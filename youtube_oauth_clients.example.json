@@ -1,0 +1,12 @@
+{
+  "clients": {
+    "account_a": {
+      "oauth_client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+      "oauth_client_secret": "GOCSPX-your-secret"
+    },
+    "account_b": {
+      "oauth_client_id": "OTHER_CLIENT_ID.apps.googleusercontent.com",
+      "oauth_client_secret": "GOCSPX-other-secret"
+    }
+  }
+}

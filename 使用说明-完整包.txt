@@ -1,0 +1,64 @@
+========================================
+  龙虾 (Lobster) 在线版客户端 - 完整包 使用说明
+========================================
+
+本包已包含 Windows 用运行环境（嵌入式 Python、Node.js 便携版、依赖 wheel），解压后按以下步骤即可使用。
+
+【打包说明（制作者）】
+
+· 打「依赖完整」完整包前请在 lobster_online 根目录执行：
+    bash scripts/ensure_full_pack_deps.sh
+  会校验 deps/wheels 是否覆盖 requirements.txt（含剪辑用到的 httpx、SQLAlchemy、Pillow 等）。
+  若需跳过（已确认 wheel 齐全）：SKIP_ENSURE_FULL_PACK_DEPS=1 bash pack_full.sh
+· 素材剪辑（media.edit）需 ffmpeg.exe：**优先**使用包内路径 deps\ffmpeg\ffmpeg.exe（与代码包一并分发时由制作者执行 INCLUDE_FFMPEG_IN_PACK=1 bash pack_code.sh 或 python3 scripts/ensure_ffmpeg_windows.py 下载后打入 zip）。亦可安装 ffmpeg 到系统 PATH，或设置环境变量 LOBSTER_FFMPEG_PATH 指向 ffmpeg.exe。
+· 打完整依赖前若需一并准备 ffmpeg：INCLUDE_FFMPEG=1 bash scripts/ensure_full_pack_deps.sh（需联网）。
+
+【安装说明（用户）】
+
+· 解压后双击 install.bat 即可：优先使用包内离线资源（deps\wheels、包内 VC++、预置 Node/OpenClaw、browser_chromium 等）；若某步失败，脚本会按设计尝试联网补救（pip/npm/playwright 等）。
+· 仅在完全无网或必须禁止联网时：在 cmd 中先执行 set LOBSTER_OFFLINE_ONLY=1 再运行 install.bat（须自备齐全离线文件，否则可能报错）。
+· 若仍静默安装 VC++ 运行库失败，请预先安装 VC++ 2015-2022 x64，或设置 LOBSTER_SKIP_VCREDIST=1（需已安装 VC++）。
+
+【使用步骤】
+
+1. 解压
+   将本 zip 解压到任意目录（如 D:\），得到 lobster_online 文件夹（或与 zip 内顶层目录同名）。
+
+2. 安装（首次必须）
+   进入该文件夹，双击运行 install.bat
+   脚本会自动检测并静默安装「Microsoft VC++ 2015-2022 x64」（若系统尚未注册该运行库），
+   过程中可能出现一次 UAC 授权，无需自己去微软网站下载。
+   若企业网络禁止下载，可先设置环境变量 LOBSTER_SKIP_VCREDIST=1 再运行 install.bat（需自行解决 greenlet 等原生模块依赖）。
+   等待提示「Install complete!」即安装完成。
+
+3. 启动
+   双击运行 start.bat
+   等待浏览器自动打开，或手动打开 http://localhost:8000
+
+4. 登录与配置
+   - 默认账号：user@lobster.local  密码：lobster123
+   - 登录后进入「系统配置」：
+     · 模型配置：填写你要用的模型的 API Key（如 DeepSeek、OpenAI 等），并选择默认模型
+     · 技能商店：点击「配置 Token」填写速推/xSkill Token（用于图片生成、视频解析等能力）
+   - 所有 Key 需自行申请、自行填写，本软件不包含任何 Key。
+
+【局域网访问】
+
+如需在其他设备访问，在「系统配置」页面可看到本机局域网地址，复制到手机或其它电脑浏览器即可。
+
+【常见问题】
+
+· 若 install.bat 报错：确认未将项目放在中文或过深路径下，必要时以管理员身份运行。
+· 若仍报 greenlet / DLL load failed：先以管理员身份再运行一次 install.bat（会重装 VC++ 静默包）；
+  或与「单机 lobster」同样问题时，可将本包中的 install.bat、start.bat 覆盖到单机目录（逻辑一致）。
+· 在 macOS 上开发时若本目录已有 nodejs/ 且无 node.exe，请先移走再执行 ./build_package.sh 再打 Windows 包。
+· 若 start.bat 启动后无法打开网页：检查本机 8000 端口是否被占用，或稍等几秒再刷新。
+· 若对话/生成失败：请到系统配置中确认对应 API Key 与速推 Token 已正确填写。
+
+【停止服务】
+
+关闭 start.bat 窗口即可；或运行 stop.bat。
+
+========================================
+  龙虾在线客户端 | Windows 完整包
+========================================

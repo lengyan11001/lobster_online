@@ -1,0 +1,56 @@
+{
+  "media.edit": {
+    "description": "本地素材剪辑：叠字、时间段裁剪、画幅比例、静音、视频配新音轨、静图转视频、视频抽帧；输出新 asset。需本机 ffmpeg。解锁见技能「素材剪辑」。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": ["overlay_text", "trim", "scale_pad", "mute", "mux_audio", "image_to_video", "extract_frame"],
+          "description": "操作类型"
+        },
+        "asset_id": { "type": "string", "description": "主素材 ID" },
+        "text": { "type": "string", "description": "overlay_text 文案（必填）" },
+        "position": { "type": "string", "enum": ["top", "center", "bottom"], "description": "overlay_text 垂直位置（与 vertical_align 二选一，后者优先）" },
+        "vertical_align": { "type": "string", "enum": ["top", "center", "bottom"], "description": "overlay_text 垂直对齐，默认 top" },
+        "horizontal_align": { "type": "string", "enum": ["left", "center", "right"], "description": "overlay_text 水平对齐，默认 center" },
+        "margin_x": { "type": "integer", "description": "overlay_text 左右边距/水平基准，默认 40，0–4000" },
+        "margin_y": { "type": "integer", "description": "overlay_text 上下边距，默认 40，0–4000" },
+        "offset_x": { "type": "integer", "description": "overlay_text 额外偏移 X，默认 0，-4000–4000" },
+        "offset_y": { "type": "integer", "description": "overlay_text 额外偏移 Y，默认 0，-4000–4000" },
+        "font_size": { "type": "integer", "description": "overlay_text 字号，默认 48，8–200" },
+        "font_color": { "type": "string", "description": "overlay_text 字色：命名色或 #RRGGBB / 0xRRGGBB / 0xRRGGBBAA" },
+        "font_alpha": { "type": "number", "description": "overlay_text 字透明度 0–1" },
+        "font_file": { "type": "string", "description": "overlay_text 字体绝对路径" },
+        "x_expr": { "type": "string", "description": "overlay_text 自定义 x（须与 y_expr 同时）" },
+        "y_expr": { "type": "string", "description": "overlay_text 自定义 y" },
+        "box": { "type": "boolean", "description": "overlay_text 文字背景框" },
+        "box_color": { "type": "string", "description": "overlay_text 背景色" },
+        "box_alpha": { "type": "number", "description": "overlay_text 背景透明度，默认 0.5" },
+        "box_border_width": { "type": "integer", "description": "overlay_text 背景框边宽 0–80" },
+        "border_width": { "type": "integer", "description": "overlay_text 描边 0–40" },
+        "border_color": { "type": "string", "description": "overlay_text 描边颜色" },
+        "shadow_x": { "type": "integer", "description": "overlay_text 阴影 X -120–120" },
+        "shadow_y": { "type": "integer", "description": "overlay_text 阴影 Y -120–120" },
+        "shadow_color": { "type": "string", "description": "overlay_text 阴影颜色" },
+        "shadow_alpha": { "type": "number", "description": "overlay_text 阴影透明度，默认 0.45" },
+        "line_spacing": { "type": "integer", "description": "overlay_text 行距 -200–200" },
+        "text_align": { "type": "string", "enum": ["left", "center", "right"], "description": "overlay_text 多行对齐" },
+        "fix_bounds": { "type": "boolean", "description": "overlay_text 限制在画面内" },
+        "start_sec": { "type": "number", "description": "trim 起始秒" },
+        "end_sec": { "type": "number", "description": "trim 结束秒（须大于 start）" },
+        "aspect_ratio": { "type": "string", "enum": ["9:16", "16:9", "1:1", "4:3", "3:4"], "description": "scale_pad 目标比例" },
+        "fit_mode": { "type": "string", "enum": ["contain", "cover"], "description": "scale_pad：留边或裁切" },
+        "audio_asset_id": { "type": "string", "description": "mux_audio 音频素材 ID" },
+        "duration_sec": { "type": "number", "description": "image_to_video 时长（秒），最大 600" },
+        "timestamp_sec": { "type": "number", "description": "extract_frame 截取时刻（秒）" }
+      },
+      "required": ["operation", "asset_id"]
+    }
+  }
+}

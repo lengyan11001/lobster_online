@@ -1,0 +1,2 @@
+# Windows 批处理必须由 cmd 按 CRLF 解析；仅用 LF 会导致命令被截断（echo→cho、cd /d→/d 等）
+*.bat text eol=crlf

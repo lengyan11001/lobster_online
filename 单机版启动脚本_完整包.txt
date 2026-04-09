@@ -1,0 +1,278 @@
+================================================================================
+  龙虾单机版 - Windows 启动脚本完整包（覆盖用）
+  请将下面 4 个文件按名称保存到 lobster 根目录，覆盖原有文件。
+  lobster 根目录 = 与 backend、mcp、static 同级，或 start.bat 所在目录的上一级。
+================================================================================
+
+---------- 文件 1/4: start.bat ----------
+@echo off
+setlocal EnableDelayedExpansion
+set "ROOT=%~dp0"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+cd /d "%ROOT%"
+chcp 65001 >nul 2>&1
+title Lobster
+
+REM Set offline Chromium path if bundled
+if exist "browser_chromium" (
+    set "PLAYWRIGHT_BROWSERS_PATH=%ROOT%\browser_chromium"
+)
+
+REM Detect Python: prefer embedded (packages installed there)
+set "PYTHON="
+if exist "python\python.exe" (
+    set "PYTHON=%ROOT%\python\python.exe"
+    goto :check_uvicorn
+)
+where python >nul 2>&1
+if not errorlevel 1 (
+    set "PYTHON=python"
+    goto :check_uvicorn
+)
+echo [ERR] Python not found
+pause
+exit /b 1
+
+:check_uvicorn
+%PYTHON% -m uvicorn --version >nul 2>&1
+if errorlevel 1 goto :try_alt_python
+goto :python_ready
+
+:try_alt_python
+REM If embedded python doesn't have uvicorn, try system python
+where python >nul 2>&1
+if errorlevel 1 goto :no_uvicorn
+python -m uvicorn --version >nul 2>&1
+if errorlevel 1 goto :no_uvicorn
+set "PYTHON=python"
+goto :python_ready
+
+:no_uvicorn
+echo [ERR] uvicorn not installed. Run install.bat first.
+pause
+exit /b 1
+
+:python_ready
+echo [OK] Python: %PYTHON%
+
+REM Detect Node.js
+set "NODE_CMD="
+if exist "nodejs\node.exe" (
+    set "NODE_CMD=%ROOT%\nodejs\node.exe"
+    set "PATH=%ROOT%\nodejs;%PATH%"
+    goto :node_detected
+)
+where node >nul 2>&1
+if not errorlevel 1 set "NODE_CMD=node"
+:node_detected
+
+REM Load .env for PORT and edition (single-machine vs online)
+set "PORT=8000"
+set "MCP_PORT=8001"
+set "HOST=0.0.0.0"
+set "EDITION=standalone"
+if exist ".env" (
+    for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do (
+        if "%%a"=="PORT" set "PORT=%%b"
+        if "%%a"=="MCP_PORT" set "MCP_PORT=%%b"
+        if "%%a"=="HOST" set "HOST=%%b"
+        if "%%a"=="LOBSTER_EDITION" for /f "tokens=* delims= " %%e in ("%%b") do set "EDITION=%%e"
+    )
+)
+if /i not "%EDITION%"=="online" set "EDITION=standalone"
+
+REM Detect LAN IP
+set "LAN_IP=127.0.0.1"
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /R "IPv4.*192\. IPv4.*10\. IPv4.*172\."') do (
+    for /f "tokens=* delims= " %%b in ("%%a") do set "LAN_IP=%%b"
+)
+
+echo ================================================
+echo          Lobster Starting...
+echo ================================================
+echo(
+echo   Local:   http://localhost:%PORT%
+echo   LAN:     http://%LAN_IP%:%PORT%
+echo(
+echo   Share the LAN address with other devices
+echo ================================================
+echo(
+
+REM Load openclaw/.env for API keys
+if exist "openclaw\.env" (
+    for /f "usebackq eol=# tokens=1,2 delims==" %%a in ("openclaw\.env") do (
+        if not "%%a"=="" if not "%%b"=="" set "%%a=%%b"
+    )
+)
+
+REM Start OpenClaw Gateway (online edition only; single-machine uses direct LLM API)
+if /i not "%EDITION%"=="online" goto :skip_openclaw
+if not defined NODE_CMD goto :skip_openclaw
+
+set "OC_ROOT=%ROOT%\"
+set "OPENCLAW_CONFIG_PATH=%OC_ROOT%openclaw\openclaw.json"
+set "OPENCLAW_STATE_DIR=%OC_ROOT%openclaw"
+echo [OpenClaw] Starting Gateway on port 18789 (online mode)...
+
+if exist "nodejs\node_modules\openclaw\openclaw.mjs" (
+    start "Lobster-OpenClaw" /B cmd /c "cd /d %OC_ROOT% && set OPENCLAW_CONFIG_PATH=%OC_ROOT%openclaw\openclaw.json && set OPENCLAW_STATE_DIR=%OC_ROOT%openclaw && "%OC_ROOT%nodejs\node.exe" "%OC_ROOT%nodejs\node_modules\openclaw\openclaw.mjs" gateway --port 18789"
+    goto :oc_started
+)
+if exist "node_modules\openclaw\openclaw.mjs" (
+    start "Lobster-OpenClaw" /B cmd /c "cd /d %OC_ROOT% && set OPENCLAW_CONFIG_PATH=%OC_ROOT%openclaw\openclaw.json && set OPENCLAW_STATE_DIR=%OC_ROOT%openclaw && node node_modules\openclaw\openclaw.mjs gateway --port 18789"
+    goto :oc_started
+)
+if exist "nodejs\node_modules\.bin\openclaw.cmd" (
+    start "Lobster-OpenClaw" /B cmd /c "cd /d %OC_ROOT% && set OPENCLAW_CONFIG_PATH=%OC_ROOT%openclaw\openclaw.json && set OPENCLAW_STATE_DIR=%OC_ROOT%openclaw && "%OC_ROOT%nodejs\node_modules\.bin\openclaw.cmd" gateway --port 18789"
+    goto :oc_started
+)
+echo   [WARN] OpenClaw not found, skipping
+goto :skip_openclaw
+
+:oc_started
+timeout /t 3 /nobreak >nul
+echo   [OK] OpenClaw Gateway started
+goto :after_openclaw
+
+:skip_openclaw
+if /i not "%EDITION%"=="online" (
+    echo [INFO] Single-machine mode: OpenClaw skipped
+) else (
+    echo [INFO] OpenClaw Gateway not found or Node missing
+)
+
+:after_openclaw
+echo(
+
+REM Start MCP (full path so child process finds it)
+echo [MCP] Starting MCP Server on port %MCP_PORT%...
+start "Lobster-MCP" /B cmd /c "%ROOT%\run_mcp.bat"
+timeout /t 2 /nobreak >nul
+echo   [OK] MCP Server started
+echo(
+
+REM Start Backend (full path so child process finds it)
+echo [Backend] Starting on port %PORT% (log: backend.log)...
+if exist backend.log del backend.log
+start "Lobster-Backend" /B cmd /c "%ROOT%\run_backend.bat"
+
+REM Wait for backend to be ready (60s, then show log on failure)
+echo [Backend] Waiting for service (up to 60s)...
+set "_WAIT_COUNT=0"
+:wait_backend
+timeout /t 1 /nobreak >nul
+set /a _WAIT_COUNT+=1
+netstat -ano 2>nul | findstr ":%PORT% " | findstr "LISTENING" >nul
+if not errorlevel 1 goto backend_ready
+if !_WAIT_COUNT! GEQ 60 goto backend_failed
+echo   [..] waiting... !_WAIT_COUNT!s
+goto wait_backend
+
+:backend_failed
+echo.
+echo   [ERR] Backend did not start within 60 seconds.
+echo   Check backend.log in this folder for errors.
+echo   ----------------------------------------
+if exist backend.log type backend.log
+if not exist backend.log echo   No backend.log yet.
+echo   ----------------------------------------
+pause
+exit /b 1
+
+:backend_ready
+timeout /t 2 /nobreak >nul
+echo   [OK] Backend is ready.
+echo(
+
+REM Open browser
+echo [Browser] Opening http://localhost:%PORT%
+start "" "http://localhost:%PORT%"
+
+echo ================================================
+echo   All services running. Press Ctrl+C to stop.
+echo ================================================
+echo(
+
+REM Keep window alive
+:keep_alive
+timeout /t 3600 /nobreak >nul
+goto :keep_alive
+
+REM Cleanup when script exits
+:cleanup
+echo(
+echo Stopping services...
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":%PORT% " ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%p >nul 2>&1
+)
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":%MCP_PORT% " ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%p >nul 2>&1
+)
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":18789 " ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%p >nul 2>&1
+)
+echo Lobster stopped.
+
+---------- 文件 2/4: run_backend.bat ----------
+@echo off
+cd /d "%~dp0"
+if not exist "backend" cd /d "%~dp0.."
+set "PY=python"
+if exist "python\python.exe" set "PY=python\python.exe"
+if exist "%~dp0python\python.exe" set "PY=%~dp0python\python.exe"
+"%PY%" -m backend.run 1>>backend.log 2>&1
+
+---------- 文件 3/4: run_mcp.bat ----------
+@echo off
+cd /d "%~dp0"
+if not exist "mcp" cd /d "%~dp0.."
+set "PY=python"
+if exist "python\python.exe" set "PY=python\python.exe"
+if exist "%~dp0python\python.exe" set "PY=%~dp0python\python.exe"
+"%PY%" -m mcp --port 8001 1>>mcp.log 2>&1
+
+---------- 文件 4/4: stop.bat ----------
+@echo off
+cd /d "%~dp0"
+chcp 65001 >nul 2>&1
+echo Stopping Lobster services...
+
+REM Kill backend by port 8000
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":8000 " ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%p >nul 2>&1
+    echo   [OK] Backend process %%p stopped
+)
+
+REM Kill MCP by port 8001
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":8001 " ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%p >nul 2>&1
+    echo   [OK] MCP process %%p stopped
+)
+
+REM Kill OpenClaw Gateway by port 18789
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":18789 " ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%p >nul 2>&1
+    echo   [OK] OpenClaw process %%p stopped
+)
+
+echo(
+echo Lobster stopped.
+pause
+
+================================================================================
+  使用说明
+================================================================================
+1. 将上述 4 段代码分别保存为：
+   - start.bat
+   - run_backend.bat
+   - run_mcp.bat
+   - stop.bat
+
+2. 这 4 个文件必须放在「lobster 根目录」：
+   - 根目录下要有 backend 文件夹、mcp 文件夹（与 start.bat 同级，或在 start.bat 的上一级）。
+   - 若你的 start.bat 在 lobster\lobster\ 下，请把 run_backend.bat、run_mcp.bat 也放在同一目录；run_xxx.bat 会自动往上一级找 backend/mcp。
+
+3. 单机版无需改 .env，直接双击 start.bat。在线版在 .env 中设 LOBSTER_EDITION=online。
+
+4. 停止服务：双击 stop.bat。
+================================================================================

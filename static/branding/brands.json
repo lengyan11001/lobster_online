@@ -1,0 +1,45 @@
+{
+  "default_mark": "bihuo",
+  "marks": {
+    "bihuo": {
+      "document_title": "必火openclaw",
+      "logo_primary": "必火",
+      "logo_accent": "openclaw",
+      "hero_title": "龙虾 - 你的私人 AI 助手",
+      "hero_subtitle": "对话驱动，随装随用，能力无限扩展",
+      "icons": {
+        "favicon_32": "/static/bihu_32.png",
+        "apple_touch": "/static/bihu_128.png",
+        "logo_mark": "/static/bihu_32.png",
+        "logo_mark_width": 32,
+        "logo_mark_height": 32
+      },
+      "install": {
+        "desktop_ico": "static/bihu_box.ico",
+        "shortcut_lnk_name": "Bihu_AI_BOX.lnk",
+        "shortcut_description": "Bihu AI BOX - Lobster local server",
+        "install_complete_hint": "Double-click desktop Bihu_AI_BOX.lnk or start.bat in this folder"
+      }
+    },
+    "yingshi": {
+      "document_title": "InsClaw",
+      "logo_primary": "Ins",
+      "logo_accent": "Claw",
+      "hero_title": "InsClaw - 你的私人 AI 助手",
+      "hero_subtitle": "对话驱动，随装随用，能力无限扩展",
+      "icons": {
+        "favicon_32": "/static/yingshi_32.png",
+        "apple_touch": "/static/yingshi_128.png",
+        "logo_mark": "/static/yingshi_32.png",
+        "logo_mark_width": 32,
+        "logo_mark_height": 32
+      },
+      "install": {
+        "desktop_ico": "static/yingshi_box.ico",
+        "shortcut_lnk_name": "InsClaw.lnk",
+        "shortcut_description": "InsClaw - Lobster local server",
+        "install_complete_hint": "Double-click desktop InsClaw.lnk or start.bat in this folder"
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+========================================
+  龙虾 (Lobster) 在线版客户端 - 精简包 使用说明
+========================================
+
+本包仅含代码与脚本，不包含预置 Python / Node / 依赖库；首次安装需联网。
+
+【环境要求】
+
+· Windows 10/11 64 位，能访问外网（python.org、nodejs.org、PyPI、npm、Playwright CDN 等）
+· 无需事先安装 Python / Node：install_slim.bat 会在缺失时自动从官网下载安装
+  （Python 3.12 官方安装包静默安装到当前用户；Node 为便携版解压到本目录 nodejs\）
+· 若已自行安装 Python 3.10+ 或 Node 并已在 PATH 中，脚本会优先使用本机环境
+
+【使用步骤】
+
+1. 解压
+   将本 zip 解压到任意目录（如 D:\），得到 lobster_online 文件夹（或与 zip 内顶层目录同名）。
+
+2. 安装依赖（首次必须）
+   进入该文件夹，双击运行 install_slim.bat（精简包专用，联网安装；勿与完整包共用的 install.bat 混用）
+   脚本会：若无 Python 则下载官方安装包并静默安装；若无 Node 则下载便携版到 nodejs\；
+   再 pip install、npm（OpenClaw）、Playwright Chromium、VC++ 运行库等（均为在线）。
+   若提示「Install complete!」即安装成功。
+   发布管理需要 Playwright：install_slim.bat 会联网安装 Chromium；若仅覆盖代码未重装依赖，
+   可在包根目录 cmd 执行：python -m pip install "playwright>=1.49.0"
+
+   说明：精简包 zip 内为 ASCII 文件名：本说明对应 README_SLIM.txt；一键安装并启动对应 quick_start.bat
+   （与旧版「一键启动.bat」相同逻辑，避免中文路径在部分解压工具下乱码）。
+
+3. 启动
+   双击运行 start.bat；或首次可直接双击 quick_start.bat（先执行精简安装再打开 start.bat）
+   等待浏览器自动打开，或手动打开 http://localhost:8000
+
+4. 登录与配置
+   - 默认账号：user@lobster.local  密码：lobster123
+   - 登录后进入「系统配置」填写各模型 API Key 与速推 Token（见完整包说明）。
+   - 所有 Key 需自行申请、自行填写。
+
+【若 install_slim.bat 失败】
+
+· 确认网络与磁盘空间；代理环境请配置系统代理或 VPN。
+· 若 Python 静默安装被策略拦截，可手动从 python.org 安装 64 位 Python 3.10+ 并勾选 Add to PATH 后重跑 install_slim.bat。
+· 若仍失败，请改用「完整项目包」+ install.bat（含嵌入式 Python，离线优先）。
+
+【停止服务】
+
+关闭 start.bat 窗口即可；或运行 stop.bat。
+
+========================================
+  龙虾在线客户端 | Windows 精简包
+========================================

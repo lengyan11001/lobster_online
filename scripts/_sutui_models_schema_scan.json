@@ -1,0 +1,5098 @@
+[
+  {
+    "id": "jimeng-5.0",
+    "name": "即梦 5.0 旗舰",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "image_url",
+      "images",
+      "negative_prompt",
+      "prompt",
+      "ratio",
+      "resolution",
+      "sample_strength"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "ratio": {
+        "enum": [
+          "1:1",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "3:2",
+          "2:3",
+          "21:9"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "1k",
+          "2k",
+          "4k"
+        ],
+        "required": false
+      },
+      "sample_strength": {
+        "min": 0,
+        "max": 1,
+        "required": false
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "images": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "sora2pub/text-to-video",
+    "name": "Sora 2 Pub 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "duration",
+      "orientation",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "orientation": {
+        "enum": [
+          "portrait",
+          "landscape"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "10",
+          "15"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "sora2pub/image-to-video",
+    "name": "Sora 2 Pub 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "image_url",
+      "orientation",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "orientation": {
+        "enum": [
+          "portrait",
+          "landscape"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/nano-banana-2",
+    "name": "Nano Banana 2",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "enable_web_search",
+      "image_urls",
+      "limit_generations",
+      "num_images",
+      "output_format",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 4,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "21:9",
+          "16:9",
+          "3:2",
+          "4:3",
+          "5:4",
+          "1:1",
+          "4:5",
+          "3:4",
+          "2:3",
+          "9:16"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "0.5K",
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "required": false
+      },
+      "output_format": {
+        "enum": [
+          "jpeg",
+          "png",
+          "webp"
+        ],
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_web_search": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      },
+      "limit_generations": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/v3/standard/image-to-video",
+    "name": "Kling V3 图生视频 [Standard]",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "image_url"
+    ],
+    "prop_keys": [
+      "duration",
+      "elements",
+      "end_image_url",
+      "generate_audio",
+      "image_url",
+      "prompt",
+      "voice_ids"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "voice_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "elements": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/v3/pro/image-to-video",
+    "name": "Kling V3 图生视频 [Pro]",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "image_url"
+    ],
+    "prop_keys": [
+      "duration",
+      "elements",
+      "end_image_url",
+      "generate_audio",
+      "image_url",
+      "prompt",
+      "voice_ids"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "voice_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "elements": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/v3/standard/text-to-video",
+    "name": "Kling V3 文生视频 [Standard]",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "prompt",
+      "voice_ids"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "voice_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/v3/pro/text-to-video",
+    "name": "Kling V3 文生视频 [Pro]",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "prompt",
+      "voice_ids"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "voice_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/v3/standard/motion-control",
+    "name": "Kling V3 动作迁移 [Standard]",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "image_url",
+      "video_url",
+      "character_orientation"
+    ],
+    "prop_keys": [
+      "character_orientation",
+      "elements",
+      "image_url",
+      "keep_original_sound",
+      "prompt",
+      "video_url"
+    ],
+    "summ": {
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "character_orientation": {
+        "enum": [
+          "image",
+          "video"
+        ],
+        "required": true
+      },
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "keep_original_sound": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "elements": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/v3/pro/motion-control",
+    "name": "Kling V3 动作迁移 [Pro]",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "image_url",
+      "video_url",
+      "character_orientation"
+    ],
+    "prop_keys": [
+      "character_orientation",
+      "elements",
+      "image_url",
+      "keep_original_sound",
+      "prompt",
+      "video_url"
+    ],
+    "summ": {
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "character_orientation": {
+        "enum": [
+          "image",
+          "video"
+        ],
+        "required": true
+      },
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "keep_original_sound": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "elements": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/sora-2/characters",
+    "name": "Sora 2 角色创建",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "video_url",
+      "name"
+    ],
+    "prop_keys": [
+      "name",
+      "video_url"
+    ],
+    "summ": {
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "name": {
+        "type": "string",
+        "default": null,
+        "required": true
+      }
+    }
+  },
+  {
+    "id": "jimeng-4.6",
+    "name": "即梦 4.6",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "image_url",
+      "images",
+      "negative_prompt",
+      "prompt",
+      "ratio",
+      "resolution",
+      "sample_strength"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "ratio": {
+        "enum": [
+          "1:1",
+          "4:3",
+          "3:4",
+          "16:9",
+          "9:16",
+          "3:2",
+          "2:3",
+          "21:9"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "1k",
+          "2k",
+          "4k"
+        ],
+        "required": false
+      },
+      "sample_strength": {
+        "min": 0,
+        "max": 1,
+        "required": false
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "images": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "jimeng-4.0",
+    "name": "即梦 4.0",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "image_url",
+      "n",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "n": {
+        "min": 1,
+        "max": 4,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/v2.6/standard/motion-control",
+    "name": "Kling Motion Control 动作迁移",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "image_url",
+      "video_url",
+      "character_orientation"
+    ],
+    "prop_keys": [
+      "character_orientation",
+      "image_url",
+      "keep_original_sound",
+      "prompt",
+      "video_url"
+    ],
+    "summ": {
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "character_orientation": {
+        "enum": [
+          "image",
+          "video"
+        ],
+        "required": true
+      },
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "keep_original_sound": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/o3/standard/image-to-video",
+    "name": "Kling O3 图生视频 [Standard]",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "image_url"
+    ],
+    "prop_keys": [
+      "duration",
+      "end_image_url",
+      "generate_audio",
+      "image_url",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/o3/pro/image-to-video",
+    "name": "Kling O3 图生视频 [Pro]",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "image_url"
+    ],
+    "prop_keys": [
+      "duration",
+      "end_image_url",
+      "generate_audio",
+      "image_url",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/o3/standard/text-to-video",
+    "name": "Kling O3 文生视频 [Standard]",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/o3/pro/text-to-video",
+    "name": "Kling O3 文生视频 [Pro]",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/o3/standard/video-to-video/reference",
+    "name": "Kling O3 参考视频生成 [Standard]",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "prompt",
+      "video_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "elements",
+      "image_urls",
+      "keep_audio",
+      "prompt",
+      "video_url"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "elements": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "keep_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/kling-video/o3/pro/video-to-video/reference",
+    "name": "Kling O3 参考视频生成 [Pro]",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "prompt",
+      "video_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "elements",
+      "image_urls",
+      "keep_audio",
+      "prompt",
+      "video_url"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "elements": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "keep_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15"
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedream/v4.5/text-to-image",
+    "name": "Seedream 4.5 文生图",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "enable_safety_checker",
+      "image_size",
+      "num_images",
+      "prompt",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_size": {
+        "enum": [
+          "auto_2K",
+          "auto_4K",
+          "square_hd",
+          "square",
+          "portrait_4_3",
+          "portrait_16_9",
+          "landscape_4_3",
+          "landscape_16_9"
+        ],
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 6,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedream/v4.5/edit",
+    "name": "Seedream 4.5 图像编辑",
+    "category": "image",
+    "task_type": "i2i",
+    "required": [
+      "prompt",
+      "image_urls"
+    ],
+    "prop_keys": [
+      "enable_safety_checker",
+      "image_size",
+      "image_urls",
+      "num_images",
+      "prompt",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "image_size": {
+        "enum": [
+          "auto_2K",
+          "auto_4K",
+          "square_hd",
+          "square",
+          "portrait_4_3",
+          "portrait_16_9",
+          "landscape_4_3",
+          "landscape_16_9"
+        ],
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 6,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedream/v5/lite/text-to-image",
+    "name": "Seedream 5.0 Lite 文生图",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "enable_safety_checker",
+      "enhance_prompt_mode",
+      "image_size",
+      "max_images",
+      "num_images",
+      "prompt",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_size": {
+        "enum": [
+          "auto_2K",
+          "auto_3K",
+          "square_hd",
+          "square",
+          "portrait_4_3",
+          "portrait_16_9",
+          "landscape_4_3",
+          "landscape_16_9"
+        ],
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 6,
+        "required": false
+      },
+      "max_images": {
+        "min": 1,
+        "max": 6,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enhance_prompt_mode": {
+        "enum": [
+          "standard",
+          "fast"
+        ],
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedream/v5/lite/edit",
+    "name": "Seedream 5.0 Lite 图像编辑",
+    "category": "image",
+    "task_type": "i2i",
+    "required": [
+      "prompt",
+      "image_urls"
+    ],
+    "prop_keys": [
+      "enable_safety_checker",
+      "enhance_prompt_mode",
+      "image_size",
+      "image_urls",
+      "max_images",
+      "num_images",
+      "prompt",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "image_size": {
+        "enum": [
+          "auto_2K",
+          "auto_3K",
+          "square_hd",
+          "square",
+          "portrait_4_3",
+          "portrait_16_9",
+          "landscape_4_3",
+          "landscape_16_9"
+        ],
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 6,
+        "required": false
+      },
+      "max_images": {
+        "min": 1,
+        "max": 6,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enhance_prompt_mode": {
+        "enum": [
+          "standard",
+          "fast"
+        ],
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/flux-2/flash",
+    "name": "Flux 2 Flash",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "enable_prompt_expansion",
+      "enable_safety_checker",
+      "guidance_scale",
+      "image_size",
+      "image_urls",
+      "num_images",
+      "output_format",
+      "prompt",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "image_size": {
+        "enum": [
+          "square_hd",
+          "square",
+          "portrait_4_3",
+          "portrait_16_9",
+          "landscape_4_3",
+          "landscape_16_9"
+        ],
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 4,
+        "required": false
+      },
+      "guidance_scale": {
+        "min": 0,
+        "max": 20,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_prompt_expansion": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "output_format": {
+        "enum": [
+          "jpeg",
+          "png",
+          "webp"
+        ],
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/nano-banana-pro",
+    "name": "Nano Banana Pro",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "enable_web_search",
+      "image_urls",
+      "num_images",
+      "output_format",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 4,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "3:2",
+          "4:3",
+          "5:4",
+          "1:1",
+          "4:5",
+          "3:4",
+          "2:3",
+          "9:16"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "required": false
+      },
+      "output_format": {
+        "enum": [
+          "jpeg",
+          "png",
+          "webp"
+        ],
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_web_search": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/sora-2/text-to-video",
+    "name": "Sora 2 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "character_ids",
+      "detect_and_block_ip",
+      "duration",
+      "model",
+      "prompt",
+      "resolution"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          4,
+          8,
+          12,
+          16,
+          20
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "9:16",
+          "16:9"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p"
+        ],
+        "required": false
+      },
+      "model": {
+        "enum": [
+          "sora-2",
+          "sora-2-2025-12-08",
+          "sora-2-2025-10-06"
+        ],
+        "required": false
+      },
+      "detect_and_block_ip": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "character_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/sora-2/image-to-video",
+    "name": "Sora 2 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "character_ids",
+      "detect_and_block_ip",
+      "duration",
+      "image_url",
+      "model",
+      "prompt",
+      "resolution"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          4,
+          8,
+          12,
+          16,
+          20
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "9:16",
+          "16:9"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "auto",
+          "720p"
+        ],
+        "required": false
+      },
+      "model": {
+        "enum": [
+          "sora-2",
+          "sora-2-2025-12-08",
+          "sora-2-2025-10-06"
+        ],
+        "required": false
+      },
+      "detect_and_block_ip": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "character_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/sora-2/text-to-video/pro",
+    "name": "Sora 2 Pro 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "character_ids",
+      "detect_and_block_ip",
+      "duration",
+      "prompt",
+      "resolution"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          4,
+          8,
+          12,
+          16,
+          20
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "9:16",
+          "16:9"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "true_1080p"
+        ],
+        "required": false
+      },
+      "detect_and_block_ip": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "character_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/sora-2/image-to-video/pro",
+    "name": "Sora 2 Pro 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "character_ids",
+      "detect_and_block_ip",
+      "duration",
+      "image_url",
+      "prompt",
+      "resolution"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          4,
+          8,
+          12,
+          16,
+          20
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "9:16",
+          "16:9"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "auto",
+          "720p",
+          "1080p",
+          "true_1080p"
+        ],
+        "required": false
+      },
+      "detect_and_block_ip": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "character_ids": {
+        "type": "array",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/sora-2/video-to-video/remix",
+    "name": "Sora 2 视频重混",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "prompt",
+      "video_id",
+      "video_url"
+    ],
+    "summ": {
+      "video_id": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          4,
+          8,
+          12,
+          16,
+          20
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "9:16",
+          "16:9"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "kapon/gemini-3-pro-image-preview",
+    "name": "Gemini 3 Pro Image Preview",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "image_urls",
+      "prompt",
+      "size"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": false
+      },
+      "size": {
+        "enum": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "1:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "sprcra/sora-2-vip/text-to-video",
+    "name": "Sora 2 VIP 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "prompt",
+      "seconds",
+      "size"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "seconds": {
+        "enum": [
+          "10"
+        ],
+        "required": false
+      },
+      "size": {
+        "enum": [
+          "720x1280",
+          "1280x720"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "sprcra/sora-2-vip/image-to-video",
+    "name": "Sora 2 VIP 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "image_url",
+      "prompt",
+      "seconds",
+      "size"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "seconds": {
+        "enum": [
+          "10"
+        ],
+        "required": false
+      },
+      "size": {
+        "enum": [
+          "720x1280",
+          "1280x720"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "sprcra/sora-2-character",
+    "name": "Sora 2 角色创建",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [],
+    "prop_keys": [
+      "prompt",
+      "task_id",
+      "timestamps",
+      "video_url"
+    ],
+    "summ": {
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "task_id": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "timestamps": {
+        "type": "string",
+        "default": "1,3",
+        "required": false
+      },
+      "prompt": {
+        "type": "string",
+        "default": "创建角色",
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1",
+    "name": "Veo 3.1 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4s",
+          "6s",
+          "8s"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/extend-video",
+    "name": "Veo 3.1 视频延长",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "prompt",
+      "video_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed",
+      "video_url"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "type": "string",
+        "default": "7s",
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/image-to-video",
+    "name": "Veo 3.1 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "image_url",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4s",
+          "6s",
+          "8s"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/first-last-frame-to-video",
+    "name": "Veo 3.1 首尾帧视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "first_frame_url",
+      "last_frame_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "first_frame_url",
+      "generate_audio",
+      "last_frame_url",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "first_frame_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "last_frame_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4s",
+          "6s",
+          "8s"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/reference-to-video",
+    "name": "Veo 3.1 参考图视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_urls"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "image_urls",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "type": "string",
+        "default": "8s",
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/fast",
+    "name": "Veo 3.1 Fast 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4s",
+          "6s",
+          "8s"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/fast/extend-video",
+    "name": "Veo 3.1 Fast 视频延长",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "prompt",
+      "video_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed",
+      "video_url"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "type": "string",
+        "default": "7s",
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/fast/image-to-video",
+    "name": "Veo 3.1 Fast 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "generate_audio",
+      "image_url",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4s",
+          "6s",
+          "8s"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/veo3.1/fast/first-last-frame-to-video",
+    "name": "Veo 3.1 Fast 首尾帧视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "first_frame_url",
+      "last_frame_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "first_frame_url",
+      "generate_audio",
+      "last_frame_url",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "safety_tolerance",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "first_frame_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "last_frame_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "9:16"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4s",
+          "6s",
+          "8s"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "safety_tolerance": {
+        "enum": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "minimax/t2a",
+    "name": "海螺语音合成",
+    "category": "audio",
+    "task_type": "t2a",
+    "required": [
+      "text"
+    ],
+    "prop_keys": [
+      "aigc_watermark",
+      "continuous_sound",
+      "emotion",
+      "language_boost",
+      "model",
+      "output_format",
+      "pitch",
+      "speed",
+      "stream",
+      "subtitle_enable",
+      "text",
+      "voice_id",
+      "vol"
+    ],
+    "summ": {
+      "text": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "voice_id": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "model": {
+        "enum": [
+          "speech-2.8-hd",
+          "speech-2.8-turbo",
+          "speech-2.6-hd",
+          "speech-2.6-turbo",
+          "speech-02-hd",
+          "speech-02-turbo",
+          "speech-01-hd",
+          "speech-01-turbo"
+        ],
+        "required": false
+      },
+      "stream": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      },
+      "output_format": {
+        "enum": [
+          "url",
+          "hex"
+        ],
+        "required": false
+      },
+      "speed": {
+        "type": "number",
+        "default": null,
+        "required": false
+      },
+      "vol": {
+        "type": "number",
+        "default": null,
+        "required": false
+      },
+      "pitch": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "emotion": {
+        "enum": [
+          "happy",
+          "sad",
+          "angry",
+          "fearful",
+          "disgusted",
+          "surprised",
+          "calm",
+          "fluent",
+          "whisper"
+        ],
+        "required": false
+      },
+      "language_boost": {
+        "enum": [
+          "Chinese",
+          "Chinese,Yue",
+          "English",
+          "Japanese",
+          "Korean",
+          "Arabic",
+          "Russian",
+          "Spanish",
+          "French",
+          "German",
+          "auto"
+        ],
+        "required": false
+      },
+      "continuous_sound": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      },
+      "subtitle_enable": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      },
+      "aigc_watermark": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "minimax/voice-design",
+    "name": "海螺语音设计",
+    "category": "audio",
+    "task_type": "t2a",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aigc_watermark",
+      "preview_text",
+      "prompt",
+      "voice_id"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "preview_text": {
+        "type": "string",
+        "default": "各位听众朋友们，大家好！今天我们来聊聊人工智能的发展现状和未来趋势。",
+        "required": false
+      },
+      "voice_id": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "aigc_watermark": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "minimax/voice-clone",
+    "name": "海螺声音克隆",
+    "category": "audio",
+    "task_type": "t2a",
+    "required": [
+      "file_id",
+      "voice_id"
+    ],
+    "prop_keys": [
+      "aigc_watermark",
+      "continuous_sound",
+      "file_id",
+      "language_boost",
+      "model",
+      "need_noise_reduction",
+      "need_volume_normalization",
+      "text",
+      "voice_id"
+    ],
+    "summ": {
+      "file_id": {
+        "type": "integer",
+        "default": null,
+        "required": true
+      },
+      "voice_id": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "text": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "model": {
+        "enum": [
+          "speech-2.8-hd",
+          "speech-2.8-turbo",
+          "speech-2.6-hd",
+          "speech-2.6-turbo",
+          "speech-02-hd",
+          "speech-02-turbo",
+          "speech-01-hd",
+          "speech-01-turbo"
+        ],
+        "required": false
+      },
+      "language_boost": {
+        "enum": [
+          "Chinese",
+          "Chinese,Yue",
+          "English",
+          "Japanese",
+          "Korean",
+          "auto"
+        ],
+        "required": false
+      },
+      "need_noise_reduction": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      },
+      "need_volume_normalization": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      },
+      "aigc_watermark": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      },
+      "continuous_sound": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "minimax/music-gen",
+    "name": "海螺音乐生成",
+    "category": "audio",
+    "task_type": "t2a",
+    "required": [
+      "lyrics"
+    ],
+    "prop_keys": [
+      "aigc_watermark",
+      "lyrics",
+      "model",
+      "output_format",
+      "prompt",
+      "stream"
+    ],
+    "summ": {
+      "lyrics": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "model": {
+        "enum": [
+          "music-2.5",
+          "music-2.0"
+        ],
+        "required": false
+      },
+      "stream": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      },
+      "output_format": {
+        "enum": [
+          "url",
+          "hex"
+        ],
+        "required": false
+      },
+      "aigc_watermark": {
+        "type": "boolean",
+        "default": "false",
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "wan/v2.6/text-to-video",
+    "name": "Wan 2.6 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "audio_url",
+      "duration",
+      "enable_prompt_expansion",
+      "enable_safety_checker",
+      "multi_shots",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "audio_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16",
+          "1:1",
+          "4:3",
+          "3:4"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "5",
+          "10",
+          "15"
+        ],
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": "",
+        "required": false
+      },
+      "enable_prompt_expansion": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "multi_shots": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "wan/v2.6/image-to-video",
+    "name": "Wan 2.6 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "audio_url",
+      "duration",
+      "enable_prompt_expansion",
+      "enable_safety_checker",
+      "image_url",
+      "multi_shots",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          "5",
+          "10",
+          "15"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "audio_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": "",
+        "required": false
+      },
+      "enable_prompt_expansion": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "multi_shots": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "wan/v2.6/reference-to-video",
+    "name": "Wan 2.6 参考视频生成",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "prompt",
+      "video_urls"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "enable_prompt_expansion",
+      "enable_safety_checker",
+      "multi_shots",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "seed",
+      "video_urls"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16",
+          "1:1",
+          "4:3",
+          "3:4"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "5",
+          "10"
+        ],
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": "",
+        "required": false
+      },
+      "enable_prompt_expansion": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "multi_shots": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "wan/v2.6/image-to-video/flash",
+    "name": "Wan 2.6 Flash 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "audio_url",
+      "duration",
+      "enable_prompt_expansion",
+      "enable_safety_checker",
+      "image_url",
+      "multi_shots",
+      "negative_prompt",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          "5",
+          "10",
+          "15"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "audio_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "negative_prompt": {
+        "type": "string",
+        "default": "",
+        "required": false
+      },
+      "enable_prompt_expansion": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "multi_shots": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedance/v1/lite/text-to-video",
+    "name": "Seedance Lite 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "camera_fixed",
+      "duration",
+      "enable_safety_checker",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16",
+          "9:21"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "required": false
+      },
+      "camera_fixed": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedance/v1/lite/reference-to-video",
+    "name": "Seedance Lite 参考图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "reference_image_urls"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "camera_fixed",
+      "duration",
+      "enable_safety_checker",
+      "prompt",
+      "reference_image_urls",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "reference_image_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16",
+          "9:21",
+          "auto"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "required": false
+      },
+      "camera_fixed": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedance/v1/pro/fast/image-to-video",
+    "name": "Seedance Pro Fast 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "camera_fixed",
+      "duration",
+      "enable_safety_checker",
+      "image_url",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16",
+          "9:21",
+          "auto"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "required": false
+      },
+      "camera_fixed": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedance/v1/pro/fast/text-to-video",
+    "name": "Seedance Pro Fast 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "camera_fixed",
+      "duration",
+      "enable_safety_checker",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16",
+          "9:21",
+          "auto"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "required": false
+      },
+      "camera_fixed": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedance/v1.5/pro/image-to-video",
+    "name": "Seedance 1.5 Pro 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "camera_fixed",
+      "duration",
+      "enable_safety_checker",
+      "end_image_url",
+      "generate_audio",
+      "image_url",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "camera_fixed": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedance/v1.5/pro/text-to-video",
+    "name": "Seedance 1.5 Pro 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "camera_fixed",
+      "duration",
+      "enable_safety_checker",
+      "generate_audio",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "required": false
+      },
+      "generate_audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "camera_fixed": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/seedance/v1/lite/image-to-video",
+    "name": "Seedance Lite 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "camera_fixed",
+      "duration",
+      "enable_safety_checker",
+      "end_image_url",
+      "image_url",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16",
+          "9:21",
+          "auto"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "duration": {
+        "enum": [
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "required": false
+      },
+      "camera_fixed": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      },
+      "enable_safety_checker": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/omnihuman/v1.5",
+    "name": "OmniHuman v1.5 音频驱动视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "image_url",
+      "audio_url"
+    ],
+    "prop_keys": [
+      "audio_url",
+      "image_url",
+      "prompt",
+      "resolution",
+      "turbo_mode"
+    ],
+    "summ": {
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "audio_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "turbo_mode": {
+        "type": "boolean",
+        "default": false,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "jimeng-4.5",
+    "name": "即梦 4.5",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "image_url",
+      "n",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "n": {
+        "min": 1,
+        "max": 4,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "jimeng-4.1",
+    "name": "即梦 4.1",
+    "category": "image",
+    "task_type": "t2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "image_url",
+      "n",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "n": {
+        "min": 1,
+        "max": 4,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "jimeng-agent",
+    "name": "即梦智能创作",
+    "category": "image",
+    "task_type": "i2i",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "image_url",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "jimeng-video-3.5-pro",
+    "name": "即梦 3.5 Pro 视频 (5秒)",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "end_image_url",
+      "image_url",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "jimeng-video-3.5-pro-10s",
+    "name": "即梦 3.5 Pro 视频 (10秒)",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "end_image_url",
+      "image_url",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "jimeng-video-3.5-pro-12s",
+    "name": "即梦 3.5 Pro 视频 (12秒)",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "end_image_url",
+      "image_url",
+      "prompt"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/vidu/q3/image-to-video",
+    "name": "Vidu Q3 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "image_url"
+    ],
+    "prop_keys": [
+      "audio",
+      "duration",
+      "end_image_url",
+      "image_url",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": "",
+        "required": false
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "end_image_url": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "duration": {
+        "min": 1,
+        "max": 16,
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "360p",
+          "540p",
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/vidu/q3/text-to-video",
+    "name": "Vidu Q3 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "audio",
+      "duration",
+      "prompt",
+      "resolution",
+      "seed"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "min": 1,
+        "max": 16,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "1:1"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "360p",
+          "540p",
+          "720p",
+          "1080p"
+        ],
+        "required": false
+      },
+      "audio": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/bytedance/dreamactor/v2",
+    "name": "Dreamactor V2 动作迁移",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "image_url",
+      "video_url"
+    ],
+    "prop_keys": [
+      "image_url",
+      "trim_first_second",
+      "video_url"
+    ],
+    "summ": {
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "trim_first_second": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/elevenlabs/speech-to-text/scribe-v2",
+    "name": "ElevenLabs Scribe V2 语音转文字",
+    "category": "audio",
+    "task_type": "stt",
+    "required": [
+      "audio_url"
+    ],
+    "prop_keys": [
+      "audio_url",
+      "diarize",
+      "keyterms",
+      "language_code",
+      "tag_audio_events"
+    ],
+    "summ": {
+      "audio_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "language_code": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "tag_audio_events": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "diarize": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      },
+      "keyterms": {
+        "type": "array",
+        "default": [],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/minimax/hailuo-2.3-fast/pro/image-to-video",
+    "name": "Hailuo 2.3 Fast [Pro] 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "image_url",
+      "prompt",
+      "prompt_optimizer"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "prompt_optimizer": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/minimax/hailuo-2.3-fast/standard/image-to-video",
+    "name": "Hailuo 2.3 Fast [Standard] 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "duration",
+      "image_url",
+      "prompt",
+      "prompt_optimizer"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          "6",
+          "10"
+        ],
+        "required": false
+      },
+      "prompt_optimizer": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/minimax/hailuo-2.3/pro/image-to-video",
+    "name": "Hailuo 2.3 [Pro] 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "image_url",
+      "prompt",
+      "prompt_optimizer"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "prompt_optimizer": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/minimax/hailuo-2.3/pro/text-to-video",
+    "name": "Hailuo 2.3 [Pro] 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "prompt",
+      "prompt_optimizer"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "prompt_optimizer": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/minimax/hailuo-2.3/standard/image-to-video",
+    "name": "Hailuo 2.3 [Standard] 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "duration",
+      "image_url",
+      "prompt",
+      "prompt_optimizer"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          "6",
+          "10"
+        ],
+        "required": false
+      },
+      "prompt_optimizer": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/minimax/hailuo-2.3/standard/text-to-video",
+    "name": "Hailuo 2.3 [Standard] 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "duration",
+      "prompt",
+      "prompt_optimizer"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "enum": [
+          "6",
+          "10"
+        ],
+        "required": false
+      },
+      "prompt_optimizer": {
+        "type": "boolean",
+        "default": true,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "openrouter/router/vision",
+    "name": "LLM 图片理解",
+    "category": "image",
+    "task_type": "i2t",
+    "required": [
+      "prompt",
+      "image_urls"
+    ],
+    "prop_keys": [
+      "image_urls",
+      "max_tokens",
+      "model",
+      "prompt",
+      "reasoning",
+      "system_prompt",
+      "temperature"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "model": {
+        "enum": [
+          "google/gemini-3-pro-preview",
+          "google/gemini-3-flash-preview",
+          "google/gemini-2.5-flash",
+          "anthropic/claude-opus-4.6"
+        ],
+        "required": false
+      },
+      "system_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "max_tokens": {
+        "min": 1,
+        "max": 32000,
+        "required": false
+      },
+      "temperature": {
+        "min": 0,
+        "max": 2,
+        "required": false
+      },
+      "reasoning": {
+        "type": "boolean",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "openrouter/router/video",
+    "name": "LLM 视频理解",
+    "category": "video",
+    "task_type": "v2t",
+    "required": [
+      "prompt",
+      "video_urls"
+    ],
+    "prop_keys": [
+      "max_tokens",
+      "model",
+      "prompt",
+      "reasoning",
+      "system_prompt",
+      "temperature",
+      "video_urls"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "model": {
+        "enum": [
+          "google/gemini-3-pro-preview",
+          "google/gemini-3-flash-preview",
+          "google/gemini-2.5-flash",
+          "anthropic/claude-opus-4.6"
+        ],
+        "required": false
+      },
+      "system_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "max_tokens": {
+        "min": 1,
+        "max": 32000,
+        "required": false
+      },
+      "temperature": {
+        "min": 0,
+        "max": 2,
+        "required": false
+      },
+      "reasoning": {
+        "type": "boolean",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "xai/grok-imagine-video/text-to-video",
+    "name": "Grok Imagine Video 文生视频",
+    "category": "video",
+    "task_type": "t2v",
+    "required": [
+      "prompt"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "prompt",
+      "resolution"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "min": 1,
+        "max": 15,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "16:9",
+          "4:3",
+          "3:2",
+          "1:1",
+          "2:3",
+          "3:4",
+          "9:16"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "xai/grok-imagine-video/image-to-video",
+    "name": "Grok Imagine Video 图生视频",
+    "category": "video",
+    "task_type": "i2v",
+    "required": [
+      "prompt",
+      "image_url"
+    ],
+    "prop_keys": [
+      "aspect_ratio",
+      "duration",
+      "image_url",
+      "prompt",
+      "resolution"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "image_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "duration": {
+        "min": 1,
+        "max": 15,
+        "required": false
+      },
+      "aspect_ratio": {
+        "enum": [
+          "auto",
+          "16:9",
+          "4:3",
+          "3:2",
+          "1:1",
+          "2:3",
+          "3:4",
+          "9:16"
+        ],
+        "required": false
+      },
+      "resolution": {
+        "enum": [
+          "480p",
+          "720p"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "xai/grok-imagine-video/edit-video",
+    "name": "Grok Imagine Video 视频编辑",
+    "category": "video",
+    "task_type": "v2v",
+    "required": [
+      "prompt",
+      "video_url"
+    ],
+    "prop_keys": [
+      "prompt",
+      "resolution",
+      "video_url"
+    ],
+    "summ": {
+      "prompt": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "video_url": {
+        "type": "string",
+        "default": null,
+        "required": true
+      },
+      "resolution": {
+        "enum": [
+          "auto",
+          "480p",
+          "720p"
+        ],
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "fal-ai/qwen-image-edit-2511-multiple-angles",
+    "name": "Qwen 多角度图像生成",
+    "category": "image",
+    "task_type": "i2i",
+    "required": [
+      "image_urls"
+    ],
+    "prop_keys": [
+      "additional_prompt",
+      "guidance_scale",
+      "horizontal_angle",
+      "image_size",
+      "image_urls",
+      "lora_scale",
+      "num_images",
+      "num_inference_steps",
+      "output_format",
+      "seed",
+      "vertical_angle",
+      "zoom"
+    ],
+    "summ": {
+      "image_urls": {
+        "type": "array",
+        "default": null,
+        "required": true
+      },
+      "horizontal_angle": {
+        "min": 0,
+        "max": 360,
+        "required": false
+      },
+      "vertical_angle": {
+        "min": -30,
+        "max": 90,
+        "required": false
+      },
+      "zoom": {
+        "min": 0,
+        "max": 10,
+        "required": false
+      },
+      "additional_prompt": {
+        "type": "string",
+        "default": null,
+        "required": false
+      },
+      "lora_scale": {
+        "min": 0,
+        "max": 4,
+        "required": false
+      },
+      "image_size": {
+        "enum": [
+          "square_hd",
+          "square",
+          "portrait_4_3",
+          "portrait_16_9",
+          "landscape_4_3",
+          "landscape_16_9"
+        ],
+        "required": false
+      },
+      "guidance_scale": {
+        "min": 1,
+        "max": 20,
+        "required": false
+      },
+      "num_inference_steps": {
+        "min": 1,
+        "max": 50,
+        "required": false
+      },
+      "num_images": {
+        "min": 1,
+        "max": 4,
+        "required": false
+      },
+      "output_format": {
+        "enum": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "required": false
+      },
+      "seed": {
+        "type": "integer",
+        "default": null,
+        "required": false
+      }
+    }
+  },
+  {
+    "id": "gpt-4o",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gpt-4o-mini",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gpt-4.1",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gpt-4.1-mini",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gpt-4.1-nano",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-sonnet-4-6",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-opus-4-6",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-sonnet-4-5-20250929",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-opus-4-5-20251101",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-haiku-4-5-20251001",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-sonnet-4-20250514",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-opus-4-20250514",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-3-5-sonnet-20241022",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-3-5-haiku-20241022",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gemini-2.5-pro",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gemini-2.5-flash",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gemini-3.1-flash-lite-preview",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gemini-2.0-flash",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "deepseek-chat",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "deepseek-reasoner",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "Doubao-1.5-pro-32k",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "Doubao-1.5-lite-32k",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gpt-5",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gpt-5-mini",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "o3",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "o4-mini",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "claude-opus-4-1-20250805",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gemini-3-pro-preview",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "gemini-3.1-pro-preview",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "deepseek-v3",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "deepseek-v3.1",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "grok-3",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "grok-4-0709",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "qwen3-235b-a22b",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "qwen3-max",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "qwen-plus",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "glm-5",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "glm-4.5",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "minimax-m2.1",
+    "category": "text",
+    "api_code": null
+  },
+  {
+    "id": "kimi-k2.5",
+    "category": "text",
+    "api_code": null
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "lobster-sutui": {
+      "baseUrl": "http://127.0.0.1:8000/internal/openclaw-sutui/v1",
+      "apiKey": "${OPENCLAW_SUTUI_PROXY_KEY}",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "deepseek-chat",
+          "name": "速推 DeepSeek Chat（经龙虾代理）",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 65536,
+          "maxTokens": 8192
+        }
+      ]
+    }
+  }
+}

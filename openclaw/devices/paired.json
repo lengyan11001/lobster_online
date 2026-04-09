@@ -1,0 +1,32 @@
+{
+  "9210ade6d8cf5bf686d171e0dc650b5b484d0a059b30ff56ca094186ae5348c2": {
+    "deviceId": "9210ade6d8cf5bf686d171e0dc650b5b484d0a059b30ff56ca094186ae5348c2",
+    "publicKey": "e8UC8Y7hM2p7raaEzHxmA1qJ5dJb0UCsvsWFzSLek-Q",
+    "displayName": "agent",
+    "platform": "win32",
+    "clientId": "gateway-client",
+    "clientMode": "backend",
+    "role": "operator",
+    "roles": [
+      "operator"
+    ],
+    "scopes": [
+      "operator.approvals"
+    ],
+    "approvedScopes": [
+      "operator.approvals"
+    ],
+    "tokens": {
+      "operator": {
+        "token": "qOKjPMhr8SsidoX1WqabADjobStWrvWSZT6oXT-3ebs",
+        "role": "operator",
+        "scopes": [
+          "operator.approvals"
+        ],
+        "createdAtMs": 1775284541946
+      }
+    },
+    "createdAtMs": 1775284541946,
+    "approvedAtMs": 1775284541946
+  }
+}

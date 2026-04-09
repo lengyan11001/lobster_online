@@ -1,0 +1,6 @@
+{
+  "version": "1.0.7",
+  "build": 13,
+  "applied_at": "2026-04-08T18:25:00.000Z",
+  "note": "默认 OTA 与 DEFAULT_PATHS 一致（含 npm 引导脚本，无 node_modules）；整包依赖见 DEFAULT_PATHS_WITH_NODEJS_DEPS"
+}

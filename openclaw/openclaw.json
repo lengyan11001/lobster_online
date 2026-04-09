@@ -1,0 +1,151 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.4.1",
+    "lastTouchedAt": "2026-04-05T18:34:00.089Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-03-25T11:18:09.044Z",
+    "lastRunVersion": "2026.4.1",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "tools": {
+    "profile": "full"
+  },
+  "plugins": {
+    "enabled": true,
+    "load": {
+      "paths": [
+        "D:\\lobster_online\\nodejs\\node_modules\\@tencent-weixin\\openclaw-weixin"
+      ]
+    },
+    "entries": {
+      "openclaw-weixin": {
+        "enabled": true
+      }
+    },
+    "installs": {
+      "openclaw-weixin": {
+        "source": "path",
+        "sourcePath": "D:\\lobster_online\\nodejs\\node_modules\\@tencent-weixin\\openclaw-weixin",
+        "installPath": "D:\\lobster_online\\openclaw\\extensions\\openclaw-weixin",
+        "version": "2.1.6",
+        "installedAt": "2026-04-05T18:33:25.406Z"
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "token": "5917d6976fb8f5f8ae74e8bf7d19df913157d19b31ff3f5d47b4701715ca1cba"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "lobster": {
+        "url": "http://127.0.0.1:8000/mcp-gateway",
+        "transport": "streamable-http"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "lobster-sutui": {
+        "baseUrl": "http://127.0.0.1:8000/internal/openclaw-sutui/v1",
+        "apiKey": "lobster-oc-sutui-local-change-me",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-chat",
+            "name": "速推 DeepSeek Chat（经龙虾代理）",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 65536,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "lobster-sutui/deepseek-chat"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true
+      },
+      {
+        "id": "lobster-sutui-deepseek-chat",
+        "model": "lobster-sutui/deepseek-chat"
+      },
+      {
+        "id": "anthropic-claude-sonnet-4-5",
+        "model": "anthropic/claude-sonnet-4-5"
+      },
+      {
+        "id": "anthropic-claude-opus-4-6",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      {
+        "id": "anthropic-claude-haiku-3-5",
+        "model": "anthropic/claude-haiku-3-5"
+      },
+      {
+        "id": "openai-gpt-4o",
+        "model": "openai/gpt-4o"
+      },
+      {
+        "id": "openai-gpt-4o-mini",
+        "model": "openai/gpt-4o-mini"
+      },
+      {
+        "id": "openai-o3-mini",
+        "model": "openai/o3-mini"
+      },
+      {
+        "id": "deepseek-deepseek-chat",
+        "model": "deepseek/deepseek-chat"
+      },
+      {
+        "id": "deepseek-deepseek-reasoner",
+        "model": "deepseek/deepseek-reasoner"
+      },
+      {
+        "id": "google-gemini-2-5-pro",
+        "model": "google/gemini-2.5-pro"
+      },
+      {
+        "id": "google-gemini-2-5-flash",
+        "model": "google/gemini-2.5-flash"
+      }
+    ]
+  },
+  "channels": {
+    "openclaw-weixin": {
+      "channelConfigUpdatedAt": "2026-04-05T18:33:59.892Z"
+    }
+  }
+}

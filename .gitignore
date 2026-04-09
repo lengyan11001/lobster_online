@@ -1,0 +1,60 @@
+# ── 运行时 / 二进制 / 大目录 ──
+python/
+browser_chromium/
+browser_data/
+deps/
+assets/
+logs/
+dist/
+.pack_python_shim/
+
+# Node.js（顶层打包的 Node 运行时；openclaw 内的 node_modules 也排除）
+nodejs/
+**/node_modules/
+
+# ── 数据库 / 日志 / 缓存 ──
+*.db
+*.db-journal
+*.log
+*.zip
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ── 用户配置 / 密钥 ──
+.env
+sutui_config.json
+custom_configs.json
+models_config.json
+twilio_whatsapp_config.json
+youtube_accounts_*.json
+mcp_registry_cache.json
+installed_packages.json
+pack_bundle.env
+xskill_captured_requests.json
+xskill_recharge_captured_requests.jsonl
+
+# ── openclaw 会话 / 运行数据 ──
+openclaw/agents/*/sessions/
+openclaw/.weixin_login_last.json
+openclaw/.channel_fallback.json
+openclaw/update-check.json
+openclaw/openclaw-weixin/accounts/
+openclaw/openclaw-weixin/accounts.json
+openclaw/workspace-lobster-sutui-claude-3-5-sonnet-20241022/
+openclaw/workspace-lobster-sutui-deepseek-chat/
+openclaw/workspace-lobster-sutui-gpt-4o/
+openclaw/workspace-lobster-sutui-gpt-4o-mini/
+
+# ── 临时 / 调试 ──
+_tmp_*
+192.168.1.64/
+D_/
+build_bihuo_log.txt
+
+# ── 系统 / 编辑器 ──
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursor/
