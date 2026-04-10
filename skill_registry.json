@@ -209,19 +209,50 @@
             "properties": {
               "action": {
                 "type": "string",
-                "enum": ["upload", "generate_prompts", "submit_video", "poll_video"],
+                "enum": [
+                  "upload",
+                  "generate_prompts",
+                  "submit_video",
+                  "poll_video"
+                ],
                 "description": "upload: 本机 asset_id 上传得 image_url；generate_prompts: 从 image_url 生成 5 条英文视频 prompt；submit_video: 提交 Veo 任务；poll_video: 查询 task_id 状态与 output"
               },
-              "asset_id": { "type": "string", "description": "upload 时必填" },
-              "image_url": { "type": "string", "description": "generate_prompts/submit_video 时可用" },
-              "prompt": { "type": "string", "description": "submit_video 视频提示词" },
-              "task_id": { "type": "string", "description": "poll_video 必填" },
-              "video_model": { "type": "string", "description": "覆盖卡片默认 Veo 模型" },
-              "analysis_model": { "type": "string", "description": "覆盖卡片默认分析模型" },
-              "aspect_ratio": { "type": "string", "description": "如 9:16、16:9" },
-              "enhance_prompt": { "type": "boolean", "description": "非英文 prompt 时是否增强" }
+              "asset_id": {
+                "type": "string",
+                "description": "upload 时必填"
+              },
+              "image_url": {
+                "type": "string",
+                "description": "generate_prompts/submit_video 时可用"
+              },
+              "prompt": {
+                "type": "string",
+                "description": "submit_video 视频提示词"
+              },
+              "task_id": {
+                "type": "string",
+                "description": "poll_video 必填"
+              },
+              "video_model": {
+                "type": "string",
+                "description": "覆盖卡片默认 Veo 模型"
+              },
+              "analysis_model": {
+                "type": "string",
+                "description": "覆盖卡片默认分析模型"
+              },
+              "aspect_ratio": {
+                "type": "string",
+                "description": "如 9:16、16:9"
+              },
+              "enhance_prompt": {
+                "type": "boolean",
+                "description": "非英文 prompt 时是否增强"
+              }
             },
-            "required": ["action"]
+            "required": [
+              "action"
+            ]
           }
         },
         "comfly.veo.daihuo_pipeline": {
@@ -234,23 +265,152 @@
           "arg_schema": {
             "type": "object",
             "properties": {
-              "action": { "type": "string", "enum": ["run_pipeline", "start_pipeline", "poll_pipeline"] },
-              "job_id": { "type": "string" },
-              "asset_id": { "type": "string" },
-              "image_url": { "type": "string" },
-              "merge_clips": { "type": "boolean" },
-              "storyboard_count": { "type": "integer" },
-              "auto_save": { "type": "boolean" },
-              "isolate_job_dir": { "type": "boolean" },
-              "platform": { "type": "string" },
-              "country": { "type": "string" },
-              "language": { "type": "string" },
-              "output_dir": { "type": "string" }
+              "action": {
+                "type": "string",
+                "enum": [
+                  "run_pipeline",
+                  "start_pipeline",
+                  "poll_pipeline"
+                ]
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              },
+              "image_url": {
+                "type": "string"
+              },
+              "merge_clips": {
+                "type": "boolean"
+              },
+              "storyboard_count": {
+                "type": "integer"
+              },
+              "auto_save": {
+                "type": "boolean"
+              },
+              "isolate_job_dir": {
+                "type": "boolean"
+              },
+              "platform": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "output_dir": {
+                "type": "string"
+              }
             }
           }
         }
       },
-      "tags": ["video", "comfly", "veo", "i2v", "爆款TVC", "TVC", "credential_package"]
+      "tags": [
+        "video",
+        "comfly",
+        "veo",
+        "i2v",
+        "爆款TVC",
+        "TVC",
+        "credential_package"
+      ]
+    },
+    "comfly_ecommerce_detail_skill": {
+      "name": "?????",
+      "description": "?????????????????????????????????????????????TVC??? Comfly ??????????? Key?",
+      "type": "builtin",
+      "store_visibility": "popular",
+      "status": "available",
+      "package_config": {
+        "analysis_model": "gemini-2.5-pro",
+        "image_model": "nano-banana-2",
+        "page_count": 12,
+        "aspect_ratio": "9:16"
+      },
+      "capabilities": {
+        "comfly.ecommerce.detail_pipeline": {
+          "description": "???????????run_pipeline ?????start_pipeline ?????poll_pipeline ??????????",
+          "upstream": "local",
+          "upstream_tool": "invoke",
+          "enabled": true,
+          "is_default": false,
+          "unit_credits": 0,
+          "arg_schema": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "run_pipeline",
+                  "start_pipeline",
+                  "poll_pipeline"
+                ]
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              },
+              "image_url": {
+                "type": "string"
+              },
+              "reference_asset_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reference_image_urls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "page_count": {
+                "type": "integer"
+              },
+              "auto_save": {
+                "type": "boolean"
+              },
+              "platform": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "analysis_model": {
+                "type": "string"
+              },
+              "image_model": {
+                "type": "string"
+              },
+              "output_dir": {
+                "type": "string"
+              },
+              "isolate_job_dir": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "tags": [
+        "image",
+        "ecommerce",
+        "detail",
+        "long-image",
+        "comfly",
+        "credential_package"
+      ]
     },
     "sutui_mcp": {
       "name": "速推 MCP",

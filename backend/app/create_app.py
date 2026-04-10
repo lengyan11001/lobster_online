@@ -34,6 +34,7 @@ from .api.assets import router as assets_router
 from .api.media_edit import router as media_edit_router
 from .api.comfly_veo import router as comfly_veo_router
 from .api.comfly_daihuo import router as comfly_daihuo_router
+from .api.comfly_ecommerce_detail import router as comfly_ecommerce_detail_router
 from .api.publish import router as publish_router
 from .api.creator_content import router as creator_content_router
 from .api.account_creator_schedule import router as account_creator_schedule_router
@@ -148,6 +149,46 @@ def _ensure_comfly_daihuo_pipeline_capability():
     except Exception:
         db.rollback()
         logger.exception("Failed to seed comfly.veo.daihuo_pipeline capability")
+    finally:
+        db.close()
+
+
+def _ensure_comfly_ecommerce_detail_pipeline_capability():
+    """Ensure comfly.ecommerce.detail_pipeline exists in CapabilityConfig."""
+    catalog_path = Path(__file__).resolve().parent.parent.parent / "mcp" / "capability_catalog.json"
+    if not catalog_path.exists():
+        return
+    try:
+        raw = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    cfg = raw.get("comfly.ecommerce.detail_pipeline")
+    if not isinstance(cfg, dict):
+        return
+    db = SessionLocal()
+    try:
+        existing = db.query(models.CapabilityConfig).filter(
+            models.CapabilityConfig.capability_id == "comfly.ecommerce.detail_pipeline"
+        ).first()
+        if existing:
+            return
+        db.add(
+            models.CapabilityConfig(
+                capability_id="comfly.ecommerce.detail_pipeline",
+                description=str(cfg.get("description") or "comfly.ecommerce.detail_pipeline"),
+                upstream=str(cfg.get("upstream") or "local"),
+                upstream_tool=str(cfg.get("upstream_tool") or "invoke"),
+                arg_schema=cfg.get("arg_schema") if isinstance(cfg.get("arg_schema"), dict) else None,
+                enabled=bool(cfg.get("enabled", True)),
+                is_default=bool(cfg.get("is_default", False)),
+                unit_credits=int(cfg.get("unit_credits") or 0),
+            )
+        )
+        db.commit()
+        logger.info("Seeded capability comfly.ecommerce.detail_pipeline into CapabilityConfig")
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to seed comfly.ecommerce.detail_pipeline capability")
     finally:
         db.close()
 
@@ -594,6 +635,7 @@ def create_app() -> FastAPI:
     _ensure_media_edit_capability()
     _ensure_comfly_veo_capability()
     _ensure_comfly_daihuo_pipeline_capability()
+    _ensure_comfly_ecommerce_detail_pipeline_capability()
     _auto_start_openclaw()
 
     app = FastAPI(
@@ -639,6 +681,7 @@ def create_app() -> FastAPI:
     app.include_router(media_edit_router, prefix="")
     app.include_router(comfly_veo_router, prefix="")
     app.include_router(comfly_daihuo_router, prefix="")
+    app.include_router(comfly_ecommerce_detail_router, prefix="")
     app.include_router(publish_router, prefix="")
     app.include_router(creator_content_router, prefix="")
     app.include_router(account_creator_schedule_router, prefix="")

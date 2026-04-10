@@ -17,6 +17,17 @@ class Settings(BaseSettings):
 
     app_name: str = "龙虾 (Lobster)"
     debug: bool = True
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def _coerce_debug_flag(cls, v: object) -> object:
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            if normalized in {"release", "prod", "production", "false", "0", "off", "no"}:
+                return False
+            if normalized in {"debug", "dev", "development", "true", "1", "on", "yes"}:
+                return True
+        return v
     secret_key: str = "lobster-secret-change-me"
     cors_origins: str = "*"
     database_url: str = "sqlite:///./lobster.db"
