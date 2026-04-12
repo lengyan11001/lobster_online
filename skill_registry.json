@@ -360,6 +360,12 @@
               "image_url": {
                 "type": "string"
               },
+              "product_name_hint": {
+                "type": "string"
+              },
+              "product_direction_hint": {
+                "type": "string"
+              },
               "reference_asset_ids": {
                 "type": "array",
                 "items": {

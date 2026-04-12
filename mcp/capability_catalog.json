@@ -705,6 +705,14 @@
           "type": "string",
           "description": "?????? URL?? asset_id ???"
         },
+        "product_name_hint": {
+          "type": "string",
+          "description": "用户指定的商品名/商品标题；传入后优先按该商品身份生成"
+        },
+        "product_direction_hint": {
+          "type": "string",
+          "description": "用户指定的商品方向/类目，如男装、女装、猫舍、猫砂柜"
+        },
         "reference_asset_ids": {
           "type": "array",
           "items": {

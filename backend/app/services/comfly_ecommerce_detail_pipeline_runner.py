@@ -108,12 +108,26 @@ def build_pipeline_input(
     *,
     product_image: str,
     reference_images: List[str],
+    sku: Optional[str],
+    selling_points: Optional[List[Dict[str, object]]],
+    specs: Optional[Dict[str, object]],
+    style: Optional[str],
+    style_reference_images: Optional[List[str]],
+    icon_assets: Optional[List[Dict[str, object]]],
+    scene_preferences: Optional[Dict[str, object]],
+    output_targets: Optional[Dict[str, object]],
+    detail_template_id: Optional[str],
+    showcase_template_id: Optional[str],
+    brand: Optional[str],
+    compliance_notes: Optional[List[str]],
     api_key: str,
     api_base: str,
     analysis_model: Optional[str],
     image_model: Optional[str],
     page_count: Optional[int],
     output_dir: Optional[str],
+    product_name_hint: Optional[str],
+    product_direction_hint: Optional[str],
     platform: str,
     country: str,
     language: str,
@@ -127,6 +141,30 @@ def build_pipeline_input(
         "apikey": api_key,
         "base_url": base,
     }
+    if (sku or "").strip():
+        inp["sku"] = sku.strip()
+    if selling_points:
+        inp["selling_points"] = selling_points
+    if specs:
+        inp["specs"] = specs
+    if (style or "").strip():
+        inp["style"] = style.strip()
+    if style_reference_images:
+        inp["style_reference_images"] = [str(item).strip() for item in style_reference_images if str(item).strip()]
+    if icon_assets:
+        inp["icon_assets"] = icon_assets
+    if scene_preferences:
+        inp["scene_preferences"] = scene_preferences
+    if output_targets:
+        inp["output_targets"] = output_targets
+    if (detail_template_id or "").strip():
+        inp["detail_template_id"] = detail_template_id.strip()
+    if (showcase_template_id or "").strip():
+        inp["showcase_template_id"] = showcase_template_id.strip()
+    if (brand or "").strip():
+        inp["brand"] = brand.strip()
+    if compliance_notes:
+        inp["compliance_notes"] = [str(item).strip() for item in compliance_notes if str(item).strip()]
     if analysis_model:
         inp["analysis_model"] = analysis_model
     if image_model:
@@ -135,6 +173,10 @@ def build_pipeline_input(
         inp["page_count"] = int(page_count)
     if output_dir:
         inp["output_dir"] = output_dir
+    if (product_name_hint or "").strip():
+        inp["product_name_hint"] = product_name_hint.strip()
+    if (product_direction_hint or "").strip():
+        inp["product_direction_hint"] = product_direction_hint.strip()
     if (platform or "").strip():
         inp["platform"] = platform.strip()
     if (country or "").strip():

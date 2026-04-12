@@ -35,11 +35,64 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class EcommerceProductImageItem(BaseModel):
+    role: str = Field("front", description="素材角色，如 front / side / back / detail")
+    asset_id: Optional[str] = Field(None, description="素材 ID，与 image_url 二选一")
+    image_url: Optional[str] = Field(None, description="素材公网 URL，与 asset_id 二选一")
+
+
+class EcommerceSellingPointItem(BaseModel):
+    title: str
+    description: str = ""
+    icon: str = ""
+    priority: Optional[int] = None
+
+
+class EcommerceScenePreferences(BaseModel):
+    include_pet: Optional[bool] = None
+    pet_type: str = ""
+    include_human: Optional[bool] = None
+    human_type: str = ""
+    decor_tags: List[str] = Field(default_factory=list)
+
+
+class EcommerceOutputTargets(BaseModel):
+    main_images: Optional[bool] = None
+    sku_images: Optional[bool] = None
+    transparent_image: Optional[bool] = None
+    white_bg_image: Optional[bool] = None
+    detail_pages: Optional[bool] = None
+    material_images: Optional[bool] = None
+    showcase_images: Optional[bool] = None
+
+
+class EcommerceIconAssetItem(BaseModel):
+    icon: str
+    asset_id: Optional[str] = Field(None, description="图标素材 ID，与 image_url 二选一")
+    image_url: Optional[str] = Field(None, description="图标公网 URL，与 asset_id 二选一")
+
+
 class EcommerceDetailPipelinePayload(BaseModel):
     asset_id: Optional[str] = Field(None, description="商品主图素材 ID，与 image_url 二选一")
     image_url: Optional[str] = Field(None, description="商品主图公网 URL，与 asset_id 二选一")
+    product_images: List[EcommerceProductImageItem] = Field(default_factory=list, description="结构化商品图列表，优先于 asset_id / image_url")
+    product_name_hint: str = ""
+    product_direction_hint: str = ""
     reference_asset_ids: List[str] = Field(default_factory=list, description="补充参考图素材 ID")
     reference_image_urls: List[str] = Field(default_factory=list, description="补充参考图公网 URL")
+    style_reference_asset_ids: List[str] = Field(default_factory=list, description="风格参考图素材 ID")
+    style_reference_image_urls: List[str] = Field(default_factory=list, description="风格参考图公网 URL")
+    sku: str = ""
+    selling_points: List[EcommerceSellingPointItem] = Field(default_factory=list)
+    specs: Dict[str, Any] = Field(default_factory=dict)
+    style: str = ""
+    icon_assets: List[EcommerceIconAssetItem] = Field(default_factory=list)
+    scene_preferences: Optional[EcommerceScenePreferences] = None
+    output_targets: Optional[EcommerceOutputTargets] = None
+    detail_template_id: str = ""
+    showcase_template_id: str = ""
+    brand: str = ""
+    compliance_notes: List[str] = Field(default_factory=list)
     page_count: Optional[int] = Field(12, ge=10, le=16)
     auto_save: bool = True
     platform: str = ""
@@ -62,8 +115,20 @@ def _default_runs_root() -> str:
 def _validate_payload(pl: EcommerceDetailPipelinePayload) -> None:
     if bool(pl.asset_id and pl.image_url):
         raise HTTPException(status_code=400, detail="asset_id 和 image_url 不能同时传")
-    if not pl.asset_id and not pl.image_url:
-        raise HTTPException(status_code=400, detail="请提供 asset_id 或 image_url")
+    for item in pl.product_images:
+        if bool(item.asset_id and item.image_url):
+            raise HTTPException(status_code=400, detail="product_images 中每项的 asset_id 和 image_url 不能同时传")
+        if not item.asset_id and not item.image_url:
+            raise HTTPException(status_code=400, detail="product_images 中每项都需要提供 asset_id 或 image_url")
+    for item in pl.icon_assets:
+        if not (item.icon or "").strip():
+            raise HTTPException(status_code=400, detail="icon_assets 中每项都需要提供 icon 标识")
+        if bool(item.asset_id and item.image_url):
+            raise HTTPException(status_code=400, detail="icon_assets 中每项的 asset_id 和 image_url 不能同时传")
+        if not item.asset_id and not item.image_url:
+            raise HTTPException(status_code=400, detail="icon_assets 中每项都需要提供 asset_id 或 image_url")
+    if not pl.product_images and not pl.asset_id and not pl.image_url:
+        raise HTTPException(status_code=400, detail="请提供 product_images 或 asset_id / image_url")
 
 
 async def _prepare_pipeline_input(
@@ -74,30 +139,85 @@ async def _prepare_pipeline_input(
     request: Request,
     effective_output_dir: str,
 ) -> Dict[str, object]:
-    product_image = resolve_public_image_for_pipeline(
+    style_reference_images = resolve_reference_images_for_pipeline(
         user_id=current_user.id,
         db=db,
         request=request,
-        asset_id=pl.asset_id,
-        image_url=pl.image_url,
+        asset_ids=pl.style_reference_asset_ids,
+        image_urls=pl.style_reference_image_urls,
     )
-    reference_images = resolve_reference_images_for_pipeline(
+    if pl.product_images:
+        resolved_product_images: List[Dict[str, str]] = []
+        for item in pl.product_images:
+            resolved_url = resolve_public_image_for_pipeline(
+                user_id=current_user.id,
+                db=db,
+                request=request,
+                asset_id=item.asset_id,
+                image_url=item.image_url,
+            )
+            resolved_product_images.append(
+                {
+                    "role": str(item.role or "front").strip().lower() or "front",
+                    "url": resolved_url,
+                }
+            )
+        front_candidates = [row["url"] for row in resolved_product_images if row["role"] == "front"]
+        product_image = front_candidates[0] if front_candidates else resolved_product_images[0]["url"]
+        reference_images = [row["url"] for row in resolved_product_images if row["url"] != product_image]
+    else:
+        product_image = resolve_public_image_for_pipeline(
+            user_id=current_user.id,
+            db=db,
+            request=request,
+            asset_id=pl.asset_id,
+            image_url=pl.image_url,
+        )
+        reference_images = []
+    extra_reference_images = resolve_reference_images_for_pipeline(
         user_id=current_user.id,
         db=db,
         request=request,
         asset_ids=pl.reference_asset_ids,
         image_urls=pl.reference_image_urls,
     )
+    for image_url in extra_reference_images + style_reference_images:
+        if image_url != product_image and image_url not in reference_images:
+            reference_images.append(image_url)
+    resolved_icon_assets: List[Dict[str, str]] = []
+    for item in pl.icon_assets:
+        resolved_url = resolve_public_image_for_pipeline(
+            user_id=current_user.id,
+            db=db,
+            request=request,
+            asset_id=item.asset_id,
+            image_url=item.image_url,
+        )
+        resolved_icon_assets.append({"icon": str(item.icon or "").strip(), "url": resolved_url})
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db)
     return build_pipeline_input(
         product_image=product_image,
         reference_images=reference_images,
+        sku=pl.sku,
+        selling_points=[item.model_dump(exclude_none=True) for item in pl.selling_points],
+        specs=dict(pl.specs),
+        style=pl.style,
+        style_reference_images=style_reference_images,
+        icon_assets=resolved_icon_assets,
+        scene_preferences=pl.scene_preferences.model_dump(exclude_none=True) if pl.scene_preferences else None,
+        output_targets=pl.output_targets.model_dump(exclude_none=True) if pl.output_targets else None,
+        detail_template_id=pl.detail_template_id,
+        showcase_template_id=pl.showcase_template_id,
+        brand=pl.brand,
+        compliance_notes=list(pl.compliance_notes),
         api_key=api_key,
         api_base=api_base,
         analysis_model=pl.analysis_model,
         image_model=pl.image_model,
         page_count=pl.page_count,
         output_dir=effective_output_dir,
+        product_name_hint=pl.product_name_hint,
+        product_direction_hint=pl.product_direction_hint,
         platform=pl.platform,
         country=pl.country,
         language=pl.language,
@@ -123,7 +243,13 @@ def _save_local_image_asset(
         return None
     if not raw:
         return None
-    aid, fname, fsize, tos_url = _save_bytes_or_tos(raw, path.suffix.lower() or ".png", "image/png")
+    suffix = path.suffix.lower() or ".png"
+    content_type = "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        content_type = "image/jpeg"
+    elif suffix == ".webp":
+        content_type = "image/webp"
+    aid, fname, fsize, tos_url = _save_bytes_or_tos(raw, suffix, content_type)
     source_url = (tos_url or "").strip() or ""
     asset = Asset(
         asset_id=aid,
@@ -188,7 +314,46 @@ def _save_pipeline_images(*, result: Dict[str, Any], user_id: int, db: Session) 
             "page_count": final_info.get("page_count"),
         },
     )
-    return {"pages": saved_pages, "final": {"asset": final_asset} if final_asset else None}
+    suite_saved: Dict[str, List[Dict[str, Any]]] = {}
+    suite_bundle = result.get("suite_bundle") if isinstance(result.get("suite_bundle"), dict) else {}
+    suite_categories = suite_bundle.get("categories") if isinstance(suite_bundle, dict) else {}
+    if isinstance(suite_categories, dict):
+        for category, payload in suite_categories.items():
+            if not isinstance(payload, dict):
+                continue
+            saved_rows: List[Dict[str, Any]] = []
+            for item in payload.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                asset_row = _save_local_image_asset(
+                    local_path=str(item.get("path") or ""),
+                    user_id=user_id,
+                    db=db,
+                    prompt=str(item.get("filename") or category),
+                    model=image_model,
+                    tags=f"auto,comfly.ecommerce.detail_pipeline,{category}",
+                    meta={
+                        "origin": "comfly_ecommerce_suite_export",
+                        "suite_category": category,
+                        "relative_path": item.get("relative_path"),
+                        "placeholder": bool(item.get("placeholder")),
+                    },
+                )
+                if asset_row:
+                    saved_rows.append(
+                        {
+                            "filename": str(item.get("filename") or ""),
+                            "relative_path": str(item.get("relative_path") or ""),
+                            "asset": asset_row,
+                        }
+                    )
+            if saved_rows:
+                suite_saved[category] = saved_rows
+    return {
+        "pages": saved_pages,
+        "final": {"asset": final_asset} if final_asset else None,
+        "suite_bundle": suite_saved,
+    }
 
 
 async def _job_runner(job_id: str) -> None:

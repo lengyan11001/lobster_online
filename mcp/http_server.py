@@ -218,6 +218,8 @@ def _normalize_invoke_ecommerce_detail_pipeline_args(args: Dict[str, Any]) -> Di
         "job_id",
         "asset_id",
         "image_url",
+        "product_name_hint",
+        "product_direction_hint",
         "reference_asset_ids",
         "reference_image_urls",
         "page_count",
