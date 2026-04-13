@@ -700,7 +700,9 @@ def _load_style_preset(style_id: Any) -> Dict[str, Any]:
     return dict(payload)
 
 
-def _style_prompt_details(analysis: Dict[str, Any], *, include_copy_tone: bool = False) -> List[str]:
+def _style_prompt_details(
+    analysis: Dict[str, Any], *, include_copy_tone: bool = False, mode: str = "scene"
+) -> List[str]:
     preset = analysis.get("style_preset") if isinstance(analysis.get("style_preset"), dict) else {}
     if not preset:
         return []
@@ -718,6 +720,9 @@ def _style_prompt_details(analysis: Dict[str, Any], *, include_copy_tone: bool =
     copy_tone = str(preset.get("copy_tone") or "").strip()
     if display_name:
         parts.append(f"Style preset: {display_name}")
+    parts.append(
+        "Style instructions may affect only lighting, environment, mood, and props; they must never change the product's own design, structure, materials, color blocking, or component layout"
+    )
     if scene_direction:
         parts.append(f"Scene direction: {scene_direction}")
     if palette:
@@ -726,17 +731,30 @@ def _style_prompt_details(analysis: Dict[str, Any], *, include_copy_tone: bool =
         parts.append(f"Preferred materials and finishes: {materials}")
     if lighting_desc:
         parts.append(f"Lighting direction: {lighting_desc}")
-    if scene_objects:
+    if mode != "product_only" and scene_objects:
         parts.append(f"Scene objects to weave in naturally: {scene_objects}")
-    if decorative:
+    if mode != "product_only" and decorative:
         parts.append(f"Decor accents: {decorative}")
     if prompt_keywords:
         parts.append(f"Style keywords: {prompt_keywords}")
-    if include_copy_tone and copy_tone:
+    if mode != "product_only" and include_copy_tone and copy_tone:
         parts.append(f"Copy tone direction: {copy_tone}")
     if negative_rules:
         parts.append(f"Avoid these style mistakes: {negative_rules}")
     return parts
+
+
+def _product_identity_guardrails(analysis: Dict[str, Any]) -> List[str]:
+    category = str(analysis.get("category") or "product").strip()
+    target_name = str(analysis.get("product_name") or category or "product").strip()
+    return [
+        f"Treat the reference image as the exact sellable {target_name}, not as loose inspiration for a redesigned or upgraded variant",
+        "Product fidelity is the top priority; if any style, scene, camera, or atmosphere instruction conflicts with the reference product, preserve the reference product and relax the scene instead",
+        "Do not redesign, beautify, simplify, optimize, reinterpret, merge, split, extend, or invent a new version of the product",
+        "Do not add, remove, rearrange, enlarge, shrink, or replace visible structural parts, openings, panels, handles, accessories, hardware, textures, seams, prints, or decorative features from the reference",
+        "Keep the same silhouette, proportions, construction logic, material boundaries, color placement, and relative position of all visible parts",
+        "If any product detail is unclear, stay conservative and preserve what is visible rather than inventing new details",
+    ]
 
 
 def _style_theme(analysis: Dict[str, Any], key: str, defaults: Dict[str, str]) -> Dict[str, str]:
@@ -1112,6 +1130,8 @@ Rules:
 5. When a user-supplied product name exists, keep product_name aligned with that user hint, while using the images to infer selling points, structure, scenes, and safe claims.
 6. When structured selling points, specs, style, or scene preferences are supplied, treat them as the primary source of truth. Use the images to validate and enrich them, not to replace them.
 7. If style is supplied, keep the visual_style aligned with that style_id rather than inventing a totally different style direction.
+8. Treat the reference images as the exact sellable item. Do not upgrade, redesign, beautify, or reinterpret the product into a cleaner or more premium variant during analysis.
+9. Preserve visible structure, proportions, openings, materials, color blocking, and component layout. If something is unclear, stay conservative instead of inventing a new product detail.
 Platform: {locale["platform"]}
 Country: {locale["country"]}
 Target market: {locale["market"]}
@@ -1432,6 +1452,7 @@ def _compose_page_background_prompt(page: Dict[str, Any], analysis: Dict[str, An
         "Create a clean mobile ecommerce detail page background with strong product visibility",
         "No text, no typography, no watermark, no UI, no sticker, no subtitles",
     ]
+    prompt_parts.extend(_product_identity_guardrails(analysis))
     prompt_parts.extend(_style_prompt_details(analysis, include_copy_tone=True))
     if user_hints.get("product_name_hint"):
         prompt_parts.append(f"User-specified product identity: {user_hints.get('product_name_hint')}")
@@ -1481,10 +1502,10 @@ def _compose_cover_background_prompt(page: Dict[str, Any], analysis: Dict[str, A
         "Create a cinematic campaign hero scene rather than a standard ecommerce product page",
         "Show the product in a believable aspirational usage scenario with storytelling, atmosphere, depth, and strong visual focus",
         "Prefer a fashion advertising composition, urban winter lifestyle scene, editorial campaign photography, premium magazine poster mood, natural environment context, confident hero framing",
-        "Keep the product appearance consistent with the reference image while making the scene feel premium and purchase-driven",
         "No collage, no split panels, no infographic layout, no white seamless studio background, no empty product-only center composition, no flat lay, no mannequin, no ghost mannequin",
         "No text, no typography, no watermark, no logo, no UI, no sticker, no subtitles",
     ]
+    prompt_parts.extend(_product_identity_guardrails(analysis))
     prompt_parts.extend(_style_prompt_details(analysis, include_copy_tone=True))
     if scenes:
         prompt_parts.append(f"Scene inspiration: {scenes}")
@@ -1516,9 +1537,39 @@ def _compose_white_bg_prompt(analysis: Dict[str, Any]) -> str:
         "No room scene, no furniture scene, no props, no packaging, no extra objects, no people, no animals",
         "No text, no logo, no watermark, no infographic, no labels, no measurement lines, no collage, no UI",
         "Avoid visible cast shadows and avoid gray studio floor; keep the surrounding background clean white",
-        "Preserve the product silhouette, material, color, structure, and proportions from the reference image",
     ]
-    prompt_parts.extend(_style_prompt_details(analysis))
+    prompt_parts.extend(_product_identity_guardrails(analysis))
+    prompt_parts.extend(_style_prompt_details(analysis, mode="product_only"))
+    if user_hints.get("product_name_hint"):
+        prompt_parts.append(f"User-specified product identity: {user_hints.get('product_name_hint')}")
+    if user_hints.get("product_direction_hint"):
+        prompt_parts.append(f"User-specified category direction: {user_hints.get('product_direction_hint')}")
+    if constraints:
+        prompt_parts.append(f"Do not imply unverifiable claims: {constraints}")
+    return ". ".join(part for part in prompt_parts if part)
+
+
+def _compose_black_bg_prompt(analysis: Dict[str, Any]) -> str:
+    category = str(analysis.get("category") or "product").strip()
+    product_name = str(analysis.get("product_name") or category or "product").strip()
+    style = str(analysis.get("visual_style") or "clean ecommerce product photography").strip()
+    user_hints = analysis.get("user_hints") if isinstance(analysis.get("user_hints"), dict) else {}
+    constraints = ", ".join(_safe_string_list(analysis.get("visual_constraints"))[:3])
+    points = ", ".join(_safe_string_list(analysis.get("selling_points"))[:3])
+    prompt_parts = [
+        f"Create a clean ecommerce black-background product image for {product_name}",
+        f"Product category: {category}",
+        f"Visual style: {style}",
+        f"Keep these product cues consistent: {points}",
+        "Show only the sellable product itself on a pure solid black background #000000",
+        "Centered full-product composition suitable for alpha extraction and ecommerce asset recovery",
+        "No room scene, no furniture scene, no props, no packaging, no extra objects, no people, no animals",
+        "No text, no logo, no watermark, no infographic, no labels, no measurement lines, no collage, no UI",
+        "Keep the framing, scale, pose, crop, perspective, and product edges aligned as closely as possible to the white-background version",
+        "Avoid visible floor, avoid reflections, and keep the surrounding background pure black",
+    ]
+    prompt_parts.extend(_product_identity_guardrails(analysis))
+    prompt_parts.extend(_style_prompt_details(analysis, mode="product_only"))
     if user_hints.get("product_name_hint"):
         prompt_parts.append(f"User-specified product identity: {user_hints.get('product_name_hint')}")
     if user_hints.get("product_direction_hint"):
@@ -1535,67 +1586,44 @@ def _normalize_generated_white_bg(image: Image.Image, width: int = 800, height: 
     return canvas.convert("RGB")
 
 
-def _is_white_bg_candidate(rgb: tuple[int, int, int], brightness_threshold: int, spread_threshold: int) -> bool:
-    r, g, b = rgb
-    return min(r, g, b) >= brightness_threshold and (max(r, g, b) - min(r, g, b)) <= spread_threshold
+def _normalize_generated_black_bg(image: Image.Image, width: int = 800, height: int = 800) -> Image.Image:
+    fitted = _fit_contain(image.convert("RGBA"), width, height)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 255))
+    canvas.paste(fitted, (0, 0), fitted)
+    return canvas.convert("RGB")
 
 
-def _derive_transparent_from_white_bg(image: Image.Image) -> Image.Image:
-    rgba = image.convert("RGBA")
-    width, height = rgba.size
-    pixels = rgba.load()
-    is_background = [[False for _ in range(width)] for _ in range(height)]
-    queue: deque[tuple[int, int]] = deque()
+def _derive_transparent_from_white_black_bg(white_image: Image.Image, black_image: Image.Image) -> Image.Image:
+    white_rgba = white_image.convert("RGBA")
+    black_rgba = black_image.convert("RGBA")
+    if white_rgba.size != black_rgba.size:
+        raise PipelineError("White-background and black-background images must have identical dimensions")
 
-    def _try_seed(x: int, y: int, brightness: int, spread: int) -> None:
-        if is_background[y][x]:
-            return
-        if _is_white_bg_candidate(pixels[x, y][:3], brightness, spread):
-            is_background[y][x] = True
-            queue.append((x, y))
-
-    for x in range(width):
-        _try_seed(x, 0, 245, 14)
-        _try_seed(x, height - 1, 245, 14)
-    for y in range(height):
-        _try_seed(0, y, 245, 14)
-        _try_seed(width - 1, y, 245, 14)
-
-    while queue:
-        x, y = queue.popleft()
-        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-            if nx < 0 or ny < 0 or nx >= width or ny >= height or is_background[ny][nx]:
-                continue
-            if _is_white_bg_candidate(pixels[nx, ny][:3], 236, 22):
-                is_background[ny][nx] = True
-                queue.append((nx, ny))
-
-    out = rgba.copy()
+    width, height = white_rgba.size
+    white_pixels = white_rgba.load()
+    black_pixels = black_rgba.load()
+    out = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     out_pixels = out.load()
+    bg_dist = math.sqrt(3 * 255 * 255)
+
     for y in range(height):
         for x in range(width):
-            r, g, b, a = out_pixels[x, y]
-            if is_background[y][x]:
-                out_pixels[x, y] = (255, 255, 255, 0)
+            r_w, g_w, b_w, _ = white_pixels[x, y]
+            r_b, g_b, b_b, _ = black_pixels[x, y]
+            pixel_dist = math.sqrt(
+                float((r_w - r_b) ** 2 + (g_w - g_b) ** 2 + (b_w - b_b) ** 2)
+            )
+            alpha = 1.0 - (pixel_dist / bg_dist)
+            alpha = max(0.0, min(1.0, alpha))
+
+            if alpha <= 0.01:
+                out_pixels[x, y] = (0, 0, 0, 0)
                 continue
-            near_bg = False
-            for nx, ny in (
-                (x - 1, y),
-                (x + 1, y),
-                (x, y - 1),
-                (x, y + 1),
-                (x - 1, y - 1),
-                (x + 1, y - 1),
-                (x - 1, y + 1),
-                (x + 1, y + 1),
-            ):
-                if 0 <= nx < width and 0 <= ny < height and is_background[ny][nx]:
-                    near_bg = True
-                    break
-            if near_bg and _is_white_bg_candidate((r, g, b), 225, 28):
-                distance = max(255 - r, 255 - g, 255 - b)
-                alpha = max(48, min(255, int(distance * 10)))
-                out_pixels[x, y] = (r, g, b, min(a, alpha))
+
+            r_out = min(255, max(0, round(r_b / alpha)))
+            g_out = min(255, max(0, round(g_b / alpha)))
+            b_out = min(255, max(0, round(b_b / alpha)))
+            out_pixels[x, y] = (r_out, g_out, b_out, round(alpha * 255))
     return out
 
 
@@ -1673,6 +1701,60 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: Any, max_width: int, max_l
     if len(lines) == max_lines and "".join(lines) != source:
         lines[-1] = lines[-1].rstrip(" .") + "..."
     return [line for line in lines if line.strip()]
+
+
+def _split_text_by_chars(text: str, max_chars_per_line: int, max_lines: int) -> List[str]:
+    source = str(text or "").strip()
+    if not source or max_chars_per_line <= 0 or max_lines <= 0:
+        return []
+    visible_limit = max_chars_per_line * max_lines
+    clipped = source[:visible_limit]
+    lines = [clipped[idx : idx + max_chars_per_line] for idx in range(0, len(clipped), max_chars_per_line)]
+    lines = lines[:max_lines]
+    if len(source) > visible_limit and lines:
+        ellipsis_room = max(1, max_chars_per_line - 3)
+        lines[-1] = (lines[-1][:ellipsis_room] if ellipsis_room < len(lines[-1]) else lines[-1]).rstrip(" .") + "..."
+    return [line for line in lines if line.strip()]
+
+
+def _fit_font_to_lines(
+    draw: ImageDraw.ImageDraw,
+    lines: List[str],
+    *,
+    initial_size: int,
+    min_size: int,
+    max_width: int,
+    bold: bool = False,
+) -> Any:
+    size = max(min_size, initial_size)
+    while size > min_size:
+        candidate_font = _font(size, bold=bold)
+        too_wide = False
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=candidate_font)
+            if (bbox[2] - bbox[0]) > max_width:
+                too_wide = True
+                break
+        if not too_wide:
+            return candidate_font
+        size -= 4
+    return _font(min_size, bold=bold)
+
+
+def _draw_line_list(
+    draw: ImageDraw.ImageDraw,
+    pos: tuple[int, int],
+    lines: List[str],
+    font: Any,
+    fill: str,
+    spacing: int,
+) -> int:
+    x, y = pos
+    for line in lines:
+        draw.text((x, y), line, font=font, fill=fill)
+        bbox = draw.textbbox((x, y), line, font=font)
+        y = bbox[3] + spacing
+    return y
 
 
 def _draw_multiline(
@@ -3102,10 +3184,10 @@ def _generate_white_bg_assets(
     config: PipelineConfig,
     reference_urls: List[str],
 ) -> Dict[str, Any]:
-    prompt = _compose_white_bg_prompt(analysis)
-    generated, attempts = client.generate_image(
+    white_prompt = _compose_white_bg_prompt(analysis)
+    white_generated, white_attempts = client.generate_image(
         config.image_model,
-        prompt,
+        white_prompt,
         "1:1",
         reference_urls,
         "06_white_bg_source",
@@ -3114,20 +3196,44 @@ def _generate_white_bg_assets(
         "image",
         config.image_model,
         "white_bg_source",
-        payload={"attempts": attempts, "aspect_ratio": "1:1"},
+        payload={"attempts": white_attempts, "aspect_ratio": "1:1"},
     )
-    white_bg_source = _download_image(generated["url"], retries=5, timeout=180)
+    white_bg_source = _download_image(white_generated["url"], retries=5, timeout=180)
     white_bg_image = _normalize_generated_white_bg(white_bg_source, 800, 800)
-    transparent_image = _derive_transparent_from_white_bg(white_bg_image)
+
+    black_prompt = _compose_black_bg_prompt(analysis)
+    black_refs = [str(white_generated["url"]).strip()] + [ref for ref in reference_urls if str(ref).strip()]
+    black_generated, black_attempts = client.generate_image(
+        config.image_model,
+        black_prompt,
+        "1:1",
+        black_refs,
+        "06_black_bg_source",
+    )
+    logger.record_usage(
+        "image",
+        config.image_model,
+        "black_bg_source",
+        payload={"attempts": black_attempts, "aspect_ratio": "1:1"},
+    )
+    black_bg_source = _download_image(black_generated["url"], retries=5, timeout=180)
+    black_bg_image = _normalize_generated_black_bg(black_bg_source, 800, 800)
+
+    transparent_image = _derive_transparent_from_white_black_bg(white_bg_image, black_bg_image)
     if not _image_has_real_transparency(transparent_image):
-        raise PipelineError("Generated white-background image could not be converted into a usable transparent asset")
+        raise PipelineError("Generated white/black-background images could not be converted into a usable transparent asset")
     return {
         "white_bg_image": white_bg_image,
+        "black_bg_image": black_bg_image,
         "transparent_image": transparent_image,
         "generation_mode": "remote",
-        "generated_image_url": generated["url"],
-        "prompt": prompt,
-        "attempts": attempts,
+        "generated_image_url": white_generated["url"],
+        "prompt": white_prompt,
+        "attempts": white_attempts + black_attempts,
+        "white_bg_generated_image_url": white_generated["url"],
+        "black_bg_generated_image_url": black_generated["url"],
+        "white_bg_prompt": white_prompt,
+        "black_bg_prompt": black_prompt,
         "warnings": [],
     }
 
@@ -3619,6 +3725,10 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                     "generation_mode": white_bg_assets.get("generation_mode"),
                     "generated_image_url": white_bg_assets.get("generated_image_url"),
                     "prompt": white_bg_assets.get("prompt"),
+                    "white_bg_generated_image_url": white_bg_assets.get("white_bg_generated_image_url"),
+                    "black_bg_generated_image_url": white_bg_assets.get("black_bg_generated_image_url"),
+                    "white_bg_prompt": white_bg_assets.get("white_bg_prompt"),
+                    "black_bg_prompt": white_bg_assets.get("black_bg_prompt"),
                     "warnings": white_bg_assets.get("warnings"),
                 },
             )
@@ -3751,6 +3861,10 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "generation_mode": white_bg_assets.get("generation_mode"),
                 "generated_image_url": white_bg_assets.get("generated_image_url"),
                 "prompt": white_bg_assets.get("prompt"),
+                "white_bg_generated_image_url": white_bg_assets.get("white_bg_generated_image_url"),
+                "black_bg_generated_image_url": white_bg_assets.get("black_bg_generated_image_url"),
+                "white_bg_prompt": white_bg_assets.get("white_bg_prompt"),
+                "black_bg_prompt": white_bg_assets.get("black_bg_prompt"),
                 "warnings": white_bg_assets.get("warnings"),
             },
             "suite_bundle": suite_bundle,
@@ -3935,8 +4049,8 @@ def _compose_main_image_prompt(analysis: Dict[str, Any], *, aspect_ratio: str, s
         "Do not crop off key product structure, and keep enough safe space around the subject for later resizing",
         "Avoid turning this into a detail-page poster or typography-based ad",
         "Use realistic lighting, credible materials, and a commercially polished look",
-        "Keep the product silhouette, color, structure, and materials consistent with the reference image",
     ]
+    prompt_parts.extend(_product_identity_guardrails(analysis))
     prompt_parts.extend(_style_prompt_details(analysis, include_copy_tone=True))
     if shot_label:
         prompt_parts.append(f"Shot intent: {shot_label}")
@@ -4122,8 +4236,8 @@ def _compose_sku_scene_prompt(analysis: Dict[str, Any], shot: Optional[Dict[str,
         "No title, no subtitle, no callout, no measurement label, no badge, no UI, no watermark, no logo, no collage",
         "Keep the product visually complete and readable in a square composition",
         "Make the image feel suitable for a marketplace sku gallery slot",
-        "Keep the product silhouette, color, structure, and materials consistent with the reference image",
     ]
+    prompt_parts.extend(_product_identity_guardrails(analysis))
     prompt_parts.extend(_style_prompt_details(analysis))
     if shot_label:
         prompt_parts.append(f"SKU shot intent: {shot_label}")
@@ -4189,7 +4303,8 @@ def _compose_sku_layout_image(
     body_dark = theme["body_dark"]
     draw.rectangle((0, 0, size, top_band_h), fill=dark)
 
-    title_font = _font(max(38, size // 18), bold=True)
+    title_font_size = max(38, size // 18)
+    title_font = _font(title_font_size, bold=True)
     sub_font = _font(max(22, size // 40))
     chip_font = _font(max(18, size // 54), bold=True)
     tiny_font = _font(max(18, size // 56))
@@ -4197,8 +4312,9 @@ def _compose_sku_layout_image(
     margin = int(size * 0.06)
     title_source = str(analysis.get("product_name") or analysis.get("hero_claim") or analysis.get("category") or "SKU图").strip()
     title = _sanitize_copy_text(title_source)
-    if len(title) > 12:
-        title = _short_overlay_phrase(title, 12) or title[:12]
+    title_lines = _split_text_by_chars(title, 10, 2)
+    if not title_lines:
+        title_lines = ["SKU图"]
     subtitle = str(analysis.get("category") or analysis.get("product_summary") or "").strip()
     if not subtitle:
         subtitle = "适合电商 SKU 展示"
@@ -4208,9 +4324,19 @@ def _compose_sku_layout_image(
     size_specs = _primary_size_specs(analysis)
     top_right = " / ".join(size_specs[:1]) or _short_overlay_phrase(analysis.get("category") or "", 8)
 
-    _draw_multiline(draw, (margin, int(size * 0.04)), title, title_font, text_dark, int(size * 0.5), 2, 8)
+    title_max_width = size - margin * 2 - int(size * 0.2)
+    title_font = _fit_font_to_lines(
+        draw,
+        title_lines,
+        initial_size=title_font_size,
+        min_size=max(34, title_font_size - 28),
+        max_width=title_max_width,
+        bold=True,
+    )
+    title_bottom = _draw_line_list(draw, (margin, int(size * 0.04)), title_lines, title_font, text_dark, int(size * 0.008))
     if subtitle:
-        _draw_multiline(draw, (margin, int(size * 0.105)), subtitle, sub_font, "#f7e9dc", int(size * 0.42), 1, 6)
+        subtitle_y = min(title_bottom + int(size * 0.008), top_band_h - int(size * 0.05))
+        _draw_multiline(draw, (margin, subtitle_y), subtitle, sub_font, "#f7e9dc", int(size * 0.42), 1, 6)
 
     if top_right:
         bbox = draw.textbbox((0, 0), top_right, font=sub_font)

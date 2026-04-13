@@ -65,6 +65,249 @@
     .category-chip.active { background: rgba(6,182,212,0.18); border-color: var(--accent); color: var(--accent); font-weight: 500; }
     .category-chip .chip-count { font-size: 0.7rem; opacity: 0.7; margin-left: 0.2rem; }
     .paging-info { font-size: 0.82rem; color: var(--text-muted); }
+    .ecom-studio { display: flex; flex-direction: column; gap: 1rem; }
+    .ecom-studio-hero {
+      display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start;
+      padding: 1.25rem; border: 1px solid rgba(255,255,255,0.08); border-radius: var(--radius);
+      background:
+        radial-gradient(circle at top left, rgba(245,158,11,0.14), transparent 34%),
+        radial-gradient(circle at top right, rgba(6,182,212,0.12), transparent 32%),
+        linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+    }
+    .ecom-studio-hero-copy h3 { margin: 0 0 0.45rem 0; font-size: 1.15rem; }
+    .ecom-studio-hero-copy p { margin: 0; max-width: 720px; font-size: 0.84rem; color: var(--text-muted); line-height: 1.65; }
+    .ecom-studio-badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.8rem; }
+    .ecom-studio-badge { padding: 0.25rem 0.6rem; font-size: 0.75rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: var(--text-muted); }
+    .ecom-studio-shell { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 1rem; min-height: 720px; }
+    .ecom-studio-sidebar { display: flex; flex-direction: column; gap: 0.85rem; min-width: 0; }
+    .ecom-studio-main { min-width: 0; display: flex; flex-direction: column; gap: 0.85rem; }
+    .ecom-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
+    .ecom-panel-title { margin: 0 0 0.75rem 0; font-size: 0.95rem; font-weight: 600; color: var(--text); }
+    .ecom-panel-hint { margin: -0.35rem 0 0.75rem 0; font-size: 0.76rem; color: var(--text-muted); line-height: 1.55; }
+    .ecom-field { margin-bottom: 0.75rem; }
+    .ecom-field:last-child { margin-bottom: 0; }
+    .ecom-field label { display: block; font-size: 0.82rem; font-weight: 500; color: var(--text); margin-bottom: 0.35rem; }
+    .ecom-field input[type="text"], .ecom-field input[type="number"], .ecom-field textarea, .ecom-field select {
+      width: 100%; padding: 0.55rem 0.65rem; font-size: 0.86rem; color: var(--text);
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-sm); outline: none; box-sizing: border-box;
+    }
+    .ecom-field textarea { min-height: 84px; resize: vertical; line-height: 1.5; }
+    .ecom-field .hint { margin-top: 0.25rem; font-size: 0.74rem; color: var(--text-muted); line-height: 1.45; }
+    .ecom-inline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+    .ecom-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+    .ecom-check {
+      display: flex; align-items: center; gap: 0.45rem; padding: 0.55rem 0.65rem;
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; background: rgba(255,255,255,0.03); font-size: 0.8rem; color: var(--text);
+    }
+    .ecom-check input { margin: 0; width: auto; }
+    .ecom-upload-box { border: 1px dashed rgba(255,255,255,0.16); border-radius: 12px; padding: 0.8rem; background: rgba(255,255,255,0.025); }
+    .ecom-upload-box .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.6rem; }
+    .ecom-upload-list { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+    .ecom-upload-item { width: 84px; position: relative; }
+    .ecom-upload-thumb { width: 84px; height: 84px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.05); }
+    .ecom-upload-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ecom-upload-name { margin-top: 0.25rem; font-size: 0.68rem; color: var(--text-muted); line-height: 1.35; word-break: break-word; }
+    .ecom-upload-remove {
+      position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.1); background: rgba(10,10,15,0.92); color: #fff; cursor: pointer;
+    }
+    .ecom-workspace-tabs { display: flex; gap: 0.3rem; padding: 4px; background: rgba(255,255,255,0.04); border-radius: var(--radius-sm); width: fit-content; }
+    .ecom-workspace-tab { padding: 0.48rem 0.95rem; border-radius: 8px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; font-weight: 500; }
+    .ecom-workspace-tab.active { color: var(--text); background: rgba(255,255,255,0.09); }
+    .ecom-workspace-panel { display: none; }
+    .ecom-workspace-panel.visible { display: block; }
+    .ecom-task-browser-top {
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at top left, rgba(245,158,11,0.12), transparent 34%),
+        radial-gradient(circle at top right, rgba(6,182,212,0.1), transparent 30%),
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)),
+        rgba(8,8,12,0.78);
+    }
+    .ecom-task-browser-head { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+    .ecom-task-browser-title .eyebrow {
+      font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.52);
+    }
+    .ecom-task-browser-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .ecom-preview-stage { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.22rem 0.55rem; border-radius: 999px; background: rgba(255,255,255,0.06); color: var(--text); font-size: 0.74rem; }
+    .ecom-task-pill-row { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-top: 0.95rem; }
+    .ecom-task-pill {
+      min-width: 0; max-width: 100%;
+      padding: 0.6rem 0.8rem; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03); color: var(--text); cursor: pointer; text-align: left;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+      font-family: inherit;
+    }
+    .ecom-task-pill:hover { border-color: rgba(255,255,255,0.18); transform: translateY(-1px); }
+    .ecom-task-pill.active { border-color: rgba(6,182,212,0.34); background: rgba(6,182,212,0.12); }
+    .ecom-task-pill .name {
+      display: block; font-size: 0.8rem; font-weight: 600; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ecom-task-pill .meta {
+      display: block; margin-top: 0.18rem; font-size: 0.72rem; color: var(--text-muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ecom-task-drawer {
+      display: none; margin-top: 0.95rem; padding-top: 0.95rem;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .ecom-task-drawer.open { display: block; }
+    .ecom-task-drawer-head { display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    .ecom-task-drawer-list { display: grid; gap: 0.7rem; margin-top: 0.85rem; }
+    .ecom-task-card {
+      width: 100%; padding: 0.8rem; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03); cursor: pointer; text-align: left;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+      font-family: inherit;
+    }
+    .ecom-task-card:hover { border-color: rgba(255,255,255,0.18); transform: translateY(-1px); }
+    .ecom-task-card.active { border-color: rgba(6,182,212,0.34); background: rgba(6,182,212,0.12); }
+    .ecom-task-card-shell { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 0.75rem; align-items: start; }
+    .ecom-task-card-thumb {
+      width: 54px; height: 54px; border-radius: 14px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.04);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ecom-task-card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ecom-task-card-thumb span { font-size: 0.68rem; color: var(--text-muted); }
+    .ecom-task-card-head { display: flex; justify-content: space-between; gap: 0.65rem; align-items: flex-start; }
+    .ecom-task-card-title { margin: 0; font-size: 0.84rem; font-weight: 600; color: var(--text); line-height: 1.45; }
+    .ecom-task-card-meta { margin-top: 0.28rem; font-size: 0.72rem; color: var(--text-muted); line-height: 1.5; }
+    .ecom-task-card-counts { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.6rem; }
+    .ecom-task-count {
+      padding: 0.18rem 0.48rem; border-radius: 999px; font-size: 0.68rem;
+      background: rgba(255,255,255,0.06); color: var(--text-muted);
+    }
+    .ecom-result-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.7rem; }
+    .ecom-stat-card { padding: 0.85rem; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); }
+    .ecom-stat-card .label { font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.35rem; }
+    .ecom-stat-card .value { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    .ecom-browser-toolbar { display: flex; flex-direction: column; gap: 0.85rem; }
+    .ecom-browser-toolbar-head { display: flex; justify-content: space-between; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap; }
+    .ecom-browser-toolbar-row { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+    .ecom-result-overview-inline { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .ecom-result-overview-inline .ecom-stat-card { min-width: 84px; padding: 0.65rem 0.75rem; }
+    .ecom-result-overview-inline .ecom-stat-card .value { font-size: 1.05rem; }
+    .ecom-stage-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.65rem; margin-top: 0.85rem; }
+    .ecom-stage-strip-compact { margin-top: 0; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+    .ecom-stage-chip { padding: 0.7rem 0.75rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); }
+    .ecom-stage-chip .kicker { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .ecom-stage-chip .name { margin-top: 0.25rem; font-size: 0.82rem; color: var(--text); font-weight: 600; }
+    .ecom-stage-chip.done { border-color: rgba(16,185,129,0.28); background: rgba(16,185,129,0.12); }
+    .ecom-stage-chip.running { border-color: rgba(245,158,11,0.28); background: rgba(245,158,11,0.12); }
+    .ecom-progress-bar { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+    .ecom-progress-bar > span { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, #f59e0b, #06b6d4); transition: width 0.25s ease; }
+    .ecom-progress-bar-compact { height: 6px; }
+    .ecom-browser-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) 320px; gap: 1rem; align-items: start; }
+    .ecom-browser-main { min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
+    .ecom-browser-side { min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
+    .ecom-browser-stage-head { display: flex; justify-content: space-between; gap: 0.85rem; align-items: flex-start; flex-wrap: wrap; margin-bottom: 0.85rem; }
+    .ecom-focused-preview {
+      min-height: 420px; border-radius: 18px; border: 1px solid rgba(255,255,255,0.08);
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.08), transparent 32%),
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)),
+        rgba(8,8,12,0.85);
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    .ecom-focused-preview img {
+      width: 100%; height: 100%; max-height: 640px; object-fit: contain; display: block; background: #fff;
+    }
+    .ecom-focused-meta {
+      display: flex; justify-content: space-between; gap: 0.85rem; flex-wrap: wrap;
+      margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .ecom-focused-meta-copy { min-width: 0; flex: 1; }
+    .ecom-focused-meta-title { font-size: 0.9rem; font-weight: 600; color: var(--text); line-height: 1.45; }
+    .ecom-focused-meta-sub { margin-top: 0.3rem; font-size: 0.76rem; color: var(--text-muted); line-height: 1.6; word-break: break-word; }
+    .ecom-focused-meta-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-start; }
+    .ecom-activity-list { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.85rem; }
+    .ecom-activity-item { padding: 0.75rem 0.85rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.07); background: rgba(255,255,255,0.03); font-size: 0.8rem; line-height: 1.5; }
+    .ecom-activity-item .meta { margin-top: 0.25rem; font-size: 0.72rem; color: var(--text-muted); }
+    .ecom-activity-compact { max-height: 260px; overflow: auto; padding-right: 0.15rem; }
+    .ecom-stage-strip-vertical { grid-template-columns: 1fr; }
+    .ecom-results-header { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+    .ecom-result-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .ecom-result-tab { padding: 0.35rem 0.65rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: var(--text-muted); cursor: pointer; font-size: 0.78rem; font-family: inherit; }
+    .ecom-result-tab.active { color: var(--text); border-color: rgba(6,182,212,0.3); background: rgba(6,182,212,0.12); }
+    .ecom-result-tab.is-empty { opacity: 0.7; }
+    .ecom-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.8rem; }
+    .ecom-gallery-browser { grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); }
+    .ecom-gallery-results {
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+      align-items: start;
+    }
+    .ecom-gallery-item {
+      border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03);
+      overflow: hidden; padding: 0.5rem; cursor: pointer;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+      width: 100%; text-align: left; font-family: inherit; appearance: none;
+    }
+    .ecom-gallery-item:hover { border-color: rgba(255,255,255,0.18); transform: translateY(-1px); }
+    .ecom-gallery-item.active { border-color: rgba(6,182,212,0.34); background: rgba(6,182,212,0.1); }
+    .ecom-gallery-item.link-card { display: block; text-decoration: none; color: inherit; cursor: pointer; }
+    .ecom-gallery-item.link-card.is-static { cursor: default; }
+    .ecom-gallery-thumb { aspect-ratio: 1 / 1; background: rgba(255,255,255,0.04); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .ecom-gallery-thumb { border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); }
+    .ecom-gallery-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ecom-gallery-results .ecom-gallery-thumb { aspect-ratio: auto; min-height: 220px; background: rgba(10,10,14,0.88); }
+    .ecom-gallery-results .ecom-gallery-thumb img { object-fit: contain; background: #fff; }
+    .ecom-gallery-body { padding: 0.55rem 0.1rem 0.15rem; }
+    .ecom-gallery-body .title { font-size: 0.8rem; color: var(--text); font-weight: 600; line-height: 1.45; margin-bottom: 0.3rem; word-break: break-word; }
+    .ecom-gallery-body .meta { font-size: 0.72rem; color: var(--text-muted); line-height: 1.5; word-break: break-word; }
+    .ecom-results-panel-simple { display: flex; flex-direction: column; gap: 1rem; }
+    .ecom-results-strip { display: flex; justify-content: space-between; gap: 0.8rem; align-items: flex-start; flex-wrap: wrap; }
+    .ecom-empty { padding: 1rem; border: 1px dashed rgba(255,255,255,0.12); border-radius: 12px; color: var(--text-muted); font-size: 0.82rem; text-align: center; background: rgba(255,255,255,0.02); }
+    .ecom-example-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.8rem; }
+    .ecom-example-card {
+      padding: 0.95rem; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);
+      background: radial-gradient(circle at top left, rgba(255,255,255,0.06), transparent 30%), rgba(255,255,255,0.03); min-height: 180px;
+    }
+    .ecom-example-card h4 { margin: 0 0 0.35rem 0; font-size: 0.92rem; }
+    .ecom-example-card p { margin: 0; font-size: 0.78rem; line-height: 1.6; color: var(--text-muted); }
+    .ecom-example-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.75rem; }
+    .ecom-example-tags span { font-size: 0.68rem; padding: 0.2rem 0.5rem; border-radius: 999px; background: rgba(255,255,255,0.06); color: var(--text-muted); }
+    @media (max-width: 1080px) {
+      .ecom-studio-shell, .ecom-browser-layout { grid-template-columns: 1fr; }
+      .ecom-browser-toolbar-row { flex-direction: column; }
+      .ecom-example-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 768px) {
+      .ecom-studio-hero { flex-direction: column; }
+      .ecom-inline-grid, .ecom-choice-grid, .ecom-result-overview { grid-template-columns: 1fr; }
+      .ecom-task-browser-head { flex-direction: column; }
+      .ecom-task-browser-actions { width: 100%; }
+      .ecom-focused-preview { min-height: 300px; }
+    }
+    #ecomOverviewStats,
+    #ecomRequestedOutputs,
+    #ecomFocusedCounter,
+    #ecomFocusedFolderHint,
+    #ecomFocusedPreview,
+    #ecomFocusedMeta,
+    .ecom-browser-toolbar-head,
+    .ecom-progress-bar-compact,
+    .ecom-results-header,
+    .ecom-browser-side,
+    .ecom-browser-main > .ecom-panel:first-child {
+      display: none !important;
+    }
+    .ecom-browser-layout {
+      grid-template-columns: 1fr;
+    }
+    .ecom-browser-toolbar {
+      padding-bottom: 0.9rem;
+    }
+    .ecom-browser-toolbar-row {
+      justify-content: flex-start;
+    }
+    #ecomGallery.ecom-gallery {
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
   </style>
 </head>
 <body>
@@ -248,6 +491,313 @@
               </div>
               <div id="mcpRegistryResults" class="skill-store-grid" style="margin-top:0.75rem;"></div>
               <div id="mcpRegistryPaging" style="margin-top:0.75rem;text-align:center;display:flex;justify-content:center;align-items:center;gap:0.75rem;"></div>
+            </div>
+          </div>
+
+          <div id="content-ecommerce-detail-studio" class="content-block">
+            <div class="ecom-studio">
+              <div class="ecom-studio-hero">
+                <div class="ecom-studio-hero-copy">
+                  <h3>产品套图工作台</h3>
+                  <p>把商品主图、多角度图、卖点和风格预设组织成一套完整上架素材。这里会直接调用 <code>comfly_ecommerce_detail</code> 的异步流水线，按主图、SKU 图、透明/白底、详情图、素材图、橱窗图分组返回，适合反复校准与验图。</p>
+                  <div class="ecom-studio-badges">
+                    <span class="ecom-studio-badge">结构化输入</span>
+                    <span class="ecom-studio-badge">任务轮询进度</span>
+                    <span class="ecom-studio-badge">分类结果预览</span>
+                    <span class="ecom-studio-badge">复用 Comfly 凭据</span>
+                  </div>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+                  <button type="button" id="ecomStudioBackBtn" class="btn btn-ghost btn-sm">← 返回技能商店</button>
+                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn">配置 Comfly</button>
+                </div>
+              </div>
+
+              <div class="ecom-studio-shell">
+                <aside class="ecom-studio-sidebar">
+                  <div class="ecom-panel">
+                    <h4 class="ecom-panel-title">商品素材</h4>
+                    <p class="ecom-panel-hint">至少上传 1 张商品主图。多角度图与风格参考图会作为额外控制信息参与生成。</p>
+
+                    <div class="ecom-field">
+                      <label>主商品图</label>
+                      <div class="ecom-upload-box">
+                        <div class="actions">
+                          <button type="button" id="ecomUploadMainBtn" class="btn btn-primary btn-sm">上传主图</button>
+                          <input type="file" id="ecomMainFileInput" accept="image/*" style="display:none;">
+                          <input type="text" id="ecomMainAssetIdInput" placeholder="或直接填写已存在的 asset_id">
+                        </div>
+                        <div id="ecomMainUploadList" class="ecom-upload-list"></div>
+                      </div>
+                    </div>
+
+                    <div class="ecom-field">
+                      <label>多角度商品图</label>
+                      <div class="ecom-upload-box">
+                        <div class="actions">
+                          <button type="button" id="ecomUploadProductRefsBtn" class="btn btn-ghost btn-sm">上传参考商品图</button>
+                          <input type="file" id="ecomProductRefsFileInput" accept="image/*" multiple style="display:none;">
+                        </div>
+                        <div id="ecomProductRefsList" class="ecom-upload-list"></div>
+                      </div>
+                    </div>
+
+                    <div class="ecom-field">
+                      <label>风格参考图</label>
+                      <div class="ecom-upload-box">
+                        <div class="actions">
+                          <button type="button" id="ecomUploadStyleRefsBtn" class="btn btn-ghost btn-sm">上传风格参考</button>
+                          <input type="file" id="ecomStyleRefsFileInput" accept="image/*" multiple style="display:none;">
+                        </div>
+                        <div id="ecomStyleRefsList" class="ecom-upload-list"></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="ecom-panel">
+                    <h4 class="ecom-panel-title">商品信息</h4>
+                    <div class="ecom-field">
+                      <label for="ecomProductNameInput">商品名</label>
+                      <input type="text" id="ecomProductNameInput" placeholder="例如：实木猫砂柜 / 牛仔外套 / 女包">
+                    </div>
+                    <div class="ecom-field">
+                      <label for="ecomProductDirectionInput">商品方向</label>
+                      <input type="text" id="ecomProductDirectionInput" placeholder="例如：猫家具、女装外套、收纳家居">
+                    </div>
+                    <div class="ecom-inline-grid">
+                      <div class="ecom-field">
+                        <label for="ecomSkuInput">SKU</label>
+                        <input type="text" id="ecomSkuInput" placeholder="可选">
+                      </div>
+                      <div class="ecom-field">
+                        <label for="ecomBrandInput">品牌</label>
+                        <input type="text" id="ecomBrandInput" placeholder="可选">
+                      </div>
+                    </div>
+                    <div class="ecom-field">
+                      <label for="ecomSellingPointsInput">卖点</label>
+                      <textarea id="ecomSellingPointsInput" placeholder="每行一个卖点，支持“标题|描述”格式&#10;例如：防带砂|走廊式结构减少猫砂外带"></textarea>
+                    </div>
+                    <div class="ecom-field">
+                      <label for="ecomSpecsInput">规格参数</label>
+                      <textarea id="ecomSpecsInput" placeholder="每行一个参数，支持“键:值”格式&#10;例如：尺寸:80x45x60cm"></textarea>
+                    </div>
+                    <div class="ecom-field">
+                      <label for="ecomComplianceNotesInput">合规备注</label>
+                      <textarea id="ecomComplianceNotesInput" placeholder="每行一条需要规避或不能乱写的说明"></textarea>
+                    </div>
+                  </div>
+
+                  <div class="ecom-panel">
+                    <h4 class="ecom-panel-title">风格与输出</h4>
+                    <div class="ecom-inline-grid">
+                      <div class="ecom-field">
+                        <label for="ecomStyleSelect">风格预设</label>
+                        <select id="ecomStyleSelect">
+                          <option value="creamy_vintage">中古孟菲斯风</option>
+                          <option value="creamy_wood" selected>奶油原木风</option>
+                          <option value="french_creamy">法式奶油风</option>
+                        </select>
+                      </div>
+                      <div class="ecom-field">
+                        <label for="ecomPageCountInput">详情页数</label>
+                        <input type="number" id="ecomPageCountInput" min="10" max="16" value="12">
+                      </div>
+                    </div>
+                    <div class="ecom-inline-grid">
+                      <div class="ecom-field">
+                        <label for="ecomDetailTemplateSelect">详情模板</label>
+                        <select id="ecomDetailTemplateSelect">
+                          <option value="detail_template_01">详情模板 01</option>
+                          <option value="detail_template_02" selected>详情模板 02</option>
+                          <option value="detail_template_03">详情模板 03</option>
+                        </select>
+                      </div>
+                      <div class="ecom-field">
+                        <label for="ecomShowcaseTemplateSelect">橱窗模板</label>
+                        <select id="ecomShowcaseTemplateSelect">
+                          <option value="showcase_template_01">橱窗模板 01</option>
+                          <option value="showcase_template_02" selected>橱窗模板 02</option>
+                          <option value="showcase_template_03">橱窗模板 03</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="ecom-field">
+                      <label>输出内容</label>
+                      <div class="ecom-choice-grid">
+                        <label class="ecom-check"><input type="checkbox" id="ecomTargetMain" checked>主图</label>
+                        <label class="ecom-check"><input type="checkbox" id="ecomTargetSku" checked>SKU 图</label>
+                        <label class="ecom-check"><input type="checkbox" id="ecomTargetTransparent" checked>透明图</label>
+                        <label class="ecom-check"><input type="checkbox" id="ecomTargetWhite" checked>白底图</label>
+                        <label class="ecom-check"><input type="checkbox" id="ecomTargetDetail" checked>详情图</label>
+                        <label class="ecom-check"><input type="checkbox" id="ecomTargetMaterial" checked>素材图</label>
+                        <label class="ecom-check"><input type="checkbox" id="ecomTargetShowcase" checked>橱窗图</label>
+                      </div>
+                    </div>
+                    <div class="ecom-inline-grid">
+                      <label class="ecom-check"><input type="checkbox" id="ecomIncludePetCheck">偏向宠物场景</label>
+                      <label class="ecom-check"><input type="checkbox" id="ecomIncludeHumanCheck">偏向人物场景</label>
+                    </div>
+                    <div class="ecom-inline-grid" style="margin-top:0.65rem;">
+                      <div class="ecom-field">
+                        <label for="ecomPetTypeInput">宠物类型</label>
+                        <input type="text" id="ecomPetTypeInput" placeholder="如 cat / dog">
+                      </div>
+                      <div class="ecom-field">
+                        <label for="ecomHumanTypeInput">人物类型</label>
+                        <input type="text" id="ecomHumanTypeInput" placeholder="如 female urban / mom">
+                      </div>
+                    </div>
+                    <div class="ecom-field">
+                      <label for="ecomDecorTagsInput">装饰偏好</label>
+                      <input type="text" id="ecomDecorTagsInput" placeholder="用逗号分隔，例如：原木、绿植、暖光">
+                    </div>
+                    <div id="ecomStudioMsg" class="msg" style="display:none;"></div>
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.9rem;">
+                      <button type="button" id="ecomStartBtn" class="btn btn-primary">开始生成套图</button>
+                      <button type="button" id="ecomResetBtn" class="btn btn-ghost">重置表单</button>
+                    </div>
+                  </div>
+                </aside>
+
+                <section class="ecom-studio-main">
+                  <div class="ecom-panel">
+                    <div class="ecom-workspace-tabs">
+                      <button type="button" class="ecom-workspace-tab active" data-ecom-tab="workspace">生成结果</button>
+                      <button type="button" class="ecom-workspace-tab" data-ecom-tab="examples">优秀案例</button>
+                    </div>
+                  </div>
+
+                  <div id="ecomWorkspacePanel" class="ecom-workspace-panel visible">
+                    <div class="ecom-panel ecom-task-browser-top">
+                      <div class="ecom-task-browser-head">
+                        <div class="ecom-task-browser-title">
+                          <div class="eyebrow">当前任务</div>
+                          <h4 id="ecomCurrentTaskTitle" class="ecom-panel-title" style="margin:0.15rem 0 0 0;">等待提交商品套图任务</h4>
+                          <div id="ecomCurrentTaskMeta" class="ecom-panel-hint" style="margin:0.35rem 0 0 0;">上传主图并提交后，这里会保留最近任务，方便在不同商品任务之间来回切换查看结果。</div>
+                        </div>
+                        <div class="ecom-task-browser-actions">
+                          <span class="ecom-preview-stage" id="ecomPreviewStatus">待提交</span>
+                          <button type="button" id="ecomRefreshBtn" class="btn btn-ghost btn-sm">刷新状态</button>
+                          <button type="button" id="ecomToggleTaskDrawerBtn" class="btn btn-ghost btn-sm">全部任务</button>
+                        </div>
+                      </div>
+                      <div id="ecomRecentTasks" class="ecom-task-pill-row">
+                        <div class="ecom-empty" style="width:100%;margin:0;">提交任务后，这里会保留最近任务，方便切换查看不同商品的套图结果。</div>
+                      </div>
+                      <div id="ecomTaskDrawer" class="ecom-task-drawer">
+                        <div class="ecom-task-drawer-head">
+                          <div>
+                            <h4 class="ecom-panel-title" style="margin-bottom:0.2rem;">全部任务</h4>
+                            <div class="ecom-panel-hint" style="margin:0;">后续批量跑多个商品时，可以从这里回看每个任务的生成结果。</div>
+                          </div>
+                        </div>
+                        <div id="ecomTaskDrawerList" class="ecom-task-drawer-list">
+                          <div class="ecom-empty">当前还没有任务记录。</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="ecom-panel ecom-browser-toolbar">
+                      <div class="ecom-browser-toolbar-head">
+                        <div>
+                          <h4 class="ecom-panel-title" style="margin-bottom:0.2rem;">结果浏览器</h4>
+                          <div id="ecomStatusSummary" class="ecom-panel-hint" style="margin:0;">按真实导出目录浏览结果，右侧只保留轻量状态和任务摘要。</div>
+                        </div>
+                        <span id="ecomCurrentJobText" class="ecom-preview-stage">尚未开始</span>
+                      </div>
+                      <div class="ecom-browser-toolbar-row">
+                        <div id="ecomResultTabs" class="ecom-result-tabs"></div>
+                        <div class="ecom-result-overview ecom-result-overview-inline" id="ecomOverviewStats">
+                          <div class="ecom-stat-card"><div class="label">主图</div><div class="value">0</div></div>
+                          <div class="ecom-stat-card"><div class="label">SKU 图</div><div class="value">0</div></div>
+                          <div class="ecom-stat-card"><div class="label">详情图</div><div class="value">0</div></div>
+                          <div class="ecom-stat-card"><div class="label">橱窗图</div><div class="value">0</div></div>
+                        </div>
+                      </div>
+                      <div class="ecom-stage-strip ecom-stage-strip-compact" id="ecomRequestedOutputs"></div>
+                      <div class="ecom-progress-bar ecom-progress-bar-compact"><span id="ecomProgressBarFill"></span></div>
+                    </div>
+
+                    <div class="ecom-browser-layout">
+                      <div class="ecom-browser-main">
+                        <div class="ecom-panel ecom-results-panel-simple">
+                          <div class="ecom-browser-stage-head">
+                            <div>
+                              <h4 id="ecomFocusedFolderTitle" class="ecom-panel-title" style="margin-bottom:0.2rem;">1 】主图</h4>
+                              <div id="ecomFocusedFolderHint" class="ecom-panel-hint" style="margin:0;">当前分类暂无结果，任务完成后会在这里显示大图预览。</div>
+                            </div>
+                            <span id="ecomFocusedCounter" class="ecom-preview-stage">0 张</span>
+                          </div>
+                          <div id="ecomFocusedPreview" class="ecom-focused-preview">
+                            <div class="ecom-empty" style="width:100%;margin:0;">上传主图并提交任务后，这里会显示当前选中的套图结果。</div>
+                          </div>
+                          <div id="ecomFocusedMeta" class="ecom-focused-meta">
+                            <div class="ecom-empty" style="width:100%;margin:0;">下方缩略图可切换预览，顶部目录标签可切换主图、SKU 图、透明白底、详情图等不同分类。</div>
+                          </div>
+                        </div>
+
+                        <div class="ecom-panel">
+                          <div class="ecom-results-header">
+                            <div>
+                              <h4 class="ecom-panel-title" style="margin-bottom:0.2rem;">当前分类缩略图</h4>
+                              <div class="ecom-panel-hint" style="margin:0;">点击缩略图切换大图，方便快速对比当前目录下的每一张产物。</div>
+                            </div>
+                          </div>
+                          <div id="ecomGallery" class="ecom-gallery ecom-gallery-browser ecom-gallery-results">
+                            <div class="ecom-empty" style="grid-column:1 / -1;">结果会在任务完成后展示在这里。</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <aside class="ecom-browser-side">
+                        <div class="ecom-panel">
+                          <h4 class="ecom-panel-title" style="margin-bottom:0.2rem;">任务节点</h4>
+                          <div class="ecom-panel-hint" style="margin:0;">这里只保留轻量进度，避免结果区被状态信息挤占。</div>
+                          <div class="ecom-stage-strip ecom-stage-strip-vertical" id="ecomStageChips"></div>
+                        </div>
+
+                        <div class="ecom-panel">
+                          <h4 class="ecom-panel-title" style="margin-bottom:0.2rem;">任务摘要</h4>
+                          <div id="ecomRunFacts" class="ecom-activity-list ecom-activity-compact">
+                            <div class="ecom-empty">生成完成后，这里会显示模型、页数、积分消耗和输出目录摘要。</div>
+                          </div>
+                        </div>
+
+                        <div class="ecom-panel">
+                          <h4 class="ecom-panel-title" style="margin-bottom:0.2rem;">最近步骤</h4>
+                          <div id="ecomActivityList" class="ecom-activity-list ecom-activity-compact">
+                            <div class="ecom-empty">还没有任务记录，填写左侧信息后开始生成。</div>
+                          </div>
+                        </div>
+                      </aside>
+                    </div>
+                  </div>
+
+                  <div id="ecomExamplesPanel" class="ecom-workspace-panel">
+                    <div class="ecom-panel">
+                      <h4 class="ecom-panel-title">优秀案例参考</h4>
+                      <div class="ecom-example-grid">
+                        <div class="ecom-example-card">
+                          <h4>主图要点</h4>
+                          <p>主体完整吃满尺寸，画面只有图，没有说明字；重点不是做“详情海报”，而是做能直接上架的纯图片主图。</p>
+                          <div class="ecom-example-tags"><span>1:1 / 3:4</span><span>主体完整</span><span>无排版字</span></div>
+                        </div>
+                        <div class="ecom-example-card">
+                          <h4>SKU 图要点</h4>
+                          <p>SKU 图应当是适合商城切图浏览的连续组图，场景图与版式图都要保证主体完整、边距安全、排版不外溢。</p>
+                          <div class="ecom-example-tags"><span>安全边距</span><span>结构清楚</span><span>统一风格</span></div>
+                        </div>
+                        <div class="ecom-example-card">
+                          <h4>详情与橱窗分离</h4>
+                          <p>详情图偏信息承载，橱窗图偏卖点传播。两者不能混成一套视觉，模板和文案密度要分开控制。</p>
+                          <div class="ecom-example-tags"><span>详情承载</span><span>橱窗传播</span><span>模板分离</span></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
             </div>
           </div>
 
@@ -1313,6 +1863,7 @@
   <script src="/static/js/twilio-whatsapp-detail.js"></script>
   <script src="/static/js/wecom-config.js"></script>
   <script src="/static/js/wecom-detail.js"></script>
+  <script src="/static/js/comfly-ecommerce-detail.js"></script>
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js"></script>
   <script src="/static/js/sysconfig.js"></script>

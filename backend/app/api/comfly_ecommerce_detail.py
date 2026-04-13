@@ -4,8 +4,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
+import sys
 import uuid
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -108,8 +111,113 @@ class EcommerceDetailRunBody(BaseModel):
     payload: EcommerceDetailPipelinePayload
 
 
+def _application_root_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[3]
+
+
 def _default_runs_root() -> str:
-    return str(Path(__file__).resolve().parents[3] / "skills" / "comfly_ecommerce_detail" / "runs")
+    return str(_application_root_dir() / "_lobster_runtime" / "comfly_ecommerce_detail" / "runs")
+
+
+def _sanitize_export_folder_name(value: str) -> str:
+    text = re.sub(r"[<>:\"/\\\\|?*]+", " ", str(value or "").strip())
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    if not text:
+        text = "商品套图"
+    return text[:48].rstrip(" .") or "商品套图"
+
+
+def _pick_export_title(result: Dict[str, Any]) -> str:
+    analysis = result.get("analysis") if isinstance(result.get("analysis"), dict) else {}
+    config = result.get("config") if isinstance(result.get("config"), dict) else {}
+    product_name = str(analysis.get("product_name") or "").strip()
+    hero_claim = str(analysis.get("hero_claim") or "").strip()
+    hinted_name = str((analysis.get("user_hints") or {}).get("product_name_hint") or "").strip() if isinstance(analysis.get("user_hints"), dict) else ""
+    fallback_name = str(config.get("product_name_hint") or "").strip()
+    return _sanitize_export_folder_name(hinted_name or product_name or hero_claim or fallback_name or "商品套图")
+
+
+def _alloc_visible_export_dir(result: Dict[str, Any]) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = f"{_pick_export_title(result)}_{stamp}"
+    candidate = _application_root_dir() / base_name
+    seq = 1
+    while candidate.exists():
+        seq += 1
+        candidate = _application_root_dir() / f"{base_name}_{seq:02d}"
+    return candidate
+
+
+def _rewrite_suite_bundle_paths(bundle: Dict[str, Any], final_dir: Path) -> Dict[str, Any]:
+    categories = bundle.get("categories") if isinstance(bundle.get("categories"), dict) else {}
+    bundle["root_dir"] = str(final_dir)
+    bundle["root_relative_path"] = final_dir.name
+    for _, payload in categories.items():
+        if not isinstance(payload, dict):
+            continue
+        dirname = str(payload.get("dirname") or "").strip()
+        category_dir = final_dir / dirname if dirname else final_dir
+        payload["dir"] = str(category_dir)
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            filename = str(item.get("filename") or Path(str(item.get("path") or "")).name).strip()
+            item_path = category_dir / filename if filename else category_dir
+            item["path"] = str(item_path)
+            item["relative_path"] = str(item_path.relative_to(final_dir)).replace("\\", "/")
+    return bundle
+
+
+def _rewrite_saved_suite_paths(saved_assets: Dict[str, Any], final_dir: Path) -> Dict[str, Any]:
+    suite_bundle = saved_assets.get("suite_bundle") if isinstance(saved_assets.get("suite_bundle"), dict) else {}
+    for _, rows in suite_bundle.items():
+        if not isinstance(rows, list):
+            continue
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            rel = str(item.get("relative_path") or "").strip().replace("\\", "/")
+            if rel:
+                rel_path = Path(rel)
+                if len(rel_path.parts) > 1:
+                    rel = "/".join(rel_path.parts[1:])
+                item["relative_path"] = rel
+    return saved_assets
+
+
+def _finalize_visible_export(result: Dict[str, Any]) -> Dict[str, Any]:
+    bundle = result.get("suite_bundle") if isinstance(result.get("suite_bundle"), dict) else {}
+    root_dir = Path(str(bundle.get("root_dir") or "").strip())
+    run_dir = Path(str(result.get("run_dir") or "").strip())
+    if not bundle or not root_dir.is_dir():
+        return result
+    final_dir = _alloc_visible_export_dir(result)
+    final_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(root_dir), str(final_dir))
+    result["suite_bundle"] = _rewrite_suite_bundle_paths(bundle, final_dir)
+    result["run_dir"] = str(final_dir)
+    result["detail_dir"] = ""
+    result["preview_html_path"] = None
+    result["archive_path"] = None
+    return result
+
+
+def _cleanup_internal_run_dir(result: Dict[str, Any]) -> None:
+    raw = str(result.get("run_dir") or "").strip()
+    if not raw:
+        return
+    run_dir = Path(raw)
+    target = run_dir
+    if target.is_file():
+        return
+    try:
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+    except Exception:
+        logger.warning("[comfly_ecommerce_detail] cleanup internal run dir failed: %s", target, exc_info=True)
 
 
 def _validate_payload(pl: EcommerceDetailPipelinePayload) -> None:
@@ -369,18 +477,25 @@ async def _job_runner(job_id: str) -> None:
         logger.exception("[comfly_ecommerce_detail] job %s failed", job_id[:12])
         update_job(job_id, status="failed", error=str(e)[:2000])
         return
+    internal_run_dir = str(result.get("run_dir") or "").strip()
     saved_assets: Dict[str, Any] = {"pages": [], "final": None}
-    if auto_save:
-        db = SessionLocal()
-        try:
-            saved_assets = _save_pipeline_images(result=result, user_id=user_id, db=db)
-        except Exception:
-            logger.exception("[comfly_ecommerce_detail] job %s auto_save failed", job_id[:12])
-            update_job(job_id, status="failed", error="流水线执行成功，但素材入库失败", result=result)
-            db.close()
-            return
-        finally:
-            db.close()
+    result = _finalize_visible_export(result)
+    try:
+        if auto_save:
+            db = SessionLocal()
+            try:
+                saved_assets = _save_pipeline_images(result=result, user_id=user_id, db=db)
+                saved_assets = _rewrite_saved_suite_paths(saved_assets, Path(str((result.get("suite_bundle") or {}).get("root_dir") or "")))
+            except Exception:
+                logger.exception("[comfly_ecommerce_detail] job %s auto_save failed", job_id[:12])
+                update_job(job_id, status="failed", error="流水线执行成功，但素材入库失败", result=result)
+                db.close()
+                return
+            finally:
+                db.close()
+    finally:
+        if internal_run_dir:
+            _cleanup_internal_run_dir({"run_dir": internal_run_dir})
     update_job(job_id, status="completed", error=None, result=result, saved_assets=saved_assets)
 
 
@@ -450,20 +565,27 @@ async def ecommerce_detail_pipeline_run(
         current_user=current_user,
         db=db,
         request=request,
-        effective_output_dir=(pl.output_dir or "").strip() or _default_runs_root(),
+        effective_output_dir=_default_runs_root(),
     )
     try:
         result = await asyncio.to_thread(run_pipeline_sync, inp)
     except Exception as e:
         logger.exception("[comfly_ecommerce_detail] pipeline failed user_id=%s", current_user.id)
         raise HTTPException(status_code=500, detail=str(e)[:2000]) from e
+    internal_run_dir = str(result.get("run_dir") or "").strip()
+    result = _finalize_visible_export(result)
     saved_assets: Dict[str, Any] = {"pages": [], "final": None}
-    if pl.auto_save:
-        try:
-            saved_assets = _save_pipeline_images(result=result, user_id=current_user.id, db=db)
-        except Exception as e:
-            logger.exception("[comfly_ecommerce_detail] auto_save failed")
-            raise HTTPException(status_code=500, detail=f"流水线执行成功，但素材入库失败: {e}") from e
+    try:
+        if pl.auto_save:
+            try:
+                saved_assets = _save_pipeline_images(result=result, user_id=current_user.id, db=db)
+                saved_assets = _rewrite_saved_suite_paths(saved_assets, Path(str((result.get("suite_bundle") or {}).get("root_dir") or "")))
+            except Exception as e:
+                logger.exception("[comfly_ecommerce_detail] auto_save failed")
+                raise HTTPException(status_code=500, detail=f"流水线执行成功，但素材入库失败: {e}") from e
+    finally:
+        if internal_run_dir:
+            _cleanup_internal_run_dir({"run_dir": internal_run_dir})
     return {"ok": True, "pipeline": "comfly_ecommerce_detail", "result": result, "saved_assets": saved_assets}
 
 
@@ -476,7 +598,7 @@ async def ecommerce_detail_pipeline_start(
 ):
     pl = body.payload
     _validate_payload(pl)
-    runs_root = (pl.output_dir or "").strip() or _default_runs_root()
+    runs_root = _default_runs_root()
     job_id = uuid.uuid4().hex
     effective_dir = str(Path(runs_root) / "job_runs" / job_id) if pl.isolate_job_dir else runs_root
     inp = await _prepare_pipeline_input(

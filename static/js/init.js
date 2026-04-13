@@ -1315,10 +1315,20 @@ function loadLogsView() {
     if (hash === 'meta-social' && typeof window._openMetaSocialView === 'function') {
       window._openMetaSocialView();
     }
+    if (hash === 'ecommerce-detail-studio' && typeof window._openEcommerceDetailStudioView === 'function') {
+      window._openEcommerceDetailStudioView();
+    }
   }
   window.addEventListener('hashchange', applyHash);
   window._applyWecomConfigHash = applyHash;
-  if (location.hash && (location.hash.indexOf('wecom') !== -1 || location.hash.indexOf('messenger') !== -1 || location.hash.indexOf('twilio-whatsapp') !== -1 || location.hash.indexOf('youtube-accounts') !== -1 || location.hash.indexOf('meta-social') !== -1)) applyHash();
+  if (location.hash && (
+    location.hash.indexOf('wecom') !== -1 ||
+    location.hash.indexOf('messenger') !== -1 ||
+    location.hash.indexOf('twilio-whatsapp') !== -1 ||
+    location.hash.indexOf('youtube-accounts') !== -1 ||
+    location.hash.indexOf('meta-social') !== -1 ||
+    location.hash.indexOf('ecommerce-detail-studio') !== -1
+  )) applyHash();
 })();
 
 applyBrandingFromApi();
