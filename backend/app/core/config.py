@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     twilio_auth_token: Optional[str] = None
     """与 Twilio Sandbox「When a message comes in」里填写的 URL 完全一致（含 https、域名、路径），用于签名校验。若留空则用 request.url（反代后常需显式填写）。"""
     twilio_whatsapp_webhook_full_url: Optional[str] = None
-    """在线版：本机 twilio_whatsapp_config.json 与 .env 均无 SID/Token 时，将 /api/twilio-whatsapp/* 转发到此前 lobster_server 的根 URL。未设置且 lobster_edition=online 时默认 https://lobster-server.icu；设为空字符串则关闭转发。"""
+    """在线版：本机 twilio_whatsapp_config.json 与 .env 均无 SID/Token 时，将 /api/twilio-whatsapp/* 转发到海外 lobster_server。未设置且 lobster_edition=online 时默认 http://43.162.111.36；设为空字符串则关闭转发。"""
     twilio_remote_api_base: Optional[str] = None
     """创作者作品同步（Playwright）是否默认无头；与详情页「无头同步」一致，可由 perform_creator_content_sync(headless=) 覆盖。"""
     creator_sync_headless: bool = True

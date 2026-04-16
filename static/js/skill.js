@@ -416,6 +416,16 @@ function loadSkillStore() {
             '<div class="card-tags">' + tagsM + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm messenger-config-entry-btn">进入配置</button></div></div>';
         }
+        if (pkg.id === 'ecommerce_publish_skill') {
+          var tagsE = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+          var capE = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+          return '<div class="skill-store-card ecommerce-publish-card" style="cursor:pointer;border-color:rgba(251,146,60,0.35);background:linear-gradient(135deg,rgba(251,146,60,0.08),transparent);">' +
+            '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可配置</span></div>' +
+            '<div class="card-value">' + escapeHtml(pkg.name || pkg.id) + '</div>' +
+            '<div class="card-desc">' + escapeHtml(pkg.description || '') + capE + '</div>' +
+            '<div class="card-tags">' + tagsE + '</div>' +
+            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ecommerce-publish-entry-btn">管理店铺账号</button></div></div>';
+        }
         if (pkg.id === 'wecom_reply') {
           var tags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
           var capCount = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
@@ -456,6 +466,7 @@ function loadSkillStore() {
         _bindYoutubePublishCardEntry();
         _bindMetaSocialCardEntry();
         _bindEcommerceDetailCardEntry();
+        _bindEcommercePublishCardEntry();
         _bindInstallUninstall(el);
         _bindXSkillConfigBtn();
         _bindComflyConfigBtn();
@@ -622,6 +633,33 @@ function _bindWecomConfigEntry() {
       _openWecomConfigIfUnlocked();
     });
   });
+}
+
+function _bindEcommercePublishCardEntry() {
+  document.querySelectorAll('.ecommerce-publish-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      _navigateToEcommerceAccounts();
+    });
+  });
+  document.querySelectorAll('.ecommerce-publish-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      _navigateToEcommerceAccounts();
+    });
+  });
+}
+
+function _navigateToEcommerceAccounts() {
+  var publishTab = document.querySelector('[data-view="publish"]');
+  if (publishTab) publishTab.click();
+  setTimeout(function() {
+    var filter = document.getElementById('accountPlatformFilter');
+    if (filter) {
+      filter.value = 'douyin_shop';
+      filter.dispatchEvent(new Event('change'));
+    }
+  }, 300);
 }
 
 // ── xSkill Token Modal ──────────────────────────────────────────────

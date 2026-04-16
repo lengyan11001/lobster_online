@@ -90,11 +90,13 @@
     var tabContacts = document.getElementById('wecomTabContacts');
     var tabSend = document.getElementById('wecomTabSend');
     var tabCust = document.getElementById('wecomTabCustomers');
+    var tabKf = document.getElementById('wecomTabWechatKf');
     var tabSys = document.getElementById('wecomTabSystem');
     if (tabMsg) tabMsg.style.display = 'block';
     if (tabContacts) tabContacts.style.display = 'none';
     if (tabSend) tabSend.style.display = 'none';
     if (tabCust) tabCust.style.display = 'none';
+    if (tabKf) tabKf.style.display = 'none';
     if (tabSys) tabSys.style.display = 'none';
     var appNameEl = document.getElementById('wecomDetailAppName');
     if (appNameEl) appNameEl.textContent = '';
@@ -118,16 +120,19 @@
       var tabContacts = document.getElementById('wecomTabContacts');
       var tabSend = document.getElementById('wecomTabSend');
       var tabCust = document.getElementById('wecomTabCustomers');
+      var tabKf = document.getElementById('wecomTabWechatKf');
       var tabSys = document.getElementById('wecomTabSystem');
       if (tabMsg) tabMsg.style.display = key === 'messages' ? 'block' : 'none';
       if (tabContacts) tabContacts.style.display = key === 'contacts' ? 'block' : 'none';
       if (tabSend) tabSend.style.display = key === 'send' ? 'block' : 'none';
       if (tabCust) tabCust.style.display = key === 'customers' ? 'block' : 'none';
+      if (tabKf) tabKf.style.display = key === 'wechat-kf' ? 'block' : 'none';
       if (tabSys) tabSys.style.display = key === 'system' ? 'block' : 'none';
       if (key === 'messages') { loadSessionList(); if (selectedWecomCustomerId) loadMessageList(); }
       if (key === 'contacts' && typeof initWecomContacts === 'function') initWecomContacts();
       if (key === 'send' && typeof initWecomSend === 'function') initWecomSend();
       if (key === 'customers') loadCustomerList();
+      if (key === 'wechat-kf' && typeof initWecomKf === 'function') initWecomKf();
       if (key === 'system') loadEnterpriseList();
     });
   });

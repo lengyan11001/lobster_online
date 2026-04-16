@@ -52,6 +52,9 @@ MAX_TOOL_ROUNDS_ORCHESTRATION = 16
 _schedule_orchestration_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_schedule_orchestration_active", default=False
 )
+_review_prompt_drafts_only_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_review_prompt_drafts_only_active", default=False
+)
 
 
 def _effective_max_tool_rounds() -> int:
@@ -2311,6 +2314,8 @@ async def _exec_tool(
         and name == "invoke_capability"
         and capability_id
         and invoke_should_prompt_cost_confirm(args if isinstance(args, dict) else {})
+        and not _schedule_orchestration_active.get()
+        and not _review_prompt_drafts_only_active.get()
     ):
         from ..services.capability_cost_confirm import (
             CONFIRM_WAIT_SECONDS,
@@ -2344,7 +2349,10 @@ async def _exec_tool(
             timed_out = True
         if not accepted:
             cost_confirm_cancel = True
-            cost_confirm_result_text = "确认超时。" if timed_out else "已取消。"
+            cost_confirm_result_text = (
+                "确认超时，本次调用已取消。请直接回复用户告知已取消，不要重试。" if timed_out
+                else "用户已取消本次调用。请直接回复用户告知已取消，禁止再次调用同一能力或重试。"
+            )
 
     t0 = time.perf_counter()
     success = True
@@ -3760,8 +3768,11 @@ def _extract_status_for_log(result_text: str) -> str:
 def _is_task_result_in_progress(result_text: str) -> bool:
     """True if task.get_result 表示仍在进行中（需继续 15s 轮询）。先判进行中再判终态，避免「未完成」等误判为终态."""
     if not result_text or not result_text.strip():
-        return True  # 无内容时继续轮询，避免误报「已生成」
+        return True
     raw = (result_text or "").strip()
+    raw_lower = raw.lower()
+    if '"saved_assets"' in raw_lower and '"asset_id"' in raw_lower:
+        return False
     status_val = _extract_status_for_log(result_text)
     if status_val and status_val != "?":
         s = status_val.strip().lower()
@@ -3772,7 +3783,6 @@ def _is_task_result_in_progress(result_text: str) -> bool:
             if s == term.lower():
                 return False
         return True
-    raw_lower = raw.lower()
     if '"status":"completed"' in raw_lower or '"status":"success"' in raw_lower or '"status":"failed"' in raw_lower:
         return False
     if "未完成" in raw or "未成功" in raw:
@@ -4347,6 +4357,7 @@ async def _chat_openai(
         re.IGNORECASE,
     )
     force_tool_retry_done = False
+    _generate_cap_done: set = set()
 
     cur = list(msgs)
     _aid_list = attachment_asset_ids if attachment_asset_ids is not None else []
@@ -4391,23 +4402,30 @@ async def _chat_openai(
                     _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                     _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls)
                 logger.info("[CHAT] tool_call: %s(%s)", fn.get("name"), list(a.keys()))
-                if fn.get("name") == "invoke_capability" and (a.get("capability_id") or "").strip() == "media.edit":
+                _cap_id = (a.get("capability_id") or "").strip() if fn.get("name") == "invoke_capability" else ""
+                if fn.get("name") == "invoke_capability" and _cap_id == "media.edit":
                     pl0 = a.get("payload") if isinstance(a.get("payload"), dict) else {}
                     logger.info(
                         "[CHAT] media.edit payload operation=%s asset_id=%s",
                         pl0.get("operation"),
                         pl0.get("asset_id"),
                     )
-                res = await _exec_tool(
-                    fn.get("name", ""),
-                    a,
-                    token,
-                    sutui_token,
-                    progress_cb=progress_cb,
-                    request=request,
-                    db=db,
-                    user_id=user_id,
-                )
+                if _cap_id in _generate_cap_done:
+                    logger.warning("[CHAT] 拦截重复 %s 调用 rnd=%d（本轮已调用或取消过）", _cap_id, rnd)
+                    res = '{"error": "本轮对话已调用或取消过 ' + _cap_id + '，禁止重复调用。请直接回复用户。"}'
+                else:
+                    res = await _exec_tool(
+                        fn.get("name", ""),
+                        a,
+                        token,
+                        sutui_token,
+                        progress_cb=progress_cb,
+                        request=request,
+                        db=db,
+                        user_id=user_id,
+                    )
+                    if _cap_id in ("image.generate", "video.generate"):
+                        _generate_cap_done.add(_cap_id)
                 if fn.get("name") == "invoke_capability" and (a.get("capability_id") or "").strip() == "media.edit":
                     logger.info(
                         "[CHAT] media.edit result preview=%s",
@@ -4457,23 +4475,30 @@ async def _chat_openai(
                     _ensure_daihuo_pipeline_asset_or_url(tc_info["arguments"], attachment_asset_ids, attachment_urls)
                 logger.info("[CHAT] text_tool_call: %s(%s)", tc_info["name"], list(tc_info["arguments"].keys()))
                 ta = tc_info["arguments"]
-                if tc_info["name"] == "invoke_capability" and (ta.get("capability_id") or "").strip() == "media.edit":
+                _tc_cap = (ta.get("capability_id") or "").strip() if tc_info["name"] == "invoke_capability" else ""
+                if tc_info["name"] == "invoke_capability" and _tc_cap == "media.edit":
                     pl1 = ta.get("payload") if isinstance(ta.get("payload"), dict) else {}
                     logger.info(
                         "[CHAT] media.edit payload operation=%s asset_id=%s",
                         pl1.get("operation"),
                         pl1.get("asset_id"),
                     )
-                res = await _exec_tool(
-                    tc_info["name"],
-                    tc_info["arguments"],
-                    token,
-                    sutui_token,
-                    progress_cb=progress_cb,
-                    request=request,
-                    db=db,
-                    user_id=user_id,
-                )
+                if _tc_cap in _generate_cap_done:
+                    logger.warning("[CHAT] 拦截重复 %s(text_calls) rnd=%d", _tc_cap, rnd)
+                    res = '{"error": "本轮对话已调用或取消过 ' + _tc_cap + '，禁止重复调用。请直接回复用户。"}'
+                else:
+                    res = await _exec_tool(
+                        tc_info["name"],
+                        tc_info["arguments"],
+                        token,
+                        sutui_token,
+                        progress_cb=progress_cb,
+                        request=request,
+                        db=db,
+                        user_id=user_id,
+                    )
+                    if _tc_cap in ("image.generate", "video.generate"):
+                        _generate_cap_done.add(_tc_cap)
                 if tc_info["name"] == "invoke_capability" and (ta.get("capability_id") or "").strip() == "media.edit":
                     logger.info(
                         "[CHAT] media.edit result preview=%s",
@@ -4567,16 +4592,23 @@ async def _chat_openai(
                             _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                             _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls)
                         logger.info("[CHAT] tool_call(forced): %s(%s)", fn.get("name"), list(a.keys()))
-                        res = await _exec_tool(
-                            fn.get("name", ""),
-                            a,
-                            token,
-                            sutui_token,
-                            progress_cb=progress_cb,
-                            request=request,
-                            db=db,
-                            user_id=user_id,
-                        )
+                        _fc_cap = (a.get("capability_id") or "").strip() if fn.get("name") == "invoke_capability" else ""
+                        if _fc_cap in _generate_cap_done:
+                            logger.warning("[CHAT] 拦截重复 %s(forced) rnd=%d", _fc_cap, rnd)
+                            res = '{"error": "本轮对话已调用或取消过 ' + _fc_cap + '，禁止重复调用。请直接回复用户。"}'
+                        else:
+                            res = await _exec_tool(
+                                fn.get("name", ""),
+                                a,
+                                token,
+                                sutui_token,
+                                progress_cb=progress_cb,
+                                request=request,
+                                db=db,
+                                user_id=user_id,
+                            )
+                            if _fc_cap in ("image.generate", "video.generate"):
+                                _generate_cap_done.add(_fc_cap)
                         if fn.get("name") == "invoke_capability":
                             res = await _after_generate_auto_task_result(
                                 a, res, token, sutui_token, progress_cb, request, db=db, user_id=user_id
@@ -5125,6 +5157,7 @@ async def chat_endpoint(
 
     mcp_tools = await _fetch_mcp_tools(raw_token)
     review_drafts_only = bool(getattr(payload, "review_prompt_drafts_only", False))
+    _review_prompt_drafts_only_active.set(review_drafts_only)
     direct_llm = bool(getattr(payload, "direct_llm", False))
     if review_drafts_only:
         mcp_tools = []
@@ -5393,6 +5426,9 @@ async def _chat_stream_events(
             if not model or model == "openclaw":
                 model = _pick_default_model()
         mcp_tools = await _fetch_mcp_tools(raw_token)
+        _is_sched_orch = bool(getattr(payload, "schedule_orchestration", False))
+        _schedule_orchestration_active.set(_is_sched_orch)
+        _review_prompt_drafts_only_active.set(bool(getattr(payload, "review_prompt_drafts_only", False)))
         direct_llm = bool(getattr(payload, "direct_llm", False))
         if direct_llm:
             mcp_tools = []
@@ -5402,7 +5438,6 @@ async def _chat_stream_events(
             logger.info("MCP tools empty (stream path), chat has no capabilities")
         sutui_override_url: Optional[str] = None
         sutui_override_headers: Optional[Dict[str, str]] = None
-        _is_sched_orch = bool(getattr(payload, "schedule_orchestration", False))
         if edition == "online":
             resolve_model, cfg_pre, sutui_override_url, sutui_override_headers = _online_resolve_cfg_and_overrides(
                 payload, raw_token, schedule_orchestration=_is_sched_orch
