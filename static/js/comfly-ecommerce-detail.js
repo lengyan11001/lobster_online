@@ -1612,6 +1612,46 @@
     }).join('');
   }
 
+  function _renderFacts(resp) {
+    var wrap = byId('ecomRunFacts');
+    if (!wrap) return;
+    var result = resp && resp.result ? resp.result : {};
+    var config = result && result.config ? result.config : {};
+    var progress = resp && resp.progress ? resp.progress : {};
+    var usage = progress && progress.usage_summary ? progress.usage_summary : {};
+    var billing = result && result.billing_summary ? result.billing_summary : {};
+    var facts = [];
+    if (state.currentJobId) facts.push('任务 ID：' + state.currentJobId);
+    if (config.analysis_model) facts.push('分析模型：' + config.analysis_model);
+    if (config.image_model) facts.push('生图模型：' + config.image_model);
+    if (config.page_count) facts.push('详情页数：' + config.page_count);
+    if (usage.image_count != null) facts.push('生图成功次数：' + usage.image_count);
+    if (usage.analysis_count != null) facts.push('分析调用次数：' + usage.analysis_count);
+    if (billing.total_points != null) {
+      var amount = billing.total_cost_cny != null ? ('（约 ¥' + Number(billing.total_cost_cny).toFixed(2) + '）') : '';
+      facts.push('积分消耗：' + billing.total_points + ' 积分' + amount);
+    } else if (usage.total_points != null) {
+      facts.push('积分消耗：' + usage.total_points + ' 积分');
+    }
+    if (billing.image_points_per_success != null || billing.analysis_points_per_call != null) {
+      facts.push(
+        '计费规则：生图成功 ' + String(billing.image_points_per_success != null ? billing.image_points_per_success : 40) +
+        ' 积分/次，分析 ' + String(billing.analysis_points_per_call != null ? billing.analysis_points_per_call : 10) + ' 积分/次'
+      );
+    }
+    if (result && result.suite_bundle && result.suite_bundle.root_relative_path) {
+      facts.push('输出目录：' + result.suite_bundle.root_relative_path);
+    }
+    facts = facts.concat(_collectProgressFacts(resp));
+    if (!facts.length) {
+      wrap.innerHTML = '<div class="ecom-empty">生成完成后，这里会显示模型、页数、积分消耗和输出目录摘要。</div>';
+      return;
+    }
+    wrap.innerHTML = facts.map(function(item) {
+      return '<div class="ecom-activity-item"><div>' + escapeHtml(item) + '</div></div>';
+    }).join('');
+  }
+
   function initEcommerceDetailStudioView() {
     if (!state.initialized) {
       _bindUploader('ecomUploadMainBtn', 'ecomMainFileInput', 'main', false);
