@@ -1,6 +1,6 @@
 {
-  "version": "1.0.11",
-  "build": 17,
-  "applied_at": "2026-04-15T09:20:00.000Z",
-  "note": "feat: 企微发消息接收者下拉多选 + 定时发布(周几+时间) + 图片视频附件上传; fix: video early-finish + comfly.veo过滤 + default duration 5s"
+  "version": "1.0.12",
+  "build": 18,
+  "applied_at": "2026-04-17T05:15:00.000Z",
+  "note": "chore: migrate from IP to bhzn.top domain; fix: localStorage cache auto-migration for old IP"
 }

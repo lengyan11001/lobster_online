@@ -355,24 +355,25 @@ function loadSkillStore() {
   el.innerHTML = '<p class="meta">加载中…</p>';
 
   var remoteBase = (typeof API_BASE !== 'undefined' ? API_BASE : '') || '';
-  var localBase = (typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') || '';
   var remoteReq = _fetchSkillStoreFrom(remoteBase).catch(function() { return { packages: [] }; });
-  var localReq = (!localBase || String(localBase).replace(/\/$/, '') === String(remoteBase).replace(/\/$/, ''))
-    ? Promise.resolve({ packages: [] })
-    : _fetchSkillStoreFrom(localBase).catch(function() { return { packages: [] }; });
 
-  Promise.all([remoteReq, localReq])
+  Promise.all([remoteReq])
     .then(function(results) {
-      var d = _mergeSkillStorePackages(results[0], results[1]);
+      var d = results[0] || { packages: [] };
       var packages = (d && Array.isArray(d.packages)) ? d.packages : [];
       var isSkillAdmin = !!(d && d.is_skill_store_admin);
       var needYoutube = packages.some(function(p) { return p.id === 'youtube_publish'; });
       var ecommercePkg = packages.filter(function(p) { return p.id === 'comfly_ecommerce_detail_skill'; })[0] || null;
 
+      var hasSutuiPkg = packages.some(function(p) { return p.id === 'sutui_mcp'; });
+      var hasComflyPkg = packages.some(function(p) { return p.id === 'comfly_veo_skill'; });
+
       function paintSkillStoreList() {
-        var html = _renderXSkillCard() + _renderComflyCard();
+        var html = '';
+        if (hasSutuiPkg) html += _renderXSkillCard();
+        if (hasComflyPkg || isSkillAdmin) html += _renderComflyCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
-        html += _renderMetaSocialCard();
+        if (isSkillAdmin) html += _renderMetaSocialCard();
         var hasWxPkg = packages.some(function(p) { return p.id === 'openclaw_weixin_channel'; });
         if (hasWxPkg) {
           var wxPkg = packages.filter(function(p) { return p.id === 'openclaw_weixin_channel'; })[0];
@@ -843,10 +844,10 @@ function _bindComflyConfigBtn() {
 
   function _priceShort(p) {
     if (!p) return '—';
-    if (p.default_credits > 0) return p.default_credits + ' 积分';
-    if (p.base_price_user > 0) return p.base_price_user + ' 积分/' + (p.price_type === 'duration_based' ? '秒' : '次');
+    if (p.default_credits > 0) return p.default_credits + ' 算力';
+    if (p.base_price_user > 0) return p.base_price_user + ' 算力/' + (p.price_type === 'duration_based' ? '秒' : '次');
     var exs = (p.examples || []).filter(function(e) { return e.price > 0; });
-    if (exs.length > 0) return exs[0].price + ' 积分';
+    if (exs.length > 0) return exs[0].price + ' 算力';
     return '—';
   }
 
@@ -854,12 +855,12 @@ function _bindComflyConfigBtn() {
     if (!p) return '';
     var lines = [];
     if (p.price_type) lines.push('计费方式: ' + p.price_type);
-    if (p.base_price_user) lines.push('基础单价: ' + p.base_price_user + ' 积分');
-    if (p.default_credits) lines.push('默认参数估价: ' + p.default_credits + ' 积分');
+    if (p.base_price_user) lines.push('基础单价: ' + p.base_price_user + ' 算力');
+    if (p.default_credits) lines.push('默认参数估价: ' + p.default_credits + ' 算力');
     var exs = (p.examples || []).filter(function(e) { return e.price > 0; });
     if (exs.length > 0) {
       lines.push('');
-      exs.forEach(function(e) { lines.push((e.description || '默认') + ': ' + e.price + ' 积分'); });
+      exs.forEach(function(e) { lines.push((e.description || '默认') + ': ' + e.price + ' 算力'); });
     }
     return lines.join('\n');
   }
