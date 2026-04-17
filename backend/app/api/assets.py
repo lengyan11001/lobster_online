@@ -444,41 +444,37 @@ def _is_loopback_base(base: str) -> bool:
 
 
 def _resolve_asset_public_base(request: Request) -> str:
-    """生成 /api/assets/file 签名链的根：同网段设备可访问，避免误用 127.0.0.1。"""
+    """生成 /api/assets/file 签名链的根。
+
+    策略：跟随请求的 Host header（浏览器从哪个地址访问就用哪个），
+    这样 IP 变化后不会失效。仅在需要被外部系统拉取时才用 PUBLIC_BASE_URL。
+    """
     from ..core.config import get_settings
 
     settings = get_settings()
     port = getattr(settings, "port", 8000)
     pub = (getattr(settings, "public_base_url", None) or "").strip().rstrip("/")
-    lan = (getattr(settings, "lan_public_base_url", None) or "").strip().rstrip("/")
 
-    base = ""
-    if pub and not _is_loopback_base(pub):
-        base = pub
-    elif lan and not _is_loopback_base(lan):
-        base = lan
-    elif pub and _is_loopback_base(pub):
-        # .env 里误填 127 时当作未配置，让 Host / LAN 生效
+    host_header = ""
+    try:
+        host_header = (request.headers.get("host") or "").strip()
+    except Exception:
         pass
 
-    if not base:
+    if host_header:
+        sch = "http"
         try:
-            base = str((request.base_url or "").rstrip("/"))
-        except Exception:
-            base = ""
-    if not base:
-        base = f"http://127.0.0.1:{port}"
-    if "0.0.0.0" in base:
-        host = (request.headers.get("host") or "").strip()
-        if host:
             sch = getattr(request.url, "scheme", None) or "http"
-            base = f"{sch}://{host}"
-        else:
-            base = base.replace("0.0.0.0", "127.0.0.1")
+        except Exception:
+            pass
+        base = f"{sch}://{host_header}"
+    else:
+        base = f"http://127.0.0.1:{port}"
 
-    if _is_loopback_base(base) and lan and not _is_loopback_base(lan):
-        base = lan
-    if _is_loopback_base(base) and pub:
+    if "0.0.0.0" in base:
+        base = base.replace("0.0.0.0", "127.0.0.1")
+
+    if _is_loopback_base(base) and pub and not _is_loopback_base(pub):
         base = pub
 
     try:
@@ -486,12 +482,7 @@ def _resolve_asset_public_base(request: Request) -> str:
     except UnicodeEncodeError:
         base = f"http://127.0.0.1:{port}"
         logger.warning(
-            "[素材] base_url 含非 ASCII，已回退为 127.0.0.1。请在 .env 设置 PUBLIC_BASE_URL 或 LAN_PUBLIC_BASE_URL（如 http://本机局域网IP:8000）。"
-        )
-    if _is_loopback_base(base):
-        logger.debug(
-            "[素材] 签名 URL 为回环地址；同网段预览请配置 LAN_PUBLIC_BASE_URL 或 PUBLIC_BASE_URL 为局域网/公网根地址 (port=%s)",
-            port,
+            "[素材] base_url 含非 ASCII，已回退为 127.0.0.1。请在 .env 设置 PUBLIC_BASE_URL（如 http://本机局域网IP:8000）。"
         )
     return base
 

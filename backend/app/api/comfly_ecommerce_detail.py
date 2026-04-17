@@ -675,12 +675,51 @@ async def ecommerce_detail_pipeline_start(
     }
 
 
+def _enrich_saved_assets_urls(
+    saved_assets: Dict[str, Any],
+    request: Request,
+) -> Dict[str, Any]:
+    """给 saved_assets.suite_bundle 里的 asset 对象补上 preview_url / open_url。"""
+    from .assets import build_asset_file_url
+
+    sa = dict(saved_assets) if saved_assets else {}
+    suite = sa.get("suite_bundle")
+    if not isinstance(suite, dict):
+        return sa
+    enriched_suite: Dict[str, Any] = {}
+    for cat, rows in suite.items():
+        if not isinstance(rows, list):
+            enriched_suite[cat] = rows
+            continue
+        new_rows = []
+        for item in rows:
+            if not isinstance(item, dict):
+                new_rows.append(item)
+                continue
+            item = dict(item)
+            asset = item.get("asset")
+            if isinstance(asset, dict):
+                asset = dict(asset)
+                aid = asset.get("asset_id", "")
+                if aid and not asset.get("preview_url"):
+                    url = build_asset_file_url(request, aid, expiry_sec=3600)
+                    if url:
+                        asset["preview_url"] = url
+                        asset["open_url"] = url
+                item["asset"] = asset
+            new_rows.append(item)
+        enriched_suite[cat] = new_rows
+    sa["suite_bundle"] = enriched_suite
+    return sa
+
+
 @router.get("/api/comfly-ecommerce-detail/pipeline/jobs/{job_id}")
 async def ecommerce_detail_pipeline_job_status(
     job_id: str,
     compact: bool = False,
     current_user: _ServerUser = Depends(get_current_user_media_edit),
     db: Session = Depends(get_db),
+    request: Request = None,
 ):
     job = get_job(job_id)
     if job:
@@ -693,12 +732,13 @@ async def ecommerce_detail_pipeline_job_status(
     ).first()
     if not db_job:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    sa = _enrich_saved_assets_urls(db_job.saved_assets or {}, request) if request else (db_job.saved_assets or {})
     return {
         "ok": True,
         "job_id": db_job.job_id,
         "status": db_job.status,
         "product_name": db_job.product_name,
-        "saved_assets": db_job.saved_assets or {},
+        "saved_assets": sa,
         "error": db_job.error,
         "created_at": db_job.created_at.isoformat() if db_job.created_at else None,
         "source": "database",

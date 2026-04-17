@@ -53,19 +53,24 @@ def _get_comfly_image_models() -> list[str]:
     auth_base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
     if not auth_base:
         return _comfly_image_models_cache
-    try:
-        import httpx as _hx
-        r = _hx.get(f"{auth_base}/capabilities/comfly-pricing", timeout=5.0)
-        if r.status_code == 200:
-            data = r.json()
-            models = data.get("models") or {}
-            result = [k for k, v in models.items() if isinstance(v, dict) and v.get("api_format") == "dalle"]
-            _comfly_image_models_cache = result
-            _comfly_image_models_ts = now
-            logger.debug("[CHAT] comfly image models refreshed: %s", result)
-            return result
-    except Exception as e:
-        logger.debug("[CHAT] comfly-pricing fetch failed: %s", e)
+    for _attempt in range(2):
+        try:
+            import httpx as _hx
+            r = _hx.get(f"{auth_base}/capabilities/comfly-pricing", timeout=8.0)
+            if r.status_code == 200:
+                data = r.json()
+                models = data.get("models") or {}
+                result = [k for k, v in models.items() if isinstance(v, dict) and v.get("api_format") == "dalle"]
+                _comfly_image_models_cache = result
+                _comfly_image_models_ts = now
+                logger.info("[CHAT] comfly image models refreshed: %s", result)
+                return result
+            else:
+                logger.warning("[CHAT] comfly-pricing 非 200: status=%s", r.status_code)
+        except Exception as e:
+            logger.warning("[CHAT] comfly-pricing fetch failed (attempt %d): %s", _attempt + 1, e)
+        if _attempt == 0:
+            time.sleep(0.5)
     return _comfly_image_models_cache
 router = APIRouter()
 
@@ -1349,13 +1354,26 @@ def _ensure_image_generate_default_model(args: Dict[str, Any]) -> None:
     raw_model = (inner.get("model") or inner.get("model_id") or "").strip()
     if raw_model and "/" in raw_model:
         return
-    if raw_model and raw_model.lower() in {m.lower() for m in _get_comfly_image_models()}:
+    if raw_model and raw_model.lower() in _IMAGE_MODEL_ALIASES:
+        canonical = _IMAGE_MODEL_ALIASES[raw_model.lower()]
+        inner["model"] = canonical
+        logger.info("[CHAT] image.generate model「%s」为已知别名，映射为 %s", raw_model, canonical)
+        return
+    comfly_models = _get_comfly_image_models()
+    if raw_model and raw_model.lower() in {m.lower() for m in comfly_models}:
         logger.info("[CHAT] image.generate model「%s」为 Comfly 模型，保留原值", raw_model)
         return
     if raw_model and raw_model.lower().startswith("jimeng-"):
         return
+    if raw_model and not comfly_models:
+        logger.warning(
+            "[CHAT] image.generate model「%s」不含 / 且 Comfly 模型列表为空（fetch 可能失败），"
+            "保留原值交由服务端判断", raw_model,
+        )
+        return
     if raw_model:
-        logger.info("[CHAT] image.generate model「%s」不含 / 疑似幻觉模型名，已替换为 model=%s", raw_model, _DEFAULT_IMAGE_GENERATE_MODEL)
+        logger.info("[CHAT] image.generate model「%s」不含 / 且不在 Comfly 列表 %s 中，已替换为 model=%s",
+                    raw_model, comfly_models, _DEFAULT_IMAGE_GENERATE_MODEL)
     inner["model"] = _DEFAULT_IMAGE_GENERATE_MODEL
     logger.info(
         "[CHAT] image.generate 未传 model，已默认 model=%s",

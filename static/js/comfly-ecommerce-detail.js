@@ -307,6 +307,43 @@
     if (!state.currentJobId && state.recentJobs.length) {
       _activateRecentJob(state.recentJobs[0].jobId, { skipRefresh: false });
     }
+    _mergeDbJobs();
+  }
+
+  function _mergeDbJobs() {
+    var base = _localBase();
+    if (!base) return;
+    fetch(base + '/api/comfly-ecommerce-detail/pipeline/jobs?limit=20', {
+      headers: authHeaders()
+    })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data || !Array.isArray(data.jobs)) return;
+        var changed = false;
+        data.jobs.forEach(function(dbJob) {
+          if (!dbJob || !dbJob.job_id) return;
+          if (_findRecentJob(dbJob.job_id)) return;
+          _upsertRecentJob({
+            jobId: dbJob.job_id,
+            createdAt: dbJob.created_at || new Date().toISOString(),
+            updatedAt: dbJob.created_at || new Date().toISOString(),
+            status: dbJob.status || 'completed',
+            productName: dbJob.product_name || ('\u4efb\u52a1 ' + String(dbJob.job_id).slice(0, 8)),
+            galleryByTab: {},
+            latestResponse: null,
+            fromDb: true
+          });
+          changed = true;
+        });
+        if (changed) {
+          _renderRecentTasks();
+          _renderTaskDrawer();
+          if (!state.currentJobId && state.recentJobs.length) {
+            _activateRecentJob(state.recentJobs[0].jobId, { skipRefresh: false });
+          }
+        }
+      })
+      .catch(function() {});
   }
 
   function _collectProgressFacts(resp) {

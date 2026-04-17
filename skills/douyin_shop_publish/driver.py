@@ -105,6 +105,7 @@ class DouyinShopDriver(BaseDriver):
                         filled.append(f"主图({len(main_image_paths)}张)")
                         logger.info("[DOUYIN-SHOP] uploaded %d main images", len(main_image_paths))
                         await asyncio.sleep(2)
+                        await self._wait_and_dismiss_popups(page, max_attempts=3)
                 except Exception as e:
                     logger.warning("[DOUYIN-SHOP] upload main images failed: %s", e)
 
@@ -126,36 +127,114 @@ class DouyinShopDriver(BaseDriver):
             logger.exception("[DOUYIN-SHOP] open_product_form failed")
             return {"ok": False, "error": str(e)}
 
-    async def _upload_detail_images(self, page: Any, paths: List[str]) -> None:
-        """在抖店商品编辑页的「商品详情」富文本区域上传图片。
+    async def _dismiss_ai_tool_popup(self, page: Any) -> bool:
+        """检测并关闭抖店上传图片后弹出的 AI 素材工具/图片编辑弹窗。
 
-        抖店的详情编辑器一般有一个「图片」按钮，点击后弹出文件选择。
-        如果找不到精确选择器，尝试滚动到「商品详情」区域后查找 file input。
+        Returns True if a popup was detected and dismissed.
         """
+        dismiss_selectors = [
+            'button:has-text("跳过")',
+            'button:has-text("关闭")',
+            'button:has-text("取消")',
+            'button:has-text("不使用")',
+            'button:has-text("暂不使用")',
+            'button:has-text("退出")',
+            '[class*="modal"] [class*="close"]',
+            '[class*="dialog"] [class*="close"]',
+            '[class*="drawer"] [class*="close"]',
+            '[class*="Modal"] button[class*="close"]',
+            '[class*="ai-tool"] button[class*="close"]',
+            '[aria-label="关闭"]',
+            '[aria-label="Close"]',
+        ]
+        for sel in dismiss_selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    text = (await loc.text_content() or "").strip()[:30]
+                    await loc.click()
+                    logger.info("[DOUYIN-SHOP] dismissed AI tool popup via: %s (text=%s)", sel, text)
+                    await asyncio.sleep(1)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _wait_and_dismiss_popups(self, page: Any, max_attempts: int = 5) -> None:
+        """上传图片后反复检测并关闭弹窗，直到没有更多弹窗。"""
+        for attempt in range(max_attempts):
+            await asyncio.sleep(2)
+            dismissed = await self._dismiss_ai_tool_popup(page)
+            if not dismissed:
+                try:
+                    snapshot = await page.evaluate("""() => {
+                        const modals = document.querySelectorAll('[class*="modal"],[class*="Modal"],[class*="dialog"],[class*="Dialog"],[class*="drawer"],[class*="Drawer"],[class*="popup"],[class*="Popup"]');
+                        return Array.from(modals).slice(0, 5).map(el => ({
+                            tag: el.tagName,
+                            cls: el.className.toString().slice(0, 100),
+                            visible: el.offsetHeight > 0,
+                            text: el.innerText?.slice(0, 100) || ''
+                        }));
+                    }""")
+                    if snapshot:
+                        logger.info("[DOUYIN-SHOP] popup probe attempt %d: %s", attempt + 1, snapshot)
+                except Exception as e:
+                    logger.debug("[DOUYIN-SHOP] popup probe error: %s", e)
+                break
+            logger.info("[DOUYIN-SHOP] popup dismissed on attempt %d, checking for more...", attempt + 1)
+
+    async def _upload_detail_images(self, page: Any, paths: List[str]) -> None:
+        """在抖店商品编辑页的「商品详情」富文本区域逐张上传图片。"""
+        await page.evaluate("window.scrollBy(0, 600)")
+        await asyncio.sleep(1)
+
         detail_selectors = [
             'div[class*="detail"] input[type="file"]',
             'div[class*="description"] input[type="file"]',
             'div[class*="richtext"] input[type="file"]',
             '.detail-editor input[type="file"]',
         ]
-        uploaded = False
+
+        target_sel = None
         for sel in detail_selectors:
             loc = page.locator(sel).first
             if await loc.count() > 0:
-                await loc.set_input_files(paths)
-                uploaded = True
-                await asyncio.sleep(3)
+                target_sel = sel
                 break
 
-        if not uploaded:
+        if not target_sel:
             all_uploads = page.locator('input[type="file"]')
             count = await all_uploads.count()
             if count >= 2:
-                await all_uploads.nth(count - 1).set_input_files(paths)
-                await asyncio.sleep(3)
+                target_sel = f'input[type="file"] >> nth={count - 1}'
             elif count == 1:
-                logger.warning("[DOUYIN-SHOP] only 1 file input found, detail upload may conflict with main images")
-                await all_uploads.first.set_input_files(paths)
-                await asyncio.sleep(3)
+                logger.warning("[DOUYIN-SHOP] only 1 file input, detail upload may overlap main images")
+                target_sel = 'input[type="file"]'
             else:
                 logger.warning("[DOUYIN-SHOP] no file input found for detail images")
+                return
+
+        loc = page.locator(target_sel).first
+        is_multiple = await loc.evaluate("el => el.multiple") if await loc.count() > 0 else False
+
+        if is_multiple:
+            await loc.set_input_files(paths)
+            await asyncio.sleep(3)
+            logger.info("[DOUYIN-SHOP] detail images: batch uploaded %d files", len(paths))
+        else:
+            uploaded_count = 0
+            for i, fp in enumerate(paths):
+                try:
+                    loc = page.locator(target_sel).first
+                    if await loc.count() == 0:
+                        logger.warning("[DOUYIN-SHOP] detail file input disappeared at index %d", i)
+                        break
+                    await loc.set_input_files(fp)
+                    uploaded_count += 1
+                    await asyncio.sleep(1.5)
+                    await self._dismiss_ai_tool_popup(page)
+                except Exception as e:
+                    logger.warning("[DOUYIN-SHOP] detail image %d/%d failed: %s", i + 1, len(paths), e)
+            logger.info("[DOUYIN-SHOP] detail images: uploaded %d/%d files one by one", uploaded_count, len(paths))
+
+        await self._wait_and_dismiss_popups(page)
