@@ -888,7 +888,7 @@
     if (usage.total_points != null) facts.push('累计点数：' + usage.total_points);
     if (result && result.suite_bundle && result.suite_bundle.root_relative_path) facts.push('输出目录：' + result.suite_bundle.root_relative_path);
     if (!facts.length) {
-      wrap.innerHTML = '<div class="ecom-empty">生成完成后，这里会显示模型、页数、积分消耗和输出目录摘要。</div>';
+      wrap.innerHTML = '<div class="ecom-empty">生成完成后，这里会显示模型、页数、算力消耗和输出目录摘要。</div>';
       return;
     }
     wrap.innerHTML = facts.map(function(item) {
@@ -1136,7 +1136,7 @@
     if (result && result.suite_bundle && result.suite_bundle.root_relative_path) facts.push('输出目录：' + result.suite_bundle.root_relative_path);
     facts = facts.concat(_collectProgressFacts(resp));
     if (!facts.length) {
-      wrap.innerHTML = '<div class="ecom-empty">生成完成后，这里会显示模型、页数、积分消耗和输出目录摘要。</div>';
+      wrap.innerHTML = '<div class="ecom-empty">生成完成后，这里会显示模型、页数、算力消耗和输出目录摘要。</div>';
       return;
     }
     wrap.innerHTML = facts.map(function(item) {

@@ -47,6 +47,7 @@ OTA_PATHS: tuple[str, ...] = (
     "nodejs/ensure-npm-cli.mjs",
     "nodejs/run-npm.mjs",
     "nodejs/.gitignore",
+    "nodejs/node_modules/@tencent-weixin/openclaw-weixin",
 )
 
 # 与 check_client_code_update.DEFAULT_PATHS_WITH_NODEJS_DEPS 一致（仅在对等清单外加整树时用）

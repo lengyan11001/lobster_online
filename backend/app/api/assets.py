@@ -222,6 +222,11 @@ def _extract_cdn_from_mcp_invoke_result(rpc_result: dict) -> Optional[str]:
     return None
 
 
+_transfer_url_cache: dict = {}
+_transfer_url_cache_max = 200
+_transfer_url_inflight: dict = {}
+
+
 async def _transfer_url_via_sutui(
     url: str,
     media_type: str = "image",
@@ -229,6 +234,41 @@ async def _transfer_url_via_sutui(
     request: Optional[Request] = None,
 ) -> Optional[str]:
     """经本机 MCP 的 invoke_capability(capability_id=sutui.transfer_url) 转存；不可用裸工具名 sutui.transfer_url。"""
+    import asyncio
+    cached = _transfer_url_cache.get(url)
+    if cached is not None:
+        logger.debug("[转存] cache hit: %s", url[:80])
+        return cached if cached else None
+
+    inflight = _transfer_url_inflight.get(url)
+    if inflight is not None:
+        try:
+            return await asyncio.shield(inflight)
+        except Exception:
+            return None
+
+    async def _do_transfer():
+        return await _transfer_url_via_sutui_inner(url, media_type, user, request)
+
+    task = asyncio.ensure_future(_do_transfer())
+    _transfer_url_inflight[url] = task
+    try:
+        result = await task
+    finally:
+        _transfer_url_inflight.pop(url, None)
+    if len(_transfer_url_cache) >= _transfer_url_cache_max:
+        oldest = next(iter(_transfer_url_cache))
+        _transfer_url_cache.pop(oldest, None)
+    _transfer_url_cache[url] = result or ""
+    return result
+
+
+async def _transfer_url_via_sutui_inner(
+    url: str,
+    media_type: str = "image",
+    user=None,
+    request: Optional[Request] = None,
+) -> Optional[str]:
     try:
         sutui_token = None
         if user:
@@ -261,7 +301,7 @@ async def _transfer_url_via_sutui(
 
         tp = _transfer_payload_type(media_type)
         MCP_URL = "http://127.0.0.1:8001/mcp"
-        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
             resp = await client.post(
                 MCP_URL,
                 json={

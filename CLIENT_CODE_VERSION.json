@@ -1,6 +1,6 @@
 {
-  "version": "1.0.8",
-  "build": 14,
-  "applied_at": "2026-04-09T10:30:00.000Z",
-  "note": "Meta Social (IG/FB) 发布 + YouTube 数据分析 + Twilio WA 轮询优化 + 电商上架方案"
+  "version": "1.0.11",
+  "build": 17,
+  "applied_at": "2026-04-15T09:20:00.000Z",
+  "note": "feat: 企微发消息接收者下拉多选 + 定时发布(周几+时间) + 图片视频附件上传; fix: video early-finish + comfly.veo过滤 + default duration 5s"
 }
