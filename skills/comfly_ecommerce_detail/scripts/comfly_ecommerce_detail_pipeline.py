@@ -46,6 +46,12 @@ class Input(TypedDict, total=False):
     output_targets: Dict[str, Any]
     detail_template_id: str
     showcase_template_id: str
+    main_image_count: int
+    sku_image_count: int
+    listing_category: str
+    export_name_prefix: str
+    showcase_count: int
+    material_image_count: int
     brand: str
     compliance_notes: List[str]
     product_name_hint: str
@@ -107,7 +113,10 @@ class PipelineConfig:
     image_model: str = "nano-banana-2"
     aspect_ratio: str = "9:16"
     page_count: int = 12
+    main_image_count: int = 10
+    sku_image_count: int = 3
     showcase_count: int = 0
+    material_image_count: int = 3
     page_width: int = 790
     page_height: int = 1250
     page_gap_px: int = 0
@@ -174,13 +183,17 @@ class RunLogger:
                 "country": config.country,
                 "language": config.language,
                 "analysis_model": config.analysis_model,
-    "image_model": config.image_model,
-    "aspect_ratio": config.aspect_ratio,
-    "page_count": config.page_count,
-    "page_width": config.page_width,
-    "page_height": config.page_height,
-    "page_gap_px": config.page_gap_px,
-    "image_concurrency": config.image_concurrency,
+                "image_model": config.image_model,
+                "aspect_ratio": config.aspect_ratio,
+                "page_count": config.page_count,
+                "main_image_count": config.main_image_count,
+                "sku_image_count": config.sku_image_count,
+                "showcase_count": config.showcase_count,
+                "material_image_count": config.material_image_count,
+                "page_width": config.page_width,
+                "page_height": config.page_height,
+                "page_gap_px": config.page_gap_px,
+                "image_concurrency": config.image_concurrency,
             },
             "input": {k: v for k, v in raw_input.items() if k != "apikey"},
             "artifacts": {
@@ -399,6 +412,11 @@ def _build_partial_failure_payload(
             "image_model": config.image_model,
             "detail_template_id": config.detail_template_id,
             "showcase_template_id": config.showcase_template_id,
+            "page_count": config.page_count,
+            "main_image_count": config.main_image_count,
+            "sku_image_count": config.sku_image_count,
+            "showcase_count": config.showcase_count,
+            "material_image_count": config.material_image_count,
         }
     if partial_output:
         payload.update({k: v for k, v in partial_output.items() if v is not None})
@@ -931,6 +949,64 @@ def _showcase_theme_override(config: PipelineConfig) -> Dict[str, str]:
     return {str(k): str(v) for k, v in theme.items() if str(v).strip()}
 
 
+def _clamp_requested_count(
+    value: Any,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 20,
+    allow_zero: bool = False,
+) -> int:
+    try:
+        number = int(value)
+    except Exception:
+        number = default
+    if allow_zero and number <= 0:
+        return 0
+    return max(minimum, min(maximum, number))
+
+
+def _main_image_target_count(config: PipelineConfig) -> int:
+    return max(1, int(config.main_image_count or 10))
+
+
+def _main_image_shot_target_count(config: PipelineConfig) -> int:
+    return max(1, int(math.ceil(_main_image_target_count(config) / 2.0)))
+
+
+def _sku_image_target_count(config: PipelineConfig) -> int:
+    return max(1, int(config.sku_image_count or 3))
+
+
+def _sku_scene_target_count(config: PipelineConfig) -> int:
+    target = _sku_image_target_count(config)
+    if target <= 1:
+        return 1
+    return max(1, target - 1)
+
+
+def _material_image_target_count(config: PipelineConfig) -> int:
+    return max(1, int(config.material_image_count or 3))
+
+
+def _selling_point_target_count(
+    config: PipelineConfig,
+    *,
+    manual_count: int = 0,
+    inferred_count: int = 0,
+) -> int:
+    explicit_showcase = int(config.showcase_count or 0)
+    return max(
+        1,
+        int(manual_count or 0),
+        int(inferred_count or 0),
+        _main_image_target_count(config),
+        _sku_scene_target_count(config),
+        _material_image_target_count(config),
+        explicit_showcase if explicit_showcase > 0 else 0,
+    )
+
+
 def _download_image_rgba(url: str, retries: int = 5, timeout: int = 180) -> Image.Image:
     last: Optional[Exception] = None
     for attempt in range(1, max(1, retries) + 1):
@@ -1078,8 +1154,11 @@ def _build_config(data: Input) -> PipelineConfig:
     api_key = str(data.get("apikey") or os.getenv("COMFLY_API_KEY", "")).strip()
     if not api_key:
         raise PipelineError("Missing apikey")
-    page_count = max(10, min(16, int(data.get("page_count", 12))))
-    showcase_count = max(0, min(20, int(data.get("showcase_count", 0) or 0)))
+    page_count = _clamp_requested_count(data.get("page_count", 12), 12, minimum=1, maximum=20)
+    main_image_count = _clamp_requested_count(data.get("main_image_count", 10), 10, minimum=1, maximum=20)
+    sku_image_count = _clamp_requested_count(data.get("sku_image_count", 3), 3, minimum=1, maximum=10)
+    showcase_count = _clamp_requested_count(data.get("showcase_count", 0), 0, minimum=1, maximum=20, allow_zero=True)
+    material_image_count = _clamp_requested_count(data.get("material_image_count", 3), 3, minimum=1, maximum=10)
     selling_points = _normalize_selling_point_records(data.get("selling_points"))
     specs = _normalize_specs(data.get("specs"))
     scene_preferences = _safe_dict(data.get("scene_preferences"))
@@ -1118,7 +1197,10 @@ def _build_config(data: Input) -> PipelineConfig:
         image_model=str(data.get("image_model", "nano-banana-2")).strip(),
         aspect_ratio=str(data.get("aspect_ratio", "9:16")).strip(),
         page_count=page_count,
+        main_image_count=main_image_count,
+        sku_image_count=sku_image_count,
         showcase_count=showcase_count,
+        material_image_count=material_image_count,
         page_width=int(data.get("page_width", 790)),
         page_height=int(data.get("page_height", 1250)),
         page_gap_px=int(data.get("page_gap_px", 0)),
@@ -1159,6 +1241,13 @@ def _analysis_prompt(config: PipelineConfig) -> str:
         structured_inputs["detail_template_id"] = config.detail_template_id
     if config.showcase_template_id:
         structured_inputs["showcase_template_id"] = config.showcase_template_id
+    structured_inputs["requested_output_counts"] = {
+        "main_images": _main_image_target_count(config),
+        "sku_images": _sku_image_target_count(config),
+        "detail_pages": max(1, int(config.page_count or 1)),
+        "material_images": _material_image_target_count(config),
+        "showcase_images": int(config.showcase_count or 0),
+    }
     if config.listing_category:
         structured_inputs["listing_category"] = config.listing_category
     if config.showcase_count > 0:
@@ -1168,12 +1257,16 @@ def _analysis_prompt(config: PipelineConfig) -> str:
     if config.compliance_notes:
         structured_inputs["compliance_notes"] = config.compliance_notes
     user_hint_block = "\n".join(user_hint_lines).strip()
+    selling_point_target = _selling_point_target_count(
+        config,
+        manual_count=len(_normalize_selling_point_records(config.selling_points)),
+    )
     return f"""
 You are a senior ecommerce creative strategist.
 The user gave product reference images and wants a mobile ecommerce detail-image sequence.
 Return strict JSON only with:
 product_name, category, audience, product_summary, hero_claim, visual_style,
-selling_points (8-12 strings), trust_points (3-6), usage_scenes (3-6),
+selling_points (at least {selling_point_target} strings, up to 20 strings), trust_points (3-6), usage_scenes (3-6),
 materials, colors, structure_features, care_points, certification_clues, visual_constraints.
 Rules:
 1. Stay faithful to what is visible.
@@ -1185,6 +1278,7 @@ Rules:
 7. If style is supplied, keep the visual_style aligned with that style_id rather than inventing a totally different style direction.
 8. Treat the reference images as the exact sellable item. Do not upgrade, redesign, beautify, or reinterpret the product into a cleaner or more premium variant during analysis.
 9. Preserve visible structure, proportions, openings, materials, color blocking, and component layout. If something is unclear, stay conservative instead of inventing a new product detail.
+10. Generate enough distinct selling_points to support the requested output counts. When the user supplied fewer manual selling points, keep them first and conservatively add complementary points instead of reducing the total count.
 Platform: {locale["platform"]}
 Country: {locale["country"]}
 Target market: {locale["market"]}
@@ -1198,7 +1292,7 @@ Structured inputs:
 
 def _normalize_analysis(plan: Dict[str, Any], locale: Dict[str, str]) -> Dict[str, Any]:
     result = dict(plan)
-    result["selling_points"] = _safe_string_list(plan.get("selling_points"))[:12] or DEFAULT_SELLING_POINTS[:]
+    result["selling_points"] = _safe_string_list(plan.get("selling_points"))[:20] or DEFAULT_SELLING_POINTS[:]
     result["trust_points"] = _safe_string_list(plan.get("trust_points"))[:6] or DEFAULT_TRUST_POINTS[:]
     result["usage_scenes"] = _safe_string_list(plan.get("usage_scenes"))[:6] or DEFAULT_USAGE_SCENES[:]
     result["materials"] = _safe_string_list(plan.get("materials"))[:8]
@@ -1219,19 +1313,40 @@ def _normalize_analysis(plan: Dict[str, Any], locale: Dict[str, str]) -> Dict[st
     return result
 
 
+def _expand_selling_point_records(records: List[Dict[str, Any]], display_points: List[str]) -> List[Dict[str, Any]]:
+    out = _normalize_selling_point_records(records)
+    existing = {str(item.get("title") or "").strip() for item in out if str(item.get("title") or "").strip()}
+    next_priority = len(out) + 1
+    for text in display_points:
+        title = str(text or "").strip()
+        if not title or title in existing:
+            continue
+        out.append({"title": title, "description": "", "icon": "", "priority": next_priority})
+        existing.add(title)
+        next_priority += 1
+    return out
+
+
 def _merge_structured_inputs_into_analysis(analysis: Dict[str, Any], config: PipelineConfig) -> Dict[str, Any]:
     result = dict(analysis)
     selling_point_records = _normalize_selling_point_records(config.selling_points)
     inferred_points = _safe_string_list(result.get("selling_points"))
+    target_count = _selling_point_target_count(
+        config,
+        manual_count=len(selling_point_records),
+        inferred_count=len(inferred_points),
+    )
     if selling_point_records:
-        result["selling_point_records"] = selling_point_records
-        result["selling_points"] = _dedupe_strings(_selling_point_display_texts(selling_point_records) + inferred_points)[:12]
+        display_points = _dedupe_strings(_selling_point_display_texts(selling_point_records) + inferred_points)
+        display_points = _pad_points(display_points, target_count, inferred_points + DEFAULT_SELLING_POINTS)
+        result["selling_point_records"] = _expand_selling_point_records(selling_point_records, display_points)
+        result["selling_points"] = display_points
         if not str(result.get("hero_claim") or "").strip():
             result["hero_claim"] = selling_point_records[0]["title"]
         if not str(result.get("product_summary") or "").strip():
             result["product_summary"] = selling_point_records[0].get("description") or selling_point_records[0]["title"]
     else:
-        result["selling_points"] = inferred_points[:12] or DEFAULT_SELLING_POINTS[:]
+        result["selling_points"] = _pad_points(inferred_points or DEFAULT_SELLING_POINTS[:], target_count, inferred_points + DEFAULT_SELLING_POINTS)
 
     specs = _normalize_specs(config.specs)
     if specs:
@@ -3929,7 +4044,10 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "image_model": config.image_model,
                 "aspect_ratio": config.aspect_ratio,
                 "page_count": config.page_count,
+                "main_image_count": config.main_image_count,
+                "sku_image_count": config.sku_image_count,
                 "showcase_count": config.showcase_count,
+                "material_image_count": config.material_image_count,
                 "total_page_count": len(pages),
                 "page_width": config.page_width,
                 "page_height": config.page_height,
@@ -4151,7 +4269,7 @@ def _generate_main_image_assets(
 ) -> Dict[str, Any]:
     master_dir = logger.run_dir / "main_image_masters"
     master_dir.mkdir(parents=True, exist_ok=True)
-    shot_plan = _main_image_shot_plan(analysis)
+    shot_plan = _main_image_shot_plan(analysis, _main_image_shot_target_count(config))
     assets: Dict[str, Any] = {"variants": {}, "shots": [], "warnings": []}
     for shot in shot_plan:
         prompt = _compose_main_image_prompt(analysis, aspect_ratio="1:1", shot=shot)
@@ -4387,7 +4505,7 @@ def _generate_sku_assets(
 ) -> Dict[str, Any]:
     master_dir = logger.run_dir / "sku_image_masters"
     master_dir.mkdir(parents=True, exist_ok=True)
-    sku_plan = _sku_image_plan(analysis)
+    sku_plan = _sku_image_plan(analysis, _sku_image_target_count(config))
     variants: List[Dict[str, Any]] = []
     scene_variants: List[Dict[str, Any]] = []
 
@@ -4822,6 +4940,266 @@ def _export_prefix(config: PipelineConfig, analysis: Dict[str, Any]) -> str:
     )
 
 
+def _main_image_shot_plan(analysis: Dict[str, Any], shot_count: int) -> List[Dict[str, Any]]:
+    selling_points = _safe_string_list(analysis.get("selling_points"))
+    structure = _safe_string_list(analysis.get("structure_features"))
+    materials = _safe_string_list(analysis.get("materials"))
+    scenes = _safe_string_list(analysis.get("usage_scenes"))
+    hero_claim = str(analysis.get("hero_claim") or "").strip()
+    product_name = str(analysis.get("product_name") or analysis.get("category") or "商品").strip()
+
+    focus_a = selling_points[0] if selling_points else hero_claim or product_name
+    focus_b = selling_points[1] if len(selling_points) > 1 else (structure[0] if structure else focus_a)
+    focus_c = selling_points[2] if len(selling_points) > 2 else (scenes[0] if scenes else focus_a)
+    focus_d = structure[0] if structure else (selling_points[1] if len(selling_points) > 1 else focus_a)
+    focus_e = materials[0] if materials else (selling_points[2] if len(selling_points) > 2 else focus_a)
+
+    base_plan = [
+        {
+            "index": 1,
+            "key": "hero_anchor",
+            "label": "主图锚点",
+            "direction": "front-facing hero shot or stable three-quarter hero view, full product clearly visible, centered and complete",
+            "focus": focus_a,
+            "portrait_anchor_x": 0.5,
+            "portrait_anchor_y": 0.32,
+        },
+        {
+            "index": 2,
+            "key": "angle_view",
+            "label": "角度展示",
+            "direction": "forty-five-degree angled view that shows the product silhouette, side structure, and volume more clearly",
+            "focus": focus_b,
+            "portrait_anchor_x": 0.5,
+            "portrait_anchor_y": 0.36,
+        },
+        {
+            "index": 3,
+            "key": "lifestyle_scene",
+            "label": "场景价值",
+            "direction": "lifestyle usage scene with believable home context, optional pet or daily-life props, product remains the dominant subject",
+            "focus": focus_c,
+            "portrait_anchor_x": 0.52,
+            "portrait_anchor_y": 0.38,
+        },
+        {
+            "index": 4,
+            "key": "feature_demo",
+            "label": "功能演示",
+            "direction": "feature demonstration view showing a functional state, opening method, storage use, or interaction while keeping the product mostly complete in frame",
+            "focus": focus_d,
+            "portrait_anchor_x": 0.48,
+            "portrait_anchor_y": 0.42,
+        },
+        {
+            "index": 5,
+            "key": "material_detail",
+            "label": "材质细节",
+            "direction": "closer craftsmanship and material-emphasis shot with stronger texture visibility, but still keep the overall product recognizable",
+            "focus": focus_e,
+            "portrait_anchor_x": 0.5,
+            "portrait_anchor_y": 0.45,
+        },
+    ]
+    target_count = max(1, int(shot_count or 1))
+    if target_count <= len(base_plan):
+        return base_plan[:target_count]
+
+    extra_focuses = _dedupe_strings(selling_points[3:] + structure[1:] + materials[1:] + scenes[1:] + [hero_claim, product_name])
+    extra_directions = [
+        "closer lifestyle angle that still keeps the full product readable while emphasizing another selling point",
+        "variant hero view with stronger depth and supporting props while keeping the product dominant",
+        "conversion-oriented alternate angle that highlights one more product advantage without changing the item identity",
+    ]
+    plan = list(base_plan)
+    while len(plan) < target_count:
+        idx = len(plan) + 1
+        plan.append(
+            {
+                "index": idx,
+                "key": f"extended_{idx:02d}",
+                "label": f"扩展主图 {idx:02d}",
+                "direction": extra_directions[(idx - len(base_plan) - 1) % len(extra_directions)],
+                "focus": extra_focuses[(idx - len(base_plan) - 1) % len(extra_focuses)] if extra_focuses else hero_claim or product_name,
+                "portrait_anchor_x": 0.5,
+                "portrait_anchor_y": 0.38 + (0.03 * ((idx - 1) % 3)),
+            }
+        )
+    return plan
+
+
+def _sku_image_plan(analysis: Dict[str, Any], target_count: int) -> List[Dict[str, Any]]:
+    selling_points = _safe_string_list(analysis.get("selling_points"))
+    structure = _safe_string_list(analysis.get("structure_features"))
+    materials = _safe_string_list(analysis.get("materials"))
+    scenes = _safe_string_list(analysis.get("usage_scenes"))
+    hero_claim = str(analysis.get("hero_claim") or "").strip()
+    focus_a = selling_points[0] if selling_points else hero_claim or "核心展示"
+    focus_b = selling_points[1] if len(selling_points) > 1 else (structure[0] if structure else focus_a)
+    focus_c = structure[0] if structure else (materials[0] if materials else focus_b)
+    scene_target = 1 if int(target_count or 1) <= 1 else max(1, int(target_count) - 1)
+    base_scenes = [
+        {
+            "index": 1,
+            "key": "front_scene",
+            "label": "SKU 正面场景",
+            "mode": "scene",
+            "direction": "front-facing or stable three-quarter view for marketplace SKU gallery",
+            "focus": focus_a,
+        },
+        {
+            "index": 2,
+            "key": "function_scene",
+            "label": "SKU 功能角度",
+            "mode": "scene",
+            "direction": "side, forty-five-degree, or function-emphasis view that reveals structure and usage more clearly",
+            "focus": focus_b,
+        },
+    ]
+    scene_focuses = _dedupe_strings(selling_points[2:] + structure + materials + scenes + [hero_claim])
+    scene_directions = [
+        "detail-emphasis square view that keeps the product complete while strengthening one more selling point",
+        "alternate marketplace scene angle that shows usage context and preserves the exact product structure",
+    ]
+    plan: List[Dict[str, Any]] = []
+    for item in base_scenes:
+        if len(plan) >= scene_target:
+            break
+        plan.append(dict(item))
+    while len(plan) < scene_target:
+        idx = len(plan) + 1
+        plan.append(
+            {
+                "index": idx,
+                "key": f"scene_{idx:02d}",
+                "label": f"SKU 扩展场景 {idx:02d}",
+                "mode": "scene",
+                "direction": scene_directions[(idx - 1) % len(scene_directions)],
+                "focus": scene_focuses[(idx - 1) % len(scene_focuses)] if scene_focuses else focus_b,
+            }
+        )
+    if int(target_count or 1) > 1:
+        plan.append(
+            {
+                "index": len(plan) + 1,
+                "key": "layout_board",
+                "label": "SKU 带版式",
+                "mode": "layout",
+                "direction": "clean local-composed sku board",
+                "focus": focus_c,
+            }
+        )
+    return plan
+
+
+def _generate_sku_assets(
+    *,
+    client: ComflyClient,
+    logger: RunLogger,
+    analysis: Dict[str, Any],
+    config: PipelineConfig,
+    reference_urls: List[str],
+    white_bg_assets: Dict[str, Any],
+) -> Dict[str, Any]:
+    master_dir = logger.run_dir / "sku_image_masters"
+    master_dir.mkdir(parents=True, exist_ok=True)
+    sku_plan = _sku_image_plan(analysis, _sku_image_target_count(config))
+    variants: List[Dict[str, Any]] = []
+    scene_variants: List[Dict[str, Any]] = []
+
+    for shot in [item for item in sku_plan if str(item.get("mode") or "") == "scene"]:
+        prompt = _compose_sku_scene_prompt(analysis, shot=shot)
+        generated, attempts = client.generate_image(
+            config.image_model,
+            prompt,
+            "1:1",
+            reference_urls,
+            f"08_sku_scene_{shot['index']:02d}",
+        )
+        logger.record_usage(
+            "image",
+            config.image_model,
+            f"sku_scene_{shot['key']}",
+            payload={"attempts": attempts, "aspect_ratio": "1:1", "shot_index": shot["index"]},
+        )
+        scene_source = _download_image(generated["url"], retries=5, timeout=180)
+        scene_master = _save_master_jpeg(scene_source, master_dir / f"sku-{shot['index']:02d}-scene-3072.jpg", 3072, 3072)
+        scene_image = _open_local_image(scene_master["path"]).convert("RGB")
+        record = {
+            "index": int(shot["index"]),
+            "shot_key": str(shot["key"]),
+            "label": str(shot["label"]),
+            "mode": "scene",
+            "aspect_ratio": "1:1",
+            "generated_image_url": generated["url"],
+            "prompt": prompt,
+            "attempts": attempts,
+            "master": scene_master,
+            "master_image": scene_image,
+            "focus": str(shot.get("focus") or ""),
+        }
+        scene_variants.append(record)
+        variants.append(record)
+
+    layout_record: Dict[str, Any] = {}
+    layout_items = [item for item in sku_plan if str(item.get("mode") or "") == "layout"]
+    if layout_items:
+        scene_image = scene_variants[0]["master_image"] if scene_variants else None
+        inset_image = white_bg_assets.get("white_bg_image") if isinstance(white_bg_assets.get("white_bg_image"), Image.Image) else scene_image
+        if not isinstance(scene_image, Image.Image):
+            raise PipelineError("SKU scene generation completed without a usable scene image")
+        layout_item = layout_items[0]
+        layout_image = _compose_sku_layout_image(
+            analysis=analysis,
+            scene_image=scene_image,
+            inset_image=inset_image if isinstance(inset_image, Image.Image) else scene_image,
+            size=3072,
+        )
+        layout_master = _save_master_jpeg(
+            layout_image,
+            master_dir / f"sku-{int(layout_item.get('index') or len(variants) + 1):02d}-layout-3072.jpg",
+            3072,
+            3072,
+        )
+        layout_record = {
+            "index": int(layout_item.get("index") or len(variants) + 1),
+            "shot_key": "layout_board",
+            "label": "SKU 带版式",
+            "mode": "layout",
+            "aspect_ratio": "1:1",
+            "generated_image_url": "",
+            "prompt": "local_composed_sku_layout",
+            "attempts": 1,
+            "master": layout_master,
+            "master_image": _open_local_image(layout_master["path"]).convert("RGB"),
+            "focus": str(layout_item.get("focus") or ""),
+        }
+        variants.append(layout_record)
+
+    return {
+        "warnings": [],
+        "variants": variants,
+        "scene": dict(scene_variants[0]) if scene_variants else {},
+        "layout": dict(layout_record),
+    }
+
+
+def _material_image_size_plan(count: int) -> List[tuple[int, int]]:
+    presets = [
+        (513, 750),
+        (800, 1200),
+        (900, 1200),
+        (1080, 1080),
+        (1080, 1440),
+        (1200, 1600),
+        (1242, 1660),
+        (1440, 1920),
+        (750, 1000),
+        (768, 1024),
+    ]
+    return presets[: max(1, min(len(presets), int(count or 1)))]
+
+
 def _prefixed_export_name(prefix: str, filename: str) -> str:
     base = str(filename or "").strip()
     clean_prefix = _sanitize_export_prefix(prefix)
@@ -5142,8 +5520,11 @@ def _export_suite_bundle(
     )
 
     if _target_enabled(config.output_targets, "main_images"):
+        main_export_limit = _main_image_target_count(config)
         if main_shots:
             for shot in main_shots:
+                if len(suite_categories["main_images"]) >= main_export_limit:
+                    break
                 square_payload = shot.get("square") if isinstance(shot.get("square"), dict) else {}
                 portrait_payload = shot.get("portrait") if isinstance(shot.get("portrait"), dict) else {}
                 square_image = square_payload.get("master_image") if isinstance(square_payload.get("master_image"), Image.Image) else None
@@ -5151,43 +5532,47 @@ def _export_suite_bundle(
                 shot_index = int(shot.get("index") or len(suite_categories["main_images"]) + 1)
                 if not isinstance(square_image, Image.Image) or not isinstance(portrait_image, Image.Image):
                     raise PipelineError(f"Main image shot {shot_index} is missing square or portrait master output")
-                square_export = _save_cover_jpeg(square_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, f"{shot_index}-1440X1440.jpg"), 1440, 1440)
-                square_export["kind"] = "main_image_square"
-                square_export["source"] = "generated_main_image"
-                square_export["shot_index"] = shot_index
-                square_export["shot_key"] = str(shot.get("shot_key") or "")
-                square_export["shot_label"] = str(shot.get("label") or "")
-                square_export["generated_image_url"] = str(shot.get("generated_image_url") or "")
-                square_export["prompt"] = str(shot.get("prompt") or "")
-                suite_categories["main_images"].append(square_export)
+                if len(suite_categories["main_images"]) < main_export_limit:
+                    square_export = _save_cover_jpeg(square_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, f"{shot_index}-1440X1440.jpg"), 1440, 1440)
+                    square_export["kind"] = "main_image_square"
+                    square_export["source"] = "generated_main_image"
+                    square_export["shot_index"] = shot_index
+                    square_export["shot_key"] = str(shot.get("shot_key") or "")
+                    square_export["shot_label"] = str(shot.get("label") or "")
+                    square_export["generated_image_url"] = str(shot.get("generated_image_url") or "")
+                    square_export["prompt"] = str(shot.get("prompt") or "")
+                    suite_categories["main_images"].append(square_export)
 
-                portrait_export = _save_cover_jpeg(portrait_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, f"{shot_index}-1440X1920.jpg"), 1440, 1920)
-                portrait_export["kind"] = "main_image_portrait"
-                portrait_export["source"] = "generated_main_image"
-                portrait_export["shot_index"] = shot_index
-                portrait_export["shot_key"] = str(shot.get("shot_key") or "")
-                portrait_export["shot_label"] = str(shot.get("label") or "")
-                portrait_export["generated_image_url"] = str(shot.get("generated_image_url") or "")
-                portrait_export["prompt"] = str(shot.get("prompt") or "")
-                suite_categories["main_images"].append(portrait_export)
+                if len(suite_categories["main_images"]) < main_export_limit:
+                    portrait_export = _save_cover_jpeg(portrait_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, f"{shot_index}-1440X1920.jpg"), 1440, 1920)
+                    portrait_export["kind"] = "main_image_portrait"
+                    portrait_export["source"] = "generated_main_image"
+                    portrait_export["shot_index"] = shot_index
+                    portrait_export["shot_key"] = str(shot.get("shot_key") or "")
+                    portrait_export["shot_label"] = str(shot.get("label") or "")
+                    portrait_export["generated_image_url"] = str(shot.get("generated_image_url") or "")
+                    portrait_export["prompt"] = str(shot.get("prompt") or "")
+                    suite_categories["main_images"].append(portrait_export)
         else:
             if not isinstance(main_square_image, Image.Image):
                 raise PipelineError("Main image target is enabled, but the 1:1 main-image master is missing")
             if not isinstance(main_portrait_image, Image.Image):
                 raise PipelineError("Main image target is enabled, but the 3:4 main-image master is missing")
-            square_export = _save_cover_jpeg(main_square_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, "1-1440X1440.jpg"), 1440, 1440)
-            square_export["kind"] = "main_image_square"
-            square_export["source"] = "generated_main_image"
-            square_export["generated_image_url"] = str((main_square or {}).get("generated_image_url") or "")
-            square_export["prompt"] = str((main_square or {}).get("prompt") or "")
-            suite_categories["main_images"].append(square_export)
+            if main_export_limit >= 1:
+                square_export = _save_cover_jpeg(main_square_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, "1-1440X1440.jpg"), 1440, 1440)
+                square_export["kind"] = "main_image_square"
+                square_export["source"] = "generated_main_image"
+                square_export["generated_image_url"] = str((main_square or {}).get("generated_image_url") or "")
+                square_export["prompt"] = str((main_square or {}).get("prompt") or "")
+                suite_categories["main_images"].append(square_export)
 
-            portrait_export = _save_cover_jpeg(main_portrait_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, "1-1440X1920.jpg"), 1440, 1920)
-            portrait_export["kind"] = "main_image_portrait"
-            portrait_export["source"] = "generated_main_image"
-            portrait_export["generated_image_url"] = str((main_portrait or {}).get("generated_image_url") or "")
-            portrait_export["prompt"] = str((main_portrait or {}).get("prompt") or "")
-            suite_categories["main_images"].append(portrait_export)
+            if main_export_limit >= 2:
+                portrait_export = _save_cover_jpeg(main_portrait_image, category_dirs["main_images"] / _prefixed_export_name(name_prefix, "1-1440X1920.jpg"), 1440, 1920)
+                portrait_export["kind"] = "main_image_portrait"
+                portrait_export["source"] = "generated_main_image"
+                portrait_export["generated_image_url"] = str((main_portrait or {}).get("generated_image_url") or "")
+                portrait_export["prompt"] = str((main_portrait or {}).get("prompt") or "")
+                suite_categories["main_images"].append(portrait_export)
 
     if _target_enabled(config.output_targets, "sku_images"):
         if sku_variants:
@@ -5274,7 +5659,7 @@ def _export_suite_bundle(
             if isinstance(main_portrait_image, Image.Image)
             else ("generated_sku_image" if isinstance(sku_scene_image, Image.Image) else "detail_page")
         )
-        for width, height in ((513, 750), (800, 1200), (900, 1200)):
+        for width, height in _material_image_size_plan(_material_image_target_count(config)):
             exported = _save_cover_jpeg(material_source, category_dirs["material_images"] / _prefixed_export_name(name_prefix, f"{width}X{height}.jpg"), width, height)
             exported["kind"] = "material_image"
             exported["source"] = material_source_kind

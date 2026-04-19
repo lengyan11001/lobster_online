@@ -729,6 +729,12 @@
     return rounded;
   }
 
+  function _numericOrDefault(id, fallback, min, max) {
+    var value = _numericOrNull(id, min, max);
+    if (value === null || value === undefined) return fallback;
+    return value;
+  }
+
   function _parseSpecs() {
     var out = {};
     var raw = (byId('ecomSpecsInput').value || '').split(/\r?\n/);
@@ -794,7 +800,10 @@
       style: (byId('ecomStyleSelect').value || '').trim() || 'creamy_wood',
       detail_template_id: (byId('ecomDetailTemplateSelect').value || '').trim() || 'detail_template_02',
       showcase_template_id: (byId('ecomShowcaseTemplateSelect').value || '').trim() || 'showcase_template_02',
-      page_count: Number(byId('ecomPageCountInput').value || 12) || 12,
+      main_image_count: _numericOrDefault('ecomMainImageCountInput', 10, 1, 20),
+      sku_image_count: _numericOrDefault('ecomSkuImageCountInput', 3, 1, 10),
+      page_count: _numericOrDefault('ecomPageCountInput', 12, 1, 20),
+      material_image_count: _numericOrDefault('ecomMaterialImageCountInput', 3, 1, 10),
       showcase_count: _numericOrNull('ecomShowcaseCountInput', 1, 20),
       auto_save: false,
       analysis_model: ANALYSIS_MODEL,
@@ -1291,6 +1300,9 @@
     if (byId('ecomDetailTemplateSelect')) byId('ecomDetailTemplateSelect').value = 'detail_template_02';
     if (byId('ecomShowcaseTemplateSelect')) byId('ecomShowcaseTemplateSelect').value = 'showcase_template_02';
     if (byId('ecomPageCountInput')) byId('ecomPageCountInput').value = 12;
+    if (byId('ecomMainImageCountInput')) byId('ecomMainImageCountInput').value = 10;
+    if (byId('ecomSkuImageCountInput')) byId('ecomSkuImageCountInput').value = 3;
+    if (byId('ecomMaterialImageCountInput')) byId('ecomMaterialImageCountInput').value = 3;
     if (byId('ecomShowcaseCountInput')) byId('ecomShowcaseCountInput').value = '';
     OUTPUT_TARGETS.forEach(function(item) {
       if (byId(item.id)) byId(item.id).checked = true;
@@ -1349,6 +1361,31 @@
       var pageCountInput = byId('ecomPageCountInput');
       var pageField = pageCountInput ? pageCountInput.closest('.ecom-field') : null;
       if (pageField && pageField.parentNode) {
+        if (pageCountInput) {
+          pageCountInput.min = '1';
+          pageCountInput.max = '20';
+        }
+        var mainWrap = document.createElement('div');
+        mainWrap.className = 'ecom-field';
+        mainWrap.innerHTML =
+          '<label for="ecomMainImageCountInput">主图数量</label>' +
+          '<input type="number" id="ecomMainImageCountInput" min="1" max="20" value="10">';
+        pageField.parentNode.appendChild(mainWrap);
+
+        var skuWrap = document.createElement('div');
+        skuWrap.className = 'ecom-field';
+        skuWrap.innerHTML =
+          '<label for="ecomSkuImageCountInput">SKU 图数量</label>' +
+          '<input type="number" id="ecomSkuImageCountInput" min="1" max="10" value="3">';
+        pageField.parentNode.appendChild(skuWrap);
+
+        var materialWrap = document.createElement('div');
+        materialWrap.className = 'ecom-field';
+        materialWrap.innerHTML =
+          '<label for="ecomMaterialImageCountInput">素材图数量</label>' +
+          '<input type="number" id="ecomMaterialImageCountInput" min="1" max="10" value="3">';
+        pageField.parentNode.appendChild(materialWrap);
+
         var countWrap = document.createElement('div');
         countWrap.className = 'ecom-field';
         countWrap.innerHTML =

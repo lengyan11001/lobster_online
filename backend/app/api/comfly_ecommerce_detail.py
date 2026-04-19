@@ -104,10 +104,13 @@ class EcommerceDetailPipelinePayload(BaseModel):
     output_targets: Optional[EcommerceOutputTargets] = None
     detail_template_id: str = ""
     showcase_template_id: str = ""
+    main_image_count: Optional[int] = Field(10, ge=1, le=20)
+    sku_image_count: Optional[int] = Field(3, ge=1, le=10)
     showcase_count: Optional[int] = Field(None, ge=1, le=20)
+    material_image_count: Optional[int] = Field(3, ge=1, le=10)
     brand: str = ""
     compliance_notes: List[str] = Field(default_factory=list)
-    page_count: Optional[int] = Field(12, ge=10, le=16)
+    page_count: Optional[int] = Field(12, ge=1, le=20)
     auto_save: bool = True
     platform: str = ""
     country: str = ""
@@ -628,9 +631,12 @@ async def _prepare_pipeline_input(
         output_targets=pl.output_targets.model_dump(exclude_none=True) if pl.output_targets else None,
         detail_template_id=pl.detail_template_id,
         showcase_template_id=pl.showcase_template_id,
+        main_image_count=pl.main_image_count,
+        sku_image_count=pl.sku_image_count,
         listing_category=pl.listing_category,
         export_name_prefix=pl.export_name_prefix,
         showcase_count=pl.showcase_count,
+        material_image_count=pl.material_image_count,
         brand=pl.brand,
         compliance_notes=list(pl.compliance_notes),
         api_key=api_key,
@@ -1055,7 +1061,10 @@ def _detail_render_config_from_result(mod: Any, result: Dict[str, Any]) -> Any:
         page_height=int(config_payload.get("page_height") or 1250),
         page_gap_px=int(config_payload.get("page_gap_px") or 0),
         page_count=int(config_payload.get("page_count") or 12),
+        main_image_count=int(config_payload.get("main_image_count") or 10),
+        sku_image_count=int(config_payload.get("sku_image_count") or 3),
         showcase_count=int(config_payload.get("showcase_count") or 0),
+        material_image_count=int(config_payload.get("material_image_count") or 3),
         analysis_model=str(config_payload.get("analysis_model") or ""),
         image_model=str(config_payload.get("image_model") or ""),
         aspect_ratio=str(config_payload.get("aspect_ratio") or "9:16"),
