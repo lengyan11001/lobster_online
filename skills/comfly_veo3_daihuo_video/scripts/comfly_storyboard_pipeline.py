@@ -4,6 +4,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,7 @@ class Input(TypedDict, total=False):
     product_image: str
     apikey: str
     base_url: str
+    task_text: str
     platform: str
     country: str
     language: str
@@ -72,6 +74,7 @@ class Output(TypedDict):
 class PipelineConfig:
     base_url: str
     api_key: str
+    task_text: str = ""
     platform: str = "douyin"
     country: str = ""
     language: str = ""
@@ -83,7 +86,7 @@ class PipelineConfig:
     video_model: str = "veo3.1-fast"
     aspect_ratio: str = "9:16"
     enhance_prompt: bool = True
-    storyboard_count: int = 5
+    storyboard_count: int = 6
     shot_concurrency: int = 5
     poll_interval_seconds: int = 12
     max_polls: int = 50
@@ -356,9 +359,19 @@ class ComflyClient:
             h.update({str(k): str(v) for k, v in extra.items()})
         return h
 
+    def _redact_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
+        redacted: Dict[str, str] = {}
+        for key, value in headers.items():
+            lowered = key.lower()
+            if lowered in {"authorization", "proxy-authorization", "x-api-key"}:
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = value
+        return redacted
+
     def _trace_request(self, phase: str, url: str, extra_headers: Optional[Dict[str, str]], body: Any) -> None:
-        """按调试需要打印完整请求头（含 Authorization 全量），便于与上游核对。"""
-        hdrs = self._effective_headers(extra_headers)
+        """打印调试请求信息，但敏感认证头必须脱敏。"""
+        hdrs = self._redact_headers(self._effective_headers(extra_headers))
         if isinstance(body, dict):
             body_s = json.dumps(body, ensure_ascii=False)
         elif body is None:
@@ -531,6 +544,7 @@ def _build_config(data: Input) -> PipelineConfig:
     api_key = _normalize_comfly_api_key(data.get("apikey") or os.getenv("COMFLY_API_KEY", ""))
     if not api_key:
         raise PipelineError("Missing apikey")
+    locale_inputs = _resolve_locale_inputs(data)
     raw_irs = (data.get("image_request_style") or "").strip().lower()
     if raw_irs in ("openai_images", "openai", "oai"):
         irs = "openai_images"
@@ -543,9 +557,10 @@ def _build_config(data: Input) -> PipelineConfig:
     return PipelineConfig(
         base_url=data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.chat")),
         api_key=api_key,
-        platform=data.get("platform", "douyin"),
-        country=data.get("country", ""),
-        language=data.get("language", ""),
+        task_text=locale_inputs["task_text"],
+        platform=locale_inputs["platform"],
+        country=locale_inputs["country"],
+        language=locale_inputs["language"],
         target_market=data.get("target_market", ""),
         analysis_model=data.get("analysis_model", "gemini-2.5-pro"),
         image_model=data.get("image_model", "nano-banana-2"),
@@ -553,8 +568,8 @@ def _build_config(data: Input) -> PipelineConfig:
         video_model=data.get("video_model", "veo3.1-fast"),
         aspect_ratio=_normalize_aspect_ratio_for_comfly(str(data.get("aspect_ratio") or "9:16")),
         enhance_prompt=bool(data.get("enhance_prompt", True)),
-        storyboard_count=int(data.get("storyboard_count", 5)),
-        shot_concurrency=max(1, int(data.get("shot_concurrency", data.get("storyboard_count", 5)))),
+        storyboard_count=int(data.get("storyboard_count", 6)),
+        shot_concurrency=max(1, int(data.get("shot_concurrency", data.get("storyboard_count", 6)))),
         poll_interval_seconds=int(data.get("poll_interval_seconds", 12)),
         max_polls=int(data.get("max_polls", 50)),
         output_dir=data.get("output_dir", ""),
@@ -588,9 +603,317 @@ def _normalize_platform(platform: str) -> str:
     return value or "douyin"
 
 
+_COUNTRY_ALIASES: Dict[str, str] = {
+    "china": "China",
+    "中国": "China",
+    "中国大陆": "China",
+    "大陆": "China",
+    "mainland china": "China",
+    "united states": "United States",
+    "usa": "United States",
+    "us": "United States",
+    "america": "United States",
+    "美国": "United States",
+    "美区": "United States",
+    "united kingdom": "United Kingdom",
+    "uk": "United Kingdom",
+    "britain": "United Kingdom",
+    "england": "United Kingdom",
+    "英国": "United Kingdom",
+    "英区": "United Kingdom",
+    "japan": "Japan",
+    "日本": "Japan",
+    "日区": "Japan",
+    "south korea": "South Korea",
+    "korea": "South Korea",
+    "韩国": "South Korea",
+    "韩区": "South Korea",
+    "france": "France",
+    "法国": "France",
+    "germany": "Germany",
+    "德国": "Germany",
+    "spain": "Spain",
+    "西班牙": "Spain",
+    "mexico": "Mexico",
+    "墨西哥": "Mexico",
+    "brazil": "Brazil",
+    "巴西": "Brazil",
+    "russia": "Russia",
+    "俄罗斯": "Russia",
+    "thailand": "Thailand",
+    "泰国": "Thailand",
+    "indonesia": "Indonesia",
+    "印尼": "Indonesia",
+    "印度尼西亚": "Indonesia",
+    "malaysia": "Malaysia",
+    "马来西亚": "Malaysia",
+    "vietnam": "Vietnam",
+    "越南": "Vietnam",
+}
+
+_LANGUAGE_METADATA: Dict[str, Dict[str, str]] = {
+    "simplified chinese": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "chinese": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "zh": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "zh-cn": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "中文": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "汉语": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "普通话": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "简体中文": {"language_name": "Simplified Chinese", "language_code": "zh-CN"},
+    "english": {"language_name": "English", "language_code": "en-US"},
+    "en": {"language_name": "English", "language_code": "en-US"},
+    "en-us": {"language_name": "English", "language_code": "en-US"},
+    "en-gb": {"language_name": "English", "language_code": "en-GB"},
+    "英文": {"language_name": "English", "language_code": "en-US"},
+    "英语": {"language_name": "English", "language_code": "en-US"},
+    "japanese": {"language_name": "Japanese", "language_code": "ja-JP"},
+    "ja": {"language_name": "Japanese", "language_code": "ja-JP"},
+    "ja-jp": {"language_name": "Japanese", "language_code": "ja-JP"},
+    "日语": {"language_name": "Japanese", "language_code": "ja-JP"},
+    "日本语": {"language_name": "Japanese", "language_code": "ja-JP"},
+    "korean": {"language_name": "Korean", "language_code": "ko-KR"},
+    "ko": {"language_name": "Korean", "language_code": "ko-KR"},
+    "ko-kr": {"language_name": "Korean", "language_code": "ko-KR"},
+    "韩语": {"language_name": "Korean", "language_code": "ko-KR"},
+    "french": {"language_name": "French", "language_code": "fr-FR"},
+    "fr": {"language_name": "French", "language_code": "fr-FR"},
+    "fr-fr": {"language_name": "French", "language_code": "fr-FR"},
+    "法语": {"language_name": "French", "language_code": "fr-FR"},
+    "german": {"language_name": "German", "language_code": "de-DE"},
+    "de": {"language_name": "German", "language_code": "de-DE"},
+    "de-de": {"language_name": "German", "language_code": "de-DE"},
+    "德语": {"language_name": "German", "language_code": "de-DE"},
+    "spanish": {"language_name": "Spanish", "language_code": "es-ES"},
+    "es": {"language_name": "Spanish", "language_code": "es-ES"},
+    "es-es": {"language_name": "Spanish", "language_code": "es-ES"},
+    "es-mx": {"language_name": "Spanish", "language_code": "es-MX"},
+    "西班牙语": {"language_name": "Spanish", "language_code": "es-ES"},
+    "portuguese": {"language_name": "Portuguese", "language_code": "pt-BR"},
+    "pt": {"language_name": "Portuguese", "language_code": "pt-BR"},
+    "pt-br": {"language_name": "Portuguese", "language_code": "pt-BR"},
+    "葡萄牙语": {"language_name": "Portuguese", "language_code": "pt-BR"},
+    "russian": {"language_name": "Russian", "language_code": "ru-RU"},
+    "ru": {"language_name": "Russian", "language_code": "ru-RU"},
+    "ru-ru": {"language_name": "Russian", "language_code": "ru-RU"},
+    "俄语": {"language_name": "Russian", "language_code": "ru-RU"},
+    "thai": {"language_name": "Thai", "language_code": "th-TH"},
+    "th": {"language_name": "Thai", "language_code": "th-TH"},
+    "th-th": {"language_name": "Thai", "language_code": "th-TH"},
+    "泰语": {"language_name": "Thai", "language_code": "th-TH"},
+    "indonesian": {"language_name": "Indonesian", "language_code": "id-ID"},
+    "id": {"language_name": "Indonesian", "language_code": "id-ID"},
+    "id-id": {"language_name": "Indonesian", "language_code": "id-ID"},
+    "印尼语": {"language_name": "Indonesian", "language_code": "id-ID"},
+    "bahasa indonesia": {"language_name": "Indonesian", "language_code": "id-ID"},
+    "malay": {"language_name": "Malay", "language_code": "ms-MY"},
+    "ms": {"language_name": "Malay", "language_code": "ms-MY"},
+    "ms-my": {"language_name": "Malay", "language_code": "ms-MY"},
+    "马来语": {"language_name": "Malay", "language_code": "ms-MY"},
+    "vietnamese": {"language_name": "Vietnamese", "language_code": "vi-VN"},
+    "vi": {"language_name": "Vietnamese", "language_code": "vi-VN"},
+    "vi-vn": {"language_name": "Vietnamese", "language_code": "vi-VN"},
+    "越南语": {"language_name": "Vietnamese", "language_code": "vi-VN"},
+}
+
+_LANGUAGE_TO_COUNTRY: Dict[str, str] = {
+    "zh-cn": "China",
+    "en": "United States",
+    "en-us": "United States",
+    "en-gb": "United Kingdom",
+    "ja-jp": "Japan",
+    "ko-kr": "South Korea",
+    "fr-fr": "France",
+    "de-de": "Germany",
+    "es-es": "Spain",
+    "es-mx": "Mexico",
+    "pt-br": "Brazil",
+    "ru-ru": "Russia",
+    "th-th": "Thailand",
+    "id-id": "Indonesia",
+    "ms-my": "Malaysia",
+    "vi-vn": "Vietnam",
+}
+
+_COUNTRY_TASK_HINTS: List[tuple[tuple[str, ...], str]] = [
+    (("中国", "中国大陆", "国内", "本土", "国货"), "China"),
+    (("美国", "美区", "美国站", "united states", "usa", "american"), "United States"),
+    (("英国", "英区", "united kingdom", "uk", "british"), "United Kingdom"),
+    (("日本", "日区", "japan", "japanese market"), "Japan"),
+    (("韩国", "韩区", "south korea", "korea", "korean market"), "South Korea"),
+    (("法国", "france", "french market"), "France"),
+    (("德国", "germany", "german market"), "Germany"),
+    (("西班牙", "spain"), "Spain"),
+    (("墨西哥", "mexico"), "Mexico"),
+    (("巴西", "brazil"), "Brazil"),
+    (("俄罗斯", "russia"), "Russia"),
+    (("泰国", "thailand"), "Thailand"),
+    (("印尼", "印度尼西亚", "indonesia"), "Indonesia"),
+    (("马来西亚", "malaysia"), "Malaysia"),
+    (("越南", "vietnam"), "Vietnam"),
+]
+
+_LANGUAGE_TASK_HINTS: List[tuple[tuple[str, ...], str]] = [
+    (("中文", "汉语", "普通话", "简体中文", "chinese", "mandarin"), "zh-CN"),
+    (("英文", "英语", "english"), "en-US"),
+    (("日语", "japanese", "日本语"), "ja-JP"),
+    (("韩语", "korean"), "ko-KR"),
+    (("法语", "french"), "fr-FR"),
+    (("德语", "german"), "de-DE"),
+    (("西班牙语", "spanish"), "es-ES"),
+    (("葡萄牙语", "portuguese"), "pt-BR"),
+    (("俄语", "russian"), "ru-RU"),
+    (("泰语", "thai"), "th-TH"),
+    (("印尼语", "bahasa indonesia", "indonesian"), "id-ID"),
+    (("马来语", "malay"), "ms-MY"),
+    (("越南语", "vietnamese"), "vi-VN"),
+]
+
+_UI_MENTION_REPLACEMENTS: List[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"左下角小黄车"), "现在就去下单"),
+    (re.compile(r"小黄车"), "现在就去下单"),
+    (re.compile(r"购物车图标?"), "立即下单"),
+    (re.compile(r"购物车"), "立即下单"),
+    (re.compile(r"点(?:击|开)?左下角"), "现在就下单"),
+    (re.compile(r"点击下方链接"), "现在就下单"),
+    (re.compile(r"点击链接"), "现在就下单"),
+    (re.compile(r"下方链接"), "立即下单"),
+    (re.compile(r"左下角"), ""),
+    (re.compile(r"shop(?:ping)? cart icon", re.IGNORECASE), "order now"),
+    (re.compile(r"cart icon", re.IGNORECASE), "order now"),
+    (re.compile(r"shop now button", re.IGNORECASE), "order now"),
+    (re.compile(r"button overlay", re.IGNORECASE), ""),
+    (re.compile(r"click the link below", re.IGNORECASE), "order now"),
+    (re.compile(r"tap the link below", re.IGNORECASE), "order now"),
+    (re.compile(r"link below", re.IGNORECASE), "order now"),
+    (re.compile(r"lower-left", re.IGNORECASE), ""),
+]
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text or ""))
+
+
+def _text_contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    raw = text or ""
+    lower = raw.casefold()
+    for needle in needles:
+        if _contains_cjk(needle):
+            if needle in raw:
+                return True
+        else:
+            if needle.casefold() in lower:
+                return True
+    return False
+
+
+def _normalize_country_name(country: str) -> str:
+    raw = (country or "").strip()
+    if not raw:
+        return ""
+    return _COUNTRY_ALIASES.get(raw.casefold(), raw)
+
+
+def _language_meta(language: str) -> Dict[str, str]:
+    raw = (language or "").strip()
+    if not raw:
+        return {}
+    meta = _LANGUAGE_METADATA.get(raw.casefold())
+    if meta:
+        return dict(meta)
+    return {"language_name": raw, "language_code": raw}
+
+
+def _infer_locale_from_task_text(task_text: str) -> Dict[str, str]:
+    text = (task_text or "").strip()
+    if not text:
+        return {"platform": "", "country": "", "language": ""}
+
+    platform = ""
+    if _text_contains_any(text, ("tiktok", "tik tok", "tk带货", "tk shop", "tiktok shop", "跨境", "出海", "海外")):
+        platform = "tiktok"
+    elif _text_contains_any(text, ("抖音", "douyin", "dy")):
+        platform = "douyin"
+    elif _text_contains_any(text, ("小红书", "xiaohongshu", "xhs")):
+        platform = "xiaohongshu"
+    elif _text_contains_any(text, ("快手", "kuaishou")):
+        platform = "kuaishou"
+    elif _text_contains_any(text, ("instagram", "ig")):
+        platform = "instagram"
+
+    country = ""
+    for needles, canonical in _COUNTRY_TASK_HINTS:
+        if _text_contains_any(text, needles):
+            country = canonical
+            break
+
+    language = ""
+    for needles, language_code in _LANGUAGE_TASK_HINTS:
+        if _text_contains_any(text, needles):
+            language = language_code
+            break
+
+    cross_border = _text_contains_any(text, ("跨境", "出海", "海外", "tk带货", "tiktok", "tik tok", "tiktok shop"))
+    if cross_border and not platform:
+        platform = "tiktok"
+    if cross_border and not language:
+        language = "en-US"
+    if not country and language:
+        country = _LANGUAGE_TO_COUNTRY.get(language.casefold(), "")
+    if not country and not cross_border and _contains_cjk(text):
+        country = "China"
+    if not language and country == "China":
+        language = "zh-CN"
+
+    return {"platform": platform, "country": country, "language": language}
+
+
+def _resolve_locale_inputs(data: Input) -> Dict[str, str]:
+    task_text = str(data.get("task_text", "") or "").strip()
+    inferred = _infer_locale_from_task_text(task_text)
+    platform = str(data.get("platform", "") or "").strip() or inferred["platform"] or "douyin"
+    country = str(data.get("country", "") or "").strip() or inferred["country"]
+    language = str(data.get("language", "") or "").strip() or inferred["language"]
+    return {
+        "task_text": task_text,
+        "platform": platform,
+        "country": country,
+        "language": language,
+    }
+
+
+def _sanitize_ui_mentions(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return cleaned
+    for pattern, replacement in _UI_MENTION_REPLACEMENTS:
+        cleaned = pattern.sub(replacement, cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"([，。！？,.!?:;；])\1+", r"\1", cleaned)
+    cleaned = re.sub(r"[，,]\s*[，,]", "，", cleaned)
+    return cleaned.strip(" \t\r\n,，")
+
+
+def _sanitize_storyboard_fields(storyboard: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized = dict(storyboard)
+    for key in (
+        "title_cn",
+        "goal_cn",
+        "scene_cn",
+        "hook_line_cn",
+        "selling_point_cn",
+        "cta_cn",
+        "storyboard_image_prompt_en",
+        "video_prompt_en",
+    ):
+        value = sanitized.get(key)
+        if isinstance(value, str) and value.strip():
+            sanitized[key] = _sanitize_ui_mentions(value)
+    return sanitized
+
+
 def _locale_defaults(platform: str, country: str, language: str, target_market: str) -> Dict[str, str]:
     normalized_platform = _normalize_platform(platform)
-    normalized_country = (country or "").strip()
+    normalized_country = _normalize_country_name(country)
     normalized_language = (language or "").strip()
     country_key = normalized_country.lower()
 
@@ -616,22 +939,26 @@ def _locale_defaults(platform: str, country: str, language: str, target_market: 
         "mainland china": {"language_name": "Simplified Chinese", "language_code": "zh-CN", "market": "Chinese ecommerce shoppers", "character_hint": "Use a mainland China creator look, Chinese ecommerce tone, and local lifestyle cues."},
     }
 
-    if normalized_language:
-        language_name = normalized_language
-        language_code = normalized_language
+    language_meta = _language_meta(normalized_language)
+    if language_meta:
+        language_name = language_meta["language_name"]
+        language_code = language_meta["language_code"]
     elif normalized_country and country_key in country_language_map:
         language_name = country_language_map[country_key]["language_name"]
         language_code = country_language_map[country_key]["language_code"]
     elif normalized_platform == "tiktok":
         language_name = "English"
-        language_code = "en"
+        language_code = "en-US"
     else:
         language_name = "Simplified Chinese"
         language_code = "zh-CN"
 
-    if normalized_country and country_key in country_language_map:
-        market = target_market or country_language_map[country_key]["market"]
-        character_hint = country_language_map[country_key]["character_hint"]
+    resolved_country = normalized_country or _LANGUAGE_TO_COUNTRY.get(language_code.casefold(), "")
+    resolved_country_key = resolved_country.lower()
+
+    if resolved_country and resolved_country_key in country_language_map:
+        market = target_market or country_language_map[resolved_country_key]["market"]
+        character_hint = country_language_map[resolved_country_key]["character_hint"]
     elif normalized_platform == "tiktok":
         market = target_market or "Global TikTok ecommerce shoppers"
         character_hint = "Use an international TikTok creator look, English-speaking persona, and global ecommerce styling."
@@ -641,19 +968,25 @@ def _locale_defaults(platform: str, country: str, language: str, target_market: 
 
     return {
         "platform": normalized_platform,
-        "country": normalized_country or ("China" if normalized_platform != "tiktok" else ""),
+        "country": resolved_country or ("China" if normalized_platform != "tiktok" else ""),
         "language_name": language_name,
         "language_code": language_code,
         "market": market,
         "character_hint": character_hint,
-        "copy_rule": "Use the country's main consumer language for all hooks, selling points, CTA, character naming style, and scenario wording."
-        if normalized_country
+        "copy_rule": "Use the country's main consumer language for all hooks, selling points, CTA, character naming style, scenario wording, and spoken on-camera dialogue."
+        if resolved_country
         else ("Use English copy and international creator naming if platform is TikTok." if normalized_platform == "tiktok" else "Use Simplified Chinese copy and a domestic creator persona by default."),
     }
 
 
 def _storyboard_prompt(config: PipelineConfig) -> str:
     locale = _locale_defaults(config.platform, config.country, config.language, config.target_market)
+    task_brief = ""
+    if config.task_text:
+        task_brief = (
+            f"User task brief: {config.task_text}\n"
+            "Additional instruction: Respect any explicit locale, platform, nationality, character, or dialogue requirements from the task brief.\n"
+        )
     return f"""
 You are an expert ecommerce video strategist, storyboard designer, and character consistency planner.
 The user provided one product image. Build a conversion-oriented short video plan for {locale["platform"]}.
@@ -668,12 +1001,14 @@ Rules:
 3. Make storyboard_image_prompt_en usable for image generation.
 4. Make video_prompt_en usable for Veo.
 5. No subtitles, no UI, no watermark, no stickers.
+5a. Never mention or depict shopping cart icons, yellow cart icons, lower-left buttons, floating CTA badges, app interface chrome, clickable overlays, logos, or platform UI in any field.
 6. For compatibility, keep the field names title_cn, goal_cn, scene_cn, hook_line_cn, selling_point_cn, cta_cn, but the actual text content inside those fields must use the required local language instead of always Chinese.
 7. Character identity, face, styling, name, daily environment, and speaking tone must match the platform and country setting. Do not reuse a China-market character for overseas scenarios.
 8. If platform is TikTok and no country is specified, use English copy and a global TikTok creator persona.
 9. If no platform and no country are specified, default to mainland China domestic ecommerce style and Simplified Chinese copy.
 10. If a country is specified, prioritize that country's main consumer language and localized character style.
-Platform: {locale["platform"]}
+11. If the presenter speaks on camera, the spoken dialogue in video_prompt_en must clearly be delivered in {locale["language_name"]}, not a mismatched language.
+{task_brief}Platform: {locale["platform"]}
 Country: {locale["country"] or "Not specified"}
 Required copy language: {locale["language_name"]} ({locale["language_code"]})
 Target audience: {locale["market"]}
@@ -746,7 +1081,7 @@ def _first_list_of_text(mapping: Dict[str, Any], *keys: str) -> List[str]:
     return []
 
 
-def _build_character_image_prompt(character: Dict[str, Any], storyboards: List[Dict[str, Any]]) -> str:
+def _build_character_image_prompt(character: Dict[str, Any], storyboards: List[Dict[str, Any]], locale: Dict[str, str]) -> str:
     direct_prompt = _first_text(character, "character_image_prompt_en")
     if direct_prompt:
         return direct_prompt
@@ -767,9 +1102,14 @@ def _build_character_image_prompt(character: Dict[str, Any], storyboards: List[D
         parts.append(f"Style notes: {style_cn}")
     if description_cn:
         parts.append(f"Character background for personality consistency: {description_cn}")
+    if locale.get("character_hint"):
+        parts.append(f"Localization guidance: {locale['character_hint']}")
+    if locale.get("market") or locale.get("language_name"):
+        parts.append(
+            f"The character should feel native to {locale.get('market') or 'the target market'} and convincingly present as a fluent {locale.get('language_name') or 'local-language'} speaking creator"
+        )
     parts.append("Create a clean ecommerce character reference portrait for repeated shot consistency")
     parts.append("Show the same core person that will appear in every storyboard scene")
-    parts.append("The character should feel suitable for Chinese short-form ecommerce ads")
     parts.append("No subtitles, no UI, no watermark, no text")
     return ". ".join(part for part in parts if part)
 
@@ -800,8 +1140,24 @@ def _compose_image_prompt(storyboard: Dict[str, Any], character: Dict[str, Any],
         prompt_parts.append(f"Product selling points: {selling_points}")
     if consistency:
         prompt_parts.append(f"Consistency rules: {consistency}")
-    prompt_parts.append("Commercial product shot, no subtitles, no UI, no watermark")
+    prompt_parts.append("Commercial product shot, no subtitles, no UI, no watermark, no shopping cart icons, no CTA badges, no platform logos")
     return ". ".join(part for part in prompt_parts if part)
+
+
+def _compose_video_prompt(storyboard: Dict[str, Any], fallback_prompt: str, locale: Dict[str, str]) -> str:
+    base_prompt = _sanitize_ui_mentions(_first_text(storyboard, "video_prompt_en", "storyboard_image_prompt_en") or fallback_prompt)
+    prompt_parts = [base_prompt]
+    language_name = locale.get("language_name") or "the target language"
+    market = locale.get("market") or "the target market"
+    country = locale.get("country") or "the target locale"
+    character_hint = locale.get("character_hint") or ""
+    prompt_parts.append(f"All spoken dialogue, ad-lib lines, and lip sync must be in {language_name}.")
+    prompt_parts.append(f"If an on-camera presenter appears, the presenter must feel native to {market} and match the locale of {country}.")
+    if character_hint:
+        prompt_parts.append(character_hint)
+    prompt_parts.append("Do not switch the presenter into a different-country persona or mismatched language accent.")
+    prompt_parts.append("No subtitles, no UI, no watermark, no on-screen text, no shopping cart icons, no CTA badges, no platform logos, no clickable overlays.")
+    return " ".join(part.strip() for part in prompt_parts if isinstance(part, str) and part.strip())
 
 
 def _download_file(url: str, destination: Path, timeout_seconds: int) -> Path:
@@ -862,6 +1218,8 @@ def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
         [ffprobe_binary, "-v", "error", "-show_entries", "stream=codec_type", "-of", "json", media_path],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if proc.returncode != 0:
         return []
@@ -960,7 +1318,7 @@ def _merge_completed_shots(config: PipelineConfig, logger: RunLogger, shots: Lis
         cmd.extend(["-filter_complex", filter_complex, "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_arg])
         audio_preserved = False
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0 or not merged_path.exists():
         last_error = proc.stderr.strip() or proc.stdout.strip() or f"ffmpeg exited with code {proc.returncode}"
         raise PipelineError(f"ffmpeg merge failed: {last_error}")
@@ -979,7 +1337,19 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
     index = int(storyboard.get("index", 0))
     round_tag = f"round_{round_index}"
     image_prompt = _compose_image_prompt(storyboard, character, product_summary)
-    logger.shot(index, f"plan_{round_tag}", "ready", payload={"round_index": round_index, "storyboard": storyboard, "storyboard_image_prompt": image_prompt})
+    locale = _locale_defaults(config.platform, config.country, config.language, config.target_market)
+    video_prompt = _compose_video_prompt(storyboard, image_prompt, locale)
+    logger.shot(
+        index,
+        f"plan_{round_tag}",
+        "ready",
+        payload={
+            "round_index": round_index,
+            "storyboard": storyboard,
+            "storyboard_image_prompt": image_prompt,
+            "submitted_video_prompt": video_prompt,
+        },
+    )
     image_result, image_attempts = client.generate_image(config.image_model, image_prompt, config.aspect_ratio, [product_image_url, character_image_url], f"shot_{index:02d}_image_{round_tag}")
     logger.shot(index, f"image_{round_tag}", "success", attempts=image_attempts, payload=image_result)
     logger.record_usage(
@@ -991,7 +1361,7 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
     last_error = ""
     for video_attempt in range(1, config.video_generation_retries + 1):
         try:
-            submit_result, submit_attempts = client.submit_video(storyboard.get("video_prompt_en", image_prompt), config.video_model, [image_result["url"]], config.aspect_ratio, config.enhance_prompt, f"shot_{index:02d}_submit_{round_tag}_{video_attempt}")
+            submit_result, submit_attempts = client.submit_video(video_prompt, config.video_model, [image_result["url"]], config.aspect_ratio, config.enhance_prompt, f"shot_{index:02d}_submit_{round_tag}_{video_attempt}")
             logger.shot(index, f"submit_{round_tag}_{video_attempt}", "success", attempts=submit_attempts, payload=submit_result)
             poll_result = client.poll_video(submit_result["task_id"], config.poll_interval_seconds, config.max_polls)
             logger.shot(index, f"poll_{round_tag}_{video_attempt}", "success", attempts=len(poll_result.get("history", [])), payload=poll_result)
@@ -1012,6 +1382,7 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
                 "cta_cn": storyboard.get("cta_cn"),
                 "storyboard_image_prompt_en": storyboard.get("storyboard_image_prompt_en"),
                 "video_prompt_en": storyboard.get("video_prompt_en"),
+                "submitted_video_prompt_en": video_prompt,
                 "storyboard_image_url": image_result["url"],
                 "storyboard_image_revised_prompt": image_result.get("revised_prompt"),
                 "video_task_id": submit_result["task_id"],
@@ -1042,9 +1413,11 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         product_image_url, upload_attempts = client.upload(product_image)
         logger.step("01_product_upload", "success", attempts=upload_attempts, payload={"product_image": product_image, "product_image_url": product_image_url})
         storyboard_plan, analysis_attempts = client.analyze(config.analysis_model, _storyboard_prompt(config), [product_image_url])
+        _coerce_plan_character_and_product_summary(storyboard_plan)
+        raw_storyboards = storyboard_plan.get("storyboards", [])
+        storyboard_plan["storyboards"] = [_sanitize_storyboard_fields(sb) for sb in raw_storyboards if isinstance(sb, dict)]
         logger.step("02_storyboard_plan", "success", attempts=analysis_attempts, payload=storyboard_plan)
         logger.record_usage("analysis", config.analysis_model, "storyboard_plan_analysis", payload={"attempts": analysis_attempts})
-        _coerce_plan_character_and_product_summary(storyboard_plan)
         product_summary = storyboard_plan.get("product_summary", {})
         character = storyboard_plan.get("character", {})
         storyboards = storyboard_plan.get("storyboards", [])
@@ -1052,7 +1425,11 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             raise PipelineError(f"Invalid character plan: {storyboard_plan}")
         if not isinstance(storyboards, list) or not storyboards:
             raise PipelineError(f"Invalid storyboard plan: {storyboard_plan}")
-        character_prompt = _build_character_image_prompt(character, [sb for sb in storyboards if isinstance(sb, dict)])
+        character_prompt = _build_character_image_prompt(
+            character,
+            [sb for sb in storyboards if isinstance(sb, dict)],
+            locale_profile,
+        )
         if not character_prompt.strip():
             raise PipelineError(f"Missing character image prompt after fallback synthesis: {storyboard_plan}")
         char_image_prompt = f"{character_prompt}. Keep the person suitable for repeated consistency across all storyboard scenes."

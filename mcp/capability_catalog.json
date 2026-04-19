@@ -649,11 +649,14 @@
         },
         "storyboard_count": {
           "type": "integer",
-          "description": "分镜条数 1–8，默认脚本内 5"
+          "description": "分镜条数 1–8，默认脚本内 6"
         },
         "auto_save": {
           "type": "boolean",
           "description": "完成后是否将每段成功 mp4 入库，默认 true"
+        },
+        "task_text": {
+          "type": "string"
         },
         "isolate_job_dir": {
           "type": "boolean",

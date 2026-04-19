@@ -1099,6 +1099,8 @@ def _redirect_video_generate_to_daihuo_if_tvc(
     image_url = (pl.get("image_url") or "").strip()
     args["capability_id"] = "comfly.veo.daihuo_pipeline"
     new_pl: Dict[str, Any] = {"action": "start_pipeline", "auto_save": True}
+    if (user_message or "").strip():
+        new_pl["task_text"] = user_message.strip()
     if asset_id:
         new_pl["asset_id"] = asset_id
     if image_url:
@@ -1114,6 +1116,7 @@ def _ensure_daihuo_pipeline_asset_or_url(
     args: Dict[str, Any],
     attachment_asset_ids: Optional[List[str]],
     attachment_urls: List[str],
+    user_message: str = "",
 ) -> None:
     """爆款 TVC 整包：模型常漏传 asset_id/image_url；本条消息有附图时自动补全（与 video.generate 注入一致）。"""
     if not args or (args.get("capability_id") or "").strip() != "comfly.veo.daihuo_pipeline":
@@ -1140,6 +1143,7 @@ def _ensure_daihuo_pipeline_asset_or_url(
         "merge_clips",
         "storyboard_count",
         "auto_save",
+        "task_text",
         "platform",
         "country",
         "language",
@@ -1149,6 +1153,8 @@ def _ensure_daihuo_pipeline_asset_or_url(
     ):
         if k in args and args[k] is not None:
             pl.setdefault(k, args[k])
+    if (user_message or "").strip():
+        pl.setdefault("task_text", user_message.strip())
     aid = (str(pl.get("asset_id") or "").strip())
     iu = (str(pl.get("image_url") or "").strip())
     if aid or (iu.startswith("http://") or iu.startswith("https://")):
@@ -2135,6 +2141,7 @@ def _normalize_invoke_daihuo_pipeline_args_for_chat(args: Dict[str, Any]) -> Dic
         "merge_clips",
         "storyboard_count",
         "auto_save",
+        "task_text",
         "platform",
         "country",
         "language",
@@ -2156,6 +2163,7 @@ def _daihuo_start_payload_from_pl(pl: Dict[str, Any]) -> Dict[str, Any]:
         "merge_clips",
         "storyboard_count",
         "auto_save",
+        "task_text",
         "platform",
         "country",
         "language",
@@ -4882,7 +4890,7 @@ async def _chat_openai(
                         _ensure_image_generate_default_model(a)
                         _ensure_video_generate_default_model(a)
                         _ensure_image_generate_prompt_and_aspect(a, last_user_content)
-                        _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls)
+                        _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("[CHAT] tool_call: %s(%s)", fn.get("name"), list(a.keys()))
                 if fn.get("name") == "publish_content" and _publish_fail_count >= 1:
                     logger.warning("[CHAT] publish_content 已失败 %d 次，拦截重试", _publish_fail_count)
@@ -5065,7 +5073,7 @@ async def _chat_openai(
                         _ensure_image_generate_default_model(tc_info["arguments"])
                         _ensure_video_generate_default_model(tc_info["arguments"])
                         _ensure_image_generate_prompt_and_aspect(tc_info["arguments"], last_user_content)
-                        _ensure_daihuo_pipeline_asset_or_url(tc_info["arguments"], attachment_asset_ids, attachment_urls)
+                        _ensure_daihuo_pipeline_asset_or_url(tc_info["arguments"], attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("[CHAT] text_tool_call: %s(%s)", tc_info["name"], list(tc_info["arguments"].keys()))
                 ta = tc_info["arguments"]
                 if not isinstance(ta, dict):
@@ -5274,7 +5282,7 @@ async def _chat_openai(
                                 _ensure_image_generate_default_model(a)
                                 _ensure_video_generate_default_model(a)
                                 _ensure_image_generate_prompt_and_aspect(a, last_user_content)
-                                _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls)
+                                _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
                         logger.info("[CHAT] tool_call(forced): %s(%s)", fn.get("name"), list(a.keys()))
                         _fc_cap = (a.get("capability_id") or "").strip() if fn.get("name") == "invoke_capability" else ""
                         if _mismatch_err_fc:
@@ -5342,7 +5350,7 @@ async def _chat_openai(
             _ensure_image_generate_default_model(auto_args)
             _ensure_video_generate_default_model(auto_args)
             _ensure_image_generate_prompt_and_aspect(auto_args, last_user_msg)
-            _ensure_daihuo_pipeline_asset_or_url(auto_args, attachment_asset_ids, attachment_urls)
+            _ensure_daihuo_pipeline_asset_or_url(auto_args, attachment_asset_ids, attachment_urls, last_user_msg)
             res = await _exec_tool(
                 "invoke_capability",
                 auto_args,
@@ -5486,7 +5494,7 @@ async def _chat_anthropic(
                         _ensure_image_generate_default_model(inp)
                         _ensure_video_generate_default_model(inp)
                         _ensure_image_generate_prompt_and_aspect(inp, last_user_content)
-                        _ensure_daihuo_pipeline_asset_or_url(inp, attachment_asset_ids, attachment_urls)
+                        _ensure_daihuo_pipeline_asset_or_url(inp, attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("tool_call: %s", tu["name"])
                 _a_cap = (inp.get("capability_id") or "").strip() if tu.get("name") == "invoke_capability" else ""
                 if _mismatch_err_a:

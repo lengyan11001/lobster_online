@@ -102,6 +102,7 @@ def build_pipeline_input(
     platform: str,
     country: str,
     language: str,
+    task_text: str = "",
     image_request_style: Optional[str] = None,
 ) -> Dict[str, Any]:
     base = _api_base_for_pipeline(api_base)
@@ -121,6 +122,8 @@ def build_pipeline_input(
         inp["country"] = country.strip()
     if (language or "").strip():
         inp["language"] = language.strip()
+    if (task_text or "").strip():
+        inp["task_text"] = task_text.strip()
     ff = _bundled_ffmpeg_exe()
     if ff:
         inp["ffmpeg_path"] = ff

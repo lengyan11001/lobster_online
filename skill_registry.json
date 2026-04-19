@@ -291,6 +291,9 @@
               "auto_save": {
                 "type": "boolean"
               },
+              "task_text": {
+                "type": "string"
+              },
               "isolate_job_dir": {
                 "type": "boolean"
               },

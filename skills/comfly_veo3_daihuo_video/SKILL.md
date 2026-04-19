@@ -184,14 +184,14 @@ It implements this flow:
 2. use `gemini-2.5-pro` to analyze the product image and generate:
    - product summary
    - main character definition
-   - 5 storyboard plans
+   - 6 storyboard plans by default
 3. generate one consistent main character reference image with `nano-banana-2`
-4. generate 5 storyboard images in parallel, each using:
+4. generate 6 storyboard images in parallel by default, each using:
    - product image
    - character image
    - shot prompt
-5. submit 5 Veo video tasks in parallel
-6. poll 5 Veo tasks in parallel
+5. submit 6 Veo video tasks in parallel by default
+6. poll 6 Veo video tasks in parallel by default
 
 The Python pipeline defaults to `veo3.1-fast`.
 The storyboard and character image generation defaults to `nano-banana-2`, matching the existing `nanobanna2` reference project flow.

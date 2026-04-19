@@ -182,6 +182,7 @@ def _normalize_invoke_daihuo_pipeline_args(args: Dict[str, Any]) -> Dict[str, An
         "merge_clips",
         "storyboard_count",
         "auto_save",
+        "task_text",
         "platform",
         "country",
         "language",

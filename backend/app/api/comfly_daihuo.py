@@ -54,8 +54,9 @@ class ComflyDaihuoPipelinePayload(BaseModel):
     asset_id: Optional[str] = Field(None, description="素材库商品图 ID（与 image_url 二选一）")
     image_url: Optional[str] = Field(None, description="公网商品图 URL（与 asset_id 二选一）")
     merge_clips: bool = Field(True, description="是否用 FFmpeg 拼接多段（技能包默认行为）")
-    storyboard_count: Optional[int] = Field(None, ge=1, le=8, description="分镜条数，默认脚本内 5")
+    storyboard_count: Optional[int] = Field(None, ge=1, le=8, description="分镜条数，默认脚本内 6")
     auto_save: bool = Field(True, description="为每段成功 mp4 调用与前端一致的 save-url 入库")
+    task_text: str = Field("", description="用户原始任务描述；可用于自动推断语言、国家和人物风格")
     platform: str = ""
     country: str = ""
     language: str = ""
@@ -125,6 +126,7 @@ async def _prepare_pipeline_input(
         platform=pl.platform,
         country=pl.country,
         language=pl.language,
+        task_text=pl.task_text,
         image_request_style=pl.image_request_style,
     )
 
