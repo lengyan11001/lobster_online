@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.4.1",
-    "lastTouchedAt": "2026-04-04T07:03:01.287Z"
+    "lastTouchedAt": "2026-04-17T09:26:11.356Z"
   },
   "wizard": {
     "lastRunAt": "2026-03-25T11:18:09.044Z",
@@ -22,12 +22,21 @@
     "enabled": true,
     "load": {
       "paths": [
-        "nodejs/node_modules/@tencent-weixin/openclaw-weixin"
+        "D:\\lobster_online\\nodejs\\node_modules\\@tencent-weixin\\openclaw-weixin"
       ]
     },
     "entries": {
       "openclaw-weixin": {
         "enabled": true
+      }
+    },
+    "installs": {
+      "openclaw-weixin": {
+        "source": "path",
+        "sourcePath": "D:\\lobster_online\\nodejs\\node_modules\\@tencent-weixin\\openclaw-weixin",
+        "installPath": "D:\\lobster_online\\openclaw\\extensions\\openclaw-weixin",
+        "version": "2.1.6",
+        "installedAt": "2026-04-05T18:33:25.406Z"
       }
     }
   },
@@ -57,7 +66,7 @@
     "providers": {
       "lobster-sutui": {
         "baseUrl": "http://127.0.0.1:8000/internal/openclaw-sutui/v1",
-        "apiKey": "${OPENCLAW_SUTUI_PROXY_KEY}",
+        "apiKey": "lobster-oc-sutui-local-change-me",
         "api": "openai-completions",
         "models": [
           {
@@ -136,7 +145,7 @@
   },
   "channels": {
     "openclaw-weixin": {
-      "channelConfigUpdatedAt": "2026-04-04T07:03:01.095Z"
+      "channelConfigUpdatedAt": "2026-04-15T10:42:04.890Z"
     }
   }
 }

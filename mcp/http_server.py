@@ -67,14 +67,14 @@ _SUTUI_UPSTREAM_LOG_MAX = 500_000
 # 本机 invoke_capability：后端路径与 HTTP 超时（秒）；带货整包流水线可能极长，单独加长超时
 _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "media.edit": ("/api/media-edit/run", 3600.0),
-    "comfly.veo": ("/api/comfly-veo/run", 600.0),
-    "comfly.veo.daihuo_pipeline": ("/api/comfly-daihuo/pipeline/run", 7200.0),
+    "comfly.daihuo": ("/api/comfly-veo/run", 600.0),
+    "comfly.daihuo.pipeline": ("/api/comfly-daihuo/pipeline/run", 7200.0),
     "comfly.ecommerce.detail_pipeline": ("/api/comfly-ecommerce-detail/pipeline/run", 7200.0),
     "ecommerce.publish": ("/api/ecommerce-publish/open-product-form", 120.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.veo", "comfly.veo.daihuo_pipeline", "comfly.ecommerce.detail_pipeline", "ecommerce.publish"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.ecommerce.detail_pipeline", "ecommerce.publish"})
 
 
 def _normalize_invoke_task_get_result_args(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -121,10 +121,10 @@ def _normalize_invoke_task_get_result_args(args: Dict[str, Any]) -> Dict[str, An
 
 
 def _normalize_invoke_comfly_veo_args(args: Dict[str, Any]) -> Dict[str, Any]:
-    """comfly.veo：模型常把 action 写在 invoke_capability 顶层，或误套 payload.payload。"""
+    """comfly.daihuo：模型常把 action 写在 invoke_capability 顶层，或误套 payload.payload。"""
     if not isinstance(args, dict):
         return args
-    if str(args.get("capability_id") or "").strip() != "comfly.veo":
+    if str(args.get("capability_id") or "").strip() != "comfly.daihuo":
         return args
     raw_pl = args.get("payload")
     pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
@@ -156,10 +156,10 @@ def _normalize_invoke_comfly_veo_args(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_invoke_daihuo_pipeline_args(args: Dict[str, Any]) -> Dict[str, Any]:
-    """comfly.veo.daihuo_pipeline：模型常把 action/job_id 写在顶层或误套 payload.payload。"""
+    """comfly.daihuo.pipeline：模型常把 action/job_id 写在顶层或误套 payload.payload。"""
     if not isinstance(args, dict):
         return args
-    if str(args.get("capability_id") or "").strip() != "comfly.veo.daihuo_pipeline":
+    if str(args.get("capability_id") or "").strip() != "comfly.daihuo.pipeline":
         return args
     raw_pl = args.get("payload")
     pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
@@ -627,7 +627,7 @@ async def _mcp_poll_comfly_veo_after_submit(
     data: Dict[str, Any] = dict(initial_submit_data) if isinstance(initial_submit_data, dict) else {}
     while waited < _COMFLY_VEO_MCP_POLL_MAX_SEC:
         logger.info(
-            "[MCP comfly.veo] 自动 poll_video waited=%ss task_id=%s",
+            "[MCP comfly.daihuo] 自动 poll_video waited=%ss task_id=%s",
             waited,
             tid[:96],
         )
@@ -639,10 +639,10 @@ async def _mcp_poll_comfly_veo_after_submit(
                     headers=_backend_headers(token, request),
                 )
         except Exception as e:
-            logger.warning("[MCP comfly.veo] poll_video 请求异常: %s", e)
+            logger.warning("[MCP comfly.daihuo] poll_video 请求异常: %s", e)
             break
         if pr.status_code >= 400:
-            logger.warning("[MCP comfly.veo] poll_video HTTP %s", pr.status_code)
+            logger.warning("[MCP comfly.daihuo] poll_video HTTP %s", pr.status_code)
             try:
                 data = pr.json() if pr.content else {"ok": False, "error": (pr.text or "")[:500]}
             except Exception:
@@ -672,7 +672,7 @@ async def _mcp_poll_daihuo_pipeline_until_done(
     bu = base_url.rstrip("/")
     while waited < float(_COMFLY_DAIHUO_MCP_POLL_MAX_SEC):
         logger.info(
-            "[MCP comfly.veo.daihuo_pipeline] poll job waited=%ss job_id=%s",
+            "[MCP comfly.daihuo.pipeline] poll job waited=%ss job_id=%s",
             int(waited),
             jid[:16],
         )
@@ -683,10 +683,10 @@ async def _mcp_poll_daihuo_pipeline_until_done(
                     headers=_backend_headers(token, request),
                 )
         except Exception as e:
-            logger.warning("[MCP comfly.veo.daihuo_pipeline] poll job 请求异常: %s", e)
+            logger.warning("[MCP comfly.daihuo.pipeline] poll job 请求异常: %s", e)
             break
         if pr.status_code >= 400:
-            logger.warning("[MCP comfly.veo.daihuo_pipeline] poll job HTTP %s", pr.status_code)
+            logger.warning("[MCP comfly.daihuo.pipeline] poll job HTTP %s", pr.status_code)
             try:
                 last = pr.json() if pr.content else {"ok": False, "error": (pr.text or "")[:500]}
             except Exception:
@@ -807,7 +807,7 @@ def _tool_definitions(catalog: Dict[str, Dict[str, Any]], *, is_skill_store_admi
                 "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
                 "【默认模型】image.generate 用户未指定模型时 payload.model 必须填 \"fal-ai/flux-2/flash\"（不要自动选 jimeng）；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
                 "video.generate 用户未指定模型时 payload.model 填 \"sora2\"。"
-                "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.veo.daihuo_pipeline\"。"
+                "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
             ),
             "inputSchema": {
                 "type": "object",
@@ -1953,9 +1953,9 @@ async def _call_upstream_mcp_tool(
         _upstream_call_read_timeout = 35 * 60.0
     elif tool_name == "invoke_capability" and _cap_for_timeout == "image.generate":
         _upstream_call_read_timeout = 25 * 60.0
-    elif tool_name == "invoke_capability" and _cap_for_timeout == "comfly.veo.daihuo_pipeline":
+    elif tool_name == "invoke_capability" and _cap_for_timeout == "comfly.daihuo.pipeline":
         _upstream_call_read_timeout = 130 * 60.0
-    elif tool_name == "invoke_capability" and _cap_for_timeout == "comfly.veo":
+    elif tool_name == "invoke_capability" and _cap_for_timeout == "comfly.daihuo":
         _upstream_call_read_timeout = 40 * 60.0
     else:
         _upstream_call_read_timeout = 120.0
@@ -2708,6 +2708,19 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
             return [{"type": "text", "text": json.dumps(r.json() if r.content else {}, ensure_ascii=False, indent=2)}], r.status_code >= 400
 
         if name == "invoke_capability":
+            # ── 老 capability_id 兼容：comfly.veo* → comfly.daihuo*（在所有规范化与后续逻辑生效之前）──
+            _legacy_cid = str(args.get("capability_id") or "").strip()
+            _LEGACY_CAPABILITY_ALIAS = {
+                "comfly.veo": "comfly.daihuo",
+                "comfly.veo.daihuo_pipeline": "comfly.daihuo.pipeline",
+            }
+            _new_cid = _LEGACY_CAPABILITY_ALIAS.get(_legacy_cid)
+            if _new_cid:
+                logger.info(
+                    "[MCP] capability_id 老名映射 %s → %s（请客户端尽快升级到新名）",
+                    _legacy_cid, _new_cid,
+                )
+                args["capability_id"] = _new_cid
             args = _normalize_invoke_task_get_result_args(args)
             args = _normalize_invoke_comfly_veo_args(args)
             args = _normalize_invoke_daihuo_pipeline_args(args)
@@ -2966,7 +2979,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                     upstream_name,
                 )
 
-            # 本机能力（media.edit / comfly.veo / comfly.veo.daihuo_pipeline）：走在线版后端，不走上游 MCP
+            # 本机能力（media.edit / comfly.daihuo / comfly.daihuo.pipeline）：走在线版后端，不走上游 MCP
             if upstream_name == "local":
                 _skip_ac_billing = capability_id in _INVOKE_NO_AUTH_CENTER_BILLING
                 route = _LOCAL_INVOKE_BACKEND.get(capability_id)
@@ -2997,7 +3010,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         _p.get("asset_id"),
                         BASE_URL,
                     )
-                elif capability_id == "comfly.veo.daihuo_pipeline":
+                elif capability_id == "comfly.daihuo.pipeline":
                     dh_act = (_p.get("action") or "").strip() or "run_pipeline"
                     if dh_act == "start_pipeline":
                         req_path = "/api/comfly-daihuo/pipeline/start"
@@ -3028,7 +3041,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         req_path = "/api/comfly-daihuo/pipeline/run"
                         timeout_s = 7200.0
                     logger.info(
-                        "[MCP comfly.veo.daihuo_pipeline] invoke has_token=%s action=%s asset_id=%s job_id=%s base_url=%s",
+                        "[MCP comfly.daihuo.pipeline] invoke has_token=%s action=%s asset_id=%s job_id=%s base_url=%s",
                         bool(token),
                         dh_act,
                         _p.get("asset_id"),
@@ -3092,7 +3105,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                     )
                 else:
                     logger.info(
-                        "[MCP comfly.veo] invoke has_token=%s action=%s asset_id=%s payload_keys=%s base_url=%s",
+                        "[MCP comfly.daihuo] invoke has_token=%s action=%s asset_id=%s payload_keys=%s base_url=%s",
                         bool(token),
                         _p.get("action"),
                         _p.get("asset_id"),
@@ -3153,7 +3166,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         return [{"type": "text", "text": _json_dumps_mcp_payload({"capability_id": capability_id, "error": err_text})}], True
                     data = r.json() if r.content else {}
                     if (
-                        capability_id == "comfly.veo.daihuo_pipeline"
+                        capability_id == "comfly.daihuo.pipeline"
                         and isinstance(data, dict)
                         and data.get("ok", True)
                     ):
@@ -3162,7 +3175,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                             jid2 = (data.get("job_id") or "").strip()
                             if jid2:
                                 logger.info(
-                                    "[MCP comfly.veo.daihuo_pipeline] start 成功，开始轮询 job_id=%s",
+                                    "[MCP comfly.daihuo.pipeline] start 成功，开始轮询 job_id=%s",
                                     jid2[:16],
                                 )
                                 polled = await _mcp_poll_daihuo_pipeline_until_done(
@@ -3217,12 +3230,12 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                                         "start_ack": data,
                                         "poll_error": polled,
                                     }
-                    if capability_id == "comfly.veo" and isinstance(data, dict) and data.get("ok", True):
+                    if capability_id == "comfly.daihuo" and isinstance(data, dict) and data.get("ok", True):
                         if (data.get("action") or "").strip() == "submit_video":
                             tid_poll = str(data.get("task_id") or "").strip()
                             if tid_poll:
                                 logger.info(
-                                    "[MCP comfly.veo] submit_video 成功，开始阻塞轮询 poll_video task_id=%s",
+                                    "[MCP comfly.daihuo] submit_video 成功，开始阻塞轮询 poll_video task_id=%s",
                                     tid_poll[:96],
                                 )
                                 data = await _mcp_poll_comfly_veo_after_submit(
@@ -3285,14 +3298,14 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         )
                     if capability_id == "media.edit":
                         fail_msg = "本地剪辑调用失败"
-                    elif capability_id == "comfly.veo.daihuo_pipeline":
+                    elif capability_id == "comfly.daihuo.pipeline":
                         fail_msg = "爆款TVC 整包成片后端调用失败"
                     elif capability_id == "comfly.ecommerce.detail_pipeline":
                         fail_msg = "电商详情图流水线后端调用失败"
                     elif capability_id == "ecommerce.publish":
                         fail_msg = "电商商品发布后端调用失败"
                     else:
-                        fail_msg = "comfly.veo 后端调用失败"
+                        fail_msg = "comfly.daihuo 后端调用失败"
                     return [{"type": "text", "text": f"{fail_msg}: {e}"}], True
 
             if not upstream_url:

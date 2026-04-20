@@ -11,19 +11,22 @@
       "operator"
     ],
     "scopes": [
-      "operator.approvals"
+      "operator.approvals",
+      "operator.read"
     ],
     "approvedScopes": [
-      "operator.approvals"
+      "operator.approvals",
+      "operator.read"
     ],
     "tokens": {
       "operator": {
-        "token": "qOKjPMhr8SsidoX1WqabADjobStWrvWSZT6oXT-3ebs",
+        "token": "lqWLvMkZ3Tidxyu_b8OjUXcqxayBJPZFus5gnwwkMTc",
         "role": "operator",
         "scopes": [
-          "operator.approvals"
+          "operator.read"
         ],
-        "createdAtMs": 1775284541946
+        "createdAtMs": 1775284541946,
+        "rotatedAtMs": 1776400442603
       }
     },
     "createdAtMs": 1775284541946,

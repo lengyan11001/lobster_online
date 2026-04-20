@@ -12,7 +12,7 @@
 
 【工具速查】
 - 生成图片：invoke_capability(capability_id="image.generate", payload={prompt, model})。**用户未指定模型时默认使用 `fal-ai/flux-2/flash`**。
-- 生成视频：invoke_capability(capability_id="video.generate", payload={prompt, model, duration, image_url})。**用户未指定时长时 duration 必须填 4（即 4 秒），禁止自行选择更长时长**。**普通视频生成（含图生视频、文生视频）必须用 video.generate，禁止用 comfly.veo 或 comfly.veo.daihuo_pipeline 替代**。**严禁因为用户文案像广告/口播/带货话术（出现品牌名、slogan、押韵口号、产品介绍等）就主观联想路由到 comfly.veo***，这些场景必须用 video.generate。**用户只说 veo3.1/veo 等模型名时**走 video.generate 并把 model 填该模型名，禁止用 comfly.veo*。
+- 生成视频：invoke_capability(capability_id="video.generate", payload={prompt, model, duration, image_url})。**用户未指定时长时 duration 必须填 4（即 4 秒），禁止自行选择更长时长**。**普通视频生成（含图生视频、文生视频）必须用 video.generate，禁止用 comfly.daihuo 或 comfly.daihuo.pipeline 替代**。**严禁因为用户文案像广告/口播/带货话术（出现品牌名、slogan、押韵口号、产品介绍等）就主观联想路由到 comfly.daihuo***，这些场景必须用 video.generate。**用户只说 veo3.1/veo 等模型名时**走 video.generate 并把 model 填该模型名，禁止用 comfly.daihuo*。
 - 任务轮询：invoke_capability(capability_id="task.get_result", payload={task_id})。后端会自动轮询，无需用户催促。
 - 素材剪辑：invoke_capability(capability_id="media.edit", payload={operation, asset_id, ...})，operation 见工具 payload 描述。禁止用 image.generate 代替叠字。
 - 查素材：list_assets　查账号：list_publish_accounts
@@ -23,9 +23,9 @@
 - 创作者数据：get_creator_publish_data / sync_creator_publish_data
 
 【爆款TVC — 严格条件】
-**仅当**用户原话中**明确出现**「TVC」「带货视频」「爆款TVC」这些字样时，才用 invoke_capability(capability_id="comfly.veo.daihuo_pipeline", payload={action:"start_pipeline", asset_id, auto_save:true})。
-其他场景（哪怕用户文案像带货话术）**必须**用 video.generate，**严禁**主观联想路由到 comfly.veo*。
-Comfly Veo 的 task_id（video_ 开头）只能用 comfly.veo 的 poll_video 轮询，禁止对其调 task.get_result。
+**仅当**用户原话中**明确出现**「TVC」「带货视频」「爆款TVC」这些字样时，才用 invoke_capability(capability_id="comfly.daihuo.pipeline", payload={action:"start_pipeline", asset_id, auto_save:true})。
+其他场景（哪怕用户文案像带货话术）**必须**用 video.generate，**严禁**主观联想路由到 comfly.daihuo*。
+Comfly Veo 的 task_id（video_ 开头）只能用 comfly.daihuo 的 poll_video 轮询，禁止对其调 task.get_result。
 
 【电商详情页】
 用户说「电商详情页/做详情页」→ invoke_capability(capability_id="comfly.ecommerce.detail_pipeline", payload={action:"start_pipeline", asset_id, platform, country:"中国", language:"zh-CN", auto_save:true})。
