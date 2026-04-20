@@ -13,6 +13,7 @@ from .api.health import router as health_router
 from .api.branding import router as branding_router
 from .api.auth import router as auth_router, get_password_hash
 from .api.chat import router as chat_router
+from .api.workbench_chat import router as workbench_chat_router
 from .api.capabilities import router as capabilities_router
 from .api.skills import router as skills_router
 from .api.settings_api import router as settings_router
@@ -751,6 +752,7 @@ def create_app() -> FastAPI:
     app.include_router(skills_router, prefix="")
     app.include_router(settings_router, prefix="")
     app.include_router(chat_router, prefix="")
+    app.include_router(workbench_chat_router, prefix="")
     app.include_router(mcp_gateway_router, prefix="")
     app.include_router(openclaw_sutui_llm_proxy_router, prefix="")
     app.include_router(openclaw_config_router, prefix="")
