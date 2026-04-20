@@ -1,4 +1,4 @@
-"""爆款TVC 技能内的分步 Veo 能力：供本机 MCP invoke_capability(comfly.veo) 调用。"""
+"""爆款TVC 技能内的分步 Veo 能力：供本机 MCP invoke_capability(comfly.daihuo) 调用。"""
 import ipaddress
 import logging
 from typing import Any, Dict, Optional

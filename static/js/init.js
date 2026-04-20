@@ -59,20 +59,22 @@ function applyBrandingFromApi() {
       if (typeof console !== 'undefined') console.warn('[branding]', e);
     });
 }
-var USE_FUBEI_PAY = false;
-var _fubeiPollTimer = null;
-function _startFubeiPoll(outTradeNo) {
-  if (_fubeiPollTimer) clearInterval(_fubeiPollTimer);
+var USE_FUIOU_PAY = false;
+var _fuiouPollTimer = null;
+function _startFuiouPoll(outTradeNo, orderDate) {
+  if (_fuiouPollTimer) clearInterval(_fuiouPollTimer);
   var attempts = 0, maxAttempts = 90;
-  _fubeiPollTimer = setInterval(function() {
+  _fuiouPollTimer = setInterval(function() {
     attempts++;
-    if (attempts > maxAttempts) { clearInterval(_fubeiPollTimer); _fubeiPollTimer = null; var el = document.getElementById('fubeiPollStatus'); if (el) el.textContent = '查询超时，请刷新页面查看是否到账'; return; }
-    fetch(API_BASE + '/api/recharge/fubei-query?out_trade_no=' + encodeURIComponent(outTradeNo), { headers: authHeaders() })
+    if (attempts > maxAttempts) { clearInterval(_fuiouPollTimer); _fuiouPollTimer = null; var el = document.getElementById('fuiouPollStatus'); if (el) el.textContent = '查询超时，请刷新页面查看是否到账'; return; }
+    var url = API_BASE + '/api/recharge/fuiou-query?out_trade_no=' + encodeURIComponent(outTradeNo);
+    if (orderDate) url += '&order_date=' + encodeURIComponent(orderDate);
+    fetch(url, { headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (d && d.status === 'paid') {
-          clearInterval(_fubeiPollTimer); _fubeiPollTimer = null;
-          var el = document.getElementById('fubeiPollStatus');
+          clearInterval(_fuiouPollTimer); _fuiouPollTimer = null;
+          var el = document.getElementById('fuiouPollStatus');
           if (el) { el.style.color = '#27ae60'; el.textContent = '支付成功！已到账 ' + (d.credits || '') + ' 算力'; }
           if (typeof loadSutuiBalance === 'function') loadSutuiBalance();
           var balanceEl = document.getElementById('billingBalance');
@@ -225,7 +227,7 @@ function applyEditionLoginUI() {
     d = d || {};
     EDITION = (d.edition) || 'online';
     USE_INDEPENDENT_AUTH = !!d.use_independent_auth;
-    USE_FUBEI_PAY = !!(d.use_fubei_pay);
+    USE_FUIOU_PAY = !!(d.use_fuiou_pay);
     ALLOW_SELF_CONFIG_MODEL = d.allow_self_config_model !== false;
     RECHARGE_URL = (d.recharge_url && d.recharge_url.trim()) ? d.recharge_url.trim() : null;
     if (typeof d.client_code_build === 'number' || (d.client_code_version && String(d.client_code_version).trim())) {
@@ -246,16 +248,16 @@ function applyEditionLoginUI() {
     });
   }
   var localBase = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).trim() : '';
-  function supplementFubeiPayFromApiBase() {
-    if (typeof EDITION === 'undefined' || EDITION !== 'online' || !USE_INDEPENDENT_AUTH || USE_FUBEI_PAY) return Promise.resolve();
+  function supplementFuiouPayFromApiBase() {
+    if (typeof EDITION === 'undefined' || EDITION !== 'online' || !USE_INDEPENDENT_AUTH || USE_FUIOU_PAY) return Promise.resolve();
     var apiB = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
     if (!apiB) return Promise.resolve();
     return fetchFrom(apiB).then(function(remote) {
-      if (remote && remote.use_fubei_pay) USE_FUBEI_PAY = true;
+      if (remote && remote.use_fuiou_pay) USE_FUIOU_PAY = true;
     }).catch(function() {});
   }
   function chainAfterEdition(p) {
-    return p.then(supplementFubeiPayFromApiBase).then(tryStaticClientVersionIfEmpty);
+    return p.then(supplementFuiouPayFromApiBase).then(tryStaticClientVersionIfEmpty);
   }
   if (localBase) {
     chainAfterEdition(fetchFrom(localBase).then(applyEditionPayload)).catch(function() {
@@ -1113,7 +1115,7 @@ function loadBillingView() {
         if (rechargeResult) { rechargeResult.style.display = 'none'; rechargeResult.innerHTML = ''; }
         rechargeSubmitBtn.disabled = true;
         showMsg(rechargeMsg, '正在创建订单…', false);
-        var apiUrl = USE_FUBEI_PAY ? (API_BASE + '/api/recharge/fubei-create') : (API_BASE + '/api/recharge/create');
+        var apiUrl = USE_FUIOU_PAY ? (API_BASE + '/api/recharge/fuiou-create') : (API_BASE + '/api/recharge/create');
         fetch(apiUrl, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ package_index: idx }) })
           .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
           .then(function(x) {
@@ -1121,15 +1123,15 @@ function loadBillingView() {
             var d = x.data || {};
             showMsg(rechargeMsg, '', false);
             if (rechargeResult) {
-              if (USE_FUBEI_PAY && d.qr_code) {
+              if (USE_FUIOU_PAY && d.qr_code) {
                 var apiRoot = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
                 var qrSrc = apiRoot + '/api/recharge/qr-png?data=' + encodeURIComponent(d.qr_code);
                 rechargeResult.innerHTML = '<p><strong>订单号：' + escapeHtml(d.out_trade_no || '') + '</strong></p>'
-                  + '<p>请使用微信/支付宝扫描下方二维码完成支付：</p>'
-                  + '<img src="' + escapeAttr(qrSrc) + '" alt="支付二维码" style="max-width:220px;height:auto;margin-top:0.5rem;">'
-                  + '<p id="fubeiPollStatus" style="margin-top:0.5rem;color:#888;">等待支付…</p>';
+                  + '<p>请使用微信或支付宝扫描下方二维码完成支付（富友扫码支付）：</p>'
+                  + '<img src="' + escapeAttr(qrSrc) + '" alt="富友扫码支付二维码" style="max-width:220px;height:auto;margin-top:0.5rem;">'
+                  + '<p id="fuiouPollStatus" style="margin-top:0.5rem;color:#888;">等待支付…</p>';
                 rechargeResult.style.display = 'block';
-                _startFubeiPoll(d.out_trade_no);
+                _startFuiouPoll(d.out_trade_no, d.order_date);
               } else {
                 rechargeResult.innerHTML = '<p><strong>订单号：' + escapeHtml(d.out_trade_no || '') + '</strong></p><p>' + escapeHtml(d.payment_info || '') + '</p>';
                 rechargeResult.style.display = 'block';

@@ -11,7 +11,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 from .pw_timeouts import ms as _pw_ms
@@ -111,6 +111,14 @@ def browser_options_from_youtube_proxy_fields(
     user = (proxy_username or "").strip() or (unquote(u.username) if u.username else "")
     pw = (proxy_password or "").strip() or (unquote(u.password) if u.password else "")
     server = f"{u.scheme}://{host}:{port}"
+
+    # Chromium / Playwright 不支持「带用户名密码的 SOCKS5」；经本机 HTTP 桥转发到上游 SOCKS5（见 socks_http_bridge）。
+    if u.scheme == "socks5" and user and pw:
+        from .socks_http_bridge import ensure_local_http_bridge
+
+        local_http = ensure_local_http_bridge(host, port, user, pw)
+        return {**base, "proxy": {"server": local_http}}
+
     pw_obj: Dict[str, Any] = {"server": server}
     if user or pw:
         if not user or not pw:
@@ -163,6 +171,60 @@ _BASE_DIR = Path(__file__).resolve().parent.parent
 _CHROMIUM_PATH = os.environ.get("PLAYWRIGHT_CHROMIUM_PATH", "")
 # 例如 chrome：使用本机已安装的 Google Chrome，避免部分环境下 bundled Chromium SIGTRAP。
 _BROWSER_CHANNEL = os.environ.get("PLAYWRIGHT_BROWSER_CHANNEL", "").strip()
+
+# CDP attach 模式：用户自己开好 Chrome（--remote-debugging-port=9222），脚本通过 CDP 接管。
+# 避开 Playwright launch 层的指纹检测；淘宝等反自动化站点在此模式下表现与"手动双击 Chrome"一致。
+# 优先级：PLAYWRIGHT_CDP_URL > TAOBAO_CDP_URL。设了 CDP_URL 时 profile_dir 被忽略（以用户手动启动时的 --user-data-dir 为准）。
+_CDP_URL = (
+    os.environ.get("PLAYWRIGHT_CDP_URL", "").strip()
+    or os.environ.get("TAOBAO_CDP_URL", "").strip()
+)
+_cdp_browser: Any = None
+
+
+def _cdp_enabled() -> bool:
+    return bool(_CDP_URL)
+
+
+async def _connect_cdp_browser() -> Any:
+    """懒加载 + 缓存：连接用户手动启动的 Chrome，复用同一个 browser 对象。"""
+    global _pw_instance, _cdp_browser
+    if _cdp_browser is not None and _cdp_browser.is_connected():
+        return _cdp_browser
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise RuntimeError("playwright 未安装")
+    if _pw_instance is None:
+        _pw_instance = await async_playwright().__aenter__()
+    logger.info("[BROWSER][CDP] connect_over_cdp %s", _CDP_URL)
+    _cdp_browser = await _pw_instance.chromium.connect_over_cdp(_CDP_URL)
+    return _cdp_browser
+
+
+async def _acquire_cdp_context(profile_dir: str, key: str) -> Tuple[Any, bool]:
+    """CDP 模式下返回用户 Chrome 的第一个 context，并打标 _lobster_cdp_external=True。
+
+    此 context 属于用户手动启动的浏览器，脚本绝不应关闭它。
+    profile_dir 仅用作 _contexts 缓存键，不实际影响浏览器进程。
+    """
+    browser = await _connect_cdp_browser()
+    ctx_list = list(getattr(browser, "contexts", []) or [])
+    if not ctx_list:
+        raise RuntimeError(
+            f"CDP 浏览器没有任何 context（{_CDP_URL}）。请确认 Chrome 已启动且未处于关机状态。"
+        )
+    ctx = ctx_list[0]
+    try:
+        setattr(ctx, "_lobster_cdp_external", True)
+    except Exception:
+        pass
+    async with _lock:
+        _contexts[key] = ctx
+        _context_headless[key] = False
+        _profile_active_key[profile_dir] = key
+    logger.info("[BROWSER][CDP] attach 复用 context, pages=%s, 缓存键 profile=%s", len(ctx.pages), profile_dir[-60:])
+    return ctx, False
 
 
 async def _ensure_browser() -> Any:
@@ -217,6 +279,21 @@ async def _acquire_context(
     )
     key = _storage_key(profile_dir, opts)
 
+    # CDP 模式：不启浏览器，连 用户已开的 Chrome，profile_dir 仅作缓存键
+    if _cdp_enabled():
+        async with _lock:
+            existing = _contexts.get(key)
+            if existing is not None:
+                try:
+                    if hasattr(existing, "is_closed") and existing.is_closed():
+                        _contexts.pop(key, None)
+                    else:
+                        _profile_active_key[profile_dir] = key
+                        return existing, False
+                except Exception:
+                    _contexts.pop(key, None)
+        return await _acquire_cdp_context(profile_dir, key)
+
     global _pw_instance
     to_close_mismatch: Any = None
     async with _lock:
@@ -252,24 +329,47 @@ async def _acquire_context(
                 if _profile_active_key.get(profile_dir) == key:
                     _profile_active_key.pop(profile_dir, None)
 
+    # channel 优先级：opts 里显式指定 > 环境变量 > 自定义路径 > 默认 bundled Chromium
+    channel_override = opts.get("channel") or _BROWSER_CHANNEL or ""
+
     launch_kwargs: Dict[str, Any] = {
         "headless": bool(new_headless),
         "viewport": {"width": 1280, "height": 800},
         "locale": "zh-CN",
         "permissions": ["geolocation"],
-        "user_agent": opts["user_agent"],
+        "args": [
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=ThirdPartyCookieBlocking,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure",
+        ],
     }
+    # 使用真实 Chrome channel 时不覆盖 UA，让浏览器用自身真实 UA，减少指纹不匹配风险
+    if not channel_override:
+        launch_kwargs["user_agent"] = opts["user_agent"]
     if opts.get("proxy"):
         launch_kwargs["proxy"] = opts["proxy"]
-    if _BROWSER_CHANNEL:
-        launch_kwargs["channel"] = _BROWSER_CHANNEL
+    if channel_override:
+        launch_kwargs["channel"] = channel_override
     elif _CHROMIUM_PATH and Path(_CHROMIUM_PATH).exists():
         launch_kwargs["executable_path"] = _CHROMIUM_PATH
+
+    # Playwright 默认会带 --disable-extensions，环境过「干净」易与日常 Chrome 指纹不一致。
+    # 使用真实 Chrome channel 时去掉该默认项，允许沿用 profile 内扩展（更接近手动浏览器）。
+    _ida: List[str] = ["--enable-automation"]
+    if channel_override and os.environ.get("PLAYWRIGHT_KEEP_DISABLE_EXTENSIONS", "").strip() != "1":
+        _ida.append("--disable-extensions")
+    launch_kwargs["ignore_default_args"] = _ida
 
     Path(profile_dir).mkdir(parents=True, exist_ok=True)
     ctx = await _pw_instance.chromium.launch_persistent_context(
         profile_dir, **launch_kwargs,
     )
+    try:
+        await ctx.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            "try{if(!window.chrome)window.chrome={};if(!window.chrome.runtime)window.chrome.runtime={};}catch(e){}"
+        )
+    except Exception as e:
+        logger.debug("persistent context add_init_script: %s", e)
     async with _lock:
         _contexts[key] = ctx
         _context_headless[key] = bool(new_headless)
@@ -311,7 +411,10 @@ async def _drop_cached_context(
         pass
     try:
         if to_close is not None:
-            await to_close.close()
+            if getattr(to_close, "_lobster_cdp_external", False):
+                logger.info("[BROWSER][CDP] skip close (external, user-owned browser)")
+            else:
+                await to_close.close()
     except Exception:
         pass
 
@@ -360,6 +463,9 @@ async def _ensure_visible_interactive_context(
     browser_options: Optional[Dict[str, Any]] = None,
 ) -> None:
     """若池中仅有无头 context（如刚跑过作品同步），关闭之，以便后续以有头方式打开（发布/扫码登录）。"""
+    # CDP 模式下浏览器由用户启动，永远可见可交互，无需替换
+    if _cdp_enabled():
+        return
     opts = (
         browser_options
         if browser_options is not None
@@ -381,7 +487,14 @@ def _setup_auto_close(
     *,
     browser_options: Optional[Dict[str, Any]] = None,
 ):
-    """Register page close handler to release context when user closes window."""
+    """用户关闭窗口后释放池内 context。
+
+    Facebook / Meta OAuth 常会再开标签页或弹出「选图验证」窗口；若任一子页关闭就整 context.close()，
+    会清空持久化 Cookie，表现为「验证完又回到登录」循环。因此仅在**所有页面都关闭**后再释放。
+    """
+    # CDP 模式：浏览器由用户拥有，脚本不负责生命周期，页关闭不触发任何清理
+    if getattr(ctx, "_lobster_cdp_external", False):
+        return
     opts = (
         browser_options
         if browser_options is not None
@@ -389,7 +502,7 @@ def _setup_auto_close(
     )
     sk = _storage_key(profile_dir, opts)
 
-    async def _close_ctx():
+    async def _close_pool():
         try:
             await ctx.close()
         except Exception:
@@ -403,8 +516,63 @@ def _setup_auto_close(
                         _profile_active_key.pop(profile_dir, None)
         except Exception:
             pass
+
+    async def _maybe_close_after_last_page() -> None:
+        await asyncio.sleep(0.35)
+        try:
+            n = len(ctx.pages)
+        except Exception:
+            n = 0
+        if n > 0:
+            logger.info(
+                "[BROWSER] 某标签已关闭，仍有 %s 个页面，保留会话与 Cookie（profile …%s）",
+                n,
+                str(profile_dir)[-50:],
+            )
+            return
+        logger.info("[BROWSER] 所有页面已关闭，释放 context（profile …%s）", str(profile_dir)[-50:])
+        await _close_pool()
+
+    def _schedule_maybe_close() -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                return
+        try:
+            loop.create_task(_maybe_close_after_last_page())
+        except Exception:
+            pass
+
+    wired: set = getattr(ctx, "_lobster_wired_page_ids", None)
+    if wired is None:
+        wired = set()
+        setattr(ctx, "_lobster_wired_page_ids", wired)
+
+    def _wire_page_once(p: Any) -> None:
+        try:
+            pid = id(p)
+            if pid in wired:
+                return
+            wired.add(pid)
+            p.on("close", lambda _p=None: _schedule_maybe_close())
+        except Exception:
+            pass
+
+    _wire_page_once(page)
+    if getattr(ctx, "_lobster_auto_close_registered", False):
+        return
+    setattr(ctx, "_lobster_auto_close_registered", True)
+
     try:
-        page.on("close", lambda: asyncio.create_task(_close_ctx()))
+        for p in list(getattr(ctx, "pages", []) or []):
+            _wire_page_once(p)
+    except Exception:
+        pass
+    try:
+        ctx.on("page", lambda p: _wire_page_once(p))
     except Exception:
         pass
 
@@ -491,11 +659,13 @@ async def open_url_in_persistent_chromium(
 ) -> Dict[str, Any]:
     """在持久化 Chromium 中打开任意 URL（无平台 driver）。用于 YouTube OAuth 等与发布同源固定浏览器。"""
     opts = browser_options if browser_options is not None else _default_browser_options()
-    await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
-    ctx, created_new = await _acquire_context(
-        profile_dir, new_headless=False, browser_options=opts
-    )
+    ctx: Any = None
+    created_new = False
     try:
+        await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
+        ctx, created_new = await _acquire_context(
+            profile_dir, new_headless=False, browser_options=opts
+        )
         page, ctx = await _get_page_with_reacquire(profile_dir, ctx, browser_options=opts)
         await page.goto(
             url,
@@ -518,8 +688,11 @@ async def open_url_in_persistent_chromium(
         }
     except Exception as e:
         logger.exception("open_url_in_persistent_chromium failed")
-        if created_new:
-            await _drop_cached_context(profile_dir, ctx, browser_options=opts)
+        if created_new and ctx is not None:
+            try:
+                await _drop_cached_context(profile_dir, ctx, browser_options=opts)
+            except Exception:
+                pass
         return {"ok": False, "message": str(e)}
 
 
