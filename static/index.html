@@ -97,7 +97,13 @@
     .ecom-studio-shell { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 1rem; min-height: 720px; }
     .ecom-studio-sidebar { display: flex; flex-direction: column; gap: 0.85rem; min-width: 0; }
     .ecom-studio-main { min-width: 0; display: flex; flex-direction: column; gap: 0.85rem; }
-    .ecom-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
+    .ecom-panel {
+      background: rgba(255,255,255,0.94);
+      border: 1px solid rgba(34,49,78,0.12);
+      border-radius: var(--radius);
+      padding: 1rem;
+      box-shadow: 0 10px 28px rgba(36,54,88,0.05);
+    }
     .ecom-panel-title { margin: 0 0 0.75rem 0; font-size: 0.95rem; font-weight: 600; color: var(--text); }
     .ecom-panel-hint { margin: -0.35rem 0 0.75rem 0; font-size: 0.76rem; color: var(--text-muted); line-height: 1.55; }
     .ecom-field { margin-bottom: 0.75rem; }
@@ -105,7 +111,22 @@
     .ecom-field label { display: block; font-size: 0.82rem; font-weight: 500; color: var(--text); margin-bottom: 0.35rem; }
     .ecom-field input[type="text"], .ecom-field input[type="number"], .ecom-field textarea, .ecom-field select {
       width: 100%; padding: 0.55rem 0.65rem; font-size: 0.86rem; color: var(--text);
-      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-sm); outline: none; box-sizing: border-box;
+      background: linear-gradient(180deg, rgba(252,253,255,0.98), rgba(246,249,253,0.96));
+      border: 1px solid rgba(113,130,159,0.28);
+      border-radius: var(--radius-sm);
+      outline: none;
+      box-sizing: border-box;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.88);
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+    .ecom-field input[type="text"]:hover, .ecom-field input[type="number"]:hover, .ecom-field textarea:hover, .ecom-field select:hover {
+      border-color: rgba(91,124,255,0.28);
+      background: linear-gradient(180deg, #ffffff, rgba(244,248,255,0.98));
+    }
+    .ecom-field input[type="text"]:focus, .ecom-field input[type="number"]:focus, .ecom-field textarea:focus, .ecom-field select:focus {
+      border-color: rgba(91,124,255,0.72);
+      box-shadow: 0 0 0 3px rgba(91,124,255,0.12);
+      background: #ffffff;
     }
     .ecom-field textarea { min-height: 84px; resize: vertical; line-height: 1.5; }
     .ecom-field .hint { margin-top: 0.25rem; font-size: 0.74rem; color: var(--text-muted); line-height: 1.45; }
@@ -113,14 +134,28 @@
     .ecom-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
     .ecom-check {
       display: flex; align-items: center; gap: 0.45rem; padding: 0.55rem 0.65rem;
-      border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; background: rgba(255,255,255,0.03); font-size: 0.8rem; color: var(--text);
+      border: 1px solid rgba(34,49,78,0.10);
+      border-radius: 10px;
+      background: rgba(247,249,252,0.95);
+      font-size: 0.8rem;
+      color: var(--text);
     }
     .ecom-check input { margin: 0; width: auto; }
-    .ecom-upload-box { border: 1px dashed rgba(255,255,255,0.16); border-radius: 12px; padding: 0.8rem; background: rgba(255,255,255,0.025); }
+    .ecom-upload-box {
+      border: 1px dashed rgba(113,130,159,0.34);
+      border-radius: 12px;
+      padding: 0.8rem;
+      background: linear-gradient(180deg, rgba(249,251,255,0.96), rgba(244,247,252,0.96));
+    }
     .ecom-upload-box .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.6rem; }
     .ecom-upload-list { display: flex; flex-wrap: wrap; gap: 0.55rem; }
     .ecom-upload-item { width: 104px; position: relative; }
-    .ecom-upload-thumb { width: 84px; height: 84px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.05); }
+    .ecom-upload-thumb {
+      width: 84px; height: 84px; border-radius: 10px; overflow: hidden;
+      border: 1px solid rgba(113,130,159,0.24);
+      background: #ffffff;
+      box-shadow: 0 4px 14px rgba(36,54,88,0.06);
+    }
     .ecom-upload-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .ecom-upload-name { margin-top: 0.25rem; font-size: 0.68rem; color: var(--text-muted); line-height: 1.35; word-break: break-word; }
     .ecom-upload-status { display: inline-flex; align-items: center; margin-top: 0.28rem; padding: 0.14rem 0.42rem; border-radius: 999px; background: rgba(56,189,248,0.13); color: #7dd3fc; font-size: 0.66rem; line-height: 1.2; }
@@ -281,7 +316,31 @@
     .ecom-gallery-body .meta { font-size: 0.72rem; color: var(--text-muted); line-height: 1.5; word-break: break-word; }
     .ecom-results-panel-simple { display: flex; flex-direction: column; gap: 1rem; }
     .ecom-results-strip { display: flex; justify-content: space-between; gap: 0.8rem; align-items: flex-start; flex-wrap: wrap; }
-    .ecom-empty { padding: 1rem; border: 1px dashed rgba(255,255,255,0.12); border-radius: 12px; color: var(--text-muted); font-size: 0.82rem; text-align: center; background: rgba(255,255,255,0.02); }
+    .ecom-empty {
+      padding: 1rem;
+      border: 1px dashed rgba(113,130,159,0.34);
+      border-radius: 12px;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      text-align: center;
+      background: linear-gradient(180deg, rgba(250,251,255,0.98), rgba(245,248,252,0.98));
+    }
+    .ecom-panel .btn {
+      min-height: 34px;
+      font-weight: 600;
+    }
+    .ecom-panel .btn-ghost {
+      background: #ffffff;
+      border: 1px solid rgba(113,130,159,0.24);
+      box-shadow: 0 4px 12px rgba(36,54,88,0.04);
+    }
+    .ecom-panel .btn-ghost:hover {
+      background: rgba(241,245,255,0.98);
+      border-color: rgba(91,124,255,0.32);
+    }
+    .ecom-panel .btn-primary {
+      box-shadow: 0 8px 18px rgba(91,124,255,0.20);
+    }
     .ecom-example-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.8rem; }
     .ecom-example-card {
       padding: 0.95rem; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08);
