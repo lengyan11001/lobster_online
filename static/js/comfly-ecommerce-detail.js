@@ -99,6 +99,33 @@
     el.style.display = 'block';
   }
 
+  function _normalizeApiErrorText(detail, fallback) {
+    if (detail === null || detail === undefined || detail === '') return fallback || '未知错误';
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      var rows = detail.map(function(item) {
+        if (item === null || item === undefined) return '';
+        if (typeof item === 'string') return item;
+        if (typeof item === 'object') {
+          var loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+          var msg = String(item.msg || item.message || '').trim();
+          if (loc && msg) return loc + '：' + msg;
+          if (msg) return msg;
+          try { return JSON.stringify(item, null, 0); } catch (err) { return String(item); }
+        }
+        return String(item);
+      }).filter(Boolean);
+      return rows.join('；') || (fallback || '未知错误');
+    }
+    if (typeof detail === 'object') {
+      if (typeof detail.detail === 'string' && detail.detail) return detail.detail;
+      if (typeof detail.message === 'string' && detail.message) return detail.message;
+      if (typeof detail.msg === 'string' && detail.msg) return detail.msg;
+      try { return JSON.stringify(detail, null, 0); } catch (err) { return String(detail); }
+    }
+    return String(detail);
+  }
+
   function _stopPolling() {
     if (state.pollTimer) {
       clearTimeout(state.pollTimer);
@@ -232,6 +259,46 @@
     return RESULT_ORDER.reduce(function(sum, key) {
       return sum + ((galleryByTab && galleryByTab[key]) ? galleryByTab[key].length : 0);
     }, 0);
+  }
+
+  function _stripFileExtension(name) {
+    var text = String(name || '').trim();
+    if (!text) return '';
+    return text.replace(/\.[a-z0-9]{2,8}$/i, '');
+  }
+
+  function _formatTaskNameTimestamp(value) {
+    if (!value) return '';
+    var d = new Date(value);
+    if (!isFinite(d.getTime())) return '';
+    var pad = function(n) { return String(n).padStart(2, '0'); };
+    return [
+      d.getFullYear(),
+      pad(d.getMonth() + 1),
+      pad(d.getDate())
+    ].join('') + '_' + [
+      pad(d.getHours()),
+      pad(d.getMinutes()),
+      pad(d.getSeconds())
+    ].join('');
+  }
+
+  function _extractSuiteDisplayName(pathText) {
+    var text = String(pathText || '').trim();
+    if (!text) return '';
+    var normalized = text.replace(/\\/g, '/');
+    var last = normalized.split('/').pop() || '';
+    return String(last).replace(/\s*-\s*\d+\s+outputs?$/i, '').trim();
+  }
+
+  function _displayTaskName(item) {
+    var suiteName = _extractSuiteDisplayName(item && item.suiteRootRelativePath);
+    if (suiteName) return suiteName;
+    var base = _stripFileExtension(item && item.productName);
+    var stamp = _formatTaskNameTimestamp(item && (item.createdAt || item.updatedAt));
+    if (!base) return stamp || ('任务 ' + String(item && item.jobId || '').slice(0, 8));
+    if (/_\d{8}_\d{6}$/.test(base)) return base;
+    return stamp ? (base + '_' + stamp) : base;
   }
 
   function _buildJobDraft(jobId) {
@@ -926,7 +993,7 @@
     var visible = state.recentJobs.slice(0, 5);
     var extraCount = Math.max(0, state.recentJobs.length - visible.length);
     wrap.innerHTML = visible.map(function(item) {
-      var title = item.productName || ('任务 ' + String(item.jobId || '').slice(0, 8));
+      var title = _displayTaskName(item);
       var meta = [_statusLabel(item.status), _formatTimeLabel(item.updatedAt || item.createdAt)].filter(Boolean).join(' · ');
       return (
         '<button type="button" class="ecom-task-pill' + (state.currentJobId === item.jobId ? ' active' : '') + '" data-task-pill="' + escapeAttr(item.jobId) + '">' +
@@ -976,7 +1043,7 @@
             '<div class="ecom-task-card-thumb">' + thumb + '</div>' +
             '<div>' +
               '<div class="ecom-task-card-head">' +
-                '<div class="ecom-task-card-title">' + escapeHtml(item.productName || ('任务 ' + String(item.jobId || '').slice(0, 8))) + '</div>' +
+                '<div class="ecom-task-card-title">' + escapeHtml(_displayTaskName(item)) + '</div>' +
                 '<span class="ecom-preview-stage">' + escapeHtml(_statusLabel(item.status)) + '</span>' +
               '</div>' +
               '<div class="ecom-task-card-meta">' + escapeHtml(meta || ('任务 ID ' + String(item.jobId || '').slice(0, 8))) + '</div>' +
@@ -1244,7 +1311,7 @@
     _setMsg('正在提交套图任务，请稍候...', false);
     fetch(base + '/api/comfly-ecommerce-detail/pipeline/start', {
       method: 'POST',
-      headers: authHeaders(),
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
       body: JSON.stringify({ payload: built.payload })
     })
       .then(function(r) {
@@ -1252,7 +1319,7 @@
       })
       .then(function(res) {
         if (!res.ok || !res.data || !res.data.job_id) {
-          throw new Error((res.data && (res.data.detail || res.data.message)) || '任务提交失败');
+          throw new Error(_normalizeApiErrorText(res.data && (res.data.detail || res.data.message), '任务提交失败'));
         }
         state.currentJobId = res.data.job_id;
         _setWorkspaceTab('workspace');
@@ -1261,7 +1328,7 @@
         _refreshJobStatus(false);
       })
       .catch(function(err) {
-        _setMsg('提交失败：' + (err && err.message ? err.message : '未知错误'), true);
+        _setMsg('提交失败：' + _normalizeApiErrorText(err && (err.message || err.detail || err), '未知错误'), true);
       })
       .finally(function() {
         if (btn) {
@@ -1887,11 +1954,11 @@
     var currentJob = byId('ecomCurrentJobText');
     var summaryEl = byId('ecomStatusSummary');
     if (previewStatus) previewStatus.textContent = _statusLabel(status);
-    if (currentJob) currentJob.textContent = state.currentJobId ? ('Task ' + state.currentJobId.slice(0, 8)) : 'No active job';
+    if (currentJob) currentJob.textContent = record ? _displayTaskName(record) : (state.currentJobId ? ('Task ' + state.currentJobId.slice(0, 8)) : 'No active job');
     if (titleEl) {
-      titleEl.textContent = record && record.productName
-        ? record.productName
-        : ((state.mainAsset && state.mainAsset.filename) || 'Waiting for a new ecommerce image job');
+      titleEl.textContent = record
+        ? _displayTaskName(record)
+        : (_stripFileExtension(state.mainAsset && state.mainAsset.filename) || 'Waiting for a new ecommerce image job');
     }
     if (metaEl) {
       var metaParts = [];

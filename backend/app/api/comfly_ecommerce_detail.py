@@ -12,9 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
@@ -123,6 +123,94 @@ class EcommerceDetailPipelinePayload(BaseModel):
 
 class EcommerceDetailRunBody(BaseModel):
     payload: EcommerceDetailPipelinePayload
+
+
+def _pick_string(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return ""
+
+
+def _coerce_str_list(values: Any) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        text = values.strip()
+        return [text] if text else []
+    out: List[str] = []
+    if isinstance(values, list):
+        for item in values:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    out.append(text)
+                continue
+            if isinstance(item, dict):
+                text = _pick_string(
+                    item.get("local_path"),
+                    item.get("asset_id"),
+                    item.get("image_url"),
+                    item.get("source_url"),
+                    item.get("preview_url"),
+                    item.get("open_url"),
+                )
+                if text:
+                    out.append(text)
+    return out
+
+
+def _coerce_product_images(values: Any) -> List[Dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        row: Dict[str, Any] = {
+            "role": _pick_string(item.get("role"), "front") or "front",
+        }
+        asset_id = _pick_string(item.get("asset_id"))
+        image_url = _pick_string(item.get("image_url"), item.get("source_url"), item.get("preview_url"), item.get("open_url"))
+        local_path = _pick_string(item.get("local_path"))
+        if local_path:
+            row["local_path"] = local_path
+        elif asset_id:
+            row["asset_id"] = asset_id
+        elif image_url:
+            row["image_url"] = image_url
+        out.append(row)
+    return out
+
+
+def _coerce_run_body(raw_body: Any) -> EcommerceDetailRunBody:
+    body_data = raw_body if isinstance(raw_body, dict) else {}
+    payload = body_data.get("payload")
+    if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
+        payload = payload.get("payload")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体格式不正确：缺少 payload 对象")
+    payload = dict(payload)
+    if "product_images" in payload:
+        payload["product_images"] = _coerce_product_images(payload.get("product_images"))
+    for key in (
+        "reference_asset_ids",
+        "reference_image_urls",
+        "reference_local_paths",
+        "style_reference_asset_ids",
+        "style_reference_image_urls",
+        "style_reference_local_paths",
+        "compliance_notes",
+    ):
+        if key in payload:
+            payload[key] = _coerce_str_list(payload.get(key))
+    body_data = {"payload": payload}
+    try:
+        return EcommerceDetailRunBody.model_validate(body_data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
 
 
 class EcommerceShowcaseEditPayload(BaseModel):
@@ -1206,12 +1294,13 @@ async def ecommerce_detail_pipeline_run(
 
 @router.post("/api/comfly-ecommerce-detail/pipeline/start")
 async def ecommerce_detail_pipeline_start(
-    body: EcommerceDetailRunBody,
     request: Request,
     db: Session = Depends(get_db),
+    body: Dict[str, Any] = Body(default_factory=dict),
 ):
     current_user = await _resolve_optional_request_user(request, db)
-    pl = body.payload
+    normalized = _coerce_run_body(body)
+    pl = normalized.payload
     _validate_payload(pl)
     runs_root = _default_runs_root()
     job_id = uuid.uuid4().hex
