@@ -64,6 +64,7 @@ class Input(TypedDict, total=False):
     target_market: str
     analysis_model: str
     image_model: str
+    detail_render_mode: str
     aspect_ratio: str
     page_count: int
     page_width: int
@@ -111,6 +112,7 @@ class PipelineConfig:
     target_market: str = ""
     analysis_model: str = "gemini-2.5-pro"
     image_model: str = "nano-banana-2"
+    detail_render_mode: str = "composited"
     aspect_ratio: str = "9:16"
     page_count: int = 12
     main_image_count: int = 10
@@ -184,6 +186,7 @@ class RunLogger:
                 "language": config.language,
                 "analysis_model": config.analysis_model,
                 "image_model": config.image_model,
+                "detail_render_mode": config.detail_render_mode,
                 "aspect_ratio": config.aspect_ratio,
                 "page_count": config.page_count,
                 "main_image_count": config.main_image_count,
@@ -1195,6 +1198,7 @@ def _build_config(data: Input) -> PipelineConfig:
         target_market=str(data.get("target_market", "")).strip(),
         analysis_model=str(data.get("analysis_model", "gemini-2.5-pro")).strip(),
         image_model=str(data.get("image_model", "nano-banana-2")).strip(),
+        detail_render_mode=str(data.get("detail_render_mode", "composited")).strip() or "composited",
         aspect_ratio=str(data.get("aspect_ratio", "9:16")).strip(),
         page_count=page_count,
         main_image_count=main_image_count,
@@ -1696,6 +1700,92 @@ def _compose_cover_background_prompt(page: Dict[str, Any], analysis: Dict[str, A
     if constraints:
         prompt_parts.append(f"Do not imply unverifiable technical claims: {constraints}")
     return ". ".join(part for part in prompt_parts if part)
+
+
+def _is_gpt_image2_direct_mode(config: PipelineConfig) -> bool:
+    return str(config.detail_render_mode or "").strip().lower() == "gpt_image2_direct"
+
+
+def _direct_detail_spec_lines(page: Dict[str, Any], analysis: Dict[str, Any]) -> List[str]:
+    metadata = page.get("metadata") if isinstance(page.get("metadata"), dict) else {}
+    entries = metadata.get("spec_entries") if isinstance(metadata.get("spec_entries"), list) else []
+    if not entries:
+        entries = _spec_entries(analysis.get("specs"))
+    out: List[str] = []
+    for item in entries[:6]:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if key and value:
+            out.append(f"{key}：{value}")
+    return out
+
+
+def _compose_direct_detail_page_prompt(page: Dict[str, Any], analysis: Dict[str, Any], config: PipelineConfig) -> str:
+    product_name = str(
+        analysis.get("product_name")
+        or config.product_name_hint
+        or analysis.get("category")
+        or "product"
+    ).strip()
+    category = str(analysis.get("category") or config.listing_category or "product").strip()
+    style = str(analysis.get("visual_style") or config.style or "premium ecommerce design").strip()
+    slot_name = str(page.get("slot") or "").strip().lower()
+    title = str(page.get("title") or "").strip()
+    subtitle = str(page.get("subtitle") or "").strip()
+    footer = str(page.get("footer") or "").strip()
+    highlights = [str(item).strip() for item in _safe_string_list(page.get("highlights")) if str(item).strip()][:4]
+    spec_lines = _direct_detail_spec_lines(page, analysis)
+    material_lines = _safe_string_list(analysis.get("materials"))[:3]
+    scene_lines = _safe_string_list(analysis.get("usage_scenes"))[:3]
+    trust_lines = _safe_string_list(analysis.get("trust_points"))[:3]
+    copy_blocks: List[str] = []
+    if title:
+        copy_blocks.append(f"标题：{title}")
+    if subtitle:
+        copy_blocks.append(f"副标题：{subtitle}")
+    if highlights:
+        copy_blocks.append("卖点：\n- " + "\n- ".join(highlights))
+    if spec_lines:
+        copy_blocks.append("参数信息：\n- " + "\n- ".join(spec_lines))
+    if footer:
+        copy_blocks.append(f"页脚短句：{footer}")
+
+    layout_instruction = {
+        "cover": "Create a premium Chinese ecommerce detail cover with strong hero composition, one main title block, one short subtitle block, and 2-3 small supporting benefit chips.",
+        "overview": "Create a polished Chinese ecommerce detail section with one clear title, one short subtitle, and 3-4 structured supporting points.",
+        "feature": "Create a premium Chinese selling-point page with the product as hero and concise callout copy blocks around it.",
+        "scene": "Create a scene-driven Chinese detail page that highlights lifestyle use while preserving the exact product identity.",
+        "material": "Create a refined Chinese product-detail page focusing on material, craftsmanship, and close-up premium texture storytelling.",
+        "trust": "Create a Chinese trust-building detail page with concise assurance copy, neat icon-like information blocks, and premium layout.",
+        "spec_table": "Create a clean Chinese parameter page with structured information cards. Keep copy concise, legible, and suitable for a spec layout.",
+    }.get(slot_name, "Create a high-quality Chinese ecommerce detail page with premium layout and clean hierarchy.")
+
+    prompt_parts = [
+        f"Design a final Chinese ecommerce detail page image for {product_name}.",
+        f"Product category: {category}.",
+        f"Visual style: {style}.",
+        layout_instruction,
+        "This must be a finished detail-page visual, not a blank background and not a poster without content.",
+        "Use exactly one single product that matches the reference product. Do not create a second garment, second box, bag, scarf, model, or accessory.",
+        "Keep the visible product identity highly consistent with the reference, including silhouette, collar, neckline, sleeves, buttons, seams, proportions, color, material feel, and overall shape.",
+        "The product in the final image must remain the same item as the reference, not a redesigned product.",
+        "All visible text must be clear Simplified Chinese with good legibility.",
+        "Do not invent fake English brands, fake logos, random watermarks, or unrelated product names.",
+        "Do not add extra claims or parameters that are not provided below.",
+        "Do not output a collage, moodboard, UI screenshot, website mockup, or fake packaging backstory.",
+        "Use premium ecommerce art direction, strong spacing, clean visual hierarchy, controlled typography area, and a high-end commercial finish.",
+    ]
+    if scene_lines:
+        prompt_parts.append("Scene cues: " + " / ".join(scene_lines))
+    if material_lines:
+        prompt_parts.append("Material cues: " + " / ".join(material_lines))
+    if trust_lines:
+        prompt_parts.append("Trust cues: " + " / ".join(trust_lines))
+    if copy_blocks:
+        prompt_parts.append("Use only these Chinese copy blocks:\n" + "\n\n".join(copy_blocks))
+    return "\n".join(part for part in prompt_parts if part)
 
 
 def _compose_white_bg_prompt(analysis: Dict[str, Any]) -> str:
@@ -3663,7 +3753,10 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             allow_local_fallback: bool = False,
         ) -> Dict[str, Any]:
             idx = int(page["index"])
-            if str(page.get("slot") or "").strip().lower() == "cover":
+            direct_full_page = _is_gpt_image2_direct_mode(config)
+            if direct_full_page:
+                image_prompt = _compose_direct_detail_page_prompt(page, analysis, config)
+            elif str(page.get("slot") or "").strip().lower() == "cover":
                 image_prompt = _compose_cover_background_prompt(page, analysis)
             else:
                 image_prompt = _compose_page_background_prompt(page, analysis)
@@ -3686,13 +3779,18 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                         f"{phase}_page_{idx:02d}",
                         payload={"attempts": attempts, "page_attempt": page_attempt, "phase": phase},
                     )
-                    background_image = _download_image(generated["url"], retries=5, timeout=180)
-                    background_local_path = logger.detail_dir / f"背景_{idx:02d}.jpg"
-                    background_image.save(background_local_path, format="JPEG", quality=92, subsampling=0)
-                    rendered = _render_page(product_local.copy(), background_image, page, config, icon_images=icon_images)
+                    generated_image = _download_image(generated["url"], retries=5, timeout=180)
                     local_path = logger.detail_dir / f"详情_{idx:02d}.jpg"
-                    rendered.save(local_path, format="JPEG", quality=92, subsampling=0)
-                    return {
+                    background_local_path = None
+                    if direct_full_page:
+                        rendered = generated_image.convert("RGB")
+                        rendered.save(local_path, format="JPEG", quality=92, subsampling=0)
+                    else:
+                        background_local_path = logger.detail_dir / f"背景_{idx:02d}.jpg"
+                        generated_image.save(background_local_path, format="JPEG", quality=92, subsampling=0)
+                        rendered = _render_page(product_local.copy(), generated_image, page, config, icon_images=icon_images)
+                        rendered.save(local_path, format="JPEG", quality=92, subsampling=0)
+                    result_row = {
                         "index": idx,
                         "slot": page["slot"],
                         "title": page["title"],
@@ -3705,12 +3803,16 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                         "relative_path": str(local_path.relative_to(logger.run_dir)),
                         "generated_image_url": generated["url"],
                         "generated_image_prompt": image_prompt,
-                        "background_local_path": str(background_local_path),
-                        "background_relative_path": str(background_local_path.relative_to(logger.run_dir)),
-                        "generation_mode": "remote",
+                        "generation_mode": "direct_full_page" if direct_full_page else "remote",
                         "local_path": str(local_path),
                         "attempts": attempts,
                     }
+                    if background_local_path is not None:
+                        result_row["background_local_path"] = str(background_local_path)
+                        result_row["background_relative_path"] = str(background_local_path.relative_to(logger.run_dir))
+                    if direct_full_page:
+                        result_row["detail_render_mode"] = config.detail_render_mode
+                    return result_row
                 except Exception as page_exc:
                     last_page_error = page_exc
                     if page_attempt >= total_attempts:
@@ -4042,6 +4144,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             "config": {
                 "analysis_model": config.analysis_model,
                 "image_model": config.image_model,
+                "detail_render_mode": config.detail_render_mode,
                 "aspect_ratio": config.aspect_ratio,
                 "page_count": config.page_count,
                 "main_image_count": config.main_image_count,
