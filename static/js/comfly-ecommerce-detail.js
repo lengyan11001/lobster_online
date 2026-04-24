@@ -1,6 +1,18 @@
 (function() {
   var ANALYSIS_MODEL = 'gpt-4.1-mini';
-  var IMAGE_MODEL = 'nano-banana-2';
+  var DEFAULT_IMAGE_MODEL_PRESET = 'stable_default';
+  var IMAGE_MODEL_PRESETS = {
+    stable_default: {
+      imageModel: 'nano-banana-2',
+      detailRenderMode: 'composited',
+      label: '稳定版'
+    },
+    gpt_image2_direct: {
+      imageModel: 'gpt-image-2',
+      detailRenderMode: 'gpt_image2_direct',
+      label: 'GPT Image 2 直出'
+    }
+  };
   var RESULT_LABELS = {
     main_images: '主图',
     sku_images: 'SKU 图',
@@ -845,6 +857,11 @@
     };
   }
 
+  function _selectedImageModelPreset() {
+    var key = ((byId('ecomImageModelPresetSelect') && byId('ecomImageModelPresetSelect').value) || DEFAULT_IMAGE_MODEL_PRESET || '').trim();
+    return IMAGE_MODEL_PRESETS[key] || IMAGE_MODEL_PRESETS[DEFAULT_IMAGE_MODEL_PRESET];
+  }
+
   function _buildPayload() {
     var mainAssetId = (byId('ecomMainAssetIdInput').value || '').trim() || (state.mainAsset && state.mainAsset.asset_id) || '';
     var mainLocalPath = (state.mainAsset && state.mainAsset.local_path) || '';
@@ -855,6 +872,7 @@
       return { error: '主商品图保存失败，请重新选择本地图片，或直接填写可用的 asset_id。' };
     }
     if (!mainAssetId && !mainLocalPath) return { error: '请先选择主商品图，或填写可用的 asset_id。' };
+    var imagePreset = _selectedImageModelPreset();
     var payload = {
       product_name_hint: (byId('ecomProductNameInput').value || '').trim(),
       product_direction_hint: (byId('ecomProductDirectionInput').value || '').trim(),
@@ -874,7 +892,8 @@
       showcase_count: _numericOrNull('ecomShowcaseCountInput', 1, 20),
       auto_save: false,
       analysis_model: ANALYSIS_MODEL,
-      image_model: IMAGE_MODEL,
+      image_model: imagePreset.imageModel,
+      detail_render_mode: imagePreset.detailRenderMode,
       output_targets: _outputTargetsFromForm(),
       scene_preferences: _scenePreferencesFromForm(),
       style_reference_asset_ids: state.styleRefs.map(function(item) { return item.asset_id; }).filter(Boolean),
@@ -1215,6 +1234,7 @@
     if (state.currentJobId) facts.push('任务 ID：' + state.currentJobId);
     if (config.analysis_model) facts.push('分析模型：' + config.analysis_model);
     if (config.image_model) facts.push('生图模型：' + config.image_model);
+    if (config.detail_render_mode) facts.push('详情页模式：' + config.detail_render_mode);
     if (config.page_count) facts.push('详情页数：' + config.page_count);
     if (usage.image_count != null) facts.push('生图次数：' + usage.image_count);
     if (usage.analysis_count != null) facts.push('分析次数：' + usage.analysis_count);
@@ -1364,6 +1384,7 @@
       if (byId(id)) byId(id).value = '';
     });
     if (byId('ecomStyleSelect')) byId('ecomStyleSelect').value = 'creamy_wood';
+    if (byId('ecomImageModelPresetSelect')) byId('ecomImageModelPresetSelect').value = DEFAULT_IMAGE_MODEL_PRESET;
     if (byId('ecomDetailTemplateSelect')) byId('ecomDetailTemplateSelect').value = 'detail_template_02';
     if (byId('ecomShowcaseTemplateSelect')) byId('ecomShowcaseTemplateSelect').value = 'showcase_template_02';
     if (byId('ecomPageCountInput')) byId('ecomPageCountInput').value = 12;
@@ -1929,6 +1950,7 @@
     if (state.currentJobId) facts.push('任务 ID：' + state.currentJobId);
     if (config.analysis_model) facts.push('分析模型：' + config.analysis_model);
     if (config.image_model) facts.push('生图模型：' + config.image_model);
+    if (config.detail_render_mode) facts.push('详情页模式：' + config.detail_render_mode);
     if (config.page_count) facts.push('详情页数：' + config.page_count);
     if (usage.image_count != null) facts.push('生图次数：' + usage.image_count);
     if (usage.analysis_count != null) facts.push('分析次数：' + usage.analysis_count);
@@ -2203,6 +2225,7 @@
     if (state.currentJobId) facts.push('任务 ID：' + state.currentJobId);
     if (config.analysis_model) facts.push('分析模型：' + config.analysis_model);
     if (config.image_model) facts.push('生图模型：' + config.image_model);
+    if (config.detail_render_mode) facts.push('详情页模式：' + config.detail_render_mode);
     if (config.page_count) facts.push('详情页数：' + config.page_count);
     if (usage.image_count != null) facts.push('生图成功次数：' + usage.image_count);
     if (usage.analysis_count != null) facts.push('分析调用次数：' + usage.analysis_count);

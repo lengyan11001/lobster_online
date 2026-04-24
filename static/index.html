@@ -92,6 +92,17 @@
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-sm); outline: none; box-sizing: border-box;
     }
     .ecom-field textarea { min-height: 84px; resize: vertical; line-height: 1.5; }
+    .ecom-field-note {
+      min-height: 44px;
+      padding: 0.55rem 0.65rem;
+      font-size: 0.78rem;
+      line-height: 1.55;
+      color: var(--text-muted);
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.035);
+      box-sizing: border-box;
+    }
     .ecom-field .hint { margin-top: 0.25rem; font-size: 0.74rem; color: var(--text-muted); line-height: 1.45; }
     .ecom-inline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
     .ecom-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
@@ -551,6 +562,20 @@
                           <input type="file" id="ecomStyleRefsFileInput" accept="image/*" multiple style="display:none;">
                         </div>
                         <div id="ecomStyleRefsList" class="ecom-upload-list"></div>
+                      </div>
+                    </div>
+
+                    <div class="ecom-inline-grid">
+                      <div class="ecom-field">
+                        <label for="ecomImageModelPresetSelect">生图方案</label>
+                        <select id="ecomImageModelPresetSelect">
+                          <option value="stable_default" selected>稳定版：nano-banana-2 + 本地排字</option>
+                          <option value="gpt_image2_direct">实验版：gpt-image-2 详情页直出</option>
+                        </select>
+                      </div>
+                      <div class="ecom-field">
+                        <label>说明</label>
+                        <div class="ecom-field-note">默认保留当前稳定流程；选择 GPT Image 2 后，会切到实验版详情页直出链路。</div>
                       </div>
                     </div>
                   </div>

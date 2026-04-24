@@ -117,6 +117,7 @@ class EcommerceDetailPipelinePayload(BaseModel):
     language: str = ""
     analysis_model: Optional[str] = None
     image_model: Optional[str] = None
+    detail_render_mode: Optional[str] = None
     output_dir: Optional[str] = None
     isolate_job_dir: bool = True
 
@@ -733,6 +734,7 @@ async def _prepare_pipeline_input(
         api_base=api_base,
         analysis_model=pl.analysis_model,
         image_model=pl.image_model,
+        detail_render_mode=pl.detail_render_mode,
         page_count=pl.page_count,
         output_dir=effective_output_dir,
         product_name_hint=pl.product_name_hint,
@@ -1157,6 +1159,7 @@ def _detail_render_config_from_result(mod: Any, result: Dict[str, Any]) -> Any:
         material_image_count=int(config_payload.get("material_image_count") or 3),
         analysis_model=str(config_payload.get("analysis_model") or ""),
         image_model=str(config_payload.get("image_model") or ""),
+        detail_render_mode=str(config_payload.get("detail_render_mode") or ""),
         aspect_ratio=str(config_payload.get("aspect_ratio") or "9:16"),
         listing_category=str(config_payload.get("listing_category") or ""),
         export_name_prefix=str(config_payload.get("export_name_prefix") or ""),

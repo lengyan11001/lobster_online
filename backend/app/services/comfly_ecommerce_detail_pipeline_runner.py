@@ -130,6 +130,7 @@ def build_pipeline_input(
     api_base: str,
     analysis_model: Optional[str],
     image_model: Optional[str],
+    detail_render_mode: Optional[str],
     page_count: Optional[int],
     output_dir: Optional[str],
     product_name_hint: Optional[str],
@@ -187,6 +188,8 @@ def build_pipeline_input(
         inp["analysis_model"] = analysis_model
     if image_model:
         inp["image_model"] = image_model
+    if detail_render_mode:
+        inp["detail_render_mode"] = detail_render_mode
     if page_count is not None:
         inp["page_count"] = int(page_count)
     if output_dir:
