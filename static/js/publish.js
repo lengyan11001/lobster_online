@@ -1060,7 +1060,7 @@ function _renderAccountList(accounts) {
   var el = document.getElementById('accountList');
   if (!el) return;
   if (!accounts.length) {
-    el.innerHTML = '<p class="meta" style="padding:1rem;">该平台暂无发布账号。请在上方添加账号后扫码登录。</p>';
+    el.innerHTML = '<div class="page-empty-card">该平台暂无发布账号。请在上方添加账号后扫码登录。</div>';
     return;
   }
   el.innerHTML = accounts.map(function(a) {
@@ -1087,15 +1087,18 @@ function _renderAccountList(accounts) {
       var kindL = _scheduleKindLabel(sch.schedule_kind);
       var vHint = sch.schedule_kind === 'video' ? (' · ' + escapeHtml(_scheduleVideoBranchHint(sch))) : '';
       var modeShort = sch.schedule_publish_mode === 'review' ? '审核' : '立即';
-      schHint = '<div class="card-desc" style="font-size:0.7rem;color:#a5b4fc;">定时已开 · ' + escapeHtml(modeShort) +
+      schHint = '<div class="account-card-highlight">定时已开 · ' + escapeHtml(modeShort) +
         ' · ' + escapeHtml(kindL) + ' · ' + escapeHtml(_formatScheduleIntervalMinutes(im)) + vHint + nextL + '</div>';
     }
     return '<div class="skill-store-card account-card" data-account-card="' + a.id + '" data-platform="' + escapeAttr(a.platform) + '" style="cursor:pointer;" title="点击查看详情">' +
-      '<div class="card-label">' + escapeHtml(PLATFORM_NAMES[a.platform] || a.platform) +
-      ' <span style="color:' + statusColor + ';font-weight:600;">' + escapeHtml(statusLabel) + '</span></div>' +
+      '<div class="account-card-top">' +
+      '<div class="card-label">' + escapeHtml(PLATFORM_NAMES[a.platform] || a.platform) + '</div>' +
+      '<span class="account-card-status" style="color:' + statusColor + ';">' + escapeHtml(statusLabel) + '</span></div>' +
       '<div class="card-value">' + escapeHtml(a.nickname) + '</div>' +
+      '<div class="account-card-meta">' +
       '<div class="card-desc" style="font-size:0.78rem;color:var(--text-muted);">' + escapeHtml(lastLogin) + '</div>' +
       (syncLine ? '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">' + escapeHtml(syncLine) + '</div>' : '') +
+      '</div>' +
       schHint +
       '<div class="card-actions" onclick="event.stopPropagation();">' + detailBtn + ' ' + openBtn + ' ' + runsBtn + ' ' + publishBtn + ' ' + deleteBtn + '</div></div>';
   }).join('');
@@ -1113,30 +1116,30 @@ function loadAccounts() {
   var el = document.getElementById('accountList');
   if (!el) return;
   if (!publishLocalBase()) {
-    el.innerHTML = '<p class="msg err" style="padding:1rem;">未配置本机 API（LOCAL_API_BASE）。请用本机运行 backend/run.py 后从 <code>http://127.0.0.1:端口</code> 打开页面。</p>';
+    el.innerHTML = '<div class="page-empty-card msg err">未配置本机 API（LOCAL_API_BASE）。请用本机运行 backend/run.py 后从 <code>http://127.0.0.1:端口</code> 打开页面。</div>';
     return;
   }
-  el.innerHTML = '<p class="meta">加载中…</p>';
+  el.innerHTML = '<div class="page-empty-card">加载中…</div>';
   fetch(publishLocalBase() + '/api/accounts', { headers: authHeaders() })
     .then(_publishParseResponse)
     .then(function(x) {
       if (!x.ok) {
         var msg = (x.d && (x.d.detail || x.d.message)) ? String(x.d.detail || x.d.message) : ('HTTP ' + x.status);
-        el.innerHTML = '<p class="msg err" style="padding:1rem;">加载失败：' + escapeHtml(msg) + '</p>';
+        el.innerHTML = '<div class="page-empty-card msg err">加载失败：' + escapeHtml(msg) + '</div>';
         return;
       }
       var d = x.d;
       var accounts = (d && Array.isArray(d.accounts)) ? d.accounts : [];
       _allAccounts = accounts;
       if (!accounts.length) {
-        el.innerHTML = '<p class="meta" style="padding:1rem;">暂无发布账号。请在上方添加账号后扫码登录。</p>';
+        el.innerHTML = '<div class="page-empty-card">暂无发布账号。请在上方添加账号后扫码登录。</div>';
         return;
       }
       _applyAccountPlatformFilter();
     })
     .catch(function(err) {
       var m = (err && err.message) ? err.message : String(err);
-      el.innerHTML = '<p class="msg err" style="padding:1rem;">加载失败：' + escapeHtml(m) + '</p>';
+      el.innerHTML = '<div class="page-empty-card msg err">加载失败：' + escapeHtml(m) + '</div>';
     });
 }
 
@@ -1865,7 +1868,7 @@ function _wireAssetListThumbs(container) {
 function loadAssets(query) {
   var el = document.getElementById('assetList');
   if (!el) return;
-  el.innerHTML = '<p class="meta">加载中…</p>';
+  el.innerHTML = '<div class="page-empty-card">加载中…</div>';
   var mediaType = (document.getElementById('assetTypeFilter') || {}).value || '';
   var url = publishLocalBase() + '/api/assets?limit=50';
   if (mediaType) url += '&media_type=' + encodeURIComponent(mediaType);
@@ -1875,7 +1878,7 @@ function loadAssets(query) {
     .then(function(d) {
       var assets = (d && Array.isArray(d.assets)) ? d.assets : [];
       if (!assets.length) {
-        el.innerHTML = '<p class="meta" style="padding:1rem;">暂无素材。可上传本地文件或保存网络URL，也可在对话中让龙虾生成。</p>';
+        el.innerHTML = '<div class="page-empty-card">暂无素材。可上传本地文件或保存网络URL，也可在对话中让龙虾生成。</div>';
         return;
       }
       el.innerHTML = assets.map(function(a) {
@@ -1944,8 +1947,8 @@ function loadAssets(query) {
         var size = a.file_size ? (a.file_size > 1048576 ? (a.file_size / 1048576).toFixed(1) + ' MB' : (a.file_size / 1024).toFixed(1) + ' KB') : '';
         var useAsAttachBtn = (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
         var deleteBtn = '<button type="button" class="btn btn-ghost btn-sm" data-delete-asset="' + escapeAttr(a.asset_id) + '">删除</button>';
-        return '<div class="skill-store-card">' +
-          '<div class="card-label"><span style="background:' + (isImage ? '#6366f1' : isVideo ? '#f59e0b' : '#888') + ';color:#fff;padding:1px 6px;border-radius:3px;font-size:0.72rem;margin-right:4px;">' + escapeHtml(typeLabel) + '</span> ' + escapeHtml(size) + '</div>' +
+        return '<div class="skill-store-card asset-card">' +
+          '<div class="card-label"><span class="asset-card-badge" style="background:' + (isImage ? '#6366f1' : isVideo ? '#f59e0b' : '#888') + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
           preview +
           '<div class="card-desc" style="font-size:0.78rem;">' + escapeHtml(a.prompt || a.filename) + '</div>' +
           tags +
@@ -1987,7 +1990,7 @@ function loadAssets(query) {
         });
       });
     })
-    .catch(function() { el.innerHTML = '<p class="msg err">加载失败</p>'; });
+    .catch(function() { el.innerHTML = '<div class="page-empty-card msg err">加载失败</div>'; });
 }
 
 // Search
@@ -2127,41 +2130,41 @@ function _renderSteps(steps) {
 function loadTasks() {
   var el = document.getElementById('taskList');
   if (!el) return;
-  el.innerHTML = '<p class="meta">加载中…</p>';
+  el.innerHTML = '<div class="page-empty-card">加载中…</div>';
   fetch(publishLocalBase() + '/api/publish/tasks?limit=50', { headers: authHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(d) {
       var tasks = (d && Array.isArray(d.tasks)) ? d.tasks : [];
       if (!tasks.length) {
-        el.innerHTML = '<p class="meta" style="padding:1rem;line-height:1.55;">暂无<strong>单次发布</strong>记录（对话触发的 publish 任务）。<br>' +
-          '若你配置的是账号上的<strong>间隔定时任务</strong>：请到<strong>发布账号</strong> → 点击该账号 → <strong>执行记录</strong> 或进入详情后点 <strong>任务列表</strong>（今日头条与抖音、小红书相同）。</p>';
+        el.innerHTML = '<div class="page-empty-card">暂无<strong>单次发布</strong>记录（对话触发的 publish 任务）。<br>' +
+          '若你配置的是账号上的<strong>间隔定时任务</strong>：请到<strong>发布账号</strong> → 点击该账号 → <strong>执行记录</strong> 或进入详情后点 <strong>任务列表</strong>（今日头条与抖音、小红书相同）。</div>';
         return;
       }
-      el.innerHTML = '<div class="card">' + tasks.map(function(t) {
+      el.innerHTML = '<div class="publish-task-list">' + tasks.map(function(t) {
         var statusColor = TASK_COLORS[t.status] || '#888';
         var statusLabel = TASK_STATUS[t.status] || t.status;
         var resultLink = t.result_url ? ' <a href="' + escapeAttr(t.result_url) + '" target="_blank" style="color:var(--primary);">查看</a>' : '';
-        var errorText = t.error ? '<div style="color:#f87171;font-size:0.78rem;margin-top:0.25rem;">' + escapeHtml(t.error) + '</div>' : '';
+        var errorText = t.error ? '<div class="card-desc" style="color:#f87171;font-size:0.78rem;margin-top:0.35rem;">' + escapeHtml(t.error) + '</div>' : '';
         var acctInfo = (t.platform ? (PLATFORM_NAMES[t.platform] || t.platform) : '') +
           (t.account_nickname ? ' · ' + t.account_nickname : '');
         var stepsHtml = _renderSteps(t.steps || []);
-        return '<div style="padding:0.75rem 0;border-bottom:1px solid rgba(255,255,255,0.06);">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-            '<div><span style="font-weight:600;">' + escapeHtml(t.title || '无标题') + '</span>' +
-            ' <span style="font-size:0.78rem;color:var(--text-muted);">素材:' + escapeHtml(t.asset_id) +
-            (acctInfo ? ' · ' + escapeHtml(acctInfo) : '') + '</span></div>' +
-            '<span style="color:' + statusColor + ';font-weight:600;font-size:0.85rem;">' + statusLabel + resultLink + '</span>' +
+        return '<div class="publish-task-item">' +
+          '<div class="publish-task-top">' +
+            '<div><div class="publish-task-title">' + escapeHtml(t.title || '无标题') + '</div>' +
+            '<div class="publish-task-meta">素材:' + escapeHtml(t.asset_id) +
+            (acctInfo ? ' · ' + escapeHtml(acctInfo) : '') + '</div></div>' +
+            '<span class="publish-task-status" style="color:' + statusColor + ';">' + statusLabel + resultLink + '</span>' +
           '</div>' +
           errorText +
           stepsHtml +
-          '<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.25rem;">' +
+          '<div class="publish-task-timeline">' +
             escapeHtml(_formatDateTimeBeijing(t.created_at)) +
             (t.finished_at ? ' → ' + escapeHtml(_formatDateTimeBeijing(t.finished_at)) : '') +
           '</div>' +
         '</div>';
       }).join('') + '</div>';
     })
-    .catch(function() { el.innerHTML = '<p class="msg err">加载失败</p>'; });
+    .catch(function() { el.innerHTML = '<div class="page-empty-card msg err">加载失败</div>'; });
 }
 
 // ── Refresh button ───────────────────────────────────────────────

@@ -38,6 +38,143 @@ function getChatLastSessionStorageKey() {
   return sk.replace(/^lobster_chat_sessions/, 'lobster_chat_last_session');
 }
 
+var CHAT_MODE_DEFAULT = 'default';
+var CHAT_MODE_WORKSPACE = 'workspace_cli';
+var WORKSPACE_CATEGORY_DEFAULT = 'web_app';
+var WORKSPACE_CATEGORY_CONFIG = {
+  web_app: {
+    title: '要我在网页应用里帮你处理什么？',
+    subtitle: '这里适合创建网页应用、继续开发、预览部署、总结网页、输出文档，以及上传图片和文档后继续处理。',
+    placeholder: '描述你想做的网页应用、网页改版、网页总结或网页生成任务',
+    hint: '云端工作台模式：默认聚焦网页应用，可继续开发、部署、总结网页、输出文档和处理附件。',
+    chips: [
+      ['创建网页', '帮我生成一个网站：'],
+      ['继续开发', '继续帮我开发这个网站：'],
+      ['总结网页', '帮我总结网页，网页地址是：'],
+      ['输出文档', '帮我输出一份文档，主题是：'],
+      ['上传图片', '我会上传图片，请结合这个网站需求处理：'],
+      ['生成页面图', '帮我生成一版网站页面图，需求是：']
+    ],
+    shortcuts: [
+      ['网页结构', '帮我梳理这个网站的页面结构：'],
+      ['部署发布', '帮我部署这个网站：'],
+      ['查看文档', '帮我整理这个网站的文档：']
+    ]
+  },
+  mobile_app: {
+    title: '要我在移动应用里帮你处理什么？',
+    subtitle: '这里适合创建移动应用、梳理页面流、继续改功能、输出 PRD 和交互说明，也能结合附件继续开发。',
+    placeholder: '描述你想做的移动应用、页面流程、功能开发或文档任务',
+    hint: '云端工作台模式：移动应用可直接做页面规划、功能拆解、继续开发和文档输出。',
+    chips: [
+      ['创建应用', '帮我生成一个移动应用：'],
+      ['页面流程', '帮我梳理这个移动应用的页面流程：'],
+      ['继续开发', '继续帮我开发这个移动应用：'],
+      ['输出文档', '帮我输出一份移动应用文档：'],
+      ['上传图片', '我会上传移动端参考图，请结合这个需求处理：'],
+      ['生成界面图', '帮我生成一版移动应用界面图：']
+    ],
+    shortcuts: [
+      ['功能拆解', '帮我拆解这个移动应用的功能：'],
+      ['测试清单', '帮我整理这个移动应用的测试清单：'],
+      ['查看文档', '帮我整理这个移动应用的文档：']
+    ]
+  },
+  mini_program: {
+    title: '要我在小程序里帮你处理什么？',
+    subtitle: '这里适合搭建小程序、梳理页面与能力边界、输出开发文档、生成视觉素材，并结合上传内容继续推进。',
+    placeholder: '描述你想做的小程序功能、页面、开发任务或输出需求',
+    hint: '云端工作台模式：小程序支持从需求梳理、页面设计到继续开发和文档输出。',
+    chips: [
+      ['创建小程序', '帮我生成一个小程序：'],
+      ['页面规划', '帮我规划这个小程序的页面：'],
+      ['继续开发', '继续帮我开发这个小程序：'],
+      ['输出文档', '帮我输出一份小程序文档：'],
+      ['上传文档', '我会上传小程序文档，请结合这个需求处理：'],
+      ['上传图片', '我会上传小程序参考图，请结合这个需求处理：']
+    ],
+    shortcuts: [
+      ['能力边界', '帮我梳理这个小程序的能力边界：'],
+      ['上线准备', '帮我整理这个小程序的上线准备：'],
+      ['查看文档', '帮我整理这个小程序的文档：']
+    ]
+  },
+  agent: {
+    title: '要我在智能体里帮你处理什么？',
+    subtitle: '这里适合设计智能体能力、对话流程、工具接入、任务拆解，以及继续完善智能体的执行逻辑。',
+    placeholder: '描述你想做的智能体目标、能力设计、工具接入或对话流程任务',
+    hint: '云端工作台模式：智能体支持能力设计、对话流程梳理、工具接入和持续迭代。',
+    chips: [
+      ['创建智能体', '帮我生成一个智能体：'],
+      ['对话流程', '帮我设计这个智能体的对话流程：'],
+      ['接入能力', '帮我给这个智能体接入能力：'],
+      ['继续优化', '继续帮我优化这个智能体：'],
+      ['输出文档', '帮我输出一份智能体文档：'],
+      ['上传资料', '我会上传智能体资料，请结合这个需求处理：']
+    ],
+    shortcuts: [
+      ['能力清单', '帮我梳理这个智能体的能力清单：'],
+      ['异常处理', '帮我设计这个智能体的异常处理：'],
+      ['查看文档', '帮我整理这个智能体的文档：']
+    ]
+  },
+  skills: {
+    title: '要我在技能里帮你处理什么？',
+    subtitle: '这里适合设计技能结构、接入外部能力、整理参数说明、生成使用文档，也适合结合附件继续配置和迭代。',
+    placeholder: '描述你想新增、配置或优化的技能能力和使用场景',
+    hint: '云端工作台模式：技能支持能力设计、参数整理、文档生成和后续迭代。',
+    chips: [
+      ['创建技能', '帮我生成一个技能：'],
+      ['参数设计', '帮我设计这个技能的参数：'],
+      ['接入能力', '帮我给这个技能接入能力：'],
+      ['继续优化', '继续帮我优化这个技能：'],
+      ['输出文档', '帮我输出一份技能文档：'],
+      ['上传资料', '我会上传技能资料，请结合这个需求处理：']
+    ],
+    shortcuts: [
+      ['技能说明', '帮我整理这个技能的说明：'],
+      ['能力边界', '帮我梳理这个技能的能力边界：'],
+      ['查看文档', '帮我整理这个技能的文档：']
+    ]
+  }
+};
+
+function _normalizeChatMode(mode) {
+  return String(mode || '').trim() === CHAT_MODE_WORKSPACE ? CHAT_MODE_WORKSPACE : CHAT_MODE_DEFAULT;
+}
+
+function _chatModeStorageKey() {
+  var sk = getChatSessionsStorageKey();
+  return sk ? (sk + '_mode') : 'lobster_chat_mode_anon';
+}
+
+function _getStoredChatMode() {
+  try {
+    return _normalizeChatMode(localStorage.getItem(_chatModeStorageKey()) || CHAT_MODE_DEFAULT);
+  } catch (e) {
+    return CHAT_MODE_DEFAULT;
+  }
+}
+
+function _saveStoredChatMode(mode) {
+  try {
+    localStorage.setItem(_chatModeStorageKey(), _normalizeChatMode(mode));
+  } catch (e) {}
+}
+
+function _getSessionMode(session) {
+  return _normalizeChatMode(session && session.mode);
+}
+
+function _isWorkspaceSession(session) {
+  return _getSessionMode(session) === CHAT_MODE_WORKSPACE;
+}
+
+function _getWorkspaceCategory(session) {
+  var v = session && session.workspace_category;
+  return WORKSPACE_CATEGORY_CONFIG[String(v || '').trim()] ? String(v).trim() : WORKSPACE_CATEGORY_DEFAULT;
+}
+
 function saveLastActiveChatSessionToStorage(sid) {
   try {
     var k = getChatLastSessionStorageKey();
@@ -287,6 +424,8 @@ function _saveSessionTypingState(sid, mainText, step, stepMode) {
     s._typingState._ver = (s._typingState._ver || 0) + 1;
     if (stepMode === 'replace_last' && s._typingState.steps.length) {
       s._typingState.steps[s._typingState.steps.length - 1] = step;
+    } else if (stepMode === 'replace_last') {
+      s._typingState.steps.push(step);
     } else if (stepMode === 'append') {
       s._typingState.steps.push(step);
     }
@@ -646,6 +785,7 @@ function loadChatSessionsFromStorage() {
       var storageDirty = false;
       chatSessions.forEach(function(s) {
         if (s.id != null) s.id = String(s.id);
+        s.mode = _getSessionMode(s);
         var m = s.messages || s.history;
         s.messages = Array.isArray(m) ? m : [];
         mergePollResumeFromBackupIntoSession(s);
@@ -696,6 +836,7 @@ function getSessionTitle(session) {
     var t = (msg.content || '').trim();
     return t.length > 24 ? t.slice(0, 24) + '…' : t;
   }
+  if (session && _isWorkspaceSession(session)) return session.title || '云端工作台';
   return session.title || '新对话';
 }
 function getSessionPreview(session) {
@@ -720,9 +861,199 @@ function formatSessionTime(ts) {
   if (diff < 43200) return Math.floor(diff / 1440) + ' 天前';
   return d.toLocaleDateString();
 }
-function createNewSession() {
+function _getRequestedNewChatMode(mode) {
+  if (mode) return _normalizeChatMode(mode);
+  var active = document.querySelector('.chat-mode-pill.is-active[data-chat-mode]');
+  if (active) return _normalizeChatMode(active.getAttribute('data-chat-mode'));
+  return _getStoredChatMode();
+}
+
+function updateWorkspaceCategoryUi(category) {
+  var normalized = WORKSPACE_CATEGORY_CONFIG[category] ? category : WORKSPACE_CATEGORY_DEFAULT;
+  document.querySelectorAll('.workspace-category-tab[data-workspace-category]').forEach(function(btn) {
+    btn.classList.toggle('is-active', btn.getAttribute('data-workspace-category') === normalized);
+  });
+  var current = getSessionById(currentSessionId);
+  if (current && _isWorkspaceSession(current)) {
+    current.workspace_category = normalized;
+    saveChatSessionsToStorage();
+  }
+  var cfg = WORKSPACE_CATEGORY_CONFIG[normalized];
+  if (!cfg) return;
+  var title = document.getElementById('chatEmptyTitle');
+  var subtitle = document.getElementById('chatEmptySubtitle');
+  var input = document.getElementById('chatInput');
+  var hint = document.getElementById('chatModeHint');
+  var chipIds = [
+    'chatSuggestionChip1',
+    'chatSuggestionChip2',
+    'chatSuggestionChip3',
+    'chatSuggestionChip4',
+    'chatSuggestionChip5',
+    'chatSuggestionChip6'
+  ];
+  var shortcutIds = ['chatShortcutLink1', 'chatShortcutLink2', 'chatShortcutLink3'];
+  if (title) title.textContent = cfg.title;
+  if (subtitle) subtitle.textContent = cfg.subtitle;
+  if (input) input.placeholder = cfg.placeholder;
+  if (hint) hint.textContent = cfg.hint;
+  chipIds.forEach(function(id, idx) {
+    var el = document.getElementById(id);
+    var item = cfg.chips[idx];
+    if (!el || !item) return;
+    el.textContent = item[0];
+    el.setAttribute('data-chat-prompt', item[1]);
+  });
+  shortcutIds.forEach(function(id, idx) {
+    var el = document.getElementById(id);
+    var item = cfg.shortcuts[idx];
+    if (!el || !item) return;
+    el.textContent = item[0];
+    el.setAttribute('data-chat-prompt', item[1]);
+    el.removeAttribute('data-jump-view');
+  });
+}
+
+function updateWorkspaceStatusUi(options) {
+  var strip = document.getElementById('workspaceStatusStrip');
+  var primary = document.getElementById('workspaceStatusPrimary');
+  var secondary = document.getElementById('workspaceStatusSecondary');
+  var cliStatus = document.getElementById('workspaceCliAuthStatus');
+  if (!strip) return;
+  var cfg = options || {};
+  var visible = !!cfg.visible;
+  strip.style.display = visible ? 'flex' : 'none';
+  if (!visible) return;
+  if (primary) primary.textContent = cfg.primary || '测试模式';
+  if (secondary) secondary.textContent = cfg.secondary || '当前未强制校验龙虾登录态';
+  if (cliStatus) cliStatus.textContent = cfg.cli || '未连接';
+}
+
+function maybeUpdateWorkspaceStatusFromMessage(message) {
+  var text = String(message || '').trim();
+  if (!text) return;
+  var current = getSessionById(currentSessionId);
+  if (!current || !_isWorkspaceSession(current)) return;
+  if (text.indexOf('未强制校验') >= 0 || text.indexOf('测试模式') >= 0) {
+    updateWorkspaceStatusUi({
+      visible: true,
+      primary: '测试模式',
+      secondary: '当前未强制校验龙虾登录态，可先直接体验工作台能力'
+    });
+    return;
+  }
+  if (text.indexOf('登录授权') >= 0 || text.indexOf('需要登录') >= 0 || text.indexOf('未登录') >= 0) {
+    updateWorkspaceStatusUi({
+      visible: true,
+      primary: '待连接账号',
+      secondary: '工作台主体可先测试，账号类能力需要登录授权后再执行'
+    });
+    return;
+  }
+  if (text.indexOf('云端') >= 0 || text.indexOf('处理') >= 0 || text.indexOf('查询') >= 0 || text.indexOf('提交') >= 0) {
+    updateWorkspaceStatusUi({
+      visible: true,
+      primary: '云端处理中',
+      secondary: text,
+      cli: '已连接'
+    });
+  }
+}
+
+function updateChatModeUi(mode) {
+  var normalized = _normalizeChatMode(mode);
+  document.querySelectorAll('.chat-mode-pill[data-chat-mode]').forEach(function(btn) {
+    btn.classList.toggle('is-active', _normalizeChatMode(btn.getAttribute('data-chat-mode')) === normalized);
+  });
+  _saveStoredChatMode(normalized);
+  var hint = document.getElementById('chatModeHint');
+  var input = document.getElementById('chatInput');
+  var eyebrow = document.getElementById('chatEmptyEyebrow');
+  var title = document.getElementById('chatEmptyTitle');
+  var subtitle = document.getElementById('chatEmptySubtitle');
+  var attachBtn = document.getElementById('chatAttachBtn');
+  var directChip = document.getElementById('chatDirectLlmChip');
+  var directChk = document.getElementById('chatDirectLlmCheck');
+  var chip1 = document.getElementById('chatSuggestionChip1');
+  var chip2 = document.getElementById('chatSuggestionChip2');
+  var chip3 = document.getElementById('chatSuggestionChip3');
+  var chip4 = document.getElementById('chatSuggestionChip4');
+  var chip5 = document.getElementById('chatSuggestionChip5');
+  var chip6 = document.getElementById('chatSuggestionChip6');
+  var shortcut1 = document.getElementById('chatShortcutLink1');
+  var shortcut2 = document.getElementById('chatShortcutLink2');
+  var shortcut3 = document.getElementById('chatShortcutLink3');
+  var categoryTabs = document.getElementById('workspaceCategoryTabs');
+  if (normalized === CHAT_MODE_WORKSPACE) {
+    if (hint) hint.textContent = '当前模式：云端工作台。当前消息会走独立工作台链路，不走原来的 AI 对话。';
+    if (eyebrow) eyebrow.textContent = '云端应用工作台';
+    if (categoryTabs) categoryTabs.classList.add('is-visible');
+    updateWorkspaceStatusUi({
+      visible: true,
+      primary: '测试模式',
+      secondary: '当前未强制校验龙虾登录态，可先直接体验工作台能力'
+    });
+    if (attachBtn) attachBtn.style.display = '';
+    if (directChip) directChip.style.display = 'none';
+    if (directChk) directChk.checked = false;
+    var current = getSessionById(currentSessionId);
+    updateWorkspaceCategoryUi(_getWorkspaceCategory(current));
+  } else {
+    if (hint) hint.textContent = '默认模式：继续走现在这套智能对话链路。';
+    if (input) input.placeholder = '发送消息或输入 / 选择技能';
+    if (eyebrow) eyebrow.textContent = 'AI 员工工作台';
+    if (title) title.textContent = '今天想让我帮你做什么？';
+    if (subtitle) subtitle.textContent = '把需求直接告诉我，我可以帮你做视频、做电商套图、整理上架内容，也可以继续承接发布和运营动作。';
+    if (categoryTabs) categoryTabs.classList.remove('is-visible');
+    updateWorkspaceStatusUi({ visible: false });
+    if (chip1) {
+      chip1.textContent = '生成视频';
+      chip1.setAttribute('data-chat-prompt', '帮我生成视频：');
+    }
+    if (chip2) {
+      chip2.textContent = '电商套图';
+      chip2.setAttribute('data-chat-prompt', '帮我生成电商套图：');
+    }
+    if (chip3) {
+      chip3.textContent = '自动上架';
+      chip3.setAttribute('data-chat-prompt', '帮我自动上架这个商品：');
+    }
+    if (chip4) {
+      chip4.textContent = '小红书运营';
+      chip4.setAttribute('data-chat-prompt', '帮我做小红书运营：');
+    }
+    if (chip5) {
+      chip5.textContent = '图片生成';
+      chip5.setAttribute('data-chat-prompt', '帮我生成图片：');
+    }
+    if (chip6) {
+      chip6.textContent = '运营规划';
+      chip6.setAttribute('data-chat-prompt', '帮我做运营规划：');
+    }
+    if (shortcut1) {
+      shortcut1.textContent = '打开技能商店';
+      shortcut1.setAttribute('data-jump-view', 'skill-store');
+      shortcut1.removeAttribute('data-chat-prompt');
+    }
+    if (shortcut2) {
+      shortcut2.textContent = '前往发布中心';
+      shortcut2.setAttribute('data-jump-view', 'publish');
+      shortcut2.removeAttribute('data-chat-prompt');
+    }
+    if (shortcut3) {
+      shortcut3.textContent = '查看系统配置';
+      shortcut3.setAttribute('data-jump-view', 'sys-config');
+      shortcut3.removeAttribute('data-chat-prompt');
+    }
+    if (attachBtn) attachBtn.style.display = '';
+    if (directChip) directChip.style.display = '';
+  }
+}
+
+function createNewSession(mode) {
   var id = 's' + Date.now();
-  var session = { id: id, title: '新对话', messages: [], updatedAt: Date.now(), pending: false };
+  var sessionMode = _getRequestedNewChatMode(mode);
+  var session = { id: id, title: '新对话', messages: [], updatedAt: Date.now(), pending: false, mode: sessionMode };
   chatSessions.unshift(session);
   saveChatSessionsToStorage();
   switchChatSession(id);
@@ -734,6 +1065,8 @@ function switchChatSession(id) {
   saveCurrentSessionToStore();
   currentSessionId = sid;
   saveLastActiveChatSessionToStorage(sid);
+  var nextSession = getSessionById(sid);
+  updateChatModeUi(_getSessionMode(nextSession));
   renderCurrentSessionMessages();
   renderChatSessionList();
   /** 默认不自动续查，见 chatAutoResumePollEnabled */
@@ -772,7 +1105,7 @@ function renderChatSessionList() {
       })
     : chatSessions.slice();
   if (filtered.length === 0) {
-    listEl.innerHTML = '<p class="meta" style="padding:0.5rem;font-size:0.8rem;color:var(--text-muted);">暂无对话</p>';
+    listEl.innerHTML = '<div class="chat-session-empty">还没有历史对话</div>';
     return;
   }
   listEl.innerHTML = filtered.map(function(s) {
@@ -780,20 +1113,59 @@ function renderChatSessionList() {
     var preview = getSessionPreview(s);
     var time = formatSessionTime(s.updatedAt);
     var active = s.id === currentSessionId ? ' active' : '';
-    var pendingDot = isSessionPending(s.id) ? '<span class="session-pending-dot" title="任务进行中"></span>' : '';
+    var modeBadge = _isWorkspaceSession(s) ? '<span class="session-mode-badge">云端</span>' : '';
+    var pendingDot = isSessionPending(s.id)
+      ? '<span class="session-pending-dot" title="任务进行中"></span>'
+      : '<span class="session-bubble-icon">◌</span>';
     return '<div class="chat-session-item' + active + '" data-session-id="' + escapeAttr(s.id) + '">' +
-      '<div class="session-title">' + pendingDot + escapeHtml(title) + '</div>' +
-      '<div class="session-preview">' + escapeHtml(preview) + '</div>' +
+      '<div class="session-row">' +
+        '<div class="session-leading">' + pendingDot + '</div>' +
+        '<div class="session-copy">' +
+          '<div class="session-title"><div class="session-title-row"><span>' + escapeHtml(title) + '</span>' + modeBadge + '</div></div>' +
+          '<div class="session-preview">' + escapeHtml(preview) + '</div>' +
+        '</div>' +
+      '</div>' +
       '<div class="session-time">' + escapeHtml(time) + '</div></div>';
   }).join('');
   listEl.querySelectorAll('.chat-session-item').forEach(function(el) {
     el.addEventListener('click', function() { switchChatSession(el.getAttribute('data-session-id')); });
   });
 }
+
+function setChatMode(mode) {
+  var normalized = _normalizeChatMode(mode);
+  var current = getSessionById(currentSessionId);
+  if (current && Array.isArray(current.messages) && current.messages.length > 0 && _getSessionMode(current) !== normalized) {
+    createNewSession(normalized);
+    return;
+  }
+  if (current) {
+    current.mode = normalized;
+    saveChatSessionsToStorage();
+  }
+  updateChatModeUi(normalized);
+  renderChatSessionList();
+}
+
+function bindChatModeSwitch() {
+  if (window.__chatModeSwitchBound) return;
+  window.__chatModeSwitchBound = true;
+  document.querySelectorAll('.chat-mode-pill[data-chat-mode]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      setChatMode(btn.getAttribute('data-chat-mode'));
+    });
+  });
+  document.querySelectorAll('.workspace-category-tab[data-workspace-category]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      updateWorkspaceCategoryUi(btn.getAttribute('data-workspace-category'));
+    });
+  });
+}
+
 function initChatSessions() {
   loadChatSessionsFromStorage();
   if (chatSessions.length === 0) {
-    createNewSession();
+    createNewSession(_getStoredChatMode());
     return;
   }
   // 登录后 currentSessionId 已被清空：优先恢复「上次正在看的会话」，再考虑带 poll_resume 的会话。
@@ -811,7 +1183,7 @@ function initChatSessions() {
     }
   }
   if (!targetId) {
-    createNewSession();
+    createNewSession(_getStoredChatMode());
     return;
   }
   currentSessionId = null;
@@ -1030,8 +1402,19 @@ function showChatTypingIndicator() {
   removeChatTypingIndicator();
   var div = document.createElement('div');
   div.id = 'chatTypingIndicator';
-  div.className = 'chat-msg assistant typing chat-typing-indicator';
-  div.innerHTML = '<div class="role">龙虾</div><div class="typing-dots"><span></span><span></span><span></span></div> <span class="typing-text">正在处理…</span><div class="typing-steps" id="chatTypingSteps"></div>';
+  div.className = 'chat-msg assistant typing chat-typing-indicator chat-task-card';
+  div.innerHTML =
+    '<div class="role">\u9f99\u867e</div>' +
+    '<div class="chat-typing-shell">' +
+      '<div class="typing-status-row">' +
+        '<div class="typing-status-main">' +
+          '<span class="typing-status-badge">\u6b63\u5728\u6267\u884c</span>' +
+          '<span class="typing-text typing-main">\u6b63\u5728\u5904\u7406\u2026</span>' +
+        '</div>' +
+        '<div class="typing-dots"><span></span><span></span><span></span></div>' +
+      '</div>' +
+      '<div class="typing-steps" id="chatTypingSteps"></div>' +
+    '</div>';
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
@@ -1040,9 +1423,29 @@ function appendChatTypingStep(text) {
   if (!steps) return;
   var line = document.createElement('div');
   line.className = 'typing-step';
-  line.style.cssText = 'font-size:0.82rem;color:var(--text-muted);margin-top:0.35rem;';
-  line.textContent = text;
+  var bullet = document.createElement('span');
+  bullet.className = 'typing-step-bullet';
+  var body = document.createElement('span');
+  body.className = 'typing-step-text';
+  body.textContent = text;
+  line.appendChild(bullet);
+  line.appendChild(body);
   steps.appendChild(line);
+  var container = document.getElementById('chatMessages');
+  if (container) container.scrollTop = container.scrollHeight;
+}
+function upsertChatTypingStep(text) {
+  var steps = document.getElementById('chatTypingSteps');
+  if (!steps || !steps.lastElementChild) {
+    appendChatTypingStep(text);
+    return;
+  }
+  if (steps.lastElementChild.classList.contains('chat-generated-assets-preview')) {
+    appendChatTypingStep(text);
+    return;
+  }
+  var body = steps.lastElementChild.querySelector('.typing-step-text');
+  if (body) body.textContent = text;
   var container = document.getElementById('chatMessages');
   if (container) container.scrollTop = container.scrollHeight;
 }
@@ -1053,15 +1456,15 @@ function updateLastChatTypingStep(text) {
     appendChatTypingStep(text);
     return;
   }
-  steps.lastElementChild.textContent = text;
+  var body = steps.lastElementChild.querySelector('.typing-step-text');
+  if (body) body.textContent = text;
   var container = document.getElementById('chatMessages');
   if (container) container.scrollTop = container.scrollHeight;
 }
 function setChatTypingMainText(text) {
   var el = document.querySelector('#chatTypingIndicator .typing-text');
-  if (el) el.textContent = text || '正在处理…';
+  if (el) el.textContent = text || '\u6b63\u5728\u5904\u7406\u2026';
 }
-/** task_poll：完整展示后端 message；附加 result_hint（与正文重复则不加）。 */
 function _formatTaskPollTypingLine(ev) {
   var msg = String(ev.message || '').trim();
   var line = msg || '正在查询生成结果…';
@@ -1322,13 +1725,14 @@ function appendAssistantMessageReveal(fullText, savedAssets) {
   var container = document.getElementById('chatMessages');
   if (!container) return;
   var text = _compactAssistantReplyForDisplay(fullText, savedAssets);
-  text = (text || '').trim() || '（无内容）';
+  text = (text || '').trim() || '\uFF08\u65E0\u5185\u5BB9\uFF09';
   var lines = text.split('\n');
   var div = document.createElement('div');
-  div.className = 'chat-msg assistant';
+  div.className = 'chat-msg assistant chat-task-card';
+  if (savedAssets && savedAssets.length) div.classList.add('has-assets');
   var roleDiv = document.createElement('div');
   roleDiv.className = 'role';
-  roleDiv.textContent = '龙虾';
+  roleDiv.textContent = '\u9f99\u867e';
   var bodyDiv = document.createElement('div');
   bodyDiv.className = 'chat-msg-body';
   div.appendChild(roleDiv);
@@ -1336,12 +1740,12 @@ function appendAssistantMessageReveal(fullText, savedAssets) {
   if (savedAssets && savedAssets.length) {
     var assetsWrap = document.createElement('div');
     assetsWrap.className = 'chat-generated-assets';
-    assetsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.75rem;align-items:flex-start;';
     savedAssets.forEach(function(a) {
       appendSavedAssetDom(assetsWrap, a, { compact: false });
     });
     bodyDiv.appendChild(assetsWrap);
   }
+  appendAssistantActionRow(bodyDiv, !!(savedAssets && savedAssets.length));
   container.appendChild(div);
   var lineDelay = 150;
   var i = 0;
@@ -1361,7 +1765,7 @@ function appendAssistantMessageReveal(fullText, savedAssets) {
   }
   if (lines.length) setTimeout(showNext, lineDelay); else container.scrollTop = container.scrollHeight;
 }
-function renderChatAttachments() {
+function _legacyRenderChatAttachments_unused() {
   var container = document.getElementById('chatAttachments');
   if (!container) return;
   if (chatAttachmentIds.length === 0) {
@@ -1404,10 +1808,115 @@ function renderChatAttachments() {
     container.appendChild(wrap);
   });
 }
-function addChatAttachment(assetId, mediaType) {
+function renderChatAttachments() {
+  var container = document.getElementById('chatAttachments');
+  if (!container) return;
+  var composer = container.closest ? container.closest('.chat-composer-shell') : null;
+  if (chatAttachmentIds.length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    if (composer) composer.classList.remove('has-attachments');
+    return;
+  }
+  container.style.display = 'flex';
+  if (composer) composer.classList.add('has-attachments');
+  container.innerHTML = '';
+  chatAttachmentInfos.forEach(function(info, idx) {
+    var wrap = document.createElement('div');
+    wrap.className = 'chat-attach-item';
+
+    var thumb = document.createElement('div');
+    thumb.className = 'chat-attach-thumb';
+    if (info.media_type === 'video') {
+      var video = document.createElement('video');
+      video.src = info.previewUrl || '';
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      thumb.appendChild(video);
+    } else if (info.media_type === 'image') {
+      var img = document.createElement('img');
+      img.src = info.previewUrl || '';
+      img.alt = '附件预览';
+      thumb.appendChild(img);
+    } else {
+      var glyph = document.createElement('div');
+      glyph.className = 'chat-attach-file-glyph';
+      var strong = document.createElement('strong');
+      strong.textContent = 'DOC';
+      var span = document.createElement('span');
+      span.textContent = info.filename || '文档附件';
+      glyph.appendChild(strong);
+      glyph.appendChild(span);
+      thumb.appendChild(glyph);
+    }
+    wrap.appendChild(thumb);
+
+    var meta = document.createElement('div');
+    meta.className = 'chat-attach-meta';
+
+    var type = document.createElement('div');
+    type.className = 'chat-attach-type';
+    type.textContent = info.media_type === 'video' ? '视频素材' : (info.media_type === 'image' ? '图片素材' : '文档附件');
+    meta.appendChild(type);
+
+    var hint = document.createElement('div');
+    hint.className = 'chat-attach-hint';
+    hint.textContent = info.media_type === 'video'
+      ? '继续生成口播视频'
+      : (info.media_type === 'image' ? '可直接做解图和生成' : '可读取内容并整理输出');
+    meta.appendChild(hint);
+
+    wrap.appendChild(meta);
+
+    var action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'chat-attach-action';
+    action.textContent = info.media_type === 'video'
+      ? '继续创作 ->'
+      : (info.media_type === 'image' ? '解析图片 ->' : '读取文档 ->');
+    action.addEventListener('click', function() {
+      var input = document.getElementById('chatInput');
+      if (!input) return;
+      var suggestion = info.media_type === 'video'
+        ? '请基于这个视频素材继续帮我生成更适合抖音带货的优化方案和新版本脚本。'
+        : (info.media_type === 'image'
+          ? '请先帮我解析这张图片里的商品、卖点和适合的电商内容方向。'
+          : '请先读取这个文档的内容，帮我总结重点并输出结构清晰的结果。');
+      var current = (input.value || '').trim();
+      input.value = current ? (current + '\n' + suggestion) : suggestion;
+      input.focus();
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) {}
+    });
+    wrap.appendChild(action);
+
+    var rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'attach-remove';
+    rm.textContent = '×';
+    rm.setAttribute('data-idx', String(idx));
+    rm.addEventListener('click', function() {
+      var i = parseInt(rm.getAttribute('data-idx'), 10);
+      if (chatAttachmentInfos[i] && chatAttachmentInfos[i].previewUrl) {
+        try { URL.revokeObjectURL(chatAttachmentInfos[i].previewUrl); } catch (e) {}
+      }
+      chatAttachmentIds.splice(i, 1);
+      chatAttachmentInfos.splice(i, 1);
+      renderChatAttachments();
+    });
+    wrap.appendChild(rm);
+    container.appendChild(wrap);
+  });
+}
+function addChatAttachment(assetId, mediaType, filename) {
   chatAttachmentIds.push(assetId);
-  var info = { asset_id: assetId, media_type: mediaType || 'image', previewUrl: '' };
+  var normalizedType = (mediaType === 'video' || mediaType === 'image') ? mediaType : 'document';
+  var info = { asset_id: assetId, media_type: normalizedType, previewUrl: '', filename: filename || '' };
   chatAttachmentInfos.push(info);
+  if (normalizedType === 'document') {
+    renderChatAttachments();
+    return;
+  }
   fetch((typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') + '/api/assets/' + assetId + '/content', { headers: authHeaders() })
     .then(function(r) { return r.blob(); })
     .then(function(blob) {
@@ -1783,8 +2292,9 @@ function resumeChatStreamForTaskPoll(sid, taskId) {
               if (String(currentSessionId) === sid) setChatTypingMainText(_pollLine);
             } else if (ev.type === 'status' && ev.message) {
               if (ev.message === '正在请模型撰写回复…' || ev.message === '正在生成回复…') continue;
-              _saveSessionTypingState(sid, null, ev.message, 'append');
-              if (String(currentSessionId) === sid) appendChatTypingStep(ev.message);
+              _saveSessionTypingState(sid, null, ev.message, 'replace_last');
+              if (String(currentSessionId) === sid) maybeUpdateWorkspaceStatusFromMessage(ev.message);
+              if (String(currentSessionId) === sid) upsertChatTypingStep(ev.message);
             } else if (ev.type === 'done') {
               _clearSessionTypingState(sid);
               return Promise.resolve(ev);
@@ -1889,15 +2399,16 @@ function sendChatMessage() {
   var session = getSessionById(sid);
   if (!session) return;
   if (isSessionPending(sid)) return;
+  var sessionMode = _getSessionMode(session);
 
   var chatBase = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
   if (!chatBase) {
-    alert('智能对话须连接本机 lobster_online 后端（含 OpenClaw/MCP）。请运行 backend/run.py 后用该后端地址打开页面，或在页面中设置 window.__LOCAL_API_BASE。');
+    alert('对话功能须连接本机 lobster_online 后端。请运行 backend/run.py 后用该后端地址打开页面，或在页面中设置 window.__LOCAL_API_BASE。');
     return;
   }
 
   input.value = '';
-  var attachIds = mergeUserMessageAssetIds(chatAttachmentIds.slice(), message);
+  var attachIds = sessionMode === CHAT_MODE_WORKSPACE ? [] : mergeUserMessageAssetIds(chatAttachmentIds.slice(), message);
   clearChatAttachments();
   session.messages = Array.isArray(session.messages) ? session.messages : [];
   session.messages.push({
@@ -1941,7 +2452,7 @@ function sendChatMessage() {
     model: model || undefined
   };
   var directChk = document.getElementById('chatDirectLlmCheck');
-  if (directChk && directChk.checked) body.direct_llm = true;
+  if (sessionMode !== CHAT_MODE_WORKSPACE && directChk && directChk.checked) body.direct_llm = true;
   if (attachIds.length) body.attachment_asset_ids = attachIds;
   var bodyStr = JSON.stringify(body);
   var headers = authHeaders();
@@ -1958,7 +2469,8 @@ function sendChatMessage() {
   chatStreamAbortController = abortController;
   refreshChatInputState();
   var streamKindResume = false;
-  fetch(chatBase + '/chat/stream', { method: 'POST', headers: headers, body: bodyStr, signal: abortController.signal })
+  var streamPath = sessionMode === CHAT_MODE_WORKSPACE ? '/chat/workbench/stream' : '/chat/stream';
+  fetch(chatBase + streamPath, { method: 'POST', headers: headers, body: bodyStr, signal: abortController.signal })
     .then(function(r) {
       if (!r.ok) {
         return r.json().then(function(d) { throw { status: r.status, detail: (d && d.detail) || r.statusText }; });
@@ -2148,8 +2660,12 @@ function sendChatMessage() {
               if (String(currentSessionId) === sid) setChatTypingMainText(_pollLine);
             } else if (ev.type === 'status' && ev.message) {
               if (ev.message === '正在请模型撰写回复…' || ev.message === '正在生成回复…') continue;
-              _saveSessionTypingState(sid, null, ev.message, 'append');
-              if (String(currentSessionId) === sid) appendChatTypingStep(ev.message);
+              _saveSessionTypingState(sid, null, ev.message, sessionMode === CHAT_MODE_WORKSPACE ? 'replace_last' : 'append');
+              if (String(currentSessionId) === sid) maybeUpdateWorkspaceStatusFromMessage(ev.message);
+              if (String(currentSessionId) === sid) {
+                if (sessionMode === CHAT_MODE_WORKSPACE) upsertChatTypingStep(ev.message);
+                else appendChatTypingStep(ev.message);
+              }
             } else if (ev.type === 'done') {
               _clearSessionTypingState(sid);
               return Promise.resolve(ev);
@@ -2242,7 +2758,7 @@ if (chatAttachBtn && chatFileInput) {
         fetch((typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') + '/api/assets/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + (typeof token !== 'undefined' ? token : '') }, body: fd })
           .then(function(r) { return r.json(); })
           .then(function(d) {
-            if (d && d.asset_id) addChatAttachment(d.asset_id, d.media_type || 'image');
+            if (d && d.asset_id) addChatAttachment(d.asset_id, d.media_type || 'image', d.filename || file.name || '');
           })
           .catch(function() {});
       })(files[i]);
@@ -2263,3 +2779,75 @@ var chatNewSessionBtn = document.getElementById('chatNewSessionBtn');
 if (chatNewSessionBtn) chatNewSessionBtn.addEventListener('click', createNewSession);
 var chatSessionSearch = document.getElementById('chatSessionSearch');
 if (chatSessionSearch) chatSessionSearch.addEventListener('input', renderChatSessionList);
+
+function syncChatWorkspaceState() {
+  var workspace = document.getElementById('chatWorkspace');
+  var messages = document.getElementById('chatMessages');
+  if (!workspace || !messages) return;
+  workspace.classList.toggle('is-empty', messages.children.length === 0);
+}
+
+function bindChatHomeActions() {
+  if (window.__chatHomeActionsBound) return;
+  window.__chatHomeActionsBound = true;
+  document.addEventListener('click', function(e) {
+    var promptBtn = e.target.closest('[data-chat-prompt]');
+    if (promptBtn) {
+      var input = document.getElementById('chatInput');
+      if (!input) return;
+      input.value = promptBtn.getAttribute('data-chat-prompt') || '';
+      input.focus();
+      if (typeof input.setSelectionRange === 'function') {
+        var cursor = input.value.length;
+        input.setSelectionRange(cursor, cursor);
+      }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    var jumpBtn = e.target.closest('[data-jump-view]');
+    if (jumpBtn) {
+      var view = jumpBtn.getAttribute('data-jump-view');
+      var navBtn = document.querySelector('.nav-left-item[data-view="' + view + '"]');
+      if (navBtn) navBtn.click();
+    }
+  });
+}
+
+function initChatWorkspaceShell() {
+  bindChatModeSwitch();
+  syncChatWorkspaceState();
+  bindChatHomeActions();
+  var messages = document.getElementById('chatMessages');
+  if (!messages || typeof MutationObserver === 'undefined') return;
+  var observer = new MutationObserver(syncChatWorkspaceState);
+  observer.observe(messages, { childList: true, subtree: false });
+}
+
+initChatWorkspaceShell();
+
+function appendAssistantActionRow(parent, hasAssets) {
+  if (!parent) return;
+  var wrap = document.createElement('div');
+  wrap.className = 'chat-result-actions';
+  var actions = hasAssets
+    ? [
+        { label: '再做一版', prompt: '基于刚才的结果，再给我一版不同风格但用途相同的方案。', primary: true },
+        { label: '继续优化', prompt: '基于刚才的结果继续优化，提升转化感和完成度。' },
+        { label: '去发布中心', jump: 'publish' }
+      ]
+    : [
+        { label: '继续细化', prompt: '基于刚才的内容继续细化，并给我更可执行的版本。', primary: true },
+        { label: '看技能商店', jump: 'skill-store' },
+        { label: '打开系统配置', jump: 'sys-config' }
+      ];
+  actions.forEach(function(action) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chat-result-action' + (action.primary ? ' is-primary' : '');
+    btn.textContent = action.label;
+    if (action.prompt) btn.setAttribute('data-chat-prompt', action.prompt);
+    if (action.jump) btn.setAttribute('data-jump-view', action.jump);
+    wrap.appendChild(btn);
+  });
+  parent.appendChild(wrap);
+}

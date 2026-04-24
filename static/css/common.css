@@ -547,7 +547,7 @@
     .gc-panel.visible { display: block; }
     .modal-task-detail { max-width: 700px; max-height: 85vh; overflow-y: auto; }
     /* 右上角用户下拉 */
-    .header-dropdown { position: relative; }
+    .header-dropdown { position: relative; z-index: 160; }
     .header-dropdown-btn {
       display: inline-flex; align-items: center; gap: 0.35rem;
       padding: 0.4rem 0.75rem; font-size: 0.875rem; color: var(--text-muted);
@@ -556,9 +556,9 @@
     }
     .header-dropdown-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }
     .header-dropdown-menu {
-      display: none; position: absolute; right: 0; top: 100%; margin-top: 0.35rem;
+      display: none; position: absolute; right: 0; top: calc(100% + 0.35rem);
       min-width: 200px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
-      padding: 0.5rem 0; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 50;
+      padding: 0.5rem 0; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 4000; overflow: hidden;
     }
     .header-dropdown.open .header-dropdown-menu { display: block; }
     .header-dropdown-menu a, .header-dropdown-menu button {

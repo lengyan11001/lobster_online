@@ -570,6 +570,8 @@ function loadDashboard() {
       if (typeof window.resetChatSessionsMemory === 'function') window.resetChatSessionsMemory();
       document.getElementById('userEmail').textContent = d.email;
       document.getElementById('headerUserEmail').textContent = (d.email || '').split('@')[0];
+      var avatarEl = document.getElementById('headerUserAvatar');
+      if (avatarEl) avatarEl.textContent = ((d.email || 'U').trim().charAt(0) || 'U').toUpperCase();
       document.getElementById('headerActions').style.display = 'flex';
       document.getElementById('authPanel').style.display = 'none';
       document.getElementById('dashboard').classList.add('visible');
@@ -768,6 +770,8 @@ document.getElementById('logout').addEventListener('click', function() {
   token = null;
   localStorage.removeItem('token');
   if (typeof window.resetChatSessionsForLogout === 'function') window.resetChatSessionsForLogout();
+  var avatarEl = document.getElementById('headerUserAvatar');
+  if (avatarEl) avatarEl.textContent = 'U';
   document.getElementById('dashboard').classList.remove('visible');
   document.getElementById('authPanel').style.display = 'block';
   document.getElementById('headerActions').style.display = 'none';
@@ -783,6 +787,236 @@ document.getElementById('logout').addEventListener('click', function() {
     document.addEventListener('click', function() { dropdown.classList.remove('open'); });
   }
 })();
+
+function decorateWorkspacePages() {
+  if (window.__workspacePagesDecorated) return;
+  window.__workspacePagesDecorated = true;
+  var configs = [
+    {
+      id: 'content-skill-store',
+      kicker: '能力中心',
+      title: '技能商店',
+      desc: '安装可用技能、浏览常用能力，并把生成、运营、发布等工作流逐步接进你的 AI 员工工作台。',
+      actions: [
+        { label: '添加 MCP', clickId: 'openAddMcpModal', primary: true },
+        { label: '刷新商店', clickId: 'refreshStoreBtn' }
+      ]
+    },
+    {
+      id: 'content-publish',
+      kicker: '发布与运营',
+      title: '发布中心',
+      desc: '统一管理发布账号、素材和发布记录，让生成结果能够顺手进入分发和运营阶段。',
+      actions: [
+        { label: '刷新内容', clickId: 'refreshPublishBtn', primary: true },
+        { label: '账号列表', jumpView: 'publish' }
+      ]
+    },
+    {
+      id: 'content-billing',
+      kicker: '账户与消耗',
+      title: '消费记录',
+      desc: '查看算力余额、充值记录和消耗明细，清楚知道每一步生成任务都花在哪里。',
+      actions: [
+        { label: '立即刷新', clickId: 'billingRefreshBtn', primary: true }
+      ]
+    },
+    {
+      id: 'content-sys-config',
+      kicker: '系统控制台',
+      title: '系统配置',
+      desc: '在这里集中管理模型、连接状态和自定义配置，让复杂设置藏在后面，但仍然清晰可达。',
+      actions: [
+        { label: '查看技能商店', jumpView: 'skill-store' },
+        { label: '回到首页', jumpView: 'chat', primary: true }
+      ]
+    },
+    {
+      id: 'content-logs',
+      kicker: '运行诊断',
+      title: '日志与排查',
+      desc: '查看运行日志、调试信息和任务线索，方便在出现问题时快速定位和恢复。',
+      actions: [
+        { label: '刷新日志', clickId: 'logsRefreshBtn', primary: true }
+      ]
+    }
+  ];
+  configs.forEach(function(cfg) {
+    var block = document.getElementById(cfg.id);
+    if (!block || block.querySelector('.page-hero-card')) return;
+    block.classList.add('has-page-shell');
+    var hero = document.createElement('div');
+    hero.className = 'page-hero-card';
+    var copy = document.createElement('div');
+    copy.className = 'page-hero-copy';
+    var kicker = document.createElement('div');
+    kicker.className = 'page-hero-kicker';
+    kicker.textContent = cfg.kicker;
+    var title = document.createElement('h2');
+    title.className = 'page-hero-title';
+    title.textContent = cfg.title;
+    var desc = document.createElement('p');
+    desc.className = 'page-hero-desc';
+    desc.textContent = cfg.desc;
+    copy.appendChild(kicker);
+    copy.appendChild(title);
+    copy.appendChild(desc);
+    hero.appendChild(copy);
+    if (cfg.actions && cfg.actions.length) {
+      var actions = document.createElement('div');
+      actions.className = 'page-hero-actions';
+      cfg.actions.forEach(function(action) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'page-hero-action' + (action.primary ? ' is-primary' : '');
+        btn.textContent = action.label;
+        if (action.clickId) btn.setAttribute('data-click-id', action.clickId);
+        if (action.jumpView) btn.setAttribute('data-jump-view', action.jumpView);
+        actions.appendChild(btn);
+      });
+      hero.appendChild(actions);
+    }
+    block.insertBefore(hero, block.firstChild);
+  });
+  document.addEventListener('click', function(e) {
+    var clickBtn = e.target.closest('[data-click-id]');
+    if (clickBtn) {
+      var targetId = clickBtn.getAttribute('data-click-id');
+      var target = targetId ? document.getElementById(targetId) : null;
+      if (target) target.click();
+    }
+  });
+}
+decorateWorkspacePages();
+
+function decorateWorkspaceSubsections() {
+  if (window.__workspaceSubsectionsDecorated) return;
+  window.__workspaceSubsectionsDecorated = true;
+
+  function addClass(id, className) {
+    var el = document.getElementById(id);
+    if (el) el.classList.add(className);
+    return el;
+  }
+
+  function addSectionChrome(block, options) {
+    if (!block) return;
+    block.classList.add('page-section-shell');
+    if (block.querySelector('.page-section-head') || !options || !options.title) return;
+
+    var head = document.createElement('div');
+    head.className = 'page-section-head';
+
+    var copy = document.createElement('div');
+    copy.className = 'page-section-copy';
+
+    if (options.kicker) {
+      var kicker = document.createElement('div');
+      kicker.className = 'page-section-kicker';
+      kicker.textContent = options.kicker;
+      copy.appendChild(kicker);
+    }
+
+    var title = document.createElement('h3');
+    title.className = 'page-section-title';
+    title.textContent = options.title;
+    copy.appendChild(title);
+
+    if (options.desc) {
+      var desc = document.createElement('p');
+      desc.className = 'page-section-desc';
+      desc.textContent = options.desc;
+      copy.appendChild(desc);
+    }
+
+    head.appendChild(copy);
+
+    if (Array.isArray(options.actions) && options.actions.length) {
+      var actions = document.createElement('div');
+      actions.className = 'page-section-actions';
+      options.actions.forEach(function(action) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'page-section-action' + (action.primary ? ' is-primary' : '');
+        btn.textContent = action.label;
+        if (action.clickId) btn.setAttribute('data-click-id', action.clickId);
+        if (action.jumpView) btn.setAttribute('data-jump-view', action.jumpView);
+        actions.appendChild(btn);
+      });
+      head.appendChild(actions);
+    }
+
+    block.insertBefore(head, block.firstChild);
+  }
+
+  function readLabel(selector, fallback) {
+    var el = document.querySelector(selector);
+    var text = el ? (el.textContent || '').trim() : '';
+    return text || fallback;
+  }
+
+  function markToolbars(parentId, selectors) {
+    var parent = document.getElementById(parentId);
+    if (!parent || !Array.isArray(selectors)) return;
+    selectors.forEach(function(config) {
+      var node = parent.querySelector(config.selector);
+      if (!node) return;
+      node.classList.add(config.className);
+    });
+  }
+
+  addSectionChrome(document.getElementById('storeTabPopular'), {
+    kicker: 'Workspace',
+    title: readLabel('.store-tab[data-store-tab="popular"]', 'Popular'),
+    desc: 'Keep your most-used skills close, and bring common generation and operations flows into one place.'
+  });
+  addSectionChrome(document.getElementById('storeTabOfficial'), {
+    kicker: 'Registry',
+    title: readLabel('.store-tab[data-store-tab="official"]', 'Registry'),
+    desc: 'Search cached MCP capabilities, browse references, and add what you need without leaving the workspace.'
+  });
+  addSectionChrome(document.getElementById('pubTabAccounts'), {
+    kicker: 'Operations',
+    title: readLabel('.pub-tab[data-pub-tab="accounts"]', 'Accounts'),
+    desc: 'Manage connected accounts, open their workspaces, and continue into review or publishing when you are ready.'
+  });
+  addSectionChrome(document.getElementById('pubTabAssets'), {
+    kicker: 'Library',
+    title: readLabel('.pub-tab[data-pub-tab="assets"]', 'Assets'),
+    desc: 'Collect generated media in one place so it can flow naturally into chat, editing, and publishing.'
+  });
+  addSectionChrome(document.getElementById('pubTabTasks'), {
+    kicker: 'Records',
+    title: readLabel('.pub-tab[data-pub-tab="tasks"]', 'Tasks'),
+    desc: 'Review recent publish activity, inspect results, and follow each run without digging through logs.'
+  });
+
+  markToolbars('pubTabAccounts', [
+    { selector: ':scope > div:nth-of-type(1)', className: 'page-toolbar' },
+    { selector: ':scope > div:nth-of-type(2)', className: 'publish-filter-toolbar' }
+  ]);
+  markToolbars('pubTabAssets', [
+    { selector: ':scope > div:nth-of-type(1)', className: 'publish-filter-toolbar' },
+    { selector: ':scope > div:nth-of-type(2)', className: 'publish-assets-toolbar' }
+  ]);
+
+  addClass('accountPublishShell', 'publish-shell-grid');
+  addClass('accountListPanel', 'publish-list-panel');
+  addClass('accountDetailPanel', 'account-detail-shell');
+  addClass('taskList', 'publish-task-list');
+  addClass('skillStoreList', 'skill-store-grid');
+  addClass('mcpRegistryResults', 'skill-store-grid');
+  addClass('accountList', 'skill-store-grid');
+  addClass('assetList', 'skill-store-grid');
+
+  var detailBackRow = document.querySelector('#accountDetailPanel > div:first-child');
+  if (detailBackRow) {
+    detailBackRow.classList.add('account-detail-summary');
+    var title = document.getElementById('accountDetailTitle');
+    if (title) title.classList.add('account-detail-title');
+  }
+}
+decorateWorkspaceSubsections();
 
 document.querySelectorAll('.nav-left-item').forEach(function(el) {
   el.addEventListener('click', function() {
