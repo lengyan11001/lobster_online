@@ -69,12 +69,13 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "media.edit": ("/api/media-edit/run", 3600.0),
     "comfly.daihuo": ("/api/comfly-veo/run", 600.0),
     "comfly.daihuo.pipeline": ("/api/comfly-daihuo/pipeline/run", 7200.0),
+    "comfly.seedance.tvc.pipeline": ("/api/comfly-seedance-tvc/pipeline/run", 7200.0),
     "comfly.ecommerce.detail_pipeline": ("/api/comfly-ecommerce-detail/pipeline/run", 7200.0),
     "ecommerce.publish": ("/api/ecommerce-publish/open-product-form", 120.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.ecommerce.detail_pipeline", "ecommerce.publish"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "ecommerce.publish"})
 
 
 def _normalize_invoke_task_get_result_args(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -189,6 +190,54 @@ def _normalize_invoke_daihuo_pipeline_args(args: Dict[str, Any]) -> Dict[str, An
         "output_dir",
         "isolate_job_dir",
         "image_request_style",
+    ):
+        if k in args and args[k] is not None:
+            pl.setdefault(k, args[k])
+    out = dict(args)
+    out["payload"] = pl
+    return out
+
+
+def _normalize_invoke_seedance_tvc_pipeline_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(args, dict):
+        return args
+    if str(args.get("capability_id") or "").strip() != "comfly.seedance.tvc.pipeline":
+        return args
+    raw_pl = args.get("payload")
+    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    nested = pl.get("payload")
+    if isinstance(nested, dict) and (
+        (nested.get("action") or "").strip()
+        or (nested.get("job_id") or "").strip()
+        or nested.get("asset_id") is not None
+    ):
+        base = {k: v for k, v in pl.items() if k != "payload"}
+        pl = {**base, **nested}
+    if not (pl.get("action") or "").strip():
+        top_act = str(args.get("action") or "").strip()
+        if top_act:
+            pl["action"] = top_act
+    for k in (
+        "job_id",
+        "asset_id",
+        "image_url",
+        "reference_asset_ids",
+        "reference_image_urls",
+        "merge_clips",
+        "storyboard_count",
+        "segment_count",
+        "segment_duration_seconds",
+        "total_duration_seconds",
+        "auto_save",
+        "task_text",
+        "platform",
+        "country",
+        "language",
+        "output_dir",
+        "isolate_job_dir",
+        "analysis_model",
+        "image_model",
+        "video_model",
     ):
         if k in args and args[k] is not None:
             pl.setdefault(k, args[k])
@@ -687,6 +736,51 @@ async def _mcp_poll_daihuo_pipeline_until_done(
             break
         if pr.status_code >= 400:
             logger.warning("[MCP comfly.daihuo.pipeline] poll job HTTP %s", pr.status_code)
+            try:
+                last = pr.json() if pr.content else {"ok": False, "error": (pr.text or "")[:500]}
+            except Exception:
+                last = {"ok": False, "error": (pr.text or "")[:500]}
+            break
+        last = pr.json() if pr.content else {}
+        st = (last.get("status") or "").strip().lower()
+        if st in ("completed", "failed"):
+            return last
+        await asyncio.sleep(_COMFLY_DAIHUO_MCP_POLL_INTERVAL)
+        waited += _COMFLY_DAIHUO_MCP_POLL_INTERVAL
+    if last and isinstance(last, dict):
+        last.setdefault(
+            "poll_timeout",
+            f"已达最大等待 {_COMFLY_DAIHUO_MCP_POLL_MAX_SEC}s，任务可能仍在运行，请用 poll_pipeline + job_id 继续查询",
+        )
+    return last if last else {"ok": False, "error": "poll 无有效响应"}
+
+
+async def _mcp_poll_seedance_tvc_pipeline_until_done(
+    *,
+    base_url: str,
+    token: Optional[str],
+    job_id: str,
+    request: Optional[Request],
+) -> Dict[str, Any]:
+    jid = (job_id or "").strip().lower()
+    if not jid:
+        return {"ok": False, "error": "缺少 job_id"}
+    waited = 0.0
+    last: Dict[str, Any] = {}
+    bu = base_url.rstrip("/")
+    while waited < float(_COMFLY_DAIHUO_MCP_POLL_MAX_SEC):
+        logger.info("[MCP comfly.seedance.tvc.pipeline] poll job waited=%ss job_id=%s", int(waited), jid[:16])
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                pr = await client.get(
+                    f"{bu}/api/comfly-seedance-tvc/pipeline/jobs/{jid}",
+                    headers=_backend_headers(token, request),
+                )
+        except Exception as e:
+            logger.warning("[MCP comfly.seedance.tvc.pipeline] poll job 请求异常: %s", e)
+            break
+        if pr.status_code >= 400:
+            logger.warning("[MCP comfly.seedance.tvc.pipeline] poll job HTTP %s", pr.status_code)
             try:
                 last = pr.json() if pr.content else {"ok": False, "error": (pr.text or "")[:500]}
             except Exception:
@@ -2724,6 +2818,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
             args = _normalize_invoke_task_get_result_args(args)
             args = _normalize_invoke_comfly_veo_args(args)
             args = _normalize_invoke_daihuo_pipeline_args(args)
+            args = _normalize_invoke_seedance_tvc_pipeline_args(args)
             args = _normalize_invoke_ecommerce_detail_pipeline_args(args)
             capability_id = str(args.get("capability_id") or "").strip()
             payload = args.get("payload") or {}
@@ -3086,6 +3181,44 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         (_p.get("job_id") or "")[:16],
                         BASE_URL,
                     )
+                elif capability_id == "comfly.seedance.tvc.pipeline":
+                    sd_act = (_p.get("action") or "").strip() or "run_pipeline"
+                    if sd_act == "start_pipeline":
+                        req_path = "/api/comfly-seedance-tvc/pipeline/start"
+                        timeout_s = 120.0
+                    elif sd_act == "poll_pipeline":
+                        jid = (_p.get("job_id") or "").strip().lower()
+                        if (
+                            not jid
+                            or len(jid) != 32
+                            or any(c not in "0123456789abcdef" for c in jid)
+                        ):
+                            return [
+                                {
+                                    "type": "text",
+                                    "text": _json_dumps_mcp_payload(
+                                        {
+                                            "capability_id": capability_id,
+                                            "error": "poll_pipeline 需要有效的 payload.job_id（32 位十六进制）",
+                                        }
+                                    ),
+                                }
+                            ], True
+                        req_path = f"/api/comfly-seedance-tvc/pipeline/jobs/{jid}"
+                        req_method = "GET"
+                        req_json = None
+                        timeout_s = 120.0
+                    else:
+                        req_path = "/api/comfly-seedance-tvc/pipeline/run"
+                        timeout_s = 7200.0
+                    logger.info(
+                        "[MCP comfly.seedance.tvc.pipeline] invoke has_token=%s action=%s asset_id=%s job_id=%s base_url=%s",
+                        bool(token),
+                        sd_act,
+                        _p.get("asset_id"),
+                        (_p.get("job_id") or "")[:16],
+                        BASE_URL,
+                    )
                 elif capability_id == "ecommerce.publish":
                     ec_action = (_p.get("action") or "").strip() or "open_product_form"
                     if ec_action == "list_shop_accounts":
@@ -3230,6 +3363,34 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                                         "start_ack": data,
                                         "poll_error": polled,
                                     }
+                    if (
+                        capability_id == "comfly.seedance.tvc.pipeline"
+                        and isinstance(data, dict)
+                        and data.get("ok", True)
+                    ):
+                        sd_act2 = (_p.get("action") or "").strip() or "run_pipeline"
+                        if sd_act2 == "start_pipeline":
+                            jid2 = (data.get("job_id") or "").strip()
+                            if jid2:
+                                logger.info(
+                                    "[MCP comfly.seedance.tvc.pipeline] start 成功，开始轮询 job_id=%s",
+                                    jid2[:16],
+                                )
+                                polled = await _mcp_poll_seedance_tvc_pipeline_until_done(
+                                    base_url=BASE_URL,
+                                    token=token,
+                                    job_id=jid2,
+                                    request=request,
+                                )
+                                if isinstance(polled, dict) and (polled.get("status") or "").strip():
+                                    data = polled
+                                else:
+                                    data = {
+                                        "ok": False,
+                                        "job_id": jid2,
+                                        "start_ack": data,
+                                        "poll_error": polled,
+                                    }
                     if capability_id == "comfly.daihuo" and isinstance(data, dict) and data.get("ok", True):
                         if (data.get("action") or "").strip() == "submit_video":
                             tid_poll = str(data.get("task_id") or "").strip()
@@ -3300,6 +3461,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         fail_msg = "本地剪辑调用失败"
                     elif capability_id == "comfly.daihuo.pipeline":
                         fail_msg = "爆款TVC 整包成片后端调用失败"
+                    elif capability_id == "comfly.seedance.tvc.pipeline":
+                        fail_msg = "Seedance TVC 整包成片后端调用失败"
                     elif capability_id == "comfly.ecommerce.detail_pipeline":
                         fail_msg = "电商详情图流水线后端调用失败"
                     elif capability_id == "ecommerce.publish":

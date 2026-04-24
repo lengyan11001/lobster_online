@@ -2809,6 +2809,14 @@ function bindChatHomeActions() {
       var view = jumpBtn.getAttribute('data-jump-view');
       var navBtn = document.querySelector('.nav-left-item[data-view="' + view + '"]');
       if (navBtn) navBtn.click();
+      return;
+    }
+    var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
+    if (hiddenViewBtn) {
+      var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
+      if (typeof window._openHiddenWorkspaceView === 'function') {
+        window._openHiddenWorkspaceView(hiddenView);
+      }
     }
   });
 }
