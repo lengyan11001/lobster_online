@@ -39,6 +39,7 @@ from .api.assets import router as assets_router
 from .api.media_edit import router as media_edit_router
 from .api.comfly_veo import router as comfly_veo_router
 from .api.comfly_daihuo import router as comfly_daihuo_router
+from .api.comfly_seedance_tvc import router as comfly_seedance_tvc_router
 from .api.comfly_ecommerce_detail import router as comfly_ecommerce_detail_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
@@ -201,6 +202,55 @@ def _ensure_comfly_ecommerce_detail_pipeline_capability():
     except Exception:
         db.rollback()
         logger.exception("Failed to seed comfly.ecommerce.detail_pipeline capability")
+    finally:
+        db.close()
+
+
+def _ensure_comfly_seedance_tvc_pipeline_capability():
+    """Ensure comfly.seedance.tvc.pipeline exists in CapabilityConfig."""
+    catalog_path = Path(__file__).resolve().parent.parent.parent / "mcp" / "capability_catalog.json"
+    if not catalog_path.exists():
+        return
+    try:
+        raw = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    cfg = raw.get("comfly.seedance.tvc.pipeline")
+    if not isinstance(cfg, dict):
+        return
+    db = SessionLocal()
+    try:
+        existing = db.query(models.CapabilityConfig).filter(
+            models.CapabilityConfig.capability_id == "comfly.seedance.tvc.pipeline"
+        ).first()
+        if existing:
+            existing.description = str(cfg.get("description") or "comfly.seedance.tvc.pipeline")
+            existing.upstream = str(cfg.get("upstream") or "local")
+            existing.upstream_tool = str(cfg.get("upstream_tool") or "invoke")
+            existing.arg_schema = cfg.get("arg_schema") if isinstance(cfg.get("arg_schema"), dict) else None
+            existing.enabled = bool(cfg.get("enabled", True))
+            existing.is_default = bool(cfg.get("is_default", False))
+            existing.unit_credits = int(cfg.get("unit_credits") or 0)
+            db.commit()
+            logger.info("Refreshed capability comfly.seedance.tvc.pipeline in CapabilityConfig")
+            return
+        db.add(
+            models.CapabilityConfig(
+                capability_id="comfly.seedance.tvc.pipeline",
+                description=str(cfg.get("description") or "comfly.seedance.tvc.pipeline"),
+                upstream=str(cfg.get("upstream") or "local"),
+                upstream_tool=str(cfg.get("upstream_tool") or "invoke"),
+                arg_schema=cfg.get("arg_schema") if isinstance(cfg.get("arg_schema"), dict) else None,
+                enabled=bool(cfg.get("enabled", True)),
+                is_default=bool(cfg.get("is_default", False)),
+                unit_credits=int(cfg.get("unit_credits") or 0),
+            )
+        )
+        db.commit()
+        logger.info("Seeded capability comfly.seedance.tvc.pipeline into CapabilityConfig")
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to seed comfly.seedance.tvc.pipeline capability")
     finally:
         db.close()
 
@@ -718,6 +768,7 @@ def create_app() -> FastAPI:
     _ensure_comfly_veo_capability()
     _ensure_comfly_daihuo_pipeline_capability()
     _ensure_comfly_ecommerce_detail_pipeline_capability()
+    _ensure_comfly_seedance_tvc_pipeline_capability()
     _auto_start_openclaw()
 
     app = FastAPI(
@@ -764,6 +815,7 @@ def create_app() -> FastAPI:
     app.include_router(media_edit_router, prefix="")
     app.include_router(comfly_veo_router, prefix="")
     app.include_router(comfly_daihuo_router, prefix="")
+    app.include_router(comfly_seedance_tvc_router, prefix="")
     app.include_router(comfly_ecommerce_detail_router, prefix="")
     if ecommerce_publish_router is not None:
         app.include_router(ecommerce_publish_router, prefix="")

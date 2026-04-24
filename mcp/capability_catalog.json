@@ -678,6 +678,120 @@
       }
     }
   },
+  "comfly.seedance.tvc.pipeline": {
+  "description": "一体化 Seedance TVC 成片流水线：基于一个或多个产品参考图，按 10 秒一段规划同一条广告片的连续分镜板，先统一生成全部分镜图，再统一提交全部 10 秒视频任务，最后自动合成为 1 条完整视频。总时长仅支持 10/20/30/40/50/60 秒。action 可选 run_pipeline（同步）、start_pipeline（异步）、poll_pipeline（轮询）。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "run_pipeline",
+            "start_pipeline",
+            "poll_pipeline"
+          ]
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "asset_id": {
+          "type": "string",
+          "description": "主参考商品图/品牌图 asset_id，与 image_url 二选一"
+        },
+        "image_url": {
+          "type": "string",
+          "description": "主参考商品图/品牌图公网 URL，与 asset_id 二选一"
+        },
+        "reference_asset_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "额外参考图 asset_id 列表，可与主图共同决定产品一致性、场景、包装和质感"
+        },
+        "reference_image_urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "额外参考图公网 URL 列表，可与主图共同决定产品一致性、场景、包装和质感"
+        },
+      "merge_clips": {
+        "type": "boolean",
+        "description": "保留兼容字段；该流水线最终始终会合并所有分段视频"
+      },
+      "storyboard_count": {
+        "type": "integer",
+        "description": "兼容旧参数；若传入将按 storyboard_count * 10 秒推导总时长"
+      },
+      "segment_count": {
+        "type": "integer",
+        "description": "兼容旧参数；若传入必须与 total_duration_seconds / 10 一致"
+      },
+      "segment_duration_seconds": {
+        "type": "integer",
+        "description": "固定为 10 秒；若传入必须是 10"
+      },
+      "total_duration_seconds": {
+        "type": "integer",
+        "enum": [
+          10,
+          20,
+          30,
+          40,
+          50,
+          60
+        ],
+        "description": "总时长，仅支持 10/20/30/40/50/60 秒"
+      },
+        "auto_save": {
+          "type": "boolean",
+          "description": "完成后是否将视频素材入库，默认 true"
+        },
+        "task_text": {
+          "type": "string",
+          "description": "补充目标说明，例如品牌定位、受众、风格、台词语气、重点卖点"
+        },
+        "platform": {
+          "type": "string",
+          "description": "投放平台，如抖音、小红书、快手、TikTok"
+        },
+        "country": {
+          "type": "string",
+          "description": "目标国家/市场"
+        },
+        "language": {
+          "type": "string",
+          "description": "目标语言"
+        },
+      "analysis_model": {
+        "type": "string",
+        "description": "分析参考图并生成整条广告连续分镜结构所用模型，默认 gpt-4.1-mini"
+      },
+      "image_model": {
+        "type": "string",
+        "description": "分镜设计图生成模型，默认 gpt-image-2"
+      },
+        "video_model": {
+          "type": "string",
+          "description": "Seedance 视频模型；测试阶段默认 doubao-seedance-2-0-fast-260128"
+        },
+        "output_dir": {
+          "type": "string",
+          "description": "可选，输出目录"
+        },
+        "isolate_job_dir": {
+          "type": "boolean",
+          "description": "异步任务是否隔离到独立 job 目录，默认 true"
+        }
+      }
+    }
+  },
   "comfly.ecommerce.detail_pipeline": {
     "description": "电商详情页生成流水线：商品主图自动分析卖点、生成多张竖版详情页、拼接长图、素材入库。action 可选 run_pipeline（同步）、start_pipeline（异步）、poll_pipeline（轮询）。",
     "upstream": "local",

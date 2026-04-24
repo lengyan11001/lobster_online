@@ -71,6 +71,40 @@ window._openEcommerceDetailStudioView = function() {
   try { location.hash = 'ecommerce-detail-studio'; } catch (e1) {}
 };
 
+window._openSeedanceTvcStudioView = function() {
+  _switchToHiddenView('seedance-tvc-studio');
+  if (typeof window.initSeedanceTvcStudioView === 'function') window.initSeedanceTvcStudioView();
+  try { location.hash = 'seedance-tvc-studio'; } catch (e1) {}
+};
+
+window._openHiddenWorkspaceView = function(view) {
+  var target = String(view || '').trim();
+  if (!target) return;
+  if (target === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
+    window._openSeedanceTvcStudioView();
+    return;
+  }
+  if (target === 'ecommerce-detail-studio' && typeof window._openEcommerceDetailStudioView === 'function') {
+    window._openEcommerceDetailStudioView();
+    return;
+  }
+  if (target === 'youtube-accounts' && typeof window._openYoutubeAccountsView === 'function') {
+    window._openYoutubeAccountsView();
+    return;
+  }
+  if (target === 'messenger-config' && typeof _openMessengerConfigView === 'function') {
+    _openMessengerConfigView();
+    return;
+  }
+  if (target === 'twilio-whatsapp-config' && typeof _openTwilioWhatsappConfigView === 'function') {
+    _openTwilioWhatsappConfigView();
+    return;
+  }
+  if (target === 'meta-social' && typeof window._openMetaSocialView === 'function') {
+    window._openMetaSocialView();
+  }
+};
+
 function _openTwilioWhatsappConfigView() {
   _ensureSkillStoreVisible();
   var modal = document.getElementById('twilioWhatsappConfigModal');
@@ -265,6 +299,26 @@ function _renderEcommerceDetailCard(opts) {
     '</div></div>';
 }
 
+function _renderSeedanceTvcStudioCard() {
+  var ok = _comflyStatus.effective_ready;
+  var statusBadge = ok
+    ? '<span class="badge-installed">已就绪</span>'
+    : '<span class="badge-coming" style="background:rgba(251,146,60,0.15);color:#fb923c;border-color:rgba(251,146,60,0.3);">待配置</span>';
+  var sub = ok
+    ? '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">进入工作台后可先切换输入方式，再组织参考图、参考视频、提示词、时长和分镜节奏。</div>'
+    : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先在本机保存 <strong>Comfly API Key</strong>，再进入这个视频工作台。当前先提供结构化 UI，方便把图片参考、参考视频、自动分镜和手动提示词放在一个界面里。</div>';
+  return '<div class="skill-store-card seedance-tvc-card" style="cursor:pointer;border-color:rgba(91,124,255,0.28);background:linear-gradient(135deg,rgba(91,124,255,0.09),rgba(14,165,233,0.05));">' +
+    '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
+    '<div class="card-value">视频分镜工作台</div>' +
+    '<div class="card-desc">面向参考图、参考视频和纯提示词的统一视频创作界面。左侧管参数与输入方式，右侧同时看分镜预览和最终成片位。</div>' +
+    sub +
+    '<div class="card-tags"><span class="tag">TVC</span><span class="tag">Seedance</span><span class="tag">分镜</span><span class="tag">Comfly</span></div>' +
+    '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
+      '<button type="button" class="btn btn-primary btn-sm seedance-tvc-entry-btn">进入工作台</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置 Comfly</button>' +
+    '</div></div>';
+}
+
 function _openclawWeixinResolveBase() {
   if (typeof LOCAL_API_BASE === 'undefined' || !LOCAL_API_BASE) return '';
   return String(LOCAL_API_BASE).replace(/\/$/, '');
@@ -372,6 +426,7 @@ function loadSkillStore() {
         var html = '';
         if (hasSutuiPkg) html += _renderXSkillCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderComflyCard();
+        if (hasComflyPkg || isSkillAdmin) html += _renderSeedanceTvcStudioCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
         var hasWxPkg = packages.some(function(p) { return p.id === 'openclaw_weixin_channel'; });
@@ -467,6 +522,7 @@ function loadSkillStore() {
         _bindTwilioWhatsappCardEntry();
         _bindYoutubePublishCardEntry();
         _bindMetaSocialCardEntry();
+        _bindSeedanceTvcCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
         _bindInstallUninstall(el);
@@ -677,6 +733,21 @@ function _bindEcommerceDetailCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openEcommerceDetailStudioView === 'function') window._openEcommerceDetailStudioView();
+    });
+  });
+}
+
+function _bindSeedanceTvcCardEntry() {
+  document.querySelectorAll('.seedance-tvc-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openSeedanceTvcStudioView === 'function') window._openSeedanceTvcStudioView();
+    });
+  });
+  document.querySelectorAll('.seedance-tvc-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openSeedanceTvcStudioView === 'function') window._openSeedanceTvcStudioView();
     });
   });
 }

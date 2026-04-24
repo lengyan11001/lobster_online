@@ -269,6 +269,202 @@
     .ecom-progress-bar-compact { height: 6px; }
     .ecom-browser-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) 320px; gap: 1rem; align-items: start; }
     .ecom-browser-main { min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
+    .tvc-studio { display:flex; flex-direction:column; gap:0.65rem; }
+    .tvc-studio-hero {
+      display:grid; grid-template-columns:minmax(0, 1.2fr) auto; gap:1rem; align-items:start;
+      padding:0.72rem 0.9rem; border-radius:18px;
+      background:
+        radial-gradient(circle at top left, rgba(245,158,11,0.16), transparent 34%),
+        radial-gradient(circle at 85% 20%, rgba(59,130,246,0.16), transparent 32%),
+        linear-gradient(180deg, rgba(255,255,255,0.98), rgba(246,249,255,0.96));
+      border:1px solid rgba(110,129,170,0.16);
+      box-shadow:0 18px 40px rgba(36,54,88,0.08);
+    }
+    .tvc-studio-hero h3 { margin:0 0 0.18rem 0; font-size:1rem; color:#20314d; }
+    .tvc-studio-hero p { margin:0; max-width:760px; font-size:0.75rem; line-height:1.45; color:#5b6a82; }
+    .tvc-hero-meta { margin-top:0.32rem; font-size:0.72rem; line-height:1.4; color:#6d7c93; }
+    .tvc-shell { display:grid; grid-template-columns:520px minmax(0, 1fr); gap:0.9rem; align-items:start; }
+    .tvc-sidebar, .tvc-main { display:flex; flex-direction:column; gap:0.9rem; min-width:0; }
+    .tvc-sidebar { position:sticky; top:0.75rem; max-height:calc(100vh - 1.5rem); overflow:auto; padding-right:0.15rem; }
+    .tvc-sidebar::-webkit-scrollbar { width:8px; }
+    .tvc-sidebar::-webkit-scrollbar-thumb { background:rgba(117,139,179,0.24); border-radius:999px; }
+    .tvc-panel {
+      background:rgba(255,255,255,0.96); border:1px solid rgba(110,129,170,0.14); border-radius:22px; padding:0.88rem;
+      box-shadow:0 12px 28px rgba(36,54,88,0.06);
+    }
+    .tvc-panel-compact { padding:0.72rem 0.78rem; }
+    .tvc-panel-compact .tvc-panel-hint { margin-bottom:0.45rem; }
+    .tvc-panel-compact .tvc-upload-box { padding:0.52rem; }
+    .tvc-panel-compact .tvc-upload-actions { margin-bottom:0.42rem; }
+    .tvc-panel-compact .tvc-helper-note { margin-top:0.4rem; padding:0.56rem 0.65rem; font-size:0.72rem; }
+    .tvc-panel-title { margin:0 0 0.35rem 0; font-size:0.96rem; color:#20314d; }
+    .tvc-panel-hint { margin:0 0 0.62rem 0; font-size:0.74rem; line-height:1.5; color:#67768e; }
+    .tvc-inline-hint { display:flex; gap:0.45rem; flex-wrap:wrap; margin:-0.05rem 0 0.2rem 0; }
+    .tvc-inline-hint span {
+      display:inline-flex; align-items:center; padding:0.24rem 0.58rem; border-radius:999px;
+      background:rgba(241,246,255,0.96); border:1px solid rgba(117,139,179,0.14); color:#607089; font-size:0.7rem;
+    }
+    .tvc-field { margin-bottom:0.68rem; }
+    .tvc-field:last-child { margin-bottom:0; }
+    .tvc-field label { display:block; margin-bottom:0.35rem; font-size:0.82rem; font-weight:600; color:#2b3b56; }
+    .tvc-field input[type="text"], .tvc-field textarea, .tvc-field select {
+      width:100%; box-sizing:border-box; padding:0.56rem 0.66rem; border-radius:14px;
+      border:1px solid rgba(116,134,168,0.22); background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98)); color:#243755;
+      font-size:0.84rem; outline:none; transition:border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .tvc-field input[type="text"]:focus, .tvc-field textarea:focus, .tvc-field select:focus {
+      border-color:rgba(91,124,255,0.52); box-shadow:0 0 0 3px rgba(91,124,255,0.12);
+    }
+    .tvc-field textarea { min-height:86px; resize:vertical; line-height:1.55; }
+    .tvc-inline-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.7rem; }
+    .tvc-duration-grid { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:0.45rem; }
+    .tvc-duration-chip {
+      border:none; cursor:pointer; border-radius:999px; padding:0.5rem 0.2rem; font-size:0.76rem; font-weight:600;
+      color:#50617b; background:rgba(242,246,252,0.92); box-shadow:inset 0 0 0 1px rgba(117,139,179,0.14);
+    }
+    .tvc-duration-chip.is-active { color:#26447c; background:rgba(225,236,255,0.98); box-shadow:inset 0 0 0 1px rgba(91,124,255,0.32); }
+    .tvc-upload-box {
+      padding:0.66rem; border-radius:18px; border:1px dashed rgba(124,142,178,0.26);
+      background:linear-gradient(180deg, rgba(248,250,255,0.98), rgba(242,246,253,0.96));
+    }
+    .tvc-upload-actions { display:flex; gap:0.45rem; flex-wrap:wrap; align-items:center; margin-bottom:0.55rem; }
+    .tvc-upload-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:0.6rem; }
+    .tvc-upload-card {
+      position:relative; overflow:hidden; border-radius:16px; border:1px solid rgba(116,134,168,0.16);
+      background:#fff; min-height:102px; box-shadow:0 8px 16px rgba(36,54,88,0.06);
+    }
+    .tvc-upload-card img, .tvc-upload-card video { width:100%; height:70px; object-fit:cover; display:block; background:#eef3fb; }
+    .tvc-upload-remove {
+      position:absolute; top:6px; right:6px; width:22px; height:22px; border:none; border-radius:999px;
+      display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:2;
+      background:rgba(20,30,45,0.72); color:#fff; font-size:0.9rem; line-height:1; box-shadow:0 6px 12px rgba(20,30,45,0.18);
+    }
+    .tvc-upload-remove:hover { background:rgba(220,38,38,0.88); }
+    .tvc-upload-card-body { padding:0.45rem 0.5rem 0.55rem; }
+    .tvc-upload-card-title { font-size:0.7rem; line-height:1.4; color:#4f607a; word-break:break-word; }
+    .tvc-upload-card-meta { margin-top:0.2rem; font-size:0.62rem; color:#7a879d; }
+    .tvc-empty-slot {
+      display:flex; align-items:center; min-height:38px; padding:0.4rem 0.55rem; border-radius:12px;
+      border:1px dashed rgba(116,134,168,0.2); background:rgba(255,255,255,0.72); color:#75839a; font-size:0.72rem;
+    }
+    .tvc-check-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.55rem; }
+    .tvc-check {
+      display:flex; align-items:flex-start; gap:0.45rem; padding:0.58rem 0.64rem; border-radius:14px;
+      background:rgba(247,250,255,0.95); border:1px solid rgba(116,134,168,0.14); color:#425169; font-size:0.74rem;
+    }
+    .tvc-check input { margin-top:0.08rem; }
+    .tvc-toolbar { display:flex; gap:0.55rem; flex-wrap:wrap; align-items:center; justify-content:space-between; }
+    .tvc-summary-strip { display:flex; gap:0.5rem; flex-wrap:wrap; }
+    .tvc-summary-pill {
+      display:inline-flex; align-items:center; gap:0.38rem; padding:0.35rem 0.68rem; border-radius:999px;
+      background:rgba(240,245,252,0.95); border:1px solid rgba(116,134,168,0.14); color:#52637c; font-size:0.76rem;
+    }
+    .tvc-preview-grid { display:grid; grid-template-columns:minmax(0, 1.28fr) 280px; gap:0.85rem; align-items:start; }
+    .tvc-preview-stack { display:flex; flex-direction:column; gap:1rem; min-width:0; }
+    .tvc-storyboard-strip { display:grid; grid-template-columns:repeat(auto-fit, minmax(176px, 1fr)); gap:0.65rem; }
+    .tvc-board-card {
+      border:none; cursor:pointer; text-align:left; padding:0; overflow:hidden; border-radius:20px;
+      background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,247,252,0.98));
+      box-shadow:inset 0 0 0 1px rgba(116,134,168,0.16), 0 12px 22px rgba(36,54,88,0.05);
+    }
+    .tvc-board-card.is-active { box-shadow:inset 0 0 0 2px rgba(91,124,255,0.28), 0 16px 28px rgba(91,124,255,0.10); }
+    .tvc-board-media { aspect-ratio:4 / 5; background:linear-gradient(135deg, rgba(232,239,252,1), rgba(248,242,233,0.98)); position:relative; overflow:hidden; }
+    .tvc-board-media img { width:100%; height:100%; object-fit:cover; display:block; }
+    .tvc-board-media::after {
+      content:""; position:absolute; inset:0; background:linear-gradient(180deg, transparent 30%, rgba(20,30,45,0.2));
+    }
+    .tvc-board-body { padding:0.78rem 0.82rem 0.88rem; }
+    .tvc-board-time { font-size:0.68rem; color:#6e7d93; text-transform:uppercase; letter-spacing:0.04em; }
+    .tvc-board-title { margin-top:0.28rem; font-size:0.84rem; font-weight:700; color:#20314d; line-height:1.45; }
+    .tvc-board-copy { margin-top:0.32rem; font-size:0.72rem; color:#607089; line-height:1.55; }
+    .tvc-focus-frame {
+      border-radius:24px; overflow:hidden; border:1px solid rgba(116,134,168,0.14);
+      background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,248,253,0.98));
+      box-shadow:0 14px 28px rgba(36,54,88,0.06);
+    }
+    .tvc-focus-head {
+      display:flex; justify-content:space-between; gap:0.8rem; align-items:flex-start; flex-wrap:wrap;
+      padding:0.95rem 1rem 0.8rem; border-bottom:1px solid rgba(116,134,168,0.12);
+      background:linear-gradient(180deg, rgba(248,251,255,0.95), rgba(255,255,255,0.94));
+    }
+    .tvc-focus-head .eyebrow { font-size:0.68rem; color:#73839b; text-transform:uppercase; letter-spacing:0.05em; }
+    .tvc-focus-head h4 { margin:0.18rem 0 0 0; font-size:1rem; color:#20314d; }
+    .tvc-focus-head p { margin:0.24rem 0 0 0; font-size:0.76rem; color:#607089; line-height:1.5; max-width:620px; }
+    .tvc-focus-meta {
+      display:inline-flex; align-items:center; padding:0.35rem 0.68rem; border-radius:999px;
+      background:rgba(236,242,252,0.95); border:1px solid rgba(116,134,168,0.14); color:#52637c; font-size:0.74rem;
+    }
+    .tvc-focus-layout {
+      display:grid; grid-template-columns:240px minmax(0, 1fr); gap:0.95rem; padding:1rem;
+    }
+    .tvc-focus-visual {
+      position:relative; min-height:240px; border-radius:20px; overflow:hidden;
+      background:linear-gradient(135deg, rgba(236,241,252,1), rgba(250,243,234,0.98));
+      border:1px solid rgba(116,134,168,0.12);
+    }
+    .tvc-focus-visual img { width:100%; height:100%; min-height:240px; object-fit:cover; display:block; }
+    .tvc-focus-visual-empty {
+      display:flex; align-items:flex-end; min-height:240px; padding:1rem; color:#31445f; font-size:0.82rem; font-weight:600;
+      background:linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.35));
+    }
+    .tvc-focus-copy { display:grid; gap:0.72rem; }
+    .tvc-focus-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.72rem; }
+    .tvc-focus-block {
+      padding:0.8rem 0.85rem; border-radius:18px; background:rgba(246,249,254,0.96);
+      border:1px solid rgba(116,134,168,0.12);
+    }
+    .tvc-focus-block.wide { grid-column:1 / -1; }
+    .tvc-focus-block .label { display:block; font-size:0.68rem; color:#74829a; text-transform:uppercase; letter-spacing:0.05em; }
+    .tvc-focus-block strong { display:block; margin-top:0.3rem; font-size:0.9rem; color:#20314d; line-height:1.45; }
+    .tvc-focus-block p { margin:0.3rem 0 0 0; font-size:0.76rem; color:#607089; line-height:1.6; }
+    .tvc-video-stage {
+      border-radius:24px; overflow:hidden; border:1px solid rgba(116,134,168,0.16);
+      background:linear-gradient(180deg, rgba(250,252,255,0.98), rgba(243,247,253,0.98));
+    }
+    .tvc-video-surface {
+      position:relative; min-height:260px; display:flex; align-items:center; justify-content:center;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(245,158,11,0.16), transparent 26%),
+        radial-gradient(circle at 80% 18%, rgba(59,130,246,0.18), transparent 24%),
+        linear-gradient(135deg, #eef3fb, #f9f2e8);
+    }
+    .tvc-video-surface video { width:100%; height:100%; min-height:260px; object-fit:cover; background:#dfe7f4; }
+    .tvc-video-placeholder {
+      width:min(86%, 420px); padding:1rem; border-radius:24px; text-align:left; color:#30425f;
+      background:rgba(255,255,255,0.78); border:1px solid rgba(116,134,168,0.14); box-shadow:0 20px 38px rgba(36,54,88,0.08);
+    }
+    .tvc-video-placeholder strong { display:block; font-size:1rem; color:#20314d; }
+    .tvc-video-placeholder span { display:block; margin-top:0.38rem; font-size:0.8rem; line-height:1.65; color:#61718a; }
+    .tvc-video-meta { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.65rem; padding:0.9rem 1rem 1rem; }
+    .tvc-meta-card {
+      padding:0.72rem 0.8rem; border-radius:16px; background:rgba(246,249,254,0.96);
+      border:1px solid rgba(116,134,168,0.12);
+    }
+    .tvc-meta-card .label { font-size:0.68rem; color:#74829a; text-transform:uppercase; letter-spacing:0.05em; }
+    .tvc-meta-card .value { margin-top:0.28rem; font-size:0.86rem; color:#243755; font-weight:600; line-height:1.45; }
+    .tvc-side-stack { display:flex; flex-direction:column; gap:1rem; }
+    .tvc-insight-list { display:grid; gap:0.6rem; }
+    .tvc-insight-item {
+      padding:0.82rem 0.85rem; border-radius:18px; background:rgba(246,249,254,0.96);
+      border:1px solid rgba(116,134,168,0.12);
+    }
+    .tvc-insight-item strong { display:block; font-size:0.8rem; color:#20314d; }
+    .tvc-insight-item span { display:block; margin-top:0.26rem; font-size:0.74rem; line-height:1.55; color:#64748b; }
+    .tvc-example-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.8rem; }
+    .tvc-example-card {
+      padding:1rem; border-radius:22px; background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,253,0.98));
+      border:1px solid rgba(116,134,168,0.12);
+    }
+    .tvc-example-card h4 { margin:0 0 0.35rem 0; font-size:0.9rem; color:#20314d; }
+    .tvc-example-card p { margin:0; font-size:0.78rem; line-height:1.65; color:#64748b; }
+    .tvc-helper-note {
+      margin-top:0.55rem; padding:0.72rem 0.8rem; border-radius:16px; background:rgba(237,243,255,0.94);
+      border:1px solid rgba(91,124,255,0.14); color:#51627c; font-size:0.76rem; line-height:1.6;
+    }
+    .tvc-quick-actions {
+      display:flex; gap:0.55rem; flex-wrap:wrap; margin-top:0.75rem;
+    }
+    .tvc-quick-actions .btn { flex:1 1 140px; }
     .ecom-browser-side { min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
     .ecom-browser-stage-head { display: flex; justify-content: space-between; gap: 0.85rem; align-items: flex-start; flex-wrap: wrap; margin-bottom: 0.85rem; }
     .ecom-focused-preview {
@@ -1897,6 +2093,42 @@
       .page-section-actions {
         width: 100%;
       }
+      .tvc-shell,
+      .tvc-preview-grid {
+        grid-template-columns: 1fr;
+      }
+      .tvc-sidebar {
+        position:static;
+        max-height:none;
+        overflow:visible;
+        padding-right:0;
+      }
+      .tvc-studio-hero {
+        grid-template-columns: 1fr;
+      }
+      .tvc-example-grid {
+        grid-template-columns: 1fr;
+      }
+      .tvc-focus-layout,
+      .tvc-focus-grid {
+        grid-template-columns: 1fr;
+      }
+      .tvc-video-meta {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 768px) {
+      .tvc-mode-grid,
+      .tvc-inline-grid,
+      .tvc-check-grid {
+        grid-template-columns: 1fr;
+      }
+      .tvc-duration-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .tvc-storyboard-strip {
+        grid-template-columns: 1fr 1fr;
+      }
     }
     @keyframes fadeSlideIn {
       from {
@@ -2052,6 +2284,11 @@
                   <button type="button" class="chat-sidebar-entry" data-jump-view="skill-store">
                     <span class="chat-sidebar-entry-icon">&lt;/&gt;</span>
                     <span class="chat-sidebar-entry-copy">技能商店</span>
+                    <span class="chat-sidebar-entry-arrow">›</span>
+                  </button>
+                  <button type="button" class="chat-sidebar-entry" data-open-hidden-view="seedance-tvc-studio">
+                    <span class="chat-sidebar-entry-icon">▶</span>
+                    <span class="chat-sidebar-entry-copy">视频分镜</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
                   <button type="button" class="chat-sidebar-entry" data-jump-view="publish">
@@ -2515,6 +2752,157 @@
                         </div>
                       </div>
                     </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <!-- Seedance 视频分镜工作台 -->
+          <div id="content-seedance-tvc-studio" class="content-block">
+            <div class="tvc-studio">
+              <div class="tvc-studio-hero">
+                <div>
+                  <h3>视频分镜工作台</h3>
+                  <p>上传参考图或直接写提示词，按每 10 秒一镜生成统一分镜，并在右侧展示最终合成视频。</p>
+                  <div class="tvc-hero-meta">支持单图 / 多图参考、纯提示词规划、10 秒一镜、最终合成一条视频。</div>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+                  <button type="button" id="seedanceTvcStudioBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn">配置 Comfly</button>
+                </div>
+              </div>
+
+              <div class="tvc-shell">
+                <aside class="tvc-sidebar">
+                  <div class="tvc-panel tvc-panel-compact">
+                    <h4 class="tvc-panel-title">上传参考</h4>
+                    <p class="tvc-panel-hint">先选输入方式，再决定是否上传参考图，只保留最直接的入口。</p>
+
+                    <div class="tvc-field">
+                      <label for="seedanceInputModeSelect">输入方式</label>
+                      <select id="seedanceInputModeSelect">
+                        <option value="image_auto" selected>上传图片，AI 自动分析分镜</option>
+                        <option value="image_prompt">上传图片 + 提示词共创</option>
+                        <option value="prompt_only">只写提示词，不上传素材</option>
+                      </select>
+                    </div>
+
+                    <div id="seedanceImageField" class="tvc-field">
+                      <label>上传参考图片</label>
+                      <div class="tvc-upload-box">
+                        <div class="tvc-upload-actions">
+                          <button type="button" id="seedanceImageUploadBtn" class="btn btn-primary btn-sm">上传图片</button>
+                          <input type="file" id="seedanceImageFileInput" accept="image/*" multiple style="display:none;">
+                          <span class="tvc-panel-hint" style="margin:0;">单张或多张都可以。</span>
+                        </div>
+                        <div id="seedanceImageList" class="tvc-upload-list"></div>
+                      </div>
+                    </div>
+
+                    <div class="tvc-helper-note" id="seedanceInputModeHint">
+                      当前模式会优先使用参考图来统一主体与画面风格，再按 10 秒一个分镜进行编排。
+                    </div>
+                    <div id="seedanceStudioMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
+                  </div>
+
+                  <div class="tvc-panel">
+                    <h4 class="tvc-panel-title">视频参数</h4>
+                    <p class="tvc-panel-hint">提示词、时长和画面参数都放在这里，提交前看这一块就够了。</p>
+
+                    <div class="tvc-field">
+                      <label for="seedanceTaskPromptInput">提示词</label>
+                      <textarea id="seedanceTaskPromptInput" placeholder="例如：做一条 20 秒的轻奢护肤品短视频，先建立包装高级感，再切到使用场景，最后用品牌记忆点收尾。"></textarea>
+                    </div>
+
+                    <div class="tvc-field">
+                      <label>视频时长</label>
+                      <div id="seedanceDurationGrid" class="tvc-duration-grid">
+                        <button type="button" class="tvc-duration-chip" data-duration="10">10s</button>
+                        <button type="button" class="tvc-duration-chip is-active" data-duration="20">20s</button>
+                        <button type="button" class="tvc-duration-chip" data-duration="30">30s</button>
+                        <button type="button" class="tvc-duration-chip" data-duration="40">40s</button>
+                        <button type="button" class="tvc-duration-chip" data-duration="50">50s</button>
+                        <button type="button" class="tvc-duration-chip" data-duration="60">60s</button>
+                      </div>
+                    </div>
+
+                    <div class="tvc-inline-grid">
+                      <div class="tvc-field">
+                        <label for="seedanceAspectRatioSelect">画面比例</label>
+                        <select id="seedanceAspectRatioSelect">
+                          <option value="9:16" selected>9:16 竖屏带货</option>
+                          <option value="16:9">16:9 横屏展示</option>
+                          <option value="1:1">1:1 方形信息流</option>
+                          <option value="4:5">4:5 内容种草</option>
+                        </select>
+                      </div>
+                      <div class="tvc-field">
+                        <label for="seedanceVisualToneSelect">视觉基调</label>
+                        <select id="seedanceVisualToneSelect">
+                          <option value="clean_bright" selected>明亮干净</option>
+                          <option value="lifestyle_warm">生活感暖调</option>
+                          <option value="luxury_refined">精致高级</option>
+                          <option value="cinematic_contrast">叙事电影感</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="tvc-inline-grid">
+                      <div class="tvc-field">
+                        <label for="seedanceRhythmSelect">镜头节奏</label>
+                        <select id="seedanceRhythmSelect">
+                          <option value="smooth" selected>平滑推进</option>
+                          <option value="dynamic">更有动势</option>
+                          <option value="product_focus">偏产品展示</option>
+                          <option value="storytelling">偏情绪叙事</option>
+                        </select>
+                      </div>
+                      <div class="tvc-field">
+                        <label for="seedanceModelSelect">生成模型</label>
+                        <select id="seedanceModelSelect">
+                          <option value="seedance-2-0-pro-250528" selected>Seedance 2.0 Pro</option>
+                          <option value="seedance-2-0-lite-250428">Seedance 2.0 Lite</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="tvc-check-grid">
+                      <label class="tvc-check"><input type="checkbox" id="seedanceNeedAudioCheck" checked>需要保留音频或配乐规划</label>
+                      <label class="tvc-check"><input type="checkbox" id="seedanceNeedMergeCheck" checked>多分镜最终合成一个视频</label>
+                    </div>
+
+                    <div class="tvc-quick-actions">
+                      <button type="button" id="seedanceStartBtn" class="btn btn-primary">开始生成视频</button>
+                      <button type="button" id="seedancePreviewRefreshBtn" class="btn btn-ghost">刷新分镜预览</button>
+                      <button type="button" id="seedanceStudioResetBtn" class="btn btn-ghost">重置界面</button>
+                    </div>
+                  </div>
+
+                </aside>
+
+                <section class="tvc-main">
+                  <div class="tvc-panel">
+                    <div class="tvc-toolbar" style="margin-bottom:0.85rem;">
+                      <div>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">最终结果视频</h4>
+                        <p class="tvc-panel-hint" style="margin:0;">这里展示最后合成的视频结果。</p>
+                      </div>
+                    </div>
+                    <div class="tvc-video-stage">
+                      <div id="seedanceVideoSurface" class="tvc-video-surface"></div>
+                    </div>
+                  </div>
+
+                  <div class="tvc-panel">
+                    <div class="tvc-toolbar" style="margin-bottom:0.85rem;">
+                      <div>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">分镜图片展示</h4>
+                        <p id="seedanceBoardsHint" class="tvc-panel-hint" style="margin:0;">下面按每 10 秒展示一张分镜图。</p>
+                      </div>
+                      <span id="seedanceBoardsCounter" class="tvc-summary-pill">2 张分镜</span>
+                    </div>
+                    <div id="seedanceStoryboardStrip" class="tvc-storyboard-strip"></div>
                   </div>
                 </section>
               </div>
@@ -3850,6 +4238,7 @@
   <script src="/static/js/wecom-detail.js?v=20260416e"></script>
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js"></script>

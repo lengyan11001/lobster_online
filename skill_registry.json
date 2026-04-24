@@ -323,6 +323,123 @@
         "credential_package"
       ]
     },
+    "comfly_seedance_tvc_skill": {
+      "name": "分镜TVC（Seedance）",
+      "description": "上传商品/品牌参考图后，按 10 秒一段自动设计同一条 TVC 的连续分镜板，再用 gpt-image-2 生成分镜设计图，并为每张分镜图生成 10 秒 Seedance 视频，最后强制合成为 1 条完整成片。总时长支持 10/20/30/40/50/60 秒，适合美妆护肤、品牌广告、招商页风格 TVC。",
+      "type": "builtin",
+      "store_visibility": "popular",
+      "status": "available",
+      "package_config": {
+        "analysis_model": "gpt-4.1-mini",
+        "storyboard_image_model": "gpt-image-2",
+        "video_model": "doubao-seedance-2-0-fast-260128",
+        "storyboard_count": 2,
+        "segment_count": 2,
+        "segment_duration_seconds": 10,
+        "total_duration_seconds": 20,
+        "aspect_ratio": "9:16"
+      },
+      "capabilities": {
+        "comfly.seedance.tvc.pipeline": {
+          "description": "一体化分镜 TVC 成片：总时长仅支持 10/20/30/40/50/60 秒，并固定按每 10 秒生成 1 张分镜图和 1 段视频，所有段最终自动合成为 1 条完整视频。推荐 action=start_pipeline + asset_id（或 image_url）；poll_pipeline + job_id 用于追进度。",
+          "upstream": "local",
+          "upstream_tool": "invoke",
+          "enabled": true,
+          "is_default": false,
+          "unit_credits": 0,
+          "arg_schema": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "run_pipeline",
+                  "start_pipeline",
+                  "poll_pipeline"
+                ]
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              },
+              "image_url": {
+                "type": "string"
+              },
+              "merge_clips": {
+                "type": "boolean",
+                "description": "保留兼容字段；该流水线最终始终会合并所有分段视频"
+              },
+              "storyboard_count": {
+                "type": "integer",
+                "description": "兼容旧字段；若传入将按 storyboard_count * 10 秒推导总时长"
+              },
+              "segment_count": {
+                "type": "integer",
+                "description": "兼容旧字段；若传入必须与 total_duration_seconds / 10 一致"
+              },
+              "segment_duration_seconds": {
+                "type": "integer",
+                "description": "固定为 10 秒；若传入必须是 10"
+              },
+              "total_duration_seconds": {
+                "type": "integer",
+                "enum": [
+                  10,
+                  20,
+                  30,
+                  40,
+                  50,
+                  60
+                ],
+                "description": "总时长，仅支持 10/20/30/40/50/60 秒"
+              },
+              "auto_save": {
+                "type": "boolean"
+              },
+              "task_text": {
+                "type": "string"
+              },
+              "platform": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "analysis_model": {
+                "type": "string"
+              },
+              "image_model": {
+                "type": "string"
+              },
+              "video_model": {
+                "type": "string"
+              },
+              "output_dir": {
+                "type": "string"
+              },
+              "isolate_job_dir": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "tags": [
+        "video",
+        "seedance",
+        "tvc",
+        "storyboard",
+        "gpt-image-2",
+        "doubao",
+        "comfly",
+        "credential_package"
+      ]
+    },
     "comfly_ecommerce_detail_skill": {
       "name": "电商详情页",
       "description": "商品主图一键生成电商详情页长图：自动分析商品卖点，生成多张详情页并拼接为长图，素材自动入库。与带货TVC同源 Comfly 流水线，需配置 Key。",

@@ -593,7 +593,20 @@ function loadDashboard() {
       var navAgent = document.getElementById('navAgent');
       if (navAgent) navAgent.style.display = d.is_agent ? '' : 'none';
       window.__currentUserIsAgent = !!d.is_agent;
-      if (typeof window._applyWecomConfigHash === 'function' && location.hash && location.hash.indexOf('wecom') !== -1) window._applyWecomConfigHash();
+      if (typeof window._applyWecomConfigHash === 'function' && location.hash) {
+        var hiddenHash = String(location.hash || '');
+        if (
+          hiddenHash.indexOf('wecom') !== -1 ||
+          hiddenHash.indexOf('messenger') !== -1 ||
+          hiddenHash.indexOf('twilio-whatsapp') !== -1 ||
+          hiddenHash.indexOf('youtube-accounts') !== -1 ||
+          hiddenHash.indexOf('meta-social') !== -1 ||
+          hiddenHash.indexOf('ecommerce-detail-studio') !== -1 ||
+          hiddenHash.indexOf('seedance-tvc-studio') !== -1
+        ) {
+          window._applyWecomConfigHash();
+        }
+      }
     });
 }
 
@@ -1593,6 +1606,9 @@ function loadLogsView() {
     if (hash === 'ecommerce-detail-studio' && typeof window._openEcommerceDetailStudioView === 'function') {
       window._openEcommerceDetailStudioView();
     }
+    if (hash === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
+      window._openSeedanceTvcStudioView();
+    }
   }
   window.addEventListener('hashchange', applyHash);
   window._applyWecomConfigHash = applyHash;
@@ -1602,7 +1618,8 @@ function loadLogsView() {
     location.hash.indexOf('twilio-whatsapp') !== -1 ||
     location.hash.indexOf('youtube-accounts') !== -1 ||
     location.hash.indexOf('meta-social') !== -1 ||
-    location.hash.indexOf('ecommerce-detail-studio') !== -1
+    location.hash.indexOf('ecommerce-detail-studio') !== -1 ||
+    location.hash.indexOf('seedance-tvc-studio') !== -1
   )) applyHash();
 })();
 
