@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
 from ..db import SessionLocal, get_db
-from ..models import Asset, EcommerceDetailJob
+from ..models import Asset, EcommerceDetailJob, User
 from ..services.comfly_ecommerce_detail_job_store import (
     create_job_record,
     get_job,
@@ -1180,6 +1180,87 @@ def _history_edit_job_response(*, job_id: str, result: Dict[str, Any], request: 
     }
 
 
+def _estimate_ecommerce_detail_credits(
+    *,
+    page_count: int,
+    main_image_count: int,
+    sku_image_count: int,
+    showcase_count: int,
+    material_image_count: int,
+    image_model: str,
+) -> int:
+    """估算电商详情页生成所需积分（用户消耗 = 采购价 × 2倍）"""
+    # 图片生成模型定价（采购价）
+    model_prices = {
+        "nano-banana-2": 42,
+        "gpt-image-2": 20,
+    }
+    price_per_image = model_prices.get(image_model, 42)  # 默认使用 nano-banana-2 价格
+
+    # 计算总图片数量
+    total_images = (
+        int(page_count or 12) +           # 详情页
+        int(main_image_count or 10) +     # 主图
+        int(sku_image_count or 3) +       # SKU图
+        int(showcase_count or 0) +        # 橱窗图
+        int(material_image_count or 3) +  # 素材图
+        2                                  # 透明图 + 白底图
+    )
+
+    # 分析模型消耗（gemini-2.5-pro 约消耗 20-50 积分，取中间值）
+    analysis_credits = 35
+
+    # 用户消耗 = (图片生成采购价 × 图片数量 + 分析消耗) × 2倍
+    total_credits = (price_per_image * total_images + analysis_credits) * 2
+
+    return int(total_credits)
+
+
+def _check_ecommerce_detail_credits(
+    *,
+    user_id: int,
+    db: Session,
+    page_count: int,
+    main_image_count: int,
+    sku_image_count: int,
+    showcase_count: int,
+    material_image_count: int,
+    image_model: str,
+) -> None:
+    """检查用户积分是否足够生成电商详情页"""
+    if int(user_id or 0) <= 0:
+        # 本地免登录模式，跳过积分检查
+        return
+
+    required_credits = _estimate_ecommerce_detail_credits(
+        page_count=page_count,
+        main_image_count=main_image_count,
+        sku_image_count=sku_image_count,
+        showcase_count=showcase_count,
+        material_image_count=material_image_count,
+        image_model=image_model,
+    )
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="用户不存在")
+
+    current_credits = int(user.credits or 0)
+    if current_credits < required_credits:
+        total_images = (
+            int(page_count or 12) +
+            int(main_image_count or 10) +
+            int(sku_image_count or 3) +
+            int(showcase_count or 0) +
+            int(material_image_count or 3) +
+            2
+        )
+        raise HTTPException(
+            status_code=402,
+            detail=f"积分不足：生成电商详情页套图（约 {total_images} 张图片）需要约 {required_credits} 积分，当前余额 {current_credits} 积分。请先充值。"
+        )
+
+
 def _collect_detail_page_paths(result: Dict[str, Any]) -> List[str]:
     return [
         str(item.get("local_path") or "")
@@ -1261,6 +1342,19 @@ async def ecommerce_detail_pipeline_run(
     current_user = await _resolve_optional_request_user(request, db)
     pl = body.payload
     _validate_payload(pl)
+
+    # 积分预检查
+    _check_ecommerce_detail_credits(
+        user_id=current_user.id,
+        db=db,
+        page_count=pl.page_count or 12,
+        main_image_count=pl.main_image_count or 10,
+        sku_image_count=pl.sku_image_count or 3,
+        showcase_count=pl.showcase_count or 0,
+        material_image_count=pl.material_image_count or 3,
+        image_model=pl.image_model or "nano-banana-2",
+    )
+
     inp = await _prepare_pipeline_input(
         pl=pl,
         current_user=current_user,
@@ -1305,6 +1399,19 @@ async def ecommerce_detail_pipeline_start(
     normalized = _coerce_run_body(body)
     pl = normalized.payload
     _validate_payload(pl)
+
+    # 积分预检查
+    _check_ecommerce_detail_credits(
+        user_id=current_user.id,
+        db=db,
+        page_count=pl.page_count or 12,
+        main_image_count=pl.main_image_count or 10,
+        sku_image_count=pl.sku_image_count or 3,
+        showcase_count=pl.showcase_count or 0,
+        material_image_count=pl.material_image_count or 3,
+        image_model=pl.image_model or "nano-banana-2",
+    )
+
     runs_root = _default_runs_root()
     job_id = uuid.uuid4().hex
     effective_dir = str(Path(runs_root) / "job_runs" / job_id) if pl.isolate_job_dir else runs_root

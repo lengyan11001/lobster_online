@@ -862,6 +862,17 @@
     return IMAGE_MODEL_PRESETS[key] || IMAGE_MODEL_PRESETS[DEFAULT_IMAGE_MODEL_PRESET];
   }
 
+  function _setImageModelPreset(key) {
+    var nextKey = String(key || '').trim();
+    if (!IMAGE_MODEL_PRESETS[nextKey]) nextKey = DEFAULT_IMAGE_MODEL_PRESET;
+    if (byId('ecomImageModelPresetSelect')) byId('ecomImageModelPresetSelect').value = nextKey;
+    document.querySelectorAll('[data-image-preset]').forEach(function(btn) {
+      var active = btn.getAttribute('data-image-preset') === nextKey;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
   function _buildPayload() {
     var mainAssetId = (byId('ecomMainAssetIdInput').value || '').trim() || (state.mainAsset && state.mainAsset.asset_id) || '';
     var mainLocalPath = (state.mainAsset && state.mainAsset.local_path) || '';
@@ -1323,6 +1334,34 @@
       _setMsg(built.error, true);
       return;
     }
+
+    // 积分预检查
+    var pageCount = parseInt(byId('ecomPageCountInput').value) || 12;
+    var mainImageCount = parseInt(byId('ecomMainImageCountInput').value) || 10;
+    var skuImageCount = parseInt(byId('ecomSkuImageCountInput').value) || 3;
+    var showcaseCount = parseInt(byId('ecomShowcaseCountInput').value) || 0;
+    var materialImageCount = parseInt(byId('ecomMaterialImageCountInput').value) || 3;
+    var imageModel = built.payload.image_model || 'nano-banana-2';
+
+    // 计算所需积分
+    var modelPrices = {
+      'nano-banana-2': 42,
+      'gpt-image-2': 20
+    };
+    var pricePerImage = modelPrices[imageModel] || 42;
+    var totalImages = pageCount + mainImageCount + skuImageCount + showcaseCount + materialImageCount + 2;
+    var analysisCredits = 35;
+    var requiredCredits = (pricePerImage * totalImages + analysisCredits) * 2;
+
+    // 检查用户积分
+    if (window._lobsterMe && typeof window._lobsterMe.credits === 'number') {
+      var currentCredits = window._lobsterMe.credits;
+      if (currentCredits < requiredCredits) {
+        _setMsg('积分不足：生成电商详情页套图（约 ' + totalImages + ' 张图片）需要约 ' + requiredCredits + ' 积分，当前余额 ' + currentCredits + ' 积分。请先充值。', true);
+        return;
+      }
+    }
+
     var btn = byId('ecomStartBtn');
     if (btn) {
       btn.disabled = true;
@@ -1384,7 +1423,7 @@
       if (byId(id)) byId(id).value = '';
     });
     if (byId('ecomStyleSelect')) byId('ecomStyleSelect').value = 'creamy_wood';
-    if (byId('ecomImageModelPresetSelect')) byId('ecomImageModelPresetSelect').value = DEFAULT_IMAGE_MODEL_PRESET;
+    _setImageModelPreset(DEFAULT_IMAGE_MODEL_PRESET);
     if (byId('ecomDetailTemplateSelect')) byId('ecomDetailTemplateSelect').value = 'detail_template_02';
     if (byId('ecomShowcaseTemplateSelect')) byId('ecomShowcaseTemplateSelect').value = 'showcase_template_02';
     if (byId('ecomPageCountInput')) byId('ecomPageCountInput').value = 12;
@@ -1488,6 +1527,11 @@
     OUTPUT_TARGETS.forEach(function(item) {
       var el = byId(item.id);
       if (el) el.addEventListener('change', _renderRequestedOutputs);
+    });
+    document.querySelectorAll('[data-image-preset]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        _setImageModelPreset(btn.getAttribute('data-image-preset'));
+      });
     });
   }
 
@@ -2257,6 +2301,7 @@
   function initEcommerceDetailStudioView() {
     if (!state.initialized) {
       _ensureExtendedFields();
+      _setImageModelPreset(DEFAULT_IMAGE_MODEL_PRESET);
       _bindUploader('ecomUploadMainBtn', 'ecomMainFileInput', 'main', false);
       _bindUploader('ecomUploadProductRefsBtn', 'ecomProductRefsFileInput', 'product_ref', true);
       _bindUploader('ecomUploadStyleRefsBtn', 'ecomStyleRefsFileInput', 'style_ref', true);

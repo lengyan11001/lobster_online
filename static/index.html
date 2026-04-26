@@ -143,6 +143,47 @@
     .ecom-field .hint { margin-top: 0.25rem; font-size: 0.74rem; color: var(--text-muted); line-height: 1.45; }
     .ecom-inline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
     .ecom-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+    .ecom-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+    .ecom-preset-option {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.18rem;
+      width: 100%;
+      min-height: 58px;
+      padding: 0.7rem 0.8rem;
+      text-align: left;
+      cursor: pointer;
+      border: 1px solid rgba(34,49,78,0.10);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(249,251,255,0.98), rgba(244,247,252,0.98));
+      color: var(--text);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, transform 0.18s ease;
+    }
+    .ecom-preset-option:hover {
+      border-color: rgba(91,124,255,0.28);
+      background: linear-gradient(180deg, #ffffff, rgba(244,248,255,0.98));
+      transform: translateY(-1px);
+    }
+    .ecom-preset-option.is-active {
+      border-color: rgba(91,124,255,0.52);
+      background: linear-gradient(180deg, rgba(239,244,255,0.98), rgba(232,240,255,0.94));
+      box-shadow: 0 0 0 3px rgba(91,124,255,0.10), inset 0 1px 0 rgba(255,255,255,0.92);
+    }
+    .ecom-preset-option strong {
+      display: block;
+      font-size: 0.82rem;
+      line-height: 1.4;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .ecom-preset-option span {
+      display: block;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
     .ecom-check {
       display: flex; align-items: center; gap: 0.45rem; padding: 0.55rem 0.65rem;
       border: 1px solid rgba(34,49,78,0.10);
@@ -421,6 +462,7 @@
       border-radius:24px; overflow:hidden; border:1px solid rgba(116,134,168,0.16);
       background:linear-gradient(180deg, rgba(250,252,255,0.98), rgba(243,247,253,0.98));
     }
+    .tvc-video-stage[hidden] { display:none !important; }
     .tvc-video-surface {
       position:relative; min-height:260px; display:flex; align-items:center; justify-content:center;
       background:
@@ -442,6 +484,129 @@
     }
     .tvc-meta-card .label { font-size:0.68rem; color:#74829a; text-transform:uppercase; letter-spacing:0.05em; }
     .tvc-meta-card .value { margin-top:0.28rem; font-size:0.86rem; color:#243755; font-weight:600; line-height:1.45; }
+    .tvc-tip-toggle {
+      display:inline-flex; align-items:center; gap:0.45rem;
+      min-height:38px; padding:0.48rem 0.82rem;
+      border-radius:999px; border:1px solid rgba(91,124,255,0.16);
+      background:linear-gradient(180deg, rgba(247,250,255,0.98), rgba(238,244,255,0.96));
+      color:#3657d8; font-size:0.78rem; font-weight:700; cursor:pointer;
+      box-shadow:0 10px 22px rgba(36,54,88,0.05), inset 0 1px 0 rgba(255,255,255,0.92);
+      transition:transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    }
+    .tvc-tip-toggle:hover {
+      transform:translateY(-1px);
+      border-color:rgba(91,124,255,0.28);
+      box-shadow:0 14px 26px rgba(36,54,88,0.08), inset 0 1px 0 rgba(255,255,255,0.96);
+    }
+    .tvc-tip-toggle.is-active {
+      background:linear-gradient(135deg, #5f7dff, #3f62ea 62%, #3556d8 100%);
+      border-color:rgba(63,98,234,0.42);
+      color:#fff;
+      box-shadow:0 16px 30px rgba(63,98,234,0.18), inset 0 1px 0 rgba(255,255,255,0.18);
+    }
+    .tvc-tip-toggle .badge {
+      display:inline-flex; align-items:center; justify-content:center;
+      min-width:26px; height:22px; padding:0 0.45rem;
+      border-radius:999px; background:rgba(255,255,255,0.72); color:#d91d49;
+      font-size:0.68rem; font-weight:800;
+    }
+    .tvc-tip-toggle.is-active .badge {
+      background:rgba(255,255,255,0.18);
+      color:#fff;
+    }
+    .tvc-case-panel {
+      display:none; margin-bottom:1rem; padding:0.95rem;
+      border-radius:22px; border:1px solid rgba(116,134,168,0.14);
+      background:
+        radial-gradient(circle at top right, rgba(255,92,120,0.12), transparent 26%),
+        radial-gradient(circle at top left, rgba(91,124,255,0.10), transparent 24%),
+        linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,253,0.98));
+      box-shadow:0 14px 30px rgba(36,54,88,0.06);
+    }
+    .tvc-case-panel.is-visible { display:block; }
+    .tvc-panel[hidden] { display:none !important; }
+    .tvc-case-head {
+      display:flex; align-items:flex-start; justify-content:space-between; gap:0.8rem;
+      margin-bottom:0.85rem; flex-wrap:wrap;
+    }
+    .tvc-case-head h4 { margin:0 0 0.18rem 0; font-size:0.96rem; color:#20314d; }
+    .tvc-case-head p { margin:0; font-size:0.76rem; line-height:1.58; color:#66758d; max-width:760px; }
+    .tvc-case-status { font-size:0.74rem; color:#6f7f98; }
+    .tvc-case-grid {
+      display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.9rem;
+    }
+    .tvc-case-grid::-webkit-scrollbar { width:8px; }
+    .tvc-case-grid::-webkit-scrollbar-thumb { background:rgba(117,139,179,0.24); border-radius:999px; }
+    .tvc-case-card {
+      display:flex; flex-direction:column; padding:0; overflow:hidden; text-align:left;
+      border-radius:20px; border:1px solid rgba(116,134,168,0.12);
+      background:linear-gradient(180deg, rgba(255,255,255,0.99), rgba(246,249,255,0.98));
+      box-shadow:0 12px 24px rgba(36,54,88,0.05);
+      transition:transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+    .tvc-case-card:hover {
+      transform:translateY(-2px);
+      border-color:rgba(91,124,255,0.2);
+      box-shadow:0 16px 28px rgba(36,54,88,0.08);
+    }
+    .tvc-case-card.is-active {
+      border-color:rgba(63,98,234,0.28);
+      box-shadow:0 0 0 3px rgba(91,124,255,0.10), 0 16px 28px rgba(63,98,234,0.08);
+    }
+    .tvc-case-thumb {
+      position:relative; aspect-ratio:16 / 9; overflow:hidden;
+      background:linear-gradient(135deg, rgba(232,239,252,1), rgba(248,242,233,0.98));
+    }
+    .tvc-case-thumb img, .tvc-case-thumb video { width:100%; height:100%; object-fit:cover; display:block; }
+    .tvc-case-thumb::after {
+      content:""; position:absolute; inset:auto 0 0 0; height:54%;
+      background:linear-gradient(180deg, rgba(18,31,55,0), rgba(18,31,55,0.58));
+      pointer-events:none;
+    }
+    .tvc-case-badges {
+      position:absolute; top:0.65rem; left:0.65rem; right:0.65rem;
+      display:flex; align-items:center; justify-content:space-between; gap:0.45rem; z-index:1;
+    }
+    .tvc-case-badge {
+      display:inline-flex; align-items:center; justify-content:center;
+      padding:0.24rem 0.52rem; border-radius:999px; font-size:0.66rem; font-weight:800;
+      background:rgba(19,32,56,0.54); color:#fff; backdrop-filter:blur(8px);
+    }
+    .tvc-case-badge.is-featured { background:linear-gradient(135deg, #ff5c78, #d91d49); }
+    .tvc-case-overlay-title {
+      position:absolute; left:0.78rem; right:0.78rem; bottom:0.72rem; z-index:1;
+      color:#fff; font-size:0.84rem; font-weight:700; line-height:1.45;
+      text-shadow:0 6px 14px rgba(17,24,39,0.22);
+    }
+    .tvc-case-body { padding:0.86rem 0.9rem 0.92rem; }
+    .tvc-case-copy {
+      margin:0; font-size:0.74rem; line-height:1.62; color:#66758d;
+      display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden;
+      min-height:4.8em;
+    }
+    .tvc-case-tags { display:flex; flex-wrap:wrap; gap:0.36rem; margin-top:0.72rem; }
+    .tvc-case-tags span {
+      display:inline-flex; align-items:center; padding:0.2rem 0.48rem;
+      border-radius:999px; background:rgba(239,244,252,0.96);
+      border:1px solid rgba(116,134,168,0.10); color:#708099; font-size:0.66rem;
+    }
+    .tvc-case-actions {
+      display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.82rem;
+    }
+    .tvc-case-actions .btn { flex:1 1 140px; justify-content:center; }
+    .tvc-video-modal-mask {
+      position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
+      padding:1rem; background:rgba(11,18,32,0.66); backdrop-filter:blur(10px);
+    }
+    .tvc-video-modal-mask.is-visible { display:flex; }
+    .tvc-video-modal {
+      width:min(940px, 96vw); max-height:92vh; display:flex; flex-direction:column; gap:0.8rem;
+      padding:0.9rem; border-radius:22px; background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,253,0.98));
+      border:1px solid rgba(116,134,168,0.18); box-shadow:0 24px 70px rgba(15,23,42,0.28);
+    }
+    .tvc-video-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:0.8rem; }
+    .tvc-video-modal-title { margin:0; font-size:0.96rem; line-height:1.45; color:#20314d; }
+    .tvc-video-modal video { width:100%; max-height:74vh; border-radius:16px; background:#101827; display:block; }
     .tvc-side-stack { display:flex; flex-direction:column; gap:1rem; }
     .tvc-insight-list { display:grid; gap:0.6rem; }
     .tvc-insight-item {
@@ -465,6 +630,134 @@
       display:flex; gap:0.55rem; flex-wrap:wrap; margin-top:0.75rem;
     }
     .tvc-quick-actions .btn { flex:1 1 140px; }
+    .imglab-studio { display:flex; flex-direction:column; gap:0.9rem; }
+    .imglab-hero {
+      display:grid; grid-template-columns:minmax(0, 1.1fr) auto; gap:1rem; align-items:start;
+      padding:0.95rem 1rem; border-radius:22px;
+      background:
+        radial-gradient(circle at top left, rgba(245,158,11,0.14), transparent 30%),
+        radial-gradient(circle at 88% 20%, rgba(59,130,246,0.14), transparent 28%),
+        linear-gradient(180deg, rgba(255,255,255,0.98), rgba(247,249,255,0.96));
+      border:1px solid rgba(113,130,159,0.18);
+      box-shadow:0 16px 36px rgba(36,54,88,0.08);
+    }
+    .imglab-hero h3 { margin:0 0 0.24rem 0; font-size:1.08rem; color:#20314d; }
+    .imglab-hero p { margin:0; max-width:780px; font-size:0.8rem; line-height:1.62; color:#62718a; }
+    .imglab-badges { display:flex; flex-wrap:wrap; gap:0.45rem; margin-top:0.72rem; }
+    .imglab-badge {
+      display:inline-flex; align-items:center; padding:0.26rem 0.62rem; border-radius:999px;
+      background:rgba(255,255,255,0.88); border:1px solid rgba(113,130,159,0.16); color:#6c7b92; font-size:0.72rem;
+    }
+    .imglab-shell { display:grid; grid-template-columns:360px minmax(0, 1fr); gap:1rem; align-items:start; }
+    .imglab-sidebar, .imglab-main { min-width:0; display:flex; flex-direction:column; gap:1rem; }
+    .imglab-sidebar {
+      position:sticky; top:0.75rem; max-height:calc(100vh - 1.5rem); overflow:auto; padding-right:0.15rem;
+    }
+    .imglab-sidebar::-webkit-scrollbar { width:8px; }
+    .imglab-sidebar::-webkit-scrollbar-thumb { background:rgba(117,139,179,0.24); border-radius:999px; }
+    .imglab-panel {
+      background:rgba(255,255,255,0.96); border:1px solid rgba(113,130,159,0.16); border-radius:24px; padding:0.95rem;
+      box-shadow:0 12px 28px rgba(36,54,88,0.06);
+    }
+    .imglab-panel-title { margin:0 0 0.34rem 0; font-size:0.96rem; color:#20314d; }
+    .imglab-panel-hint { margin:0 0 0.7rem 0; font-size:0.75rem; line-height:1.58; color:#6a7890; }
+    .imglab-field { margin-bottom:0.78rem; }
+    .imglab-field:last-child { margin-bottom:0; }
+    .imglab-field label { display:block; margin-bottom:0.36rem; font-size:0.82rem; font-weight:600; color:#2b3b56; }
+    .imglab-field textarea,
+    .imglab-field select {
+      width:100%; box-sizing:border-box; padding:0.62rem 0.72rem; border-radius:16px;
+      border:1px solid rgba(113,130,159,0.22); background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      color:#243755; font-size:0.84rem; outline:none; transition:border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .imglab-field textarea { min-height:132px; resize:vertical; line-height:1.6; }
+    .imglab-field textarea:focus,
+    .imglab-field select:focus {
+      border-color:rgba(91,124,255,0.48); box-shadow:0 0 0 3px rgba(91,124,255,0.12);
+    }
+    .imglab-inline-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.72rem; }
+    .imglab-helper-note {
+      margin-top:0.68rem; padding:0.72rem 0.8rem; border-radius:18px;
+      background:rgba(240,245,255,0.94); border:1px solid rgba(91,124,255,0.14); color:#51627c; font-size:0.75rem; line-height:1.62;
+    }
+    .imglab-upload-box {
+      padding:0.68rem; border-radius:18px; border:1px dashed rgba(124,142,178,0.26);
+      background:linear-gradient(180deg, rgba(248,250,255,0.98), rgba(242,246,253,0.96));
+    }
+    .imglab-upload-actions { display:flex; gap:0.45rem; flex-wrap:wrap; align-items:center; margin-bottom:0.55rem; }
+    .imglab-upload-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(112px, 1fr)); gap:0.6rem; }
+    .imglab-upload-card {
+      position:relative; overflow:hidden; border-radius:16px; border:1px solid rgba(116,134,168,0.16);
+      background:#fff; min-height:108px; box-shadow:0 8px 16px rgba(36,54,88,0.06);
+    }
+    .imglab-upload-card img { width:100%; height:76px; object-fit:cover; display:block; background:#eef3fb; }
+    .imglab-upload-remove {
+      position:absolute; top:6px; right:6px; width:22px; height:22px; border:none; border-radius:999px;
+      display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:2;
+      background:rgba(20,30,45,0.72); color:#fff; font-size:0.9rem; line-height:1; box-shadow:0 6px 12px rgba(20,30,45,0.18);
+    }
+    .imglab-upload-remove:hover { background:rgba(220,38,38,0.88); }
+    .imglab-upload-card-body { padding:0.45rem 0.5rem 0.55rem; }
+    .imglab-upload-card-title { font-size:0.7rem; line-height:1.42; color:#4f607a; word-break:break-word; }
+    .imglab-upload-card-meta { margin-top:0.2rem; font-size:0.62rem; color:#7a879d; }
+    .imglab-empty-slot {
+      display:flex; align-items:center; min-height:40px; padding:0.44rem 0.58rem; border-radius:12px;
+      border:1px dashed rgba(116,134,168,0.2); background:rgba(255,255,255,0.74); color:#75839a; font-size:0.73rem;
+    }
+    .imglab-actions { display:flex; gap:0.55rem; flex-wrap:wrap; margin-top:0.78rem; }
+    .imglab-actions .btn { flex:1 1 140px; }
+    .imglab-result-surface {
+      min-height:420px; border-radius:24px; overflow:hidden; border:1px solid rgba(116,134,168,0.16);
+      background:
+        radial-gradient(circle at top left, rgba(245,158,11,0.14), transparent 26%),
+        radial-gradient(circle at 82% 16%, rgba(59,130,246,0.16), transparent 24%),
+        linear-gradient(180deg, rgba(250,252,255,0.98), rgba(243,247,253,0.98));
+      display:flex; align-items:center; justify-content:center;
+    }
+    .imglab-result-surface img {
+      width:100%; height:100%; min-height:420px; max-height:720px; object-fit:contain; display:block; background:#f5f7fb;
+    }
+    .imglab-result-placeholder {
+      width:min(84%, 420px); padding:1rem; border-radius:24px; text-align:left; color:#30425f;
+      background:rgba(255,255,255,0.78); border:1px solid rgba(116,134,168,0.14); box-shadow:0 20px 38px rgba(36,54,88,0.08);
+    }
+    .imglab-result-placeholder strong { display:block; font-size:1rem; color:#20314d; }
+    .imglab-result-placeholder span { display:block; margin-top:0.38rem; font-size:0.8rem; line-height:1.65; color:#61718a; }
+    .imglab-result-meta { display:flex; align-items:center; justify-content:space-between; gap:0.7rem; flex-wrap:wrap; margin:0.85rem 0 0.55rem; }
+    .imglab-result-pills { display:flex; gap:0.45rem; flex-wrap:wrap; }
+    .imglab-result-pill {
+      display:inline-flex; align-items:center; padding:0.34rem 0.68rem; border-radius:999px;
+      background:rgba(240,245,252,0.95); border:1px solid rgba(116,134,168,0.14); color:#52637c; font-size:0.74rem;
+    }
+    .imglab-result-gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:0.7rem; }
+    .imglab-result-thumb {
+      border:none; cursor:pointer; padding:0.38rem; text-align:left; border-radius:18px;
+      background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,253,0.98));
+      box-shadow:inset 0 0 0 1px rgba(116,134,168,0.14);
+    }
+    .imglab-result-thumb.is-active { box-shadow:inset 0 0 0 2px rgba(91,124,255,0.26), 0 10px 22px rgba(91,124,255,0.08); }
+    .imglab-result-thumb img { width:100%; aspect-ratio:1 / 1; object-fit:cover; border-radius:14px; display:block; background:#eef3fb; }
+    .imglab-example-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.9rem; }
+    .imglab-example-toolbar {
+      display:flex; align-items:center; justify-content:space-between; gap:0.8rem; flex-wrap:wrap; margin-bottom:0.8rem;
+    }
+    .imglab-example-status { font-size:0.76rem; color:#718099; }
+    .imglab-example-card {
+      border:none; cursor:pointer; padding:0; overflow:hidden; text-align:left; border-radius:22px;
+      background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,253,0.98));
+      box-shadow:inset 0 0 0 1px rgba(116,134,168,0.12), 0 12px 24px rgba(36,54,88,0.05);
+      transition:transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .imglab-example-card:hover { transform:translateY(-2px); box-shadow:inset 0 0 0 1px rgba(91,124,255,0.18), 0 16px 26px rgba(91,124,255,0.08); }
+    .imglab-example-card img { width:100%; aspect-ratio:1 / 1; object-fit:cover; display:block; background:#edf2fb; }
+    .imglab-example-body { padding:0.88rem 0.92rem 0.96rem; }
+    .imglab-example-title { margin:0; font-size:0.88rem; font-weight:700; line-height:1.42; color:#20314d; }
+    .imglab-example-copy { margin:0.34rem 0 0 0; font-size:0.74rem; line-height:1.62; color:#66758d; }
+    .imglab-example-tag-row { display:flex; flex-wrap:wrap; gap:0.36rem; margin-top:0.72rem; }
+    .imglab-example-tag {
+      display:inline-flex; align-items:center; padding:0.2rem 0.5rem; border-radius:999px; background:rgba(240,245,252,0.96);
+      border:1px solid rgba(116,134,168,0.12); color:#74839a; font-size:0.66rem;
+    }
     .ecom-browser-side { min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
     .ecom-browser-stage-head { display: flex; justify-content: space-between; gap: 0.85rem; align-items: flex-start; flex-wrap: wrap; margin-bottom: 0.85rem; }
     .ecom-focused-preview {
@@ -558,16 +851,19 @@
     .ecom-example-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.75rem; }
     .ecom-example-tags span { font-size: 0.68rem; padding: 0.2rem 0.5rem; border-radius: 999px; background: rgba(255,255,255,0.06); color: var(--text-muted); }
     @media (max-width: 1080px) {
-      .ecom-studio-shell, .ecom-browser-layout { grid-template-columns: 1fr; }
+      .ecom-studio-shell, .ecom-browser-layout, .imglab-shell { grid-template-columns: 1fr; }
       .ecom-browser-toolbar-row { flex-direction: column; }
-      .ecom-example-grid { grid-template-columns: 1fr; }
+      .ecom-example-grid, .imglab-example-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 768px) {
       .ecom-studio-hero { flex-direction: column; }
-      .ecom-inline-grid, .ecom-choice-grid, .ecom-result-overview { grid-template-columns: 1fr; }
+      .ecom-inline-grid, .ecom-choice-grid, .ecom-result-overview, .imglab-inline-grid { grid-template-columns: 1fr; }
       .ecom-task-browser-head { flex-direction: column; }
       .ecom-task-browser-actions { width: 100%; }
       .ecom-focused-preview { min-height: 300px; }
+      .imglab-hero { grid-template-columns: 1fr; }
+      .imglab-result-surface { min-height: 320px; }
+      .imglab-result-surface img { min-height: 320px; }
     }
     #ecomOverviewStats,
     #ecomRequestedOutputs,
@@ -1410,7 +1706,29 @@
       font-size: 0.72rem;
     }
     .chat-main {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
       gap: 0.55rem;
+    }
+    .chat-main.is-home-empty {
+      min-height: calc(100vh - 190px);
+      justify-content: flex-start;
+      padding: 0.15rem 0 0.45rem;
+    }
+    .chat-main.is-home-empty .chat-mode-switch,
+    .chat-main.is-home-empty .model-selector {
+      display: none;
+    }
+    .chat-main.is-home-empty .chat-workspace {
+      min-height: auto;
+      padding: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      backdrop-filter: none;
+      overflow: visible;
     }
     .model-selector {
       padding: 0.4rem 0.25rem;
@@ -1430,10 +1748,29 @@
     }
     .chat-empty-state {
       display: none;
-      max-width: 1180px;
-      margin: 0 auto;
-      text-align: center;
-      padding: 2.5rem 1rem 1.2rem;
+      max-width: 1380px;
+      margin: 0 0 0 420px;
+      padding: 0;
+    }
+    .chat-home-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 520px;
+      gap: 3.4rem;
+      align-items: start;
+      padding: 0 0 1rem;
+    }
+    .chat-home-copy {
+      min-width: 0;
+      max-width: 980px;
+      padding: 0.15rem 0 0;
+    }
+    .chat-home-copy .workspace-category-tabs {
+      justify-content: flex-start;
+      margin: 0.85rem 0 0.7rem;
+    }
+    .chat-home-copy .workspace-status-strip {
+      justify-content: flex-start;
+      margin: 0;
     }
     .chat-workspace.is-empty {
       justify-content: center;
@@ -1445,78 +1782,318 @@
       display: none !important;
     }
     .chat-workspace.is-empty .chat-input-row {
-      width: min(980px, 100%);
-      margin: 0 auto;
-      padding-top: 1rem;
+      width: min(1210px, 100%);
+      margin: 0 0 0 420px;
+      padding-top: 0.1rem;
       border-top: none;
       flex-wrap: nowrap;
     }
     .chat-workspace.is-empty .chat-composer-shell {
-      border-radius: 30px;
-      padding: 1rem 1rem 0.9rem;
+      border-radius: 28px;
+      padding: 1rem 1.15rem 0.95rem;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,255,0.96));
+      border: 1px solid rgba(34, 49, 78, 0.08);
       box-shadow: 0 18px 44px rgba(36, 54, 88, 0.08);
     }
     .chat-workspace.is-empty .chat-input-row textarea {
-      min-height: 110px;
+      min-height: 154px;
       padding: 0;
       border-radius: 0;
       background: transparent;
-      font-size: 0.98rem;
+      font-size: 1rem;
     }
-    .chat-empty-eyebrow {
+    .chat-home-badge-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.2rem;
+    }
+    .chat-empty-eyebrow,
+    .chat-home-mode-pill {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 0.35rem 0.8rem;
+      padding: 0.55rem 1.15rem;
       border-radius: 999px;
-      background: rgba(91, 124, 255, 0.1);
-      color: #3f60dc;
-      font-size: 0.8rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
+      background: rgba(91, 124, 255, 0.06);
+      color: #7d8aab;
+      font-size: 2.05rem;
+      font-weight: 700;
+      border: 1px solid rgba(91, 124, 255, 0.12);
+      white-space: nowrap;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.92);
+    }
+    .chat-home-mode-pill {
+      cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .chat-home-mode-pill:hover {
+      transform: translateY(-1px);
+      border-color: rgba(91, 124, 255, 0.26);
+      background: rgba(91, 124, 255, 0.12);
+      color: #4d68dc;
+    }
+    .chat-home-mode-pill.is-active,
+    .chat-empty-eyebrow.is-active {
+      background: linear-gradient(135deg, #5f7dff, #3f62ea 58%, #3556d8 100%);
+      color: #ffffff;
+      border-color: rgba(63, 98, 234, 0.52);
+      box-shadow:
+        0 18px 34px rgba(63, 98, 234, 0.24),
+        inset 0 1px 0 rgba(255,255,255,0.18);
     }
     .chat-empty-title {
-      font-size: clamp(2rem, 4vw, 3.1rem);
-      line-height: 1.08;
+      font-size: clamp(5rem, 8.75vw, 7.25rem);
+      line-height: 0.96;
       letter-spacing: -0.04em;
-      margin: 0 0 0.8rem;
+      margin: 0 0 1.25rem;
       color: #1e2c44;
+      font-weight: 800;
+    }
+    .chat-empty-title-emphasis {
+      color: #5a78f6;
     }
     .chat-empty-subtitle {
-      max-width: 660px;
-      margin: 0 auto 1.5rem;
+      max-width: 920px;
+      margin: 0 0 0.85rem;
       color: var(--text-muted);
-      font-size: 1rem;
-      line-height: 1.75;
+      font-size: 2.3rem;
+      line-height: 1.3;
+    }
+    .chat-home-helper {
+      margin: 0;
+      color: #8190a7;
+      font-size: 2.25rem;
+      line-height: 1.32;
+    }
+    .chat-home-visual {
+      position: relative;
+      width: 520px;
+      min-height: 420px;
+      overflow: hidden;
+      margin-top: -0.25rem;
+    }
+    .chat-home-visual::before {
+      content: "";
+      position: absolute;
+      inset: 138px 82px 62px;
+      border-radius: 999px;
+      background:
+        radial-gradient(circle, rgba(255,255,255,0.96), rgba(224,234,255,0.62) 68%, rgba(201,217,255,0.16) 100%);
+      box-shadow: 0 36px 72px rgba(130, 161, 255, 0.18);
+    }
+    .chat-home-visual::after {
+      content: "";
+      position: absolute;
+      inset: 210px 144px 92px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(248,250,255,0.98), rgba(208,224,255,0.78));
+      box-shadow:
+        0 22px 44px rgba(104, 137, 236, 0.18),
+        inset 0 1px 0 rgba(255,255,255,0.98);
+    }
+    .chat-home-visual-core {
+      position: absolute;
+      top: 48px;
+      left: 50%;
+      width: 236px;
+      height: 272px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 4.9rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: rgba(255,255,255,0.98);
+      text-shadow: 0 10px 24px rgba(91,124,255,0.32);
+      z-index: 1;
+      background:
+        linear-gradient(180deg, rgba(154,188,255,0.98), rgba(92,126,244,0.98));
+      clip-path: polygon(50% 0%, 88% 18%, 88% 74%, 50% 100%, 12% 74%, 12% 18%);
+      box-shadow:
+        0 24px 46px rgba(92,126,244,0.28),
+        inset 0 1px 0 rgba(255,255,255,0.45);
+    }
+    .chat-home-orbit,
+    .chat-home-orbit::before,
+    .chat-home-orbit::after {
+      position: absolute;
+      border-radius: 999px;
+      pointer-events: none;
+      content: "";
+    }
+    .chat-home-orbit {
+      left: 50%;
+      top: 158px;
+      width: 336px;
+      height: 126px;
+      transform: translateX(-50%) rotate(-10deg);
+      border: 2px solid rgba(112,146,248,0.24);
+      z-index: 0;
+    }
+    .chat-home-orbit::before {
+      width: 24px;
+      height: 24px;
+      right: 34px;
+      top: -14px;
+      background: linear-gradient(180deg, rgba(173,198,255,1), rgba(91,124,255,1));
+      box-shadow: 0 8px 20px rgba(91,124,255,0.26);
+    }
+    .chat-home-orbit::after {
+      width: 22px;
+      height: 22px;
+      left: 10px;
+      bottom: 10px;
+      background: linear-gradient(180deg, rgba(137,188,255,1), rgba(70,132,255,1));
+      box-shadow: 0 8px 20px rgba(91,124,255,0.24);
+    }
+    .chat-home-stage,
+    .chat-home-stage::before,
+    .chat-home-stage::after {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      content: "";
+    }
+    .chat-home-stage {
+      bottom: 40px;
+      width: 372px;
+      height: 106px;
+      background: linear-gradient(180deg, rgba(248,250,255,0.98), rgba(192,212,255,0.88));
+      box-shadow:
+        0 22px 44px rgba(106, 140, 240, 0.14),
+        inset 0 1px 0 rgba(255,255,255,1);
+    }
+    .chat-home-stage::before {
+      top: -26px;
+      width: 282px;
+      height: 78px;
+      background: linear-gradient(180deg, rgba(252,253,255,1), rgba(213,227,255,0.92));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.98);
+    }
+    .chat-home-stage::after {
+      top: 24px;
+      width: 176px;
+      height: 34px;
+      background: radial-gradient(circle, rgba(130,161,255,0.28), rgba(130,161,255,0.02) 72%);
+    }
+    .chat-home-tools {
+      display: none;
+      width: min(1210px, 100%);
+      margin: 1.05rem 0 0 420px;
+    }
+    .chat-workspace.is-empty .chat-home-tools {
+      display: block;
+    }
+    .chat-home-tools-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.72rem;
+    }
+    .chat-home-tools-head strong {
+      font-size: 0.96rem;
+      color: #243654;
+      font-weight: 700;
+    }
+    .chat-home-tools-head span {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .chat-composer-lead {
+      display: none;
+      margin-bottom: 0.6rem;
+      color: #7a879d;
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+    .chat-workspace.is-empty .chat-composer-lead {
+      display: block;
     }
     .chat-suggestion-grid {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 0.75rem;
-      margin-bottom: 1rem;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 0.8rem;
+      margin-bottom: 0;
     }
     .chat-suggestion-chip {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.85rem;
+      min-height: 88px;
       border: 1px solid rgba(34, 49, 78, 0.08);
-      background: rgba(255, 255, 255, 0.9);
-      color: var(--text);
-      border-radius: 999px;
-      padding: 0.72rem 1rem;
+      background: rgba(255, 255, 255, 0.96);
+      color: #233451;
+      border-radius: 22px;
+      padding: 0.95rem 1rem;
       font-size: 0.9rem;
+      font-weight: 600;
+      text-align: left;
       cursor: pointer;
-      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-      box-shadow: 0 8px 20px rgba(36, 54, 88, 0.05);
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+      box-shadow: 0 10px 22px rgba(36, 54, 88, 0.05);
     }
     .chat-suggestion-chip:hover {
       transform: translateY(-1px);
       background: #ffffff;
+      border-color: rgba(91,124,255,0.22);
       box-shadow: 0 12px 24px rgba(36, 54, 88, 0.08);
     }
-    .chat-shortcut-row {
-      display: flex;
-      flex-wrap: wrap;
+    .chat-suggestion-chip-icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center;
       justify-content: center;
-      gap: 0.6rem;
+      flex-shrink: 0;
+      color: #ffffff;
+      font-size: 1.1rem;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.32);
+    }
+    .chat-suggestion-chip[data-chip-tone="video"] .chat-suggestion-chip-icon {
+      background: linear-gradient(180deg, #78a8ff, #5d88f3);
+    }
+    .chat-suggestion-chip[data-chip-tone="ecommerce"] .chat-suggestion-chip-icon {
+      background: linear-gradient(180deg, #c995ff, #a86cf6);
+    }
+    .chat-suggestion-chip[data-chip-tone="publish"] .chat-suggestion-chip-icon {
+      background: linear-gradient(180deg, #78e1a4, #43bf77);
+    }
+    .chat-suggestion-chip[data-chip-tone="content"] .chat-suggestion-chip-icon {
+      background: linear-gradient(180deg, #ffb1ad, #ff7d7a);
+    }
+    .chat-suggestion-chip[data-chip-tone="image"] .chat-suggestion-chip-icon {
+      background: linear-gradient(180deg, #ffc56d, #f29a37);
+    }
+    .chat-suggestion-chip[data-chip-tone="plan"] .chat-suggestion-chip-icon {
+      background: linear-gradient(180deg, #7ab8ff, #5294ef);
+    }
+    .chat-suggestion-chip-copy {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.16rem;
+    }
+    .chat-suggestion-chip-title {
+      color: #253551;
+      font-size: 0.92rem;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+    .chat-suggestion-chip-desc {
+      color: #8a96aa;
+      font-size: 0.74rem;
+      line-height: 1.45;
+      font-weight: 500;
+    }
+    .chat-shortcut-row {
+      display: none;
     }
     .chat-shortcut-link {
       background: transparent;
@@ -1529,6 +2106,25 @@
     }
     .chat-shortcut-link:hover {
       background: rgba(91, 124, 255, 0.08);
+    }
+    .chat-home-viewall {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.38rem;
+      border: none;
+      background: transparent;
+      color: #73809a;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0.2rem 0;
+    }
+    .chat-home-viewall:hover {
+      color: #4b67e3;
+    }
+    .chat-home-viewall span {
+      font-size: 1rem;
+      color: inherit;
     }
     .chat-messages {
       padding: 0.4rem 0 0.8rem;
@@ -1752,7 +2348,7 @@
       color: var(--text-muted);
     }
     .chat-input-row {
-      padding-top: 1rem;
+      padding-top: 0.85rem;
       border-top: none;
     }
     .chat-composer-shell {
@@ -1770,7 +2366,128 @@
       display: flex;
       flex-direction: column;
       gap: 0.85rem;
-      min-height: 132px;
+      min-height: 122px;
+    }
+    .chat-quick-mode-bar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.85rem;
+      padding: 0.7rem 0.85rem;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(236,241,255,0.98), rgba(246,249,255,0.96));
+      border: 1px solid rgba(91,124,255,0.16);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.88);
+    }
+    .chat-quick-mode-bar.is-visible {
+      display: flex;
+    }
+    .chat-quick-mode-copy {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.72rem;
+    }
+    .chat-quick-mode-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 78px;
+      padding: 0.36rem 0.72rem;
+      border-radius: 999px;
+      background: rgba(91,124,255,0.14);
+      color: #3656d6;
+      font-size: 0.78rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .chat-quick-mode-text {
+      min-width: 0;
+    }
+    .chat-quick-mode-title {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: #243654;
+      line-height: 1.35;
+    }
+    .chat-quick-mode-desc {
+      margin-top: 0.18rem;
+      font-size: 0.75rem;
+      line-height: 1.5;
+      color: #7d8aa3;
+    }
+    .chat-quick-mode-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .chat-quick-mode-advanced {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.62rem;
+      min-height: 42px;
+      padding: 0.7rem 1.1rem 0.7rem 1rem;
+      border: 1px solid rgba(225, 56, 88, 0.28);
+      border-radius: 14px;
+      background: linear-gradient(135deg, #fff7f8, #ffe7ec 54%, #ffd7df 100%);
+      color: #8f1733;
+      font-size: 0.84rem;
+      font-weight: 800;
+      line-height: 1;
+      box-shadow:
+        0 12px 26px rgba(225, 56, 88, 0.16),
+        inset 0 1px 0 rgba(255,255,255,0.96);
+      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, filter 0.18s ease;
+    }
+    .chat-quick-mode-advanced:hover {
+      transform: translateY(-1px);
+      border-color: rgba(225, 56, 88, 0.46);
+      box-shadow:
+        0 16px 30px rgba(225, 56, 88, 0.22),
+        inset 0 1px 0 rgba(255,255,255,0.98);
+      filter: saturate(1.04);
+    }
+    .chat-quick-mode-advanced-main {
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
+    }
+    .chat-quick-mode-advanced-tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.26rem 0.54rem;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #ff5c78, #d91d49);
+      color: #fff;
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      box-shadow: 0 8px 18px rgba(217, 29, 73, 0.24);
+    }
+    .chat-quick-mode-close {
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(34,49,78,0.08);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.88);
+      color: #7d8aa3;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .chat-quick-mode-close:hover {
+      background: #fff;
+      color: #425169;
+      border-color: rgba(91,124,255,0.18);
     }
     .chat-composer-shell.has-attachments .chat-composer-body {
       align-items: flex-start;
@@ -1932,11 +2649,11 @@
     .chat-icon-btn {
       width: 42px;
       height: 42px;
-      border-radius: 15px;
+      border-radius: 999px;
       border: 1px solid rgba(34, 49, 78, 0.12);
       background: rgba(255, 255, 255, 0.96);
       color: #253552;
-      font-size: 1.08rem;
+      font-size: 1rem;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1955,10 +2672,10 @@
       box-shadow: none;
     }
     .chat-attach-trigger {
-      border-radius: 14px;
+      border-radius: 999px;
       background: #fff;
       border-color: rgba(34, 49, 78, 0.1);
-      font-size: 1.35rem;
+      font-size: 1rem;
       font-weight: 400;
       box-shadow: 0 10px 22px rgba(36, 54, 88, 0.06);
     }
@@ -1971,10 +2688,10 @@
       align-items: center;
       gap: 0.45rem;
       min-height: 42px;
-      padding: 0 0.95rem;
-      border-radius: 15px;
-      border: 1px solid rgba(91, 124, 255, 0.2);
-      background: rgba(237, 242, 255, 0.95);
+      padding: 0 0.95rem 0 0.85rem;
+      border-radius: 999px;
+      border: 1px solid rgba(91, 124, 255, 0.18);
+      background: rgba(255, 255, 255, 0.98);
       color: #3e5dd5;
       cursor: pointer;
       font-size: 0.92rem;
@@ -1985,13 +2702,19 @@
     .chat-skill-chip:hover {
       transform: translateY(-1px);
       box-shadow: 0 10px 20px rgba(91, 124, 255, 0.12);
-      background: rgba(231, 237, 255, 1);
+      background: rgba(247, 250, 255, 1);
     }
     .chat-skill-chip input {
-      width: 15px;
-      height: 15px;
-      accent-color: #4d6ce3;
-      margin: 0;
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+      width: 0;
+      height: 0;
+    }
+    .chat-skill-chip::after {
+      content: "▾";
+      color: #5e74c9;
+      font-size: 0.82rem;
     }
     .chat-send-btn {
       width: 42px;
@@ -2048,11 +2771,46 @@
       .chat-workspace {
         min-height: 680px;
       }
+      .chat-main.is-home-empty {
+        min-height: auto;
+        justify-content: flex-start;
+        padding: 0;
+      }
+      .chat-empty-state {
+        margin-left: 0;
+      }
+      .chat-home-hero {
+        grid-template-columns: 1fr;
+        gap: 1.2rem;
+      }
+      .chat-home-visual {
+        width: min(100%, 360px);
+        min-height: 220px;
+        max-width: 360px;
+      }
       .chat-workspace.is-empty .chat-input-row {
+        margin-left: 0;
         flex-wrap: wrap;
+      }
+      .chat-home-tools {
+        margin-left: 0;
+      }
+      .chat-suggestion-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .chat-composer-shell {
         padding: 0.9rem;
+      }
+      .chat-quick-mode-bar {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .chat-quick-mode-actions {
+        justify-content: flex-start;
+      }
+      .chat-quick-mode-advanced {
+        width: 100%;
+        justify-content: space-between;
       }
       .chat-composer-body {
         min-height: 118px;
@@ -2109,6 +2867,7 @@
       .tvc-example-grid {
         grid-template-columns: 1fr;
       }
+      .tvc-case-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .tvc-focus-layout,
       .tvc-focus-grid {
         grid-template-columns: 1fr;
@@ -2118,6 +2877,30 @@
       }
     }
     @media (max-width: 768px) {
+      .chat-empty-state {
+        padding-top: 0.2rem;
+      }
+      .chat-workspace.is-empty .chat-input-row {
+        padding-top: 0.15rem;
+      }
+      .chat-home-tools-head,
+      .chat-shortcut-row {
+        justify-content: flex-start;
+      }
+      .tvc-case-head {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .tvc-tip-toggle {
+        width: 100%;
+        justify-content: center;
+      }
+      .tvc-case-grid {
+        grid-template-columns: 1fr;
+      }
+      .chat-suggestion-grid {
+        grid-template-columns: 1fr;
+      }
       .tvc-mode-grid,
       .tvc-inline-grid,
       .tvc-check-grid {
@@ -2286,6 +3069,11 @@
                     <span class="chat-sidebar-entry-copy">技能商店</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
+                  <button type="button" class="chat-sidebar-entry" data-open-hidden-view="image-composer-studio">
+                    <span class="chat-sidebar-entry-icon">▣</span>
+                    <span class="chat-sidebar-entry-copy">创作图片</span>
+                    <span class="chat-sidebar-entry-arrow">›</span>
+                  </button>
                   <button type="button" class="chat-sidebar-entry" data-open-hidden-view="seedance-tvc-studio">
                     <span class="chat-sidebar-entry-icon">▶</span>
                     <span class="chat-sidebar-entry-copy">视频分镜</span>
@@ -2320,38 +3108,55 @@
                 </div>
                 <div class="chat-panel card chat-workspace" id="chatWorkspace" style="max-width: 100%;">
                   <div class="chat-empty-state" id="chatEmptyState">
-                    <div class="chat-empty-eyebrow" id="chatEmptyEyebrow">AI 员工工作台</div>
-                    <h2 class="chat-empty-title" id="chatEmptyTitle">今天想让我帮你做什么？</h2>
-                    <p class="chat-empty-subtitle" id="chatEmptySubtitle">把需求直接告诉我，我可以帮你做视频、做电商套图、整理上架内容，也可以继续承接发布和运营动作。</p>
-                    <div class="workspace-category-tabs" id="workspaceCategoryTabs" aria-label="云端工作台能力分类">
-                      <button type="button" class="workspace-category-tab is-active" data-workspace-category="web_app">网页应用</button>
-                      <button type="button" class="workspace-category-tab" data-workspace-category="mobile_app">移动应用</button>
-                      <button type="button" class="workspace-category-tab" data-workspace-category="mini_program">小程序</button>
-                      <button type="button" class="workspace-category-tab" data-workspace-category="agent">智能体</button>
-                      <button type="button" class="workspace-category-tab" data-workspace-category="skills">技能</button>
-                    </div>
-                    <div class="workspace-status-strip" id="workspaceStatusStrip" aria-label="工作台状态">
-                      <div class="workspace-status-pill"><strong id="workspaceStatusPrimary">测试模式</strong><span id="workspaceStatusSecondary">当前未强制校验龙虾登录态</span></div>
-                    </div>
-                    <div class="chat-suggestion-grid">
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip1" data-chat-prompt="帮我生成一条抖音带货视频，突出卖点和口播节奏">生成视频</button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip2" data-chat-prompt="帮我做一套电商详情图，主图、SKU 图和详情页都要">电商套图</button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip3" data-chat-prompt="根据商品卖点整理一份可以直接上架的标题、卖点和详情文案">自动上架</button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip4" data-chat-prompt="帮我规划一周的小红书运营内容，包含选题和发布时间">小红书运营</button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chat-prompt="帮我生成几张适合投放和发帖的商品图片">图片生成</button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chat-prompt="帮我把账号运营动作拆成执行步骤，并告诉我先做什么">运营规划</button>
-                    </div>
-                    <div class="chat-shortcut-row">
-                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink1" data-jump-view="skill-store">打开技能商店</button>
-                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink2" data-jump-view="publish">前往发布中心</button>
-                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink3" data-jump-view="sys-config">查看系统配置</button>
+                    <div class="chat-home-hero">
+                      <div class="chat-home-copy">
+                        <div class="chat-home-badge-row">
+                          <button type="button" class="chat-empty-eyebrow is-active" id="chatEmptyEyebrow" data-chat-home-mode="default">AI 员工工作台</button>
+                          <button type="button" class="chat-home-mode-pill" id="chatHomeWorkspacePill" data-chat-home-mode="workspace_cli">云端工作台</button>
+                        </div>
+                        <h2 class="chat-empty-title" id="chatEmptyTitle">👋 你好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
+                        <p class="chat-empty-subtitle" id="chatEmptySubtitle">我可以帮你创作内容、生成视频、处理数据、运营分析等</p>
+                        <p class="chat-home-helper">选择下方功能，或直接对我说出你的需求吧~</p>
+                        <div class="workspace-category-tabs" id="workspaceCategoryTabs" aria-label="云端工作台能力分类">
+                          <button type="button" class="workspace-category-tab is-active" data-workspace-category="web_app">网页应用</button>
+                          <button type="button" class="workspace-category-tab" data-workspace-category="mobile_app">移动应用</button>
+                          <button type="button" class="workspace-category-tab" data-workspace-category="mini_program">小程序</button>
+                          <button type="button" class="workspace-category-tab" data-workspace-category="agent">智能体</button>
+                          <button type="button" class="workspace-category-tab" data-workspace-category="skills">技能</button>
+                        </div>
+                        <div class="workspace-status-strip" id="workspaceStatusStrip" aria-label="工作台状态">
+                          <div class="workspace-status-pill"><strong id="workspaceStatusPrimary">测试模式</strong><span id="workspaceStatusSecondary">当前未强制校验龙虾登录态</span></div>
+                        </div>
+                      </div>
+                      <div class="chat-home-visual" aria-hidden="true">
+                        <div class="chat-home-orbit"></div>
+                        <div class="chat-home-visual-core">AI</div>
+                        <div class="chat-home-stage"></div>
+                      </div>
                     </div>
                   </div>
                   <div id="chatMessages" class="chat-messages"></div>
                   <div class="chat-input-row">
                     <input type="file" id="chatFileInput" accept="image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.md,.json" multiple style="display:none;">
                     <div class="chat-composer-shell">
+                      <div class="chat-quick-mode-bar" id="chatQuickModeBar">
+                        <div class="chat-quick-mode-copy">
+                          <span class="chat-quick-mode-badge" id="chatQuickModeBadge">视频合成</span>
+                          <div class="chat-quick-mode-text">
+                            <div class="chat-quick-mode-title" id="chatQuickModeTitle">当前模式：视频合成</div>
+                            <div class="chat-quick-mode-desc" id="chatQuickModeDesc">直接在下面输入一句话，我会按当前模式帮你开始创作。</div>
+                          </div>
+                        </div>
+                        <div class="chat-quick-mode-actions">
+                          <button type="button" class="chat-quick-mode-advanced" id="chatQuickModeAdvancedBtn">
+                            <span class="chat-quick-mode-advanced-main">进入工作台</span>
+                            <span class="chat-quick-mode-advanced-tag">精选案例</span>
+                          </button>
+                          <button type="button" class="chat-quick-mode-close" id="chatQuickModeCloseBtn" aria-label="关闭当前模式">×</button>
+                        </div>
+                      </div>
                       <div class="chat-composer-body">
+                        <div class="chat-composer-lead" id="chatComposerLead">告诉我你想做什么？我会尽力帮你完成~</div>
                         <div id="chatAttachments" class="chat-attachments" style="display:none;"></div>
                         <textarea id="chatInput" rows="1" placeholder="发送消息或输入 / 选择技能"></textarea>
                       </div>
@@ -2365,9 +3170,28 @@
                         </div>
                         <div class="chat-input-trailing-actions">
                           <button type="button" id="chatCancelBtn" class="chat-icon-btn" disabled title="终止当前进行中的请求；如果已经提交生成任务则无法取消">&times;</button>
-                          <button type="button" id="chatSendBtn" class="chat-send-btn" title="发送">&uarr;</button>
+                          <button type="button" id="chatSendBtn" class="chat-send-btn" title="发送">&#10148;</button>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                  <div class="chat-home-tools" id="chatHomeTools">
+                    <div class="chat-home-tools-head">
+                      <strong>最近使用</strong>
+                      <button type="button" class="chat-home-viewall" data-jump-view="skill-store">查看全部 <span>&rsaquo;</span></button>
+                    </div>
+                    <div class="chat-suggestion-grid">
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip1" data-chip-tone="video" data-chat-quick-mode="video"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">生成视频</span><span class="chat-suggestion-chip-desc">一句话直接开始创作</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip2" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio"><span class="chat-suggestion-chip-icon">👜</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">电商图器</span><span class="chat-suggestion-chip-desc">商品图快速生成</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip3" data-chip-tone="publish" data-chat-prompt="根据商品卖点整理一份可以直接上架的标题、卖点和详情文案"><span class="chat-suggestion-chip-icon">↥</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">自动上架</span><span class="chat-suggestion-chip-desc">批量发布到平台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip4" data-chip-tone="content" data-chat-prompt="帮我规划一周的小红书运营内容，包含选题和发布时间"><span class="chat-suggestion-chip-icon">✦</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">小红书运营</span><span class="chat-suggestion-chip-desc">笔记创作与运营</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-chat-quick-mode="image"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">图片生成</span><span class="chat-suggestion-chip-desc">一句话直接生成画面</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-chat-prompt="帮我把账号运营动作拆成执行步骤，并告诉我先做什么"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">运营规划</span><span class="chat-suggestion-chip-desc">制定运营策略</span></span></button>
+                    </div>
+                    <div class="chat-shortcut-row">
+                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink1" data-jump-view="skill-store">打开技能商店</button>
+                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink2" data-jump-view="publish">前往发布中心</button>
+                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink3" data-jump-view="sys-config">查看系统配置</button>
                     </div>
                   </div>
                 </div>
@@ -2477,11 +3301,18 @@
 
                     <div class="ecom-inline-grid">
                       <div class="ecom-field">
-                        <label for="ecomImageModelPresetSelect">生图方案</label>
-                        <select id="ecomImageModelPresetSelect">
-                          <option value="stable_default" selected>稳定版：nano-banana-2 + 本地排字</option>
-                          <option value="gpt_image2_direct">实验版：gpt-image-2 详情页直出</option>
-                        </select>
+                        <label>生图方案</label>
+                        <input type="hidden" id="ecomImageModelPresetSelect" value="stable_default">
+                        <div class="ecom-preset-grid" role="radiogroup" aria-label="生图方案">
+                          <button type="button" class="ecom-preset-option is-active" data-image-preset="stable_default" aria-pressed="true">
+                            <strong>稳定版</strong>
+                            <span>nano-banana-2 + 本地排字</span>
+                          </button>
+                          <button type="button" class="ecom-preset-option" data-image-preset="gpt_image2_direct" aria-pressed="false">
+                            <strong>实验版</strong>
+                            <span>gpt-image-2 详情页直出</span>
+                          </button>
+                        </div>
                       </div>
                       <div class="ecom-field">
                         <label>说明</label>
@@ -2758,6 +3589,130 @@
             </div>
           </div>
 
+          <div id="content-image-composer-studio" class="content-block">
+            <div class="imglab-studio">
+              <div class="imglab-hero">
+                <div>
+                  <h3>创作图片工作台</h3>
+                  <p>左侧统一填写提示词、上传参考图、选择比例和模型。上传参考图时会走 <code>gpt-image-2</code> 的图片编辑模式做合成，不上传图片时就直接按提示词文生图；右侧上方看最终结果，下方直接复用灵感示例。</p>
+                  <div class="imglab-badges">
+                    <span class="imglab-badge">文生图</span>
+                    <span class="imglab-badge">多参考图合成</span>
+                    <span class="imglab-badge">比例映射输出</span>
+                    <span class="imglab-badge">GPT Image 2</span>
+                  </div>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+                  <button type="button" id="imglabStudioBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn">配置 Comfly</button>
+                </div>
+              </div>
+
+              <div class="imglab-shell">
+                <aside class="imglab-sidebar">
+                  <div class="imglab-panel">
+                    <h4 class="imglab-panel-title">生成参数</h4>
+                    <p class="imglab-panel-hint">这里保持一个入口就够了：有参考图就上传，没有参考图就直接写提示词。结果始终只看右侧，不做多余解释卡片。</p>
+
+                    <div class="imglab-field">
+                      <label for="imglabPromptInput">提示词</label>
+                      <textarea id="imglabPromptInput" placeholder="例如：为一款奶油风香氛蜡烛生成一张高级感主视觉，桌面摆放自然，暖白色光线，背景干净，主体材质细腻；如果上传了参考图，就沿用主体和颜色体系。"></textarea>
+                    </div>
+
+                    <div class="imglab-field">
+                      <label>上传参考图</label>
+                      <div class="imglab-upload-box">
+                        <div class="imglab-upload-actions">
+                          <button type="button" id="imglabReferenceUploadBtn" class="btn btn-primary btn-sm">上传图片</button>
+                          <input type="file" id="imglabReferenceInput" accept="image/*" multiple style="display:none;">
+                          <span class="imglab-panel-hint" style="margin:0;">不上传就是纯文生图，上传多张会一起参与合成。</span>
+                        </div>
+                        <div id="imglabReferenceList" class="imglab-upload-list"></div>
+                      </div>
+                    </div>
+
+                    <div class="imglab-inline-grid">
+                      <div class="imglab-field">
+                        <label for="imglabAspectRatioSelect">比例</label>
+                        <select id="imglabAspectRatioSelect">
+                          <option value="1:1" selected>1:1 方图</option>
+                          <option value="3:2">3:2 横图</option>
+                          <option value="16:9">16:9 横版</option>
+                          <option value="2:3">2:3 竖图</option>
+                          <option value="9:16">9:16 竖版</option>
+                        </select>
+                      </div>
+                      <div class="imglab-field">
+                        <label for="imglabModelSelect">模型</label>
+                        <select id="imglabModelSelect">
+                          <option value="gpt-image-2" selected>gpt-image-2</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="imglab-inline-grid">
+                      <div class="imglab-field">
+                        <label for="imglabQualitySelect">质量</label>
+                        <select id="imglabQualitySelect">
+                          <option value="high" selected>High</option>
+                          <option value="medium">Medium</option>
+                          <option value="low">Low</option>
+                          <option value="auto">Auto</option>
+                        </select>
+                      </div>
+                      <div class="imglab-field">
+                        <label for="imglabBackgroundSelect">背景</label>
+                        <select id="imglabBackgroundSelect">
+                          <option value="auto" selected>自动</option>
+                          <option value="opaque">实底</option>
+                          <option value="transparent">透明</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div class="imglab-helper-note">
+                      比例会映射到当前接口支持的官方尺寸。上传参考图时会按图片编辑接口组装 multipart；不上传图时，会自动补一张空白底图走同一条链路，这样页面逻辑更稳定。
+                    </div>
+                    <div id="imglabStudioMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
+
+                    <div class="imglab-actions">
+                      <button type="button" id="imglabGenerateBtn" class="btn btn-primary">开始生成图片</button>
+                      <button type="button" id="imglabResetBtn" class="btn btn-ghost">重置</button>
+                    </div>
+                  </div>
+                </aside>
+
+                <section class="imglab-main">
+                  <div class="imglab-panel">
+                    <div class="tvc-toolbar" style="margin-bottom:0.2rem;">
+                      <div>
+                        <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">结果展示</h4>
+                        <p class="imglab-panel-hint" style="margin:0;">生成完成后直接在这里看大图，下面的小图只负责切换结果，不做复杂的中间解释。</p>
+                      </div>
+                    </div>
+                    <div id="imglabResultSurface" class="imglab-result-surface"></div>
+                    <div id="imglabResultMeta" class="imglab-result-meta"></div>
+                    <div id="imglabResultGallery" class="imglab-result-gallery"></div>
+                  </div>
+
+                  <div class="imglab-panel">
+                    <div class="imglab-example-toolbar">
+                      <div>
+                        <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">提示词示例</h4>
+                        <p class="imglab-panel-hint" style="margin:0;">这里改成从你的提示词库动态读取，点一下就会把示例 prompt 带到左侧编辑区。</p>
+                      </div>
+                      <div id="imglabExamplesStatus" class="imglab-example-status">正在加载示例...</div>
+                    </div>
+                    <div id="imglabExamplesGrid" class="imglab-example-grid"></div>
+                    <div style="margin-top:0.85rem;display:flex;justify-content:center;">
+                      <button type="button" id="imglabExamplesMoreBtn" class="btn btn-ghost">加载更多示例</button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
           <!-- Seedance 视频分镜工作台 -->
           <div id="content-seedance-tvc-studio" class="content-block">
             <div class="tvc-studio">
@@ -2882,27 +3837,46 @@
                 </aside>
 
                 <section class="tvc-main">
-                  <div class="tvc-panel">
-                    <div class="tvc-toolbar" style="margin-bottom:0.85rem;">
+                  <div class="tvc-panel" id="seedanceResultPanel">
+                    <div class="tvc-toolbar" style="margin-bottom:0.2rem;">
                       <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">最终结果视频</h4>
-                        <p class="tvc-panel-hint" style="margin:0;">这里展示最后合成的视频结果。</p>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">结果展示</h4>
+                        <p class="tvc-panel-hint" style="margin:0;">最终合成视频会直接显示在这里，下面的分镜缩略图只负责帮助你快速检查整条视频节奏。</p>
                       </div>
+                      <button type="button" id="seedanceExamplesToggleBtn" class="tvc-tip-toggle" title="查看精选案例">
+                        TIP · 精选案例 <span class="badge" id="seedanceExamplesBadge">0</span>
+                      </button>
                     </div>
-                    <div class="tvc-video-stage">
+                    <div id="seedanceVideoStage" class="tvc-video-stage">
                       <div id="seedanceVideoSurface" class="tvc-video-surface"></div>
                     </div>
-                  </div>
-
-                  <div class="tvc-panel">
-                    <div class="tvc-toolbar" style="margin-bottom:0.85rem;">
+                    <div class="tvc-toolbar" style="margin:0.95rem 0 0.78rem;">
                       <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">分镜图片展示</h4>
-                        <p id="seedanceBoardsHint" class="tvc-panel-hint" style="margin:0;">下面按每 10 秒展示一张分镜图。</p>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">分镜预览</h4>
+                        <p id="seedanceBoardsHint" class="tvc-panel-hint" style="margin:0;">这里按每 10 秒生成一张分镜草案，用来检查画面是否前后连贯。</p>
                       </div>
                       <span id="seedanceBoardsCounter" class="tvc-summary-pill">2 张分镜</span>
                     </div>
                     <div id="seedanceStoryboardStrip" class="tvc-storyboard-strip"></div>
+                  </div>
+
+                  <div id="seedanceExamplesPanel" class="tvc-panel" hidden>
+                    <div class="tvc-toolbar" style="margin-bottom:0.8rem;">
+                      <div>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">OpenNana 精选案例</h4>
+                        <p class="tvc-panel-hint" style="margin:0;">点任意案例卡，会把对应提示词回填到左侧输入框。</p>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;justify-content:flex-end;">
+                        <button type="button" id="seedanceExamplesCloseBtn" class="btn btn-ghost btn-sm">返回结果</button>
+                      </div>
+                    </div>
+                    <div class="tvc-toolbar" style="margin-bottom:0.7rem;">
+                      <div id="seedanceExamplesStatus" class="tvc-case-status">案例库未加载</div>
+                    </div>
+                    <div id="seedanceExamplesGrid" class="tvc-case-grid"></div>
+                    <div style="margin-top:0.85rem;display:flex;justify-content:center;">
+                      <button type="button" id="seedanceExamplesMoreBtn" class="btn btn-ghost">加载更多示例</button>
+                    </div>
                   </div>
                 </section>
               </div>
@@ -3730,6 +4704,16 @@
     </div>
   </div>
 
+  <div id="seedanceVideoModal" class="tvc-video-modal-mask" aria-hidden="true">
+    <div class="tvc-video-modal" role="dialog" aria-modal="true" aria-labelledby="seedanceVideoModalTitle">
+      <div class="tvc-video-modal-head">
+        <h4 id="seedanceVideoModalTitle" class="tvc-video-modal-title">案例视频</h4>
+        <button type="button" id="seedanceVideoModalClose" class="btn btn-ghost btn-sm">关闭</button>
+      </div>
+      <video id="seedanceVideoModalPlayer" controls playsinline preload="metadata"></video>
+    </div>
+  </div>
+
   <!-- OpenClaw 微信插件：本机扫码授权（技能商店卡片） -->
   <div id="openclawWeixinLoginModal" class="modal-mask">
     <div class="modal" style="max-width:540px;">
@@ -4238,6 +5222,7 @@
   <script src="/static/js/wecom-detail.js?v=20260416e"></script>
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js"></script>
+  <script src="/static/js/comfly-image-studio.js"></script>
   <script src="/static/js/comfly-seedance-tvc-studio.js"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js"></script>

@@ -4,6 +4,13 @@
     duration: 20,
     activeBoardIndex: 0,
     images: [],
+    examplesOpen: false,
+    examplesLoading: false,
+    exampleCatalog: [],
+    exampleFeaturedCount: 0,
+    exampleVisibleCount: 0,
+    examplePageSize: 12,
+    activeExampleId: '',
     currentJobId: '',
     currentJobStatus: '',
     currentResultVideoUrl: '',
@@ -74,6 +81,88 @@
     if (size >= 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
     if (size >= 1024) return Math.round(size / 1024) + ' KB';
     return size + ' B';
+  }
+
+  function cleanRemoteUrl(url) {
+    return String(url || '').trim().replace(/[\\\/]+$/, '');
+  }
+
+  function normalizeExampleItem(item) {
+    var tags = Array.isArray(item && item.tags) ? item.tags : [];
+    return {
+      id: String((item && item.id) || '').trim(),
+      title: String((item && item.title) || 'Seedance 案例').trim(),
+      slug: String((item && item.slug) || '').trim(),
+      prompt: String((item && item.prompt) || '').trim(),
+      cover_image: cleanRemoteUrl(item && item.cover_image),
+      video_url: cleanRemoteUrl(item && item.video_url),
+      model: String((item && item.model) || 'Seedance 2.0').trim() || 'Seedance 2.0',
+      tags: tags.map(function(tag) { return String(tag || '').trim(); }).filter(Boolean).slice(0, 6),
+      language: String((item && item.language) || '').trim(),
+      is_featured: !!(item && item.is_featured),
+      author: String((item && item.author) || '').trim()
+    };
+  }
+
+  function updateExamplesBadge() {
+    var badge = $('seedanceExamplesBadge');
+    if (!badge) return;
+    badge.textContent = state.exampleFeaturedCount || state.exampleCatalog.length || 0;
+  }
+
+  function updateExamplesToggle() {
+    var btn = $('seedanceExamplesToggleBtn');
+    if (!btn) return;
+    btn.classList.toggle('is-active', !!state.examplesOpen);
+  }
+
+  function visibleExampleCount() {
+    return state.exampleVisibleCount || state.examplePageSize || 12;
+  }
+
+  function loadMoreExamples() {
+    if (!state.examplesOpen || state.examplesLoading || !state.exampleCatalog.length) return;
+    var current = visibleExampleCount();
+    if (current >= state.exampleCatalog.length) return;
+    state.exampleVisibleCount = Math.min(current + state.examplePageSize, state.exampleCatalog.length);
+    renderExamplesPanel();
+  }
+
+  function updateExamplesMoreButton() {
+    var btn = $('seedanceExamplesMoreBtn');
+    if (!btn) return;
+    var total = state.exampleCatalog.length;
+    var visible = Math.min(visibleExampleCount(), total);
+    btn.style.display = (state.examplesOpen && visible > 0 && visible < total) ? '' : 'none';
+    btn.disabled = !!state.examplesLoading;
+    btn.textContent = state.examplesLoading ? '加载中...' : '加载更多示例';
+  }
+
+  function openExampleVideo(example) {
+    if (!example || !example.video_url) return;
+    var modal = $('seedanceVideoModal');
+    var player = $('seedanceVideoModalPlayer');
+    var title = $('seedanceVideoModalTitle');
+    if (!modal || !player) return;
+    if (title) title.textContent = example.title || '案例视频';
+    player.src = example.video_url;
+    modal.classList.add('is-visible');
+    modal.setAttribute('aria-hidden', 'false');
+    try { player.play(); } catch (err) {}
+  }
+
+  function closeExampleVideo() {
+    var modal = $('seedanceVideoModal');
+    var player = $('seedanceVideoModalPlayer');
+    if (player) {
+      try { player.pause(); } catch (err) {}
+      player.removeAttribute('src');
+      player.load();
+    }
+    if (modal) {
+      modal.classList.remove('is-visible');
+      modal.setAttribute('aria-hidden', 'true');
+    }
   }
 
   function localBase() {
@@ -218,6 +307,114 @@
     return clean.slice(0, maxLength) + '...';
   }
 
+  function renderExamplesPanel() {
+    var panel = $('seedanceExamplesPanel');
+    var grid = $('seedanceExamplesGrid');
+    var status = $('seedanceExamplesStatus');
+    if (!panel || !grid || !status) return;
+
+    updateExamplesToggle();
+    if (!state.examplesOpen) {
+      panel.hidden = true;
+      panel.classList.remove('is-visible');
+      updateExamplesMoreButton();
+      return;
+    }
+
+    panel.hidden = false;
+    panel.classList.add('is-visible');
+    updateExamplesBadge();
+
+    if (state.examplesLoading && !state.exampleCatalog.length) {
+      status.textContent = '正在加载案例库...';
+      grid.innerHTML = '<div class="tvc-empty-slot" style="grid-column:1 / -1;">正在加载案例视频与提示词...</div>';
+      updateExamplesMoreButton();
+      return;
+    }
+
+    if (!state.exampleCatalog.length) {
+      status.textContent = '暂时没有案例数据';
+      grid.innerHTML = '<div class="tvc-empty-slot" style="grid-column:1 / -1;">案例库暂时为空，请稍后再试。</div>';
+      updateExamplesMoreButton();
+      return;
+    }
+
+    var total = state.exampleCatalog.length;
+    var visibleItems = state.exampleCatalog.slice(0, Math.min(visibleExampleCount(), total));
+    status.textContent = '已加载 ' + visibleItems.length + ' / ' + total + ' 条 OpenNana Seedance 2.0 精选案例';
+    grid.innerHTML = visibleItems.map(function(item) {
+      var tags = (item.tags || []).slice(0, 3);
+      if (item.language) tags.push(item.language.toUpperCase());
+      var media = item.video_url
+        ? '<video src="' + escapeHtml(item.video_url) + '"' + (item.cover_image ? ' poster="' + escapeHtml(item.cover_image) + '"' : '') + ' muted loop playsinline preload="metadata"></video>'
+        : (item.cover_image ? '<img src="' + escapeHtml(item.cover_image) + '" alt="' + escapeHtml(item.title) + '">' : '');
+      return [
+        '<div class="tvc-case-card' + (state.activeExampleId === item.id ? ' is-active' : '') + '" data-example-id="' + escapeHtml(item.id) + '" data-example-apply="' + escapeHtml(item.id) + '" role="button" tabindex="0">',
+        '<div class="tvc-case-thumb"' + (item.video_url ? ' data-example-video="' + escapeHtml(item.id) + '"' : '') + '>',
+        media,
+        '<div class="tvc-case-badges">',
+        '<span class="tvc-case-badge is-featured">精选案例</span>',
+        '<span class="tvc-case-badge">' + escapeHtml(item.model) + '</span>',
+        '</div>',
+        '<div class="tvc-case-overlay-title">' + escapeHtml(item.title) + '</div>',
+        '</div>',
+        '<div class="tvc-case-body">',
+        '<p class="tvc-case-copy">' + escapeHtml(shortenText(item.prompt, 220)) + '</p>',
+        '<div class="tvc-case-tags">' + tags.map(function(tag) {
+          return '<span>' + escapeHtml(tag) + '</span>';
+        }).join('') + '</div>',
+        '<div class="tvc-case-actions">',
+        '<button type="button" class="btn btn-primary btn-sm" data-example-apply="' + escapeHtml(item.id) + '">带入提示词</button>',
+        (item.video_url ? '<button type="button" class="btn btn-ghost btn-sm" data-example-video="' + escapeHtml(item.id) + '">播放案例视频</button>' : '<span class="btn btn-ghost btn-sm" style="pointer-events:none;opacity:0.55;">暂无视频</span>'),
+        '</div>',
+        '</div>',
+        '</div>'
+      ].join('');
+    }).join('');
+    updateExamplesMoreButton();
+  }
+
+  function ensureExampleCatalog() {
+    if (state.exampleCatalog.length) {
+      updateExamplesBadge();
+      return Promise.resolve(state.exampleCatalog);
+    }
+
+    state.examplesLoading = true;
+    renderExamplesPanel();
+
+    return fetch('/static/data/comfly-seedance-tvc-examples.json', { cache: 'no-store' })
+      .then(function(response) {
+        if (!response.ok) throw new Error('案例库加载失败');
+        return response.json();
+      })
+      .then(function(payload) {
+        var items = Array.isArray(payload) ? payload : (payload && Array.isArray(payload.prompts) ? payload.prompts : []);
+        state.exampleCatalog = items.map(normalizeExampleItem).filter(function(item) {
+          return item.id && item.title && item.prompt;
+        }).sort(function(a, b) {
+          if (!!a.is_featured === !!b.is_featured) return 0;
+          return a.is_featured ? -1 : 1;
+        });
+        state.exampleFeaturedCount = state.exampleCatalog.filter(function(item) { return item.is_featured; }).length;
+        state.exampleVisibleCount = Math.min(state.examplePageSize, state.exampleCatalog.length);
+        updateExamplesBadge();
+        return state.exampleCatalog;
+      })
+      .catch(function(err) {
+        state.exampleCatalog = [];
+      state.exampleFeaturedCount = 0;
+      state.exampleVisibleCount = 0;
+      updateExamplesBadge();
+        showMessage('案例库加载失败：' + (err && err.message ? err.message : '未知错误'));
+        return [];
+      })
+      .finally(function() {
+        state.examplesLoading = false;
+        renderExamplesPanel();
+      });
+  }
+
   function buildBoards() {
     var values = getFormValues();
     var count = Math.max(1, Math.floor(state.duration / 10));
@@ -326,9 +523,12 @@
   function renderWorkspace() {
     var values = getFormValues();
     var boards = buildBoards();
+    var resultPanel = $('seedanceResultPanel');
+    if (resultPanel) resultPanel.hidden = !!state.examplesOpen;
     renderUploadList('seedanceImageList', state.images);
     renderBoards(boards);
     renderVideoStage(values, boards);
+    renderExamplesPanel();
   }
 
   function showMessage(text) {
@@ -474,14 +674,46 @@
       return;
     }
 
+    // 积分预检查
+    var duration = state.duration || 20;
+    var segmentCount = Math.max(1, duration / 10);
+    // 每个分镜：图片生成(20积分) + 视频生成(20积分veo3.1-fast) = 约40积分采购价
+    var estimatedCreditsPerSegment = 40;
+    var totalEstimatedCredits = estimatedCreditsPerSegment * segmentCount;
+    var userCredits = totalEstimatedCredits * 2; // 用户消耗 = 采购价 × 2倍
+
     if (btn) {
       btn.disabled = true;
-      btn.textContent = '提交中...';
+      btn.textContent = '检查积分...';
     }
 
-    showMessage('正在上传参考素材并提交视频任务，请稍候...');
+    fetch((typeof API_BASE !== 'undefined' ? API_BASE : '') + '/auth/me', {
+      headers: (typeof authHeaders === 'function' ? authHeaders() : {})
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(meData) {
+        var balance = meData.credits != null ? meData.credits : null;
+        if (balance !== null && balance < userCredits) {
+          throw new Error('积分不足：生成 ' + duration + ' 秒视频（' + segmentCount + ' 个分镜）需要约 ' + userCredits + ' 积分（采购价 ' + totalEstimatedCredits + ' 积分 × 2倍），当前余额 ' + balance + ' 积分。请先充值。');
+        }
 
-    ensureImageAssetsUploaded()
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = '提交中...';
+        }
+        showMessage('正在上传参考素材并提交视频任务，请稍候...');
+
+        return ensureImageAssetsUploaded();
+      })
+      .catch(function(err) {
+        // 积分检查失败，显示错误但不继续
+        showMessage(err && err.message ? err.message : '积分检查失败');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '开始生成视频';
+        }
+        throw err;
+      })
       .then(function(uploadedImages) {
         var built = buildRunPayload(uploadedImages);
         if (built.error) throw new Error(built.error);
@@ -557,6 +789,75 @@
 
     bindUploadListRemoval();
 
+    if ($('seedanceExamplesToggleBtn')) {
+      $('seedanceExamplesToggleBtn').addEventListener('click', function() {
+        state.examplesOpen = !state.examplesOpen;
+        if (state.examplesOpen && state.exampleCatalog.length && !state.exampleVisibleCount) {
+          state.exampleVisibleCount = Math.min(state.examplePageSize, state.exampleCatalog.length);
+        }
+        renderWorkspace();
+        if (state.examplesOpen) ensureExampleCatalog();
+      });
+    }
+
+    if ($('seedanceExamplesCloseBtn')) {
+      $('seedanceExamplesCloseBtn').addEventListener('click', function() {
+        state.examplesOpen = false;
+        renderWorkspace();
+      });
+    }
+
+    if ($('seedanceExamplesMoreBtn')) {
+      $('seedanceExamplesMoreBtn').addEventListener('click', function() {
+        loadMoreExamples();
+      });
+    }
+
+    if ($('seedanceVideoModalClose')) {
+      $('seedanceVideoModalClose').addEventListener('click', closeExampleVideo);
+    }
+    if ($('seedanceVideoModal')) {
+      $('seedanceVideoModal').addEventListener('click', function(event) {
+        if (event.target === $('seedanceVideoModal')) closeExampleVideo();
+      });
+    }
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') closeExampleVideo();
+    });
+
+    if ($('seedanceExamplesGrid')) {
+      $('seedanceExamplesGrid').addEventListener('click', function(event) {
+        var videoBtn = event.target && event.target.closest ? event.target.closest('[data-example-video]') : null;
+        if (videoBtn) {
+          event.preventDefault();
+          event.stopPropagation();
+          var videoId = String(videoBtn.getAttribute('data-example-video') || '').trim();
+          var videoExample = state.exampleCatalog.find(function(item) { return item.id === videoId; });
+          openExampleVideo(videoExample);
+          return;
+        }
+        var applyBtn = event.target && event.target.closest ? event.target.closest('[data-example-apply]') : null;
+        if (!applyBtn) return;
+        event.preventDefault();
+        var targetId = String(applyBtn.getAttribute('data-example-apply') || '').trim();
+        var example = state.exampleCatalog.find(function(item) { return item.id === targetId; });
+        if (!example || !$('seedanceTaskPromptInput')) return;
+        state.activeExampleId = example.id;
+        $('seedanceTaskPromptInput').value = example.prompt || '';
+        $('seedanceTaskPromptInput').focus();
+        renderWorkspace();
+        showMessage('已带入案例提示词：' + example.title);
+      });
+
+      $('seedanceExamplesGrid').addEventListener('keydown', function(event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        var card = event.target && event.target.closest ? event.target.closest('[data-example-apply]') : null;
+        if (!card) return;
+        event.preventDefault();
+        card.click();
+      });
+    }
+
     [
       'seedanceAspectRatioSelect',
       'seedanceVisualToneSelect',
@@ -587,6 +888,9 @@
       releaseMediaItems(state.images);
       state.images = [];
       state.activeBoardIndex = 0;
+      state.examplesOpen = false;
+      state.activeExampleId = '';
+      state.exampleVisibleCount = Math.min(state.examplePageSize, state.exampleCatalog.length || state.examplePageSize);
       state.currentJobId = '';
       state.currentJobStatus = '';
       state.currentResultVideoUrl = '';
@@ -610,6 +914,8 @@
       setDuration(state.duration);
     }
 
+    updateExamplesBadge();
     renderWorkspace();
+    ensureExampleCatalog();
   };
 })();

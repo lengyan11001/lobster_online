@@ -71,6 +71,12 @@ window._openEcommerceDetailStudioView = function() {
   try { location.hash = 'ecommerce-detail-studio'; } catch (e1) {}
 };
 
+window._openImageComposerStudioView = function() {
+  _switchToHiddenView('image-composer-studio');
+  if (typeof window.initImageComposerStudioView === 'function') window.initImageComposerStudioView();
+  try { location.hash = 'image-composer-studio'; } catch (e1) {}
+};
+
 window._openSeedanceTvcStudioView = function() {
   _switchToHiddenView('seedance-tvc-studio');
   if (typeof window.initSeedanceTvcStudioView === 'function') window.initSeedanceTvcStudioView();
@@ -82,6 +88,10 @@ window._openHiddenWorkspaceView = function(view) {
   if (!target) return;
   if (target === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
     window._openSeedanceTvcStudioView();
+    return;
+  }
+  if (target === 'image-composer-studio' && typeof window._openImageComposerStudioView === 'function') {
+    window._openImageComposerStudioView();
     return;
   }
   if (target === 'ecommerce-detail-studio' && typeof window._openEcommerceDetailStudioView === 'function') {

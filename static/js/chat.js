@@ -868,6 +868,169 @@ function _getRequestedNewChatMode(mode) {
   return _getStoredChatMode();
 }
 
+function _renderChatEmptyTitle(rawText) {
+  var el = document.getElementById('chatEmptyTitle');
+  if (!el) return;
+  var text = String(rawText || '').trim();
+  if (!text) {
+    el.textContent = '';
+    return;
+  }
+  if (text.indexOf('AI 员工') >= 0) {
+    el.innerHTML = escapeHtml(text).replace('AI 员工', '<span class="chat-empty-title-emphasis">AI 员工</span>');
+    return;
+  }
+  el.textContent = text;
+}
+
+function _getChatSuggestionMeta(title) {
+  var key = String(title || '').trim();
+  var map = {
+    '生成视频': { tone: 'video', icon: '▶', desc: '一键生成创意视频' },
+    '电商套图': { tone: 'ecommerce', icon: '👜', desc: '商品图快速生成' },
+    '电商图器': { tone: 'ecommerce', icon: '👜', desc: '商品图快速生成' },
+    '自动上架': { tone: 'publish', icon: '↥', desc: '批量发布到平台' },
+    '小红书运营': { tone: 'content', icon: '✦', desc: '笔记创作与运营' },
+    '图片生成': { tone: 'image', icon: '▣', desc: 'AI 生成精美图片' },
+    '运营规划': { tone: 'plan', icon: '▤', desc: '制定运营策略' },
+    '创建网页': { tone: 'video', icon: '⌘', desc: '从需求直接起一个网页' },
+    '继续开发': { tone: 'ecommerce', icon: '↺', desc: '接着当前进度继续往下做' },
+    '总结网页': { tone: 'plan', icon: '⌂', desc: '快速梳理页面结构和内容' },
+    '输出文档': { tone: 'publish', icon: '✎', desc: '整理成可交付文档' },
+    '上传图片': { tone: 'image', icon: '⬆', desc: '结合参考图继续处理' },
+    '生成页面图': { tone: 'content', icon: '▣', desc: '先看界面草图和方向' },
+    '创建应用': { tone: 'video', icon: '◫', desc: '快速搭一个移动应用方案' },
+    '页面流程': { tone: 'plan', icon: '⇄', desc: '梳理关键页面和跳转逻辑' },
+    '生成界面图': { tone: 'image', icon: '▣', desc: '先出界面视觉方案' },
+    '创建小程序': { tone: 'video', icon: '◧', desc: '从零搭建小程序能力' },
+    '页面规划': { tone: 'plan', icon: '▤', desc: '先把结构和模块排清楚' },
+    '上传文档': { tone: 'publish', icon: '⇪', desc: '根据资料继续拆解执行' },
+    '创建智能体': { tone: 'video', icon: '◎', desc: '设计一个可执行的智能体' },
+    '对话流程': { tone: 'content', icon: '✦', desc: '梳理对话节点和流程' },
+    '接入能力': { tone: 'ecommerce', icon: '+', desc: '给工作台接更多能力' },
+    '继续优化': { tone: 'plan', icon: '↻', desc: '在已有基础上继续优化' },
+    '上传资料': { tone: 'publish', icon: '⇪', desc: '结合资料继续完善方案' },
+    '创建技能': { tone: 'video', icon: '✳', desc: '从零搭建新的技能能力' },
+    '参数设计': { tone: 'plan', icon: '≣', desc: '把参数和规则设计清楚' }
+  };
+  return map[key] || { tone: 'plan', icon: '•', desc: '' };
+}
+
+function _renderChatSuggestionChip(el, title, prompt) {
+  if (!el) return;
+  var safeTitle = String(title || '').trim();
+  var meta = _getChatSuggestionMeta(safeTitle);
+  if (safeTitle === '图片生成') {
+    meta.desc = '文生图 / 参考图合成';
+  }
+  el.setAttribute('data-chip-tone', meta.tone || 'plan');
+  el.setAttribute('data-chat-prompt', prompt || '');
+  el.removeAttribute('data-open-hidden-view');
+  el.removeAttribute('data-jump-view');
+  el.innerHTML =
+    '<span class="chat-suggestion-chip-icon">' + escapeHtml(meta.icon || '•') + '</span>' +
+    '<span class="chat-suggestion-chip-copy">' +
+      '<span class="chat-suggestion-chip-title">' + escapeHtml(safeTitle) + '</span>' +
+      (meta.desc ? '<span class="chat-suggestion-chip-desc">' + escapeHtml(meta.desc) + '</span>' : '') +
+    '</span>';
+}
+
+var CHAT_DEFAULT_PLACEHOLDER = '发送消息或输入 / 选择技能';
+var CHAT_DEFAULT_COMPOSER_LEAD = '告诉我你想做什么？我会先帮你理清任务，再继续生成和执行~';
+var CHAT_QUICK_MODE_CONFIG = {
+  video: {
+    badge: '视频合成',
+    title: '当前模式：视频合成',
+    desc: '直接在下面输入一句话描述视频内容；如果要调分镜、时长和镜头节奏，再进工作台精调。',
+    lead: '直接描述你要合成的视频内容，我会先帮你开始生成；需要更细参数时再进工作台。',
+    placeholder: '例如：我要合成一个20秒的护肤品短视频，晨光感，人物手持产品，镜头缓慢推进',
+    starter: '我要合成一个视频，视频内容是：',
+    advancedView: 'seedance-tvc-studio'
+  },
+  image: {
+    badge: '图片生成',
+    title: '当前模式：图片生成',
+    desc: '直接输入一句话描述画面内容；如果要上传参考图、选比例和模型，再进工作台精调。',
+    lead: '直接描述你想生成的图片内容，我会先帮你开始生成；需要更细参数时再进工作台。',
+    placeholder: '例如：我要生成一张香薰蜡烛主视觉，奶油风桌面，暖白自然光，构图高级干净',
+    starter: '我要生成一张图片，画面内容是：',
+    advancedView: 'image-composer-studio'
+  }
+};
+
+function _normalizeChatQuickMode(mode) {
+  var key = String(mode || '').trim();
+  return CHAT_QUICK_MODE_CONFIG[key] ? key : '';
+}
+
+function _getSessionQuickMode(session) {
+  if (!session || typeof session !== 'object') return '';
+  return _normalizeChatQuickMode(session.chat_quick_mode);
+}
+
+function _focusChatInputToEnd() {
+  var input = document.getElementById('chatInput');
+  if (!input) return;
+  input.focus();
+  if (typeof input.setSelectionRange === 'function') {
+    var cursor = (input.value || '').length;
+    input.setSelectionRange(cursor, cursor);
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function renderChatQuickModeUi(mode) {
+  var normalized = _normalizeChatQuickMode(mode);
+  var bar = document.getElementById('chatQuickModeBar');
+  var badge = document.getElementById('chatQuickModeBadge');
+  var title = document.getElementById('chatQuickModeTitle');
+  var desc = document.getElementById('chatQuickModeDesc');
+  var advancedBtn = document.getElementById('chatQuickModeAdvancedBtn');
+  var composerLead = document.getElementById('chatComposerLead');
+  var input = document.getElementById('chatInput');
+  var current = getSessionById(currentSessionId);
+  var sessionMode = _getSessionMode(current);
+  if (!bar || sessionMode === CHAT_MODE_WORKSPACE) {
+    if (bar) bar.classList.remove('is-visible');
+    return;
+  }
+  if (!normalized) {
+    bar.classList.remove('is-visible');
+    if (badge) badge.textContent = '';
+    if (title) title.textContent = '';
+    if (desc) desc.textContent = '';
+    if (advancedBtn) advancedBtn.setAttribute('data-open-hidden-view', '');
+    if (composerLead) composerLead.textContent = CHAT_DEFAULT_COMPOSER_LEAD;
+    if (input) input.placeholder = CHAT_DEFAULT_PLACEHOLDER;
+    return;
+  }
+  var cfg = CHAT_QUICK_MODE_CONFIG[normalized];
+  bar.classList.add('is-visible');
+  if (badge) badge.textContent = cfg.badge;
+  if (title) title.textContent = cfg.title;
+  if (desc) desc.textContent = cfg.desc;
+  if (advancedBtn) advancedBtn.setAttribute('data-open-hidden-view', cfg.advancedView || '');
+  if (composerLead) composerLead.textContent = cfg.lead;
+  if (input) input.placeholder = cfg.placeholder;
+}
+
+function setChatQuickMode(mode, options) {
+  var normalized = _normalizeChatQuickMode(mode);
+  var current = getSessionById(currentSessionId);
+  if (!current) return;
+  current.chat_quick_mode = normalized || '';
+  saveChatSessionsToStorage();
+  renderChatQuickModeUi(normalized);
+  if (!normalized) return;
+  var cfg = CHAT_QUICK_MODE_CONFIG[normalized];
+  var input = document.getElementById('chatInput');
+  if (input && cfg) {
+    var shouldPrefill = !options || options.prefill !== false;
+    if (shouldPrefill) input.value = cfg.starter;
+    _focusChatInputToEnd();
+  }
+}
+
 function updateWorkspaceCategoryUi(category) {
   var normalized = WORKSPACE_CATEGORY_CONFIG[category] ? category : WORKSPACE_CATEGORY_DEFAULT;
   document.querySelectorAll('.workspace-category-tab[data-workspace-category]').forEach(function(btn) {
@@ -880,8 +1043,8 @@ function updateWorkspaceCategoryUi(category) {
   }
   var cfg = WORKSPACE_CATEGORY_CONFIG[normalized];
   if (!cfg) return;
-  var title = document.getElementById('chatEmptyTitle');
   var subtitle = document.getElementById('chatEmptySubtitle');
+  var composerLead = document.getElementById('chatComposerLead');
   var input = document.getElementById('chatInput');
   var hint = document.getElementById('chatModeHint');
   var chipIds = [
@@ -893,16 +1056,16 @@ function updateWorkspaceCategoryUi(category) {
     'chatSuggestionChip6'
   ];
   var shortcutIds = ['chatShortcutLink1', 'chatShortcutLink2', 'chatShortcutLink3'];
-  if (title) title.textContent = cfg.title;
+  _renderChatEmptyTitle(cfg.title);
   if (subtitle) subtitle.textContent = cfg.subtitle;
+  if (composerLead) composerLead.textContent = '直接描述你要搭建的' + cfg.label + '目标、页面结构或关键功能，我会先帮你拆成可执行方案。';
   if (input) input.placeholder = cfg.placeholder;
   if (hint) hint.textContent = cfg.hint;
   chipIds.forEach(function(id, idx) {
     var el = document.getElementById(id);
     var item = cfg.chips[idx];
     if (!el || !item) return;
-    el.textContent = item[0];
-    el.setAttribute('data-chat-prompt', item[1]);
+    _renderChatSuggestionChip(el, item[0], item[1]);
   });
   shortcutIds.forEach(function(id, idx) {
     var el = document.getElementById(id);
@@ -969,8 +1132,9 @@ function updateChatModeUi(mode) {
   var hint = document.getElementById('chatModeHint');
   var input = document.getElementById('chatInput');
   var eyebrow = document.getElementById('chatEmptyEyebrow');
-  var title = document.getElementById('chatEmptyTitle');
+  var homeWorkspacePill = document.getElementById('chatHomeWorkspacePill');
   var subtitle = document.getElementById('chatEmptySubtitle');
+  var composerLead = document.getElementById('chatComposerLead');
   var attachBtn = document.getElementById('chatAttachBtn');
   var directChip = document.getElementById('chatDirectLlmChip');
   var directChk = document.getElementById('chatDirectLlmCheck');
@@ -984,9 +1148,13 @@ function updateChatModeUi(mode) {
   var shortcut2 = document.getElementById('chatShortcutLink2');
   var shortcut3 = document.getElementById('chatShortcutLink3');
   var categoryTabs = document.getElementById('workspaceCategoryTabs');
+  if (eyebrow) eyebrow.classList.toggle('is-active', normalized !== CHAT_MODE_WORKSPACE);
+  if (homeWorkspacePill) homeWorkspacePill.classList.toggle('is-active', normalized === CHAT_MODE_WORKSPACE);
+  if (eyebrow) eyebrow.textContent = 'AI 员工工作台';
+  if (homeWorkspacePill) homeWorkspacePill.textContent = '云端工作台';
   if (normalized === CHAT_MODE_WORKSPACE) {
     if (hint) hint.textContent = '当前模式：云端工作台。当前消息会走独立工作台链路，不走原来的 AI 对话。';
-    if (eyebrow) eyebrow.textContent = '云端应用工作台';
+    if (composerLead) composerLead.textContent = '告诉我要搭建的页面、应用或工作流，我会先拆成明确步骤，再继续执行。';
     if (categoryTabs) categoryTabs.classList.add('is-visible');
     updateWorkspaceStatusUi({
       visible: true,
@@ -1002,33 +1170,40 @@ function updateChatModeUi(mode) {
     if (hint) hint.textContent = '默认模式：继续走现在这套智能对话链路。';
     if (input) input.placeholder = '发送消息或输入 / 选择技能';
     if (eyebrow) eyebrow.textContent = 'AI 员工工作台';
-    if (title) title.textContent = '今天想让我帮你做什么？';
-    if (subtitle) subtitle.textContent = '把需求直接告诉我，我可以帮你做视频、做电商套图、整理上架内容，也可以继续承接发布和运营动作。';
+    _renderChatEmptyTitle('👋 你好，我是 AI 员工');
+    if (subtitle) subtitle.textContent = '我可以帮你创作内容、生成视频、处理数据、运营分析等';
+    if (composerLead) composerLead.textContent = '告诉我你想做什么？我会先帮你理清任务，再继续生成和执行~';
     if (categoryTabs) categoryTabs.classList.remove('is-visible');
     updateWorkspaceStatusUi({ visible: false });
     if (chip1) {
-      chip1.textContent = '生成视频';
-      chip1.setAttribute('data-chat-prompt', '帮我生成视频：');
+      _renderChatSuggestionChip(chip1, '生成视频', '帮我生成视频：');
     }
     if (chip2) {
-      chip2.textContent = '电商套图';
-      chip2.setAttribute('data-chat-prompt', '帮我生成电商套图：');
+      _renderChatSuggestionChip(chip2, '电商图器', '帮我生成电商套图：');
     }
     if (chip3) {
-      chip3.textContent = '自动上架';
-      chip3.setAttribute('data-chat-prompt', '帮我自动上架这个商品：');
+      _renderChatSuggestionChip(chip3, '自动上架', '帮我自动上架这个商品：');
     }
     if (chip4) {
-      chip4.textContent = '小红书运营';
-      chip4.setAttribute('data-chat-prompt', '帮我做小红书运营：');
+      _renderChatSuggestionChip(chip4, '小红书运营', '帮我做小红书运营：');
     }
     if (chip5) {
-      chip5.textContent = '图片生成';
-      chip5.setAttribute('data-chat-prompt', '帮我生成图片：');
+      _renderChatSuggestionChip(chip5, '图片生成', '帮我生成图片：');
     }
     if (chip6) {
-      chip6.textContent = '运营规划';
-      chip6.setAttribute('data-chat-prompt', '帮我做运营规划：');
+      _renderChatSuggestionChip(chip6, '运营规划', '帮我做运营规划：');
+    }
+    if (chip1) {
+      chip1.setAttribute('data-open-hidden-view', 'seedance-tvc-studio');
+      chip1.removeAttribute('data-chat-prompt');
+    }
+    if (chip2) {
+      chip2.setAttribute('data-open-hidden-view', 'ecommerce-detail-studio');
+      chip2.removeAttribute('data-chat-prompt');
+    }
+    if (chip5) {
+      chip5.setAttribute('data-open-hidden-view', 'image-composer-studio');
+      chip5.removeAttribute('data-chat-prompt');
     }
     if (shortcut1) {
       shortcut1.textContent = '打开技能商店';
@@ -1045,9 +1220,21 @@ function updateChatModeUi(mode) {
       shortcut3.setAttribute('data-jump-view', 'sys-config');
       shortcut3.removeAttribute('data-chat-prompt');
     }
+    if (chip1) {
+      chip1.setAttribute('data-chat-quick-mode', 'video');
+      chip1.removeAttribute('data-open-hidden-view');
+      chip1.removeAttribute('data-chat-prompt');
+    }
+    if (chip5) {
+      chip5.setAttribute('data-chat-quick-mode', 'image');
+      chip5.removeAttribute('data-open-hidden-view');
+      chip5.removeAttribute('data-chat-prompt');
+    }
     if (attachBtn) attachBtn.style.display = '';
     if (directChip) directChip.style.display = '';
   }
+  renderChatQuickModeUi(normalized === CHAT_MODE_WORKSPACE ? '' : _getSessionQuickMode(getSessionById(currentSessionId)));
+  if (homeWorkspacePill) homeWorkspacePill.textContent = '云端工作台';
 }
 
 function createNewSession(mode) {
@@ -2783,14 +2970,42 @@ if (chatSessionSearch) chatSessionSearch.addEventListener('input', renderChatSes
 function syncChatWorkspaceState() {
   var workspace = document.getElementById('chatWorkspace');
   var messages = document.getElementById('chatMessages');
+  var main = workspace ? workspace.closest('.chat-main') : null;
   if (!workspace || !messages) return;
-  workspace.classList.toggle('is-empty', messages.children.length === 0);
+  var isEmpty = messages.children.length === 0;
+  workspace.classList.toggle('is-empty', isEmpty);
+  if (main) main.classList.toggle('is-home-empty', isEmpty);
 }
 
 function bindChatHomeActions() {
   if (window.__chatHomeActionsBound) return;
   window.__chatHomeActionsBound = true;
   document.addEventListener('click', function(e) {
+    var modeBtn = e.target.closest('[data-chat-home-mode]');
+    if (modeBtn) {
+      setChatMode(modeBtn.getAttribute('data-chat-home-mode'));
+      return;
+    }
+    var quickModeBtn = e.target.closest('[data-chat-quick-mode]');
+    if (quickModeBtn) {
+      setChatQuickMode(quickModeBtn.getAttribute('data-chat-quick-mode'), { prefill: true });
+      return;
+    }
+    var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
+    if (hiddenViewBtn) {
+      var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
+      if (typeof window._openHiddenWorkspaceView === 'function') {
+        window._openHiddenWorkspaceView(hiddenView);
+      }
+      return;
+    }
+    var jumpBtn = e.target.closest('[data-jump-view]');
+    if (jumpBtn) {
+      var view = jumpBtn.getAttribute('data-jump-view');
+      var navBtn = document.querySelector('.nav-left-item[data-view="' + view + '"]');
+      if (navBtn) navBtn.click();
+      return;
+    }
     var promptBtn = e.target.closest('[data-chat-prompt]');
     if (promptBtn) {
       var input = document.getElementById('chatInput');
@@ -2802,29 +3017,36 @@ function bindChatHomeActions() {
         input.setSelectionRange(cursor, cursor);
       }
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      return;
     }
-    var jumpBtn = e.target.closest('[data-jump-view]');
-    if (jumpBtn) {
-      var view = jumpBtn.getAttribute('data-jump-view');
-      var navBtn = document.querySelector('.nav-left-item[data-view="' + view + '"]');
-      if (navBtn) navBtn.click();
-      return;
-    }
-    var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
-    if (hiddenViewBtn) {
-      var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
+  });
+}
+
+function bindChatQuickModeActions() {
+  if (window.__chatQuickModeActionsBound) return;
+  window.__chatQuickModeActionsBound = true;
+  var closeBtn = document.getElementById('chatQuickModeCloseBtn');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', function() {
+      setChatQuickMode('', { prefill: false });
+    });
+  }
+  var advancedBtn = document.getElementById('chatQuickModeAdvancedBtn');
+  if (advancedBtn) {
+    advancedBtn.addEventListener('click', function() {
+      var hiddenView = advancedBtn.getAttribute('data-open-hidden-view');
+      if (!hiddenView) return;
       if (typeof window._openHiddenWorkspaceView === 'function') {
         window._openHiddenWorkspaceView(hiddenView);
       }
-    }
-  });
+    });
+  }
 }
 
 function initChatWorkspaceShell() {
   bindChatModeSwitch();
   syncChatWorkspaceState();
   bindChatHomeActions();
+  bindChatQuickModeActions();
   var messages = document.getElementById('chatMessages');
   if (!messages || typeof MutationObserver === 'undefined') return;
   var observer = new MutationObserver(syncChatWorkspaceState);

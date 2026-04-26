@@ -1606,6 +1606,9 @@ function loadLogsView() {
     if (hash === 'ecommerce-detail-studio' && typeof window._openEcommerceDetailStudioView === 'function') {
       window._openEcommerceDetailStudioView();
     }
+    if (hash === 'image-composer-studio' && typeof window._openImageComposerStudioView === 'function') {
+      window._openImageComposerStudioView();
+    }
     if (hash === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
       window._openSeedanceTvcStudioView();
     }
@@ -1619,6 +1622,7 @@ function loadLogsView() {
     location.hash.indexOf('youtube-accounts') !== -1 ||
     location.hash.indexOf('meta-social') !== -1 ||
     location.hash.indexOf('ecommerce-detail-studio') !== -1 ||
+    location.hash.indexOf('image-composer-studio') !== -1 ||
     location.hash.indexOf('seedance-tvc-studio') !== -1
   )) applyHash();
 })();
