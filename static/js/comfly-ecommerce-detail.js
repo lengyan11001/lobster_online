@@ -1353,11 +1353,11 @@
     var analysisCredits = 35;
     var requiredCredits = (pricePerImage * totalImages + analysisCredits) * 2;
 
-    // 检查用户积分
+    // 检查用户算力
     if (window._lobsterMe && typeof window._lobsterMe.credits === 'number') {
       var currentCredits = window._lobsterMe.credits;
       if (currentCredits < requiredCredits) {
-        _setMsg('积分不足：生成电商详情页套图（约 ' + totalImages + ' 张图片）需要约 ' + requiredCredits + ' 积分，当前余额 ' + currentCredits + ' 积分。请先充值。', true);
+        _setMsg('算力不足：生成电商详情页套图（约 ' + totalImages + ' 张图片）需要约 ' + requiredCredits + ' 算力，当前余额 ' + currentCredits + ' 算力。请先充值。', true);
         return;
       }
     }
@@ -2275,14 +2275,14 @@
     if (usage.analysis_count != null) facts.push('分析调用次数：' + usage.analysis_count);
     if (billing.total_points != null) {
       var amount = billing.total_cost_cny != null ? ('（约 ¥' + Number(billing.total_cost_cny).toFixed(2) + '）') : '';
-      facts.push('积分消耗：' + billing.total_points + ' 积分' + amount);
+      facts.push('算力消耗：' + billing.total_points + ' 算力' + amount);
     } else if (usage.total_points != null) {
-      facts.push('积分消耗：' + usage.total_points + ' 积分');
+      facts.push('算力消耗：' + usage.total_points + ' 算力');
     }
     if (billing.image_points_per_success != null || billing.analysis_points_per_call != null) {
       facts.push(
         '计费规则：生图成功 ' + String(billing.image_points_per_success != null ? billing.image_points_per_success : 40) +
-        ' 积分/次，分析 ' + String(billing.analysis_points_per_call != null ? billing.analysis_points_per_call : 10) + ' 积分/次'
+        ' 算力/次，分析 ' + String(billing.analysis_points_per_call != null ? billing.analysis_points_per_call : 10) + ' 算力/次'
       );
     }
     if (result && result.suite_bundle && result.suite_bundle.root_relative_path) {
@@ -2290,7 +2290,7 @@
     }
     facts = facts.concat(_collectProgressFacts(resp));
     if (!facts.length) {
-      wrap.innerHTML = '<div class="ecom-empty">生成完成后，这里会显示模型、页数、积分消耗和输出目录摘要。</div>';
+      wrap.innerHTML = '<div class="ecom-empty">生成完成后，这里会显示模型、页数、算力消耗和输出目录摘要。</div>';
       return;
     }
     wrap.innerHTML = facts.map(function(item) {

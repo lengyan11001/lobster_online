@@ -1189,7 +1189,7 @@ def _estimate_ecommerce_detail_credits(
     material_image_count: int,
     image_model: str,
 ) -> int:
-    """估算电商详情页生成所需积分（用户消耗 = 采购价 × 2倍）"""
+    """估算电商详情页生成所需算力（用户消耗 = 采购价 × 2倍）"""
     # 图片生成模型定价（采购价）
     model_prices = {
         "nano-banana-2": 42,
@@ -1207,7 +1207,7 @@ def _estimate_ecommerce_detail_credits(
         2                                  # 透明图 + 白底图
     )
 
-    # 分析模型消耗（gemini-2.5-pro 约消耗 20-50 积分，取中间值）
+    # 分析模型消耗（gemini-2.5-pro 约消耗 20-50 算力，取中间值）
     analysis_credits = 35
 
     # 用户消耗 = (图片生成采购价 × 图片数量 + 分析消耗) × 2倍
@@ -1227,9 +1227,9 @@ def _check_ecommerce_detail_credits(
     material_image_count: int,
     image_model: str,
 ) -> None:
-    """检查用户积分是否足够生成电商详情页"""
+    """检查用户算力是否足够生成电商详情页"""
     if int(user_id or 0) <= 0:
-        # 本地免登录模式，跳过积分检查
+        # 本地免登录模式，跳过算力检查
         return
 
     required_credits = _estimate_ecommerce_detail_credits(
@@ -1257,7 +1257,7 @@ def _check_ecommerce_detail_credits(
         )
         raise HTTPException(
             status_code=402,
-            detail=f"积分不足：生成电商详情页套图（约 {total_images} 张图片）需要约 {required_credits} 积分，当前余额 {current_credits} 积分。请先充值。"
+            detail=f"算力不足：生成电商详情页套图（约 {total_images} 张图片）需要约 {required_credits} 算力，当前余额 {current_credits} 算力。请先充值。"
         )
 
 
@@ -1343,7 +1343,7 @@ async def ecommerce_detail_pipeline_run(
     pl = body.payload
     _validate_payload(pl)
 
-    # 积分预检查
+    # 算力预检查
     _check_ecommerce_detail_credits(
         user_id=current_user.id,
         db=db,
@@ -1400,7 +1400,7 @@ async def ecommerce_detail_pipeline_start(
     pl = normalized.payload
     _validate_payload(pl)
 
-    # 积分预检查
+    # 算力预检查
     _check_ecommerce_detail_credits(
         user_id=current_user.id,
         db=db,

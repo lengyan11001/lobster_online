@@ -1,6 +1,6 @@
 {
-  "version": "1.0.12",
-  "build": 18,
-  "applied_at": "2026-04-17T05:15:00.000Z",
-  "note": "chore: migrate from IP to bhzn.top domain; fix: localStorage cache auto-migration for old IP"
+  "version": "1.0.21",
+  "build": 19,
+  "applied_at": "2026-04-27T11:54:31+08:00",
+  "note": "unreleased OTA with task.get_result early-finish fix"
 }

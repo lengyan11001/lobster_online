@@ -89,6 +89,7 @@ def list_store():
             "unlock_price_credits": pkg.get("unlock_price_credits"),
             "unlock_price_yuan": pkg.get("unlock_price_yuan"),
             "default_installed": pkg.get("default_installed"),
+            "store_visibility": pkg.get("store_visibility"),
         })
     return {"packages": out}
 

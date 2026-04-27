@@ -20,6 +20,7 @@ from .api.settings_api import router as settings_router
 from .api.mcp_gateway import router as mcp_gateway_router
 from .api.openclaw_sutui_llm_proxy import router as openclaw_sutui_llm_proxy_router
 from .api.openclaw_config import router as openclaw_config_router
+from .api.openclaw_memory import router as openclaw_memory_router
 from .api.custom_config import router as custom_config_router
 from .api.billing import router as billing_router
 from .api.consumption_accounts import router as consumption_accounts_router
@@ -673,22 +674,63 @@ def _migrate_publish_account_creator_schedule_v5():
 
 
 def _sync_global_openclaw_workspace():
-    """Copy project-bundled global workspace defaults to ~/.openclaw/workspace/ if missing or stale."""
+    """Sync product-bundled OpenClaw defaults without touching user memory."""
     try:
-        src_dir = Path(__file__).resolve().parents[2] / "openclaw" / "global_workspace_defaults"
-        dst_dir = Path.home() / ".openclaw" / "workspace"
-        if not src_dir.is_dir():
+        openclaw_dir = Path(__file__).resolve().parents[2] / "openclaw"
+        bundled_dir = openclaw_dir / "global_workspace_defaults"
+        fallback_dirs = [
+            openclaw_dir / "workspace-lobster-sutui-deepseek-chat",
+            openclaw_dir / "workspace-lobster-sutui-gpt-4o-mini",
+            openclaw_dir / "workspace",
+        ]
+        source_dir = None
+        if bundled_dir.is_dir() and any(p.is_file() for p in bundled_dir.rglob("*")):
+            source_dir = bundled_dir
+        else:
+            for cand in fallback_dirs:
+                if cand.is_dir() and any(p.is_file() for p in cand.glob("*.md")):
+                    source_dir = cand
+                    break
+        if source_dir is None:
             return
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        for src_file in src_dir.iterdir():
-            if src_file.is_file():
-                dst_file = dst_dir / src_file.name
-                src_bytes = src_file.read_bytes()
+
+        target_dirs = [
+            Path.home() / ".openclaw" / "workspace",
+            openclaw_dir / "workspace",
+            openclaw_dir / "workspace-lobster-sutui-deepseek-chat",
+            openclaw_dir / "workspace-lobster-sutui-gpt-4o-mini",
+        ]
+        for existing_ws in sorted(openclaw_dir.glob("workspace-*")):
+            if existing_ws.is_dir() and existing_ws not in target_dirs:
+                target_dirs.append(existing_ws)
+
+        skip_names = {".env", "workspace-state.json"}
+        skip_dirs = {".openclaw", "__pycache__", "memory", "user_memory"}
+        synced = 0
+        for src_file in source_dir.rglob("*"):
+            if not src_file.is_file():
+                continue
+            rel = src_file.relative_to(source_dir)
+            if any(part in skip_dirs for part in rel.parts):
+                continue
+            if src_file.name in skip_names or src_file.name.endswith(".bak") or ".bak." in src_file.name:
+                continue
+            src_bytes = src_file.read_bytes()
+            for dst_dir in target_dirs:
+                try:
+                    if dst_dir.resolve() == source_dir.resolve():
+                        continue
+                except OSError:
+                    pass
+                dst_file = dst_dir / rel
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
                 if not dst_file.exists() or dst_file.read_bytes() != src_bytes:
                     dst_file.write_bytes(src_bytes)
-                    logger.info("[启动] 同步全局工作区文件: %s", src_file.name)
+                    synced += 1
+        if synced:
+            logger.info("[startup] synced OpenClaw bundled workspace defaults files=%s source=%s", synced, source_dir)
     except Exception as e:
-        logger.warning("[启动] 同步全局工作区文件失败: %s", e)
+        logger.warning("[startup] sync OpenClaw bundled workspace defaults failed: %s", e)
 
 
 @asynccontextmanager
@@ -808,6 +850,7 @@ def create_app() -> FastAPI:
     app.include_router(mcp_gateway_router, prefix="")
     app.include_router(openclaw_sutui_llm_proxy_router, prefix="")
     app.include_router(openclaw_config_router, prefix="")
+    app.include_router(openclaw_memory_router, prefix="")
     app.include_router(custom_config_router, prefix="")
     app.include_router(billing_router, prefix="")
     app.include_router(consumption_accounts_router, prefix="")

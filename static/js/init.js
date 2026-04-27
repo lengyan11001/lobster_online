@@ -591,7 +591,7 @@ function loadDashboard() {
         if (w) w.style.display = 'none';
       }
       var navAgent = document.getElementById('navAgent');
-      if (navAgent) navAgent.style.display = d.is_agent ? '' : 'none';
+      if (navAgent) navAgent.style.display = 'none';
       window.__currentUserIsAgent = !!d.is_agent;
       if (typeof window._applyWecomConfigHash === 'function' && location.hash) {
         var hiddenHash = String(location.hash || '');
@@ -900,7 +900,9 @@ function decorateWorkspacePages() {
     }
   });
 }
-decorateWorkspacePages();
+// Each tab already has its own card header/actions. Avoid injecting a second
+// page-level hero that repeats the same title and controls.
+// decorateWorkspacePages();
 
 function decorateWorkspaceSubsections() {
   if (window.__workspaceSubsectionsDecorated) return;
@@ -1047,7 +1049,10 @@ document.querySelectorAll('.nav-left-item').forEach(function(el) {
     var contentEl = document.getElementById(contentId);
     if (contentEl) contentEl.classList.add('visible');
     currentView = view;
-    if (view === 'chat') refreshModelSelector();
+    if (view === 'chat') {
+      if (typeof setChatMode === 'function') setChatMode('default');
+      refreshModelSelector();
+    }
     if (view === 'skill-store') { loadSkillStore(); if (typeof initOnlineSkillStore === 'function') initOnlineSkillStore(); }
     if (view === 'publish') { if (typeof initPublishView === 'function') initPublishView(); }
     if (view === 'production') { if (typeof initProductionView === 'function') initProductionView(); }
@@ -1320,6 +1325,17 @@ function loadBillingView() {
       rechargeBlock.style.display = '';
       var rechargeTitle = rechargeBlock.querySelector('h4');
       if (rechargeTitle) rechargeTitle.textContent = '算力充值';
+      var typeWrap = document.getElementById('rechargePaymentTypeWrap');
+      var typeSel = document.getElementById('rechargePaymentType');
+      if (typeWrap && typeSel) {
+        if (USE_FUIOU_PAY) {
+          typeWrap.style.display = 'block';
+          typeSel.innerHTML = '<option value="WECHAT">微信支付</option><option value="ALIPAY">支付宝</option>';
+          typeSel.value = 'WECHAT';
+        } else {
+          typeWrap.style.display = 'none';
+        }
+      }
       fetch(API_BASE + '/api/recharge/packages', { headers: authHeaders() })
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(opts) {
@@ -1358,12 +1374,19 @@ function loadBillingView() {
       rechargeSubmitBtn.addEventListener('click', function() {
         var amountEl = document.getElementById('rechargeAmount');
         var idx = amountEl ? parseInt(amountEl.value, 10) : -1;
+        var paymentType = 'WECHAT';
+        if (USE_FUIOU_PAY) {
+          var typeSel = document.getElementById('rechargePaymentType');
+          paymentType = (typeSel && typeSel.value) ? String(typeSel.value).toUpperCase() : 'WECHAT';
+        }
+        var createBody = { package_index: idx };
+        if (USE_FUIOU_PAY) createBody.payment_type = paymentType;
         if (!amountEl || idx < 0) { showMsg(rechargeMsg, '请选择套餐', true); return; }
         if (rechargeResult) { rechargeResult.style.display = 'none'; rechargeResult.innerHTML = ''; }
         rechargeSubmitBtn.disabled = true;
         showMsg(rechargeMsg, '正在创建订单…', false);
         var apiUrl = USE_FUIOU_PAY ? (API_BASE + '/api/recharge/fuiou-create') : (API_BASE + '/api/recharge/create');
-        fetch(apiUrl, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ package_index: idx }) })
+        fetch(apiUrl, { method: 'POST', headers: authHeaders(), body: JSON.stringify(createBody) })
           .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
           .then(function(x) {
             if (!x.ok && x.data && x.data.detail) { showMsg(rechargeMsg, x.data.detail, true); return; }
@@ -1373,8 +1396,10 @@ function loadBillingView() {
               if (USE_FUIOU_PAY && d.qr_code) {
                 var apiRoot = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
                 var qrSrc = apiRoot + '/api/recharge/qr-png?data=' + encodeURIComponent(d.qr_code);
+                var responsePaymentType = String(d.payment_type || paymentType || 'WECHAT').toUpperCase();
+                var paymentName = responsePaymentType === 'ALIPAY' ? '支付宝' : (responsePaymentType === 'UNIONPAY' ? '银联' : '微信');
                 rechargeResult.innerHTML = '<p><strong>订单号：' + escapeHtml(d.out_trade_no || '') + '</strong></p>'
-                  + '<p>请使用微信或支付宝扫描下方二维码完成支付（富友扫码支付）：</p>'
+                  + '<p>请使用' + escapeHtml(paymentName) + '扫描下方二维码完成支付（富友扫码支付）。</p>'
                   + '<img src="' + escapeAttr(qrSrc) + '" alt="富友扫码支付二维码" style="max-width:220px;height:auto;margin-top:0.5rem;">'
                   + '<p id="fuiouPollStatus" style="margin-top:0.5rem;color:#888;">等待支付…</p>';
                 rechargeResult.style.display = 'block';

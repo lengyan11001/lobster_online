@@ -372,6 +372,121 @@ def _json_dumps_mcp_payload(obj: Any) -> str:
     return json.dumps(_sanitize_for_json(obj), ensure_ascii=False, indent=2)
 
 
+_OPENCLAW_SCOPE_HEADER_INTENT = "X-Lobster-OpenClaw-Intent"
+_OPENCLAW_SCOPE_HEADER_TOOLS = "X-Lobster-Allowed-MCP-Tools"
+_OPENCLAW_SCOPE_HEADER_CAPS = "X-Lobster-Allowed-Capabilities"
+_NO_AUTH_UNSCOPED_SAFE_TOOLS = frozenset({"list_capabilities", "list_assets"})
+
+
+def _request_header_raw(request: Optional[Any], name: str) -> Optional[str]:
+    if request is None:
+        return None
+    needle = name.lower().encode("latin-1")
+    try:
+        for k, v in request.headers.raw:
+            if k.lower() == needle:
+                return v.decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+    return None
+
+
+def _csv_scope_header(request: Optional[Any], name: str) -> Optional[set[str]]:
+    raw = _request_header_raw(request, name)
+    if raw is None:
+        return None
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _openclaw_scope_intent(request: Optional[Any]) -> str:
+    return (_request_header_raw(request, _OPENCLAW_SCOPE_HEADER_INTENT) or "").strip()
+
+
+def _request_has_auth_material(request: Optional[Any]) -> bool:
+    if request is None:
+        return False
+    try:
+        if request.query_params.get("token") or request.query_params.get("api_key"):
+            return True
+    except Exception:
+        pass
+    for name in ("Authorization", "x-user-authorization", "x-user-token"):
+        if (_request_header_raw(request, name) or "").strip():
+            return True
+    return False
+
+
+def _effective_openclaw_scope(
+    request: Optional[Any],
+) -> Tuple[Optional[set[str]], Optional[set[str]], str, bool]:
+    allowed_tools = _csv_scope_header(request, _OPENCLAW_SCOPE_HEADER_TOOLS)
+    allowed_caps = _csv_scope_header(request, _OPENCLAW_SCOPE_HEADER_CAPS)
+    intent = _openclaw_scope_intent(request)
+    scoped = allowed_tools is not None or allowed_caps is not None
+    if not scoped and not _request_has_auth_material(request):
+        # OpenClaw/mcp-remote may do an unauthenticated warm-up tools/list before
+        # the per-turn scope reaches the gateway. Never expose write/generate tools
+        # in that gap; authenticated direct-chat calls still receive the full list.
+        allowed_tools = set(_NO_AUTH_UNSCOPED_SAFE_TOOLS)
+        allowed_caps = set()
+        intent = intent or "unauthenticated_safe"
+        scoped = True
+    return allowed_tools, allowed_caps, intent, scoped
+
+
+def _openclaw_scope_error(name: str, cap_id: str, intent: str) -> Tuple[List[Dict[str, Any]], bool]:
+    detail = {
+        "error": "本轮 OpenClaw 工具范围不允许该调用，已拦截，未执行。",
+        "intent": intent or "unknown",
+        "tool": name,
+    }
+    if cap_id:
+        detail["capability_id"] = cap_id
+    detail["next_step"] = "请根据用户当前任务改用允许范围内的工具；如果确实需要该能力，先向用户确认更明确的任务。"
+    return [{"type": "text", "text": json.dumps(detail, ensure_ascii=False, indent=2)}], True
+
+
+def _compact_publish_accounts_for_llm(data: Any) -> Dict[str, Any]:
+    """Return only the account fields needed for chat-side matching/publishing."""
+    if not isinstance(data, dict):
+        return {"accounts": [], "platforms": [], "account_count": 0}
+
+    raw_accounts = data.get("accounts") if isinstance(data.get("accounts"), list) else []
+    accounts: List[Dict[str, Any]] = []
+    platform_summary: Dict[str, List[str]] = {}
+
+    for raw in raw_accounts:
+        if not isinstance(raw, dict):
+            continue
+        platform = str(raw.get("platform") or "").strip()
+        nickname = str(raw.get("nickname") or "").strip()
+        platform_name = str(raw.get("platform_name") or platform).strip()
+        account = {
+            "id": raw.get("id"),
+            "platform": platform,
+            "platform_name": platform_name,
+            "nickname": nickname,
+            "status": raw.get("status"),
+            "match_label": f"{platform_name}/{nickname}" if platform_name or nickname else "",
+            "publish_content_account_nickname": nickname,
+        }
+        accounts.append(account)
+        if platform:
+            platform_summary.setdefault(platform, []).append(nickname)
+
+    return {
+        "accounts": accounts,
+        "account_count": len(accounts),
+        "platform_account_summary": platform_summary,
+        "platforms": data.get("platforms") if isinstance(data.get("platforms"), list) else [],
+        "matching_rules": [
+            "用户说“抖音账号123”时，匹配 platform='douyin' 且 nickname='123'。",
+            "platform='douyin_shop' 是抖店，不等于 platform='douyin' 抖音。",
+            "发布时调用 publish_content，传 account_nickname 为匹配账号的 nickname，不要把 id 当昵称。",
+        ],
+    }
+
+
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -880,11 +995,18 @@ async def _find_account_platform_by_nickname(
         return None, f"获取账号列表失败: {e}"
 
 
-def _tool_definitions(catalog: Dict[str, Dict[str, Any]], *, is_skill_store_admin: bool = True) -> List[Dict[str, Any]]:
+def _tool_definitions(
+    catalog: Dict[str, Dict[str, Any]],
+    *,
+    is_skill_store_admin: bool = True,
+    allowed_tool_names: Optional[set[str]] = None,
+    allowed_capability_ids: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
     capability_list = sorted(
         cid
         for cid in catalog.keys()
         if not (_capability_id_is_debug_only_in_registry(cid) and not is_skill_store_admin)
+        and (allowed_capability_ids is None or cid in allowed_capability_ids)
     )
     tools = [
         {
@@ -899,7 +1021,7 @@ def _tool_definitions(catalog: Dict[str, Dict[str, Any]], *, is_skill_store_admi
                 "capability_id 必须是 list_capabilities 中的能力 ID；"
                 "禁止将素材库 asset_id（十二位以上十六进制串，如入库后的成片 ID）当作能力 ID。"
                 "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
-                "【默认模型】image.generate 用户未指定模型时 payload.model 必须填 \"fal-ai/flux-2/flash\"（不要自动选 jimeng）；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
+                "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由对话后端按认证中心默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
                 "video.generate 用户未指定模型时 payload.model 填 \"sora2\"。"
                 "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
             ),
@@ -917,7 +1039,7 @@ def _tool_definitions(catalog: Dict[str, Dict[str, Any]], *, is_skill_store_admi
                             "能力调用参数（按 capability_id 不同）。"
                             "media.edit: 必须含 operation（overlay_text|trim|scale_pad|mute|mux_audio|image_to_video|extract_frame）+ asset_id；"
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
-                            "image.generate: 含 prompt（英文）、model（用户未指定时默认 fal-ai/flux-2/flash；用户指定 jimeng-4.0/jimeng-4.5 等时照用）。"
+                            "image.generate: 含 prompt（英文）；用户未指定模型时可省略 model，由对话后端按认证中心默认配置补齐；用户指定 jimeng-4.0/jimeng-4.5 等时照用。"
                             "video.generate: 含 prompt、model（默认 sora2）、duration（用户未指定时长时必须填 4，即 4 秒）。"
                             "task.get_result: 含 task_id。"
                         ),
@@ -998,7 +1120,12 @@ def _tool_definitions(catalog: Dict[str, Dict[str, Any]], *, is_skill_store_admi
         },
         {
             "name": "list_publish_accounts",
-            "description": "列出已配置的发布账号（抖音、B站等平台）",
+            "description": (
+                "列出已配置的发布账号，返回给对话使用的精简清单。"
+                "匹配用户指定账号时必须扫描 accounts 全量列表，并同时核对 platform 与 nickname；"
+                "douyin=抖音，douyin_shop=抖店，两者不可混淆。"
+                "发布时把匹配账号的 nickname 传给 publish_content.account_nickname。"
+            ),
             "inputSchema": {"type": "object", "properties": {}},
         },
         {
@@ -1269,6 +1396,10 @@ def _tool_definitions(catalog: Dict[str, Dict[str, Any]], *, is_skill_store_admi
     ]
     if not is_skill_store_admin:
         tools = [t for t in tools if (t.get("name") or "") not in _DEBUG_ONLY_MCP_TOOL_NAMES]
+    if allowed_tool_names is not None:
+        tools = [t for t in tools if (t.get("name") or "") in allowed_tool_names]
+    if allowed_capability_ids is not None and not capability_list:
+        tools = [t for t in tools if (t.get("name") or "") != "invoke_capability"]
     return tools
 
 
@@ -1431,15 +1562,33 @@ def _merge_common_video_ui_fields(out: Dict[str, Any], payload: Dict[str, Any]) 
             out[k] = payload[k]
 
 
+_IMAGE_MODEL_ALIASES: Dict[str, str] = {
+    "gpt-image": "gpt-image-2",
+    "gpt-image2": "gpt-image-2",
+    "gptimage2": "gpt-image-2",
+    "flux-2/flash": "fal-ai/flux-2/flash",
+    "flux2/flash": "fal-ai/flux-2/flash",
+    "flux2-flash": "fal-ai/flux-2/flash",
+    "flux-2-flash": "fal-ai/flux-2/flash",
+    "flux2": "fal-ai/flux-2/flash",
+    "flux-2": "fal-ai/flux-2/flash",
+}
+
+_DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "gpt-image2").strip() or "gpt-image2"
+
+
 def _normalize_image_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     按图片模型把「统一 payload」转成该模型 API 需要的参数，并保证用户输入的 prompt 原样传入。
     """
     if not payload or not isinstance(payload, dict):
         return payload
+    payload = dict(payload)
     model = (payload.get("model") or payload.get("model_id") or "").strip()
     if not model:
-        raise ValueError("请指定图片模型（model），例如 flux-2/flash、seedream、nano-banana-pro、jimeng-4.5、gemini 等。")
+        model = _DEFAULT_IMAGE_MODEL
+    model = _IMAGE_MODEL_ALIASES.get(model, model)
+    payload["model"] = model
     prompt = (payload.get("prompt") or "").strip()
     image_url = (payload.get("image_url") or "").strip()
     image_size = (payload.get("image_size") or "").strip()
@@ -2722,14 +2871,20 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
 
         if name == "list_capabilities":
             is_admin = await _fetch_is_skill_store_admin(token)
+            _, allowed_caps, intent, _ = _effective_openclaw_scope(request)
             caps_out = []
             for cid in sorted(catalog.keys()):
                 if catalog[cid].get("enabled") is False:
                     continue
                 if _capability_id_is_debug_only_in_registry(cid) and not is_admin:
                     continue
+                if allowed_caps is not None and cid not in allowed_caps:
+                    continue
                 caps_out.append({"capability_id": cid, "description": catalog[cid].get("description") or cid})
             data = {"capabilities": caps_out}
+            if intent:
+                data["openclaw_intent"] = intent
+                data["scope_note"] = "本返回已按 OpenClaw 本轮意图裁剪。"
             return [{"type": "text", "text": json.dumps(data, ensure_ascii=False, indent=2)}], False
 
         if name == "manage_skills":
@@ -3607,7 +3762,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
             async with httpx.AsyncClient(timeout=30.0) as client:
                 r = await client.get(f"{BASE_URL}/api/accounts", headers=_backend_headers(token, request))
             data = r.json() if r.content else {}
-            text = json.dumps(data, ensure_ascii=False, indent=2)
+            text = _json_dumps_mcp_payload(_compact_publish_accounts_for_llm(data))
             return [{"type": "text", "text": text}], r.status_code >= 400
 
         if name == "get_creator_publish_data":
@@ -4028,15 +4183,33 @@ async def _handle_single_message(msg: Dict[str, Any], request: Request) -> Optio
         catalog = _load_capability_catalog()
         token = _get_token_from_request(request)
         is_admin = await _fetch_is_skill_store_admin(token)
-        tools = _tool_definitions(catalog, is_skill_store_admin=is_admin)
-        logger.info("[MCP] tools/list -> %s tools", len(tools))
+        allowed_tools, allowed_caps, intent, scoped = _effective_openclaw_scope(request)
+        tools = _tool_definitions(
+            catalog,
+            is_skill_store_admin=is_admin,
+            allowed_tool_names=allowed_tools,
+            allowed_capability_ids=allowed_caps,
+        )
+        logger.info(
+            "[MCP] tools/list -> %s tools intent=%s scoped=%s",
+            len(tools),
+            intent or "-",
+            scoped,
+        )
         return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": tools}}
     if method == "tools/call":
         name = params.get("name")
         arguments = params.get("arguments") or {}
         cap_id = str(arguments.get("capability_id") or "").strip() if name == "invoke_capability" else ""
         token = _get_token_from_request(request)
-        logger.info("[MCP] tools/call name=%s capability_id=%s", name, cap_id or "-")
+        allowed_tools, allowed_caps, intent, _ = _effective_openclaw_scope(request)
+        logger.info("[MCP] tools/call name=%s capability_id=%s intent=%s", name, cap_id or "-", intent or "-")
+        if allowed_tools is not None and str(name or "") not in allowed_tools:
+            content, is_error = _openclaw_scope_error(str(name or ""), cap_id, intent)
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"content": content, "isError": is_error}}
+        if name == "invoke_capability" and allowed_caps is not None and cap_id not in allowed_caps:
+            content, is_error = _openclaw_scope_error(str(name or ""), cap_id, intent)
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"content": content, "isError": is_error}}
         content, is_error = await _call_tool(name, arguments, token, request=request)
         return {"jsonrpc": "2.0", "id": msg_id, "result": {"content": content, "isError": is_error}}
     return _make_error(msg_id, -32601, f"Method not found: {method}")

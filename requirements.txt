@@ -15,6 +15,9 @@ playwright>=1.49.0
 pycryptodome>=3.20.0
 tos>=2.9.0
 Pillow>=10.0.0
+pypdf>=4.0.0
+xlrd>=2.0.1
+pywin32>=306; platform_system=="Windows"
 twilio>=9.0.0,<10
 PyJWT>=2.0.0,<3.0.0
 google-api-python-client>=2.100.0

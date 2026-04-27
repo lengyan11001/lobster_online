@@ -58,10 +58,28 @@ OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
 
 SKIP_DIR_NAMES = {"__pycache__", ".git"}
 
+# OpenClaw state/runtime directories are intentionally excluded from OTA.
+# Product defaults are emitted separately under openclaw/global_workspace_defaults.
+_OTA_OPENCLAW_SKIP_DIR_NAMES = {
+    ".openclaw",
+    "agents",
+    "browser",
+    "cron",
+    "delivery-queue",
+    "devices",
+    "identity",
+    "logs",
+    "memory",
+    "openclaw-weixin",
+    "tasks",
+    "user_memory",
+}
+
 # 本地调试/抓页面临时目录，非交付代码（曾占 OTA 包约 16MB+）
 # skills 下各技能的 runs/job_runs 为执行缓存（音视频等），不应随 OTA 分发（否则单包可膨胀 200MB+）
 OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     "scripts/_probe",
+    "static/uploads",
 )
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
@@ -70,6 +88,20 @@ _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
 _OTA_OPENCLAW_POLICY_RELS: tuple[str, ...] = (
     "openclaw/workspace/LOBSTER_CHAT_POLICY_INTRO.md",
     "openclaw/workspace/LOBSTER_CHAT_POLICY_TOOLS.md",
+)
+
+# Product-trained OpenClaw defaults. Runtime/user memory is never packaged; these
+# curated files are copied into openclaw/global_workspace_defaults inside the OTA.
+_OTA_OPENCLAW_BUNDLED_DEFAULT_FILENAMES: tuple[str, ...] = (
+    "AGENTS.md",
+    "BOOTSTRAP.md",
+    "HEARTBEAT.md",
+    "IDENTITY.md",
+    "LOBSTER_CHAT_POLICY_INTRO.md",
+    "LOBSTER_CHAT_POLICY_TOOLS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "USER.md",
 )
 
 
@@ -123,6 +155,35 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
                 print(f"[WARN] 跳过无法读取的路径: {rel} ({e})")
 
 
+def _openclaw_bundled_default_source(root: Path, filename: str) -> Path | None:
+    openclaw = root / "openclaw"
+    candidates = [
+        openclaw / "global_workspace_defaults" / filename,
+        openclaw / "workspace" / filename,
+        openclaw / "workspace-lobster-sutui-deepseek-chat" / filename,
+        openclaw / "workspace-lobster-sutui-gpt-4o-mini" / filename,
+    ]
+    candidates.extend(sorted(openclaw.glob(f"workspace-*/{filename}")))
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _add_openclaw_bundled_defaults(zf: zipfile.ZipFile, root: Path) -> None:
+    written = set(zf.namelist())
+    for filename in _OTA_OPENCLAW_BUNDLED_DEFAULT_FILENAMES:
+        arcname = f"openclaw/global_workspace_defaults/{filename}"
+        if arcname in written:
+            continue
+        src = _openclaw_bundled_default_source(root, filename)
+        if src is None:
+            print(f"[WARN] missing OpenClaw bundled workspace default: {filename}")
+            continue
+        zf.write(src, arcname)
+        written.add(arcname)
+
+
 def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
     base = root / "openclaw"
     if not base.is_dir():
@@ -134,8 +195,7 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
             if d not in SKIP_DIR_NAMES
             and d != "workspace"
             and not d.startswith("workspace-")
-            and d != "logs"
-            and d != "browser"
+            and d not in _OTA_OPENCLAW_SKIP_DIR_NAMES
         ]
         for name in filenames:
             if name == ".env" or name.endswith(".bak") or ".bak." in name:
@@ -149,9 +209,20 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
     for rel in _OTA_OPENCLAW_POLICY_RELS:
         src_pol = root / rel.replace("/", os.sep)
         if not src_pol.is_file():
-            print(f"[WARN] 缺失聊天策略（请从仓库补齐）: {rel}")
-            continue
+            fallback = None
+            name = Path(rel).name
+            for cand in sorted((root / "openclaw").glob(f"workspace-*/{name}")):
+                if cand.is_file():
+                    fallback = cand
+                    break
+            if fallback is None:
+                print(f"[WARN] 缺失聊天策略（请从仓库补齐）: {rel}")
+                continue
+            src_pol = fallback
+            print(f"[WARN] {rel} 缺失，已用 {src_pol.relative_to(root).as_posix()} 兜底打包")
         zf.write(src_pol, rel)
+
+    _add_openclaw_bundled_defaults(zf, root)
 
 
 def main() -> int:

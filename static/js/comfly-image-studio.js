@@ -345,13 +345,13 @@
         var meData = await meResp.json();
         var balance = meData.credits != null ? meData.credits : null;
         if (balance !== null && balance < userCredits) {
-          showMessage('积分不足：生成一张图片需要 ' + userCredits + ' 积分（采购价 ' + estimatedCredits + ' 积分 × 2倍），当前余额 ' + balance + ' 积分。请先充值。', true);
+          showMessage('算力不足：生成一张图片需要 ' + userCredits + ' 算力（采购价 ' + estimatedCredits + ' 算力 × 2倍），当前余额 ' + balance + ' 算力。请先充值。', true);
           return;
         }
       }
     } catch (err) {
-      // 积分检查失败不阻断，继续执行
-      console.warn('积分预检查失败:', err);
+      // 算力检查失败不阻断，继续执行
+      console.warn('算力预检查失败:', err);
     }
 
     setSubmitting(true);

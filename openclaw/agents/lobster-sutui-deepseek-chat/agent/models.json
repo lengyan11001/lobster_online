@@ -1,8 +1,13 @@
 {
   "providers": {
+    "openai-codex": {
+      "baseUrl": "https://chatgpt.com/backend-api",
+      "api": "openai-codex-responses",
+      "models": []
+    },
     "lobster-sutui": {
       "baseUrl": "http://127.0.0.1:8000/internal/openclaw-sutui/v1",
-      "apiKey": "${OPENCLAW_SUTUI_PROXY_KEY}",
+      "apiKey": "lobster-oc-sutui-local-change-me",
       "api": "openai-completions",
       "models": [
         {

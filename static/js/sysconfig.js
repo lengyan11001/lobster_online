@@ -1,6 +1,35 @@
 var ocConfigLoaded = false;
 var ocProviderData = [];
 var _currentSysTab = 'model';
+var _chatRouteModeSavedValue = null;
+var _chatRouteModeMsgTimer = null;
+
+function clearChatRouteModeMsg() {
+  var msgEl = document.getElementById('chatRouteModeMsg');
+  if (_chatRouteModeMsgTimer) {
+    clearTimeout(_chatRouteModeMsgTimer);
+    _chatRouteModeMsgTimer = null;
+  }
+  if (msgEl) {
+    msgEl.textContent = '';
+    msgEl.className = 'msg';
+    msgEl.style.display = 'none';
+  }
+}
+
+function showChatRouteModeMsg(text, isErr, autoHide) {
+  var msgEl = document.getElementById('chatRouteModeMsg');
+  if (_chatRouteModeMsgTimer) {
+    clearTimeout(_chatRouteModeMsgTimer);
+    _chatRouteModeMsgTimer = null;
+  }
+  showMsg(msgEl, text, isErr);
+  if (autoHide) {
+    _chatRouteModeMsgTimer = setTimeout(function() {
+      clearChatRouteModeMsg();
+    }, 2500);
+  }
+}
 
 document.querySelectorAll('.sys-tab').forEach(function(tab) {
   tab.addEventListener('click', function() {
@@ -35,6 +64,67 @@ function loadLanInfo() {
       }
     })
     .catch(function() {});
+}
+
+function setChatRouteModeValue(mode) {
+  var normalized = (mode === 'openclaw') ? 'openclaw' : 'direct';
+  document.querySelectorAll('input[name="chatRouteMode"]').forEach(function(radio) {
+    radio.checked = (radio.value === normalized);
+  });
+}
+
+function getChatRouteModeValue() {
+  var checked = document.querySelector('input[name="chatRouteMode"]:checked');
+  return checked && checked.value === 'openclaw' ? 'openclaw' : 'direct';
+}
+
+function loadChatRouteMode() {
+  if (!document.getElementById('chatRouteModeBlock')) return;
+  fetch((LOCAL_API_BASE || '') + '/api/settings/chat-route', { headers: authHeaders() })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(x) {
+      if (x.ok && x.data) {
+        setChatRouteModeValue(x.data.mode);
+        _chatRouteModeSavedValue = getChatRouteModeValue();
+      } else {
+        setChatRouteModeValue('direct');
+        _chatRouteModeSavedValue = 'direct';
+      }
+      clearChatRouteModeMsg();
+    })
+    .catch(function() {
+      setChatRouteModeValue('direct');
+      _chatRouteModeSavedValue = 'direct';
+      clearChatRouteModeMsg();
+    });
+}
+
+function saveChatRouteMode() {
+  var btn = document.getElementById('saveChatRouteModeBtn');
+  var mode = getChatRouteModeValue();
+  if (_chatRouteModeSavedValue === mode) {
+    showChatRouteModeMsg('当前已是这个路由', false, true);
+    return;
+  }
+  if (btn) btn.disabled = true;
+  showChatRouteModeMsg('正在保存…', false, false);
+  fetch((LOCAL_API_BASE || '') + '/api/settings/chat-route', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ mode: mode })
+  })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(x) {
+      if (x.ok && x.data) {
+        setChatRouteModeValue(x.data.mode);
+        _chatRouteModeSavedValue = getChatRouteModeValue();
+        showChatRouteModeMsg('已保存，新的智能对话立即生效', false, true);
+      } else {
+        showChatRouteModeMsg((x.data && x.data.detail) || '保存失败', true, false);
+      }
+    })
+    .catch(function() { showChatRouteModeMsg('网络错误', true, false); })
+    .finally(function() { if (btn) btn.disabled = false; });
 }
 
 function loadSutuiConfig() {
@@ -103,6 +193,7 @@ function loadOpenClawConfig() {
   if (EDITION !== 'online') loadSutuiConfig();
   checkOcStatus();
   loadLanInfo();
+  loadChatRouteMode();
   if (_currentSysTab === 'custom') loadCustomConfigs();
   if (ocConfigLoaded && EDITION !== 'online') return;
   if (EDITION === 'online' && !allowModel) { return; }
@@ -291,6 +382,17 @@ var saveOcBtn = document.getElementById('saveOcConfigBtn');
 if (saveOcBtn) saveOcBtn.addEventListener('click', saveOcConfig);
 var saveSutuiTokenBtn = document.getElementById('saveSutuiTokenBtn');
 if (saveSutuiTokenBtn) saveSutuiTokenBtn.addEventListener('click', saveSutuiToken);
+var saveChatRouteModeBtn = document.getElementById('saveChatRouteModeBtn');
+if (saveChatRouteModeBtn) saveChatRouteModeBtn.addEventListener('click', saveChatRouteMode);
+document.querySelectorAll('input[name="chatRouteMode"]').forEach(function(radio) {
+  radio.addEventListener('change', function() {
+    if (!radio.checked) return;
+    clearChatRouteModeMsg();
+    if (_chatRouteModeSavedValue !== null && getChatRouteModeValue() !== _chatRouteModeSavedValue) {
+      showChatRouteModeMsg('已选择，点击保存后生效', false, false);
+    }
+  });
+});
 var refreshOcBtn = document.getElementById('refreshOcStatusBtn');
 if (refreshOcBtn) refreshOcBtn.addEventListener('click', function() {
   checkOcStatus();
@@ -367,6 +469,43 @@ if (clearLocalUserConfigBtn) {
         }
       })
       .finally(function() { clearLocalUserConfigBtn.disabled = false; });
+  });
+}
+
+var clearOpenclawMemoryBtn = document.getElementById('clearOpenclawMemoryBtn');
+if (clearOpenclawMemoryBtn) {
+  clearOpenclawMemoryBtn.addEventListener('click', function() {
+    var msgEl = document.getElementById('clearOpenclawMemoryMsg');
+    if (!confirm('确定清除当前账号上传给 OpenClaw 的个人记忆资料？\n（只清除本机 OpenClaw 个人记忆，不删除登录、算力、素材和系统配置）')) return;
+    clearOpenclawMemoryBtn.disabled = true;
+    if (msgEl) { msgEl.style.display = 'none'; }
+    fetch((LOCAL_API_BASE || '') + '/api/openclaw/memory/clear', {
+      method: 'DELETE',
+      headers: authHeaders()
+    })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(x) {
+        if (x.ok && x.data && x.data.ok) {
+          var deletedCount = Number(x.data.deleted_count || 0);
+          if (msgEl) {
+            showMsg(msgEl, '已清除 ' + deletedCount + ' 份个人记忆资料', false);
+            msgEl.style.display = '';
+          }
+        } else {
+          var detail = (x.data && (x.data.detail || x.data.message)) || '清除失败';
+          if (msgEl) {
+            showMsg(msgEl, typeof detail === 'string' ? detail : '清除失败', true);
+            msgEl.style.display = '';
+          }
+        }
+      })
+      .catch(function() {
+        if (msgEl) {
+          showMsg(msgEl, '网络错误或本机后端未启动', true);
+          msgEl.style.display = '';
+        }
+      })
+      .finally(function() { clearOpenclawMemoryBtn.disabled = false; });
   });
 }
 

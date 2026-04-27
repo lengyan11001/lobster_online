@@ -318,36 +318,63 @@ def _merge_openclaw_policies_from_bundle(bundle_openclaw: Path, target_openclaw:
         shutil.copy2(sf, dst_ws / name)
 
 
+_OPENCLAW_PRESERVE_DIR_NAMES = {
+    ".openclaw",
+    "agents",
+    "cron",
+    "delivery-queue",
+    "devices",
+    "identity",
+    "memory",
+    "openclaw-weixin",
+    "tasks",
+    "user_memory",
+}
+
+
 def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
-    """用 src 覆盖 dst 目录，保留本地 workspace/ 与 .env（若 zip 未提供）；再合并包内 LOBSTER_CHAT_POLICY_*。"""
-    tmp_ws = None
-    tmp_env = None
-    if dst.is_dir():
-        ws = dst / "workspace"
-        # 始终保留已有 workspace，避免 OTA 仅含少量 workspace 文件时清空用户 OpenClaw 数据
-        if ws.is_dir():
-            tmp_ws = Path(tempfile.mkdtemp(prefix="lobster_oc_ws_"))
-            shutil.move(str(ws), str(tmp_ws / "workspace"))
-        env_f = dst / ".env"
-        if env_f.is_file() and not (src / ".env").exists():
-            tmp_env = Path(tempfile.mkdtemp(prefix="lobster_oc_env_")) / ".env"
-            shutil.copy2(env_f, tmp_env)
-    if dst.exists():
+    """Replace OpenClaw code while preserving local runtime state and user memory."""
+    preserved: list[tuple[str, Path]] = []
+    tmp_root = Path(tempfile.mkdtemp(prefix="lobster_oc_preserve_"))
+    try:
         if dst.is_dir():
-            shutil.rmtree(dst)
-        else:
-            dst.unlink()
-    shutil.copytree(src, dst)
-    if tmp_ws and (tmp_ws / "workspace").is_dir():
-        target = dst / "workspace"
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.move(str(tmp_ws / "workspace"), str(target))
-        shutil.rmtree(tmp_ws, ignore_errors=True)
-    _merge_openclaw_policies_from_bundle(src, dst)
-    if tmp_env and tmp_env.is_file():
-        shutil.copy2(tmp_env, dst / ".env")
-        shutil.rmtree(tmp_env.parent, ignore_errors=True)
+            for child in dst.iterdir():
+                if child.is_dir() and (child.name == "workspace" or child.name.startswith("workspace-")):
+                    holder = tmp_root / child.name
+                    shutil.move(str(child), str(holder))
+                    preserved.append((child.name, holder))
+                elif child.is_dir() and child.name in _OPENCLAW_PRESERVE_DIR_NAMES:
+                    holder = tmp_root / child.name
+                    shutil.move(str(child), str(holder))
+                    preserved.append((child.name, holder))
+            env_f = dst / ".env"
+            if env_f.is_file() and not (src / ".env").exists():
+                holder = tmp_root / ".env"
+                shutil.copy2(env_f, holder)
+                preserved.append((".env", holder))
+
+        if dst.exists():
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            else:
+                dst.unlink()
+        shutil.copytree(src, dst)
+
+        for name, holder in preserved:
+            target = dst / name
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            if holder.is_dir():
+                shutil.move(str(holder), str(target))
+            elif holder.is_file():
+                shutil.copy2(holder, target)
+
+        _merge_openclaw_policies_from_bundle(src, dst)
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def _apply_path(src: Path, dst: Path) -> None:

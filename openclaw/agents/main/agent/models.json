@@ -23,6 +23,11 @@
           "api": "openai-completions"
         }
       ]
+    },
+    "openai-codex": {
+      "baseUrl": "https://chatgpt.com/backend-api",
+      "api": "openai-codex-responses",
+      "models": []
     }
   }
 }

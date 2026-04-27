@@ -20,6 +20,11 @@ from fastapi.responses import Response
 
 from ..core.config import settings
 from ..services.openclaw_channel_auth_store import read_channel_fallback, read_weixin_peer_auth
+from ..services.openclaw_tool_scope import (
+    HEADER_ALLOWED_CAPABILITIES,
+    HEADER_ALLOWED_TOOLS,
+    HEADER_INTENT,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,6 +38,7 @@ MCP_GATEWAY_FORWARD_TIMEOUT_SEC = float(os.environ.get("MCP_GATEWAY_FORWARD_TIME
 # agent_id -> (token, expiry_ts, installation_id 可选)
 # OpenClaw 调 MCP 时常不带 X-Installation-Id；认证中心 capabilities 在槽位开启时必填该头，故与 JWT 一并缓存。
 _mcp_token_cache: dict[str, tuple[str, float, Optional[str]]] = {}
+_openclaw_tool_scope_cache: dict[str, tuple[dict[str, str], float]] = {}
 _cache_lock = threading.Lock()
 
 
@@ -45,10 +51,33 @@ def set_mcp_token_for_agent(
     """在发起智能对话前调用，将当前用户的 token（及可选 X-Installation-Id）按 agent_id 写入缓存。"""
     if not agent_id or not token:
         return
-    expiry = time.time() + ttl_seconds
     xi = (installation_id or "").strip() or None
+    if xi and xi.lower().startswith("lobster-internal-"):
+        # 本机内部 JWT 只用于绕过本地接口鉴权，认证中心不认可；写入缓存会污染 OpenClaw 后续上游调用。
+        logger.debug("mcp_gateway: skip caching internal lobster JWT for agent=%s", agent_id)
+        return
+    expiry = time.time() + ttl_seconds
     with _cache_lock:
         _mcp_token_cache[agent_id] = (token.strip(), expiry, xi)
+
+
+def set_openclaw_tool_scope_for_agent(
+    agent_id: str,
+    scope_headers: dict[str, str],
+    ttl_seconds: int = MCP_TOKEN_TTL_SECONDS,
+) -> None:
+    """Cache the per-turn OpenClaw MCP tool scope; mcp-remote often drops request headers."""
+    if not agent_id:
+        return
+    headers = {
+        k: str(v or "").strip()
+        for k, v in (scope_headers or {}).items()
+        if k in {HEADER_INTENT, HEADER_ALLOWED_TOOLS, HEADER_ALLOWED_CAPABILITIES}
+    }
+    if not headers:
+        return
+    with _cache_lock:
+        _openclaw_tool_scope_cache[agent_id] = (headers, time.time() + float(ttl_seconds))
 
 
 def extend_mcp_token_ttl_for_jwt(token: str, ttl_seconds: int = MCP_TOKEN_TTL_SECONDS) -> None:
@@ -155,6 +184,8 @@ def get_mcp_token_from_request(
 def _installation_id_for_mcp_forward(request: Request) -> Optional[str]:
     """供转发 MCP 时补全 X-Installation-Id：优先请求头，否则与同 agent 缓存的 JWT 一并写入的值。"""
     xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
+    if xi.lower().startswith("lobster-internal-"):
+        xi = ""
     if xi:
         return xi
     aid = (request.headers.get("x-openclaw-agent-id") or "").strip()
@@ -186,6 +217,43 @@ def _installation_id_for_mcp_forward(request: Request) -> Optional[str]:
     return fb_iid or None
 
 
+def _openclaw_tool_scope_headers_for_mcp_forward(request: Request) -> dict[str, str]:
+    """Return the current OpenClaw tool scope headers for MCP forwarding."""
+    explicit = {}
+    for h in (HEADER_INTENT, HEADER_ALLOWED_TOOLS, HEADER_ALLOWED_CAPABILITIES):
+        v = (request.headers.get(h) or "").strip()
+        if v:
+            explicit[h] = v
+    if explicit:
+        return explicit
+
+    aid = (request.headers.get("x-openclaw-agent-id") or "").strip()
+    now = time.time()
+    with _cache_lock:
+        if aid:
+            entry = _openclaw_tool_scope_cache.get(aid)
+            if entry:
+                headers, exp = entry
+                if exp > now:
+                    return dict(headers)
+                _openclaw_tool_scope_cache.pop(aid, None)
+
+        best_headers: Optional[dict[str, str]] = None
+        best_exp = 0.0
+        stale_keys: list[str] = []
+        for k, entry in _openclaw_tool_scope_cache.items():
+            headers, exp = entry
+            if exp <= now:
+                stale_keys.append(k)
+                continue
+            if exp > best_exp:
+                best_exp = exp
+                best_headers = dict(headers)
+        for k in stale_keys:
+            _openclaw_tool_scope_cache.pop(k, None)
+    return best_headers or {}
+
+
 @router.post("/mcp-gateway", include_in_schema=False)
 async def mcp_gateway_proxy(request: Request) -> Response:
     """将 Gateway 的 MCP 请求转发到真实 MCP，并注入当前用户 token（若有）。"""
@@ -205,6 +273,9 @@ async def mcp_gateway_proxy(request: Request) -> Response:
     _xi_mcp = _installation_id_for_mcp_forward(request)
     if _xi_mcp:
         headers["X-Installation-Id"] = _xi_mcp
+    scope_headers = _openclaw_tool_scope_headers_for_mcp_forward(request)
+    if scope_headers:
+        headers.update(scope_headers)
     mcp_method = ""
     try:
         parsed = json.loads(body)
@@ -220,13 +291,14 @@ async def mcp_gateway_proxy(request: Request) -> Response:
             r = await client.post(MCP_BACKEND_URL, content=body, headers=headers)
         fwd_ms = int((time.perf_counter() - t_fwd0) * 1000)
         logger.info(
-            "[mcp_gateway] -> %s method=%s status=%s duration_ms=%s req_bytes=%s agent=%s",
+            "[mcp_gateway] -> %s method=%s status=%s duration_ms=%s req_bytes=%s agent=%s intent=%s",
             MCP_BACKEND_URL,
             mcp_method or "?",
             r.status_code,
             fwd_ms,
             len(body),
             (request.headers.get("x-openclaw-agent-id") or "")[:48] or "-",
+            scope_headers.get(HEADER_INTENT, "-"),
         )
         # 只透传对 JSON-RPC 有用的响应头，避免 hop-by-hop 等干扰
         out_headers = {}

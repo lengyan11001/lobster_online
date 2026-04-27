@@ -88,6 +88,13 @@
       "model": {
         "primary": "lobster-sutui/deepseek-chat"
       },
+      "memorySearch": {
+        "store": {
+          "fts": {
+            "tokenizer": "trigram"
+          }
+        }
+      },
       "compaction": {
         "mode": "safeguard"
       }

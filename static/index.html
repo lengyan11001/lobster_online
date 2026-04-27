@@ -928,12 +928,14 @@
     .header-left {
       gap: 0.9rem;
       min-width: 0;
+      max-width: min(360px, 32vw);
+      flex: 0 1 auto;
     }
     .logo .logo-accent {
       color: #3558d8;
     }
     .header-version {
-      max-width: 240px;
+      max-width: clamp(120px, 14vw, 220px);
     }
     .app-top-nav {
       display: flex;
@@ -942,15 +944,23 @@
       gap: 0.35rem;
       flex: 1 1 auto;
       min-width: 0;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .app-top-nav::-webkit-scrollbar {
+      display: none;
     }
     .app-top-nav .nav-left-item {
+      flex: 0 0 auto;
       border: none;
       background: transparent;
       color: var(--text-muted);
       padding: 0.6rem 0.95rem;
       border-radius: 999px;
       font-size: 0.9rem;
+      white-space: nowrap;
       cursor: pointer;
       transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
     }
@@ -1476,6 +1486,11 @@
       align-items: stretch;
       width: 100%;
     }
+    .chat-area-wrap.is-home-empty .chat-main {
+      max-width: 1260px;
+      width: 100%;
+      margin: 0 auto;
+    }
     .chat-history-sidebar {
       order: 0;
       width: 292px;
@@ -1486,7 +1501,9 @@
       box-shadow: 0 18px 40px rgba(37, 56, 90, 0.05);
       display: flex;
       flex-direction: column;
-      min-height: calc(100vh - 190px);
+      height: calc(100vh - 130px);
+      min-height: 520px;
+      overflow: hidden;
     }
     .chat-sidebar-brand {
       display: flex;
@@ -1539,6 +1556,11 @@
       flex-direction: column;
       gap: 0.2rem;
       margin-bottom: 1rem;
+      flex: 0 1 auto;
+      min-height: 0;
+      max-height: min(390px, 46vh);
+      overflow-y: auto;
+      padding-right: 0.1rem;
     }
     .chat-sidebar-entry {
       width: 100%;
@@ -1630,8 +1652,8 @@
       box-shadow: none;
     }
     .chat-session-list {
-      flex: 1 1 auto;
-      min-height: 0;
+      flex: 1 1 96px;
+      min-height: 72px;
       overflow-y: auto;
       gap: 0.32rem;
       padding-right: 0.1rem;
@@ -1717,7 +1739,6 @@
       justify-content: flex-start;
       padding: 0.15rem 0 0.45rem;
     }
-    .chat-main.is-home-empty .chat-mode-switch,
     .chat-main.is-home-empty .model-selector {
       display: none;
     }
@@ -1754,9 +1775,9 @@
     }
     .chat-home-hero {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 520px;
-      gap: 3.4rem;
-      align-items: start;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+      gap: clamp(1.5rem, 4vw, 3rem);
+      align-items: center;
       padding: 0 0 1rem;
     }
     .chat-home-copy {
@@ -1796,7 +1817,7 @@
       box-shadow: 0 18px 44px rgba(36, 54, 88, 0.08);
     }
     .chat-workspace.is-empty .chat-input-row textarea {
-      min-height: 154px;
+      min-height: 112px;
       padding: 0;
       border-radius: 0;
       background: transparent;
@@ -1809,6 +1830,9 @@
       flex-wrap: wrap;
       margin-bottom: 1.2rem;
     }
+    .chat-empty-state .chat-home-badge-row {
+      display: none;
+    }
     .chat-empty-eyebrow,
     .chat-home-mode-pill {
       display: inline-flex;
@@ -1818,7 +1842,7 @@
       border-radius: 999px;
       background: rgba(91, 124, 255, 0.06);
       color: #7d8aab;
-      font-size: 2.05rem;
+      font-size: clamp(1.08rem, 2vw, 1.65rem);
       font-weight: 700;
       border: 1px solid rgba(91, 124, 255, 0.12);
       white-space: nowrap;
@@ -1844,10 +1868,10 @@
         inset 0 1px 0 rgba(255,255,255,0.18);
     }
     .chat-empty-title {
-      font-size: clamp(5rem, 8.75vw, 7.25rem);
-      line-height: 0.96;
+      font-size: clamp(1.05rem, 1.35vw, 1.18rem);
+      line-height: 1.25;
       letter-spacing: -0.04em;
-      margin: 0 0 1.25rem;
+      margin: 0 0 1rem;
       color: #1e2c44;
       font-weight: 800;
     }
@@ -1858,19 +1882,19 @@
       max-width: 920px;
       margin: 0 0 0.85rem;
       color: var(--text-muted);
-      font-size: 2.3rem;
+      font-size: clamp(1.55rem, 2.6vw, 2.15rem);
       line-height: 1.3;
     }
     .chat-home-helper {
       margin: 0;
       color: #8190a7;
-      font-size: 2.25rem;
+      font-size: clamp(1.22rem, 2.15vw, 1.75rem);
       line-height: 1.32;
     }
     .chat-home-visual {
       position: relative;
-      width: 520px;
-      min-height: 420px;
+      width: min(100%, 420px);
+      min-height: 340px;
       overflow: hidden;
       margin-top: -0.25rem;
     }
@@ -1984,6 +2008,18 @@
       display: none;
       width: min(1210px, 100%);
       margin: 1.05rem 0 0 420px;
+    }
+    .chat-area-wrap.is-home-empty .chat-empty-state {
+      max-width: min(1180px, 100%);
+      margin: 0 auto;
+    }
+    .chat-area-wrap.is-home-empty .chat-workspace.is-empty .chat-input-row {
+      width: min(920px, 100%);
+      margin: 0 auto;
+    }
+    .chat-area-wrap.is-home-empty .chat-home-tools {
+      width: min(920px, 100%);
+      margin: 1.05rem auto 0;
     }
     .chat-workspace.is-empty .chat-home-tools {
       display: block;
@@ -2366,7 +2402,7 @@
       display: flex;
       flex-direction: column;
       gap: 0.85rem;
-      min-height: 122px;
+      min-height: 96px;
     }
     .chat-quick-mode-bar {
       display: none;
@@ -2616,7 +2652,7 @@
     }
     .chat-input-row textarea {
       width: 100%;
-      min-height: 96px;
+      min-height: 76px;
       padding: 0;
       background: transparent;
       border: none;
@@ -2761,12 +2797,26 @@
         order: 3;
         width: 100%;
         justify-content: flex-start;
+        flex-wrap: nowrap;
+        overflow-x: auto;
       }
       .chat-area-wrap {
         flex-direction: column;
       }
       .chat-history-sidebar {
         width: 100%;
+        height: auto;
+        min-height: auto;
+        max-height: none;
+        overflow: visible;
+      }
+      .chat-sidebar-nav {
+        max-height: none;
+        overflow: visible;
+      }
+      .chat-session-list {
+        min-height: 96px;
+        max-height: 240px;
       }
       .chat-workspace {
         min-height: 680px;
@@ -2813,7 +2863,7 @@
         justify-content: space-between;
       }
       .chat-composer-body {
-        min-height: 118px;
+        min-height: 92px;
       }
       .chat-composer-footer {
         flex-wrap: wrap;
@@ -2876,9 +2926,82 @@
         grid-template-columns: 1fr;
       }
     }
+    @media (min-width: 1181px) and (max-height: 820px) {
+      .chat-history-sidebar {
+        padding: 0.85rem 0.75rem 0.75rem;
+      }
+      .chat-sidebar-brand {
+        padding-bottom: 0.65rem;
+        margin-bottom: 0.15rem;
+      }
+      .chat-sidebar-brand-avatar {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+      }
+      .chat-sidebar-top {
+        gap: 0.45rem;
+        margin-bottom: 0.55rem;
+      }
+      .chat-history-sidebar .btn-new-session {
+        min-height: 42px;
+        padding: 0.55rem 0.75rem;
+        border-radius: 14px;
+      }
+      .chat-sidebar-nav {
+        gap: 0.06rem;
+        margin-bottom: 0.5rem;
+        max-height: none;
+        overflow: visible;
+      }
+      .chat-sidebar-entry {
+        min-height: 37px;
+        padding: 0.48rem 0.7rem;
+        border-radius: 13px;
+        gap: 0.55rem;
+      }
+      .chat-sidebar-entry-copy {
+        font-size: 0.94rem;
+      }
+      .chat-sidebar-section-label {
+        margin: 0 0 0.32rem;
+      }
+      .chat-history-sidebar .search-input {
+        min-height: 36px;
+        margin-bottom: 0.45rem;
+        padding: 0.45rem 0.65rem;
+      }
+      .chat-session-list {
+        flex-basis: 64px;
+        min-height: 64px;
+      }
+      .chat-session-item {
+        padding: 0.5rem 0.65rem;
+      }
+    }
     @media (max-width: 768px) {
       .chat-empty-state {
         padding-top: 0.2rem;
+      }
+      .header-left {
+        max-width: 100%;
+      }
+      .chat-home-badge-row {
+        gap: 0.55rem;
+      }
+      .chat-empty-eyebrow,
+      .chat-home-mode-pill {
+        font-size: 1rem;
+        padding: 0.45rem 0.78rem;
+      }
+      .chat-empty-subtitle {
+        font-size: 1.28rem;
+      }
+      .chat-home-helper {
+        font-size: 1.05rem;
+      }
+      .chat-home-visual {
+        display: none;
       }
       .chat-workspace.is-empty .chat-input-row {
         padding-top: 0.15rem;
@@ -3095,7 +3218,7 @@
               </div>
               <div class="chat-main">
                 <div class="chat-mode-switch" id="chatModeSwitch" aria-label="对话模式">
-                  <button type="button" class="chat-mode-pill is-active" data-chat-mode="default">AI 对话</button>
+                  <button type="button" class="chat-mode-pill is-active" data-chat-mode="default">智能对话</button>
                   <button type="button" class="chat-mode-pill" data-chat-mode="workspace_cli">云端工作台</button>
                   <div class="chat-mode-hint" id="chatModeHint">默认模式：继续走现在这套智能对话链路。</div>
                 </div>
@@ -3111,7 +3234,7 @@
                     <div class="chat-home-hero">
                       <div class="chat-home-copy">
                         <div class="chat-home-badge-row">
-                          <button type="button" class="chat-empty-eyebrow is-active" id="chatEmptyEyebrow" data-chat-home-mode="default">AI 员工工作台</button>
+                          <button type="button" class="chat-empty-eyebrow is-active" id="chatEmptyEyebrow" data-chat-home-mode="default">智能对话</button>
                           <button type="button" class="chat-home-mode-pill" id="chatHomeWorkspacePill" data-chat-home-mode="workspace_cli">云端工作台</button>
                         </div>
                         <h2 class="chat-empty-title" id="chatEmptyTitle">👋 你好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
@@ -4380,11 +4503,11 @@
           <div id="content-publish" class="content-block">
             <div class="card">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
-                <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">发布管理 <button type="button" class="help-q" data-help-key="publish_overview" aria-label="说明">?</button></h3>
+                <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">发布中心 <button type="button" class="help-q" data-help-key="publish_overview" aria-label="说明">?</button></h3>
                 <button type="button" id="refreshPublishBtn" class="btn btn-ghost btn-sm">刷新</button>
               </div>
               <div class="store-tabs" style="margin-top:0.75rem;">
-                <button type="button" class="pub-tab active" data-pub-tab="accounts">发布账号</button>
+                <button type="button" class="pub-tab active" data-pub-tab="accounts">账号管理</button>
                 <button type="button" class="pub-tab" data-pub-tab="assets">素材库</button>
                 <button type="button" class="pub-tab" data-pub-tab="tasks">发布记录</button>
               </div>
@@ -4394,6 +4517,8 @@
             <div id="pubTabAccounts" class="pub-tab-panel">
               <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;padding:0.5rem 0;">
                 <button type="button" id="openAddPublishAccountModalBtn" class="btn btn-primary btn-sm">添加发布账号</button>
+                <button type="button" id="openAddPublishPlatformHelpBtn" class="btn btn-ghost btn-sm">添加发布平台</button>
+                <span class="meta" style="font-size:0.82rem;">账号平台和电商平台分开展示；新增平台需要先接入对应登录/发布适配器。</span>
               </div>
               <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.4rem 0;">
                 <span style="font-size:0.82rem;color:var(--text-muted);">选平台：</span>
@@ -4575,6 +4700,24 @@
             <!-- Tab: 模型配置 -->
             <div id="sysTabModel" class="sys-tab-panel" style="margin-top:0.75rem;">
               <div class="config-form">
+                <div class="form-group" id="chatRouteModeBlock">
+                  <label>智能对话路由</label>
+                  <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
+                    <label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.45rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;">
+                      <input type="radio" name="chatRouteMode" value="direct" checked>
+                      <span>直连 + MCP（默认）</span>
+                    </label>
+                    <label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.45rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;">
+                      <input type="radio" name="chatRouteMode" value="openclaw">
+                      <span>OpenClaw Gateway</span>
+                    </label>
+                  </div>
+                  <div class="form-hint">控制智能对话主路径；保存后立即生效，不需要改 .env 或重启。选 OpenClaw 后，主对话直接走 Gateway。</div>
+                  <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-top:0.35rem;">
+                    <button type="button" id="saveChatRouteModeBtn" class="btn btn-ghost btn-sm">保存对话路由</button>
+                    <span id="chatRouteModeMsg" class="msg" style="display:none;"></span>
+                  </div>
+                </div>
                 <div class="form-group">
                   <label>默认模型</label>
                   <select id="ocPrimaryModel">
@@ -4635,6 +4778,8 @@
               <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">清除本机个人配置 <button type="button" class="help-q" data-help-key="sys_clear_local" aria-label="说明">?</button></h4>
               <button type="button" id="clearLocalUserConfigBtn" class="btn btn-ghost btn-sm" style="color:#f87171;border-color:rgba(248,113,113,0.45);">一键清除个人配置</button>
               <span id="clearLocalUserConfigMsg" class="msg" style="display:none;margin-left:0.75rem;"></span>
+              <button type="button" id="clearOpenclawMemoryBtn" class="btn btn-ghost btn-sm" style="color:#f59e0b;border-color:rgba(245,158,11,0.45);margin-left:0.5rem;">一键清除个人记忆</button>
+              <span id="clearOpenclawMemoryMsg" class="msg" style="display:none;margin-left:0.75rem;"></span>
             </div>
           </div>
 
@@ -4739,6 +4884,43 @@
       <div class="modal-field">
         <label>进程日志（节选）</label>
         <pre id="openclawWeixinLoginLog" style="margin:0;max-height:160px;overflow:auto;font-size:0.72rem;background:var(--bg-muted, rgba(0,0,0,0.04));padding:0.5rem;border-radius:6px;white-space:pre-wrap;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- OpenClaw 资料记忆：技能商店卡片上传入口 -->
+  <div id="openclawMemoryModal" class="modal-mask">
+    <div class="modal" style="max-width:620px;max-height:88vh;display:flex;flex-direction:column;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
+        <div>
+          <h4 style="margin:0;font-size:1.05rem;">OpenClaw 资料记忆</h4>
+          <p style="font-size:0.8rem;color:var(--text-muted);line-height:1.55;margin:0.45rem 0 0 0;">
+            上传 Word、PDF、Excel、PPT、txt、md、csv、json、yaml、html 等资料。文件只保存在本机，并写入 OpenClaw 记忆目录，供后续对话参考。
+          </p>
+        </div>
+        <button type="button" id="openclawMemoryClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-field" style="margin-top:0.85rem;">
+        <label>资料文件</label>
+        <input type="file" id="openclawMemoryFile" accept=".pdf,.doc,.docx,.xls,.xlsx,.xlsm,.ppt,.pptx,.txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.yaml,.yml,.html,.htm,.log">
+      </div>
+      <div class="modal-field">
+        <label>标题（可选）</label>
+        <input type="text" id="openclawMemoryTitle" placeholder="例如：我的产品资料、公司介绍、客户 FAQ">
+      </div>
+      <div class="modal-field">
+        <label>备注（可选）</label>
+        <textarea id="openclawMemoryNotes" rows="2" placeholder="补充这份资料的用途或适用场景"></textarea>
+      </div>
+      <div id="openclawMemoryMsg" class="msg" style="display:none;font-size:0.82rem;margin:0.25rem 0 0.65rem 0;"></div>
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap;margin-bottom:0.85rem;">
+        <button type="button" id="openclawMemoryRefreshBtn" class="btn btn-ghost btn-sm">刷新列表</button>
+        <button type="button" id="openclawMemoryCancel" class="btn btn-ghost btn-sm">关闭</button>
+        <button type="button" id="openclawMemoryUploadBtn" class="btn btn-primary btn-sm">上传并写入记忆</button>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:0.8rem;overflow:auto;">
+        <div style="font-size:0.85rem;font-weight:600;margin-bottom:0.55rem;">已上传资料</div>
+        <div id="openclawMemoryList"></div>
       </div>
     </div>
   </div>
@@ -5026,7 +5208,7 @@
   <div id="xskillModelsModal" class="modal-mask">
     <div class="modal" style="max-width:820px;max-height:85vh;display:flex;flex-direction:column;padding:1.25rem;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;flex-shrink:0;">
-        <h4 style="margin:0;font-size:1.05rem;">速推 · 模型与定价</h4>
+        <h4 style="margin:0;font-size:1.05rem;">模型能力与定价</h4>
         <button type="button" id="xskillModelsClose" class="btn btn-ghost btn-sm" style="font-size:1.1rem;padding:0.2rem 0.5rem;">&times;</button>
       </div>
       <div style="display:flex;gap:0.5rem;margin-bottom:0.6rem;flex-shrink:0;flex-wrap:wrap;align-items:center;" id="xskillModelsTabs">

@@ -225,14 +225,13 @@ function _renderXSkillCard() {
   if (EDITION === 'online') guide = '';
   return '<div class="skill-store-card" style="border-color:rgba(6,182,212,0.25);background:linear-gradient(135deg,rgba(6,182,212,0.06),transparent);">' +
     '<div class="card-label">MCP · 内置 ' + statusBadge + '</div>' +
-    '<div class="card-value">xSkill AI (速推)</div>' +
+    '<div class="card-value">AI 模型能力</div>' +
     '<div class="card-desc">图片生成、视频生成、视频解析、语音合成、音色克隆等 50+ AI 模型能力</div>' +
     '<div class="card-tags"><span class="tag">图片</span><span class="tag">视频</span><span class="tag">音频</span><span class="tag">AI创作</span></div>' +
     guide +
     '<div class="card-actions">' +
       configBtn +
-      '<button type="button" class="btn btn-ghost btn-sm" id="xskillModelsBtn">模型与定价</button>' +
-      '<a href="https://xskill.ai" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">官网</a>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="xskillModelsBtn">模型能力与定价</button>' +
     '</div></div>';
 }
 
@@ -276,7 +275,7 @@ function _renderComflyCard() {
   return '<div class="skill-store-card comfly-veo-card" style="border-color:rgba(245,158,11,0.38);background:linear-gradient(135deg,rgba(245,158,11,0.07),transparent);">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">爆款TVC</div>' +
-    '<div class="card-desc">整包成片走 <code>comfly.daihuo.pipeline</code>（start_pipeline + 素材）；单段调试可走 <code>comfly.daihuo</code>。均与速推 <code>video.generate</code> 无关。</div>' +
+    '<div class="card-desc">整包成片走 <code>comfly.daihuo.pipeline</code>（start_pipeline + 素材）；单段调试可走 <code>comfly.daihuo</code>。</div>' +
     sub +
     '<div class="card-tags"><span class="tag">爆款TVC</span><span class="tag">TVC</span><span class="tag">Veo</span><span class="tag">Comfly</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm" id="comflyConfigBtn">配置</button></div></div>';
@@ -348,6 +347,177 @@ function _fetchSkillStoreFrom(base) {
       return res.data || {};
     });
 }
+
+function _openclawMemoryApiBase() {
+  var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE)
+    ? LOCAL_API_BASE
+    : ((typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : '');
+  return String(base || '').replace(/\/$/, '');
+}
+
+function _renderOpenclawMemoryCard(pkg) {
+  pkg = pkg || {};
+  var tags = (pkg.tags || ['OpenClaw', '记忆', '资料']).map(function(t) {
+    return '<span class="tag">' + escapeHtml(t) + '</span>';
+  }).join('');
+  return '<div class="skill-store-card openclaw-memory-card" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.09),transparent);">' +
+    '<div class="card-label">OpenClaw <span class="badge-installed">本机记忆</span></div>' +
+    '<div class="card-value">' + escapeHtml(pkg.name || 'OpenClaw 资料记忆') + '</div>' +
+    '<div class="card-desc">' + escapeHtml(pkg.description || '上传 Word/PDF/Excel/txt/md/csv/json 等资料，让 OpenClaw 在本机对话中参考。') + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm openclaw-memory-entry-btn">上传资料</button></div></div>';
+}
+
+function _openOpenclawMemoryModal() {
+  var modal = document.getElementById('openclawMemoryModal');
+  if (!modal) return;
+  modal.classList.add('visible');
+  _showOpenclawMemoryMsg('', false);
+  _loadOpenclawMemoryList();
+}
+
+function _bindOpenclawMemoryCardEntry() {
+  document.querySelectorAll('.openclaw-memory-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      _openOpenclawMemoryModal();
+    });
+  });
+  document.querySelectorAll('.openclaw-memory-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      _openOpenclawMemoryModal();
+    });
+  });
+}
+
+function _showOpenclawMemoryMsg(text, isErr) {
+  var el = document.getElementById('openclawMemoryMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'msg' + (isErr ? ' err' : '');
+  el.style.display = text ? 'block' : 'none';
+}
+
+function _loadOpenclawMemoryList() {
+  var list = document.getElementById('openclawMemoryList');
+  if (!list) return;
+  var base = _openclawMemoryApiBase();
+  if (!base) {
+    list.innerHTML = '<p class="msg err">未找到本机后端地址，请用本机页面打开或设置 local_api。</p>';
+    return;
+  }
+  list.innerHTML = '<p class="meta">加载资料列表中…</p>';
+  fetch(base + '/api/openclaw/memory/list', { headers: authHeaders() })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(x) {
+      if (!x.ok) {
+        list.innerHTML = '<p class="msg err">' + escapeHtml((x.data && x.data.detail) || '加载失败') + '</p>';
+        return;
+      }
+      var docs = (x.data && Array.isArray(x.data.documents)) ? x.data.documents : [];
+      if (!docs.length) {
+        list.innerHTML = '<p class="meta">还没有上传资料。上传后会写入本机 OpenClaw 记忆目录。</p>';
+        return;
+      }
+      list.innerHTML = docs.map(function(doc) {
+        var title = doc.title || doc.filename || doc.id;
+        var meta = (doc.filename || '') + (doc.size ? (' · ' + Math.round(doc.size / 1024) + 'KB') : '');
+        return '<div class="skill-store-card" style="padding:0.85rem;margin-bottom:0.55rem;">' +
+          '<div class="card-value" style="font-size:0.98rem;">' + escapeHtml(title) + '</div>' +
+          '<div class="card-desc">' + escapeHtml(meta) + '</div>' +
+          '<div class="card-actions"><button type="button" class="btn btn-ghost btn-sm openclaw-memory-delete" data-doc-id="' + escapeAttr(doc.id || '') + '">删除</button></div>' +
+          '</div>';
+      }).join('');
+      list.querySelectorAll('.openclaw-memory-delete').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var docId = btn.getAttribute('data-doc-id') || '';
+          if (!docId || !confirm('确定删除这份 OpenClaw 记忆资料？')) return;
+          btn.disabled = true;
+          fetch(base + '/api/openclaw/memory/' + encodeURIComponent(docId), {
+            method: 'DELETE',
+            headers: authHeaders()
+          }).then(function(r) {
+            return r.json().then(function(d) { return { ok: r.ok, data: d }; });
+          }).then(function(y) {
+            if (!y.ok) {
+              _showOpenclawMemoryMsg((y.data && y.data.detail) || '删除失败', true);
+              btn.disabled = false;
+              return;
+            }
+            _showOpenclawMemoryMsg('已删除', false);
+            _loadOpenclawMemoryList();
+          }).catch(function() {
+            _showOpenclawMemoryMsg('网络错误，删除失败', true);
+            btn.disabled = false;
+          });
+        });
+      });
+    })
+    .catch(function() {
+      list.innerHTML = '<p class="msg err">无法连接本机 OpenClaw 记忆接口</p>';
+    });
+}
+
+(function _initOpenclawMemoryModal() {
+  var modal = document.getElementById('openclawMemoryModal');
+  if (!modal) return;
+  var closeBtn = document.getElementById('openclawMemoryClose');
+  var cancelBtn = document.getElementById('openclawMemoryCancel');
+  var uploadBtn = document.getElementById('openclawMemoryUploadBtn');
+  var refreshBtn = document.getElementById('openclawMemoryRefreshBtn');
+  function closeModal() {
+    modal.classList.remove('visible');
+  }
+  if (closeBtn) closeBtn.addEventListener('click', closeModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+  if (refreshBtn) refreshBtn.addEventListener('click', _loadOpenclawMemoryList);
+  if (uploadBtn) uploadBtn.addEventListener('click', function() {
+    var base = _openclawMemoryApiBase();
+    var fileInput = document.getElementById('openclawMemoryFile');
+    var titleInput = document.getElementById('openclawMemoryTitle');
+    var notesInput = document.getElementById('openclawMemoryNotes');
+    if (!base) {
+      _showOpenclawMemoryMsg('未找到本机后端地址，请用本机页面打开或设置 local_api。', true);
+      return;
+    }
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+      _showOpenclawMemoryMsg('请选择要上传的资料文件', true);
+      return;
+    }
+    var fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    fd.append('title', titleInput ? titleInput.value : '');
+    fd.append('notes', notesInput ? notesInput.value : '');
+    var headers = typeof authHeaders === 'function' ? authHeaders() : {};
+    delete headers['Content-Type'];
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = '上传中…';
+    _showOpenclawMemoryMsg('正在写入 OpenClaw 本机记忆…', false);
+    fetch(base + '/api/openclaw/memory/upload', {
+      method: 'POST',
+      headers: headers,
+      body: fd
+    }).then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, data: d }; });
+    }).then(function(x) {
+      if (!x.ok) {
+        _showOpenclawMemoryMsg((x.data && x.data.detail) || '上传失败', true);
+        return;
+      }
+      if (fileInput) fileInput.value = '';
+      if (titleInput) titleInput.value = '';
+      if (notesInput) notesInput.value = '';
+      _showOpenclawMemoryMsg('已写入 OpenClaw 记忆。之后和 OpenClaw 对话时可参考这份资料。', false);
+      _loadOpenclawMemoryList();
+    }).catch(function() {
+      _showOpenclawMemoryMsg('网络错误，上传失败', true);
+    }).finally(function() {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = '上传并写入记忆';
+    });
+  });
+})();
 
 function _mergeSkillStorePackages(primary, secondary) {
   var out = [];
@@ -448,6 +618,8 @@ function loadSkillStore() {
             noLocalBackend: !hasLocal,
           });
         }
+        var memoryPkg = packages.filter(function(p) { return p.id === 'openclaw_memory_skill'; })[0] || null;
+        if (memoryPkg) html += _renderOpenclawMemoryCard(memoryPkg);
         html += packages.map(function(pkg) {
           var debugBadge = (isSkillAdmin && pkg.store_visibility === 'debug')
             ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
@@ -457,6 +629,7 @@ function loadSkillStore() {
           if (pkg.id === 'comfly_veo_skill') return '';
           if (pkg.id === 'comfly_ecommerce_detail_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
+          if (pkg.id === 'openclaw_memory_skill') return '';
           if (pkg.id === 'youtube_publish') {
             if (typeof EDITION === 'undefined' || EDITION !== 'online') return '';
             if (!isSkillAdmin) return '';
@@ -535,6 +708,7 @@ function loadSkillStore() {
         _bindSeedanceTvcCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
+        _bindOpenclawMemoryCardEntry();
         _bindInstallUninstall(el);
         _bindXSkillConfigBtn();
         _bindComflyConfigBtn();
@@ -730,7 +904,7 @@ function _navigateToEcommerceAccounts() {
   }, 300);
 }
 
-// ── xSkill Token Modal ──────────────────────────────────────────────
+// ── Token 配置 Modal ──────────────────────────────────────────────
 
 function _bindEcommerceDetailCardEntry() {
   document.querySelectorAll('.ecommerce-detail-card').forEach(function(card) {
@@ -896,7 +1070,7 @@ function _bindComflyConfigBtn() {
   });
 })();
 
-// ── xSkill 模型与定价 Modal ──────────────────────────────────────
+// ── 模型与定价 Modal ──────────────────────────────────────
 (function _initXSkillModelsModal() {
   var modal = document.getElementById('xskillModelsModal');
   if (!modal) return;

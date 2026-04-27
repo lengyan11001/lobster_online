@@ -20,6 +20,14 @@ from .auth import (
 )
 from .openclaw_config import clear_openclaw_local_provider_keys
 from ..models import ConsumptionAccount, User
+from ..services.chat_route_mode import (
+    CHAT_ROUTE_MODE_DIRECT,
+    CHAT_ROUTE_MODE_OPENCLAW,
+    DEFAULT_CHAT_ROUTE_MODE,
+    get_chat_route_mode,
+    normalize_chat_route_mode,
+    set_chat_route_mode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +120,10 @@ class UpdateSettingsRequest(BaseModel):
     preferred_model: Optional[str] = None
 
 
+class ChatRouteModeRequest(BaseModel):
+    mode: str
+
+
 @router.get("/api/settings", summary="获取用户设置")
 def get_settings(current_user: User = Depends(get_current_user)):
     preferred = "sutui"
@@ -199,6 +211,31 @@ def get_lan_info():
         "port": port,
         "url": f"http://{ip}:{port}",
     }
+
+
+@router.get("/api/settings/chat-route", summary="获取智能对话路由模式")
+def get_chat_route_settings(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return {
+        "mode": get_chat_route_mode(),
+        "default_mode": DEFAULT_CHAT_ROUTE_MODE,
+        "modes": [
+            {"value": CHAT_ROUTE_MODE_DIRECT, "label": "直连 + MCP"},
+            {"value": CHAT_ROUTE_MODE_OPENCLAW, "label": "OpenClaw Gateway"},
+        ],
+    }
+
+
+@router.post("/api/settings/chat-route", summary="更新智能对话路由模式")
+def update_chat_route_settings(
+    body: ChatRouteModeRequest,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    mode = normalize_chat_route_mode(body.mode)
+    if not mode:
+        raise HTTPException(status_code=400, detail="无效的智能对话路由模式")
+    return {"ok": True, "mode": set_chat_route_mode(mode)}
 
 
 @router.post(

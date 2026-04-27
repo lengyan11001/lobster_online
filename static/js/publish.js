@@ -1605,6 +1605,15 @@ if (openAddPubAcctBtn) {
   openAddPubAcctBtn.addEventListener('click', openAddPublishAccountModal);
 }
 
+var openAddPlatformHelpBtn = document.getElementById('openAddPublishPlatformHelpBtn');
+if (openAddPlatformHelpBtn) {
+  openAddPlatformHelpBtn.addEventListener('click', function() {
+    var filter = document.getElementById('accountPlatformFilter');
+    if (filter) filter.focus();
+    alert('发布平台在“添加发布账号”的平台下拉中选择：账号平台包括抖音、小红书、今日头条等；电商平台包括抖店、小红书店铺、1688、淘宝、拼多多。新增平台需要先接入对应登录/发布适配器。');
+  });
+}
+
 var addPubAcctCancel = document.getElementById('addPublishAccountModalCancel');
 if (addPubAcctCancel) {
   addPubAcctCancel.addEventListener('click', closeAddPublishAccountModal);

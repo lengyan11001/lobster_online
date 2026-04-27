@@ -31,9 +31,44 @@ from sqlalchemy.orm import Session
 from ..core.config import settings
 from ..db import get_db
 from .auth import get_current_user_for_chat, oauth2_scheme, _ServerUser
-from ..models import CapabilityCallLog, ChatTurnLog, PublishAccount, ToolCallLog, User
+try:
+    from ..models import Asset, CapabilityCallLog, ChatTurnLog, PublishAccount, ToolCallLog, User
+except ImportError:
+    from ..models import CapabilityCallLog, ChatTurnLog, PublishAccount, ToolCallLog, User
+    Asset = None  # type: ignore[assignment]
 from ..services.capability_cost_confirm import invoke_should_prompt_cost_confirm
-from .mcp_gateway import set_mcp_token_for_agent
+try:
+    from ..services.chat_route_mode import CHAT_ROUTE_MODE_OPENCLAW, get_chat_route_mode
+except ImportError:
+    CHAT_ROUTE_MODE_OPENCLAW = "openclaw"
+
+    def get_chat_route_mode() -> str:
+        return "direct"
+
+try:
+    from ..services.openclaw_tool_scope import classify_openclaw_tool_scope
+except ImportError:
+    class _OpenClawFallbackScope:
+        intent = "legacy"
+        allowed_tools = set()
+        allowed_capabilities = None
+
+        def headers(self) -> Dict[str, str]:
+            return {}
+
+        def system_hint(self) -> str:
+            return ""
+
+    def classify_openclaw_tool_scope(_msgs: List[Dict]) -> _OpenClawFallbackScope:
+        return _OpenClawFallbackScope()
+
+try:
+    from .mcp_gateway import set_mcp_token_for_agent, set_openclaw_tool_scope_for_agent
+except ImportError:
+    from .mcp_gateway import set_mcp_token_for_agent
+
+    def set_openclaw_tool_scope_for_agent(_agent_id: str, _headers: Dict[str, str]) -> None:
+        return None
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -41,18 +76,19 @@ logger = logging.getLogger(__name__)
 
 _comfly_image_models_cache: list[str] = []
 _comfly_image_models_ts: float = 0
+_remote_image_generate_default_model_cache: str = ""
 _COMFLY_CACHE_TTL = 600  # 10 minutes
 
 
-def _get_comfly_image_models() -> list[str]:
-    """Fetch Comfly image model IDs from server /capabilities/comfly-pricing, cached with TTL."""
-    global _comfly_image_models_cache, _comfly_image_models_ts
+def _refresh_remote_generation_config() -> None:
+    """Fetch image defaults and Comfly model IDs from auth server, cached with TTL."""
+    global _comfly_image_models_cache, _comfly_image_models_ts, _remote_image_generate_default_model_cache
     now = time.time()
-    if _comfly_image_models_cache and (now - _comfly_image_models_ts) < _COMFLY_CACHE_TTL:
-        return _comfly_image_models_cache
+    if _comfly_image_models_ts and (now - _comfly_image_models_ts) < _COMFLY_CACHE_TTL:
+        return
     auth_base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
     if not auth_base:
-        return _comfly_image_models_cache
+        return
     for _attempt in range(2):
         try:
             import httpx as _hx
@@ -61,17 +97,40 @@ def _get_comfly_image_models() -> list[str]:
                 data = r.json()
                 models = data.get("models") or {}
                 result = [k for k, v in models.items() if isinstance(v, dict) and v.get("api_format") == "dalle"]
+                defaults = data.get("defaults") if isinstance(data, dict) else {}
+                if isinstance(defaults, dict):
+                    default_model = str(defaults.get("image_generate_model") or "").strip()
+                    _remote_image_generate_default_model_cache = default_model
                 _comfly_image_models_cache = result
                 _comfly_image_models_ts = now
-                logger.info("[CHAT] comfly image models refreshed: %s", result)
-                return result
+                logger.info(
+                    "[CHAT] remote generation config refreshed: default_image_model=%s comfly_models=%s",
+                    _remote_image_generate_default_model_cache or "-",
+                    result,
+                )
+                return
             else:
                 logger.warning("[CHAT] comfly-pricing 非 200: status=%s", r.status_code)
         except Exception as e:
             logger.warning("[CHAT] comfly-pricing fetch failed (attempt %d): %s", _attempt + 1, e)
         if _attempt == 0:
             time.sleep(0.5)
+    _comfly_image_models_ts = now
+
+
+def _get_comfly_image_models() -> list[str]:
+    """Fetch Comfly image model IDs from server /capabilities/comfly-pricing, cached with TTL."""
+    _refresh_remote_generation_config()
     return _comfly_image_models_cache
+
+
+def _get_default_image_generate_model() -> str:
+    """Server-controlled default image model with local fallback for offline/old servers."""
+    _refresh_remote_generation_config()
+    local_fallback = (getattr(settings, "lobster_default_image_generate_model", None) or "").strip()
+    return _remote_image_generate_default_model_cache or local_fallback or _DEFAULT_IMAGE_GENERATE_MODEL
+
+
 router = APIRouter()
 
 # chat/stream 与工具链遇 httpx 对端掐连接时的统一用户文案（避免界面直接显示英文 RemoteProtocolError）
@@ -502,11 +561,23 @@ def _load_lobster_chat_policy_intro(edition: str) -> str:
 
 def _load_lobster_chat_policy_tools_body() -> str:
     """有 MCP 工具时的详策（与 LOBSTER_CHAT_POLICY_TOOLS.md 单一事实来源）。"""
-    try:
-        return _LOBSTER_CHAT_POLICY_TOOLS_PATH.read_text(encoding="utf-8").strip() + "\n\n"
-    except OSError as exc:
-        logger.error("读取龙虾策略 TOOLS 失败 %s: %s", _LOBSTER_CHAT_POLICY_TOOLS_PATH, exc)
-        return ""
+    candidates = [
+        _LOBSTER_CHAT_POLICY_TOOLS_PATH,
+        _BASE_DIR / "openclaw" / "workspace-lobster-sutui-deepseek-chat" / "LOBSTER_CHAT_POLICY_TOOLS.md",
+        _BASE_DIR / "openclaw" / "workspace-lobster-sutui-gpt-4o-mini" / "LOBSTER_CHAT_POLICY_TOOLS.md",
+    ]
+    for path in candidates:
+        try:
+            body = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            logger.debug("读取龙虾策略 TOOLS 失败 %s: %s", path, exc)
+            continue
+        if body:
+            if path != _LOBSTER_CHAT_POLICY_TOOLS_PATH:
+                logger.warning("主 workspace TOOLS 缺失，使用兜底策略文件: %s", path)
+            return body + "\n\n"
+    logger.error("读取龙虾策略 TOOLS 失败，所有候选文件均不可用: %s", candidates)
+    return ""
 
 
 def _build_lobster_main_system_prompt(edition: str, has_tools: bool) -> str:
@@ -517,13 +588,18 @@ def _build_lobster_main_system_prompt(edition: str, has_tools: bool) -> str:
         if not body.strip():
             logger.warning("LOBSTER_CHAT_POLICY_TOOLS.md 为空，降级为无工具提示")
             body = _no_tools_sys_hint(edition)
+        default_image_model = _get_default_image_generate_model()
         comfly_models = _get_comfly_image_models()
-        if comfly_models:
-            body += (
-                "【图片模型】用户指定模型时必须原样传入 payload.model。"
-                "可用图片模型: fal-ai/flux-2/flash, " + ", ".join(comfly_models)
-                + "。用户说用某模型就传该模型名，禁止替换为 default。\n"
-            )
+        image_model_options = []
+        for mid in [default_image_model, "fal-ai/flux-2/flash", *comfly_models]:
+            if mid and mid not in image_model_options:
+                image_model_options.append(mid)
+        body += (
+            "【图片模型】用户指定模型时必须原样传入 payload.model。"
+            f"用户未指定时默认使用 {default_image_model}。"
+            "可用图片模型: " + ", ".join(image_model_options)
+            + "。用户说用某模型就传该模型名，禁止替换为 default。\n"
+        )
     else:
         body = _no_tools_sys_hint(edition)
     return intro + body + _LOBSTER_CHAT_POLICY_CLOSING
@@ -962,11 +1038,16 @@ def _early_finish_generation_user_reply(kind_cn: str) -> str:
     return f"{kind_cn}已生成并入库。"
 
 
+def _strip_lobster_attachment_block(text: str) -> str:
+    """只保留用户原始需求，避免后端注入的附件说明影响意图判断。"""
+    return re.split(r"\n*【用户本条消息上传的素材】", str(text or ""), maxsplit=1)[0].strip()
+
+
 def _correct_video_to_image_if_user_asked_image(args: Dict, last_user_content: str) -> Dict:
     """模型误将图片需求选成 video.generate 时，按用户最后一条消息纠正为 image.generate，并清理 payload 仅保留图片参数（避免速推按视频处理）。"""
     if not args or (args.get("capability_id") or "").strip() != "video.generate":
         return args
-    text = (last_user_content or "").strip()
+    text = _strip_lobster_attachment_block(last_user_content)
     if not text:
         return args
     image_keywords = ("图片", "图", "画一张", "生成图", "一张图", "画一只", "画个", "生成一张", "来张图", "来一张", "一只猫的图", "猫的图片")
@@ -983,8 +1064,8 @@ def _correct_video_to_image_if_user_asked_image(args: Dict, last_user_content: s
     # 只保留图片能力需要的参数，去掉视频专用字段，避免传给 MCP/速推时仍被当视频
     model = (old_payload.get("model") or "").strip()
     if not model or "super-seed" in model or "st-ai" in model or "wan/" in model or "vidu" in model or "seedance" in model or "hailuo" in model or "minimax" in model:
-        # 默认走 Fal 文生图，不依赖速推侧「即梦」Token 池（jimeng-* 需上游单独开通）
-        model = "fal-ai/flux-2/flash"
+        # 默认走统一生图模型，不依赖速推侧「即梦」Token 池（jimeng-* 需上游单独开通）
+        model = _get_default_image_generate_model()
     payload = {
         "prompt": (old_payload.get("prompt") or "").strip(),
         "model": model,
@@ -1082,7 +1163,152 @@ def _get_attachment_public_urls(
     return _resolve_attachment_urls_strict(attachment_asset_ids, request, db, user_id)
 
 
-_TVC_KEYWORDS_RE = re.compile(r"(?:爆款|tvc|带货视频|做tvc|用tvc)", re.IGNORECASE)
+_TVC_KEYWORDS_RE = re.compile(r"(?:爆款|tvc|带货|分镜|comfly|做tvc|用tvc)", re.IGNORECASE)
+_PLAIN_VIDEO_REQUEST_RE = re.compile(
+    r"(?:生成|做|制作|创建|帮我|给我|出).{0,30}(?:视频|短视频|宣传视频|片子|动画)|"
+    r"文生视频|图生视频|视频生成|短视频生成",
+    re.IGNORECASE,
+)
+_IMAGE_REQUEST_RE = re.compile(
+    r"(?:生成|画|出|做|创建|制作|帮我|给我).{0,18}(?:图|图片|画|海报|插图|壁纸|头像|产品图)|"
+    r"文生图|图生图|生图|作图|P图|修图",
+    re.IGNORECASE,
+)
+_VIDEO_DURATION_RE = re.compile(r"(?<!\d)(\d{1,3}(?:\.\d+)?)\s*(?:秒|秒钟|s\b)", re.IGNORECASE)
+
+
+def _user_wants_plain_video(user_message: str) -> bool:
+    text = _strip_lobster_attachment_block(user_message)
+    return bool(text and _PLAIN_VIDEO_REQUEST_RE.search(text) and not _TVC_KEYWORDS_RE.search(text))
+
+
+def _extract_video_duration_from_user_text(user_message: str) -> Optional[Union[int, float]]:
+    text = _strip_lobster_attachment_block(user_message)
+    m = _VIDEO_DURATION_RE.search(text or "")
+    if not m:
+        return None
+    try:
+        val = float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    if val <= 0 or val > 600:
+        return None
+    return int(val) if val.is_integer() else val
+
+
+_VIDEO_HISTORY_CONTINUATION_RE = re.compile(
+    r"(继续|再做|再来|上一|上次|刚才|之前|沿用|同样|按.{0,8}(上面|上次|刚才|之前)|照着|基于)",
+    re.IGNORECASE,
+)
+_VIDEO_PROMPT_NOISE_RE = re.compile(
+    r"(fal-ai/veo3\.1/(?:fast/)?image-to-video|fal-ai/veo3\.1/fast|fal-ai/veo3\.1|"
+    r"veo\s*3(?:[\._]?\s*1)?|veo3(?:[\._]?1)?|sora\s*2?|seedance|hailuo|kling|wan\s*2(?:\.\s*6)?|"
+    r"使用|用|采用|选择|帮我|给我|请|直接|生成|制作|创建|做|来|一个|一段|"
+    r"视频|短视频|图生视频|文生视频|模型|素材|图片|这张图|这张图片|这个素材|"
+    r"\d+(?:\.\d+)?\s*(?:秒|秒钟|s\b)|中文|英文|高清|高质量)",
+    re.IGNORECASE,
+)
+
+
+def _current_turn_has_specific_video_prompt(user_message: str) -> bool:
+    """Whether the current user turn itself contains a real video subject/prompt."""
+    text = _strip_lobster_attachment_block(user_message)
+    if not text:
+        return False
+    stripped = _VIDEO_PROMPT_NOISE_RE.sub("", text)
+    stripped = re.sub(r"[\s,，。.!！?？:：;；、_\-\\/|（）()【】\[\]\"'“”‘’]+", "", stripped)
+    return len(stripped) >= 4
+
+
+def _neutral_video_prompt_for_underspecified_turn(has_attachment: bool) -> str:
+    if has_attachment:
+        return (
+            "图生视频：基于本次上传或选择的素材生成自然动态视频，保持主体一致，镜头稳定，"
+            "不要添加用户本轮未指定的产品名称、营销文案或文字。"
+        )
+    return (
+        "生成一段自然连贯、镜头稳定的视频，不要添加用户本轮未指定的产品名称、营销文案或文字。"
+    )
+
+
+def _prevent_stale_video_prompt_from_history(
+    args: Dict[str, Any],
+    last_user_content: str,
+    has_attachment: bool,
+) -> None:
+    """Do not let LLM silently reuse an old video prompt when this turn has no prompt."""
+    if not args or (args.get("capability_id") or "").strip() != "video.generate":
+        return
+    text = _strip_lobster_attachment_block(last_user_content)
+    if _current_turn_has_specific_video_prompt(text) or _VIDEO_HISTORY_CONTINUATION_RE.search(text or ""):
+        return
+    inner = args.get("payload")
+    if not isinstance(inner, dict):
+        inner = {}
+        args["payload"] = inner
+    prompt = str(inner.get("prompt") or inner.get("text") or "").strip()
+    neutral = _neutral_video_prompt_for_underspecified_turn(
+        has_attachment
+        or bool(str(inner.get("image_url") or "").strip())
+        or bool(inner.get("media_files"))
+        or bool(inner.get("filePaths"))
+    )
+    if prompt != neutral:
+        logger.warning(
+            "[CHAT] video.generate 当前轮未给明确 prompt，已阻止沿用历史 prompt old=%s",
+            prompt[:160] if prompt else "-",
+        )
+    inner["prompt"] = neutral
+
+
+def _correct_daihuo_pipeline_to_video_if_plain_video(args: Dict[str, Any], user_message: str) -> Dict[str, Any]:
+    """普通视频生成不能误走爆款TVC管线；仅显式 TVC/带货/分镜/Comfly 时才保留管线。"""
+    if not args or (args.get("capability_id") or "").strip() != "comfly.daihuo.pipeline":
+        return args
+    clean_user = _strip_lobster_attachment_block(user_message)
+    if not _user_wants_plain_video(clean_user):
+        return args
+
+    old_payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    nested = old_payload.get("payload") if isinstance(old_payload.get("payload"), dict) else None
+    if isinstance(nested, dict):
+        old_payload = {**{k: v for k, v in old_payload.items() if k != "payload"}, **nested}
+
+    task_text = _strip_lobster_attachment_block(str(old_payload.get("task_text") or ""))
+    prompt = str(old_payload.get("prompt") or old_payload.get("text") or task_text or clean_user).strip()
+    new_payload: Dict[str, Any] = {"prompt": prompt or clean_user}
+
+    duration = old_payload.get("duration")
+    if duration is None:
+        duration = _extract_video_duration_from_user_text(prompt or clean_user)
+    if duration is not None:
+        new_payload["duration"] = duration
+
+    for key in ("aspect_ratio", "ratio", "negative_prompt", "no_subtitles", "voiceover"):
+        if old_payload.get(key) is not None:
+            new_payload[key] = old_payload[key]
+
+    image_url = str(old_payload.get("image_url") or "").strip()
+    asset_id = str(old_payload.get("asset_id") or "").strip()
+    if image_url:
+        new_payload["image_url"] = image_url
+    elif asset_id:
+        # 后续 _resolve_video_payload_asset_ids_to_urls 会转成公网 URL。
+        new_payload["image_url"] = asset_id
+    for key in ("media_files", "filePaths"):
+        val = old_payload.get(key)
+        if val:
+            new_payload[key] = val
+
+    fixed = dict(args)
+    fixed["capability_id"] = "video.generate"
+    fixed["payload"] = new_payload
+    logger.warning(
+        "[CHAT] 普通视频需求误选 comfly.daihuo.pipeline，已纠正为 video.generate duration=%s prompt=%s",
+        new_payload.get("duration") or "-",
+        (new_payload.get("prompt") or "")[:120],
+    )
+    return fixed
 
 
 def _redirect_video_generate_to_daihuo_if_tvc(
@@ -1092,15 +1318,16 @@ def _redirect_video_generate_to_daihuo_if_tvc(
     """用户消息含 TVC/爆款/带货 关键词但 LLM 误走 video.generate 时，自动重定向到 comfly.daihuo.pipeline。"""
     if not args or (args.get("capability_id") or "").strip() != "video.generate":
         return
-    if not (user_message and _TVC_KEYWORDS_RE.search(user_message)):
+    clean_user = _strip_lobster_attachment_block(user_message)
+    if not (clean_user and _TVC_KEYWORDS_RE.search(clean_user)):
         return
     pl = args.get("payload") if isinstance(args.get("payload"), dict) else {}
     asset_id = (pl.get("asset_id") or "").strip()
     image_url = (pl.get("image_url") or "").strip()
     args["capability_id"] = "comfly.daihuo.pipeline"
     new_pl: Dict[str, Any] = {"action": "start_pipeline", "auto_save": True}
-    if (user_message or "").strip():
-        new_pl["task_text"] = user_message.strip()
+    if clean_user:
+        new_pl["task_text"] = clean_user
     if asset_id:
         new_pl["asset_id"] = asset_id
     if image_url:
@@ -1226,7 +1453,7 @@ def _infer_video_model_from_user_text(
         args["payload"] = inner
     if (inner.get("model") or "").strip():
         return
-    text = (last_user_content or "").strip()
+    text = _strip_lobster_attachment_block(last_user_content)
     if not text:
         return
     low = text.lower()
@@ -1250,11 +1477,14 @@ def _infer_video_model_from_user_text(
         )
 
 
-_DEFAULT_IMAGE_GENERATE_MODEL = "fal-ai/flux-2/flash"
+_DEFAULT_IMAGE_GENERATE_MODEL = "gpt-image2"
 _DEFAULT_VIDEO_GENERATE_MODEL_T2V = "sora2pub/text-to-video"
 _DEFAULT_VIDEO_GENERATE_MODEL_I2V = "sora2pub/image-to-video"
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
+    "gpt-image": "gpt-image-2",
+    "gpt-image2": "gpt-image-2",
+    "gpt-image-2": "gpt-image-2",
     "flux": "fal-ai/flux-2/flash",
     "flux2": "fal-ai/flux-2/flash",
     "flux-2": "fal-ai/flux-2/flash",
@@ -1285,6 +1515,18 @@ _VIDEO_MODEL_ALIASES: Dict[str, str] = {
     "wan": "wan/v2.6/text-to-video",
     "wan-2.6": "wan/v2.6/text-to-video",
 }
+
+
+_VIDEO_MODEL_USER_HINT_RE = re.compile(
+    r"(sora\s*2?|seedance|veo\s*3(?:[\._]?\s*1)?|hailuo|kling|wan\s*2(?:\.\s*6)?|"
+    r"super[-_\s]*seed|st-ai|vidu|grok|fal-ai/|sora2pub/|ark/|minimax)",
+    re.IGNORECASE,
+)
+
+
+def _user_explicitly_requested_video_model(user_message: str) -> bool:
+    text = _strip_lobster_attachment_block(user_message)
+    return bool(text and _VIDEO_MODEL_USER_HINT_RE.search(text))
 
 
 def _normalize_model_alias(args: Dict[str, Any]) -> None:
@@ -1322,8 +1564,8 @@ def _is_known_video_model_without_slash(model_id: str) -> bool:
     return any(p in low for p in _KNOWN_VIDEO_PATTERNS)
 
 
-def _ensure_video_generate_default_model(args: Dict[str, Any]) -> None:
-    """video.generate 未传 model 或 model 不合法时补默认 sora2；有 image_url 时用 i2v，否则 t2v。未传 duration 时补最短时长。"""
+def _ensure_video_generate_default_model(args: Dict[str, Any], user_message: str = "") -> None:
+    """video.generate 使用系统默认模型；只有用户显式指定模型时才保留 LLM 传入的 model。"""
     if not args or (args.get("capability_id") or "").strip() != "video.generate":
         return
     inner = args.get("payload")
@@ -1331,9 +1573,24 @@ def _ensure_video_generate_default_model(args: Dict[str, Any]) -> None:
         inner = {}
         args["payload"] = inner
     raw_model = (inner.get("model") or "").strip()
-    if not (raw_model and ("/" in raw_model or _is_known_video_model_without_slash(raw_model))):
-        has_img = bool((inner.get("image_url") or "").strip())
-        chosen = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if has_img else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
+    has_img = bool((inner.get("image_url") or "").strip())
+    if not has_img:
+        for key in ("media_files", "filePaths"):
+            vals = inner.get(key)
+            if isinstance(vals, list) and any(str(v or "").strip() for v in vals):
+                has_img = True
+                break
+    chosen = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if has_img else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
+    user_named_model = _user_explicitly_requested_video_model(user_message)
+    if raw_model and not user_named_model:
+        if raw_model != chosen:
+            logger.info(
+                "[CHAT] video.generate 用户未指定模型，LLM 传入 model=%s，已覆盖为默认 model=%s",
+                raw_model,
+                chosen,
+            )
+        inner["model"] = chosen
+    elif not (raw_model and ("/" in raw_model or _is_known_video_model_without_slash(raw_model))):
         if raw_model:
             logger.info("[CHAT] video.generate model「%s」不含 / 且非已知视频模型，已替换为 model=%s", raw_model, chosen)
         else:
@@ -1345,8 +1602,15 @@ def _ensure_video_generate_default_model(args: Dict[str, Any]) -> None:
     except (TypeError, ValueError):
         dur_f = None
     if dur_f is None or dur_f <= 0:
-        inner["duration"] = _DEFAULT_VIDEO_GENERATE_DURATION
-        logger.info("[CHAT] video.generate 未传 duration，已默认 duration=%s", _DEFAULT_VIDEO_GENERATE_DURATION)
+        inferred_duration = _extract_video_duration_from_user_text(user_message)
+        inner["duration"] = inferred_duration or _DEFAULT_VIDEO_GENERATE_DURATION
+        if inferred_duration:
+            logger.info(
+                "[CHAT] video.generate 未传 duration，已从用户原话补全 duration=%s",
+                inferred_duration,
+            )
+        else:
+            logger.info("[CHAT] video.generate 未传 duration，已默认 duration=%s", _DEFAULT_VIDEO_GENERATE_DURATION)
 
 
 def _ensure_image_generate_default_model(args: Dict[str, Any]) -> None:
@@ -1378,12 +1642,15 @@ def _ensure_image_generate_default_model(args: Dict[str, Any]) -> None:
         )
         return
     if raw_model:
+        default_model = _get_default_image_generate_model()
         logger.info("[CHAT] image.generate model「%s」不含 / 且不在 Comfly 列表 %s 中，已替换为 model=%s",
-                    raw_model, comfly_models, _DEFAULT_IMAGE_GENERATE_MODEL)
-    inner["model"] = _DEFAULT_IMAGE_GENERATE_MODEL
+                    raw_model, comfly_models, default_model)
+    else:
+        default_model = _get_default_image_generate_model()
+    inner["model"] = default_model
     logger.info(
         "[CHAT] image.generate 未传 model，已默认 model=%s",
-        _DEFAULT_IMAGE_GENERATE_MODEL,
+        default_model,
     )
 
 
@@ -1396,7 +1663,7 @@ def _ensure_image_generate_prompt_and_aspect(args: Dict[str, Any], last_user_con
         inner = {}
         args["payload"] = inner
     pm = (str(inner.get("prompt") or inner.get("text") or "")).strip()
-    u = (last_user_content or "").strip()
+    u = _strip_lobster_attachment_block(last_user_content)
     if not pm and u:
         inner["prompt"] = u[:_MAX_IMAGE_GENERATE_PROMPT_CHARS]
         logger.info(
@@ -1406,7 +1673,7 @@ def _ensure_image_generate_prompt_and_aspect(args: Dict[str, Any], last_user_con
         pm = inner["prompt"]
     mid = (str(inner.get("model") or inner.get("model_id") or "")).strip().lower()
     if not mid:
-        mid = _DEFAULT_IMAGE_GENERATE_MODEL.lower()
+        mid = _get_default_image_generate_model().lower()
     wants_16_9 = bool(u and _IMAGE_16_9_RE.search(u))
     if wants_16_9 and "flux-2" in mid and not (str(inner.get("image_size") or "")).strip():
         inner["image_size"] = "landscape_16_9"
@@ -3306,7 +3573,7 @@ def _raise_api_err(resp: httpx.Response, model: str = ""):
 
 
 _DSML_FC_RE = re.compile(
-    r'<[\uff5c|]DSML[\uff5c|]function_calls>(.*?)</[\uff5c|]DSML[\uff5c|]function_calls>',
+    r'<[\uff5c|]DSML[\uff5c|](?:function_calls|tool_calls)>(.*?)</[\uff5c|]DSML[\uff5c|](?:function_calls|tool_calls)>',
     re.DOTALL,
 )
 _DSML_INVOKE_RE = re.compile(
@@ -4570,10 +4837,14 @@ async def _poll_task_get_result_until_terminal(
     """task.get_result 首次返回仍「进行中」时，15s 间隔轮询直至终态（与 MCP 长超时配合）。"""
     if (invoke_args.get("capability_id") or "").strip() != "task.get_result":
         return initial_res
+    invoke_args = _normalize_invoke_task_get_result_args(invoke_args)
     if not _is_task_result_in_progress(initial_res):
         return initial_res
     res = initial_res
     task_id = _task_id_from_invoke_capability_args(invoke_args)
+    if not task_id:
+        logger.warning("[CHAT] task.get_result polling skipped: missing task_id")
+        return initial_res
     if progress_cb:
         try:
             ev_immediate: Dict[str, Any] = {
@@ -4662,6 +4933,18 @@ async def _after_generate_auto_task_result(
     cap = (invoke_args.get("capability_id") or "").strip()
     if cap not in _AUTOPOLL_CAPS:
         return gen_res
+    if cap in ("image.generate", "video.generate"):
+        try:
+            terminal_assets = _terminal_saved_assets_for_task_result(gen_res)
+        except Exception:
+            terminal_assets = []
+        if terminal_assets:
+            logger.info(
+                "[CHAT] %s 已返回终态素材 saved_assets=%s，跳过自动 task.get_result",
+                cap,
+                len(terminal_assets),
+            )
+            return gen_res
     tid = _extract_task_id_from_result(gen_res)
     if not tid:
         return gen_res
@@ -4815,7 +5098,7 @@ async def _chat_openai(
     )
     # 仅当用户当前消息包含操作意图时才强制要求调用工具，避免对「你好」等问候误触发
     _USER_ACTION_KW = re.compile(
-        r"(帮我|给我|生成.*图|发.*抖音|发布到|YouTube|youtube|发到YouTube|打开浏览器|登录|查看素材|查看账号|"
+        r"(帮我|给我|生成.*图|生成.*视频|做.*视频|制作.*视频|发.*抖音|发布到|YouTube|youtube|发到YouTube|打开浏览器|登录|查看素材|查看账号|"
         r"invoke_capability|publish_content|publish_youtube_video|list_youtube_accounts|"
         r"open_account_browser|list_assets|生成图片|发布内容|"
         r"发布数据|作品数据|同步.*数据|播放量|get_creator_publish_data|sync_creator_publish_data)",
@@ -4880,6 +5163,7 @@ async def _chat_openai(
                 _mismatch_err = None
                 if fn.get("name") == "invoke_capability":
                     a = _correct_video_to_image_if_user_asked_image(a, last_user_content)
+                    a = _correct_daihuo_pipeline_to_video_if_plain_video(a, last_user_content)
                     _mismatch_err = _detect_model_capability_mismatch(a)
                     if not _mismatch_err:
                         _redirect_video_generate_to_daihuo_if_tvc(a, last_user_content)
@@ -4888,7 +5172,8 @@ async def _chat_openai(
                         _resolve_video_payload_asset_ids_to_urls(a, request, db, user_id)
                         _normalize_model_alias(a)
                         _ensure_image_generate_default_model(a)
-                        _ensure_video_generate_default_model(a)
+                        _ensure_video_generate_default_model(a, last_user_content)
+                        _prevent_stale_video_prompt_from_history(a, last_user_content, bool(attachment_urls))
                         _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("[CHAT] tool_call: %s(%s)", fn.get("name"), list(a.keys()))
@@ -4950,12 +5235,33 @@ async def _chat_openai(
                     )
                 if (
                     fn.get("name") == "invoke_capability"
-                    and (a.get("capability_id") or "").strip() == "task.get_result"
+                    and _cap_id == "task.get_result"
                     and _is_task_result_in_progress(res)
                 ):
                     res = await _poll_task_get_result_until_terminal(
                         a, res, token, sutui_token, progress_cb, request, db=db, user_id=user_id
                     )
+                if (
+                    fn.get("name") == "invoke_capability"
+                    and _cap_id == "task.get_result"
+                    and res
+                    and '"error"' not in res
+                    and not _is_task_result_in_progress(res)
+                ):
+                    try:
+                        sse_saved = _terminal_saved_assets_for_task_result(res or "")
+                    except Exception as _e_saved:
+                        logger.warning("[CHAT] early_finish task.get_result saved_assets parse failed: %s", _e_saved)
+                        sse_saved = []
+                    if sse_saved:
+                        media_type = _extract_media_type_from_task_result(res)
+                        terminal_saved_after_gen = sse_saved
+                        gen_cap_for_reply = "image.generate" if media_type == "image" else "video.generate"
+                        logger.info(
+                            "[CHAT] early_finish task.get_result terminal saved_assets=%s media_type=%s",
+                            len(sse_saved),
+                            media_type,
+                        )
                 cur.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
@@ -5063,6 +5369,7 @@ async def _chat_openai(
                 _mismatch_err_tc = None
                 if tc_info["name"] == "invoke_capability":
                     tc_info["arguments"] = _correct_video_to_image_if_user_asked_image(tc_info["arguments"], last_user_content)
+                    tc_info["arguments"] = _correct_daihuo_pipeline_to_video_if_plain_video(tc_info["arguments"], last_user_content)
                     _mismatch_err_tc = _detect_model_capability_mismatch(tc_info["arguments"])
                     if not _mismatch_err_tc:
                         _redirect_video_generate_to_daihuo_if_tvc(tc_info["arguments"], last_user_content)
@@ -5071,7 +5378,8 @@ async def _chat_openai(
                         _resolve_video_payload_asset_ids_to_urls(tc_info["arguments"], request, db, user_id)
                         _normalize_model_alias(tc_info["arguments"])
                         _ensure_image_generate_default_model(tc_info["arguments"])
-                        _ensure_video_generate_default_model(tc_info["arguments"])
+                        _ensure_video_generate_default_model(tc_info["arguments"], last_user_content)
+                        _prevent_stale_video_prompt_from_history(tc_info["arguments"], last_user_content, bool(attachment_urls))
                         _ensure_image_generate_prompt_and_aspect(tc_info["arguments"], last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(tc_info["arguments"], attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("[CHAT] text_tool_call: %s(%s)", tc_info["name"], list(tc_info["arguments"].keys()))
@@ -5146,12 +5454,33 @@ async def _chat_openai(
                     )
                 if (
                     tc_info["name"] == "invoke_capability"
-                    and (tc_info["arguments"].get("capability_id") or "").strip() == "task.get_result"
+                    and _tc_cap == "task.get_result"
                     and _is_task_result_in_progress(res)
                 ):
                     res = await _poll_task_get_result_until_terminal(
                         tc_info["arguments"], res, token, sutui_token, progress_cb, request, db=db, user_id=user_id
                     )
+                if (
+                    tc_info["name"] == "invoke_capability"
+                    and _tc_cap == "task.get_result"
+                    and res
+                    and '"error"' not in res
+                    and not _is_task_result_in_progress(res)
+                ):
+                    try:
+                        sse_saved_tc = _terminal_saved_assets_for_task_result(res or "")
+                    except Exception as _e_saved_tc:
+                        logger.warning("[CHAT] text early_finish task.get_result saved_assets parse failed: %s", _e_saved_tc)
+                        sse_saved_tc = []
+                    if sse_saved_tc:
+                        media_type_tc = _extract_media_type_from_task_result(res)
+                        terminal_saved_after_gen_tc = sse_saved_tc
+                        gen_cap_for_reply_tc = "image.generate" if media_type_tc == "image" else "video.generate"
+                        logger.info(
+                            "[CHAT] text early_finish task.get_result terminal saved_assets=%s media_type=%s",
+                            len(sse_saved_tc),
+                            media_type_tc,
+                        )
                 if (
                     tc_info["name"] == "invoke_capability"
                     and _tc_cap in ("image.generate", "video.generate")
@@ -5272,6 +5601,7 @@ async def _chat_openai(
                         _mismatch_err_fc = None
                         if fn.get("name") == "invoke_capability":
                             a = _correct_video_to_image_if_user_asked_image(a, last_user_content)
+                            a = _correct_daihuo_pipeline_to_video_if_plain_video(a, last_user_content)
                             _mismatch_err_fc = _detect_model_capability_mismatch(a)
                             if not _mismatch_err_fc:
                                 _redirect_video_generate_to_daihuo_if_tvc(a, last_user_content)
@@ -5280,7 +5610,8 @@ async def _chat_openai(
                                 _resolve_video_payload_asset_ids_to_urls(a, request, db, user_id)
                                 _normalize_model_alias(a)
                                 _ensure_image_generate_default_model(a)
-                                _ensure_video_generate_default_model(a)
+                                _ensure_video_generate_default_model(a, last_user_content)
+                                _prevent_stale_video_prompt_from_history(a, last_user_content, bool(attachment_urls))
                                 _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                                 _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
                         logger.info("[CHAT] tool_call(forced): %s(%s)", fn.get("name"), list(a.keys()))
@@ -5348,7 +5679,8 @@ async def _chat_openai(
             _resolve_video_payload_asset_ids_to_urls(auto_args, request, db, user_id)
             _normalize_model_alias(auto_args)
             _ensure_image_generate_default_model(auto_args)
-            _ensure_video_generate_default_model(auto_args)
+            _ensure_video_generate_default_model(auto_args, last_user_msg)
+            _prevent_stale_video_prompt_from_history(auto_args, last_user_msg, bool(attachment_urls))
             _ensure_image_generate_prompt_and_aspect(auto_args, last_user_msg)
             _ensure_daihuo_pipeline_asset_or_url(auto_args, attachment_asset_ids, attachment_urls, last_user_msg)
             res = await _exec_tool(
@@ -5484,6 +5816,7 @@ async def _chat_anthropic(
                 _mismatch_err_a = None
                 if tu.get("name") == "invoke_capability":
                     inp = _correct_video_to_image_if_user_asked_image(inp, last_user_content)
+                    inp = _correct_daihuo_pipeline_to_video_if_plain_video(inp, last_user_content)
                     _mismatch_err_a = _detect_model_capability_mismatch(inp)
                     if not _mismatch_err_a:
                         _redirect_video_generate_to_daihuo_if_tvc(inp, last_user_content)
@@ -5492,7 +5825,8 @@ async def _chat_anthropic(
                         _resolve_video_payload_asset_ids_to_urls(inp, request, db, user_id)
                         _normalize_model_alias(inp)
                         _ensure_image_generate_default_model(inp)
-                        _ensure_video_generate_default_model(inp)
+                        _ensure_video_generate_default_model(inp, last_user_content)
+                        _prevent_stale_video_prompt_from_history(inp, last_user_content, bool(attachment_urls))
                         _ensure_image_generate_prompt_and_aspect(inp, last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(inp, attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("tool_call: %s", tu["name"])
@@ -5564,8 +5898,16 @@ def _openclaw_gateway_configured() -> bool:
     return bool(oc_base and oc_token)
 
 
+def _chat_route_mode() -> str:
+    try:
+        return get_chat_route_mode()
+    except Exception as exc:
+        logger.warning("[CHAT] 读取智能对话路由设置失败，回退直连: %s", exc)
+        return "direct"
+
+
 def _openclaw_only_chat_enabled() -> bool:
-    return bool(getattr(settings, "lobster_openclaw_only_chat", False))
+    return _chat_route_mode() == CHAT_ROUTE_MODE_OPENCLAW
 
 
 def _openclaw_chat_prefix_patterns() -> List[str]:
@@ -5597,15 +5939,17 @@ def _want_openclaw_first_this_turn(
     direct_llm: bool,
     openclaw_from_message_prefix: bool,
 ) -> bool:
-    if review_drafts_only or direct_llm:
+    if review_drafts_only:
         return False
+    # UI setting is authoritative. Legacy LOBSTER_OPENCLAW_* env switches no
+    # longer decide the main chat route.
     if _openclaw_only_chat_enabled():
         return True
+    if direct_llm:
+        return False
     if openclaw_from_message_prefix:
         return True
-    if getattr(settings, "lobster_openclaw_chat_prefix_gate", False):
-        return False
-    return bool(getattr(settings, "lobster_openclaw_primary_chat", False))
+    return False
 
 
 _OC_ONLY_CHAT_FAIL_DETAIL = (
@@ -5700,6 +6044,56 @@ def _installation_id_from_request(request: Optional[Request]) -> Optional[str]:
     return xi or None
 
 
+_OPENCLAW_CHAT_SYSTEM_EXTRA = """\
+OpenClaw 主对话补充规则：
+- 用户问“查资料 / 了解 / 介绍 / 继续细化 / 总结某个名称或公司/产品资料”时，必须先调用 memory_search 检索本机记忆和用户上传资料；只要 memory_search 有相关结果，本轮禁止再调用 web_search/web_fetch。只有 memory_search 没有相关结果，或用户明确要求联网/工商/网页搜索时，才使用 web_search。
+- 如果 memory_search 返回用户上传文档，优先基于该文档回答；不要把同名网页公司误当成用户资料。
+- 用户要求发布到某账号时，调用 list_publish_accounts 后必须扫描 accounts 全量列表，并同时核对 platform 与 nickname；“抖音账号123”匹配 platform="douyin" 且 nickname="123"，douyin_shop/抖店不是抖音。发布时传 account_nickname，不要把 id 当昵称。若历史回复曾说账号不存在，以最新工具结果为准。
+- 绝对不要把 DSML、XML、tool_calls、function_calls 或工具调用参数作为正文输出给用户。需要工具时使用工具调用；不能调用时用自然语言说明。
+"""
+
+
+def _prepare_messages_for_openclaw(msgs: List[Dict], scope_hint: str = "") -> List[Dict]:
+    """Add OpenClaw-specific routing rules and remove leaked tool markup from history."""
+    prepared: List[Dict] = []
+    for m in msgs or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, str):
+            clean_content = content
+            if role == "assistant":
+                clean_content = _strip_dsml(clean_content).strip()
+                if not clean_content:
+                    continue
+            copied = dict(m)
+            copied["content"] = clean_content
+            prepared.append(copied)
+        else:
+            prepared.append(dict(m))
+
+    system_extra = _OPENCLAW_CHAT_SYSTEM_EXTRA
+    if scope_hint:
+        system_extra = f"{system_extra}\n{scope_hint}".strip()
+
+    if prepared and prepared[0].get("role") == "system":
+        base = str(prepared[0].get("content") or "").rstrip()
+        prepared[0]["content"] = f"{base}\n\n{system_extra}".strip()
+    else:
+        prepared.insert(0, {"role": "system", "content": system_extra})
+
+    if scope_hint:
+        for idx in range(len(prepared) - 1, -1, -1):
+            if prepared[idx].get("role") == "user":
+                content = str(prepared[idx].get("content") or "").rstrip()
+                prepared[idx]["content"] = (
+                    f"{content}\n\n【本轮工具硬约束】\n{scope_hint}"
+                ).strip()
+                break
+    return prepared
+
+
 async def _try_openclaw(
     msgs: List[Dict],
     model: str,
@@ -5714,26 +6108,41 @@ async def _try_openclaw(
 
     agent_id = _openclaw_agent_id_from_chat_model(model)
     openclaw_body_model = _openclaw_gateway_body_model(agent_id)
+    scope = classify_openclaw_tool_scope(msgs)
+    set_openclaw_tool_scope_for_agent(agent_id, scope.headers())
+    logger.info(
+        "[CHAT] OpenClaw tool scope intent=%s tools=%s caps=%s",
+        scope.intent,
+        ",".join(sorted(scope.allowed_tools)) or "-",
+        (
+            "ALL"
+            if scope.allowed_capabilities is None
+            else (",".join(sorted(scope.allowed_capabilities)) or "-")
+        ),
+    )
 
     _xi = (installation_id or "").strip()
     rt = (raw_token or "").strip()
-    if rt:
+    is_internal_lobster_jwt = bool(_xi and _xi.lower().startswith("lobster-internal-"))
+    if rt and not is_internal_lobster_jwt:
         set_mcp_token_for_agent(agent_id, rt, installation_id=_xi or None)
 
     hdrs: Dict[str, str] = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {oc_token}",
         "x-openclaw-agent-id": agent_id,
-        "x-user-authorization": f"Bearer {raw_token}" if rt else "",
     }
-    if _xi:
+    if rt and not is_internal_lobster_jwt:
+        hdrs["x-user-authorization"] = f"Bearer {raw_token}"
+    if _xi and not is_internal_lobster_jwt:
         hdrs["X-Installation-Id"] = _xi
 
     try:
+        openclaw_messages = _prepare_messages_for_openclaw(msgs, scope.system_hint())
         async with httpx.AsyncClient(timeout=120.0, trust_env=False) as c:
             resp = await c.post(
                 f"{oc_base}/v1/chat/completions",
-                json={"model": openclaw_body_model, "messages": msgs, "stream": False},
+                json={"model": openclaw_body_model, "messages": openclaw_messages, "stream": False},
                 headers=hdrs,
             )
         if resp.status_code == 200:
@@ -5837,17 +6246,44 @@ def _build_user_content_with_attachments(
                     status_code=400,
                     detail=f"素材 {aid} 为旧版签名链接，已不可用。请重新上传。",
                 )
-            pairs.append((aid, u))
+            media_type = ""
+            try:
+                row = db.query(Asset).filter(Asset.user_id == user_id, Asset.asset_id == aid).first()
+                media_type = (getattr(row, "media_type", "") or "").strip().lower() if row else ""
+            except Exception:
+                media_type = ""
+            if not media_type:
+                ul = (u or "").split("?", 1)[0].lower()
+                if ul.endswith((".mp4", ".webm", ".mov", ".avi", ".mkv")):
+                    media_type = "video"
+                elif ul.endswith((".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")):
+                    media_type = "audio"
+                else:
+                    media_type = "image"
+            pairs.append((aid, u, media_type))
         if pairs:
             logger.info("[CHAT] 注入素材 URL: asset_ids=%s", [p[0] for p in pairs])
-            user_content += (
-                "\n\n【用户本条消息上传的素材】\n"
-                "- 图生视频：你不要在 video.generate 的 payload 里填 image_url/media_files，由系统自动注入。\n"
-                "- 图生图 / 图片编辑：调用 image.generate，在 payload 里设 image_url 为下方 URL，并指定编辑模型（wan/v2.7/edit、seedream/v4.5/edit 等）。\n"
-                "- 理解图片：调用 image.understand，在 payload 里设 image_url 为下方 URL，prompt 为用户的要求。\n"
-                "- 理解视频：调用 video.understand，在 payload 里设 video_url 为下方 URL，prompt 为用户的要求。\n"
-            )
-            user_content += "\n".join(f"- asset_id: {aid}  URL: {u}" for aid, u in pairs)
+            clean_request = _strip_lobster_attachment_block(user_content)
+            wants_video = bool(_PLAIN_VIDEO_REQUEST_RE.search(clean_request or ""))
+            wants_image = bool(_IMAGE_REQUEST_RE.search(clean_request or "")) and not wants_video
+            wants_tvc = bool(_TVC_KEYWORDS_RE.search(clean_request or ""))
+            media_summary = ", ".join(sorted({mt for _, _, mt in pairs if mt}))
+            user_content += "\n\n【用户本条消息上传的素材】\n"
+            if media_summary:
+                user_content += f"- 素材类型：{media_summary}\n"
+            if wants_video:
+                if wants_tvc:
+                    user_content += "- 用户明确要求爆款TVC/带货/分镜时，才使用 comfly.daihuo.pipeline。\n"
+                else:
+                    user_content += "- 用户本轮要求视频生成：必须优先调用 video.generate；不要改用爆款TVC管线。\n"
+                user_content += "- 有附件时，后端会把下方公网 URL 注入 video.generate 的 media_files/filePaths，必要时注入 image_url。\n"
+                user_content += "- 不要因为附件存在而改成 image.generate，除非用户明确要求生成/编辑图片。\n"
+            elif wants_image:
+                user_content += "- 用户本轮要求图片生成/编辑：调用 image.generate；如需使用附件，在 payload 设置 image_url 为下方 URL。\n"
+            else:
+                user_content += "- 先按用户原话判断任务；不要仅因附件存在就调用生成、发布或爆款TVC管线。\n"
+                user_content += "- 如果只是理解素材，按素材类型选择 image.understand 或 video.understand。\n"
+            user_content += "\n".join(f"- asset_id: {aid}  media_type: {mt}  URL: {u}" for aid, u, mt in pairs)
     return user_content or "（无文字）"
 
 

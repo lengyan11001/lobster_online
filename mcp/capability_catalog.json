@@ -14,7 +14,7 @@
         },
         "model": {
           "type": "string",
-          "description": "可选（省略时默认 fal-ai/flux-2/flash）"
+          "description": "可选（省略时默认 gpt-image2）"
         },
         "image_url": {
           "type": "string",

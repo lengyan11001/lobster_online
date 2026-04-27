@@ -193,6 +193,46 @@ function getLastActiveChatSessionIdFromStorage() {
   }
 }
 
+function getChatLastSessionByModeStorageKey(mode) {
+  var k = getChatLastSessionStorageKey();
+  if (!k) return '';
+  return k + '_' + _normalizeChatMode(mode);
+}
+
+function saveLastActiveChatSessionByModeToStorage(sid, mode) {
+  try {
+    var k = getChatLastSessionByModeStorageKey(mode);
+    if (!k || !sid) return;
+    localStorage.setItem(k, String(sid));
+  } catch (e) {}
+}
+
+function getLastActiveChatSessionIdByModeFromStorage(mode) {
+  try {
+    var k = getChatLastSessionByModeStorageKey(mode);
+    if (!k) return '';
+    return String(localStorage.getItem(k) || '').trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+function findLastChatSessionIdByMode(mode, excludeSid) {
+  var normalized = _normalizeChatMode(mode);
+  var exclude = excludeSid != null ? String(excludeSid) : '';
+  var stored = getLastActiveChatSessionIdByModeFromStorage(normalized);
+  if (stored && stored !== exclude) {
+    var storedSession = getSessionById(stored);
+    if (storedSession && _getSessionMode(storedSession) === normalized) return stored;
+  }
+  var best = null;
+  chatSessions.forEach(function(s) {
+    if (!s || String(s.id) === exclude || _getSessionMode(s) !== normalized) return;
+    if (!best || Number(s.updatedAt || 0) > Number(best.updatedAt || 0)) best = s;
+  });
+  return best && best.id != null ? String(best.id) : '';
+}
+
 /** 流式 /chat/stream 根地址：与发送消息一致，缺省时用当前页 origin（同源部署） */
 function _chatStreamApiBase() {
   var b = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
@@ -359,6 +399,10 @@ window.resetChatSessionsForLogout = function() {
   try {
     var k = getChatLastSessionStorageKey();
     if (k) localStorage.removeItem(k);
+    [CHAT_MODE_DEFAULT, CHAT_MODE_WORKSPACE].forEach(function(mode) {
+      var mk = getChatLastSessionByModeStorageKey(mode);
+      if (mk) localStorage.removeItem(mk);
+    });
   } catch (e) {}
   window.__currentUserId = undefined;
   resetChatSessionsMemory();
@@ -1150,7 +1194,7 @@ function updateChatModeUi(mode) {
   var categoryTabs = document.getElementById('workspaceCategoryTabs');
   if (eyebrow) eyebrow.classList.toggle('is-active', normalized !== CHAT_MODE_WORKSPACE);
   if (homeWorkspacePill) homeWorkspacePill.classList.toggle('is-active', normalized === CHAT_MODE_WORKSPACE);
-  if (eyebrow) eyebrow.textContent = 'AI 员工工作台';
+  if (eyebrow) eyebrow.textContent = '智能对话';
   if (homeWorkspacePill) homeWorkspacePill.textContent = '云端工作台';
   if (normalized === CHAT_MODE_WORKSPACE) {
     if (hint) hint.textContent = '当前模式：云端工作台。当前消息会走独立工作台链路，不走原来的 AI 对话。';
@@ -1169,7 +1213,7 @@ function updateChatModeUi(mode) {
   } else {
     if (hint) hint.textContent = '默认模式：继续走现在这套智能对话链路。';
     if (input) input.placeholder = '发送消息或输入 / 选择技能';
-    if (eyebrow) eyebrow.textContent = 'AI 员工工作台';
+    if (eyebrow) eyebrow.textContent = '智能对话';
     _renderChatEmptyTitle('👋 你好，我是 AI 员工');
     if (subtitle) subtitle.textContent = '我可以帮你创作内容、生成视频、处理数据、运营分析等';
     if (composerLead) composerLead.textContent = '告诉我你想做什么？我会先帮你理清任务，再继续生成和执行~';
@@ -1253,6 +1297,7 @@ function switchChatSession(id) {
   currentSessionId = sid;
   saveLastActiveChatSessionToStorage(sid);
   var nextSession = getSessionById(sid);
+  if (nextSession) saveLastActiveChatSessionByModeToStorage(sid, _getSessionMode(nextSession));
   updateChatModeUi(_getSessionMode(nextSession));
   renderCurrentSessionMessages();
   renderChatSessionList();
@@ -1322,13 +1367,23 @@ function renderChatSessionList() {
 function setChatMode(mode) {
   var normalized = _normalizeChatMode(mode);
   var current = getSessionById(currentSessionId);
-  if (current && Array.isArray(current.messages) && current.messages.length > 0 && _getSessionMode(current) !== normalized) {
-    createNewSession(normalized);
+  var currentMode = _getSessionMode(current);
+  if (!current) {
+    var existingSid = findLastChatSessionIdByMode(normalized, '');
+    if (existingSid) switchChatSession(existingSid);
+    else createNewSession(normalized);
     return;
   }
-  if (current) {
-    current.mode = normalized;
-    saveChatSessionsToStorage();
+  if (current && currentMode !== normalized) {
+    saveCurrentSessionToStore();
+    saveLastActiveChatSessionByModeToStorage(currentSessionId, currentMode);
+    var targetSid = findLastChatSessionIdByMode(normalized, currentSessionId);
+    if (targetSid) {
+      switchChatSession(targetSid);
+      return;
+    }
+    createNewSession(normalized);
+    return;
   }
   updateChatModeUi(normalized);
   renderChatSessionList();
@@ -2971,10 +3026,12 @@ function syncChatWorkspaceState() {
   var workspace = document.getElementById('chatWorkspace');
   var messages = document.getElementById('chatMessages');
   var main = workspace ? workspace.closest('.chat-main') : null;
+  var shell = workspace ? workspace.closest('.chat-area-wrap') : null;
   if (!workspace || !messages) return;
   var isEmpty = messages.children.length === 0;
   workspace.classList.toggle('is-empty', isEmpty);
   if (main) main.classList.toggle('is-home-empty', isEmpty);
+  if (shell) shell.classList.toggle('is-home-empty', isEmpty);
 }
 
 function bindChatHomeActions() {

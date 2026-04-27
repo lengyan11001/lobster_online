@@ -33,18 +33,26 @@ installed_packages.json
 pack_bundle.env
 xskill_captured_requests.json
 xskill_recharge_captured_requests.jsonl
+wecom_cloud_config.json
 
 # ── openclaw 会话 / 运行数据 ──
 openclaw/agents/*/sessions/
 openclaw/.weixin_login_last.json
 openclaw/.channel_fallback.json
 openclaw/update-check.json
+openclaw/memory/
+openclaw/user_memory/
+openclaw/workspace/memory/
 openclaw/openclaw-weixin/accounts/
 openclaw/openclaw-weixin/accounts.json
 openclaw/workspace-lobster-sutui-claude-3-5-sonnet-20241022/
 openclaw/workspace-lobster-sutui-deepseek-chat/
 openclaw/workspace-lobster-sutui-gpt-4o/
 openclaw/workspace-lobster-sutui-gpt-4o-mini/
+
+# ── EXE 打包测试 ──
+_pack_exe_test/
+.installed
 
 # ── 临时 / 调试 ──
 _tmp_*
@@ -56,6 +64,8 @@ skills/comfly_ecommerce_detail/runs/
 skills/comfly_seedance_tvc_video/runs/
 skills/comfly_ecommerce_detail/scripts/temp_test_*
 _lobster_runtime/
+static/uploads/
+lobster.exe
 
 # ── 系统 / 编辑器 ──
 .DS_Store

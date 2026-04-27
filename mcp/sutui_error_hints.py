@@ -21,6 +21,7 @@ IMAGE_MODEL_IDS = frozenset(
         "fal-ai/nano-banana-2",
         "fal-ai/nano-banana-pro",
         "fal-ai/qwen-image-edit-2511-multiple-angles",
+        "gpt-image2",
         "jimeng-4.0",
         "jimeng-4.1",
         "jimeng-4.5",

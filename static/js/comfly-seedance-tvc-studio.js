@@ -684,7 +684,7 @@
 
     if (btn) {
       btn.disabled = true;
-      btn.textContent = '检查积分...';
+      btn.textContent = '检查算力...';
     }
 
     fetch((typeof API_BASE !== 'undefined' ? API_BASE : '') + '/auth/me', {
@@ -694,7 +694,7 @@
       .then(function(meData) {
         var balance = meData.credits != null ? meData.credits : null;
         if (balance !== null && balance < userCredits) {
-          throw new Error('积分不足：生成 ' + duration + ' 秒视频（' + segmentCount + ' 个分镜）需要约 ' + userCredits + ' 积分（采购价 ' + totalEstimatedCredits + ' 积分 × 2倍），当前余额 ' + balance + ' 积分。请先充值。');
+          throw new Error('算力不足：生成 ' + duration + ' 秒视频（' + segmentCount + ' 个分镜）需要约 ' + userCredits + ' 算力（采购价 ' + totalEstimatedCredits + ' 算力 × 2倍），当前余额 ' + balance + ' 算力。请先充值。');
         }
 
         if (btn) {
@@ -706,8 +706,8 @@
         return ensureImageAssetsUploaded();
       })
       .catch(function(err) {
-        // 积分检查失败，显示错误但不继续
-        showMessage(err && err.message ? err.message : '积分检查失败');
+        // 算力检查失败，显示错误但不继续
+        showMessage(err && err.message ? err.message : '算力检查失败');
         if (btn) {
           btn.disabled = false;
           btn.textContent = '开始生成视频';
