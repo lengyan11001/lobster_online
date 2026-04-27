@@ -1487,6 +1487,7 @@
       width: 100%;
     }
     .chat-area-wrap.is-home-empty .chat-main {
+      --chat-home-content-width: 1180px;
       max-width: 1260px;
       width: 100%;
       margin: 0 auto;
@@ -2010,15 +2011,15 @@
       margin: 1.05rem 0 0 420px;
     }
     .chat-area-wrap.is-home-empty .chat-empty-state {
-      max-width: min(1180px, 100%);
+      max-width: min(var(--chat-home-content-width), 100%);
       margin: 0 auto;
     }
     .chat-area-wrap.is-home-empty .chat-workspace.is-empty .chat-input-row {
-      width: min(920px, 100%);
+      width: min(var(--chat-home-content-width), 100%);
       margin: 0 auto;
     }
     .chat-area-wrap.is-home-empty .chat-home-tools {
-      width: min(920px, 100%);
+      width: min(var(--chat-home-content-width), 100%);
       margin: 1.05rem auto 0;
     }
     .chat-workspace.is-empty .chat-home-tools {
