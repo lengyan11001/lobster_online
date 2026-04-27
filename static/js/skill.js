@@ -67,18 +67,21 @@ window._openYoutubeAccountsView = function() {
 
 window._openEcommerceDetailStudioView = function() {
   _switchToHiddenView('ecommerce-detail-studio');
+  if (typeof _bindComflyConfigBtn === 'function') _bindComflyConfigBtn();
   if (typeof window.initEcommerceDetailStudioView === 'function') window.initEcommerceDetailStudioView();
   try { location.hash = 'ecommerce-detail-studio'; } catch (e1) {}
 };
 
 window._openImageComposerStudioView = function() {
   _switchToHiddenView('image-composer-studio');
+  if (typeof _bindComflyConfigBtn === 'function') _bindComflyConfigBtn();
   if (typeof window.initImageComposerStudioView === 'function') window.initImageComposerStudioView();
   try { location.hash = 'image-composer-studio'; } catch (e1) {}
 };
 
 window._openSeedanceTvcStudioView = function() {
   _switchToHiddenView('seedance-tvc-studio');
+  if (typeof _bindComflyConfigBtn === 'function') _bindComflyConfigBtn();
   if (typeof window.initSeedanceTvcStudioView === 'function') window.initSeedanceTvcStudioView();
   try { location.hash = 'seedance-tvc-studio'; } catch (e1) {}
 };
@@ -1018,6 +1021,7 @@ function _openComflyConfigModal() {
   }
   modal.classList.add('visible');
 }
+window._openComflyConfigModal = _openComflyConfigModal;
 
 function _bindComflyConfigBtn() {
   document.querySelectorAll('#comflyConfigBtn, .js-comfly-config-btn').forEach(function(btn) {
@@ -1028,6 +1032,17 @@ function _bindComflyConfigBtn() {
     });
   });
 }
+
+(function _bindComflyConfigBtnDelegated() {
+  if (window.__comflyConfigDelegatedBound) return;
+  window.__comflyConfigDelegatedBound = true;
+  document.addEventListener('click', function(e) {
+    var btn = e.target && e.target.closest ? e.target.closest('#comflyConfigBtn, .js-comfly-config-btn') : null;
+    if (!btn) return;
+    e.preventDefault();
+    _openComflyConfigModal();
+  });
+})();
 
 (function _initXSkillModal() {
   var modal = document.getElementById('xskillModal');
@@ -1243,7 +1258,7 @@ function _bindComflyConfigBtn() {
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; }); })
       .then(function(x) {
         if (x.ok) {
-          if (msgEl) { msgEl.textContent = '已保存。这里只做本机保存，不会在保存时校验 Comfly 凭据。'; msgEl.className = 'msg'; msgEl.style.display = ''; }
+          if (msgEl) { msgEl.textContent = '已保存。当前用户的电商套图、图片工作台和爆款TVC 会优先共用这份 Comfly 配置；这里只做本机保存，不会在保存时校验 Comfly 凭据。'; msgEl.className = 'msg'; msgEl.style.display = ''; }
           setTimeout(function() { closeModal(); loadSkillStore(); }, 500);
         } else {
           var det = x.data && (x.data.detail || x.data.message);

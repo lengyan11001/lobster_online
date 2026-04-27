@@ -3378,7 +3378,7 @@
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
                   <button type="button" id="ecomStudioBackBtn" class="btn btn-ghost btn-sm">← 返回技能商店</button>
-                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn">配置 Comfly</button>
+                  <button type="button" id="ecomStudioComflyBtn" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
                 </div>
               </div>
 
@@ -3727,7 +3727,7 @@
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
                   <button type="button" id="imglabStudioBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
-                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn">配置 Comfly</button>
+                  <button type="button" id="imglabStudioComflyBtn" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
                 </div>
               </div>
 
@@ -3847,7 +3847,7 @@
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
                   <button type="button" id="seedanceTvcStudioBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
-                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn">配置 Comfly</button>
+                  <button type="button" id="seedanceStudioComflyBtn" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
                 </div>
               </div>
 
@@ -5251,12 +5251,12 @@
     </div>
   </div>
 
-  <!-- 爆款TVC：用户仅需配置 Comfly Key -->
+  <!-- 共享 Comfly 配置：电商套图 / 图片工作台 / 爆款TVC 共用 -->
   <div id="comflyModal" class="modal-mask">
     <div class="modal" style="max-width:460px;">
-      <h4 style="margin:0 0 0.25rem 0;font-size:1.05rem;">爆款TVC · Comfly 凭据</h4>
+      <h4 style="margin:0 0 0.25rem 0;font-size:1.05rem;">共享 Comfly 配置</h4>
       <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 1rem 0;line-height:1.5;">
-        技能「爆款TVC」只需在此填写 <strong>API Key</strong>。接口地址走软件内置配置，用户无需单独修改；这里仅做本机保存，用于 <code>comfly.daihuo</code> / <code>comfly.daihuo.pipeline</code>，不会在保存时请求 Comfly 校验凭据。请使用 Comfly 控制台发放的 Key（勿在聊天里发送 Token）。
+        这里保存的是当前用户在本机的 <strong>Comfly API Key</strong>。电商套图、图片工作台、爆款TVC 会优先共用这份配置；接口地址走软件内置配置，通常不需要单独修改。这里只做本机保存，不会在保存时请求 Comfly 校验凭据。请使用 Comfly 控制台发放的 Key。
       </p>
       <div class="modal-field">
         <label>API Key</label>

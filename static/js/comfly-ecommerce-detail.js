@@ -1290,7 +1290,7 @@
     var base = _localBase();
     if (!base || !state.currentJobId) return;
     fetch(base + '/api/comfly-ecommerce-detail/pipeline/jobs/' + encodeURIComponent(state.currentJobId), {
-      headers: {}
+      headers: _authHeaderOnly()
     })
       .then(function(r) {
         return r.json().then(function(d) { return { ok: r.ok, data: d || {} }; });
@@ -2120,7 +2120,7 @@
     var base = _localBase();
     if (!base || !state.currentJobId) return;
     fetch(base + '/api/comfly-ecommerce-detail/pipeline/jobs/' + encodeURIComponent(state.currentJobId), {
-      headers: {}
+      headers: _authHeaderOnly()
     })
       .then(function(r) {
         return r.json().then(function(d) { return { ok: r.ok, data: d || {} }; });
