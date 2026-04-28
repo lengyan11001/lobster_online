@@ -1,6 +1,7 @@
 """Publishing accounts and task management."""
 import asyncio
 import logging
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -54,13 +55,15 @@ _VIDEO_MAIN_ASSET_SUFFIX = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".m
 
 
 def _query_publish_account_by_nickname(
-    db: Session, user_id: int, nick: str
+    db: Session, user_id: int, nick: str, platform_hint: Optional[str] = None
 ) -> Optional[PublishAccount]:
     """按昵称查且必须唯一；0 条返回 None；多条抛 400。"""
     q = db.query(PublishAccount).filter(
         PublishAccount.user_id == user_id,
         PublishAccount.nickname == nick,
     )
+    if platform_hint:
+        q = q.filter(PublishAccount.platform == platform_hint)
     n = q.count()
     if n == 0:
         return None
@@ -83,10 +86,65 @@ def _query_publish_account_by_nickname(
     return q.first()
 
 
-_PLATFORM_NICK_PREFIXES = [
-    "抖音", "douyin", "小红书", "xiaohongshu", "xhs",
-    "头条", "今日头条", "toutiao", "抖店", "抖音商城", "douyin_shop",
+_ACCOUNT_NICK_PREFIX_PATTERNS = [
+    (
+        re.compile(r"^(?:抖店|抖音商城|douyin[_\s-]*shop)\s*(?:账号|帐号|账户|号|昵称)?\s*[:：\-_/|]?\s*(.+)$", re.IGNORECASE),
+        "douyin_shop",
+    ),
+    (
+        re.compile(r"^(?:抖音|douyin)\s*(?:账号|帐号|账户|号|昵称)?\s*[:：\-_/|]?\s*(.+)$", re.IGNORECASE),
+        "douyin",
+    ),
+    (
+        re.compile(r"^(?:小红书|xiaohongshu|xhs)\s*(?:账号|帐号|账户|号|昵称)?\s*[:：\-_/|]?\s*(.+)$", re.IGNORECASE),
+        "xiaohongshu",
+    ),
+    (
+        re.compile(r"^(?:今日头条|头条|toutiao)\s*(?:账号|帐号|账户|号|昵称)?\s*[:：\-_/|]?\s*(.+)$", re.IGNORECASE),
+        "toutiao",
+    ),
 ]
+_ACCOUNT_NICK_GENERIC_PREFIX_RE = re.compile(
+    r"^(?:账号|帐号|账户|号|昵称)\s*[:：\-_/|]?\s*(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _clean_account_nickname_fragment(value: str) -> str:
+    text = (value or "").strip()
+    text = re.sub(r"^[\s\"'“”‘’《》<>【】\[\]（）()]+|[\s\"'“”‘’《》<>【】\[\]（）()]+$", "", text)
+    text = re.sub(r"^[：:，,。.\-_/|]+|[：:，,。.\-_/|]+$", "", text)
+    return text.strip()
+
+
+def _account_nickname_candidates(raw_nick: str) -> tuple[List[str], Optional[str]]:
+    """Return nickname lookup candidates and an optional platform hint inferred from natural text."""
+    candidates: List[str] = []
+    platform_hint: Optional[str] = None
+
+    def add(value: str) -> None:
+        candidate = _clean_account_nickname_fragment(value)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    nick = _clean_account_nickname_fragment(raw_nick)
+    add(nick)
+    if not nick:
+        return candidates, platform_hint
+
+    for pattern, platform in _ACCOUNT_NICK_PREFIX_PATTERNS:
+        m = pattern.match(nick)
+        if not m:
+            continue
+        if platform_hint is None:
+            platform_hint = platform
+        add(m.group(1))
+
+    generic = _ACCOUNT_NICK_GENERIC_PREFIX_RE.match(nick)
+    if generic:
+        add(generic.group(1))
+
+    return candidates, platform_hint
 
 
 def _resolve_publish_account_for_request(
@@ -102,21 +160,16 @@ def _resolve_publish_account_for_request(
     """
     nick = (account_nickname or "").strip()
     if nick:
-        acct = _query_publish_account_by_nickname(db, user_id, nick)
-        if acct is not None:
-            return acct
-        nick_lower = nick.lower()
-        for prefix in _PLATFORM_NICK_PREFIXES:
-            if nick_lower.startswith(prefix.lower()) and len(nick) > len(prefix):
-                stripped = nick[len(prefix):].strip()
-                if stripped:
-                    acct = _query_publish_account_by_nickname(db, user_id, stripped)
-                    if acct is not None:
-                        logger.info(
-                            "[PUBLISH-API] 昵称「%s」精确无匹配，剥离平台前缀「%s」→「%s」命中 id=%s",
-                            nick, prefix, stripped, acct.id,
-                        )
-                        return acct
+        candidates, platform_hint = _account_nickname_candidates(nick)
+        for candidate in candidates:
+            acct = _query_publish_account_by_nickname(db, user_id, candidate, platform_hint)
+            if acct is not None:
+                if candidate != nick or platform_hint:
+                    logger.info(
+                        "[PUBLISH-API] account_nickname=%r 规范化为 nickname=%r platform_hint=%r 命中 id=%s",
+                        nick, candidate, platform_hint, acct.id,
+                    )
+                return acct
         return None
     if account_id is not None:
         acct = (
@@ -130,16 +183,19 @@ def _resolve_publish_account_for_request(
         if acct is not None:
             return acct
         nick_candidate = str(account_id).strip()
-        acct = _query_publish_account_by_nickname(db, user_id, nick_candidate)
-        if acct is not None:
-            logger.info(
-                "[PUBLISH-API] account_id=%s 无主键匹配，已按昵称「%s」解析为 id=%s platform=%s",
-                account_id,
-                nick_candidate,
-                acct.id,
-                acct.platform,
-            )
-        return acct
+        candidates, platform_hint = _account_nickname_candidates(nick_candidate)
+        for candidate in candidates:
+            acct = _query_publish_account_by_nickname(db, user_id, candidate, platform_hint)
+            if acct is not None:
+                logger.info(
+                    "[PUBLISH-API] account_id=%s 无主键匹配，已按昵称「%s」解析为 id=%s platform=%s",
+                    account_id,
+                    candidate,
+                    acct.id,
+                    acct.platform,
+                )
+                return acct
+        return None
     return None
 
 

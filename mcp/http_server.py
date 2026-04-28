@@ -1021,6 +1021,7 @@ def _tool_definitions(
                 "capability_id 必须是 list_capabilities 中的能力 ID；"
                 "禁止将素材库 asset_id（十二位以上十六进制串，如入库后的成片 ID）当作能力 ID。"
                 "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
+                "生成类 prompt 只写画面/视频内容；账号、平台、标题、正文、话题等发布信息必须放 publish_content，禁止混进 image.generate/video.generate prompt。"
                 "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由对话后端按认证中心默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
                 "video.generate 用户未指定模型时 payload.model 填 \"sora2\"。"
                 "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
@@ -1039,8 +1040,8 @@ def _tool_definitions(
                             "能力调用参数（按 capability_id 不同）。"
                             "media.edit: 必须含 operation（overlay_text|trim|scale_pad|mute|mux_audio|image_to_video|extract_frame）+ asset_id；"
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
-                            "image.generate: 含 prompt（英文）；用户未指定模型时可省略 model，由对话后端按认证中心默认配置补齐；用户指定 jimeng-4.0/jimeng-4.5 等时照用。"
-                            "video.generate: 含 prompt、model（默认 sora2）、duration（用户未指定时长时必须填 4，即 4 秒）。"
+                            "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由对话后端按认证中心默认配置补齐。"
+                            "video.generate: 含 prompt、model（默认 sora2）、duration（用户未指定时长时必须填 4，即 4 秒）；prompt 只写视频画面/动作，不写发布账号或发布文案。"
                             "task.get_result: 含 task_id。"
                         ),
                     },
@@ -1575,11 +1576,100 @@ _IMAGE_MODEL_ALIASES: Dict[str, str] = {
 }
 
 _DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "gpt-image2").strip() or "gpt-image2"
+_IMAGE_SOCIAL_PLATFORM_PATTERN = r"(?:抖音|小红书|今日头条|头条|快手|B站|b站|视频号|微博|TikTok|tiktok|YouTube|youtube|Instagram|instagram)"
+_IMAGE_PUBLISH_CONTEXT_RE = re.compile(
+    rf"(?:发布|投稿|上传|发到|发至|发送到|同步到|{_IMAGE_SOCIAL_PLATFORM_PATTERN}.{{0,12}}(?:账号|帐号|账户|昵称|发布|文案|配文|话题))",
+    re.IGNORECASE,
+)
+_IMAGE_PUBLISH_ACTION_RE = re.compile(
+    rf"(?:帮我)?(?:(?:发布|投稿|上传|发送|同步)\s*(?:到|至)?|发到|发至)\s*(?:{_IMAGE_SOCIAL_PLATFORM_PATTERN})[^，。；;,.!！?？\n]*",
+    re.IGNORECASE,
+)
+_IMAGE_SOCIAL_ACCOUNT_RE = re.compile(
+    rf"(?:{_IMAGE_SOCIAL_PLATFORM_PATTERN})\s*(?:账号|帐号|账户|号|昵称)?\s*[:：]?\s*[\w\u4e00-\u9fff-]{{1,32}}",
+    re.IGNORECASE,
+)
+_IMAGE_COPY_TAIL_RE = re.compile(
+    r"(?:发布文案|抖音文案|小红书文案|平台文案|文案|配文|正文|描述|标题|caption|copy)\s*[:：]\s*(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_IMAGE_TEXT_OVERLAY_REQUEST_RE = re.compile(
+    r"((?:图中|图片上|画面中|海报上|封面上).{0,16}(?:写|加|放|显示|包含|印|打上)|"
+    r"(?:写上|加上|打上|印上).{0,24}(?:字|文字|标题|logo|LOGO|标语|水印|文案)|"
+    r"(?:文字海报|logo设计|设计logo|设计LOGO))",
+    re.IGNORECASE,
+)
+_IMAGE_NO_TEXT_GUARD = "画面中不要出现任何文字、LOGO、水印、账号名、社交平台界面、点赞评论按钮、字幕或发布文案。"
+
+
+def _compact_image_prompt_text(text: str) -> str:
+    return re.sub(r"[\s,，。.!！?？:：;；、_\-\\/|（）()【】\[\]\"'“”‘’#]+", "", text or "")
+
+
+def _sanitize_image_generate_prompt_for_publish_copy(prompt: str) -> str:
+    raw = str(prompt or "").strip()
+    if not raw:
+        return raw
+    if _IMAGE_TEXT_OVERLAY_REQUEST_RE.search(raw) or not _IMAGE_PUBLISH_CONTEXT_RE.search(raw):
+        return raw
+
+    cleaned = raw
+    copy_match = _IMAGE_COPY_TAIL_RE.search(cleaned)
+    if copy_match:
+        before = cleaned[: copy_match.start()].strip(" \t\r\n，,。.;；:：")
+        copy_text = copy_match.group(1).strip()
+        if len(_compact_image_prompt_text(before)) >= 6:
+            cleaned = before
+        elif copy_text:
+            cleaned = f"根据这段内容生成配图画面：{copy_text}"
+
+    cleaned = _IMAGE_PUBLISH_ACTION_RE.sub("", cleaned)
+    cleaned = _IMAGE_SOCIAL_ACCOUNT_RE.sub("", cleaned)
+    cleaned = re.sub(r"#[^\s#，,。；;]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.strip(" \t\r\n，,。.;；:：-_/|")
+    if len(_compact_image_prompt_text(cleaned)) < 4:
+        cleaned = raw
+    if _IMAGE_NO_TEXT_GUARD not in cleaned:
+        cleaned = f"{cleaned}\n{_IMAGE_NO_TEXT_GUARD}".strip()
+    return cleaned
+
+
+_VIDEO_NO_SOCIAL_GUARD = "视频画面中不要出现社交平台界面、账号名、点赞评论按钮或发布文案。"
+
+
+def _sanitize_video_generate_prompt_for_publish_copy(prompt: str) -> str:
+    raw = str(prompt or "").strip()
+    if not raw:
+        return raw
+    if not _IMAGE_PUBLISH_CONTEXT_RE.search(raw):
+        return raw
+
+    cleaned = raw
+    copy_match = _IMAGE_COPY_TAIL_RE.search(cleaned)
+    if copy_match:
+        before = cleaned[: copy_match.start()].strip(" \t\r\n，,。.;；:：")
+        copy_text = copy_match.group(1).strip()
+        if len(_compact_image_prompt_text(before)) >= 6:
+            cleaned = before
+        elif copy_text:
+            cleaned = f"根据这段内容生成视频画面：{copy_text}"
+
+    cleaned = _IMAGE_PUBLISH_ACTION_RE.sub("", cleaned)
+    cleaned = _IMAGE_SOCIAL_ACCOUNT_RE.sub("", cleaned)
+    cleaned = re.sub(r"#[^\s#，,。；;]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.strip(" \t\r\n，,。.;；:：-_/|")
+    if len(_compact_image_prompt_text(cleaned)) < 4:
+        cleaned = raw
+    if _VIDEO_NO_SOCIAL_GUARD not in cleaned:
+        cleaned = f"{cleaned}\n{_VIDEO_NO_SOCIAL_GUARD}".strip()
+    return cleaned
 
 
 def _normalize_image_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    按图片模型把「统一 payload」转成该模型 API 需要的参数，并保证用户输入的 prompt 原样传入。
+    按图片模型把「统一 payload」转成该模型 API 需要的参数；发布账号/文案类信息会先从生图 prompt 中剥离。
     """
     if not payload or not isinstance(payload, dict):
         return payload
@@ -1589,7 +1679,15 @@ def _normalize_image_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         model = _DEFAULT_IMAGE_MODEL
     model = _IMAGE_MODEL_ALIASES.get(model, model)
     payload["model"] = model
-    prompt = (payload.get("prompt") or "").strip()
+    prompt_raw = (payload.get("prompt") or "").strip()
+    prompt = _sanitize_image_generate_prompt_for_publish_copy(prompt_raw)
+    if prompt != prompt_raw:
+        logger.warning(
+            "[MCP image.generate] prompt 含发布/账号/文案信息，已清洗 old=%s new=%s",
+            prompt_raw[:160],
+            prompt[:160],
+        )
+        payload["prompt"] = prompt
     image_url = (payload.get("image_url") or "").strip()
     image_size = (payload.get("image_size") or "").strip()
     num_images = payload.get("num_images", payload.get("n", 1))
@@ -1695,7 +1793,14 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     model = (payload.get("model") or payload.get("model_id") or "").strip()
     if not model:
         raise ValueError("请指定视频模型（model），例如 sora2、seedance2、hailuo、vidu、wan、veo、kling、grok、jimeng 等。")
-    prompt = (payload.get("prompt") or "").strip()
+    prompt_raw = (payload.get("prompt") or "").strip()
+    prompt = _sanitize_video_generate_prompt_for_publish_copy(prompt_raw)
+    if prompt != prompt_raw:
+        logger.warning(
+            "[MCP video.generate] prompt 含发布/账号/文案信息，已清洗 old=%s new=%s",
+            prompt_raw[:160],
+            prompt[:160],
+        )
     fp = payload.get("filePaths") or []
     image_url = (payload.get("image_url") or "").strip()
     mf = payload.get("media_files") or []

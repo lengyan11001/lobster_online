@@ -1318,6 +1318,60 @@ function saveCurrentSessionToStore() {
     saveChatSessionsToStorage();
   }
 }
+
+function clearStoredChatSessionReferences(sid) {
+  var id = String(sid || '');
+  if (!id) return;
+  try {
+    var lastKey = getChatLastSessionStorageKey();
+    if (lastKey && String(localStorage.getItem(lastKey) || '') === id) localStorage.removeItem(lastKey);
+    [CHAT_MODE_DEFAULT, CHAT_MODE_WORKSPACE].forEach(function(mode) {
+      var modeKey = getChatLastSessionByModeStorageKey(mode);
+      if (modeKey && String(localStorage.getItem(modeKey) || '') === id) localStorage.removeItem(modeKey);
+    });
+  } catch (e) {}
+}
+
+function deleteChatSession(id, ev) {
+  if (ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  var sid = String(id || '');
+  var session = getSessionById(sid);
+  if (!sid || !session) return;
+  var isCurrent = String(currentSessionId || '') === sid;
+  var deletedMode = _getSessionMode(session);
+  var title = getSessionTitle(session);
+  var message = isSessionPending(sid)
+    ? '这个会话还有任务在进行中，删除后会停止当前页面继续展示结果。确定删除「' + title + '」吗？'
+    : '确定删除会话「' + title + '」吗？';
+  if (!window.confirm(message)) return;
+  if (isCurrent) {
+    abortActiveChatStream();
+    removeChatTypingIndicator();
+    chatHistory = [];
+  }
+  clearSessionPollResume(sid);
+  delete chatPendingBySession[sid];
+  chatSessions = chatSessions.filter(function(s) { return String(s.id) !== sid; });
+  clearStoredChatSessionReferences(sid);
+  saveChatSessionsToStorage();
+
+  if (isCurrent) {
+    currentSessionId = null;
+    var nextSid = findLastChatSessionIdByMode(deletedMode, sid);
+    if (!nextSid && chatSessions.length) nextSid = String(chatSessions[0].id || '');
+    if (nextSid) {
+      switchChatSession(nextSid);
+    } else {
+      createNewSession(deletedMode);
+    }
+    return;
+  }
+  renderChatSessionList();
+}
+
 window.addEventListener('beforeunload', function() {
   flushPendingChatSessionsSave();
   abortActiveChatStream();
@@ -1356,11 +1410,17 @@ function renderChatSessionList() {
           '<div class="session-title"><div class="session-title-row"><span>' + escapeHtml(title) + '</span>' + modeBadge + '</div></div>' +
           '<div class="session-preview">' + escapeHtml(preview) + '</div>' +
         '</div>' +
+        '<button type="button" class="session-delete-btn" title="删除会话" aria-label="删除会话" data-delete-session-id="' + escapeAttr(s.id) + '">×</button>' +
       '</div>' +
       '<div class="session-time">' + escapeHtml(time) + '</div></div>';
   }).join('');
   listEl.querySelectorAll('.chat-session-item').forEach(function(el) {
     el.addEventListener('click', function() { switchChatSession(el.getAttribute('data-session-id')); });
+  });
+  listEl.querySelectorAll('.session-delete-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(ev) {
+      deleteChatSession(btn.getAttribute('data-delete-session-id'), ev);
+    });
   });
 }
 

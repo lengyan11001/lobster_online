@@ -50,7 +50,7 @@
     },
     logs: {
       title: '系统日志',
-      html: '<p>读取本机 <code>logs/app.log</code> 末尾若干行，用于排查对话、MCP、定时任务等问题。</p><p>可选择「末尾」行数；<strong>导出 txt</strong> 便于发给他人分析。若一直空白请先点<strong>刷新</strong>。</p>'
+      html: '<p>读取本机 <code>logs/app.log</code> 末尾若干行，用于排查对话、MCP、定时任务等问题。</p><p>可选择「末尾」行数；<strong>导出 txt</strong> 便于本机保存。需要远程排查时点<strong>上传诊断</strong>，系统会脱敏打包日志和关键配置后上传到服务器，并返回诊断 ID。</p>'
     },
     schedule_modal_full: {
       title: '定时任务（完整说明）',

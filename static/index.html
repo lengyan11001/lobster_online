@@ -1701,6 +1701,32 @@
       min-width: 0;
       flex: 1;
     }
+    .chat-session-item .session-delete-btn {
+      width: 24px;
+      height: 24px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(226, 232, 240, 0.72);
+      color: #7b879a;
+      cursor: pointer;
+      flex-shrink: 0;
+      opacity: 0;
+      transform: translateY(-1px);
+      transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+    }
+    .chat-session-item:hover .session-delete-btn,
+    .chat-session-item .session-delete-btn:focus-visible {
+      opacity: 1;
+    }
+    .chat-session-item .session-delete-btn:hover {
+      background: rgba(239, 68, 68, 0.12);
+      color: #dc2626;
+    }
+    @media (hover: none) {
+      .chat-session-item .session-delete-btn {
+        opacity: 0.7;
+      }
+    }
     .chat-session-item .session-bubble-icon {
       width: 18px;
       height: 18px;
@@ -4800,8 +4826,10 @@
                   <button type="button" id="logsRefreshBtn" class="btn btn-primary btn-sm">刷新</button>
                   <button type="button" id="logsLoadBtn" class="btn btn-ghost btn-sm" title="手动请求日志">加载日志</button>
                   <button type="button" id="logsExportBtn" class="btn btn-ghost btn-sm" title="按当前「末尾」行数导出为 txt">导出 txt</button>
+                  <button type="button" id="logsUploadDiagnosticBtn" class="btn btn-ghost btn-sm" title="打包本机日志并上传到服务器">上传诊断</button>
                 </div>
               </div>
+              <div id="logsDiagnosticUploadMsg" style="display:none;margin-top:0.65rem;font-size:0.82rem;color:var(--text-muted);"></div>
               <pre id="logsContent" style="margin:1rem 0 0;padding:0.75rem;background:rgba(0,0,0,0.25);border-radius:var(--radius-sm);font-size:0.78rem;line-height:1.45;overflow:auto;max-height:calc(100vh - 220px);white-space:pre-wrap;word-break:break-all;">点击「刷新」加载日志</pre>
             </div>
           </div>

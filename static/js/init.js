@@ -850,7 +850,8 @@ function decorateWorkspacePages() {
       title: '日志与排查',
       desc: '查看运行日志、调试信息和任务线索，方便在出现问题时快速定位和恢复。',
       actions: [
-        { label: '刷新日志', clickId: 'logsRefreshBtn', primary: true }
+        { label: '刷新日志', clickId: 'logsRefreshBtn', primary: true },
+        { label: '上传诊断', clickId: 'logsUploadDiagnosticBtn' }
       ]
     }
   ];
@@ -1511,6 +1512,7 @@ function ensureLogsBindings() {
   var refreshBtn = document.getElementById('logsRefreshBtn');
   var loadBtn = document.getElementById('logsLoadBtn');
   var exportBtn = document.getElementById('logsExportBtn');
+  var uploadDiagnosticBtn = document.getElementById('logsUploadDiagnosticBtn');
   var tailEl = document.getElementById('logsTail');
   if (refreshBtn && !refreshBtn._logsBound) {
     refreshBtn._logsBound = true;
@@ -1524,10 +1526,79 @@ function ensureLogsBindings() {
     exportBtn._logsBound = true;
     exportBtn.onclick = exportLogsView;
   }
+  if (uploadDiagnosticBtn && !uploadDiagnosticBtn._logsBound) {
+    uploadDiagnosticBtn._logsBound = true;
+    uploadDiagnosticBtn.onclick = uploadDiagnosticLogs;
+  }
   if (tailEl && !tailEl._logsBound) {
     tailEl._logsBound = true;
     tailEl.addEventListener('change', loadLogsView);
   }
+}
+
+function uploadDiagnosticLogs() {
+  var btn = document.getElementById('logsUploadDiagnosticBtn');
+  var msgEl = document.getElementById('logsDiagnosticUploadMsg');
+  var pre = document.getElementById('logsContent');
+  var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+  if (!base) {
+    if (msgEl) {
+      msgEl.style.display = 'block';
+      msgEl.style.color = '#d14343';
+      msgEl.textContent = '上传诊断需要连接本机 lobster_online 后端，请先用 start.bat 启动并通过本机地址打开。';
+    }
+    return;
+  }
+  var url = base + '/api/logs/upload-diagnostics';
+  if (msgEl) {
+    msgEl.style.display = 'block';
+    msgEl.style.color = 'var(--text-muted)';
+    msgEl.textContent = '正在打包并上传诊断日志...';
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '上传中...';
+  }
+  var opts = {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + (typeof token !== 'undefined' ? token : '') }
+  };
+  fetch(url, opts)
+    .then(function(r) {
+      return r.json().catch(function() { return {}; }).then(function(d) {
+        return { ok: r.ok, status: r.status, data: d };
+      });
+    })
+    .then(function(x) {
+      if (!x.ok) {
+        var detail = (x.data && (x.data.detail || x.data.message)) || ('HTTP ' + x.status);
+        throw new Error(detail);
+      }
+      var id = (x.data && x.data.diagnostic_id) || '';
+      var size = (x.data && x.data.bundle && x.data.bundle.size) ? Math.round(x.data.bundle.size / 1024) : 0;
+      var text = '诊断日志已上传' + (id ? '，诊断ID：' + id : '') + (size ? '，大小约 ' + size + ' KB' : '');
+      if (msgEl) {
+        msgEl.style.color = '#0f9f6e';
+        msgEl.textContent = text;
+      }
+      if (pre && id) {
+        pre.textContent = text + '\n\n' + (pre.textContent || '');
+      }
+    })
+    .catch(function(e) {
+      var msg = (e && e.message) ? e.message : String(e);
+      if (msgEl) {
+        msgEl.style.color = '#d14343';
+        msgEl.textContent = '上传诊断失败：' + msg;
+      }
+    })
+    .finally(function() {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '上传诊断';
+      }
+    });
 }
 
 function exportLogsView() {

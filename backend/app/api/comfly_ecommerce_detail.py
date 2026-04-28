@@ -1220,6 +1220,7 @@ def _check_ecommerce_detail_credits(
     *,
     user_id: int,
     db: Session,
+    request: Optional[Request] = None,
     page_count: int,
     main_image_count: int,
     sku_image_count: int,
@@ -1240,6 +1241,16 @@ def _check_ecommerce_detail_credits(
         material_image_count=material_image_count,
         image_model=image_model,
     )
+
+    settings = get_settings()
+    auth_server_base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if auth_server_base:
+        logger.info(
+            "[comfly_ecommerce_detail] online auth user_id=%s, skip local users balance check estimated_credits=%s",
+            user_id,
+            required_credits,
+        )
+        return
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -1347,6 +1358,7 @@ async def ecommerce_detail_pipeline_run(
     _check_ecommerce_detail_credits(
         user_id=current_user.id,
         db=db,
+        request=request,
         page_count=pl.page_count or 12,
         main_image_count=pl.main_image_count or 10,
         sku_image_count=pl.sku_image_count or 3,
@@ -1404,6 +1416,7 @@ async def ecommerce_detail_pipeline_start(
     _check_ecommerce_detail_credits(
         user_id=current_user.id,
         db=db,
+        request=request,
         page_count=pl.page_count or 12,
         main_image_count=pl.main_image_count or 10,
         sku_image_count=pl.sku_image_count or 3,

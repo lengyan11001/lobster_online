@@ -1050,6 +1050,8 @@ def _correct_video_to_image_if_user_asked_image(args: Dict, last_user_content: s
     text = _strip_lobster_attachment_block(last_user_content)
     if not text:
         return args
+    if _user_wants_media_understand(text):
+        return args
     image_keywords = ("图片", "图", "画一张", "生成图", "一张图", "画一只", "画个", "生成一张", "来张图", "来一张", "一只猫的图", "猫的图片")
     video_keywords = ("视频", "动图", "生成视频", "做视频", "做个视频")
     has_image = any(k in text for k in image_keywords)
@@ -1077,6 +1079,68 @@ def _correct_video_to_image_if_user_asked_image(args: Dict, last_user_content: s
     args["payload"] = payload
     logger.info("[CHAT] 根据用户意图将 video.generate 纠正为 image.generate，并已清理 payload 为仅图片参数")
     return args
+
+
+def _correct_image_to_video_or_tvc_if_user_asked(args: Dict, last_user_content: str) -> Dict:
+    """模型误把视频/TVC需求选成 image.generate 时，按当前用户原话纠正能力，避免只生成静态图。"""
+    if not args or (args.get("capability_id") or "").strip() != "image.generate":
+        return args
+    text = _strip_lobster_attachment_block(last_user_content)
+    if not text:
+        return args
+    if _user_wants_media_understand(text):
+        return args
+    wants_image = bool(_IMAGE_REQUEST_RE.search(text))
+    wants_video = bool(_PLAIN_VIDEO_REQUEST_RE.search(text))
+    wants_tvc = bool(_TVC_KEYWORDS_RE.search(text))
+    if wants_tvc and not wants_image:
+        old_payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+        new_pl: Dict[str, Any] = {
+            "action": "start_pipeline",
+            "auto_save": True,
+            "task_text": text,
+        }
+        for key in ("asset_id", "image_url"):
+            val = old_payload.get(key)
+            if isinstance(val, str):
+                val = val.strip()
+            if val:
+                new_pl[key] = val
+        fixed = dict(args)
+        fixed["capability_id"] = "comfly.daihuo.pipeline"
+        fixed["payload"] = new_pl
+        logger.warning("[CHAT-ORCH] 用户明确TVC/带货，但模型选了 image.generate，已纠正为 comfly.daihuo.pipeline")
+        return fixed
+    if not (wants_video and not wants_image):
+        return args
+
+    old_payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    prompt = str(old_payload.get("prompt") or old_payload.get("text") or text).strip()
+    new_payload: Dict[str, Any] = {"prompt": prompt or text}
+    duration = old_payload.get("duration")
+    if duration is None:
+        duration = _extract_video_duration_from_user_text(text) or _extract_video_duration_from_user_text(prompt)
+    if duration is not None:
+        new_payload["duration"] = duration
+    for key in ("aspect_ratio", "ratio", "negative_prompt"):
+        if old_payload.get(key) is not None:
+            new_payload[key] = old_payload[key]
+    image_url = str(old_payload.get("image_url") or "").strip()
+    asset_id = str(old_payload.get("asset_id") or "").strip()
+    image_urls = old_payload.get("image_urls")
+    if image_url:
+        new_payload["image_url"] = image_url
+    elif isinstance(image_urls, list) and image_urls:
+        new_payload["image_url"] = image_urls[0]
+        new_payload["media_files"] = image_urls
+        new_payload["filePaths"] = image_urls
+    elif asset_id:
+        new_payload["image_url"] = asset_id
+    fixed = dict(args)
+    fixed["capability_id"] = "video.generate"
+    fixed["payload"] = new_payload
+    logger.warning("[CHAT-ORCH] 用户明确视频生成，但模型选了 image.generate，已纠正为 video.generate")
+    return fixed
 
 
 _VIDEO_ONLY_MODEL_HINTS = ("veo", "sora", "seedance", "hailuo", "minimax", "wan/", "wan2", "kling", "grok", "vidu")
@@ -1175,11 +1239,142 @@ _IMAGE_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 _VIDEO_DURATION_RE = re.compile(r"(?<!\d)(\d{1,3}(?:\.\d+)?)\s*(?:秒|秒钟|s\b)", re.IGNORECASE)
+_MEDIA_UNDERSTAND_REQUEST_RE = re.compile(
+    r"(?:理解|分析|识别|解读|描述|总结|读懂|看一下|看看|帮我看|帮忙看|"
+    r"(?:这个|这段|这张)?(?:视频|短视频|图片|图|照片|素材).{0,12}(?:是什么|有什么|讲了什么|内容)|"
+    r"(?:是什么|有什么|讲了什么|内容).{0,12}(?:视频|短视频|图片|图|照片|素材))",
+    re.IGNORECASE,
+)
+_MEDIA_UNDERSTAND_ACTION_RE = re.compile(
+    r"(?:文生视频|图生视频|视频生成|短视频生成|文生图|图生图|生图|作图|P图|修图|"
+    r"生成|制作|创建|做(?:个|一个|一段|一张)?(?:视频|短视频|图片|图|海报)|"
+    r"出(?:个|一个|一段|一张)?(?:视频|短视频|图片|图|海报)|"
+    r"加字幕|添加字幕|配字幕|加文字|叠字|剪辑|裁剪|发布|投稿)",
+    re.IGNORECASE,
+)
+_ATTACHMENT_MEDIA_LINE_RE = re.compile(
+    r"media_type:\s*(?P<media_type>image|video)\s+URL:\s*(?P<url>\S+)",
+    re.IGNORECASE,
+)
+
+
+def _user_wants_media_understand(user_message: str) -> bool:
+    """识别“理解/分析素材”意图，避免“帮我理解视频”被宽泛视频正则误判为生成。"""
+    text = _strip_lobster_attachment_block(user_message)
+    if not text or not _MEDIA_UNDERSTAND_REQUEST_RE.search(text):
+        return False
+    return not _MEDIA_UNDERSTAND_ACTION_RE.search(text)
+
+
+def _attachment_media_types_from_context(user_message: str) -> set[str]:
+    return {
+        (m.group("media_type") or "").lower()
+        for m in _ATTACHMENT_MEDIA_LINE_RE.finditer(user_message or "")
+        if (m.group("media_type") or "").strip()
+    }
+
+
+def _attachment_urls_for_media_type(
+    user_message: str,
+    media_type: str,
+    fallback_urls: Optional[List[str]] = None,
+) -> List[str]:
+    wanted = (media_type or "").strip().lower()
+    urls: List[str] = []
+    for m in _ATTACHMENT_MEDIA_LINE_RE.finditer(user_message or ""):
+        if (m.group("media_type") or "").lower() == wanted:
+            u = (m.group("url") or "").strip()
+            if u:
+                urls.append(u)
+    if not urls and fallback_urls:
+        urls = [u for u in fallback_urls if isinstance(u, str) and u.strip()]
+    return urls
+
+
+def _requested_understand_capability(user_message: str) -> str:
+    clean = _strip_lobster_attachment_block(user_message)
+    if not _user_wants_media_understand(clean):
+        return ""
+    types = _attachment_media_types_from_context(user_message)
+    has_video_word = bool(re.search(r"(?:视频|短视频|片子|动画)", clean or "", re.IGNORECASE))
+    has_image_word = bool(re.search(r"(?:图片|图|照片|截图|海报)", clean or "", re.IGNORECASE))
+    if "video" in types or (has_video_word and not has_image_word):
+        return "video.understand"
+    if "image" in types or has_image_word:
+        return "image.understand"
+    if len(types) == 1:
+        return "video.understand" if "video" in types else "image.understand"
+    return ""
+
+
+def _inject_understand_media_urls(
+    args: Dict[str, Any],
+    last_user_content: str,
+    attachment_urls: Optional[List[str]] = None,
+) -> None:
+    cap = (args.get("capability_id") or "").strip() if args else ""
+    if cap not in ("image.understand", "video.understand"):
+        return
+    inner = args.get("payload")
+    if not isinstance(inner, dict):
+        inner = {}
+        args["payload"] = inner
+    media_type = "video" if cap == "video.understand" else "image"
+    key = "video_urls" if media_type == "video" else "image_urls"
+    single_key = "video_url" if media_type == "video" else "image_url"
+    if inner.get(key) or inner.get(single_key):
+        return
+    urls = _attachment_urls_for_media_type(last_user_content, media_type, attachment_urls)
+    if urls:
+        inner[key] = urls
+        logger.info("[CHAT-ORCH] %s 注入本轮上传素材 URL count=%d", cap, len(urls))
+
+
+def _correct_generation_to_understand_if_user_asked(
+    args: Dict[str, Any],
+    last_user_content: str,
+    attachment_urls: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    requested_cap = _requested_understand_capability(last_user_content)
+    if not requested_cap or not args:
+        return args
+    cap = (args.get("capability_id") or "").strip()
+    if cap == requested_cap:
+        _inject_understand_media_urls(args, last_user_content, attachment_urls)
+        return args
+    if cap not in ("image.generate", "video.generate", "media.edit", "comfly.daihuo", "comfly.daihuo.pipeline"):
+        return args
+    media_type = "video" if requested_cap == "video.understand" else "image"
+    urls = _attachment_urls_for_media_type(last_user_content, media_type, attachment_urls)
+    old_payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    for key in ("video_urls", "image_urls", "media_files", "filePaths"):
+        val = old_payload.get(key)
+        if not urls and isinstance(val, list):
+            urls = [str(x).strip() for x in val if str(x).strip()]
+    for key in ("video_url", "image_url"):
+        val = str(old_payload.get(key) or "").strip()
+        if not urls and val:
+            urls = [val]
+    if not urls:
+        return args
+    prompt = _strip_lobster_attachment_block(last_user_content) or str(old_payload.get("prompt") or "").strip()
+    fixed_payload: Dict[str, Any] = {"prompt": prompt or "请详细描述内容。"}
+    fixed_payload["video_urls" if media_type == "video" else "image_urls"] = urls
+    fixed = dict(args)
+    fixed["capability_id"] = requested_cap
+    fixed["payload"] = fixed_payload
+    logger.warning("[CHAT-ORCH] 用户要求理解素材，已将 %s 纠正为 %s", cap or "-", requested_cap)
+    return fixed
 
 
 def _user_wants_plain_video(user_message: str) -> bool:
     text = _strip_lobster_attachment_block(user_message)
-    return bool(text and _PLAIN_VIDEO_REQUEST_RE.search(text) and not _TVC_KEYWORDS_RE.search(text))
+    return bool(
+        text
+        and not _user_wants_media_understand(text)
+        and _PLAIN_VIDEO_REQUEST_RE.search(text)
+        and not _TVC_KEYWORDS_RE.search(text)
+    )
 
 
 def _extract_video_duration_from_user_text(user_message: str) -> Optional[Union[int, float]]:
@@ -1218,6 +1413,65 @@ def _current_turn_has_specific_video_prompt(user_message: str) -> bool:
     stripped = _VIDEO_PROMPT_NOISE_RE.sub("", text)
     stripped = re.sub(r"[\s,，。.!！?？:：;；、_\-\\/|（）()【】\[\]\"'“”‘’]+", "", stripped)
     return len(stripped) >= 4
+
+
+_GENERIC_VIDEO_PROMPT_COMPACT = {
+    "图生视频",
+    "文生视频",
+    "生成视频",
+    "视频生成",
+    "短视频生成",
+    "imagetovideo",
+    "texttovideo",
+    "generatevideo",
+    "videogeneration",
+}
+
+
+def _is_generic_video_generate_prompt(prompt: Any) -> bool:
+    raw = str(prompt or "").strip()
+    if not raw:
+        return True
+    compact = re.sub(r"[\s,，。.!！?？:：;；、_\-\\/|（）()【】\[\]\"'“”‘’]+", "", raw).lower()
+    if compact in _GENERIC_VIDEO_PROMPT_COMPACT:
+        return True
+    return len(compact) <= 4 and ("视频" in compact or "video" in compact)
+
+
+def _ensure_video_generate_prompt_from_current_turn(
+    args: Dict[str, Any],
+    last_user_content: str,
+    has_attachment: bool,
+) -> None:
+    """When the LLM emits only "图生视频", restore the actual prompt from the current user turn."""
+    if not args or (args.get("capability_id") or "").strip() != "video.generate":
+        return
+    inner = args.get("payload")
+    if not isinstance(inner, dict):
+        inner = {}
+        args["payload"] = inner
+    current_prompt = str(inner.get("prompt") or inner.get("text") or "").strip()
+    if not _is_generic_video_generate_prompt(current_prompt):
+        return
+    user_text = _strip_lobster_attachment_block(last_user_content).strip()
+    if not _current_turn_has_specific_video_prompt(user_text):
+        return
+    replacement = re.sub(r"\n{3,}", "\n\n", user_text).strip()
+    if (
+        has_attachment
+        or bool(str(inner.get("image_url") or "").strip())
+        or bool(inner.get("media_files"))
+        or bool(inner.get("filePaths"))
+    ) and "图生视频" not in replacement:
+        replacement = f"图生视频：{replacement}"
+    inner["prompt"] = replacement[:4000]
+    if "text" in inner and _is_generic_video_generate_prompt(inner.get("text")):
+        inner["text"] = replacement[:4000]
+    logger.warning(
+        "[CHAT] video.generate prompt 过短/泛化，已用当前用户文本补全 old=%s new=%s",
+        current_prompt[:160] if current_prompt else "-",
+        replacement[:160],
+    )
 
 
 def _neutral_video_prompt_for_underspecified_turn(has_attachment: bool) -> str:
@@ -1280,7 +1534,7 @@ def _correct_daihuo_pipeline_to_video_if_plain_video(args: Dict[str, Any], user_
 
     duration = old_payload.get("duration")
     if duration is None:
-        duration = _extract_video_duration_from_user_text(prompt or clean_user)
+        duration = _extract_video_duration_from_user_text(clean_user) or _extract_video_duration_from_user_text(prompt)
     if duration is not None:
         new_payload["duration"] = duration
 
@@ -1382,10 +1636,24 @@ def _ensure_daihuo_pipeline_asset_or_url(
             pl.setdefault(k, args[k])
     if (user_message or "").strip():
         pl.setdefault("task_text", user_message.strip())
+    task_text = str(pl.get("task_text") or "").strip()
+    clean_task_text = _strip_publish_account_directives_for_tvc_task_text(task_text)
+    if clean_task_text and clean_task_text != task_text:
+        pl["task_text"] = clean_task_text
+        logger.warning(
+            "[CHAT-ORCH] daihuo_pipeline task_text 含发布账号指令，已剥离 old=%s new=%s",
+            task_text[:160],
+            clean_task_text[:160],
+        )
     aid = (str(pl.get("asset_id") or "").strip())
     iu = (str(pl.get("image_url") or "").strip())
     if aid or (iu.startswith("http://") or iu.startswith("https://")):
         args["payload"] = pl
+        logger.info(
+            "[CHAT-ORCH] normalized comfly.daihuo.pipeline source=%s action=%s",
+            "asset_id" if aid else "image_url",
+            pl.get("action") or "run_pipeline",
+        )
         return
     ids = [a.strip() for a in (attachment_asset_ids or []) if isinstance(a, str) and a.strip()]
     if ids:
@@ -1401,6 +1669,11 @@ def _ensure_daihuo_pipeline_asset_or_url(
             (attachment_urls[0] or "")[:72],
         )
     args["payload"] = pl
+    logger.info(
+        "[CHAT-ORCH] normalized comfly.daihuo.pipeline source=%s action=%s",
+        "asset_id" if pl.get("asset_id") else "image_url" if pl.get("image_url") else "none",
+        pl.get("action") or "run_pipeline",
+    )
 
 
 def _inject_video_media_urls(args: Dict[str, Any], attachment_urls: List[str]) -> None:
@@ -1549,6 +1822,200 @@ def _normalize_model_alias(args: Dict[str, Any]) -> None:
 # 用户只说「配图 / 发头条」但漏传 payload.prompt 时，用正文兜底，避免上游「prompt 不能为空」
 _MAX_IMAGE_GENERATE_PROMPT_CHARS = 4000
 _IMAGE_16_9_RE = re.compile(r"16\s*[:：]\s*9")
+_IMAGE_SOCIAL_PLATFORM_PATTERN = r"(?:抖音|小红书|今日头条|头条|快手|B站|b站|视频号|微博|TikTok|tiktok|YouTube|youtube|Instagram|instagram)"
+_IMAGE_PUBLISH_CONTEXT_RE = re.compile(
+    rf"(?:发布|投稿|上传|发到|发至|发送到|同步到|{_IMAGE_SOCIAL_PLATFORM_PATTERN}.{{0,12}}(?:账号|帐号|账户|昵称|发布|文案|配文|话题))",
+    re.IGNORECASE,
+)
+_IMAGE_PUBLISH_ACTION_RE = re.compile(
+    rf"(?:帮我)?(?:(?:发布|投稿|上传|发送|同步)\s*(?:到|至)?|发到|发至)\s*(?:{_IMAGE_SOCIAL_PLATFORM_PATTERN})[^，。；;,.!！?？\n]*",
+    re.IGNORECASE,
+)
+_IMAGE_SOCIAL_ACCOUNT_RE = re.compile(
+    rf"(?:{_IMAGE_SOCIAL_PLATFORM_PATTERN})\s*(?:账号|帐号|账户|号|昵称)?\s*[:：]?\s*[\w\u4e00-\u9fff-]{{1,32}}",
+    re.IGNORECASE,
+)
+_IMAGE_COPY_TAIL_RE = re.compile(
+    r"(?:发布文案|抖音文案|小红书文案|平台文案|文案|配文|正文|描述|标题|caption|copy)\s*[:：]\s*(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_IMAGE_TEXT_OVERLAY_REQUEST_RE = re.compile(
+    r"((?:图中|图片上|画面中|海报上|封面上).{0,16}(?:写|加|放|显示|包含|印|打上)|"
+    r"(?:写上|加上|打上|印上).{0,24}(?:字|文字|标题|logo|LOGO|标语|水印|文案)|"
+    r"(?:文字海报|logo设计|设计logo|设计LOGO))",
+    re.IGNORECASE,
+)
+_IMAGE_NO_TEXT_GUARD = "画面中不要出现任何文字、LOGO、水印、账号名、社交平台界面、点赞评论按钮、字幕或发布文案。"
+
+
+def _compact_image_prompt_text(text: str) -> str:
+    return re.sub(r"[\s,，。.!！?？:：;；、_\-\\/|（）()【】\[\]\"'“”‘’#]+", "", text or "")
+
+
+def _image_prompt_requests_text_overlay(*texts: str) -> bool:
+    return any(_IMAGE_TEXT_OVERLAY_REQUEST_RE.search(t or "") for t in texts)
+
+
+def _sanitize_image_generate_prompt_for_publish_copy(prompt: str, last_user_content: str) -> str:
+    """Keep publish copy/account instructions out of image prompts so models do not draw them."""
+    raw = str(prompt or "").strip()
+    if not raw:
+        return raw
+    user_text = _strip_lobster_attachment_block(last_user_content)
+    if _image_prompt_requests_text_overlay(raw, user_text):
+        return raw
+    if not (_IMAGE_PUBLISH_CONTEXT_RE.search(raw) or _IMAGE_PUBLISH_CONTEXT_RE.search(user_text or "")):
+        return raw
+
+    cleaned = raw
+    copy_match = _IMAGE_COPY_TAIL_RE.search(cleaned)
+    if copy_match:
+        before = cleaned[: copy_match.start()].strip(" \t\r\n，,。.;；:：")
+        copy_text = copy_match.group(1).strip()
+        if len(_compact_image_prompt_text(before)) >= 6:
+            cleaned = before
+        elif copy_text:
+            cleaned = f"根据这段内容生成配图画面：{copy_text}"
+
+    cleaned = _IMAGE_PUBLISH_ACTION_RE.sub("", cleaned)
+    cleaned = _IMAGE_SOCIAL_ACCOUNT_RE.sub("", cleaned)
+    cleaned = re.sub(r"#[^\s#，,。；;]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.strip(" \t\r\n，,。.;；:：-_/|")
+    if len(_compact_image_prompt_text(cleaned)) < 4:
+        cleaned = raw.strip()
+
+    if _IMAGE_NO_TEXT_GUARD not in cleaned:
+        cleaned = f"{cleaned}\n{_IMAGE_NO_TEXT_GUARD}".strip()
+    return cleaned[:_MAX_IMAGE_GENERATE_PROMPT_CHARS]
+
+
+_VIDEO_IMAGE_SOURCE_REF_RE = re.compile(
+    r"(图生视频|image[-_\s]*to[-_\s]*video|这张|这幅|这个图|这张图|这张图片|附图|上传的图|上传图片|参考图|"
+    r"用图|用这图|用图片|基于图片|基于素材|刚才的图|上一张|上一个素材|素材\s*ID|asset[_\s-]*id)",
+    re.IGNORECASE,
+)
+_VIDEO_NO_SOCIAL_GUARD = "视频画面中不要出现社交平台界面、账号名、点赞评论按钮或发布文案。"
+
+
+def _current_turn_references_image_source(user_message: str) -> bool:
+    text = _strip_lobster_attachment_block(user_message)
+    if not text:
+        return False
+    if _VIDEO_IMAGE_SOURCE_REF_RE.search(text):
+        return True
+    return bool(re.search(r"\b[a-f0-9]{10,32}\b", text, re.IGNORECASE))
+
+
+def _sanitize_video_generate_prompt_for_publish_copy(prompt: str, last_user_content: str) -> str:
+    raw = str(prompt or "").strip()
+    if not raw:
+        return raw
+    user_text = _strip_lobster_attachment_block(last_user_content)
+    if not (_IMAGE_PUBLISH_CONTEXT_RE.search(raw) or _IMAGE_PUBLISH_CONTEXT_RE.search(user_text or "")):
+        return raw
+
+    cleaned = raw
+    copy_match = _IMAGE_COPY_TAIL_RE.search(cleaned)
+    if copy_match:
+        before = cleaned[: copy_match.start()].strip(" \t\r\n，,。.;；:：")
+        copy_text = copy_match.group(1).strip()
+        if len(_compact_image_prompt_text(before)) >= 6:
+            cleaned = before
+        elif copy_text:
+            cleaned = f"根据这段内容生成视频画面：{copy_text}"
+
+    cleaned = _IMAGE_PUBLISH_ACTION_RE.sub("", cleaned)
+    cleaned = _IMAGE_SOCIAL_ACCOUNT_RE.sub("", cleaned)
+    cleaned = re.sub(r"#[^\s#，,。；;]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.strip(" \t\r\n，,。.;；:：-_/|")
+    if len(_compact_image_prompt_text(cleaned)) < 4:
+        cleaned = raw.strip()
+    if _VIDEO_NO_SOCIAL_GUARD not in cleaned:
+        cleaned = f"{cleaned}\n{_VIDEO_NO_SOCIAL_GUARD}".strip()
+    return cleaned[:4000]
+
+
+def _ensure_video_generate_prompt_source_and_clean_publish_context(
+    args: Dict[str, Any],
+    last_user_content: str,
+    has_attachment: bool,
+) -> None:
+    """Normalize video.generate into text-to-video/image-to-video and keep publish fields out of prompt."""
+    if not args or (args.get("capability_id") or "").strip() != "video.generate":
+        return
+    inner = args.get("payload")
+    if not isinstance(inner, dict):
+        inner = {}
+        args["payload"] = inner
+
+    prompt = str(inner.get("prompt") or inner.get("text") or "").strip()
+    cleaned_prompt = _sanitize_video_generate_prompt_for_publish_copy(prompt, last_user_content)
+    if cleaned_prompt and cleaned_prompt != prompt:
+        inner["prompt"] = cleaned_prompt
+        if "text" in inner:
+            inner["text"] = cleaned_prompt
+        logger.warning(
+            "[CHAT-ORCH] video.generate prompt 含发布/账号/文案信息，已清洗 old=%s new=%s",
+            prompt[:160] if prompt else "-",
+            cleaned_prompt[:160],
+        )
+
+    image_fields_present = any(inner.get(k) for k in ("image_url", "media_files", "filePaths"))
+    references_image = has_attachment or _current_turn_references_image_source(last_user_content)
+    if image_fields_present and not references_image:
+        removed = {}
+        for key in ("image_url", "media_files", "filePaths", "functionMode"):
+            if key in inner:
+                removed[key] = inner.pop(key, None)
+        if removed:
+            logger.warning(
+                "[CHAT-ORCH] 当前轮未上传/引用图片，已移除 video.generate 过期图生视频字段 keys=%s",
+                sorted(removed.keys()),
+            )
+    route = "image_to_video" if any(inner.get(k) for k in ("image_url", "media_files", "filePaths")) else "text_to_video"
+    logger.info(
+        "[CHAT-ORCH] normalized video.generate route=%s has_attachment=%s duration=%s model=%s",
+        route,
+        has_attachment,
+        inner.get("duration") or "-",
+        inner.get("model") or "-",
+    )
+
+
+def _inject_image_media_urls(args: Dict[str, Any], attachment_urls: List[str], last_user_content: str) -> None:
+    """image.generate 时若本轮有上传图，兜底注入 image_url，防止图生图/改图误变文生图。"""
+    if not args or (args.get("capability_id") or "").strip() != "image.generate":
+        return
+    if not attachment_urls:
+        return
+    inner = args.get("payload")
+    if not isinstance(inner, dict):
+        inner = {}
+        args["payload"] = inner
+    if inner.get("image_url") or inner.get("image_urls"):
+        return
+    inner["image_url"] = attachment_urls[0]
+    inner["image_urls"] = list(attachment_urls)
+    logger.info(
+        "[CHAT-ORCH] image.generate 注入本轮上传图 route=image_to_image count=%d user=%s",
+        len(attachment_urls),
+        _strip_lobster_attachment_block(last_user_content)[:120],
+    )
+
+
+def _strip_publish_account_directives_for_tvc_task_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return raw
+    if not _IMAGE_PUBLISH_CONTEXT_RE.search(raw):
+        return raw
+    cleaned = _IMAGE_PUBLISH_ACTION_RE.sub("", raw)
+    cleaned = _IMAGE_SOCIAL_ACCOUNT_RE.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = cleaned.strip(" \t\r\n，,。.;；:：-_/|")
+    return cleaned or raw
 
 
 _DEFAULT_VIDEO_GENERATE_DURATION = 4
@@ -1671,6 +2138,18 @@ def _ensure_image_generate_prompt_and_aspect(args: Dict[str, Any], last_user_con
             len(inner["prompt"]),
         )
         pm = inner["prompt"]
+    old_pm = pm
+    cleaned_pm = _sanitize_image_generate_prompt_for_publish_copy(pm, last_user_content)
+    if cleaned_pm and cleaned_pm != pm:
+        inner["prompt"] = cleaned_pm
+        if "text" in inner:
+            inner["text"] = cleaned_pm
+        pm = cleaned_pm
+        logger.warning(
+            "[CHAT] image.generate prompt 含发布/账号/文案信息，已清洗为画面提示词 old=%s new=%s",
+            str(old_pm or "")[:160],
+            cleaned_pm[:160],
+        )
     mid = (str(inner.get("model") or inner.get("model_id") or "")).strip().lower()
     if not mid:
         mid = _get_default_image_generate_model().lower()
@@ -4502,6 +4981,152 @@ def _task_result_hint(result_text: str) -> str:
     return "结果: 已完成"
 
 
+_GENERATION_FAILED_STATUSES = {
+    "failed",
+    "failure",
+    "error",
+    "cancelled",
+    "canceled",
+    "timeout",
+    "timed_out",
+    "expired",
+    "rejected",
+    "失败",
+    "错误",
+    "取消",
+    "超时",
+}
+
+
+def _extract_generation_failure_reason(result_text: str) -> str:
+    """Best-effort user-safe reason from nested MCP/upstream JSON."""
+    raw = (result_text or "").strip()
+    if not raw:
+        return ""
+
+    seen: set[int] = set()
+
+    def _walk(obj: Any, depth: int = 0) -> str:
+        if depth > 8 or obj is None:
+            return ""
+        oid = id(obj)
+        if oid in seen:
+            return ""
+        seen.add(oid)
+        if isinstance(obj, str):
+            t = obj.strip()
+            if t.startswith("{") or t.startswith("["):
+                try:
+                    return _walk(json.loads(t), depth + 1)
+                except Exception:
+                    return ""
+            return ""
+        if isinstance(obj, list):
+            for item in obj[:20]:
+                got = _walk(item, depth + 1)
+                if got:
+                    return got
+            return ""
+        if not isinstance(obj, dict):
+            return ""
+
+        for key in ("error", "message", "msg", "detail", "desc", "reason"):
+            val = obj.get(key)
+            if isinstance(val, str) and val.strip():
+                return _sanitize_user_visible_hint(val)
+            if isinstance(val, (dict, list)):
+                got = _walk(val, depth + 1)
+                if got:
+                    return got
+        for key in ("output", "result", "data", "content"):
+            got = _walk(obj.get(key), depth + 1)
+            if got:
+                return got
+        return ""
+
+    candidates: List[str] = []
+    if raw.startswith("{") or raw.startswith("["):
+        candidates.append(raw)
+    for m in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", raw, re.IGNORECASE):
+        t = (m.group(1) or "").strip()
+        if t:
+            candidates.append(t)
+    idx = raw.find("{")
+    if idx >= 0:
+        candidates.append(raw[idx:])
+
+    for cand in candidates:
+        try:
+            got = _walk(json.loads(cand))
+            if got:
+                return got
+        except Exception:
+            continue
+
+    m = re.search(r'"(?:error|message|msg|detail|desc|reason)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', raw)
+    if m:
+        try:
+            return _sanitize_user_visible_hint(json.loads('"' + m.group(1) + '"'))
+        except Exception:
+            return _sanitize_user_visible_hint(m.group(1))
+    return ""
+
+
+def _is_generation_failure_result(result_text: str) -> bool:
+    raw = (result_text or "").strip()
+    if not raw:
+        return False
+    try:
+        if _terminal_saved_assets_for_task_result(raw):
+            return False
+    except Exception:
+        pass
+    status = (_extract_status_for_log(raw) or "").strip().lower()
+    if status and status != "?" and status in _GENERATION_FAILED_STATUSES:
+        return True
+    low = raw.lower()
+    if '"saved_assets"' in low and '"asset_id"' in low:
+        return False
+    if re.search(r'"ok"\s*:\s*false\b', low):
+        return True
+    if _extract_generation_failure_reason(raw) and re.search(r'"(?:error|detail|desc|reason)"\s*:', raw, re.IGNORECASE):
+        return True
+    if (
+        _extract_generation_failure_reason(raw)
+        and re.search(r'"(?:message|msg)"\s*:', raw, re.IGNORECASE)
+        and re.search(r"(failed|failure|error|exception|异常|失败|错误|取消|超时)", raw, re.IGNORECASE)
+    ):
+        return True
+    return False
+
+
+def _generation_failed_user_reply(capability_id: str, result_text: str, wants_publish: bool = False) -> str:
+    kind = "图片" if (capability_id or "").strip() == "image.generate" else "视频"
+    reason = _extract_generation_failure_reason(result_text)
+    parts = [f"{kind}生成失败，上游任务已返回失败状态。"]
+    if reason:
+        parts.append(f"原因：{reason}")
+    if wants_publish:
+        parts.append("因为没有生成可发布的素材，本轮不会继续发布。")
+    parts.append("可以重新发起一次，或调整提示词/素材后再试。")
+    return "".join(parts)[:600]
+
+
+def _generation_capability_from_invoke_args(args: Dict[str, Any]) -> str:
+    if not isinstance(args, dict):
+        return ""
+    cap = (args.get("capability_id") or "").strip()
+    if cap in ("image.generate", "video.generate"):
+        return cap
+    if cap != "task.get_result":
+        return ""
+    payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    orig = (payload.get("capability_id") or payload.get("origin_capability_id") or "").strip()
+    if orig in ("image.generate", "video.generate"):
+        return orig
+    return ""
+
+
 def _task_id_token_ok(s: str) -> bool:
     t = (s or "").strip()
     if len(t) < 4:
@@ -5154,6 +5779,7 @@ async def _chat_openai(
                 logger.info("[CHAT] publish_intent=True last_user_content=%s", (last_user_content or "")[:200])
             terminal_saved_after_gen: Optional[List[Dict[str, Any]]] = None
             gen_cap_for_reply = ""
+            generation_failed_reply = ""
             for tc in tcs:
                 fn = tc.get("function", {})
                 try:
@@ -5162,10 +5788,13 @@ async def _chat_openai(
                     a = {}
                 _mismatch_err = None
                 if fn.get("name") == "invoke_capability":
+                    a = _correct_generation_to_understand_if_user_asked(a, last_user_content, attachment_urls)
                     a = _correct_video_to_image_if_user_asked_image(a, last_user_content)
+                    a = _correct_image_to_video_or_tvc_if_user_asked(a, last_user_content)
                     a = _correct_daihuo_pipeline_to_video_if_plain_video(a, last_user_content)
                     _mismatch_err = _detect_model_capability_mismatch(a)
                     if not _mismatch_err:
+                        _inject_understand_media_urls(a, last_user_content, attachment_urls)
                         _redirect_video_generate_to_daihuo_if_tvc(a, last_user_content)
                         _inject_video_media_urls(a, attachment_urls)
                         _infer_video_model_from_user_text(a, last_user_content, bool(attachment_urls))
@@ -5174,6 +5803,9 @@ async def _chat_openai(
                         _ensure_image_generate_default_model(a)
                         _ensure_video_generate_default_model(a, last_user_content)
                         _prevent_stale_video_prompt_from_history(a, last_user_content, bool(attachment_urls))
+                        _ensure_video_generate_prompt_from_current_turn(a, last_user_content, bool(attachment_urls))
+                        _ensure_video_generate_prompt_source_and_clean_publish_context(a, last_user_content, bool(attachment_urls))
+                        _inject_image_media_urls(a, attachment_urls, last_user_content)
                         _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("[CHAT] tool_call: %s(%s)", fn.get("name"), list(a.keys()))
@@ -5241,6 +5873,15 @@ async def _chat_openai(
                     res = await _poll_task_get_result_until_terminal(
                         a, res, token, sutui_token, progress_cb, request, db=db, user_id=user_id
                     )
+                _gen_failed_cap = _generation_capability_from_invoke_args(a) if fn.get("name") == "invoke_capability" else ""
+                if _gen_failed_cap and _is_generation_failure_result(res):
+                    generation_failed_reply = _generation_failed_user_reply(
+                        _gen_failed_cap,
+                        res,
+                        wants_publish=_round_wants_publish,
+                    )
+                    _generate_cap_done.add(_gen_failed_cap)
+                    logger.info("[CHAT] generation failed terminal cap=%s, skip follow-up LLM", _gen_failed_cap)
                 if (
                     fn.get("name") == "invoke_capability"
                     and _cap_id == "task.get_result"
@@ -5293,6 +5934,8 @@ async def _chat_openai(
                         terminal_saved_after_gen = sse_saved
                         gen_cap_for_reply = _cap_id
             # ── publish_content 成功后提前结束（避免再调 LLM 导致 ReadTimeout） ──
+            if generation_failed_reply:
+                return generation_failed_reply
             _round_publish_ok = False
             for _tc_check in tcs:
                 _fn_check = _tc_check.get("function", {})
@@ -5363,15 +6006,19 @@ async def _chat_openai(
             round_wants_publish_tc = _user_text_requests_publish(last_user_content)
             terminal_saved_after_gen_tc: Optional[List[Dict[str, Any]]] = None
             gen_cap_for_reply_tc = ""
+            generation_failed_reply_tc = ""
             for tc_info in text_calls:
                 if not isinstance(tc_info.get("arguments"), dict):
                     tc_info["arguments"] = {}
                 _mismatch_err_tc = None
                 if tc_info["name"] == "invoke_capability":
+                    tc_info["arguments"] = _correct_generation_to_understand_if_user_asked(tc_info["arguments"], last_user_content, attachment_urls)
                     tc_info["arguments"] = _correct_video_to_image_if_user_asked_image(tc_info["arguments"], last_user_content)
+                    tc_info["arguments"] = _correct_image_to_video_or_tvc_if_user_asked(tc_info["arguments"], last_user_content)
                     tc_info["arguments"] = _correct_daihuo_pipeline_to_video_if_plain_video(tc_info["arguments"], last_user_content)
                     _mismatch_err_tc = _detect_model_capability_mismatch(tc_info["arguments"])
                     if not _mismatch_err_tc:
+                        _inject_understand_media_urls(tc_info["arguments"], last_user_content, attachment_urls)
                         _redirect_video_generate_to_daihuo_if_tvc(tc_info["arguments"], last_user_content)
                         _inject_video_media_urls(tc_info["arguments"], attachment_urls)
                         _infer_video_model_from_user_text(tc_info["arguments"], last_user_content, bool(attachment_urls))
@@ -5380,6 +6027,9 @@ async def _chat_openai(
                         _ensure_image_generate_default_model(tc_info["arguments"])
                         _ensure_video_generate_default_model(tc_info["arguments"], last_user_content)
                         _prevent_stale_video_prompt_from_history(tc_info["arguments"], last_user_content, bool(attachment_urls))
+                        _ensure_video_generate_prompt_from_current_turn(tc_info["arguments"], last_user_content, bool(attachment_urls))
+                        _ensure_video_generate_prompt_source_and_clean_publish_context(tc_info["arguments"], last_user_content, bool(attachment_urls))
+                        _inject_image_media_urls(tc_info["arguments"], attachment_urls, last_user_content)
                         _ensure_image_generate_prompt_and_aspect(tc_info["arguments"], last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(tc_info["arguments"], attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("[CHAT] text_tool_call: %s(%s)", tc_info["name"], list(tc_info["arguments"].keys()))
@@ -5460,6 +6110,19 @@ async def _chat_openai(
                     res = await _poll_task_get_result_until_terminal(
                         tc_info["arguments"], res, token, sutui_token, progress_cb, request, db=db, user_id=user_id
                     )
+                _gen_failed_cap_tc = (
+                    _generation_capability_from_invoke_args(tc_info["arguments"])
+                    if tc_info["name"] == "invoke_capability"
+                    else ""
+                )
+                if _gen_failed_cap_tc and _is_generation_failure_result(res):
+                    generation_failed_reply_tc = _generation_failed_user_reply(
+                        _gen_failed_cap_tc,
+                        res,
+                        wants_publish=round_wants_publish_tc,
+                    )
+                    _generate_cap_done.add(_gen_failed_cap_tc)
+                    logger.info("[CHAT] text generation failed terminal cap=%s, skip follow-up LLM", _gen_failed_cap_tc)
                 if (
                     tc_info["name"] == "invoke_capability"
                     and _tc_cap == "task.get_result"
@@ -5499,6 +6162,8 @@ async def _chat_openai(
                     logger.info("[CHAT] text_calls publish_content 失败计数: %d", _publish_fail_count)
                 results.append(f"[{tc_info['name']}] {res}")
             # publish_content 成功后也应提前结束（text_calls 路径）
+            if generation_failed_reply_tc:
+                return generation_failed_reply_tc
             _tc_publish_ok = any(
                 tc_info["name"] == "publish_content"
                 and f"[{tc_info['name']}]" in r
@@ -5592,6 +6257,7 @@ async def _chat_openai(
                     logger.info("[CHAT] forced retry produced %d tool_calls", len(tcs2))
                     cur.append(msg2)
                     last_user_content = _last_user_content(cur)
+                    forced_wants_publish = _openai_round_has_publish_intent(tcs2, last_user_content)
                     for tc in tcs2:
                         fn = tc.get("function", {})
                         try:
@@ -5600,10 +6266,13 @@ async def _chat_openai(
                             a = {}
                         _mismatch_err_fc = None
                         if fn.get("name") == "invoke_capability":
+                            a = _correct_generation_to_understand_if_user_asked(a, last_user_content, attachment_urls)
                             a = _correct_video_to_image_if_user_asked_image(a, last_user_content)
+                            a = _correct_image_to_video_or_tvc_if_user_asked(a, last_user_content)
                             a = _correct_daihuo_pipeline_to_video_if_plain_video(a, last_user_content)
                             _mismatch_err_fc = _detect_model_capability_mismatch(a)
                             if not _mismatch_err_fc:
+                                _inject_understand_media_urls(a, last_user_content, attachment_urls)
                                 _redirect_video_generate_to_daihuo_if_tvc(a, last_user_content)
                                 _inject_video_media_urls(a, attachment_urls)
                                 _infer_video_model_from_user_text(a, last_user_content, bool(attachment_urls))
@@ -5612,6 +6281,9 @@ async def _chat_openai(
                                 _ensure_image_generate_default_model(a)
                                 _ensure_video_generate_default_model(a, last_user_content)
                                 _prevent_stale_video_prompt_from_history(a, last_user_content, bool(attachment_urls))
+                                _ensure_video_generate_prompt_from_current_turn(a, last_user_content, bool(attachment_urls))
+                                _ensure_video_generate_prompt_source_and_clean_publish_context(a, last_user_content, bool(attachment_urls))
+                                _inject_image_media_urls(a, attachment_urls, last_user_content)
                                 _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                                 _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
                         logger.info("[CHAT] tool_call(forced): %s(%s)", fn.get("name"), list(a.keys()))
@@ -5651,6 +6323,17 @@ async def _chat_openai(
                             res = await _poll_task_get_result_until_terminal(
                                 a, res, token, sutui_token, progress_cb, request, db=db, user_id=user_id
                             )
+                        _gen_failed_cap_fc = _generation_capability_from_invoke_args(a) if fn.get("name") == "invoke_capability" else ""
+                        if _gen_failed_cap_fc and _is_generation_failure_result(res):
+                            logger.info(
+                                "[CHAT] forced generation failed terminal cap=%s, skip follow-up LLM",
+                                _gen_failed_cap_fc,
+                            )
+                            return _generation_failed_user_reply(
+                                _gen_failed_cap_fc,
+                                res,
+                                wants_publish=forced_wants_publish,
+                            )
                         cur.append({
                             "role": "tool",
                             "tool_call_id": tc.get("id", ""),
@@ -5673,6 +6356,7 @@ async def _chat_openai(
             )
             auto_args: Dict[str, Any] = {"capability_id": "image.generate", "payload": {}}
             auto_args = _correct_video_to_image_if_user_asked_image(auto_args, last_user_msg)
+            auto_args = _correct_image_to_video_or_tvc_if_user_asked(auto_args, last_user_msg)
             _redirect_video_generate_to_daihuo_if_tvc(auto_args, last_user_msg)
             _inject_video_media_urls(auto_args, attachment_urls)
             _infer_video_model_from_user_text(auto_args, last_user_msg, bool(attachment_urls))
@@ -5681,6 +6365,9 @@ async def _chat_openai(
             _ensure_image_generate_default_model(auto_args)
             _ensure_video_generate_default_model(auto_args, last_user_msg)
             _prevent_stale_video_prompt_from_history(auto_args, last_user_msg, bool(attachment_urls))
+            _ensure_video_generate_prompt_from_current_turn(auto_args, last_user_msg, bool(attachment_urls))
+            _ensure_video_generate_prompt_source_and_clean_publish_context(auto_args, last_user_msg, bool(attachment_urls))
+            _inject_image_media_urls(auto_args, attachment_urls, last_user_msg)
             _ensure_image_generate_prompt_and_aspect(auto_args, last_user_msg)
             _ensure_daihuo_pipeline_asset_or_url(auto_args, attachment_asset_ids, attachment_urls, last_user_msg)
             res = await _exec_tool(
@@ -5704,6 +6391,9 @@ async def _chat_openai(
                 user_id=user_id,
             )
             _fb_cap = (auto_args.get("capability_id") or "").strip()
+            if _fb_cap in ("image.generate", "video.generate") and _is_generation_failure_result(res):
+                logger.info("[CHAT] fallback generation failed terminal cap=%s, skip follow-up LLM", _fb_cap)
+                return _generation_failed_user_reply(_fb_cap, res, wants_publish=False)
             if _fb_cap in ("image.generate", "video.generate") and res and '"error"' not in res:
                 _generate_cap_done.add(_fb_cap)
             cur.append({"role": "assistant", "content": content or "（系统已代为发起文生图，以下为工具返回。）"})
@@ -5811,14 +6501,18 @@ async def _chat_anthropic(
             ant_msgs.append({"role": "assistant", "content": blocks})
             results = []
             last_user_content = _last_user_content(ant_msgs)
+            ant_wants_publish = _user_text_requests_publish(last_user_content)
             for tu in tus:
                 inp = dict(tu.get("input") or {})
                 _mismatch_err_a = None
                 if tu.get("name") == "invoke_capability":
+                    inp = _correct_generation_to_understand_if_user_asked(inp, last_user_content, attachment_urls)
                     inp = _correct_video_to_image_if_user_asked_image(inp, last_user_content)
+                    inp = _correct_image_to_video_or_tvc_if_user_asked(inp, last_user_content)
                     inp = _correct_daihuo_pipeline_to_video_if_plain_video(inp, last_user_content)
                     _mismatch_err_a = _detect_model_capability_mismatch(inp)
                     if not _mismatch_err_a:
+                        _inject_understand_media_urls(inp, last_user_content, attachment_urls)
                         _redirect_video_generate_to_daihuo_if_tvc(inp, last_user_content)
                         _inject_video_media_urls(inp, attachment_urls)
                         _infer_video_model_from_user_text(inp, last_user_content, bool(attachment_urls))
@@ -5827,6 +6521,9 @@ async def _chat_anthropic(
                         _ensure_image_generate_default_model(inp)
                         _ensure_video_generate_default_model(inp, last_user_content)
                         _prevent_stale_video_prompt_from_history(inp, last_user_content, bool(attachment_urls))
+                        _ensure_video_generate_prompt_from_current_turn(inp, last_user_content, bool(attachment_urls))
+                        _ensure_video_generate_prompt_source_and_clean_publish_context(inp, last_user_content, bool(attachment_urls))
+                        _inject_image_media_urls(inp, attachment_urls, last_user_content)
                         _ensure_image_generate_prompt_and_aspect(inp, last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(inp, attachment_asset_ids, attachment_urls, last_user_content)
                 logger.info("tool_call: %s", tu["name"])
@@ -5858,6 +6555,7 @@ async def _chat_anthropic(
                     r = await _after_generate_auto_task_result(
                         inp, r, token, sutui_token, progress_cb, request, db=db, user_id=user_id
                     )
+                ant_wants_publish = ant_wants_publish or _openai_tool_call_requests_publish(tu.get("name") or "", inp)
                 if tu.get("name") == "invoke_capability" and _should_auto_poll_comfly_veo_after_submit(inp, r):
                     r = await _poll_comfly_veo_after_submit(
                         inp, r, token, sutui_token, progress_cb, request, db=db, user_id=user_id
@@ -5869,6 +6567,14 @@ async def _chat_anthropic(
                 ):
                     r = await _poll_task_get_result_until_terminal(
                         inp, r, token, sutui_token, progress_cb, request, db=db, user_id=user_id
+                    )
+                _gen_failed_cap_a = _generation_capability_from_invoke_args(inp) if tu.get("name") == "invoke_capability" else ""
+                if _gen_failed_cap_a and _is_generation_failure_result(r):
+                    logger.info("[CHAT-ANT] generation failed terminal cap=%s, skip follow-up LLM", _gen_failed_cap_a)
+                    return _generation_failed_user_reply(
+                        _gen_failed_cap_a,
+                        r,
+                        wants_publish=ant_wants_publish,
                     )
                 results.append({
                     "type": "tool_result",
@@ -6264,14 +6970,18 @@ def _build_user_content_with_attachments(
         if pairs:
             logger.info("[CHAT] 注入素材 URL: asset_ids=%s", [p[0] for p in pairs])
             clean_request = _strip_lobster_attachment_block(user_content)
-            wants_video = bool(_PLAIN_VIDEO_REQUEST_RE.search(clean_request or ""))
+            wants_understand = _user_wants_media_understand(clean_request or "")
+            wants_video = bool(_PLAIN_VIDEO_REQUEST_RE.search(clean_request or "")) and not wants_understand
             wants_image = bool(_IMAGE_REQUEST_RE.search(clean_request or "")) and not wants_video
             wants_tvc = bool(_TVC_KEYWORDS_RE.search(clean_request or ""))
             media_summary = ", ".join(sorted({mt for _, _, mt in pairs if mt}))
             user_content += "\n\n【用户本条消息上传的素材】\n"
             if media_summary:
                 user_content += f"- 素材类型：{media_summary}\n"
-            if wants_video:
+            user_content += "- 生成类 prompt 只写画面/动作；发布平台、账号、标题、正文、话题必须留给 publish_content，不要写进 image.generate/video.generate prompt。\n"
+            if wants_understand:
+                user_content += "- 用户本轮要求理解/分析素材：必须按素材类型调用 image.understand 或 video.understand；禁止调用 image.generate、video.generate、media.edit 或爆款TVC管线。\n"
+            elif wants_video:
                 if wants_tvc:
                     user_content += "- 用户明确要求爆款TVC/带货/分镜时，才使用 comfly.daihuo.pipeline。\n"
                 else:
