@@ -59,6 +59,9 @@ class ComflySeedancePipelinePayload(BaseModel):
     analysis_model: Optional[str] = None
     image_model: Optional[str] = None
     video_model: Optional[str] = None
+    aspect_ratio: str = "9:16"
+    generate_audio: bool = True
+    watermark: bool = False
 
 
 class ComflySeedanceRunBody(BaseModel):
@@ -125,6 +128,9 @@ async def _prepare_pipeline_input(
         analysis_model=pl.analysis_model,
         image_model=pl.image_model,
         video_model=pl.video_model,
+        aspect_ratio=pl.aspect_ratio,
+        generate_audio=pl.generate_audio,
+        watermark=pl.watermark,
     )
 
 

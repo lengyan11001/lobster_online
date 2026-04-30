@@ -271,9 +271,6 @@ def _path_allowed(rel: str) -> bool:
     if not r or ".." in r.split("/"):
         return False
     rl = r.lower()
-    # 根 .env 随 OTA 覆盖；禁止误打包隐藏目录 .env/...
-    if rl.startswith(".env/"):
-        return False
     if rl == "python" or rl.startswith("python/"):
         return False
     if rl == "deps" or rl.startswith("deps/"):

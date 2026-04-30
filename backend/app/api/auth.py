@@ -55,6 +55,9 @@ _AUTH_ME_TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
 # Bearer(+安装 id) -> (monotonic 过期时间, 用户 id)；仅缓存远端 200 结果
 _AUTH_ME_CACHE_LOCK = asyncio.Lock()
 _AUTH_ME_CACHE: Dict[str, tuple[float, int]] = {}
+_SKILL_STORE_ADMIN_CACHE_LOCK = asyncio.Lock()
+_SKILL_STORE_ADMIN_CACHE: Dict[str, tuple[float, bool]] = {}
+_SKILL_STORE_ADMIN_CACHE_TTL_SEC = 120.0
 
 
 class UserOut(BaseModel):
@@ -339,6 +342,14 @@ async def require_skill_store_admin(request: Request) -> None:
     if not auth:
         raise HTTPException(status_code=403, detail="需要技能商店管理员权限")
     hdr = auth if auth.lower().startswith("bearer ") else f"Bearer {auth}"
+    cache_key = hashlib.sha256(hdr.encode("utf-8")).hexdigest()
+    now = time.monotonic()
+    async with _SKILL_STORE_ADMIN_CACHE_LOCK:
+        cached = _SKILL_STORE_ADMIN_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            if cached[1]:
+                return
+            raise HTTPException(status_code=403, detail="需要技能商店管理员权限")
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(f"{base}/skills/skill-store-admin", headers={"Authorization": hdr})
@@ -346,7 +357,13 @@ async def require_skill_store_admin(request: Request) -> None:
             logger.warning("[require_skill_store_admin] skill-store-admin HTTP %s", r.status_code)
             raise HTTPException(status_code=403, detail="需要技能商店管理员权限")
         data = r.json()
-        if not bool(data.get("is_skill_store_admin")):
+        is_admin = bool(data.get("is_skill_store_admin"))
+        async with _SKILL_STORE_ADMIN_CACHE_LOCK:
+            _SKILL_STORE_ADMIN_CACHE[cache_key] = (
+                time.monotonic() + _SKILL_STORE_ADMIN_CACHE_TTL_SEC,
+                is_admin,
+            )
+        if not is_admin:
             raise HTTPException(status_code=403, detail="需要技能商店管理员权限")
     except HTTPException:
         raise

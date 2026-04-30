@@ -16,6 +16,12 @@
     .chat-mode-pill:hover { border-color:rgba(66,98,223,0.28); color:var(--text); transform:translateY(-1px); }
     .chat-mode-pill.is-active { background:rgba(66,98,223,0.1); border-color:rgba(66,98,223,0.26); color:#4262df; box-shadow:inset 0 0 0 1px rgba(66,98,223,0.06); }
     .chat-mode-hint { font-size:0.82rem; color:var(--text-muted); }
+    .chat-toolbar-actions { display:flex; align-items:center; justify-content:flex-end; gap:0.5rem; margin-left:auto; flex-wrap:wrap; }
+    .chat-memory-sync-status { max-width:min(44vw, 520px); font-size:0.78rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    @media (max-width: 760px) {
+      .chat-toolbar-actions { width:100%; margin-left:0; justify-content:flex-start; }
+      .chat-memory-sync-status { max-width:100%; white-space:normal; }
+    }
     .session-title-row { display:flex; align-items:center; gap:0.42rem; min-width:0; }
     .session-mode-badge { display:inline-flex; align-items:center; justify-content:center; padding:0.12rem 0.46rem; border-radius:999px; font-size:0.68rem; color:#4262df; background:rgba(66,98,223,0.1); flex:0 0 auto; }
     .workspace-category-tabs { display:none; align-items:center; justify-content:center; gap:0.42rem; flex-wrap:wrap; margin:0 auto 1.1rem; }
@@ -1039,6 +1045,81 @@
     }
     .content-block.visible {
       display: block;
+    }
+    .openclaw-skill-chat-shell {
+      display: grid;
+      grid-template-rows: minmax(320px, 1fr) auto;
+      gap: 0.75rem;
+      min-height: min(68vh, 760px);
+    }
+    .openclaw-skill-chat-log {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      min-height: 320px;
+      max-height: 58vh;
+      overflow: auto;
+      padding: 0.2rem;
+    }
+    .openclaw-skill-chat-bubble {
+      max-width: min(760px, 92%);
+      padding: 0.72rem 0.85rem;
+      border-radius: 16px;
+      border: 1px solid rgba(34, 49, 78, 0.08);
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.58;
+      font-size: 0.92rem;
+    }
+    .openclaw-skill-chat-bubble.user {
+      align-self: flex-end;
+      background: rgba(91, 124, 255, 0.12);
+      border-color: rgba(91, 124, 255, 0.2);
+    }
+    .openclaw-skill-chat-bubble.assistant {
+      align-self: flex-start;
+    }
+    .openclaw-skill-chat-attachments {
+      display: grid;
+      gap: 0.45rem;
+      margin-top: 0.55rem;
+    }
+    .openclaw-skill-chat-attachment img {
+      display: block;
+      width: min(560px, 100%);
+      max-height: 360px;
+      object-fit: contain;
+      border-radius: 12px;
+      border: 1px solid rgba(34, 49, 78, 0.12);
+      background: rgba(15, 23, 42, 0.04);
+    }
+    .openclaw-skill-chat-attachment-name {
+      margin-top: 0.28rem;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      word-break: break-all;
+    }
+    .openclaw-skill-chat-form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.55rem;
+      align-items: end;
+    }
+    .openclaw-skill-chat-form textarea {
+      resize: vertical;
+      min-height: 54px;
+      max-height: 180px;
+      box-sizing: border-box;
+    }
+    @media (max-width: 720px) {
+      .openclaw-skill-chat-form {
+        grid-template-columns: 1fr;
+      }
+      .openclaw-skill-chat-bubble {
+        max-width: 100%;
+      }
     }
     .dashboard-main > .content-block > .card,
     .dashboard-main > .content-block > .ecom-studio,
@@ -3202,11 +3283,11 @@
                   </button>
                 </div>
                 <div class="chat-sidebar-nav">
-                  <button type="button" class="chat-sidebar-entry is-active" data-jump-view="chat">
+                  <button type="button" class="chat-sidebar-entry is-active" data-chat-open-default="1" data-jump-view="chat">
                     <span class="chat-sidebar-entry-icon">⌕</span>
                     <span class="chat-sidebar-entry-copy">AI 对话</span>
                   </button>
-                  <button type="button" class="chat-sidebar-entry" data-chat-prompt="帮我搜索这个商品适合的小红书、抖音和电商内容方向。">
+                  <button type="button" class="chat-sidebar-entry" data-h5-chat-sync="1">
                     <span class="chat-sidebar-entry-icon">○</span>
                     <span class="chat-sidebar-entry-copy">AI 搜索</span>
                   </button>
@@ -3246,15 +3327,19 @@
               <div class="chat-main">
                 <div class="chat-mode-switch" id="chatModeSwitch" aria-label="对话模式">
                   <button type="button" class="chat-mode-pill is-active" data-chat-mode="default">智能对话</button>
-                  <button type="button" class="chat-mode-pill" data-chat-mode="workspace_cli">云端工作台</button>
+                  <button type="button" class="chat-mode-pill" data-chat-mode="workspace_cli" hidden aria-hidden="true">云端工作台</button>
                   <div class="chat-mode-hint" id="chatModeHint">默认模式：继续走现在这套智能对话链路。</div>
+                  <div class="chat-toolbar-actions">
+                    <button type="button" id="chatMemorySyncBtn" class="btn btn-ghost btn-sm" title="同步 OpenClaw 资料记忆">同步资料</button>
+                    <span id="chatMemorySyncStatus" class="chat-memory-sync-status"></span>
+                    <button type="button" id="chatTipsBtn" class="help-q" title="使用说明" aria-label="使用说明">?</button>
+                  </div>
                 </div>
                 <div class="model-selector">
                   <label>模型:</label>
                   <select id="modelSelect"><option value="sutui_aggregate">速推聚合</option></select>
                   <label id="sutuiModelLabel" for="sutuiModelSelect" style="display:none;margin-left:0.5rem;">速推 LLM</label>
                   <select id="sutuiModelSelect" style="display:none;max-width:14rem;" title="速推聚合时选择对话用 LLM，不包含图片和视频生成" aria-label="速推 LLM"></select>
-                  <button type="button" id="chatTipsBtn" class="help-q" title="使用说明" aria-label="使用说明">?</button>
                 </div>
                 <div class="chat-panel card chat-workspace" id="chatWorkspace" style="max-width: 100%;">
                   <div class="chat-empty-state" id="chatEmptyState">
@@ -3262,7 +3347,7 @@
                       <div class="chat-home-copy">
                         <div class="chat-home-badge-row">
                           <button type="button" class="chat-empty-eyebrow is-active" id="chatEmptyEyebrow" data-chat-home-mode="default">智能对话</button>
-                          <button type="button" class="chat-home-mode-pill" id="chatHomeWorkspacePill" data-chat-home-mode="workspace_cli">云端工作台</button>
+                          <button type="button" class="chat-home-mode-pill" id="chatHomeWorkspacePill" data-chat-home-mode="workspace_cli" hidden aria-hidden="true">云端工作台</button>
                         </div>
                         <h2 class="chat-empty-title" id="chatEmptyTitle">👋 你好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
                         <p class="chat-empty-subtitle" id="chatEmptySubtitle">我可以帮你创作内容、生成视频、处理数据、运营分析等</p>
@@ -3387,6 +3472,38 @@
               </div>
               <div id="mcpRegistryResults" class="skill-store-grid" style="margin-top:0.75rem;"></div>
               <div id="mcpRegistryPaging" style="margin-top:0.75rem;text-align:center;display:flex;justify-content:center;align-items:center;gap:0.75rem;"></div>
+            </div>
+          </div>
+
+          <div id="content-openclaw-skill-chat" class="content-block">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+                <div>
+                  <h3 id="openclawSkillChatTitle" style="margin:0;">OpenClaw 工作台</h3>
+                  <p id="openclawSkillChatSubtitle" style="margin:0.3rem 0 0 0;font-size:0.84rem;color:var(--text-muted);">Browser Use</p>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                  <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.82rem;color:var(--text-muted);">
+                    <span>执行权限</span>
+                    <select id="openclawSkillExecMode" style="height:32px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);padding:0 0.45rem;">
+                      <option value="auto">自动执行</option>
+                      <option value="confirm">每次确认</option>
+                    </select>
+                  </label>
+                  <button type="button" id="openclawSkillChatClearBtn" class="btn btn-ghost btn-sm">清空</button>
+                  <button type="button" id="openclawSkillBrowserCloseBtn" class="btn btn-ghost btn-sm">关闭浏览器</button>
+                  <button type="button" id="openclawSkillChatBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+                </div>
+              </div>
+              <div id="openclawSkillConfigStatus" style="margin-top:0.5rem;font-size:0.8rem;color:var(--text-muted);"></div>
+            </div>
+            <div class="card openclaw-skill-chat-shell">
+              <div id="openclawSkillChatLog" class="openclaw-skill-chat-log"></div>
+              <form id="openclawSkillChatForm" class="openclaw-skill-chat-form">
+                <textarea id="openclawSkillChatInput" rows="2" placeholder="发消息给 OpenClaw"></textarea>
+                <button type="submit" id="openclawSkillChatSendBtn" class="btn btn-primary">发送</button>
+              </form>
+              <div id="openclawSkillChatMsg" class="msg" style="display:none;"></div>
             </div>
           </div>
 
@@ -3966,8 +4083,8 @@
                       <div class="tvc-field">
                         <label for="seedanceModelSelect">生成模型</label>
                         <select id="seedanceModelSelect">
-                          <option value="seedance-2-0-pro-250528" selected>Seedance 2.0 Pro</option>
-                          <option value="seedance-2-0-lite-250428">Seedance 2.0 Lite</option>
+                          <option value="doubao-seedance-2-0-260128" selected>Seedance 2.0 Pro</option>
+                          <option value="doubao-seedance-2-0-fast-260128">Seedance 2.0 Fast</option>
                         </select>
                       </div>
                     </div>
@@ -4480,19 +4597,19 @@
             </div>
           </div>
 
-          <!-- Billing / 消费记录 + 速推充值 -->
+          <!-- Billing / 消费记录 + 算力充值 -->
           <div id="content-billing" class="content-block">
             <div class="card">
-              <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">消费记录 <button type="button" class="help-q" data-help-key="billing" aria-label="说明">?</button></h3>
-              <!-- 软件收费模式说明（算力套餐，数据来自 /api/billing/pricing） -->
+              <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">消费记录</h3>
+              <!-- 算力说明（套餐数据来自 /api/billing/pricing） -->
               <div id="billingPricingBlock" style="margin-top:0.75rem;padding:1rem;background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.2);border-radius:var(--radius-sm);font-size:0.88rem;">
-                <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">软件收费模式 <button type="button" class="help-q" data-help-key="billing_pricing_mode" aria-label="说明">?</button></h4>
+                <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">算力</h4>
                 <div id="billingPricingContent"><span class="meta">加载中…</span></div>
               </div>
               <div id="billingBalance" style="margin-top:0.75rem;padding:0.65rem;background:rgba(255,255,255,0.04);border-radius:var(--radius-sm);font-size:0.9rem;"></div>
-              <!-- 在线版：速推充值（对接速推接口，支持其他支付方式） -->
+              <!-- 在线版：算力充值 -->
               <div id="rechargeBlock" style="display:none;margin-top:1rem;padding:1rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-sm);">
-                <h4 style="margin:0 0 0.75rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">速推充值 <button type="button" class="help-q" data-help-key="billing_recharge" aria-label="说明">?</button></h4>
+                <h4 style="margin:0 0 0.75rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">算力充值 <button type="button" class="help-q" data-help-key="billing_recharge" aria-label="说明">?</button></h4>
                 <div style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:flex-end;">
                   <div class="form-group" style="margin:0;">
                     <label style="font-size:0.82rem;color:var(--text-muted);">充值档位</label>
@@ -4924,7 +5041,7 @@
         <div>
           <h4 style="margin:0;font-size:1.05rem;">OpenClaw 资料记忆</h4>
           <p style="font-size:0.8rem;color:var(--text-muted);line-height:1.55;margin:0.45rem 0 0 0;">
-            上传 Word、PDF、Excel、PPT、txt、md、csv、json、yaml、html 等资料。文件只保存在本机，并写入 OpenClaw 记忆目录，供后续对话参考。
+            上传 Word、PDF、Excel、PPT、txt、md、csv、json、yaml、html 等资料。用户本机上传会写入本机 OpenClaw 记忆；代理商/管理员下发到本设备的资料可从服务器同步到本机。
           </p>
         </div>
         <button type="button" id="openclawMemoryClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
@@ -4943,6 +5060,7 @@
       </div>
       <div id="openclawMemoryMsg" class="msg" style="display:none;font-size:0.82rem;margin:0.25rem 0 0.65rem 0;"></div>
       <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap;margin-bottom:0.85rem;">
+        <button type="button" id="openclawMemorySyncBtn" class="btn btn-ghost btn-sm">同步云端下发</button>
         <button type="button" id="openclawMemoryRefreshBtn" class="btn btn-ghost btn-sm">刷新列表</button>
         <button type="button" id="openclawMemoryCancel" class="btn btn-ghost btn-sm">关闭</button>
         <button type="button" id="openclawMemoryUploadBtn" class="btn btn-primary btn-sm">上传并写入记忆</button>
@@ -5423,7 +5541,8 @@
   <script src="/static/js/help-hints.js"></script>
   <script src="/static/js/app.js"></script>
   <script src="/static/js/chat.js"></script>
-  <script src="/static/js/skill.js"></script>
+  <script src="/static/js/skill.js?v=20260429-chat-memory-sync"></script>
+  <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>
   <script src="/static/js/meta-social.js"></script>
@@ -5434,13 +5553,13 @@
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js"></script>
   <script src="/static/js/comfly-image-studio.js"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260429-seedance-upload-fix"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js"></script>
-  <script src="/static/js/sysconfig.js"></script>
+  <script src="/static/js/sysconfig.js?v=20260429-chat-route-bind"></script>
   <script src="/static/js/agent.js"></script>
-  <script src="/static/js/init.js"></script>
+  <script src="/static/js/init.js?v=20260429-chat-toolbar-actions"></script>
 </body>
 </html>
 

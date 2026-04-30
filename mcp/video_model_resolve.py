@@ -140,6 +140,20 @@ def _build_alias_map() -> Dict[str, Pair]:
         wan27,
     )
 
+    # —— Veo 3.1 Fast ——（Comfly 渠道模型，保留原始 id 以便服务端正确路由/计价）
+    veo_fast = _p("veo3.1-fast", "veo3.1-fast")
+    add(
+        (
+            "veo 3.1 fast",
+            "veo3.1 fast",
+            "veo3.1-fast",
+            "veo3 fast",
+            "veo fast",
+            "google veo fast",
+        ),
+        veo_fast,
+    )
+
     # —— Veo 3.1 ——（速推 ID 为 fal-ai/veo3.1，不区分 t2v/i2v）
     veo = _p("fal-ai/veo3.1", "fal-ai/veo3.1")
     add(
@@ -319,6 +333,8 @@ def _heuristic_video_model(model: str, has_image: bool) -> str:
         return "wan/v2.7/image-to-video" if has_image else "wan/v2.7/text-to-video"
 
     if "veo" in model_lower:
+        if "fast" in model_lower:
+            return "veo3.1-fast"
         return "fal-ai/veo3.1"
 
     if "grok" in model_lower:

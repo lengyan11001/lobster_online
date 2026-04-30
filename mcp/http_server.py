@@ -544,6 +544,8 @@ def _load_capability_catalog() -> Dict[str, Dict[str, Any]]:
 
 _SKILL_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "skill_registry.json"
 _DEBUG_ONLY_MCP_TOOL_NAMES = frozenset({"list_youtube_accounts", "publish_youtube_video", "get_youtube_analytics", "sync_youtube_analytics", "list_meta_social_accounts", "publish_meta_social", "get_meta_social_data", "sync_meta_social_data", "get_social_report"})
+_SKILL_STORE_ADMIN_CACHE_TTL_SEC = float(os.getenv("MCP_SKILL_STORE_ADMIN_CACHE_TTL_SEC", "120"))
+_SKILL_STORE_ADMIN_CACHE: Dict[str, Tuple[float, bool]] = {}
 
 
 def _load_skill_registry() -> Dict[str, Any]:
@@ -582,6 +584,11 @@ async def _fetch_is_skill_store_admin(token: Optional[str]) -> bool:
     auth = (token or "").strip()
     if not auth.lower().startswith("bearer "):
         auth = f"Bearer {auth}"
+    cache_key = hashlib.sha256(auth.encode("utf-8")).hexdigest()
+    cached = _SKILL_STORE_ADMIN_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and cached[0] > now:
+        return cached[1]
     auth_base = (os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
     if not auth_base:
         return True
@@ -597,7 +604,12 @@ async def _fetch_is_skill_store_admin(token: Optional[str]) -> bool:
                 logger.warning("[MCP] skill-store-admin HTTP %s", r.status_code)
                 return False
             data = r.json()
-            return bool(data.get("is_skill_store_admin"))
+            is_admin = bool(data.get("is_skill_store_admin"))
+            _SKILL_STORE_ADMIN_CACHE[cache_key] = (
+                time.monotonic() + _SKILL_STORE_ADMIN_CACHE_TTL_SEC,
+                is_admin,
+            )
+            return is_admin
         except httpx.RequestError as e:
             last_err = e
             logger.warning(
@@ -1023,7 +1035,7 @@ def _tool_definitions(
                 "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
                 "生成类 prompt 只写画面/视频内容；账号、平台、标题、正文、话题等发布信息必须放 publish_content，禁止混进 image.generate/video.generate prompt。"
                 "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由对话后端按认证中心默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
-                "video.generate 用户未指定模型时 payload.model 填 \"sora2\"。"
+                "video.generate 用户未指定模型时可省略 payload.model，由对话后端按认证中心默认配置补齐。"
                 "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
             ),
             "inputSchema": {
@@ -1041,7 +1053,7 @@ def _tool_definitions(
                             "media.edit: 必须含 operation（overlay_text|trim|scale_pad|mute|mux_audio|image_to_video|extract_frame）+ asset_id；"
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
                             "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由对话后端按认证中心默认配置补齐。"
-                            "video.generate: 含 prompt、model（默认 sora2）、duration（用户未指定时长时必须填 4，即 4 秒）；prompt 只写视频画面/动作，不写发布账号或发布文案。"
+                            "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由后端按模型默认值处理）；model 可省略并由对话后端按认证中心默认配置补齐；prompt 只写视频画面/动作，不写发布账号或发布文案。"
                             "task.get_result: 含 task_id。"
                         ),
                     },
@@ -1432,10 +1444,39 @@ def _payload_get_aspect_ratio(payload: Dict[str, Any]) -> Any:
 
 def _payload_get_duration_raw(payload: Dict[str, Any]) -> Any:
     """duration / duration_seconds / length 等别名。"""
-    for key in ("duration", "duration_seconds", "length", "video_length"):
+    for key in ("duration", "duration_sec", "duration_seconds", "length", "video_length"):
         if payload.get(key) is not None:
             return payload.get(key)
     return None
+
+
+def _collect_video_image_refs(payload: Dict[str, Any]) -> List[str]:
+    refs: List[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            item = value.strip()
+            if item and item not in seen:
+                seen.add(item)
+                refs.append(item)
+            return
+        if isinstance(value, dict):
+            for k in ("url", "image_url", "file_url", "source_url", "path"):
+                if value.get(k):
+                    add(value.get(k))
+                    return
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                add(item)
+
+    # Keep filePaths first: it is the canonical list after chat injects current attachments.
+    for key in ("filePaths", "image_url", "media_files", "images", "image_files", "image_urls"):
+        add(payload.get(key))
+    return refs
 
 
 def _coerce_video_aspect_ratio_for_upstream(raw: Any) -> str:
@@ -1486,6 +1527,23 @@ def _parse_video_duration_seconds(raw: Any, *, default: int = 5) -> int:
         return max(1, int(round(v)))
     except (ValueError, TypeError, OverflowError):
         return default
+
+
+_SUPER_SEED2_DURATION_SECONDS = (5, 10, 15)
+
+
+def _coerce_super_seed2_duration_seconds(sec: int) -> int:
+    """Super Seed2 Lite 上游只接受 5/10/15 秒；非法值按向上取整并封顶。"""
+    try:
+        s = max(1, int(sec))
+    except (ValueError, TypeError, OverflowError):
+        return _SUPER_SEED2_DURATION_SECONDS[0]
+    if s in _SUPER_SEED2_DURATION_SECONDS:
+        return s
+    for allowed in _SUPER_SEED2_DURATION_SECONDS:
+        if s <= allowed:
+            return allowed
+    return _SUPER_SEED2_DURATION_SECONDS[-1]
 
 
 # fal-ai/sora-2/* 上游 duration 枚举；非法值易 422
@@ -1801,15 +1859,11 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
             prompt_raw[:160],
             prompt[:160],
         )
-    fp = payload.get("filePaths") or []
-    image_url = (payload.get("image_url") or "").strip()
-    mf = payload.get("media_files") or []
-    has_image = bool(fp) or bool(image_url) or bool(mf)
+    image_refs = _collect_video_image_refs(payload)
+    has_image = bool(image_refs)
     model = resolve_video_model_id(model, has_image)
     model_lower = model.lower()
-    first_url = (str(fp[0]) if fp else "") or image_url or (str(mf[0]) if mf else "")
-    if not first_url and image_url:
-        first_url = image_url
+    first_url = image_refs[0] if image_refs else ""
     aspect_ratio = _coerce_video_aspect_ratio_for_upstream(_payload_get_aspect_ratio(payload))
     valid_ratios = _VIDEO_ASPECT_RATIOS
     ratio_ok = aspect_ratio in valid_ratios
@@ -1817,14 +1871,26 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
 
     # st-ai/super-seed2：ratio, filePaths, functionMode（保留 backend 注入的多图 filePaths）
     if "super-seed2" in model or "st-ai/super-seed2" == model:
+        duration_raw = _payload_get_duration_raw(payload)
+        parsed_duration = _parse_video_duration_seconds(duration_raw, default=5)
+        seed2_duration = _coerce_super_seed2_duration_seconds(parsed_duration)
+        if seed2_duration != parsed_duration:
+            logger.info(
+                "[MCP] Super Seed2 duration 已收敛为上游枚举: raw=%r parsed=%s -> %s",
+                duration_raw,
+                parsed_duration,
+                seed2_duration,
+            )
         out: Dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "functionMode": "first_last_frames",
             "ratio": aspect_ratio if ratio_ok else "16:9",
-            "duration": duration_sec,
+            "duration": seed2_duration,
         }
-        out["filePaths"] = list(fp) if fp else ([first_url] if first_url else [])
+        out["filePaths"] = list(image_refs)
+        out["images"] = list(image_refs)
+        out["image_files"] = list(image_refs)
         _merge_common_video_ui_fields(out, payload)
         return out
 
@@ -3164,6 +3230,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                     and (
                         (str(payload.get("image_url") or "").strip())
                         or (payload.get("filePaths") and len(payload.get("filePaths") or []) > 0)
+                        or (payload.get("images") and len(payload.get("images") or []) > 0)
+                        or (payload.get("image_files") and len(payload.get("image_files") or []) > 0)
                     )
                 )
                 logger.info(

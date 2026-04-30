@@ -863,6 +863,12 @@ async def create_publish_task(
     body_title_s = (body.title or "").strip()
     body_desc_s = (body.description or "").strip()
     body_tags_raw_s = (body.tags or "").strip()
+    internal_options = body.options if isinstance(body.options, dict) else {}
+    internal_source_prompt = str(
+        internal_options.get("_source_prompt")
+        or internal_options.get("source_prompt")
+        or ""
+    ).strip()
 
     xhs_strict = acct.platform == "xiaohongshu"
     if xhs_strict:
@@ -901,11 +907,21 @@ async def create_publish_task(
     if use_llm:
         from ..services.publish_copy_llm import PublishCopyLLMError, generate_publish_copy
 
+        copy_source_prompt = (
+            ((getattr(asset, "prompt", None) or "").strip() if asset is not None else "")
+            or internal_source_prompt
+        )
+        if internal_source_prompt and not ((getattr(asset, "prompt", None) or "").strip() if asset is not None else ""):
+            logger.info(
+                "[PUBLISH-API] AI 发布文案使用会话 source_prompt 兜底 asset_id=%s source_len=%d",
+                (getattr(asset, "asset_id", None) or "-") if asset is not None else "-",
+                len(internal_source_prompt),
+            )
         try:
             eff_title, eff_desc, eff_tags = await generate_publish_copy(
                 platform=acct.platform,
                 media_type=_infer_asset_media_type(asset) if asset is not None else "image",
-                asset_prompt=(getattr(asset, "prompt", None) or "") if asset is not None else "",
+                asset_prompt=copy_source_prompt,
                 filename=(asset.filename or "") if asset is not None else "toutiao_graphic_text_only.mp4",
                 hint_title=body_title_s,
                 hint_desc=body_desc_s,
@@ -1070,7 +1086,11 @@ async def create_publish_task(
                 "[PUBLISH-API] 小红书 description 与 tags 仍为空（素材无可用文案）。"
             )
 
-        publish_opts = dict(body.options or {})
+        publish_opts = {
+            str(k): v
+            for k, v in dict(body.options or {}).items()
+            if not str(k).startswith("_")
+        }
         if acct.platform == "douyin" and _infer_asset_media_type(asset) == "video":
             mode = (publish_opts.get("douyin_cover_mode") or "smart").strip().lower()
             if mode not in ("smart", "upload", "manual"):

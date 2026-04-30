@@ -21,9 +21,11 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from .auth import _ServerUser, get_current_user_for_local
+from ..core.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,6 +65,24 @@ _DEFAULT_WORKSPACE_NAMES = (
     "workspace-lobster-sutui-deepseek-chat",
     "workspace-lobster-sutui-gpt-4o-mini",
 )
+_MEMORY_POLICY_KEYWORDS = (
+    "使用规则",
+    "资料规则",
+    "资料使用",
+    "用户规则",
+    "用户倾向",
+    "用户偏好",
+    "偏好",
+    "倾向",
+    "人设",
+    "画像",
+    "要求",
+    "规则",
+    "policy",
+    "preference",
+    "preferences",
+    "profile",
+)
 
 
 def _utc_now_iso() -> str:
@@ -98,6 +118,74 @@ def _save_index(user_id: int, docs: list[dict[str, Any]]) -> None:
         json.dumps({"documents": docs}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _is_memory_policy_doc(record: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(record.get(k) or "")
+        for k in ("title", "filename", "notes")
+    ).lower()
+    return any(k.lower() in haystack for k in _MEMORY_POLICY_KEYWORDS)
+
+
+def _read_canonical_memory_content(record: dict[str, Any], max_chars: int = 1800) -> str:
+    rel = str(record.get("canonical_path") or "").strip()
+    if not rel:
+        return ""
+    path = (_BASE_DIR / rel).resolve()
+    try:
+        if not path.is_file() or _USER_MEMORY_DIR.resolve() not in path.parents:
+            return ""
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    marker = "\n## Content\n\n"
+    if marker in text:
+        text = text.split(marker, 1)[1]
+    text = _normalize_extracted_text(text)
+    if len(text) > max_chars:
+        return text[:max_chars].rstrip() + "\n..."
+    return text
+
+
+def build_openclaw_memory_prompt_context(user_id: int, *, max_docs: int = 40) -> str:
+    """Compact per-turn memory hint for OpenClaw.
+
+    The actual documents remain in memory files and should be read through
+    memory_search. Policy/preference documents are lifted into the prompt so
+    they can govern how other documents are used before any tool call.
+    """
+    docs = _load_index(user_id)
+    if not docs:
+        return ""
+
+    active_docs = [d for d in docs if isinstance(d, dict)][:max_docs]
+    policy_docs = [d for d in active_docs if _is_memory_policy_doc(d)]
+    lines = [
+        "OpenClaw 资料记忆索引：",
+        "- 下列资料已下发或由用户上传到本设备；任务可能相关时，先使用 memory_search 检索，再基于资料回答或执行。",
+        "- 标记为「使用规则/用户倾向」的资料优先级高于普通资料，用来约束其他资料如何被理解和使用。",
+        "",
+    ]
+    for doc in active_docs:
+        title = str(doc.get("title") or doc.get("filename") or doc.get("id") or "未命名资料").strip()
+        origin = str(doc.get("origin") or doc.get("source") or "").strip()
+        tag = "使用规则/用户倾向" if doc in policy_docs else "资料"
+        notes = str(doc.get("notes") or "").strip()
+        note_tail = f"；notes={notes[:120]}" if notes else ""
+        lines.append(f"- [{tag}] {title}（id={doc.get('id')}, source={origin}{note_tail}）")
+
+    if policy_docs:
+        lines.extend(["", "优先注入的使用规则/用户倾向摘要："])
+        for doc in policy_docs[:3]:
+            title = str(doc.get("title") or doc.get("filename") or doc.get("id") or "未命名规则").strip()
+            snippet = _read_canonical_memory_content(doc, max_chars=1600)
+            if snippet:
+                lines.append(f"\n### {title}\n{snippet}")
+            else:
+                lines.append(f"\n### {title}\n（请通过 memory_search 读取完整规则。）")
+
+    return "\n".join(lines).strip()
 
 
 def _normalize_extracted_text(text: str) -> str:
@@ -501,6 +589,205 @@ def _remove_workspace_memory(user_id: int, doc_id: str) -> list[str]:
     return removed
 
 
+def _safe_doc_id(raw: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "", (raw or "").strip())[:64]
+
+
+def _memory_markdown(record: dict[str, Any], text: str) -> str:
+    notes = (record.get("notes") or "").strip()
+    notes_block = f"\n- notes: {notes}" if notes else ""
+    source = (record.get("source") or "local_user").strip()
+    source_desc = "cloud-distributed to this device" if source.startswith("cloud_") else "uploaded on this device"
+    policy_note = (
+        " This document is marked as a user preference / memory usage policy; apply it before using other memory documents."
+        if _is_memory_policy_doc(record)
+        else ""
+    )
+    return (
+        f"# {record.get('title') or 'OpenClaw memory document'}\n\n"
+        "This OpenClaw memory document is scoped to the current Lobster user/device. "
+        f"Source: {source_desc}. Use it only when relevant to the user's request.{policy_note}\n\n"
+        "## Metadata\n\n"
+        f"- document_id: {record.get('id')}\n"
+        f"- user_id: {record.get('user_id')}\n"
+        f"- source_file: {record.get('filename')}\n"
+        f"- source: {source}\n"
+        f"- uploaded_at: {record.get('created_at')}\n"
+        f"{notes_block}\n\n"
+        "## Content\n\n"
+        f"{text.strip()}\n"
+    )
+
+
+def _auth_server_forward_headers(request: Request) -> tuple[str, dict[str, str]]:
+    base = (get_settings().auth_server_base or "").strip().rstrip("/")
+    if not base:
+        return "", {}
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not auth:
+        return base, {}
+    if not auth.lower().startswith("bearer "):
+        auth = f"Bearer {auth}"
+    headers = {"Authorization": auth, "Content-Type": "application/json"}
+    xi = (
+        request.headers.get("X-Installation-Id")
+        or request.headers.get("x-installation-id")
+        or ""
+    ).strip()
+    if xi:
+        headers["X-Installation-Id"] = xi
+    return base, headers
+
+
+async def _mirror_local_memory_to_server(
+    request: Request,
+    record: dict[str, Any],
+    text: str,
+) -> dict[str, Any]:
+    base, headers = _auth_server_forward_headers(request)
+    if not base:
+        return {"ok": False, "skipped": "AUTH_SERVER_BASE not configured"}
+    if not headers.get("Authorization") or not headers.get("X-Installation-Id"):
+        return {"ok": False, "skipped": "missing Authorization or X-Installation-Id"}
+    payload = {
+        "doc_id": record.get("id") or "",
+        "title": record.get("title") or "",
+        "filename": record.get("filename") or "document.txt",
+        "notes": record.get("notes") or "",
+        "size": record.get("size"),
+        "sha256": record.get("sha256"),
+        "content_text": text,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=25.0, trust_env=False) as client:
+            resp = await client.post(
+                f"{base}/api/openclaw-memory/user-documents",
+                headers=headers,
+                json=payload,
+            )
+        if resp.status_code >= 400:
+            return {"ok": False, "status": resp.status_code, "error": (resp.text or "")[:500]}
+        return {"ok": True, "synced_at": _utc_now_iso()}
+    except Exception as exc:
+        logger.warning("[openclaw-memory] cloud mirror failed doc_id=%s: %s", record.get("id"), exc)
+        return {"ok": False, "error": str(exc)[:300]}
+
+
+def _delete_indexed_doc_files(user_id: int, record: dict[str, Any]) -> list[str]:
+    doc_id = _safe_doc_id(str(record.get("id") or ""))
+    removed: list[str] = []
+    canon = _BASE_DIR / str(record.get("canonical_path") or "")
+    try:
+        if doc_id and canon.is_file() and _USER_MEMORY_DIR in canon.resolve().parents:
+            canon.unlink()
+            removed.append(canon.relative_to(_BASE_DIR).as_posix())
+    except Exception as exc:
+        logger.warning("[openclaw-memory] remove canonical failed doc_id=%s: %s", doc_id, exc)
+    if doc_id:
+        removed.extend(_remove_workspace_memory(user_id, doc_id))
+    return removed
+
+
+async def sync_openclaw_memory_from_cloud(
+    request: Request,
+    current_user: _ServerUser,
+    *,
+    raise_errors: bool = False,
+) -> dict[str, Any]:
+    base, headers = _auth_server_forward_headers(request)
+    if not base:
+        return {"ok": False, "skipped": "AUTH_SERVER_BASE not configured"}
+    if not headers.get("Authorization") or not headers.get("X-Installation-Id"):
+        return {"ok": False, "skipped": "missing Authorization or X-Installation-Id"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            resp = await client.get(f"{base}/api/openclaw-memory/sync", headers=headers)
+        if resp.status_code >= 400:
+            detail = (resp.text or "")[:800]
+            if raise_errors:
+                raise HTTPException(status_code=resp.status_code, detail=detail)
+            return {"ok": False, "status": resp.status_code, "error": detail}
+        data = resp.json() if resp.content else {}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if raise_errors:
+            raise HTTPException(status_code=503, detail=f"同步云端 OpenClaw 资料失败：{exc}") from exc
+        return {"ok": False, "error": str(exc)[:500]}
+
+    remote_docs = data.get("documents") if isinstance(data, dict) else []
+    if not isinstance(remote_docs, list):
+        remote_docs = []
+    docs = _load_index(current_user.id)
+    by_id = {str(d.get("id") or ""): d for d in docs if isinstance(d, dict)}
+    removed: list[str] = []
+    applied = 0
+    deleted = 0
+    skipped = 0
+
+    for item in remote_docs:
+        if not isinstance(item, dict):
+            continue
+        doc_id = _safe_doc_id(str(item.get("doc_id") or item.get("id") or ""))
+        if not doc_id:
+            skipped += 1
+            continue
+        origin = (item.get("origin") or "agent").strip()
+        status = (item.get("status") or "active").strip()
+        existing = by_id.get(doc_id)
+        if status == "deleted":
+            if existing and str(existing.get("source") or "").startswith("cloud_"):
+                docs = [d for d in docs if d.get("id") != doc_id]
+                removed.extend(_delete_indexed_doc_files(current_user.id, existing))
+                deleted += 1
+            continue
+        text = _limit_extracted_text(str(item.get("content_text") or ""))
+        if not text:
+            skipped += 1
+            continue
+        if origin == "user" and existing and not str(existing.get("source") or "local_user").startswith("cloud_"):
+            existing["cloud_mirror"] = {"ok": True, "synced_at": _utc_now_iso(), "server_doc_id": doc_id}
+            applied += 1
+            continue
+        source = "cloud_user" if origin == "user" else ("cloud_admin" if origin == "admin" else "cloud_agent")
+        created_at = item.get("created_at") or _utc_now_iso()
+        record = {
+            "id": doc_id,
+            "user_id": current_user.id,
+            "title": _short_title(str(item.get("title") or ""), str(item.get("filename") or "")),
+            "filename": (str(item.get("filename") or "document.txt").strip() or "document.txt")[:255],
+            "notes": str(item.get("notes") or "")[:1000],
+            "size": item.get("size"),
+            "sha256": item.get("sha256") or hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "created_at": created_at,
+            "updated_at": item.get("updated_at") or created_at,
+            "source": source,
+            "origin": origin,
+            "cloud_doc_id": doc_id,
+            "installation_id": item.get("installation_id") or headers.get("X-Installation-Id"),
+        }
+        docs_dir = _user_dir(current_user.id) / "documents"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = docs_dir / f"{doc_id}.md"
+        markdown_path.write_text(_memory_markdown(record, text), encoding="utf-8")
+        record["canonical_path"] = markdown_path.relative_to(_BASE_DIR).as_posix()
+        record["workspace_paths"] = _write_workspace_memory(record, text)
+        docs = [d for d in docs if d.get("id") != doc_id]
+        docs.insert(0, record)
+        applied += 1
+
+    _save_index(current_user.id, docs)
+    return {
+        "ok": True,
+        "installation_id": data.get("installation_id") if isinstance(data, dict) else None,
+        "remote_count": len(remote_docs),
+        "applied_count": applied,
+        "deleted_count": deleted,
+        "skipped_count": skipped,
+        "removed_paths": sorted(set(removed)),
+    }
+
+
 @router.get("/api/openclaw/memory/list", summary="List user-uploaded OpenClaw memory docs")
 async def list_openclaw_memory(
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -509,8 +796,17 @@ async def list_openclaw_memory(
     return {"ok": True, "documents": docs}
 
 
+@router.post("/api/openclaw/memory/sync-cloud", summary="Sync cloud-distributed OpenClaw memory docs")
+async def sync_cloud_openclaw_memory(
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return await sync_openclaw_memory_from_cloud(request, current_user, raise_errors=True)
+
+
 @router.post("/api/openclaw/memory/upload", summary="Upload a document into OpenClaw memory")
 async def upload_openclaw_memory(
+    request: Request,
     file: UploadFile = File(...),
     title: str = Form(""),
     notes: str = Form(""),
@@ -533,6 +829,7 @@ async def upload_openclaw_memory(
         "size": len(data),
         "sha256": sha256,
         "created_at": created_at,
+        "source": "local_user",
     }
 
     user_dir = _user_dir(current_user.id)
@@ -542,6 +839,7 @@ async def upload_openclaw_memory(
     markdown_path.write_text(_memory_markdown(record, text), encoding="utf-8")
     record["canonical_path"] = markdown_path.relative_to(_BASE_DIR).as_posix()
     record["workspace_paths"] = _write_workspace_memory(record, text)
+    record["cloud_mirror"] = await _mirror_local_memory_to_server(request, record, text)
 
     docs = [d for d in _load_index(current_user.id) if d.get("id") != doc_id]
     docs.insert(0, record)

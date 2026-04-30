@@ -144,6 +144,9 @@ def build_pipeline_input(
     analysis_model: Optional[str] = None,
     image_model: Optional[str] = None,
     video_model: Optional[str] = None,
+    aspect_ratio: Optional[str] = None,
+    generate_audio: Optional[bool] = None,
+    watermark: Optional[bool] = None,
 ) -> Dict[str, Any]:
     base = _api_base_for_pipeline(api_base)
     effective_total_duration = total_duration_seconds
@@ -183,6 +186,12 @@ def build_pipeline_input(
         inp["image_model"] = image_model.strip()
     if (video_model or "").strip():
         inp["video_model"] = video_model.strip()
+    if (aspect_ratio or "").strip():
+        inp["aspect_ratio"] = aspect_ratio.strip()
+    if generate_audio is not None:
+        inp["generate_audio"] = bool(generate_audio)
+    if watermark is not None:
+        inp["watermark"] = bool(watermark)
     ff = _bundled_ffmpeg_exe()
     if ff:
         inp["ffmpeg_path"] = ff

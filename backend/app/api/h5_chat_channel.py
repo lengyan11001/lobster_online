@@ -1,0 +1,329 @@
+"""Remote H5 chat channel.
+
+The public H5 page cannot call a user's local online backend directly, so the
+cloud server works as a mailbox. This local worker claims messages for the
+logged-in user, runs them through the existing local chat/OpenClaw paths, and
+posts progress/final events back to the cloud.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import logging
+import os
+from typing import Any, Dict, Optional
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+from ..core.config import settings
+from ..services.openclaw_channel_auth_store import read_channel_fallback
+from .auth import get_current_user_for_local
+from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+def _enabled() -> bool:
+    raw = os.environ.get("LOBSTER_H5_CHAT_CHANNEL_ENABLED", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _decode_jwt_sub(token: str) -> str:
+    parts = (token or "").split(".")
+    if len(parts) < 2:
+        return ""
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8"))
+        return str(data.get("sub") or "").strip()
+    except Exception:
+        return ""
+
+
+def _auth_context() -> tuple[str, str]:
+    jwt_token, installation_id = read_channel_fallback()
+    jwt_token = (jwt_token or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
+    installation_id = (
+        (installation_id or "").strip()
+        or (getattr(settings, "openclaw_sutui_fallback_installation_id", None) or "").strip()
+    )
+    if jwt_token and not installation_id:
+        sub = _decode_jwt_sub(jwt_token)
+        installation_id = f"h5-local-{sub}" if sub else "h5-local"
+    return jwt_token, installation_id
+
+
+def _cloud_base() -> str:
+    return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+
+
+def _headers(jwt_token: str, installation_id: str) -> Dict[str, str]:
+    h = {"Authorization": f"Bearer {jwt_token}"}
+    if installation_id:
+        h["X-Installation-Id"] = installation_id
+    return h
+
+
+def _request_bearer_token(request: Request) -> str:
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[-1].strip()
+    return ""
+
+
+@router.get("/api/h5-chat/messages", summary="Proxy cloud H5 chat messages for local online UI")
+async def proxy_h5_chat_messages(
+    request: Request,
+    limit: int = Query(40, ge=1, le=100),
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    base = _cloud_base()
+    if not base:
+        raise HTTPException(status_code=503, detail="AUTH_SERVER_BASE is not configured")
+
+    fallback_jwt, fallback_installation_id = _auth_context()
+    jwt_token = _request_bearer_token(request) or fallback_jwt
+    installation_id = (request.headers.get("X-Installation-Id") or "").strip() or fallback_installation_id
+    if jwt_token and not installation_id:
+        sub = _decode_jwt_sub(jwt_token)
+        installation_id = f"h5-local-{sub}" if sub else "h5-local"
+    if not jwt_token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(
+                f"{base}/api/h5-chat/messages",
+                params={"limit": limit},
+                headers=_headers(jwt_token, installation_id),
+            )
+    except httpx.RequestError as exc:
+        logger.warning("[H5-CHAT] proxy messages request failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Cloud H5 chat service is unreachable") from exc
+
+    if resp.status_code in (401, 403):
+        raise HTTPException(status_code=401, detail="Cloud H5 chat auth failed")
+    if resp.status_code >= 400:
+        detail = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
+        raise HTTPException(status_code=502, detail=detail)
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Cloud H5 chat returned invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="Cloud H5 chat returned invalid payload")
+    return data
+
+
+async def _post_cloud_event(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    message_id: str,
+    event_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        await client.post(
+            f"{base}/api/h5-chat/messages/{message_id}/event",
+            json={"type": event_type, "payload": payload or {}},
+            headers=headers,
+        )
+    except Exception as exc:
+        logger.debug("[H5-CHAT] post event failed message_id=%s type=%s: %s", message_id, event_type, exc)
+
+
+async def _complete_cloud_message(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    message_id: str,
+    *,
+    reply_text: str = "",
+    error: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    await client.post(
+        f"{base}/api/h5-chat/messages/{message_id}/complete",
+        json={"reply_text": reply_text, "error": error, "payload": payload or {}},
+        headers=headers,
+    )
+
+
+def _local_chat_url() -> str:
+    port = int(getattr(settings, "port", 8000) or 8000)
+    return f"http://127.0.0.1:{port}/chat/stream"
+
+
+async def _run_direct_chat(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+) -> None:
+    message_id = str(item.get("id") or "").strip()
+    content = str(item.get("content") or "").strip()
+    if not message_id or not content:
+        return
+
+    await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "本地直连链路正在处理"})
+    payload = {
+        "message": content,
+        "history": [],
+        "session_id": f"h5-{message_id}",
+        "context_id": f"h5-{message_id}",
+    }
+    timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
+    final_reply = ""
+    final_error = ""
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
+            async with local.stream("POST", _local_chat_url(), json=payload, headers=headers) as resp:
+                if resp.status_code != 200:
+                    text = (await resp.aread()).decode("utf-8", errors="replace")
+                    raise RuntimeError(text[:500] or f"local chat HTTP {resp.status_code}")
+                async for line in resp.aiter_lines():
+                    line = (line or "").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    et = str(ev.get("type") or "progress")
+                    if et == "done":
+                        final_reply = str(ev.get("reply") or "").strip()
+                        final_error = str(ev.get("error") or "").strip()
+                        break
+                    await _post_cloud_event(cloud, base, headers, message_id, et[:32], ev)
+        if final_error:
+            await _complete_cloud_message(cloud, base, headers, message_id, error=final_error)
+        else:
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                reply_text=final_reply or "处理完成。",
+                payload={"mode": "direct"},
+            )
+    except Exception as exc:
+        logger.exception("[H5-CHAT] direct chat failed message_id=%s", message_id)
+        await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "本地直连处理失败")
+
+
+async def _run_openclaw_chat(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    jwt_token: str,
+    installation_id: str,
+    item: Dict[str, Any],
+) -> None:
+    message_id = str(item.get("id") or "").strip()
+    content = str(item.get("content") or "").strip()
+    if not message_id or not content:
+        return
+    await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "已交给本机 OpenClaw"})
+    messages = [
+        {"role": "system", "content": "你是用户的远程 H5 会话助手。根据用户消息自然完成任务，使用中文回复。"},
+        {"role": "user", "content": content},
+    ]
+    try:
+        reply = await try_openclaw(
+            messages,
+            openclaw_fallback_model(),
+            jwt_token,
+            installation_id=installation_id,
+        )
+        if not reply:
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                error="OpenClaw 无有效回复，请检查本机 OpenClaw Gateway 是否启动。",
+            )
+            return
+        await _complete_cloud_message(
+            cloud,
+            base,
+            headers,
+            message_id,
+            reply_text=reply.strip(),
+            payload={"mode": "openclaw"},
+        )
+    except Exception as exc:
+        logger.exception("[H5-CHAT] openclaw chat failed message_id=%s", message_id)
+        await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "OpenClaw 处理失败")
+
+
+async def _process_item(
+    client: httpx.AsyncClient,
+    base: str,
+    jwt_token: str,
+    installation_id: str,
+    item: Dict[str, Any],
+) -> None:
+    headers = _headers(jwt_token, installation_id)
+    mode = str(item.get("mode") or "direct").strip().lower()
+    if mode == "openclaw":
+        await _run_openclaw_chat(client, base, headers, jwt_token, installation_id, item)
+    else:
+        await _run_direct_chat(client, base, headers, item)
+
+
+async def h5_chat_poll_loop() -> None:
+    if not _enabled():
+        logger.info("[H5-CHAT] remote H5 chat channel disabled")
+        return
+
+    sleep_empty = float(os.environ.get("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", "2.0") or "2.0")
+    sleep_missing_auth = 10.0
+    logged_missing = False
+
+    while True:
+        base = _cloud_base()
+        jwt_token, installation_id = _auth_context()
+        if not base or not jwt_token:
+            if not logged_missing:
+                logger.info("[H5-CHAT] waiting for AUTH_SERVER_BASE and logged-in channel token")
+                logged_missing = True
+            await asyncio.sleep(sleep_missing_auth)
+            continue
+        logged_missing = False
+
+        headers = _headers(jwt_token, installation_id)
+        try:
+            timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                await client.post(
+                    f"{base}/api/h5-chat/device-heartbeat",
+                    json={"display_name": "local-online"},
+                    headers=headers,
+                )
+                resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": 2}, headers=headers)
+                if resp.status_code == 401:
+                    logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
+                    await asyncio.sleep(sleep_missing_auth)
+                    continue
+                resp.raise_for_status()
+                items = (resp.json() or {}).get("items") or []
+                if not items:
+                    await asyncio.sleep(sleep_empty)
+                    continue
+                for item in items:
+                    await _process_item(client, base, jwt_token, installation_id, item)
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("[H5-CHAT] poll loop error: %s", exc)
+            await asyncio.sleep(5.0)

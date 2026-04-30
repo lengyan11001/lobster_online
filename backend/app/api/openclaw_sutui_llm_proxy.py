@@ -36,6 +36,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 TRACE_HEADER = "X-Lobster-Chat-Trace-Id"
+_OPENCLAW_SKILL_AGENT_IDS = {"lobster-browser-use", "lobster-computer-use"}
+_OPENCLAW_SKILL_SERVER_MODEL_ALIAS = "openclaw-skill-chat"
+
+_FAKE_TOOL_CALL_RE = __import__("re").compile(
+    r"tool_call|tool\u2581call|function_calls|<\|tool|<\s*[\|｜]\s*DSML\s*[\|｜]|```json\s*\{[^}]*capability",
+    __import__("re").IGNORECASE,
+)
+_DSML_BLOCK_RE = __import__("re").compile(
+    r"<\s*[\|｜]\s*DSML\s*[\|｜]\s*(?:tool_calls|function_calls)\s*>[\s\S]*?<\s*/\s*[\|｜]\s*DSML\s*[\|｜]\s*(?:tool_calls|function_calls)\s*>",
+    __import__("re").IGNORECASE,
+)
+_DSML_TAG_RE = __import__("re").compile(
+    r"<\s*/?\s*[\|｜]\s*DSML\s*[\|｜][^>]*>",
+    __import__("re").IGNORECASE,
+)
 
 
 def _upstream_resp_summary(data: Any) -> str:
@@ -59,6 +74,58 @@ def _upstream_resp_summary(data: Any) -> str:
     except Exception:
         s = str(slim)
     return s[:1200] if len(s) > 1200 else s
+
+
+def _response_has_fake_tool_text(data: Any) -> bool:
+    """Detect text-embedded fake tool calls that OpenClaw may show to WeChat users."""
+    if not isinstance(data, dict):
+        return False
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    msg = (choices[0] if isinstance(choices[0], dict) else {}).get("message", {})
+    content = msg.get("content") if isinstance(msg, dict) else None
+    return isinstance(content, str) and bool(_FAKE_TOOL_CALL_RE.search(content))
+
+
+def _strip_fake_tool_text_from_response(data: Any) -> bool:
+    """Strip DSML/fake tool-call markup in-place before the WeChat channel can display it."""
+    if not isinstance(data, dict):
+        return False
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    msg = (choices[0] if isinstance(choices[0], dict) else {}).get("message")
+    if not isinstance(msg, dict):
+        return False
+    content = msg.get("content")
+    if not isinstance(content, str) or not _FAKE_TOOL_CALL_RE.search(content):
+        return False
+
+    cleaned = _DSML_BLOCK_RE.sub("", content)
+    cleaned = _DSML_TAG_RE.sub("", cleaned).strip()
+    if not cleaned:
+        cleaned = "好的，我来为您总结一下已获取的信息。"
+    if cleaned != content:
+        msg["content"] = cleaned
+        logger.warning(
+            "[openclaw-sutui-proxy] stripped fake tool markup from response content (%d -> %d chars)",
+            len(content),
+            len(cleaned),
+        )
+        return True
+    return False
+
+
+def _should_retry_fake_tool_call(data: Any, request_body: Dict[str, Any]) -> bool:
+    """Retry only when the model wrote a fake tool call as text; normal text replies stay untouched."""
+    tools = request_body.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return False
+    tc = request_body.get("tool_choice") or "auto"
+    if isinstance(tc, str) and tc.strip().lower() == "none":
+        return False
+    return _response_has_fake_tool_text(data)
 
 
 def _proxy_key_ok(request: Request) -> bool:
@@ -167,8 +234,20 @@ async def openclaw_sutui_chat_completions(request: Request):
         set_mcp_token_for_agent(agent_id, user_jwt, installation_id=xi_pre or None)
 
     model_in = (body.get("model") or "").strip()
+    is_openclaw_skill_model = model_in == _OPENCLAW_SKILL_SERVER_MODEL_ALIAS
+    is_openclaw_skill_request = agent_id in _OPENCLAW_SKILL_AGENT_IDS or is_openclaw_skill_model
+    if is_openclaw_skill_request:
+        prev = (body.get("model") or "").strip()
+        body["model"] = _OPENCLAW_SKILL_SERVER_MODEL_ALIAS
+        if prev != _OPENCLAW_SKILL_SERVER_MODEL_ALIAS:
+            logger.info(
+                "[openclaw-sutui-proxy] OpenClaw skill uses server-scheduled model alias: %s -> %s agent=%s",
+                prev or "(empty)",
+                _OPENCLAW_SKILL_SERVER_MODEL_ALIAS,
+                agent_id,
+            )
     ov = (getattr(settings, "openclaw_sutui_upstream_model", None) or "").strip()
-    if ov:
+    if ov and not is_openclaw_skill_request:
         prev = (body.get("model") or "").strip()
         body["model"] = ov
         logger.info(
@@ -222,12 +301,49 @@ async def openclaw_sutui_chat_completions(request: Request):
         except httpx.RequestError as e:
             logger.exception("[openclaw-sutui-proxy] 转发失败: %s", e)
             raise HTTPException(status_code=502, detail=f"认证中心不可达: {e!s}") from e
+        response_content = r.content
+        json_data: Optional[Dict[str, Any]] = None
+        json_overridden = False
         summary = ""
         try:
             ct_main = (r.headers.get("content-type") or "").lower().split(";")[0].strip()
             if r.status_code == 200 and ct_main == "application/json":
                 jd = r.json()
-                summary = _upstream_resp_summary(jd)
+                if isinstance(jd, dict):
+                    json_data = jd
+                if json_data is not None and _should_retry_fake_tool_call(json_data, body):
+                    retry_body = dict(body)
+                    retry_body["tool_choice"] = "required"
+                    try:
+                        async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
+                            r2 = await client.post(url, json=retry_body, headers=headers)
+                        ct2 = (r2.headers.get("content-type") or "").lower().split(";")[0].strip()
+                        jd2 = r2.json() if r2.status_code == 200 and ct2 == "application/json" else None
+                        if isinstance(jd2, dict) and not _response_has_fake_tool_text(jd2):
+                            r = r2
+                            json_data = jd2
+                            json_overridden = True
+                            logger.info(
+                                "[chat_trace] trace_id=%s openclaw_sutui_proxy fake_tool_text retry succeeded",
+                                trace_id,
+                            )
+                        else:
+                            logger.warning(
+                                "[chat_trace] trace_id=%s openclaw_sutui_proxy fake_tool_text retry ineffective http=%s",
+                                trace_id,
+                                getattr(r2, "status_code", "-"),
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "[chat_trace] trace_id=%s openclaw_sutui_proxy fake_tool_text retry failed: %s",
+                            trace_id,
+                            e,
+                        )
+                if json_data is not None and _strip_fake_tool_text_from_response(json_data):
+                    json_overridden = True
+                if json_data is not None and json_overridden:
+                    response_content = json.dumps(json_data, ensure_ascii=False, default=str).encode("utf-8")
+                summary = _upstream_resp_summary(json_data if json_data is not None else jd)
             elif r.text:
                 summary = (r.text or "").replace("\n", " ")[:500]
         except Exception:
@@ -253,7 +369,7 @@ async def openclaw_sutui_chat_completions(request: Request):
         ct = r.headers.get("content-type")
         if ct:
             out_h["content-type"] = ct
-        return Response(content=r.content, status_code=r.status_code, headers=out_h)
+        return Response(content=response_content, status_code=r.status_code, headers=out_h)
 
     async def gen() -> AsyncIterator[bytes]:
         try:

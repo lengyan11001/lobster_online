@@ -30,6 +30,10 @@ var _comflyStatus = {
   default_api_base_hint: 'https://ai.comfly.chat/v1',
 };
 var _youtubePublishStatus = { has_ready: false, accounts_count: 0 };
+var _skillStoreFetchCache = {};
+var _SKILL_STORE_FETCH_TTL_MS = 60000;
+var _SKILL_STORE_FETCH_TIMEOUT_MS = 8000;
+var _SKILL_STORE_STATUS_TIMEOUT_MS = 3500;
 
 /** OpenClaw 微信插件本机扫码授权（/api/openclaw/weixin-login/*） */
 var _openclawWeixinLast = { last_ok: false, at: null, detail: '' };
@@ -111,6 +115,10 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'twilio-whatsapp-config' && typeof _openTwilioWhatsappConfigView === 'function') {
     _openTwilioWhatsappConfigView();
+    return;
+  }
+  if (target === 'openclaw-skill-chat' && typeof window.openOpenclawSkillChat === 'function') {
+    window.openOpenclawSkillChat();
     return;
   }
   if (target === 'meta-social' && typeof window._openMetaSocialView === 'function') {
@@ -336,10 +344,61 @@ function _openclawWeixinResolveBase() {
   return String(LOCAL_API_BASE).replace(/\/$/, '');
 }
 
+function _fetchWithTimeout(url, opts, timeoutMs) {
+  opts = opts || {};
+  timeoutMs = Number(timeoutMs || 0) || 8000;
+  if (typeof AbortController === 'undefined') {
+    return Promise.race([
+      fetch(url, opts),
+      new Promise(function(_, reject) {
+        setTimeout(function() { reject(new Error('timeout')); }, timeoutMs);
+      })
+    ]);
+  }
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
+  var merged = Object.assign({}, opts, { signal: controller.signal });
+  return fetch(url, merged).finally(function() {
+    clearTimeout(timer);
+  });
+}
+
+function _callbackJobWithTimeout(label, runner, timeoutMs) {
+  return new Promise(function(resolve) {
+    var done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    }
+    var timer = setTimeout(finish, timeoutMs || _SKILL_STORE_STATUS_TIMEOUT_MS);
+    try {
+      runner(finish);
+    } catch (e) {
+      finish();
+    }
+  });
+}
+
 function _fetchSkillStoreFrom(base) {
   var b = String(base || '').replace(/\/$/, '');
   if (!b) return Promise.resolve({ packages: [] });
-  return fetch(b + '/skills/store', { headers: authHeaders() })
+  var auth = '';
+  try {
+    var headers = (typeof authHeaders === 'function') ? authHeaders() : {};
+    auth = String((headers && headers.Authorization) || (headers && headers.authorization) || '');
+  } catch (eAuth) {}
+  var key = b + '|' + auth;
+  var now = Date.now();
+  var cached = _skillStoreFetchCache[key];
+  if (cached && cached.data && (now - cached.at) < _SKILL_STORE_FETCH_TTL_MS) {
+    return Promise.resolve(cached.data);
+  }
+  if (cached && cached.promise) {
+    return cached.promise;
+  }
+  var req = _fetchWithTimeout(b + '/skills/store', { headers: authHeaders() }, _SKILL_STORE_FETCH_TIMEOUT_MS)
     .then(function(r) {
       return r.json().then(function(d) {
         return { ok: r.ok, data: d || {} };
@@ -347,8 +406,21 @@ function _fetchSkillStoreFrom(base) {
     })
     .then(function(res) {
       if (!res.ok) throw new Error((res.data && res.data.detail) || 'load_skill_store_failed');
-      return res.data || {};
+      var data = res.data || {};
+      _skillStoreFetchCache[key] = { data: data, at: Date.now(), promise: null };
+      return data;
+    })
+    .catch(function(err) {
+      if (_skillStoreFetchCache[key]) _skillStoreFetchCache[key].promise = null;
+      if (cached && cached.data) return cached.data;
+      throw err;
     });
+  _skillStoreFetchCache[key] = {
+    data: cached && cached.data,
+    at: cached ? cached.at : 0,
+    promise: req
+  };
+  return req;
 }
 
 function _openclawMemoryApiBase() {
@@ -356,6 +428,71 @@ function _openclawMemoryApiBase() {
     ? LOCAL_API_BASE
     : ((typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : '');
   return String(base || '').replace(/\/$/, '');
+}
+
+function _renderOpenclawSkillWorkspaceCard(pkg, opts) {
+  pkg = pkg || {};
+  opts = opts || {};
+  var skillId = String(opts.skillId || pkg.id || '').trim();
+  var title = (pkg.name && String(pkg.name).trim()) || opts.title || skillId;
+  var desc = (pkg.description && String(pkg.description).trim()) || opts.desc || '';
+  var tags = (pkg.tags || opts.tags || ['OpenClaw']).map(function(t) {
+    return '<span class="tag">' + escapeHtml(t) + '</span>';
+  }).join('');
+  var accent = opts.accent || '99,102,241';
+  return '<div class="skill-store-card openclaw-skill-workspace-card" data-openclaw-skill-id="' + escapeAttr(skillId) + '" data-openclaw-skill-title="' + escapeAttr(title) + '" style="cursor:pointer;border-color:rgba(' + accent + ',0.35);background:linear-gradient(135deg,rgba(' + accent + ',0.08),transparent);">' +
+    '<div class="card-label">OpenClaw <span class="badge-installed">管理员可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(title) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(desc) + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm openclaw-skill-workspace-entry-btn">进入工作台</button></div></div>';
+}
+
+function _loadOpenclawSkillChatScript(cb) {
+  if (typeof window.openOpenclawSkillChat === 'function') {
+    cb();
+    return;
+  }
+  var existing = document.querySelector('script[data-openclaw-skill-chat-loader="1"]');
+  if (existing) {
+    existing.addEventListener('load', cb, { once: true });
+    existing.addEventListener('error', function() {
+      alert('OpenClaw 工作台脚本加载失败，请刷新后重试');
+    }, { once: true });
+    return;
+  }
+  var script = document.createElement('script');
+  script.src = '/static/js/openclaw-skill-chat.js?v=20260429-return-fix';
+  script.async = true;
+  script.dataset.openclawSkillChatLoader = '1';
+  script.onload = cb;
+  script.onerror = function() {
+    alert('OpenClaw 工作台脚本加载失败，请刷新后重试');
+  };
+  document.head.appendChild(script);
+}
+
+function _openOpenclawSkillWorkspace(skillId, title) {
+  _loadOpenclawSkillChatScript(function() {
+    window.openOpenclawSkillChat(skillId, title);
+  });
+}
+
+function _bindOpenclawSkillWorkspaceCardEntry() {
+  document.querySelectorAll('.openclaw-skill-workspace-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      _openOpenclawSkillWorkspace(card.getAttribute('data-openclaw-skill-id'), card.getAttribute('data-openclaw-skill-title'));
+    });
+  });
+  document.querySelectorAll('.openclaw-skill-workspace-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var card = btn.closest('.openclaw-skill-workspace-card');
+      if (!card) return;
+      _openOpenclawSkillWorkspace(card.getAttribute('data-openclaw-skill-id'), card.getAttribute('data-openclaw-skill-title'));
+    });
+  });
 }
 
 function _renderOpenclawMemoryCard(pkg) {
@@ -366,7 +503,7 @@ function _renderOpenclawMemoryCard(pkg) {
   return '<div class="skill-store-card openclaw-memory-card" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.09),transparent);">' +
     '<div class="card-label">OpenClaw <span class="badge-installed">本机记忆</span></div>' +
     '<div class="card-value">' + escapeHtml(pkg.name || 'OpenClaw 资料记忆') + '</div>' +
-    '<div class="card-desc">' + escapeHtml(pkg.description || '上传 Word/PDF/Excel/txt/md/csv/json 等资料，让 OpenClaw 在本机对话中参考。') + '</div>' +
+    '<div class="card-desc">' + escapeHtml(pkg.description || '上传 Word/PDF/Excel/txt/md/csv/json 等资料；也可同步代理商/管理员下发到本设备的资料，让 OpenClaw 在本机对话中参考。') + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm openclaw-memory-entry-btn">上传资料</button></div></div>';
 }
@@ -376,7 +513,9 @@ function _openOpenclawMemoryModal() {
   if (!modal) return;
   modal.classList.add('visible');
   _showOpenclawMemoryMsg('', false);
-  _loadOpenclawMemoryList();
+  _syncOpenclawMemoryFromCloud({ silent: true, reload: false }).then(function() {
+    _loadOpenclawMemoryList();
+  });
 }
 
 function _bindOpenclawMemoryCardEntry() {
@@ -400,6 +539,114 @@ function _showOpenclawMemoryMsg(text, isErr) {
   el.textContent = text || '';
   el.className = 'msg' + (isErr ? ' err' : '');
   el.style.display = text ? 'block' : 'none';
+}
+
+function _syncOpenclawMemoryFromCloud(opts) {
+  opts = opts || {};
+  var base = _openclawMemoryApiBase();
+  if (!base) {
+    if (!opts.silent) _showOpenclawMemoryMsg('未找到本机后端地址，无法同步云端资料。', true);
+    return Promise.resolve({ ok: false });
+  }
+  if (!opts.silent) _showOpenclawMemoryMsg('正在同步代理商/管理员下发到本设备的资料…', false);
+  return fetch(base + '/api/openclaw/memory/sync-cloud', {
+    method: 'POST',
+    headers: typeof authHeaders === 'function' ? authHeaders() : {}
+  }).then(function(r) {
+    return r.json().then(function(d) { return { ok: r.ok, data: d }; });
+  }).then(function(x) {
+    if (!x.ok) {
+      if (!opts.silent) _showOpenclawMemoryMsg((x.data && x.data.detail) || '同步失败', true);
+      return x;
+    }
+    var d = x.data || {};
+    if (!opts.silent) {
+      _showOpenclawMemoryMsg('同步完成：新增/更新 ' + (d.applied_count || 0) + ' 份，删除 ' + (d.deleted_count || 0) + ' 份。', false);
+    }
+    if (opts.reload !== false) _loadOpenclawMemoryList();
+    return x;
+  }).catch(function(err) {
+    if (!opts.silent) _showOpenclawMemoryMsg('无法连接本机 OpenClaw 资料同步接口', true);
+    return { ok: false, error: err };
+  });
+}
+
+function _countEffectiveOpenclawMemoryDocs(docs) {
+  if (!Array.isArray(docs)) return 0;
+  return docs.filter(function(doc) {
+    return doc && Array.isArray(doc.workspace_paths) && doc.workspace_paths.length > 0;
+  }).length;
+}
+
+function _loadOpenclawMemoryEffectiveSummary() {
+  var base = _openclawMemoryApiBase();
+  if (!base) return Promise.reject(new Error('未找到本机后端地址'));
+  return _fetchWithTimeout(base + '/api/openclaw/memory/list', {
+    headers: typeof authHeaders === 'function' ? authHeaders() : {}
+  }, 8000)
+    .then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, data: d }; });
+    })
+    .then(function(x) {
+      if (!x.ok) throw new Error((x.data && x.data.detail) || '读取资料列表失败');
+      var docs = (x.data && Array.isArray(x.data.documents)) ? x.data.documents : [];
+      return {
+        total_count: docs.length,
+        effective_count: _countEffectiveOpenclawMemoryDocs(docs)
+      };
+    });
+}
+
+function _setChatMemorySyncStatus(text, isErr) {
+  var el = document.getElementById('chatMemorySyncStatus');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isErr ? '#b91c1c' : 'var(--text-muted)';
+}
+
+function _bindChatMemorySyncButton() {
+  var btn = document.getElementById('chatMemorySyncBtn');
+  if (!btn || btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', function() {
+    btn.disabled = true;
+    var oldText = btn.textContent;
+    btn.textContent = '同步中...';
+    _setChatMemorySyncStatus('正在同步资料...', false);
+    var syncResult = null;
+    _syncOpenclawMemoryFromCloud({ silent: true, reload: false })
+      .then(function(x) {
+        syncResult = x || {};
+        return _loadOpenclawMemoryEffectiveSummary();
+      })
+      .then(function(summary) {
+        var prefix = '';
+        var syncData = (syncResult && syncResult.data) || {};
+        if (syncResult && syncResult.ok && syncData.ok !== false) {
+          prefix = '同步完成，新增/更新 ' + (syncData.applied_count || 0) + ' 份，删除 ' + (syncData.deleted_count || 0) + ' 份；';
+        } else if (syncData && syncData.skipped) {
+          prefix = '云端同步跳过；';
+        } else if (syncResult && syncResult.ok === false) {
+          prefix = '云端同步未完成；';
+        } else if (syncData && syncData.ok === false) {
+          prefix = '云端同步未完成；';
+        }
+        _setChatMemorySyncStatus(prefix + '当前已生效 ' + (summary.effective_count || 0) + ' 份资料。', false);
+      })
+      .catch(function(err) {
+        _setChatMemorySyncStatus((err && err.message) ? err.message : '同步资料失败', true);
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = oldText || '同步资料';
+      });
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _bindChatMemorySyncButton);
+} else {
+  _bindChatMemorySyncButton();
 }
 
 function _loadOpenclawMemoryList() {
@@ -426,10 +673,17 @@ function _loadOpenclawMemoryList() {
       list.innerHTML = docs.map(function(doc) {
         var title = doc.title || doc.filename || doc.id;
         var meta = (doc.filename || '') + (doc.size ? (' · ' + Math.round(doc.size / 1024) + 'KB') : '');
+        var src = String(doc.source || 'local_user');
+        var sourceLabel = src.indexOf('cloud_') === 0 ? '云端下发' : '本机上传';
+        var sourceClass = src.indexOf('cloud_') === 0 ? 'badge-coming' : 'badge-installed';
+        var deleteHtml = src.indexOf('cloud_') === 0
+          ? '<span class="meta">由代理商/管理员下发，请在管理后台删除</span>'
+          : '<button type="button" class="btn btn-ghost btn-sm openclaw-memory-delete" data-doc-id="' + escapeAttr(doc.id || '') + '">删除</button>';
         return '<div class="skill-store-card" style="padding:0.85rem;margin-bottom:0.55rem;">' +
+          '<div class="card-label"><span class="' + sourceClass + '">' + sourceLabel + '</span></div>' +
           '<div class="card-value" style="font-size:0.98rem;">' + escapeHtml(title) + '</div>' +
           '<div class="card-desc">' + escapeHtml(meta) + '</div>' +
-          '<div class="card-actions"><button type="button" class="btn btn-ghost btn-sm openclaw-memory-delete" data-doc-id="' + escapeAttr(doc.id || '') + '">删除</button></div>' +
+          '<div class="card-actions">' + deleteHtml + '</div>' +
           '</div>';
       }).join('');
       list.querySelectorAll('.openclaw-memory-delete').forEach(function(btn) {
@@ -469,12 +723,19 @@ function _loadOpenclawMemoryList() {
   var cancelBtn = document.getElementById('openclawMemoryCancel');
   var uploadBtn = document.getElementById('openclawMemoryUploadBtn');
   var refreshBtn = document.getElementById('openclawMemoryRefreshBtn');
+  var syncBtn = document.getElementById('openclawMemorySyncBtn');
   function closeModal() {
     modal.classList.remove('visible');
   }
   if (closeBtn) closeBtn.addEventListener('click', closeModal);
   if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
   if (refreshBtn) refreshBtn.addEventListener('click', _loadOpenclawMemoryList);
+  if (syncBtn) syncBtn.addEventListener('click', function() {
+    syncBtn.disabled = true;
+    _syncOpenclawMemoryFromCloud({ silent: false }).finally(function() {
+      syncBtn.disabled = false;
+    });
+  });
   if (uploadBtn) uploadBtn.addEventListener('click', function() {
     var base = _openclawMemoryApiBase();
     var fileInput = document.getElementById('openclawMemoryFile');
@@ -601,6 +862,8 @@ function loadSkillStore() {
       var isSkillAdmin = !!(d && d.is_skill_store_admin);
       var needYoutube = packages.some(function(p) { return p.id === 'youtube_publish'; });
       var ecommercePkg = packages.filter(function(p) { return p.id === 'comfly_ecommerce_detail_skill'; })[0] || null;
+      var browserUsePkg = packages.filter(function(p) { return p.id === 'browser_use_skill'; })[0] || null;
+      var computerUsePkg = packages.filter(function(p) { return p.id === 'computer_use_skill'; })[0] || null;
 
       var hasSutuiPkg = packages.some(function(p) { return p.id === 'sutui_mcp'; });
       var hasComflyPkg = packages.some(function(p) { return p.id === 'comfly_veo_skill'; });
@@ -612,6 +875,24 @@ function loadSkillStore() {
         if (hasComflyPkg || isSkillAdmin) html += _renderSeedanceTvcStudioCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
+        if (isSkillAdmin && browserUsePkg) {
+          html += _renderOpenclawSkillWorkspaceCard(browserUsePkg, {
+            skillId: 'browser_use_skill',
+            title: 'Browser Use',
+            accent: '99,102,241',
+            tags: ['OpenClaw', 'Browser', 'automation'],
+            desc: '独立 OpenClaw 浏览器工作台'
+          });
+        }
+        if (isSkillAdmin && computerUsePkg) {
+          html += _renderOpenclawSkillWorkspaceCard(computerUsePkg, {
+            skillId: 'computer_use_skill',
+            title: 'Computer Use',
+            accent: '14,165,233',
+            tags: ['OpenClaw', 'Computer', 'automation'],
+            desc: '独立 OpenClaw 电脑操作工作台'
+          });
+        }
         var hasWxPkg = packages.some(function(p) { return p.id === 'openclaw_weixin_channel'; });
         if (hasWxPkg) {
           var wxPkg = packages.filter(function(p) { return p.id === 'openclaw_weixin_channel'; })[0];
@@ -633,6 +914,8 @@ function loadSkillStore() {
           if (pkg.id === 'comfly_ecommerce_detail_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
+          if (pkg.id === 'browser_use_skill') return '';
+          if (pkg.id === 'computer_use_skill') return '';
           if (pkg.id === 'youtube_publish') {
             if (typeof EDITION === 'undefined' || EDITION !== 'online') return '';
             if (!isSkillAdmin) return '';
@@ -711,6 +994,7 @@ function loadSkillStore() {
         _bindSeedanceTvcCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
+        _bindOpenclawSkillWorkspaceCardEntry();
         _bindOpenclawMemoryCardEntry();
         _bindInstallUninstall(el);
         _bindXSkillConfigBtn();
@@ -728,7 +1012,7 @@ function loadSkillStore() {
           paintSkillStoreList();
           return;
         }
-        fetch(wxBase + '/api/openclaw/weixin-login/last', { headers: authHeaders() })
+        _fetchWithTimeout(wxBase + '/api/openclaw/weixin-login/last', { headers: authHeaders() }, _SKILL_STORE_STATUS_TIMEOUT_MS)
           .then(function(r) { return r.json(); })
           .then(function(d) {
             _openclawWeixinLast = { last_ok: !!d.last_ok, at: d.at || null, detail: d.detail || '' };
@@ -737,22 +1021,17 @@ function loadSkillStore() {
           .catch(function() { paintSkillStoreList(); });
       }
 
-      _loadXSkillStatus(function() {
-        _loadComflyStatus(function() {
-          var afterYoutube = function() {
-            if (typeof _loadMetaSocialStatus === 'function') {
-              _loadMetaSocialStatus(finishRender);
-            } else {
-              finishRender();
-            }
-          };
-          if (needYoutube && isSkillAdmin) {
-            _loadYoutubePublishStatus(afterYoutube);
-          } else {
-            afterYoutube();
-          }
-        });
-      });
+      var statusJobs = [
+        _callbackJobWithTimeout('sutui', _loadXSkillStatus, _SKILL_STORE_STATUS_TIMEOUT_MS),
+        _callbackJobWithTimeout('comfly', _loadComflyStatus, _SKILL_STORE_STATUS_TIMEOUT_MS)
+      ];
+      if (needYoutube && isSkillAdmin) {
+        statusJobs.push(_callbackJobWithTimeout('youtube', _loadYoutubePublishStatus, _SKILL_STORE_STATUS_TIMEOUT_MS));
+      }
+      if (typeof _loadMetaSocialStatus === 'function') {
+        statusJobs.push(_callbackJobWithTimeout('meta-social', _loadMetaSocialStatus, _SKILL_STORE_STATUS_TIMEOUT_MS));
+      }
+      Promise.all(statusJobs).then(finishRender).catch(finishRender);
     })
     .catch(function() { el.innerHTML = '<p class="msg err">加载失败</p>'; });
 }

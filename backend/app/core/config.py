@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     lobster_default_sutui_chat_model: str = "deepseek-chat"
     """服务器未返回默认生图模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
     lobster_default_image_generate_model: str = "gpt-image2"
+    """服务器未返回默认视频模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
+    lobster_default_video_generate_model: str = "veo3.1-fast"
     """定时编排（schedule_orchestration=True）时使用的速推子模型。不填则用默认对话模型。"""
     lobster_orchestration_sutui_chat_model: Optional[str] = None
     openclaw_gateway_url: Optional[str] = None
@@ -128,7 +130,7 @@ class Settings(BaseSettings):
     """同 Bearer 在本进程内复用最近一次成功的 GET /auth/me 结果，减少并发与远端超时。秒；0=每次请求都拉远端（与旧行为一致）。"""
     auth_me_cache_ttl_seconds: int = 120
     """为 True 时：高消耗 invoke_capability 前需用户确认后再请求 MCP（环境变量 CHAT_REQUIRE_CAPABILITY_COST_CONFIRM）。"""
-    chat_require_capability_cost_confirm: bool = True
+    chat_require_capability_cost_confirm: bool = False
     """为 True（默认）时：纯图/视频生成拿到终态 saved_assets 后尽早结束工具编排，减少多余 LLM 轮次；用户同句要求发布时仍会继续编排。"""
     lobster_chat_generation_early_finish: bool = True
     """纯生成提前结束时的助手可见回复：minimal=仅一句就绪确认（不含链接与 asset_id）；detailed=含 asset_id 与预览链接（旧行为）。"""

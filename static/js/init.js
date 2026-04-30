@@ -99,26 +99,10 @@ function billingCreditsPerYuan(p) {
   return Math.round((c / yuan) * 100) / 100;
 }
 function billingRatioHintLinesHtml(packages) {
-  if (!packages || !packages.length) return '';
-  var parts = [];
-  packages.forEach(function(p) {
-    var per = billingCreditsPerYuan(p);
-    if (per == null) return;
-    parts.push(billingPackageYuan(p) + ' 元档约 ' + per + ' 算力/元');
-  });
-  if (!parts.length) return '';
-  return '<p style="margin:0.45rem 0 0 0;font-size:0.82rem;color:var(--text-muted);">折算参考：' + parts.join('；') + '。支付成功后以实际到账算力为准。</p>';
+  return '';
 }
 function billingRatioHintPlainText(packages) {
-  if (!packages || !packages.length) return '';
-  var parts = [];
-  packages.forEach(function(p) {
-    var per = billingCreditsPerYuan(p);
-    if (per == null) return;
-    parts.push(billingPackageYuan(p) + ' 元档约 ' + per + ' 算力/元');
-  });
-  if (!parts.length) return '';
-  return '折算参考：' + parts.join('；') + '。支付成功后以实际到账算力为准。';
+  return '';
 }
 
 function loadLoginCaptcha() {
@@ -542,6 +526,12 @@ function syncTosFromServerIfOnline() {
     .catch(function() {});
 }
 
+function syncOpenclawMemoryFromServerIfOnline() {
+  if (typeof EDITION === 'undefined' || EDITION !== 'online' || !token) return;
+  if (typeof _syncOpenclawMemoryFromCloud !== 'function') return;
+  _syncOpenclawMemoryFromCloud({ silent: true, reload: false }).catch(function() {});
+}
+
 function loadDashboard() {
   if (!token) {
     if (typeof window.resetChatSessionsForLogout === 'function') window.resetChatSessionsForLogout();
@@ -580,6 +570,7 @@ function loadDashboard() {
       loadModelSelector(d.preferred_model);
       initChatSessions();
       syncTosFromServerIfOnline();
+      syncOpenclawMemoryFromServerIfOnline();
       if (EDITION === 'online') {
         loadSutuiBalance();
         var rBtn = document.getElementById('sutuiRechargeBtn');
@@ -1292,7 +1283,7 @@ function loadBillingView() {
           });
           html += '</ul>';
         } else {
-          html = '<p style="margin:0;"><strong>算力套餐</strong>：198元/20000算力、498元/50000算力、998元/120000算力。</p>';
+          html = '<p style="margin:0;"><strong>算力套餐</strong>：98元/10000算力、198元/20000算力、498元/50000算力、998元/120000算力。</p>';
         }
         pricingContent.innerHTML = html;
       })
@@ -1351,8 +1342,9 @@ function loadBillingView() {
           }
           if (hintEl) {
             if (opts && Array.isArray(opts.packages) && opts.packages.length) {
-              hintEl.textContent = billingRatioHintPlainText(opts.packages);
-              hintEl.style.display = '';
+              var ratioHint = billingRatioHintPlainText(opts.packages);
+              hintEl.textContent = ratioHint;
+              hintEl.style.display = ratioHint ? '' : 'none';
             } else {
               hintEl.textContent = '';
               hintEl.style.display = 'none';

@@ -17,6 +17,30 @@ YOUTUBE_TOOLS = frozenset({"list_assets", "list_youtube_accounts", "publish_yout
 META_TOOLS = frozenset({"list_meta_social_accounts", "publish_meta_social", "get_meta_social_insights", "sync_meta_social_insights", "get_social_report"})
 CREATOR_DATA_TOOLS = frozenset({"list_publish_accounts", "get_creator_publish_data", "sync_creator_publish_data"})
 SKILL_TOOLS = frozenset({"list_capabilities", "manage_skills"})
+AUTONOMOUS_OPENCLAW_TOOLS = frozenset(
+    {
+        "list_capabilities",
+        "invoke_capability",
+        "manage_skills",
+        "save_asset",
+        "list_assets",
+        "list_publish_accounts",
+        "publish_content",
+        "open_account_browser",
+        "check_account_login",
+        "get_creator_publish_data",
+        "sync_creator_publish_data",
+        "list_youtube_accounts",
+        "publish_youtube_video",
+        "get_youtube_analytics",
+        "sync_youtube_analytics",
+        "list_meta_social_accounts",
+        "publish_meta_social",
+        "get_meta_social_data",
+        "sync_meta_social_data",
+        "get_social_report",
+    }
+)
 
 
 CAP_IMAGE = frozenset({"image.generate", "task.get_result", "sutui.search_models", "sutui.guide"})
@@ -45,7 +69,7 @@ class OpenClawToolScope:
 
     def system_hint(self) -> str:
         caps = (
-            "全部能力仅可查看，不可直接调用"
+            "全部已安装能力（以 list_capabilities 返回为准）"
             if self.allowed_capabilities is None
             else (", ".join(sorted(self.allowed_capabilities)) or "无")
         )
@@ -119,6 +143,17 @@ def _scope(
 
 
 def classify_openclaw_tool_scope(messages: Sequence[Dict]) -> OpenClawToolScope:
+    # OpenClaw 主链路不再由本地正则预判“图片/视频/发布/TVC”并裁剪能力。
+    # 这些正则容易把“继续细化”等自然语言续接到上一轮生成流程里，导致误触发。
+    # 现在仅把 Lobster 能力暴露给 OpenClaw，由模型结合记忆、用户原话和
+    # list_capabilities 的真实结果自主判断该做什么。
+    return _scope(
+        "ai_autonomous",
+        AUTONOMOUS_OPENCLAW_TOOLS,
+        None,
+        "",
+    )
+
     current = _last_text(messages)
     recent = _recent_text(messages)
     text = current or recent

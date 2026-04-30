@@ -1,4 +1,4 @@
-"""软件收费模式配置与展示：技能解锁价格、算力套餐（算力兑换比例）；自有充值订单。"""
+"""算力配置与展示：技能解锁价格、算力套餐（算力兑换比例）；自有充值订单。"""
 import json
 import logging
 import time
@@ -26,6 +26,7 @@ _CUSTOM_CONFIGS_FILE = _BASE_DIR / "custom_configs.json"
 # 默认收费模式（可被 custom_configs.json 中 BILLING_PRICING 覆盖）
 _DEFAULT_SKILL_UNLOCK = {"min_yuan": 98, "max_yuan": 198}
 _DEFAULT_CREDIT_PACKAGES = [
+    {"price_yuan": 98, "credits": 10000, "label": "98元 - 10000算力"},
     {"price_yuan": 198, "credits": 20000, "label": "198元 - 20000算力"},
     {"price_yuan": 498, "credits": 50000, "label": "498元 - 50000算力"},
     {"price_yuan": 998, "credits": 120000, "label": "998元 - 120000算力"},
@@ -138,7 +139,7 @@ async def proxy_credit_history_from_auth_server(
         raise HTTPException(status_code=502, detail="认证中心响应非 JSON")
 
 
-@router.get("/api/billing/pricing", summary="软件收费模式（技能解锁价格 + 算力套餐）")
+@router.get("/api/billing/pricing", summary="算力套餐（技能解锁价格 + 充值档位）")
 def get_billing_pricing(current_user: User = Depends(get_current_user)):
     """返回技能解锁价格区间与算力套餐列表，供前端展示。可在 custom_configs.json 的 configs.BILLING_PRICING 中覆盖。"""
     return _get_billing_pricing()

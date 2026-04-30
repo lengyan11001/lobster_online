@@ -1,5 +1,25 @@
 {
   "packages": {
+    "browser_use_skill": {
+      "name": "Browser Use",
+      "description": "管理员调试入口：在独立二级工作台中直接向 OpenClaw 发送浏览器操作消息，不进入龙虾主聊天链路。",
+      "type": "builtin",
+      "store_visibility": "debug",
+      "default_installed": true,
+      "status": "available",
+      "capabilities": {},
+      "tags": ["OpenClaw", "Browser", "automation"]
+    },
+    "computer_use_skill": {
+      "name": "Computer Use",
+      "description": "管理员调试入口：在独立二级工作台中直接向 OpenClaw 发送电脑操作消息，不进入龙虾主聊天链路。",
+      "type": "builtin",
+      "store_visibility": "debug",
+      "default_installed": true,
+      "status": "available",
+      "capabilities": {},
+      "tags": ["OpenClaw", "Computer", "automation"]
+    },
     "media_edit_skill": {
       "name": "素材剪辑",
       "description": "对素材库视频/图片做叠字、裁剪、画幅、静音、配乐、静图转视频、抽帧；需本机已安装 ffmpeg。1000 算力解锁后可在对话中用自然语言描述剪辑意图（须给出可解析参数）。",

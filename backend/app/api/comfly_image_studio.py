@@ -1,11 +1,9 @@
-import io
 import json
 import logging
 from typing import Any, Dict, List
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from PIL import Image
 from pathlib import Path
 from sqlalchemy.orm import Session
 
@@ -96,12 +94,6 @@ async def comfly_image_studio_examples(
     }
 
 
-def _blank_image_file() -> tuple[str, bytes, str]:
-    buf = io.BytesIO()
-    Image.new("RGB", (1024, 1024), color="white").save(buf, format="PNG")
-    return ("blank.png", buf.getvalue(), "image/png")
-
-
 def _response_preview(item: Dict[str, Any]) -> Dict[str, str]:
     url = str(item.get("url") or "").strip()
     b64_json = str(item.get("b64_json") or "").strip()
@@ -132,6 +124,13 @@ def _pick_error_detail(resp: httpx.Response) -> str:
     return text[:800] if text else f"上游接口请求失败：HTTP {resp.status_code}"
 
 
+def _comfly_endpoint(api_base: str, path: str) -> str:
+    base = (api_base or "").strip().rstrip("/")
+    if base.lower().endswith("/v1") and path.startswith("/v1/"):
+        base = base[:-3].rstrip("/")
+    return f"{base}{path}"
+
+
 @router.post("/api/comfly-image-studio/generate")
 async def comfly_image_studio_generate(
     request: Request,
@@ -150,20 +149,22 @@ async def comfly_image_studio_generate(
 
     size = _ASPECT_TO_SIZE.get((aspect_ratio or "").strip(), "1024x1024")
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
-    url = f"{api_base.rstrip('/')}/v1/images/edits"
+    model_id = (model or "gpt-image-2").strip() or "gpt-image-2"
+    quality_id = (quality or "high").strip() or "high"
+    valid_uploads = [item for item in (images or []) if item and (item.filename or "").strip()]
 
-    data = {
+    body = {
         "prompt": prompt,
-        "model": (model or "gpt-image-2").strip() or "gpt-image-2",
-        "n": "1",
-        "quality": (quality or "high").strip() or "high",
+        "model": model_id,
+        "n": 1,
+        "quality": quality_id,
         "size": size,
+        "response_format": "url",
     }
     if background and background != "auto":
-        data["background"] = background
+        body["background"] = background
 
     files: List[tuple[str, tuple[str, bytes, str]]] = []
-    valid_uploads = [item for item in (images or []) if item and (item.filename or "").strip()]
     if valid_uploads:
         for upload in valid_uploads:
             raw = await upload.read()
@@ -179,13 +180,17 @@ async def comfly_image_studio_generate(
                     ),
                 )
             )
-    if not files:
-        files.append(("image", _blank_image_file()))
 
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
-            resp = await client.post(url, headers=headers, data=data, files=files)
+            if files:
+                url = _comfly_endpoint(api_base, "/v1/images/edits")
+                data = {k: str(v) for k, v in body.items() if k != "response_format"}
+                resp = await client.post(url, headers=headers, data=data, files=files)
+            else:
+                url = _comfly_endpoint(api_base, "/v1/images/generations")
+                resp = await client.post(url, headers={**headers, "Content-Type": "application/json"}, json=body)
     except httpx.TimeoutException as exc:
         logger.warning("[comfly_image_studio] timeout user_id=%s", current_user.id)
         raise HTTPException(status_code=504, detail="图片生成超时，请稍后重试") from exc
@@ -222,10 +227,10 @@ async def comfly_image_studio_generate(
         "ok": True,
         "images": previews,
         "meta": {
-            "model": data["model"],
+            "model": model_id,
             "aspect_ratio": aspect_ratio,
             "size": size,
-            "quality": data["quality"],
+            "quality": quality_id,
             "reference_count": len(valid_uploads),
         },
     }

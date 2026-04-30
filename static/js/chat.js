@@ -40,6 +40,8 @@ function getChatLastSessionStorageKey() {
 
 var CHAT_MODE_DEFAULT = 'default';
 var CHAT_MODE_WORKSPACE = 'workspace_cli';
+// 云端工作台入口先在前端关闭；后端能力保留，后续需要时改这里即可恢复入口。
+var CHAT_WORKSPACE_ENTRY_ENABLED = false;
 var WORKSPACE_CATEGORY_DEFAULT = 'web_app';
 var WORKSPACE_CATEGORY_CONFIG = {
   web_app: {
@@ -140,7 +142,10 @@ var WORKSPACE_CATEGORY_CONFIG = {
 };
 
 function _normalizeChatMode(mode) {
-  return String(mode || '').trim() === CHAT_MODE_WORKSPACE ? CHAT_MODE_WORKSPACE : CHAT_MODE_DEFAULT;
+  if (String(mode || '').trim() === CHAT_MODE_WORKSPACE && CHAT_WORKSPACE_ENTRY_ENABLED) {
+    return CHAT_MODE_WORKSPACE;
+  }
+  return CHAT_MODE_DEFAULT;
 }
 
 function _chatModeStorageKey() {
@@ -428,6 +433,239 @@ function abortActiveChatStream() {
 var chatAttachmentIds = [];
 var chatAttachmentInfos = [];
 
+var H5_MIRROR_SESSION_ID = 'h5_remote_messages';
+var H5_MIRROR_SYNC_INTERVAL_MS = 30000;
+var h5MirrorSyncTimer = null;
+var h5MirrorSyncInFlight = false;
+
+function _isH5MirrorSession(session) {
+  return !!(session && session.kind === 'h5_remote_mirror');
+}
+
+function _h5MirrorTitle() {
+  return 'H5 \u6d88\u606f';
+}
+
+function _h5MirrorWaitingText() {
+  return '\u5df2\u540c\u6b65\uff0c\u7b49\u5f85\u672c\u5730\u8bbe\u5907\u5904\u7406...';
+}
+
+function _h5MirrorErrorText(message) {
+  return 'H5 \u6d88\u606f\u540c\u6b65\u5931\u8d25\uff1a' + (message || '\u672a\u77e5\u9519\u8bef');
+}
+
+function _h5EventLabel(ev) {
+  if (!ev) return '';
+  var payload = ev.payload || {};
+  if (ev.type === 'queued') return '\u5df2\u8fdb\u5165\u4e91\u7aef\u961f\u5217';
+  if (ev.type === 'claimed') return '\u672c\u5730\u8bbe\u5907\u5df2\u9886\u53d6';
+  if (ev.type === 'thinking') return payload.text || '\u6b63\u5728\u5904\u7406';
+  if (ev.type === 'tool_start') return payload.name ? '\u8c03\u7528\u80fd\u529b\uff1a' + payload.name : '\u8c03\u7528\u80fd\u529b';
+  if (ev.type === 'tool_end') return payload.name ? '\u80fd\u529b\u5b8c\u6210\uff1a' + payload.name : '\u80fd\u529b\u5b8c\u6210';
+  if (ev.type === 'progress') return payload.text || payload.message || '\u5904\u7406\u4e2d';
+  return '';
+}
+
+function _h5DeltaText(events) {
+  return (events || []).map(function(ev) {
+    if (!ev || ev.type !== 'delta' || !ev.payload) return '';
+    return ev.payload.text || '';
+  }).join('');
+}
+
+function _h5EventFinalText(events) {
+  for (var i = (events || []).length - 1; i >= 0; i--) {
+    var ev = events[i] || {};
+    var payload = ev.payload || {};
+    if (ev.type === 'final') return payload.reply_text || payload.text || '';
+    if (ev.type === 'error') return payload.error || payload.detail || '';
+  }
+  return '';
+}
+
+function _h5MirrorAssistantText(msg, events) {
+  msg = msg || {};
+  events = Array.isArray(events) ? events : [];
+  var finalText = _h5EventFinalText(events);
+  if (msg.status === 'completed') return msg.reply_text || finalText || '\u5904\u7406\u5b8c\u6210\u3002';
+  if (msg.status === 'failed') return '\u5904\u7406\u5931\u8d25\uff1a' + (msg.error || finalText || '\u672a\u77e5\u9519\u8bef');
+  if (msg.status === 'cancelled') return '\u5df2\u53d6\u6d88';
+  var delta = _h5DeltaText(events).trim();
+  if (delta) return delta;
+  var labels = [];
+  events.forEach(function(ev) {
+    var label = _h5EventLabel(ev);
+    if (label) labels.push(label);
+  });
+  if (labels.length) return labels.map(function(label) { return '\u00b7 ' + label; }).join('\n');
+  return _h5MirrorWaitingText();
+}
+
+function _h5ItemsToChatMessages(items) {
+  var out = [];
+  (Array.isArray(items) ? items : []).forEach(function(item) {
+    var msg = (item && item.message) || {};
+    if (!msg.id && !msg.content) return;
+    var events = Array.isArray(item.events) ? item.events : [];
+    out.push({
+      role: 'user',
+      content: msg.content || '',
+      h5_message_id: msg.id || '',
+      h5_status: msg.status || ''
+    });
+    out.push({
+      role: 'assistant',
+      content: _h5MirrorAssistantText(msg, events),
+      h5_message_id: msg.id || '',
+      h5_status: msg.status || '',
+      h5_mirror: true
+    });
+  });
+  return out;
+}
+
+function _h5LatestTime(items) {
+  var latest = 0;
+  (Array.isArray(items) ? items : []).forEach(function(item) {
+    var msg = (item && item.message) || {};
+    [msg.updated_at, msg.finished_at, msg.created_at].forEach(function(v) {
+      var t = v ? Date.parse(v) : 0;
+      if (t && t > latest) latest = t;
+    });
+  });
+  return latest || Date.now();
+}
+
+function getOrCreateH5MirrorSession() {
+  var session = getSessionById(H5_MIRROR_SESSION_ID);
+  if (session) {
+    session.kind = 'h5_remote_mirror';
+    session.title = _h5MirrorTitle();
+    session.mode = CHAT_MODE_DEFAULT;
+    session.pending = false;
+    return session;
+  }
+  session = {
+    id: H5_MIRROR_SESSION_ID,
+    title: _h5MirrorTitle(),
+    messages: [],
+    updatedAt: Date.now(),
+    pending: false,
+    mode: CHAT_MODE_DEFAULT,
+    kind: 'h5_remote_mirror',
+    readonly: true
+  };
+  chatSessions.unshift(session);
+  saveChatSessionsToStorage();
+  return session;
+}
+
+function _applyH5MirrorMessages(messages, updatedAt) {
+  var session = getOrCreateH5MirrorSession();
+  session.messages = Array.isArray(messages) ? messages : [];
+  session.updatedAt = updatedAt || Date.now();
+  session.pending = false;
+  session.title = _h5MirrorTitle();
+  if (String(currentSessionId || '') === H5_MIRROR_SESSION_ID) {
+    chatHistory = session.messages.slice();
+    renderCurrentSessionMessages();
+  }
+  saveChatSessionsToStorage();
+  renderChatSessionList();
+}
+
+function _setH5MirrorSyncError(message) {
+  _applyH5MirrorMessages([{ role: 'assistant', content: _h5MirrorErrorText(message), h5_mirror: true }], Date.now());
+}
+
+function syncH5ChatMirrorSession(force) {
+  if (h5MirrorSyncInFlight && !force) return Promise.resolve(false);
+  var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+  if (!base) {
+    _setH5MirrorSyncError('\u672c\u5730\u540e\u7aef\u672a\u8fde\u63a5');
+    return Promise.resolve(false);
+  }
+  h5MirrorSyncInFlight = true;
+  var headers = typeof authHeaders === 'function' ? authHeaders() : {};
+  return fetch(base + '/api/h5-chat/messages?limit=40', { headers: headers })
+    .then(function(r) {
+      return r.text().then(function(text) {
+        var data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+        if (!r.ok) throw new Error((data && (data.detail || data.message)) || text || ('HTTP ' + r.status));
+        return data;
+      });
+    })
+    .then(function(data) {
+      var items = Array.isArray(data && data.messages) ? data.messages : [];
+      _applyH5MirrorMessages(_h5ItemsToChatMessages(items), _h5LatestTime(items));
+      return true;
+    })
+    .catch(function(err) {
+      _setH5MirrorSyncError(err && err.message ? err.message : String(err || 'sync failed'));
+      return false;
+    })
+    .finally(function() {
+      h5MirrorSyncInFlight = false;
+    });
+}
+
+function _startH5MirrorAutoSync() {
+  if (h5MirrorSyncTimer) return;
+  h5MirrorSyncTimer = setInterval(function() {
+    if (_isH5MirrorSession(getSessionById(currentSessionId))) syncH5ChatMirrorSession(false);
+  }, H5_MIRROR_SYNC_INTERVAL_MS);
+}
+
+function _stopH5MirrorAutoSync() {
+  if (!h5MirrorSyncTimer) return;
+  clearInterval(h5MirrorSyncTimer);
+  h5MirrorSyncTimer = null;
+}
+
+function _restartH5MirrorAutoSync() {
+  _stopH5MirrorAutoSync();
+  _startH5MirrorAutoSync();
+}
+
+function _syncH5MirrorAutoSyncForCurrentSession() {
+  if (_isH5MirrorSession(getSessionById(currentSessionId))) _startH5MirrorAutoSync();
+  else _stopH5MirrorAutoSync();
+}
+
+function _setChatSidebarConversationActive(kind) {
+  document.querySelectorAll('.chat-sidebar-nav .chat-sidebar-entry').forEach(function(btn) {
+    var isH5 = btn.hasAttribute('data-h5-chat-sync');
+    var isDefault = btn.hasAttribute('data-chat-open-default');
+    btn.classList.toggle('is-active', kind === 'h5' ? isH5 : isDefault);
+  });
+}
+
+function openH5ChatMirrorSession() {
+  var session = getOrCreateH5MirrorSession();
+  _setChatSidebarConversationActive('h5');
+  if (String(currentSessionId || '') !== H5_MIRROR_SESSION_ID) {
+    switchChatSession(session.id);
+  } else {
+    renderChatSessionList();
+    _syncH5MirrorAutoSyncForCurrentSession();
+  }
+  _restartH5MirrorAutoSync();
+  syncH5ChatMirrorSession(true);
+}
+
+function openDefaultChatSession() {
+  _setChatSidebarConversationActive('default');
+  var target = chatSessions.find(function(s) {
+    return !_isH5MirrorSession(s) && _getSessionMode(s) === CHAT_MODE_DEFAULT;
+  });
+  if (target) {
+    switchChatSession(target.id);
+    return;
+  }
+  createNewSession(CHAT_MODE_DEFAULT);
+}
+
 function getSessionById(id) {
   var sid = id != null ? String(id) : '';
   return chatSessions.find(function(s) { return String(s.id) === sid; }) || null;
@@ -577,6 +815,19 @@ function refreshChatInputState() {
   var btn = document.getElementById('chatSendBtn');
   var cancelBtn = document.getElementById('chatCancelBtn');
   if (!btn) return;
+  var current = getSessionById(currentSessionId);
+  if (_isH5MirrorSession(current)) {
+    btn.disabled = true;
+    if (input) {
+      input.disabled = true;
+      input.placeholder = 'H5 \u6d88\u606f\u955c\u50cf\u4f1a\u8bdd\u4ec5\u5c55\u793a\uff0c\u70b9\u51fb\u5de6\u4fa7 AI \u641c\u7d22\u53ef\u5237\u65b0';
+    }
+    if (cancelBtn) {
+      cancelBtn.disabled = true;
+      cancelBtn.title = 'H5 \u6d88\u606f\u955c\u50cf\u4f1a\u8bdd\u65e0\u9700\u53d6\u6d88';
+    }
+    return;
+  }
   btn.disabled = !!(currentSessionId && isSessionPending(currentSessionId));
   if (input) input.disabled = false;
   if (cancelBtn) {
@@ -875,6 +1126,7 @@ function flushPendingChatSessionsSave() {
   }
 }
 function getSessionTitle(session) {
+  if (_isH5MirrorSession(session)) return session.title || _h5MirrorTitle();
   var msg = (session.messages || []).find(function(m) { return m.role === 'user' && (m.content || '').trim(); });
   if (msg) {
     var t = (msg.content || '').trim();
@@ -1169,6 +1421,10 @@ function maybeUpdateWorkspaceStatusFromMessage(message) {
 
 function updateChatModeUi(mode) {
   var normalized = _normalizeChatMode(mode);
+  document.querySelectorAll('[data-chat-mode="' + CHAT_MODE_WORKSPACE + '"], [data-chat-home-mode="' + CHAT_MODE_WORKSPACE + '"]').forEach(function(btn) {
+    btn.hidden = !CHAT_WORKSPACE_ENTRY_ENABLED;
+    btn.setAttribute('aria-hidden', CHAT_WORKSPACE_ENTRY_ENABLED ? 'false' : 'true');
+  });
   document.querySelectorAll('.chat-mode-pill[data-chat-mode]').forEach(function(btn) {
     btn.classList.toggle('is-active', _normalizeChatMode(btn.getAttribute('data-chat-mode')) === normalized);
   });
@@ -1301,6 +1557,8 @@ function switchChatSession(id) {
   updateChatModeUi(_getSessionMode(nextSession));
   renderCurrentSessionMessages();
   renderChatSessionList();
+  _syncH5MirrorAutoSyncForCurrentSession();
+  _setChatSidebarConversationActive(_isH5MirrorSession(nextSession) ? 'h5' : 'default');
   /** 默认不自动续查，见 chatAutoResumePollEnabled */
   if (typeof maybeAutoResumeChatTaskPoll === 'function' && chatAutoResumePollEnabled())
     maybeAutoResumeChatTaskPoll({ pickAnySession: false });
@@ -1311,6 +1569,11 @@ function saveCurrentSessionToStore() {
   if (session) {
     session.messages = Array.isArray(chatHistory) ? chatHistory.slice() : [];
     session.updatedAt = Date.now();
+    if (_isH5MirrorSession(session)) {
+      session.title = _h5MirrorTitle();
+      saveChatSessionsToStorage();
+      return;
+    }
     if (session.messages.length) {
       var firstUser = session.messages.find(function(m) { return m && m.role === 'user'; });
       if (firstUser && (firstUser.content || '').trim()) session.title = getSessionTitle(session);
@@ -1399,7 +1662,7 @@ function renderChatSessionList() {
     var preview = getSessionPreview(s);
     var time = formatSessionTime(s.updatedAt);
     var active = s.id === currentSessionId ? ' active' : '';
-    var modeBadge = _isWorkspaceSession(s) ? '<span class="session-mode-badge">云端</span>' : '';
+    var modeBadge = _isH5MirrorSession(s) ? '<span class="session-mode-badge">H5</span>' : (_isWorkspaceSession(s) ? '<span class="session-mode-badge">云端</span>' : '');
     var pendingDot = isSessionPending(s.id)
       ? '<span class="session-pending-dot" title="任务进行中"></span>'
       : '<span class="session-bubble-icon">◌</span>';
@@ -1454,6 +1717,7 @@ function bindChatModeSwitch() {
   window.__chatModeSwitchBound = true;
   document.querySelectorAll('.chat-mode-pill[data-chat-mode]').forEach(function(btn) {
     btn.addEventListener('click', function() {
+      if (btn.getAttribute('data-chat-mode') === CHAT_MODE_WORKSPACE && !CHAT_WORKSPACE_ENTRY_ENABLED) return;
       setChatMode(btn.getAttribute('data-chat-mode'));
     });
   });
@@ -1505,6 +1769,11 @@ function stripBackticksAroundUrls(text) {
   return t;
 }
 
+function normalizeMarkdownLinkBreaks(text) {
+  if (!text) return text;
+  return String(text).replace(/\[([^\]\n]{1,160})\]\s*\n+\s*\((https?:\/\/[^\s<>"'`]+)\)/g, '[$1]($2)');
+}
+
 /** 正文中显式写的素材 ID（与上传附图合并展示） */
 function extractAssetIdsFromUserMessageText(text) {
   var found = [];
@@ -1549,9 +1818,19 @@ function mergeUserMessageAssetIds(attachmentIds, content) {
 }
 
 function linkifyText(text) {
-  var raw = stripBackticksAroundUrls(text || '');
+  var raw = normalizeMarkdownLinkBreaks(stripBackticksAroundUrls(text || ''));
   var escaped = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    var result = escaped.replace(/https?:\/\/[^\s<>"'`]+/g, function(raw) {
+  var markdownLinks = [];
+  escaped = escaped.replace(/\[([^\]\n]{1,160})\]\s*\((https?:\/\/[^\s<>"'`]+)\)/g, function(match, label, rawUrl) {
+    var url = String(rawUrl || '').trim();
+    var rewritten = url.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1):8000\/media\//, window.location.origin + '/media/');
+    var token = '\u0000CHAT_LINK_' + markdownLinks.length + '_\u0000';
+    markdownLinks.push(
+      '<a href="' + rewritten + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
+    );
+    return token;
+  });
+  var result = escaped.replace(/https?:\/\/[^\s<>"'`]+/g, function(raw) {
     var url = raw;
     var suffix = '';
     while (/[)\]}\u3002\uff0c\uff01\uff1f,.]$/.test(url)) {
@@ -1570,6 +1849,9 @@ function linkifyText(text) {
     var path = match.slice(prefix.length);
     var full = window.location.origin + path;
     return prefix + '<a href="' + full + '" target="_blank" rel="noopener noreferrer">' + full + '</a>';
+  });
+  markdownLinks.forEach(function(html, idx) {
+    result = result.replace('\u0000CHAT_LINK_' + idx + '_\u0000', html);
   });
   return result;
 }
@@ -2026,7 +2308,7 @@ function _compactAssistantReplyForDisplay(fullText, savedAssets) {
 function appendAssistantMessageReveal(fullText, savedAssets) {
   var container = document.getElementById('chatMessages');
   if (!container) return;
-  var text = _compactAssistantReplyForDisplay(fullText, savedAssets);
+  var text = normalizeMarkdownLinkBreaks(_compactAssistantReplyForDisplay(fullText, savedAssets));
   text = (text || '').trim() || '\uFF08\u65E0\u5185\u5BB9\uFF09';
   var lines = text.split('\n');
   var div = document.createElement('div');
@@ -2700,6 +2982,10 @@ function sendChatMessage() {
   var sid = String(currentSessionId);
   var session = getSessionById(sid);
   if (!session) return;
+  if (_isH5MirrorSession(session)) {
+    syncH5ChatMirrorSession(true);
+    return;
+  }
   if (isSessionPending(sid)) return;
   var sessionMode = _getSessionMode(session);
 
@@ -3100,12 +3386,23 @@ function bindChatHomeActions() {
   document.addEventListener('click', function(e) {
     var modeBtn = e.target.closest('[data-chat-home-mode]');
     if (modeBtn) {
+      if (modeBtn.getAttribute('data-chat-home-mode') === CHAT_MODE_WORKSPACE && !CHAT_WORKSPACE_ENTRY_ENABLED) return;
       setChatMode(modeBtn.getAttribute('data-chat-home-mode'));
       return;
     }
     var quickModeBtn = e.target.closest('[data-chat-quick-mode]');
     if (quickModeBtn) {
       setChatQuickMode(quickModeBtn.getAttribute('data-chat-quick-mode'), { prefill: true });
+      return;
+    }
+    var defaultChatBtn = e.target.closest('[data-chat-open-default]');
+    if (defaultChatBtn) {
+      openDefaultChatSession();
+      return;
+    }
+    var h5SyncBtn = e.target.closest('[data-h5-chat-sync]');
+    if (h5SyncBtn) {
+      openH5ChatMirrorSession();
       return;
     }
     var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');

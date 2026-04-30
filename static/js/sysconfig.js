@@ -23,7 +23,13 @@ function showChatRouteModeMsg(text, isErr, autoHide) {
     clearTimeout(_chatRouteModeMsgTimer);
     _chatRouteModeMsgTimer = null;
   }
-  showMsg(msgEl, text, isErr);
+  if (typeof showMsg === 'function') {
+    showMsg(msgEl, text, isErr);
+  } else if (msgEl) {
+    msgEl.textContent = text || '';
+    msgEl.className = 'msg ' + (isErr ? 'err' : 'ok');
+    msgEl.style.display = text ? 'inline-block' : 'none';
+  }
   if (autoHide) {
     _chatRouteModeMsgTimer = setTimeout(function() {
       clearChatRouteModeMsg();
@@ -102,7 +108,7 @@ function loadChatRouteMode() {
 function saveChatRouteMode() {
   var btn = document.getElementById('saveChatRouteModeBtn');
   var mode = getChatRouteModeValue();
-  if (_chatRouteModeSavedValue === mode) {
+  if (_chatRouteModeSavedValue !== null && _chatRouteModeSavedValue === mode) {
     showChatRouteModeMsg('当前已是这个路由', false, true);
     return;
   }
@@ -382,8 +388,12 @@ var saveOcBtn = document.getElementById('saveOcConfigBtn');
 if (saveOcBtn) saveOcBtn.addEventListener('click', saveOcConfig);
 var saveSutuiTokenBtn = document.getElementById('saveSutuiTokenBtn');
 if (saveSutuiTokenBtn) saveSutuiTokenBtn.addEventListener('click', saveSutuiToken);
-var saveChatRouteModeBtn = document.getElementById('saveChatRouteModeBtn');
-if (saveChatRouteModeBtn) saveChatRouteModeBtn.addEventListener('click', saveChatRouteMode);
+document.addEventListener('click', function(e) {
+  var target = e.target && e.target.closest ? e.target.closest('#saveChatRouteModeBtn') : null;
+  if (!target) return;
+  e.preventDefault();
+  saveChatRouteMode();
+});
 document.querySelectorAll('input[name="chatRouteMode"]').forEach(function(radio) {
   radio.addEventListener('change', function() {
     if (!radio.checked) return;

@@ -96,6 +96,12 @@ class PipelineConfig:
 
 ALLOWED_TOTAL_DURATIONS = (10, 20, 30, 40, 50, 60)
 FIXED_SEGMENT_DURATION_SECONDS = 10
+_SEEDANCE_MODEL_ALIASES = {
+    "seedance-2-0-pro-250528": "doubao-seedance-2-0-260128",
+    "seedance-2-0-lite-250428": "doubao-seedance-2-0-fast-260128",
+    "seedance-2-0-260128": "doubao-seedance-2-0-260128",
+    "seedance-2-0-fast-260128": "doubao-seedance-2-0-fast-260128",
+}
 
 
 class PipelineError(RuntimeError):
@@ -202,6 +208,19 @@ def _normalize_aspect_ratio(raw: str, default: str = "9:16") -> str:
     if s in {"1:1", "4:3", "3:4", "4:5", "5:4", "9:16", "16:9", "21:9"}:
         return s
     return default
+
+
+def _normalize_seedance_model(raw: str) -> str:
+    model = (raw or "").strip()
+    return _SEEDANCE_MODEL_ALIASES.get(model, model)
+
+
+def _normalize_seedance_duration(raw: int) -> int:
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        seconds = FIXED_SEGMENT_DURATION_SECONDS
+    return 10 if seconds >= 10 else 5
 
 
 def _first_text(d: Dict[str, Any], *keys: str) -> str:
@@ -686,10 +705,10 @@ class ComflySeedanceClient:
             if ref_url and ref_url != segment_reference_url:
                 content.append({"type": "image_url", "image_url": {"url": ref_url}, "role": "reference_image"})
         body: Dict[str, Any] = {
-            "model": self.config.video_model,
+            "model": _normalize_seedance_model(self.config.video_model),
             "content": content,
             "ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
-            "duration": max(5, min(15, int(duration_seconds))),
+            "duration": _normalize_seedance_duration(duration_seconds),
             "generate_audio": bool(self.config.generate_audio),
             "watermark": bool(self.config.watermark),
         }
@@ -719,13 +738,32 @@ class ComflySeedanceClient:
                 return self._check(r)
 
             payload, request_attempts = _retry(f"poll_{task_id}", 3, self.config.network_retry_delay_seconds, self.logger, call)
-            status = str(payload.get("status") or "").strip().lower()
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+            status = str(payload.get("status") or data.get("status") or result.get("status") or "").strip().lower()
             content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-            video_url = str(content.get("video_url") or "").strip() if isinstance(content, dict) else ""
+            video_url = str(
+                (content.get("video_url") if isinstance(content, dict) else "")
+                or data.get("video_url")
+                or data.get("output")
+                or result.get("video_url")
+                or result.get("output")
+                or ""
+            ).strip()
+            outputs = data.get("outputs") if isinstance(data, dict) else None
+            if not video_url and isinstance(outputs, list):
+                for item in outputs:
+                    if isinstance(item, str) and item.strip():
+                        video_url = item.strip()
+                        break
+                    if isinstance(item, dict):
+                        video_url = str(item.get("url") or item.get("video_url") or item.get("output") or "").strip()
+                        if video_url:
+                            break
             history.append({"attempt": attempt, "request_attempts": request_attempts, "status": status, "video_url": video_url})
-            if status == "succeeded" and video_url:
+            if status in {"succeeded", "success", "completed", "done"} and video_url:
                 return {"task_id": task_id, "status": status, "mp4url": video_url, "raw": payload, "history": history}
-            if status in {"failed", "cancelled", "expired"}:
+            if status in {"failed", "failure", "error", "cancelled", "canceled", "expired"}:
                 err = payload.get("error") if isinstance(payload.get("error"), dict) else {}
                 raise PipelineError(f"Seedance task failed: {err or payload}")
             time.sleep(self.config.poll_interval_seconds)

@@ -1,5 +1,10 @@
 {
   "providers": {
+    "openai-codex": {
+      "baseUrl": "https://chatgpt.com/backend-api",
+      "api": "openai-codex-responses",
+      "models": []
+    },
     "lobster-sutui": {
       "baseUrl": "http://127.0.0.1:8000/internal/openclaw-sutui/v1",
       "apiKey": "lobster-oc-sutui-local-change-me",
@@ -13,21 +18,19 @@
             "text"
           ],
           "contextWindow": 65536,
-          "maxTokens": 8192,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "api": "openai-completions"
+          "maxTokens": 8192
+        },
+        {
+          "id": "openclaw-skill-chat",
+          "name": "Sutui OpenClaw Skill Chat (server scheduled)",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 65536,
+          "maxTokens": 8192
         }
       ]
-    },
-    "openai-codex": {
-      "baseUrl": "https://chatgpt.com/backend-api",
-      "api": "openai-codex-responses",
-      "models": []
     }
   }
 }

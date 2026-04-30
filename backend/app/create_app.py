@@ -21,6 +21,8 @@ from .api.mcp_gateway import router as mcp_gateway_router
 from .api.openclaw_sutui_llm_proxy import router as openclaw_sutui_llm_proxy_router
 from .api.openclaw_config import router as openclaw_config_router
 from .api.openclaw_memory import router as openclaw_memory_router
+from .api.openclaw_skill_chat import router as openclaw_skill_chat_router
+from .api.h5_chat_channel import router as h5_chat_channel_router
 from .api.custom_config import router as custom_config_router
 from .api.billing import router as billing_router
 from .api.consumption_accounts import router as consumption_accounts_router
@@ -758,6 +760,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[启动] Twilio WhatsApp 自动拉取回复未启动: %s", e)
     try:
+        from .api.h5_chat_channel import h5_chat_poll_loop
+
+        asyncio.create_task(h5_chat_poll_loop())
+        logger.info("[startup] H5 remote chat poll loop started")
+    except Exception as e:
+        logger.warning("[startup] H5 remote chat poll loop not started: %s", e)
+    try:
         from .services.creator_schedule_runner import creator_schedule_background_loop
 
         asyncio.create_task(creator_schedule_background_loop())
@@ -851,6 +860,8 @@ def create_app() -> FastAPI:
     app.include_router(openclaw_sutui_llm_proxy_router, prefix="")
     app.include_router(openclaw_config_router, prefix="")
     app.include_router(openclaw_memory_router, prefix="")
+    app.include_router(openclaw_skill_chat_router, prefix="")
+    app.include_router(h5_chat_channel_router, prefix="")
     app.include_router(custom_config_router, prefix="")
     app.include_router(billing_router, prefix="")
     app.include_router(consumption_accounts_router, prefix="")

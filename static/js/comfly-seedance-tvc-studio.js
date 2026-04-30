@@ -21,7 +21,7 @@
     aspectRatio: '9:16',
     visualTone: 'clean_bright',
     rhythm: 'smooth',
-    model: 'seedance-2-0-pro-250528',
+    model: 'doubao-seedance-2-0-260128',
     needAudio: true,
     needMerge: true,
     prompt: ''
@@ -60,7 +60,10 @@
 
   function authHeadersSafe() {
     if (typeof authHeaders === 'function') {
-      return authHeaders() || {};
+      var headers = Object.assign({}, authHeaders() || {});
+      delete headers['Content-Type'];
+      delete headers['content-type'];
+      return headers;
     }
     return {};
   }
@@ -74,6 +77,38 @@
         '"': '&quot;'
       }[ch];
     });
+  }
+
+  function normalizeApiErrorText(detail, fallback) {
+    if (detail === null || detail === undefined || detail === '') return fallback || '未知错误';
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      var rows = detail.map(function(item) {
+        if (item === null || item === undefined) return '';
+        if (typeof item === 'string') return item;
+        if (typeof item === 'object') {
+          var loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+          var msg = String(item.msg || item.message || item.detail || '').trim();
+          if (loc && msg) return loc + ': ' + msg;
+          if (msg) return msg;
+          try { return JSON.stringify(item); } catch (err) { return String(item); }
+        }
+        return String(item);
+      }).filter(Boolean);
+      return rows.join('；') || (fallback || '未知错误');
+    }
+    if (typeof detail === 'object') {
+      if (typeof detail.detail === 'string' && detail.detail) return detail.detail;
+      if (typeof detail.message === 'string' && detail.message) return detail.message;
+      if (typeof detail.msg === 'string' && detail.msg) return detail.msg;
+      if (detail.error) return normalizeApiErrorText(detail.error, fallback);
+      try { return JSON.stringify(detail); } catch (err) { return String(detail); }
+    }
+    return String(detail);
+  }
+
+  function responseErrorText(data, fallback) {
+    return normalizeApiErrorText(data && (data.detail || data.message || data.error || data), fallback);
   }
 
   function formatFileSize(size) {
@@ -556,10 +591,10 @@
         return response.json().then(function(data) {
           return { ok: response.ok, data: data || {} };
         });
-      })
+    })
       .then(function(result) {
         if (!result.ok || !result.data || !result.data.asset_id) {
-          throw new Error((result.data && (result.data.detail || result.data.message)) || '素材上传失败');
+          throw new Error(responseErrorText(result.data, '素材上传失败'));
         }
         item.asset_id = result.data.asset_id || '';
         item.source_url = result.data.source_url || '';
@@ -604,7 +639,10 @@
         task_text: values.prompt || '',
         analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
         image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
-        video_model: values.model
+        video_model: values.model,
+        aspect_ratio: values.aspectRatio,
+        generate_audio: !!values.needAudio,
+        watermark: false
       }
     };
   }
@@ -638,7 +676,7 @@
       })
       .then(function(result) {
         if (!result.ok) {
-          throw new Error((result.data && (result.data.detail || result.data.message)) || '状态查询失败');
+          throw new Error(responseErrorText(result.data, '状态查询失败'));
         }
 
         state.currentJobStatus = String(result.data.status || '').trim();
@@ -654,14 +692,14 @@
         if (state.currentJobStatus === 'completed') {
           showMessage('任务已完成，右侧已切换到最终结果视频。');
         } else if (state.currentJobStatus === 'failed') {
-          showMessage('任务失败：' + String(result.data.error || '未知错误'));
+          showMessage('任务失败：' + normalizeApiErrorText(result.data.error, '未知错误'));
         } else if (showToast) {
           showMessage('任务状态已刷新。');
         }
       })
       .catch(function(err) {
         stopPolling();
-        showMessage('刷新任务状态失败：' + (err && err.message ? err.message : '未知错误'));
+        showMessage('刷新任务状态失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
       });
   }
 
@@ -707,7 +745,7 @@
       })
       .catch(function(err) {
         // 算力检查失败，显示错误但不继续
-        showMessage(err && err.message ? err.message : '算力检查失败');
+        showMessage(normalizeApiErrorText(err && (err.message || err), '算力检查失败'));
         if (btn) {
           btn.disabled = false;
           btn.textContent = '开始生成视频';
@@ -731,7 +769,7 @@
       })
       .then(function(result) {
         if (!result.ok || !result.data || !result.data.job_id) {
-          throw new Error((result.data && (result.data.detail || result.data.message)) || '任务提交失败');
+          throw new Error(responseErrorText(result.data, '任务提交失败'));
         }
 
         state.currentJobId = result.data.job_id;
@@ -742,7 +780,7 @@
         refreshJobStatus(false);
       })
       .catch(function(err) {
-        showMessage('提交失败：' + (err && err.message ? err.message : '未知错误'));
+        showMessage('提交失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
       })
       .finally(function() {
         if (btn) {
