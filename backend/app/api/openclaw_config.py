@@ -40,6 +40,7 @@ _OC_DIR = _BASE_DIR / "openclaw"
 _OC_CONFIG = _OC_DIR / "openclaw.json"
 _WEIXIN_LEDGER = _OC_DIR / ".weixin_login_last.json"
 _OC_ENV = _OC_DIR / ".env"
+_OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER = "LOBSTER_AUTO_TOKEN_PLACEHOLDER"
 
 SUPPORTED_PROVIDERS = [
     {"id": "anthropic", "name": "Anthropic", "env_key": "ANTHROPIC_API_KEY",
@@ -147,6 +148,19 @@ def _ensure_openclaw_json_for_local_launch() -> None:
                         else:
                             new_paths.append(p)
                     load["paths"] = new_paths
+        gateway = cfg.setdefault("gateway", {})
+        if isinstance(gateway, dict):
+            auth = gateway.setdefault("auth", {})
+            if isinstance(auth, dict):
+                env_gateway_token = (settings.openclaw_gateway_token or os.environ.get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
+                cfg_gateway_token = str(auth.get("token") or "").strip()
+                if (
+                    env_gateway_token
+                    and env_gateway_token != _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER
+                    and cfg_gateway_token != env_gateway_token
+                ):
+                    auth["token"] = env_gateway_token
+                    changed = True
         env_data = _read_oc_env()
         models = cfg.get("models")
         if isinstance(models, dict):
@@ -1202,9 +1216,10 @@ _CUSTOM_CONFIGS_FILE = _BASE_DIR / "custom_configs.json"
 def _default_recharge_shops():
     """默认充值档位（当 get_pay_info_list 失败时使用）。"""
     return [
-        {"shop_id": 0, "money_yuan": 100, "title": "100 元"},
-        {"shop_id": 0, "money_yuan": 500, "title": "500 元"},
-        {"shop_id": 0, "money_yuan": 1000, "title": "1000 元"},
+        {"shop_id": 0, "money_yuan": 100, "title": "100 元 - 10000 算力"},
+        {"shop_id": 0, "money_yuan": 200, "title": "200 元 - 20000 算力"},
+        {"shop_id": 0, "money_yuan": 500, "title": "500 元 - 50000 算力"},
+        {"shop_id": 0, "money_yuan": 1000, "title": "1000 元 - 100000 算力"},
     ]
 
 

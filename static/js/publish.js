@@ -23,7 +23,10 @@ document.querySelectorAll('.pub-tab').forEach(function(tab) {
 });
 
 var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
+var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'bilibili', 'xiaohongshu', 'kuaishou', 'toutiao'];
+var ECOMMERCE_ACCOUNT_PLATFORMS = ['douyin_shop', 'xiaohongshu_shop', 'alibaba1688', 'taobao', 'pinduoduo'];
 var ECOMMERCE_PLATFORMS = { douyin_shop: true, xiaohongshu_shop: true, alibaba1688: true, taobao: true, pinduoduo: true };
+var _currentAccountType = 'publish';
 var STATUS_LABELS = { active: '已登录', pending: '待登录', error: '异常' };
 var STATUS_COLORS = { active: '#34d399', pending: '#fb923c', error: '#f87171' };
 
@@ -31,6 +34,77 @@ var STATUS_COLORS = { active: '#34d399', pending: '#fb923c', error: '#f87171' };
 function publishLocalBase() {
   var b = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
   return b;
+}
+
+function _accountTypeForPlatform(platform) {
+  return ECOMMERCE_PLATFORMS[platform] ? 'ecommerce' : 'publish';
+}
+
+function _platformsForAccountType(type) {
+  return type === 'ecommerce' ? ECOMMERCE_ACCOUNT_PLATFORMS : PUBLISH_ACCOUNT_PLATFORMS;
+}
+
+function _accountTypeUiText(type) {
+  if (type === 'ecommerce') {
+    return {
+      addButton: '添加电商平台账号',
+      modalTitle: '添加电商平台账号',
+      platformLabel: '电商平台',
+      filterLabel: '选电商平台：',
+      emptyAll: '暂无电商平台账号。请添加账号后登录。',
+      emptyPlatform: '该电商平台暂无账号。'
+    };
+  }
+  return {
+    addButton: '添加发布账号',
+    modalTitle: '添加发布账号',
+    platformLabel: '账号平台',
+    filterLabel: '选账号平台：',
+    emptyAll: '暂无发布账号。请添加账号后登录。',
+    emptyPlatform: '该账号平台暂无发布账号。'
+  };
+}
+
+function _renderPlatformOptions(selectEl, type, includeAll, selectedValue) {
+  if (!selectEl) return;
+  var platforms = _platformsForAccountType(type);
+  var html = includeAll ? '<option value="">全部</option>' : '';
+  platforms.forEach(function(platform) {
+    html += '<option value="' + escapeAttr(platform) + '">' + escapeHtml(PLATFORM_NAMES[platform] || platform) + '</option>';
+  });
+  selectEl.innerHTML = html;
+  if (selectedValue && platforms.indexOf(selectedValue) !== -1) {
+    selectEl.value = selectedValue;
+  } else if (!includeAll && platforms.length) {
+    selectEl.value = platforms[0];
+  } else {
+    selectEl.value = '';
+  }
+}
+
+function _syncAccountTypeUi() {
+  var text = _accountTypeUiText(_currentAccountType);
+  document.querySelectorAll('.account-type-tab').forEach(function(tab) {
+    tab.classList.toggle('active', tab.getAttribute('data-account-type') === _currentAccountType);
+  });
+  var addBtn = document.getElementById('openAddPublishAccountModalBtn');
+  if (addBtn) addBtn.textContent = text.addButton;
+  var filterLabel = document.getElementById('accountPlatformFilterLabel');
+  if (filterLabel) filterLabel.textContent = text.filterLabel;
+  var filter = document.getElementById('accountPlatformFilter');
+  var current = filter ? filter.value : '';
+  _renderPlatformOptions(filter, _currentAccountType, true, current);
+}
+
+function _syncAddAccountModalPlatformOptions() {
+  var filter = document.getElementById('accountPlatformFilter');
+  var selected = filter ? filter.value : '';
+  var text = _accountTypeUiText(_currentAccountType);
+  var title = document.getElementById('addPublishAccountModalTitleText');
+  if (title) title.textContent = text.modalTitle;
+  var label = document.getElementById('modalAddAcctPlatformLabel');
+  if (label) label.textContent = text.platformLabel;
+  _renderPlatformOptions(document.getElementById('modalAddAcctPlatform'), _currentAccountType, false, selected);
 }
 
 /** 解析 fetch 响应：静态服返回 HTML 时给出可操作的报错 */
@@ -1056,11 +1130,11 @@ function _intervalMinutesFromModal() {
   return m;
 }
 
-function _renderAccountList(accounts) {
+function _renderAccountList(accounts, emptyMessage) {
   var el = document.getElementById('accountList');
   if (!el) return;
   if (!accounts.length) {
-    el.innerHTML = '<div class="page-empty-card">该平台暂无发布账号。请在上方添加账号后扫码登录。</div>';
+    el.innerHTML = '<div class="page-empty-card">' + escapeHtml(emptyMessage || '暂无账号。') + '</div>';
     return;
   }
   el.innerHTML = accounts.map(function(a) {
@@ -1108,8 +1182,14 @@ function _renderAccountList(accounts) {
 
 function _applyAccountPlatformFilter() {
   var platform = (document.getElementById('accountPlatformFilter') || {}).value || '';
-  var list = platform ? _allAccounts.filter(function(a) { return a.platform === platform; }) : _allAccounts;
-  _renderAccountList(list);
+  var text = _accountTypeUiText(_currentAccountType);
+  var list = _allAccounts.filter(function(a) {
+    return _accountTypeForPlatform(a.platform) === _currentAccountType;
+  });
+  if (platform) {
+    list = list.filter(function(a) { return a.platform === platform; });
+  }
+  _renderAccountList(list, platform ? text.emptyPlatform : text.emptyAll);
 }
 
 function loadAccounts() {
@@ -1131,10 +1211,6 @@ function loadAccounts() {
       var d = x.d;
       var accounts = (d && Array.isArray(d.accounts)) ? d.accounts : [];
       _allAccounts = accounts;
-      if (!accounts.length) {
-        el.innerHTML = '<div class="page-empty-card">暂无发布账号。请在上方添加账号后扫码登录。</div>';
-        return;
-      }
       _applyAccountPlatformFilter();
     })
     .catch(function(err) {
@@ -1566,7 +1642,28 @@ function closeCreatorScheduleTasksModal() {
   if (mask) mask.style.display = 'none';
 }
 
-// 选平台筛选：切换时只显示该平台账号，并确保下方列表立即刷新
+function _setAccountType(type) {
+  var next = type === 'ecommerce' ? 'ecommerce' : 'publish';
+  if (next === _currentAccountType) return;
+  _currentAccountType = next;
+  hideAccountDetailPanel();
+  _syncAccountTypeUi();
+  if (_allAccounts.length === 0) {
+    loadAccounts();
+  } else {
+    _applyAccountPlatformFilter();
+  }
+}
+
+document.querySelectorAll('.account-type-tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    _setAccountType(tab.getAttribute('data-account-type'));
+  });
+});
+
+_syncAccountTypeUi();
+
+// 选平台筛选：切换时只显示当前类型下的平台账号，并确保下方列表立即刷新
 var accountPlatformFilter = document.getElementById('accountPlatformFilter');
 if (accountPlatformFilter) {
   accountPlatformFilter.addEventListener('change', function() {
@@ -1584,6 +1681,7 @@ function openAddPublishAccountModal() {
   if (!mask) return;
   var msg = document.getElementById('addPublishAccountModalMsg');
   if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+  _syncAddAccountModalPlatformOptions();
   mask.style.display = 'flex';
 }
 
@@ -1605,15 +1703,6 @@ if (openAddPubAcctBtn) {
   openAddPubAcctBtn.addEventListener('click', openAddPublishAccountModal);
 }
 
-var openAddPlatformHelpBtn = document.getElementById('openAddPublishPlatformHelpBtn');
-if (openAddPlatformHelpBtn) {
-  openAddPlatformHelpBtn.addEventListener('click', function() {
-    var filter = document.getElementById('accountPlatformFilter');
-    if (filter) filter.focus();
-    alert('发布平台在“添加发布账号”的平台下拉中选择：账号平台包括抖音、小红书、今日头条等；电商平台包括抖店、小红书店铺、1688、淘宝、拼多多。新增平台需要先接入对应登录/发布适配器。');
-  });
-}
-
 var addPubAcctCancel = document.getElementById('addPublishAccountModalCancel');
 if (addPubAcctCancel) {
   addPubAcctCancel.addEventListener('click', closeAddPublishAccountModal);
@@ -1632,6 +1721,10 @@ if (addPubAcctSubmit) {
     var platform = document.getElementById('modalAddAcctPlatform').value;
     var nickname = (document.getElementById('modalAddAcctNickname').value || '').trim();
     var msgEl = document.getElementById('addPublishAccountModalMsg');
+    if (_accountTypeForPlatform(platform) !== _currentAccountType) {
+      _syncAddAccountModalPlatformOptions();
+      platform = document.getElementById('modalAddAcctPlatform').value;
+    }
     if (!nickname) {
       if (msgEl) {
         msgEl.textContent = '请输入账号昵称';
@@ -2146,7 +2239,7 @@ function loadTasks() {
       var tasks = (d && Array.isArray(d.tasks)) ? d.tasks : [];
       if (!tasks.length) {
         el.innerHTML = '<div class="page-empty-card">暂无<strong>单次发布</strong>记录（对话触发的 publish 任务）。<br>' +
-          '若你配置的是账号上的<strong>间隔定时任务</strong>：请到<strong>发布账号</strong> → 点击该账号 → <strong>执行记录</strong> 或进入详情后点 <strong>任务列表</strong>（今日头条与抖音、小红书相同）。</div>';
+          '若您配置的是账号上的<strong>间隔定时任务</strong>：请到<strong>发布账号</strong> → 点击该账号 → <strong>执行记录</strong> 或进入详情后点 <strong>任务列表</strong>（今日头条与抖音、小红书相同）。</div>';
         return;
       }
       el.innerHTML = '<div class="publish-task-list">' + tasks.map(function(t) {

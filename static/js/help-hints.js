@@ -10,15 +10,15 @@
     },
     billing: {
       title: '消费记录',
-      html: '<p>展示能力调用与算力扣费流水（以本系统记录为准）。</p><p>「充值」页签可查看充值订单；「消费」为扣费明细。时间一般为北京时间。</p>'
+      html: '<p>展示能力调用与算力扣费流水（以本系统记录为准）。</p><p>充值档位为 100、200、500、1000 元，按 1 元 = 100 算力到账；「充值」页签可查看充值订单，「消费」为扣费明细。</p>'
     },
     billing_recharge: {
       title: '算力充值',
-      html: '<p>选择算力档位后跳转支付；完成后余额会更新。若未显示充值区，可能当前版本或环境未开放在线充值。</p>'
+      html: '<p>选择算力档位后跳转支付；100、200、500、1000 元分别到账 10000、20000、50000、100000 算力。</p><p>完成后余额会更新。若未显示充值区，可能当前版本或环境未开放在线充值。</p>'
     },
     publish_overview: {
-      title: '发布管理',
-      html: '<p>点击<strong>账号卡片</strong>进入详情，查看抖音/小红书/今日头条作品数据。</p><p><strong>定时任务</strong>与<strong>执行记录</strong>在卡片或详情内；本页「发布记录」tab 是<strong>单次发布</strong>（对话里触发的 publish），与按间隔的定时任务<strong>不是同一处</strong>。</p>'
+      title: '发布中心',
+      html: '<p><strong>发布账号</strong>管理抖音、小红书、今日头条等内容平台账号；<strong>电商平台</strong>管理抖店、小红书店铺、1688、淘宝、拼多多等店铺账号。</p><p><strong>素材库</strong>查看可发布素材，<strong>发布记录</strong>查看单次发布任务；定时任务与执行记录在账号卡片或详情内查看。</p>'
     },
     publish_add_account: {
       title: '添加发布账号',
@@ -34,11 +34,11 @@
     },
     sys_config: {
       title: '系统配置',
-      html: '<p><strong>模型配置</strong>：默认对话模型与各厂商 API Key；在线版能力可能由服务端统一提供，部分项只读或无需填写。</p><p><strong>自定义配置</strong>：导入键值/JSON 供本机后端使用。</p><p>下方「清除本机个人配置」仅影响当前账号在本机的缓存数据，不会删云端算力。</p>'
+      html: '<p><strong>智能对话路由</strong>保存后立即生效，用于切换直连 + MCP 或 OpenClaw Gateway。</p><p><strong>模型配置</strong>用于选择默认对话模型。</p><p><strong>一键清除</strong>仅影响当前账号在本机的配置或 OpenClaw 个人记忆，不删除云端算力和素材。</p>'
     },
     sys_save_oc: {
       title: '保存 / Gateway',
-      html: '<p><strong>保存</strong>：各厂商 API Key 只写入本机 <code>openclaw/.env</code> 与 <code>openclaw.json</code>，<strong>不会</strong>上传到云端 lobster_server。</p><p><strong>重启 Gateway</strong>：重启本机对话网关进程，改 Key 后若未生效可试。</p><p><strong>刷新状态</strong>：探测本机网关是否就绪。</p>'
+      html: '<p><strong>保存</strong>：保存当前默认模型设置。</p><p><strong>重启 Gateway</strong>：重启本机对话网关进程。</p><p><strong>刷新状态</strong>：探测本机网关是否就绪。</p>'
     },
     sys_custom_import: {
       title: '导入配置',
@@ -46,7 +46,7 @@
     },
     sys_clear_local: {
       title: '清除本机个人配置',
-      html: '<p>清除<strong>本机</strong>：OpenClaw 目录下各厂商 API Key（<code>openclaw/.env</code>，与云端无关）；若本机库有用户行则再清速推 Token、首选模型、算力账号；并清<strong>浏览器</strong>对话与 <code>lobster_*_base</code> 调试项。</p><p>不删云端算力与素材，不退出登录；自定义配置块请用上方 Tab 单独删。</p><p>需已登录（仅用于确认操作者，不在远端存你的 Key）。</p>'
+      html: '<p>清除<strong>本机</strong>当前账号的个人配置、偏好与浏览器本地调试项。</p><p>不删云端算力与素材，不退出登录；自定义配置块请用上方 Tab 单独删。</p>'
     },
     logs: {
       title: '系统日志',

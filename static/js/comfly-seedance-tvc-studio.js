@@ -659,7 +659,37 @@
 
     var result = resp.result || {};
     var finalVideo = result.final_video || {};
-    return String(finalVideo.url || '').trim();
+    var finalUrl = String(finalVideo.url || '').trim();
+    if (finalUrl) return finalUrl;
+
+    function pickSegmentUrl(item) {
+      if (!item || typeof item !== 'object') return '';
+      var direct = String(item.mp4url || item.video_url || item.url || item.output || '').trim();
+      if (direct) return direct;
+
+      var raw = item.video_raw || item.raw || {};
+      var content = raw && typeof raw.content === 'object' ? raw.content : {};
+      var contentUrl = String(content.video_url || content.url || '').trim();
+      if (contentUrl) return contentUrl;
+
+      var data = raw && typeof raw.data === 'object' ? raw.data : {};
+      var dataUrl = String(data.video_url || data.output || '').trim();
+      if (dataUrl) return dataUrl;
+
+      var resultObj = raw && typeof raw.result === 'object' ? raw.result : {};
+      return String(resultObj.video_url || resultObj.output || '').trim();
+    }
+
+    var groups = [result.completed_segments, result.completed_shots, result.shots];
+    for (var g = 0; g < groups.length; g += 1) {
+      var list = Array.isArray(groups[g]) ? groups[g] : [];
+      for (var j = 0; j < list.length; j += 1) {
+        var url = pickSegmentUrl(list[j]);
+        if (url) return url;
+      }
+    }
+
+    return '';
   }
 
   function refreshJobStatus(showToast) {
@@ -690,7 +720,11 @@
 
         stopPolling();
         if (state.currentJobStatus === 'completed') {
-          showMessage('任务已完成，右侧已切换到最终结果视频。');
+          if (state.currentResultVideoUrl) {
+            showMessage('任务已完成，右侧已切换到最终结果视频。');
+          } else {
+            showMessage('任务已完成，但未拿到可播放的视频地址，请刷新任务状态或到素材库查看。');
+          }
         } else if (state.currentJobStatus === 'failed') {
           showMessage('任务失败：' + normalizeApiErrorText(result.data.error, '未知错误'));
         } else if (showToast) {

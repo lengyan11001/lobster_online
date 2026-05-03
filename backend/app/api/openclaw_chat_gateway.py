@@ -7,8 +7,10 @@ route, not carry the Gateway implementation details.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
+import os
 import re
 import base64
 from pathlib import Path
@@ -56,11 +58,20 @@ except ImportError:
 logger = logging.getLogger(__name__)
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 _USER_MEMORY_DIR = _BASE_DIR / "openclaw" / "user_memory"
+_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC = float(
+    os.environ.get("LOBSTER_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC", "300") or "300"
+)
+_OPENCLAW_LAST_FAILURE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "openclaw_last_failure",
+    default="",
+)
 
 
 OC_ONLY_CHAT_FAIL_DETAIL = (
-    "已启用「仅 OpenClaw」但未配置 Gateway 或 Gateway 无有效回复。"
-    "请配置 OPENCLAW_GATEWAY_URL、OPENCLAW_GATEWAY_TOKEN 并检查 OpenClaw 服务。"
+    "已启用「仅 OpenClaw」，但 Gateway 没有返回可用回复。"
+    "可能原因是 OpenClaw 服务未启动、Gateway 配置缺失，或生成/工具调用等待超时。"
+    "请检查 OPENCLAW_GATEWAY_URL、OPENCLAW_GATEWAY_TOKEN 与 OpenClaw 服务；"
+    "如果刚触发了图片/视频生成，请稍后查看素材库，后台任务可能仍在继续。"
 )
 
 OC_PREFIX_CHAT_FAIL_DETAIL = (
@@ -69,6 +80,65 @@ OC_PREFIX_CHAT_FAIL_DETAIL = (
     "并确认龙虾后端 .env 的 OPENCLAW_GATEWAY_URL、OPENCLAW_GATEWAY_TOKEN 与 Gateway 一致。"
     "在线版在已配置 AUTH_SERVER_BASE 且本轮可解析为速推对话时，会自动回退到认证中心 sutui-chat。"
 )
+
+
+_OPENCLAW_STAGE_LABELS = {
+    "config_missing": "配置检查",
+    "prepare_messages": "组装 OpenClaw 请求",
+    "memory_context": "加载 OpenClaw 记忆",
+    "gateway_request": "请求 OpenClaw Gateway",
+    "gateway_http_status": "Gateway HTTP 响应",
+    "gateway_response_parse": "解析 Gateway 响应",
+    "gateway_empty_choices": "解析模型回复",
+    "gateway_empty_content": "解析模型回复",
+    "upstream_error_body": "OpenClaw 上游模型/工具",
+    "memory_followup": "记忆资料二次追问",
+    "timeout": "请求 OpenClaw Gateway",
+    "exception": "OpenClaw 调用异常",
+}
+
+
+def _redact_openclaw_diag_text(value: Any) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<redacted>", text)
+    text = re.sub(r"(?i)(access_token=)[^&\s]+", r"\1<redacted>", text)
+    text = re.sub(
+        r'(?i)((?:api[_-]?key|token|authorization|secret)["\']?\s*[:=]\s*["\']?)[^"\'\s,}]+',
+        r"\1<redacted>",
+        text,
+    )
+    return text
+
+
+def _diag_snippet(value: Any, limit: int = 500) -> str:
+    text = _redact_openclaw_diag_text(value).replace("\r", " ").replace("\n", " ").strip()
+    if len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
+def _set_openclaw_failure(stage: str, message: str, **meta: Any) -> str:
+    label = _OPENCLAW_STAGE_LABELS.get(stage, stage)
+    parts = [f"{label}({stage})：{_diag_snippet(message, 240)}"]
+    for key, value in meta.items():
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}={_diag_snippet(value, 320)}")
+    detail = "；".join(parts)
+    _OPENCLAW_LAST_FAILURE.set(detail)
+    logger.warning("[OPENCLAW] failure %s", detail)
+    return detail
+
+
+def openclaw_last_failure_detail() -> str:
+    return _OPENCLAW_LAST_FAILURE.get("").strip()
+
+
+def openclaw_failure_detail(base_detail: str, fallback_detail: str = "") -> str:
+    detail = openclaw_last_failure_detail() or fallback_detail.strip()
+    if not detail:
+        return base_detail
+    return f"{base_detail}\n\n诊断：{detail}"
 
 
 def openclaw_gateway_configured() -> bool:
@@ -205,7 +275,7 @@ def _openclaw_agent_id_from_chat_model(model: str) -> str:
 
 
 _DSML_FC_RE = re.compile(
-    r'<[\uff5c|]DSML[\uff5c|](?:function_calls|tool_calls)>(.*?)</[\uff5c|]DSML[\uff5c|](?:function_calls|tool_calls)>',
+    r'<[\uff5c|]+DSML[\uff5c|]+(?:function_calls|tool_calls)>(.*?)</[\uff5c|]+DSML[\uff5c|]+(?:function_calls|tool_calls)>',
     re.DOTALL,
 )
 _PIPE_TOOL_CALLS_WRAPPER_RE = re.compile(
@@ -218,7 +288,7 @@ _PIPE_TOOL_CALLS_WRAPPER_RE = re.compile(
 def _strip_dsml(content: str) -> str:
     cleaned = _PIPE_TOOL_CALLS_WRAPPER_RE.sub("", content or "").strip()
     cleaned = _DSML_FC_RE.sub("", cleaned).strip()
-    cleaned = re.sub(r'<[\uff5c|]DSML[\uff5c|][^>]*>', "", cleaned).strip()
+    cleaned = re.sub(r'</?[\uff5c|]+DSML[\uff5c|]+[^>]*>', "", cleaned).strip()
     return cleaned
 
 
@@ -615,9 +685,16 @@ async def try_openclaw(
     installation_id: Optional[str] = None,
 ) -> Optional[str]:
     """Attempt to get a reply via OpenClaw Gateway. Returns None on failure."""
+    _OPENCLAW_LAST_FAILURE.set("")
     oc_base = (settings.openclaw_gateway_url or "").strip().rstrip("/")
     oc_token = (settings.openclaw_gateway_token or "").strip()
     if not oc_base or not oc_token:
+        missing = []
+        if not oc_base:
+            missing.append("OPENCLAW_GATEWAY_URL")
+        if not oc_token:
+            missing.append("OPENCLAW_GATEWAY_TOKEN")
+        _set_openclaw_failure("config_missing", "缺少 OpenClaw Gateway 配置", missing=",".join(missing))
         return None
 
     agent_id = _openclaw_agent_id_from_chat_model(model)
@@ -651,13 +728,17 @@ async def try_openclaw(
     if xi and not is_internal_lobster_jwt:
         headers["X-Installation-Id"] = xi
 
+    stage = "prepare_messages"
     try:
         openclaw_messages = _prepare_messages_for_openclaw(msgs, scope.system_hint())
+        stage = "memory_context"
         memory_context = _build_openclaw_memory_context(msgs, raw_token, xi)
         if memory_context:
             openclaw_messages = _inject_memory_context(openclaw_messages, memory_context)
 
         async def _post_gateway(messages: List[Dict]) -> Tuple[Optional[str], Optional[httpx.Response]]:
+            nonlocal stage
+            stage = "gateway_request"
             resp = await client.post(
                 f"{oc_base}/v1/chat/completions",
                 json={"model": openclaw_body_model, "messages": messages, "stream": False},
@@ -665,16 +746,51 @@ async def try_openclaw(
             )
             if resp.status_code != 200:
                 return None, resp
-            choices = resp.json().get("choices", [])
-            if not choices:
+            stage = "gateway_response_parse"
+            try:
+                body = resp.json()
+            except ValueError as exc:
+                _set_openclaw_failure(
+                    "gateway_response_parse",
+                    f"Gateway 返回 200，但响应不是有效 JSON：{exc}",
+                    model=model,
+                    agent_id=agent_id,
+                    body=_diag_snippet(resp.text),
+                )
                 return None, resp
-            return (choices[0].get("message", {}).get("content") or "").strip(), resp
+            choices = body.get("choices", []) if isinstance(body, dict) else []
+            if not choices:
+                _set_openclaw_failure(
+                    "gateway_empty_choices",
+                    "Gateway 返回 200，但 choices 为空",
+                    model=model,
+                    agent_id=agent_id,
+                    body=_diag_snippet(body),
+                )
+                return None, resp
+            content = (choices[0].get("message", {}).get("content") or "").strip()
+            if not content:
+                _set_openclaw_failure(
+                    "gateway_empty_content",
+                    "Gateway 返回 200，但 choices[0].message.content 为空",
+                    model=model,
+                    agent_id=agent_id,
+                    body=_diag_snippet(body),
+                )
+            return content, resp
 
-        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC, trust_env=False) as client:
             raw_content, resp = await _post_gateway(openclaw_messages)
-        if resp.status_code == 200:
+        if resp and resp.status_code == 200:
             if raw_content:
                 if _openclaw_body_looks_like_upstream_http_error(raw_content):
+                    _set_openclaw_failure(
+                        "upstream_error_body",
+                        "Gateway 返回了 OpenClaw 上游模型/工具错误内容",
+                        model=model,
+                        agent_id=agent_id,
+                        body=_diag_snippet(raw_content),
+                    )
                     logger.warning(
                         "[OPENCLAW] Gateway 200 but body looks like upstream HTTP/auth error agent_id=%s snippet=%s",
                         agent_id,
@@ -697,18 +813,49 @@ async def try_openclaw(
                             ),
                         }
                     )
-                    async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+                    async with httpx.AsyncClient(timeout=_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC, trust_env=False) as client:
+                        stage = "memory_followup"
                         retry_content, retry_resp = await _post_gateway(followup_messages)
                     if retry_resp and retry_resp.status_code == 200 and retry_content:
                         if not _openclaw_body_looks_like_upstream_http_error(retry_content):
                             logger.info("[OPENCLAW] memory-context follow-up produced final reply agent_id=%s", agent_id)
                             return retry_content
+                        _set_openclaw_failure(
+                            "upstream_error_body",
+                            "记忆资料二次追问后仍返回上游模型/工具错误内容",
+                            model=model,
+                            agent_id=agent_id,
+                            body=_diag_snippet(retry_content),
+                        )
+                    elif retry_resp and retry_resp.status_code != 200:
+                        retry_body = (retry_resp.text or "").replace("\n", " ").strip()
+                        _set_openclaw_failure(
+                            "gateway_http_status",
+                            f"记忆资料二次追问返回 HTTP {retry_resp.status_code}",
+                            model=model,
+                            agent_id=agent_id,
+                            body=_diag_snippet(retry_body),
+                        )
+                    elif not retry_content:
+                        _set_openclaw_failure(
+                            "memory_followup",
+                            "记忆资料二次追问没有得到最终回复",
+                            model=model,
+                            agent_id=agent_id,
+                        )
                 return raw_content
             logger.warning("[OPENCLAW] Gateway 200 but choices empty model=%s agent_id=%s", model, agent_id)
-        else:
+        elif resp:
             body_prefix = (resp.text or "").replace("\n", " ").strip()
             if len(body_prefix) > 600:
                 body_prefix = body_prefix[:600] + "…"
+            _set_openclaw_failure(
+                "gateway_http_status",
+                f"Gateway 返回 HTTP {resp.status_code}",
+                model=model,
+                agent_id=agent_id,
+                body=body_prefix or "(empty body)",
+            )
             logger.warning(
                 "[OPENCLAW] Gateway HTTP %s model=%s agent_id=%s body_prefix=%s",
                 resp.status_code,
@@ -716,6 +863,19 @@ async def try_openclaw(
                 agent_id,
                 body_prefix or "(empty body)",
             )
+    except httpx.TimeoutException as exc:
+        _set_openclaw_failure(
+            "timeout",
+            f"Gateway 请求超过 {_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC:.1f}s 未返回",
+            model=model,
+            agent_id=agent_id,
+            error=f"{exc.__class__.__name__}: {exc}",
+        )
     except Exception as exc:
-        logger.warning("[OPENCLAW] Gateway request failed: %s", exc)
+        _set_openclaw_failure(
+            stage or "exception",
+            f"{exc.__class__.__name__}: {exc}",
+            model=model,
+            agent_id=agent_id,
+        )
     return None

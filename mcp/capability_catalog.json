@@ -41,7 +41,7 @@
       "properties": {
         "model": {
           "type": "string",
-          "description": "可选（省略时默认 sora2 即 fal-ai/sora-2/text-to-video）。用户说「用 Seedance」「用 wan」等即指定此字段。"
+          "description": "可选（省略时由 MCP 使用默认视频模型，当前默认 veo3.1-fast）。用户说「用 Seedance」「用 wan」等即指定此字段。"
         },
         "prompt": {
           "type": "string",
@@ -99,7 +99,7 @@
         },
         "image_url": {
           "type": "string",
-          "description": "单张图片 URL（会自动转为 image_urls 数组）"
+          "description": "单张图片 URL（会自动转为 image_urls 数组）；也可传 asset_id 由 MCP 解析素材公网地址"
         },
         "image_urls": {
           "type": "array",
@@ -130,7 +130,7 @@
         },
         "video_url": {
           "type": "string",
-          "description": "单个视频 URL（会自动转为 video_urls 数组）"
+          "description": "单个视频 URL（会自动转为 video_urls 数组）；也可传 asset_id 由 MCP 解析素材公网地址"
         },
         "video_urls": {
           "type": "array",

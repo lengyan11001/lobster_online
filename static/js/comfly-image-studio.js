@@ -332,10 +332,10 @@
       return;
     }
 
-    // 积分预检查
+    // 算力预检查
     var model = $('imglabModelSelect').value;
-    var estimatedCredits = 20; // gpt-image-2 采购价
-    var userCredits = estimatedCredits * 2; // 用户消耗 = 采购价 × 2倍
+    var estimatedCredits = 30;
+    var userCredits = estimatedCredits * 2;
 
     try {
       var meResp = await fetch((typeof API_BASE !== 'undefined' ? API_BASE : '') + '/auth/me', {
@@ -345,7 +345,7 @@
         var meData = await meResp.json();
         var balance = meData.credits != null ? meData.credits : null;
         if (balance !== null && balance < userCredits) {
-          showMessage('算力不足：生成一张图片需要 ' + userCredits + ' 算力（采购价 ' + estimatedCredits + ' 算力 × 2倍），当前余额 ' + balance + ' 算力。请先充值。', true);
+          showMessage('算力不足：生成一张图片需要 ' + userCredits + ' 算力，当前余额 ' + balance + ' 算力。请先充值。', true);
           return;
         }
       }

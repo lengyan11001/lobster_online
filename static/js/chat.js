@@ -45,9 +45,9 @@ var CHAT_WORKSPACE_ENTRY_ENABLED = false;
 var WORKSPACE_CATEGORY_DEFAULT = 'web_app';
 var WORKSPACE_CATEGORY_CONFIG = {
   web_app: {
-    title: '要我在网页应用里帮你处理什么？',
+    title: '要我在网页应用里帮您处理什么？',
     subtitle: '这里适合创建网页应用、继续开发、预览部署、总结网页、输出文档，以及上传图片和文档后继续处理。',
-    placeholder: '描述你想做的网页应用、网页改版、网页总结或网页生成任务',
+    placeholder: '描述您想做的网页应用、网页改版、网页总结或网页生成任务',
     hint: '云端工作台模式：默认聚焦网页应用，可继续开发、部署、总结网页、输出文档和处理附件。',
     chips: [
       ['创建网页', '帮我生成一个网站：'],
@@ -64,9 +64,9 @@ var WORKSPACE_CATEGORY_CONFIG = {
     ]
   },
   mobile_app: {
-    title: '要我在移动应用里帮你处理什么？',
+    title: '要我在移动应用里帮您处理什么？',
     subtitle: '这里适合创建移动应用、梳理页面流、继续改功能、输出 PRD 和交互说明，也能结合附件继续开发。',
-    placeholder: '描述你想做的移动应用、页面流程、功能开发或文档任务',
+    placeholder: '描述您想做的移动应用、页面流程、功能开发或文档任务',
     hint: '云端工作台模式：移动应用可直接做页面规划、功能拆解、继续开发和文档输出。',
     chips: [
       ['创建应用', '帮我生成一个移动应用：'],
@@ -83,9 +83,9 @@ var WORKSPACE_CATEGORY_CONFIG = {
     ]
   },
   mini_program: {
-    title: '要我在小程序里帮你处理什么？',
+    title: '要我在小程序里帮您处理什么？',
     subtitle: '这里适合搭建小程序、梳理页面与能力边界、输出开发文档、生成视觉素材，并结合上传内容继续推进。',
-    placeholder: '描述你想做的小程序功能、页面、开发任务或输出需求',
+    placeholder: '描述您想做的小程序功能、页面、开发任务或输出需求',
     hint: '云端工作台模式：小程序支持从需求梳理、页面设计到继续开发和文档输出。',
     chips: [
       ['创建小程序', '帮我生成一个小程序：'],
@@ -102,9 +102,9 @@ var WORKSPACE_CATEGORY_CONFIG = {
     ]
   },
   agent: {
-    title: '要我在智能体里帮你处理什么？',
+    title: '要我在智能体里帮您处理什么？',
     subtitle: '这里适合设计智能体能力、对话流程、工具接入、任务拆解，以及继续完善智能体的执行逻辑。',
-    placeholder: '描述你想做的智能体目标、能力设计、工具接入或对话流程任务',
+    placeholder: '描述您想做的智能体目标、能力设计、工具接入或对话流程任务',
     hint: '云端工作台模式：智能体支持能力设计、对话流程梳理、工具接入和持续迭代。',
     chips: [
       ['创建智能体', '帮我生成一个智能体：'],
@@ -121,9 +121,9 @@ var WORKSPACE_CATEGORY_CONFIG = {
     ]
   },
   skills: {
-    title: '要我在技能里帮你处理什么？',
+    title: '要我在技能里帮您处理什么？',
     subtitle: '这里适合设计技能结构、接入外部能力、整理参数说明、生成使用文档，也适合结合附件继续配置和迭代。',
-    placeholder: '描述你想新增、配置或优化的技能能力和使用场景',
+    placeholder: '描述您想新增、配置或优化的技能能力和使用场景',
     hint: '云端工作台模式：技能支持能力设计、参数整理、文档生成和后续迭代。',
     chips: [
       ['创建技能', '帮我生成一个技能：'],
@@ -820,7 +820,7 @@ function refreshChatInputState() {
     btn.disabled = true;
     if (input) {
       input.disabled = true;
-      input.placeholder = 'H5 \u6d88\u606f\u955c\u50cf\u4f1a\u8bdd\u4ec5\u5c55\u793a\uff0c\u70b9\u51fb\u5de6\u4fa7 AI \u641c\u7d22\u53ef\u5237\u65b0';
+      input.placeholder = 'H5 \u6d88\u606f\u955c\u50cf\u4f1a\u8bdd\u4ec5\u5c55\u793a\uff0c\u70b9\u51fb\u5de6\u4fa7 H5 \u6d88\u606f\u53ef\u5237\u65b0';
     }
     if (cancelBtn) {
       cancelBtn.disabled = true;
@@ -1207,9 +1207,33 @@ function _getChatSuggestionMeta(title) {
     '继续优化': { tone: 'plan', icon: '↻', desc: '在已有基础上继续优化' },
     '上传资料': { tone: 'publish', icon: '⇪', desc: '结合资料继续完善方案' },
     '创建技能': { tone: 'video', icon: '✳', desc: '从零搭建新的技能能力' },
-    '参数设计': { tone: 'plan', icon: '≣', desc: '把参数和规则设计清楚' }
+    '参数设计': { tone: 'plan', icon: '≣', desc: '把参数和规则设计清楚' },
+    'AI对话': { tone: 'video', icon: '⌕', desc: '回到本机智能对话' },
+    'H5对话': { tone: 'ecommerce', icon: '○', desc: '查看远程会话消息' },
+    '帮我创作': { tone: 'publish', icon: '≡', desc: '填入创作需求' },
+    '创作图片': { tone: 'content', icon: '▣', desc: '进入图片工作台' },
+    '爆款TVC': { tone: 'image', icon: '▶', desc: '填入视频生成话术' },
+    '视频分镜': { tone: 'plan', icon: '▶', desc: '进入分镜工作台' },
+    '发布中心': { tone: 'publish', icon: '▣', desc: '管理发布账号和记录' },
+    '技能商店': { tone: 'ecommerce', icon: '</>', desc: '查看可用技能' }
   };
   return map[key] || { tone: 'plan', icon: '•', desc: '' };
+}
+
+function _clearChatSuggestionActionAttrs(el) {
+  if (!el) return;
+  el.removeAttribute('data-chat-prompt');
+  el.removeAttribute('data-open-hidden-view');
+  el.removeAttribute('data-jump-view');
+  el.removeAttribute('data-chat-quick-mode');
+  el.removeAttribute('data-chat-open-default');
+  el.removeAttribute('data-h5-chat-sync');
+}
+
+function _setChatSuggestionAction(el, attr, value) {
+  if (!el || !attr) return;
+  _clearChatSuggestionActionAttrs(el);
+  el.setAttribute(attr, value == null ? '1' : String(value));
 }
 
 function _renderChatSuggestionChip(el, title, prompt) {
@@ -1219,10 +1243,10 @@ function _renderChatSuggestionChip(el, title, prompt) {
   if (safeTitle === '图片生成') {
     meta.desc = '文生图 / 参考图合成';
   }
+  el.style.display = '';
   el.setAttribute('data-chip-tone', meta.tone || 'plan');
-  el.setAttribute('data-chat-prompt', prompt || '');
-  el.removeAttribute('data-open-hidden-view');
-  el.removeAttribute('data-jump-view');
+  _clearChatSuggestionActionAttrs(el);
+  if (prompt) el.setAttribute('data-chat-prompt', prompt);
   el.innerHTML =
     '<span class="chat-suggestion-chip-icon">' + escapeHtml(meta.icon || '•') + '</span>' +
     '<span class="chat-suggestion-chip-copy">' +
@@ -1232,13 +1256,13 @@ function _renderChatSuggestionChip(el, title, prompt) {
 }
 
 var CHAT_DEFAULT_PLACEHOLDER = '发送消息或输入 / 选择技能';
-var CHAT_DEFAULT_COMPOSER_LEAD = '告诉我你想做什么？我会先帮你理清任务，再继续生成和执行~';
+var CHAT_DEFAULT_COMPOSER_LEAD = '告诉我您想做什么？我会先帮您理清任务，再继续生成和执行~';
 var CHAT_QUICK_MODE_CONFIG = {
   video: {
     badge: '视频合成',
     title: '当前模式：视频合成',
     desc: '直接在下面输入一句话描述视频内容；如果要调分镜、时长和镜头节奏，再进工作台精调。',
-    lead: '直接描述你要合成的视频内容，我会先帮你开始生成；需要更细参数时再进工作台。',
+    lead: '直接描述您要合成的视频内容，我会先帮您开始生成；需要更细参数时再进工作台。',
     placeholder: '例如：我要合成一个20秒的护肤品短视频，晨光感，人物手持产品，镜头缓慢推进',
     starter: '我要合成一个视频，视频内容是：',
     advancedView: 'seedance-tvc-studio'
@@ -1247,7 +1271,7 @@ var CHAT_QUICK_MODE_CONFIG = {
     badge: '图片生成',
     title: '当前模式：图片生成',
     desc: '直接输入一句话描述画面内容；如果要上传参考图、选比例和模型，再进工作台精调。',
-    lead: '直接描述你想生成的图片内容，我会先帮你开始生成；需要更细参数时再进工作台。',
+    lead: '直接描述您想生成的图片内容，我会先帮您开始生成；需要更细参数时再进工作台。',
     placeholder: '例如：我要生成一张香薰蜡烛主视觉，奶油风桌面，暖白自然光，构图高级干净',
     starter: '我要生成一张图片，画面内容是：',
     advancedView: 'image-composer-studio'
@@ -1349,18 +1373,24 @@ function updateWorkspaceCategoryUi(category) {
     'chatSuggestionChip3',
     'chatSuggestionChip4',
     'chatSuggestionChip5',
-    'chatSuggestionChip6'
+    'chatSuggestionChip6',
+    'chatSuggestionChip7',
+    'chatSuggestionChip8'
   ];
   var shortcutIds = ['chatShortcutLink1', 'chatShortcutLink2', 'chatShortcutLink3'];
   _renderChatEmptyTitle(cfg.title);
   if (subtitle) subtitle.textContent = cfg.subtitle;
-  if (composerLead) composerLead.textContent = '直接描述你要搭建的' + cfg.label + '目标、页面结构或关键功能，我会先帮你拆成可执行方案。';
+  if (composerLead) composerLead.textContent = '直接描述您要搭建的' + cfg.label + '目标、页面结构或关键功能，我会先帮您拆成可执行方案。';
   if (input) input.placeholder = cfg.placeholder;
   if (hint) hint.textContent = cfg.hint;
   chipIds.forEach(function(id, idx) {
     var el = document.getElementById(id);
     var item = cfg.chips[idx];
-    if (!el || !item) return;
+    if (!el) return;
+    if (!item) {
+      el.style.display = 'none';
+      return;
+    }
     _renderChatSuggestionChip(el, item[0], item[1]);
   });
   shortcutIds.forEach(function(id, idx) {
@@ -1444,6 +1474,8 @@ function updateChatModeUi(mode) {
   var chip4 = document.getElementById('chatSuggestionChip4');
   var chip5 = document.getElementById('chatSuggestionChip5');
   var chip6 = document.getElementById('chatSuggestionChip6');
+  var chip7 = document.getElementById('chatSuggestionChip7');
+  var chip8 = document.getElementById('chatSuggestionChip8');
   var shortcut1 = document.getElementById('chatShortcutLink1');
   var shortcut2 = document.getElementById('chatShortcutLink2');
   var shortcut3 = document.getElementById('chatShortcutLink3');
@@ -1470,40 +1502,40 @@ function updateChatModeUi(mode) {
     if (hint) hint.textContent = '默认模式：继续走现在这套智能对话链路。';
     if (input) input.placeholder = '发送消息或输入 / 选择技能';
     if (eyebrow) eyebrow.textContent = '智能对话';
-    _renderChatEmptyTitle('👋 你好，我是 AI 员工');
-    if (subtitle) subtitle.textContent = '我可以帮你创作内容、生成视频、处理数据、运营分析等';
-    if (composerLead) composerLead.textContent = '告诉我你想做什么？我会先帮你理清任务，再继续生成和执行~';
+    _renderChatEmptyTitle('👋 您好，我是 AI 员工');
+    if (subtitle) subtitle.textContent = '我可以帮您创作内容、生成视频、处理数据、运营分析等';
+    if (composerLead) composerLead.textContent = '告诉我您想做什么？我会先帮您理清任务，再继续生成和执行~';
     if (categoryTabs) categoryTabs.classList.remove('is-visible');
     updateWorkspaceStatusUi({ visible: false });
     if (chip1) {
-      _renderChatSuggestionChip(chip1, '生成视频', '帮我生成视频：');
+      _renderChatSuggestionChip(chip1, 'AI对话');
+      _setChatSuggestionAction(chip1, 'data-chat-open-default', '1');
     }
     if (chip2) {
-      _renderChatSuggestionChip(chip2, '电商图器', '帮我生成电商套图：');
+      _renderChatSuggestionChip(chip2, 'H5对话');
+      _setChatSuggestionAction(chip2, 'data-h5-chat-sync', '1');
     }
     if (chip3) {
-      _renderChatSuggestionChip(chip3, '自动上架', '帮我自动上架这个商品：');
+      _renderChatSuggestionChip(chip3, '帮我创作', '帮我写一版电商详情页文案、短视频脚本和发布标题。');
     }
     if (chip4) {
-      _renderChatSuggestionChip(chip4, '小红书运营', '帮我做小红书运营：');
+      _renderChatSuggestionChip(chip4, '创作图片');
+      _setChatSuggestionAction(chip4, 'data-open-hidden-view', 'image-composer-studio');
     }
     if (chip5) {
-      _renderChatSuggestionChip(chip5, '图片生成', '帮我生成图片：');
+      _renderChatSuggestionChip(chip5, '爆款TVC', '用爆款tvc帮我生成一个视频。');
     }
     if (chip6) {
-      _renderChatSuggestionChip(chip6, '运营规划', '帮我做运营规划：');
+      _renderChatSuggestionChip(chip6, '视频分镜');
+      _setChatSuggestionAction(chip6, 'data-open-hidden-view', 'seedance-tvc-studio');
     }
-    if (chip1) {
-      chip1.setAttribute('data-open-hidden-view', 'seedance-tvc-studio');
-      chip1.removeAttribute('data-chat-prompt');
+    if (chip7) {
+      _renderChatSuggestionChip(chip7, '发布中心');
+      _setChatSuggestionAction(chip7, 'data-jump-view', 'publish');
     }
-    if (chip2) {
-      chip2.setAttribute('data-open-hidden-view', 'ecommerce-detail-studio');
-      chip2.removeAttribute('data-chat-prompt');
-    }
-    if (chip5) {
-      chip5.setAttribute('data-open-hidden-view', 'image-composer-studio');
-      chip5.removeAttribute('data-chat-prompt');
+    if (chip8) {
+      _renderChatSuggestionChip(chip8, '技能商店');
+      _setChatSuggestionAction(chip8, 'data-jump-view', 'skill-store');
     }
     if (shortcut1) {
       shortcut1.textContent = '打开技能商店';
@@ -1519,16 +1551,6 @@ function updateChatModeUi(mode) {
       shortcut3.textContent = '查看系统配置';
       shortcut3.setAttribute('data-jump-view', 'sys-config');
       shortcut3.removeAttribute('data-chat-prompt');
-    }
-    if (chip1) {
-      chip1.setAttribute('data-chat-quick-mode', 'video');
-      chip1.removeAttribute('data-open-hidden-view');
-      chip1.removeAttribute('data-chat-prompt');
-    }
-    if (chip5) {
-      chip5.setAttribute('data-chat-quick-mode', 'image');
-      chip5.removeAttribute('data-open-hidden-view');
-      chip5.removeAttribute('data-chat-prompt');
     }
     if (attachBtn) attachBtn.style.display = '';
     if (directChip) directChip.style.display = '';
@@ -3422,6 +3444,9 @@ function bindChatHomeActions() {
     }
     var promptBtn = e.target.closest('[data-chat-prompt]');
     if (promptBtn) {
+      if (typeof _isH5MirrorSession === 'function' && _isH5MirrorSession(getSessionById(currentSessionId)) && typeof openDefaultChatSession === 'function') {
+        openDefaultChatSession();
+      }
       var input = document.getElementById('chatInput');
       if (!input) return;
       input.value = promptBtn.getAttribute('data-chat-prompt') || '';

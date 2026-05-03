@@ -376,6 +376,11 @@ _OPENCLAW_SCOPE_HEADER_INTENT = "X-Lobster-OpenClaw-Intent"
 _OPENCLAW_SCOPE_HEADER_TOOLS = "X-Lobster-Allowed-MCP-Tools"
 _OPENCLAW_SCOPE_HEADER_CAPS = "X-Lobster-Allowed-Capabilities"
 _NO_AUTH_UNSCOPED_SAFE_TOOLS = frozenset({"list_capabilities", "list_assets"})
+_OPENCLAW_LONG_CAPABILITY_IDS = frozenset({"image.generate", "video.generate"})
+_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC = float(
+    os.environ.get("LOBSTER_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC", "45") or "45"
+)
+_OPENCLAW_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 def _request_header_raw(request: Optional[Any], name: str) -> Optional[str]:
@@ -400,6 +405,44 @@ def _csv_scope_header(request: Optional[Any], name: str) -> Optional[set[str]]:
 
 def _openclaw_scope_intent(request: Optional[Any]) -> str:
     return (_request_header_raw(request, _OPENCLAW_SCOPE_HEADER_INTENT) or "").strip()
+
+
+def _openclaw_should_detach_long_capability(request: Optional[Any], capability_id: str) -> bool:
+    return bool(_openclaw_scope_intent(request)) and capability_id in _OPENCLAW_LONG_CAPABILITY_IDS
+
+
+def _openclaw_long_capability_pending_payload(
+    capability_id: str,
+    payload: Dict[str, Any],
+    elapsed_ms: int,
+) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "capability_id": capability_id,
+        "status": "processing",
+        "openclaw_async": True,
+        "elapsed_ms": elapsed_ms,
+        "message": (
+            "生成任务已经提交，后台会继续等待上游结果并自动保存到素材库。"
+            "请不要重复发起同一个生成任务；可以先告诉用户正在生成，稍后到素材库或最近素材中查看。"
+        ),
+    }
+    if isinstance(payload, dict):
+        prompt = str(payload.get("prompt") or "").strip()
+        model = str(payload.get("model") or payload.get("model_id") or "").strip()
+        if prompt:
+            data["prompt"] = prompt[:300]
+        if model:
+            data["model"] = model[:128]
+    return data
+
+
+def _track_openclaw_background_task(task: asyncio.Task) -> None:
+    _OPENCLAW_BACKGROUND_TASKS.add(task)
+
+    def _discard(done: asyncio.Task) -> None:
+        _OPENCLAW_BACKGROUND_TASKS.discard(done)
+
+    task.add_done_callback(_discard)
 
 
 def _request_has_auth_material(request: Optional[Any]) -> bool:
@@ -692,6 +735,207 @@ def _backend_headers(token: Optional[str], request: Optional[Request] = None) ->
     if bk:
         h["X-Lobster-Mcp-Billing"] = bk
     return h
+
+
+_ASSET_PUBLIC_URL_CACHE: Dict[Tuple[str, str], Tuple[float, Optional[str]]] = {}
+_ASSET_PUBLIC_URL_CACHE_TTL_SEC = float(os.getenv("MCP_ASSET_PUBLIC_URL_CACHE_TTL_SEC", "300"))
+_ASSET_PUBLIC_URL_RE = re.compile(r"https?://[^\s\"'<>，。；;、\)\]\}]+", re.IGNORECASE)
+_ASSET_ID_HINT_RE = re.compile(
+    r"(?:asset[_\s-]*id|素材\s*ID|素材ID)?[：:=\s`'\"]*(?<![0-9a-fA-F-])([0-9a-fA-F]{12,32})(?![0-9a-fA-F-])",
+    re.IGNORECASE,
+)
+
+
+def _token_cache_prefix(token: Optional[str]) -> str:
+    return hashlib.sha256((token or "").strip().encode("utf-8")).hexdigest()[:24]
+
+
+def _normalize_public_media_url(raw: Any) -> str:
+    if not isinstance(raw, str):
+        return ""
+    url = raw.strip().strip("`'\" \t\r\n，。；;、)")
+    if not url.startswith(("http://", "https://")):
+        return ""
+    return url
+
+
+def _media_url_kind(url: str) -> str:
+    low = (url or "").lower().split("?", 1)[0].split("#", 1)[0]
+    if low.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi")):
+        return "video"
+    if low.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")):
+        return "image"
+    return ""
+
+
+def _dedupe_urls(urls: List[str]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for raw in urls:
+        url = _normalize_public_media_url(raw)
+        if url and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
+def _extract_public_urls_from_payload_text(payload: Dict[str, Any], *, kind: str) -> List[str]:
+    texts: List[str] = []
+    for key in ("prompt", "url", "image_url", "video_url", "source_url"):
+        val = payload.get(key)
+        if isinstance(val, str):
+            texts.append(val)
+    urls: List[str] = []
+    for text in texts:
+        for match in _ASSET_PUBLIC_URL_RE.findall(text or ""):
+            url = _normalize_public_media_url(match)
+            if not url:
+                continue
+            url_kind = _media_url_kind(url)
+            if kind and url_kind and url_kind != kind:
+                continue
+            if kind and not url_kind:
+                continue
+            urls.append(url)
+    return _dedupe_urls(urls)
+
+
+def _collect_asset_id_hints(payload: Dict[str, Any]) -> List[str]:
+    ids: List[str] = []
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            for m in _ASSET_ID_HINT_RE.findall(value):
+                aid = (m or "").strip().lower()
+                if _looks_like_material_asset_id(aid) and aid not in ids:
+                    ids.append(aid)
+            return
+        if isinstance(value, dict):
+            for v in value.values():
+                add(v)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                add(item)
+
+    for key in (
+        "asset_id",
+        "image_asset_id",
+        "video_asset_id",
+        "source_asset_id",
+        "reference_asset_id",
+        "reference_asset_ids",
+        "attachment_asset_ids",
+        "asset_ids",
+    ):
+        add(payload.get(key))
+    # OpenClaw 常把 “2b016fd8bb84 理解一下这个图片” 只塞进 prompt；这里按工具边界兜底。
+    add(payload.get("prompt"))
+    return ids[:8]
+
+
+async def _resolve_asset_public_url(asset_id: str, token: Optional[str], request: Optional[Request]) -> Optional[str]:
+    aid = (asset_id or "").strip().lower()
+    if not aid or not _looks_like_material_asset_id(aid) or not (token or "").strip():
+        return None
+    cache_key = (_token_cache_prefix(token), aid)
+    cached = _ASSET_PUBLIC_URL_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and cached[0] > now:
+        return cached[1]
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            r = await client.get(
+                f"{BASE_URL}/api/assets/{aid}",
+                headers=_backend_headers(token, request),
+            )
+        if r.status_code >= 400:
+            logger.info("[MCP asset_resolve] asset_id=%s http_status=%s", aid, r.status_code)
+            _ASSET_PUBLIC_URL_CACHE[cache_key] = (now + 30.0, None)
+            return None
+        data = r.json() if r.content else {}
+        url = ""
+        if isinstance(data, dict):
+            for key in ("open_url", "source_url", "preview_url"):
+                cand = _normalize_public_media_url(data.get(key))
+                if cand:
+                    url = cand
+                    break
+        _ASSET_PUBLIC_URL_CACHE[cache_key] = (now + _ASSET_PUBLIC_URL_CACHE_TTL_SEC, url or None)
+        if url:
+            logger.info("[MCP asset_resolve] asset_id=%s -> %s", aid, url[:96])
+        return url or None
+    except Exception as exc:
+        logger.warning("[MCP asset_resolve] failed asset_id=%s err=%s", aid, exc)
+        return None
+
+
+def _payload_has_media(payload: Dict[str, Any], keys: Tuple[str, ...]) -> bool:
+    for key in keys:
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return True
+        if isinstance(val, (list, tuple)) and any(str(x or "").strip() for x in val):
+            return True
+    return False
+
+
+async def _prepare_media_payload_from_openclaw(
+    capability_id: str,
+    payload: Dict[str, Any],
+    token: Optional[str],
+    request: Optional[Request],
+) -> Dict[str, Any]:
+    """Normalize URL/asset_id hints at the MCP boundary so OpenClaw need not learn backend details."""
+    if not isinstance(payload, dict):
+        return payload
+    cid = (capability_id or "").strip()
+    out = dict(payload)
+
+    if cid == "image.understand":
+        if not _payload_has_media(out, ("image_urls", "image_url")):
+            urls = _extract_public_urls_from_payload_text(out, kind="image")
+            for aid in _collect_asset_id_hints(out):
+                resolved = await _resolve_asset_public_url(aid, token, request)
+                if resolved and _media_url_kind(resolved) in ("", "image"):
+                    urls.append(resolved)
+            urls = _dedupe_urls(urls)
+            if urls:
+                out["image_urls"] = urls
+                logger.info("[MCP image.understand] auto-filled image_urls count=%s", len(urls))
+        return out
+
+    if cid == "video.understand":
+        if not _payload_has_media(out, ("video_urls", "video_url")):
+            urls = _extract_public_urls_from_payload_text(out, kind="video")
+            for aid in _collect_asset_id_hints(out):
+                resolved = await _resolve_asset_public_url(aid, token, request)
+                if resolved and _media_url_kind(resolved) in ("", "video"):
+                    urls.append(resolved)
+            urls = _dedupe_urls(urls)
+            if urls:
+                out["video_urls"] = urls
+                logger.info("[MCP video.understand] auto-filled video_urls count=%s", len(urls))
+        return out
+
+    if cid == "video.generate":
+        if not _payload_has_media(out, ("filePaths", "image_url", "media_files", "images", "image_files", "image_urls")):
+            urls = _extract_public_urls_from_payload_text(out, kind="image")
+            for aid in _collect_asset_id_hints(out):
+                resolved = await _resolve_asset_public_url(aid, token, request)
+                if resolved and _media_url_kind(resolved) in ("", "image"):
+                    urls.append(resolved)
+            urls = _dedupe_urls(urls)
+            if urls:
+                out["image_url"] = urls[0]
+                out["filePaths"] = urls
+                out["images"] = urls
+                logger.info("[MCP video.generate] auto-filled image refs from asset/url count=%s", len(urls))
+        return out
+
+    return out
 
 
 _COMFLY_VEO_MCP_POLL_INTERVAL = 15
@@ -1034,8 +1278,9 @@ def _tool_definitions(
                 "禁止将素材库 asset_id（十二位以上十六进制串，如入库后的成片 ID）当作能力 ID。"
                 "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
                 "生成类 prompt 只写画面/视频内容；账号、平台、标题、正文、话题等发布信息必须放 publish_content，禁止混进 image.generate/video.generate prompt。"
-                "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由对话后端按认证中心默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
-                "video.generate 用户未指定模型时可省略 payload.model，由对话后端按认证中心默认配置补齐。"
+                "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
+                "video.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认视频模型补齐。"
+                "【素材/URL】理解图片/视频或图生视频时，可以在 payload 传 image_url/video_url/image_urls/video_urls/asset_id；不要用 read 读取 http(s) URL。"
                 "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
             ),
             "inputSchema": {
@@ -1052,8 +1297,9 @@ def _tool_definitions(
                             "能力调用参数（按 capability_id 不同）。"
                             "media.edit: 必须含 operation（overlay_text|trim|scale_pad|mute|mux_audio|image_to_video|extract_frame）+ asset_id；"
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
-                            "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由对话后端按认证中心默认配置补齐。"
-                            "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由后端按模型默认值处理）；model 可省略并由对话后端按认证中心默认配置补齐；prompt 只写视频画面/动作，不写发布账号或发布文案。"
+                            "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由 MCP 按默认配置补齐。"
+                            "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由后端按模型默认值处理）；model 可省略并由 MCP 按默认视频模型补齐；prompt 只写视频画面/动作，不写发布账号或发布文案；图生视频可传 image_url 或 asset_id。"
+                            "image.understand/video.understand: 必须带 image_url/video_url、对应 *_urls 数组或 asset_id。"
                             "task.get_result: 含 task_id。"
                         ),
                     },
@@ -1634,6 +1880,9 @@ _IMAGE_MODEL_ALIASES: Dict[str, str] = {
 }
 
 _DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "gpt-image2").strip() or "gpt-image2"
+_DEFAULT_VIDEO_MODEL = (
+    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or "veo3.1-fast"
+).strip() or "veo3.1-fast"
 _IMAGE_SOCIAL_PLATFORM_PATTERN = r"(?:抖音|小红书|今日头条|头条|快手|B站|b站|视频号|微博|TikTok|tiktok|YouTube|youtube|Instagram|instagram)"
 _IMAGE_PUBLISH_CONTEXT_RE = re.compile(
     rf"(?:发布|投稿|上传|发到|发至|发送到|同步到|{_IMAGE_SOCIAL_PLATFORM_PATTERN}.{{0,12}}(?:账号|帐号|账户|昵称|发布|文案|配文|话题))",
@@ -1850,7 +2099,8 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         return payload
     model = (payload.get("model") or payload.get("model_id") or "").strip()
     if not model:
-        raise ValueError("请指定视频模型（model），例如 sora2、seedance2、hailuo、vidu、wan、veo、kling、grok、jimeng 等。")
+        model = _DEFAULT_VIDEO_MODEL
+        logger.info("[MCP video.generate] 未传 model，已使用默认视频模型 model=%s", model)
     prompt_raw = (payload.get("prompt") or "").strip()
     prompt = _sanitize_video_generate_prompt_for_publish_copy(prompt_raw)
     if prompt != prompt_raw:
@@ -2428,30 +2678,45 @@ async def _call_upstream_mcp_tool(
         write=600.0,
         pool=60.0,
     )
-    async with httpx.AsyncClient(timeout=_call_timeout) as client:
-        try:
-            r = await client.post(server_url, json=call_body, headers=call_headers)
-        except httpx.HTTPError as exc:
-            logger.warning("[MCP] 上游调用失败 tool=%s url=%s: %s", tool_name, server_url, exc)
-            return {
-                "error": {
-                    "message": (
-                        f"上游工具调用失败: {exc}。"
-                        f"（云端地址 {server_url} 不可达时请查本机 HTTPS 出网/VPN/DNS）"
-                    )
+    # task.get_result is idempotent. The public gateway can occasionally close a
+    # long-poll read with BrokenResourceError; retrying the query avoids showing
+    # users a false "generation failed" after the video task was already submitted.
+    call_attempts = 3 if tool_name == "invoke_capability" and _cap_for_timeout == "task.get_result" else 1
+    for attempt in range(1, call_attempts + 1):
+        async with httpx.AsyncClient(timeout=_call_timeout) as client:
+            try:
+                r = await client.post(server_url, json=call_body, headers=call_headers)
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "[MCP] 上游调用失败 tool=%s url=%s attempt=%s/%s: %s",
+                    tool_name,
+                    server_url,
+                    attempt,
+                    call_attempts,
+                    exc,
+                )
+                if attempt < call_attempts:
+                    await asyncio.sleep(min(2.0 * attempt, 5.0))
+                    continue
+                return {
+                    "error": {
+                        "message": (
+                            f"上游工具调用失败: {exc}。"
+                            f"（云端地址 {server_url} 不可达时请查本机 HTTPS 出网/VPN/DNS）"
+                        )
+                    }
                 }
-            }
 
-        if r.status_code >= 400:
-            logger.warning("[MCP] 上游返回 HTTP %s tool=%s: %s", r.status_code, tool_name, r.text[:200])
-            return {"error": {"message": f"上游工具调用返回 HTTP {r.status_code}: {r.text[:300]}"}}
-        try:
-            out = _parse_sse_or_json(r)
-            logger.info("[MCP] 上游调用完成 tool=%s status=%s", tool_name, r.status_code)
-            return out
-        except Exception as e:
-            logger.warning("[MCP] 上游响应解析失败 tool=%s: %s", tool_name, e)
-            return {"error": {"message": f"上游返回无法解析的响应: status={r.status_code}, body={r.text[:200]}"}}
+            if r.status_code >= 400:
+                logger.warning("[MCP] 上游返回 HTTP %s tool=%s: %s", r.status_code, tool_name, r.text[:200])
+                return {"error": {"message": f"上游工具调用返回 HTTP {r.status_code}: {r.text[:300]}"}}
+            try:
+                out = _parse_sse_or_json(r)
+                logger.info("[MCP] 上游调用完成 tool=%s status=%s attempt=%s/%s", tool_name, r.status_code, attempt, call_attempts)
+                return out
+            except Exception as e:
+                logger.warning("[MCP] 上游响应解析失败 tool=%s: %s", tool_name, e)
+                return {"error": {"message": f"上游返回无法解析的响应: status={r.status_code}, body={r.text[:200]}"}}
 
 
 # 速推 task 状态：先判进行中再判终态（与 backend 一致，避免「未完成」误判）
@@ -3033,6 +3298,41 @@ async def _auto_save_generated_assets(
     return saved
 
 
+async def _finish_openclaw_detached_upstream(
+    upstream_task: asyncio.Task,
+    capability_id: str,
+    payload: Dict[str, Any],
+    token: Optional[str],
+    request: Optional[Request],
+    started_at: float,
+) -> None:
+    try:
+        upstream_resp = await upstream_task
+        latency_ms = int((time.perf_counter() - started_at) * 1000)
+        upstream_error = ""
+        if isinstance(upstream_resp, dict):
+            err_obj = upstream_resp.get("error")
+            if isinstance(err_obj, dict):
+                upstream_error = str(err_obj.get("message") or "")[:500]
+        if upstream_error:
+            logger.warning(
+                "[MCP OpenClaw detached] capability_id=%s finished_with_error latency_ms=%s err=%s",
+                capability_id,
+                latency_ms,
+                upstream_error,
+            )
+            return
+        saved = await _auto_save_generated_assets(upstream_resp, capability_id, payload, token, request)
+        logger.info(
+            "[MCP OpenClaw detached] capability_id=%s finished latency_ms=%s saved_count=%s",
+            capability_id,
+            latency_ms,
+            len(saved or []),
+        )
+    except asyncio.CancelledError:
+        logger.warning("[MCP OpenClaw detached] capability_id=%s cancelled", capability_id)
+    except Exception as exc:
+        logger.exception("[MCP OpenClaw detached] capability_id=%s failed: %s", capability_id, exc)
 
 
 async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], request: Optional[Request] = None) -> Tuple[List[Dict[str, Any]], bool]:
@@ -3201,6 +3501,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                             ),
                         }
                     ], True
+            payload = await _prepare_media_payload_from_openclaw(capability_id, payload, token, request)
             if capability_id == "image.generate":
                 try:
                     payload = _normalize_image_generate_payload(payload)
@@ -3241,8 +3542,28 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 )
             elif capability_id == "image.understand":
                 payload = _normalize_understand_payload(payload, media_key="image_urls", default_model="openrouter/router/vision")
+                if not _payload_has_media(payload, ("image_urls", "image_url")):
+                    return [
+                        {
+                            "type": "text",
+                            "text": (
+                                "image.understand 缺少图片参数：请传 payload.image_urls / image_url / asset_id，"
+                                "或在 prompt 中包含可公网访问的图片 URL。不要用 read 读取 http(s) 图片 URL。"
+                            ),
+                        }
+                    ], True
             elif capability_id == "video.understand":
                 payload = _normalize_understand_payload(payload, media_key="video_urls", default_model="openrouter/router/video")
+                if not _payload_has_media(payload, ("video_urls", "video_url")):
+                    return [
+                        {
+                            "type": "text",
+                            "text": (
+                                "video.understand 缺少视频参数：请传 payload.video_urls / video_url / asset_id，"
+                                "或在 prompt 中包含可公网访问的视频 URL。不要用 read 读取 http(s) 视频 URL。"
+                            ),
+                        }
+                    ], True
             elif capability_id == "task.get_result":
                 if not str(payload.get("task_id") or "").strip():
                     return [
@@ -3831,7 +4152,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                             (_tu_src[:96] + "…") if len(_tu_src) > 96 else _tu_src,
                         )
             # 在线版经 /mcp-gateway 连的是**服务器 lobster MCP**，只注册 invoke_capability，无裸工具名 generate/get_result 等
-            if not transfer_url_from_cache:
+            async def _run_upstream_request() -> Any:
                 if upstream_name == "sutui" and _sutui_upstream_is_server_gateway(upstream_url):
                     upstream_raw = await _call_upstream_mcp_tool(
                         upstream_url,
@@ -3843,20 +4164,54 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         x_installation_id=xi_for_upstream or None,
                         lobster_capability_id=capability_id,
                     )
-                    upstream_resp = _unwrap_lobster_server_gateway_response(
+                    return _unwrap_lobster_server_gateway_response(
                         upstream_raw if isinstance(upstream_raw, dict) else {}
                     )
+                return await _call_upstream_mcp_tool(
+                    upstream_url,
+                    upstream_tool,
+                    payload,
+                    upstream_name=upstream_name,
+                    sutui_token=sutui_token,
+                    user_authorization=user_auth,
+                    x_installation_id=xi_for_upstream or None,
+                    lobster_capability_id=capability_id,
+                )
+
+            if not transfer_url_from_cache:
+                if _openclaw_should_detach_long_capability(request, capability_id):
+                    upstream_task = asyncio.create_task(_run_upstream_request())
+                    try:
+                        upstream_resp = await asyncio.wait_for(
+                            asyncio.shield(upstream_task),
+                            timeout=_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC,
+                        )
+                    except asyncio.TimeoutError:
+                        bg_task = asyncio.create_task(
+                            _finish_openclaw_detached_upstream(
+                                upstream_task,
+                                capability_id,
+                                payload,
+                                token,
+                                request,
+                                t0,
+                            )
+                        )
+                        _track_openclaw_background_task(bg_task)
+                        latency_ms = int((time.perf_counter() - t0) * 1000)
+                        logger.info(
+                            "[MCP OpenClaw detached] capability_id=%s foreground_timeout_ms=%s",
+                            capability_id,
+                            latency_ms,
+                        )
+                        pending = _openclaw_long_capability_pending_payload(
+                            capability_id,
+                            payload,
+                            latency_ms,
+                        )
+                        return [{"type": "text", "text": _json_dumps_mcp_payload(pending)}], False
                 else:
-                    upstream_resp = await _call_upstream_mcp_tool(
-                        upstream_url,
-                        upstream_tool,
-                        payload,
-                        upstream_name=upstream_name,
-                        sutui_token=sutui_token,
-                        user_authorization=user_auth,
-                        x_installation_id=xi_for_upstream or None,
-                        lobster_capability_id=capability_id,
-                    )
+                    upstream_resp = await _run_upstream_request()
             # task.get_result: 不再在此处轮询，由 backend chat 每 15s 轮询并写回对话
             latency_ms = int((time.perf_counter() - t0) * 1000)
             upstream_error = ""

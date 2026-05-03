@@ -65,9 +65,6 @@
     .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
     .status-dot.online { background: #10b981; }
     .status-dot.offline { background: #ef4444; }
-    .provider-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-sm); padding: 0.65rem 0.85rem; margin-bottom: 0.5rem; min-height: 4rem; }
-    .provider-card .provider-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; }
-    .provider-card .provider-status { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.35rem; }
     .key-input-row { display: flex; gap: 0.5rem; align-items: center; }
     .key-input-row input { flex: 1; min-width: 0; }
     .key-input-row .btn { flex-shrink: 0; }
@@ -79,9 +76,10 @@
     .section-title { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; }
     /* .add-mcp-form moved to modal */
     .store-tabs { display: flex; gap: 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
-    .store-tab, .pub-tab, .sys-tab, .wecom-detail-tab { background: none; border: none; padding: 0.6rem 1.25rem; font-size: 0.9rem; font-weight: 500; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
-    .store-tab:hover, .pub-tab:hover, .sys-tab:hover, .wecom-detail-tab:hover { color: var(--text); }
-    .store-tab.active, .pub-tab.active, .sys-tab.active, .wecom-detail-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .account-type-tabs { display: flex; gap: 0; border-bottom: 1px solid rgba(255,255,255,0.1); margin-top: 0.75rem; }
+    .store-tab, .pub-tab, .sys-tab, .wecom-detail-tab, .account-type-tab { background: none; border: none; padding: 0.6rem 1.25rem; font-size: 0.9rem; font-weight: 500; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+    .store-tab:hover, .pub-tab:hover, .sys-tab:hover, .wecom-detail-tab:hover, .account-type-tab:hover { color: var(--text); }
+    .store-tab.active, .pub-tab.active, .sys-tab.active, .wecom-detail-tab.active, .account-type-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
     .category-chip { display: inline-block; padding: 0.25rem 0.65rem; font-size: 0.78rem; border-radius: 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: var(--text-muted); cursor: pointer; transition: all 0.15s; }
     .category-chip:hover { background: rgba(6,182,212,0.12); border-color: var(--accent); color: var(--accent); }
     .category-chip.active { background: rgba(6,182,212,0.18); border-color: var(--accent); color: var(--accent); font-weight: 500; }
@@ -1555,7 +1553,6 @@
     .chat-panel,
     .ecom-panel,
     .skill-store-card,
-    .provider-card,
     .config-block-item {
       background: rgba(255, 255, 255, 0.84);
       border-color: var(--border);
@@ -2027,26 +2024,30 @@
     }
     .chat-home-visual-core {
       position: absolute;
-      top: 48px;
+      top: 56px;
       left: 50%;
-      width: 236px;
-      height: 272px;
+      width: 226px;
+      height: 226px;
       transform: translateX(-50%);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 4.9rem;
-      font-weight: 800;
-      letter-spacing: 0.04em;
-      color: rgba(255,255,255,0.98);
-      text-shadow: 0 10px 24px rgba(91,124,255,0.32);
+      padding: 22px;
       z-index: 1;
       background:
-        linear-gradient(180deg, rgba(154,188,255,0.98), rgba(92,126,244,0.98));
-      clip-path: polygon(50% 0%, 88% 18%, 88% 74%, 50% 100%, 12% 74%, 12% 18%);
+        linear-gradient(180deg, rgba(255,255,255,0.98), rgba(246,249,255,0.94));
+      border: 1px solid rgba(91,124,255,0.12);
+      border-radius: 46px;
       box-shadow:
-        0 24px 46px rgba(92,126,244,0.28),
-        inset 0 1px 0 rgba(255,255,255,0.45);
+        0 24px 46px rgba(92,126,244,0.18),
+        inset 0 1px 0 rgba(255,255,255,0.88);
+      box-sizing: border-box;
+    }
+    .chat-home-visual-core img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
     }
     .chat-home-orbit,
     .chat-home-orbit::before,
@@ -2160,7 +2161,7 @@
     }
     .chat-suggestion-grid {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
       gap: 0.8rem;
       margin-bottom: 0;
     }
@@ -2464,7 +2465,6 @@
       border-color: rgba(91, 124, 255, 0.18);
     }
     .skill-store-card,
-    .provider-card,
     .config-block-item,
     .ecom-example-card,
     .ecom-task-card,
@@ -2481,6 +2481,7 @@
       border-color: rgba(91, 124, 255, 0.18);
     }
     .store-tabs,
+    .account-type-tabs,
     .ecom-workspace-tabs {
       border-bottom-color: rgba(34, 49, 78, 0.08);
     }
@@ -2488,6 +2489,7 @@
     .pub-tab,
     .sys-tab,
     .wecom-detail-tab,
+    .account-type-tab,
     .ecom-workspace-tab {
       color: var(--text-muted);
     }
@@ -2887,13 +2889,15 @@
     .store-tab,
     .pub-tab,
     .sys-tab,
-    .wecom-detail-tab {
+    .wecom-detail-tab,
+    .account-type-tab {
       color: var(--text-muted);
     }
     .store-tab.active,
     .pub-tab.active,
     .sys-tab.active,
-    .wecom-detail-tab.active {
+    .wecom-detail-tab.active,
+    .account-type-tab.active {
       color: #4262df;
       border-bottom-color: #4262df;
     }
@@ -3088,6 +3092,55 @@
       }
     }
     @media (max-width: 768px) {
+      body {
+        overflow-x: hidden;
+      }
+      .page {
+        padding: 0.65rem;
+      }
+      .chat-area-wrap {
+        gap: 0.65rem;
+      }
+      .chat-history-sidebar {
+        display: none;
+      }
+      .chat-workspace {
+        min-height: calc(100dvh - 155px);
+        border-radius: 18px;
+      }
+      .chat-workspace.is-empty {
+        min-height: auto;
+      }
+      #chatMessages {
+        padding: 0.8rem;
+      }
+      .chat-input-row {
+        padding: 0.55rem 0 0;
+      }
+      .chat-composer-shell {
+        border-radius: 18px;
+        padding: 0.75rem;
+      }
+      .chat-composer-body {
+        min-height: 74px;
+      }
+      .chat-composer-footer {
+        gap: 0.5rem;
+      }
+      .chat-composer-left,
+      .chat-input-trailing-actions {
+        width: 100%;
+        justify-content: space-between;
+      }
+      .chat-skill-chip {
+        flex: 1 1 auto;
+        justify-content: center;
+        min-width: 0;
+      }
+      .chat-send-btn,
+      .chat-icon-btn {
+        flex: 0 0 42px;
+      }
       .chat-empty-state {
         padding-top: 0.2rem;
       }
@@ -3195,7 +3248,7 @@
     </header>
 
     <section class="hero" id="pageHero">
-      <h1 id="brandHeroTitle">龙虾 - 你的私人 AI 助手</h1>
+      <h1 id="brandHeroTitle">龙虾 - 您的私人 AI 助手</h1>
       <p id="brandHeroSubtitle">对话驱动，随装随用，能力无限扩展</p>
     </section>
 
@@ -3257,7 +3310,7 @@
           </div>
         </div>
       </div>
-      <p id="authPanelHint" style="text-align:center;font-size:0.9rem;color:var(--text-muted);max-width:420px;margin:0 auto 2rem;line-height:1.6;">登录后可使用智能对话、技能商店、发布管理、系统配置等功能</p>
+      <p id="authPanelHint" style="text-align:center;font-size:0.9rem;color:var(--text-muted);max-width:420px;margin:0 auto 2rem;line-height:1.6;">登录后可使用智能对话、技能商店、发布中心、系统配置等功能</p>
     </div>
 
     <div id="dashboard" class="dashboard">
@@ -3272,7 +3325,7 @@
                   <div class="chat-sidebar-brand-avatar">AI</div>
                   <div class="chat-sidebar-brand-copy">
                     <div class="chat-sidebar-brand-title">AI员工</div>
-                    <div class="chat-sidebar-brand-subtitle">帮你做图、做视频、做运营</div>
+                    <div class="chat-sidebar-brand-subtitle">帮您做图、做视频、做运营</div>
                   </div>
                 </div>
                 <div class="chat-sidebar-top">
@@ -3285,25 +3338,24 @@
                 <div class="chat-sidebar-nav">
                   <button type="button" class="chat-sidebar-entry is-active" data-chat-open-default="1" data-jump-view="chat">
                     <span class="chat-sidebar-entry-icon">⌕</span>
-                    <span class="chat-sidebar-entry-copy">AI 对话</span>
+                    <span class="chat-sidebar-entry-copy">AI对话</span>
                   </button>
                   <button type="button" class="chat-sidebar-entry" data-h5-chat-sync="1">
                     <span class="chat-sidebar-entry-icon">○</span>
-                    <span class="chat-sidebar-entry-copy">AI 搜索</span>
+                    <span class="chat-sidebar-entry-copy">H5对话</span>
                   </button>
                   <button type="button" class="chat-sidebar-entry" data-chat-prompt="帮我写一版电商详情页文案、短视频脚本和发布标题。">
                     <span class="chat-sidebar-entry-icon">≡</span>
-                    <span class="chat-sidebar-entry-copy">帮我写作</span>
-                  </button>
-                  <button type="button" class="chat-sidebar-entry" data-jump-view="skill-store">
-                    <span class="chat-sidebar-entry-icon">&lt;/&gt;</span>
-                    <span class="chat-sidebar-entry-copy">技能商店</span>
-                    <span class="chat-sidebar-entry-arrow">›</span>
+                    <span class="chat-sidebar-entry-copy">帮我创作</span>
                   </button>
                   <button type="button" class="chat-sidebar-entry" data-open-hidden-view="image-composer-studio">
                     <span class="chat-sidebar-entry-icon">▣</span>
                     <span class="chat-sidebar-entry-copy">创作图片</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
+                  </button>
+                  <button type="button" class="chat-sidebar-entry" data-chat-prompt="用爆款tvc帮我生成一个视频。">
+                    <span class="chat-sidebar-entry-icon">▶</span>
+                    <span class="chat-sidebar-entry-copy">爆款TVC</span>
                   </button>
                   <button type="button" class="chat-sidebar-entry" data-open-hidden-view="seedance-tvc-studio">
                     <span class="chat-sidebar-entry-icon">▶</span>
@@ -3313,10 +3365,11 @@
                   <button type="button" class="chat-sidebar-entry" data-jump-view="publish">
                     <span class="chat-sidebar-entry-icon">▣</span>
                     <span class="chat-sidebar-entry-copy">发布中心</span>
+                    <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
-                  <button type="button" class="chat-sidebar-entry" data-jump-view="sys-config">
-                    <span class="chat-sidebar-entry-icon">⋯</span>
-                    <span class="chat-sidebar-entry-copy">更多功能</span>
+                  <button type="button" class="chat-sidebar-entry" data-jump-view="skill-store">
+                    <span class="chat-sidebar-entry-icon">&lt;/&gt;</span>
+                    <span class="chat-sidebar-entry-copy">技能商店</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
                 </div>
@@ -3349,9 +3402,9 @@
                           <button type="button" class="chat-empty-eyebrow is-active" id="chatEmptyEyebrow" data-chat-home-mode="default">智能对话</button>
                           <button type="button" class="chat-home-mode-pill" id="chatHomeWorkspacePill" data-chat-home-mode="workspace_cli" hidden aria-hidden="true">云端工作台</button>
                         </div>
-                        <h2 class="chat-empty-title" id="chatEmptyTitle">👋 你好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
-                        <p class="chat-empty-subtitle" id="chatEmptySubtitle">我可以帮你创作内容、生成视频、处理数据、运营分析等</p>
-                        <p class="chat-home-helper">选择下方功能，或直接对我说出你的需求吧~</p>
+                        <h2 class="chat-empty-title" id="chatEmptyTitle">👋 您好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
+                        <p class="chat-empty-subtitle" id="chatEmptySubtitle">我可以帮您创作内容、生成视频、处理数据、运营分析等</p>
+                        <p class="chat-home-helper">选择下方功能，或直接对我说出您的需求吧~</p>
                         <div class="workspace-category-tabs" id="workspaceCategoryTabs" aria-label="云端工作台能力分类">
                           <button type="button" class="workspace-category-tab is-active" data-workspace-category="web_app">网页应用</button>
                           <button type="button" class="workspace-category-tab" data-workspace-category="mobile_app">移动应用</button>
@@ -3365,7 +3418,7 @@
                       </div>
                       <div class="chat-home-visual" aria-hidden="true">
                         <div class="chat-home-orbit"></div>
-                        <div class="chat-home-visual-core">AI</div>
+                        <div class="chat-home-visual-core"><img src="/static/bihu_256.png" alt=""></div>
                         <div class="chat-home-stage"></div>
                       </div>
                     </div>
@@ -3379,7 +3432,7 @@
                           <span class="chat-quick-mode-badge" id="chatQuickModeBadge">视频合成</span>
                           <div class="chat-quick-mode-text">
                             <div class="chat-quick-mode-title" id="chatQuickModeTitle">当前模式：视频合成</div>
-                            <div class="chat-quick-mode-desc" id="chatQuickModeDesc">直接在下面输入一句话，我会按当前模式帮你开始创作。</div>
+                            <div class="chat-quick-mode-desc" id="chatQuickModeDesc">直接在下面输入一句话，我会按当前模式帮您开始创作。</div>
                           </div>
                         </div>
                         <div class="chat-quick-mode-actions">
@@ -3391,7 +3444,7 @@
                         </div>
                       </div>
                       <div class="chat-composer-body">
-                        <div class="chat-composer-lead" id="chatComposerLead">告诉我你想做什么？我会尽力帮你完成~</div>
+                        <div class="chat-composer-lead" id="chatComposerLead">告诉我您想做什么？我会尽力帮您完成~</div>
                         <div id="chatAttachments" class="chat-attachments" style="display:none;"></div>
                         <textarea id="chatInput" rows="1" placeholder="发送消息或输入 / 选择技能"></textarea>
                       </div>
@@ -3416,12 +3469,14 @@
                       <button type="button" class="chat-home-viewall" data-jump-view="skill-store">查看全部 <span>&rsaquo;</span></button>
                     </div>
                     <div class="chat-suggestion-grid">
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip1" data-chip-tone="video" data-chat-quick-mode="video"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">生成视频</span><span class="chat-suggestion-chip-desc">一句话直接开始创作</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip2" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio"><span class="chat-suggestion-chip-icon">👜</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">电商图器</span><span class="chat-suggestion-chip-desc">商品图快速生成</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip3" data-chip-tone="publish" data-chat-prompt="根据商品卖点整理一份可以直接上架的标题、卖点和详情文案"><span class="chat-suggestion-chip-icon">↥</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">自动上架</span><span class="chat-suggestion-chip-desc">批量发布到平台</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip4" data-chip-tone="content" data-chat-prompt="帮我规划一周的小红书运营内容，包含选题和发布时间"><span class="chat-suggestion-chip-icon">✦</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">小红书运营</span><span class="chat-suggestion-chip-desc">笔记创作与运营</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-chat-quick-mode="image"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">图片生成</span><span class="chat-suggestion-chip-desc">一句话直接生成画面</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-chat-prompt="帮我把账号运营动作拆成执行步骤，并告诉我先做什么"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">运营规划</span><span class="chat-suggestion-chip-desc">制定运营策略</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip1" data-chip-tone="video" data-chat-open-default="1"><span class="chat-suggestion-chip-icon">⌕</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">AI对话</span><span class="chat-suggestion-chip-desc">回到本机智能对话</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip2" data-chip-tone="ecommerce" data-h5-chat-sync="1"><span class="chat-suggestion-chip-icon">○</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">H5对话</span><span class="chat-suggestion-chip-desc">查看远程会话消息</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip3" data-chip-tone="publish" data-chat-prompt="帮我写一版电商详情页文案、短视频脚本和发布标题。"><span class="chat-suggestion-chip-icon">≡</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">帮我创作</span><span class="chat-suggestion-chip-desc">填入创作需求</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip4" data-chip-tone="content" data-open-hidden-view="image-composer-studio"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创作图片</span><span class="chat-suggestion-chip-desc">进入图片工作台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-chat-prompt="用爆款tvc帮我生成一个视频。"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">爆款TVC</span><span class="chat-suggestion-chip-desc">填入视频生成话术</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">视频分镜</span><span class="chat-suggestion-chip-desc">进入分镜工作台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-jump-view="skill-store"><span class="chat-suggestion-chip-icon">&lt;/&gt;</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">技能商店</span><span class="chat-suggestion-chip-desc">查看可用技能</span></span></button>
                     </div>
                     <div class="chat-shortcut-row">
                       <button type="button" class="chat-shortcut-link" id="chatShortcutLink1" data-jump-view="skill-store">打开技能商店</button>
@@ -3966,7 +4021,7 @@
                     <div class="imglab-example-toolbar">
                       <div>
                         <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">提示词示例</h4>
-                        <p class="imglab-panel-hint" style="margin:0;">这里改成从你的提示词库动态读取，点一下就会把示例 prompt 带到左侧编辑区。</p>
+                        <p class="imglab-panel-hint" style="margin:0;">这里改成从您的提示词库动态读取，点一下就会把示例 prompt 带到左侧编辑区。</p>
                       </div>
                       <div id="imglabExamplesStatus" class="imglab-example-status">正在加载示例...</div>
                     </div>
@@ -4108,7 +4163,7 @@
                     <div class="tvc-toolbar" style="margin-bottom:0.2rem;">
                       <div>
                         <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">结果展示</h4>
-                        <p class="tvc-panel-hint" style="margin:0;">最终合成视频会直接显示在这里，下面的分镜缩略图只负责帮助你快速检查整条视频节奏。</p>
+                        <p class="tvc-panel-hint" style="margin:0;">最终合成视频会直接显示在这里，下面的分镜缩略图只负责帮助您快速检查整条视频节奏。</p>
                       </div>
                       <button type="button" id="seedanceExamplesToggleBtn" class="tvc-tip-toggle" title="查看精选案例">
                         TIP · 精选案例 <span class="badge" id="seedanceExamplesBadge">0</span>
@@ -4200,7 +4255,7 @@
                 </div>
               </div>
               <p style="font-size:0.82rem;color:var(--text-muted);margin:0.75rem 0;line-height:1.55;">
-                通过 Facebook OAuth 授权连接你的 Instagram Business 或 Facebook 主页。
+                通过 Facebook OAuth 授权连接您的 Instagram Business 或 Facebook 主页。
                 授权后可在对话中使用 <code>publish_meta_social</code> 发布内容，或用 <code>sync_meta_social_data</code> 拉取最新数据。
                 Instagram 支持 photo / video / reel / story / carousel；Facebook 支持 photo / video / link。
               </p>
@@ -4651,7 +4706,7 @@
                 <button type="button" id="refreshPublishBtn" class="btn btn-ghost btn-sm">刷新</button>
               </div>
               <div class="store-tabs" style="margin-top:0.75rem;">
-                <button type="button" class="pub-tab active" data-pub-tab="accounts">账号管理</button>
+                <button type="button" class="pub-tab active" data-pub-tab="accounts">发布账号</button>
                 <button type="button" class="pub-tab" data-pub-tab="assets">素材库</button>
                 <button type="button" class="pub-tab" data-pub-tab="tasks">发布记录</button>
               </div>
@@ -4659,13 +4714,15 @@
 
             <!-- Accounts Tab -->
             <div id="pubTabAccounts" class="pub-tab-panel">
-              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;padding:0.5rem 0;">
-                <button type="button" id="openAddPublishAccountModalBtn" class="btn btn-primary btn-sm">添加发布账号</button>
-                <button type="button" id="openAddPublishPlatformHelpBtn" class="btn btn-ghost btn-sm">添加发布平台</button>
-                <span class="meta" style="font-size:0.82rem;">账号平台和电商平台分开展示；新增平台需要先接入对应登录/发布适配器。</span>
+              <div class="account-type-tabs" id="accountTypeTabs">
+                <button type="button" class="account-type-tab active" data-account-type="publish">发布账号</button>
+                <button type="button" class="account-type-tab" data-account-type="ecommerce">电商平台</button>
               </div>
-              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.4rem 0;">
-                <span style="font-size:0.82rem;color:var(--text-muted);">选平台：</span>
+              <div id="accountAddToolbar" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;padding:0.5rem 0;">
+                <button type="button" id="openAddPublishAccountModalBtn" class="btn btn-primary btn-sm">添加发布账号</button>
+              </div>
+              <div id="accountFilterToolbar" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.4rem 0;">
+                <span id="accountPlatformFilterLabel" style="font-size:0.82rem;color:var(--text-muted);">选账号平台：</span>
                 <select id="accountPlatformFilter" style="min-width:7rem;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                   <option value="">全部</option>
                   <option value="douyin">抖音</option>
@@ -4673,12 +4730,6 @@
                   <option value="xiaohongshu">小红书</option>
                   <option value="kuaishou">快手</option>
                   <option value="toutiao">今日头条</option>
-                  <option disabled>── 电商店铺 ──</option>
-                  <option value="douyin_shop">抖店</option>
-                  <option value="xiaohongshu_shop">小红书店铺</option>
-                  <option value="alibaba1688">1688</option>
-                  <option value="taobao">淘宝</option>
-                  <option value="pinduoduo">拼多多</option>
                 </select>
               </div>
               <div id="accountPublishShell">
@@ -4824,24 +4875,14 @@
           <div id="content-sys-config" class="content-block">
             <div class="card" style="padding-bottom:0;">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
-                <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">系统配置 <button type="button" class="help-q" data-help-key="sys_config" aria-label="说明">?</button></h3>
+                <h3 style="margin:0;">系统配置</h3>
                 <div style="display:flex;align-items:center;gap:0.5rem;">
                   <span class="status-dot" id="ocStatusDot"></span>
                   <span id="ocStatusText" style="font-size:0.82rem;">检查中...</span>
                 </div>
               </div>
-              <div id="lanInfoBar" style="margin-top:0.5rem;padding:0.4rem 0.75rem;background:rgba(6,182,212,0.08);border-radius:var(--radius-sm);font-size:0.82rem;display:none;">
-                <span style="color:var(--text-muted);">局域网访问：</span>
-                <a id="lanInfoUrl" href="#" target="_blank" style="color:var(--accent);font-weight:500;"></a>
-                <button type="button" id="lanInfoCopy" class="btn btn-ghost" style="padding:0.15rem 0.4rem;font-size:0.72rem;margin-left:0.5rem;">复制</button>
-              </div>
-              <div class="store-tabs" style="margin-top:0.75rem;">
-                <button type="button" class="sys-tab active" data-sys-tab="model">模型配置</button>
-                <button type="button" class="sys-tab" data-sys-tab="custom">自定义配置</button>
-              </div>
             </div>
 
-            <!-- Tab: 模型配置 -->
             <div id="sysTabModel" class="sys-tab-panel" style="margin-top:0.75rem;">
               <div class="config-form">
                 <div class="form-group" id="chatRouteModeBlock">
@@ -4862,22 +4903,6 @@
                     <span id="chatRouteModeMsg" class="msg" style="display:none;"></span>
                   </div>
                 </div>
-                <div class="form-group">
-                  <label>默认模型</label>
-                  <select id="ocPrimaryModel">
-                    <option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5 (Anthropic)</option>
-                    <option value="anthropic/claude-opus-4-6">Claude Opus 4.6 (Anthropic)</option>
-                    <option value="anthropic/claude-haiku-3-5">Claude Haiku 3.5 (Anthropic)</option>
-                    <option value="openai/gpt-4o">GPT-4o (OpenAI)</option>
-                    <option value="openai/gpt-4o-mini">GPT-4o Mini (OpenAI)</option>
-                    <option value="openai/o3-mini">o3-mini (OpenAI)</option>
-                    <option value="deepseek/deepseek-chat">DeepSeek Chat</option>
-                    <option value="deepseek/deepseek-reasoner">DeepSeek Reasoner</option>
-                    <option value="google/gemini-2.5-pro">Gemini 2.5 Pro (Google)</option>
-                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (Google)</option>
-                  </select>
-                </div>
-                <div id="ocProviderCards"></div>
                 <div id="sutuiTokenBlock" class="form-group" style="display:none;">
                   <label>速推 / xSkill Token</label>
                   <input type="password" id="sutuiTokenInput" placeholder="" style="max-width:24rem;">
@@ -4885,41 +4910,11 @@
                   <button type="button" id="saveSutuiTokenBtn" class="btn btn-ghost btn-sm" style="margin-top:0.25rem;">保存 Token</button>
                   <span id="sutuiTokenMsg" class="msg" style="display:none;margin-left:0.5rem;"></span>
                 </div>
-                <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
-                  <button type="button" id="saveOcConfigBtn" class="btn btn-primary">保存</button>
-                  <button type="button" id="restartOcBtn" class="btn btn-ghost btn-sm">重启 Gateway</button>
-                  <button type="button" id="refreshOcStatusBtn" class="btn btn-ghost btn-sm">刷新状态</button>
-                  <button type="button" class="help-q" data-help-key="sys_save_oc" aria-label="说明">?</button>
-                  <span id="ocSaveMsg" class="msg" style="display:none;"></span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Tab: 自定义配置 -->
-            <div id="sysTabCustom" class="sys-tab-panel" style="display:none;margin-top:0.75rem;">
-              <div class="config-form">
-                <div class="form-group">
-                  <label>配置名称</label>
-                  <input type="text" id="customConfigName" placeholder="如: TOS_CONFIG, REDIS_CONFIG">
-                </div>
-                <div class="form-group">
-                  <label>配置内容</label>
-                  <textarea id="customConfigJson" rows="6" placeholder='JSON: {"key": "value"}&#10;Python: CONFIG = {&apos;key&apos;: &apos;value&apos;}&#10;KEY=VALUE 格式均可'></textarea>
-                </div>
-                <div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                  <button type="button" id="saveCustomConfigBtn" class="btn btn-primary">导入配置</button>
-                  <button type="button" class="help-q" data-help-key="sys_custom_import" aria-label="说明">?</button>
-                  <span id="customConfigMsg" class="msg" style="display:none;margin-left:0.75rem;"></span>
-                </div>
-              </div>
-              <div style="margin-top:1rem;">
-                <div class="section-title">已导入的配置</div>
-                <div id="customConfigList"></div>
               </div>
             </div>
 
             <div class="card" style="margin-top:1rem;border:1px solid rgba(248,113,113,0.28);">
-              <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">清除本机个人配置 <button type="button" class="help-q" data-help-key="sys_clear_local" aria-label="说明">?</button></h4>
+              <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;">清除本机个人配置</h4>
               <button type="button" id="clearLocalUserConfigBtn" class="btn btn-ghost btn-sm" style="color:#f87171;border-color:rgba(248,113,113,0.45);">一键清除个人配置</button>
               <span id="clearLocalUserConfigMsg" class="msg" style="display:none;margin-left:0.75rem;"></span>
               <button type="button" id="clearOpenclawMemoryBtn" class="btn btn-ghost btn-sm" style="color:#f59e0b;border-color:rgba(245,158,11,0.45);margin-left:0.5rem;">一键清除个人记忆</button>
@@ -4986,8 +4981,8 @@
       <ol class="chat-tips-list">
         <li>可以直接问我<strong>有哪些能力</strong>、<strong>能做什么</strong>，我会根据当前已启用的技能与工具说明可用范围。</li>
         <li>可以问<strong>都有哪些模型可以用</strong>、<strong>支持哪些模型</strong>，我会结合系统配置列出可选模型。</li>
-        <li>可以直接说明<strong>用哪个模型、生成什么样的内容</strong>（画面、风格、时长等），我会按你的意图调用对应能力完成生成。</li>
-        <li>若需要<strong>生成后自动发布</strong>到抖音、小红书、今日头条等：请先到<strong>发布管理</strong>添加账号，并<strong>启动浏览器完成登录</strong>。之后在对话里可以说「发布到某某账号」，或<strong>一句话写清</strong>：用哪个模型、生成什么、发到哪里，即可<strong>一键完成</strong>生成与发布。</li>
+        <li>可以直接说明<strong>用哪个模型、生成什么样的内容</strong>（画面、风格、时长等），我会按您的意图调用对应能力完成生成。</li>
+        <li>若需要<strong>生成后自动发布</strong>到抖音、小红书、今日头条等：请先到<strong>发布中心</strong>的<strong>发布账号</strong>里添加账号，并<strong>启动浏览器完成登录</strong>。之后在对话里可以说「发布到某某账号」，或<strong>一句话写清</strong>：用哪个模型、生成什么、发到哪里，即可<strong>一键完成</strong>生成与发布。</li>
       </ol>
       <div class="btns" style="justify-content:flex-end;margin-top:1rem;">
         <button type="button" class="btn btn-primary" id="chatTipsModalClose">知道了</button>
@@ -5238,9 +5233,9 @@
         <details class="sch-fill-guide">
           <summary>这几个小标题怎么填？（点我展开）</summary>
           <div class="sch-fill-guide-body">
-            <p style="margin:0 0 0.5rem 0;">下面不是必填表，而是<strong>建议你复制到输入框里当提纲</strong>；某一栏没有就写「无」或删掉该行即可。</p>
+            <p style="margin:0 0 0.5rem 0;">下面不是必填表，而是<strong>建议您复制到输入框里当提纲</strong>；某一栏没有就写「无」或删掉该行即可。</p>
             <p style="margin:0 0 0.45rem 0;color:var(--accent);font-size:0.76rem;">视频且要用<strong>参考图</strong>时，请填上面的<strong>「素材 ID」</strong>，不必在这里再写垫图/参考图描述。</p>
-            <p style="margin:0 0 0.35rem 0;"><strong>【模型】</strong>你想用哪个 AI（视频/图片各有一套名字）。不知道可写「默认」或留空，由系统自动选。</p>
+            <p style="margin:0 0 0.35rem 0;"><strong>【模型】</strong>您想用哪个 AI（视频/图片各有一套名字）。不知道可写「默认」或留空，由系统自动选。</p>
             <p style="margin:0 0 0.35rem 0;"><strong>【画面/内容方向】</strong>整条讲什么、风格（搞笑/种草/科普）、场景、氛围、给谁看。</p>
             <p style="margin:0 0 0.35rem 0;"><strong>【生成素材】</strong>要生成的视频/图片里希望出现什么、镜头与内容要点、台词/口播倾向等（<strong>不含</strong>发布平台上的标题正文，那栏单独写）。文生视频/图就写清楚生成诉求；已填素材 ID 做图生视频时可写「按参考图延续风格」等简短说明。</p>
             <p style="margin:0 0 0.35rem 0;"><strong>【发布文案】</strong>真要发出去时用的<strong>标题、简介/描述、话题或标签</strong>想怎么写、强调什么。不发布就写<strong>无</strong>。</p>
@@ -5286,21 +5281,15 @@
   <!-- 添加发布账号（代理 / UA 等在弹窗内填写） -->
   <div id="addPublishAccountModal" class="modal-mask" style="display:none;">
     <div class="modal" style="max-width:440px;">
-      <h4 style="margin:0 0 0.75rem 0;display:flex;align-items:center;gap:0.35rem;">添加发布账号 <button type="button" class="help-q" data-help-key="publish_add_account" aria-label="说明">?</button></h4>
+      <h4 style="margin:0 0 0.75rem 0;display:flex;align-items:center;gap:0.35rem;"><span id="addPublishAccountModalTitleText">添加发布账号</span> <button type="button" class="help-q" data-help-key="publish_add_account" aria-label="说明">?</button></h4>
       <div class="modal-field" style="margin-bottom:0.65rem;">
-        <label>平台</label>
+        <label id="modalAddAcctPlatformLabel">账号平台</label>
         <select id="modalAddAcctPlatform" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.45rem;font-size:0.85rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
           <option value="douyin">抖音</option>
           <option value="bilibili">B站</option>
           <option value="xiaohongshu">小红书</option>
           <option value="kuaishou">快手</option>
           <option value="toutiao">今日头条</option>
-          <option disabled>── 电商店铺 ──</option>
-          <option value="douyin_shop">抖店</option>
-          <option value="xiaohongshu_shop">小红书店铺</option>
-          <option value="alibaba1688">1688</option>
-          <option value="taobao">淘宝</option>
-          <option value="pinduoduo">拼多多</option>
         </select>
       </div>
       <div class="modal-field" style="margin-bottom:0.65rem;">

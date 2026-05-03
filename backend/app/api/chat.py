@@ -42,6 +42,7 @@ from .openclaw_chat_gateway import (
     OC_ONLY_CHAT_FAIL_DETAIL as _OC_ONLY_CHAT_FAIL_DETAIL,
     OC_PREFIX_CHAT_FAIL_DETAIL as _OC_PREFIX_CHAT_FAIL_DETAIL,
     installation_id_from_request as _installation_id_from_request,
+    openclaw_failure_detail as _openclaw_failure_detail,
     openclaw_fallback_model as _openclaw_fallback_model,
     openclaw_gateway_configured as _openclaw_gateway_configured,
     openclaw_only_chat_enabled as _openclaw_only_chat_enabled,
@@ -952,7 +953,7 @@ async def get_reply_for_channel(
     oc_reply = await _try_openclaw(messages, model or "openclaw", "")
     if oc_reply:
         return (oc_reply or "").strip() or "收到。"
-    return "抱歉，当前未配置对话模型或 OpenClaw，无法回复。"
+    return _openclaw_failure_detail("抱歉，当前未配置对话模型或 OpenClaw，无法回复。")
 
 
 async def get_customer_service_reply(
@@ -1020,7 +1021,7 @@ async def get_customer_service_reply(
             logger.warning("[客服回复] OpenClaw 返回疑似错误信息，已过滤: %s", oc_reply[:200])
             return _FALLBACK
         return oc_reply
-    return "抱歉，当前未配置对话模型，无法回复。"
+    return _openclaw_failure_detail("抱歉，当前未配置对话模型，无法回复。")
 
 
 def _last_user_content(cur: List[Dict]) -> str:
@@ -4379,15 +4380,15 @@ def _raise_api_err(resp: httpx.Response, model: str = ""):
 
 
 _DSML_FC_RE = re.compile(
-    r'<[\uff5c|]DSML[\uff5c|](?:function_calls|tool_calls)>(.*?)</[\uff5c|]DSML[\uff5c|](?:function_calls|tool_calls)>',
+    r'<[\uff5c|]+DSML[\uff5c|]+(?:function_calls|tool_calls)>(.*?)</[\uff5c|]+DSML[\uff5c|]+(?:function_calls|tool_calls)>',
     re.DOTALL,
 )
 _DSML_INVOKE_RE = re.compile(
-    r'<[\uff5c|]DSML[\uff5c|]invoke\s+name="([^"]+)">(.*?)</[\uff5c|]DSML[\uff5c|]invoke>',
+    r'<[\uff5c|]+DSML[\uff5c|]+invoke\s+name="([^"]+)">(.*?)</[\uff5c|]+DSML[\uff5c|]+invoke>',
     re.DOTALL,
 )
 _DSML_PARAM_RE = re.compile(
-    r'<[\uff5c|]DSML[\uff5c|]parameter\s+name="([^"]+)"\s+string="(true|false)">(.*?)</[\uff5c|]DSML[\uff5c|]parameter>',
+    r'<[\uff5c|]+DSML[\uff5c|]+parameter\s+name="([^"]+)"\s+string="(true|false)">(.*?)</[\uff5c|]+DSML[\uff5c|]+parameter>',
     re.DOTALL,
 )
 
@@ -4496,6 +4497,8 @@ def _parse_text_tool_calls(content: str) -> List[Dict[str, Any]]:
         block = fc_match.group(1)
         for inv in _DSML_INVOKE_RE.finditer(block):
             name = inv.group(1)
+            if name == "lobster__invoke_capability":
+                name = "invoke_capability"
             body = inv.group(2)
             args: Dict[str, Any] = {}
             for pm in _DSML_PARAM_RE.finditer(body):
@@ -4516,7 +4519,7 @@ def _strip_dsml(content: str) -> str:
     """Remove DSML / 正文 <|tool_calls|> 等标记，返回可展示的前言。"""
     cleaned = _strip_pipe_markup_tool_calls(content)
     cleaned = _DSML_FC_RE.sub("", cleaned).strip()
-    cleaned = re.sub(r'<[\uff5c|]DSML[\uff5c|][^>]*>', '', cleaned).strip()
+    cleaned = re.sub(r'</?[\uff5c|]+DSML[\uff5c|]+[^>]*>', '', cleaned).strip()
     return cleaned
 
 
@@ -7349,7 +7352,13 @@ async def chat_endpoint(
     if want_oc_first:
         openclaw_tried_first = True
         if _openclaw_only_chat_enabled() and not _openclaw_gateway_configured():
-            raise HTTPException(status_code=503, detail=_OC_ONLY_CHAT_FAIL_DETAIL)
+            raise HTTPException(
+                status_code=503,
+                detail=_openclaw_failure_detail(
+                    _OC_ONLY_CHAT_FAIL_DETAIL,
+                    "配置检查(config_missing)：缺少 OPENCLAW_GATEWAY_URL 或 OPENCLAW_GATEWAY_TOKEN。",
+                ),
+            )
         oc_model = resolve_model if resolve_model else _openclaw_fallback_model()
         _oc_xi = _installation_id_from_request(request)
         oc_reply = await _try_openclaw(
@@ -7376,11 +7385,13 @@ async def chat_endpoint(
                 headers={"X-Duration-Ms": str(ms), "X-Chat-Mode": "openclaw_primary"},
             )
         if _openclaw_only_chat_enabled():
-            logger.warning("[CHAT] 仅 OpenClaw：Gateway 无有效回复")
-            raise HTTPException(status_code=503, detail=_OC_ONLY_CHAT_FAIL_DETAIL)
+            detail = _openclaw_failure_detail(_OC_ONLY_CHAT_FAIL_DETAIL)
+            logger.warning("[CHAT] 仅 OpenClaw：Gateway 无有效回复 detail=%s", detail)
+            raise HTTPException(status_code=503, detail=detail)
         if _oc_pfx_hit and not cfg_pre:
-            logger.warning("[CHAT] OpenClaw 前缀轮次：Gateway 无有效回复，且无直连/速推配置，不回退")
-            raise HTTPException(status_code=503, detail=_OC_PREFIX_CHAT_FAIL_DETAIL)
+            detail = _openclaw_failure_detail(_OC_PREFIX_CHAT_FAIL_DETAIL)
+            logger.warning("[CHAT] OpenClaw 前缀轮次：Gateway 无有效回复，且无直连/速推配置，不回退 detail=%s", detail)
+            raise HTTPException(status_code=503, detail=detail)
         logger.info("[CHAT] OpenClaw 优先：Gateway 无有效回复，回退直连+MCP")
 
     cfg = cfg_pre
@@ -7489,6 +7500,7 @@ async def chat_endpoint(
         )
     else:
         detail = "LLM 服务暂时不可用，请稍后重试。"
+    detail = _openclaw_failure_detail(detail)
     raise HTTPException(status_code=503, detail=detail)
 
 
@@ -7632,7 +7644,12 @@ async def _chat_stream_events(
                 if want_oc:
                     openclaw_tried_first = True
                     if _openclaw_only_chat_enabled() and not _openclaw_gateway_configured():
-                        error_holder.append(_OC_ONLY_CHAT_FAIL_DETAIL)
+                        error_holder.append(
+                            _openclaw_failure_detail(
+                                _OC_ONLY_CHAT_FAIL_DETAIL,
+                                "配置检查(config_missing)：缺少 OPENCLAW_GATEWAY_URL 或 OPENCLAW_GATEWAY_TOKEN。",
+                            )
+                        )
                     else:
                         oc_model = resolve_model if resolve_model else _openclaw_fallback_model()
                         _oc_xi_s = _installation_id_from_request(request)
@@ -7652,9 +7669,9 @@ async def _chat_stream_events(
                             )
                             db.commit()
                         elif _openclaw_only_chat_enabled():
-                            error_holder.append(_OC_ONLY_CHAT_FAIL_DETAIL)
+                            error_holder.append(_openclaw_failure_detail(_OC_ONLY_CHAT_FAIL_DETAIL))
                         elif openclaw_prefixed_turn and not cfg:
-                            error_holder.append(_OC_PREFIX_CHAT_FAIL_DETAIL)
+                            error_holder.append(_openclaw_failure_detail(_OC_PREFIX_CHAT_FAIL_DETAIL))
 
                 if not reply_holder and not error_holder and cfg:
                     _mcp_sh: Dict[str, str] = {}
@@ -7728,10 +7745,10 @@ async def _chat_stream_events(
                             )
                             db.commit()
                         else:
-                            error_holder.append("LLM 服务暂时不可用")
+                            error_holder.append(_openclaw_failure_detail("LLM 服务暂时不可用"))
                     elif want_oc and not cfg:
                         error_holder.append(
-                            "OpenClaw 无有效回复，且未配置速推直连模型。"
+                            _openclaw_failure_detail("OpenClaw 无有效回复，且未配置速推直连模型。")
                         )
             except HTTPException as e:
                 error_holder.append(e.detail if isinstance(e.detail, str) else str(e.detail))

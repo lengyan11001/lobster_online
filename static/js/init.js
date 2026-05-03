@@ -99,10 +99,23 @@ function billingCreditsPerYuan(p) {
   return Math.round((c / yuan) * 100) / 100;
 }
 function billingRatioHintLinesHtml(packages) {
-  return '';
+  if (!Array.isArray(packages) || !packages.length) return '';
+  return packages.map(function(p) {
+    var yuan = billingPackageYuan(p);
+    var credits = Number(p && p.credits || 0);
+    if (!yuan || !credits) return '';
+    return escapeHtml(yuan + ' 元到账 ' + credits + ' 算力（1 元 = ' + billingCreditsPerYuan(p) + ' 算力）');
+  }).filter(Boolean).join('<br>');
 }
 function billingRatioHintPlainText(packages) {
-  return '';
+  if (!Array.isArray(packages) || !packages.length) return '';
+  var lines = packages.map(function(p) {
+    var yuan = billingPackageYuan(p);
+    var credits = Number(p && p.credits || 0);
+    if (!yuan || !credits) return '';
+    return yuan + ' 元到账 ' + credits + ' 算力，按 1 元 = ' + billingCreditsPerYuan(p) + ' 算力计算';
+  }).filter(Boolean);
+  return lines.join('；');
 }
 
 function loadLoginCaptcha() {
@@ -800,7 +813,7 @@ function decorateWorkspacePages() {
       id: 'content-skill-store',
       kicker: '能力中心',
       title: '技能商店',
-      desc: '安装可用技能、浏览常用能力，并把生成、运营、发布等工作流逐步接进你的 AI 员工工作台。',
+      desc: '安装可用技能、浏览常用能力，并把生成、运营、发布等工作流逐步接进您的 AI 员工工作台。',
       actions: [
         { label: '添加 MCP', clickId: 'openAddMcpModal', primary: true },
         { label: '刷新商店', clickId: 'refreshStoreBtn' }
@@ -999,8 +1012,8 @@ function decorateWorkspaceSubsections() {
   });
 
   markToolbars('pubTabAccounts', [
-    { selector: ':scope > div:nth-of-type(1)', className: 'page-toolbar' },
-    { selector: ':scope > div:nth-of-type(2)', className: 'publish-filter-toolbar' }
+    { selector: '#accountAddToolbar', className: 'page-toolbar' },
+    { selector: '#accountFilterToolbar', className: 'publish-filter-toolbar' }
   ]);
   markToolbars('pubTabAssets', [
     { selector: ':scope > div:nth-of-type(1)', className: 'publish-filter-toolbar' },
@@ -1216,6 +1229,18 @@ function loadBillingView() {
             if (e === 'skill_unlock') return '技能解锁';
             return et || '扣减';
           }
+          function billingConsumptionDescription(h, typeText) {
+            var hType = (h && h.type ? String(h.type) : '').trim().toLowerCase();
+            var e = (h && h.entry_type ? String(h.entry_type) : '').trim().toLowerCase();
+            if (hType === 'recharge') return '充值到账';
+            if (e === 'pre_deduct') return '预扣';
+            if (e === 'settle') return '结算';
+            if (e === 'refund') return '退款';
+            if (e === 'unit_charge' || e === 'direct_charge') return '扣费';
+            if (e === 'sutui_chat') return '对话扣费';
+            if (e === 'skill_unlock') return '技能解锁';
+            return typeText || '算力变动';
+          }
           history.forEach(function(h) {
             var time = (h.time_beijing || '').trim() || formatIsoToBeijingDisplay(h.time || '');
             var et = (h.entry_type || '').trim();
@@ -1227,7 +1252,7 @@ function loadBillingView() {
             } else {
               amountStr = (Math.abs(amount) > 0 && Math.abs(amount) < 1 ? amount.toFixed(4) : String(amount));
             }
-            var desc = (h.description || '-').trim() || '-';
+            var desc = billingConsumptionDescription(h, typeText);
             if (h.balance_after != null && h.balance_after !== undefined) {
               desc = desc + '（余额 ' + h.balance_after + '）';
             }
@@ -1275,6 +1300,7 @@ function loadBillingView() {
         if (!pricingContent) return;
         if (!d) { pricingContent.innerHTML = '<span class="meta">收费说明加载失败</span>'; return; }
         var packages = d.credit_packages || [];
+        var usageCosts = d.usage_costs || [];
         var html = '';
         if (packages.length) {
           html += '<p style="margin:0 0 0.35rem 0;"><strong>算力套餐</strong>：</p><ul style="margin:0;padding-left:1.25rem;">';
@@ -1283,7 +1309,16 @@ function loadBillingView() {
           });
           html += '</ul>';
         } else {
-          html = '<p style="margin:0;"><strong>算力套餐</strong>：98元/10000算力、198元/20000算力、498元/50000算力、998元/120000算力。</p>';
+          html = '<p style="margin:0;"><strong>算力套餐</strong>：100元/10000算力、200元/20000算力、500元/50000算力、1000元/100000算力。</p>';
+        }
+        if (usageCosts.length) {
+          html += '<p style="margin:0.65rem 0 0.35rem 0;"><strong>默认扣除</strong>：</p><ul style="margin:0;padding-left:1.25rem;">';
+          usageCosts.forEach(function(item) {
+            html += '<li>' + escapeHtml(item.label || '能力调用') + '：' + escapeHtml(String(item.credits || 0)) + ' 算力/' + escapeHtml(item.unit || '次') + '</li>';
+          });
+          html += '</ul>';
+        } else {
+          html += '<p style="margin:0.65rem 0 0;"><strong>默认扣除</strong>：日常对话 10 算力/次，生成图片 60 算力/次，图生视频 8 秒 160 算力/次。</p>';
         }
         pricingContent.innerHTML = html;
       })

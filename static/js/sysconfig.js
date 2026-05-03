@@ -51,25 +51,7 @@ document.querySelectorAll('.sys-tab').forEach(function(tab) {
 });
 
 function loadLanInfo() {
-  fetch((LOCAL_API_BASE || '') + '/api/settings/lan-info', { headers: authHeaders() })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var bar = document.getElementById('lanInfoBar');
-      var link = document.getElementById('lanInfoUrl');
-      var copyBtn = document.getElementById('lanInfoCopy');
-      if (bar && d.url) {
-        link.href = d.url;
-        link.textContent = d.url;
-        bar.style.display = '';
-        if (copyBtn) {
-          copyBtn.onclick = function() {
-            try { navigator.clipboard.writeText(d.url); copyBtn.textContent = '已复制'; setTimeout(function() { copyBtn.textContent = '复制'; }, 1500); }
-            catch(e) {}
-          };
-        }
-      }
-    })
-    .catch(function() {});
+  return;
 }
 
 function setChatRouteModeValue(mode) {
@@ -216,8 +198,7 @@ function loadOpenClawConfig() {
           }
         }
       }
-      ocProviderData = d.providers || [];
-      renderProviderCards(ocProviderData);
+      ocProviderData = [];
     })
     .catch(function() {});
 }
@@ -245,29 +226,6 @@ function checkOcStatus() {
     });
 }
 
-function renderProviderCards(providers) {
-  var el = document.getElementById('ocProviderCards');
-  if (!el) return;
-  if (!providers || !providers.length) {
-    el.innerHTML = '<p class="meta">无可用模型提供商</p>';
-    return;
-  }
-  el.innerHTML = providers.map(function(p) {
-    var statusText = p.configured
-      ? '<span style="color:#6ee7b7;">已配置</span> (' + escapeHtml(p.masked_key) + ')'
-      : '<span style="color:#f87171;">未配置</span>';
-    var placeholder = p.configured ? '留空则保持原 Key，输入新值可覆盖' : '输入 API Key...';
-    return '<div class="provider-card">' +
-      '<div class="provider-name">' + escapeHtml(p.name) + '</div>' +
-      '<div class="provider-status">' + statusText + '</div>' +
-      '<div class="key-input-row">' +
-      '<input type="password" id="ocKey_' + escapeAttr(p.id) + '" placeholder="' + escapeAttr(placeholder) + '" value="" autocomplete="off" style="min-width:14rem;">' +
-      '</div>' +
-      '<div class="form-hint">环境变量: ' + escapeHtml(p.env_key) + '</div>' +
-      '</div>';
-  }).join('');
-}
-
 function saveOcConfig() {
   var btn = document.getElementById('saveOcConfigBtn');
   var msgEl = document.getElementById('ocSaveMsg');
@@ -275,20 +233,6 @@ function saveOcConfig() {
   var modelSel = document.getElementById('ocPrimaryModel');
   var body = {};
   if (modelSel) body.primary_model = modelSel.value;
-
-  var keyMap = {
-    'anthropic': 'anthropic_api_key',
-    'openai': 'openai_api_key',
-    'deepseek': 'deepseek_api_key',
-    'google': 'gemini_api_key'
-  };
-  ocProviderData.forEach(function(p) {
-    var input = document.getElementById('ocKey_' + p.id);
-    if (input && input.value.trim()) {
-      var field = keyMap[p.id];
-      if (field) body[field] = input.value.trim();
-    }
-  });
 
   fetch((LOCAL_API_BASE || '') + '/api/openclaw/config', {
     method: 'POST', headers: authHeaders(),

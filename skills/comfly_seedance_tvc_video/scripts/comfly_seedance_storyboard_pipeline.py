@@ -678,7 +678,7 @@ class ComflySeedanceClient:
         def call() -> Dict[str, Any]:
             img_url = f"{self.base_url}/v1/images/generations"
             self._trace_request("images_generations", img_url, body)
-            r = self.session.post(img_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+            r = self.session.post(img_url, headers={"Content-Type": "application/json"}, json=body, timeout=300)
             payload = self._check(r)
             data = payload.get("data", [])
             if not isinstance(data, list) or not data:

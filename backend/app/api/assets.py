@@ -1521,18 +1521,32 @@ def serve_asset_file(
 @router.get("/api/assets/{asset_id}", summary="获取素材详情")
 def get_asset(
     asset_id: str,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
     a = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
     if not a:
         raise HTTPException(404, detail="素材不存在")
+    open_url = None
+    pub = get_asset_public_url(a.asset_id, current_user.id, request, db)
+    if pub:
+        open_url = pub
+    elif _asset_local_path(a):
+        open_url = build_asset_file_url(
+            request,
+            a.asset_id,
+            expiry_sec=_ASSET_LIST_OPEN_FALLBACK_EXPIRY_SEC,
+        )
+    elif (a.source_url or "").strip().startswith(("http://", "https://")):
+        open_url = (a.source_url or "").strip()
     return {
         "asset_id": a.asset_id,
         "filename": a.filename,
         "media_type": a.media_type,
         "file_size": a.file_size,
         "source_url": a.source_url,
+        "open_url": open_url,
         "prompt": a.prompt,
         "tags": a.tags,
         "created_at": a.created_at.isoformat() if a.created_at else "",

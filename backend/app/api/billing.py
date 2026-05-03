@@ -26,10 +26,15 @@ _CUSTOM_CONFIGS_FILE = _BASE_DIR / "custom_configs.json"
 # 默认收费模式（可被 custom_configs.json 中 BILLING_PRICING 覆盖）
 _DEFAULT_SKILL_UNLOCK = {"min_yuan": 98, "max_yuan": 198}
 _DEFAULT_CREDIT_PACKAGES = [
-    {"price_yuan": 98, "credits": 10000, "label": "98元 - 10000算力"},
-    {"price_yuan": 198, "credits": 20000, "label": "198元 - 20000算力"},
-    {"price_yuan": 498, "credits": 50000, "label": "498元 - 50000算力"},
-    {"price_yuan": 998, "credits": 120000, "label": "998元 - 120000算力"},
+    {"price_yuan": 100, "credits": 10000, "label": "100元 - 10000算力"},
+    {"price_yuan": 200, "credits": 20000, "label": "200元 - 20000算力"},
+    {"price_yuan": 500, "credits": 50000, "label": "500元 - 50000算力"},
+    {"price_yuan": 1000, "credits": 100000, "label": "1000元 - 100000算力"},
+]
+_DEFAULT_USAGE_COSTS = [
+    {"label": "日常对话", "credits": 10, "unit": "次"},
+    {"label": "生成图片", "credits": 60, "unit": "次"},
+    {"label": "图生视频 8 秒", "credits": 160, "unit": "次"},
 ]
 
 
@@ -39,6 +44,7 @@ def _get_billing_pricing() -> dict[str, Any]:
         return {
             "skill_unlock": _DEFAULT_SKILL_UNLOCK,
             "credit_packages": _DEFAULT_CREDIT_PACKAGES,
+            "usage_costs": _DEFAULT_USAGE_COSTS,
         }
     try:
         data = json.loads(_CUSTOM_CONFIGS_FILE.read_text(encoding="utf-8"))
@@ -47,6 +53,7 @@ def _get_billing_pricing() -> dict[str, Any]:
             return {
                 "skill_unlock": _DEFAULT_SKILL_UNLOCK,
                 "credit_packages": _DEFAULT_CREDIT_PACKAGES,
+                "usage_costs": _DEFAULT_USAGE_COSTS,
             }
         skill = cfg.get("skill_unlock")
         if isinstance(skill, dict):
@@ -81,12 +88,21 @@ def _get_billing_pricing() -> dict[str, Any]:
         else:
             credit_packages = _DEFAULT_CREDIT_PACKAGES
 
-        return {"skill_unlock": skill_unlock, "credit_packages": credit_packages}
+        usage_costs = cfg.get("usage_costs")
+        if not isinstance(usage_costs, list) or not usage_costs:
+            usage_costs = _DEFAULT_USAGE_COSTS
+
+        return {
+            "skill_unlock": skill_unlock,
+            "credit_packages": credit_packages,
+            "usage_costs": usage_costs,
+        }
     except Exception as e:
         logger.debug("BILLING_PRICING read failed: %s", e)
         return {
             "skill_unlock": _DEFAULT_SKILL_UNLOCK,
             "credit_packages": _DEFAULT_CREDIT_PACKAGES,
+            "usage_costs": _DEFAULT_USAGE_COSTS,
         }
 
 

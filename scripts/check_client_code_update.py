@@ -7,7 +7,7 @@
 - 满足任一即更新：① 服务端 build 更大；② build 相同且 manifest.version 高于本地（如 1.0.0 → 1.0.1，便于只发「小版本」包）。
 - 下载 bundle_url，校验 sha256 后，对 manifest.paths 所列路径做「整路径覆盖」
   （目录则先删再拷，文件则覆盖）；绝不触碰 python/、deps/、browser_chromium/、nodejs 可执行文件等。
-- openclaw/：覆盖前尽量保留本地 openclaw/workspace 与 openclaw/.env（若存在）；覆盖后把 zip 内
+- openclaw/：覆盖前保留本地 workspace、运行态目录、.env/登录态文件与 gateway token；覆盖后把 zip 内
   openclaw/workspace/LOBSTER_CHAT_POLICY_*.md 合并进保留后的 workspace（避免 OTA 丢策略导致 /chat 不调 MCP）。
 
 禁止静默伪装成功：校验失败或解压失败时不改本地代码。
@@ -67,10 +67,10 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "skills",
     "skill_registry.json",
     "upstream_urls.json",
+    ".env",
     "openclaw",
     "requirements.txt",
     ".env.example",
-    ".env",
     "install.bat",
     "start.bat",
     "start_online.bat",
@@ -101,6 +101,14 @@ BLOCKED_PREFIXES = (
     ".git\\",
     "nodejs/node.exe",
     "nodejs/node",
+)
+BLOCKED_EXACT = frozenset(
+    {
+        "openclaw/.env",
+        "openclaw/.channel_fallback.json",
+        "openclaw/.weixin_login_last.json",
+        "openclaw/update-check.json",
+    }
 )
 ALLOWED_NODEJS_EXACT = frozenset(
     {
@@ -271,6 +279,8 @@ def _path_allowed(rel: str) -> bool:
     if not r or ".." in r.split("/"):
         return False
     rl = r.lower()
+    if rl in BLOCKED_EXACT:
+        return False
     if rl == "python" or rl.startswith("python/"):
         return False
     if rl == "deps" or rl.startswith("deps/"):
@@ -327,6 +337,36 @@ _OPENCLAW_PRESERVE_DIR_NAMES = {
     "tasks",
     "user_memory",
 }
+_OPENCLAW_PRESERVE_FILE_NAMES = {
+    ".env",
+    ".channel_fallback.json",
+    ".weixin_login_last.json",
+    "update-check.json",
+}
+_OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER = "LOBSTER_AUTO_TOKEN_PLACEHOLDER"
+
+
+def _read_openclaw_gateway_token(config_path: Path) -> str:
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        token = str(data.get("gateway", {}).get("auth", {}).get("token") or "").strip()
+        if token == _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER:
+            return ""
+        return token
+    except Exception:
+        return ""
+
+
+def _write_openclaw_gateway_token(config_path: Path, token: str) -> None:
+    token = (token or "").strip()
+    if not token or token == _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER or not config_path.is_file():
+        return
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        data.setdefault("gateway", {}).setdefault("auth", {})["token"] = token
+        config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:
+        print(f"[code] [WARN] 保留 OpenClaw Gateway token 失败: {exc}", flush=True)
 
 
 def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
@@ -334,7 +374,11 @@ def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
     preserved: list[tuple[str, Path]] = []
     tmp_root = Path(tempfile.mkdtemp(prefix="lobster_oc_preserve_"))
     try:
+        local_gateway_token = ""
         if dst.is_dir():
+            local_gateway_token = _read_openclaw_gateway_token(dst / "openclaw.json")
+            if not local_gateway_token:
+                local_gateway_token = (_load_dotenv_simple(ROOT / ".env").get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
             for child in dst.iterdir():
                 if child.is_dir() and (child.name == "workspace" or child.name.startswith("workspace-")):
                     holder = tmp_root / child.name
@@ -344,11 +388,12 @@ def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
                     holder = tmp_root / child.name
                     shutil.move(str(child), str(holder))
                     preserved.append((child.name, holder))
-            env_f = dst / ".env"
-            if env_f.is_file() and not (src / ".env").exists():
-                holder = tmp_root / ".env"
-                shutil.copy2(env_f, holder)
-                preserved.append((".env", holder))
+            for filename in _OPENCLAW_PRESERVE_FILE_NAMES:
+                state_file = dst / filename
+                if state_file.is_file():
+                    holder = tmp_root / filename
+                    shutil.copy2(state_file, holder)
+                    preserved.append((filename, holder))
 
         if dst.exists():
             if dst.is_dir():
@@ -356,6 +401,16 @@ def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
             else:
                 dst.unlink()
         shutil.copytree(src, dst)
+
+        for filename in _OPENCLAW_PRESERVE_FILE_NAMES:
+            bundled_state_file = dst / filename
+            if bundled_state_file.exists():
+                if bundled_state_file.is_dir():
+                    shutil.rmtree(bundled_state_file)
+                else:
+                    bundled_state_file.unlink()
+
+        _write_openclaw_gateway_token(dst / "openclaw.json", local_gateway_token)
 
         for name, holder in preserved:
             target = dst / name
