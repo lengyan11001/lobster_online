@@ -1275,9 +1275,21 @@ async def upload_asset(
                     ).strip()
                     if installation_id:
                         headers["X-Installation-Id"] = installation_id
-                    upload_url = f"{server_base.rstrip('/')}/api/assets/upload-temp"
+                    upload_base = server_base.rstrip("/")
+                    if upload_base.lower().startswith("http://") and not re.search(
+                        r"^http://(127\.0\.0\.1|localhost|\[?::1\]?)(:\d+)?$",
+                        upload_base,
+                        re.IGNORECASE,
+                    ):
+                        upload_base = "https://" + upload_base[7:]
+                        logger.info(
+                            "[上传流程-步骤3] AUTH_SERVER_BASE 为 http，upload-temp 优先改用 https asset_id=%s url=%s",
+                            aid,
+                            upload_base,
+                        )
+                    upload_url = f"{upload_base}/api/assets/upload-temp"
                     logger.info("[上传流程-步骤3] POST %s asset_id=%s", upload_url, aid)
-                    resp = await client.post(upload_url, files=files, headers=headers)
+                    resp = await client.post(upload_url, files=files, headers=headers, follow_redirects=True)
                     temp_http_status = resp.status_code
                     logger.info("[上传流程-步骤3] 服务器响应状态码=%d asset_id=%s", resp.status_code, aid)
                     if resp.status_code >= 400:

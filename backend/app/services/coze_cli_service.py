@@ -10,11 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from ..core.config import settings
+
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 RUNS_DIR = ROOT_DIR / "runs" / "workbench_cli"
 SESSION_STATE_FILE = RUNS_DIR / "session_state.json"
-HARDCODED_COZE_CLI_PAT = "sat_63YJw6MIvj9YG6nWozu2YHNZ8zOrgcNubOC0m2q0A89JSIifFGnvLzhF7r4Q84ef"
 
 
 @dataclass
@@ -259,6 +260,31 @@ def _run_cli_json(args: list[str], timeout: int = 180) -> tuple[bool, Any, str]:
     return True, payload, raw
 
 
+def _is_cli_permission_error(payload: Any, raw: str = "") -> bool:
+    text = raw or ""
+    if isinstance(payload, dict):
+        text += "\n" + json.dumps(payload, ensure_ascii=False)
+    return any(
+        marker in text
+        for marker in (
+            "无权限",
+            "无权限操作",
+            "No permission",
+            "No permission to operate",
+        )
+    )
+
+
+def _format_cli_failure(raw: str, payload: Any = None) -> str:
+    if _is_cli_permission_error(payload, raw):
+        return (
+            "当前 Coze 账号或 PAT 可以登录 CLI，但没有 Coze Coding 项目操作权限，"
+            "所以无法创建网页应用。请在 Coze 后台确认该账号已开通/加入支持 Coding 项目的空间，"
+            "并使用带有项目创建权限的 PAT 重新配置 COZE_CLI_PAT 后再试。"
+        )
+    return raw or "CLI 执行失败"
+
+
 def get_auth_status() -> tuple[bool, dict[str, Any], str]:
     ok, exe = is_cli_installed()
     if not ok or not exe:
@@ -273,7 +299,7 @@ def get_auth_status() -> tuple[bool, dict[str, Any], str]:
 
 
 def _configured_pat_token() -> str:
-    return HARDCODED_COZE_CLI_PAT.strip()
+    return str(settings.coze_cli_pat or os.getenv("COZE_CLI_PAT") or "").strip()
 
 
 def login_with_pat(token: str) -> tuple[bool, str]:
@@ -499,7 +525,7 @@ def handle_cli_prompt(message: str, session_id: Optional[str] = None) -> CliHand
     configured_pat = _configured_pat_token()
     token_expires_at = str(auth_payload.get("token_expires_at") or "").strip()
 
-    if configured_pat and (not logged_in or token_expires_at != "Never (PAT)"):
+    if configured_pat:
         pat_ok, _pat_detail = login_with_pat(configured_pat)
         status_ok, auth_payload, auth_error = get_auth_status()
         logged_in = bool(auth_payload.get("logged_in")) if status_ok else False
@@ -582,8 +608,8 @@ def handle_cli_prompt(message: str, session_id: Optional[str] = None) -> CliHand
             return CliHandleResult(
                 ok=False,
                 statuses=[f"正在创建{project_label}项目…"],
-                reply=f"创建{project_label}失败：{raw}",
-                meta={"action": f"create_{project_type}_project"},
+                reply=f"创建{project_label}失败：{_format_cli_failure(raw, payload)}",
+                meta={"action": f"create_{project_type}_project", "error": payload},
             )
         latest = _latest_projects(3)
         project_id, project_name = _latest_project_from_payload(payload, latest)

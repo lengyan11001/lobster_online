@@ -123,6 +123,7 @@ class Settings(BaseSettings):
     capability_sutui_mcp_url: Optional[str] = None
     capability_upstream_urls_json: Optional[str] = None
     reddit_comment2video_backend_url: Optional[str] = None
+    coze_cli_pat: Optional[str] = None
     """认证中心（lobster_server）根地址，必填（无默认值）：发布/素材/对话等本机接口仅通过该地址 GET /auth/me 校验 token。"""
     auth_server_base: Optional[str] = None
     """与认证中心 LOBSTER_MCP_BILLING_INTERNAL_KEY 一致；本机转发 /capabilities/*、MCP 调认证中心（若有）时带 X-Lobster-Mcp-Billing。速推只走 mcp-gateway；media.edit 免费、comfly 在后端自扣费，均不在 MCP 侧走认证中心计费。"""

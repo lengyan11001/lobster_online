@@ -5,12 +5,12 @@
     stable_default: {
       imageModel: 'nano-banana-2',
       detailRenderMode: 'composited',
-      label: '稳定版'
+      label: 'Nano Banana 2'
     },
     gpt_image2_direct: {
       imageModel: 'gpt-image-2',
       detailRenderMode: 'gpt_image2_direct',
-      label: 'GPT Image 2 直出'
+      label: 'GPT Image 2'
     }
   };
   var RESULT_LABELS = {
@@ -503,14 +503,14 @@
   function _collectProgressFacts(resp) {
     var progress = resp && resp.progress ? resp.progress : {};
     var facts = [];
-    if (progress && progress.manifest_status) facts.push('manifest: ' + progress.manifest_status);
-    if (progress && progress.step_count != null) facts.push('steps: ' + progress.step_count);
+    if (progress && progress.manifest_status) facts.push('清单状态：' + _statusLabel(progress.manifest_status));
+    if (progress && progress.step_count != null) facts.push('已处理阶段：' + progress.step_count);
     if (progress && Array.isArray(progress.page_indexes) && progress.page_indexes.length) {
-      facts.push('pages: ' + progress.page_indexes.join(', '));
+      facts.push('已生成页码：' + progress.page_indexes.join('、'));
     }
     if (progress && Array.isArray(progress.errors) && progress.errors.length) {
       progress.errors.slice(-3).forEach(function(item) {
-        if (typeof item === 'string' && item.trim()) facts.push('error: ' + item.trim());
+        if (typeof item === 'string' && item.trim()) facts.push('异常提示：' + item.trim());
       });
     }
     return facts;
@@ -540,7 +540,7 @@
         '<div class="ecom-upload-name">' + escapeHtml(filename) + '</div>' +
         '<div class="ecom-upload-status' + statusClass + '">' + escapeHtml(statusText) + '</div>' +
         (errorMessage ? '<div class="ecom-upload-error">' + escapeHtml(errorMessage) + '</div>' : '') +
-        (assetId ? '<div class="ecom-upload-asset-id">' + escapeHtml(assetId) + '</div>' : '') +
+        (assetId ? '<div class="ecom-upload-asset-id">素材ID：' + escapeHtml(assetId) + '</div>' : '') +
       '</div>'
     );
   }
@@ -880,14 +880,19 @@
       return { error: '主商品图还在保存，请等状态变成“本地已就绪”后再开始生成。' };
     }
     if (state.mainAsset && state.mainAsset.upload_status === 'failed' && !mainAssetId && !mainLocalPath) {
-      return { error: '主商品图保存失败，请重新选择本地图片，或直接填写可用的 asset_id。' };
+      return { error: '主商品图保存失败，请重新选择本地图片，或直接填写可用的素材库 ID。' };
     }
-    if (!mainAssetId && !mainLocalPath) return { error: '请先选择主商品图，或填写可用的 asset_id。' };
+    if (!mainAssetId && !mainLocalPath) return { error: '请先选择主商品图，或填写可用的素材库 ID。' };
     var imagePreset = _selectedImageModelPreset();
+    var categoryText = (byId('ecomProductDirectionInput').value || '').trim();
+    var generationPrompt = (byId('ecomMainGenerationPromptInput') && byId('ecomMainGenerationPromptInput').value || '').trim();
+    var directionParts = [];
+    if (categoryText) directionParts.push('商品类目：' + categoryText);
+    if (generationPrompt) directionParts.push('主图生成要求：' + generationPrompt);
     var payload = {
       product_name_hint: (byId('ecomProductNameInput').value || '').trim(),
-      product_direction_hint: (byId('ecomProductDirectionInput').value || '').trim(),
-      listing_category: (byId('ecomProductDirectionInput').value || '').trim(),
+      product_direction_hint: directionParts.join('\n'),
+      listing_category: categoryText,
       export_name_prefix: (byId('ecomFilePrefixInput') && byId('ecomFilePrefixInput').value || '').trim(),
       sku: (byId('ecomSkuInput').value || '').trim(),
       brand: (byId('ecomBrandInput').value || '').trim(),
@@ -953,7 +958,7 @@
         var previewUrl = _firstImageUrl(asset, item);
         return {
           title: (item && item.filename) || ('结果 ' + (index + 1)),
-          meta: [asset.asset_id ? ('asset_id: ' + asset.asset_id) : '', item && item.relative_path ? item.relative_path : ''].filter(Boolean).join(' · '),
+          meta: [asset.asset_id ? ('素材ID：' + asset.asset_id) : '', item && item.relative_path ? item.relative_path : ''].filter(Boolean).join(' · '),
           preview_url: previewUrl,
           open_url: previewUrl,
           filename: (item && item.filename) || '',
@@ -1136,7 +1141,7 @@
             '<div class="ecom-gallery-actions">' +
               (openUrl ? '<a class="btn btn-primary btn-sm" href="' + escapeAttr(openUrl) + '" target="_blank" rel="noopener">打开</a>' : '') +
               ((item.asset_id && typeof copyToClipboard === 'function')
-                ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-id="' + escapeAttr(item.asset_id) + '">复制 asset_id</button>'
+                ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-id="' + escapeAttr(item.asset_id) + '">复制素材ID</button>'
                 : '') +
             '</div>' +
           '</div>' +
@@ -1148,7 +1153,7 @@
         var aid = btn.getAttribute('data-copy-asset-id') || '';
         if (!aid || typeof copyToClipboard !== 'function') return;
         copyToClipboard(aid, function() {
-          _setMsg('已复制 asset_id：' + aid, false);
+          _setMsg('已复制素材ID：' + aid, false);
         });
       });
     });
@@ -1181,7 +1186,7 @@
       return;
     }
     wrap.innerHTML = active.map(function(label, index) {
-      return '<div class="ecom-stage-chip"><div class="kicker">output ' + (index + 1) + '</div><div class="name">' + escapeHtml(label) + '</div></div>';
+      return '<div class="ecom-stage-chip"><div class="kicker">输出 ' + (index + 1) + '</div><div class="name">' + escapeHtml(label) + '</div></div>';
     }).join('');
   }
 
@@ -1410,6 +1415,7 @@
       'ecomMainAssetIdInput',
       'ecomProductNameInput',
       'ecomProductDirectionInput',
+      'ecomMainGenerationPromptInput',
       'ecomFilePrefixInput',
       'ecomSkuInput',
       'ecomBrandInput',
@@ -1469,6 +1475,11 @@
         hint.textContent = '用于后续上架类目和生成理解，不是商品标题。';
         categoryField.appendChild(hint);
       }
+    }
+
+    var mainPromptInput = byId('ecomMainGenerationPromptInput');
+    if (mainPromptInput) {
+      mainPromptInput.placeholder = '例如：这是一张白底图，请帮我生成淘宝场景图、商品特写图、质感细节图，保持产品外观、颜色、结构和标签一致。';
     }
 
     if (!byId('ecomFilePrefixInput')) {
@@ -1559,7 +1570,7 @@
         }
         _fetchAssetById(aid, function(err, row) {
           if (err || !row) {
-            _setMsg('未找到该 asset_id 对应的素材，请确认后重试。', true);
+            _setMsg('未找到这个素材库 ID 对应的素材，请确认后重试。', true);
             return;
           }
           row.kind = 'main';
@@ -2020,27 +2031,27 @@
     var currentJob = byId('ecomCurrentJobText');
     var summaryEl = byId('ecomStatusSummary');
     if (previewStatus) previewStatus.textContent = _statusLabel(status);
-    if (currentJob) currentJob.textContent = record ? _displayTaskName(record) : (state.currentJobId ? ('Task ' + state.currentJobId.slice(0, 8)) : 'No active job');
+    if (currentJob) currentJob.textContent = record ? _displayTaskName(record) : (state.currentJobId ? ('任务 ' + state.currentJobId.slice(0, 8)) : '暂无任务');
     if (titleEl) {
       titleEl.textContent = record
         ? _displayTaskName(record)
-        : (_stripFileExtension(state.mainAsset && state.mainAsset.filename) || 'Waiting for a new ecommerce image job');
+        : (_stripFileExtension(state.mainAsset && state.mainAsset.filename) || '等待开始生成商品图片');
     }
     if (metaEl) {
       var metaParts = [];
       if (record && record.productDirectionHint) metaParts.push(record.productDirectionHint);
-      if (record && (record.updatedAt || record.createdAt)) metaParts.push('Updated ' + _formatTimeLabel(record.updatedAt || record.createdAt));
+      if (record && (record.updatedAt || record.createdAt)) metaParts.push('更新于 ' + _formatTimeLabel(record.updatedAt || record.createdAt));
       if (record && record.suiteRootRelativePath) metaParts.push(record.suiteRootRelativePath);
-      if (totalCount) metaParts.push(totalCount + ' outputs');
+      if (totalCount) metaParts.push(totalCount + ' 张结果图');
       metaEl.textContent = metaParts.length
         ? metaParts.join(' · ')
-        : 'Submit a product image job and the latest result will stay here.';
+        : '提交任务后，最新生成结果会保留在这里。';
     }
     if (summaryEl) {
-      if (status === 'completed') summaryEl.textContent = 'Job completed. You can switch folders to review the generated outputs.';
-      else if (status === 'failed') summaryEl.textContent = _pickResponseMessage(resp, 'The current job failed. You can switch to another recent task or retry.');
-      else if (status === 'running') summaryEl.textContent = 'Job is still running. The page will keep polling for the latest progress.';
-      else summaryEl.textContent = 'Recent task details and generated outputs will appear here after submission.';
+      if (status === 'completed') summaryEl.textContent = '生成完成，可以切换不同分类查看图片。';
+      else if (status === 'failed') summaryEl.textContent = _pickResponseMessage(resp, '当前任务生成失败，可以刷新状态或重新提交。');
+      else if (status === 'running') summaryEl.textContent = '正在生成中，页面会自动刷新最新进度。';
+      else summaryEl.textContent = '提交任务后，这里会显示生成进度和结果。';
     }
     var publishBtn = byId('ecomPublishToShopBtn');
     if (publishBtn) publishBtn.style.display = (status === 'completed' && state.currentJobId) ? '' : 'none';
@@ -2049,13 +2060,13 @@
   function _publishToShop() {
     var base = _localBase();
     if (!base || !state.currentJobId) {
-      _setMsg('No completed job is available for publish.', true);
+      _setMsg('当前没有可发布的已完成任务。', true);
       return;
     }
     var btn = byId('ecomPublishToShopBtn');
     if (btn) {
       btn.disabled = true;
-      btn.textContent = 'Opening shop...';
+      btn.textContent = '正在打开店铺发布...';
     }
     var record = _findRecentJob(state.currentJobId);
     var payload = {
@@ -2076,16 +2087,16 @@
       .then(function(res) {
         if (!res.ok || !res.data || !res.data.ok) {
           var detail = res.data && (res.data.detail || res.data.message);
-          throw new Error(detail || 'Publish failed');
+          throw new Error(detail || '发布失败');
         }
-        var parts = ['Shop publish page opened'];
+        var parts = ['已打开店铺发布页'];
         if (res.data.auto_filled && res.data.auto_filled.length) {
-          parts.push('auto-filled: ' + res.data.auto_filled.join(', '));
+          parts.push('已自动填写：' + res.data.auto_filled.join('、'));
         }
         _setMsg(parts.join('; '), false);
       })
       .catch(function(err) {
-        _setMsg('Publish failed: ' + (err && err.message ? err.message : 'Unknown error'), true);
+        _setMsg('发布失败：' + (err && err.message ? err.message : '未知错误'), true);
       })
       .finally(function() {
         if (btn) {
@@ -2176,12 +2187,12 @@
     var hintEl = byId('ecomFocusedFolderHint');
     var counterEl = byId('ecomFocusedCounter');
     if (titleEl) titleEl.textContent = _resultFolderLabel(state.activeResultTab);
-    if (counterEl) counterEl.textContent = String((rows || []).length) + ' items';
+    if (counterEl) counterEl.textContent = String((rows || []).length) + ' 张';
     if (!previewEl || !metaEl) return;
     if (!rows || !rows.length) {
-      previewEl.innerHTML = '<div class="ecom-empty" style="width:100%;margin:0;">No previews in this folder yet.</div>';
-      metaEl.innerHTML = '<div class="ecom-empty" style="width:100%;margin:0;">Switch folders or refresh the job to load new outputs.</div>';
-      if (hintEl) hintEl.textContent = 'No previews in this folder yet.';
+      previewEl.innerHTML = '<div class="ecom-empty" style="width:100%;margin:0;">当前分类还没有预览图。</div>';
+      metaEl.innerHTML = '<div class="ecom-empty" style="width:100%;margin:0;">可以切换上方分类，或刷新任务状态查看新结果。</div>';
+      if (hintEl) hintEl.textContent = '当前分类还没有预览图。';
       return;
     }
     var index = state.focusedResultIndexByTab[state.activeResultTab] || 0;
@@ -2192,17 +2203,17 @@
     var editLabel = item.edit_kind === 'detail' ? '\u7f16\u8f91\u8be6\u60c5\u6587\u6848' : '\u6539\u5355\u5f20\u6587\u6848';
     previewEl.innerHTML = item.preview_url
       ? '<img src="' + escapeAttr(item.preview_url) + '" alt="">'
-      : '<div class="ecom-empty" style="width:100%;margin:0;">Preview unavailable.</div>';
+      : '<div class="ecom-empty" style="width:100%;margin:0;">暂时无法预览这张图片。</div>';
     metaEl.innerHTML =
       '<div class="ecom-focused-meta-copy">' +
-        '<div class="ecom-focused-meta-title">' + escapeHtml(item.title || 'Untitled result') + '</div>' +
-        '<div class="ecom-focused-meta-sub">' + escapeHtml(item.meta || 'No extra details') + '</div>' +
+        '<div class="ecom-focused-meta-title">' + escapeHtml(item.title || '未命名结果') + '</div>' +
+        '<div class="ecom-focused-meta-sub">' + escapeHtml(item.meta || '暂无更多信息') + '</div>' +
       '</div>' +
       '<div class="ecom-focused-meta-actions">' +
         (openUrl ? '<a class="btn btn-primary btn-sm" href="' + escapeAttr(openUrl) + '" target="_blank" rel="noopener">\u6253\u5f00\u539f\u56fe</a>' : '') +
         (item.editable ? '<button type="button" class="btn btn-ghost btn-sm" data-edit-image="' + escapeAttr(String(item.page_index || '')) + '">' + editLabel + '</button>' : '') +
         (item.asset_id && typeof copyToClipboard === 'function'
-          ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-focused-asset="' + escapeAttr(item.asset_id) + '">\u590d\u5236 asset_id</button>'
+          ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-focused-asset="' + escapeAttr(item.asset_id) + '">\u590d\u5236\u7d20\u6750ID</button>'
           : '') +
       '</div>';
     if (hintEl) hintEl.textContent = '\u70b9\u51fb\u4e0b\u65b9\u7f29\u7565\u56fe\u53ef\u5207\u6362\u5f53\u524d\u5927\u56fe\u9884\u89c8\u3002';
@@ -2211,7 +2222,7 @@
         var aid = btn.getAttribute('data-copy-focused-asset') || '';
         if (!aid || typeof copyToClipboard !== 'function') return;
         copyToClipboard(aid, function() {
-          _setMsg('\u5df2\u590d\u5236 asset_id\uff1a' + aid, false);
+          _setMsg('\u5df2\u590d\u5236\u7d20\u6750ID\uff1a' + aid, false);
         });
       });
     });

@@ -45,6 +45,7 @@ from .api.comfly_daihuo import router as comfly_daihuo_router
 from .api.comfly_seedance_tvc import router as comfly_seedance_tvc_router
 from .api.comfly_ecommerce_detail import router as comfly_ecommerce_detail_router
 from .api.comfly_image_studio import router as comfly_image_studio_router
+from .api.viral_video_remix import router as viral_video_remix_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
 except ModuleNotFoundError as e:
@@ -873,6 +874,7 @@ def create_app() -> FastAPI:
     app.include_router(comfly_seedance_tvc_router, prefix="")
     app.include_router(comfly_ecommerce_detail_router, prefix="")
     app.include_router(comfly_image_studio_router, prefix="")
+    app.include_router(viral_video_remix_router, prefix="")
     if ecommerce_publish_router is not None:
         app.include_router(ecommerce_publish_router, prefix="")
     else:

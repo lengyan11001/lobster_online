@@ -1735,6 +1735,9 @@ function loadLogsView() {
     if (hash === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
       window._openSeedanceTvcStudioView();
     }
+    if (hash === 'viral-video-remix' && typeof window._openViralVideoRemixView === 'function') {
+      window._openViralVideoRemixView();
+    }
   }
   window.addEventListener('hashchange', applyHash);
   window._applyWecomConfigHash = applyHash;
@@ -1746,7 +1749,8 @@ function loadLogsView() {
     location.hash.indexOf('meta-social') !== -1 ||
     location.hash.indexOf('ecommerce-detail-studio') !== -1 ||
     location.hash.indexOf('image-composer-studio') !== -1 ||
-    location.hash.indexOf('seedance-tvc-studio') !== -1
+    location.hash.indexOf('seedance-tvc-studio') !== -1 ||
+    location.hash.indexOf('viral-video-remix') !== -1
   )) applyHash();
 })();
 

@@ -10,10 +10,14 @@
     exampleFeaturedCount: 0,
     exampleVisibleCount: 0,
     examplePageSize: 12,
+    exampleCategory: 'all',
+    exampleSearch: '',
     activeExampleId: '',
     currentJobId: '',
     currentJobStatus: '',
     currentResultVideoUrl: '',
+    submitBusy: false,
+    submitLabel: '',
     pollTimer: null
   };
 
@@ -52,6 +56,37 @@
       hint: '当前模式只用提示词规划分镜，右侧先展示草案；真正提交还需要后端支持纯文生视频。',
       emphasis: '脚本主导'
     }
+  };
+
+  var PURPOSE_LABELS = {
+    storyboard: '分镜参考',
+    person: '指定人物',
+    product: '指定产品',
+    style: '参考风格',
+    scene: '参考场景',
+    auto: '普通参考'
+  };
+
+  var PURPOSE_HINTS = {
+    storyboard: '参考图{n}是分镜/画面结构参考，请学习它的构图、镜头节奏、画面层次和商业短视频表达方式，不要把它误当成必须替换的人物或产品。',
+    person: '参考图{n}是目标人物，请所有分镜和最终视频都保持参考图{n}的人物脸型、五官、发型、气质和服装核心特征；不要生成相似但不同的人。',
+    product: '参考图{n}是目标产品，请所有产品展示镜头都保持参考图{n}的产品外观、包装、颜色、材质、标签布局和主要识别特征；不要沿用其他产品。',
+    style: '参考图{n}只作为风格参考，请学习它的色彩、光线、质感、镜头氛围和视觉调性，不要复制其中无关人物或产品。',
+    scene: '参考图{n}是场景参考，请使用类似空间、背景环境、光线和布景关系，并让人物或产品自然融入该场景。',
+    auto: '参考图{n}是普通参考图，请结合它的主体、风格或构图进行视频分镜规划。'
+  };
+
+  var EXAMPLE_CATEGORIES = {
+    all: [],
+    product: ['产品', '带货', '商品', '广告', '口播', '美妆', '护肤', '包装', '品牌', '电商', '种草', 'TVC'],
+    comedy: ['搞笑', '喜剧', '反转', '爆笑', '沙雕', '整顿', '幽默'],
+    drama: ['剧情', '短剧', '故事', '反转剧', '职场', '情绪', '叙事'],
+    fashion: ['变装', '换装', '走秀', '时尚', '穿搭', '铠甲', '妆容', '舞蹈'],
+    guofeng: ['国风', '古风', '武侠', '汉服', '东方', '水墨', '仙侠', '中国'],
+    sci_fi: ['科幻', '奇幻', '赛博朋克', '未来', '机甲', '魔法', '反重力', '特效'],
+    cinematic: ['电影感', '电影质感', '影视', '高清', '写实', '镜头', '慢动作', '大片'],
+    anime: ['动漫', '二次元', '动画', '漫画', 'OVA', '赛璐璐'],
+    travel: ['风景', '旅行', '山脉', '城市', '街头', '自然', '航拍', '海边']
   };
 
   function $(id) {
@@ -124,11 +159,16 @@
 
   function normalizeExampleItem(item) {
     var tags = Array.isArray(item && item.tags) ? item.tags : [];
+    var prompt = String((item && item.prompt) || '').trim();
+    var promptZh = String((item && item.prompt_zh) || '').trim();
+    var promptEn = String((item && item.prompt_en) || '').trim();
     return {
       id: String((item && item.id) || '').trim(),
       title: String((item && item.title) || 'Seedance 案例').trim(),
       slug: String((item && item.slug) || '').trim(),
-      prompt: String((item && item.prompt) || '').trim(),
+      prompt: promptZh || prompt || promptEn,
+      prompt_zh: promptZh,
+      prompt_en: promptEn,
       cover_image: cleanRemoteUrl(item && item.cover_image),
       video_url: cleanRemoteUrl(item && item.video_url),
       model: String((item && item.model) || 'Seedance 2.0').trim() || 'Seedance 2.0',
@@ -155,18 +195,54 @@
     return state.exampleVisibleCount || state.examplePageSize || 12;
   }
 
+  function exampleMatchesCategory(item, category) {
+    if (!category || category === 'all') return true;
+    var words = EXAMPLE_CATEGORIES[category] || [];
+    if (!words.length) return true;
+    var haystack = [
+      item.title || '',
+      item.prompt || '',
+      item.prompt_zh || '',
+      item.prompt_en || '',
+      (item.tags || []).join(' ')
+    ].join(' ');
+    return words.some(function(word) {
+      return haystack.indexOf(word) >= 0;
+    });
+  }
+
+  function exampleMatchesSearch(item, query) {
+    var q = String(query || '').trim().toLowerCase();
+    if (!q) return true;
+    var haystack = [
+      item.title || '',
+      item.prompt || '',
+      item.prompt_zh || '',
+      item.prompt_en || '',
+      (item.tags || []).join(' ')
+    ].join(' ').toLowerCase();
+    return haystack.indexOf(q) >= 0;
+  }
+
+  function filteredExampleCatalog() {
+    return (state.exampleCatalog || []).filter(function(item) {
+      return exampleMatchesCategory(item, state.exampleCategory) && exampleMatchesSearch(item, state.exampleSearch);
+    });
+  }
+
   function loadMoreExamples() {
-    if (!state.examplesOpen || state.examplesLoading || !state.exampleCatalog.length) return;
+    var filtered = filteredExampleCatalog();
+    if (!state.examplesOpen || state.examplesLoading || !filtered.length) return;
     var current = visibleExampleCount();
-    if (current >= state.exampleCatalog.length) return;
-    state.exampleVisibleCount = Math.min(current + state.examplePageSize, state.exampleCatalog.length);
+    if (current >= filtered.length) return;
+    state.exampleVisibleCount = Math.min(current + state.examplePageSize, filtered.length);
     renderExamplesPanel();
   }
 
   function updateExamplesMoreButton() {
     var btn = $('seedanceExamplesMoreBtn');
     if (!btn) return;
-    var total = state.exampleCatalog.length;
+    var total = filteredExampleCatalog().length;
     var visible = Math.min(visibleExampleCount(), total);
     btn.style.display = (state.examplesOpen && visible > 0 && visible < total) ? '' : 'none';
     btn.disabled = !!state.examplesLoading;
@@ -239,6 +315,7 @@
     $('seedanceNeedMergeCheck').checked = defaults.needMerge;
     $('seedanceTaskPromptInput').value = defaults.prompt;
     $('seedanceImageFileInput').value = '';
+    if ($('seedanceReferencePurposeSelect')) $('seedanceReferencePurposeSelect').value = 'storyboard';
   }
 
   function setMode(mode) {
@@ -272,13 +349,15 @@
   }
 
   function readFiles(fileList) {
+    var purpose = (($('seedanceReferencePurposeSelect') || {}).value || 'storyboard').trim() || 'storyboard';
     return Array.prototype.slice.call(fileList || []).map(function(file) {
       return {
         name: file.name,
         size: file.size,
         type: file.type,
         url: URL.createObjectURL(file),
-        file: file
+        file: file,
+        purpose: purpose
       };
     });
   }
@@ -308,10 +387,21 @@
         '<div class="tvc-upload-card-body">',
         '<div class="tvc-upload-card-title">' + escapeHtml(item.name || ('参考图 ' + (index + 1))) + '</div>',
         '<div class="tvc-upload-card-meta">' + escapeHtml(formatFileSize(item.size)) + '</div>',
+        '<select class="seedance-ref-purpose" data-ref-purpose-index="' + index + '">',
+        Object.keys(PURPOSE_LABELS).map(function(key) {
+          return '<option value="' + key + '"' + ((item.purpose || 'storyboard') === key ? ' selected' : '') + '>' + escapeHtml(PURPOSE_LABELS[key]) + '</option>';
+        }).join(''),
+        '</select>',
         '</div>',
         '</div>'
       ].join('');
     }).join('');
+  }
+
+  function updateReferencePurpose(index, purpose) {
+    if (!state.images[index]) return;
+    state.images[index].purpose = purpose || 'storyboard';
+    renderWorkspace();
   }
 
   function removeMediaItem(index) {
@@ -332,6 +422,11 @@
       if (!btn) return;
       event.preventDefault();
       removeMediaItem(Number(btn.getAttribute('data-index')) || 0);
+    });
+    el.addEventListener('change', function(event) {
+      var sel = event.target && event.target.closest ? event.target.closest('.seedance-ref-purpose') : null;
+      if (!sel) return;
+      updateReferencePurpose(Number(sel.getAttribute('data-ref-purpose-index')) || 0, sel.value);
     });
   }
 
@@ -374,9 +469,17 @@
       return;
     }
 
-    var total = state.exampleCatalog.length;
-    var visibleItems = state.exampleCatalog.slice(0, Math.min(visibleExampleCount(), total));
-    status.textContent = '已加载 ' + visibleItems.length + ' / ' + total + ' 条 OpenNana Seedance 2.0 精选案例';
+    var filteredItems = filteredExampleCatalog();
+    if (!filteredItems.length) {
+      status.textContent = '没有匹配的案例';
+      grid.innerHTML = '<div class="tvc-empty-slot" style="grid-column:1 / -1;">换个分类或关键词试试。</div>';
+      updateExamplesMoreButton();
+      return;
+    }
+
+    var total = filteredItems.length;
+    var visibleItems = filteredItems.slice(0, Math.min(visibleExampleCount(), total));
+    status.textContent = '已加载 ' + visibleItems.length + ' / ' + total + ' 条视频灵感案例';
     grid.innerHTML = visibleItems.map(function(item) {
       var tags = (item.tags || []).slice(0, 3);
       if (item.language) tags.push(item.language.toUpperCase());
@@ -388,7 +491,7 @@
         '<div class="tvc-case-thumb"' + (item.video_url ? ' data-example-video="' + escapeHtml(item.id) + '"' : '') + '>',
         media,
         '<div class="tvc-case-badges">',
-        '<span class="tvc-case-badge is-featured">精选案例</span>',
+        '<span class="tvc-case-badge is-featured">灵感案例</span>',
         '<span class="tvc-case-badge">' + escapeHtml(item.model) + '</span>',
         '</div>',
         '<div class="tvc-case-overlay-title">' + escapeHtml(item.title) + '</div>',
@@ -524,9 +627,14 @@
 
     if (state.currentJobStatus === 'running') {
       videoSurface.innerHTML = [
-        '<div class="tvc-video-placeholder">',
-        '<strong>视频任务生成中</strong>',
-        '<span>任务已提交，正在生成最终视频，完成后这里会自动切换到成片结果。</span>',
+        '<div class="tvc-video-placeholder is-busy">',
+        '<div class="tvc-status-head">',
+        '<span class="tvc-status-spinner" aria-hidden="true"></span>',
+        '<div>',
+        '<strong>视频正在生成中</strong>',
+        '<span>任务已提交，正在分析分镜、生成片段并合成最终视频，完成后这里会自动切换到成片结果。</span>',
+        '</div>',
+        '</div>',
         '</div>'
       ].join('');
       return;
@@ -564,6 +672,7 @@
     renderBoards(boards);
     renderVideoStage(values, boards);
     renderExamplesPanel();
+    updateStartButtonState();
   }
 
   function showMessage(text) {
@@ -571,6 +680,25 @@
     if (!el) return;
     el.textContent = text;
     el.style.display = text ? 'block' : 'none';
+  }
+
+  function updateStartButtonState() {
+    var btn = $('seedanceStartBtn');
+    if (!btn) return;
+    var isBusy = !!state.submitBusy || state.currentJobStatus === 'running';
+    var label = state.submitLabel || (state.currentJobStatus === 'running' ? '生成中，请稍候' : '开始生成视频');
+    btn.disabled = isBusy;
+    btn.classList.toggle('is-loading', isBusy);
+    btn.innerHTML = [
+      '<span class="tvc-btn-spinner" aria-hidden="true"></span>',
+      '<span class="tvc-btn-label">' + escapeHtml(label) + '</span>'
+    ].join('');
+  }
+
+  function setSubmitBusy(isBusy, label) {
+    state.submitBusy = !!isBusy;
+    state.submitLabel = isBusy ? (label || '处理中...') : '';
+    updateStartButtonState();
   }
 
   function uploadAssetItem(item) {
@@ -613,6 +741,21 @@
     }, Promise.resolve([]));
   }
 
+  function buildPromptWithReferenceHints(prompt, uploadedImages) {
+    var hints = [];
+    (uploadedImages || state.images || []).forEach(function(item, index) {
+      var purpose = item.purpose || 'storyboard';
+      var tpl = PURPOSE_HINTS[purpose] || PURPOSE_HINTS.storyboard;
+      hints.push(tpl.replace(/\{n\}/g, String(index + 1)));
+    });
+    var userPrompt = String(prompt || '').trim();
+    if (!hints.length) return userPrompt;
+    if (!userPrompt) {
+      userPrompt = '请基于以上参考图规划一条统一、连贯、适合短视频平台发布的商业视频。';
+    }
+    return hints.join('\n') + '\n\n用户提示词：' + userPrompt;
+  }
+
   function buildRunPayload(uploadedImages) {
     var values = getFormValues();
     var uploaded = uploadedImages || [];
@@ -636,7 +779,7 @@
         segment_duration_seconds: 10,
         merge_clips: !!values.needMerge,
         auto_save: true,
-        task_text: values.prompt || '',
+        task_text: buildPromptWithReferenceHints(values.prompt || '', uploaded),
         analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
         image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
         video_model: values.model,
@@ -739,7 +882,6 @@
 
   function startRun() {
     var base = localBase();
-    var btn = $('seedanceStartBtn');
 
     if (!base) {
       showMessage('当前未检测到本机 LOCAL_API_BASE，无法提交 Seedance 视频任务。');
@@ -754,10 +896,7 @@
     var totalEstimatedCredits = estimatedCreditsPerSegment * segmentCount;
     var userCredits = totalEstimatedCredits * 2; // 用户消耗 = 采购价 × 2倍
 
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = '检查算力...';
-    }
+    setSubmitBusy(true, '检查算力...');
 
     fetch((typeof API_BASE !== 'undefined' ? API_BASE : '') + '/auth/me', {
       headers: (typeof authHeaders === 'function' ? authHeaders() : {})
@@ -769,10 +908,7 @@
           throw new Error('算力不足：生成 ' + duration + ' 秒视频（' + segmentCount + ' 个分镜）需要约 ' + userCredits + ' 算力（采购价 ' + totalEstimatedCredits + ' 算力 × 2倍），当前余额 ' + balance + ' 算力。请先充值。');
         }
 
-        if (btn) {
-          btn.disabled = true;
-          btn.textContent = '提交中...';
-        }
+        setSubmitBusy(true, '提交中...');
         showMessage('正在上传参考素材并提交视频任务，请稍候...');
 
         return ensureImageAssetsUploaded();
@@ -780,10 +916,7 @@
       .catch(function(err) {
         // 算力检查失败，显示错误但不继续
         showMessage(normalizeApiErrorText(err && (err.message || err), '算力检查失败'));
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = '开始生成视频';
-        }
+        setSubmitBusy(false);
         throw err;
       })
       .then(function(uploadedImages) {
@@ -809,18 +942,17 @@
         state.currentJobId = result.data.job_id;
         state.currentJobStatus = 'running';
         state.currentResultVideoUrl = '';
+        setSubmitBusy(false);
         renderWorkspace();
         showMessage('任务已提交，开始自动查询生成结果。');
         refreshJobStatus(false);
       })
       .catch(function(err) {
+        setSubmitBusy(false);
         showMessage('提交失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
       })
       .finally(function() {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = '开始生成视频';
-        }
+        updateStartButtonState();
       });
   }
 
@@ -882,6 +1014,25 @@
     if ($('seedanceExamplesMoreBtn')) {
       $('seedanceExamplesMoreBtn').addEventListener('click', function() {
         loadMoreExamples();
+      });
+    }
+
+    document.querySelectorAll('[data-seedance-category]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        state.exampleCategory = btn.getAttribute('data-seedance-category') || 'all';
+        state.exampleVisibleCount = Math.min(state.examplePageSize, filteredExampleCatalog().length || state.examplePageSize);
+        document.querySelectorAll('[data-seedance-category]').forEach(function(item) {
+          item.classList.toggle('active', item === btn);
+        });
+        renderExamplesPanel();
+      });
+    });
+
+    if ($('seedanceExampleSearchInput')) {
+      $('seedanceExampleSearchInput').addEventListener('input', function(event) {
+        state.exampleSearch = event.target.value || '';
+        state.exampleVisibleCount = Math.min(state.examplePageSize, filteredExampleCatalog().length || state.examplePageSize);
+        renderExamplesPanel();
       });
     }
 
@@ -962,10 +1113,17 @@
       state.activeBoardIndex = 0;
       state.examplesOpen = false;
       state.activeExampleId = '';
+      state.exampleCategory = 'all';
+      state.exampleSearch = '';
       state.exampleVisibleCount = Math.min(state.examplePageSize, state.exampleCatalog.length || state.examplePageSize);
       state.currentJobId = '';
       state.currentJobStatus = '';
       state.currentResultVideoUrl = '';
+      setSubmitBusy(false);
+      if ($('seedanceExampleSearchInput')) $('seedanceExampleSearchInput').value = '';
+      document.querySelectorAll('[data-seedance-category]').forEach(function(item) {
+        item.classList.toggle('active', item.getAttribute('data-seedance-category') === 'all');
+      });
       setMode('image_auto');
       setDuration(20);
       resetFormFields();

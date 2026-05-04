@@ -90,9 +90,20 @@ window._openSeedanceTvcStudioView = function() {
   try { location.hash = 'seedance-tvc-studio'; } catch (e1) {}
 };
 
+window._openViralVideoRemixView = function() {
+  _switchToHiddenView('viral-video-remix');
+  if (typeof _bindComflyConfigBtn === 'function') _bindComflyConfigBtn();
+  if (typeof window.initViralVideoRemixView === 'function') window.initViralVideoRemixView();
+  try { location.hash = 'viral-video-remix'; } catch (e1) {}
+};
+
 window._openHiddenWorkspaceView = function(view) {
   var target = String(view || '').trim();
   if (!target) return;
+  if (target === 'viral-video-remix' && typeof window._openViralVideoRemixView === 'function') {
+    window._openViralVideoRemixView();
+    return;
+  }
   if (target === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
     window._openSeedanceTvcStudioView();
     return;
@@ -335,6 +346,26 @@ function _renderSeedanceTvcStudioCard() {
     '<div class="card-tags"><span class="tag">TVC</span><span class="tag">Seedance</span><span class="tag">分镜</span><span class="tag">Comfly</span></div>' +
     '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
       '<button type="button" class="btn btn-primary btn-sm seedance-tvc-entry-btn">进入工作台</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置 Comfly</button>' +
+    '</div></div>';
+}
+
+function _renderViralVideoRemixCard() {
+  var ok = _comflyStatus.effective_ready;
+  var statusBadge = ok
+    ? '<span class="badge-installed">测试可用</span>'
+    : '<span class="badge-coming" style="background:rgba(251,146,60,0.15);color:#fb923c;border-color:rgba(251,146,60,0.3);">待配置</span>';
+  var sub = ok
+    ? '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">当前走本地 Comfly Key 测试链路，暂不接入积分扣费。</div>'
+    : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先配置本地 Comfly API Key，再进入复刻工作台测试。</div>';
+  return '<div class="skill-store-card viral-video-remix-card" style="cursor:pointer;border-color:rgba(20,184,166,0.34);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(245,158,11,0.05));">' +
+    '<div class="card-label">生成 · 内测 ' + statusBadge + '</div>' +
+    '<div class="card-value">爆款视频复刻</div>' +
+    '<div class="card-desc">上传原爆款视频、人物四视图和产品图，用 Seedance 2.0 全能参考复刻动作、运镜和节奏。</div>' +
+    sub +
+    '<div class="card-tags"><span class="tag">复刻</span><span class="tag">Seedance 2.0</span><span class="tag">人物四视图</span><span class="tag">产品替换</span></div>' +
+    '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
+      '<button type="button" class="btn btn-primary btn-sm viral-video-remix-entry-btn">进入工作台</button>' +
       '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置 Comfly</button>' +
     '</div></div>';
 }
@@ -873,6 +904,7 @@ function loadSkillStore() {
         if (hasSutuiPkg) html += _renderXSkillCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderComflyCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderSeedanceTvcStudioCard();
+        if (hasComflyPkg || isSkillAdmin) html += _renderViralVideoRemixCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
         if (isSkillAdmin && browserUsePkg) {
@@ -992,6 +1024,7 @@ function loadSkillStore() {
         _bindYoutubePublishCardEntry();
         _bindMetaSocialCardEntry();
         _bindSeedanceTvcCardEntry();
+        _bindViralVideoRemixCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
         _bindOpenclawSkillWorkspaceCardEntry();
@@ -1214,6 +1247,21 @@ function _bindSeedanceTvcCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openSeedanceTvcStudioView === 'function') window._openSeedanceTvcStudioView();
+    });
+  });
+}
+
+function _bindViralVideoRemixCardEntry() {
+  document.querySelectorAll('.viral-video-remix-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openViralVideoRemixView === 'function') window._openViralVideoRemixView();
+    });
+  });
+  document.querySelectorAll('.viral-video-remix-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openViralVideoRemixView === 'function') window._openViralVideoRemixView();
     });
   });
 }

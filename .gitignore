@@ -23,6 +23,7 @@ __pycache__/
 
 # ── 用户配置 / 密钥 ──
 .env
+.env.backup_*
 sutui_config.json
 custom_configs.json
 models_config.json
@@ -68,6 +69,7 @@ build_bihuo_log.txt
 temp_test_inputs/
 skills/comfly_ecommerce_detail/runs/
 skills/comfly_seedance_tvc_video/runs/
+skills/comfly_veo3_daihuo_video/runs/
 skills/comfly_ecommerce_detail/scripts/temp_test_*
 _lobster_runtime/
 static/uploads/

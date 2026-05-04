@@ -123,14 +123,40 @@
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.88);
       transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
     }
+    .ecom-field select {
+      appearance: none;
+      -webkit-appearance: none;
+      padding-right: 2rem;
+      cursor: pointer;
+      background-image:
+        linear-gradient(180deg, rgba(252,253,255,0.98), rgba(246,249,253,0.96)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%236f7e92' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: 0 0, right 0.62rem center;
+      background-size: 100% 100%, 1rem 1rem;
+    }
     .ecom-field input[type="text"]:hover, .ecom-field input[type="number"]:hover, .ecom-field textarea:hover, .ecom-field select:hover {
       border-color: rgba(91,124,255,0.28);
       background: linear-gradient(180deg, #ffffff, rgba(244,248,255,0.98));
+    }
+    .ecom-field select:hover {
+      background-image:
+        linear-gradient(180deg, #ffffff, rgba(244,248,255,0.98)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%235b7cff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     }
     .ecom-field input[type="text"]:focus, .ecom-field input[type="number"]:focus, .ecom-field textarea:focus, .ecom-field select:focus {
       border-color: rgba(91,124,255,0.72);
       box-shadow: 0 0 0 3px rgba(91,124,255,0.12);
       background: #ffffff;
+    }
+    .ecom-field select:focus {
+      background-image:
+        linear-gradient(180deg, #ffffff, #ffffff),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%235b7cff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    }
+    .ecom-field select option {
+      background: #ffffff;
+      color: #1d2b42;
     }
     .ecom-field textarea { min-height: 84px; resize: vertical; line-height: 1.5; }
     .ecom-field-note {
@@ -147,44 +173,60 @@
     .ecom-field .hint { margin-top: 0.25rem; font-size: 0.74rem; color: var(--text-muted); line-height: 1.45; }
     .ecom-inline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
     .ecom-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
-    .ecom-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+    .ecom-model-source-field { grid-column: 1 / -1; }
+    .ecom-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
     .ecom-preset-option {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: flex-start;
-      gap: 0.18rem;
+      justify-content: center;
+      gap: 0.26rem;
       width: 100%;
-      min-height: 58px;
-      padding: 0.7rem 0.8rem;
+      min-height: 78px;
+      padding: 0.84rem 0.92rem;
       text-align: left;
       cursor: pointer;
-      border: 1px solid rgba(34,49,78,0.10);
-      border-radius: 12px;
-      background: linear-gradient(180deg, rgba(249,251,255,0.98), rgba(244,247,252,0.98));
+      border: 1px solid rgba(91,124,255,0.16);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #ffffff, rgba(246,249,255,0.98));
       color: var(--text);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
+      box-shadow: 0 10px 24px rgba(36,54,88,0.06), inset 0 1px 0 rgba(255,255,255,0.9);
       transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, transform 0.18s ease;
     }
     .ecom-preset-option:hover {
-      border-color: rgba(91,124,255,0.28);
-      background: linear-gradient(180deg, #ffffff, rgba(244,248,255,0.98));
-      transform: translateY(-1px);
+      border-color: rgba(91,124,255,0.38);
+      background: linear-gradient(180deg, #ffffff, rgba(239,245,255,0.98));
+      transform: translateY(-2px);
     }
     .ecom-preset-option.is-active {
-      border-color: rgba(91,124,255,0.52);
-      background: linear-gradient(180deg, rgba(239,244,255,0.98), rgba(232,240,255,0.94));
-      box-shadow: 0 0 0 3px rgba(91,124,255,0.10), inset 0 1px 0 rgba(255,255,255,0.92);
+      border-color: rgba(91,124,255,0.72);
+      background: linear-gradient(180deg, rgba(238,244,255,0.98), rgba(226,237,255,0.96));
+      box-shadow: 0 0 0 3px rgba(91,124,255,0.12), 0 16px 32px rgba(72,104,228,0.14), inset 0 1px 0 rgba(255,255,255,0.92);
+    }
+    .ecom-preset-option.is-active::after {
+      content: "已选择";
+      position: absolute;
+      top: 0.58rem;
+      right: 0.62rem;
+      padding: 0.14rem 0.42rem;
+      border-radius: 999px;
+      background: rgba(91,124,255,0.13);
+      color: #3f5ed6;
+      font-size: 0.66rem;
+      font-weight: 600;
     }
     .ecom-preset-option strong {
       display: block;
-      font-size: 0.82rem;
+      padding-right: 3.2rem;
+      font-size: 0.94rem;
       line-height: 1.4;
-      font-weight: 600;
+      font-weight: 700;
       color: var(--text);
     }
     .ecom-preset-option span {
       display: block;
-      font-size: 0.72rem;
+      font-size: 0.76rem;
       line-height: 1.45;
       color: var(--text-muted);
     }
@@ -357,8 +399,31 @@
       border:1px solid rgba(116,134,168,0.22); background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98)); color:#243755;
       font-size:0.84rem; outline:none; transition:border-color 0.18s ease, box-shadow 0.18s ease;
     }
+    .tvc-field select {
+      min-height:40px; padding-right:2.35rem; cursor:pointer;
+      appearance:none; -webkit-appearance:none;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%235f6f87' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.72rem center / 16px 16px no-repeat,
+        linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      box-shadow:inset 0 1px 0 rgba(255,255,255,0.88);
+    }
+    .tvc-field select:hover {
+      border-color:rgba(91,124,255,0.34);
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%234564de' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.72rem center / 16px 16px no-repeat,
+        linear-gradient(180deg, #fff, rgba(240,246,255,0.98));
+    }
     .tvc-field input[type="text"]:focus, .tvc-field textarea:focus, .tvc-field select:focus {
       border-color:rgba(91,124,255,0.52); box-shadow:0 0 0 3px rgba(91,124,255,0.12);
+    }
+    .tvc-field select:focus {
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%233f5ed6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.72rem center / 16px 16px no-repeat,
+        #fff;
+    }
+    .tvc-field select option {
+      color:#243755;
+      background:#fff;
     }
     .tvc-field textarea { min-height:86px; resize:vertical; line-height:1.55; }
     .tvc-inline-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.7rem; }
@@ -373,6 +438,35 @@
       background:linear-gradient(180deg, rgba(248,250,255,0.98), rgba(242,246,253,0.96));
     }
     .tvc-upload-actions { display:flex; gap:0.45rem; flex-wrap:wrap; align-items:center; margin-bottom:0.55rem; }
+    .tvc-upload-actions select,
+    .seedance-ref-purpose,
+    .seedance-example-search {
+      box-sizing:border-box; border-radius:12px; border:1px solid rgba(116,134,168,0.22);
+      background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      color:#243755; font-size:0.78rem; outline:none;
+      transition:border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+    .tvc-upload-actions select,
+    .seedance-ref-purpose {
+      min-height:32px; padding:0.34rem 1.85rem 0.34rem 0.58rem;
+      appearance:none; -webkit-appearance:none;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6f87' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.55rem center / 14px 14px no-repeat,
+        linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      cursor:pointer;
+    }
+    .tvc-upload-actions select:hover,
+    .seedance-ref-purpose:hover {
+      border-color:rgba(91,124,255,0.32);
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%234564de' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.55rem center / 14px 14px no-repeat,
+        linear-gradient(180deg, #fff, rgba(240,246,255,0.98));
+    }
+    .tvc-upload-actions select:focus,
+    .seedance-ref-purpose:focus,
+    .seedance-example-search:focus {
+      border-color:rgba(91,124,255,0.48); box-shadow:0 0 0 3px rgba(91,124,255,0.12);
+    }
     .tvc-upload-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:0.6rem; }
     .tvc-upload-card {
       position:relative; overflow:hidden; border-radius:16px; border:1px solid rgba(116,134,168,0.16);
@@ -388,6 +482,7 @@
     .tvc-upload-card-body { padding:0.45rem 0.5rem 0.55rem; }
     .tvc-upload-card-title { font-size:0.7rem; line-height:1.4; color:#4f607a; word-break:break-word; }
     .tvc-upload-card-meta { margin-top:0.2rem; font-size:0.62rem; color:#7a879d; }
+    .seedance-ref-purpose { width:100%; margin-top:0.42rem; font-size:0.72rem; }
     .tvc-empty-slot {
       display:flex; align-items:center; min-height:38px; padding:0.4rem 0.55rem; border-radius:12px;
       border:1px dashed rgba(116,134,168,0.2); background:rgba(255,255,255,0.72); color:#75839a; font-size:0.72rem;
@@ -481,6 +576,16 @@
     }
     .tvc-video-placeholder strong { display:block; font-size:1rem; color:#20314d; }
     .tvc-video-placeholder span { display:block; margin-top:0.38rem; font-size:0.8rem; line-height:1.65; color:#61718a; }
+    .tvc-video-placeholder.is-busy {
+      border-color:rgba(91,124,255,0.18);
+      background:linear-gradient(180deg, rgba(255,255,255,0.94), rgba(247,250,255,0.92));
+    }
+    .tvc-status-head { display:flex; align-items:center; gap:0.72rem; }
+    .tvc-status-spinner {
+      flex:0 0 auto; width:34px; height:34px; border-radius:999px;
+      border:3px solid rgba(91,124,255,0.18); border-top-color:#4f63d7;
+      animation:tvc-spin 0.8s linear infinite;
+    }
     .tvc-video-meta { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.65rem; padding:0.9rem 1rem 1rem; }
     .tvc-meta-card {
       padding:0.72rem 0.8rem; border-radius:16px; background:rgba(246,249,254,0.96);
@@ -518,6 +623,184 @@
       background:rgba(255,255,255,0.18);
       color:#fff;
     }
+    #content-viral-video-remix .tvc-shell {
+      grid-template-columns:minmax(340px, 410px) minmax(0, 1fr);
+      gap:0.8rem;
+    }
+    #content-viral-video-remix .tvc-sidebar {
+      top:0.65rem;
+      max-height:calc(100vh - 7rem);
+      padding-bottom:0.5rem;
+    }
+    #content-viral-video-remix .tvc-panel {
+      border-radius:18px;
+      padding:0.72rem;
+    }
+    #content-viral-video-remix .tvc-panel-title {
+      font-size:0.9rem;
+      margin-bottom:0.28rem;
+    }
+    #content-viral-video-remix .tvc-panel-hint {
+      margin-bottom:0.48rem;
+      font-size:0.72rem;
+      line-height:1.45;
+    }
+    #content-viral-video-remix .tvc-field {
+      margin-bottom:0.58rem;
+    }
+    #content-viral-video-remix .tvc-field textarea {
+      min-height:68px;
+    }
+    #content-viral-video-remix .tvc-field select {
+      appearance:none;
+      -webkit-appearance:none;
+      padding-right:2.15rem;
+      background:
+        linear-gradient(45deg, transparent 50%, #64748b 50%) calc(100% - 1.05rem) 50% / 7px 7px no-repeat,
+        linear-gradient(135deg, #64748b 50%, transparent 50%) calc(100% - 0.7rem) 50% / 7px 7px no-repeat,
+        linear-gradient(180deg, #ffffff, rgba(246,249,255,0.98));
+      cursor:pointer;
+    }
+    #content-viral-video-remix .tvc-field select:hover {
+      border-color:rgba(91,124,255,0.34);
+      background:
+        linear-gradient(45deg, transparent 50%, #4f63d7 50%) calc(100% - 1.05rem) 50% / 7px 7px no-repeat,
+        linear-gradient(135deg, #4f63d7 50%, transparent 50%) calc(100% - 0.7rem) 50% / 7px 7px no-repeat,
+        linear-gradient(180deg, #ffffff, rgba(240,246,255,0.98));
+    }
+    #content-viral-video-remix .tvc-field select:focus {
+      background:
+        linear-gradient(45deg, transparent 50%, #3657d8 50%) calc(100% - 1.05rem) 50% / 7px 7px no-repeat,
+        linear-gradient(135deg, #3657d8 50%, transparent 50%) calc(100% - 0.7rem) 50% / 7px 7px no-repeat,
+        #ffffff;
+    }
+    #content-viral-video-remix .tvc-field select option {
+      color:#243755;
+      background:#ffffff;
+    }
+    #content-viral-video-remix .tvc-field select option:checked {
+      color:#20314d;
+      background:#eaf1ff;
+    }
+    #content-viral-video-remix .viral-character-stage {
+      height:clamp(280px, 42vh, 430px);
+    }
+    #content-viral-video-remix .viral-output-stage {
+      height:clamp(220px, 26vh, 280px);
+    }
+    #content-viral-video-remix .tvc-video-surface {
+      min-height:0;
+      height:100%;
+      overflow:hidden;
+    }
+    #content-viral-video-remix #viralCharacterResult img,
+    #content-viral-video-remix #viralRemixVideoSurface video {
+      width:100%;
+      height:100%;
+      min-height:0;
+      object-fit:contain;
+      display:block;
+    }
+    #content-viral-video-remix #viralRemixVideoSurface video {
+      background:#eef3fb;
+    }
+    #content-viral-video-remix .viral-video-placeholder {
+      width:min(88%, 520px);
+      padding:1.05rem 1.15rem;
+      border-radius:18px;
+      background:rgba(255,255,255,0.92);
+      border:1px solid rgba(91,124,255,0.16);
+      box-shadow:0 18px 42px rgba(36,54,88,0.10);
+    }
+    #content-viral-video-remix .viral-video-placeholder.is-busy {
+      border-color:rgba(59,130,246,0.26);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,250,255,0.94));
+    }
+    #content-viral-video-remix .viral-status-head {
+      display:flex;
+      align-items:center;
+      gap:0.72rem;
+    }
+    #content-viral-video-remix .viral-status-spinner {
+      flex:0 0 auto;
+      width:34px;
+      height:34px;
+      border-radius:999px;
+      border:3px solid rgba(91,124,255,0.18);
+      border-top-color:#4f63d7;
+      animation:viral-spin 0.8s linear infinite;
+    }
+    #content-viral-video-remix .viral-status-copy strong {
+      display:block;
+      font-size:1rem;
+      color:#20314d;
+    }
+    #content-viral-video-remix .viral-status-copy span {
+      display:block;
+      margin-top:0.28rem;
+      color:#607089;
+      font-size:0.8rem;
+      line-height:1.55;
+    }
+    #content-viral-video-remix .viral-status-note {
+      margin-top:0.72rem;
+      padding:0.58rem 0.68rem;
+      border-radius:12px;
+      background:rgba(91,124,255,0.08);
+      color:#3e5474;
+      font-size:0.76rem;
+      line-height:1.55;
+    }
+    #content-viral-video-remix .viral-action-row {
+      display:flex;
+      align-items:center;
+      gap:0.6rem;
+      flex-wrap:wrap;
+    }
+    #content-viral-video-remix .viral-action-row .btn {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:0.42rem;
+      min-height:38px;
+    }
+    #content-viral-video-remix .viral-btn-spinner {
+      display:none;
+      width:14px;
+      height:14px;
+      border-radius:999px;
+      border:2px solid rgba(255,255,255,0.38);
+      border-top-color:#fff;
+      animation:viral-spin 0.75s linear infinite;
+    }
+    #content-viral-video-remix .btn.is-loading .viral-btn-spinner {
+      display:inline-block;
+    }
+    #content-viral-video-remix .btn.is-loading,
+    #content-viral-video-remix .btn:disabled {
+      opacity:0.66;
+      cursor:not-allowed;
+      transform:none;
+      filter:saturate(0.8);
+    }
+    #content-viral-video-remix .viral-inline-status {
+      min-height:20px;
+      font-size:0.76rem;
+      line-height:1.45;
+      color:#607089;
+      overflow-wrap:anywhere;
+      flex:1 1 180px;
+    }
+    #content-viral-video-remix .viral-inline-status.ok {
+      color:#277a57;
+    }
+    #content-viral-video-remix .viral-inline-status.err {
+      color:#c2413d;
+    }
+    @keyframes viral-spin {
+      to { transform:rotate(360deg); }
+    }
     .tvc-case-panel {
       display:none; margin-bottom:1rem; padding:0.95rem;
       border-radius:22px; border:1px solid rgba(116,134,168,0.14);
@@ -536,6 +819,20 @@
     .tvc-case-head h4 { margin:0 0 0.18rem 0; font-size:0.96rem; color:#20314d; }
     .tvc-case-head p { margin:0; font-size:0.76rem; line-height:1.58; color:#66758d; max-width:760px; }
     .tvc-case-status { font-size:0.74rem; color:#6f7f98; }
+    .seedance-example-filters { display:flex; gap:0.45rem; flex-wrap:wrap; margin:0 0 0.72rem 0; }
+    .seedance-example-filters .category-chip {
+      border-radius:999px; background:rgba(246,249,255,0.92); border-color:rgba(113,130,159,0.18);
+      color:#5f6f87; padding:0.32rem 0.7rem;
+    }
+    .seedance-example-filters .category-chip:hover {
+      background:rgba(91,124,255,0.10); border-color:rgba(91,124,255,0.24); color:#4564de;
+    }
+    .seedance-example-filters .category-chip.active {
+      background:rgba(91,124,255,0.13); border-color:rgba(91,124,255,0.22); color:#3f5ed6; font-weight:600;
+    }
+    .seedance-example-search {
+      width:100%; margin:0 0 0.75rem 0; padding:0.56rem 0.68rem; font-size:0.82rem;
+    }
     .tvc-case-grid {
       display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.9rem;
     }
@@ -634,6 +931,20 @@
       display:flex; gap:0.55rem; flex-wrap:wrap; margin-top:0.75rem;
     }
     .tvc-quick-actions .btn { flex:1 1 140px; }
+    .tvc-quick-actions .btn {
+      display:inline-flex; align-items:center; justify-content:center; gap:0.42rem;
+    }
+    .tvc-btn-spinner {
+      display:none; width:14px; height:14px; border-radius:999px;
+      border:2px solid rgba(255,255,255,0.38); border-top-color:#fff;
+      animation:tvc-spin 0.75s linear infinite;
+    }
+    .tvc-quick-actions .btn.is-loading .tvc-btn-spinner { display:inline-block; }
+    .tvc-quick-actions .btn.is-loading,
+    .tvc-quick-actions .btn:disabled {
+      opacity:0.66; cursor:not-allowed; transform:none; filter:saturate(0.86);
+    }
+    @keyframes tvc-spin { to { transform:rotate(360deg); } }
     .imglab-studio { display:flex; flex-direction:column; gap:0.9rem; }
     .imglab-hero {
       display:grid; grid-template-columns:minmax(0, 1.1fr) auto; gap:1rem; align-items:start;
@@ -674,10 +985,33 @@
       border:1px solid rgba(113,130,159,0.22); background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
       color:#243755; font-size:0.84rem; outline:none; transition:border-color 0.18s ease, box-shadow 0.18s ease;
     }
+    .imglab-field select {
+      min-height:42px; padding-right:2.4rem; cursor:pointer;
+      appearance:none; -webkit-appearance:none;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%235f6f87' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.78rem center / 16px 16px no-repeat,
+        linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      box-shadow:inset 0 1px 0 rgba(255,255,255,0.88);
+    }
+    .imglab-field select:hover {
+      border-color:rgba(91,124,255,0.34);
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%234564de' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.78rem center / 16px 16px no-repeat,
+        linear-gradient(180deg, #fff, rgba(240,246,255,0.98));
+    }
     .imglab-field textarea { min-height:132px; resize:vertical; line-height:1.6; }
     .imglab-field textarea:focus,
     .imglab-field select:focus {
       border-color:rgba(91,124,255,0.48); box-shadow:0 0 0 3px rgba(91,124,255,0.12);
+    }
+    .imglab-field select:focus {
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%233f5ed6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.78rem center / 16px 16px no-repeat,
+        #fff;
+    }
+    .imglab-field select option {
+      color:#243755;
+      background:#fff;
     }
     .imglab-inline-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.72rem; }
     .imglab-helper-note {
@@ -689,6 +1023,35 @@
       background:linear-gradient(180deg, rgba(248,250,255,0.98), rgba(242,246,253,0.96));
     }
     .imglab-upload-actions { display:flex; gap:0.45rem; flex-wrap:wrap; align-items:center; margin-bottom:0.55rem; }
+    .imglab-upload-actions select,
+    .imglab-ref-purpose,
+    .imglab-example-search {
+      box-sizing:border-box; border-radius:12px; border:1px solid rgba(113,130,159,0.22);
+      background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      color:#243755; font-size:0.78rem; outline:none;
+      transition:border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    }
+    .imglab-upload-actions select,
+    .imglab-ref-purpose {
+      min-height:32px; padding:0.34rem 1.85rem 0.34rem 0.58rem;
+      appearance:none; -webkit-appearance:none;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6f87' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.55rem center / 14px 14px no-repeat,
+        linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      cursor:pointer;
+    }
+    .imglab-upload-actions select:hover,
+    .imglab-ref-purpose:hover {
+      border-color:rgba(91,124,255,0.32);
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%234564de' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 0.55rem center / 14px 14px no-repeat,
+        linear-gradient(180deg, #fff, rgba(240,246,255,0.98));
+    }
+    .imglab-upload-actions select:focus,
+    .imglab-ref-purpose:focus,
+    .imglab-example-search:focus {
+      border-color:rgba(91,124,255,0.48); box-shadow:0 0 0 3px rgba(91,124,255,0.12);
+    }
     .imglab-upload-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(112px, 1fr)); gap:0.6rem; }
     .imglab-upload-card {
       position:relative; overflow:hidden; border-radius:16px; border:1px solid rgba(116,134,168,0.16);
@@ -704,6 +1067,7 @@
     .imglab-upload-card-body { padding:0.45rem 0.5rem 0.55rem; }
     .imglab-upload-card-title { font-size:0.7rem; line-height:1.42; color:#4f607a; word-break:break-word; }
     .imglab-upload-card-meta { margin-top:0.2rem; font-size:0.62rem; color:#7a879d; }
+    .imglab-ref-purpose { width:100%; margin-top:0.42rem; font-size:0.72rem; }
     .imglab-empty-slot {
       display:flex; align-items:center; min-height:40px; padding:0.44rem 0.58rem; border-radius:12px;
       border:1px dashed rgba(116,134,168,0.2); background:rgba(255,255,255,0.74); color:#75839a; font-size:0.73rem;
@@ -746,6 +1110,20 @@
       display:flex; align-items:center; justify-content:space-between; gap:0.8rem; flex-wrap:wrap; margin-bottom:0.8rem;
     }
     .imglab-example-status { font-size:0.76rem; color:#718099; }
+    .imglab-example-filters { display:flex; gap:0.45rem; flex-wrap:wrap; margin:0.45rem 0 0.75rem 0; }
+    .imglab-example-filters .category-chip {
+      border-radius:999px; background:rgba(246,249,255,0.92); border-color:rgba(113,130,159,0.18);
+      color:#5f6f87; padding:0.32rem 0.7rem;
+    }
+    .imglab-example-filters .category-chip:hover {
+      background:rgba(91,124,255,0.10); border-color:rgba(91,124,255,0.24); color:#4564de;
+    }
+    .imglab-example-filters .category-chip.active {
+      background:rgba(91,124,255,0.13); border-color:rgba(91,124,255,0.22); color:#3f5ed6; font-weight:600;
+    }
+    .imglab-example-search {
+      width:100%; margin-bottom:0.75rem; padding:0.56rem 0.68rem; font-size:0.82rem;
+    }
     .imglab-example-card {
       border:none; cursor:pointer; padding:0; overflow:hidden; text-align:left; border-radius:22px;
       background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,253,0.98));
@@ -3362,6 +3740,11 @@
                     <span class="chat-sidebar-entry-copy">视频分镜</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
+                  <button type="button" class="chat-sidebar-entry" data-open-hidden-view="viral-video-remix">
+                    <span class="chat-sidebar-entry-icon">R</span>
+                    <span class="chat-sidebar-entry-copy">爆款复刻</span>
+                    <span class="chat-sidebar-entry-arrow">›</span>
+                  </button>
                   <button type="button" class="chat-sidebar-entry" data-jump-view="publish">
                     <span class="chat-sidebar-entry-icon">▣</span>
                     <span class="chat-sidebar-entry-copy">发布中心</span>
@@ -3476,7 +3859,7 @@
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-chat-prompt="用爆款tvc帮我生成一个视频。"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">爆款TVC</span><span class="chat-suggestion-chip-desc">填入视频生成话术</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">视频分镜</span><span class="chat-suggestion-chip-desc">进入分镜工作台</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-jump-view="skill-store"><span class="chat-suggestion-chip-icon">&lt;/&gt;</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">技能商店</span><span class="chat-suggestion-chip-desc">查看可用技能</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">商品详情大师</span><span class="chat-suggestion-chip-desc">商品图快速生成</span></span></button>
                     </div>
                     <div class="chat-shortcut-row">
                       <button type="button" class="chat-shortcut-link" id="chatShortcutLink1" data-jump-view="skill-store">打开技能商店</button>
@@ -3566,18 +3949,17 @@
             <div class="ecom-studio">
               <div class="ecom-studio-hero">
                 <div class="ecom-studio-hero-copy">
-                  <h3>产品套图工作台</h3>
-                  <p>把商品主图、多角度图、卖点和风格预设组织成一套完整上架素材。这里会直接调用 <code>comfly_ecommerce_detail</code> 的异步流水线，按主图、SKU 图、透明/白底、详情图、素材图、橱窗图分组返回，适合反复校准与验图。</p>
+                  <h3>商品详情大师</h3>
+                  <p>上传商品图后，自动生成可用于上架的主图、白底图、详情页、素材图和橱窗图。你可以补充生成要求、卖点和风格偏好，让整套图片更贴近商品真实卖点。</p>
                   <div class="ecom-studio-badges">
-                    <span class="ecom-studio-badge">结构化输入</span>
-                    <span class="ecom-studio-badge">任务轮询进度</span>
-                    <span class="ecom-studio-badge">分类结果预览</span>
-                    <span class="ecom-studio-badge">复用 Comfly 凭据</span>
+                    <span class="ecom-studio-badge">主图生成</span>
+                    <span class="ecom-studio-badge">白底图</span>
+                    <span class="ecom-studio-badge">详情页</span>
+                    <span class="ecom-studio-badge">橱窗图</span>
                   </div>
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
                   <button type="button" id="ecomStudioBackBtn" class="btn btn-ghost btn-sm">← 返回技能商店</button>
-                  <button type="button" id="ecomStudioComflyBtn" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
                 </div>
               </div>
 
@@ -3585,7 +3967,7 @@
                 <aside class="ecom-studio-sidebar">
                   <div class="ecom-panel">
                     <h4 class="ecom-panel-title">商品素材</h4>
-                    <p class="ecom-panel-hint">至少上传 1 张商品主图。多角度图与风格参考图会作为额外控制信息参与生成。</p>
+                    <p class="ecom-panel-hint">至少上传 1 张商品图。补充角度图和生成要求后，系统会更稳地保持产品外观一致。</p>
 
                     <div class="ecom-field">
                       <label>主商品图</label>
@@ -3593,17 +3975,22 @@
                         <div class="actions">
                           <button type="button" id="ecomUploadMainBtn" class="btn btn-primary btn-sm">上传主图</button>
                           <input type="file" id="ecomMainFileInput" accept="image/*" style="display:none;">
-                          <input type="text" id="ecomMainAssetIdInput" placeholder="或直接填写已存在的 asset_id">
+                          <input type="text" id="ecomMainAssetIdInput" placeholder="高级：粘贴素材库 ID">
                         </div>
                         <div id="ecomMainUploadList" class="ecom-upload-list"></div>
                       </div>
                     </div>
 
                     <div class="ecom-field">
-                      <label>多角度商品图</label>
+                      <label for="ecomMainGenerationPromptInput">主图生成要求</label>
+                      <textarea id="ecomMainGenerationPromptInput" placeholder="例如：这是一张白底图，请帮我生成淘宝场景图、商品特写图、质感细节图，保持产品外观、颜色、结构和标签一致。"></textarea>
+                    </div>
+
+                    <div class="ecom-field">
+                      <label>补充商品角度图</label>
                       <div class="ecom-upload-box">
                         <div class="actions">
-                          <button type="button" id="ecomUploadProductRefsBtn" class="btn btn-ghost btn-sm">上传参考商品图</button>
+                          <button type="button" id="ecomUploadProductRefsBtn" class="btn btn-ghost btn-sm">上传补充角度图</button>
                           <input type="file" id="ecomProductRefsFileInput" accept="image/*" multiple style="display:none;">
                         </div>
                         <div id="ecomProductRefsList" class="ecom-upload-list"></div>
@@ -3622,23 +4009,19 @@
                     </div>
 
                     <div class="ecom-inline-grid">
-                      <div class="ecom-field">
-                        <label>生图方案</label>
+                      <div class="ecom-field ecom-model-source-field">
+                        <label>模型来源</label>
                         <input type="hidden" id="ecomImageModelPresetSelect" value="stable_default">
-                        <div class="ecom-preset-grid" role="radiogroup" aria-label="生图方案">
+                        <div class="ecom-preset-grid" role="radiogroup" aria-label="模型来源">
                           <button type="button" class="ecom-preset-option is-active" data-image-preset="stable_default" aria-pressed="true">
-                            <strong>稳定版</strong>
-                            <span>nano-banana-2 + 本地排字</span>
+                            <strong>Nano Banana 2</strong>
+                            <span>Google 图片模型</span>
                           </button>
                           <button type="button" class="ecom-preset-option" data-image-preset="gpt_image2_direct" aria-pressed="false">
-                            <strong>实验版</strong>
-                            <span>gpt-image-2 详情页直出</span>
+                            <strong>GPT Image 2</strong>
+                            <span>OpenAI 图片模型</span>
                           </button>
                         </div>
-                      </div>
-                      <div class="ecom-field">
-                        <label>说明</label>
-                        <div class="ecom-field-note">默认保留当前稳定流程；选择 GPT Image 2 后，会切到实验版详情页直出链路。</div>
                       </div>
                     </div>
                   </div>
@@ -3916,7 +4299,7 @@
               <div class="imglab-hero">
                 <div>
                   <h3>创作图片工作台</h3>
-                  <p>左侧统一填写提示词、上传参考图、选择比例和模型。上传参考图时会走 <code>gpt-image-2</code> 的图片编辑模式做合成，不上传图片时就直接按提示词文生图；右侧上方看最终结果，下方直接复用灵感示例。</p>
+                  <p>左侧填写提示词、上传参考图并选择图片用途。上传参考图时会进入图片编辑模式做合成；不上传图片时直接按提示词文生图。右侧查看最终结果，下方复用灵感示例。</p>
                   <div class="imglab-badges">
                     <span class="imglab-badge">文生图</span>
                     <span class="imglab-badge">多参考图合成</span>
@@ -3926,7 +4309,6 @@
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
                   <button type="button" id="imglabStudioBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
-                  <button type="button" id="imglabStudioComflyBtn" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
                 </div>
               </div>
 
@@ -3934,7 +4316,7 @@
                 <aside class="imglab-sidebar">
                   <div class="imglab-panel">
                     <h4 class="imglab-panel-title">生成参数</h4>
-                    <p class="imglab-panel-hint">这里保持一个入口就够了：有参考图就上传，没有参考图就直接写提示词。结果始终只看右侧，不做多余解释卡片。</p>
+                    <p class="imglab-panel-hint">输入图片要求后即可生成；需要参考人物、产品、风格或背景时，先选择用途再上传参考图。</p>
 
                     <div class="imglab-field">
                       <label for="imglabPromptInput">提示词</label>
@@ -3947,7 +4329,15 @@
                         <div class="imglab-upload-actions">
                           <button type="button" id="imglabReferenceUploadBtn" class="btn btn-primary btn-sm">上传图片</button>
                           <input type="file" id="imglabReferenceInput" accept="image/*" multiple style="display:none;">
-                          <span class="imglab-panel-hint" style="margin:0;">不上传就是纯文生图，上传多张会一起参与合成。</span>
+                          <select id="imglabReferencePurposeSelect" style="max-width:160px;">
+                            <option value="auto" selected>普通参考</option>
+                            <option value="person">替换人物</option>
+                            <option value="product">替换产品</option>
+                            <option value="style">参考风格</option>
+                            <option value="background">参考背景</option>
+                            <option value="local_edit">局部修改</option>
+                          </select>
+                          <span class="imglab-panel-hint" style="margin:0;">先选用途再上传；每张图也可以单独调整用途。</span>
                         </div>
                         <div id="imglabReferenceList" class="imglab-upload-list"></div>
                       </div>
@@ -3993,7 +4383,7 @@
                     </div>
 
                     <div class="imglab-helper-note">
-                      比例会映射到当前接口支持的官方尺寸。上传参考图时会按图片编辑接口组装 multipart；不上传图时，会自动补一张空白底图走同一条链路，这样页面逻辑更稳定。
+                      比例会映射到当前接口支持的官方尺寸。上传参考图时会按图片编辑接口组装；不上传图时直接按提示词生成。
                     </div>
                     <div id="imglabStudioMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
 
@@ -4021,13 +4411,194 @@
                     <div class="imglab-example-toolbar">
                       <div>
                         <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">提示词示例</h4>
-                        <p class="imglab-panel-hint" style="margin:0;">这里改成从您的提示词库动态读取，点一下就会把示例 prompt 带到左侧编辑区。</p>
+                        <p class="imglab-panel-hint" style="margin:0;">点一下示例会把中文提示词带到左侧编辑区。</p>
                       </div>
                       <div id="imglabExamplesStatus" class="imglab-example-status">正在加载示例...</div>
                     </div>
+                    <div class="imglab-example-filters">
+                      <button type="button" class="category-chip active" data-imglab-category="all">全部</button>
+                      <button type="button" class="category-chip" data-imglab-category="portrait">人物写真</button>
+                      <button type="button" class="category-chip" data-imglab-category="product">产品广告</button>
+                      <button type="button" class="category-chip" data-imglab-category="ecommerce">电商主图</button>
+                      <button type="button" class="category-chip" data-imglab-category="guofeng">古风国潮</button>
+                      <button type="button" class="category-chip" data-imglab-category="poster">海报设计</button>
+                      <button type="button" class="category-chip" data-imglab-category="character">角色设定</button>
+                      <button type="button" class="category-chip" data-imglab-category="composite">多图合成</button>
+                    </div>
+                    <input type="text" id="imglabExampleSearchInput" class="imglab-example-search" placeholder="搜索示例、标签或提示词...">
                     <div id="imglabExamplesGrid" class="imglab-example-grid"></div>
                     <div style="margin-top:0.85rem;display:flex;justify-content:center;">
                       <button type="button" id="imglabExamplesMoreBtn" class="btn btn-ghost">加载更多示例</button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <!-- 爆款视频复刻工作台 -->
+          <div id="content-viral-video-remix" class="content-block">
+            <div class="tvc-studio">
+              <div class="tvc-studio-hero">
+                <div>
+                  <h3>爆款视频复刻</h3>
+                  <p>上传原爆款视频、人物四视图和产品图，用 Seedance 2.0 全能参考复刻动作、运镜和节奏。</p>
+                  <div class="tvc-hero-meta">测试模式：使用本地 Comfly Key，不走积分扣费；建议先用 5 秒片段验证效果。</div>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+                  <button type="button" id="viralRemixBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
+                </div>
+              </div>
+
+              <div class="tvc-shell">
+                <aside class="tvc-sidebar">
+                  <div class="tvc-panel tvc-panel-compact">
+                    <h4 class="tvc-panel-title">1. 人物参考（可选）</h4>
+                    <p class="tvc-panel-hint">默认按官方产品替换方式复刻，只用产品图和原视频。需要换人物时，再生成并勾选人物参考。</p>
+                    <div class="tvc-field">
+                      <label>人物参考图</label>
+                      <div class="tvc-upload-box">
+                        <div class="tvc-upload-actions">
+                          <button type="button" id="viralPersonUploadBtn" class="btn btn-primary btn-sm">选择人物图</button>
+                          <input type="file" id="viralPersonInput" accept="image/*" style="display:none;">
+                          <span class="tvc-panel-hint" style="margin:0;">不上传也可以纯文本生成。</span>
+                        </div>
+                        <div id="viralPersonPreview" class="tvc-upload-list"></div>
+                      </div>
+                    </div>
+                    <div class="tvc-field">
+                      <label for="viralCharacterPrompt">人物要求</label>
+                      <textarea id="viralCharacterPrompt" placeholder="例如：年轻女性带货达人，五官清爽，棕色中长发，亲和、自然、适合短视频口播。"></textarea>
+                    </div>
+                    <div class="tvc-inline-grid">
+                      <div class="tvc-field">
+                        <label for="viralCharacterStyle">规避风格</label>
+                        <select id="viralCharacterStyle">
+                          <option value="colored_pencil" selected>彩铅四视图</option>
+                          <option value="soft_illustration">柔和插画</option>
+                          <option value="semi_realistic">轻写实设定图</option>
+                        </select>
+                      </div>
+                      <div class="tvc-field">
+                        <label for="viralCharacterUrlInput">人物图 URL</label>
+                        <input id="viralCharacterUrlInput" type="text" placeholder="生成后自动填入，也可手动粘贴">
+                      </div>
+                    </div>
+                    <div class="viral-action-row">
+                      <button type="button" id="viralCharacterGenerateBtn" class="btn btn-primary">
+                        <span class="viral-btn-spinner" aria-hidden="true"></span>
+                        <span class="viral-btn-label">生成人物四视图</span>
+                      </button>
+                      <span id="viralCharacterStatus" class="viral-inline-status" role="status" aria-live="polite"></span>
+                    </div>
+                  </div>
+
+                  <div class="tvc-panel">
+                    <h4 class="tvc-panel-title">2. 原视频与产品图</h4>
+                    <div class="tvc-field">
+                      <label>原爆款视频</label>
+                      <div class="tvc-upload-box">
+                        <div class="tvc-upload-actions">
+                          <button type="button" id="viralOriginalVideoPickBtn" class="btn btn-primary btn-sm">选择视频</button>
+                          <button type="button" id="viralUploadVideoBtn" class="btn btn-ghost btn-sm">上传视频</button>
+                          <input type="file" id="viralOriginalVideoInput" accept="video/*" style="display:none;">
+                        </div>
+                        <div id="viralOriginalVideoPreview" class="tvc-upload-list"></div>
+                      </div>
+                      <input id="viralOriginalVideoUrlInput" type="text" placeholder="或直接粘贴公网视频 URL">
+                    </div>
+                    <div class="tvc-field">
+                      <label>产品图</label>
+                      <div class="tvc-upload-box">
+                        <div class="tvc-upload-actions">
+                          <button type="button" id="viralProductPickBtn" class="btn btn-primary btn-sm">选择产品图</button>
+                          <button type="button" id="viralUploadProductBtn" class="btn btn-ghost btn-sm">上传产品图</button>
+                          <input type="file" id="viralProductInput" accept="image/*" style="display:none;">
+                        </div>
+                        <div id="viralProductPreview" class="tvc-upload-list"></div>
+                      </div>
+                      <input id="viralProductUrlInput" type="text" placeholder="或直接粘贴公网产品图 URL">
+                      <div class="tvc-upload-actions" style="margin-top:0.55rem;">
+                        <label class="tvc-check" style="margin:0;"><input type="checkbox" id="viralCleanProductCheck" checked>提交前先生成白底产品图</label>
+                        <button type="button" id="viralCleanProductBtn" class="btn btn-ghost btn-sm">生成白底图</button>
+                        <span id="viralProductCleanStatus" class="tvc-panel-hint" style="margin:0;"></span>
+                      </div>
+                      <input id="viralProductCleanPrompt" type="text" placeholder="白底图补充要求，可不填，例如：只保留正面瓶身和外盒">
+                    </div>
+                  </div>
+
+                  <div class="tvc-panel">
+                    <h4 class="tvc-panel-title">3. 复刻参数</h4>
+                    <div class="tvc-field">
+                      <label for="viralRemixPrompt">补充要求</label>
+                      <textarea id="viralRemixPrompt" placeholder="例如：将视频里礼盒中的香水替换成产品图中的面霜，运镜和手部动作不变，去掉字幕和水印。"></textarea>
+                    </div>
+                    <div class="tvc-inline-grid">
+                      <div class="tvc-field">
+                        <label for="viralRemixModelSelect">模型</label>
+                        <select id="viralRemixModelSelect">
+                          <option value="doubao-seedance-2-0-260128" selected>Seedance 2.0 Pro（产品替换）</option>
+                        </select>
+                        <div class="tvc-panel-hint" style="margin-top:0.3rem;">产品替换固定使用 Pro，Fast 容易只复刻运镜、不替换商品。</div>
+                      </div>
+                      <div class="tvc-field">
+                        <label for="viralRemixDurationSelect">时长</label>
+                        <select id="viralRemixDurationSelect">
+                          <option value="5" selected>5s 测试</option>
+                          <option value="10">10s</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="tvc-inline-grid">
+                      <div class="tvc-field">
+                        <label for="viralRemixRatioSelect">比例</label>
+                        <select id="viralRemixRatioSelect">
+                          <option value="9:16" selected>9:16 竖屏</option>
+                          <option value="16:9">16:9 横屏</option>
+                          <option value="1:1">1:1 方形</option>
+                        </select>
+                      </div>
+                      <div class="tvc-field">
+                        <label for="viralRemixResolutionSelect">清晰度</label>
+                        <select id="viralRemixResolutionSelect">
+                          <option value="720p" selected>720p</option>
+                          <option value="480p">480p</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="tvc-inline-grid">
+                      <label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralRemixAudioCheck" checked>保留音频/生成音频</label>
+                      <label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralUseCharacterCheck">使用人物四视图参考</label>
+                    </div>
+                    <div id="viralRemixMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
+                    <div class="tvc-quick-actions">
+                      <button type="button" id="viralRemixStartBtn" class="btn btn-primary">开始复刻视频</button>
+                    </div>
+                  </div>
+                </aside>
+
+                <section class="tvc-main">
+                  <div class="tvc-panel">
+                    <div class="tvc-toolbar" style="margin-bottom:0.8rem;">
+                      <div>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">人物参考结果</h4>
+                        <p class="tvc-panel-hint" style="margin:0;">可选参考。未勾选“使用人物四视图参考”时，不会参与视频替换任务。</p>
+                      </div>
+                    </div>
+                    <div class="tvc-video-stage viral-character-stage">
+                      <div id="viralCharacterResult" class="tvc-video-surface"></div>
+                    </div>
+                  </div>
+                  <div class="tvc-panel">
+                    <div class="tvc-toolbar" style="margin-bottom:0.8rem;">
+                      <div>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">复刻视频结果</h4>
+                        <p class="tvc-panel-hint" style="margin:0;">按“产品图 + 参考视频”的替换方式提交，完成后在这里播放。</p>
+                      </div>
+                    </div>
+                    <div id="viralRemixVideoStage" class="tvc-video-stage viral-output-stage">
+                      <div id="viralRemixVideoSurface" class="tvc-video-surface"></div>
                     </div>
                   </div>
                 </section>
@@ -4046,7 +4617,6 @@
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
                   <button type="button" id="seedanceTvcStudioBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
-                  <button type="button" id="seedanceStudioComflyBtn" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
                 </div>
               </div>
 
@@ -4071,7 +4641,15 @@
                         <div class="tvc-upload-actions">
                           <button type="button" id="seedanceImageUploadBtn" class="btn btn-primary btn-sm">上传图片</button>
                           <input type="file" id="seedanceImageFileInput" accept="image/*" multiple style="display:none;">
-                          <span class="tvc-panel-hint" style="margin:0;">单张或多张都可以。</span>
+                          <select id="seedanceReferencePurposeSelect" style="max-width:160px;">
+                            <option value="storyboard" selected>分镜参考</option>
+                            <option value="person">指定人物</option>
+                            <option value="product">指定产品</option>
+                            <option value="style">参考风格</option>
+                            <option value="scene">参考场景</option>
+                            <option value="auto">普通参考</option>
+                          </select>
+                          <span class="tvc-panel-hint" style="margin:0;">先选用途再上传；每张图也可以单独调整。</span>
                         </div>
                         <div id="seedanceImageList" class="tvc-upload-list"></div>
                       </div>
@@ -4150,7 +4728,10 @@
                     </div>
 
                     <div class="tvc-quick-actions">
-                      <button type="button" id="seedanceStartBtn" class="btn btn-primary">开始生成视频</button>
+                      <button type="button" id="seedanceStartBtn" class="btn btn-primary">
+                        <span class="tvc-btn-spinner" aria-hidden="true"></span>
+                        <span class="tvc-btn-label">开始生成视频</span>
+                      </button>
                       <button type="button" id="seedancePreviewRefreshBtn" class="btn btn-ghost">刷新分镜预览</button>
                       <button type="button" id="seedanceStudioResetBtn" class="btn btn-ghost">重置界面</button>
                     </div>
@@ -4185,8 +4766,8 @@
                   <div id="seedanceExamplesPanel" class="tvc-panel" hidden>
                     <div class="tvc-toolbar" style="margin-bottom:0.8rem;">
                       <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">OpenNana 精选案例</h4>
-                        <p class="tvc-panel-hint" style="margin:0;">点任意案例卡，会把对应提示词回填到左侧输入框。</p>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">视频灵感案例</h4>
+                        <p class="tvc-panel-hint" style="margin:0;">点任意案例卡，会把中文提示词回填到左侧输入框。</p>
                       </div>
                       <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;justify-content:flex-end;">
                         <button type="button" id="seedanceExamplesCloseBtn" class="btn btn-ghost btn-sm">返回结果</button>
@@ -4195,6 +4776,19 @@
                     <div class="tvc-toolbar" style="margin-bottom:0.7rem;">
                       <div id="seedanceExamplesStatus" class="tvc-case-status">案例库未加载</div>
                     </div>
+                    <div class="seedance-example-filters">
+                      <button type="button" class="category-chip active" data-seedance-category="all">全部</button>
+                      <button type="button" class="category-chip" data-seedance-category="product">产品带货</button>
+                      <button type="button" class="category-chip" data-seedance-category="comedy">搞笑反转</button>
+                      <button type="button" class="category-chip" data-seedance-category="drama">剧情短剧</button>
+                      <button type="button" class="category-chip" data-seedance-category="fashion">变装换装</button>
+                      <button type="button" class="category-chip" data-seedance-category="guofeng">国风古风</button>
+                      <button type="button" class="category-chip" data-seedance-category="sci_fi">科幻奇幻</button>
+                      <button type="button" class="category-chip" data-seedance-category="cinematic">影视感</button>
+                      <button type="button" class="category-chip" data-seedance-category="anime">动漫二次元</button>
+                      <button type="button" class="category-chip" data-seedance-category="travel">风景旅行</button>
+                    </div>
+                    <input type="text" id="seedanceExampleSearchInput" class="seedance-example-search" placeholder="搜索案例、标签或提示词...">
                     <div id="seedanceExamplesGrid" class="tvc-case-grid"></div>
                     <div style="margin-top:0.85rem;display:flex;justify-content:center;">
                       <button type="button" id="seedanceExamplesMoreBtn" class="btn btn-ghost">加载更多示例</button>
@@ -5540,9 +6134,10 @@
   <script src="/static/js/wecom-config.js"></script>
   <script src="/static/js/wecom-detail.js?v=20260416e"></script>
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
-  <script src="/static/js/comfly-ecommerce-detail.js"></script>
-  <script src="/static/js/comfly-image-studio.js"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260429-seedance-upload-fix"></script>
+  <script src="/static/js/comfly-ecommerce-detail.js?v=20260503-ecom-master-copy"></script>
+  <script src="/static/js/comfly-image-studio.js?v=20260503-reference-purpose-fix"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260502-purpose-filter"></script>
+  <script src="/static/js/viral-video-remix.js?v=20260501-product-ref-fix"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js"></script>
