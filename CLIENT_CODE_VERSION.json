@@ -1,6 +1,6 @@
 {
-  "version": "1.0.28",
-  "build": 26,
-  "applied_at": "2026-05-02T23:03:01+08:00",
-  "note": "OTA with separated publish and ecommerce account tabs plus 5.2 fixes"
+  "version": "1.0.29",
+  "build": 27,
+  "applied_at": "2026-05-04T13:10:47+08:00",
+  "note": "OTA with latest media studios and ecommerce image flow updates"
 }
