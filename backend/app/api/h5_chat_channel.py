@@ -154,6 +154,41 @@ async def _complete_cloud_message(
     )
 
 
+async def _post_task_event(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    event_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        await client.post(
+            f"{base}/api/scheduled-tasks/runs/{run_id}/event",
+            json={"type": event_type, "payload": payload or {}},
+            headers=headers,
+        )
+    except Exception as exc:
+        logger.debug("[SCHEDULED-TASK] post event failed run_id=%s type=%s: %s", run_id, event_type, exc)
+
+
+async def _complete_task_run(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    *,
+    result_text: str = "",
+    result_payload: Optional[Dict[str, Any]] = None,
+    error: str = "",
+) -> None:
+    await client.post(
+        f"{base}/api/scheduled-tasks/runs/{run_id}/complete",
+        json={"result_text": result_text, "result_payload": result_payload or {}, "error": error},
+        headers=headers,
+    )
+
+
 def _local_chat_url() -> str:
     port = int(getattr(settings, "port", 8000) or 8000)
     return f"http://127.0.0.1:{port}/chat/stream"
@@ -242,6 +277,8 @@ async def _run_openclaw_chat(
             openclaw_fallback_model(),
             jwt_token,
             installation_id=installation_id,
+            video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "veo3.1-fast"),
+            video_model_lock_source="default",
         )
         if not reply:
             await _complete_cloud_message(
@@ -280,6 +317,181 @@ async def _process_item(
         await _run_direct_chat(client, base, headers, item)
 
 
+async def _run_scheduled_chat_message(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+    *,
+    openclaw: bool,
+    jwt_token: str,
+    installation_id: str,
+) -> None:
+    run_id = str(item.get("id") or "").strip()
+    content = str(item.get("content") or "").strip()
+    if not run_id or not content:
+        return
+    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "local-online claimed scheduled task"})
+    try:
+        if openclaw:
+            messages = [
+                {"role": "system", "content": "You are executing a scheduled OpenClaw task. Follow the user request and return the final result concisely."},
+                {"role": "user", "content": content},
+            ]
+            reply = await try_openclaw(
+                messages,
+                openclaw_fallback_model(),
+                jwt_token,
+                installation_id=installation_id,
+                video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "veo3.1-fast"),
+                video_model_lock_source="default",
+            )
+            if not reply:
+                raise RuntimeError("OpenClaw returned no reply")
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=reply.strip(),
+                result_payload={"mode": "openclaw_message"},
+            )
+            return
+
+        payload = {
+            "message": content,
+            "history": [],
+            "session_id": f"scheduled-{run_id}",
+            "context_id": f"scheduled-{run_id}",
+        }
+        timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
+        final_reply = ""
+        final_error = ""
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
+            async with local.stream("POST", _local_chat_url(), json=payload, headers=headers) as resp:
+                if resp.status_code != 200:
+                    text = (await resp.aread()).decode("utf-8", errors="replace")
+                    raise RuntimeError(text[:500] or f"local chat HTTP {resp.status_code}")
+                async for line in resp.aiter_lines():
+                    line = (line or "").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    et = str(ev.get("type") or "progress")
+                    if et == "done":
+                        final_reply = str(ev.get("reply") or "").strip()
+                        final_error = str(ev.get("error") or "").strip()
+                        break
+                    await _post_task_event(cloud, base, headers, run_id, et[:32], ev)
+        if final_error:
+            await _complete_task_run(cloud, base, headers, run_id, error=final_error)
+        else:
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=final_reply or "done",
+                result_payload={"mode": "chat_message"},
+            )
+    except Exception as exc:
+        logger.exception("[SCHEDULED-TASK] chat task failed run_id=%s", run_id)
+        await _complete_task_run(cloud, base, headers, run_id, error=str(exc)[:500] or "local execution failed")
+
+
+def _compact_result_text(obj: Any) -> str:
+    if isinstance(obj, str):
+        return obj[:4000]
+    try:
+        return json.dumps(obj, ensure_ascii=False, indent=2)[:4000]
+    except Exception:
+        return str(obj)[:4000]
+
+
+async def _run_scheduled_capability(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+) -> None:
+    run_id = str(item.get("id") or "").strip()
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    capability_id = str(payload.get("capability_id") or "").strip()
+    cap_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    if not run_id or not capability_id:
+        return
+    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"invoke_capability {capability_id}"})
+    rpc = {
+        "jsonrpc": "2.0",
+        "id": f"scheduled-{run_id}",
+        "method": "tools/call",
+        "params": {
+            "name": "invoke_capability",
+            "arguments": {"capability_id": capability_id, "payload": cap_payload},
+        },
+    }
+    try:
+        timeout = httpx.Timeout(600.0, connect=10.0, read=600.0, write=30.0, pool=10.0)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
+            resp = await local.post("http://127.0.0.1:8001/mcp", json=rpc, headers=headers)
+        if resp.status_code >= 400:
+            raise RuntimeError((resp.text or f"MCP HTTP {resp.status_code}")[:500])
+        data = resp.json()
+        if isinstance(data, dict) and data.get("error"):
+            raise RuntimeError(_compact_result_text(data.get("error")))
+        result = data.get("result") if isinstance(data, dict) else data
+        await _complete_task_run(
+            cloud,
+            base,
+            headers,
+            run_id,
+            result_text=_compact_result_text(result),
+            result_payload={"capability_id": capability_id, "mcp_result": result},
+        )
+    except Exception as exc:
+        logger.exception("[SCHEDULED-TASK] capability failed run_id=%s capability_id=%s", run_id, capability_id)
+        await _complete_task_run(cloud, base, headers, run_id, error=str(exc)[:500] or "capability failed")
+
+
+async def _process_scheduled_task(
+    client: httpx.AsyncClient,
+    base: str,
+    jwt_token: str,
+    installation_id: str,
+    item: Dict[str, Any],
+) -> None:
+    headers = _headers(jwt_token, installation_id)
+    kind = str(item.get("task_kind") or "openclaw_message").strip().lower()
+    if kind == "capability":
+        await _run_scheduled_capability(client, base, headers, item)
+    elif kind == "chat_message":
+        await _run_scheduled_chat_message(
+            client,
+            base,
+            headers,
+            item,
+            openclaw=False,
+            jwt_token=jwt_token,
+            installation_id=installation_id,
+        )
+    else:
+        await _run_scheduled_chat_message(
+            client,
+            base,
+            headers,
+            item,
+            openclaw=True,
+            jwt_token=jwt_token,
+            installation_id=installation_id,
+        )
+
+
 async def h5_chat_poll_loop() -> None:
     if not _enabled():
         logger.info("[H5-CHAT] remote H5 chat channel disabled")
@@ -316,11 +528,23 @@ async def h5_chat_poll_loop() -> None:
                     continue
                 resp.raise_for_status()
                 items = (resp.json() or {}).get("items") or []
-                if not items:
+                task_items: list[Dict[str, Any]] = []
+                task_resp = await client.get(f"{base}/api/scheduled-tasks/pending", params={"limit": 2}, headers=headers)
+                if task_resp.status_code == 401:
+                    logger.warning("[SCHEDULED-TASK] cloud auth rejected; waiting for next login token")
+                    await asyncio.sleep(sleep_missing_auth)
+                    continue
+                if task_resp.status_code < 400:
+                    task_items = (task_resp.json() or {}).get("items") or []
+                elif task_resp.status_code != 404:
+                    logger.debug("[SCHEDULED-TASK] pending request HTTP %s: %s", task_resp.status_code, task_resp.text[:300])
+                if not items and not task_items:
                     await asyncio.sleep(sleep_empty)
                     continue
                 for item in items:
                     await _process_item(client, base, jwt_token, installation_id, item)
+                for item in task_items:
+                    await _process_scheduled_task(client, base, jwt_token, installation_id, item)
                 await asyncio.sleep(0.2)
         except asyncio.CancelledError:
             raise

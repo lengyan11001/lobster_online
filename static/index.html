@@ -3604,6 +3604,7 @@
         <button type="button" class="nav-left-item" data-view="billing">消费记录</button>
         <button type="button" class="nav-left-item" data-view="sys-config">系统配置</button>
         <button type="button" class="nav-left-item" data-view="logs">日志</button>
+        <button type="button" class="nav-left-item" data-view="scheduled-tasks">????</button>
         <button type="button" class="nav-left-item" data-view="agent" id="navAgent" style="display:none;">代理商</button>
       </nav>
       <div class="header-actions" id="headerActions" style="display: none;">
@@ -5256,6 +5257,83 @@
                 <div id="billingPricingContent"><span class="meta">加载中…</span></div>
               </div>
               <div id="billingBalance" style="margin-top:0.75rem;padding:0.65rem;background:rgba(255,255,255,0.04);border-radius:var(--radius-sm);font-size:0.9rem;"></div>
+          <!-- Scheduled Tasks -->
+          <div id="content-scheduled-tasks" class="content-block">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                <h3 style="margin:0;">????</h3>
+                <button type="button" id="scheduledTaskRefreshBtn" class="btn btn-ghost btn-sm">??</button>
+              </div>
+              <p class="meta" style="margin:0.55rem 0 0 0;">?????????????????????????? H5/?????</p>
+              <div class="store-tabs" style="margin-top:0.75rem;">
+                <button type="button" class="sched-tab active" data-sched-tab="runs">????</button>
+                <button type="button" class="sched-tab" data-sched-tab="tasks">????</button>
+              </div>
+            </div>
+
+            <div id="schedTabRuns" class="sched-tab-panel">
+              <div class="card">
+                <div id="scheduledTaskRunsList"><p class="meta">???...</p></div>
+              </div>
+            </div>
+
+            <div id="schedTabTasks" class="sched-tab-panel" style="display:none;">
+              <div class="card">
+                <div style="display:grid;grid-template-columns:minmax(240px,360px) 1fr;gap:1rem;align-items:start;">
+                  <div>
+                    <h4 style="margin:0 0 0.65rem 0;">????</h4>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>????</label>
+                      <input type="text" id="scheduledTaskTitle" placeholder="???????????????">
+                    </div>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>????</label>
+                      <select id="scheduledTaskKind" style="width:100%;padding:0.45rem;">
+                        <option value="openclaw_message">???? OpenClaw</option>
+                        <option value="chat_message">??????</option>
+                        <option value="capability">???? invoke_capability</option>
+                      </select>
+                    </div>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>????</label>
+                      <select id="scheduledTaskScheduleType" style="width:100%;padding:0.45rem;">
+                        <option value="once">???</option>
+                        <option value="interval">?????</option>
+                      </select>
+                    </div>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>????</label>
+                      <input type="number" id="scheduledTaskIntervalMinutes" min="1" value="60">
+                    </div>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>???????????</label>
+                      <select id="scheduledTaskDevices" multiple size="4" style="width:100%;padding:0.45rem;"></select>
+                      <p class="meta" style="margin:0.35rem 0 0 0;">?????????????</p>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="modal-field" id="scheduledTaskContentWrap" style="margin-bottom:0.55rem;">
+                      <label>??????</label>
+                      <textarea id="scheduledTaskContent" rows="7" placeholder="??????? 8 ????????????? video.generate ?????"></textarea>
+                    </div>
+                    <div class="modal-field" id="scheduledTaskPayloadWrap" style="margin-bottom:0.55rem;">
+                      <label>???? JSON</label>
+                      <textarea id="scheduledTaskPayload" rows="7" placeholder='{"capability_id":"comfly.tvc","payload":{"image_url":"https://..."}}'></textarea>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                      <button type="button" id="scheduledTaskCreateBtn" class="btn btn-primary btn-sm">?????</button>
+                      <span id="scheduledTaskMsg" class="msg" style="display:none;"></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <h4 style="margin:0 0 0.65rem 0;">????</h4>
+                <div id="scheduledTaskList"><p class="meta">???...</p></div>
+              </div>
+            </div>
+          </div>
+
               <!-- 在线版：算力充值 -->
               <div id="rechargeBlock" style="display:none;margin-top:1rem;padding:1rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-sm);">
                 <h4 style="margin:0 0 0.75rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">算力充值 <button type="button" class="help-q" data-help-key="billing_recharge" aria-label="说明">?</button></h4>
@@ -5560,6 +5638,59 @@
   <!-- 通用「?」说明弹层（help-hints.js） -->
   <div id="helpHintModal" class="modal-mask">
     <div class="modal">
+            <div class="card" id="agentTaskDispatchCard" style="display:none;">
+              <h3 style="margin:0 0 0.75rem 0;">???????</h3>
+              <p class="meta" id="agentTaskDispatchHint" style="margin:0 0 0.75rem 0;">???????????????????????</p>
+              <div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:1rem;align-items:start;">
+                <div>
+                  <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <label>????</label>
+                    <select id="agentTaskUserSelect" style="width:100%;padding:0.45rem;"></select>
+                  </div>
+                  <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <label>???????</label>
+                    <select id="agentTaskDevices" multiple size="5" style="width:100%;padding:0.45rem;"></select>
+                  </div>
+                  <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <label>????</label>
+                    <input type="text" id="agentTaskTitle" placeholder="????? OpenClaw ?????">
+                  </div>
+                  <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <label>????</label>
+                    <select id="agentTaskKind" style="width:100%;padding:0.45rem;">
+                      <option value="openclaw_message">???? OpenClaw</option>
+                      <option value="chat_message">??????</option>
+                      <option value="capability">???? invoke_capability</option>
+                    </select>
+                  </div>
+                  <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <label>????</label>
+                    <select id="agentTaskScheduleType" style="width:100%;padding:0.45rem;">
+                      <option value="once">???</option>
+                      <option value="interval">?????</option>
+                    </select>
+                  </div>
+                  <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <label>????</label>
+                    <input type="number" id="agentTaskIntervalMinutes" min="1" value="60">
+                  </div>
+                </div>
+                <div>
+                  <div class="modal-field" id="agentTaskContentWrap" style="margin-bottom:0.55rem;">
+                    <label>??????</label>
+                    <textarea id="agentTaskContent" rows="7" placeholder="????? OpenClaw??????????????????"></textarea>
+                  </div>
+                  <div class="modal-field" id="agentTaskPayloadWrap" style="margin-bottom:0.55rem;">
+                    <label>???? JSON</label>
+                    <textarea id="agentTaskPayload" rows="7" placeholder='{"capability_id":"video.generate","payload":{"prompt":"..."}}'></textarea>
+                  </div>
+                  <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                    <button type="button" id="agentTaskSubmitBtn" class="btn btn-primary btn-sm">????</button>
+                    <span id="agentTaskMsg" class="msg" style="display:none;"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
         <h4 id="helpHintTitle" style="margin:0;font-size:1.05rem;">说明</h4>
         <button type="button" id="helpHintClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
@@ -6148,3 +6279,4 @@
 </html>
 
 
+  <script src="/static/js/scheduled-tasks.js"></script>

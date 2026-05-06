@@ -1060,6 +1060,7 @@ document.querySelectorAll('.nav-left-item').forEach(function(el) {
     }
     if (view === 'skill-store') { loadSkillStore(); if (typeof initOnlineSkillStore === 'function') initOnlineSkillStore(); }
     if (view === 'publish') { if (typeof initPublishView === 'function') initPublishView(); }
+    if (view === 'scheduled-tasks') { if (typeof initScheduledTasksView === 'function') initScheduledTasksView(); }
     if (view === 'production') { if (typeof initProductionView === 'function') initProductionView(); }
     if (view === 'billing') { if (typeof loadBillingView === 'function') loadBillingView(); }
     if (view === 'sys-config') { loadOpenClawConfig(); }
