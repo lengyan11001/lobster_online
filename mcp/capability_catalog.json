@@ -591,6 +591,10 @@
           "type": "boolean",
           "description": "submit_video：true 时开启中文转英文等优化（Comfly enhance_prompt）"
         },
+        "watermark": {
+          "type": "boolean",
+          "description": "submit_video：false 时关闭水印（若上游接口支持）"
+        },
         "task_id": {
           "type": "string",
           "description": "poll_video：submit_video 返回的完整 task_id（如 video_…），后端请求 Comfly 查询接口"
@@ -674,6 +678,18 @@
         "output_dir": {
           "type": "string",
           "description": "可选，流水线 runs 根目录"
+        },
+        "image_request_style": {
+          "type": "string",
+          "description": "可选，图生图请求形态；默认 openai_images"
+        },
+        "enhance_prompt": {
+          "type": "boolean",
+          "description": "默认 false，避免上游扩写出字幕或画面文字"
+        },
+        "watermark": {
+          "type": "boolean",
+          "description": "默认 false，关闭水印（若上游接口支持）"
         }
       }
     }

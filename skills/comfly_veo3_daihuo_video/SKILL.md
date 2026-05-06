@@ -89,7 +89,7 @@ powershell -ExecutionPolicy Bypass -File "{baseDir}\scripts\comfly-video.ps1" -A
 
 3. Submit the Veo generation task.
 
-- For Chinese prompts, default `enhance_prompt` to `true`.
+- For Chinese prompts, keep `enhance_prompt` off by default in the packaged pipeline; enable it only for explicit single-shot translation/debugging, because provider-side expansion can introduce unwanted captions or on-screen text.
 - For short-form ecommerce video, default `aspect_ratio` to `9:16`.
 - Run:
 
@@ -111,7 +111,7 @@ powershell -ExecutionPolicy Bypass -File "{baseDir}\scripts\comfly-video.ps1" -A
 - platform intent: `douyin`
 - output ratio: `9:16`
 - prompt language from user: Chinese is acceptable
-- model submission behavior: set `enhance_prompt=true` when the prompt itself is Chinese
+- model submission behavior: default `enhance_prompt=false` for the pipeline to preserve strict no-subtitle/no-text instructions
 - strongest default model choice in this environment: `veo3.1-fast`
 - quality-first option: `veo3.1-pro`
 - multi-image reference option: `veo3.1-components`

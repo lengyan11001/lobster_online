@@ -1837,6 +1837,8 @@ def _ensure_daihuo_pipeline_asset_or_url(
         "output_dir",
         "isolate_job_dir",
         "image_request_style",
+        "enhance_prompt",
+        "watermark",
     ):
         if k in args and args[k] is not None:
             pl.setdefault(k, args[k])
@@ -3241,6 +3243,8 @@ def _daihuo_start_payload_from_pl(pl: Dict[str, Any]) -> Dict[str, Any]:
         "output_dir",
         "isolate_job_dir",
         "image_request_style",
+        "enhance_prompt",
+        "watermark",
     )
     out: Dict[str, Any] = {}
     for k in keys:

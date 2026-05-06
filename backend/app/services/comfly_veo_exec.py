@@ -434,6 +434,7 @@ async def run_comfly_veo(
             "prompt": prompt,
             "model": video_model,
             "images": images,
+            "watermark": bool(payload.get("watermark", False)),
         }
         ar = (payload.get("aspect_ratio") or aspect_ratio or "").strip()
         if ar in ("9:16", "16:9"):

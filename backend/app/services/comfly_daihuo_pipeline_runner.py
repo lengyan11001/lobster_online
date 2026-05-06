@@ -104,6 +104,8 @@ def build_pipeline_input(
     language: str,
     task_text: str = "",
     image_request_style: Optional[str] = None,
+    enhance_prompt: bool = False,
+    watermark: bool = False,
 ) -> Dict[str, Any]:
     base = _api_base_for_pipeline(api_base)
     inp: Dict[str, Any] = {
@@ -111,6 +113,8 @@ def build_pipeline_input(
         "apikey": api_key,
         "base_url": base,
         "merge_clips": merge_clips,
+        "enhance_prompt": bool(enhance_prompt),
+        "watermark": bool(watermark),
     }
     if storyboard_count is not None:
         inp["storyboard_count"] = int(storyboard_count)
