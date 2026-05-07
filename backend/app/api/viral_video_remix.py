@@ -1,20 +1,41 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import io
 import json
 import logging
 import ipaddress
+import math
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from PIL import Image
 
 from ..core.config import settings
-from ..db import get_db
-from ..models import UserComflyConfig
+from ..db import SessionLocal, get_db
+from ..models import Asset, UserComflyConfig
+from ..services.viral_video_remix_job_store import create_job_record, get_job, update_job
 from ..services.comfly_veo_exec import LOCAL_COMFLY_CONFIG_USER_ID
+from .assets import (
+    SaveAssetReq,
+    _compute_save_url_dedupe_key,
+    _final_save_url_dedupe_key,
+    _resolve_v3_tasks_url_for_download,
+    _save_asset_from_url_locked,
+    _save_bytes_or_tos,
+    _save_url_lock_for,
+)
 from .auth import _ServerUser, get_current_user_for_local
 
 logger = logging.getLogger(__name__)
@@ -22,6 +43,40 @@ router = APIRouter()
 
 _SUCCESS_STATUSES = {"succeeded", "success", "completed", "done"}
 _FAILED_STATUSES = {"failed", "failure", "error", "cancelled", "canceled", "expired"}
+_MAX_PARALLEL_SEGMENT_TASKS = 6
+_UPLOADED_ASSET_CACHE: Dict[str, str] = {}
+_VIDEO_DOWNLOAD_APPID = "682e90c19520118284FGb2"
+_VIDEO_DOWNLOAD_API_URL = "https://watermark-api.hlyphp.top/Watermark/Index"
+
+
+def _lobster_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _viral_remix_jobs_root() -> Path:
+    root = _lobster_root() / "static" / "generated" / "viral_remix_jobs"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _viral_remix_upload_cache_root() -> Path:
+    root = _viral_remix_jobs_root() / "upload_cache"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _bundled_ffmpeg_exe() -> Optional[str]:
+    p = _lobster_root() / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffmpeg.exe"
+    if sys.platform == "win32" and p.is_file():
+        return str(p)
+    return shutil.which("ffmpeg")
+
+
+def _bundled_ffprobe_exe() -> Optional[str]:
+    p = _lobster_root() / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffprobe.exe"
+    if sys.platform == "win32" and p.is_file():
+        return str(p)
+    return shutil.which("ffprobe")
 
 
 def _is_local_request(request: Request) -> bool:
@@ -163,6 +218,128 @@ def _quote_public_url(url: str) -> str:
         return value
 
 
+def _safe_asset_suffix(filename: str, content_type: str) -> str:
+    name = (filename or "").strip().lower()
+    content = (content_type or "").strip().lower()
+    if name.endswith(".mp4") or content == "video/mp4":
+        return ".mp4"
+    if name.endswith(".mov") or "quicktime" in content:
+        return ".mov"
+    if name.endswith(".webm") or "webm" in content:
+        return ".webm"
+    if name.endswith(".png") or content == "image/png":
+        return ".png"
+    if name.endswith((".jpg", ".jpeg")) or content == "image/jpeg":
+        return ".jpg"
+    return Path(name).suffix[:12] or ".bin"
+
+
+def _remember_uploaded_asset(source_url: str, local_path: Path) -> None:
+    if not source_url or not local_path.is_file():
+        return
+    value = source_url.strip()
+    quoted = _quote_public_url(value)
+    _UPLOADED_ASSET_CACHE[value] = str(local_path)
+    _UPLOADED_ASSET_CACHE[quoted] = str(local_path)
+
+
+def _cached_uploaded_asset_path(source_url: str) -> Optional[Path]:
+    value = (source_url or "").strip()
+    for key in (value, _quote_public_url(value)):
+        cached = _UPLOADED_ASSET_CACHE.get(key)
+        if cached:
+            path = Path(cached)
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+    return None
+
+
+async def _save_remote_result_to_asset(
+    *,
+    url: str,
+    media_type: str,
+    tags: str,
+    prompt: str,
+    model: str,
+    user_id: int,
+    request: Optional[Request] = None,
+    generation_task_id: str = "",
+) -> Optional[Dict[str, Any]]:
+    value = _quote_public_url(url)
+    if not value.lower().startswith(("http://", "https://")):
+        return None
+    body = SaveAssetReq(
+        url=value,
+        media_type=media_type,
+        tags=tags,
+        prompt=(prompt or "")[:2000] or None,
+        model=(model or "")[:128] or None,
+        generation_task_id=(generation_task_id or "")[:128] or None,
+    )
+    try:
+        current_user = _ServerUser(id=int(user_id or 0))
+        effective = await _resolve_v3_tasks_url_for_download(body.url, media_type, current_user, request=request)
+        base_dk = _compute_save_url_dedupe_key(body.url, effective, body.dedupe_hint_url)
+        dk = _final_save_url_dedupe_key(
+            base_dk,
+            body.generation_task_id,
+            dedupe_hint_url=body.dedupe_hint_url,
+            body_url=body.url,
+        )
+        async with _save_url_lock_for(current_user.id, dk):
+            return await _save_asset_from_url_locked(dk, body, request, current_user, effective_url_resolved=effective)
+    except Exception:
+        logger.exception("[viral_video_remix] save remote result to asset failed url=%s", value[:240])
+        return None
+
+
+def _save_local_video_to_asset(
+    *,
+    path: Path,
+    user_id: int,
+    prompt: str,
+    model: str,
+    tags: str,
+    meta: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        aid, fname, fsize, tos_url = _save_bytes_or_tos(raw, ".mp4", "video/mp4")
+        row = Asset(
+            asset_id=aid,
+            user_id=int(user_id or 0),
+            filename=fname,
+            media_type="video",
+            file_size=fsize,
+            source_url=(tos_url or "").strip() or None,
+            prompt=(prompt or "")[:2000] or None,
+            model=(model or "")[:128] or None,
+            tags=tags,
+            meta=meta,
+        )
+        db = SessionLocal()
+        try:
+            db.add(row)
+            db.commit()
+        finally:
+            db.close()
+        return {
+            "asset_id": aid,
+            "filename": fname,
+            "media_type": "video",
+            "file_size": fsize,
+            "source_url": (tos_url or "").strip(),
+        }
+    except Exception:
+        logger.exception("[viral_video_remix] save local video to asset failed path=%s", path)
+        return None
+
+
 def _extract_task_id(payload: Any) -> str:
     root = _as_dict(payload)
     data = _as_dict(root.get("data"))
@@ -251,6 +428,47 @@ def _product_reference_prompt(user_prompt: str) -> str:
     return base
 
 
+def _product_multiview_reference_prompt(user_prompt: str, source_count: int) -> str:
+    if source_count <= 1:
+        return _product_reference_prompt(user_prompt)
+    base = (
+        "Create a single clean multi-view product reference sheet from the uploaded product photos. "
+        "All panels must show the exact same real product from the provided images, preserving the real geometry and product identity. "
+        "Arrange the views into one square reference board with consistent framing, neutral white studio background, and no decorative design. "
+        "Remove scene background, hands, props, table edges, captions, phone watermarks, camera metadata text, and unrelated objects. "
+        "Preserve the product exactly: overall shape, thickness, corner radius, seam lines, ports, buttons, plug structure, texture, finish, logo placement, label details, and color. "
+        "Do not redesign the product, do not stylize it, and do not invent missing features unless minimal completion is required for consistency between the provided views. "
+        "No extra text, no watermark, no brand overlay, one product only."
+    )
+    if user_prompt:
+        base += f" Additional product note: {user_prompt.strip()}"
+    return base
+
+
+def _build_product_reference_contact_sheet(
+    sources: List[Tuple[str, bytes, str]],
+    output_path: Path,
+) -> None:
+    if not sources:
+        raise RuntimeError("no product reference sources for contact sheet")
+    canv = Image.new("RGBA", (1024, 1024), (255, 255, 255, 255))
+    cols = 2
+    rows = max(1, int(math.ceil(len(sources) / float(cols))))
+    gap = 28
+    outer = 36
+    cell_w = int((1024 - outer * 2 - gap * (cols - 1)) / cols)
+    cell_h = int((1024 - outer * 2 - gap * (rows - 1)) / rows)
+    for idx, (_, raw, _) in enumerate(sources):
+        with Image.open(io.BytesIO(raw)) as img:
+            tile = img.convert("RGBA")
+            tile.thumbnail((cell_w, cell_h), Image.Resampling.LANCZOS)
+            x = outer + (idx % cols) * (cell_w + gap) + int((cell_w - tile.width) / 2)
+            y = outer + int(idx / cols) * (cell_h + gap) + int((cell_h - tile.height) / 2)
+            canv.alpha_composite(tile, (x, y))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canv.convert("RGB").save(output_path, format="PNG")
+
+
 @router.post("/api/viral-video-remix/character-reference")
 async def generate_character_reference(
     request: Request,
@@ -333,37 +551,69 @@ async def generate_product_reference(
     request: Request,
     prompt: str = Form(""),
     image_url: str = Form(""),
+    image_urls: List[str] = Form([]),
     image: Optional[UploadFile] = File(None),
+    images: List[UploadFile] = File([]),
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
     db: Session = Depends(get_db),
 ):
     api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
-    final_prompt = _product_reference_prompt((prompt or "").strip())
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-    raw = b""
-    filename = "product.png"
-    content_type = "image/png"
+    sources: List[Tuple[str, bytes, str]] = []
 
     try:
         if image and (image.filename or "").strip():
             raw = await image.read()
-            filename = image.filename or filename
-            content_type = (image.content_type or content_type).strip() or content_type
-        else:
-            src = _quote_public_url(image_url)
-            if not src:
-                raise HTTPException(status_code=400, detail="请先选择产品图，或填写产品图 URL")
+            if raw:
+                sources.append(
+                    (
+                        image.filename or "product.png",
+                        raw,
+                        (image.content_type or "image/png").strip() or "image/png",
+                    )
+                )
+        for upload in images or []:
+            if not upload or not (upload.filename or "").strip():
+                continue
+            raw = await upload.read()
+            if not raw:
+                continue
+            sources.append(
+                (
+                    upload.filename or "product.png",
+                    raw,
+                    (upload.content_type or "image/png").strip() or "image/png",
+                )
+            )
+
+        remote_urls: List[str] = []
+        if (image_url or "").strip():
+            remote_urls.append((image_url or "").strip())
+        for item in image_urls or []:
+            value = (item or "").strip()
+            if value:
+                remote_urls.append(value)
+        seen_remote = set()
+        for raw_url in remote_urls:
+            src = _quote_public_url(raw_url)
+            if not src or src in seen_remote:
+                continue
+            seen_remote.add(src)
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
                 get_resp = await client.get(src, headers={"Accept": "image/*"})
             if get_resp.status_code >= 400:
-                raise HTTPException(status_code=get_resp.status_code, detail=f"产品图 URL 无法读取：HTTP {get_resp.status_code}")
+                raise HTTPException(status_code=get_resp.status_code, detail=f"Product image URL unreadable: HTTP {get_resp.status_code}")
             raw = get_resp.content or b""
-            content_type = (get_resp.headers.get("content-type") or content_type).split(";", 1)[0].strip() or content_type
+            if not raw:
+                continue
+            content_type = (get_resp.headers.get("content-type") or "image/png").split(";", 1)[0].strip() or "image/png"
             suffix = ".png" if "png" in content_type else ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".img"
-            filename = f"product-source{suffix}"
-        if not raw:
-            raise HTTPException(status_code=400, detail="产品图为空")
+            sources.append((f"product-source-{len(sources) + 1}{suffix}", raw, content_type))
+        if not sources:
+            raise HTTPException(status_code=400, detail="Please provide one or more product images.")
 
+        final_prompt = _product_multiview_reference_prompt((prompt or "").strip(), len(sources))
+        files = [("image", (name, raw, ctype)) for name, raw, ctype in sources]
         url = _endpoint(api_base, "/v1/images/edits")
         async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(
@@ -374,42 +624,75 @@ async def generate_product_reference(
                     "model": "gpt-image-2",
                     "quality": "high",
                     "size": "1024x1024",
-                    "response_format": "url",
                 },
-                files={"image": (filename, raw, content_type)},
+                files=files,
             )
     except HTTPException:
         raise
     except httpx.TimeoutException as exc:
-        raise HTTPException(status_code=504, detail="白底产品图生成超时，请稍后重试") from exc
+        raise HTTPException(status_code=504, detail="Product reference generation timed out.") from exc
     except Exception as exc:
         logger.exception("[viral_video_remix] product reference failed user_id=%s", current_user.id)
-        raise HTTPException(status_code=500, detail=f"白底产品图生成失败: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Product reference generation failed: {exc}") from exc
 
-    if resp.status_code >= 400:
+    previews: List[Dict[str, Any]] = []
+    fallback_used = False
+    if resp.status_code < 400:
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Product reference returned invalid JSON.") from exc
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or not rows:
+            raise HTTPException(status_code=502, detail="Product reference returned no image result.")
+        previews = [_image_preview(item) for item in rows if isinstance(item, dict)]
+        for item in previews:
+            if item.get("url"):
+                item["url"] = _quote_public_url(item["url"])
+        previews = [item for item in previews if item.get("url") or item.get("data_url")]
+    elif len(sources) > 1:
+        fallback_used = True
+        fallback_path = _viral_remix_jobs_root() / "product_reference_fallbacks" / f"{current_user.id}_{int(time.time() * 1000)}.png"
+        _build_product_reference_contact_sheet(sources, fallback_path)
+        uploaded_url = await _upload_local_file_to_comfly(api_base, api_key, fallback_path, "image/png")
+        previews = [{"url": uploaded_url}]
+    else:
         raise HTTPException(status_code=resp.status_code, detail=_pick_error_detail(resp))
-    try:
-        payload = resp.json()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="白底产品图生成返回格式异常") from exc
 
-    rows = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(rows, list) or not rows:
-        raise HTTPException(status_code=502, detail="白底产品图生成成功，但没有返回图片")
-    previews = [_image_preview(item) for item in rows if isinstance(item, dict)]
-    for item in previews:
-        if item.get("url"):
-            item["url"] = _quote_public_url(item["url"])
-    previews = [item for item in previews if item.get("url") or item.get("data_url")]
     if not previews:
-        raise HTTPException(status_code=502, detail="白底产品图结果不可预览")
+        raise HTTPException(status_code=502, detail="Product reference result is not previewable.")
+    first_url = str(previews[0].get("url") or "").strip()
+    saved_asset: Optional[Dict[str, Any]] = None
+    if first_url:
+        saved_asset = await _save_remote_result_to_asset(
+            url=first_url,
+            media_type="image",
+            tags="auto,viral.video.remix,product_reference",
+            prompt=final_prompt,
+            model="gpt-image-2",
+            user_id=current_user.id,
+            request=request,
+            generation_task_id=f"viral_product_reference_{int(time.time() * 1000)}",
+        )
+        if saved_asset:
+            previews[0]["asset_id"] = saved_asset.get("asset_id") or ""
     logger.info(
-        "[viral_video_remix] product reference ok user_id=%s source=%s result=%s",
+        "[viral_video_remix] product reference ok user_id=%s source_count=%s fallback=%s asset_id=%s result=%s",
         current_user.id,
-        str((image.filename if image else image_url) or "")[:180],
+        len(sources),
+        fallback_used,
+        (saved_asset or {}).get("asset_id") or "",
         (previews[0].get("url") or previews[0].get("data_url") or "")[:240],
     )
-    return {"ok": True, "images": previews, "prompt": final_prompt}
+    return {
+        "ok": True,
+        "images": previews,
+        "prompt": final_prompt,
+        "source_count": len(sources),
+        "fallback_used": fallback_used,
+        "asset": saved_asset,
+        "asset_id": (saved_asset or {}).get("asset_id") or "",
+    }
 
 
 @router.post("/api/viral-video-remix/assets/upload")
@@ -448,6 +731,18 @@ async def upload_viral_video_remix_asset(
     if not source_url:
         raise HTTPException(status_code=502, detail=f"Comfly 文件上传未返回 URL: {json.dumps(payload, ensure_ascii=False)[:500]}")
     source_url = _quote_public_url(source_url)
+    try:
+        digest = hashlib.sha256(raw).hexdigest()[:24]
+        cache_path = _viral_remix_upload_cache_root() / f"{digest}{_safe_asset_suffix(filename, content_type)}"
+        if not cache_path.exists() or cache_path.stat().st_size != len(raw):
+            cache_path.write_bytes(raw)
+        _remember_uploaded_asset(source_url, cache_path)
+    except Exception:
+        logger.exception(
+            "[viral_video_remix] failed to cache uploaded asset user_id=%s source_url=%s",
+            current_user.id,
+            source_url[:240],
+        )
     logger.info(
         "[viral_video_remix] asset upload ok user_id=%s filename=%s content_type=%s source_url=%s",
         current_user.id,
@@ -465,6 +760,89 @@ async def upload_viral_video_remix_asset(
     }
 
 
+class ViralShareVideoResolveBody(BaseModel):
+    share_text: str = Field(..., min_length=1)
+
+
+@router.post("/api/viral-video-remix/share-video/resolve")
+async def resolve_viral_video_share_link(
+    body: ViralShareVideoResolveBody,
+    current_user: _ServerUser = Depends(_resolve_viral_remix_user),
+    db: Session = Depends(get_db),
+):
+    share_text = (body.share_text or "").strip()
+    share_url = _extract_first_http_url(share_text)
+    if not share_url:
+        raise HTTPException(status_code=400, detail="未识别到视频分享链接，请粘贴包含 http/https 的完整分享文案。")
+    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(
+                _VIDEO_DOWNLOAD_API_URL,
+                params={"appid": _VIDEO_DOWNLOAD_APPID, "link": share_url},
+                headers={"Accept": "application/json"},
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="视频解析接口请求超时，请稍后重试。") from exc
+    except Exception as exc:
+        logger.exception("[viral_video_remix] share video parse request failed user_id=%s", current_user.id)
+        raise HTTPException(status_code=502, detail=f"视频解析接口请求失败: {exc}") from exc
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=f"视频解析接口 HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="视频解析接口返回格式异常。") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="视频解析接口返回格式无效。")
+    code = payload.get("code")
+    if code != 1:
+        error_mapping = {
+            -1: "该账号已被禁用",
+            -100: "已开启白名单 IP 设置，当前 IP 禁止访问",
+            109: "套餐提取次数不足",
+            301: "未检查到链接，请检查分享文案是否完整",
+            400: "提取链接无效或暂不支持此平台",
+        }
+        raise HTTPException(status_code=502, detail=error_mapping.get(code, str(payload.get("msg") or "视频解析失败")))
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    direct_video_url = _quote_public_url(str(data.get("videoSrc") or "").strip())
+    if not direct_video_url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=502, detail="视频解析成功，但没有返回可下载的视频地址。")
+
+    suffix = ".mp4"
+    path_suffix = Path(urlsplit(direct_video_url).path).suffix.lower()
+    if path_suffix in {".mp4", ".mov", ".webm"}:
+        suffix = path_suffix
+    download_path = _viral_remix_upload_cache_root() / f"share_{current_user.id}_{int(time.time() * 1000)}{suffix}"
+    await _download_to_file(direct_video_url, download_path, timeout_seconds=300.0)
+    source_url = await _upload_local_file_to_comfly(
+        api_base,
+        api_key,
+        download_path,
+        _guess_video_content_type(direct_video_url),
+    )
+    _remember_uploaded_asset(source_url, download_path)
+    logger.info(
+        "[viral_video_remix] share video resolved user_id=%s share_url=%s source_url=%s title=%s",
+        current_user.id,
+        share_url[:180],
+        source_url[:240],
+        str(data.get("title") or "")[:120],
+    )
+    return {
+        "ok": True,
+        "share_url": share_url,
+        "title": data.get("title") or "",
+        "direct_video_url": direct_video_url,
+        "source_url": source_url,
+        "url": source_url,
+        "cover_url": data.get("imageSrc") or "",
+        "state": data.get("state"),
+        "raw": payload,
+    }
+
+
 class ViralRemixStartBody(BaseModel):
     original_video_url: str = Field(..., min_length=8)
     character_image_url: str = ""
@@ -473,10 +851,29 @@ class ViralRemixStartBody(BaseModel):
     model: str = "doubao-seedance-2-0-260128"
     ratio: str = "9:16"
     resolution: str = "720p"
-    duration: int = 5
+    duration: int = 10
     generate_audio: bool = True
     watermark: bool = False
     use_character_reference: bool = False
+
+
+def _extract_first_http_url(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    match = re.search(r"https?://[^\s\"'<>，。！？、；]+", raw, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(0).rstrip(").,;，。；")
+
+
+def _guess_video_content_type(url: str) -> str:
+    path = urlsplit(url or "").path.lower()
+    if path.endswith(".webm"):
+        return "video/webm"
+    if path.endswith(".mov"):
+        return "video/quicktime"
+    return "video/mp4"
 
 
 def _normalize_seedance_model(raw: str) -> str:
@@ -498,8 +895,8 @@ def _normalize_duration(value: int) -> int:
     try:
         n = int(value)
     except Exception:
-        n = 5
-    return n if n in {5, 10} else 5
+        n = 10
+    return n if n in {5, 10} else 10
 
 
 def _normalize_resolution(value: str) -> str:
@@ -523,28 +920,228 @@ def _remix_prompt(body: ViralRemixStartBody) -> str:
     return " ".join(parts)
 
 
-@router.post("/api/viral-video-remix/seedance/start")
-async def start_viral_video_remix(
+def _remix_prompt(body: ViralRemixStartBody) -> str:
+    """Use an ASCII prompt here to avoid mojibake from older mixed-encoding copies."""
+    extra = (body.prompt or "").strip()
+    parts = [
+        "Use the input video as the only source of camera motion, timing, composition, hand actions, subject blocking, and scene continuity.",
+        "Replace the old product seen in the input video with the target product from the first reference image.",
+        "The first reference image is the only product identity source. The final video must show that exact product, not the old product from the source video and not a similar redesigned variant.",
+        "Preserve the target product exactly: package shape, materials, color palette, label layout, logo position, cap, proportions, and visible markings.",
+        "Keep the original video's scene, performer motion, framing, pacing, and hand interaction whenever possible. Only the product itself should change.",
+        "Remove subtitles, stickers, watermarks, UI text, marketing copy, and unrelated logos from the final video. Do not add new text overlays.",
+        "Strict anti-watermark rule: never reproduce Douyin/TikTok/short-video platform watermarks, musical-note icons, account IDs, user handles, translucent corner logos, bottom-right logos, or any app interface overlays from the source video.",
+        "If the source video contains a visible watermark or account text, treat it as unwanted noise and reconstruct that area as clean natural scene background instead of copying it.",
+        "Material binding: the video_url item is the source motion video, and the first reference_image item is the replacement product image.",
+    ]
+    if body.use_character_reference and (body.character_image_url or "").strip():
+        parts.append(
+            "If a second reference_image is present, use it only for character identity such as face, hairstyle, and styling. "
+            "Product replacement has higher priority than character reference."
+        )
+    if extra:
+        parts.append(f"Additional instruction: {extra}")
+    return " ".join(parts)
+
+
+def _remix_segment_prompt(body: ViralRemixStartBody, index: int, total: int) -> str:
+    base = _remix_prompt(body)
+    if total <= 1:
+        return base
+    return (
+        f"{base} This request is segment {index + 1} of {total} from one longer source video. "
+        "Keep character identity, product identity, scene logic, and motion style continuous across adjacent segments. "
+        "Apply the anti-watermark rule independently to this segment even if the watermark appears only in this segment."
+    )
+
+
+def _run_subprocess(args: List[str], *, timeout: int, error_label: str) -> None:
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{error_label} timed out") from exc
+    if proc.returncode == 0:
+        return
+    detail = (proc.stderr or proc.stdout or "").strip()
+    raise RuntimeError(f"{error_label} failed: {detail[:1200]}")
+
+
+def _probe_video_duration_seconds(video_path: Path) -> float:
+    ffprobe = _bundled_ffprobe_exe()
+    if not ffprobe:
+        raise RuntimeError("ffprobe not found")
+    proc = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffprobe failed: {(proc.stderr or proc.stdout or '').strip()[:800]}")
+    try:
+        return max(0.0, float((proc.stdout or "").strip()))
+    except Exception as exc:
+        raise RuntimeError("ffprobe returned invalid duration") from exc
+
+
+def _split_local_video(source_path: Path, job_dir: Path, segment_seconds: int, total_duration: float) -> List[Dict[str, Any]]:
+    ffmpeg = _bundled_ffmpeg_exe()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found")
+    clips_dir = job_dir / "source_segments"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    segment_count = max(1, int(math.ceil(max(total_duration, 0.01) / float(segment_seconds))))
+    segments: List[Dict[str, Any]] = []
+    for idx in range(segment_count):
+        start_seconds = float(idx * segment_seconds)
+        if start_seconds >= total_duration and idx > 0:
+            break
+        clip_seconds = max(0.1, min(float(segment_seconds), max(total_duration - start_seconds, 0.1)))
+        clip_path = clips_dir / f"segment_{idx + 1:02d}.mp4"
+        _run_subprocess(
+            [
+                ffmpeg,
+                "-y",
+                "-ss",
+                f"{start_seconds:.3f}",
+                "-t",
+                f"{clip_seconds:.3f}",
+                "-i",
+                str(source_path),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                str(clip_path),
+            ],
+            timeout=600,
+            error_label=f"split segment {idx + 1}",
+        )
+        segments.append(
+            {
+                "index": idx,
+                "segment_path": str(clip_path),
+                "start_seconds": start_seconds,
+                "source_clip_seconds": clip_seconds,
+                "target_duration_seconds": int(segment_seconds),
+                "status": "prepared",
+            }
+        )
+    return segments
+
+
+async def _download_to_file(url: str, dest: Path, *, timeout_seconds: float = 180.0) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cached_path = _cached_uploaded_asset_path(url)
+    if cached_path:
+        shutil.copyfile(cached_path, dest)
+    else:
+        last_error: Optional[BaseException] = None
+        for attempt in range(1, 4):
+            try:
+                timeout = httpx.Timeout(timeout_seconds, connect=30.0, read=timeout_seconds, write=60.0, pool=30.0)
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                    async with client.stream("GET", url) as resp:
+                        if resp.status_code >= 400:
+                            raise RuntimeError(f"download failed HTTP {resp.status_code}: {url[:240]}")
+                        with dest.open("wb") as fh:
+                            async for chunk in resp.aiter_bytes(1024 * 1024):
+                                if chunk:
+                                    fh.write(chunk)
+                break
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError, httpx.TimeoutException, RuntimeError) as exc:
+                last_error = exc
+                if dest.exists():
+                    try:
+                        dest.unlink()
+                    except Exception:
+                        pass
+                if attempt >= 3:
+                    raise RuntimeError(f"download failed after retries: {url[:240]} ({exc})") from exc
+                await asyncio.sleep(1.5 * attempt)
+            except Exception as exc:
+                last_error = exc
+                if dest.exists():
+                    try:
+                        dest.unlink()
+                    except Exception:
+                        pass
+                raise
+        if last_error and (not dest.exists() or dest.stat().st_size <= 0):
+            raise RuntimeError(f"download failed: {url[:240]} ({last_error})") from last_error
+    if not dest.is_file() or dest.stat().st_size <= 0:
+        raise RuntimeError(f"download produced empty file: {url[:240]}")
+
+
+async def _upload_local_file_to_comfly(api_base: str, api_key: str, path: Path, content_type: str) -> str:
+    raw = path.read_bytes()
+    if not raw:
+        raise RuntimeError(f"empty file: {path}")
+    url = _endpoint(api_base, "/v1/files")
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            files={"file": (path.name, raw, content_type)},
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(_pick_error_detail(resp))
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise RuntimeError("Comfly upload returned invalid JSON") from exc
+    source_url = _extract_file_upload_url(payload)
+    if not source_url:
+        raise RuntimeError(f"Comfly upload returned no source_url: {json.dumps(payload, ensure_ascii=False)[:400]}")
+    return _quote_public_url(source_url)
+
+
+async def _submit_seedance_remix_task(
+    *,
+    api_base: str,
+    api_key: str,
     body: ViralRemixStartBody,
-    current_user: _ServerUser = Depends(_resolve_viral_remix_user),
-    db: Session = Depends(get_db),
-):
-    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    original_video_url: str,
+    prompt_text: str,
+) -> Dict[str, Any]:
     product_url = _quote_public_url(body.product_image_url)
     character_url = _quote_public_url(body.character_image_url)
-    original_video_url = _quote_public_url(body.original_video_url)
     content: List[Dict[str, Any]] = [
-        {"type": "text", "text": _remix_prompt(body)},
+        {"type": "text", "text": prompt_text},
+        {"type": "video_url", "video_url": {"url": _quote_public_url(original_video_url)}},
         {"type": "image_url", "image_url": {"url": product_url}, "role": "reference_image"},
     ]
-    content_order = ["text", "product_reference_image"]
     if body.use_character_reference and character_url:
         content.append({"type": "image_url", "image_url": {"url": character_url}, "role": "reference_image"})
-        content_order.append("character_reference_image")
-    content.append({"type": "video_url", "video_url": {"url": original_video_url}, "role": "reference_video"})
-    content_order.append("reference_video")
     request_body: Dict[str, Any] = {
         "model": _normalize_remix_model(body.model),
+        "prompt": prompt_text,
         "content": content,
         "ratio": (body.ratio or "9:16").strip() or "9:16",
         "resolution": _normalize_resolution(body.resolution),
@@ -553,17 +1150,366 @@ async def start_viral_video_remix(
         "return_last_frame": False,
         "watermark": bool(body.watermark),
     }
-    logger.info(
-        "[viral_video_remix] submit seedance user_id=%s model_requested=%s model_used=%s content_order=%s video_url=%s character_url=%s product_url=%s prompt=%s",
-        current_user.id,
-        body.model,
-        _normalize_remix_model(body.model),
-        content_order,
-        original_video_url[:160],
-        character_url[:160],
-        product_url[:160],
-        _remix_prompt(body)[:600],
+    url = _endpoint(api_base, "/seedance/v3/contents/generations/tasks")
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json=request_body,
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(_pick_error_detail(resp))
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise RuntimeError("Seedance submit returned invalid JSON") from exc
+    task_id = _extract_task_id(payload)
+    if not task_id:
+        raise RuntimeError(f"Seedance returned no task id: {json.dumps(payload, ensure_ascii=False)[:400]}")
+    return {"task_id": task_id, "raw": payload}
+
+
+async def _poll_seedance_until_done(api_base: str, api_key: str, task_id: str) -> Dict[str, Any]:
+    url = _endpoint(api_base, f"/seedance/v3/contents/generations/tasks/{task_id}")
+    last_status = "queued"
+    for _ in range(240):
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"})
+        if resp.status_code >= 400:
+            raise RuntimeError(_pick_error_detail(resp))
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            raise RuntimeError("Seedance poll returned invalid JSON") from exc
+        status, video_url, error_detail = _extract_seedance_poll(payload)
+        if status:
+            last_status = status
+        if status in _FAILED_STATUSES:
+            raise RuntimeError(error_detail or f"Seedance task failed: {task_id}")
+        if status in _SUCCESS_STATUSES and video_url:
+            return {"task_id": task_id, "status": status, "video_url": _quote_public_url(video_url), "raw": payload}
+        await asyncio.sleep(8)
+    raise RuntimeError(f"Seedance task polling timed out: {task_id} status={last_status}")
+
+
+def _merge_segment_videos(segment_paths: List[Path], output_path: Path) -> None:
+    ffmpeg = _bundled_ffmpeg_exe()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    list_path = output_path.parent / "concat_list.txt"
+    list_lines = ["file '" + str(path) + "'" for path in segment_paths]
+    list_path.write_text("\n".join(list_lines) + "\n", encoding="utf-8")
+    try:
+        _run_subprocess(
+            [
+                ffmpeg,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(list_path),
+                "-c",
+                "copy",
+                str(output_path),
+            ],
+            timeout=1200,
+            error_label="concat remix segments",
+        )
+    except RuntimeError:
+        _run_subprocess(
+            [
+                ffmpeg,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(list_path),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ],
+            timeout=1200,
+            error_label="concat remix segments (re-encode)",
+        )
+
+
+def _trim_merged_video(source_path: Path, final_path: Path, duration_seconds: float) -> None:
+    ffmpeg = _bundled_ffmpeg_exe()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found")
+    trimmed_path = final_path.with_name(final_path.stem + "_trimmed.mp4")
+    _run_subprocess(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source_path),
+            "-t",
+            f"{max(duration_seconds, 0.1):.3f}",
+            "-c",
+            "copy",
+            str(trimmed_path),
+        ],
+        timeout=600,
+        error_label="trim merged remix video",
     )
+    trimmed_path.replace(final_path)
+
+
+def _job_status_response(job: Dict[str, Any]) -> Dict[str, Any]:
+    segments = job.get("segments")
+    out: Dict[str, Any] = {
+        "ok": str(job.get("status") or "") != "failed",
+        "task_id": job.get("job_id"),
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "stage": job.get("stage"),
+        "video_url": job.get("merged_video_url") or "",
+        "error": job.get("error") or "",
+        "total_segments": int(job.get("total_segments") or 0),
+        "completed_segments": int(job.get("completed_segments") or 0),
+        "segment_duration_seconds": int(job.get("segment_duration_seconds") or 0),
+        "source_duration_seconds": float(job.get("source_duration_seconds") or 0.0),
+        "created_at_ts": job.get("created_at_ts"),
+        "updated_at_ts": job.get("updated_at_ts"),
+        "asset_id": job.get("asset_id") or "",
+    }
+    asset = job.get("asset")
+    if isinstance(asset, dict):
+        out["asset"] = asset
+    if isinstance(segments, list):
+        out["segments"] = segments
+    result = job.get("result")
+    if isinstance(result, dict):
+        out["result"] = result
+    return out
+
+
+async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base: str, api_key: str) -> None:
+    job = get_job(job_id)
+    if not job:
+        return
+    job_dir = Path(str(job.get("job_dir") or "")).resolve()
+    work_dir = job_dir / "work"
+    downloads_dir = job_dir / "downloads"
+    outputs_dir = job_dir / "outputs"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    source_path = downloads_dir / "source_video.mp4"
+    try:
+        update_job(job_id, status="running", stage="downloading")
+        await _download_to_file(_quote_public_url(body.original_video_url), source_path, timeout_seconds=300.0)
+        total_duration = _probe_video_duration_seconds(source_path)
+        segment_seconds = _normalize_duration(body.duration)
+        update_job(
+            job_id,
+            source_duration_seconds=total_duration,
+            segment_duration_seconds=segment_seconds,
+            stage="splitting",
+        )
+        segments = _split_local_video(source_path, work_dir, segment_seconds, total_duration)
+        update_job(job_id, total_segments=len(segments), segments=segments)
+        segment_state_lock = asyncio.Lock()
+        parallel_limit = max(1, min(_MAX_PARALLEL_SEGMENT_TASKS, len(segments)))
+        semaphore = asyncio.Semaphore(parallel_limit)
+
+        async def _update_segment_state(
+            index: int,
+            *,
+            stage: Optional[str] = None,
+            status: Optional[str] = None,
+            extra: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            async with segment_state_lock:
+                current = get_job(job_id) or {}
+                seg_meta = list(current.get("segments") or [])
+                if index < len(seg_meta):
+                    updated = dict(seg_meta[index])
+                    if status is not None:
+                        updated["status"] = status
+                    if extra:
+                        updated.update(extra)
+                    seg_meta[index] = updated
+                fields: Dict[str, Any] = {"segments": seg_meta}
+                if stage:
+                    fields["stage"] = stage
+                fields["completed_segments"] = sum(
+                    1 for item in seg_meta if str(item.get("status") or "").lower() == "completed"
+                )
+                update_job(job_id, **fields)
+
+        async def _process_segment(index: int, seg: Dict[str, Any]) -> Dict[str, Any]:
+            async with semaphore:
+                try:
+                    seg_path = Path(str(seg.get("segment_path") or "")).resolve()
+                    seg_upload_url = await _upload_local_file_to_comfly(api_base, api_key, seg_path, "video/mp4")
+                    await _update_segment_state(
+                        index,
+                        stage="segment_submitted",
+                        status="submitted",
+                        extra={"segment_video_url": seg_upload_url},
+                    )
+                    submit_result = await _submit_seedance_remix_task(
+                        api_base=api_base,
+                        api_key=api_key,
+                        body=body,
+                        original_video_url=seg_upload_url,
+                        prompt_text=_remix_segment_prompt(body, index, len(segments)),
+                    )
+                    task_id = str(submit_result.get("task_id") or "").strip()
+                    await _update_segment_state(
+                        index,
+                        stage="segment_running",
+                        status="polling",
+                        extra={"remote_task_id": task_id},
+                    )
+                    poll_result = await _poll_seedance_until_done(api_base, api_key, task_id)
+                    output_url = str(poll_result.get("video_url") or "").strip()
+                    local_output = outputs_dir / f"segment_{index + 1:02d}.mp4"
+                    await _download_to_file(output_url, local_output, timeout_seconds=300.0)
+                    await _update_segment_state(
+                        index,
+                        stage="segment_running",
+                        status="completed",
+                        extra={
+                            "remote_task_id": task_id,
+                            "result_video_url": output_url,
+                            "result_video_path": str(local_output),
+                        },
+                    )
+                    return {"index": index, "local_output": local_output, "output_url": output_url}
+                except Exception as exc:
+                    await _update_segment_state(
+                        index,
+                        stage="segment_running",
+                        status="failed",
+                        extra={"error": str(exc)[:1000]},
+                    )
+                    raise
+
+        tasks: List[asyncio.Task[Dict[str, Any]]] = []
+        async with asyncio.TaskGroup() as tg:
+            for idx, seg in enumerate(segments):
+                tasks.append(tg.create_task(_process_segment(idx, seg)))
+        segment_results = [task.result() for task in tasks]
+        segment_results.sort(key=lambda item: int(item["index"]))
+        rendered_paths = [Path(str(item["local_output"])) for item in segment_results]
+        rendered_urls = [str(item["output_url"]) for item in segment_results]
+        update_job(job_id, stage="merging")
+        merged_tmp = outputs_dir / "merged_raw.mp4"
+        merged_final = job_dir / "final.mp4"
+        _merge_segment_videos(rendered_paths, merged_tmp)
+        _trim_merged_video(merged_tmp, merged_final, total_duration)
+        relative_url = f"/static/generated/viral_remix_jobs/{job_id}/final.mp4?ts={int(time.time())}"
+        saved_asset = _save_local_video_to_asset(
+            path=merged_final,
+            user_id=int(job.get("user_id") or 0),
+            prompt=_remix_prompt(body),
+            model=_normalize_remix_model(body.model),
+            tags="auto,viral.video.remix,merged_final",
+            meta={
+                "origin": "viral_video_remix",
+                "job_id": job_id,
+                "source_duration_seconds": total_duration,
+                "segment_duration_seconds": segment_seconds,
+                "segment_video_urls": rendered_urls,
+                "local_path": str(merged_final),
+            },
+        )
+        update_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            merged_video_url=relative_url,
+            merged_video_path=str(merged_final),
+            asset=saved_asset,
+            asset_id=(saved_asset or {}).get("asset_id") or "",
+            result={
+                "source_duration_seconds": total_duration,
+                "segment_duration_seconds": segment_seconds,
+                "segment_video_urls": rendered_urls,
+                "merged_video_url": relative_url,
+                "asset": saved_asset,
+                "asset_id": (saved_asset or {}).get("asset_id") or "",
+            },
+        )
+    except Exception as exc:
+        logger.exception("[viral_video_remix] remix job failed job_id=%s", job_id)
+        update_job(job_id, status="failed", stage="failed", error=str(exc)[:2000])
+
+
+@router.post("/api/viral-video-remix/seedance/start")
+async def start_viral_video_remix(
+    body: ViralRemixStartBody,
+    current_user: _ServerUser = Depends(_resolve_viral_remix_user),
+    db: Session = Depends(get_db),
+):
+    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    safe_body = ViralRemixStartBody(
+        original_video_url=_quote_public_url(body.original_video_url),
+        character_image_url=_quote_public_url(body.character_image_url),
+        product_image_url=_quote_public_url(body.product_image_url),
+        prompt=body.prompt,
+        model=body.model,
+        ratio=body.ratio,
+        resolution=body.resolution,
+        duration=_normalize_duration(body.duration),
+        generate_audio=bool(body.generate_audio),
+        watermark=bool(body.watermark),
+        use_character_reference=bool(body.use_character_reference),
+    )
+    job_id = create_job_record(
+        user_id=current_user.id,
+        payload=safe_body.model_dump(),
+        job_dir=str(_viral_remix_jobs_root() / "pending"),
+    )
+    job_dir = _viral_remix_jobs_root() / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    update_job(
+        job_id,
+        job_dir=str(job_dir),
+        status="queued",
+        stage="queued",
+        total_segments=0,
+        completed_segments=0,
+        segment_duration_seconds=int(safe_body.duration or 5),
+    )
+    logger.info(
+        "[viral_video_remix] queued local remix job user_id=%s job_id=%s segment_seconds=%s video_url=%s character_url=%s product_url=%s",
+        current_user.id,
+        job_id,
+        safe_body.duration,
+        safe_body.original_video_url[:160],
+        safe_body.character_image_url[:160],
+        safe_body.product_image_url[:160],
+    )
+    asyncio.create_task(_run_viral_remix_job(job_id, safe_body, api_base, api_key))
+    return {
+        "ok": True,
+        "task_id": job_id,
+        "job_id": job_id,
+        "status": "queued",
+        "stage": "queued",
+        "segment_duration_seconds": int(safe_body.duration or 10),
+    }
     url = _endpoint(api_base, "/seedance/v3/contents/generations/tasks")
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -587,7 +1533,7 @@ async def start_viral_video_remix(
     task_id = _extract_task_id(payload)
     if not task_id:
         raise HTTPException(status_code=502, detail=f"Seedance 未返回任务 ID: {json.dumps(payload, ensure_ascii=False)[:500]}")
-    return {"ok": True, "task_id": task_id, "prompt": _remix_prompt(body), "raw": payload}
+    return {"ok": True, "task_id": task_id, "prompt": prompt_text, "raw": payload}
 
 
 @router.get("/api/viral-video-remix/seedance/tasks/{task_id}")
@@ -600,6 +1546,14 @@ async def poll_viral_video_remix_task(
     safe_task = (task_id or "").strip()
     if not safe_task:
         raise HTTPException(status_code=400, detail="缺少任务 ID")
+    job = get_job(safe_task)
+    if job is not None:
+        return _job_status_response(job)
+        """
+        if int(job.get("user_id") or 0) != int(current_user.id or 0):
+            raise HTTPException(status_code=404, detail="未找到复刻任务")
+        return _job_status_response(job)
+        """
     url = _endpoint(api_base, f"/seedance/v3/contents/generations/tasks/{safe_task}")
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:

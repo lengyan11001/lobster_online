@@ -685,6 +685,23 @@
     #content-viral-video-remix .viral-character-stage {
       height:clamp(280px, 42vh, 430px);
     }
+    #content-viral-video-remix .viral-reference-grid {
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:0.9rem;
+    }
+    #content-viral-video-remix .viral-reference-card {
+      min-width:0;
+    }
+    #content-viral-video-remix .viral-reference-card .tvc-toolbar {
+      margin-bottom:0.72rem;
+    }
+    #content-viral-video-remix .viral-reference-card .tvc-panel-title {
+      margin-bottom:0.2rem;
+    }
+    #content-viral-video-remix .viral-product-stage {
+      height:clamp(280px, 42vh, 430px);
+    }
     #content-viral-video-remix .viral-output-stage {
       height:clamp(220px, 26vh, 280px);
     }
@@ -694,6 +711,7 @@
       overflow:hidden;
     }
     #content-viral-video-remix #viralCharacterResult img,
+    #content-viral-video-remix #viralProductReferenceResult img,
     #content-viral-video-remix #viralRemixVideoSurface video {
       width:100%;
       height:100%;
@@ -703,6 +721,11 @@
     }
     #content-viral-video-remix #viralRemixVideoSurface video {
       background:#eef3fb;
+    }
+    @media (max-width: 980px) {
+      #content-viral-video-remix .viral-reference-grid {
+        grid-template-columns:minmax(0, 1fr);
+      }
     }
     #content-viral-video-remix .viral-video-placeholder {
       width:min(88%, 520px);
@@ -764,6 +787,261 @@
       justify-content:center;
       gap:0.42rem;
       min-height:38px;
+    }
+    #content-viral-video-remix .viral-share-video-box {
+      margin-top:0.68rem;
+      padding:0.72rem;
+      border:1px solid rgba(116,134,168,0.18);
+      border-radius:16px;
+      background:linear-gradient(135deg, rgba(255,255,255,0.96), rgba(246,249,255,0.96));
+    }
+    #content-viral-video-remix .viral-share-video-box textarea {
+      width:100%;
+      min-height:74px;
+      resize:vertical;
+      margin-top:0.42rem;
+    }
+    #content-viral-video-remix .viral-share-video-actions {
+      display:flex;
+      align-items:center;
+      gap:0.55rem;
+      flex-wrap:wrap;
+      margin-top:0.58rem;
+    }
+    #content-viral-video-remix #viralShareVideoResolveBtn {
+      min-height:40px;
+      font-weight:800;
+    }
+    #content-viral-video-remix #viralShareVideoStatus {
+      flex:1 1 160px;
+      font-size:0.76rem;
+      color:#607089;
+      line-height:1.45;
+      overflow-wrap:anywhere;
+    }
+    #content-viral-video-remix #viralShareVideoStatus.ok {
+      color:#277a57;
+    }
+    #content-viral-video-remix #viralShareVideoStatus.err {
+      color:#c2413d;
+    }
+    #content-viral-video-remix #viralOriginalVideoPreview {
+      grid-template-columns:minmax(132px, 160px);
+      align-items:start;
+    }
+    #content-viral-video-remix #viralProductPreview {
+      grid-template-columns:repeat(auto-fill, minmax(92px, 1fr));
+      gap:0.52rem;
+    }
+    #content-viral-video-remix .viral-product-thumb-card {
+      position:relative;
+      overflow:hidden;
+      border-radius:16px;
+      border:1px solid rgba(116,134,168,0.14);
+      background:#ffffff;
+      box-shadow:0 10px 22px rgba(36,54,88,0.08);
+    }
+    #content-viral-video-remix .viral-product-thumb-card img {
+      width:100%;
+      height:86px;
+      object-fit:cover;
+      display:block;
+      background:#eef3fb;
+    }
+    #content-viral-video-remix .viral-product-thumb-title {
+      display:block;
+      padding:0.38rem 0.48rem 0.44rem;
+      color:#31435f;
+      font-size:0.68rem;
+      font-weight:700;
+      line-height:1.3;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    #content-viral-video-remix .viral-product-thumb-index {
+      position:absolute;
+      top:0.42rem;
+      left:0.42rem;
+      min-width:1.42rem;
+      height:1.42rem;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border-radius:999px;
+      color:#ffffff;
+      font-size:0.66rem;
+      font-weight:900;
+      background:rgba(32,49,77,0.72);
+      backdrop-filter:blur(8px);
+      box-shadow:0 8px 16px rgba(18,28,45,0.18);
+    }
+    #content-viral-video-remix .viral-product-thumb-tag {
+      position:absolute;
+      right:0.42rem;
+      bottom:2.25rem;
+      padding:0.16rem 0.38rem;
+      border-radius:999px;
+      color:#ffffff;
+      font-size:0.62rem;
+      font-weight:800;
+      background:linear-gradient(135deg, rgba(91,124,255,0.86), rgba(255,112,67,0.86));
+      box-shadow:0 8px 16px rgba(36,54,88,0.16);
+    }
+    #content-viral-video-remix .viral-source-video-card {
+      position:relative;
+      width:100%;
+      border:none;
+      border-radius:18px;
+      background:#ffffff;
+      box-shadow:0 14px 30px rgba(36,54,88,0.12);
+      cursor:pointer;
+      overflow:hidden;
+      transition:transform .16s ease, box-shadow .16s ease;
+    }
+    #content-viral-video-remix .viral-source-video-card:hover,
+    #content-viral-video-remix .viral-source-video-card:focus-visible {
+      transform:translateY(-1px);
+      box-shadow:0 18px 36px rgba(36,54,88,0.16);
+      outline:2px solid rgba(91,124,255,0.22);
+      outline-offset:2px;
+    }
+    #content-viral-video-remix .viral-source-video-card video {
+      width:100%;
+      height:96px;
+      object-fit:cover;
+      display:block;
+      background:#eef3fb;
+    }
+    #content-viral-video-remix .viral-source-video-title {
+      display:block;
+      padding:0.48rem 0.58rem 0.56rem;
+      color:#213451;
+      font-size:0.76rem;
+      font-weight:700;
+      line-height:1.35;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    #content-viral-video-remix .viral-source-video-badge {
+      position:absolute;
+      left:0.48rem;
+      bottom:2.45rem;
+      padding:0.18rem 0.42rem;
+      border-radius:999px;
+      color:#ffffff;
+      font-size:0.66rem;
+      font-weight:800;
+      background:rgba(20,35,58,0.72);
+      backdrop-filter:blur(8px);
+    }
+    #content-viral-video-remix .viral-video-modal {
+      position:fixed;
+      inset:0;
+      z-index:9999;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:clamp(1rem, 4vw, 2.4rem);
+      background:rgba(15,23,42,0.58);
+      backdrop-filter:blur(10px);
+    }
+    #content-viral-video-remix .viral-video-modal.is-open {
+      display:flex;
+    }
+    #content-viral-video-remix .viral-video-modal-card {
+      width:min(92vw, 860px);
+      max-height:88vh;
+      border-radius:24px;
+      overflow:hidden;
+      background:#0b1220;
+      box-shadow:0 28px 80px rgba(4,12,28,0.45);
+    }
+    #content-viral-video-remix .viral-video-modal-head {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:0.8rem;
+      padding:0.72rem 0.88rem;
+      color:#e8eefb;
+      background:linear-gradient(135deg, rgba(28,42,68,0.96), rgba(13,21,36,0.96));
+    }
+    #content-viral-video-remix .viral-video-modal-title {
+      min-width:0;
+      margin:0;
+      font-size:0.88rem;
+      font-weight:800;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    #content-viral-video-remix .viral-video-modal-close {
+      flex:0 0 auto;
+      width:34px;
+      height:34px;
+      border:1px solid rgba(255,255,255,0.16);
+      border-radius:999px;
+      color:#ffffff;
+      background:rgba(255,255,255,0.08);
+      cursor:pointer;
+      font-size:1.1rem;
+      line-height:1;
+    }
+    #content-viral-video-remix .viral-video-modal-close:hover {
+      background:rgba(255,255,255,0.16);
+    }
+    #content-viral-video-remix .viral-video-modal video {
+      width:100%;
+      max-height:calc(88vh - 58px);
+      display:block;
+      background:#000;
+    }
+    #content-viral-video-remix .viral-product-reference-cta {
+      margin-top:0.72rem;
+      padding:0.78rem;
+      border:1px solid rgba(91,124,255,0.22);
+      border-radius:18px;
+      background:
+        radial-gradient(circle at top left, rgba(91,124,255,0.14), transparent 34%),
+        linear-gradient(135deg, rgba(255,255,255,0.98), rgba(239,244,255,0.96));
+      box-shadow:0 16px 34px rgba(36,54,88,0.08);
+    }
+    #content-viral-video-remix .viral-product-reference-cta .tvc-check {
+      margin-bottom:0.62rem !important;
+      color:#243957;
+      font-weight:700;
+    }
+    #content-viral-video-remix #viralCleanProductBtn {
+      width:100%;
+      min-height:48px;
+      border:none;
+      border-radius:16px;
+      font-size:0.96rem;
+      font-weight:800;
+      letter-spacing:0.02em;
+      color:#fff;
+      background:linear-gradient(135deg, #ff8a3d 0%, #ff4f75 48%, #5b7cff 100%);
+      box-shadow:0 16px 30px rgba(255,79,117,0.24), 0 8px 18px rgba(91,124,255,0.16);
+      transform:translateY(0);
+      transition:transform .16s ease, box-shadow .16s ease, filter .16s ease;
+    }
+    #content-viral-video-remix #viralCleanProductBtn:hover {
+      transform:translateY(-1px);
+      box-shadow:0 20px 38px rgba(255,79,117,0.30), 0 10px 22px rgba(91,124,255,0.20);
+      filter:saturate(1.05);
+    }
+    #content-viral-video-remix .viral-product-cta-hint {
+      display:block;
+      margin-top:0.52rem;
+      color:#607089;
+      font-size:0.76rem;
+      line-height:1.5;
+    }
+    #content-viral-video-remix #viralProductCleanStatus {
+      display:block;
+      margin-top:0.5rem !important;
+      font-weight:700;
     }
     #content-viral-video-remix .viral-btn-spinner {
       display:none;
@@ -4448,167 +4726,37 @@
             <div class="tvc-studio">
               <div class="tvc-studio-hero">
                 <div>
-                  <h3>爆款视频复刻</h3>
-                  <p>上传原爆款视频、人物四视图和产品图，用 Seedance 2.0 全能参考复刻动作、运镜和节奏。</p>
-                  <div class="tvc-hero-meta">测试模式：使用本地 Comfly Key，不走积分扣费；建议先用 5 秒片段验证效果。</div>
+                  <h3>&#29190;&#27454;&#35270;&#39057;&#22797;&#21051;</h3>
+                  <p>&#19978;&#20256;&#21407;&#29190;&#27454;&#35270;&#39057;&#12289;&#20154;&#29289;&#22235;&#35270;&#22270;&#21644;&#20135;&#21697;&#22270;&#65292;&#29992; Seedance 2.0 &#22797;&#21051;&#21160;&#20316;&#12289;&#36816;&#38236;&#21644;&#33410;&#22863;&#65292;&#24182;&#25226;&#30011;&#38754;&#20013;&#30340;&#20135;&#21697;&#26367;&#25442;&#25104;&#26032;&#20135;&#21697;&#12290;</p>
+                  <div class="tvc-hero-meta">&#40664;&#35748;&#27599; 10 &#31186;&#20998;&#19968;&#27573;&#24182;&#21457;&#22797;&#21051;&#65292;&#38271;&#35270;&#39057;&#20250;&#33258;&#21160;&#20999;&#27573;&#65292;&#23436;&#25104;&#21518;&#25353;&#39034;&#24207;&#21512;&#25104;&#19968;&#26465;&#35270;&#39057;&#12290;</div>
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
-                  <button type="button" id="viralRemixBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
-                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">配置 Comfly</button>
+                  <button type="button" id="viralRemixBackBtn" class="btn btn-ghost btn-sm">&#36820;&#22238;&#25216;&#33021;&#21830;&#24215;</button>
+                  <button type="button" class="btn btn-primary btn-sm js-comfly-config-btn" aria-controls="comflyModal" onclick="if (window._openComflyConfigModal) window._openComflyConfigModal(); return false;">&#37197;&#32622; Comfly</button>
                 </div>
               </div>
 
               <div class="tvc-shell">
                 <aside class="tvc-sidebar">
                   <div class="tvc-panel tvc-panel-compact">
-                    <h4 class="tvc-panel-title">1. 人物参考（可选）</h4>
-                    <p class="tvc-panel-hint">默认按官方产品替换方式复刻，只用产品图和原视频。需要换人物时，再生成并勾选人物参考。</p>
-                    <div class="tvc-field">
-                      <label>人物参考图</label>
-                      <div class="tvc-upload-box">
-                        <div class="tvc-upload-actions">
-                          <button type="button" id="viralPersonUploadBtn" class="btn btn-primary btn-sm">选择人物图</button>
-                          <input type="file" id="viralPersonInput" accept="image/*" style="display:none;">
-                          <span class="tvc-panel-hint" style="margin:0;">不上传也可以纯文本生成。</span>
-                        </div>
-                        <div id="viralPersonPreview" class="tvc-upload-list"></div>
-                      </div>
-                    </div>
-                    <div class="tvc-field">
-                      <label for="viralCharacterPrompt">人物要求</label>
-                      <textarea id="viralCharacterPrompt" placeholder="例如：年轻女性带货达人，五官清爽，棕色中长发，亲和、自然、适合短视频口播。"></textarea>
-                    </div>
-                    <div class="tvc-inline-grid">
-                      <div class="tvc-field">
-                        <label for="viralCharacterStyle">规避风格</label>
-                        <select id="viralCharacterStyle">
-                          <option value="colored_pencil" selected>彩铅四视图</option>
-                          <option value="soft_illustration">柔和插画</option>
-                          <option value="semi_realistic">轻写实设定图</option>
-                        </select>
-                      </div>
-                      <div class="tvc-field">
-                        <label for="viralCharacterUrlInput">人物图 URL</label>
-                        <input id="viralCharacterUrlInput" type="text" placeholder="生成后自动填入，也可手动粘贴">
-                      </div>
-                    </div>
-                    <div class="viral-action-row">
-                      <button type="button" id="viralCharacterGenerateBtn" class="btn btn-primary">
-                        <span class="viral-btn-spinner" aria-hidden="true"></span>
-                        <span class="viral-btn-label">生成人物四视图</span>
-                      </button>
-                      <span id="viralCharacterStatus" class="viral-inline-status" role="status" aria-live="polite"></span>
-                    </div>
+                    <h4 class="tvc-panel-title">1. &#20154;&#29289;&#21442;&#32771;&#65288;&#21487;&#36873;&#65289;</h4>
+                    <p class="tvc-panel-hint">&#40664;&#35748;&#21482;&#20570;&#20135;&#21697;&#26367;&#25442;&#12290;&#38656;&#35201;&#25442;&#20154;&#29289;&#26102;&#65292;&#20877;&#29983;&#25104;&#24182;&#21246;&#36873;&#20154;&#29289;&#22235;&#35270;&#22270;&#21442;&#32771;&#12290;</p>
+                    <div class="tvc-field"><label>&#20154;&#29289;&#21442;&#32771;&#22270;</label><div class="tvc-upload-box"><div class="tvc-upload-actions"><button type="button" id="viralPersonUploadBtn" class="btn btn-primary btn-sm">&#36873;&#25321;&#20154;&#29289;&#22270;</button><input type="file" id="viralPersonInput" accept="image/*" style="display:none;"><span class="tvc-panel-hint" style="margin:0;">&#19981;&#19978;&#20256;&#20063;&#21487;&#20197;&#32431;&#25991;&#26412;&#29983;&#25104;&#12290;</span></div><div id="viralPersonPreview" class="tvc-upload-list"></div></div></div>
+                    <div class="tvc-field"><label for="viralCharacterPrompt">&#20154;&#29289;&#35201;&#27714;</label><textarea id="viralCharacterPrompt" placeholder="&#20363;&#22914;&#65306;&#24180;&#36731;&#22899;&#24615;&#24102;&#36135;&#36798;&#20154;&#65292;&#20116;&#23448;&#28165;&#29245;&#65292;&#26837;&#33394;&#20013;&#38271;&#21457;&#65292;&#20146;&#21644;&#12289;&#33258;&#28982;&#12289;&#36866;&#21512;&#30701;&#35270;&#39057;&#21475;&#25773;&#12290;"></textarea></div>
+                    <div class="tvc-inline-grid"><div class="tvc-field"><label for="viralCharacterStyle">&#20154;&#29289;&#39118;&#26684;</label><select id="viralCharacterStyle"><option value="colored_pencil" selected>&#24425;&#38085;&#22235;&#35270;&#22270;</option><option value="soft_illustration">&#26580;&#21644;&#25554;&#30011;</option><option value="semi_realistic">&#36731;&#20889;&#23454;&#35774;&#23450;&#22270;</option></select></div><div class="tvc-field"><label for="viralCharacterUrlInput">&#20154;&#29289;&#22270; URL</label><input id="viralCharacterUrlInput" type="text" placeholder="&#29983;&#25104;&#21518;&#33258;&#21160;&#22635;&#20837;&#65292;&#20063;&#21487;&#25163;&#21160;&#31896;&#36148;"></div></div>
+                    <div class="viral-action-row"><button type="button" id="viralCharacterGenerateBtn" class="btn btn-primary"><span class="viral-btn-spinner" aria-hidden="true"></span><span class="viral-btn-label">&#29983;&#25104;&#20154;&#29289;&#22235;&#35270;&#22270;</span></button><span id="viralCharacterStatus" class="viral-inline-status" role="status" aria-live="polite"></span></div>
                   </div>
 
                   <div class="tvc-panel">
-                    <h4 class="tvc-panel-title">2. 原视频与产品图</h4>
-                    <div class="tvc-field">
-                      <label>原爆款视频</label>
-                      <div class="tvc-upload-box">
-                        <div class="tvc-upload-actions">
-                          <button type="button" id="viralOriginalVideoPickBtn" class="btn btn-primary btn-sm">选择视频</button>
-                          <button type="button" id="viralUploadVideoBtn" class="btn btn-ghost btn-sm">上传视频</button>
-                          <input type="file" id="viralOriginalVideoInput" accept="video/*" style="display:none;">
-                        </div>
-                        <div id="viralOriginalVideoPreview" class="tvc-upload-list"></div>
-                      </div>
-                      <input id="viralOriginalVideoUrlInput" type="text" placeholder="或直接粘贴公网视频 URL">
-                    </div>
-                    <div class="tvc-field">
-                      <label>产品图</label>
-                      <div class="tvc-upload-box">
-                        <div class="tvc-upload-actions">
-                          <button type="button" id="viralProductPickBtn" class="btn btn-primary btn-sm">选择产品图</button>
-                          <button type="button" id="viralUploadProductBtn" class="btn btn-ghost btn-sm">上传产品图</button>
-                          <input type="file" id="viralProductInput" accept="image/*" style="display:none;">
-                        </div>
-                        <div id="viralProductPreview" class="tvc-upload-list"></div>
-                      </div>
-                      <input id="viralProductUrlInput" type="text" placeholder="或直接粘贴公网产品图 URL">
-                      <div class="tvc-upload-actions" style="margin-top:0.55rem;">
-                        <label class="tvc-check" style="margin:0;"><input type="checkbox" id="viralCleanProductCheck" checked>提交前先生成白底产品图</label>
-                        <button type="button" id="viralCleanProductBtn" class="btn btn-ghost btn-sm">生成白底图</button>
-                        <span id="viralProductCleanStatus" class="tvc-panel-hint" style="margin:0;"></span>
-                      </div>
-                      <input id="viralProductCleanPrompt" type="text" placeholder="白底图补充要求，可不填，例如：只保留正面瓶身和外盒">
-                    </div>
+                    <h4 class="tvc-panel-title">2. &#21407;&#35270;&#39057;&#19982;&#20135;&#21697;&#22270;</h4>
+                    <div class="tvc-field"><label>&#21407;&#29190;&#27454;&#35270;&#39057;</label><div class="tvc-upload-box"><div class="tvc-upload-actions"><button type="button" id="viralOriginalVideoPickBtn" class="btn btn-primary btn-sm">&#36873;&#25321;&#35270;&#39057;</button><button type="button" id="viralUploadVideoBtn" class="btn btn-ghost btn-sm">&#19978;&#20256;&#35270;&#39057;</button><input type="file" id="viralOriginalVideoInput" accept="video/*" style="display:none;"></div><div id="viralOriginalVideoPreview" class="tvc-upload-list"></div></div><input id="viralOriginalVideoUrlInput" type="hidden"><div class="viral-share-video-box"><label for="viralShareVideoTextInput">&#31896;&#36148;&#35270;&#39057;&#20998;&#20139;&#25991;&#26696;&#25110;&#38142;&#25509;</label><textarea id="viralShareVideoTextInput" placeholder="&#20363;&#22914;&#65306;2.30 X@m.Du ... https://v.douyin.com/xxxx/ &#22797;&#21046;&#27492;&#38142;&#25509;&#65292;&#25171;&#24320;&#25238;&#38899;&#25628;&#32034;&#65292;&#30452;&#25509;&#35266;&#30475;&#35270;&#39057;&#65281;"></textarea><div class="viral-share-video-actions"><button type="button" id="viralShareVideoResolveBtn" class="btn btn-primary btn-sm">&#35299;&#26512;&#24182;&#19979;&#36733;&#35270;&#39057;</button><span id="viralShareVideoStatus" role="status" aria-live="polite"></span></div></div></div>
+                    <div class="tvc-field"><label>&#20135;&#21697;&#22270;</label><div class="tvc-upload-box"><div class="tvc-upload-actions"><button type="button" id="viralProductPickBtn" class="btn btn-primary btn-sm">&#36873;&#25321;&#20135;&#21697;&#22270;</button><button type="button" id="viralUploadProductBtn" class="btn btn-ghost btn-sm">&#19978;&#20256;&#20135;&#21697;&#22270;</button><input type="file" id="viralProductInput" accept="image/*" multiple style="display:none;"></div><div id="viralProductPreview" class="tvc-upload-list"></div></div><input id="viralProductUrlInput" type="text" placeholder="&#25110;&#30452;&#25509;&#31896;&#36148;&#19968;&#20010;&#25110;&#22810;&#20010;&#20844;&#32593;&#20135;&#21697;&#22270; URL&#65292;&#22810;&#20010;&#29992;&#36887;&#21495;&#25110;&#25442;&#34892;&#20998;&#38548;"><div class="viral-product-reference-cta"><label class="tvc-check" style="margin:0;"><input type="checkbox" id="viralCleanProductCheck" checked>&#22797;&#21051;&#21069;&#20808;&#29983;&#25104;&#20135;&#21697;&#20840;&#35270;&#22270;</label><button type="button" id="viralCleanProductBtn" class="btn btn-primary">&#29983;&#25104;&#20135;&#21697;&#20840;&#35270;&#22270;</button><span class="viral-product-cta-hint">&#22810;&#35282;&#24230;&#20135;&#21697;&#22270;&#20250;&#20808;&#21512;&#25104;&#19968;&#24352;&#20840;&#35270;&#22270;&#65292;&#29992;&#26469;&#25552;&#39640;&#35270;&#39057;&#20013;&#20135;&#21697;&#36716;&#21160;&#26102;&#30340;&#19968;&#33268;&#24615;&#12290;</span><span id="viralProductCleanStatus" class="tvc-panel-hint" style="margin:0;"></span></div><input id="viralProductCleanPrompt" type="text" placeholder="&#20135;&#21697;&#20840;&#35270;&#22270;&#34917;&#20805;&#35201;&#27714;&#65292;&#21487;&#19981;&#22635;&#12290;&#20363;&#22914;&#65306;&#20445;&#25345;&#26448;&#36136;&#32441;&#29702;&#21644;&#25509;&#21475;&#32454;&#33410;&#19981;&#21464;"></div>
                   </div>
 
-                  <div class="tvc-panel">
-                    <h4 class="tvc-panel-title">3. 复刻参数</h4>
-                    <div class="tvc-field">
-                      <label for="viralRemixPrompt">补充要求</label>
-                      <textarea id="viralRemixPrompt" placeholder="例如：将视频里礼盒中的香水替换成产品图中的面霜，运镜和手部动作不变，去掉字幕和水印。"></textarea>
-                    </div>
-                    <div class="tvc-inline-grid">
-                      <div class="tvc-field">
-                        <label for="viralRemixModelSelect">模型</label>
-                        <select id="viralRemixModelSelect">
-                          <option value="doubao-seedance-2-0-260128" selected>Seedance 2.0 Pro（产品替换）</option>
-                        </select>
-                        <div class="tvc-panel-hint" style="margin-top:0.3rem;">产品替换固定使用 Pro，Fast 容易只复刻运镜、不替换商品。</div>
-                      </div>
-                      <div class="tvc-field">
-                        <label for="viralRemixDurationSelect">时长</label>
-                        <select id="viralRemixDurationSelect">
-                          <option value="5" selected>5s 测试</option>
-                          <option value="10">10s</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div class="tvc-inline-grid">
-                      <div class="tvc-field">
-                        <label for="viralRemixRatioSelect">比例</label>
-                        <select id="viralRemixRatioSelect">
-                          <option value="9:16" selected>9:16 竖屏</option>
-                          <option value="16:9">16:9 横屏</option>
-                          <option value="1:1">1:1 方形</option>
-                        </select>
-                      </div>
-                      <div class="tvc-field">
-                        <label for="viralRemixResolutionSelect">清晰度</label>
-                        <select id="viralRemixResolutionSelect">
-                          <option value="720p" selected>720p</option>
-                          <option value="480p">480p</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div class="tvc-inline-grid">
-                      <label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralRemixAudioCheck" checked>保留音频/生成音频</label>
-                      <label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralUseCharacterCheck">使用人物四视图参考</label>
-                    </div>
-                    <div id="viralRemixMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
-                    <div class="tvc-quick-actions">
-                      <button type="button" id="viralRemixStartBtn" class="btn btn-primary">开始复刻视频</button>
-                    </div>
-                  </div>
+                  <div class="tvc-panel"><h4 class="tvc-panel-title">3. &#22797;&#21051;&#21442;&#25968;</h4><div class="tvc-field"><label for="viralRemixPrompt">&#34917;&#20805;&#35201;&#27714;</label><textarea id="viralRemixPrompt" placeholder="&#20363;&#22914;&#65306;&#23558;&#35270;&#39057;&#37324;&#30340;&#21407;&#20135;&#21697;&#26367;&#25442;&#25104;&#26032;&#20135;&#21697;&#65292;&#20445;&#25345;&#36816;&#38236;&#12289;&#25163;&#37096;&#21160;&#20316;&#12289;&#20809;&#24433;&#21644;&#33410;&#22863;&#19981;&#21464;&#65292;&#21435;&#25481;&#23383;&#24149;&#21644;&#27700;&#21360;&#12290;"></textarea></div><div class="tvc-inline-grid"><div class="tvc-field"><label for="viralRemixModelSelect">&#27169;&#22411;</label><select id="viralRemixModelSelect"><option value="doubao-seedance-2-0-260128" selected>Seedance 2.0 Pro&#65288;&#20135;&#21697;&#26367;&#25442;&#65289;</option></select><div class="tvc-panel-hint" style="margin-top:0.3rem;">&#20135;&#21697;&#26367;&#25442;&#22266;&#23450;&#20351;&#29992; Pro&#65292;Fast &#23481;&#26131;&#21482;&#22797;&#21051;&#36816;&#38236;&#65292;&#19981;&#26367;&#25442;&#21830;&#21697;&#12290;</div></div><div class="tvc-field"><label for="viralRemixDurationSelect">&#20998;&#27573;&#26102;&#38271;</label><select id="viralRemixDurationSelect"><option value="5">5s</option><option value="10" selected>10s &#65288;&#25512;&#33616;&#65289;</option></select></div></div><div class="tvc-inline-grid"><div class="tvc-field"><label for="viralRemixRatioSelect">&#27604;&#20363;</label><select id="viralRemixRatioSelect"><option value="9:16" selected>9:16 &#31446;&#23631;</option><option value="16:9">16:9 &#27178;&#23631;</option><option value="1:1">1:1 &#26041;&#24418;</option></select></div><div class="tvc-field"><label for="viralRemixResolutionSelect">&#28165;&#26224;&#24230;</label><select id="viralRemixResolutionSelect"><option value="720p" selected>720p</option><option value="480p">480p</option></select></div></div><div class="tvc-inline-grid"><label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralRemixAudioCheck" checked>&#20445;&#30041;&#38899;&#39057;&#25110;&#29983;&#25104;&#38899;&#39057;</label><label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralUseCharacterCheck">&#20351;&#29992;&#20154;&#29289;&#22235;&#35270;&#22270;&#21442;&#32771;</label></div><div id="viralRemixMsg" class="msg" style="display:none;margin-top:0.8rem;"></div><div class="tvc-quick-actions"><button type="button" id="viralRemixStartBtn" class="btn btn-primary">&#24320;&#22987;&#22797;&#21051;&#35270;&#39057;</button></div></div>
                 </aside>
 
-                <section class="tvc-main">
-                  <div class="tvc-panel">
-                    <div class="tvc-toolbar" style="margin-bottom:0.8rem;">
-                      <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">人物参考结果</h4>
-                        <p class="tvc-panel-hint" style="margin:0;">可选参考。未勾选“使用人物四视图参考”时，不会参与视频替换任务。</p>
-                      </div>
-                    </div>
-                    <div class="tvc-video-stage viral-character-stage">
-                      <div id="viralCharacterResult" class="tvc-video-surface"></div>
-                    </div>
-                  </div>
-                  <div class="tvc-panel">
-                    <div class="tvc-toolbar" style="margin-bottom:0.8rem;">
-                      <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">复刻视频结果</h4>
-                        <p class="tvc-panel-hint" style="margin:0;">按“产品图 + 参考视频”的替换方式提交，完成后在这里播放。</p>
-                      </div>
-                    </div>
-                    <div id="viralRemixVideoStage" class="tvc-video-stage viral-output-stage">
-                      <div id="viralRemixVideoSurface" class="tvc-video-surface"></div>
-                    </div>
-                  </div>
-                </section>
+                <section class="tvc-main"><div class="viral-reference-grid"><div class="tvc-panel viral-reference-card"><div class="tvc-toolbar"><div><h4 class="tvc-panel-title">&#20154;&#29289;&#22235;&#35270;&#22270;</h4><p class="tvc-panel-hint" style="margin:0;">&#29983;&#25104;&#21518;&#20808;&#22312;&#36825;&#37324;&#39044;&#35272;&#12290;&#26410;&#21246;&#36873;&#20154;&#29289;&#21442;&#32771;&#26102;&#65292;&#19981;&#20250;&#21442;&#19982;&#35270;&#39057;&#22797;&#21051;&#12290;</p></div></div><div class="tvc-video-stage viral-character-stage"><div id="viralCharacterResult" class="tvc-video-surface"></div></div></div><div class="tvc-panel viral-reference-card"><div class="tvc-toolbar"><div><h4 class="tvc-panel-title">&#20135;&#21697;&#20840;&#35270;&#22270;</h4><p class="tvc-panel-hint" style="margin:0;">&#22810;&#24352;&#20135;&#21697;&#22270;&#20250;&#20808;&#29992; GPT-Image-2 &#21512;&#25104;&#19968;&#24352;&#20840;&#35270;&#22270;&#21442;&#32771;&#65292;&#20808;&#30830;&#35748;&#20877;&#24320;&#22987;&#22797;&#21051;&#12290;</p></div></div><div class="tvc-video-stage viral-product-stage"><div id="viralProductReferenceResult" class="tvc-video-surface"></div></div></div></div><div class="tvc-panel"><div class="tvc-toolbar" style="margin-bottom:0.8rem;"><div><h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">&#22797;&#21051;&#35270;&#39057;&#32467;&#26524;</h4><p class="tvc-panel-hint" style="margin:0;">&#25353;&#8220;&#20135;&#21697;&#22270; + &#21442;&#32771;&#35270;&#39057;&#8221;&#25552;&#20132;&#65292;&#23436;&#25104;&#21518;&#22312;&#36825;&#37324;&#25773;&#25918;&#12290;</p></div></div><div id="viralRemixVideoStage" class="tvc-video-stage viral-output-stage"><div id="viralRemixVideoSurface" class="tvc-video-surface"></div></div></div></section>
               </div>
             </div>
           </div>
@@ -6144,7 +6292,7 @@
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260503-ecom-master-copy"></script>
   <script src="/static/js/comfly-image-studio.js?v=20260503-reference-purpose-fix"></script>
   <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260502-purpose-filter"></script>
-  <script src="/static/js/viral-video-remix.js?v=20260501-product-ref-fix"></script>
+  <script src="/static/js/viral-video-remix.js?v=20260507-reference-preview-cn8"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js"></script>
@@ -6153,5 +6301,3 @@
   <script src="/static/js/init.js?v=20260429-chat-toolbar-actions"></script>
 </body>
 </html>
-
-
