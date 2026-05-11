@@ -76,6 +76,129 @@
     try { return JSON.stringify(detail); } catch (e) { return String(detail); }
   }
 
+  function formatNumber(value, digits) {
+    var n = Number(value || 0);
+    if (!isFinite(n)) n = 0;
+    return n.toFixed(digits == null ? 2 : digits).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+  }
+
+  function estimateRemixBilling(originalVideoUrl) {
+    return fetch(baseUrl() + '/api/viral-video-remix/billing/estimate', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+      body: JSON.stringify({ original_video_url: originalVideoUrl })
+    }).then(function(resp) {
+      return resp.json().catch(function() { return {}; }).then(function(data) {
+        if (!resp.ok) throw new Error(normalizeApiError(data, '\u89c6\u9891\u590d\u523b\u8ba1\u7b97\u5931\u8d25'));
+        return data || {};
+      });
+    });
+  }
+
+  function fetchUserCredits() {
+    // 优先用全局 API_BASE（指向 lobster_server）拉 /auth/me 的 credits
+    var apiBase = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
+    if (!apiBase) return Promise.resolve(null);
+    var headers = (typeof authHeadersSafe === 'function') ? authHeadersSafe() : {};
+    return fetch(apiBase + '/auth/me', { headers: headers })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) { return d && d.credits != null ? Number(d.credits) : null; })
+      .catch(function() { return null; });
+  }
+
+  function gotoRechargePage() {
+    // 与 init.js 中速推充值按钮一致：点击左侧导航「消费记录」入口，定位到 rechargeBlock
+    try {
+      var navBtn = document.querySelector('.nav-left-item[data-view="billing"]');
+      if (navBtn) { navBtn.click(); return; }
+    } catch (e) {}
+    // 兜底：跳哈希
+    try { window.location.hash = 'billing'; } catch (e2) {}
+  }
+
+  function confirmRemixBilling(estimate) {
+    var credits = Math.ceil(Number(estimate && estimate.estimated_credits || 0));
+    return new Promise(function(resolve) {
+      var prev = document.getElementById('viralRemixBillingModal');
+      if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+
+      var modal = document.createElement('div');
+      modal.id = 'viralRemixBillingModal';
+      modal.style.cssText = 'position:fixed;inset:0;z-index:3000;display:block;';
+      modal.innerHTML = ''
+        + '<div class="viral-modal-backdrop" style="position:absolute;inset:0;background:rgba(15,23,42,0.58);"></div>'
+        + '<div role="dialog" aria-modal="true" style="position:relative;width:min(92vw,440px);margin:16vh auto 0;border-radius:20px;background:#fff;box-shadow:0 32px 80px rgba(15,23,42,0.32);overflow:hidden;font-family:inherit;">'
+        +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid rgba(15,23,42,0.08);">'
+        +     '<h4 style="margin:0;font-size:1.05rem;color:#1f2937;font-weight:700;">提交确认 · 视频复刻</h4>'
+        +     '<button type="button" class="viral-modal-cancel" aria-label="关闭" style="border:none;background:transparent;font-size:1.4rem;cursor:pointer;color:#6b7280;line-height:1;">×</button>'
+        +   '</div>'
+        +   '<div style="padding:1.1rem 1.25rem 0.4rem;color:#374151;font-size:0.92rem;line-height:1.7;">'
+        +     '<p style="margin:0 0 0.85rem;color:#4b5563;">视频复刻属于<strong style="color:#dc2626;">高消耗任务</strong>，提交后将按实际调用扣减算力。</p>'
+        +     '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.7rem 0.9rem;background:#f8fafc;border-radius:12px;margin-bottom:0.55rem;">'
+        +       '<span style="color:#6b7280;">本次预计扣减</span>'
+        +       '<strong style="color:#dc2626;font-size:1.05rem;">' + credits + ' 算力</strong>'
+        +     '</div>'
+        +     '<div id="viralRemixBalanceRow" style="display:flex;justify-content:space-between;align-items:center;padding:0.7rem 0.9rem;background:#f8fafc;border-radius:12px;">'
+        +       '<span style="color:#6b7280;">当前算力余额</span>'
+        +       '<strong id="viralRemixBalanceText" style="color:#374151;">加载中…</strong>'
+        +     '</div>'
+        +     '<p id="viralRemixBalanceHint" style="margin:0.75rem 0 0;font-size:0.82rem;color:#6b7280;"></p>'
+        +   '</div>'
+        +   '<div style="display:flex;justify-content:flex-end;gap:0.55rem;padding:1rem 1.25rem 1.15rem;">'
+        +     '<button type="button" class="btn btn-ghost viral-modal-cancel">取消</button>'
+        +     '<button type="button" class="btn viral-modal-recharge" style="display:none;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#fff;border:none;">充值算力</button>'
+        +     '<button type="button" class="btn btn-primary viral-modal-confirm">确定提交</button>'
+        +   '</div>'
+        + '</div>';
+      document.body.appendChild(modal);
+
+      var settled = false;
+      function close(value) {
+        if (settled) return;
+        settled = true;
+        if (modal.parentNode) modal.parentNode.removeChild(modal);
+        resolve(!!value);
+      }
+      Array.prototype.forEach.call(modal.querySelectorAll('.viral-modal-cancel'), function(btn) {
+        btn.addEventListener('click', function() { close(false); });
+      });
+      var bd = modal.querySelector('.viral-modal-backdrop');
+      if (bd) bd.addEventListener('click', function() { close(false); });
+      var ok = modal.querySelector('.viral-modal-confirm');
+      var rechargeBtn = modal.querySelector('.viral-modal-recharge');
+      if (ok) ok.addEventListener('click', function() { close(true); });
+      if (rechargeBtn) rechargeBtn.addEventListener('click', function() {
+        close(false);
+        gotoRechargePage();
+      });
+
+      // 异步拉取余额并更新展示
+      fetchUserCredits().then(function(balance) {
+        var balText = document.getElementById('viralRemixBalanceText');
+        var balRow = document.getElementById('viralRemixBalanceRow');
+        var hint = document.getElementById('viralRemixBalanceHint');
+        if (balance == null) {
+          if (balText) { balText.textContent = '获取失败'; balText.style.color = '#9ca3af'; }
+          if (hint) hint.textContent = '无法读取算力余额，请确认已登录后再提交。';
+          return;
+        }
+        var enough = balance >= credits;
+        if (balText) {
+          balText.textContent = balance + ' 算力';
+          balText.style.color = enough ? '#16a34a' : '#dc2626';
+        }
+        if (balRow) balRow.style.background = enough ? '#f0fdf4' : '#fef2f2';
+        if (!enough) {
+          if (hint) hint.textContent = '算力不足，请先充值后再提交。差 ' + (credits - balance) + ' 算力。';
+          if (rechargeBtn) rechargeBtn.style.display = '';
+          if (ok) { ok.disabled = true; ok.style.opacity = '0.5'; ok.style.cursor = 'not-allowed'; }
+        } else {
+          if (hint) hint.textContent = '余额充足，扣减后剩余 ' + (balance - credits) + ' 算力。';
+        }
+      });
+    });
+  }
+
   function videoStatusMeta(status) {
     var value = String(status || '').toLowerCase();
     var map = {
@@ -295,7 +418,7 @@
     var surface = $('viralProductReferenceResult');
     if (!surface) return;
     if (!url) {
-      surface.innerHTML = '<div class="tvc-video-placeholder"><strong>\u4ea7\u54c1\u5168\u89c6\u56fe</strong><span>\u5148\u751f\u6210\u4ea7\u54c1\u53c2\u8003\u56fe\uff0c\u786e\u8ba4\u540e\u518d\u5f00\u59cb\u590d\u523b\u89c6\u9891\u3002</span></div>';
+      surface.innerHTML = '<div class="tvc-video-placeholder"><strong>\u4ea7\u54c1\u5168\u89c6\u56fe</strong><span>\u5148\u751f\u6210\u4ea7\u54c1\u53c2\u8003\u56fe\uff0c\u786e\u8ba4\u518d\u5f00\u59cb\u590d\u523b\u89c6\u9891\u3002</span></div>';
       return;
     }
     surface.innerHTML = '<div class="tvc-video-placeholder"><strong>\u52a0\u8f7d\u4e2d</strong><span>\u6b63\u5728\u52a0\u8f7d\u4ea7\u54c1\u53c2\u8003\u56fe\u3002</span></div>';
@@ -534,13 +657,21 @@
           duration: Number((($('viralRemixDurationSelect') || {}).value || 10)),
           generate_audio: !!(($('viralRemixAudioCheck') || {}).checked || audioPrompt || narrationScript),
           use_character_reference: !!(($('viralUseCharacterCheck') || {}).checked && characterUrl),
-          watermark: false
+          watermark: false,
+          billing_confirmed: false
         };
-        showMessage('\u6b63\u5728\u63d0\u4ea4 Seedance \u4ea7\u54c1\u66ff\u6362\u4efb\u52a1...', false);
-        return fetch(baseUrl() + '/api/viral-video-remix/seedance/start', {
-          method: 'POST',
-          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
-          body: JSON.stringify(body)
+        showMessage('正在预估视频复刻算力消耗...', false);
+        return estimateRemixBilling(body.original_video_url).then(function(estimate) {
+          return confirmRemixBilling(estimate).then(function(ok) {
+            if (!ok) throw new Error('\u5df2\u53d6\u6d88\u63d0\u4ea4\u3002');
+            body.billing_confirmed = true;
+            showMessage('\u6b63\u5728\u63d0\u4ea4 Seedance \u4ea7\u54c1\u66ff\u6362\u4efb\u52a1...', false);
+            return fetch(baseUrl() + '/api/viral-video-remix/seedance/start', {
+              method: 'POST',
+              headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+              body: JSON.stringify(body)
+            });
+          });
         });
       })
       .then(function(resp) {

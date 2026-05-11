@@ -361,13 +361,9 @@ function _renderSeedanceTvcStudioCard() {
 }
 
 function _renderViralVideoRemixCard() {
-  var ok = _comflyStatus.effective_ready;
-  var statusBadge = ok
-    ? '<span class="badge-installed">测试可用</span>'
-    : '<span class="badge-coming" style="background:rgba(251,146,60,0.15);color:#fb923c;border-color:rgba(251,146,60,0.3);">待配置</span>';
-  var sub = ok
-    ? '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">当前走本地 Comfly Key 测试链路，暂不接入积分扣费。</div>'
-    : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先配置本地 Comfly API Key，再进入复刻工作台测试。</div>';
+  var statusBadge = '<span class="badge-installed">平台计费</span>';
+  var sub = '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">已接入平台统一算力计费，提交前会按原视频时长预估并弹窗确认，无需单独配置 Comfly。</div>';
+
   return '<div class="skill-store-card viral-video-remix-card" style="cursor:pointer;border-color:rgba(20,184,166,0.34);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(245,158,11,0.05));">' +
     '<div class="card-label">生成 · 内测 ' + statusBadge + '</div>' +
     '<div class="card-value">爆款视频复刻</div>' +
@@ -376,7 +372,6 @@ function _renderViralVideoRemixCard() {
     '<div class="card-tags"><span class="tag">复刻</span><span class="tag">Seedance 2.0</span><span class="tag">人物四视图</span><span class="tag">产品替换</span></div>' +
     '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
       '<button type="button" class="btn btn-primary btn-sm viral-video-remix-entry-btn">进入工作台</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置 Comfly</button>' +
     '</div></div>';
 }
 

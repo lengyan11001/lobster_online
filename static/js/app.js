@@ -7,8 +7,15 @@ var LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
   var LOBSTER_LOCAL_LOOPBACK = 'http://127.0.0.1:' + lp;
 
   // 正式环境：登录/验证码/auth/me 固定走公网认证服务。
+  // 调试覆盖：?api=http://127.0.0.1:8002 或 localStorage.lobster_server_api_base
   var p = new URLSearchParams(window.location.search);
-  window.__API_BASE = LOBSTER_SERVER_PUBLIC;
+  var serverApiOverride = (p.get('api') || '').trim();
+  if (serverApiOverride) {
+    try { localStorage.setItem('lobster_server_api_base', serverApiOverride.replace(/\/$/, '')); } catch (eApi) {}
+  } else {
+    try { serverApiOverride = (localStorage.getItem('lobster_server_api_base') || '').trim(); } catch (eApi2) { serverApiOverride = ''; }
+  }
+  window.__API_BASE = serverApiOverride ? serverApiOverride.replace(/\/$/, '') : LOBSTER_SERVER_PUBLIC;
 
   window.__LOCAL_API_BASE = (typeof window.__LOCAL_API_BASE !== 'undefined' ? window.__LOCAL_API_BASE : '');
   var exLocal = String(window.__LOCAL_API_BASE || '').trim();
