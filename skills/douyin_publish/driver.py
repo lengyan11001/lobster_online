@@ -1152,6 +1152,449 @@ async def _click_publish_button(page, publish_btn, label: str = ""):
     """)
 
 
+_DOUYIN_DECLARATION_AI_TEXT = "内容由AI生成"
+_DOUYIN_DECLARATION_NONE_TEXT = "无需添加自主声明"
+
+
+def _douyin_bool_opt(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return v != 0
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _douyin_declaration_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(options, dict):
+        return {}
+    merged: Dict[str, Any] = {}
+    inner = options.get("douyin")
+    if isinstance(inner, dict):
+        merged.update(inner)
+    merged.update(options)
+    return merged
+
+
+def _douyin_declaration_choice(options: Optional[Dict[str, Any]]) -> tuple[str, str]:
+    """
+    Return (mode, text):
+      - ("declare", "内容由AI生成" / custom text): select declaration before publish.
+      - ("direct", ""): click the platform's "直接发布" path if prompted.
+      - ("auto", ""): default legacy behavior; direct-publish warning if it appears.
+    """
+    opts = _douyin_declaration_options(options)
+    text_raw = (
+        opts.get("douyin_declaration_text")
+        or opts.get("douyin_self_declaration_text")
+        or opts.get("self_declaration_text")
+        or ""
+    )
+    text = str(text_raw).strip()
+    if text:
+        return "declare", text
+
+    raw = (
+        opts.get("douyin_declaration_mode")
+        or opts.get("douyin_self_declaration")
+        or opts.get("self_declaration")
+        or opts.get("declaration_mode")
+        or opts.get("declaration")
+        or ""
+    )
+    val = str(raw).strip()
+    low = val.lower().replace("-", "_").replace(" ", "_")
+    if low in ("", "auto", "default", "smart"):
+        pass
+    elif low in (
+        "direct",
+        "直接发布",
+        "skip",
+        "none",
+        "no",
+        "false",
+        "no_declaration",
+        "without_declaration",
+    ):
+        return "direct", ""
+    elif low in (
+        "ai",
+        "ai_generated",
+        "generated_by_ai",
+        "content_by_ai",
+        "synthetic",
+        "synthetic_media",
+    ) or "ai生成" in val.lower() or "内容由ai" in val.lower():
+        return "declare", _DOUYIN_DECLARATION_AI_TEXT
+    elif val:
+        return "declare", val
+
+    material_origin = str(opts.get("material_origin") or "").strip().lower()
+    if material_origin in ("ai_generated", "ai", "generated_by_ai"):
+        return "declare", _DOUYIN_DECLARATION_AI_TEXT
+    for key in (
+        "douyin_ai_generated",
+        "ai_generated",
+        "contains_ai_generated",
+        "contains_synthetic_media",
+        "synthetic_media",
+    ):
+        if _douyin_bool_opt(opts.get(key)):
+            return "declare", _DOUYIN_DECLARATION_AI_TEXT
+    return "auto", ""
+
+
+async def _douyin_declaration_picker_open(page: Any) -> bool:
+    try:
+        return bool(await page.evaluate(
+            """
+            () => {
+              const roots = document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal-content');
+              for (const el of roots) {
+                const style = window.getComputedStyle(el);
+                const visible = el.offsetParent || style.position === 'fixed';
+                if (!visible) continue;
+                const t = (el.innerText || '').slice(0, 3000);
+                if (t.includes('对作品内容添加声明') || t.includes('请选择声明类型')) return true;
+              }
+              return false;
+            }
+            """
+        ))
+    except Exception:
+        return False
+
+
+async def _douyin_declaration_warning_open(page: Any, timeout_ms: int = 3500) -> bool:
+    try:
+        await page.wait_for_function(
+            """
+            () => {
+              const roots = document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal-content');
+              for (const el of roots) {
+                const style = window.getComputedStyle(el);
+                const visible = el.offsetParent || style.position === 'fixed';
+                if (!visible) continue;
+                const t = (el.innerText || '').slice(0, 2000);
+                if (t.includes('未添加自主声明')) return true;
+                if (t.includes('添加声明') && t.includes('直接发布')) return true;
+              }
+              return false;
+            }
+            """,
+            timeout=_pw_ms(timeout_ms),
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _douyin_declaration_already_selected(page: Any, target_text: str) -> bool:
+    target = (target_text or "").strip()
+    if not target:
+        return False
+    try:
+        return bool(await page.evaluate(
+            """
+            (target) => {
+              function visible(el) {
+                const r = el.getBoundingClientRect();
+                const st = window.getComputedStyle(el);
+                return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+              }
+              const nodes = document.querySelectorAll('section, div');
+              for (const el of nodes) {
+                if (!visible(el)) continue;
+                const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+                if (!t.includes('自主声明')) continue;
+                if (t.includes('请选择自主声明')) continue;
+                if (t.includes(target)) return true;
+              }
+              return false;
+            }
+            """,
+            target,
+        ))
+    except Exception:
+        return False
+
+
+async def _douyin_open_declaration_picker(page: Any) -> bool:
+    if await _douyin_declaration_picker_open(page):
+        return True
+    for attempt in range(3):
+        try:
+            clicked = await page.evaluate(
+                """
+                () => {
+                  function visible(el) {
+                    const r = el.getBoundingClientRect();
+                    const st = window.getComputedStyle(el);
+                    return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+                  }
+                  const candidates = [];
+                  for (const root of document.querySelectorAll('section, div')) {
+                    if (!visible(root)) continue;
+                    const t = (root.innerText || '').replace(/\\s+/g, ' ').trim();
+                    if (!t.includes('自主声明')) continue;
+                    if (!t.includes('请选择自主声明') && !root.querySelector('[class*="select"], [role="combobox"]')) continue;
+                    if (t.length > 260) continue;
+                    const box =
+                      root.querySelector('[class*="selectBox"]') ||
+                      root.querySelector('[class*="selectText"]') ||
+                      root.querySelector('[class*="select"]') ||
+                      root.querySelector('[role="combobox"]') ||
+                      root;
+                    if (!visible(box)) continue;
+                    const r = root.getBoundingClientRect();
+                    candidates.push({ el: box, area: r.width * r.height, top: r.top });
+                  }
+                  candidates.sort((a, b) => a.area - b.area || b.top - a.top);
+                  for (const c of candidates) {
+                    try {
+                      c.el.scrollIntoView({ block: 'center', inline: 'nearest' });
+                      c.el.click();
+                      return true;
+                    } catch (e) {}
+                  }
+                  return false;
+                }
+                """
+            )
+            if clicked:
+                await asyncio.sleep(0.5 + attempt * 0.25)
+                if await _douyin_declaration_picker_open(page):
+                    return True
+        except Exception as ex:
+            logger.debug("[DOUYIN-DECLARATION] open picker attempt=%s err=%s", attempt, ex)
+        try:
+            await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        await asyncio.sleep(0.45)
+    return await _douyin_declaration_picker_open(page)
+
+
+async def _douyin_select_declaration_radio(page: Any, text: str) -> bool:
+    target = (text or "").strip()
+    if not target:
+        return False
+    for attempt in range(4):
+        try:
+            clicked = await page.evaluate(
+                """
+                (target) => {
+                  function visible(el) {
+                    const r = el.getBoundingClientRect();
+                    const st = window.getComputedStyle(el);
+                    return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+                  }
+                  const roots = Array.from(document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal-content'))
+                    .filter(el => visible(el) && ((el.innerText || '').includes('请选择声明类型') || (el.innerText || '').includes('对作品内容添加声明')))
+                    .reverse();
+                  for (const root of roots) {
+                    const labels = Array.from(root.querySelectorAll('label, .semi-radio, [role="radio"]'));
+                    for (const lab of labels) {
+                      if (!visible(lab)) continue;
+                      const t = (lab.innerText || lab.textContent || '').replace(/\\s+/g, ' ').trim();
+                      if (t === target || t.includes(target)) {
+                        try { lab.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                        try { lab.click(); return true; } catch (e) {}
+                      }
+                    }
+                    const spans = Array.from(root.querySelectorAll('.semi-radio-addon, span, div, p'));
+                    for (const el of spans) {
+                      if (!visible(el)) continue;
+                      const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                      if (t !== target && !t.includes(target)) continue;
+                      const lab = el.closest('label') || el.closest('.semi-radio') || el;
+                      try { lab.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                      try { lab.click(); return true; } catch (e) {}
+                    }
+                  }
+                  return false;
+                }
+                """,
+                target,
+            )
+            if clicked:
+                await asyncio.sleep(0.35)
+                return True
+        except Exception as ex:
+            logger.debug("[DOUYIN-DECLARATION] select radio attempt=%s err=%s", attempt, ex)
+        await asyncio.sleep(0.45)
+    return False
+
+
+async def _douyin_confirm_declaration_picker(page: Any) -> bool:
+    for attempt in range(6):
+        try:
+            clicked = await page.evaluate(
+                """
+                () => {
+                  function visible(el) {
+                    const r = el.getBoundingClientRect();
+                    const st = window.getComputedStyle(el);
+                    return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+                  }
+                  const roots = Array.from(document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal-content'))
+                    .filter(el => visible(el) && ((el.innerText || '').includes('请选择声明类型') || (el.innerText || '').includes('对作品内容添加声明')))
+                    .reverse();
+                  for (const root of roots) {
+                    const buttons = Array.from(root.querySelectorAll('button, [role="button"]'));
+                    for (const btn of buttons.reverse()) {
+                      if (!visible(btn)) continue;
+                      const t = (btn.innerText || btn.textContent || '').replace(/\\s+/g, ' ').trim();
+                      if (t !== '确定') continue;
+                      const disabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' || (btn.className || '').includes('disabled');
+                      if (disabled) continue;
+                      try { btn.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                      try { btn.click(); return true; } catch (e) {}
+                    }
+                  }
+                  return false;
+                }
+                """
+            )
+            if clicked:
+                await asyncio.sleep(0.75)
+                return True
+        except Exception as ex:
+            logger.debug("[DOUYIN-DECLARATION] confirm attempt=%s err=%s", attempt, ex)
+        await asyncio.sleep(0.4)
+    return False
+
+
+async def _douyin_click_declaration_warning_button(page: Any, text: str) -> bool:
+    target = (text or "").strip()
+    if not target:
+        return False
+    for attempt in range(3):
+        try:
+            clicked = await page.evaluate(
+                """
+                (target) => {
+                  function visible(el) {
+                    const r = el.getBoundingClientRect();
+                    const st = window.getComputedStyle(el);
+                    return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+                  }
+                  const roots = Array.from(document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal-content'))
+                    .filter(el => visible(el) && (((el.innerText || '').includes('未添加自主声明')) || ((el.innerText || '').includes('添加声明') && (el.innerText || '').includes('直接发布'))))
+                    .reverse();
+                  for (const root of roots) {
+                    const buttons = Array.from(root.querySelectorAll('button, [role="button"], a')).reverse();
+                    for (const btn of buttons) {
+                      if (!visible(btn)) continue;
+                      const t = (btn.innerText || btn.textContent || '').replace(/\\s+/g, ' ').trim();
+                      if (t !== target && !t.includes(target)) continue;
+                      const disabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' || (btn.className || '').includes('disabled');
+                      if (disabled) continue;
+                      try { btn.click(); return true; } catch (e) {}
+                    }
+                  }
+                  return false;
+                }
+                """,
+                target,
+            )
+            if clicked:
+                await asyncio.sleep(0.65)
+                return True
+        except Exception as ex:
+            logger.debug("[DOUYIN-DECLARATION] warning button=%s attempt=%s err=%s", target, attempt, ex)
+        await asyncio.sleep(0.35)
+    return False
+
+
+async def _douyin_apply_self_declaration(
+    page: Any,
+    options: Optional[Dict[str, Any]],
+    _step,
+    label: str,
+    *,
+    force_text: str = "",
+) -> Optional[bool]:
+    mode, selected_text = _douyin_declaration_choice(options)
+    if force_text:
+        mode, selected_text = "declare", force_text
+    if mode != "declare" or not selected_text:
+        return None
+
+    if await _douyin_declaration_already_selected(page, selected_text):
+        _step(f"{label}自主声明已选择", True, value=selected_text)
+        return True
+
+    if not await _douyin_open_declaration_picker(page):
+        _step(f"{label}打开自主声明选择器", False, value=selected_text)
+        return False
+    _step(f"{label}打开自主声明选择器", True)
+
+    if not await _douyin_select_declaration_radio(page, selected_text):
+        _step(f"{label}选择自主声明", False, value=selected_text)
+        return False
+    if not await _douyin_confirm_declaration_picker(page):
+        _step(f"{label}确认自主声明", False, value=selected_text)
+        return False
+    _step(f"{label}选择自主声明", True, value=selected_text)
+    return True
+
+
+async def _douyin_reclick_publish_after_declaration(page: Any, _step, label: str) -> bool:
+    try:
+        await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+    except Exception:
+        pass
+    await asyncio.sleep(0.5)
+    publish_btn = await _find_publish_button(page, f"{label.upper()}_DECL")
+    if not publish_btn:
+        _step(f"{label}声明后重新找到发布按钮", False)
+        return False
+    await _click_publish_button(page, publish_btn, f"{label}_declaration")
+    _step(f"{label}声明后重新点击发布", True)
+    return True
+
+
+async def _douyin_handle_declaration_after_publish(
+    page: Any,
+    options: Optional[Dict[str, Any]],
+    _step,
+    label: str,
+) -> bool:
+    if not await _douyin_declaration_warning_open(page):
+        return True
+
+    mode, selected_text = _douyin_declaration_choice(options)
+    _step(f"{label}检测到自主声明弹窗", True, mode=mode, value=selected_text or None)
+
+    if mode == "declare" and selected_text:
+        if not await _douyin_click_declaration_warning_button(page, "添加声明"):
+            _step(f"{label}进入自主声明选择", False, value=selected_text)
+            return False
+        ok = await _douyin_apply_self_declaration(
+            page, options, _step, label, force_text=selected_text
+        )
+        if ok is not True:
+            return False
+        return await _douyin_reclick_publish_after_declaration(page, _step, label)
+
+    if await _douyin_click_declaration_warning_button(page, "直接发布"):
+        _step(f"{label}自主声明弹窗直接发布", True)
+        return True
+
+    # 部分账号/内容会把自主声明做成必选项；非 AI 场景用“无需添加自主声明”兜底。
+    if await _douyin_click_declaration_warning_button(page, "添加声明"):
+        ok = await _douyin_apply_self_declaration(
+            page, options, _step, label, force_text=_DOUYIN_DECLARATION_NONE_TEXT
+        )
+        if ok is True:
+            return await _douyin_reclick_publish_after_declaration(page, _step, label)
+
+    _step(f"{label}处理自主声明弹窗", False, mode=mode)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1485,6 +1928,12 @@ class DouyinDriver(BaseDriver):
         await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(0.5)
 
+        decl_ready = await _douyin_apply_self_declaration(page, options, _step, "图文")
+        if decl_ready is False:
+            return {"ok": False, "error": "无法选择抖音自主声明", "applied": applied}
+        await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        await asyncio.sleep(0.4)
+
         _s = _pw_scale()
         img_btn_wait = min(int(150 * _s), max(int(45 * _s), img_wait_rounds * 2))
         if not await _douyin_wait_until_publish_clickable(page, img_btn_wait, _step, "图文"):
@@ -1520,6 +1969,8 @@ class DouyinDriver(BaseDriver):
         logger.info("[DOUYIN-IMAGE] clicking publish...")
         await _click_publish_button(page, publish_btn, "image")
         _step("点击发布按钮", True)
+        if not await _douyin_handle_declaration_after_publish(page, options, _step, "图文"):
+            return {"ok": False, "error": "抖音自主声明未完成，发布已暂停", "applied": applied}
 
         return await self._check_publish_result(page, applied, _step)
 
@@ -1740,6 +2191,12 @@ class DouyinDriver(BaseDriver):
         _s = _pw_scale()
         # 封面与填表后仍可能长时间转码；小视频原先 floor=60s 易超时，提高到 120s（上限仍 180*s）
         btn_wait = min(int(180 * _s), max(int(120 * _s), wait_rounds * 2))
+        decl_ready = await _douyin_apply_self_declaration(page, options, _step, "视频")
+        if decl_ready is False:
+            return {"ok": False, "error": "无法选择抖音自主声明", "applied": applied}
+        await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        await asyncio.sleep(0.4)
+
         if not await _douyin_wait_until_publish_clickable(page, btn_wait, _step, "视频"):
             return {
                 "ok": False,
@@ -1773,6 +2230,8 @@ class DouyinDriver(BaseDriver):
         logger.info("[DOUYIN-VIDEO] clicking publish...")
         await _click_publish_button(page, publish_btn, "video")
         _step("点击发布按钮", True)
+        if not await _douyin_handle_declaration_after_publish(page, options, _step, "视频"):
+            return {"ok": False, "error": "抖音自主声明未完成，发布已暂停", "applied": applied}
 
         return await self._check_publish_result(page, applied, _step)
 

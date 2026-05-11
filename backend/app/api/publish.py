@@ -280,6 +280,52 @@ def _infer_asset_media_type(a: Asset) -> str:
     return "video"
 
 
+def _asset_likely_ai_generated(asset: Optional[Asset]) -> bool:
+    if asset is None:
+        return False
+    tags = (getattr(asset, "tags", None) or "").strip().lower()
+    model = (getattr(asset, "model", None) or "").strip()
+    meta = getattr(asset, "meta", None) if isinstance(getattr(asset, "meta", None), dict) else {}
+    if model:
+        return True
+    if meta.get("generation_task_id") or meta.get("generated") or meta.get("ai_generated"):
+        return True
+    if tags:
+        needles = (
+            "image.generate",
+            "video.generate",
+            "task.get_result",
+            "ai_generated",
+            "synthetic",
+        )
+        if any(n in tags for n in needles):
+            return True
+    return False
+
+
+def _douyin_publish_opts_wants_declaration(opts: dict) -> bool:
+    keys = (
+        "douyin_declaration_mode",
+        "douyin_self_declaration",
+        "douyin_declaration_text",
+        "douyin_self_declaration_text",
+        "self_declaration",
+        "self_declaration_text",
+        "declaration_mode",
+        "declaration",
+        "douyin_ai_generated",
+        "ai_generated",
+        "contains_ai_generated",
+        "contains_synthetic_media",
+        "synthetic_media",
+        "material_origin",
+    )
+    if any(k in opts for k in keys):
+        return True
+    inner = opts.get("douyin")
+    return isinstance(inner, dict) and any(k in inner for k in keys)
+
+
 def _truthy(v: Optional[object]) -> bool:
     if isinstance(v, bool):
         return v
@@ -370,7 +416,7 @@ SUPPORTED_PLATFORMS = {
     "bilibili": {"name": "B站", "login_url": "https://member.bilibili.com"},
     "xiaohongshu": {"name": "小红书", "login_url": "https://creator.xiaohongshu.com"},
     "kuaishou": {"name": "快手", "login_url": "https://cp.kuaishou.com"},
-    "toutiao": {"name": "今日头条", "login_url": "https://mp.toutiao.com/login/"},
+    "toutiao": {"name": "今日头条", "login_url": "https://mp.toutiao.com/auth/page/login?redirect_url=JTJGcHJvZmlsZV92NCUyRg=="},
     "douyin_shop": {"name": "抖店", "login_url": "https://fxg.jinritemai.com/"},
     "xiaohongshu_shop": {"name": "小红书店铺", "login_url": "https://ark.xiaohongshu.com/"},
     "alibaba1688": {"name": "1688", "login_url": "https://work.1688.com/"},
@@ -1091,6 +1137,16 @@ async def create_publish_task(
             for k, v in dict(body.options or {}).items()
             if not str(k).startswith("_")
         }
+        if (
+            acct.platform == "douyin"
+            and not _douyin_publish_opts_wants_declaration(publish_opts)
+            and _asset_likely_ai_generated(asset)
+        ):
+            publish_opts["douyin_declaration_mode"] = "ai_generated"
+            logger.info(
+                "[PUBLISH-API] 抖音素材疑似 AI 生成，已默认选择自主声明: 内容由AI生成 asset_id=%s",
+                _asset_id_s,
+            )
         if acct.platform == "douyin" and _infer_asset_media_type(asset) == "video":
             mode = (publish_opts.get("douyin_cover_mode") or "smart").strip().lower()
             if mode not in ("smart", "upload", "manual"):

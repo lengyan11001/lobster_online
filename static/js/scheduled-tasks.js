@@ -1,16 +1,40 @@
-/* global API_BASE, authHeaders, escapeHtml */
+/* global API_BASE, LOCAL_API_BASE, authHeaders, escapeHtml, getOrCreateInstallationId */
 
 (function () {
   'use strict';
 
-  var state = { loaded: false, devicesLoaded: false };
+  var state = { loaded: false };
 
   function base() {
-    return (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
+    var local = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+    var remote = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
+    return local || remote;
   }
 
-  function headers() {
-    return Object.assign({ 'Content-Type': 'application/json' }, typeof authHeaders === 'function' ? authHeaders() : {});
+  function headers(withBody) {
+    var h = Object.assign({}, typeof authHeaders === 'function' ? authHeaders() : {});
+    if (withBody) h['Content-Type'] = 'application/json';
+    else delete h['Content-Type'];
+    return h;
+  }
+
+  function authHeadersNoContentType() {
+    var h = Object.assign({}, typeof authHeaders === 'function' ? authHeaders() : {});
+    delete h['Content-Type'];
+    delete h['content-type'];
+    return h;
+  }
+
+  function currentInstallationId() {
+    return typeof getOrCreateInstallationId === 'function' ? String(getOrCreateInstallationId() || '').trim() : '';
+  }
+
+  function friendlyError(err) {
+    var msg = err && err.message ? String(err.message) : String(err || '');
+    if (msg === 'Failed to fetch' || /NetworkError/i.test(msg)) {
+      return '无法连接定时任务服务，请确认本机盒子已启动并能访问云端。';
+    }
+    return msg || '请求失败';
   }
 
   function html(s) {
@@ -22,10 +46,13 @@
 
   function api(path, options) {
     var b = base();
-    if (!b) return Promise.reject(new Error('API_BASE not configured'));
+    if (!b) return Promise.reject(new Error('任务服务地址未配置'));
     options = options || {};
-    options.headers = Object.assign(headers(), options.headers || {});
-    return fetch(b + path, options).then(function (r) {
+    var hasBody = options.body != null;
+    options.headers = Object.assign(headers(hasBody), options.headers || {});
+    return fetch(b + path, options).catch(function (e) {
+      throw new Error(friendlyError(e));
+    }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (d) {
         if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
         return d;
@@ -82,10 +109,93 @@
     return obj;
   }
 
+  function parseAssetIds(text) {
+    var seen = {};
+    var out = [];
+    String(text || '').split(/[\s,，;；]+/).forEach(function (raw) {
+      var v = String(raw || '').trim();
+      if (!v || seen[v]) return;
+      seen[v] = true;
+      out.push(v);
+    });
+    return out.slice(0, 20);
+  }
+
+  function mergeAssetIds(baseIds, extraIds) {
+    var seen = {};
+    var out = [];
+    (baseIds || []).concat(extraIds || []).forEach(function (raw) {
+      var v = String(raw || '').trim();
+      if (!v || seen[v]) return;
+      seen[v] = true;
+      out.push(v);
+    });
+    return out.slice(0, 20);
+  }
+
+  function applyAttachmentAssetIds(body, assetIds) {
+    var ids = mergeAssetIds([], assetIds || []);
+    if (!ids.length) return body;
+    body.payload = body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload) ? body.payload : {};
+    body.payload.attachment_asset_ids = mergeAssetIds(body.payload.attachment_asset_ids || [], ids);
+    if (body.task_kind === 'capability') {
+      var capPayload = body.payload.payload;
+      if (!capPayload || typeof capPayload !== 'object' || Array.isArray(capPayload)) {
+        capPayload = {};
+        body.payload.payload = capPayload;
+      }
+      capPayload.attachment_asset_ids = mergeAssetIds(capPayload.attachment_asset_ids || [], ids);
+      capPayload.asset_ids = mergeAssetIds(capPayload.asset_ids || [], ids);
+      if (!capPayload.asset_id) capPayload.asset_id = ids[0];
+      if (!capPayload.image_asset_id) capPayload.image_asset_id = ids[0];
+    } else {
+      var note = '\n\n【附加素材】\n' + ids.map(function (id) { return '- asset_id: ' + id; }).join('\n');
+      if (body.content && body.content.indexOf('【附加素材】') < 0) body.content += note;
+      else if (!body.content) body.content = note.trim();
+    }
+    return body;
+  }
+
+  function uploadOneAsset(file) {
+    var fd = new FormData();
+    fd.append('file', file);
+    return fetch(base() + '/api/assets/upload', {
+      method: 'POST',
+      headers: authHeadersNoContentType(),
+      body: fd
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok) throw new Error((d && d.detail) || ('上传素材失败: HTTP ' + r.status));
+        if (!d || !d.asset_id) throw new Error('上传素材失败：未返回 asset_id');
+        return String(d.asset_id);
+      });
+    });
+  }
+
+  function collectAttachmentAssetIds(prefix) {
+    var typed = parseAssetIds(((document.getElementById(prefix + 'AssetIds') || {}).value || ''));
+    var input = document.getElementById(prefix + 'AssetUpload');
+    var files = input && input.files ? Array.prototype.slice.call(input.files) : [];
+    if (!files.length) return Promise.resolve(typed);
+    showMsg(prefix + 'Msg', '正在上传素材…', false);
+    return files.reduce(function (p, file) {
+      return p.then(function (ids) {
+        return uploadOneAsset(file).then(function (assetId) {
+          ids.push(assetId);
+          showMsg(prefix + 'Msg', '已上传素材 ' + ids.length + '/' + files.length, false);
+          return ids;
+        });
+      });
+    }, Promise.resolve([])).then(function (uploaded) {
+      return mergeAssetIds(typed, uploaded);
+    });
+  }
+
   function buildPayload(prefix) {
     var kind = (document.getElementById(prefix + 'Kind') || {}).value || 'openclaw_message';
     var scheduleType = (document.getElementById(prefix + 'ScheduleType') || {}).value || 'once';
     var intervalMin = parseInt((document.getElementById(prefix + 'IntervalMinutes') || {}).value || '60', 10);
+    var installationIds = prefix === 'scheduledTask' ? [currentInstallationId()].filter(Boolean) : getSelected(prefix + 'Devices');
     var body = {
       title: ((document.getElementById(prefix + 'Title') || {}).value || '').trim(),
       task_kind: kind,
@@ -93,7 +203,7 @@
       payload: {},
       schedule_type: scheduleType,
       interval_seconds: Math.max(60, (isNaN(intervalMin) ? 60 : intervalMin) * 60),
-      installation_ids: getSelected(prefix + 'Devices')
+      installation_ids: installationIds
     };
     if (kind === 'capability') {
       var parsed = parsePayload((document.getElementById(prefix + 'Payload') || {}).value || '');
@@ -221,9 +331,19 @@
       if (btn) { btn.disabled = false; btn.textContent = '添加并下发'; }
       return;
     }
-    api('/api/scheduled-tasks/tasks', { method: 'POST', body: JSON.stringify(body) })
+    if (!body.installation_ids || !body.installation_ids.length) {
+      showMsg('scheduledTaskMsg', '未获取到本机设备标识，请刷新页面或重启本机盒子后再试。', true);
+      if (btn) { btn.disabled = false; btn.textContent = '添加并下发'; }
+      return;
+    }
+    collectAttachmentAssetIds('scheduledTask').then(function (assetIds) {
+      applyAttachmentAssetIds(body, assetIds);
+      return api('/api/scheduled-tasks/tasks', { method: 'POST', body: JSON.stringify(body) });
+    })
       .then(function () {
         showMsg('scheduledTaskMsg', '已创建并下发', false);
+        var upload = document.getElementById('scheduledTaskAssetUpload');
+        if (upload) upload.value = '';
         loadRuns();
         loadTasks();
       })
@@ -236,6 +356,10 @@
   function bind() {
     if (state.bound) return;
     state.bound = true;
+    var deviceField = document.getElementById('scheduledTaskDevices');
+    if (deviceField && deviceField.closest) {
+      deviceField.closest('.modal-field').style.display = 'none';
+    }
     document.querySelectorAll('.sched-tab').forEach(function (tab) {
       tab.addEventListener('click', function () {
         var name = tab.getAttribute('data-sched-tab');
@@ -248,7 +372,7 @@
       });
     });
     var refresh = document.getElementById('scheduledTaskRefreshBtn');
-    if (refresh) refresh.addEventListener('click', function () { loadRuns(); loadTasks(); loadDevices('scheduledTaskDevices'); });
+    if (refresh) refresh.addEventListener('click', function () { loadRuns(); loadTasks(); });
     var create = document.getElementById('scheduledTaskCreateBtn');
     if (create) create.addEventListener('click', createTask);
     var kind = document.getElementById('scheduledTaskKind');
@@ -258,7 +382,6 @@
 
   window.initScheduledTasksView = function initScheduledTasksView() {
     bind();
-    loadDevices('scheduledTaskDevices');
     loadRuns();
     loadTasks();
   };
@@ -270,6 +393,8 @@
     kindText: kindText,
     buildPayload: buildPayload,
     togglePayload: togglePayload,
-    showMsg: showMsg
+    showMsg: showMsg,
+    parseAssetIds: parseAssetIds,
+    applyAttachmentAssetIds: applyAttachmentAssetIds
   };
 })();

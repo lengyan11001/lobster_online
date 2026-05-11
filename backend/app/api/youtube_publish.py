@@ -26,7 +26,10 @@ from publisher.browser_pool import (
     open_url_in_persistent_chromium,
 )
 
-from ..services.youtube_api_upload import build_httpx_proxy_url, upload_local_video_file
+from ..services.youtube_api_upload import (
+    upload_local_video_file,
+    youtube_httpx_client_kwargs,
+)
 from ..services.youtube_analytics import sync_youtube_account_data
 from .auth import _ServerUser, get_current_user_for_local, require_skill_store_admin
 
@@ -106,6 +109,41 @@ def _mask_client_id(cid: Optional[str]) -> str:
     if len(s) <= 20:
         return s[:6] + "…"
     return s[:12] + "…" + s[-10:]
+
+
+def _mark_account_error(user_id: int, account_id: str, message: str) -> None:
+    try:
+        doc = _load_doc(user_id)
+        accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
+        if isinstance(accounts.get(account_id), dict):
+            accounts[account_id]["status"] = "error"
+            accounts[account_id]["last_error"] = message
+            _save_doc(user_id, doc)
+    except Exception as e:
+        logger.warning(
+            "[youtube-publish] 标记账号错误失败 user_id=%s account_id=%s err=%s",
+            user_id,
+            account_id,
+            e,
+        )
+
+
+def _oauth_error_page(message: str, detail: str = "", status_code: int = 502) -> HTMLResponse:
+    detail_html = ""
+    if detail:
+        detail_html = (
+            "<pre style=\"white-space:pre-wrap;background:#f7f7f7;padding:.75rem;border-radius:.5rem;\">"
+            f"{html.escape(detail[:2000])}</pre>"
+        )
+    return HTMLResponse(
+        content="<html><head><meta charset=\"utf-8\"/></head>"
+        "<body style=\"font-family:sans-serif;padding:1.5rem;line-height:1.6;\">"
+        f"<p><strong>授权未完成</strong></p><p>{html.escape(message)}</p>"
+        "<p>请关闭本页，回到龙虾 YouTube 账号列表重新点击「浏览器授权」。"
+        "如果账号配置了代理，请确认代理可访问 Google OAuth。</p>"
+        f"{detail_html}</body></html>",
+        status_code=status_code,
+    )
 
 
 def _validate_proxy_url(ps: str) -> None:
@@ -261,7 +299,7 @@ async def list_youtube_accounts(
                 has_refresh_token=bool(rt),
                 proxy_server_masked=_mask_proxy(ps) if ps else "",
                 proxy_server=ps,
-                proxy_has_auth=bool(pu or pp),
+                proxy_has_auth=bool(ps and (pu or pp)),
                 proxy_username=pu,
                 last_error=(ent.get("last_error") or "")[:500] if isinstance(ent.get("last_error"), str) else "",
                 created_at=(ent.get("created_at") or "") if isinstance(ent.get("created_at"), str) else "",
@@ -281,6 +319,9 @@ async def create_youtube_account(
     _validate_proxy_url(ps)
     pu = (body.proxy_username or "").strip()
     pp = (body.proxy_password or "").strip()
+    if not ps:
+        pu = ""
+        pp = ""
     if pu and not pp:
         raise HTTPException(
             status_code=400,
@@ -323,7 +364,7 @@ async def create_youtube_account(
         has_refresh_token=False,
         proxy_server_masked=_mask_proxy(_ps) if _ps else "",
         proxy_server=_ps,
-        proxy_has_auth=bool(_pu or _pp),
+        proxy_has_auth=bool(_ps and (_pu or _pp)),
         proxy_username=_pu,
         last_error="",
         created_at=ent.get("created_at") or "",
@@ -360,6 +401,9 @@ async def patch_youtube_account(
             ent["proxy_password"] = body.proxy_password.strip()
         elif not (ent.get("proxy_username") or "").strip():
             ent["proxy_password"] = ""
+    if not (ent.get("proxy_server") or "").strip():
+        ent["proxy_username"] = ""
+        ent["proxy_password"] = ""
     pu = (ent.get("proxy_username") or "").strip()
     pp = (ent.get("proxy_password") or "").strip()
     if pu and not pp:
@@ -388,12 +432,23 @@ def _account_to_out(aid: str, ent: Dict[str, Any]) -> YoutubeAccountOut:
         has_refresh_token=bool(rt),
         proxy_server_masked=_mask_proxy(ps) if ps else "",
         proxy_server=ps,
-        proxy_has_auth=bool(pu or pp),
+        proxy_has_auth=bool(ps and (pu or pp)),
         proxy_username=pu,
         last_error=(ent.get("last_error") or "")[:500] if isinstance(ent.get("last_error"), str) else "",
         created_at=(ent.get("created_at") or "") if isinstance(ent.get("created_at"), str) else "",
         oauth_redirect_uri=_oauth_callback_url(),
     )
+
+
+def _youtube_account_proxy_url(ent: Dict[str, Any]) -> tuple[Optional[str], str]:
+    kwargs, source = youtube_httpx_client_kwargs(
+        (ent.get("proxy_server") or "").strip() or None,
+        (ent.get("proxy_username") or "").strip() or None,
+        (ent.get("proxy_password") or "").strip() or None,
+        timeout=30.0,
+    )
+    proxy = kwargs.get("proxy")
+    return (str(proxy) if proxy else None), source
 
 
 @router.delete("/api/youtube-publish/accounts/{account_id}")
@@ -529,44 +584,60 @@ async def youtube_oauth_callback(
     doc_px = _load_doc(uid)
     ac_px = doc_px.get("accounts") if isinstance(doc_px.get("accounts"), dict) else {}
     ent_px = ac_px.get(aid) if isinstance(ac_px, dict) else None
-    proxy_url: Optional[str] = None
+    client_kw: Dict[str, Any] = {"timeout": 30.0, "trust_env": False}
+    proxy_source = "direct"
     if isinstance(ent_px, dict):
         try:
-            proxy_url = build_httpx_proxy_url(
+            client_kw, proxy_source = youtube_httpx_client_kwargs(
                 (ent_px.get("proxy_server") or "").strip() or None,
                 (ent_px.get("proxy_username") or "").strip() or None,
                 (ent_px.get("proxy_password") or "").strip() or None,
+                timeout=30.0,
             )
         except ValueError as e:
             logger.warning("[youtube-publish] oauth token 代理 URL 无效: %s", e)
-    client_kw: Dict[str, Any] = {"timeout": 30.0}
-    if proxy_url:
-        client_kw["proxy"] = proxy_url
-        client_kw["trust_env"] = False
-        logger.info("[youtube-publish] oauth token exchange via proxy (account_id=%s)", aid)
-    async with httpx.AsyncClient(**client_kw) as c:
-        r = await c.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "code": code,
-                "client_id": st["client_id"],
-                "client_secret": st["client_secret"],
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+    if proxy_source != "direct":
+        logger.info(
+            "[youtube-publish] oauth token exchange via %s proxy (account_id=%s)",
+            proxy_source,
+            aid,
+        )
+    try:
+        async with httpx.AsyncClient(**client_kw) as c:
+            r = await c.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": st["client_id"],
+                    "client_secret": st["client_secret"],
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+    except httpx.HTTPError as e:
+        msg = f"换取 Token 网络失败：{type(e).__name__}: {e}"
+        logger.warning(
+            "[youtube-publish] token exchange network failed user_id=%s account_id=%s proxy=%s err=%s",
+            uid,
+            aid,
+            proxy_source,
+            e,
+            exc_info=True,
+        )
+        _mark_account_error(uid, aid, msg)
+        return _oauth_error_page(
+            "Google 已返回授权 code，但本机后端连接 Google OAuth token 接口时网络断开。"
+            "这通常是系统代理、账号代理或本机网络把连接中断，不是用户没有勾选权限。",
+            msg,
+            status_code=502,
         )
     if r.status_code != 200:
         logger.warning("[youtube-publish] token exchange failed: %s %s", r.status_code, r.text[:500])
-        doc = _load_doc(uid)
-        accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
-        if isinstance(accounts.get(aid), dict):
-            accounts[aid]["status"] = "error"
-            accounts[aid]["last_error"] = f"换取 Token 失败 HTTP {r.status_code}"
-            _save_doc(uid, doc)
-        return HTMLResponse(
-            content=f"<html><head><meta charset=\"utf-8\"/></head><body style=\"font-family:sans-serif;padding:1.5rem;\">"
-            f"<p>换取 Token 失败: HTTP {r.status_code}</p><pre style=\"white-space:pre-wrap\">{r.text[:2000]}</pre></body></html>",
+        _mark_account_error(uid, aid, f"换取 Token 失败 HTTP {r.status_code}")
+        return _oauth_error_page(
+            f"换取 Token 失败: HTTP {r.status_code}",
+            r.text[:2000],
             status_code=502,
         )
     tok = r.json()
@@ -618,17 +689,21 @@ async def _resolve_asset_to_temp_path(
             status_code=400,
             detail="素材无公网 source_url，请先在素材管理中上传并同步后再试",
         )
-    proxy_url: Optional[str] = None
     try:
-        proxy_url = build_httpx_proxy_url(proxy_server, proxy_username, proxy_password)
+        client_kw, proxy_source = youtube_httpx_client_kwargs(
+            proxy_server,
+            proxy_username,
+            proxy_password,
+            timeout=300.0,
+            target_url=url,
+        )
     except ValueError as e:
         if (proxy_server or "").strip():
             logger.warning("[youtube-publish] 下载素材时代理 URL 无效，将直连: %s", e)
-        proxy_url = None
-    client_kw: Dict[str, Any] = {"timeout": 300.0}
-    if proxy_url:
-        client_kw["proxy"] = proxy_url
-        client_kw["trust_env"] = False
+        client_kw = {"timeout": 300.0, "trust_env": False}
+        proxy_source = "direct"
+    if proxy_source != "direct":
+        logger.info("[youtube-publish] 下载素材 via %s proxy", proxy_source)
     async with httpx.AsyncClient(**client_kw) as c:
         r = await c.get(url)
     r.raise_for_status()
@@ -900,7 +975,8 @@ def put_youtube_publish_schedule(
 @router.get("/api/youtube-publish/accounts/{account_id}/analytics")
 async def youtube_account_analytics(
     account_id: str,
-    current_user: _ServerUser = Depends(require_skill_store_admin),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts", {})
@@ -910,7 +986,8 @@ async def youtube_account_analytics(
     if ent.get("status") != "ready":
         raise HTTPException(status_code=400, detail="账号未完成授权")
 
-    proxy_url = build_httpx_proxy_url(ent) if ent.get("proxy_server") else None
+    proxy_url, _proxy_source = _youtube_account_proxy_url(ent)
+    logger.info("[youtube-publish] analytics sync user_id=%s account_id=%s proxy=%s", current_user.id, account_id, _proxy_source)
     try:
         data = await sync_youtube_account_data(ent, proxy_url=proxy_url)
     except RuntimeError as e:
@@ -921,7 +998,8 @@ async def youtube_account_analytics(
 @router.post("/api/youtube-publish/accounts/{account_id}/sync-analytics")
 async def youtube_sync_analytics(
     account_id: str,
-    current_user: _ServerUser = Depends(require_skill_store_admin),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts", {})
@@ -931,7 +1009,8 @@ async def youtube_sync_analytics(
     if ent.get("status") != "ready":
         raise HTTPException(status_code=400, detail="账号未完成授权")
 
-    proxy_url = build_httpx_proxy_url(ent) if ent.get("proxy_server") else None
+    proxy_url, _proxy_source = _youtube_account_proxy_url(ent)
+    logger.info("[youtube-publish] analytics sync user_id=%s account_id=%s proxy=%s", current_user.id, account_id, _proxy_source)
     try:
         data = await sync_youtube_account_data(ent, proxy_url=proxy_url)
     except RuntimeError as e:

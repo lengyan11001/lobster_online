@@ -7,7 +7,8 @@
 - 满足任一即更新：① 服务端 build 更大；② build 相同且 manifest.version 高于本地（如 1.0.0 → 1.0.1，便于只发「小版本」包）。
 - 下载 bundle_url，校验 sha256 后，对 manifest.paths 所列路径做「整路径覆盖」
   （目录则先删再拷，文件则覆盖）；绝不触碰 python/、deps/、browser_chromium/、nodejs 可执行文件等。
-- openclaw/：覆盖前保留本地 workspace、运行态目录、.env/登录态文件与 gateway token；覆盖后把 zip 内
+- openclaw/：覆盖前保留本地 workspace、运行态目录、.env/登录态文件；gateway token 跟随 OTA 包覆盖，
+  保证根 .env 与 openclaw.json 一致；覆盖后把 zip 内
   openclaw/workspace/LOBSTER_CHAT_POLICY_*.md 合并进保留后的 workspace（避免 OTA 丢策略导致 /chat 不调 MCP）。
 
 禁止静默伪装成功：校验失败或解压失败时不改本地代码。
@@ -374,11 +375,7 @@ def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
     preserved: list[tuple[str, Path]] = []
     tmp_root = Path(tempfile.mkdtemp(prefix="lobster_oc_preserve_"))
     try:
-        local_gateway_token = ""
         if dst.is_dir():
-            local_gateway_token = _read_openclaw_gateway_token(dst / "openclaw.json")
-            if not local_gateway_token:
-                local_gateway_token = (_load_dotenv_simple(ROOT / ".env").get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
             for child in dst.iterdir():
                 if child.is_dir() and (child.name == "workspace" or child.name.startswith("workspace-")):
                     holder = tmp_root / child.name
@@ -409,8 +406,6 @@ def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
                     shutil.rmtree(bundled_state_file)
                 else:
                     bundled_state_file.unlink()
-
-        _write_openclaw_gateway_token(dst / "openclaw.json", local_gateway_token)
 
         for name, holder in preserved:
             target = dst / name

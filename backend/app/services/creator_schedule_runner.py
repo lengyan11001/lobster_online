@@ -19,7 +19,11 @@ from .creator_schedule_task_log import (
     update_task_log,
 )
 from .schedule_orchestration_run import run_schedule_orchestration_chat
-from .schedule_review_timing import compute_next_review_run_at_after_orchestration
+from .schedule_review_timing import (
+    compute_next_review_run_at_after_orchestration,
+    has_pending_review_queue,
+    is_review_mode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +42,35 @@ async def _get_account_tick_lock(account_id: int) -> asyncio.Lock:
 async def _run_one_schedule_tick(
     db: Session, sch: PublishAccountCreatorSchedule, now: datetime
 ) -> None:
-    lock = await _get_account_tick_lock(sch.account_id)
+    schedule_id = int(sch.id)
+    account_id = int(sch.account_id)
+    lock = await _get_account_tick_lock(account_id)
     async with lock:
         log_id: Optional[int] = None
-        iv = max(1, int(sch.interval_minutes or 60))
         try:
+            db.rollback()
+            sch = (
+                db.query(PublishAccountCreatorSchedule)
+                .filter(PublishAccountCreatorSchedule.id == schedule_id)
+                .first()
+            )
+            if not sch:
+                return
+            due_at = getattr(sch, "next_run_at", None)
+            if (
+                not bool(getattr(sch, "enabled", False))
+                or due_at is None
+                or not isinstance(due_at, datetime)
+                or due_at > datetime.utcnow()
+            ):
+                return
+
+            if is_review_mode(sch) and not has_pending_review_queue(sch):
+                sch.next_run_at = None
+                db.commit()
+                return
+
+            iv = max(1, int(sch.interval_minutes or 60))
             log_row = start_task_log(db, user_id=sch.user_id, account_id=sch.account_id, trigger="tick")
             log_id = log_row.id
 
@@ -107,18 +135,13 @@ async def _run_one_schedule_tick(
                 )
                 sync_ok = True
 
-            sch_mode = (getattr(sch, "schedule_publish_mode", None) or "immediate").strip().lower()
-            rv_conf = bool(getattr(sch, "review_confirmed", False))
-            dr_q = getattr(sch, "review_drafts_json", None) or []
-            review_queue = (
-                sch_mode == "review"
-                and rv_conf
-                and isinstance(dr_q, list)
-                and len(dr_q) > 0
-            )
+            review_queue = has_pending_review_queue(sch)
 
             if not review_queue:
-                sch.next_run_at = datetime.utcnow() + timedelta(minutes=iv)
+                if is_review_mode(sch):
+                    sch.next_run_at = None
+                else:
+                    sch.next_run_at = datetime.utcnow() + timedelta(minutes=iv)
             db.commit()
 
             update_task_log(

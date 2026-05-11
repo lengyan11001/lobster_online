@@ -31,7 +31,7 @@ from skills._base import BaseDriver
 logger = logging.getLogger(__name__)
 
 HOME_URL = "https://mp.toutiao.com/"
-LOGIN_ENTRY = "https://mp.toutiao.com/login/"
+LOGIN_ENTRY = "https://mp.toutiao.com/auth/page/login?redirect_url=JTJGcHJvZmlsZV92NCUyRg=="
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 _VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".m4v"}

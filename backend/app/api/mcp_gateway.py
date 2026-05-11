@@ -24,6 +24,8 @@ from ..services.openclaw_tool_scope import (
     HEADER_ALLOWED_CAPABILITIES,
     HEADER_ALLOWED_TOOLS,
     HEADER_INTENT,
+    HEADER_VIDEO_MODEL_LOCK,
+    HEADER_VIDEO_MODEL_LOCK_SOURCE,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,13 @@ MCP_GATEWAY_FORWARD_TIMEOUT_SEC = float(os.environ.get("MCP_GATEWAY_FORWARD_TIME
 _mcp_token_cache: dict[str, tuple[str, float, Optional[str]]] = {}
 _openclaw_tool_scope_cache: dict[str, tuple[dict[str, str], float]] = {}
 _cache_lock = threading.Lock()
+_OPENCLAW_SCOPE_CACHE_HEADERS = {
+    HEADER_INTENT,
+    HEADER_ALLOWED_TOOLS,
+    HEADER_ALLOWED_CAPABILITIES,
+    HEADER_VIDEO_MODEL_LOCK,
+    HEADER_VIDEO_MODEL_LOCK_SOURCE,
+}
 
 
 def set_mcp_token_for_agent(
@@ -72,7 +81,7 @@ def set_openclaw_tool_scope_for_agent(
     headers = {
         k: str(v or "").strip()
         for k, v in (scope_headers or {}).items()
-        if k in {HEADER_INTENT, HEADER_ALLOWED_TOOLS, HEADER_ALLOWED_CAPABILITIES}
+        if k in _OPENCLAW_SCOPE_CACHE_HEADERS
     }
     if not headers:
         return
@@ -220,7 +229,7 @@ def _installation_id_for_mcp_forward(request: Request) -> Optional[str]:
 def _openclaw_tool_scope_headers_for_mcp_forward(request: Request) -> dict[str, str]:
     """Return the current OpenClaw tool scope headers for MCP forwarding."""
     explicit = {}
-    for h in (HEADER_INTENT, HEADER_ALLOWED_TOOLS, HEADER_ALLOWED_CAPABILITIES):
+    for h in _OPENCLAW_SCOPE_CACHE_HEADERS:
         v = (request.headers.get(h) or "").strip()
         if v:
             explicit[h] = v

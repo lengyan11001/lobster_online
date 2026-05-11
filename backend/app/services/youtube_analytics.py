@@ -13,8 +13,6 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from .youtube_api_upload import build_httpx_proxy_url
-
 logger = logging.getLogger(__name__)
 
 YT_DATA_BASE = "https://www.googleapis.com/youtube/v3"
@@ -25,7 +23,7 @@ async def _refresh_access_token(
     client_id: str, client_secret: str, refresh_token: str,
     proxy_url: Optional[str] = None,
 ) -> str:
-    kwargs: Dict[str, Any] = {"timeout": 30.0}
+    kwargs: Dict[str, Any] = {"timeout": 30.0, "trust_env": False}
     if proxy_url:
         kwargs["proxy"] = proxy_url
     async with httpx.AsyncClient(**kwargs) as client:
@@ -52,7 +50,7 @@ async def _yt_get(
     proxy_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     headers = {"Authorization": f"Bearer {access_token}"}
-    kwargs: Dict[str, Any] = {"timeout": 30.0}
+    kwargs: Dict[str, Any] = {"timeout": 30.0, "trust_env": False}
     if proxy_url:
         kwargs["proxy"] = proxy_url
     async with httpx.AsyncClient(**kwargs) as client:

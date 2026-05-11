@@ -71,11 +71,12 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "comfly.daihuo.pipeline": ("/api/comfly-daihuo/pipeline/run", 7200.0),
     "comfly.seedance.tvc.pipeline": ("/api/comfly-seedance-tvc/pipeline/run", 7200.0),
     "comfly.ecommerce.detail_pipeline": ("/api/comfly-ecommerce-detail/pipeline/run", 7200.0),
+    "goal.video.pipeline": ("/api/goal-video/pipeline/run", 7200.0),
     "ecommerce.publish": ("/api/ecommerce-publish/open-product-form", 120.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "ecommerce.publish"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "ecommerce.publish"})
 
 
 def _normalize_invoke_task_get_result_args(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -293,6 +294,48 @@ def _normalize_invoke_ecommerce_detail_pipeline_args(args: Dict[str, Any]) -> Di
     return out
 
 
+def _normalize_invoke_goal_video_pipeline_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(args, dict):
+        return args
+    if str(args.get("capability_id") or "").strip() != "goal.video.pipeline":
+        return args
+    raw_pl = args.get("payload")
+    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    nested = pl.get("payload")
+    if isinstance(nested, dict) and (
+        (nested.get("action") or "").strip()
+        or (nested.get("job_id") or "").strip()
+        or (nested.get("goal") or "").strip()
+    ):
+        base = {k: v for k, v in pl.items() if k != "payload"}
+        pl = {**base, **nested}
+    if not (pl.get("action") or "").strip():
+        top_act = str(args.get("action") or "").strip()
+        if top_act:
+            pl["action"] = top_act
+    for k in (
+        "job_id",
+        "goal",
+        "platform",
+        "language",
+        "duration",
+        "aspect_ratio",
+        "memory_scope",
+        "planning_model",
+        "image_model",
+        "video_model",
+        "reference_asset_ids",
+        "reference_image_urls",
+        "image_retry_count",
+        "video_retry_count",
+    ):
+        if k in args and args[k] is not None:
+            pl.setdefault(k, args[k])
+    out = dict(args)
+    out["payload"] = pl
+    return out
+
+
 def _sutui_rest_phase_label(tool_name: str) -> str:
     if tool_name == "generate":
         return "创建任务|tasks/create"
@@ -378,6 +421,8 @@ def _json_dumps_mcp_payload(obj: Any) -> str:
 _OPENCLAW_SCOPE_HEADER_INTENT = "X-Lobster-OpenClaw-Intent"
 _OPENCLAW_SCOPE_HEADER_TOOLS = "X-Lobster-Allowed-MCP-Tools"
 _OPENCLAW_SCOPE_HEADER_CAPS = "X-Lobster-Allowed-Capabilities"
+_OPENCLAW_VIDEO_MODEL_LOCK_HEADER = "X-Lobster-Video-Model-Lock"
+_OPENCLAW_VIDEO_MODEL_LOCK_SOURCE_HEADER = "X-Lobster-Video-Model-Lock-Source"
 _NO_AUTH_UNSCOPED_SAFE_TOOLS = frozenset({"list_capabilities", "list_assets"})
 _OPENCLAW_LONG_CAPABILITY_IDS = frozenset({"image.generate", "video.generate"})
 _OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC = float(
@@ -410,6 +455,44 @@ def _openclaw_scope_intent(request: Optional[Any]) -> str:
     return (_request_header_raw(request, _OPENCLAW_SCOPE_HEADER_INTENT) or "").strip()
 
 
+def _openclaw_video_model_lock(request: Optional[Any]) -> Tuple[str, str]:
+    model = (_request_header_raw(request, _OPENCLAW_VIDEO_MODEL_LOCK_HEADER) or "").strip()
+    source = (_request_header_raw(request, _OPENCLAW_VIDEO_MODEL_LOCK_SOURCE_HEADER) or "").strip()
+    return model, source
+
+
+def _apply_openclaw_video_model_lock(
+    payload: Dict[str, Any],
+    request: Optional[Any],
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+    locked_model, source = _openclaw_video_model_lock(request)
+    if not locked_model and _openclaw_scope_intent(request):
+        locked_model = _DEFAULT_VIDEO_MODEL
+        source = "default"
+    if not locked_model:
+        return payload
+    out = dict(payload)
+    raw_model = str(out.get("model") or out.get("model_id") or "").strip()
+    if raw_model and raw_model != locked_model:
+        logger.warning(
+            "[MCP video.generate] OpenClaw model locked; override requested model=%s -> %s source=%s",
+            raw_model,
+            locked_model,
+            source or "default",
+        )
+    elif not raw_model:
+        logger.info(
+            "[MCP video.generate] OpenClaw model locked; filled model=%s source=%s",
+            locked_model,
+            source or "default",
+        )
+    out["model"] = locked_model
+    out.pop("model_id", None)
+    return out
+
+
 def _openclaw_should_detach_long_capability(request: Optional[Any], capability_id: str) -> bool:
     return bool(_openclaw_scope_intent(request)) and capability_id in _OPENCLAW_LONG_CAPABILITY_IDS
 
@@ -421,13 +504,33 @@ def _openclaw_long_capability_pending_payload(
 ) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "capability_id": capability_id,
-        "status": "processing",
+        "status": "waiting_upstream_response",
         "openclaw_async": True,
         "elapsed_ms": elapsed_ms,
         "message": (
-            "生成任务已经提交，后台会继续等待上游结果并自动保存到素材库。"
-            "请不要重复发起同一个生成任务；可以先告诉用户正在生成，稍后到素材库或最近素材中查看。"
+            "已开始调用上游生成服务，但本轮还没有拿到 task_id、成品 URL 或入库素材 ID。"
+            "只能告诉用户正在等待上游确认，不能声称任务已提交、已完成、已扣费或已入库。"
         ),
+        "result_ready": False,
+        "openclaw_evidence": {
+            "capability_id": capability_id,
+            "task_id": "",
+            "result_ready": False,
+            "media_urls": [],
+            "saved_asset_ids": [],
+            "credits_used": None,
+            "claim_rules": {
+                "tool_evidence_required": True,
+                "can_say_task_submitted": False,
+                "can_say_generation_completed": False,
+                "can_say_asset_saved": False,
+                "can_say_user_credits_used": False,
+            },
+            "reply_rules": [
+                "Do not say the task was submitted until a later tool result contains task_id.",
+                "Do not say generation completed until a later tool result contains media_urls or saved_assets.",
+            ],
+        },
     }
     if isinstance(payload, dict):
         prompt = str(payload.get("prompt") or "").strip()
@@ -446,6 +549,89 @@ def _track_openclaw_background_task(task: asyncio.Task) -> None:
         _OPENCLAW_BACKGROUND_TASKS.discard(done)
 
     task.add_done_callback(_discard)
+
+
+_OPENCLAW_TASK_REGISTRY: Dict[str, Tuple[float, set[str]]] = {}
+_OPENCLAW_TASK_REGISTRY_TTL_SEC = 6 * 60 * 60.0
+_OPENCLAW_TASK_REGISTRY_MAX = 256
+
+
+def _openclaw_guard_key(request: Optional[Any], token: Optional[str]) -> str:
+    agent = (_request_header_raw(request, "x-openclaw-agent-id") or "").strip()
+    if agent:
+        return f"agent:{agent}"
+    return f"token:{_token_cache_prefix(token)}"
+
+
+def _prune_openclaw_task_registry() -> None:
+    now = time.monotonic()
+    stale = [k for k, (ts, _) in _OPENCLAW_TASK_REGISTRY.items() if now - ts > _OPENCLAW_TASK_REGISTRY_TTL_SEC]
+    for key in stale:
+        _OPENCLAW_TASK_REGISTRY.pop(key, None)
+    if len(_OPENCLAW_TASK_REGISTRY) <= _OPENCLAW_TASK_REGISTRY_MAX:
+        return
+    for key, _ in sorted(_OPENCLAW_TASK_REGISTRY.items(), key=lambda kv: kv[1][0])[
+        : max(1, _OPENCLAW_TASK_REGISTRY_MAX // 4)
+    ]:
+        _OPENCLAW_TASK_REGISTRY.pop(key, None)
+
+
+def _register_openclaw_task_id(
+    request: Optional[Any],
+    token: Optional[str],
+    capability_id: str,
+    upstream_resp: Any,
+) -> None:
+    if not _openclaw_scope_intent(request) or capability_id not in _OPENCLAW_LONG_CAPABILITY_IDS:
+        return
+    task_id = _extract_task_id_from_upstream(upstream_resp)
+    if not task_id:
+        return
+    _prune_openclaw_task_registry()
+    key = _openclaw_guard_key(request, token)
+    now = time.monotonic()
+    _, ids = _OPENCLAW_TASK_REGISTRY.get(key, (now, set()))
+    ids.add(task_id)
+    _OPENCLAW_TASK_REGISTRY[key] = (now, ids)
+    logger.info("[MCP OpenClaw guard] registered task_id=%s capability_id=%s key=%s", task_id, capability_id, key[:48])
+
+
+def _known_openclaw_task_ids(request: Optional[Any], token: Optional[str]) -> set[str]:
+    _prune_openclaw_task_registry()
+    key = _openclaw_guard_key(request, token)
+    entry = _OPENCLAW_TASK_REGISTRY.get(key)
+    return set(entry[1]) if entry else set()
+
+
+def _openclaw_task_id_guard_error(
+    payload: Dict[str, Any],
+    request: Optional[Any],
+    token: Optional[str],
+) -> str:
+    if not _openclaw_scope_intent(request) or not isinstance(payload, dict):
+        return ""
+    task_id = str(payload.get("task_id") or payload.get("taskId") or payload.get("taskid") or "").strip()
+    if not task_id:
+        return ""
+    low = task_id.lower()
+    if low.startswith(("gen_", "task_")):
+        return (
+            "OpenClaw task.get_result 已拦截：该 task_id 看起来不是工具返回的真实速推任务 ID。"
+            "请只使用本轮 image.generate/video.generate 工具返回 JSON 里的 task_id；如果没有拿到 task_id，"
+            "请如实告诉用户任务未成功提交，不要编造任务号。"
+        )
+    if low.startswith("video_"):
+        return (
+            "OpenClaw task.get_result 已拦截：video_ 开头通常是 Comfly 任务，应使用 comfly.daihuo 的 poll_video，"
+            "不能用 task.get_result 查询。"
+        )
+    known = _known_openclaw_task_ids(request, token)
+    if known and task_id not in known and not task_id.isdigit():
+        return (
+            "OpenClaw task.get_result 已拦截：该 task_id 不在本轮已登记的生成任务中。"
+            "请使用刚才工具结果里的真实 task_id，或让用户提供明确任务 ID。"
+        )
+    return ""
 
 
 def _request_has_auth_material(request: Optional[Any]) -> bool:
@@ -1174,6 +1360,51 @@ async def _mcp_poll_seedance_tvc_pipeline_until_done(
     return last if last else {"ok": False, "error": "poll 无有效响应"}
 
 
+async def _mcp_poll_goal_video_pipeline_until_done(
+    *,
+    base_url: str,
+    token: Optional[str],
+    job_id: str,
+    request: Optional[Request],
+) -> Dict[str, Any]:
+    jid = (job_id or "").strip().lower()
+    if not jid:
+        return {"ok": False, "error": "缺少 job_id"}
+    waited = 0.0
+    last: Dict[str, Any] = {}
+    bu = base_url.rstrip("/")
+    while waited < float(_COMFLY_DAIHUO_MCP_POLL_MAX_SEC):
+        logger.info("[MCP goal.video.pipeline] poll job waited=%ss job_id=%s", int(waited), jid[:16])
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                pr = await client.get(
+                    f"{bu}/api/goal-video/pipeline/jobs/{jid}",
+                    headers=_backend_headers(token, request),
+                )
+        except Exception as e:
+            logger.warning("[MCP goal.video.pipeline] poll job 请求异常: %s", e)
+            break
+        if pr.status_code >= 400:
+            logger.warning("[MCP goal.video.pipeline] poll job HTTP %s", pr.status_code)
+            try:
+                last = pr.json() if pr.content else {"ok": False, "error": (pr.text or "")[:500]}
+            except Exception:
+                last = {"ok": False, "error": (pr.text or "")[:500]}
+            break
+        last = pr.json() if pr.content else {}
+        st = (last.get("status") or "").strip().lower()
+        if st in ("completed", "failed"):
+            return last
+        await asyncio.sleep(_COMFLY_DAIHUO_MCP_POLL_INTERVAL)
+        waited += _COMFLY_DAIHUO_MCP_POLL_INTERVAL
+    if last and isinstance(last, dict):
+        last.setdefault(
+            "poll_timeout",
+            f"已达最大等待 {_COMFLY_DAIHUO_MCP_POLL_MAX_SEC}s，任务可能仍在运行，请用 poll_pipeline + job_id 继续查询",
+        )
+    return last if last else {"ok": False, "error": "poll 无有效响应"}
+
+
 def _capabilities_api_base() -> str:
     """算力预扣/退还等与认证中心一致；在线版优先直连 AUTH_SERVER_BASE，避免本机代理异常时误判为网络故障。"""
     auth = (os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
@@ -1260,6 +1491,7 @@ def _tool_definitions(
     is_skill_store_admin: bool = True,
     allowed_tool_names: Optional[set[str]] = None,
     allowed_capability_ids: Optional[set[str]] = None,
+    openclaw_mode: bool = False,
 ) -> List[Dict[str, Any]]:
     capability_list = sorted(
         cid
@@ -1267,6 +1499,23 @@ def _tool_definitions(
         if not (_capability_id_is_debug_only_in_registry(cid) and not is_skill_store_admin)
         and (allowed_capability_ids is None or cid in allowed_capability_ids)
     )
+    invoke_description = (
+        "调用龙虾能力（图片生成、视频解析、语音合成等）。"
+        "capability_id 必须是 list_capabilities 中的能力 ID；"
+        "禁止将素材库 asset_id（十二位以上十六进制串，如入库后的成片 ID）当作能力 ID。"
+        "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
+        "生成类 prompt 只写画面/视频内容；账号、平台、标题、正文、话题等发布信息必须放 publish_content，禁止混进 image.generate/video.generate prompt。"
+        "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
+        "video.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认视频模型补齐。"
+        "【素材/URL】理解图片/视频或图生视频时，可以在 payload 传 image_url/video_url/image_urls/video_urls/asset_id；不要用 read 读取 http(s) URL。"
+        "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
+    )
+    if openclaw_mode:
+        invoke_description += (
+            "【OpenClaw证据规则】生成/查询结果只能以本工具返回的 task_id、status、media_urls、saved_assets、credits_used 为准；"
+            "没有 task_id 不要说任务已提交，没有 media_urls/saved_assets 不要说已生成完成，没有 saved_assets 不要编素材 ID，"
+            "不要把上游 result.price/cost/fee 当成用户积分或扣费。"
+        )
     tools = [
         {
             "name": "list_capabilities",
@@ -1275,17 +1524,7 @@ def _tool_definitions(
         },
         {
             "name": "invoke_capability",
-            "description": (
-                "调用龙虾能力（图片生成、视频解析、语音合成等）。"
-                "capability_id 必须是 list_capabilities 中的能力 ID；"
-                "禁止将素材库 asset_id（十二位以上十六进制串，如入库后的成片 ID）当作能力 ID。"
-                "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
-                "生成类 prompt 只写画面/视频内容；账号、平台、标题、正文、话题等发布信息必须放 publish_content，禁止混进 image.generate/video.generate prompt。"
-                "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
-                "video.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认视频模型补齐。"
-                "【素材/URL】理解图片/视频或图生视频时，可以在 payload 传 image_url/video_url/image_urls/video_urls/asset_id；不要用 read 读取 http(s) URL。"
-                "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
-            ),
+            "description": invoke_description,
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1647,6 +1886,8 @@ def _tool_definitions(
                             "- location: \"深圳市南山区\"\n"
                             "- allow_comment / allow_duet / allow_stitch: true|false\n"
                             "- goods: {enabled:true, keyword:\"商品关键词\"}\n"
+                            "- 抖音自主声明：AI生成素材/成片发布到抖音时设 douyin_declaration_mode:\"ai_generated\"；"
+                            "普通内容且用户明确要求不加声明时可设 \"direct\"。\n"
                             "今日头条发文章：用户未提供配图时设 toutiao_graphic_no_cover: true（无封面纯文）；"
                             "有配图则用图片 asset 作封面，可选 cover_asset_id 作第二图。\n"
                         ),
@@ -1726,6 +1967,122 @@ def _collect_video_image_refs(payload: Dict[str, Any]) -> List[str]:
     for key in ("filePaths", "image_url", "media_files", "images", "image_files", "image_urls"):
         add(payload.get(key))
     return refs
+
+
+def _openclaw_video_ref_guard_text(ref: str) -> str:
+    raw = (ref or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("http://", "https://")):
+        if _media_url_kind(raw) == "video":
+            return (
+                "OpenClaw video.generate 已拦截：图生视频的 image_url 必须是图片 URL，不能把 mp4/mov 等视频直链当垫图。"
+                "请改用图片素材 asset_id/source_url，或先从视频抽帧。"
+            )
+        return ""
+    if _looks_like_material_asset_id(raw):
+        return ""
+    return (
+        "OpenClaw video.generate 已拦截：垫图必须先进入素材库并使用 asset_id，或使用可公网访问的图片 URL。"
+        "本轮不要把本地路径/临时路径直接传给上游。"
+    )
+
+
+def _replace_openclaw_video_image_refs(payload: Dict[str, Any], image_url: str) -> Dict[str, Any]:
+    out = dict(payload or {})
+    stable = (image_url or "").strip()
+    if not stable:
+        return out
+    out["image_url"] = stable
+    out["filePaths"] = [stable]
+    out["images"] = [stable]
+    out["image_files"] = [stable]
+    out["image_urls"] = [stable]
+    return out
+
+
+async def _stabilize_openclaw_video_generate_payload(
+    payload: Dict[str, Any],
+    token: Optional[str],
+    request: Optional[Request],
+) -> Tuple[Dict[str, Any], str]:
+    """OpenClaw-only: rehost image refs through the asset library before video generation."""
+    if not _openclaw_scope_intent(request) or not isinstance(payload, dict):
+        return payload, ""
+    out = dict(payload)
+
+    for aid in _collect_asset_id_hints(out):
+        resolved = await _resolve_asset_public_url(aid, token, request)
+        if resolved and _media_url_kind(resolved) in ("", "image"):
+            logger.info("[MCP OpenClaw guard] video.generate using asset_id=%s source_url=%s", aid, resolved[:96])
+            return _replace_openclaw_video_image_refs(out, resolved), ""
+
+    refs = _collect_video_image_refs(out)
+    if not refs:
+        return out, ""
+    first = _normalize_public_media_url(refs[0]) or str(refs[0] or "").strip()
+    guard = _openclaw_video_ref_guard_text(first)
+    if guard:
+        return out, guard
+    if not first.startswith(("http://", "https://")):
+        return out, (
+            "OpenClaw video.generate 已拦截：未拿到可公网访问的图片 URL。"
+            "请先保存/上传图片到素材库，再用素材 ID 调用图生视频。"
+        )
+
+    body: Dict[str, Any] = {
+        "url": first,
+        "media_type": "image",
+        "tags": "openclaw_input,video.generate",
+    }
+    prompt = str(out.get("prompt") or "").strip()
+    model = str(out.get("model") or out.get("model_id") or "").strip()
+    if prompt:
+        body["prompt"] = prompt[:500]
+    if model:
+        body["model"] = model[:128]
+    try:
+        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+            r = await client.post(
+                f"{BASE_URL}/api/assets/save-url",
+                json=body,
+                headers=_backend_headers(token, request),
+            )
+        if r.status_code >= 400:
+            logger.warning(
+                "[MCP OpenClaw guard] save input image failed HTTP %s url=%s body=%s",
+                r.status_code,
+                first[:120],
+                (r.text or "")[:300],
+            )
+            return out, (
+                "OpenClaw video.generate 已拦截：这张图片还没有成功转成稳定素材链接，暂不继续调用上游生成，"
+                "避免出现 DNS/404 后还扣费或反复失败。请让用户重新上传图片，或先保存为素材后再生成。"
+            )
+        data = r.json() if r.content else {}
+        stable = ""
+        if isinstance(data, dict):
+            for key in ("source_url", "open_url", "preview_url"):
+                stable = _normalize_public_media_url(data.get(key))
+                if stable:
+                    break
+            aid = str(data.get("asset_id") or "").strip()
+            if not stable and aid:
+                stable = await _resolve_asset_public_url(aid, token, request) or ""
+        if not stable:
+            return out, (
+                "OpenClaw video.generate 已拦截：图片已尝试入库，但没有拿到稳定 source_url/open_url，"
+                "请不要继续调用上游，先提示用户重新上传图片。"
+            )
+        if stable != first:
+            logger.info("[MCP OpenClaw guard] stabilized video image_url %s -> %s", first[:96], stable[:96])
+        return _replace_openclaw_video_image_refs(out, stable), ""
+    except Exception as exc:
+        logger.warning("[MCP OpenClaw guard] stabilize input image exception: %s url=%s", exc, first[:120])
+        return out, (
+            "OpenClaw video.generate 已拦截：图片稳定化失败，暂不继续调用上游生成。"
+            "请让用户重新上传图片，或先保存为素材后再生成。"
+        )
 
 
 def _coerce_video_aspect_ratio_for_upstream(raw: Any) -> str:
@@ -3301,6 +3658,166 @@ async def _auto_save_generated_assets(
     return saved
 
 
+_OPENCLAW_GENERATION_CAPABILITIES = frozenset({"image.generate", "video.generate"})
+
+
+def _extract_status_from_upstream(obj: Any, _depth: int = 0) -> str:
+    if _depth > 12 or obj is None:
+        return ""
+    if isinstance(obj, dict):
+        for k in ("status", "state", "task_status", "taskStatus"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()[:80]
+        for v in obj.values():
+            out = _extract_status_from_upstream(v, _depth + 1)
+            if out:
+                return out
+    elif isinstance(obj, list):
+        for it in obj:
+            out = _extract_status_from_upstream(it, _depth + 1)
+            if out:
+                return out
+    return ""
+
+
+def _task_result_has_terminal_success(upstream_resp: Any) -> bool:
+    if not isinstance(upstream_resp, dict) or upstream_resp.get("error"):
+        return False
+    if _is_task_still_in_progress(upstream_resp):
+        return False
+    raw = json.dumps(_sanitize_for_json(upstream_resp), ensure_ascii=False).lower()
+    return any(
+        needle in raw
+        for needle in (
+            '"status":"completed"',
+            '"status": "completed"',
+            '"status":"success"',
+            '"status": "success"',
+            '"state":"completed"',
+            '"state": "completed"',
+            "已完成",
+            "生成成功",
+        )
+    )
+
+
+def _saved_asset_ids(saved_assets: Any) -> List[str]:
+    ids: List[str] = []
+    if not isinstance(saved_assets, list):
+        return ids
+    for item in saved_assets:
+        if not isinstance(item, dict):
+            continue
+        aid = str(item.get("asset_id") or item.get("id") or "").strip()
+        if aid:
+            ids.append(aid[:128])
+    return ids
+
+
+def _extract_lobster_credits_used(obj: Any, _depth: int = 0) -> Optional[float]:
+    """Only accept explicit lobster credit fields; never infer from upstream price/cost."""
+    if _depth > 12 or obj is None:
+        return None
+    if isinstance(obj, dict):
+        for k in ("credits_used", "credits_charged", "credits_final"):
+            if k not in obj:
+                continue
+            v = obj.get(k)
+            try:
+                amount = float(v)
+            except Exception:
+                continue
+            if amount > 0:
+                return amount
+        for v in obj.values():
+            out = _extract_lobster_credits_used(v, _depth + 1)
+            if out is not None:
+                return out
+    elif isinstance(obj, list):
+        for it in obj:
+            out = _extract_lobster_credits_used(it, _depth + 1)
+            if out is not None:
+                return out
+    return None
+
+
+def _attach_openclaw_evidence_contract(
+    data: Dict[str, Any],
+    capability_id: str,
+    payload: Dict[str, Any],
+    upstream_resp: Any,
+    saved_assets: Optional[List[Dict[str, str]]] = None,
+) -> None:
+    """Make generation evidence machine-readable so OpenClaw cannot safely invent state."""
+    cid = (capability_id or "").strip()
+    payload_cap = ""
+    if isinstance(payload, dict):
+        payload_cap = str(payload.get("capability_id") or "").strip()
+    is_generation_create = cid in _OPENCLAW_GENERATION_CAPABILITIES
+    is_generation_poll = cid == "task.get_result" and payload_cap in _OPENCLAW_GENERATION_CAPABILITIES
+    if not (is_generation_create or is_generation_poll):
+        return
+
+    saved = saved_assets if saved_assets is not None else data.get("saved_assets")
+    asset_ids = _saved_asset_ids(saved)
+    has_error = isinstance(upstream_resp, dict) and bool(upstream_resp.get("error"))
+    confirmed_task_id = _extract_task_id_from_upstream(upstream_resp)
+    requested_task_id = ""
+    if isinstance(payload, dict):
+        requested_task_id = str(payload.get("task_id") or payload.get("taskId") or payload.get("taskid") or "").strip()
+    task_id = confirmed_task_id or ("" if has_error else requested_task_id)
+
+    media_urls = _extract_media_urls_for_auto_save(upstream_resp)[:3]
+    status = _extract_status_from_upstream(upstream_resp)
+    in_progress = _is_task_still_in_progress(upstream_resp) if isinstance(upstream_resp, dict) else False
+    terminal_success = _task_result_has_terminal_success(upstream_resp)
+    output_available = bool(media_urls or asset_ids)
+    can_say_completed = bool((not has_error) and output_available and (terminal_success or not in_progress))
+    can_say_submitted = bool((not has_error) and (task_id or output_available))
+    credits_used = _extract_lobster_credits_used(data)
+
+    if task_id:
+        data.setdefault("task_id", task_id)
+    if status:
+        data.setdefault("status", status)
+    elif in_progress:
+        data.setdefault("status", "processing")
+    if media_urls:
+        data.setdefault("media_urls", media_urls)
+    data["result_ready"] = can_say_completed
+
+    rules = {
+        "tool_evidence_required": True,
+        "can_say_task_submitted": can_say_submitted,
+        "can_say_generation_completed": can_say_completed,
+        "can_say_asset_saved": bool(asset_ids),
+        "can_say_user_credits_used": credits_used is not None,
+    }
+    data["openclaw_evidence"] = {
+        "capability_id": cid,
+        "source_capability_id": payload_cap or cid,
+        "task_id": task_id,
+        "requested_task_id": requested_task_id,
+        "status": data.get("status") or "",
+        "result_ready": can_say_completed,
+        "media_urls": media_urls,
+        "saved_asset_ids": asset_ids,
+        "credits_used": credits_used,
+        "claim_rules": rules,
+        "reply_rules": [
+            "Only quote task_id/media URL/asset_id/credits_used that appear in this JSON.",
+            "If can_say_generation_completed is false, do not say the generation is complete.",
+            "If can_say_asset_saved is false, do not invent or reuse an asset_id.",
+            "Do not treat upstream result.price/cost/fee as user credits or billing.",
+        ],
+    }
+    if not can_say_submitted:
+        data["openclaw_evidence"]["warning"] = (
+            "上游未返回 task_id 或成品 URL，不能确认任务已提交；请如实告知用户并停止编造任务状态。"
+        )
+
+
 async def _finish_openclaw_detached_upstream(
     upstream_task: asyncio.Task,
     capability_id: str,
@@ -3449,6 +3966,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
             args = _normalize_invoke_daihuo_pipeline_args(args)
             args = _normalize_invoke_seedance_tvc_pipeline_args(args)
             args = _normalize_invoke_ecommerce_detail_pipeline_args(args)
+            args = _normalize_invoke_goal_video_pipeline_args(args)
             capability_id = str(args.get("capability_id") or "").strip()
             payload = args.get("payload") or {}
             if not isinstance(payload, dict):
@@ -3524,6 +4042,14 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         }
                     ], True
             elif capability_id == "video.generate":
+                payload = _apply_openclaw_video_model_lock(payload, request)
+                payload, _oc_video_guard_error = await _stabilize_openclaw_video_generate_payload(
+                    payload,
+                    token,
+                    request,
+                )
+                if _oc_video_guard_error:
+                    return [{"type": "text", "text": _oc_video_guard_error}], True
                 try:
                     payload = _normalize_video_generate_payload(payload)
                 except ValueError as e:
@@ -3580,6 +4106,9 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                             ),
                         }
                     ], True
+                _task_guard_error = _openclaw_task_id_guard_error(payload, request, token)
+                if _task_guard_error:
+                    return [{"type": "text", "text": _task_guard_error}], True
 
             def _pre_deduct_insufficient_user_text(detail: Any) -> str:
                 base = "当前账户算力不足，无法调用该能力。请前往「充值」页购买/充值后再试。"
@@ -3871,6 +4400,44 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         (_p.get("job_id") or "")[:16],
                         BASE_URL,
                     )
+                elif capability_id == "goal.video.pipeline":
+                    gv_act = (_p.get("action") or "").strip() or "run_pipeline"
+                    if gv_act == "start_pipeline":
+                        req_path = "/api/goal-video/pipeline/start"
+                        timeout_s = 120.0
+                    elif gv_act == "poll_pipeline":
+                        jid = (_p.get("job_id") or "").strip().lower()
+                        if (
+                            not jid
+                            or len(jid) != 32
+                            or any(c not in "0123456789abcdef" for c in jid)
+                        ):
+                            return [
+                                {
+                                    "type": "text",
+                                    "text": _json_dumps_mcp_payload(
+                                        {
+                                            "capability_id": capability_id,
+                                            "error": "poll_pipeline 需要有效的 payload.job_id（32 位十六进制）",
+                                        }
+                                    ),
+                                }
+                            ], True
+                        req_path = f"/api/goal-video/pipeline/jobs/{jid}"
+                        req_method = "GET"
+                        req_json = None
+                        timeout_s = 120.0
+                    else:
+                        req_path = "/api/goal-video/pipeline/run"
+                        timeout_s = 7200.0
+                    logger.info(
+                        "[MCP goal.video.pipeline] invoke has_token=%s action=%s goal_len=%s job_id=%s base_url=%s",
+                        bool(token),
+                        gv_act,
+                        len(str(_p.get("goal") or "")),
+                        (_p.get("job_id") or "")[:16],
+                        BASE_URL,
+                    )
                 elif capability_id == "ecommerce.publish":
                     ec_action = (_p.get("action") or "").strip() or "open_product_form"
                     if ec_action == "list_shop_accounts":
@@ -4043,6 +4610,34 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                                         "start_ack": data,
                                         "poll_error": polled,
                                     }
+                    if (
+                        capability_id == "goal.video.pipeline"
+                        and isinstance(data, dict)
+                        and data.get("ok", True)
+                    ):
+                        gv_act2 = (_p.get("action") or "").strip() or "run_pipeline"
+                        if gv_act2 == "start_pipeline":
+                            jid2 = (data.get("job_id") or "").strip()
+                            if jid2:
+                                logger.info(
+                                    "[MCP goal.video.pipeline] start 成功，开始轮询 job_id=%s",
+                                    jid2[:16],
+                                )
+                                polled = await _mcp_poll_goal_video_pipeline_until_done(
+                                    base_url=BASE_URL,
+                                    token=token,
+                                    job_id=jid2,
+                                    request=request,
+                                )
+                                if isinstance(polled, dict) and (polled.get("status") or "").strip():
+                                    data = polled
+                                else:
+                                    data = {
+                                        "ok": False,
+                                        "job_id": jid2,
+                                        "start_ack": data,
+                                        "poll_error": polled,
+                                    }
                     if capability_id == "comfly.daihuo" and isinstance(data, dict) and data.get("ok", True):
                         if (data.get("action") or "").strip() == "submit_video":
                             tid_poll = str(data.get("task_id") or "").strip()
@@ -4117,6 +4712,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         fail_msg = "Seedance TVC 整包成片后端调用失败"
                     elif capability_id == "comfly.ecommerce.detail_pipeline":
                         fail_msg = "电商详情图流水线后端调用失败"
+                    elif capability_id == "goal.video.pipeline":
+                        fail_msg = "目标成片流水线后端调用失败"
                     elif capability_id == "ecommerce.publish":
                         fail_msg = "电商商品发布后端调用失败"
                     else:
@@ -4250,12 +4847,17 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 )
 
             logger.info("[MCP] invoke_capability 完成 capability_id=%s latency_ms=%s ok=%s", capability_id, latency_ms, not bool(upstream_error))
+            if not upstream_error:
+                _register_openclaw_task_id(request, token, capability_id, upstream_resp)
             data: Dict[str, Any] = {"capability_id": capability_id, "result": _redact_sensitive(upstream_resp)}
 
+            saved: List[Dict[str, str]] = []
             if not upstream_error:
                 saved = await _auto_save_generated_assets(upstream_resp, capability_id, payload, token, request)
                 if saved:
                     data["saved_assets"] = saved
+            if _openclaw_scope_intent(request):
+                _attach_openclaw_evidence_contract(data, capability_id, payload, upstream_resp, saved)
 
             text = _json_dumps_mcp_payload(data)
             return [{"type": "text", "text": text}], bool(upstream_error)
@@ -4720,6 +5322,7 @@ async def _handle_single_message(msg: Dict[str, Any], request: Request) -> Optio
             is_skill_store_admin=is_admin,
             allowed_tool_names=allowed_tools,
             allowed_capability_ids=allowed_caps,
+            openclaw_mode=bool(scoped or intent),
         )
         logger.info(
             "[MCP] tools/list -> %s tools intent=%s scoped=%s",

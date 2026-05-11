@@ -2,10 +2,23 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Optional
 
 
 def _iv_minutes(sch) -> int:
     return max(1, int(getattr(sch, "interval_minutes", None) or 60))
+
+
+def is_review_mode(sch) -> bool:
+    mode = (getattr(sch, "schedule_publish_mode", None) or "immediate").strip().lower()
+    return mode == "review"
+
+
+def has_pending_review_queue(sch) -> bool:
+    if not is_review_mode(sch) or not bool(getattr(sch, "review_confirmed", False)):
+        return False
+    drafts = getattr(sch, "review_drafts_json", None) or []
+    return isinstance(drafts, list) and len(drafts) > 0
 
 
 def compute_review_base_utc_naive(sch) -> datetime:
@@ -39,16 +52,17 @@ def compute_next_review_run_at_naive(sch, now: datetime) -> datetime:
     return max(t, now)
 
 
-def compute_next_review_run_at_after_orchestration(sch, now: datetime) -> datetime:
+def compute_next_review_run_at_after_orchestration(
+    sch, now: datetime
+) -> Optional[datetime]:
     """
-    一次编排成功后：游标已在 DB 中前进；若仍有待发布则排到下一槽时间，否则回到普通间隔。
+    一次编排成功后：游标已在 DB 中前进；若仍有待发布则排到下一槽时间。
+    审核队列结束后返回 None，避免继续按普通间隔写“只同步”的任务记录。
     """
-    if not bool(getattr(sch, "review_confirmed", False)):
-        return now + timedelta(minutes=_iv_minutes(sch))
+    if not has_pending_review_queue(sch):
+        return None
     drafts = getattr(sch, "review_drafts_json", None) or []
-    if not isinstance(drafts, list) or len(drafts) < 1:
-        return now + timedelta(minutes=_iv_minutes(sch))
     cur = int(getattr(sch, "review_selected_slot", 0) or 0)
     if cur >= len(drafts):
-        return now + timedelta(minutes=_iv_minutes(sch))
+        return None
     return compute_next_review_run_at_naive(sch, now)

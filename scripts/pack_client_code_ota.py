@@ -7,8 +7,8 @@
 
 不含 python/、deps/、browser_chromium/、nodejs 可执行文件；openclaw 不含 workspace* 整目录（避免 .git/ 与用户数据），
 但强制纳入「主对话」必需的 openclaw/workspace/LOBSTER_CHAT_POLICY_*.md（与 backend chat 单一事实来源一致）。
-logs、OpenClaw 运行态令牌/登录态均不打包；根 .env 作为产品配置随 OTA 下发。
-openclaw.json 会随包更新，但 gateway.auth.token 会写成占位值，安装/更新时保留本机 token。
+logs、OpenClaw 登录态均不打包；根 .env 作为产品配置随 OTA 下发。
+openclaw.json 会随包更新，gateway.auth.token 与根 .env 一起覆盖，保证本机 backend 与 Gateway 通信 token 一致。
 默认产物与 pack_slim_zip 一致：写在 lobster_online 的上一级目录（例如 d:\\lobster_online → d:\\）。
 """
 from __future__ import annotations
@@ -207,18 +207,6 @@ def _add_openclaw_bundled_defaults(zf: zipfile.ZipFile, root: Path) -> None:
         written.add(arcname)
 
 
-def _add_sanitized_openclaw_config(zf: zipfile.ZipFile, full: Path, rel: str) -> None:
-    try:
-        data = json.loads(full.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"[WARN] openclaw.json 无法解析，已跳过避免打入本机 token: {exc}")
-        return
-    auth = data.setdefault("gateway", {}).setdefault("auth", {})
-    if isinstance(auth, dict):
-        auth["token"] = "LOBSTER_AUTO_TOKEN_PLACEHOLDER"
-    zf.writestr(rel, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-
-
 def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
     base = root / "openclaw"
     if not base.is_dir():
@@ -238,9 +226,6 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
             full = Path(dirpath) / name
             rel = _norm(os.path.relpath(str(full), str(root)))
             if _skip_file(rel):
-                continue
-            if rel == "openclaw/openclaw.json":
-                _add_sanitized_openclaw_config(zf, full, rel)
                 continue
             zf.write(full, rel)
 

@@ -34,6 +34,15 @@ def _default_browser_options() -> Dict[str, Any]:
     return dict(_DEFAULT_BROWSER_OPTIONS)
 
 
+def _browser_open_error_message(exc: BaseException) -> str:
+    raw = str(exc or "")
+    if "ERR_EMPTY_RESPONSE" in raw or "accounts.google.com" in raw or "Page.goto" in raw:
+        return "Built-in Chromium could not open the authorization page. Please use the system browser authorization link."
+    if "Executable doesn't exist" in raw or "browserType.launch" in raw or "chromium" in raw.lower():
+        return "Built-in Chromium is unavailable. Please use the system browser authorization link."
+    return raw[:300] if raw else "Built-in Chromium failed to open."
+
+
 def browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
     """
     从发布账号的 meta 解析 Playwright 可用的 browser 选项（UA / proxy）。
@@ -693,7 +702,7 @@ async def open_url_in_persistent_chromium(
                 await _drop_cached_context(profile_dir, ctx, browser_options=opts)
             except Exception:
                 pass
-        return {"ok": False, "message": str(e)}
+        return {"ok": False, "message": _browser_open_error_message(e)}
 
 
 async def open_and_check_browser(

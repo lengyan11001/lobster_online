@@ -8,6 +8,7 @@ route, not carry the Gateway implementation details.
 from __future__ import annotations
 
 import contextvars
+import asyncio
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ import re
 import base64
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import Request
@@ -92,6 +94,7 @@ _OPENCLAW_STAGE_LABELS = {
     "gateway_empty_choices": "解析模型回复",
     "gateway_empty_content": "解析模型回复",
     "upstream_error_body": "OpenClaw 上游模型/工具",
+    "upstream_timeout": "OpenClaw 上游模型/工具超时",
     "memory_followup": "记忆资料二次追问",
     "timeout": "请求 OpenClaw Gateway",
     "exception": "OpenClaw 调用异常",
@@ -145,6 +148,29 @@ def openclaw_gateway_configured() -> bool:
     oc_base = (settings.openclaw_gateway_url or "").strip().rstrip("/")
     oc_token = (settings.openclaw_gateway_token or "").strip()
     return bool(oc_base and oc_token)
+
+
+def _is_local_openclaw_gateway_url(oc_base: str) -> bool:
+    try:
+        parsed = urlparse((oc_base or "").strip())
+    except Exception:
+        return False
+    host = (parsed.hostname or "").lower()
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return host in {"127.0.0.1", "localhost", "::1"} and port == 18789
+
+
+async def _restart_local_openclaw_gateway_for_retry(oc_base: str, exc: Exception | str) -> bool:
+    if not _is_local_openclaw_gateway_url(oc_base):
+        return False
+    try:
+        from .openclaw_config import _restart_openclaw_gateway
+
+        logger.warning("[OPENCLAW] local Gateway request failed; restarting once before retry: %s", exc)
+        return bool(await asyncio.to_thread(_restart_openclaw_gateway, wait_ready_sec=75.0))
+    except Exception as restart_exc:
+        logger.warning("[OPENCLAW] local Gateway restart retry failed: %s", restart_exc)
+        return False
 
 
 def _chat_route_mode() -> str:
@@ -223,10 +249,25 @@ def installation_id_from_request(request: Optional[Request]) -> Optional[str]:
     return xi or None
 
 
+def _openclaw_body_looks_like_upstream_timeout(content: str) -> bool:
+    t = (content or "").strip().lower()
+    if not t:
+        return False
+    timeout_markers = (
+        "request timed out before a response was generated",
+        "reason=timeout",
+        "operation was aborted due to timeout",
+        "mcp error -32001: request timed out",
+    )
+    return any(marker in t for marker in timeout_markers)
+
+
 def _openclaw_body_looks_like_upstream_http_error(content: str) -> bool:
     t = (content or "").strip().lower()
     if not t:
         return False
+    if _openclaw_body_looks_like_upstream_timeout(t):
+        return True
     if "status code (no body)" in t:
         return True
     if re.match(r"^\d{3}\s+status code(\s|\(|$|,)", t):
@@ -283,12 +324,19 @@ _PIPE_TOOL_CALLS_WRAPPER_RE = re.compile(
     r"(.*?)<\s*\|\s*(?:tool_calls_end|redacted_tool_calls_end)\s*\|\s*>",
     re.DOTALL | re.IGNORECASE,
 )
+# OpenClaw messaging 通道（如 weixin 扩展）发送失败时，LLM 会把 logger 错误回流成
+# "⚠️ ✉️ Message: `<url>` failed" 这种噪音串；主对话用户根本没用 messaging，去掉避免误导。
+_OPENCLAW_MESSAGING_FAIL_RE = re.compile(
+    r"(?:⚠️\s*)?(?:✉️\s*)?Message:\s*`?[^`\r\n]+`?\s+failed[^\r\n]*",
+    re.IGNORECASE,
+)
 
 
 def _strip_dsml(content: str) -> str:
     cleaned = _PIPE_TOOL_CALLS_WRAPPER_RE.sub("", content or "").strip()
     cleaned = _DSML_FC_RE.sub("", cleaned).strip()
     cleaned = re.sub(r'</?[\uff5c|]+DSML[\uff5c|]+[^>]*>', "", cleaned).strip()
+    cleaned = _OPENCLAW_MESSAGING_FAIL_RE.sub("", cleaned).strip()
     return cleaned
 
 
@@ -521,11 +569,81 @@ def _best_memory_snippets(text: str, query: str, *, is_faq: bool, max_snippets: 
     return [_window_around_term(c, terms, width) for c in picked if c.strip()]
 
 
-def _build_openclaw_memory_context(msgs: List[Dict], raw_token: str, installation_id: str = "") -> str:
+_OPENCLAW_MEMORY_SCOPE_DEFAULT = "default"
+_OPENCLAW_MEMORY_SCOPE_PERSONAL = "personal"
+_OPENCLAW_MEMORY_SCOPE_SYSTEM = "system"
+_OPENCLAW_MEMORY_SCOPE_NONE = "none"
+_OPENCLAW_MEMORY_SCOPE_ALLOWED = {
+    _OPENCLAW_MEMORY_SCOPE_DEFAULT,
+    _OPENCLAW_MEMORY_SCOPE_PERSONAL,
+    _OPENCLAW_MEMORY_SCOPE_SYSTEM,
+    _OPENCLAW_MEMORY_SCOPE_NONE,
+}
+
+
+def normalize_openclaw_memory_scope(value: Any) -> str:
+    scope = str(value or "").strip().lower()
+    return scope if scope in _OPENCLAW_MEMORY_SCOPE_ALLOWED else _OPENCLAW_MEMORY_SCOPE_DEFAULT
+
+
+def openclaw_memory_scope_from_request(request: Any) -> str:
+    try:
+        headers = getattr(request, "headers", {}) or {}
+        raw = headers.get("X-Lobster-Memory-Scope") or headers.get("x-lobster-memory-scope") or ""
+    except Exception:
+        raw = ""
+    return normalize_openclaw_memory_scope(raw)
+
+
+def _memory_record_layer(record: Dict[str, Any]) -> str:
+    scope_type = str(
+        record.get("scope_type") or record.get("memory_scope") or record.get("memory_layer") or record.get("layer") or ""
+    ).strip().lower()
+    origin = str(record.get("origin") or "").strip().lower()
+    source = str(record.get("source") or "").strip().lower()
+    if scope_type in {"system", "platform", "global_system"} or origin in {"system", "platform"}:
+        return "system"
+    if scope_type in {"agent", "agent_global", "agency", "reseller"} or origin in {"agent_memory", "agent_global", "agency", "reseller"}:
+        return "agent"
+    if source.startswith("cloud_") or source == "local_user" or origin in {"admin", "agent", "user"}:
+        return "personal"
+    return "personal"
+
+
+def _memory_scope_allows_record(scope: str, record: Dict[str, Any]) -> bool:
+    layer = _memory_record_layer(record)
+    if scope == _OPENCLAW_MEMORY_SCOPE_NONE:
+        return False
+    if scope == _OPENCLAW_MEMORY_SCOPE_SYSTEM:
+        return layer == "system"
+    if scope == _OPENCLAW_MEMORY_SCOPE_PERSONAL:
+        return layer == "personal"
+    return layer in {"system", "agent", "personal"}
+
+
+def _memory_scope_label(scope: str) -> str:
+    if scope == _OPENCLAW_MEMORY_SCOPE_PERSONAL:
+        return "个人记忆"
+    if scope == _OPENCLAW_MEMORY_SCOPE_SYSTEM:
+        return "系统记忆"
+    if scope == _OPENCLAW_MEMORY_SCOPE_NONE:
+        return "不使用资料"
+    return "默认记忆"
+
+
+def _build_openclaw_memory_context(
+    msgs: List[Dict],
+    raw_token: str,
+    installation_id: str = "",
+    memory_scope: str = _OPENCLAW_MEMORY_SCOPE_DEFAULT,
+) -> str:
+    scope = normalize_openclaw_memory_scope(memory_scope)
+    if scope == _OPENCLAW_MEMORY_SCOPE_NONE:
+        return ""
     user_id = _decode_token_user_id(raw_token, installation_id)
     if not user_id:
         return ""
-    docs = _load_user_memory_index(user_id)
+    docs = [d for d in _load_user_memory_index(user_id) if _memory_scope_allows_record(scope, d)]
     if not docs:
         return ""
 
@@ -564,6 +682,7 @@ def _build_openclaw_memory_context(msgs: List[Dict], raw_token: str, installatio
 
     lines = [
         "【OpenClaw 本机记忆已检索】",
+        f"当前会话记忆范围：{_memory_scope_label(scope)}。",
         "以下资料来自当前用户/设备已同步的 OpenClaw 记忆。系统已经完成本轮资料检索；请直接基于这些资料给用户最终答复，不要再输出“我先查一下/正在搜索/让我读取资料”等中间过程，也不要输出 DSML/tool_calls。",
         "如果用户问题命中“百问百答/问答/销售话术”类资料，请优先沿用文档中的原文文案和话术来回答；可以做少量整理，但不要改成泛泛总结。",
         "除非用户明确要求生成图片、生成视频或发布，否则本轮只输出文字方案，不调用生成或发布能力。",
@@ -635,6 +754,10 @@ OpenClaw 主对话补充规则：
 - 如果 memory_search 返回用户上传文档，优先基于该文档回答；不要把同名网页公司误当成用户资料。
 - 用户要求发布到某账号时，调用 list_publish_accounts 后必须扫描 accounts 全量列表，并同时核对 platform 与 nickname；“抖音账号123”匹配 platform="douyin" 且 nickname="123"，douyin_shop/抖店不是抖音。发布时传 account_nickname，不要把 id 当昵称。若历史回复曾说账号不存在，以最新工具结果为准。
 - 绝对不要把 DSML、XML、tool_calls、function_calls 或工具调用参数作为正文输出给用户。需要工具时使用工具调用；不能调用时用自然语言说明。
+- 生成图片/视频、查询任务、保存素材、发布内容时，只能引用工具返回 JSON 里的真实字段。没有 task_id 时禁止说“任务已提交”；没有 media_urls/saved_assets 时禁止说“已生成完成”；没有 saved_assets 或 save_asset 返回时禁止编素材 ID；没有 publish_content 成功返回时禁止说已发布。
+- 费用/扣费只能引用工具返回的 credits_used、credits_charged、credits_final 等龙虾积分字段；禁止把上游 result.price/cost/fee 或模型价格口径说成用户已扣积分。若工具没有明确扣费字段，就说“本轮工具未返回可展示的扣费信息”。
+- 如果工具返回 openclaw_evidence，请严格按其中 claim_rules 回答；claim_rules 不允许的状态必须如实说明还不能确认，不要用经验或历史内容补齐。
+- 查询任务进度必须使用本会话工具返回的真实 task_id 或用户明确提供的 task_id；找不到真实 task_id 时说明“没有拿到可查询的任务 ID”，不要生成看起来像 ID 的字符串。
 """
 
 
@@ -678,11 +801,27 @@ def _prepare_messages_for_openclaw(msgs: List[Dict], scope_hint: str = "") -> Li
     return prepared
 
 
+def _video_model_lock_hint(video_model_lock: str, video_model_lock_source: str = "") -> str:
+    locked = str(video_model_lock or "").strip()
+    if not locked:
+        return ""
+    source = "用户指定" if str(video_model_lock_source or "").strip() == "user" else "系统默认"
+    return (
+        "OpenClaw 视频生成模型硬约束：\n"
+        f"- 本轮 video.generate 的 payload.model 已锁定为 {locked}（来源：{source}）。\n"
+        "- 如果 video.generate 失败，只能用同一个 model 重试；禁止改用 luma、pika、seedance、sora、wan 或任何其它模型。\n"
+        "- 用户另有明确模型要求时，等待用户下一轮重新指定，不要在本轮自行探索模型。"
+    )
+
+
 async def try_openclaw(
     msgs: List[Dict],
     model: str,
     raw_token: str,
     installation_id: Optional[str] = None,
+    memory_scope: str = _OPENCLAW_MEMORY_SCOPE_DEFAULT,
+    video_model_lock: str = "",
+    video_model_lock_source: str = "",
 ) -> Optional[str]:
     """Attempt to get a reply via OpenClaw Gateway. Returns None on failure."""
     _OPENCLAW_LAST_FAILURE.set("")
@@ -700,9 +839,15 @@ async def try_openclaw(
     agent_id = _openclaw_agent_id_from_chat_model(model)
     openclaw_body_model = _openclaw_gateway_body_model(agent_id)
     scope = classify_openclaw_tool_scope(msgs)
-    set_openclaw_tool_scope_for_agent(agent_id, scope.headers())
+    scope_headers = scope.headers()
+    locked_video_model = str(video_model_lock or "").strip()
+    locked_video_model_source = str(video_model_lock_source or "").strip()
+    if locked_video_model:
+        scope_headers["X-Lobster-Video-Model-Lock"] = locked_video_model
+        scope_headers["X-Lobster-Video-Model-Lock-Source"] = locked_video_model_source or "default"
+    set_openclaw_tool_scope_for_agent(agent_id, scope_headers)
     logger.info(
-        "[OPENCLAW] tool scope intent=%s tools=%s caps=%s",
+        "[OPENCLAW] tool scope intent=%s tools=%s caps=%s video_model_lock=%s source=%s",
         scope.intent,
         ",".join(sorted(scope.allowed_tools)) or "-",
         (
@@ -710,6 +855,8 @@ async def try_openclaw(
             if scope.allowed_capabilities is None
             else (",".join(sorted(scope.allowed_capabilities)) or "-")
         ),
+        locked_video_model or "-",
+        locked_video_model_source or "-",
     )
 
     xi = (installation_id or "").strip()
@@ -730,9 +877,16 @@ async def try_openclaw(
 
     stage = "prepare_messages"
     try:
-        openclaw_messages = _prepare_messages_for_openclaw(msgs, scope.system_hint())
+        hint_parts = [scope.system_hint()]
+        model_lock_hint = _video_model_lock_hint(locked_video_model, locked_video_model_source)
+        if model_lock_hint:
+            hint_parts.append(model_lock_hint)
+        openclaw_messages = _prepare_messages_for_openclaw(
+            msgs,
+            "\n".join(part for part in hint_parts if part).strip(),
+        )
         stage = "memory_context"
-        memory_context = _build_openclaw_memory_context(msgs, raw_token, xi)
+        memory_context = _build_openclaw_memory_context(msgs, raw_token, xi, memory_scope)
         if memory_context:
             openclaw_messages = _inject_memory_context(openclaw_messages, memory_context)
 
@@ -779,21 +933,39 @@ async def try_openclaw(
                 )
             return content, resp
 
-        async with httpx.AsyncClient(timeout=_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC, trust_env=False) as client:
-            raw_content, resp = await _post_gateway(openclaw_messages)
+        try:
+            async with httpx.AsyncClient(timeout=_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC, trust_env=False) as client:
+                raw_content, resp = await _post_gateway(openclaw_messages)
+        except httpx.ConnectError as exc:
+            restarted = await _restart_local_openclaw_gateway_for_retry(oc_base, exc)
+            if not restarted:
+                raise
+            logger.info("[OPENCLAW] local Gateway restarted; retrying request once agent_id=%s", agent_id)
+            async with httpx.AsyncClient(timeout=_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC, trust_env=False) as client:
+                raw_content, resp = await _post_gateway(openclaw_messages)
+        if resp and resp.status_code == 401 and _is_local_openclaw_gateway_url(oc_base):
+            restarted = await _restart_local_openclaw_gateway_for_retry(oc_base, "HTTP 401 Unauthorized")
+            if restarted:
+                logger.info("[OPENCLAW] local Gateway restarted after HTTP 401; retrying request once agent_id=%s", agent_id)
+                async with httpx.AsyncClient(timeout=_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC, trust_env=False) as client:
+                    raw_content, resp = await _post_gateway(openclaw_messages)
         if resp and resp.status_code == 200:
             if raw_content:
                 if _openclaw_body_looks_like_upstream_http_error(raw_content):
+                    is_upstream_timeout = _openclaw_body_looks_like_upstream_timeout(raw_content)
                     _set_openclaw_failure(
-                        "upstream_error_body",
-                        "Gateway 返回了 OpenClaw 上游模型/工具错误内容",
+                        "upstream_timeout" if is_upstream_timeout else "upstream_error_body",
+                        "OpenClaw 上游模型/工具超时，未生成有效回复"
+                        if is_upstream_timeout
+                        else "Gateway 返回了 OpenClaw 上游模型/工具错误内容",
                         model=model,
                         agent_id=agent_id,
                         body=_diag_snippet(raw_content),
                     )
                     logger.warning(
-                        "[OPENCLAW] Gateway 200 but body looks like upstream HTTP/auth error agent_id=%s snippet=%s",
+                        "[OPENCLAW] Gateway 200 but body looks like upstream error agent_id=%s timeout=%s snippet=%s",
                         agent_id,
+                        is_upstream_timeout,
                         (raw_content or "")[:300],
                     )
                     return None
@@ -820,9 +992,12 @@ async def try_openclaw(
                         if not _openclaw_body_looks_like_upstream_http_error(retry_content):
                             logger.info("[OPENCLAW] memory-context follow-up produced final reply agent_id=%s", agent_id)
                             return retry_content
+                        is_retry_timeout = _openclaw_body_looks_like_upstream_timeout(retry_content)
                         _set_openclaw_failure(
-                            "upstream_error_body",
-                            "记忆资料二次追问后仍返回上游模型/工具错误内容",
+                            "upstream_timeout" if is_retry_timeout else "upstream_error_body",
+                            "记忆资料二次追问后 OpenClaw 上游模型/工具超时"
+                            if is_retry_timeout
+                            else "记忆资料二次追问后仍返回上游模型/工具错误内容",
                             model=model,
                             agent_id=agent_id,
                             body=_diag_snippet(retry_content),

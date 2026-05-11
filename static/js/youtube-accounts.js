@@ -12,6 +12,53 @@
     return (base ? base : '') + path;
   }
 
+  function localApiCandidates(path) {
+    var out = [];
+    var loc = window.location || {};
+    var host = String(loc.hostname || '').toLowerCase();
+    var isLocalish = /^(localhost|127\.0\.0\.1)$/i.test(host) ||
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host);
+    function add(base, allowEmpty) {
+      base = String(base || '').replace(/\/$/, '');
+      if (!base && !allowEmpty) return;
+      var url = (base ? base : '') + path;
+      if (out.indexOf(url) === -1) out.push(url);
+    }
+    var configured = localApiBase();
+    if (configured) add(configured);
+    if (loc && /^https?:$/i.test(loc.protocol || '')) {
+      var port = loc.port || '8000';
+      add('http://127.0.0.1:' + port);
+      add('http://localhost:' + port);
+      if (port !== '8000') {
+        add('http://127.0.0.1:8000');
+        add('http://localhost:8000');
+      }
+      if (isLocalish) add(loc.origin || '', true);
+    }
+    return out;
+  }
+
+  function fetchLocalJson(path, options) {
+    var urls = localApiCandidates(path);
+    var idx = 0;
+    var lastErr = null;
+    function next() {
+      var url = urls[idx++];
+      if (!url) return Promise.reject(lastErr || new Error('请求失败'));
+      return fetch(url, options).then(function(resp) {
+        if ((resp.status === 404 || resp.status === 405 || resp.status >= 500) && idx < urls.length) return next();
+        return resp;
+      }).catch(function(err) {
+        lastErr = err;
+        return next();
+      });
+    }
+    return next();
+  }
+
   function hdrs() {
     return Object.assign({ 'Content-Type': 'application/json' }, typeof authHeaders === 'function' ? authHeaders() : {});
   }
@@ -115,7 +162,7 @@
     panel.style.cssText = 'margin:0.5rem 0 0.75rem;padding:0.75rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:rgba(255,255,255,0.03);font-size:0.82rem;';
     panel.innerHTML = '<p class="meta">加载频道数据…</p>';
     card.appendChild(panel);
-    fetch(apiUrl('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/analytics'), { headers: hdrs() })
+    fetchLocalJson('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/analytics', { headers: hdrs() })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d, status: r.status }; }); })
       .then(function(x) {
         if (!x.ok) {
@@ -156,31 +203,51 @@
   function startOauth(accountId) {
     var aid = (accountId || '').trim();
     if (!aid) return;
+    var popup = null;
+    try {
+      popup = window.open('', '_blank');
+      if (popup && popup.document) {
+        popup.document.title = 'Opening YouTube authorization';
+        popup.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px;">Opening YouTube authorization...</p>';
+      }
+    } catch (_) {
+      popup = null;
+    }
     fetch(apiUrl('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/oauth/start'), {
       method: 'POST',
       headers: hdrs(),
-      body: JSON.stringify({ open_chromium: true })
+      body: JSON.stringify({ open_chromium: false })
     })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d, status: r.status }; }); })
       .then(function(x) {
         if (!x.ok) {
+          if (popup && !popup.closed) popup.close();
           alert((x.d && x.d.detail) ? x.d.detail : ('请求失败 HTTP ' + (x.status || '')));
           return;
         }
         var u = (x.d && x.d.url) ? String(x.d.url) : '';
+        if (u && popup && !popup.closed) {
+          popup.location.href = u;
+          try { popup.opener = null; } catch (_) {}
+          return;
+        }
         var opened = !!(x.d && x.d.chromium_opened);
         var cmsg = (x.d && x.d.chromium_message) ? String(x.d.chromium_message) : '';
         if (opened) {
           return;
         }
         if (u) {
-          window.open(u, '_blank', 'noopener,noreferrer');
+          var systemPopup = window.open(u, '_blank', 'noopener,noreferrer');
+          if (!systemPopup) alert('Popup was blocked. Please copy this URL to authorize YouTube:\n' + u);
           if (cmsg) alert('内置 Chromium 未启动，已改用系统浏览器。' + cmsg);
         } else if (cmsg) {
           alert(cmsg);
         }
       })
-      .catch(function(e) { alert(e && e.message ? e.message : '请求失败'); });
+      .catch(function(e) {
+        if (popup && !popup.closed) popup.close();
+        alert(e && e.message ? e.message : '请求失败');
+      });
   }
 
   function closeScheduleModal() {

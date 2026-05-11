@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from urllib.parse import unquote, urlparse
+import subprocess
+import time
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote, unquote, urlparse
 
 import httplib2
 
@@ -16,11 +19,131 @@ YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 # httplib2 默认把 HTTP 308 当作「永久重定向」并强制要求 Location；
 # YouTube/Google 可恢复上传协议用 308 表示「分块尚未传完」(Resume Incomplete)，不应当跳转跟随。
 _HTTPLIB2_REDIRECT_CODES_NO_308 = frozenset((300, 301, 302, 303, 307))
+_GOOGLE_PROXY_PROBE_URL = "https://oauth2.googleapis.com/token"
+_SYSTEM_PROXY_CACHE_TTL_SEC = 120.0
+_system_proxy_cache: Dict[str, Tuple[float, Optional[str]]] = {}
 
 
 def _configure_httplib2_for_google_resumable_upload(http: httplib2.Http) -> httplib2.Http:
     http.redirect_codes = _HTTPLIB2_REDIRECT_CODES_NO_308
     return http
+
+
+def _normalize_http_proxy_url(raw: str) -> Optional[str]:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    u = urlparse(s)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return None
+    port = u.port if u.port is not None else (443 if u.scheme == "https" else 8080)
+    if u.username or u.password:
+        user = quote(unquote(u.username or ""), safe="")
+        pw = quote(unquote(u.password or ""), safe="")
+        auth = f"{user}:{pw}@"
+    else:
+        auth = ""
+    return f"{u.scheme}://{auth}{u.hostname}:{port}"
+
+
+def resolve_windows_system_proxy_url(target_url: str = _GOOGLE_PROXY_PROBE_URL) -> Optional[str]:
+    """解析 Windows 当前用户代理/PAC。
+
+    Python/httpx 默认不会读 WinINET 的 PAC；浏览器能访问 Google 时，本机后端仍可能直连超时。
+    这里用 .NET 的系统代理解析一次并短缓存，专供 YouTube/Google 出网链路 fallback。
+    """
+    if os.name != "nt":
+        return None
+    cache_key = target_url
+    now = time.time()
+    cached = _system_proxy_cache.get(cache_key)
+    if cached and now - cached[0] < _SYSTEM_PROXY_CACHE_TTL_SEC:
+        return cached[1]
+
+    escaped_url = target_url.replace("'", "''")
+    script = (
+        "$ErrorActionPreference='Stop';"
+        f"$uri=[Uri]'{escaped_url}';"
+        "$proxy=[System.Net.WebRequest]::GetSystemWebProxy().GetProxy($uri);"
+        "if ($proxy -and $proxy.AbsoluteUri -and $proxy.AbsoluteUri -ne $uri.AbsoluteUri) "
+        "{ [Console]::Out.Write($proxy.AbsoluteUri) }"
+    )
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=6.0,
+            creationflags=flags,
+        )
+    except Exception as e:
+        logger.debug("[youtube-proxy] 解析 Windows 系统代理失败: %s", e)
+        _system_proxy_cache[cache_key] = (now, None)
+        return None
+    if proc.returncode != 0:
+        logger.debug("[youtube-proxy] 解析 Windows 系统代理返回非 0: %s", (proc.stderr or "")[:300])
+        _system_proxy_cache[cache_key] = (now, None)
+        return None
+    proxy_url = _normalize_http_proxy_url(proc.stdout or "")
+    _system_proxy_cache[cache_key] = (now, proxy_url)
+    if proxy_url:
+        logger.info("[youtube-proxy] 使用 Windows 系统代理/PAC: %s", proxy_url)
+    return proxy_url
+
+
+def resolve_youtube_httpx_proxy_url(
+    proxy_server: Optional[str],
+    proxy_username: Optional[str],
+    proxy_password: Optional[str],
+    *,
+    target_url: str = _GOOGLE_PROXY_PROBE_URL,
+) -> Tuple[Optional[str], str]:
+    """账号代理优先；账号未配置时使用 Windows 系统代理/PAC；最后才直连。"""
+    explicit = build_httpx_proxy_url(proxy_server, proxy_username, proxy_password)
+    if explicit:
+        return explicit, "account"
+    system_proxy = resolve_windows_system_proxy_url(target_url)
+    if system_proxy:
+        return system_proxy, "system"
+    return None, "direct"
+
+
+def youtube_httpx_client_kwargs(
+    proxy_server: Optional[str],
+    proxy_username: Optional[str],
+    proxy_password: Optional[str],
+    *,
+    timeout: float = 30.0,
+    target_url: str = _GOOGLE_PROXY_PROBE_URL,
+) -> Tuple[Dict[str, Any], str]:
+    proxy_url, source = resolve_youtube_httpx_proxy_url(
+        proxy_server,
+        proxy_username,
+        proxy_password,
+        target_url=target_url,
+    )
+    kwargs: Dict[str, Any] = {"timeout": timeout, "trust_env": False}
+    if proxy_url:
+        kwargs["proxy"] = proxy_url
+    return kwargs, source
+
+
+def _httplib2_http_for_proxy_url(proxy_url: Optional[str]) -> httplib2.Http:
+    normalized = _normalize_http_proxy_url(proxy_url or "")
+    if not normalized:
+        return _configure_httplib2_for_google_resumable_upload(httplib2.Http())
+    u = urlparse(normalized)
+    from httplib2 import socks
+
+    pi = httplib2.ProxyInfo(
+        socks.PROXY_TYPE_HTTP,
+        u.hostname or "",
+        u.port or (443 if u.scheme == "https" else 8080),
+        proxy_user=unquote(u.username) if u.username else None,
+        proxy_pass=unquote(u.password) if u.password else None,
+    )
+    return _configure_httplib2_for_google_resumable_upload(httplib2.Http(proxy_info=pi))
 
 
 def _youtube_api_error_reasons(http_error) -> List[str]:
@@ -61,10 +184,10 @@ def build_httplib2_http_for_proxy(
     proxy_username: Optional[str],
     proxy_password: Optional[str],
 ) -> httplib2.Http:
-    """无代理时返回默认 Http；有代理时使用 HTTP CONNECT（PySocks 提供 PROXY_TYPE）。"""
+    """账号代理优先；无账号代理时沿用 Windows 系统代理/PAC；否则直连。"""
     raw = (proxy_server or "").strip()
     if not raw:
-        return _configure_httplib2_for_google_resumable_upload(httplib2.Http())
+        return _httplib2_http_for_proxy_url(resolve_windows_system_proxy_url(_GOOGLE_PROXY_PROBE_URL))
 
     u = urlparse(raw)
     if u.scheme not in ("http", "https"):
@@ -100,8 +223,6 @@ def build_httpx_proxy_url(
     proxy_password: Optional[str],
 ) -> Optional[str]:
     """供 httpx.AsyncClient(proxy=...) 使用；无代理返回 None。账号/密码规则与 build_httplib2_http_for_proxy 一致。"""
-    from urllib.parse import quote
-
     raw = (proxy_server or "").strip()
     if not raw:
         return None

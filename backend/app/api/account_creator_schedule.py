@@ -25,6 +25,7 @@ from ..services.schedule_review_snapshots import (
     append_review_snapshot,
     snapshot_to_list_item,
 )
+from ..services.schedule_review_timing import has_pending_review_queue, is_review_mode
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,8 @@ async def _bootstrap_creator_schedule_sync(account_id: int, user_id: int, interv
     from ..services.schedule_review_timing import (
         compute_next_review_run_at_after_orchestration,
         compute_next_review_run_at_naive,
+        has_pending_review_queue,
+        is_review_mode,
     )
 
     db = SessionLocal()
@@ -228,15 +231,10 @@ async def _bootstrap_creator_schedule_sync(account_id: int, user_id: int, interv
             logger.exception("bootstrap creator sync account_id=%s", account_id)
 
         now_b = datetime.utcnow()
-        mode_b = (getattr(sch, "schedule_publish_mode", None) or "immediate").strip().lower()
-        dr_b = getattr(sch, "review_drafts_json", None) or []
-        if (
-            mode_b == "review"
-            and bool(getattr(sch, "review_confirmed", False))
-            and isinstance(dr_b, list)
-            and len(dr_b) > 0
-        ):
+        if has_pending_review_queue(sch):
             sch.next_run_at = compute_next_review_run_at_naive(sch, now_b)
+        elif is_review_mode(sch):
+            sch.next_run_at = None
         else:
             sch.next_run_at = now_b + timedelta(minutes=max(INTERVAL_MIN, interval_minutes))
         db.commit()
@@ -311,30 +309,23 @@ async def _bootstrap_creator_schedule_sync(account_id: int, user_id: int, interv
                         orch_err = str(e)
                         logger.exception("bootstrap schedule orchestration account_id=%s", account_id)
                     db.refresh(sch)
-                    if (
-                        had_orch
-                        and orch_ok is True
-                        and mode_o == "review"
-                        and bool(getattr(sch, "review_confirmed", False))
-                    ):
-                        dr2 = getattr(sch, "review_drafts_json", None) or []
-                        if isinstance(dr2, list) and len(dr2) > 0:
-                            sch.next_run_at = compute_next_review_run_at_after_orchestration(
-                                sch, datetime.utcnow()
-                            )
-                            db.commit()
+                    if had_orch and orch_ok is True and mode_o == "review":
+                        sch.next_run_at = compute_next_review_run_at_after_orchestration(
+                            sch, datetime.utcnow()
+                        )
+                        db.commit()
                     elif (
                         had_orch
                         and orch_ok is not True
                         and mode_o == "review"
-                        and bool(getattr(sch, "review_confirmed", False))
                     ):
-                        dr2 = getattr(sch, "review_drafts_json", None) or []
-                        if isinstance(dr2, list) and len(dr2) > 0:
+                        if has_pending_review_queue(sch):
                             sch.next_run_at = datetime.utcnow() + timedelta(
                                 minutes=max(INTERVAL_MIN, interval_minutes)
                             )
-                            db.commit()
+                        else:
+                            sch.next_run_at = None
+                        db.commit()
             else:
                 had_orch = True
                 orch_ok = False
@@ -533,6 +524,8 @@ async def put_creator_schedule(
 
     row.updated_at = datetime.utcnow()
 
+    if is_review_mode(row) and not has_pending_review_queue(row):
+        row.next_run_at = None
     if not row.enabled:
         row.next_run_at = None
 
@@ -564,25 +557,33 @@ async def put_creator_schedule(
         or prev_kind != new_kind
         or prev_vaid != new_vaid
         or prev_mode != new_mode
-        or prev_rvc != new_rvc
+    )
+    review_queue_changed = (
+        prev_rvc != new_rvc
         or not _drafts_eq(prev_drafts, new_drafts)
         or prev_conf != new_conf
         or prev_slot != new_slot
     )
     # 首轮：新开启 / 改间隔或需求或模式或素材 / 已开但 next 丢失，均立即 bootstrap（同步+按需编排+顺延 next_run_at）
-    should_bootstrap = row.enabled and (
-        not was_enabled or config_changed or row.next_run_at is None
-    )
+    if new_mode == "review":
+        should_bootstrap = row.enabled and has_pending_review_queue(row) and (
+            not was_enabled or config_changed or row.next_run_at is None
+        )
+    else:
+        should_bootstrap = row.enabled and (
+            not was_enabled or config_changed or row.next_run_at is None
+        )
     if should_bootstrap:
         background_tasks.add_task(_bootstrap_creator_schedule_sync, account_id, current_user.id, iv)
 
     logger.info(
-        "creator-schedule saved account_id=%s enabled=%s interval_min=%s immediate=%s config_changed=%s",
+        "creator-schedule saved account_id=%s enabled=%s interval_min=%s immediate=%s config_changed=%s review_queue_changed=%s",
         account_id,
         row.enabled,
         iv,
         should_bootstrap,
         config_changed,
+        review_queue_changed,
     )
     return _to_out(row)
 
@@ -641,6 +642,7 @@ async def post_review_generate(
     row.review_drafts_json = drafts
     row.review_confirmed = False
     row.review_selected_slot = 0
+    row.next_run_at = None
     row.updated_at = datetime.utcnow()
     append_review_snapshot(
         db,
@@ -744,6 +746,7 @@ async def post_review_generate_assets(
         new_drafts[i] = merge_generated_into_slot(slot, gen)
     row.review_drafts_json = new_drafts
     row.review_confirmed = False
+    row.next_run_at = None
     row.updated_at = datetime.utcnow()
     append_review_snapshot(
         db,
@@ -820,6 +823,7 @@ async def post_review_regenerate_slot(
     new_list[body.slot_index] = one[0]
     row.review_drafts_json = new_list
     row.review_confirmed = False
+    row.next_run_at = None
     row.updated_at = datetime.utcnow()
     append_review_snapshot(
         db,
@@ -943,6 +947,7 @@ def restore_review_snapshot(
         raise HTTPException(400, detail="请先将发布模式设为「审核后发布」")
     row.review_drafts_json = dj
     row.review_confirmed = False
+    row.next_run_at = None
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(row)

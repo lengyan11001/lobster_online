@@ -8,7 +8,11 @@
       "default_installed": true,
       "status": "available",
       "capabilities": {},
-      "tags": ["OpenClaw", "Browser", "automation"]
+      "tags": [
+        "OpenClaw",
+        "Browser",
+        "automation"
+      ]
     },
     "computer_use_skill": {
       "name": "Computer Use",
@@ -18,7 +22,11 @@
       "default_installed": true,
       "status": "available",
       "capabilities": {},
-      "tags": ["OpenClaw", "Computer", "automation"]
+      "tags": [
+        "OpenClaw",
+        "Computer",
+        "automation"
+      ]
     },
     "media_edit_skill": {
       "name": "素材剪辑",
@@ -577,12 +585,21 @@
             "properties": {
               "action": {
                 "type": "string",
-                "enum": ["open_product_form", "list_shop_accounts"],
+                "enum": [
+                  "open_product_form",
+                  "list_shop_accounts"
+                ],
                 "description": "open_product_form=打开商品发布页面, list_shop_accounts=列出已配置的店铺账号"
               },
               "platform": {
                 "type": "string",
-                "enum": ["douyin_shop", "xiaohongshu_shop", "alibaba1688", "taobao", "pinduoduo"],
+                "enum": [
+                  "douyin_shop",
+                  "xiaohongshu_shop",
+                  "alibaba1688",
+                  "taobao",
+                  "pinduoduo"
+                ],
                 "description": "目标电商平台"
               },
               "account_nickname": {
@@ -595,12 +612,16 @@
               },
               "main_image_asset_ids": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                  "type": "string"
+                },
                 "description": "主图素材 ID 列表"
               },
               "detail_image_asset_ids": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                  "type": "string"
+                },
                 "description": "详情图素材 ID 列表"
               },
               "price": {
@@ -615,7 +636,12 @@
           }
         }
       },
-      "tags": ["ecommerce", "publish", "shop", "product"]
+      "tags": [
+        "ecommerce",
+        "publish",
+        "shop",
+        "product"
+      ]
     },
     "sutui_mcp": {
       "name": "速推 MCP",
@@ -802,6 +828,105 @@
       "capabilities": {},
       "tags": [
         "mcp"
+      ]
+    },
+    "goal_video_pipeline_skill": {
+      "name": "????",
+      "description": "?????????????????????????????????????????????? ID?? OpenClaw ???",
+      "type": "builtin",
+      "store_visibility": "popular",
+      "default_installed": true,
+      "status": "available",
+      "capabilities": {
+        "goal.video.pipeline": {
+          "description": "??????????????????? OpenClaw ???????????????????????????????????????? final_asset_id?",
+          "upstream": "local",
+          "upstream_tool": "invoke",
+          "enabled": true,
+          "is_default": false,
+          "unit_credits": 0,
+          "arg_schema": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "run_pipeline",
+                  "start_pipeline",
+                  "poll_pipeline"
+                ],
+                "default": "start_pipeline"
+              },
+              "goal": {
+                "type": "string",
+                "description": "???????????????????? 8 ???????"
+              },
+              "job_id": {
+                "type": "string",
+                "description": "poll_pipeline ?????"
+              },
+              "platform": {
+                "type": "string",
+                "default": "douyin"
+              },
+              "language": {
+                "type": "string",
+                "default": "??"
+              },
+              "duration": {
+                "type": "integer",
+                "default": 8
+              },
+              "aspect_ratio": {
+                "type": "string",
+                "default": "9:16"
+              },
+              "memory_scope": {
+                "type": "string",
+                "default": "default"
+              },
+              "planning_model": {
+                "type": "string"
+              },
+              "image_model": {
+                "type": "string"
+              },
+              "video_model": {
+                "type": "string"
+              },
+              "reference_asset_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reference_image_urls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "image_retry_count": {
+                "type": "integer",
+                "default": 2
+              },
+              "video_retry_count": {
+                "type": "integer",
+                "default": 2
+              }
+            },
+            "required": [
+              "goal"
+            ]
+          }
+        }
+      },
+      "tags": [
+        "OpenClaw",
+        "video",
+        "image",
+        "memory",
+        "workflow"
       ]
     }
   }

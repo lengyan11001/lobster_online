@@ -13,14 +13,17 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..core.config import settings
+from ..db import SessionLocal
+from ..models import Asset
 from ..services.openclaw_channel_auth_store import read_channel_fallback
 from .auth import get_current_user_for_local
+from .assets import get_asset_public_url
 from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
 logger = logging.getLogger(__name__)
@@ -75,6 +78,56 @@ def _request_bearer_token(request: Request) -> str:
     return ""
 
 
+def _cloud_headers_from_request(request: Request) -> Dict[str, str]:
+    fallback_jwt, fallback_installation_id = _auth_context()
+    jwt_token = _request_bearer_token(request) or fallback_jwt
+    installation_id = (request.headers.get("X-Installation-Id") or "").strip() or fallback_installation_id
+    if jwt_token and not installation_id:
+        sub = _decode_jwt_sub(jwt_token)
+        installation_id = f"h5-local-{sub}" if sub else "h5-local"
+    if not jwt_token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    return _headers(jwt_token, installation_id)
+
+
+async def _proxy_cloud_json(
+    request: Request,
+    method: str,
+    path: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+    timeout_sec: float = 20.0,
+) -> Dict[str, Any]:
+    base = _cloud_base()
+    if not base:
+        raise HTTPException(status_code=503, detail="AUTH_SERVER_BASE is not configured")
+    headers = _cloud_headers_from_request(request)
+    try:
+        async with httpx.AsyncClient(timeout=timeout_sec, trust_env=False) as client:
+            resp = await client.request(
+                method,
+                f"{base}{path}",
+                params=params,
+                json=json_body,
+                headers=headers,
+            )
+    except httpx.RequestError as exc:
+        logger.warning("[SCHEDULED-TASK] proxy request failed path=%s: %s", path, exc)
+        raise HTTPException(status_code=503, detail="Cloud scheduled task service is unreachable") from exc
+
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if resp.status_code >= 400:
+        detail = data.get("detail") if isinstance(data, dict) else ""
+        raise HTTPException(status_code=resp.status_code, detail=detail or resp.text[:500] or f"HTTP {resp.status_code}")
+    if isinstance(data, dict):
+        return data
+    return {"ok": True, "data": data}
+
+
 @router.get("/api/h5-chat/messages", summary="Proxy cloud H5 chat messages for local online UI")
 async def proxy_h5_chat_messages(
     request: Request,
@@ -117,6 +170,87 @@ async def proxy_h5_chat_messages(
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="Cloud H5 chat returned invalid payload")
     return data
+
+
+@router.get("/api/scheduled-tasks/runs", summary="Proxy cloud scheduled task runs for local online UI")
+async def proxy_scheduled_task_runs(
+    request: Request,
+    limit: int = Query(80, ge=1, le=200),
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    return await _proxy_cloud_json(
+        request,
+        "GET",
+        "/api/scheduled-tasks/runs",
+        params={"limit": limit},
+    )
+
+
+@router.get("/api/scheduled-tasks/tasks", summary="Proxy cloud scheduled tasks for local online UI")
+async def proxy_scheduled_tasks(
+    request: Request,
+    limit: int = Query(80, ge=1, le=200),
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    return await _proxy_cloud_json(
+        request,
+        "GET",
+        "/api/scheduled-tasks/tasks",
+        params={"limit": limit},
+    )
+
+
+@router.post("/api/scheduled-tasks/tasks", summary="Proxy create scheduled task for local online UI")
+async def proxy_create_scheduled_task(
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    return await _proxy_cloud_json(
+        request,
+        "POST",
+        "/api/scheduled-tasks/tasks",
+        json_body=body,
+        timeout_sec=30.0,
+    )
+
+
+@router.patch("/api/scheduled-tasks/tasks/{task_id}", summary="Proxy update scheduled task for local online UI")
+async def proxy_patch_scheduled_task(
+    task_id: int,
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    return await _proxy_cloud_json(
+        request,
+        "PATCH",
+        f"/api/scheduled-tasks/tasks/{task_id}",
+        json_body=body if isinstance(body, dict) else {},
+    )
+
+
+@router.post("/api/scheduled-tasks/tasks/{task_id}/run-now", summary="Proxy run scheduled task now for local online UI")
+async def proxy_run_scheduled_task_now(
+    task_id: int,
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    return await _proxy_cloud_json(
+        request,
+        "POST",
+        f"/api/scheduled-tasks/tasks/{task_id}/run-now",
+        json_body={},
+        timeout_sec=30.0,
+    )
 
 
 async def _post_cloud_event(
@@ -192,6 +326,115 @@ async def _complete_task_run(
 def _local_chat_url() -> str:
     port = int(getattr(settings, "port", 8000) or 8000)
     return f"http://127.0.0.1:{port}/chat/stream"
+
+
+def _scheduled_payload(item: Dict[str, Any]) -> Dict[str, Any]:
+    payload = item.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _merge_id_list(existing: Any, asset_ids: List[str]) -> List[str]:
+    raw: List[Any] = []
+    if isinstance(existing, list):
+        raw.extend(existing)
+    elif isinstance(existing, str):
+        raw.extend([x for x in existing.replace("，", ",").split(",")])
+    raw.extend(asset_ids)
+    seen: set[str] = set()
+    out: List[str] = []
+    for x in raw:
+        aid = str(x or "").strip().lower()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        out.append(aid[:64])
+        if len(out) >= 20:
+            break
+    return out
+
+
+def _scheduled_attachment_asset_ids(item: Dict[str, Any]) -> List[str]:
+    payload = _scheduled_payload(item)
+    raw: List[Any] = []
+    for key in ("attachment_asset_ids", "asset_ids"):
+        val = payload.get(key)
+        if isinstance(val, list):
+            raw.extend(val)
+        elif isinstance(val, str):
+            raw.extend([x for x in val.replace("，", ",").split(",")])
+    inner = payload.get("payload")
+    if isinstance(inner, dict):
+        for key in ("attachment_asset_ids", "asset_ids", "reference_asset_ids"):
+            val = inner.get(key)
+            if isinstance(val, list):
+                raw.extend(val)
+            elif isinstance(val, str):
+                raw.extend([x for x in val.replace("，", ",").split(",")])
+        for key in ("asset_id", "image_asset_id", "video_asset_id", "source_asset_id", "reference_asset_id"):
+            val = inner.get(key)
+            if isinstance(val, str):
+                raw.append(val)
+    seen: set[str] = set()
+    out: List[str] = []
+    for x in raw:
+        aid = str(x or "").strip().lower()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        out.append(aid[:64])
+        if len(out) >= 20:
+            break
+    return out
+
+
+def _append_scheduled_asset_context(content: str, asset_ids: List[str]) -> str:
+    ids = [a for a in asset_ids if a]
+    if not ids:
+        return content
+    if "【附加素材】" in (content or ""):
+        return content
+    return (content or "").rstrip() + "\n\n【附加素材】\n" + "\n".join(f"- asset_id: {aid}" for aid in ids)
+
+
+def _inject_scheduled_assets_into_capability_payload(cap_payload: Dict[str, Any], asset_ids: List[str]) -> Dict[str, Any]:
+    if not asset_ids:
+        return cap_payload
+    out = dict(cap_payload or {})
+    out["attachment_asset_ids"] = _merge_id_list(out.get("attachment_asset_ids"), asset_ids)
+    out["asset_ids"] = _merge_id_list(out.get("asset_ids"), asset_ids)
+    out.setdefault("asset_id", asset_ids[0])
+    out.setdefault("image_asset_id", asset_ids[0])
+    return out
+
+
+def _scheduled_asset_context_with_urls(asset_ids: List[str], jwt_token: str, installation_id: str) -> str:
+    ids = [a for a in asset_ids if a]
+    if not ids:
+        return ""
+    db = SessionLocal()
+    try:
+        uid = int(_decode_jwt_sub(jwt_token) or "0")
+        if uid <= 0:
+            return "\n".join(f"- asset_id: {aid}" for aid in ids)
+        req = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+        lines: List[str] = []
+        for aid in ids:
+            row = db.query(Asset).filter(Asset.user_id == uid, Asset.asset_id == aid).first()
+            if not row:
+                lines.append(f"- asset_id: {aid}  状态: 本机素材库未找到")
+                continue
+            url = get_asset_public_url(aid, uid, req, db) or (row.source_url or "").strip()
+            mt = (row.media_type or "").strip()
+            if url:
+                lines.append(f"- asset_id: {aid}  media_type: {mt}  URL: {url}")
+            else:
+                lines.append(f"- asset_id: {aid}  media_type: {mt}  状态: 无公网 URL")
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] build asset context failed ids=%s err=%s", ids, exc)
+        return "\n".join(f"- asset_id: {aid}" for aid in ids)
+    finally:
+        db.close()
 
 
 async def _run_direct_chat(
@@ -329,14 +572,25 @@ async def _run_scheduled_chat_message(
 ) -> None:
     run_id = str(item.get("id") or "").strip()
     content = str(item.get("content") or "").strip()
+    attachment_asset_ids = _scheduled_attachment_asset_ids(item)
+    content = _append_scheduled_asset_context(content, attachment_asset_ids)
     if not run_id or not content:
         return
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "local-online claimed scheduled task"})
     try:
         if openclaw:
+            asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
+            user_content = content
+            if asset_context:
+                user_content = (
+                    content.rstrip()
+                    + "\n\n【本机素材库上下文】\n"
+                    + asset_context
+                    + "\n请优先使用这些真实素材 ID/URL；不要编造素材 ID。"
+                )
             messages = [
                 {"role": "system", "content": "You are executing a scheduled OpenClaw task. Follow the user request and return the final result concisely."},
-                {"role": "user", "content": content},
+                {"role": "user", "content": user_content},
             ]
             reply = await try_openclaw(
                 messages,
@@ -363,6 +617,7 @@ async def _run_scheduled_chat_message(
             "history": [],
             "session_id": f"scheduled-{run_id}",
             "context_id": f"scheduled-{run_id}",
+            "attachment_asset_ids": attachment_asset_ids,
         }
         timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
         final_reply = ""
@@ -424,6 +679,8 @@ async def _run_scheduled_capability(
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     capability_id = str(payload.get("capability_id") or "").strip()
     cap_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    attachment_asset_ids = _scheduled_attachment_asset_ids(item)
+    cap_payload = _inject_scheduled_assets_into_capability_payload(cap_payload, attachment_asset_ids)
     if not run_id or not capability_id:
         return
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"invoke_capability {capability_id}"})

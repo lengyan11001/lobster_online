@@ -45,6 +45,7 @@ from .api.comfly_daihuo import router as comfly_daihuo_router
 from .api.comfly_seedance_tvc import router as comfly_seedance_tvc_router
 from .api.comfly_ecommerce_detail import router as comfly_ecommerce_detail_router
 from .api.comfly_image_studio import router as comfly_image_studio_router
+from .api.goal_video_pipeline import router as goal_video_pipeline_router
 from .api.viral_video_remix import router as viral_video_remix_router
 from .api.hifly_digital_human import router as hifly_digital_human_router
 try:
@@ -387,8 +388,21 @@ def _sync_missing_capabilities_from_catalog():
 def _auto_start_openclaw():
     """若本机已有 openclaw 入口则尝试拉起 Gateway；不会在启动时下载 npm/node 依赖（依赖仅在微信点授权时安装）。"""
     try:
-        from .api.openclaw_config import _find_openclaw_pid, _restart_openclaw_gateway
-        if not _find_openclaw_pid():
+        from .api.openclaw_config import (
+            _ensure_openclaw_json_for_local_launch,
+            _find_openclaw_pid,
+            _restart_openclaw_gateway,
+        )
+
+        config_changed = _ensure_openclaw_json_for_local_launch()
+        if config_changed:
+            logger.info("OpenClaw Gateway config synced from .env, restarting...")
+            ok = _restart_openclaw_gateway()
+            if ok:
+                logger.info("OpenClaw Gateway restarted after config sync")
+            else:
+                logger.warning("OpenClaw Gateway restart after config sync failed")
+        elif not _find_openclaw_pid():
             logger.info("OpenClaw Gateway not detected, auto-starting...")
             ok = _restart_openclaw_gateway()
             if ok:
@@ -840,6 +854,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def private_network_access_header(request: Request, call_next):
+        response = await call_next(request)
+        if request.headers.get("access-control-request-private-network") == "true":
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+        return response
+
     @app.exception_handler(Exception)
     async def catch_all(request: Request, exc: Exception):
         if settings.debug:
@@ -875,6 +896,7 @@ def create_app() -> FastAPI:
     app.include_router(comfly_seedance_tvc_router, prefix="")
     app.include_router(comfly_ecommerce_detail_router, prefix="")
     app.include_router(comfly_image_studio_router, prefix="")
+    app.include_router(goal_video_pipeline_router, prefix="")
     app.include_router(viral_video_remix_router, prefix="")
     app.include_router(hifly_digital_human_router, prefix="")
     if ecommerce_publish_router is not None:

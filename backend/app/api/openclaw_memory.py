@@ -162,8 +162,8 @@ def build_openclaw_memory_prompt_context(user_id: int, *, max_docs: int = 40) ->
     active_docs = [d for d in docs if isinstance(d, dict)][:max_docs]
     policy_docs = [d for d in active_docs if _is_memory_policy_doc(d)]
     lines = [
-        "OpenClaw 资料记忆索引：",
-        "- 下列资料已下发或由用户上传到本设备；任务可能相关时，先使用 memory_search 检索，再基于资料回答或执行。",
+        "OpenClaw 个人记忆索引：",
+        "- 下列个人记忆已同步或上传到本设备；任务可能相关时，先使用 memory_search 检索，再基于资料回答或执行。",
         "- 标记为「使用规则/用户倾向」的资料优先级高于普通资料，用来约束其他资料如何被理解和使用。",
         "",
     ]
@@ -439,7 +439,7 @@ def _decode_text_payload(data: bytes, filename: str) -> str:
     if suffix not in _SUPPORTED_SUFFIXES:
         raise HTTPException(
             status_code=400,
-            detail="当前资料记忆支持 txt/md/csv/json/yaml/html、PDF、Word(docx)、Excel(xlsx/xls)、PPT(pptx) 等文件。",
+            detail="当前个人记忆支持 txt/md/csv/json/yaml/html、PDF、Word(docx)、Excel(xlsx/xls)、PPT(pptx) 等文件。",
         )
 
     text = ""
@@ -524,7 +524,7 @@ def _memory_markdown(record: dict[str, Any], text: str) -> str:
     notes_block = f"\n- notes: {notes}" if notes else ""
     return (
         f"# {record.get('title') or '用户资料'}\n\n"
-        "这是一份用户上传给 OpenClaw 的本机资料记忆。回答用户问题时，如果内容相关，可以参考本文；"
+        "这是一份当前用户/设备的个人记忆。回答用户问题时，如果内容相关，可以参考本文；"
         "不要把本文透露给无关用户。\n\n"
         "## 元数据\n\n"
         f"- document_id: {record.get('id')}\n"
@@ -597,7 +597,7 @@ def _memory_markdown(record: dict[str, Any], text: str) -> str:
     notes = (record.get("notes") or "").strip()
     notes_block = f"\n- notes: {notes}" if notes else ""
     source = (record.get("source") or "local_user").strip()
-    source_desc = "cloud-distributed to this device" if source.startswith("cloud_") else "uploaded on this device"
+    source_desc = "personal memory synced to this device" if source.startswith("cloud_") else "personal memory uploaded on this device"
     policy_note = (
         " This document is marked as a user preference / memory usage policy; apply it before using other memory documents."
         if _is_memory_policy_doc(record)
@@ -605,7 +605,7 @@ def _memory_markdown(record: dict[str, Any], text: str) -> str:
     )
     return (
         f"# {record.get('title') or 'OpenClaw memory document'}\n\n"
-        "This OpenClaw memory document is scoped to the current Lobster user/device. "
+        "This OpenClaw personal memory document is scoped to the current Lobster user/device. "
         f"Source: {source_desc}. Use it only when relevant to the user's request.{policy_note}\n\n"
         "## Metadata\n\n"
         f"- document_id: {record.get('id')}\n"
@@ -724,6 +724,8 @@ async def sync_openclaw_memory_from_cloud(
     applied = 0
     deleted = 0
     skipped = 0
+    remote_agent_memory_ids: set[str] = set()
+    agent_memory_synced = bool(data.get("agent_memory_synced")) if isinstance(data, dict) else False
 
     for item in remote_docs:
         if not isinstance(item, dict):
@@ -733,6 +735,14 @@ async def sync_openclaw_memory_from_cloud(
             skipped += 1
             continue
         origin = (item.get("origin") or "agent").strip()
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        memory_layer = str(item.get("memory_layer") or meta.get("memory_layer") or "").strip()
+        if origin == "agent_memory":
+            memory_layer = "agent"
+            remote_agent_memory_ids.add(doc_id)
+            agent_memory_synced = True
+        elif not memory_layer:
+            memory_layer = "personal"
         status = (item.get("status") or "active").strip()
         existing = by_id.get(doc_id)
         if status == "deleted":
@@ -763,6 +773,8 @@ async def sync_openclaw_memory_from_cloud(
             "updated_at": item.get("updated_at") or created_at,
             "source": source,
             "origin": origin,
+            "memory_layer": memory_layer,
+            "scope_owner_user_id": item.get("scope_owner_user_id") or meta.get("scope_owner_user_id"),
             "cloud_doc_id": doc_id,
             "installation_id": item.get("installation_id") or headers.get("X-Installation-Id"),
         }
@@ -775,6 +787,21 @@ async def sync_openclaw_memory_from_cloud(
         docs = [d for d in docs if d.get("id") != doc_id]
         docs.insert(0, record)
         applied += 1
+
+    if agent_memory_synced:
+        kept_docs: list[dict[str, Any]] = []
+        for record in docs:
+            if (
+                isinstance(record, dict)
+                and str(record.get("memory_layer") or "").strip() == "agent"
+                and str(record.get("source") or "").startswith("cloud_")
+                and str(record.get("id") or "") not in remote_agent_memory_ids
+            ):
+                removed.extend(_delete_indexed_doc_files(current_user.id, record))
+                deleted += 1
+                continue
+            kept_docs.append(record)
+        docs = kept_docs
 
     _save_index(current_user.id, docs)
     return {
@@ -830,6 +857,7 @@ async def upload_openclaw_memory(
         "sha256": sha256,
         "created_at": created_at,
         "source": "local_user",
+        "memory_layer": "personal",
     }
 
     user_dir = _user_dir(current_user.id)

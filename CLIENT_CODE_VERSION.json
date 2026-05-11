@@ -1,6 +1,6 @@
 {
-  "version": "1.0.29",
-  "build": 27,
-  "applied_at": "2026-05-04T13:10:47+08:00",
-  "note": "OTA with latest media studios and ecommerce image flow updates"
+  "version": "1.0.34",
+  "build": 35,
+  "applied_at": "2026-05-09T17:51:00+08:00",
+  "note": "OTA build 35 for OpenClaw task result lookup scope"
 }

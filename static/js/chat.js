@@ -42,6 +42,16 @@ var CHAT_MODE_DEFAULT = 'default';
 var CHAT_MODE_WORKSPACE = 'workspace_cli';
 // 云端工作台入口先在前端关闭；后端能力保留，后续需要时改这里即可恢复入口。
 var CHAT_WORKSPACE_ENTRY_ENABLED = false;
+var CHAT_MEMORY_SCOPE_DEFAULT = 'default';
+var CHAT_MEMORY_SCOPE_PERSONAL = 'personal';
+var CHAT_MEMORY_SCOPE_SYSTEM = 'system';
+var CHAT_MEMORY_SCOPE_NONE = 'none';
+var CHAT_MEMORY_SCOPE_CONFIG = {
+  default: { label: '默认记忆', badge: '' },
+  personal: { label: '个人记忆', badge: '个人' },
+  system: { label: '系统记忆', badge: '系统' },
+  none: { label: '不使用资料', badge: '无记忆' }
+};
 var WORKSPACE_CATEGORY_DEFAULT = 'web_app';
 var WORKSPACE_CATEGORY_CONFIG = {
   web_app: {
@@ -173,6 +183,21 @@ function _getSessionMode(session) {
 
 function _isWorkspaceSession(session) {
   return _getSessionMode(session) === CHAT_MODE_WORKSPACE;
+}
+
+function _normalizeChatMemoryScope(scope) {
+  var key = String(scope || '').trim();
+  return CHAT_MEMORY_SCOPE_CONFIG[key] ? key : CHAT_MEMORY_SCOPE_DEFAULT;
+}
+
+function _getSessionMemoryScope(session) {
+  if (!session || typeof session !== 'object') return CHAT_MEMORY_SCOPE_DEFAULT;
+  return _normalizeChatMemoryScope(session.chat_memory_scope);
+}
+
+function _getSessionMemoryBadge(session) {
+  var cfg = CHAT_MEMORY_SCOPE_CONFIG[_getSessionMemoryScope(session)] || CHAT_MEMORY_SCOPE_CONFIG.default;
+  return cfg.badge || '';
 }
 
 function _getWorkspaceCategory(session) {
@@ -1081,6 +1106,11 @@ function loadChatSessionsFromStorage() {
       chatSessions.forEach(function(s) {
         if (s.id != null) s.id = String(s.id);
         s.mode = _getSessionMode(s);
+        var normalizedMemoryScope = _getSessionMemoryScope(s);
+        if (s.chat_memory_scope !== normalizedMemoryScope) {
+          s.chat_memory_scope = normalizedMemoryScope;
+          storageDirty = true;
+        }
         var m = s.messages || s.history;
         s.messages = Array.isArray(m) ? m : [];
         mergePollResumeFromBackupIntoSession(s);
@@ -1351,6 +1381,45 @@ function setChatQuickMode(mode, options) {
   }
 }
 
+function renderChatMemoryScopeUi() {
+  var select = document.getElementById('chatMemoryScopeSelect');
+  if (!select) return;
+  var current = getSessionById(currentSessionId);
+  var isDefaultChat = current && !_isWorkspaceSession(current) && !_isH5MirrorSession(current);
+  var scope = _getSessionMemoryScope(current);
+  select.value = scope;
+  select.disabled = !isDefaultChat;
+  select.title = isDefaultChat ? '本会话使用的记忆范围' : '当前会话不使用智能对话记忆范围';
+}
+
+function setChatMemoryScope(scope) {
+  var current = getSessionById(currentSessionId);
+  if (!current || _isWorkspaceSession(current) || _isH5MirrorSession(current)) {
+    renderChatMemoryScopeUi();
+    return;
+  }
+  current.chat_memory_scope = _normalizeChatMemoryScope(scope);
+  current.updatedAt = Date.now();
+  saveChatSessionsToStorage();
+  renderChatMemoryScopeUi();
+  renderChatSessionList();
+}
+
+function applyChatMemoryScopeHeader(headers, session) {
+  if (!headers || !session || _isWorkspaceSession(session) || _isH5MirrorSession(session)) return headers;
+  headers['X-Lobster-Memory-Scope'] = _getSessionMemoryScope(session);
+  return headers;
+}
+
+function bindChatMemoryScopeSelect() {
+  var select = document.getElementById('chatMemoryScopeSelect');
+  if (!select || select.dataset.bound === '1') return;
+  select.dataset.bound = '1';
+  select.addEventListener('change', function() {
+    setChatMemoryScope(select.value);
+  });
+}
+
 function updateWorkspaceCategoryUi(category) {
   var normalized = WORKSPACE_CATEGORY_CONFIG[category] ? category : WORKSPACE_CATEGORY_DEFAULT;
   document.querySelectorAll('.workspace-category-tab[data-workspace-category]').forEach(function(btn) {
@@ -1556,13 +1625,22 @@ function updateChatModeUi(mode) {
     if (directChip) directChip.style.display = '';
   }
   renderChatQuickModeUi(normalized === CHAT_MODE_WORKSPACE ? '' : _getSessionQuickMode(getSessionById(currentSessionId)));
+  renderChatMemoryScopeUi();
   if (homeWorkspacePill) homeWorkspacePill.textContent = '云端工作台';
 }
 
 function createNewSession(mode) {
   var id = 's' + Date.now();
   var sessionMode = _getRequestedNewChatMode(mode);
-  var session = { id: id, title: '新对话', messages: [], updatedAt: Date.now(), pending: false, mode: sessionMode };
+  var session = {
+    id: id,
+    title: '新对话',
+    messages: [],
+    updatedAt: Date.now(),
+    pending: false,
+    mode: sessionMode,
+    chat_memory_scope: CHAT_MEMORY_SCOPE_DEFAULT
+  };
   chatSessions.unshift(session);
   saveChatSessionsToStorage();
   switchChatSession(id);
@@ -1577,6 +1655,7 @@ function switchChatSession(id) {
   var nextSession = getSessionById(sid);
   if (nextSession) saveLastActiveChatSessionByModeToStorage(sid, _getSessionMode(nextSession));
   updateChatModeUi(_getSessionMode(nextSession));
+  renderChatMemoryScopeUi();
   renderCurrentSessionMessages();
   renderChatSessionList();
   _syncH5MirrorAutoSyncForCurrentSession();
@@ -1684,7 +1763,12 @@ function renderChatSessionList() {
     var preview = getSessionPreview(s);
     var time = formatSessionTime(s.updatedAt);
     var active = s.id === currentSessionId ? ' active' : '';
-    var modeBadge = _isH5MirrorSession(s) ? '<span class="session-mode-badge">H5</span>' : (_isWorkspaceSession(s) ? '<span class="session-mode-badge">云端</span>' : '');
+    var memoryBadgeText = (!_isH5MirrorSession(s) && !_isWorkspaceSession(s)) ? _getSessionMemoryBadge(s) : '';
+    var modeBadge = _isH5MirrorSession(s)
+      ? '<span class="session-mode-badge">H5</span>'
+      : (_isWorkspaceSession(s)
+        ? '<span class="session-mode-badge">云端</span>'
+        : (memoryBadgeText ? '<span class="session-mode-badge">' + escapeHtml(memoryBadgeText) + '</span>' : ''));
     var pendingDot = isSessionPending(s.id)
       ? '<span class="session-pending-dot" title="任务进行中"></span>'
       : '<span class="session-bubble-icon">◌</span>';
@@ -1748,6 +1832,7 @@ function bindChatModeSwitch() {
       updateWorkspaceCategoryUi(btn.getAttribute('data-workspace-category'));
     });
   });
+  bindChatMemoryScopeSelect();
 }
 
 function initChatSessions() {
@@ -2285,9 +2370,20 @@ function removeChatTypingIndicator() {
     if (el.parentNode) el.parentNode.removeChild(el);
   }
 }
+/**
+ * OpenClaw messaging 通道（如 weixin 扩展 sendMessage）失败时，LLM 会把 logger 错误回流成
+ * "⚠️ ✉️ Message: `<url>` failed" 这种噪音；主对话用户根本没用 messaging，渲染前去掉避免误导。
+ * 后端 _strip_dsml 已清理一道；这里是兜底（旧服务器、history 或 stream 中段都会经过）。
+ */
+function _stripOpenclawMessagingNoise(text) {
+  var s = String(text == null ? '' : text);
+  if (!s) return s;
+  return s.replace(/(?:⚠️\s*)?(?:✉️\s*)?Message:\s*`?[^`\r\n]+`?\s+failed[^\r\n]*/ig, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /** 将 task.get_result 等大段 JSON 压成简短说明（素材仍以卡片展示） */
 function _compactAssistantReplyForDisplay(fullText, savedAssets) {
-  var t = String(fullText || '').trim();
+  var t = _stripOpenclawMessagingNoise(fullText);
   if (!t) return t;
   var toParse = t;
   var prefix = '';
@@ -2684,6 +2780,7 @@ function resumeChatStreamForTaskPoll(sid, taskId) {
   var bodyStr = JSON.stringify(body);
   var headers = authHeaders();
   headers['Content-Type'] = 'application/json';
+  applyChatMemoryScopeHeader(headers, session);
   var taskPollingCompleted = false;
   var videoGeneratedShown = false;
   var streamGeneratedAssets = [];
@@ -3067,6 +3164,7 @@ function sendChatMessage() {
   var bodyStr = JSON.stringify(body);
   var headers = authHeaders();
   headers['Content-Type'] = 'application/json';
+  applyChatMemoryScopeHeader(headers, session);
   var taskPollingCompleted = false;
   var videoGeneratedShown = false;
   var streamGeneratedAssets = [];

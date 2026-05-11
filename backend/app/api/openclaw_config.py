@@ -109,7 +109,7 @@ def _write_oc_config(config: dict):
     _OC_CONFIG.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def _ensure_openclaw_json_for_local_launch() -> None:
+def _ensure_openclaw_json_for_local_launch() -> bool:
     """在拉起 OpenClaw 子进程前修正磁盘上的 openclaw.json。
 
     - OpenClaw 将 plugins.load.paths 里的相对路径按 process.cwd() 解析；若 cwd 非项目根会找不到插件。
@@ -119,10 +119,10 @@ def _ensure_openclaw_json_for_local_launch() -> None:
     """
     try:
         if not _OC_CONFIG.exists():
-            return
+            return False
         cfg = _read_oc_config()
         if not cfg:
-            return
+            return False
         changed = False
         plugins = cfg.get("plugins")
         if isinstance(plugins, dict):
@@ -177,8 +177,10 @@ def _ensure_openclaw_json_for_local_launch() -> None:
         if changed:
             _write_oc_config(cfg)
             logger.info("Patched openclaw.json for local OpenClaw launch (plugin paths / lobster-sutui apiKey)")
+        return changed
     except Exception as e:
         logger.warning("ensure_openclaw_json_for_local_launch failed: %s", e)
+        return False
 
 
 def _model_to_agent_id(model: str) -> str:
@@ -378,6 +380,80 @@ def _find_openclaw_pid() -> Optional[int]:
     """兼容：返回 18789 上第一个监听 PID（若无则 None）。"""
     pids = _find_listener_pids_on_18789()
     return pids[0] if pids else None
+
+
+def _find_openclaw_gateway_process_pids() -> list[int]:
+    """Return node processes that are running `openclaw.mjs gateway --port 18789`."""
+    try:
+        if platform.system() == "Windows":
+            script = (
+                "Get-CimInstance Win32_Process | "
+                "Where-Object { "
+                "$_.Name -match '^node(\\.exe)?$' -and "
+                "$_.CommandLine -match 'openclaw\\.mjs' -and "
+                "$_.CommandLine -match '\\bgateway\\b' -and "
+                "$_.CommandLine -match '18789' "
+                "} | ForEach-Object { $_.ProcessId }"
+            )
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", script],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            return sorted({int(x.strip()) for x in out.splitlines() if x.strip().isdigit()})
+        out = subprocess.check_output(
+            ["ps", "-eo", "pid=,args="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        pids: set[int] = set()
+        for line in out.splitlines():
+            parts = line.strip().split(maxsplit=1)
+            if len(parts) != 2 or not parts[0].isdigit():
+                continue
+            cmdline = parts[1]
+            if "openclaw.mjs" in cmdline and "gateway" in cmdline and "18789" in cmdline:
+                pids.add(int(parts[0]))
+        return sorted(pids)
+    except Exception:
+        return []
+
+
+def _wait_until_no_openclaw_gateway_processes(max_wait: float = 6.0) -> None:
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        if not _find_listener_pids_on_18789() and not _find_openclaw_gateway_process_pids():
+            return
+        time.sleep(0.2)
+
+
+def _wait_for_openclaw_gateway_ready(
+    max_wait: float = 30.0,
+    proc: Optional[subprocess.Popen] = None,
+) -> Optional[int]:
+    """Wait until the Gateway both listens on 18789 and answers HTTP."""
+    deadline = time.time() + max_wait
+    last_error = ""
+    while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            logger.warning(
+                "OpenClaw Gateway process exited before listening, returncode=%s",
+                proc.returncode,
+            )
+            return None
+        pid = _find_openclaw_pid()
+        if pid:
+            try:
+                with httpx.Client(timeout=2.0, trust_env=False) as client:
+                    r = client.get("http://127.0.0.1:18789/")
+                logger.info("OpenClaw Gateway ready, PID %s status=%s", pid, r.status_code)
+                return pid
+            except Exception as exc:
+                last_error = f"{exc.__class__.__name__}: {exc}"
+        time.sleep(0.5)
+    if last_error:
+        logger.warning("OpenClaw Gateway listener found but HTTP readiness timed out: %s", last_error)
+    return None
 
 
 def _wait_until_no_listener_on_18789(max_wait: float = 6.0) -> None:
@@ -922,18 +998,20 @@ def _weixin_login_worker(job_id: str) -> None:
                 _weixin_login_active_job_id = None
 
 
-def _restart_openclaw_gateway_impl() -> bool:
+def _restart_openclaw_gateway_impl(wait_ready_sec: float = 30.0) -> bool:
     """在已持有 _OPENCLAW_RESTART_LOCK 时调用：杀光监听 PID，等端口释放，再启动唯一 Gateway。"""
-    for pid in _find_listener_pids_on_18789():
-        logger.info("Killing OpenClaw listener PID %s", pid)
+    for pid in sorted(set(_find_listener_pids_on_18789()) | set(_find_openclaw_gateway_process_pids())):
+        logger.info("Killing OpenClaw Gateway PID %s", pid)
         _kill_pid(pid)
     _wait_until_no_listener_on_18789(6.0)
-    leftover = _find_listener_pids_on_18789()
+    _wait_until_no_openclaw_gateway_processes(6.0)
+    leftover = sorted(set(_find_listener_pids_on_18789()) | set(_find_openclaw_gateway_process_pids()))
     if leftover:
-        logger.warning("Port 18789 still has listener PIDs after kill: %s — retrying SIGKILL", leftover)
+        logger.warning("OpenClaw Gateway PIDs still alive after kill: %s — retrying SIGKILL", leftover)
         for pid in leftover:
             _kill_pid(pid)
         _wait_until_no_listener_on_18789(4.0)
+        _wait_until_no_openclaw_gateway_processes(4.0)
 
     # nodejs/npm 与 OpenClaw 依赖仅在「微信授权」流程中在线安装，启动/Gateway 重启不在此下载，以免拖死服务启动。
     entry = _find_openclaw_entry()
@@ -972,26 +1050,29 @@ def _restart_openclaw_gateway_impl() -> bool:
         if platform.system() == "Windows":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-        subprocess.Popen(cmd, **kwargs)
+        proc = subprocess.Popen(cmd, **kwargs)
+        if hasattr(log_file, "close"):
+            try:
+                log_file.close()
+            except Exception:
+                pass
         logger.info("OpenClaw Gateway restarting: %s", " ".join(cmd))
-        time.sleep(2)
 
-        new_pid = _find_openclaw_pid()
+        new_pid = _wait_for_openclaw_gateway_ready(wait_ready_sec, proc)
         if new_pid:
             logger.info("OpenClaw Gateway restarted, PID %s", new_pid)
             return True
-        else:
-            logger.warning("OpenClaw Gateway process started but not listening yet")
-            return True
+        logger.warning("OpenClaw Gateway process started but not ready after %.1fs", wait_ready_sec)
+        return False
     except Exception as e:
         logger.error("Failed to restart OpenClaw Gateway: %s", e)
         return False
 
 
-def _restart_openclaw_gateway() -> bool:
+def _restart_openclaw_gateway(wait_ready_sec: float = 30.0) -> bool:
     """串行重启，避免「清除配置」与「保存 Key」等并发各拉起一个 node。"""
     with _OPENCLAW_RESTART_LOCK:
-        return _restart_openclaw_gateway_impl()
+        return _restart_openclaw_gateway_impl(wait_ready_sec=wait_ready_sec)
 
 
 @router.post("/api/openclaw/restart", summary="重启 OpenClaw Gateway")

@@ -45,6 +45,7 @@ from .openclaw_chat_gateway import (
     openclaw_failure_detail as _openclaw_failure_detail,
     openclaw_fallback_model as _openclaw_fallback_model,
     openclaw_gateway_configured as _openclaw_gateway_configured,
+    openclaw_memory_scope_from_request as _openclaw_memory_scope_from_request,
     openclaw_only_chat_enabled as _openclaw_only_chat_enabled,
     strip_openclaw_chat_prefix as _strip_openclaw_chat_prefix,
     try_openclaw as _try_openclaw,
@@ -950,7 +951,14 @@ async def get_reply_for_channel(
         except Exception as e:
             logger.exception("[渠道回复] chat 异常: %s", e)
             return "处理时遇到问题，请稍后再试。"
-    oc_reply = await _try_openclaw(messages, model or "openclaw", "")
+    _oc_video_model, _oc_video_model_source = _infer_video_model_lock_from_user_text(user_message, False)
+    oc_reply = await _try_openclaw(
+        messages,
+        model or "openclaw",
+        "",
+        video_model_lock=_oc_video_model,
+        video_model_lock_source=_oc_video_model_source,
+    )
     if oc_reply:
         return (oc_reply or "").strip() or "收到。"
     return _openclaw_failure_detail("抱歉，当前未配置对话模型或 OpenClaw，无法回复。")
@@ -1014,7 +1022,14 @@ async def get_customer_service_reply(
         except Exception as e:
             logger.exception("[客服回复] chat 异常: %s", e)
             return _FALLBACK
-    oc_reply = await _try_openclaw(messages, model or "openclaw", "")
+    _oc_video_model, _oc_video_model_source = _infer_video_model_lock_from_user_text(user_message, False)
+    oc_reply = await _try_openclaw(
+        messages,
+        model or "openclaw",
+        "",
+        video_model_lock=_oc_video_model,
+        video_model_lock_source=_oc_video_model_source,
+    )
     if oc_reply:
         oc_reply = (oc_reply or "").strip() or "收到。"
         if _ERROR_PATTERNS.search(oc_reply):
@@ -1928,6 +1943,10 @@ _VIDEO_PROVIDER_MODEL_ID_RE = re.compile(
     r"(?<![A-Za-z0-9_/-])((?:fal-ai|st-ai|sora2pub|ark|wan|xai|sprcra|minimax)/[A-Za-z0-9._~:+/-]+)",
     re.IGNORECASE,
 )
+_VIDEO_SHORT_MODEL_ID_RE = re.compile(
+    r"(?<![A-Za-z0-9_/-])((?:luma|pika)-[A-Za-z0-9._-]+)(?![A-Za-z0-9_/-])",
+    re.IGNORECASE,
+)
 
 
 def _infer_video_model_from_user_text(
@@ -1981,6 +2000,29 @@ def _infer_video_model_from_user_text(
             "[CHAT] 用户正文含 Veo 3.1 但 payload 无 model，已补全 model=%s",
             inner["model"],
         )
+
+
+def _infer_video_model_lock_from_user_text(user_message: str, has_attachment: bool = False) -> Tuple[str, str]:
+    """Return (model, source) for OpenClaw video.generate. Source is user/default."""
+    text = _strip_lobster_attachment_block(user_message)
+    probe = {"capability_id": "video.generate", "payload": {}}
+    _infer_video_model_from_user_text(probe, text, has_attachment)
+    inner = probe.get("payload") if isinstance(probe, dict) else {}
+    model = ""
+    if isinstance(inner, dict):
+        model = str(inner.get("model") or "").strip()
+    if model:
+        return model, "user"
+    low = (text or "").lower()
+    for alias, canonical in sorted(_VIDEO_MODEL_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        alias_low = alias.lower()
+        pattern = r"(?<![a-z0-9])" + re.escape(alias_low).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+        if re.search(pattern, low):
+            return canonical, "user"
+    short_model = _VIDEO_SHORT_MODEL_ID_RE.search(text or "")
+    if short_model:
+        return short_model.group(1).strip(), "user"
+    return _get_default_video_generate_model(has_attachment), "default"
 
 
 _DEFAULT_IMAGE_GENERATE_MODEL = "gpt-image2"
@@ -7347,6 +7389,10 @@ async def chat_endpoint(
     attachment_urls = _get_attachment_public_urls(
         getattr(payload, "attachment_asset_ids", None), request, db, current_user.id
     )
+    openclaw_video_model_lock, openclaw_video_model_lock_source = _infer_video_model_lock_from_user_text(
+        payload.message or "",
+        bool(attachment_urls),
+    )
 
     want_oc_first = _want_openclaw_first_this_turn(
         review_drafts_only, direct_llm, _oc_pfx_hit
@@ -7370,6 +7416,9 @@ async def chat_endpoint(
             oc_model,
             raw_token,
             installation_id=_oc_xi,
+            memory_scope=_openclaw_memory_scope_from_request(request),
+            video_model_lock=openclaw_video_model_lock,
+            video_model_lock_source=openclaw_video_model_lock_source,
         )
         if oc_reply:
             ms = round((time.perf_counter() - t0) * 1000)
@@ -7478,6 +7527,9 @@ async def chat_endpoint(
             oc_model,
             raw_token,
             installation_id=_installation_id_from_request(request),
+            memory_scope=_openclaw_memory_scope_from_request(request),
+            video_model_lock=openclaw_video_model_lock,
+            video_model_lock_source=openclaw_video_model_lock_source,
         )
         if oc_reply:
             ms = round((time.perf_counter() - t0) * 1000)
@@ -7643,6 +7695,10 @@ async def _chat_stream_events(
             want_oc = _want_openclaw_first_this_turn(
                 review_po, direct_llm, openclaw_prefixed_turn
             )
+            stream_video_model_lock, stream_video_model_lock_source = _infer_video_model_lock_from_user_text(
+                payload.message or "",
+                bool(stream_attachment_urls),
+            )
             openclaw_tried_first = False
             try:
                 if want_oc:
@@ -7662,6 +7718,9 @@ async def _chat_stream_events(
                             oc_model,
                             raw_token,
                             installation_id=_oc_xi_s,
+                            memory_scope=_openclaw_memory_scope_from_request(request),
+                            video_model_lock=stream_video_model_lock,
+                            video_model_lock_source=stream_video_model_lock_source,
                         )
                         if oc_reply:
                             reply_holder.append(oc_reply)
@@ -7738,6 +7797,9 @@ async def _chat_stream_events(
                             oc_model,
                             raw_token,
                             installation_id=_installation_id_from_request(request),
+                            memory_scope=_openclaw_memory_scope_from_request(request),
+                            video_model_lock=stream_video_model_lock,
+                            video_model_lock_source=stream_video_model_lock_source,
                         )
                         if oc_reply:
                             reply_holder.append(oc_reply)

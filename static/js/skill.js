@@ -549,13 +549,13 @@ function _bindOpenclawSkillWorkspaceCardEntry() {
 
 function _renderOpenclawMemoryCard(pkg) {
   pkg = pkg || {};
-  var tags = (pkg.tags || ['OpenClaw', '记忆', '资料']).map(function(t) {
+  var tags = (pkg.tags || ['个人记忆', '资料']).map(function(t) {
     return '<span class="tag">' + escapeHtml(t) + '</span>';
   }).join('');
   return '<div class="skill-store-card openclaw-memory-card" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.09),transparent);">' +
-    '<div class="card-label">OpenClaw <span class="badge-installed">本机记忆</span></div>' +
-    '<div class="card-value">' + escapeHtml(pkg.name || 'OpenClaw 资料记忆') + '</div>' +
-    '<div class="card-desc">' + escapeHtml(pkg.description || '上传 Word/PDF/Excel/txt/md/csv/json 等资料；也可同步代理商/管理员下发到本设备的资料，让 OpenClaw 在本机对话中参考。') + '</div>' +
+    '<div class="card-label">OpenClaw <span class="badge-installed">个人记忆</span></div>' +
+    '<div class="card-value">' + escapeHtml(pkg.name || '个人记忆') + '</div>' +
+    '<div class="card-desc">' + escapeHtml(pkg.description || '上传或同步到本设备的 Word/PDF/Excel/txt/md/csv/json 等资料，智能对话可按会话选择是否使用。') + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm openclaw-memory-entry-btn">上传资料</button></div></div>';
 }
@@ -600,7 +600,7 @@ function _syncOpenclawMemoryFromCloud(opts) {
     if (!opts.silent) _showOpenclawMemoryMsg('未找到本机后端地址，无法同步云端资料。', true);
     return Promise.resolve({ ok: false });
   }
-  if (!opts.silent) _showOpenclawMemoryMsg('正在同步代理商/管理员下发到本设备的资料…', false);
+    if (!opts.silent) _showOpenclawMemoryMsg('正在同步云端个人记忆…', false);
   return fetch(base + '/api/openclaw/memory/sync-cloud', {
     method: 'POST',
     headers: typeof authHeaders === 'function' ? authHeaders() : {}
@@ -613,7 +613,7 @@ function _syncOpenclawMemoryFromCloud(opts) {
     }
     var d = x.data || {};
     if (!opts.silent) {
-      _showOpenclawMemoryMsg('同步完成：新增/更新 ' + (d.applied_count || 0) + ' 份，删除 ' + (d.deleted_count || 0) + ' 份。', false);
+        _showOpenclawMemoryMsg('同步完成：新增/更新 ' + (d.applied_count || 0) + ' 份，删除 ' + (d.deleted_count || 0) + ' 份。', false);
     }
     if (opts.reload !== false) _loadOpenclawMemoryList();
     return x;
@@ -664,7 +664,7 @@ function _bindChatMemorySyncButton() {
     btn.disabled = true;
     var oldText = btn.textContent;
     btn.textContent = '同步中...';
-    _setChatMemorySyncStatus('正在同步资料...', false);
+    _setChatMemorySyncStatus('正在同步个人记忆...', false);
     var syncResult = null;
     _syncOpenclawMemoryFromCloud({ silent: true, reload: false })
       .then(function(x) {
@@ -683,14 +683,14 @@ function _bindChatMemorySyncButton() {
         } else if (syncData && syncData.ok === false) {
           prefix = '云端同步未完成；';
         }
-        _setChatMemorySyncStatus(prefix + '当前已生效 ' + (summary.effective_count || 0) + ' 份资料。', false);
+        _setChatMemorySyncStatus(prefix + '当前已生效 ' + (summary.effective_count || 0) + ' 份个人记忆。', false);
       })
       .catch(function(err) {
-        _setChatMemorySyncStatus((err && err.message) ? err.message : '同步资料失败', true);
+        _setChatMemorySyncStatus((err && err.message) ? err.message : '同步个人记忆失败', true);
       })
       .finally(function() {
         btn.disabled = false;
-        btn.textContent = oldText || '同步资料';
+        btn.textContent = oldText || '同步记忆';
       });
   });
 }
@@ -719,18 +719,22 @@ function _loadOpenclawMemoryList() {
       }
       var docs = (x.data && Array.isArray(x.data.documents)) ? x.data.documents : [];
       if (!docs.length) {
-        list.innerHTML = '<p class="meta">还没有上传资料。上传后会写入本机 OpenClaw 记忆目录。</p>';
+        list.innerHTML = '<p class="meta">还没有个人记忆。上传或同步后会写入本机记忆目录。</p>';
         return;
       }
       list.innerHTML = docs.map(function(doc) {
         var title = doc.title || doc.filename || doc.id;
         var meta = (doc.filename || '') + (doc.size ? (' · ' + Math.round(doc.size / 1024) + 'KB') : '');
         var src = String(doc.source || 'local_user');
-        var sourceLabel = src.indexOf('cloud_') === 0 ? '云端下发' : '本机上传';
+        var layer = String(doc.memory_layer || '').trim();
+        var isAgentMemory = layer === 'agent' || String(doc.origin || '') === 'agent_memory';
+        var sourceLabel = isAgentMemory ? '代理商记忆' : '个人记忆';
         var sourceClass = src.indexOf('cloud_') === 0 ? 'badge-coming' : 'badge-installed';
-        var deleteHtml = src.indexOf('cloud_') === 0
-          ? '<span class="meta">由代理商/管理员下发，请在管理后台删除</span>'
-          : '<button type="button" class="btn btn-ghost btn-sm openclaw-memory-delete" data-doc-id="' + escapeAttr(doc.id || '') + '">删除</button>';
+        var deleteHtml = isAgentMemory
+          ? '<span class="meta">由代理商配置</span>'
+          : (src.indexOf('cloud_') === 0
+            ? '<span class="meta">云端同步资料，需在下发端删除</span>'
+            : '<button type="button" class="btn btn-ghost btn-sm openclaw-memory-delete" data-doc-id="' + escapeAttr(doc.id || '') + '">删除</button>');
         return '<div class="skill-store-card" style="padding:0.85rem;margin-bottom:0.55rem;">' +
           '<div class="card-label"><span class="' + sourceClass + '">' + sourceLabel + '</span></div>' +
           '<div class="card-value" style="font-size:0.98rem;">' + escapeHtml(title) + '</div>' +
@@ -741,7 +745,7 @@ function _loadOpenclawMemoryList() {
       list.querySelectorAll('.openclaw-memory-delete').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var docId = btn.getAttribute('data-doc-id') || '';
-          if (!docId || !confirm('确定删除这份 OpenClaw 记忆资料？')) return;
+          if (!docId || !confirm('确定删除这份个人记忆资料？')) return;
           btn.disabled = true;
           fetch(base + '/api/openclaw/memory/' + encodeURIComponent(docId), {
             method: 'DELETE',
@@ -809,7 +813,7 @@ function _loadOpenclawMemoryList() {
     delete headers['Content-Type'];
     uploadBtn.disabled = true;
     uploadBtn.textContent = '上传中…';
-    _showOpenclawMemoryMsg('正在写入 OpenClaw 本机记忆…', false);
+    _showOpenclawMemoryMsg('正在写入个人记忆…', false);
     fetch(base + '/api/openclaw/memory/upload', {
       method: 'POST',
       headers: headers,
@@ -824,7 +828,7 @@ function _loadOpenclawMemoryList() {
       if (fileInput) fileInput.value = '';
       if (titleInput) titleInput.value = '';
       if (notesInput) notesInput.value = '';
-      _showOpenclawMemoryMsg('已写入 OpenClaw 记忆。之后和 OpenClaw 对话时可参考这份资料。', false);
+      _showOpenclawMemoryMsg('已写入个人记忆。之后智能对话可按会话设置参考这份资料。', false);
       _loadOpenclawMemoryList();
     }).catch(function() {
       _showOpenclawMemoryMsg('网络错误，上传失败', true);
