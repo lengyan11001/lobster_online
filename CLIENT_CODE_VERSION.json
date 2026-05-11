@@ -1,6 +1,6 @@
 {
   "version": "1.0.34",
-  "build": 35,
-  "applied_at": "2026-05-09T17:51:00+08:00",
-  "note": "OTA build 35 for OpenClaw task result lookup scope"
+  "build": 36,
+  "applied_at": "2026-05-11T19:47:41+08:00",
+  "note": "OTA build 36 for HiFly cloud library routing"
 }
