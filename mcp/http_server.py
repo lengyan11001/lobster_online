@@ -148,6 +148,7 @@ def _normalize_invoke_comfly_veo_args(args: Dict[str, Any]) -> Dict[str, Any]:
             "analysis_model",
             "aspect_ratio",
             "enhance_prompt",
+            "watermark",
         ):
             if k in args and args[k] is not None:
                 pl.setdefault(k, args[k])
@@ -190,6 +191,8 @@ def _normalize_invoke_daihuo_pipeline_args(args: Dict[str, Any]) -> Dict[str, An
         "output_dir",
         "isolate_job_dir",
         "image_request_style",
+        "enhance_prompt",
+        "watermark",
     ):
         if k in args and args[k] is not None:
             pl.setdefault(k, args[k])

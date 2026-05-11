@@ -156,6 +156,8 @@ class Settings(BaseSettings):
     comfly_api_base: Optional[str] = None
     # comfly_api_key：不作为用户凭据兜底；爆款TVC / comfly.daihuo 仅使用技能商店 UserComflyConfig。
     comfly_api_key: Optional[str] = None
+    """HiFly 默认 token。配置后，数字人页可在未手动输入 token 时自动加载列表与积分。"""
+    hifly_default_token: Optional[str] = None
     """Chat 路径：以 / 开头则相对 API 主机根（默认 /v1/chat/completions，与 Comfly 文档一致）；否则拼在 comfly_api_base 后（如 chat/completions 用于 base 已含 /v1 的旧配置）"""
     comfly_chat_completions_path: str = "/v1/chat/completions"
     """提交图生视频 POST：以 / 开头则相对 API 主机根路径（如 /v2/videos/generations，与 Comfly 文档一致）；否则拼在 comfly_api_base 后（如 video/jobs 供旧版 mock）"""

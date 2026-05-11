@@ -97,9 +97,19 @@ window._openViralVideoRemixView = function() {
   try { location.hash = 'viral-video-remix'; } catch (e1) {}
 };
 
+window._openHiflyDigitalHumanView = function() {
+  _switchToHiddenView('hifly-digital-human');
+  if (typeof window.initHiflyDigitalHumanView === 'function') window.initHiflyDigitalHumanView();
+  try { location.hash = 'hifly-digital-human'; } catch (e1) {}
+};
+
 window._openHiddenWorkspaceView = function(view) {
   var target = String(view || '').trim();
   if (!target) return;
+  if (target === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
+    window._openHiflyDigitalHumanView();
+    return;
+  }
   if (target === 'viral-video-remix' && typeof window._openViralVideoRemixView === 'function') {
     window._openViralVideoRemixView();
     return;
@@ -368,6 +378,17 @@ function _renderViralVideoRemixCard() {
       '<button type="button" class="btn btn-primary btn-sm viral-video-remix-entry-btn">进入工作台</button>' +
       '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置 Comfly</button>' +
     '</div></div>';
+}
+
+function _renderHiflyDigitalHumanCard() {
+  return '<div class="skill-store-card hifly-digital-human-card" style="cursor:pointer;border-color:rgba(14,165,233,0.35);background:linear-gradient(135deg,rgba(14,165,233,0.09),rgba(20,184,166,0.06));">' +
+    '<div class="card-label">&#25968;&#23383;&#20154; &middot; HiFly <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
+    '<div class="card-value">&#39134;&#24433;&#25968;&#23383;&#20154;</div>' +
+    '<div class="card-desc">&#36890;&#36807; HiFly API &#36873;&#25321;&#25968;&#23383;&#20154;&#21644;&#22768;&#38899;&#65292;&#36755;&#20837;&#21475;&#25773;&#25991;&#26696;&#21518;&#29983;&#25104;&#25968;&#23383;&#20154;&#35270;&#39057;&#12290;</div>' +
+    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">&#38656;&#35201;&#20808;&#22312; HiFly &#20010;&#20154;&#20013;&#24515;&#33719;&#21462; API Token&#65292;&#24182;&#20934;&#22791;&#21487;&#29992;&#30340;&#25968;&#23383;&#20154;&#21644;&#22768;&#38899;&#12290;</div>' +
+    '<div class="card-tags"><span class="tag">&#25968;&#23383;&#20154;</span><span class="tag">&#21475;&#25773;</span><span class="tag">TTS</span><span class="tag">HiFly</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm hifly-digital-human-entry-btn">&#36827;&#20837;&#24037;&#20316;&#21488;</button></div>' +
+    '</div>';
 }
 
 function _openclawWeixinResolveBase() {
@@ -905,6 +926,7 @@ function loadSkillStore() {
         if (hasComflyPkg || isSkillAdmin) html += _renderComflyCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderSeedanceTvcStudioCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderViralVideoRemixCard();
+        html += _renderHiflyDigitalHumanCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
         if (isSkillAdmin && browserUsePkg) {
@@ -1025,6 +1047,7 @@ function loadSkillStore() {
         _bindMetaSocialCardEntry();
         _bindSeedanceTvcCardEntry();
         _bindViralVideoRemixCardEntry();
+        _bindHiflyDigitalHumanCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
         _bindOpenclawSkillWorkspaceCardEntry();
@@ -1262,6 +1285,21 @@ function _bindViralVideoRemixCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openViralVideoRemixView === 'function') window._openViralVideoRemixView();
+    });
+  });
+}
+
+function _bindHiflyDigitalHumanCardEntry() {
+  document.querySelectorAll('.hifly-digital-human-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+    });
+  });
+  document.querySelectorAll('.hifly-digital-human-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
     });
   });
 }

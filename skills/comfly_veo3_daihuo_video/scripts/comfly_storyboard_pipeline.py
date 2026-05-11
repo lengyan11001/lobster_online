@@ -44,6 +44,7 @@ class Input(TypedDict, total=False):
     video_model: str
     aspect_ratio: str
     enhance_prompt: bool
+    watermark: bool
     storyboard_count: int
     shot_concurrency: int
     poll_interval_seconds: int
@@ -85,7 +86,8 @@ class PipelineConfig:
     image_size: str = "1K"
     video_model: str = "veo3.1-fast"
     aspect_ratio: str = "9:16"
-    enhance_prompt: bool = True
+    enhance_prompt: bool = False
+    watermark: bool = False
     storyboard_count: int = 6
     shot_concurrency: int = 5
     poll_interval_seconds: int = 12
@@ -142,6 +144,8 @@ class RunLogger:
                 "image_model": config.image_model,
                 "video_model": config.video_model,
                 "aspect_ratio": config.aspect_ratio,
+                "enhance_prompt": config.enhance_prompt,
+                "watermark": config.watermark,
                 "storyboard_count": config.storyboard_count,
                 "shot_concurrency": config.shot_concurrency,
                 "upload_retries": config.upload_retries,
@@ -467,9 +471,9 @@ class ComflyClient:
 
         return _retry(action, self.config.image_generation_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
-    def submit_video(self, prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool, action: str) -> tuple[Dict[str, Any], int]:
+    def submit_video(self, prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool, watermark: bool, action: str) -> tuple[Dict[str, Any], int]:
         ar = _normalize_aspect_ratio_for_comfly(aspect_ratio)
-        body: Dict[str, Any] = {"prompt": prompt, "model": model, "images": images, "aspect_ratio": ar}
+        body: Dict[str, Any] = {"prompt": prompt, "model": model, "images": images, "aspect_ratio": ar, "watermark": bool(watermark)}
         if enhance_prompt:
             body["enhance_prompt"] = True
 
@@ -567,7 +571,8 @@ def _build_config(data: Input) -> PipelineConfig:
         image_size=_imsz,
         video_model=data.get("video_model", "veo3.1-fast"),
         aspect_ratio=_normalize_aspect_ratio_for_comfly(str(data.get("aspect_ratio") or "9:16")),
-        enhance_prompt=bool(data.get("enhance_prompt", True)),
+        enhance_prompt=bool(data.get("enhance_prompt", False)),
+        watermark=bool(data.get("watermark", False)),
         storyboard_count=int(data.get("storyboard_count", 6)),
         shot_concurrency=max(1, int(data.get("shot_concurrency", data.get("storyboard_count", 6)))),
         poll_interval_seconds=int(data.get("poll_interval_seconds", 12)),
@@ -1002,6 +1007,8 @@ Rules:
 4. Make video_prompt_en usable for Veo.
 5. No subtitles, no UI, no watermark, no stickers.
 5a. Never mention or depict shopping cart icons, yellow cart icons, lower-left buttons, floating CTA badges, app interface chrome, clickable overlays, logos, or platform UI in any field.
+5b. hook_line_cn, selling_point_cn, and cta_cn are planning/voiceover metadata only. They must never become visible typography, captions, subtitles, banners, callouts, price tags, labels, or any other on-screen text.
+5c. storyboard_image_prompt_en and video_prompt_en must describe action, camera movement, product usage, scene, and emotion only. Do not ask the model to render any readable Chinese, English, pseudo-text, brand-like random letters, UI words, or malformed captions.
 6. For compatibility, keep the field names title_cn, goal_cn, scene_cn, hook_line_cn, selling_point_cn, cta_cn, but the actual text content inside those fields must use the required local language instead of always Chinese.
 7. Character identity, face, styling, name, daily environment, and speaking tone must match the platform and country setting. Do not reuse a China-market character for overseas scenarios.
 8. If platform is TikTok and no country is specified, use English copy and a global TikTok creator persona.
@@ -1141,6 +1148,7 @@ def _compose_image_prompt(storyboard: Dict[str, Any], character: Dict[str, Any],
     if consistency:
         prompt_parts.append(f"Consistency rules: {consistency}")
     prompt_parts.append("Commercial product shot, no subtitles, no UI, no watermark, no shopping cart icons, no CTA badges, no platform logos")
+    prompt_parts.append("Zero visible text in the generated image: no captions, subtitles, labels, banners, slogan cards, price tags, app UI, watermark, random letters, Chinese characters, English words, or pseudo-text. If any text-like element would appear, replace it with a plain blank shape or clean surface.")
     return ". ".join(part for part in prompt_parts if part)
 
 
@@ -1157,6 +1165,8 @@ def _compose_video_prompt(storyboard: Dict[str, Any], fallback_prompt: str, loca
         prompt_parts.append(character_hint)
     prompt_parts.append("Do not switch the presenter into a different-country persona or mismatched language accent.")
     prompt_parts.append("No subtitles, no UI, no watermark, no on-screen text, no shopping cart icons, no CTA badges, no platform logos, no clickable overlays.")
+    prompt_parts.append("The planning fields hook_line_cn, selling_point_cn, and cta_cn are not visual text. Express hooks, selling points, and CTA through action, camera movement, product demonstration, facial expression, and spoken dialogue only.")
+    prompt_parts.append("Zero readable text in the frame: no captions, subtitles, labels, banners, slogan cards, price tags, app UI, watermarks, random letters, Chinese characters, English words, or pseudo-text. If text would appear, keep that area blank or as a non-readable graphic surface.")
     return " ".join(part.strip() for part in prompt_parts if isinstance(part, str) and part.strip())
 
 
@@ -1361,7 +1371,7 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
     last_error = ""
     for video_attempt in range(1, config.video_generation_retries + 1):
         try:
-            submit_result, submit_attempts = client.submit_video(video_prompt, config.video_model, [image_result["url"]], config.aspect_ratio, config.enhance_prompt, f"shot_{index:02d}_submit_{round_tag}_{video_attempt}")
+            submit_result, submit_attempts = client.submit_video(video_prompt, config.video_model, [image_result["url"]], config.aspect_ratio, config.enhance_prompt, config.watermark, f"shot_{index:02d}_submit_{round_tag}_{video_attempt}")
             logger.shot(index, f"submit_{round_tag}_{video_attempt}", "success", attempts=submit_attempts, payload=submit_result)
             poll_result = client.poll_video(submit_result["task_id"], config.poll_interval_seconds, config.max_polls)
             logger.shot(index, f"poll_{round_tag}_{video_attempt}", "success", attempts=len(poll_result.get("history", [])), payload=poll_result)
@@ -1527,6 +1537,8 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "image_model": config.image_model,
                 "analysis_model": config.analysis_model,
                 "aspect_ratio": config.aspect_ratio,
+                "enhance_prompt": config.enhance_prompt,
+                "watermark": config.watermark,
                 "storyboard_count": config.storyboard_count,
                 "shot_concurrency": config.shot_concurrency,
                 "upload_retries": config.upload_retries,

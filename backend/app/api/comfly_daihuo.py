@@ -72,6 +72,10 @@ class ComflyDaihuoPipelinePayload(BaseModel):
     )
 
 
+    enhance_prompt: bool = Field(False, description="Veo prompt enhancement switch; default off to avoid accidental subtitles or on-screen text")
+    watermark: bool = Field(False, description="Veo watermark switch; default off")
+
+
 class ComflyDaihuoRunBody(BaseModel):
     payload: ComflyDaihuoPipelinePayload
 
@@ -128,6 +132,8 @@ async def _prepare_pipeline_input(
         language=pl.language,
         task_text=pl.task_text,
         image_request_style=pl.image_request_style,
+        enhance_prompt=pl.enhance_prompt,
+        watermark=pl.watermark,
     )
 
 
