@@ -27,6 +27,7 @@ from ..db import SessionLocal, get_db
 from ..models import Asset, UserComflyConfig
 from ..services.viral_video_remix_job_store import create_job_record, get_job, update_job
 from ..services.comfly_veo_exec import LOCAL_COMFLY_CONFIG_USER_ID
+from .billing import _get_billing_pricing
 from .assets import (
     SaveAssetReq,
     _compute_save_url_dedupe_key,
@@ -48,6 +49,8 @@ _NARRATION_SPLIT_MODEL = "gpt-4o-mini"
 _UPLOADED_ASSET_CACHE: Dict[str, str] = {}
 _VIDEO_DOWNLOAD_APPID = "682e90c19520118284FGb2"
 _VIDEO_DOWNLOAD_API_URL = "https://watermark-api.hlyphp.top/Watermark/Index"
+_VIRAL_REMIX_CAPABILITY_ID = "viral.video.remix"
+_VIRAL_REMIX_YUAN_PER_SECOND = 1.5
 
 
 def _lobster_root() -> Path:
@@ -134,20 +137,187 @@ def _endpoint(api_base: str, path: str) -> str:
     return f"{base}{path}"
 
 
-def _resolve_local_comfly_credentials(user_id: int, db: Session) -> tuple[str, str]:
-    """Local test mode: use saved Comfly config or .env, without auth-server billing proxy."""
-    ids = [int(user_id or 0), LOCAL_COMFLY_CONFIG_USER_ID]
-    for uid in ids:
-        row = db.query(UserComflyConfig).filter(UserComflyConfig.user_id == uid).first()
-        if row and (row.api_key or "").strip():
-            return ((row.api_base or "").strip().rstrip("/") or _default_comfly_base()), row.api_key.strip()
-    api_key = (settings.comfly_api_key or "").strip()
-    if api_key:
-        return _default_comfly_base(), api_key
-    raise HTTPException(
-        status_code=503,
-        detail="未配置本地 Comfly API Key。请先在技能商店配置 Comfly，或在 .env 设置 COMFLY_API_KEY。",
-    )
+def _comfly_proxy_base() -> str:
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="未配置 AUTH_SERVER_BASE，无法走服务端 Comfly 代理")
+    return f"{base}/api/comfly-proxy"
+
+
+def _resolve_local_comfly_credentials(request: Request) -> tuple[str, str]:
+    """所有 Comfly 调用统一走服务端 /api/comfly-proxy（与其他 skill 一致）。
+
+    服务端使用 COMFLY_API_KEY 转发到 Comfly，并按 comfly_pricing.json 自动按调用计费；
+    本地不再读取 UserComflyConfig 或 .env 的 COMFLY_API_KEY。
+    Returns (proxy_base, user_jwt)：可直接配合 _endpoint(...) 与 Bearer 认证使用。
+    """
+    token = _bearer_token_from_request(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="请先登录后再使用视频复刻功能")
+    return _comfly_proxy_base(), token
+
+
+def _viral_remix_credits_per_yuan() -> float:
+    packages = (_get_billing_pricing() or {}).get("credit_packages")
+    if isinstance(packages, list):
+        for item in packages:
+            if not isinstance(item, dict):
+                continue
+            try:
+                yuan = float(item.get("price_yuan") or item.get("price") or 0)
+                credits = float(item.get("credits") or 0)
+            except (TypeError, ValueError):
+                continue
+            if yuan > 0 and credits > 0:
+                return credits / yuan
+    return 100.0
+
+
+def _viral_remix_estimated_credits(seconds: float) -> Dict[str, Any]:
+    billable_seconds = max(1, int(math.ceil(float(seconds or 0))))
+    credits_per_yuan = float(_viral_remix_credits_per_yuan())
+    estimated_yuan = float(billable_seconds) * _VIRAL_REMIX_YUAN_PER_SECOND
+    estimated_credits = int(math.ceil(estimated_yuan * credits_per_yuan))
+    return {
+        "billable_seconds": billable_seconds,
+        "estimated_yuan": estimated_yuan,
+        "credits_per_yuan": credits_per_yuan,
+        "estimated_credits": estimated_credits,
+        "yuan_per_second": _VIRAL_REMIX_YUAN_PER_SECOND,
+    }
+
+
+def _viral_billing_base() -> str:
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="未配置 AUTH_SERVER_BASE，无法完成视频复刻算力计费")
+    return base
+
+
+def _viral_billing_headers(request: Request) -> Dict[str, str]:
+    token = _bearer_token_from_request(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="请先登录后再提交视频复刻任务")
+    headers: Dict[str, str] = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    installation_id = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
+    if not billing_key:
+        billing_key = (os.environ.get("LOBSTER_MCP_BILLING_INTERNAL_KEY") or "").strip()
+    if billing_key:
+        headers["X-Lobster-Mcp-Billing"] = billing_key
+    return headers
+
+
+async def _viral_remix_pre_deduct(
+    *,
+    billing_base: str,
+    billing_headers: Dict[str, str],
+    estimate: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    expected_credits = float(estimate.get("estimated_credits") or 0)
+    body = {
+        "capability_id": _VIRAL_REMIX_CAPABILITY_ID,
+        "model": "doubao-seedance-video-remix",
+        "params": {
+            "source_duration_seconds": estimate.get("source_duration_seconds"),
+            "billable_seconds": estimate.get("billable_seconds"),
+            "yuan_per_second": estimate.get("yuan_per_second"),
+            "estimated_yuan": estimate.get("estimated_yuan"),
+            "credits_per_yuan": estimate.get("credits_per_yuan"),
+            "expected_credits": expected_credits,
+            "ratio": payload.get("ratio"),
+            "resolution": payload.get("resolution"),
+            "segment_duration_seconds": payload.get("duration"),
+        },
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(f"{billing_base}/capabilities/pre-deduct", json=body, headers=billing_headers)
+    if resp.status_code == 402:
+        detail = (resp.json() if resp.content else {}).get("detail", "算力不足")
+        raise HTTPException(status_code=402, detail=f"算力不足，视频复刻预计需预扣 {int(expected_credits)} 算力。{detail}")
+    if resp.status_code == 401:
+        raise HTTPException(status_code=401, detail="登录已过期，请重新登录后再提交视频复刻任务")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"视频复刻计费预扣失败 HTTP {resp.status_code}: {(resp.text or '')[:300]}")
+    data = resp.json() if resp.content else {}
+    try:
+        charged_value = float(data.get("credits_charged"))
+    except (TypeError, ValueError):
+        charged_value = expected_credits
+    return {
+        "billing_status": "pre_deducted",
+        "credits_pre_deducted": charged_value,
+        "credits_expected": expected_credits,
+        "raw": data,
+    }
+
+
+async def _viral_remix_refund(
+    *,
+    billing_base: str,
+    billing_headers: Dict[str, str],
+    credits: float,
+) -> None:
+    if credits <= 0:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            await client.post(
+                f"{billing_base}/capabilities/refund",
+                json={"capability_id": _VIRAL_REMIX_CAPABILITY_ID, "credits": credits},
+                headers=billing_headers,
+            )
+    except Exception:
+        logger.exception("[viral_video_remix_billing] refund failed credits=%s", credits)
+
+
+async def _viral_remix_record_call(
+    *,
+    billing_base: str,
+    billing_headers: Dict[str, str],
+    job_id: str,
+    entry: Dict[str, Any],
+    result: Dict[str, Any],
+) -> None:
+    credits_pre = float(entry.get("credits_pre_deducted") or 0)
+    credits_final = float(entry.get("credits_expected") or credits_pre)
+    body = {
+        "capability_id": _VIRAL_REMIX_CAPABILITY_ID,
+        "success": True,
+        "source": "viral_video_remix",
+        "request_payload": {
+            "job_id": job_id,
+            "source_duration_seconds": entry.get("source_duration_seconds"),
+            "billable_seconds": entry.get("billable_seconds"),
+            "estimated_yuan": entry.get("estimated_yuan"),
+            "credits_per_yuan": entry.get("credits_per_yuan"),
+        },
+        "response_payload": result,
+        "credits_charged": credits_final,
+        "pre_deduct_applied": credits_pre > 0,
+        "credits_pre_deducted": credits_pre,
+        "credits_final": credits_final,
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(f"{billing_base}/capabilities/record-call", json=body, headers=billing_headers)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"视频复刻计费结算失败 HTTP {resp.status_code}: {(resp.text or '')[:300]}")
+
+
+def _public_viral_billing(entry: Any) -> Dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    return {
+        key: value
+        for key, value in entry.items()
+        if key not in {"billing_headers", "billing_base", "raw"}
+    }
 
 
 def _pick_error_detail(resp: httpx.Response) -> str:
@@ -479,7 +649,7 @@ async def generate_character_reference(
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
     db: Session = Depends(get_db),
 ):
-    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    api_base, api_key = _resolve_local_comfly_credentials(request)
     final_prompt = _character_prompt((prompt or "").strip(), style)
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
 
@@ -558,7 +728,7 @@ async def generate_product_reference(
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
     db: Session = Depends(get_db),
 ):
-    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    api_base, api_key = _resolve_local_comfly_credentials(request)
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     sources: List[Tuple[str, bytes, str]] = []
 
@@ -703,7 +873,7 @@ async def upload_viral_video_remix_asset(
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
     db: Session = Depends(get_db),
 ):
-    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    api_base, api_key = _resolve_local_comfly_credentials(request)
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="上传文件为空")
@@ -768,6 +938,7 @@ class ViralShareVideoResolveBody(BaseModel):
 @router.post("/api/viral-video-remix/share-video/resolve")
 async def resolve_viral_video_share_link(
     body: ViralShareVideoResolveBody,
+    request: Request,
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
     db: Session = Depends(get_db),
 ):
@@ -775,7 +946,7 @@ async def resolve_viral_video_share_link(
     share_url = _extract_first_http_url(share_text)
     if not share_url:
         raise HTTPException(status_code=400, detail="未识别到视频分享链接，请粘贴包含 http/https 的完整分享文案。")
-    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    api_base, api_key = _resolve_local_comfly_credentials(request)
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(
@@ -858,6 +1029,40 @@ class ViralRemixStartBody(BaseModel):
     generate_audio: bool = True
     watermark: bool = False
     use_character_reference: bool = False
+    billing_confirmed: bool = False
+
+
+class ViralRemixBillingEstimateBody(BaseModel):
+    original_video_url: str = Field(..., min_length=8)
+
+
+@router.post("/api/viral-video-remix/billing/estimate")
+async def estimate_viral_video_remix_billing(
+    body: ViralRemixBillingEstimateBody,
+    current_user: _ServerUser = Depends(_resolve_viral_remix_user),
+):
+    source_url = _quote_public_url(body.original_video_url)
+    if not source_url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="请先上传原视频或解析视频链接后再预估计费")
+    tmp_dir = _viral_remix_jobs_root() / "billing_estimate"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"{current_user.id}_{int(time.time() * 1000)}.mp4"
+    try:
+        await _download_to_file(source_url, tmp_path, timeout_seconds=300.0)
+        duration = _probe_video_duration_seconds(tmp_path)
+        estimate = _viral_remix_estimated_credits(duration)
+        estimate["source_duration_seconds"] = duration
+        return {
+            "ok": True,
+            "capability_id": _VIRAL_REMIX_CAPABILITY_ID,
+            **estimate,
+        }
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
 
 
 def _extract_first_http_url(text: str) -> str:
@@ -1467,6 +1672,9 @@ def _job_status_response(job: Dict[str, Any]) -> Dict[str, Any]:
     asset = job.get("asset")
     if isinstance(asset, dict):
         out["asset"] = asset
+    billing = _public_viral_billing(job.get("billing"))
+    if billing:
+        out["billing"] = billing
     if isinstance(segments, list):
         out["segments"] = segments
     result = job.get("result")
@@ -1655,18 +1863,38 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
                 "asset_id": (saved_asset or {}).get("asset_id") or "",
             },
         )
+        # 计费由服务端 /api/comfly-proxy 在每次提交 seedance 任务时自动扣减，本地不做结算
     except Exception as exc:
         logger.exception("[viral_video_remix] remix job failed job_id=%s", job_id)
-        update_job(job_id, status="failed", stage="failed", error=str(exc)[:2000])
+        # 任务失败时，服务端代理会对未成功的 submit 调用做全额退款；本地仅记录失败状态
+        failed_patch: Dict[str, Any] = {"status": "failed", "stage": "failed", "error": str(exc)[:2000]}
+        update_job(job_id, **failed_patch)
 
 
 @router.post("/api/viral-video-remix/seedance/start")
 async def start_viral_video_remix(
     body: ViralRemixStartBody,
+    request: Request,
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
     db: Session = Depends(get_db),
 ):
-    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    api_base, api_key = _resolve_local_comfly_credentials(request)
+    if not body.billing_confirmed:
+        raise HTTPException(status_code=400, detail="请先确认视频复刻预计消耗的算力后再提交任务")
+    estimate_tmp_dir = _viral_remix_jobs_root() / "billing_estimate"
+    estimate_tmp_dir.mkdir(parents=True, exist_ok=True)
+    estimate_tmp_path = estimate_tmp_dir / f"start_{current_user.id}_{int(time.time() * 1000)}.mp4"
+    await _download_to_file(_quote_public_url(body.original_video_url), estimate_tmp_path, timeout_seconds=300.0)
+    try:
+        source_duration = _probe_video_duration_seconds(estimate_tmp_path)
+    finally:
+        try:
+            if estimate_tmp_path.exists():
+                estimate_tmp_path.unlink()
+        except Exception:
+            pass
+    billing_estimate = _viral_remix_estimated_credits(source_duration)
+    billing_estimate["source_duration_seconds"] = source_duration
     safe_body = ViralRemixStartBody(
         original_video_url=_quote_public_url(body.original_video_url),
         character_image_url=_quote_public_url(body.character_image_url),
@@ -1681,7 +1909,15 @@ async def start_viral_video_remix(
         generate_audio=bool(body.generate_audio),
         watermark=bool(body.watermark),
         use_character_reference=bool(body.use_character_reference),
+        billing_confirmed=True,
     )
+    # 弹窗仅作 UX 提示；实际计费由服务端 /api/comfly-proxy 在每次调用时按 comfly_pricing.json 自动扣费
+    billing_entry: Dict[str, Any] = {
+        "billing_status": "estimate_only",
+        "credits_pre_deducted": 0,
+        "credits_expected": float(billing_estimate.get("estimated_credits") or 0),
+        **billing_estimate,
+    }
     job_id = create_job_record(
         user_id=current_user.id,
         payload=safe_body.model_dump(),
@@ -1697,6 +1933,7 @@ async def start_viral_video_remix(
         total_segments=0,
         completed_segments=0,
         segment_duration_seconds=int(safe_body.duration or 5),
+        billing=billing_entry,
     )
     logger.info(
         "[viral_video_remix] queued local remix job user_id=%s job_id=%s segment_seconds=%s video_url=%s character_url=%s product_url=%s",
@@ -1715,6 +1952,7 @@ async def start_viral_video_remix(
         "status": "queued",
         "stage": "queued",
         "segment_duration_seconds": int(safe_body.duration or 10),
+        "billing": _public_viral_billing(billing_entry),
     }
     url = _endpoint(api_base, "/seedance/v3/contents/generations/tasks")
     headers = {
@@ -1745,10 +1983,11 @@ async def start_viral_video_remix(
 @router.get("/api/viral-video-remix/seedance/tasks/{task_id}")
 async def poll_viral_video_remix_task(
     task_id: str,
+    request: Request,
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
     db: Session = Depends(get_db),
 ):
-    api_base, api_key = _resolve_local_comfly_credentials(current_user.id, db)
+    api_base, api_key = _resolve_local_comfly_credentials(request)
     safe_task = (task_id or "").strip()
     if not safe_task:
         raise HTTPException(status_code=400, detail="缺少任务 ID")
