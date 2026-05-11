@@ -3430,8 +3430,12 @@ function bindChatHomeActions() {
     var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
     if (hiddenViewBtn) {
       var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
-      if (typeof window._openHiddenWorkspaceView === 'function') {
+      if (hiddenView === 'hifly-digital-human') {
+        openHiddenWorkspaceFallback(hiddenView);
+      } else if (typeof window._openHiddenWorkspaceView === 'function') {
         window._openHiddenWorkspaceView(hiddenView);
+      } else {
+        openHiddenWorkspaceFallback(hiddenView);
       }
       return;
     }
@@ -3474,10 +3478,35 @@ function bindChatQuickModeActions() {
     advancedBtn.addEventListener('click', function() {
       var hiddenView = advancedBtn.getAttribute('data-open-hidden-view');
       if (!hiddenView) return;
-      if (typeof window._openHiddenWorkspaceView === 'function') {
+      if (hiddenView === 'hifly-digital-human') {
+        openHiddenWorkspaceFallback(hiddenView);
+      } else if (typeof window._openHiddenWorkspaceView === 'function') {
         window._openHiddenWorkspaceView(hiddenView);
+      } else {
+        openHiddenWorkspaceFallback(hiddenView);
       }
     });
+  }
+}
+
+function openHiddenWorkspaceFallback(view) {
+  var target = String(view || '').trim();
+  if (!target) return;
+  try { location.hash = target; } catch (e) {}
+  document.querySelectorAll('.nav-left-item').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.content-block').forEach(function(p) { p.classList.remove('visible'); });
+  var contentEl = document.getElementById('content-' + target);
+  if (contentEl) contentEl.classList.add('visible');
+  if (target === 'hifly-digital-human' && typeof window.initHiflyDigitalHumanView === 'function') {
+    window.initHiflyDigitalHumanView();
+  } else if (target === 'viral-video-remix' && typeof window.initViralVideoRemixView === 'function') {
+    window.initViralVideoRemixView();
+  } else if (target === 'seedance-tvc-studio' && typeof window.initSeedanceTvcStudioView === 'function') {
+    window.initSeedanceTvcStudioView();
+  } else if (target === 'image-composer-studio' && typeof window.initImageComposerStudioView === 'function') {
+    window.initImageComposerStudioView();
+  } else if (target === 'ecommerce-detail-studio' && typeof window.initEcommerceDetailStudioView === 'function') {
+    window.initEcommerceDetailStudioView();
   }
 }
 

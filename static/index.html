@@ -740,6 +740,447 @@
       background:
         linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,250,255,0.94));
     }
+    #content-hifly-digital-human .viral-video-placeholder {
+      width:min(88%, 520px);
+      padding:1.05rem 1.15rem;
+      border-radius:18px;
+      background:rgba(255,255,255,0.92);
+      border:1px solid rgba(14,165,233,0.18);
+      box-shadow:0 18px 42px rgba(36,54,88,0.10);
+    }
+    #content-hifly-digital-human .viral-video-placeholder strong {
+      display:block;
+      font-size:1rem;
+      color:#20314d;
+    }
+    #content-hifly-digital-human .viral-video-placeholder span {
+      display:block;
+      margin-top:0.28rem;
+      color:#607089;
+      font-size:0.8rem;
+      line-height:1.55;
+    }
+    #content-hifly-digital-human .hifly-shell {
+      display:grid;
+      grid-template-columns:minmax(320px, 390px) minmax(0, 1fr);
+      gap:1rem;
+      align-items:start;
+    }
+    #content-hifly-digital-human .hifly-sidebar {
+      display:flex;
+      flex-direction:column;
+      gap:1rem;
+      position:sticky;
+      top:0.8rem;
+    }
+    #content-hifly-digital-human .hifly-main {
+      display:flex;
+      flex-direction:column;
+      gap:1rem;
+      min-width:0;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar {
+      display:grid;
+      grid-template-columns:124px minmax(0, 1fr);
+      gap:0.9rem;
+      align-items:start;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar.is-empty {
+      display:block;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-empty {
+      padding:1rem 1.05rem;
+      border-radius:18px;
+      border:1px dashed rgba(124,94,255,0.26);
+      background:linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,246,255,0.92));
+      color:#5f6b86;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-empty strong,
+    #content-hifly-digital-human .hifly-selected-avatar-empty span {
+      display:block;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-empty span {
+      margin-top:0.36rem;
+      font-size:0.82rem;
+      line-height:1.6;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-cover {
+      position:relative;
+      aspect-ratio:1 / 1;
+      border-radius:22px;
+      overflow:hidden;
+      background:linear-gradient(135deg, rgba(124,94,255,0.22), rgba(14,165,233,0.22));
+      box-shadow:0 16px 34px rgba(31,41,55,0.10);
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-cover img {
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
+    }
+    #content-hifly-digital-human .hifly-tip-chip,
+    #content-hifly-digital-human .hifly-section-chip {
+      position:absolute;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding:0.25rem 0.58rem;
+      border-radius:999px;
+      font-size:0.74rem;
+      font-weight:700;
+      backdrop-filter:blur(10px);
+    }
+    #content-hifly-digital-human .hifly-tip-chip {
+      left:0.65rem;
+      top:0.65rem;
+      color:#fff;
+      background:rgba(124,94,255,0.92);
+      letter-spacing:0.04em;
+    }
+    #content-hifly-digital-human .hifly-section-chip {
+      right:0.65rem;
+      top:0.65rem;
+      color:#6b4de6;
+      background:rgba(255,255,255,0.9);
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-copy {
+      min-width:0;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-title-row {
+      display:flex;
+      gap:0.6rem;
+      align-items:flex-start;
+      justify-content:space-between;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-title-row strong {
+      font-size:1rem;
+      color:#1f2b42;
+      line-height:1.35;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-title-row span {
+      flex:0 0 auto;
+      font-size:0.76rem;
+      color:#7c5eff;
+      padding:0.35rem 0.62rem;
+      border-radius:999px;
+      background:rgba(124,94,255,0.10);
+      font-weight:700;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-id {
+      margin-top:0.42rem;
+      font-size:0.8rem;
+      color:#6d7791;
+      word-break:break-all;
+    }
+    #content-hifly-digital-human .hifly-selected-avatar-tags {
+      margin-top:0.6rem;
+      display:flex;
+      gap:0.42rem;
+      flex-wrap:wrap;
+    }
+    #content-hifly-digital-human .hifly-mini-tag {
+      display:inline-flex;
+      align-items:center;
+      padding:0.28rem 0.56rem;
+      border-radius:999px;
+      background:rgba(19,191,159,0.10);
+      color:#157a66;
+      font-size:0.74rem;
+      font-weight:600;
+    }
+    #content-hifly-digital-human .hifly-main-toolbar {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:0.8rem;
+      margin-bottom:0.8rem;
+      flex-wrap:wrap;
+    }
+    #content-hifly-digital-human .hifly-tab-row {
+      display:flex;
+      gap:0.65rem;
+      flex-wrap:wrap;
+    }
+    #content-hifly-digital-human .hifly-tab-btn {
+      border:none;
+      padding:0.58rem 0.98rem;
+      border-radius:999px;
+      background:rgba(124,94,255,0.08);
+      color:#665a92;
+      font-weight:700;
+      cursor:pointer;
+      transition:all 0.18s ease;
+    }
+    #content-hifly-digital-human .hifly-tab-btn.is-active {
+      background:linear-gradient(135deg, #7c5eff, #6a8cff);
+      color:#fff;
+      box-shadow:0 14px 30px rgba(108,99,255,0.22);
+    }
+    #content-hifly-digital-human .hifly-library-toolbar {
+      display:flex;
+      gap:0.8rem;
+      align-items:center;
+      justify-content:space-between;
+      flex-wrap:wrap;
+      margin-bottom:1rem;
+    }
+    #content-hifly-digital-human .hifly-search {
+      flex:1 1 260px;
+      min-width:220px;
+      border:1px solid rgba(124,94,255,0.16);
+      border-radius:14px;
+      padding:0.82rem 0.9rem;
+      background:#fff;
+    }
+    #content-hifly-digital-human .hifly-library-tip {
+      font-size:0.8rem;
+      color:#68748f;
+      line-height:1.6;
+      padding:0.75rem 0.88rem;
+      border-radius:16px;
+      background:linear-gradient(180deg, rgba(255,255,255,0.94), rgba(246,248,255,0.92));
+      border:1px solid rgba(124,94,255,0.10);
+    }
+    #content-hifly-digital-human .hifly-library-section + .hifly-library-section {
+      margin-top:1.2rem;
+    }
+    #content-hifly-digital-human .hifly-section-head {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:0.75rem;
+      margin-bottom:0.82rem;
+      flex-wrap:wrap;
+    }
+    #content-hifly-digital-human .hifly-section-head h4 {
+      margin:0;
+      font-size:1.08rem;
+      color:#1f2b42;
+    }
+    #content-hifly-digital-human .hifly-section-head p {
+      margin:0.18rem 0 0;
+      font-size:0.8rem;
+      color:#6d7791;
+    }
+    #content-hifly-digital-human .hifly-section-count {
+      display:inline-flex;
+      align-items:center;
+      gap:0.32rem;
+      padding:0.38rem 0.72rem;
+      border-radius:999px;
+      background:rgba(124,94,255,0.10);
+      color:#6a54e0;
+      font-size:0.78rem;
+      font-weight:700;
+    }
+    #content-hifly-digital-human .hifly-avatar-grid {
+      display:grid;
+      grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
+      gap:0.92rem;
+    }
+    #content-hifly-digital-human .hifly-avatar-card {
+      display:flex;
+      flex-direction:column;
+      gap:0;
+      border-radius:24px;
+      background:#fff;
+      overflow:hidden;
+      border:1px solid rgba(26,39,68,0.06);
+      box-shadow:0 18px 38px rgba(26,39,68,0.08);
+      transition:transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+    #content-hifly-digital-human .hifly-avatar-card:hover {
+      transform:translateY(-2px);
+      box-shadow:0 20px 44px rgba(31,41,55,0.12);
+    }
+    #content-hifly-digital-human .hifly-avatar-card.is-selected {
+      border-color:rgba(124,94,255,0.38);
+      box-shadow:0 24px 50px rgba(108,99,255,0.16);
+    }
+    #content-hifly-digital-human .hifly-avatar-card-cover {
+      position:relative;
+      aspect-ratio:1 / 1;
+      overflow:hidden;
+      background:linear-gradient(135deg, rgba(124,94,255,0.20), rgba(14,165,233,0.20));
+    }
+    #content-hifly-digital-human .hifly-avatar-card-cover img {
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
+    }
+    #content-hifly-digital-human .hifly-avatar-card-badge,
+    #content-hifly-digital-human .hifly-avatar-card-count {
+      position:absolute;
+      display:inline-flex;
+      align-items:center;
+      padding:0.3rem 0.62rem;
+      border-radius:999px;
+      font-size:0.73rem;
+      font-weight:700;
+      backdrop-filter:blur(8px);
+    }
+    #content-hifly-digital-human .hifly-avatar-card-badge {
+      left:0.72rem;
+      top:0.72rem;
+      background:rgba(255,255,255,0.92);
+      color:#6a54e0;
+    }
+    #content-hifly-digital-human .hifly-avatar-card-count {
+      right:0.72rem;
+      bottom:0.72rem;
+      background:rgba(255,255,255,0.94);
+      color:#6a54e0;
+    }
+    #content-hifly-digital-human .hifly-avatar-card-body {
+      padding:0.88rem 0.9rem 0.96rem;
+    }
+    #content-hifly-digital-human .hifly-avatar-card-title {
+      font-size:1rem;
+      font-weight:700;
+      color:#202a3f;
+      line-height:1.4;
+      min-height:2.7em;
+    }
+    #content-hifly-digital-human .hifly-avatar-card-id {
+      margin-top:0.38rem;
+      font-size:0.76rem;
+      color:#7c879f;
+      word-break:break-all;
+      min-height:2.4em;
+    }
+    #content-hifly-digital-human .hifly-avatar-card-tags {
+      margin-top:0.55rem;
+      display:flex;
+      gap:0.38rem;
+      flex-wrap:wrap;
+      min-height:1.8rem;
+    }
+    #content-hifly-digital-human .hifly-card-tag {
+      display:inline-flex;
+      align-items:center;
+      padding:0.24rem 0.5rem;
+      border-radius:999px;
+      background:rgba(15,23,42,0.06);
+      color:#61708a;
+      font-size:0.72rem;
+    }
+    #content-hifly-digital-human .hifly-avatar-pick-btn {
+      width:100%;
+      margin-top:0.75rem;
+      justify-content:center;
+    }
+    #content-hifly-digital-human .hifly-section-empty {
+      display:none;
+      padding:1rem 1.05rem;
+      border-radius:18px;
+      border:1px dashed rgba(124,94,255,0.20);
+      background:rgba(249,247,255,0.82);
+      color:#68748f;
+      font-size:0.84rem;
+      line-height:1.7;
+    }
+    #content-hifly-digital-human .hifly-more-row {
+      margin-top:0.92rem;
+      display:flex;
+      justify-content:center;
+    }
+    #content-hifly-digital-human .hifly-result-panel-head {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:1rem;
+      flex-wrap:wrap;
+      margin-bottom:0.85rem;
+    }
+    #content-hifly-digital-human .hifly-result-meta {
+      display:flex;
+      flex-wrap:wrap;
+      gap:0.65rem;
+      margin-top:0.58rem;
+    }
+    #content-hifly-digital-human .hifly-result-pill {
+      display:inline-flex;
+      align-items:center;
+      gap:0.38rem;
+      padding:0.42rem 0.74rem;
+      border-radius:999px;
+      background:rgba(124,94,255,0.10);
+      color:#6a54e0;
+      font-size:0.78rem;
+      font-weight:700;
+    }
+    #content-hifly-digital-human #hiflyTaskStatusText[data-tone="success"] {
+      color:#1f8f5f;
+      background:rgba(31,143,95,0.12);
+    }
+    #content-hifly-digital-human #hiflyTaskStatusText[data-tone="danger"] {
+      color:#c23b3b;
+      background:rgba(194,59,59,0.12);
+    }
+    #content-hifly-digital-human #hiflyTaskStatusText[data-tone="processing"] {
+      color:#5c57d8;
+      background:rgba(92,87,216,0.12);
+    }
+    #content-hifly-digital-human .hifly-inline-check {
+      display:flex;
+      align-items:center;
+      gap:0.5rem;
+      min-height:40px;
+      padding:0.5rem 0.72rem;
+      border-radius:14px;
+      border:1px solid rgba(116,134,168,0.22);
+      background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      color:#243755;
+      font-size:0.84rem;
+      cursor:pointer;
+      user-select:none;
+      box-sizing:border-box;
+      transition:border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    #content-hifly-digital-human .hifly-inline-check:hover {
+      border-color:rgba(91,124,255,0.34);
+    }
+    #content-hifly-digital-human .hifly-inline-check input[type="checkbox"] {
+      width:16px;
+      height:16px;
+      accent-color:#5b7cff;
+      cursor:pointer;
+    }
+    #content-hifly-digital-human .hifly-result-status-head {
+      display:flex;
+      gap:0.74rem;
+      align-items:flex-start;
+    }
+    #content-hifly-digital-human .hifly-result-status-copy strong,
+    #content-hifly-digital-human .hifly-result-status-copy span {
+      display:block;
+    }
+    #content-hifly-digital-human .hifly-result-spinner {
+      flex:0 0 auto;
+      width:34px;
+      height:34px;
+      border-radius:999px;
+      border:3px solid rgba(124,94,255,0.14);
+      border-top-color:#7c5eff;
+      animation:viral-spin 0.85s linear infinite;
+    }
+    @media (max-width: 1120px) {
+      #content-hifly-digital-human .hifly-shell {
+        grid-template-columns:minmax(0, 1fr);
+      }
+      #content-hifly-digital-human .hifly-sidebar {
+        position:static;
+      }
+    }
+    @media (max-width: 640px) {
+      #content-hifly-digital-human .hifly-selected-avatar {
+        grid-template-columns:minmax(0, 1fr);
+      }
+      #content-hifly-digital-human .hifly-avatar-grid {
+        grid-template-columns:minmax(0, 1fr);
+      }
+    }
     #content-viral-video-remix .viral-status-head {
       display:flex;
       align-items:center;
@@ -4030,6 +4471,11 @@
                     <span class="chat-sidebar-entry-copy">爆款复刻</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
+                  <button type="button" class="chat-sidebar-entry" data-open-hidden-view="hifly-digital-human">
+                    <span class="chat-sidebar-entry-icon">H</span>
+                    <span class="chat-sidebar-entry-copy">数字人</span>
+                    <span class="chat-sidebar-entry-arrow">›</span>
+                  </button>
                   <button type="button" class="chat-sidebar-entry" data-jump-view="publish">
                     <span class="chat-sidebar-entry-icon">▣</span>
                     <span class="chat-sidebar-entry-copy">发布中心</span>
@@ -4143,6 +4589,7 @@
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip4" data-chip-tone="content" data-open-hidden-view="image-composer-studio"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创作图片</span><span class="chat-suggestion-chip-desc">进入图片工作台</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-chat-prompt="用爆款tvc帮我生成一个视频。"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">爆款TVC</span><span class="chat-suggestion-chip-desc">填入视频生成话术</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">视频分镜</span><span class="chat-suggestion-chip-desc">进入分镜工作台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip9" data-chip-tone="content" data-open-hidden-view="hifly-digital-human"><span class="chat-suggestion-chip-icon">H</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">数字人口播</span><span class="chat-suggestion-chip-desc">进入 HiFly 工作台</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">商品详情大师</span><span class="chat-suggestion-chip-desc">商品图快速生成</span></span></button>
                     </div>
@@ -4722,6 +5169,71 @@
           </div>
 
           <!-- 爆款视频复刻工作台 -->
+          <div id="content-hifly-digital-human" class="content-block">
+            <div class="tvc-studio">
+              <div class="tvc-studio-hero">
+                <div><h3>HiFly &#25968;&#23383;&#20154;</h3><p>&#25353;&#29031;&#39134;&#24433;&#30340;&#39029;&#38754;&#24605;&#36335;&#65292;&#21491;&#20391;&#30452;&#25509;&#30475;&#25968;&#23383;&#20154;&#24418;&#35937;&#21345;&#29255;&#65292;&#24038;&#20391;&#38543;&#26102;&#30475;&#21040;&#24403;&#21069;&#36873;&#20013;&#30340;&#24418;&#35937; Tip &#21644;&#32032;&#26448;&#25968;&#12290;</p><div class="tvc-hero-meta">&#39029;&#38754;&#36827;&#26469;&#23601;&#20250;&#33258;&#21160;&#21047;&#26032;&#25968;&#23383;&#20154;&#24211;&#65292;&#25552;&#20132;&#20219;&#21153;&#21518;&#20250;&#33258;&#21160;&#20999;&#21040;&#8220;&#20219;&#21153;&#32467;&#26524;&#8221;&#12290;</div></div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;"><button type="button" id="hiflyBackBtn" class="btn btn-ghost btn-sm">&#36820;&#22238;&#25216;&#33021;&#21830;&#24215;</button><a class="btn btn-primary btn-sm" href="https://hifly.cc/" target="_blank" rel="noreferrer">&#25171;&#24320; HiFly</a></div>
+              </div>
+              <div class="hifly-shell">
+                <aside class="hifly-sidebar">
+                  <div class="tvc-panel tvc-panel-compact">
+                    <h4 class="tvc-panel-title">1. HiFly 服务</h4>
+                    <p class="tvc-panel-hint">HiFly 创作服务由平台统一托管，用户无需填写 API Token。</p>
+                    <div class="viral-action-row"><span class="viral-inline-status">按作品实际时长消耗平台积分</span></div>
+                  </div>
+                  <div class="tvc-panel">
+                    <h4 class="tvc-panel-title">2. 当前选中的数字人</h4>
+                    <p class="tvc-panel-hint">避免只看名字不知道是谁，这里会固定显示对应形象。</p>
+                    <div id="hiflySelectedAvatarPreview" class="hifly-selected-avatar is-empty"></div>
+                    <input id="hiflyAvatarInput" type="hidden">
+                  </div>
+                  <div class="tvc-panel">
+                    <h4 class="tvc-panel-title">3. 声音与文案</h4>
+                    <div class="tvc-inline-grid"><div class="tvc-field"><label for="hiflyVoiceSelect">&#22768;&#38899;&#21015;&#34920;</label><select id="hiflyVoiceSelect"><option value="">&#35831;&#20808;&#21152;&#36733;&#22768;&#38899;</option></select></div><div class="tvc-field"><label>&nbsp;</label><button type="button" id="hiflyLoadVoicesBtn" class="btn btn-primary btn-sm" style="width:100%;">&#21152;&#36733;&#22768;&#38899;</button></div></div>
+                    <div class="tvc-field"><label for="hiflyVoiceInput">&#22768;&#38899; ID&#65288;&#21487;&#25163;&#21160;&#22635;&#20889;&#65289;</label><input id="hiflyVoiceInput" type="text" placeholder="voice_xxx"></div>
+                    <div class="tvc-field"><label for="hiflyTitleInput">&#20316;&#21697;&#26631;&#39064;</label><input id="hiflyTitleInput" type="text" maxlength="20" placeholder="&#25968;&#23383;&#20154;&#21475;&#25773;"></div>
+                    <div class="tvc-field"><label for="hiflyScriptInput">&#21475;&#25773;&#25991;&#26696;</label><textarea id="hiflyScriptInput" style="min-height:160px;" placeholder="&#36755;&#20837;&#25968;&#23383;&#20154;&#35201;&#35828;&#30340;&#25991;&#26696;&#65292;&#19981;&#36229;&#36807; 10000 &#23383;&#12290;"></textarea></div>
+                    <div class="tvc-inline-grid" style="align-items:end;"><label class="tvc-check" style="align-self:end;min-height:38px;align-items:center;"><input type="checkbox" id="hiflySubtitleCheck">&#26174;&#31034;&#23383;&#24149;</label><div class="tvc-field"><label for="hiflyAigcFlagSelect">AIGC &#27700;&#21360;</label><select id="hiflyAigcFlagSelect"><option value="0" selected>&#36319;&#38543;&#20010;&#20154;&#20013;&#24515;</option><option value="1">&#24320;&#21551;</option><option value="2">&#20851;&#38381;</option></select></div></div>
+                    <div id="hiflyMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
+                    <div class="tvc-quick-actions"><button type="button" id="hiflyGenerateBtn" class="btn btn-primary">&#25552;&#20132;&#29983;&#25104;&#20219;&#21153;</button></div>
+                  </div>
+                </aside>
+                <section class="hifly-main">
+                  <div class="tvc-panel">
+                    <div class="hifly-main-toolbar">
+                      <div><h4 class="tvc-panel-title" style="margin-bottom:0.25rem;">&#25968;&#23383;&#20154;</h4><p class="tvc-panel-hint" style="margin:0;">右侧直接按卡片看形象、名字和素材数，再决定“去创作”。</p></div>
+                      <div class="hifly-tab-row"><button type="button" id="hiflyLibraryTabBtn" class="hifly-tab-btn is-active">&#25968;&#23383;&#20154;&#24211;</button><button type="button" id="hiflyResultTabBtn" class="hifly-tab-btn">&#20219;&#21153;&#32467;&#26524;</button></div>
+                    </div>
+                    <div id="hiflyLibraryView">
+                      <div class="hifly-library-toolbar"><input id="hiflyAvatarSearchInput" class="hifly-search" type="text" placeholder="搜索数字人名称..."><button type="button" id="hiflyRefreshLibraryBtn" class="btn btn-ghost btn-sm">&#21047;&#26032;&#25968;&#23383;&#20154;</button></div>
+                      <div class="hifly-library-tip">Tip：公共数字人会优先展示能对应到的真实封面图；如果上游暂时没有返回形象图，也会继续保留卡片信息，避免退化成纯名字列表。</div>
+                      <div class="hifly-library-section">
+                        <div class="hifly-section-head"><div><h4>&#25105;&#30340;&#25968;&#23383;&#20154;</h4><p>优先放你自己的数字人，避免和公共库混在一起。</p></div><span class="hifly-section-count"><span id="hiflyMineCount">0</span> 个</span></div>
+                        <div id="hiflyMineAvatarGrid" class="hifly-avatar-grid"></div>
+                        <div id="hiflyMineAvatarEmpty" class="hifly-section-empty"></div>
+                        <div class="hifly-more-row"><button type="button" id="hiflyMineMoreBtn" class="btn btn-ghost btn-sm" style="display:none;">&#26174;&#31034;&#26356;&#22810;</button></div>
+                      </div>
+                      <div class="hifly-library-section">
+                        <div class="hifly-section-head"><div><h4>&#20844;&#20849;&#25968;&#23383;&#20154;</h4><p>按飞影那种卡片方式展示，能直接看形象，不再只是一个列表。</p></div><span class="hifly-section-count"><span id="hiflyPublicCount">0</span> 个</span></div>
+                        <div id="hiflyPublicAvatarGrid" class="hifly-avatar-grid"></div>
+                        <div id="hiflyPublicAvatarEmpty" class="hifly-section-empty"></div>
+                        <div class="hifly-more-row"><button type="button" id="hiflyPublicMoreBtn" class="btn btn-ghost btn-sm" style="display:none;">&#26174;&#31034;&#26356;&#22810;</button></div>
+                      </div>
+                    </div>
+                    <div id="hiflyResultView" style="display:none;">
+                      <div class="hifly-result-panel-head">
+                        <div><h4 class="tvc-panel-title" style="margin-bottom:0.25rem;">&#20219;&#21153;&#32467;&#26524;</h4><p class="tvc-panel-hint" style="margin:0;">提交后会自动切到这里，生成状态和最终视频都在这一屏完成。</p><div class="hifly-result-meta"><span class="hifly-result-pill" id="hiflyTaskStatusText" data-tone="idle">&#31561;&#24453;&#25552;&#20132;</span></div></div>
+                        <button type="button" id="hiflyResultBackBtn" class="btn btn-ghost btn-sm">&#36820;&#22238;&#25968;&#23383;&#20154;&#24211;</button>
+                      </div>
+                      <div class="tvc-video-stage" style="height:clamp(360px, 58vh, 680px);"><div id="hiflyResultSurface" class="tvc-video-surface" style="height:100%;display:flex;align-items:center;justify-content:center;"></div></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
           <div id="content-viral-video-remix" class="content-block">
             <div class="tvc-studio">
               <div class="tvc-studio-hero">
@@ -4753,7 +5265,17 @@
                     <div class="tvc-field"><label>&#20135;&#21697;&#22270;</label><div class="tvc-upload-box"><div class="tvc-upload-actions"><button type="button" id="viralProductPickBtn" class="btn btn-primary btn-sm">&#36873;&#25321;&#20135;&#21697;&#22270;</button><button type="button" id="viralUploadProductBtn" class="btn btn-ghost btn-sm">&#19978;&#20256;&#20135;&#21697;&#22270;</button><input type="file" id="viralProductInput" accept="image/*" multiple style="display:none;"></div><div id="viralProductPreview" class="tvc-upload-list"></div></div><input id="viralProductUrlInput" type="text" placeholder="&#25110;&#30452;&#25509;&#31896;&#36148;&#19968;&#20010;&#25110;&#22810;&#20010;&#20844;&#32593;&#20135;&#21697;&#22270; URL&#65292;&#22810;&#20010;&#29992;&#36887;&#21495;&#25110;&#25442;&#34892;&#20998;&#38548;"><div class="viral-product-reference-cta"><label class="tvc-check" style="margin:0;"><input type="checkbox" id="viralCleanProductCheck" checked>&#22797;&#21051;&#21069;&#20808;&#29983;&#25104;&#20135;&#21697;&#20840;&#35270;&#22270;</label><button type="button" id="viralCleanProductBtn" class="btn btn-primary">&#29983;&#25104;&#20135;&#21697;&#20840;&#35270;&#22270;</button><span class="viral-product-cta-hint">&#22810;&#35282;&#24230;&#20135;&#21697;&#22270;&#20250;&#20808;&#21512;&#25104;&#19968;&#24352;&#20840;&#35270;&#22270;&#65292;&#29992;&#26469;&#25552;&#39640;&#35270;&#39057;&#20013;&#20135;&#21697;&#36716;&#21160;&#26102;&#30340;&#19968;&#33268;&#24615;&#12290;</span><span id="viralProductCleanStatus" class="tvc-panel-hint" style="margin:0;"></span></div><input id="viralProductCleanPrompt" type="text" placeholder="&#20135;&#21697;&#20840;&#35270;&#22270;&#34917;&#20805;&#35201;&#27714;&#65292;&#21487;&#19981;&#22635;&#12290;&#20363;&#22914;&#65306;&#20445;&#25345;&#26448;&#36136;&#32441;&#29702;&#21644;&#25509;&#21475;&#32454;&#33410;&#19981;&#21464;"></div>
                   </div>
 
-                  <div class="tvc-panel"><h4 class="tvc-panel-title">3. &#22797;&#21051;&#21442;&#25968;</h4><div class="tvc-field"><label for="viralRemixPrompt">&#34917;&#20805;&#35201;&#27714;</label><textarea id="viralRemixPrompt" placeholder="&#20363;&#22914;&#65306;&#23558;&#35270;&#39057;&#37324;&#30340;&#21407;&#20135;&#21697;&#26367;&#25442;&#25104;&#26032;&#20135;&#21697;&#65292;&#20445;&#25345;&#36816;&#38236;&#12289;&#25163;&#37096;&#21160;&#20316;&#12289;&#20809;&#24433;&#21644;&#33410;&#22863;&#19981;&#21464;&#65292;&#21435;&#25481;&#23383;&#24149;&#21644;&#27700;&#21360;&#12290;"></textarea></div><div class="tvc-inline-grid"><div class="tvc-field"><label for="viralRemixModelSelect">&#27169;&#22411;</label><select id="viralRemixModelSelect"><option value="doubao-seedance-2-0-260128" selected>Seedance 2.0 Pro&#65288;&#20135;&#21697;&#26367;&#25442;&#65289;</option></select><div class="tvc-panel-hint" style="margin-top:0.3rem;">&#20135;&#21697;&#26367;&#25442;&#22266;&#23450;&#20351;&#29992; Pro&#65292;Fast &#23481;&#26131;&#21482;&#22797;&#21051;&#36816;&#38236;&#65292;&#19981;&#26367;&#25442;&#21830;&#21697;&#12290;</div></div><div class="tvc-field"><label for="viralRemixDurationSelect">&#20998;&#27573;&#26102;&#38271;</label><select id="viralRemixDurationSelect"><option value="5">5s</option><option value="10" selected>10s &#65288;&#25512;&#33616;&#65289;</option></select></div></div><div class="tvc-inline-grid"><div class="tvc-field"><label for="viralRemixRatioSelect">&#27604;&#20363;</label><select id="viralRemixRatioSelect"><option value="9:16" selected>9:16 &#31446;&#23631;</option><option value="16:9">16:9 &#27178;&#23631;</option><option value="1:1">1:1 &#26041;&#24418;</option></select></div><div class="tvc-field"><label for="viralRemixResolutionSelect">&#28165;&#26224;&#24230;</label><select id="viralRemixResolutionSelect"><option value="720p" selected>720p</option><option value="480p">480p</option></select></div></div><div class="tvc-inline-grid"><label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralRemixAudioCheck" checked>&#20445;&#30041;&#38899;&#39057;&#25110;&#29983;&#25104;&#38899;&#39057;</label><label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralUseCharacterCheck">&#20351;&#29992;&#20154;&#29289;&#22235;&#35270;&#22270;&#21442;&#32771;</label></div><div id="viralRemixMsg" class="msg" style="display:none;margin-top:0.8rem;"></div><div class="tvc-quick-actions"><button type="button" id="viralRemixStartBtn" class="btn btn-primary">&#24320;&#22987;&#22797;&#21051;&#35270;&#39057;</button></div></div>
+                  <div class="tvc-panel">
+                    <h4 class="tvc-panel-title">3. &#22797;&#21051;&#21442;&#25968;</h4>
+                    <div class="tvc-field"><label for="viralRemixPrompt">&#30011;&#38754;&#34917;&#20805;&#35201;&#27714;</label><textarea id="viralRemixPrompt" placeholder="&#20363;&#22914;&#65306;&#23558;&#35270;&#39057;&#37324;&#30340;&#21407;&#20135;&#21697;&#26367;&#25442;&#25104;&#26032;&#20135;&#21697;&#65292;&#20445;&#25345;&#36816;&#38236;&#12289;&#25163;&#37096;&#21160;&#20316;&#12289;&#20809;&#24433;&#21644;&#33410;&#22863;&#19981;&#21464;&#65292;&#21435;&#25481;&#23383;&#24149;&#21644;&#27700;&#21360;&#12290;"></textarea></div>
+                    <div class="tvc-field"><label for="viralRemixAudioPrompt">&#22768;&#38899;&#35201;&#27714;&#65288;&#21487;&#36873;&#65289;</label><textarea id="viralRemixAudioPrompt" placeholder="&#20363;&#22914;&#65306;&#19981;&#20445;&#30041;&#21407;&#22768;&#65292;&#25913;&#25104;&#24180;&#36731;&#22899;&#22768;&#21475;&#25773;&#65292;&#35821;&#36895;&#36731;&#24555;&#65292;&#32972;&#26223;&#38899;&#20048;&#24178;&#20928;&#26377;&#31185;&#25216;&#24863;&#12290;"></textarea></div>
+                    <div class="tvc-field"><label for="viralRemixNarrationScript">&#21475;&#25773;&#25991;&#26696;&#65288;&#21487;&#36873;&#65292;&#33258;&#21160;&#25353;&#20998;&#27573;&#25286;&#20998;&#65289;</label><textarea id="viralRemixNarrationScript" placeholder="&#25226;&#24819;&#35201;&#26367;&#25442;&#30340;&#21475;&#25773;&#25991;&#26696;&#31896;&#36148;&#21040;&#36825;&#37324;&#12290;&#20363;&#22914;&#65306;&#36825;&#27454;&#30913;&#21560;&#20805;&#30005;&#23453;&#26356;&#36731;&#34180;&#65292;&#20986;&#38376;&#25658;&#24102;&#24456;&#26041;&#20415;&#12290;&#19968;&#25918;&#19978;&#23601;&#33021;&#20805;&#65292;&#36824;&#25903;&#25345;&#22810;&#35774;&#22791;&#21516;&#26102;&#20351;&#29992;&#12290;"></textarea><div class="tvc-panel-hint" style="margin-top:0.32rem;margin-bottom:0;">&#25552;&#20132;&#26102;&#20250;&#25353;&#35270;&#39057;&#20998;&#27573;&#25968;&#33258;&#21160;&#25286;&#25104;&#27599;&#27573;&#30340;&#21475;&#25773;&#65292;&#36991;&#20813;&#27599;&#20010; 10s &#29255;&#27573;&#37117;&#37325;&#22797;&#23436;&#25972;&#25991;&#26696;&#12290;</div></div>
+                    <div class="tvc-inline-grid"><div class="tvc-field"><label for="viralRemixModelSelect">&#27169;&#22411;</label><select id="viralRemixModelSelect"><option value="doubao-seedance-2-0-260128" selected>Seedance 2.0 Pro&#65288;&#20135;&#21697;&#26367;&#25442;&#65289;</option></select><div class="tvc-panel-hint" style="margin-top:0.3rem;">&#20135;&#21697;&#26367;&#25442;&#22266;&#23450;&#20351;&#29992; Pro&#65292;Fast &#23481;&#26131;&#21482;&#22797;&#21051;&#36816;&#38236;&#65292;&#19981;&#26367;&#25442;&#21830;&#21697;&#12290;</div></div><div class="tvc-field"><label for="viralRemixDurationSelect">&#20998;&#27573;&#26102;&#38271;</label><select id="viralRemixDurationSelect"><option value="5">5s</option><option value="10" selected>10s &#65288;&#25512;&#33616;&#65289;</option></select></div></div>
+                    <div class="tvc-inline-grid"><div class="tvc-field"><label for="viralRemixRatioSelect">&#27604;&#20363;</label><select id="viralRemixRatioSelect"><option value="9:16" selected>9:16 &#31446;&#23631;</option><option value="16:9">16:9 &#27178;&#23631;</option><option value="1:1">1:1 &#26041;&#24418;</option></select></div><div class="tvc-field"><label for="viralRemixResolutionSelect">&#28165;&#26224;&#24230;</label><select id="viralRemixResolutionSelect"><option value="720p" selected>720p</option><option value="480p">480p</option></select></div></div>
+                    <div class="tvc-inline-grid"><label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralRemixAudioCheck" checked>&#29983;&#25104;&#26032;&#38899;&#39057;&#25110;&#21475;&#25773;</label><label class="tvc-check" style="align-self:end;"><input type="checkbox" id="viralUseCharacterCheck">&#20351;&#29992;&#20154;&#29289;&#22235;&#35270;&#22270;&#21442;&#32771;</label></div>
+                    <div id="viralRemixMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
+                    <div class="tvc-quick-actions"><button type="button" id="viralRemixStartBtn" class="btn btn-primary">&#24320;&#22987;&#22797;&#21051;&#35270;&#39057;</button></div>
+                  </div>
                 </aside>
 
                 <section class="tvc-main"><div class="viral-reference-grid"><div class="tvc-panel viral-reference-card"><div class="tvc-toolbar"><div><h4 class="tvc-panel-title">&#20154;&#29289;&#22235;&#35270;&#22270;</h4><p class="tvc-panel-hint" style="margin:0;">&#29983;&#25104;&#21518;&#20808;&#22312;&#36825;&#37324;&#39044;&#35272;&#12290;&#26410;&#21246;&#36873;&#20154;&#29289;&#21442;&#32771;&#26102;&#65292;&#19981;&#20250;&#21442;&#19982;&#35270;&#39057;&#22797;&#21051;&#12290;</p></div></div><div class="tvc-video-stage viral-character-stage"><div id="viralCharacterResult" class="tvc-video-surface"></div></div></div><div class="tvc-panel viral-reference-card"><div class="tvc-toolbar"><div><h4 class="tvc-panel-title">&#20135;&#21697;&#20840;&#35270;&#22270;</h4><p class="tvc-panel-hint" style="margin:0;">&#22810;&#24352;&#20135;&#21697;&#22270;&#20250;&#20808;&#29992; GPT-Image-2 &#21512;&#25104;&#19968;&#24352;&#20840;&#35270;&#22270;&#21442;&#32771;&#65292;&#20808;&#30830;&#35748;&#20877;&#24320;&#22987;&#22797;&#21051;&#12290;</p></div></div><div class="tvc-video-stage viral-product-stage"><div id="viralProductReferenceResult" class="tvc-video-surface"></div></div></div></div><div class="tvc-panel"><div class="tvc-toolbar" style="margin-bottom:0.8rem;"><div><h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">&#22797;&#21051;&#35270;&#39057;&#32467;&#26524;</h4><p class="tvc-panel-hint" style="margin:0;">&#25353;&#8220;&#20135;&#21697;&#22270; + &#21442;&#32771;&#35270;&#39057;&#8221;&#25552;&#20132;&#65292;&#23436;&#25104;&#21518;&#22312;&#36825;&#37324;&#25773;&#25918;&#12290;</p></div></div><div id="viralRemixVideoStage" class="tvc-video-stage viral-output-stage"><div id="viralRemixVideoSurface" class="tvc-video-surface"></div></div></div></section>
@@ -6277,9 +6799,10 @@
   </div>
 
   <script src="/static/js/help-hints.js"></script>
-  <script src="/static/js/app.js"></script>
-  <script src="/static/js/chat.js"></script>
-  <script src="/static/js/skill.js?v=20260429-chat-memory-sync"></script>
+  <script src="/static/js/app.js?v=20260510-local-lobster-server"></script>
+  <script src="/static/js/hifly-digital-human.js?v=20260511-brand-voice-preview-2"></script>
+  <script src="/static/js/chat.js?v=20260508-hifly-direct-entry"></script>
+  <script src="/static/js/skill.js?v=20260508-hifly-entry"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>
@@ -6292,7 +6815,7 @@
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260503-ecom-master-copy"></script>
   <script src="/static/js/comfly-image-studio.js?v=20260503-reference-purpose-fix"></script>
   <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260502-purpose-filter"></script>
-  <script src="/static/js/viral-video-remix.js?v=20260507-reference-preview-cn8"></script>
+  <script src="/static/js/viral-video-remix.js?v=20260508-audio-script-cn9"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js"></script>

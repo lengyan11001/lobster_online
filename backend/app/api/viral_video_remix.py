@@ -44,6 +44,7 @@ router = APIRouter()
 _SUCCESS_STATUSES = {"succeeded", "success", "completed", "done"}
 _FAILED_STATUSES = {"failed", "failure", "error", "cancelled", "canceled", "expired"}
 _MAX_PARALLEL_SEGMENT_TASKS = 6
+_NARRATION_SPLIT_MODEL = "gpt-4o-mini"
 _UPLOADED_ASSET_CACHE: Dict[str, str] = {}
 _VIDEO_DOWNLOAD_APPID = "682e90c19520118284FGb2"
 _VIDEO_DOWNLOAD_API_URL = "https://watermark-api.hlyphp.top/Watermark/Index"
@@ -848,6 +849,8 @@ class ViralRemixStartBody(BaseModel):
     character_image_url: str = ""
     product_image_url: str = Field(..., min_length=8)
     prompt: str = ""
+    audio_prompt: str = ""
+    narration_script: str = ""
     model: str = "doubao-seedance-2-0-260128"
     ratio: str = "9:16"
     resolution: str = "720p"
@@ -904,6 +907,142 @@ def _normalize_resolution(value: str) -> str:
     return normalized if normalized in {"720p", "480p"} else "720p"
 
 
+def _compact_prompt_text(value: str, max_chars: int = 1600) -> str:
+    text = re.sub(r"\s+", " ", (value or "").strip())
+    if len(text) <= max_chars:
+        return text
+    return text[: max(1, max_chars - 1)].rstrip() + "..."
+
+
+def _split_narration_script(script: str, total_segments: int) -> List[str]:
+    text = _compact_prompt_text(script, 8000)
+    total = max(1, int(total_segments or 1))
+    if not text:
+        return [""] * total
+    if total == 1:
+        return [text]
+
+    units = [
+        item.strip()
+        for item in re.split(r"(?<=[\.\!\?;\u3002\uff01\uff1f\uff1b])\s*|\n+", text)
+        if item and item.strip()
+    ]
+    if not units:
+        units = [text]
+
+    buckets: List[List[str]] = [[] for _ in range(total)]
+    lengths = [0 for _ in range(total)]
+    target = max(1, math.ceil(sum(len(item) for item in units) / float(total)))
+    cursor = 0
+    for unit in units:
+        if cursor < total - 1 and buckets[cursor] and lengths[cursor] + len(unit) > target:
+            cursor += 1
+        buckets[cursor].append(unit)
+        lengths[cursor] += len(unit)
+
+    return [_compact_prompt_text(" ".join(bucket), 1200) for bucket in buckets]
+
+
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE).strip()
+        raw = re.sub(r"\s*```$", "", raw).strip()
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        payload = json.loads(raw[start : end + 1])
+    if not isinstance(payload, dict):
+        raise ValueError("LLM response JSON is not an object")
+    return payload
+
+
+def _normalize_llm_narration_segments(payload: Dict[str, Any], total_segments: int) -> List[str]:
+    total = max(1, int(total_segments or 1))
+    raw_segments = payload.get("segments")
+    if not isinstance(raw_segments, list):
+        raise ValueError("LLM response missing segments array")
+    out = [""] * total
+    for idx, item in enumerate(raw_segments):
+        if isinstance(item, dict):
+            segment_no = item.get("segment") or item.get("index") or (idx + 1)
+            script = item.get("script") or item.get("text") or item.get("narration") or ""
+        else:
+            segment_no = idx + 1
+            script = item
+        try:
+            target_index = int(segment_no) - 1
+        except Exception:
+            target_index = idx
+        if 0 <= target_index < total:
+            out[target_index] = _compact_prompt_text(str(script or ""), 1200)
+    if len(out) != total:
+        raise ValueError("LLM response segment count mismatch")
+    return out
+
+
+async def _split_narration_script_with_llm(
+    *,
+    api_base: str,
+    api_key: str,
+    script: str,
+    total_segments: int,
+    segment_seconds: int,
+    source_duration_seconds: float,
+) -> List[str]:
+    text = _compact_prompt_text(script, 8000)
+    total = max(1, int(total_segments or 1))
+    if not text:
+        return [""] * total
+    if total == 1:
+        return [text]
+
+    chat_path = (getattr(settings, "comfly_chat_completions_path", None) or "/v1/chat/completions").strip()
+    chat_url = _endpoint(api_base, chat_path if chat_path.startswith("/") else f"/{chat_path.lstrip('/')}")
+    system_prompt = (
+        "You are a short-video Chinese copy editor. Split one product narration script into timed segments for a remixed video. "
+        "Return ONLY valid JSON. No markdown. No comments."
+    )
+    user_prompt = (
+        f"Total video duration: {source_duration_seconds:.2f} seconds.\n"
+        f"Segment count: {total}.\n"
+        f"Default segment duration: {int(segment_seconds)} seconds.\n"
+        "Task: split the Chinese narration into exactly the same number of segments. "
+        "Keep product selling points in logical order, keep wording natural for spoken delivery, and do not invent facts. "
+        "Each segment should fit its time window; shorter final segment may have shorter text. "
+        'Return this exact JSON shape: {"segments":[{"segment":1,"script":"..."},{"segment":2,"script":"..."}]}.\n'
+        f"Narration script:\n{text}"
+    )
+    body: Dict[str, Any] = {
+        "model": _NARRATION_SPLIT_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(chat_url, headers=headers, json=body)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Comfly chat narration split failed HTTP {resp.status_code}: {(resp.text or '')[:800]}")
+    try:
+        data = resp.json()
+        content = str(data["choices"][0]["message"]["content"] or "")
+    except Exception as exc:
+        raise RuntimeError("Comfly chat narration split returned invalid response") from exc
+    return _normalize_llm_narration_segments(_extract_json_object(content), total)
+
+
 def _remix_prompt(body: ViralRemixStartBody) -> str:
     extra = (body.prompt or "").strip()
     parts = [
@@ -922,7 +1061,8 @@ def _remix_prompt(body: ViralRemixStartBody) -> str:
 
 def _remix_prompt(body: ViralRemixStartBody) -> str:
     """Use an ASCII prompt here to avoid mojibake from older mixed-encoding copies."""
-    extra = (body.prompt or "").strip()
+    extra = _compact_prompt_text(body.prompt, 1800)
+    audio_extra = _compact_prompt_text(body.audio_prompt, 1200)
     parts = [
         "Use the input video as the only source of camera motion, timing, composition, hand actions, subject blocking, and scene continuity.",
         "Replace the old product seen in the input video with the target product from the first reference image.",
@@ -939,20 +1079,52 @@ def _remix_prompt(body: ViralRemixStartBody) -> str:
             "If a second reference_image is present, use it only for character identity such as face, hairstyle, and styling. "
             "Product replacement has higher priority than character reference."
         )
+    if body.generate_audio:
+        parts.append(
+            "Audio rule: do not keep the source video's original narration, music, platform sounds, or voice identity unless the user explicitly asks for it. "
+            "Generate clean new audio that matches the remixed video, with natural timing and no platform watermark sound cues."
+        )
+        if audio_extra:
+            parts.append(f"User audio direction: {audio_extra}")
+    else:
+        parts.append("Audio rule: do not generate new narration or new soundtrack.")
     if extra:
         parts.append(f"Additional instruction: {extra}")
     return " ".join(parts)
 
 
-def _remix_segment_prompt(body: ViralRemixStartBody, index: int, total: int) -> str:
+def _remix_segment_prompt(
+    body: ViralRemixStartBody,
+    index: int,
+    total: int,
+    segment_script_override: Optional[str] = None,
+) -> str:
     base = _remix_prompt(body)
+    if segment_script_override is None:
+        script_segments = _split_narration_script(body.narration_script, total)
+        segment_script = script_segments[index] if 0 <= index < len(script_segments) else ""
+    else:
+        segment_script = _compact_prompt_text(segment_script_override, 1200)
     if total <= 1:
+        if segment_script and body.generate_audio:
+            return (
+                f"{base} Narration script for this video: {segment_script} "
+                "Use this script as the new spoken content and align it naturally to the video duration."
+            )
         return base
-    return (
+    prompt = (
         f"{base} This request is segment {index + 1} of {total} from one longer source video. "
         "Keep character identity, product identity, scene logic, and motion style continuous across adjacent segments. "
         "Apply the anti-watermark rule independently to this segment even if the watermark appears only in this segment."
     )
+    if segment_script and body.generate_audio:
+        prompt += (
+            f" Narration script for segment {index + 1}: {segment_script} "
+            "Use only this segment's script in this segment, and keep speech timing within the segment duration."
+        )
+    elif body.generate_audio and (body.narration_script or "").strip():
+        prompt += " This segment has no assigned narration text; use short natural ambience or silence instead of repeating another segment's script."
+    return prompt
 
 
 def _run_subprocess(args: List[str], *, timeout: int, error_label: str) -> None:
@@ -1287,6 +1459,7 @@ def _job_status_response(job: Dict[str, Any]) -> Dict[str, Any]:
         "completed_segments": int(job.get("completed_segments") or 0),
         "segment_duration_seconds": int(job.get("segment_duration_seconds") or 0),
         "source_duration_seconds": float(job.get("source_duration_seconds") or 0.0),
+        "narration_split_method": job.get("narration_split_method") or "",
         "created_at_ts": job.get("created_at_ts"),
         "updated_at_ts": job.get("updated_at_ts"),
         "asset_id": job.get("asset_id") or "",
@@ -1327,6 +1500,29 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
         )
         segments = _split_local_video(source_path, work_dir, segment_seconds, total_duration)
         update_job(job_id, total_segments=len(segments), segments=segments)
+        narration_split_method = "none"
+        if (body.narration_script or "").strip():
+            try:
+                narration_segments = await _split_narration_script_with_llm(
+                    api_base=api_base,
+                    api_key=api_key,
+                    script=body.narration_script,
+                    total_segments=len(segments),
+                    segment_seconds=segment_seconds,
+                    source_duration_seconds=total_duration,
+                )
+                narration_split_method = "comfly_chat_json"
+            except Exception as exc:
+                logger.warning(
+                    "[viral_video_remix] LLM narration split failed job_id=%s fallback=local error=%s",
+                    job_id,
+                    str(exc)[:500],
+                )
+                narration_segments = _split_narration_script(body.narration_script, len(segments))
+                narration_split_method = "local_fallback"
+        else:
+            narration_segments = [""] * len(segments)
+        update_job(job_id, narration_split_method=narration_split_method)
         segment_state_lock = asyncio.Lock()
         parallel_limit = max(1, min(_MAX_PARALLEL_SEGMENT_TASKS, len(segments)))
         semaphore = asyncio.Semaphore(parallel_limit)
@@ -1365,14 +1561,22 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
                         index,
                         stage="segment_submitted",
                         status="submitted",
-                        extra={"segment_video_url": seg_upload_url},
+                        extra={
+                            "segment_video_url": seg_upload_url,
+                            "narration_script": narration_segments[index] if index < len(narration_segments) else "",
+                        },
                     )
                     submit_result = await _submit_seedance_remix_task(
                         api_base=api_base,
                         api_key=api_key,
                         body=body,
                         original_video_url=seg_upload_url,
-                        prompt_text=_remix_segment_prompt(body, index, len(segments)),
+                        prompt_text=_remix_segment_prompt(
+                            body,
+                            index,
+                            len(segments),
+                            narration_segments[index] if index < len(narration_segments) else "",
+                        ),
                     )
                     task_id = str(submit_result.get("task_id") or "").strip()
                     await _update_segment_state(
@@ -1468,6 +1672,8 @@ async def start_viral_video_remix(
         character_image_url=_quote_public_url(body.character_image_url),
         product_image_url=_quote_public_url(body.product_image_url),
         prompt=body.prompt,
+        audio_prompt=body.audio_prompt,
+        narration_script=body.narration_script,
         model=body.model,
         ratio=body.ratio,
         resolution=body.resolution,

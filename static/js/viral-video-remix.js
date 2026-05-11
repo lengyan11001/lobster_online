@@ -519,16 +519,20 @@
         if (!originalVideoUrl || !productUrl) {
           throw new Error('\u7f3a\u5c11\u539f\u89c6\u9891\u6216\u4ea7\u54c1\u56fe URL\uff0c\u8bf7\u5148\u4e0a\u4f20\u6216\u751f\u6210\u7d20\u6750\u3002');
         }
+        var audioPrompt = (($('viralRemixAudioPrompt') || {}).value || '').trim();
+        var narrationScript = (($('viralRemixNarrationScript') || {}).value || '').trim();
         var body = {
           original_video_url: ensureRemoteUrl(originalVideoUrl, '\u539f\u89c6\u9891', false),
           character_image_url: characterUrl ? ensureRemoteUrl(characterUrl, '\u4eba\u7269\u56db\u89c6\u56fe', true) : '',
           product_image_url: ensureRemoteUrl(productUrl, '\u4ea7\u54c1\u56fe', true),
           prompt: (($('viralRemixPrompt') || {}).value || '').trim(),
+          audio_prompt: audioPrompt,
+          narration_script: narrationScript,
           model: (($('viralRemixModelSelect') || {}).value || 'doubao-seedance-2-0-260128'),
           ratio: (($('viralRemixRatioSelect') || {}).value || '9:16'),
           resolution: (($('viralRemixResolutionSelect') || {}).value || '720p'),
           duration: Number((($('viralRemixDurationSelect') || {}).value || 10)),
-          generate_audio: !!(($('viralRemixAudioCheck') || {}).checked),
+          generate_audio: !!(($('viralRemixAudioCheck') || {}).checked || audioPrompt || narrationScript),
           use_character_reference: !!(($('viralUseCharacterCheck') || {}).checked && characterUrl),
           watermark: false
         };

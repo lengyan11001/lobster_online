@@ -5,13 +5,20 @@ var LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
   // 定死：本机回环端口与当前页端口一致（默认 8000）
   var lp = (window.location && window.location.port) ? window.location.port : '8000';
   var LOBSTER_LOCAL_LOOPBACK = 'http://127.0.0.1:' + lp;
+  /** 本机 lobster_server（认证 / 我的数字人 / my voice）。端口见 lobster_server/.env 的 PORT，默认 8002 */
+  var LOBSTER_SERVER_LOCAL_DEV_EARLY = 'http://127.0.0.1:8002';
 
-  // 本机打开页面（localhost/127）→ API 仍走公网服务器；?api= / localStorage 可覆盖
+  // 本机打开页面（localhost/127）→ 走本机 lobster_server；否则仍由公网 origin 提供。?api= / localStorage 可覆盖
   var isLoopbackHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host || '');
-  var serverDefault = isLoopbackHost ? LOBSTER_SERVER_PUBLIC : (window.location.origin || LOBSTER_SERVER_PUBLIC);
+  var serverDefault = isLoopbackHost ? LOBSTER_SERVER_LOCAL_DEV_EARLY : (window.location.origin || LOBSTER_SERVER_PUBLIC);
   var p = new URLSearchParams(window.location.search);
   var cached = (localStorage.getItem('lobster_api_base') || '').trim();
   if (cached && /42\.194\.209\.150/.test(cached)) { cached = ''; localStorage.removeItem('lobster_api_base'); }
+  // 本机开发：若缓存仍指向 bhzn.top（线上生产），强制清掉并改走本地 8002
+  if (isLoopbackHost && cached && /bhzn\.top/i.test(cached) && !p.get('api')) {
+    cached = '';
+    localStorage.removeItem('lobster_api_base');
+  }
   if (isLoopbackHost && cached && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(cached) && !p.get('api')) {
     cached = '';
     localStorage.removeItem('lobster_api_base');
@@ -44,9 +51,11 @@ var LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
   }
 })();
 // 本机打开静态页时 API_BASE 仍指向远程；LOCAL_API_BASE 默认同源（见 docs/架构说明_server与本地职责.md）
+/** 本机开发时把 API 默认指向本机 lobster_server（127.0.0.1:8002），别打到生产 bhzn.top */
+var LOBSTER_SERVER_LOCAL_DEV = 'http://127.0.0.1:8002';
 var API_BASE = window.__API_BASE || (function() {
   if (/^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host)) {
-    return LOBSTER_SERVER_PUBLIC;
+    return LOBSTER_SERVER_LOCAL_DEV;
   }
   var o = window.location.origin;
   return o || LOBSTER_SERVER_PUBLIC;
