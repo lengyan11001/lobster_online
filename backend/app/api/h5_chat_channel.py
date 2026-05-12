@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -28,6 +29,7 @@ from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
 
 
 def _enabled() -> bool:
@@ -453,6 +455,8 @@ async def _run_direct_chat(
     base: str,
     headers: Dict[str, str],
     item: Dict[str, Any],
+    *,
+    jwt_token: str = "",
 ) -> None:
     message_id = str(item.get("id") or "").strip()
     content = str(item.get("content") or "").strip()
@@ -469,6 +473,18 @@ async def _run_direct_chat(
     timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
     final_reply = ""
     final_error = ""
+    result_refs: Dict[str, List[str]] = {"asset_ids": [], "urls": []}
+
+    def merge_refs(refs: Dict[str, List[str]]) -> None:
+        for key, limit in (("asset_ids", 12), ("urls", 8)):
+            bucket = result_refs[key]
+            for value in (refs or {}).get(key) or []:
+                value = str(value or "").strip()
+                if value and value not in bucket:
+                    bucket.append(value)
+                    if len(bucket) >= limit:
+                        break
+
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
             async with local.stream("POST", _local_chat_url(), json=payload, headers=headers) as resp:
@@ -487,21 +503,24 @@ async def _run_direct_chat(
                     except json.JSONDecodeError:
                         continue
                     et = str(ev.get("type") or "progress")
+                    merge_refs(_collect_scheduled_result_refs(ev))
                     if et == "done":
                         final_reply = str(ev.get("reply") or "").strip()
                         final_error = str(ev.get("error") or "").strip()
+                        merge_refs(_collect_scheduled_result_refs(final_reply))
                         break
                     await _post_cloud_event(cloud, base, headers, message_id, et[:32], ev)
         if final_error:
             await _complete_cloud_message(cloud, base, headers, message_id, error=final_error)
         else:
+            refs = _scheduled_refs_with_asset_urls(result_refs, jwt_token)
             await _complete_cloud_message(
                 cloud,
                 base,
                 headers,
                 message_id,
                 reply_text=final_reply or "处理完成。",
-                payload={"mode": "direct"},
+                payload={"mode": "direct", "result_refs": refs, "media_urls": refs.get("urls") or []},
             )
     except Exception as exc:
         logger.exception("[H5-CHAT] direct chat failed message_id=%s", message_id)
@@ -564,11 +583,7 @@ async def _process_item(
     item: Dict[str, Any],
 ) -> None:
     headers = _headers(jwt_token, installation_id)
-    mode = str(item.get("mode") or "direct").strip().lower()
-    if mode == "openclaw":
-        await _run_openclaw_chat(client, base, headers, jwt_token, installation_id, item)
-    else:
-        await _run_direct_chat(client, base, headers, item)
+    await _run_direct_chat(client, base, headers, item, jwt_token=jwt_token)
 
 
 async def _run_scheduled_chat_message(
@@ -859,6 +874,8 @@ def _collect_scheduled_result_refs(obj: Any) -> Dict[str, List[str]]:
                 walk(item, depth + 1)
         elif isinstance(x, str):
             add_url(x)
+            for match in _RESULT_URL_RE.finditer(x):
+                add_url(match.group(0).rstrip(".,!?，。！？、；："))
 
     walk(obj)
     return {"asset_ids": asset_ids[:12], "urls": urls[:8]}

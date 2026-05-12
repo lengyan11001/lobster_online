@@ -187,6 +187,18 @@
     }).join('') + '</div>';
   }
 
+  function taskActionHtml(task) {
+    var status = String((task && task.status) || '').toLowerCase();
+    if (status === 'cancelled' || status === 'completed') return '';
+    var next = status === 'paused' ? 'active' : 'paused';
+    var label = status === 'paused' ? '恢复' : '暂停';
+    return '<button type="button" class="btn btn-ghost btn-sm scheduled-task-status-btn" data-task-id="'
+      + html(task.id)
+      + '" data-next-status="' + html(next) + '">'
+      + html(label)
+      + '</button>';
+  }
+
   function rowCapabilityId(row) {
     var payload = row && row.payload && typeof row.payload === 'object' ? row.payload : {};
     return String(payload.capability_id || '');
@@ -522,7 +534,7 @@
     var h = '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.82rem;">'
       + '<thead><tr style="text-align:left;border-bottom:1px solid var(--border);">'
       + '<th style="padding:0.5rem;">任务</th><th style="padding:0.5rem;">类型</th><th style="padding:0.5rem;">调度</th>'
-      + '<th style="padding:0.5rem;">状态</th><th style="padding:0.5rem;">下次执行</th><th style="padding:0.5rem;">次数</th>'
+      + '<th style="padding:0.5rem;">状态</th><th style="padding:0.5rem;">下次执行</th><th style="padding:0.5rem;">次数</th><th style="padding:0.5rem;">操作</th>'
       + '</tr></thead><tbody>';
     rows.forEach(function (t) {
       var interval = t.schedule_type === 'interval' ? ('每 ' + Math.round((t.interval_seconds || 0) / 60) + ' 分钟') : '一次性';
@@ -533,10 +545,32 @@
         + '<td style="padding:0.5rem;white-space:nowrap;">' + html(statusText(t.status)) + '</td>'
         + '<td style="padding:0.5rem;white-space:nowrap;">' + html(fmtTime(t.next_run_at)) + '</td>'
         + '<td style="padding:0.5rem;">' + (t.run_count || 0) + '</td>'
+        + '<td style="padding:0.5rem;white-space:nowrap;">' + taskActionHtml(t) + '</td>'
         + '</tr>';
     });
     h += '</tbody></table></div>';
     el.innerHTML = h;
+  }
+
+  function updateTaskStatus(taskId, status, btn) {
+    if (!taskId || !status) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = status === 'paused' ? '暂停中...' : '恢复中...';
+    }
+    api('/api/scheduled-tasks/tasks/' + encodeURIComponent(taskId), {
+      method: 'PATCH',
+      body: JSON.stringify({ status: status })
+    }).then(function () {
+      loadTasks();
+      loadRuns();
+    }).catch(function (e) {
+      showMsg('scheduledTaskMsg', e.message, true);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = status === 'paused' ? '暂停' : '恢复';
+      }
+    });
   }
 
   function loadRuns() {
@@ -616,6 +650,11 @@
     if (refresh) refresh.addEventListener('click', function () { loadRuns(); loadTasks(); });
     var create = document.getElementById('scheduledTaskCreateBtn');
     if (create) create.addEventListener('click', createTask);
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-task-status-btn') : null;
+      if (!btn) return;
+      updateTaskStatus(btn.getAttribute('data-task-id'), btn.getAttribute('data-next-status'), btn);
+    });
     var kind = document.getElementById('scheduledTaskKind');
     if (kind) kind.value = 'capability';
     var capability = document.getElementById('scheduledTaskCapability');
