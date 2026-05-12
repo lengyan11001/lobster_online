@@ -37,6 +37,8 @@ def _is_excluded(rel_posix: str) -> bool:
         return True
     if rel_posix.startswith("assets/"):
         return True
+    if rel_posix.startswith("static/hifly_previews/"):
+        return True
     return False
 
 

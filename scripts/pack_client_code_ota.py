@@ -91,6 +91,7 @@ _OTA_SECRET_REL_PATHS = {
 # skills 下各技能的 runs/job_runs 为执行缓存（音视频等），不应随 OTA 分发（否则单包可膨胀 200MB+）
 OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     "scripts/_probe",
+    "static/hifly_previews",
     "static/uploads",
 )
 

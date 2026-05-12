@@ -5955,20 +5955,21 @@
 
             <div id="schedTabTasks" class="sched-tab-panel" style="display:none;">
               <div class="card">
-                <div style="display:grid;grid-template-columns:minmax(240px,360px) 1fr;gap:1rem;align-items:start;">
+                <div style="display:grid;grid-template-columns:minmax(220px,320px) minmax(420px,1fr);gap:0.85rem;align-items:start;">
                   <div>
                     <h4 style="margin:0 0 0.65rem 0;">添加任务</h4>
                     <div class="modal-field" style="margin-bottom:0.55rem;">
                       <label>任务名称</label>
                       <input type="text" id="scheduledTaskTitle" placeholder="例如：每天生成一条宣传视频文案">
                     </div>
+                    <input type="hidden" id="scheduledTaskKind" value="capability">
                     <div class="modal-field" style="margin-bottom:0.55rem;">
-                      <label>任务类型</label>
-                      <select id="scheduledTaskKind" style="width:100%;padding:0.45rem;">
-                        <option value="openclaw_message">发消息给 OpenClaw</option>
-                        <option value="chat_message">本地对话链路</option>
-                        <option value="capability">调用能力 invoke_capability</option>
+                      <label>能力</label>
+                      <select id="scheduledTaskCapability" style="width:100%;padding:0.45rem;">
+                        <option value="goal.video.pipeline">目标成片</option>
+                        <option value="hifly.video.create_by_tts">飞影数字人</option>
                       </select>
+                      <p class="meta" id="scheduledTaskCapabilityHint" style="margin:0.35rem 0 0 0;"></p>
                     </div>
                     <div class="modal-field" style="margin-bottom:0.55rem;">
                       <label>执行方式</label>
@@ -5988,20 +5989,19 @@
                     </div>
                   </div>
                   <div>
-                    <div class="modal-field" id="scheduledTaskContentWrap" style="margin-bottom:0.55rem;">
-                      <label>要执行的内容</label>
-                      <textarea id="scheduledTaskContent" rows="7" placeholder="例如：帮我生成 8 秒宣传视频文案，并直接调用 video.generate 生成视频。"></textarea>
+                    <div id="scheduledTaskParamBlock" class="modal-field" style="margin-bottom:0.55rem;">
+                      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.35rem;">
+                        <label style="margin:0;">能力参数</label>
+                        <button type="button" id="scheduledTaskAutoFillBtn" class="btn btn-ghost btn-sm">自动选择</button>
+                      </div>
+                      <div id="scheduledTaskParamFields"></div>
                     </div>
-                    <div class="modal-field" id="scheduledTaskPayloadWrap" style="margin-bottom:0.55rem;">
-                      <label>能力调用 JSON</label>
-                      <textarea id="scheduledTaskPayload" rows="7" placeholder='{"capability_id":"comfly.tvc","payload":{"image_url":"https://..."}}'></textarea>
-                    </div>
-                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <div id="scheduledTaskAssetUploadBlock" class="modal-field" style="display:none;margin-bottom:0.55rem;">
                       <label>附加素材（可选）</label>
                       <input type="file" id="scheduledTaskAssetUpload" accept="image/*,video/*,audio/*" multiple>
                       <p class="meta" style="margin:0.35rem 0 0 0;">可上传图片/视频/音频，创建任务前会先保存到素材库。</p>
                     </div>
-                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <div id="scheduledTaskAssetIdsBlock" class="modal-field" style="display:none;margin-bottom:0.55rem;">
                       <label>指定素材 ID（可选，多个用换行或逗号分隔）</label>
                       <textarea id="scheduledTaskAssetIds" rows="3" placeholder="例如：3baf1f4ee8c9&#10;7208d5c35823"></textarea>
                     </div>
@@ -6949,7 +6949,7 @@
 
   <script src="/static/js/help-hints.js"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
-  <script src="/static/js/hifly-digital-human.js?v=20260511-cloud-library-2"></script>
+  <script src="/static/js/hifly-digital-human.js?v=20260511-local-cache-library"></script>
   <script src="/static/js/chat.js?v=20260508-hifly-direct-entry"></script>
   <script src="/static/js/skill.js?v=20260508-hifly-entry"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from ..core.config import settings
@@ -32,7 +32,14 @@ _AUDIO_EXTS = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav"}
 _HIFLY_TTS_CAPABILITY_ID = "hifly.video.create_by_tts"
 _HIFLY_TTS_UNIT_CREDITS = 10
 _HIFLY_TTS_CHARS_PER_SECOND = 4
-_HIFLY_BILLING_STATE_PATH = Path(__file__).resolve().parents[3] / "data" / "hifly_billing_state.json"
+_ROOT_DIR = Path(__file__).resolve().parents[3]
+_STATIC_DIR = _ROOT_DIR / "static"
+_HIFLY_PREVIEWS_DIR = _STATIC_DIR / "hifly_previews"
+_HIFLY_PREVIEWS_MANIFEST_PATH = _HIFLY_PREVIEWS_DIR / "manifest.json"
+_HIFLY_PUBLIC_AVATARS_PATH = _ROOT_DIR / "hifly_public_avatars.json"
+_HIFLY_PUBLIC_AVATAR_CACHE_PATH = _ROOT_DIR / "data" / "hifly_public_avatars_cache.json"
+_HIFLY_BILLING_STATE_PATH = _ROOT_DIR / "data" / "hifly_billing_state.json"
+_LOBSTER_SERVER_PUBLIC = "https://bhzn.top"
 
 _GENERIC_FEMALE_COVER = "https://hfcdn.lingverse.co/c8fb4357c18dcbe55bb646a284ab43fe/69FF59FF/hf/input/6/videos/hansining-035/hansining-cover.jpg"
 _GENERIC_MALE_COVER = "https://hfcdn.lingverse.co/a9303a866274b89806760ecedbc10a2a/69FF59FF/hf/input/6/videos/zhoujingxing-035/zhoujingxing-cover.jpg"
@@ -181,6 +188,10 @@ def _resolved_token(token: Optional[str]) -> str:
     raise HTTPException(status_code=400, detail="请先填写 HiFly API Token，或在 .env 配置 HIFLY_DEFAULT_TOKEN")
 
 
+def _has_hifly_token(token: Optional[str]) -> bool:
+    return bool((token or "").strip() or (settings.hifly_default_token or "").strip())
+
+
 def _headers(token: Optional[str]) -> Dict[str, str]:
     return {
         "Authorization": f"Bearer {_resolved_token(token)}",
@@ -221,6 +232,13 @@ def _billing_base() -> str:
     if not base:
         raise HTTPException(status_code=503, detail="未配置 AUTH_SERVER_BASE，无法完成 HiFly 算力计费")
     return base
+
+
+def _remote_resource_base() -> str:
+    return (
+        (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+        or _LOBSTER_SERVER_PUBLIC
+    )
 
 
 def _estimate_tts_seconds(text: str) -> int:
@@ -676,6 +694,263 @@ def _enrich_avatar_rows(rows: List[Dict[str, Any]], section: str) -> List[Dict[s
     return _sort_avatar_rows(result)
 
 
+def _read_json_dict(path: Path) -> Dict[str, Any]:
+    try:
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        logger.warning("[hifly] failed to read json %s", path, exc_info=True)
+        return {}
+
+
+def _load_local_public_avatar_rows() -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in (_HIFLY_PUBLIC_AVATAR_CACHE_PATH, _HIFLY_PUBLIC_AVATARS_PATH):
+        data = _read_json_dict(path)
+        candidates = data.get("public")
+        if not isinstance(candidates, list):
+            candidates = data.get("data")
+        if not isinstance(candidates, list):
+            continue
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            avatar_id = str(item.get("avatar") or item.get("avatar_id") or "").strip()
+            if not avatar_id or avatar_id in seen:
+                continue
+            seen.add(avatar_id)
+            rows.append(item)
+    return rows
+
+
+def _merge_avatar_rows(*row_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for rows in row_groups:
+        for row in rows or []:
+            key = str(row.get("avatar") or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+    return _sort_avatar_rows(_apply_material_counts(merged))
+
+
+def _local_preview_url(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    name = Path(raw.split("?", 1)[0]).name
+    if not name:
+        return ""
+    local_path = _HIFLY_PREVIEWS_DIR / name
+    if local_path.is_file():
+        return f"/static/hifly_previews/{name}"
+    return ""
+
+
+def _with_local_preview_urls(row: Dict[str, Any]) -> Dict[str, Any]:
+    cloned = dict(row)
+    styles: List[Dict[str, Any]] = []
+    for style in cloned.get("styles") or []:
+        if not isinstance(style, dict):
+            continue
+        style_copy = dict(style)
+        local_url = _local_preview_url(str(style_copy.get("demo_url") or style_copy.get("preview_url") or ""))
+        if local_url:
+            style_copy["demo_url"] = local_url
+            style_copy["preview_source"] = "local"
+        styles.append(style_copy)
+    if styles:
+        cloned["styles"] = styles
+        primary = next((item for item in styles if item.get("demo_url")), styles[0])
+        if primary.get("demo_url"):
+            cloned["demo_url"] = primary["demo_url"]
+            cloned["voice"] = primary.get("voice") or cloned.get("voice")
+    else:
+        local_url = _local_preview_url(str(cloned.get("demo_url") or ""))
+        if local_url:
+            cloned["demo_url"] = local_url
+            cloned["preview_source"] = "local"
+    return cloned
+
+
+def _voice_group_key(row: Dict[str, Any]) -> str:
+    return str(row.get("title") or row.get("voice") or "").strip()
+
+
+def _remote_static_url(url: str, remote_base: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    if value.startswith("/"):
+        return f"{remote_base.rstrip('/')}{value}"
+    return value
+
+
+def _with_remote_preview_urls(row: Dict[str, Any], remote_base: str) -> Dict[str, Any]:
+    cloned = dict(row)
+    if cloned.get("demo_url"):
+        cloned["demo_url"] = _remote_static_url(str(cloned.get("demo_url") or ""), remote_base)
+    styles: List[Dict[str, Any]] = []
+    for style in cloned.get("styles") or []:
+        if not isinstance(style, dict):
+            continue
+        style_copy = dict(style)
+        if style_copy.get("demo_url"):
+            style_copy["demo_url"] = _remote_static_url(str(style_copy.get("demo_url") or ""), remote_base)
+        styles.append(style_copy)
+    if styles:
+        cloned["styles"] = styles
+    return cloned
+
+
+def _preview_filename_from_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    name = Path(raw.split("?", 1)[0]).name
+    if not name or "." not in name:
+        return ""
+    ext = Path(name).suffix.lower()
+    if ext not in {".wav", ".mp3", ".m4a"}:
+        return ""
+    return name
+
+
+def _cache_remote_voice_previews(rows: List[Dict[str, Any]], remote_base: str) -> None:
+    try:
+        _HIFLY_PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            for row in rows or []:
+                for style in row.get("styles") or []:
+                    if not isinstance(style, dict):
+                        continue
+                    source_url = _remote_static_url(str(style.get("demo_url") or ""), remote_base)
+                    filename = _preview_filename_from_url(source_url)
+                    if not source_url or not filename:
+                        continue
+                    target = _HIFLY_PREVIEWS_DIR / filename
+                    if target.is_file():
+                        continue
+                    resp = client.get(source_url)
+                    if resp.status_code >= 400 or not resp.content:
+                        continue
+                    target.write_bytes(resp.content)
+        _write_preview_manifest_from_rows(rows)
+    except Exception:
+        logger.warning("[hifly] remote voice preview cache refresh failed", exc_info=True)
+
+
+def _write_preview_manifest_from_rows(rows: List[Dict[str, Any]]) -> None:
+    groups: List[Dict[str, Any]] = []
+    for row in rows or []:
+        title = str(row.get("title") or "").strip()
+        members: List[Dict[str, Any]] = []
+        for style in row.get("styles") or []:
+            if not isinstance(style, dict):
+                continue
+            filename = _preview_filename_from_url(str(style.get("demo_url") or ""))
+            if not filename or not (_HIFLY_PREVIEWS_DIR / filename).is_file():
+                continue
+            stem = Path(filename).stem
+            try:
+                member_id = int(stem)
+            except ValueError:
+                continue
+            members.append(
+                {
+                    "id": member_id,
+                    "title": str(style.get("title") or style.get("label") or title or "").strip(),
+                    "preview_url": f"/static/hifly_previews/{filename}",
+                    "preview_text": str(style.get("preview_text") or "").strip(),
+                    "tts_level": style.get("tts_level"),
+                }
+            )
+        if members:
+            groups.append(
+                {
+                    "title": title or str(row.get("voice") or "").strip(),
+                    "cover_url": str(row.get("cover_url") or "").strip(),
+                    "members": members,
+                }
+            )
+    if groups:
+        _HIFLY_PREVIEWS_MANIFEST_PATH.write_text(
+            json.dumps(
+                {
+                    "cached_at": datetime.now().isoformat(timespec="seconds"),
+                    "groups": groups,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+
+def _local_preview_manifest_rows() -> List[Dict[str, Any]]:
+    rows = _load_consumer_preview_manifest(require_local_files=True)
+    return [_with_local_preview_urls(row) for row in rows]
+
+
+async def _fetch_remote_library(path: str, token: Optional[str]) -> Dict[str, Any]:
+    base = _remote_resource_base()
+    body: Dict[str, Any] = {"token": (token or "").strip()}
+    if not body["token"]:
+        body.pop("token", None)
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(f"{base}{path}", json=body)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=(resp.text or "")[:500])
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="远端 HiFly 资源返回格式不是 JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="远端 HiFly 资源返回格式无效")
+    return payload
+
+
+async def _cache_remote_public_avatars(token: Optional[str]) -> None:
+    try:
+        rows = await _fetch_remote_public_rows("/api/hifly/avatar/library", token)
+        _save_public_avatar_cache(rows)
+    except Exception:
+        logger.warning("[hifly] remote avatar cache refresh failed", exc_info=True)
+
+
+async def _fetch_remote_public_rows(path: str, token: Optional[str]) -> List[Dict[str, Any]]:
+    payload = await _fetch_remote_library(path, token)
+    rows = payload.get("public") or []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _save_public_avatar_cache(rows: List[Dict[str, Any]]) -> None:
+    if not rows:
+        return
+    _HIFLY_PUBLIC_AVATAR_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _HIFLY_PUBLIC_AVATAR_CACHE_PATH.write_text(
+        json.dumps(
+            {
+                "cached_at": datetime.now().isoformat(timespec="seconds"),
+                "source": "remote",
+                "public": rows,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _enrich_voice_rows(rows: List[Dict[str, Any]], section: str) -> List[Dict[str, Any]]:
     prepared: List[Dict[str, Any]] = []
     for item in rows or []:
@@ -901,14 +1176,11 @@ async def hifly_avatar_list(body: HiflyListBody):
 
 
 @router.post("/api/hifly/avatar/library")
-async def hifly_avatar_library(body: HiflyAvatarLibraryBody):
-    size = max(1, min(20, int(body.size or 10)))
-    page = max(1, int(body.page or 1))
-
+async def hifly_avatar_library(body: HiflyAvatarLibraryBody, background_tasks: BackgroundTasks):
     mine_rows: List[Dict[str, Any]] = []
     mine_supported = True
     mine_message = ""
-    if body.include_mine:
+    if body.include_mine and _has_hifly_token(body.token):
         mine_resp = await _safe_avatar_list(body.token, 1)
         mine_rows = _enrich_avatar_rows(mine_resp.get("data") or [], "mine")
         mine_seen: set[str] = set()
@@ -916,13 +1188,23 @@ async def hifly_avatar_library(body: HiflyAvatarLibraryBody):
         mine_supported = not bool(mine_resp.get("unsupported"))
         mine_message = mine_resp.get("message") or ""
 
-    # 因为 _enrich_avatar_rows 会丢弃没有真实封面的公共数字人，
-    # 一次性把所有公共数字人拉回再过滤，避免分页加载体验不连贯。
-    public_source_rows = await _fetch_all_avatar_pages(body.token, 2)
-    public_rows = _enrich_avatar_rows(public_source_rows, "public")
-
-    public_seen: set[str] = set()
-    public_rows = [row for row in public_rows if not (row["avatar"] in public_seen or public_seen.add(row["avatar"]))]
+    source = "local"
+    local_public = _enrich_avatar_rows(_load_local_public_avatar_rows(), "public")
+    if local_public:
+        public_rows = local_public
+        try:
+            remote_rows = await _fetch_remote_public_rows("/api/hifly/avatar/library", body.token)
+            background_tasks.add_task(_save_public_avatar_cache, remote_rows)
+            public_rows = _merge_avatar_rows(local_public, remote_rows)
+            source = "local+remote"
+        except HTTPException:
+            background_tasks.add_task(_cache_remote_public_avatars, body.token)
+            logger.warning("[hifly] remote avatar library refresh failed; using local public rows", exc_info=True)
+    else:
+        public_rows = await _fetch_remote_public_rows("/api/hifly/avatar/library", body.token)
+        source = "remote"
+        background_tasks.add_task(_save_public_avatar_cache, public_rows)
+    public_rows = _merge_avatar_rows(public_rows)
 
     return {
         "ok": True,
@@ -936,6 +1218,7 @@ async def hifly_avatar_library(body: HiflyAvatarLibraryBody):
         "public_has_more": False,
         "mine_total": len(mine_rows),
         "using_default_token": bool((settings.hifly_default_token or "").strip() and not (body.token or "").strip()),
+        "source": source,
     }
 
 
@@ -949,7 +1232,7 @@ async def hifly_voice_list(body: HiflyListBody):
     return {"ok": True, "data": payload.get("data") or [], "raw": payload}
 
 
-def _load_consumer_preview_manifest() -> List[Dict[str, Any]]:
+def _load_consumer_preview_manifest(require_local_files: bool = False) -> List[Dict[str, Any]]:
     """读取 prefetch_hifly_previews.py 生成的 manifest，转换为 voice/library 公共声音条目。
 
     每个 manifest member 的 numeric id 用作 voice 字段，附 demo_url 指向本地 wav。
@@ -959,12 +1242,7 @@ def _load_consumer_preview_manifest() -> List[Dict[str, Any]]:
     import json
     from pathlib import Path
 
-    manifest_path = (
-        Path(__file__).resolve().parents[3]
-        / "static"
-        / "hifly_previews"
-        / "manifest.json"
-    )
+    manifest_path = _HIFLY_PREVIEWS_MANIFEST_PATH
     if not manifest_path.exists():
         return []
     try:
@@ -981,7 +1259,13 @@ def _load_consumer_preview_manifest() -> List[Dict[str, Any]]:
         cover_url = str(grp.get("cover_url") or "").strip()
         members = grp.get("members") or []
         # 收集组内有可用预览的 members
-        usable = [m for m in members if isinstance(m, dict) and m.get("preview_url")]
+        usable = []
+        for member in members:
+            if not isinstance(member, dict) or not member.get("preview_url"):
+                continue
+            if require_local_files and not _local_preview_url(str(member.get("preview_url") or "")):
+                continue
+            usable.append(member)
         if not usable:
             continue
 
@@ -1024,31 +1308,77 @@ def _load_consumer_preview_manifest() -> List[Dict[str, Any]]:
     return result
 
 
-def _merge_voice_rows(api_rows: List[Dict[str, Any]],
-                     manifest_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """以 voice id 为唯一键合并；manifest 优先（带 demo_url）"""
-    seen: set = set()
-    merged: List[Dict[str, Any]] = []
-    for row in manifest_rows:
-        key = str(row.get("voice") or "")
-        if key and key not in seen:
-            seen.add(key)
-            merged.append(row)
-    for row in api_rows:
-        key = str(row.get("voice") or "")
-        if key and key not in seen:
-            seen.add(key)
-            merged.append(row)
-    return merged
+def _merge_voice_rows(primary_rows: List[Dict[str, Any]], extra_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """合并公共声音；同一标题保留主来源，并用额外来源补齐缺失 style。"""
+    by_key: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for row in primary_rows or []:
+        key = _voice_group_key(row)
+        if not key or key in by_key:
+            continue
+        by_key[key] = dict(row)
+        order.append(key)
+    for row in extra_rows or []:
+        key = _voice_group_key(row)
+        if not key:
+            continue
+        if key not in by_key:
+            by_key[key] = dict(row)
+            order.append(key)
+            continue
+        base = by_key[key]
+        base_styles = [
+            dict(style)
+            for style in (base.get("styles") or [])
+            if isinstance(style, dict)
+        ]
+        seen_styles = {
+            str(style.get("voice") or style.get("label") or style.get("title") or "").strip()
+            for style in base_styles
+        }
+        for style in row.get("styles") or []:
+            if not isinstance(style, dict):
+                continue
+            style_key = str(style.get("voice") or style.get("label") or style.get("title") or "").strip()
+            if not style_key or style_key in seen_styles:
+                continue
+            seen_styles.add(style_key)
+            base_styles.append(dict(style))
+        if base_styles:
+            base["styles"] = base_styles
+            base["style_count"] = len(base_styles)
+    return [by_key[key] for key in order]
 
 
 @router.post("/api/hifly/voice/library")
-async def hifly_voice_library(body: HiflyTokenBody):
-    mine_resp = await _safe_voice_list(body.token, 1)
-    public_resp = await _safe_voice_list(body.token, 2)
-    public_api = _enrich_voice_rows(public_resp.get("data") or [], "public")
-    public_manifest = _load_consumer_preview_manifest()
-    public_merged = _merge_voice_rows(public_api, public_manifest)
+async def hifly_voice_library(body: HiflyTokenBody, background_tasks: BackgroundTasks):
+    mine_resp: Dict[str, Any] = {"data": [], "unsupported": False, "message": ""}
+    if _has_hifly_token(body.token):
+        mine_resp = await _safe_voice_list(body.token, 1)
+    public_manifest = _local_preview_manifest_rows()
+    source = "local" if public_manifest else "remote"
+    if public_manifest:
+        remote_base = _remote_resource_base()
+        try:
+            remote_public = [
+                _with_remote_preview_urls(row, remote_base)
+                for row in await _fetch_remote_public_rows("/api/hifly/voice/library", body.token)
+            ]
+            if remote_public:
+                background_tasks.add_task(_cache_remote_voice_previews, remote_public, remote_base)
+        except HTTPException:
+            remote_public = []
+            logger.warning("[hifly] remote voice library refresh failed; using local preview manifest", exc_info=True)
+        public_merged = _merge_voice_rows(public_manifest, remote_public)
+    else:
+        remote_base = _remote_resource_base()
+        remote_public = [
+            _with_remote_preview_urls(row, remote_base)
+            for row in await _fetch_remote_public_rows("/api/hifly/voice/library", body.token)
+        ]
+        if remote_public:
+            background_tasks.add_task(_cache_remote_voice_previews, remote_public, remote_base)
+        public_merged = remote_public
     return {
         "ok": True,
         "mine": _enrich_voice_rows(mine_resp.get("data") or [], "mine"),
@@ -1057,6 +1387,7 @@ async def hifly_voice_library(body: HiflyTokenBody):
         "mine_message": mine_resp.get("message") or "",
         "manifest_count": len(public_manifest),
         "using_default_token": bool((settings.hifly_default_token or "").strip() and not (body.token or "").strip()),
+        "source": source,
     }
 
 

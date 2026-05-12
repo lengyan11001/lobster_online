@@ -23,7 +23,7 @@ cd "$PARENT"
 zip -r "$OUT_NAME" "$PROJ" \
   -x "${PROJ}/.git/*" "${PROJ}/*.pyc" "${PROJ}/*__pycache__*" "${PROJ}/*.db" \
   -x "${PROJ}/node_modules/*" "${PROJ}/${PROJ}_*.zip" "${PROJ}/*.tar.gz" \
-  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/browser_data/*" "${PROJ}/assets/*" \
+  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/browser_data/*" "${PROJ}/assets/*" "${PROJ}/static/hifly_previews/*" \
   -x "${PROJ}/explore_douyin.py" "${PROJ}/douyin_*.png" "${PROJ}/douyin_*.json" \
   2>/dev/null || true
 

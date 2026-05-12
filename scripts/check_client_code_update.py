@@ -128,6 +128,7 @@ ALLOWED_NODEJS_TREE_PREFIXES: tuple[str, ...] = (
 
 # 与 backend chat 读取路径一致；OTA 宜随包更新，安装机保留其余 workspace 文件
 _OPENCLAW_POLICY_FILENAMES = ("LOBSTER_CHAT_POLICY_INTRO.md", "LOBSTER_CHAT_POLICY_TOOLS.md")
+_PRESERVED_STATIC_REL_PATHS = ("static/hifly_previews",)
 
 
 def _load_dotenv_simple(path: Path) -> dict[str, str]:
@@ -429,6 +430,21 @@ def _apply_path(src: Path, dst: Path) -> None:
     if rel == "openclaw" and src.is_dir():
         _apply_openclaw_with_preserve(src, dst)
         return
+    preserved: list[tuple[str, Path]] = []
+    tmp_root: Path | None = None
+    if src.is_dir() and rel == "static":
+        tmp_root = Path(tempfile.mkdtemp(prefix="lobster_static_preserve_"))
+        for child_rel in _PRESERVED_STATIC_REL_PATHS:
+            child = ROOT / child_rel
+            if not child.exists():
+                continue
+            holder = tmp_root / child_rel
+            holder.parent.mkdir(parents=True, exist_ok=True)
+            if child.is_dir():
+                shutil.copytree(child, holder)
+            else:
+                shutil.copy2(child, holder)
+            preserved.append((child_rel, holder))
     if dst.exists():
         if dst.is_dir():
             shutil.rmtree(dst)
@@ -439,6 +455,22 @@ def _apply_path(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
     else:
         shutil.copytree(src, dst)
+    try:
+        for child_rel, holder in preserved:
+            target = ROOT / child_rel
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if holder.is_dir():
+                shutil.copytree(holder, target)
+            else:
+                shutil.copy2(holder, target)
+    finally:
+        if tmp_root is not None:
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def main() -> int:

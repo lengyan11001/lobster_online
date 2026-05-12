@@ -72,11 +72,12 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "comfly.seedance.tvc.pipeline": ("/api/comfly-seedance-tvc/pipeline/run", 7200.0),
     "comfly.ecommerce.detail_pipeline": ("/api/comfly-ecommerce-detail/pipeline/run", 7200.0),
     "goal.video.pipeline": ("/api/goal-video/pipeline/run", 7200.0),
+    "hifly.video.create_by_tts": ("/api/hifly/video/create-by-tts", 120.0),
     "ecommerce.publish": ("/api/ecommerce-publish/open-product-form", 120.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "ecommerce.publish"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish"})
 
 
 def _normalize_invoke_task_get_result_args(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1131,6 +1132,9 @@ _COMFLY_VEO_MCP_POLL_INTERVAL = 15
 _COMFLY_VEO_MCP_POLL_MAX_SEC = 35 * 60
 _COMFLY_DAIHUO_MCP_POLL_INTERVAL = 15.0
 _COMFLY_DAIHUO_MCP_POLL_MAX_SEC = 7200  # 整包流水线可能极长（2 小时内轮询）
+_GOAL_VIDEO_OPENCLAW_FOREGROUND_POLL_MAX_SEC = float(
+    os.environ.get("LOBSTER_GOAL_VIDEO_OPENCLAW_FOREGROUND_POLL_MAX_SEC", "8") or "8"
+)
 
 
 def _mcp_comfly_upstream_dict(raw: Any) -> Dict[str, Any]:
@@ -1366,14 +1370,18 @@ async def _mcp_poll_goal_video_pipeline_until_done(
     token: Optional[str],
     job_id: str,
     request: Optional[Request],
+    max_wait_sec: Optional[float] = None,
 ) -> Dict[str, Any]:
     jid = (job_id or "").strip().lower()
     if not jid:
         return {"ok": False, "error": "缺少 job_id"}
     waited = 0.0
+    max_wait = float(_COMFLY_DAIHUO_MCP_POLL_MAX_SEC if max_wait_sec is None else max(0.0, max_wait_sec))
     last: Dict[str, Any] = {}
     bu = base_url.rstrip("/")
-    while waited < float(_COMFLY_DAIHUO_MCP_POLL_MAX_SEC):
+    first_poll = True
+    while first_poll or waited < max_wait:
+        first_poll = False
         logger.info("[MCP goal.video.pipeline] poll job waited=%ss job_id=%s", int(waited), jid[:16])
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -1395,14 +1403,103 @@ async def _mcp_poll_goal_video_pipeline_until_done(
         st = (last.get("status") or "").strip().lower()
         if st in ("completed", "failed"):
             return last
-        await asyncio.sleep(_COMFLY_DAIHUO_MCP_POLL_INTERVAL)
-        waited += _COMFLY_DAIHUO_MCP_POLL_INTERVAL
+        if waited >= max_wait:
+            break
+        sleep_for = min(float(_COMFLY_DAIHUO_MCP_POLL_INTERVAL), max_wait - waited)
+        if sleep_for <= 0:
+            break
+        await asyncio.sleep(sleep_for)
+        waited += sleep_for
     if last and isinstance(last, dict):
-        last.setdefault(
-            "poll_timeout",
-            f"已达最大等待 {_COMFLY_DAIHUO_MCP_POLL_MAX_SEC}s，任务可能仍在运行，请用 poll_pipeline + job_id 继续查询",
-        )
-    return last if last else {"ok": False, "error": "poll 无有效响应"}
+        st = (last.get("status") or "").strip().lower()
+        if st not in ("completed", "failed"):
+            if last.get("status"):
+                last.setdefault("pipeline_status", last.get("status"))
+            last.setdefault("ok", True)
+            last.setdefault("job_id", jid)
+            last["status"] = "running"
+            last["openclaw_async"] = True
+            last["result_ready"] = False
+            last["next_action"] = "poll_pipeline"
+            last["next_payload"] = {"action": "poll_pipeline", "job_id": jid}
+            last["message"] = (
+                "目标成片任务已提交，当前仍在运行。只能告知用户继续生成中，并使用 next_payload 继续查询；"
+                "不要说能力不可用，不要改用普通 image.generate/video.generate。"
+            )
+            last["reply_rules"] = [
+                "Do not say goal.video.pipeline is unavailable when status is running.",
+                "Do not switch to image.generate/video.generate as a fallback for this request.",
+                "Only say the video is completed after final_asset_id or video_asset_id appears.",
+            ]
+            if max_wait_sec is None:
+                last.setdefault(
+                    "foreground_wait_finished",
+                    f"已结束本轮前台等待，任务可能仍在运行，请用 poll_pipeline + job_id 继续查询",
+                )
+        return last
+    return {
+        "ok": True,
+        "job_id": jid,
+        "status": "running",
+        "openclaw_async": True,
+        "result_ready": False,
+        "next_action": "poll_pipeline",
+        "next_payload": {"action": "poll_pipeline", "job_id": jid},
+        "message": "目标成片任务已提交，但本轮未取到最新进度；请继续用 poll_pipeline + job_id 查询，不要改用普通生成能力。",
+    }
+
+
+async def _mcp_poll_hifly_tts_until_done(
+    *,
+    base_url: str,
+    token: Optional[str],
+    task_id: str,
+    request: Optional[Request],
+    max_wait_sec: float = 2400.0,
+    interval_sec: float = 10.0,
+) -> Dict[str, Any]:
+    tid = (task_id or "").strip()
+    if not tid:
+        return {"ok": False, "error": "缺少 task_id"}
+    waited = 0.0
+    bu = base_url.rstrip("/")
+    last: Dict[str, Any] = {}
+    while waited <= max_wait_sec:
+        logger.info("[MCP hifly.video.create_by_tts] poll waited=%ss task_id=%s", int(waited), tid[:16])
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    f"{bu}/api/hifly/video/task",
+                    json={"task_id": tid},
+                    headers=_backend_headers(token, request),
+                )
+        except Exception as e:
+            logger.warning("[MCP hifly.video.create_by_tts] poll 请求异常: %s", e)
+            break
+        if resp.status_code >= 400:
+            try:
+                last = resp.json() if resp.content else {"ok": False, "error": (resp.text or "")[:500]}
+            except Exception:
+                last = {"ok": False, "error": (resp.text or "")[:500]}
+            break
+        last = resp.json() if resp.content else {}
+        status = int(last.get("status") or 0) if isinstance(last, dict) else 0
+        if status in (3, 4):
+            return last
+        sleep_for = min(max(1.0, float(interval_sec)), max_wait_sec - waited)
+        if sleep_for <= 0:
+            break
+        await asyncio.sleep(sleep_for)
+        waited += sleep_for
+    if isinstance(last, dict) and last:
+        last.setdefault("ok", True)
+        last.setdefault("task_id", tid)
+        last.setdefault("status_text", "生成中")
+        last["status"] = last.get("status") or 2
+        last["result_ready"] = False
+        last["message"] = "飞影数字人口播任务仍在生成中。"
+        return last
+    return {"ok": True, "task_id": tid, "status": 2, "status_text": "生成中", "result_ready": False}
 
 
 def _capabilities_api_base() -> str:
@@ -1541,6 +1638,7 @@ def _tool_definitions(
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
                             "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由 MCP 按默认配置补齐。"
                             "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由后端按模型默认值处理）；model 可省略并由 MCP 按默认视频模型补齐；prompt 只写视频画面/动作，不写发布账号或发布文案；图生视频可传 image_url 或 asset_id。"
+                            "goal.video.pipeline: 目标成片专用；当用户说目标成片、根据记忆给某产品生成宣传视频时，直接传 action=start_pipeline、goal、platform、duration、aspect_ratio；goal 必填，使用用户原话或整理后的目标，不要反问主题；没有素材也可以调用，不要先卡在素材库；若返回 status=running/openclaw_async/next_payload，说明任务仍在跑，只能继续 poll_pipeline，禁止改用普通 image.generate/video.generate。"
                             "image.understand/video.understand: 必须带 image_url/video_url、对应 *_urls 数组或 asset_id。"
                             "task.get_result: 含 task_id。"
                         ),
@@ -3660,6 +3758,65 @@ async def _auto_save_generated_assets(
 
 _OPENCLAW_GENERATION_CAPABILITIES = frozenset({"image.generate", "video.generate"})
 
+_MCP_FAILURE_STATUS_VALUES = {
+    "failed",
+    "error",
+    "cancelled",
+    "canceled",
+    "timeout",
+    "expired",
+    "rejected",
+    "失败",
+    "错误",
+    "取消",
+    "超时",
+}
+
+
+def _mcp_payload_failure_message(obj: Any, _depth: int = 0) -> str:
+    if _depth > 12 or obj is None:
+        return ""
+    if isinstance(obj, dict):
+        explicit_failure = (
+            obj.get("ok") is False
+            or obj.get("success") is False
+            or obj.get("isError") is True
+        )
+        status = str(obj.get("status") or obj.get("state") or obj.get("task_status") or obj.get("taskStatus") or "").strip()
+        if status and status.lower() in _MCP_FAILURE_STATUS_VALUES:
+            explicit_failure = True
+        for key in ("error", "errors", "exception", "detail", "fail_reason", "failure_reason"):
+            value = obj.get(key)
+            if value:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:1000]
+                msg = _mcp_payload_failure_message(value, _depth + 1)
+                if msg:
+                    return msg
+                explicit_failure = True
+        if explicit_failure:
+            for key in ("message", "msg", "detail", "status_text", "error_description"):
+                value = obj.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:1000]
+            try:
+                return json.dumps(_sanitize_for_json(obj), ensure_ascii=False)[:1000]
+            except Exception:
+                return str(obj)[:1000]
+        for key in ("result", "data", "payload", "content"):
+            value = obj.get(key)
+            if value is obj:
+                continue
+            msg = _mcp_payload_failure_message(value, _depth + 1)
+            if msg:
+                return msg
+    elif isinstance(obj, list):
+        for item in obj:
+            msg = _mcp_payload_failure_message(item, _depth + 1)
+            if msg:
+                return msg
+    return ""
+
 
 def _extract_status_from_upstream(obj: Any, _depth: int = 0) -> str:
     if _depth > 12 or obj is None:
@@ -4438,6 +4595,17 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         (_p.get("job_id") or "")[:16],
                         BASE_URL,
                     )
+                elif capability_id == "hifly.video.create_by_tts":
+                    timeout_s = 120.0
+                    req_json = dict(_p)
+                    logger.info(
+                        "[MCP hifly.video.create_by_tts] invoke has_token=%s avatar=%s voice=%s text_len=%s base_url=%s",
+                        bool(token),
+                        _p.get("avatar"),
+                        _p.get("voice"),
+                        len(str(_p.get("text") or "")),
+                        BASE_URL,
+                    )
                 elif capability_id == "ecommerce.publish":
                     ec_action = (_p.get("action") or "").strip() or "open_product_form"
                     if ec_action == "list_shop_accounts":
@@ -4628,6 +4796,11 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                                     token=token,
                                     job_id=jid2,
                                     request=request,
+                                    max_wait_sec=(
+                                        _GOAL_VIDEO_OPENCLAW_FOREGROUND_POLL_MAX_SEC
+                                        if _openclaw_scope_intent(request)
+                                        else None
+                                    ),
                                 )
                                 if isinstance(polled, dict) and (polled.get("status") or "").strip():
                                     data = polled
@@ -4653,30 +4826,50 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                                     request=request,
                                     initial_submit_data=data,
                                 )
+                    if capability_id == "hifly.video.create_by_tts" and isinstance(data, dict) and data.get("ok", True):
+                        tid_poll = str(data.get("task_id") or "").strip()
+                        if tid_poll:
+                            data = await _mcp_poll_hifly_tts_until_done(
+                                base_url=BASE_URL,
+                                token=token,
+                                task_id=tid_poll,
+                                request=request,
+                                max_wait_sec=float((_p.get("poll_timeout_seconds") or 2400) or 2400),
+                                interval_sec=float((_p.get("poll_interval_seconds") or 10) or 10),
+                            )
                     latency_ms = int((time.perf_counter() - t0) * 1000)
+                    local_error = _mcp_payload_failure_message(data) if isinstance(data, dict) else ""
                     logger.info(
-                        "[MCP %s] backend_response http_status=%s latency_ms=%s",
+                        "[MCP %s] backend_response http_status=%s latency_ms=%s ok=%s",
                         log_tag,
                         r.status_code,
                         latency_ms,
+                        not bool(local_error),
                     )
                     if not _skip_ac_billing:
                         _lc_pre_ok = float(credits_charged) if credits_charged else 0.0
                         await _record_call(
                             token,
                             capability_id,
-                            True,
+                            not bool(local_error),
                             latency_ms,
                             payload,
                             data,
-                            None,
+                            local_error or None,
                             credits_charged=_lc_pre_ok if _lc_pre_ok else None,
                             pre_deduct_applied=_lc_pre_ok > 0,
                             credits_pre_deducted=_lc_pre_ok if _lc_pre_ok > 0 else None,
                             request=request,
                         )
-                    text = _json_dumps_mcp_payload({"capability_id": capability_id, "result": data})
-                    return [{"type": "text", "text": text}], False
+                    out_payload: Dict[str, Any] = {"capability_id": capability_id, "result": data}
+                    if capability_id == "hifly.video.create_by_tts" and isinstance(data, dict) and not local_error:
+                        saved = await _auto_save_generated_assets(data, capability_id, payload, token, request)
+                        if saved:
+                            out_payload["saved_assets"] = saved
+                    if local_error:
+                        out_payload["error"] = local_error
+                    text = _json_dumps_mcp_payload(out_payload)
+                    return [{"type": "text", "text": text}], bool(local_error)
                 except Exception as e:
                     logger.exception("local backend %s failed: %s", capability_id, e)
                     if credits_charged > 0 and token and not _skip_ac_billing:
@@ -4714,6 +4907,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         fail_msg = "电商详情图流水线后端调用失败"
                     elif capability_id == "goal.video.pipeline":
                         fail_msg = "目标成片流水线后端调用失败"
+                    elif capability_id == "hifly.video.create_by_tts":
+                        fail_msg = "飞影数字人口播后端调用失败"
                     elif capability_id == "ecommerce.publish":
                         fail_msg = "电商商品发布后端调用失败"
                     else:

@@ -29,7 +29,8 @@
 
 ## 规则
 
-- 不要自己串联 `image.generate`、`video.generate`、`task.get_result`，除非本能力不可用。
+- 不要自己串联 `image.generate`、`video.generate` 来替代本能力。
+- `start_pipeline` 返回 `job_id` 后，如果本轮等待超时或返回 `status=running`，说明任务仍在运行；继续用 `poll_pipeline` + `job_id` 查询，不要说能力不可用。
 - 不要编造任务 ID、素材 ID、费用或“已完成”状态。
 - 只有返回里存在 `final_asset_id` 或 `video_asset_id`，才能说视频已入库。
 - 用户后续要发布时，使用返回的 `final_asset_id` 调用现有发布工具。

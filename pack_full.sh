@@ -41,7 +41,7 @@ fi
 cd "$PARENT"
 zip -r "$OUT_NAME" "$PROJ" \
   -x "${PROJ}/.git/*" "${PROJ}/*.pyc" "${PROJ}/*__pycache__*" "${PROJ}/*.db" \
-  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" \
+  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" "${PROJ}/static/hifly_previews/*" \
   -x "${PROJ}/sutui_config.json" \
   -x "${PROJ}/pack_bundle.env" \
   -x "${PROJ}/${PROJ}_*.zip" "${PROJ}/*.tar.gz" "${PROJ}/explore_douyin.py" \

@@ -27,7 +27,6 @@ from ..db import SessionLocal, get_db
 from ..models import Asset, UserComflyConfig
 from ..services.viral_video_remix_job_store import create_job_record, get_job, update_job
 from ..services.comfly_veo_exec import LOCAL_COMFLY_CONFIG_USER_ID
-from .billing import _get_billing_pricing
 from .assets import (
     SaveAssetReq,
     _compute_save_url_dedupe_key,
@@ -50,7 +49,8 @@ _UPLOADED_ASSET_CACHE: Dict[str, str] = {}
 _VIDEO_DOWNLOAD_APPID = "682e90c19520118284FGb2"
 _VIDEO_DOWNLOAD_API_URL = "https://watermark-api.hlyphp.top/Watermark/Index"
 _VIRAL_REMIX_CAPABILITY_ID = "viral.video.remix"
-_VIRAL_REMIX_YUAN_PER_SECOND = 1.5
+_VIRAL_REMIX_SEEDANCE_CREDITS_PER_SECOND = 100
+_VIRAL_REMIX_NARRATION_SPLIT_CREDITS_PER_CALL = 1
 
 
 def _lobster_root() -> Path:
@@ -157,157 +157,98 @@ def _resolve_local_comfly_credentials(request: Request) -> tuple[str, str]:
     return _comfly_proxy_base(), token
 
 
-def _viral_remix_credits_per_yuan() -> float:
-    packages = (_get_billing_pricing() or {}).get("credit_packages")
-    if isinstance(packages, list):
-        for item in packages:
-            if not isinstance(item, dict):
-                continue
-            try:
-                yuan = float(item.get("price_yuan") or item.get("price") or 0)
-                credits = float(item.get("credits") or 0)
-            except (TypeError, ValueError):
-                continue
-            if yuan > 0 and credits > 0:
-                return credits / yuan
-    return 100.0
-
-
-def _viral_remix_estimated_credits(seconds: float) -> Dict[str, Any]:
+def _viral_remix_estimated_credits(
+    seconds: float,
+    *,
+    segment_seconds: int = 10,
+    model: str = "doubao-seedance-2-0-260128",
+    include_narration_split: bool = False,
+) -> Dict[str, Any]:
     billable_seconds = max(1, int(math.ceil(float(seconds or 0))))
-    credits_per_yuan = float(_viral_remix_credits_per_yuan())
-    estimated_yuan = float(billable_seconds) * _VIRAL_REMIX_YUAN_PER_SECOND
-    estimated_credits = int(math.ceil(estimated_yuan * credits_per_yuan))
+    normalized_segment_seconds = _normalize_duration(segment_seconds)
+    segment_count = max(1, int(math.ceil(float(billable_seconds) / float(normalized_segment_seconds))))
+    seedance_credits = segment_count * normalized_segment_seconds * _VIRAL_REMIX_SEEDANCE_CREDITS_PER_SECOND
+    narration_split_credits = _VIRAL_REMIX_NARRATION_SPLIT_CREDITS_PER_CALL if include_narration_split and segment_count > 1 else 0
+    estimated_credits = int(seedance_credits + narration_split_credits)
     return {
         "billable_seconds": billable_seconds,
-        "estimated_yuan": estimated_yuan,
-        "credits_per_yuan": credits_per_yuan,
         "estimated_credits": estimated_credits,
-        "yuan_per_second": _VIRAL_REMIX_YUAN_PER_SECOND,
+        "pricing_unit": "credits",
+        "seedance_model": _normalize_remix_model(model),
+        "seedance_credits_per_second": _VIRAL_REMIX_SEEDANCE_CREDITS_PER_SECOND,
+        "segment_count": segment_count,
+        "segment_duration_seconds": normalized_segment_seconds,
+        "seedance_credits": seedance_credits,
+        "narration_split_model": _NARRATION_SPLIT_MODEL if include_narration_split and segment_count > 1 else "",
+        "narration_split_credits": narration_split_credits,
     }
 
 
-def _viral_billing_base() -> str:
-    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
-    if not base:
-        raise HTTPException(status_code=503, detail="未配置 AUTH_SERVER_BASE，无法完成视频复刻算力计费")
-    return base
-
-
-def _viral_billing_headers(request: Request) -> Dict[str, str]:
+async def _dry_run_comfly_credits(request: Request, *, model: str, params: Dict[str, Any]) -> Optional[float]:
     token = _bearer_token_from_request(request)
     if not token:
-        raise HTTPException(status_code=401, detail="请先登录后再提交视频复刻任务")
-    headers: Dict[str, str] = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+        return None
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if not base:
+        return None
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     installation_id = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
     if installation_id:
         headers["X-Installation-Id"] = installation_id
-    billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
-    if not billing_key:
-        billing_key = (os.environ.get("LOBSTER_MCP_BILLING_INTERNAL_KEY") or "").strip()
-    if billing_key:
-        headers["X-Lobster-Mcp-Billing"] = billing_key
-    return headers
-
-
-async def _viral_remix_pre_deduct(
-    *,
-    billing_base: str,
-    billing_headers: Dict[str, str],
-    estimate: Dict[str, Any],
-    payload: Dict[str, Any],
-) -> Dict[str, Any]:
-    expected_credits = float(estimate.get("estimated_credits") or 0)
-    body = {
-        "capability_id": _VIRAL_REMIX_CAPABILITY_ID,
-        "model": "doubao-seedance-video-remix",
-        "params": {
-            "source_duration_seconds": estimate.get("source_duration_seconds"),
-            "billable_seconds": estimate.get("billable_seconds"),
-            "yuan_per_second": estimate.get("yuan_per_second"),
-            "estimated_yuan": estimate.get("estimated_yuan"),
-            "credits_per_yuan": estimate.get("credits_per_yuan"),
-            "expected_credits": expected_credits,
-            "ratio": payload.get("ratio"),
-            "resolution": payload.get("resolution"),
-            "segment_duration_seconds": payload.get("duration"),
-        },
+    payload = {
+        "capability_id": "comfly.daihuo.pipeline",
+        "model": model,
+        "params": params,
+        "dry_run": True,
     }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(f"{billing_base}/capabilities/pre-deduct", json=body, headers=billing_headers)
-    if resp.status_code == 402:
-        detail = (resp.json() if resp.content else {}).get("detail", "算力不足")
-        raise HTTPException(status_code=402, detail=f"算力不足，视频复刻预计需预扣 {int(expected_credits)} 算力。{detail}")
-    if resp.status_code == 401:
-        raise HTTPException(status_code=401, detail="登录已过期，请重新登录后再提交视频复刻任务")
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"视频复刻计费预扣失败 HTTP {resp.status_code}: {(resp.text or '')[:300]}")
-    data = resp.json() if resp.content else {}
-    try:
-        charged_value = float(data.get("credits_charged"))
-    except (TypeError, ValueError):
-        charged_value = expected_credits
-    return {
-        "billing_status": "pre_deducted",
-        "credits_pre_deducted": charged_value,
-        "credits_expected": expected_credits,
-        "raw": data,
-    }
-
-
-async def _viral_remix_refund(
-    *,
-    billing_base: str,
-    billing_headers: Dict[str, str],
-    credits: float,
-) -> None:
-    if credits <= 0:
-        return
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            await client.post(
-                f"{billing_base}/capabilities/refund",
-                json={"capability_id": _VIRAL_REMIX_CAPABILITY_ID, "credits": credits},
-                headers=billing_headers,
-            )
-    except Exception:
-        logger.exception("[viral_video_remix_billing] refund failed credits=%s", credits)
+            resp = await client.post(f"{base}/capabilities/pre-deduct", headers=headers, json=payload)
+        if resp.status_code >= 400:
+            logger.warning("[viral_video_remix] comfly dry-run failed model=%s status=%s body=%s", model, resp.status_code, (resp.text or "")[:300])
+            return None
+        data = resp.json() if resp.content else {}
+        return float(data.get("credits_charged"))
+    except Exception as exc:
+        logger.warning("[viral_video_remix] comfly dry-run exception model=%s error=%s", model, str(exc)[:300])
+        return None
 
 
-async def _viral_remix_record_call(
+async def _viral_remix_estimated_user_credits(
+    request: Request,
+    seconds: float,
     *,
-    billing_base: str,
-    billing_headers: Dict[str, str],
-    job_id: str,
-    entry: Dict[str, Any],
-    result: Dict[str, Any],
-) -> None:
-    credits_pre = float(entry.get("credits_pre_deducted") or 0)
-    credits_final = float(entry.get("credits_expected") or credits_pre)
-    body = {
-        "capability_id": _VIRAL_REMIX_CAPABILITY_ID,
-        "success": True,
-        "source": "viral_video_remix",
-        "request_payload": {
-            "job_id": job_id,
-            "source_duration_seconds": entry.get("source_duration_seconds"),
-            "billable_seconds": entry.get("billable_seconds"),
-            "estimated_yuan": entry.get("estimated_yuan"),
-            "credits_per_yuan": entry.get("credits_per_yuan"),
-        },
-        "response_payload": result,
-        "credits_charged": credits_final,
-        "pre_deduct_applied": credits_pre > 0,
-        "credits_pre_deducted": credits_pre,
-        "credits_final": credits_final,
-    }
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(f"{billing_base}/capabilities/record-call", json=body, headers=billing_headers)
-    if resp.status_code >= 400:
-        raise RuntimeError(f"视频复刻计费结算失败 HTTP {resp.status_code}: {(resp.text or '')[:300]}")
+    segment_seconds: int,
+    model: str,
+    include_narration_split: bool,
+) -> Dict[str, Any]:
+    estimate = _viral_remix_estimated_credits(
+        seconds,
+        segment_seconds=segment_seconds,
+        model=model,
+        include_narration_split=include_narration_split,
+    )
+    segment_credits = await _dry_run_comfly_credits(
+        request,
+        model=str(estimate.get("seedance_model") or model),
+        params={"duration": estimate.get("segment_duration_seconds")},
+    )
+    narration_credits: Optional[float] = None
+    if estimate.get("narration_split_model"):
+        narration_credits = await _dry_run_comfly_credits(
+            request,
+            model=str(estimate.get("narration_split_model")),
+            params={},
+        )
+    if segment_credits is not None:
+        estimate["seedance_credits"] = int(math.ceil(float(segment_credits) * int(estimate.get("segment_count") or 1)))
+        estimate["seedance_credits_per_segment"] = segment_credits
+    if narration_credits is not None:
+        estimate["narration_split_credits"] = int(math.ceil(float(narration_credits)))
+    estimate["estimated_credits"] = int(
+        math.ceil(float(estimate.get("seedance_credits") or 0) + float(estimate.get("narration_split_credits") or 0))
+    )
+    return estimate
 
 
 def _public_viral_billing(entry: Any) -> Dict[str, Any]:
@@ -1034,11 +975,15 @@ class ViralRemixStartBody(BaseModel):
 
 class ViralRemixBillingEstimateBody(BaseModel):
     original_video_url: str = Field(..., min_length=8)
+    model: str = "doubao-seedance-2-0-260128"
+    duration: int = 10
+    narration_script: str = ""
 
 
 @router.post("/api/viral-video-remix/billing/estimate")
 async def estimate_viral_video_remix_billing(
     body: ViralRemixBillingEstimateBody,
+    request: Request,
     current_user: _ServerUser = Depends(_resolve_viral_remix_user),
 ):
     source_url = _quote_public_url(body.original_video_url)
@@ -1050,7 +995,13 @@ async def estimate_viral_video_remix_billing(
     try:
         await _download_to_file(source_url, tmp_path, timeout_seconds=300.0)
         duration = _probe_video_duration_seconds(tmp_path)
-        estimate = _viral_remix_estimated_credits(duration)
+        estimate = await _viral_remix_estimated_user_credits(
+            request,
+            duration,
+            segment_seconds=body.duration,
+            model=body.model,
+            include_narration_split=bool((body.narration_script or "").strip()),
+        )
         estimate["source_duration_seconds"] = duration
         return {
             "ok": True,
@@ -1893,7 +1844,13 @@ async def start_viral_video_remix(
                 estimate_tmp_path.unlink()
         except Exception:
             pass
-    billing_estimate = _viral_remix_estimated_credits(source_duration)
+    billing_estimate = await _viral_remix_estimated_user_credits(
+        request,
+        source_duration,
+        segment_seconds=body.duration,
+        model=body.model,
+        include_narration_split=bool((body.narration_script or "").strip()),
+    )
     billing_estimate["source_duration_seconds"] = source_duration
     safe_body = ViralRemixStartBody(
         original_video_url=_quote_public_url(body.original_video_url),
@@ -1954,30 +1911,6 @@ async def start_viral_video_remix(
         "segment_duration_seconds": int(safe_body.duration or 10),
         "billing": _public_viral_billing(billing_entry),
     }
-    url = _endpoint(api_base, "/seedance/v3/contents/generations/tasks")
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(url, headers=headers, json=request_body)
-    except httpx.TimeoutException as exc:
-        raise HTTPException(status_code=504, detail="Seedance 任务提交超时") from exc
-    except Exception as exc:
-        logger.exception("[viral_video_remix] seedance submit failed user_id=%s", current_user.id)
-        raise HTTPException(status_code=500, detail=f"Seedance 任务提交失败: {exc}") from exc
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=_pick_error_detail(resp))
-    try:
-        payload = resp.json()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="Seedance 提交返回格式异常") from exc
-    task_id = _extract_task_id(payload)
-    if not task_id:
-        raise HTTPException(status_code=502, detail=f"Seedance 未返回任务 ID: {json.dumps(payload, ensure_ascii=False)[:500]}")
-    return {"ok": True, "task_id": task_id, "prompt": prompt_text, "raw": payload}
 
 
 @router.get("/api/viral-video-remix/seedance/tasks/{task_id}")

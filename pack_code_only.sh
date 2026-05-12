@@ -50,7 +50,7 @@ zip -r "$OUT" \
   单机版启动脚本_完整包.txt \
   nodejs/package.json \
   nodejs/package-lock.json \
-  -x "*.pyc" "*__pycache__*" "*.db" "openclaw/workspace/*" "openclaw/.env" "browser_data/*" "assets/*" "sutui_config.json" \
+  -x "*.pyc" "*__pycache__*" "*.db" "openclaw/workspace/*" "openclaw/.env" "browser_data/*" "assets/*" "static/hifly_previews/*" "sutui_config.json" \
   -x "*probe_three_out*" \
   -x "*.DS_Store" \
   2>/dev/null || true

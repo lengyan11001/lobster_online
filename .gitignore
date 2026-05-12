@@ -73,6 +73,8 @@ skills/comfly_veo3_daihuo_video/runs/
 skills/comfly_ecommerce_detail/scripts/temp_test_*
 _lobster_runtime/
 static/uploads/
+static/hifly_previews/
+data/hifly_public_avatars_cache.json
 lobster.exe
 
 # ── 系统 / 编辑器 ──

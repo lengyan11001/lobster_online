@@ -103,6 +103,19 @@ window._openHiflyDigitalHumanView = function() {
   try { location.hash = 'hifly-digital-human'; } catch (e1) {}
 };
 
+window._openGoalVideoChat = function() {
+  var nav = document.querySelector('.nav-left-item[data-view="chat"]');
+  if (nav) nav.click();
+  var input = document.getElementById('chatInput');
+  if (input) {
+    var starter = '用目标成片，根据我的记忆，给某产品生成一个 8 秒抖音 9:16 宣传视频。';
+    if (!String(input.value || '').trim()) input.value = starter;
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch (e1) {}
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+};
+
 window._openHiddenWorkspaceView = function(view) {
   var target = String(view || '').trim();
   if (!target) return;
@@ -1016,6 +1029,16 @@ function loadSkillStore() {
             '<div class="card-tags">' + tags + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wecom-config-entry-btn">配置</button></div></div>';
         }
+        if (pkg.id === 'goal_video_pipeline_skill') {
+          var goalTags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+          var goalCap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+          return '<div class="skill-store-card goal-video-pipeline-card" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(91,124,255,0.05));">' +
+            '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">对话可用</span></div>' +
+            '<div class="card-value">' + escapeHtml(pkg.name || '目标成片') + '</div>' +
+            '<div class="card-desc">' + escapeHtml(pkg.description || '') + goalCap + '</div>' +
+            '<div class="card-tags">' + goalTags + '</div>' +
+            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm goal-video-chat-entry-btn">去对话生成</button></div></div>';
+        }
         var statusBadge = '';
         var actionBtn = '';
         if (pkg.status === 'installed') {
@@ -1047,6 +1070,7 @@ function loadSkillStore() {
         _bindSeedanceTvcCardEntry();
         _bindViralVideoRemixCardEntry();
         _bindHiflyDigitalHumanCardEntry();
+        _bindGoalVideoPipelineCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
         _bindOpenclawSkillWorkspaceCardEntry();
@@ -1299,6 +1323,21 @@ function _bindHiflyDigitalHumanCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+    });
+  });
+}
+
+function _bindGoalVideoPipelineCardEntry() {
+  document.querySelectorAll('.goal-video-pipeline-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openGoalVideoChat === 'function') window._openGoalVideoChat();
+    });
+  });
+  document.querySelectorAll('.goal-video-chat-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openGoalVideoChat === 'function') window._openGoalVideoChat();
     });
   });
 }

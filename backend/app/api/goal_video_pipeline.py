@@ -84,6 +84,14 @@ def _safe_str(value: Any, limit: int = 4000) -> str:
     return str(value or "").strip()[:limit]
 
 
+def _json_preview(value: Any, limit: int = 1200) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        text = str(value)
+    return text.strip()[:limit]
+
+
 def _dedupe_strings(items: List[str]) -> List[str]:
     out: List[str] = []
     seen: set[str] = set()
@@ -204,6 +212,27 @@ def _failure_message(obj: Any) -> str:
     return ""
 
 
+def _has_failure_marker(obj: Any, _depth: int = 0) -> bool:
+    if _depth > 12:
+        return False
+    if isinstance(obj, dict):
+        if obj.get("ok") is False or obj.get("success") is False or obj.get("isError") is True:
+            return True
+        for k in ("error", "errors", "exception", "fail_reason", "failure_reason"):
+            if obj.get(k):
+                return True
+        status = _extract_status(obj)
+        if status in TERMINAL_FAILURE:
+            return True
+        for k in ("result", "data", "payload", "content"):
+            v = obj.get(k)
+            if v is not obj and _has_failure_marker(v, _depth + 1):
+                return True
+    elif isinstance(obj, list):
+        return any(_has_failure_marker(v, _depth + 1) for v in obj)
+    return False
+
+
 def _mcp_headers(token: str, installation_id: str) -> Dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if token:
@@ -215,7 +244,9 @@ def _mcp_headers(token: str, installation_id: str) -> Dict[str, str]:
 
 def _parse_mcp_text_response(data: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(data.get("result"), dict):
-        content = data["result"].get("content")
+        result = data["result"]
+        is_error = bool(result.get("isError"))
+        content = result.get("content")
         if isinstance(content, list):
             for item in content:
                 if not isinstance(item, dict) or item.get("type") != "text":
@@ -225,9 +256,12 @@ def _parse_mcp_text_response(data: Dict[str, Any]) -> Dict[str, Any]:
                     try:
                         parsed = json.loads(text)
                         if isinstance(parsed, dict):
+                            if is_error:
+                                parsed = dict(parsed)
+                                parsed.setdefault("isError", True)
                             return parsed
                     except Exception:
-                        return {"text": text}
+                        return {"error": text, "isError": True} if is_error else {"text": text}
     return data
 
 
@@ -262,8 +296,8 @@ async def _invoke_capability(
         raise RuntimeError(f"MCP HTTP {r.status_code}: {_failure_message(parsed) or str(parsed)[:500]}")
     if data.get("error"):
         raise RuntimeError(_failure_message(data.get("error")) or str(data.get("error"))[:500])
-    if isinstance(parsed, dict) and parsed.get("error"):
-        raise RuntimeError(_failure_message(parsed) or str(parsed.get("error"))[:500])
+    if isinstance(parsed, dict) and _has_failure_marker(parsed):
+        raise RuntimeError(_failure_message(parsed) or _json_preview(parsed, 1000))
     return parsed
 
 
@@ -396,7 +430,13 @@ async def _submit_and_wait_generation(
             "media_urls": urls,
         }
     if not task_id:
-        raise RuntimeError(f"{capability_id} did not return task_id/media")
+        detail = _failure_message(submit) or _json_preview(submit, 1200)
+        logger.warning(
+            "[goal.video.pipeline] %s submit returned no task/media payload=%s",
+            capability_id,
+            detail,
+        )
+        raise RuntimeError(f"{capability_id} did not return task_id/media: {detail}")
 
     progress(f"{kind}_poll", f"poll task {task_id[:32]}", {"task_id": task_id})
     deadline = time.monotonic() + int(timeout_seconds)

@@ -40,6 +40,8 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
         return True
     if rel_posix.startswith("assets/"):
         return True
+    if rel_posix.startswith("static/hifly_previews/"):
+        return True
     if rel_posix == "sutui_config.json":
         return True
     if rel_posix == "pack_bundle.env":

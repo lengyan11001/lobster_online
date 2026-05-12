@@ -23,7 +23,7 @@ from ..db import SessionLocal
 from ..models import Asset
 from ..services.openclaw_channel_auth_store import read_channel_fallback
 from .auth import get_current_user_for_local
-from .assets import get_asset_public_url
+from .assets import build_asset_file_url, get_asset_public_url
 from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
 logger = logging.getLogger(__name__)
@@ -402,8 +402,6 @@ def _inject_scheduled_assets_into_capability_payload(cap_payload: Dict[str, Any]
     out = dict(cap_payload or {})
     out["attachment_asset_ids"] = _merge_id_list(out.get("attachment_asset_ids"), asset_ids)
     out["asset_ids"] = _merge_id_list(out.get("asset_ids"), asset_ids)
-    out.setdefault("asset_id", asset_ids[0])
-    out.setdefault("image_asset_id", asset_ids[0])
     return out
 
 
@@ -423,7 +421,7 @@ def _scheduled_asset_context_with_urls(asset_ids: List[str], jwt_token: str, ins
             if not row:
                 lines.append(f"- asset_id: {aid}  状态: 本机素材库未找到")
                 continue
-            url = get_asset_public_url(aid, uid, req, db) or (row.source_url or "").strip()
+            url = _scheduled_asset_open_url(row, aid, uid, req, db)
             mt = (row.media_type or "").strip()
             if url:
                 lines.append(f"- asset_id: {aid}  media_type: {mt}  URL: {url}")
@@ -435,6 +433,19 @@ def _scheduled_asset_context_with_urls(asset_ids: List[str], jwt_token: str, ins
         return "\n".join(f"- asset_id: {aid}" for aid in ids)
     finally:
         db.close()
+
+
+def _scheduled_asset_open_url(row: Asset, asset_id: str, user_id: int, request: Request, db) -> str:
+    url = get_asset_public_url(asset_id, user_id, request, db) or ""
+    if url:
+        return url
+    source_url = str(getattr(row, "source_url", None) or "").strip()
+    if source_url.startswith(("http://", "https://")):
+        return source_url
+    filename = str(getattr(row, "filename", None) or "").strip()
+    if filename:
+        return build_asset_file_url(request, asset_id, expiry_sec=86400) or ""
+    return ""
 
 
 async def _run_direct_chat(
@@ -669,21 +680,315 @@ def _compact_result_text(obj: Any) -> str:
         return str(obj)[:4000]
 
 
-async def _run_scheduled_capability(
-    cloud: httpx.AsyncClient,
+def _extract_json_object_text(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`").strip()
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+    candidates = [raw]
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(raw[start : end + 1])
+    for item in candidates:
+        try:
+            data = json.loads(item)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            continue
+    return {}
+
+
+def _scheduled_memory_context(jwt_token: str, installation_id: str, query: str) -> str:
+    try:
+        from .openclaw_chat_gateway import _build_openclaw_memory_context
+
+        return _build_openclaw_memory_context(
+            [{"role": "user", "content": query}],
+            jwt_token,
+            installation_id,
+            "default",
+        )
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] memory context unavailable: %s", exc)
+        return ""
+
+
+def _scheduled_llm_model() -> str:
+    return (
+        (getattr(settings, "lobster_orchestration_sutui_chat_model", None) or "").strip()
+        or (getattr(settings, "lobster_default_sutui_chat_model", None) or "").strip()
+        or "deepseek-chat"
+    )
+
+
+async def _call_scheduled_llm(
+    *,
     base: str,
     headers: Dict[str, str],
-    item: Dict[str, Any],
-) -> None:
-    run_id = str(item.get("id") or "").strip()
-    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    capability_id = str(payload.get("capability_id") or "").strip()
-    cap_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
-    attachment_asset_ids = _scheduled_attachment_asset_ids(item)
-    cap_payload = _inject_scheduled_assets_into_capability_payload(cap_payload, attachment_asset_ids)
-    if not run_id or not capability_id:
-        return
-    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"invoke_capability {capability_id}"})
+    system: str,
+    user_payload: Dict[str, Any],
+    temperature: float = 0.2,
+) -> str:
+    body = {
+        "model": _scheduled_llm_model(),
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+        "stream": False,
+        "temperature": temperature,
+    }
+    async with httpx.AsyncClient(timeout=90.0, trust_env=False) as client:
+        resp = await client.post(f"{base}/api/sutui-chat/completions", json=body, headers=headers)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"sutui-chat HTTP {resp.status_code}: {(resp.text or '')[:500]}")
+    data = resp.json() if resp.content else {}
+    try:
+        return str(data["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        return _compact_result_text(data)
+
+
+def _fallback_goal(task_title: str) -> str:
+    title = (task_title or "").strip()
+    if title and title not in {"能力定时任务", "目标成片"}:
+        return f"根据我的记忆和任务名称“{title}”，生成一个 8 秒抖音 9:16 中文宣传视频。"
+    return "根据我的记忆，自动选择最适合推广的产品或服务，生成一个 8 秒抖音 9:16 中文宣传视频。"
+
+
+def _fallback_hifly_script(task_title: str) -> str:
+    title = (task_title or "").strip()
+    subject = f"“{title}”" if title and title not in {"能力定时任务", "飞影数字人"} else "这款产品"
+    return f"大家好，今天给大家分享{subject}。我们会结合真实资料提炼核心亮点，用简洁直接的方式帮你快速了解它的价值。"
+
+
+async def _generate_scheduled_content(
+    *,
+    base: str,
+    headers: Dict[str, str],
+    jwt_token: str,
+    installation_id: str,
+    capability_id: str,
+    task_title: str,
+    asset_context: str,
+) -> Dict[str, Any]:
+    ability = "飞影数字人" if capability_id == "hifly.video.create_by_tts" else "目标成片"
+    query = "\n".join([task_title or ability, ability, asset_context or ""]).strip()
+    memory_context = _scheduled_memory_context(jwt_token, installation_id, query)
+    if capability_id == "hifly.video.create_by_tts":
+        system = (
+            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
+            "根据用户记忆和可用素材，为飞影数字人口播生成内容。"
+            "字段：title(string), script(string), caption_hint(string)。"
+            "script 是数字人口播文案，中文，80 到 180 字，不要要求用户补充信息，不要编造素材 ID。"
+        )
+    else:
+        system = (
+            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
+            "根据用户记忆和可用素材，为目标成片流水线生成目标。"
+            "字段：title(string), goal(string), caption_hint(string)。"
+            "goal 要能直接传给目标成片能力，明确 8 秒、抖音、9:16、中文宣传视频；不要要求用户补充信息，不要编造素材 ID。"
+        )
+    user_payload = {
+        "task_title": task_title,
+        "ability": ability,
+        "memory_context": memory_context[:12000],
+        "asset_context": asset_context[:4000],
+    }
+    try:
+        text = await _call_scheduled_llm(base=base, headers=headers, system=system, user_payload=user_payload)
+        data = _extract_json_object_text(text)
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] generate content failed capability_id=%s: %s", capability_id, exc)
+        data = {}
+    title = str(data.get("title") or task_title or ability).strip()[:120]
+    if capability_id == "hifly.video.create_by_tts":
+        script = str(data.get("script") or "").strip()
+        if not script:
+            script = _fallback_hifly_script(task_title)
+        return {
+            "title": title or "数字人口播",
+            "script": script[:1000],
+            "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
+            "memory_context_used": bool(memory_context),
+        }
+    goal = str(data.get("goal") or "").strip()
+    if not goal:
+        goal = _fallback_goal(task_title)
+    return {
+        "title": title or "目标成片",
+        "goal": goal[:1000],
+        "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
+        "memory_context_used": bool(memory_context),
+    }
+
+
+def _collect_scheduled_result_refs(obj: Any) -> Dict[str, List[str]]:
+    asset_ids: List[str] = []
+    urls: List[str] = []
+
+    def add_asset(v: Any) -> None:
+        s = str(v or "").strip()
+        if s and s not in asset_ids:
+            asset_ids.append(s[:128])
+
+    def add_url(v: Any) -> None:
+        s = str(v or "").strip()
+        if s.startswith(("http://", "https://")) and s not in urls:
+            urls.append(s[:500])
+
+    def walk(x: Any, depth: int = 0) -> None:
+        if depth > 12 or x is None:
+            return
+        if isinstance(x, dict):
+            for k, v in x.items():
+                key = str(k or "").lower()
+                if key in {"asset_id", "final_asset_id", "video_asset_id", "image_asset_id"}:
+                    if isinstance(v, list):
+                        for item in v:
+                            add_asset(item)
+                    else:
+                        add_asset(v)
+                if key.endswith("url") or key in {"url", "src", "href"}:
+                    add_url(v)
+                walk(v, depth + 1)
+        elif isinstance(x, list):
+            for item in x:
+                walk(item, depth + 1)
+        elif isinstance(x, str):
+            add_url(x)
+
+    walk(obj)
+    return {"asset_ids": asset_ids[:12], "urls": urls[:8]}
+
+
+def _scheduled_refs_with_asset_urls(
+    refs: Dict[str, List[str]],
+    jwt_token: str,
+) -> Dict[str, List[str]]:
+    out = {
+        "asset_ids": list((refs or {}).get("asset_ids") or [])[:12],
+        "urls": list((refs or {}).get("urls") or [])[:8],
+    }
+    uid = int(_decode_jwt_sub(jwt_token) or "0")
+    if uid <= 0 or not out["asset_ids"]:
+        return out
+    db = SessionLocal()
+    try:
+        req = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+        for aid in out["asset_ids"]:
+            row = db.query(Asset).filter(Asset.user_id == uid, Asset.asset_id == aid).first()
+            if not row:
+                continue
+            url = _scheduled_asset_open_url(row, aid, uid, req, db)
+            if url and url not in out["urls"]:
+                out["urls"].append(url[:500])
+                if len(out["urls"]) >= 8:
+                    break
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] build result preview urls failed asset_ids=%s err=%s", out["asset_ids"], exc)
+    finally:
+        db.close()
+    return {"asset_ids": out["asset_ids"][:12], "urls": out["urls"][:8]}
+
+
+def _scheduled_result_ready(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return True
+    if result.get("error") or result.get("ok") is False:
+        return False
+    status = str(result.get("status") or result.get("pipeline_status") or "").strip().lower()
+    if status in {"running", "processing", "pending", "queued", "waiting"}:
+        return False
+    if result.get("result_ready") is False:
+        return False
+    inner = result.get("result")
+    if isinstance(inner, dict) and inner is not result:
+        return _scheduled_result_ready(inner)
+    return True
+
+
+def _scheduled_capability_error(result: Any) -> str:
+    if isinstance(result, dict):
+        err = result.get("error") or result.get("detail")
+        if err:
+            return _compact_result_text(err)
+        if result.get("ok") is False:
+            return _compact_result_text(result.get("message") or result)
+        inner = result.get("result")
+        if isinstance(inner, dict) and inner is not result:
+            return _scheduled_capability_error(inner)
+    return ""
+
+
+async def _generate_scheduled_caption(
+    *,
+    base: str,
+    headers: Dict[str, str],
+    capability_id: str,
+    generated: Dict[str, Any],
+    result: Any,
+) -> str:
+    fallback = str(generated.get("caption_hint") or "").strip() or "今天的成片已生成，欢迎查看效果。"
+    system = "你只负责写发布文案。输出一条中文朋友圈文案，不超过 50 个字，不要 Markdown，不要解释。"
+    refs = _collect_scheduled_result_refs(result)
+    try:
+        text = await _call_scheduled_llm(
+            base=base,
+            headers=headers,
+            system=system,
+            user_payload={
+                "ability": capability_id,
+                "generated_content": generated,
+                "result_refs": refs,
+            },
+            temperature=0.4,
+        )
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] caption failed capability_id=%s: %s", capability_id, exc)
+        text = fallback
+    text = " ".join(str(text or fallback).strip().strip('"“”`').split())
+    return (text or fallback)[:50]
+
+
+def _scheduled_complete_text(result: Any, caption: str, refs: Optional[Dict[str, List[str]]] = None) -> str:
+    ready = _scheduled_result_ready(result)
+    lines = ["生成完成。" if ready else "任务已提交，仍在生成中。", f"发布文案：{caption}"]
+    refs = refs or _collect_scheduled_result_refs(result)
+    if refs["asset_ids"]:
+        lines.append("素材：" + "、".join(refs["asset_ids"][:6]))
+    if refs["urls"]:
+        lines.append("预览链接：")
+        lines.extend(refs["urls"][:6])
+    return "\n".join(lines)
+
+
+def _extract_mcp_payload(data: Any) -> Any:
+    result = data.get("result") if isinstance(data, dict) else data
+    content = result.get("content") if isinstance(result, dict) else None
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if not isinstance(text, str):
+                continue
+            try:
+                return json.loads(text)
+            except Exception:
+                return text
+    return result
+
+
+async def _invoke_local_capability(
+    *,
+    headers: Dict[str, str],
+    run_id: str,
+    capability_id: str,
+    cap_payload: Dict[str, Any],
+) -> Any:
     rpc = {
         "jsonrpc": "2.0",
         "id": f"scheduled-{run_id}",
@@ -693,16 +998,200 @@ async def _run_scheduled_capability(
             "arguments": {"capability_id": capability_id, "payload": cap_payload},
         },
     }
+    timeout = httpx.Timeout(7200.0, connect=10.0, read=7200.0, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
+        resp = await local.post("http://127.0.0.1:8001/mcp", json=rpc, headers=headers)
+    if resp.status_code >= 400:
+        raise RuntimeError((resp.text or f"MCP HTTP {resp.status_code}")[:500])
+    data = resp.json()
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(_compact_result_text(data.get("error")))
+    return _extract_mcp_payload(data)
+
+
+async def _invoke_hifly_cloud_tts(
+    *,
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    cap_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    body = {
+        "title": str(cap_payload.get("title") or "数字人口播")[:128],
+        "avatar": str(cap_payload.get("avatar") or "").strip(),
+        "voice": str(cap_payload.get("voice") or "").strip(),
+        "text": str(cap_payload.get("text") or "").strip(),
+        "st_show": int(cap_payload.get("st_show") or 1),
+        "aigc_flag": int(cap_payload.get("aigc_flag") or 0),
+    }
+    create_resp = await cloud.post(f"{base}/api/hifly/my/video/create-by-tts", json=body, headers=headers)
+    create_data = create_resp.json() if create_resp.content else {}
+    if create_resp.status_code >= 400 or create_data.get("ok") is False:
+        raise RuntimeError(str(create_data.get("detail") or create_data.get("error") or create_data or create_resp.text)[:500])
+    task_id = str(create_data.get("task_id") or "").strip()
+    if not task_id:
+        raise RuntimeError("HiFly 未返回 task_id")
+    poll_timeout = int(cap_payload.get("poll_timeout_seconds") or 2400)
+    interval = max(3, int(cap_payload.get("poll_interval_seconds") or 10))
+    poll_request_timeout = httpx.Timeout(90.0, connect=10.0, read=90.0, write=30.0, pool=10.0)
+    waited = 0
+    last: Dict[str, Any] = {"ok": True, "task_id": task_id, "status": 2, "status_text": "生成中"}
+    while waited <= poll_timeout:
+        try:
+            poll_resp = await cloud.post(
+                f"{base}/api/hifly/my/video/task",
+                json={"task_id": task_id},
+                headers=headers,
+                timeout=poll_request_timeout,
+            )
+        except httpx.TimeoutException:
+            last = {"ok": True, "task_id": task_id, "status": 2, "status_text": "查询超时，继续等待生成结果"}
+            await asyncio.sleep(interval)
+            waited += interval
+            continue
+        last = poll_resp.json() if poll_resp.content else {}
+        if poll_resp.status_code >= 400 or last.get("ok") is False:
+            if int(last.get("status") or 0) != 4:
+                raise RuntimeError(str(last.get("detail") or last.get("error") or last or poll_resp.text)[:500])
+        status = int(last.get("status") or 0)
+        if status == 3:
+            item = last.get("item") if isinstance(last.get("item"), dict) else {}
+            asset_id = str(last.get("asset_id") or item.get("asset_id") or "").strip()
+            video_url = str(last.get("video_url") or item.get("video_url") or item.get("asset_video_url") or "").strip()
+            saved = []
+            if asset_id:
+                saved.append({"asset_id": asset_id, "media_type": "video", "filename": item.get("title") or body["title"]})
+            out: Dict[str, Any] = {
+                "capability_id": "hifly.video.create_by_tts",
+                "result": last,
+                "saved_assets": saved,
+            }
+            if video_url:
+                out["media_urls"] = [video_url]
+            return out
+        if status == 4:
+            raise RuntimeError(str(last.get("message") or last.get("detail") or "HiFly 任务失败")[:500])
+        await asyncio.sleep(interval)
+        waited += interval
+    last["result_ready"] = False
+    return {"capability_id": "hifly.video.create_by_tts", "result": last}
+
+
+async def _run_scheduled_capability(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+    *,
+    jwt_token: str,
+    installation_id: str,
+) -> None:
+    run_id = str(item.get("id") or "").strip()
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    capability_id = str(payload.get("capability_id") or "").strip()
+    cap_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    attachment_asset_ids = _scheduled_attachment_asset_ids(item)
+    if not run_id or not capability_id:
+        return
     try:
-        timeout = httpx.Timeout(600.0, connect=10.0, read=600.0, write=30.0, pool=10.0)
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
-            resp = await local.post("http://127.0.0.1:8001/mcp", json=rpc, headers=headers)
-        if resp.status_code >= 400:
-            raise RuntimeError((resp.text or f"MCP HTTP {resp.status_code}")[:500])
-        data = resp.json()
-        if isinstance(data, dict) and data.get("error"):
-            raise RuntimeError(_compact_result_text(data.get("error")))
-        result = data.get("result") if isinstance(data, dict) else data
+        task_title = str(item.get("title") or "").strip()
+        if capability_id in {"goal.video.pipeline", "hifly.video.create_by_tts"}:
+            asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
+            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在根据记忆生成本次内容"})
+            generated = await _generate_scheduled_content(
+                base=base,
+                headers=headers,
+                jwt_token=jwt_token,
+                installation_id=installation_id,
+                capability_id=capability_id,
+                task_title=task_title,
+                asset_context=asset_context,
+            )
+            if capability_id == "goal.video.pipeline":
+                cap_payload = {
+                    "action": "start_pipeline",
+                    "goal": generated.get("goal") or _fallback_goal(task_title),
+                    "platform": "douyin",
+                    "duration": 8,
+                    "aspect_ratio": "9:16",
+                    "language": "zh",
+                    "memory_scope": "default",
+                }
+                if attachment_asset_ids:
+                    cap_payload["reference_asset_ids"] = attachment_asset_ids[:8]
+            else:
+                avatar = str(cap_payload.get("avatar") or "").strip()
+                voice = str(cap_payload.get("voice") or "").strip()
+                if not avatar:
+                    raise RuntimeError("请选择数字人")
+                if not voice:
+                    raise RuntimeError("请选择声音")
+                cap_payload = {
+                    "title": (generated.get("title") or task_title or "数字人口播")[:20],
+                    "avatar": avatar,
+                    "voice": voice,
+                    "text": generated.get("script") or _fallback_hifly_script(task_title),
+                    "st_show": 1,
+                    "aigc_flag": 0,
+                    "poll_interval_seconds": 10,
+                    "poll_timeout_seconds": 2400,
+                }
+            cap_payload = _inject_scheduled_assets_into_capability_payload(cap_payload, attachment_asset_ids)
+            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在调用 {capability_id}"})
+            if capability_id == "hifly.video.create_by_tts":
+                result = await _invoke_hifly_cloud_tts(
+                    cloud=cloud,
+                    base=base,
+                    headers=headers,
+                    cap_payload=cap_payload,
+                )
+            else:
+                result = await _invoke_local_capability(
+                    headers=headers,
+                    run_id=run_id,
+                    capability_id=capability_id,
+                    cap_payload=cap_payload,
+                )
+            cap_error = _scheduled_capability_error(result)
+            if cap_error:
+                raise RuntimeError(cap_error)
+            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在生成发布文案"})
+            caption = await _generate_scheduled_caption(
+                base=base,
+                headers=headers,
+                capability_id=capability_id,
+                generated=generated,
+                result=result,
+            )
+            refs = _scheduled_refs_with_asset_urls(_collect_scheduled_result_refs(result), jwt_token)
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=_scheduled_complete_text(result, caption, refs),
+                result_payload={
+                    "capability_id": capability_id,
+                    "generated": generated,
+                    "caption": caption,
+                    "mcp_result": result,
+                    "result_refs": refs,
+                    "media_urls": refs["urls"],
+                },
+            )
+            return
+
+        cap_payload = _inject_scheduled_assets_into_capability_payload(cap_payload, attachment_asset_ids)
+        await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"invoke_capability {capability_id}"})
+        result = await _invoke_local_capability(
+            headers=headers,
+            run_id=run_id,
+            capability_id=capability_id,
+            cap_payload=cap_payload,
+        )
+        cap_error = _scheduled_capability_error(result)
+        if cap_error:
+            raise RuntimeError(cap_error)
         await _complete_task_run(
             cloud,
             base,
@@ -713,7 +1202,8 @@ async def _run_scheduled_capability(
         )
     except Exception as exc:
         logger.exception("[SCHEDULED-TASK] capability failed run_id=%s capability_id=%s", run_id, capability_id)
-        await _complete_task_run(cloud, base, headers, run_id, error=str(exc)[:500] or "capability failed")
+        error_text = str(exc).strip() or exc.__class__.__name__
+        await _complete_task_run(cloud, base, headers, run_id, error=error_text[:500] or "capability failed")
 
 
 async def _process_scheduled_task(
@@ -726,7 +1216,14 @@ async def _process_scheduled_task(
     headers = _headers(jwt_token, installation_id)
     kind = str(item.get("task_kind") or "openclaw_message").strip().lower()
     if kind == "capability":
-        await _run_scheduled_capability(client, base, headers, item)
+        await _run_scheduled_capability(
+            client,
+            base,
+            headers,
+            item,
+            jwt_token=jwt_token,
+            installation_id=installation_id,
+        )
     elif kind == "chat_message":
         await _run_scheduled_chat_message(
             client,
@@ -749,6 +1246,85 @@ async def _process_scheduled_task(
         )
 
 
+def _channel_concurrency(name: str, default: int, upper: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or str(default))
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(upper, value))
+
+
+def _reap_channel_tasks(active: set[asyncio.Task], label: str) -> None:
+    for task in list(active):
+        if not task.done():
+            continue
+        active.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.exception("[%s] background task failed: %s", label, exc)
+
+
+async def _scheduled_task_keepalive(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+) -> None:
+    interval = float(os.environ.get("LOBSTER_SCHEDULED_TASK_HEARTBEAT_SEC", "120") or "120")
+    interval = max(30.0, interval)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await _post_task_event(
+                client,
+                base,
+                headers,
+                run_id,
+                "heartbeat",
+                {"text": "本地执行中", "heartbeat": True},
+            )
+        except Exception as exc:
+            logger.debug("[SCHEDULED-TASK] heartbeat failed run_id=%s: %s", run_id, exc)
+
+
+async def _process_item_detached(
+    base: str,
+    jwt_token: str,
+    installation_id: str,
+    item: Dict[str, Any],
+) -> None:
+    timeout = httpx.Timeout(7200.0, connect=10.0, read=7200.0, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        await _process_item(client, base, jwt_token, installation_id, item)
+
+
+async def _process_scheduled_task_detached(
+    base: str,
+    jwt_token: str,
+    installation_id: str,
+    item: Dict[str, Any],
+) -> None:
+    timeout = httpx.Timeout(7200.0, connect=10.0, read=7200.0, write=30.0, pool=10.0)
+    headers = _headers(jwt_token, installation_id)
+    run_id = str(item.get("id") or "").strip()
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        keepalive: Optional[asyncio.Task] = None
+        if run_id:
+            keepalive = asyncio.create_task(_scheduled_task_keepalive(client, base, headers, run_id))
+        try:
+            await _process_scheduled_task(client, base, jwt_token, installation_id, item)
+        finally:
+            if keepalive:
+                keepalive.cancel()
+                try:
+                    await keepalive
+                except asyncio.CancelledError:
+                    pass
+
+
 async def h5_chat_poll_loop() -> None:
     if not _enabled():
         logger.info("[H5-CHAT] remote H5 chat channel disabled")
@@ -757,8 +1333,15 @@ async def h5_chat_poll_loop() -> None:
     sleep_empty = float(os.environ.get("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", "2.0") or "2.0")
     sleep_missing_auth = 10.0
     logged_missing = False
+    max_h5_concurrency = _channel_concurrency("LOBSTER_H5_CHAT_CONCURRENCY", 1, 5)
+    max_task_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_TASK_CONCURRENCY", 2, 10)
+    active_items: set[asyncio.Task] = set()
+    active_task_runs: set[asyncio.Task] = set()
 
     while True:
+        _reap_channel_tasks(active_items, "H5-CHAT")
+        _reap_channel_tasks(active_task_runs, "SCHEDULED-TASK")
+
         base = _cloud_base()
         jwt_token, installation_id = _auth_context()
         if not base or not jwt_token:
@@ -778,30 +1361,41 @@ async def h5_chat_poll_loop() -> None:
                     json={"display_name": "local-online"},
                     headers=headers,
                 )
-                resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": 2}, headers=headers)
-                if resp.status_code == 401:
-                    logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
-                    await asyncio.sleep(sleep_missing_auth)
-                    continue
-                resp.raise_for_status()
-                items = (resp.json() or {}).get("items") or []
+                items: list[Dict[str, Any]] = []
+                h5_slots = max(0, max_h5_concurrency - len(active_items))
+                if h5_slots > 0:
+                    resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers)
+                    if resp.status_code == 401:
+                        logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
+                    resp.raise_for_status()
+                    items = (resp.json() or {}).get("items") or []
                 task_items: list[Dict[str, Any]] = []
-                task_resp = await client.get(f"{base}/api/scheduled-tasks/pending", params={"limit": 2}, headers=headers)
-                if task_resp.status_code == 401:
-                    logger.warning("[SCHEDULED-TASK] cloud auth rejected; waiting for next login token")
-                    await asyncio.sleep(sleep_missing_auth)
-                    continue
-                if task_resp.status_code < 400:
-                    task_items = (task_resp.json() or {}).get("items") or []
-                elif task_resp.status_code != 404:
-                    logger.debug("[SCHEDULED-TASK] pending request HTTP %s: %s", task_resp.status_code, task_resp.text[:300])
+                task_slots = max(0, max_task_concurrency - len(active_task_runs))
+                if task_slots > 0:
+                    task_resp = await client.get(
+                        f"{base}/api/scheduled-tasks/pending",
+                        params={"limit": task_slots},
+                        headers=headers,
+                    )
+                    if task_resp.status_code == 401:
+                        logger.warning("[SCHEDULED-TASK] cloud auth rejected; waiting for next login token")
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
+                    if task_resp.status_code < 400:
+                        task_items = (task_resp.json() or {}).get("items") or []
+                    elif task_resp.status_code != 404:
+                        logger.debug("[SCHEDULED-TASK] pending request HTTP %s: %s", task_resp.status_code, task_resp.text[:300])
                 if not items and not task_items:
                     await asyncio.sleep(sleep_empty)
                     continue
                 for item in items:
-                    await _process_item(client, base, jwt_token, installation_id, item)
+                    active_items.add(asyncio.create_task(_process_item_detached(base, jwt_token, installation_id, item)))
                 for item in task_items:
-                    await _process_scheduled_task(client, base, jwt_token, installation_id, item)
+                    active_task_runs.add(
+                        asyncio.create_task(_process_scheduled_task_detached(base, jwt_token, installation_id, item))
+                    )
                 await asyncio.sleep(0.2)
         except asyncio.CancelledError:
             raise

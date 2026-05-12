@@ -82,11 +82,16 @@
     return n.toFixed(digits == null ? 2 : digits).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
   }
 
-  function estimateRemixBilling(originalVideoUrl) {
+  function estimateRemixBilling(body) {
     return fetch(baseUrl() + '/api/viral-video-remix/billing/estimate', {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
-      body: JSON.stringify({ original_video_url: originalVideoUrl })
+      body: JSON.stringify({
+        original_video_url: body.original_video_url,
+        model: body.model,
+        duration: body.duration,
+        narration_script: body.narration_script || ''
+      })
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
         if (!resp.ok) throw new Error(normalizeApiError(data, '\u89c6\u9891\u590d\u523b\u8ba1\u7b97\u5931\u8d25'));
@@ -661,7 +666,7 @@
           billing_confirmed: false
         };
         showMessage('正在预估视频复刻算力消耗...', false);
-        return estimateRemixBilling(body.original_video_url).then(function(estimate) {
+        return estimateRemixBilling(body).then(function(estimate) {
           return confirmRemixBilling(estimate).then(function(ok) {
             if (!ok) throw new Error('\u5df2\u53d6\u6d88\u63d0\u4ea4\u3002');
             body.billing_confirmed = true;

@@ -25,7 +25,7 @@
     }
   };
 
-  var HIFLY_TEMPLATE_VERSION = '20260511-cloud-library-2';
+  var HIFLY_TEMPLATE_VERSION = '20260511-local-cache-library';
   var HIFLY_STYLE_VERSION = '20260511-brand-voice-preview-3';
 
 
@@ -972,7 +972,7 @@
     state.avatarLibrary.public_loading = false;
     return Promise.all([
       requestCloudGet('/api/hifly/my/avatar/list?page=1&size=100'),
-      requestCloud('/api/hifly/avatar/library', { page: 1, size: 10 })
+      request('/api/hifly/avatar/library', { page: 1, size: 10 })
     ]).then(function(results) {
       var mineData = results[0] || {};
       var data = results[1] || {};
@@ -1027,7 +1027,7 @@
     if (!silent) showMessage('正在加载声音列表...', false);
     return Promise.all([
       requestCloudGet('/api/hifly/my/voice/list?page=1&size=100'),
-      requestCloud('/api/hifly/voice/library')
+      request('/api/hifly/voice/library')
     ]).then(function(results) {
       var mineData = results[0] || {};
       var data = results[1] || {};
