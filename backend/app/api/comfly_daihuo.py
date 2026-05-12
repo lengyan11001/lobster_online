@@ -200,8 +200,16 @@ async def _daihuo_job_runner(job_id: str) -> None:
 
     video_model = _video_model_from_result(result)
     saved_assets: List[Dict[str, Any]] = []
+    fv = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    if (fv.get("kind") or "") in ("merge_failed", "multiple_clips_no_merge"):
+        update_job(
+            job_id,
+            status="failed",
+            error=str(fv.get("hint") or "TVC merge failed; generated clips were not returned as final video.")[:2000],
+            result=result,
+        )
+        return
     if auto_save:
-        fv = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
         db = SessionLocal()
         try:
             current_user = _ServerUser(id=user_id)
@@ -354,8 +362,13 @@ async def comfly_daihuo_pipeline_run(
 
     video_model = _video_model_from_result(result)
     saved_assets: List[Dict[str, Any]] = []
+    fv = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    if (fv.get("kind") or "") in ("merge_failed", "multiple_clips_no_merge"):
+        raise HTTPException(
+            status_code=500,
+            detail=str(fv.get("hint") or "TVC merge failed; generated clips were not returned as final video.")[:2000],
+        )
     if pl.auto_save:
-        fv = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
         merged_row = None
         if fv.get("kind") == "merged_local" and (fv.get("path") or "").strip():
             try:

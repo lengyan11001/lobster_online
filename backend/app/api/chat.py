@@ -1213,8 +1213,11 @@ def _correct_image_to_video_or_tvc_if_user_asked(args: Dict, last_user_content: 
         new_pl: Dict[str, Any] = {
             "action": "start_pipeline",
             "auto_save": True,
-            "task_text": text,
+            "task_text": _harden_tvc_task_text(text),
         }
+        new_pl["merge_clips"] = True
+        new_pl["enhance_prompt"] = False
+        new_pl["watermark"] = False
         for key in ("asset_id", "image_url"):
             val = old_payload.get(key)
             if isinstance(val, str):
@@ -1802,11 +1805,15 @@ def _redirect_video_generate_to_daihuo_if_tvc(
     args["capability_id"] = "comfly.daihuo.pipeline"
     new_pl: Dict[str, Any] = {"action": "start_pipeline", "auto_save": True}
     if clean_user:
-        new_pl["task_text"] = clean_user
+        new_pl["task_text"] = _harden_tvc_task_text(clean_user)
     if asset_id:
         new_pl["asset_id"] = asset_id
     if image_url:
         new_pl["image_url"] = image_url
+    new_pl["merge_clips"] = True
+    new_pl["auto_save"] = True
+    new_pl["enhance_prompt"] = False
+    new_pl["watermark"] = False
     args["payload"] = new_pl
     logger.info(
         "[CHAT] 用户消息含TVC关键词，已将 video.generate 重定向到 comfly.daihuo.pipeline asset_id=%s",
@@ -1868,6 +1875,11 @@ def _ensure_daihuo_pipeline_asset_or_url(
             task_text[:160],
             clean_task_text[:160],
         )
+    pl["task_text"] = _harden_tvc_task_text(str(pl.get("task_text") or "").strip())
+    pl["merge_clips"] = True
+    pl["auto_save"] = True
+    pl["enhance_prompt"] = False
+    pl["watermark"] = False
     aid = (str(pl.get("asset_id") or "").strip())
     iu = (str(pl.get("image_url") or "").strip())
     if aid or (iu.startswith("http://") or iu.startswith("https://")):
@@ -2322,6 +2334,23 @@ def _strip_publish_account_directives_for_tvc_task_text(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned)
     cleaned = cleaned.strip(" \t\r\n，,。.;；:：-_/|")
     return cleaned or raw
+
+
+_TVC_VISUAL_NO_TEXT_GUARD = (
+    "Strict visual constraint: do not render subtitles, captions, Chinese characters, English words, "
+    "pseudo-text, UI overlays, stickers, shopping cart icons, CTA badges, price tags, platform logos, "
+    "watermarks, or any readable on-screen text. Express selling points through action, camera movement, "
+    "product demonstration, facial expression, and spoken dialogue only."
+)
+
+
+def _harden_tvc_task_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        raw = "Create a vertical ecommerce TVC from the reference image."
+    if _TVC_VISUAL_NO_TEXT_GUARD not in raw:
+        raw = f"{raw}\n{_TVC_VISUAL_NO_TEXT_GUARD}"
+    return raw[:4000]
 
 
 def _is_known_video_model_without_slash(model_id: str) -> bool:
@@ -3266,6 +3295,11 @@ def _normalize_invoke_daihuo_pipeline_args_for_chat(args: Dict[str, Any]) -> Dic
     ):
         if k in args and args[k] is not None:
             pl.setdefault(k, args[k])
+    pl["merge_clips"] = True
+    pl["auto_save"] = True
+    pl["enhance_prompt"] = False
+    pl["watermark"] = False
+    pl["task_text"] = _harden_tvc_task_text(str(pl.get("task_text") or "").strip())
     out = dict(args)
     out["payload"] = pl
     return out
@@ -3618,6 +3652,20 @@ def _saved_assets_from_daihuo_pipeline_tool_result(result_text: str) -> List[Dic
     raw_saved = inner.get("saved_assets") or []
     if not isinstance(raw_saved, list):
         return []
+    merged_saved = []
+    for it in raw_saved:
+        if not isinstance(it, dict):
+            continue
+        if str(it.get("task_id") or "").strip() == "merged_final":
+            merged_saved.append(it)
+            continue
+        row = it.get("asset")
+        tags = str(row.get("tags") or "") if isinstance(row, dict) else ""
+        meta = row.get("meta") if isinstance(row, dict) else None
+        if "merged_final" in tags or (isinstance(meta, dict) and str(meta.get("origin") or "") == "daihuo_merged"):
+            merged_saved.append(it)
+    if merged_saved:
+        raw_saved = merged_saved
     out: List[Dict[str, Any]] = []
     for it in raw_saved:
         if not isinstance(it, dict):

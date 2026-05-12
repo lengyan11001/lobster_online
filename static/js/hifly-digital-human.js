@@ -25,8 +25,12 @@
     }
   };
 
-  var HIFLY_TEMPLATE_VERSION = '20260511-local-cache-library';
+  var HIFLY_TEMPLATE_VERSION = '20260512-video-size-inline-error';
   var HIFLY_STYLE_VERSION = '20260511-brand-voice-preview-3';
+  var HIFLY_AVATAR_COVER_MANIFEST = '/static/data/hifly-public-avatar-covers.json?v=20260512';
+  var HIFLY_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
+  var avatarCoverManifest = { by_basename: {} };
+  var avatarCoverManifestPromise = null;
 
 
 
@@ -87,6 +91,60 @@
     if (!base) return raw;
     if (raw.charAt(0) === '/') return base + raw;
     return base + '/' + raw.replace(/^\.?\//, '');
+  }
+
+  function assetBasename(url) {
+    var raw = String(url || '').trim();
+    if (!raw) return '';
+    try {
+      var parsed = new URL(raw, window.location.origin);
+      var parts = parsed.pathname.split('/');
+      return decodeURIComponent(parts[parts.length - 1] || '');
+    } catch (e) {
+      var clean = raw.split('#')[0].split('?')[0].replace(/\/+$/, '');
+      var segments = clean.split('/');
+      try {
+        return decodeURIComponent(segments[segments.length - 1] || '');
+      } catch (err) {
+        return segments[segments.length - 1] || '';
+      }
+    }
+  }
+
+  function localAvatarCoverFor(item) {
+    if (!item || !avatarCoverManifest || !avatarCoverManifest.by_basename) return '';
+    var candidates = [
+      item.cover_url, item.image_url, item.face_url, item.avatar_url,
+      item.poster_url, item.thumbnail_url, item.preview_url, item.detail_url,
+      item.pic, item.pic_url, item.head_url, item.head, item.thumb, item.thumbnail
+    ];
+    for (var i = 0; i < candidates.length; i += 1) {
+      var basename = assetBasename(candidates[i]);
+      if (basename && avatarCoverManifest.by_basename[basename]) {
+        return avatarCoverManifest.by_basename[basename];
+      }
+    }
+    return '';
+  }
+
+  function loadAvatarCoverManifest() {
+    if (avatarCoverManifestPromise) return avatarCoverManifestPromise;
+    avatarCoverManifestPromise = fetch(HIFLY_AVATAR_COVER_MANIFEST, { cache: 'no-store' })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error('avatar cover manifest ' + resp.status);
+        return resp.json();
+      })
+      .then(function(data) {
+        avatarCoverManifest = data || { by_basename: {} };
+        avatarCoverManifest.by_basename = avatarCoverManifest.by_basename || {};
+        return avatarCoverManifest;
+      })
+      .catch(function(err) {
+        avatarCoverManifest = { by_basename: {} };
+        if (window.console && console.warn) console.warn('[hifly] local avatar cover manifest unavailable', err);
+        return avatarCoverManifest;
+      });
+    return avatarCoverManifestPromise;
   }
 
   function bindVoicePreviewButtons() {
@@ -161,6 +219,12 @@
 
   function requestCloud(path, body) {
     return requestTo(cloudBaseUrl(), path, body);
+  }
+
+  function requestLibrary(path, body) {
+    var cloud = cloudBaseUrl();
+    if (cloud) return requestTo(cloud, path, body);
+    return request(path, body);
   }
 
   function requestFormTo(base, path, formData) {
@@ -293,6 +357,8 @@
 
   function coverSrc(item) {
     if (!item) return placeholderSvg('数字人', 'public');
+    var localCover = localAvatarCoverFor(item);
+    if (localCover) return localCover;
     if (item.source_type === 'image' && item.detail_url) return item.detail_url;
     // 优先取明确的图片字段，再尝试常见的 cover/face/avatar/poster/thumbnail 字段名
     var candidates = [
@@ -350,6 +416,8 @@
   }
 
   function avatarDetailSrc(item) {
+    var localCover = localAvatarCoverFor(item);
+    if (localCover) return localCover;
     if (item && item.detail_url) return item.detail_url;
     if (item && item.image_url) return item.image_url;
     return coverSrc(item);
@@ -971,8 +1039,8 @@
     if (!silent) showMessage('正在加载数字人列表...', false);
     state.avatarLibrary.public_loading = false;
     return Promise.all([
-      requestCloudGet('/api/hifly/my/avatar/list?page=1&size=100'),
-      request('/api/hifly/avatar/library', { page: 1, size: 10 })
+      requestCloudGet('/api/hifly/my/avatar/list?page=1&size=100').catch(function() { return { items: [] }; }),
+      requestLibrary('/api/hifly/avatar/library', { page: 1, size: 10 })
     ]).then(function(results) {
       var mineData = results[0] || {};
       var data = results[1] || {};
@@ -1026,8 +1094,8 @@
   function loadVoices(silent) {
     if (!silent) showMessage('正在加载声音列表...', false);
     return Promise.all([
-      requestCloudGet('/api/hifly/my/voice/list?page=1&size=100'),
-      request('/api/hifly/voice/library')
+      requestCloudGet('/api/hifly/my/voice/list?page=1&size=100').catch(function() { return { items: [] }; }),
+      requestLibrary('/api/hifly/voice/library')
     ]).then(function(results) {
       var mineData = results[0] || {};
       var data = results[1] || {};
@@ -1240,6 +1308,29 @@
     return (num / 1024).toFixed(1) + ' KB';
   }
 
+  function avatarVideoSizeLimitMessage(file) {
+    return '视频太大无法上传，当前文件 '
+      + formatFileSize(file && file.size)
+      + '，超过 200MB 限制。请压缩或裁剪后再上传。';
+  }
+
+  function renderUploadError(metaId, message) {
+    var el = $(metaId);
+    if (!el) return;
+    el.style.display = 'block';
+    el.classList.add('is-error');
+    el.innerHTML = '<strong>' + escapeHtml(message || '文件无法上传') + '</strong>';
+  }
+
+  function validateAvatarVideoUploadFile(inputId, file, metaId) {
+    if (inputId !== 'hiflyAvatarVideoFile' || !file) return true;
+    if (Number(file.size || 0) <= HIFLY_AVATAR_VIDEO_MAX_BYTES) return true;
+    var message = avatarVideoSizeLimitMessage(file);
+    renderUploadError(metaId || 'hiflyAvatarVideoFileMeta', message);
+    showMessage(message, true);
+    return false;
+  }
+
   function revokeUploadPreview(inputId) {
     var previewUrl = state.uploadPreviews[inputId];
     if (!previewUrl) return;
@@ -1264,10 +1355,12 @@
     if (!el) return;
     if (!file) {
       el.style.display = 'none';
+      el.classList.remove('is-error');
       el.innerHTML = '';
       return;
     }
     el.style.display = 'block';
+    el.classList.remove('is-error');
     el.innerHTML = '<strong>' + escapeHtml(file.name || '未命名文件') + '</strong><span>' + escapeHtml(formatFileSize(file.size)) + '</span>';
   }
 
@@ -1333,7 +1426,15 @@
     trigger.setAttribute('data-bound', '1');
     trigger.addEventListener('click', function() { input.click(); });
     input.addEventListener('change', function() {
-      syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, input.files && input.files[0] ? input.files[0] : null);
+      var file = input.files && input.files[0] ? input.files[0] : null;
+      if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
+        if (input) input.value = '';
+        revokeUploadPreview(inputId);
+        syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, null);
+        renderUploadError(metaId, avatarVideoSizeLimitMessage(file));
+        return;
+      }
+      syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, file);
     });
     trigger.addEventListener('dragover', function(ev) {
       ev.preventDefault();
@@ -1346,8 +1447,16 @@
       ev.preventDefault();
       trigger.classList.remove('is-dragover');
       if (!ev.dataTransfer || !ev.dataTransfer.files || !ev.dataTransfer.files.length) return;
+      var file = ev.dataTransfer.files[0];
+      if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
+        if (input) input.value = '';
+        revokeUploadPreview(inputId);
+        syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, null);
+        renderUploadError(metaId, avatarVideoSizeLimitMessage(file));
+        return;
+      }
       input.files = ev.dataTransfer.files;
-      syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, ev.dataTransfer.files[0]);
+      syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, file);
     });
     syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, input.files && input.files[0] ? input.files[0] : null);
   }
@@ -1568,7 +1677,17 @@
     var title = (($('hiflyAvatarVideoName') || {}).value || '').trim();
     var agree = !!(($('hiflyAvatarVideoAgree') || {}).checked);
     if (!title) return showMessage('请填写数字人名称。', true);
-    if (!file) return showMessage('请先上传视频。', true);
+    if (!file) {
+      renderUploadError('hiflyAvatarVideoFileMeta', '请先上传视频。');
+      return showMessage('请先上传视频。', true);
+    }
+    if (!validateAvatarVideoUploadFile('hiflyAvatarVideoFile', file, 'hiflyAvatarVideoFileMeta')) {
+      if ($('hiflyAvatarVideoFile')) $('hiflyAvatarVideoFile').value = '';
+      revokeUploadPreview('hiflyAvatarVideoFile');
+      syncUploadSelection('hiflyAvatarVideoUploadBox', 'hiflyAvatarVideoFile', 'hiflyAvatarVideoPreview', 'hiflyAvatarVideoFileMeta', 'video', null);
+      renderUploadError('hiflyAvatarVideoFileMeta', avatarVideoSizeLimitMessage(file));
+      return;
+    }
     if (!agree) return showMessage('请先勾选同意承诺。', true);
 
     var formData = new FormData();
@@ -1743,6 +1862,7 @@
     syncVideoCreateModeUI();
 
     return Promise.allSettled([
+      loadAvatarCoverManifest(),
       loadAvatarLibrary(true),
       loadVoices(true)
     ]).then(function(results) {
@@ -1751,7 +1871,7 @@
       renderSelectedVoice();
       renderAvatarLibrary();
       renderVoiceLibrary();
-      if (rejected.length === results.length) {
+      if (rejected.length >= 2 && results[1].status === 'rejected' && results[2].status === 'rejected') {
         throw rejected[0].reason || new Error('初始化必火智能数字人页面失败');
       }
       if (state.avatarLibrary.using_default_token || state.voiceLibrary.using_default_token) {
@@ -1907,6 +2027,7 @@
       + '#content-hifly-digital-human .hifly-upload-remove{position:absolute;top:0.9rem;right:0.9rem;width:42px;height:42px;border:none;border-radius:14px;background:rgba(255,255,255,0.96);color:#334155;font-size:1.4rem;line-height:1;cursor:pointer;box-shadow:0 12px 28px rgba(15,23,42,0.12);}'
       + '#content-hifly-digital-human .hifly-upload-remove:hover{background:#fff;color:#111827;}'
       + '#content-hifly-digital-human .hifly-file-meta{display:flex;justify-content:space-between;gap:0.75rem;padding:0.78rem 0.9rem;border-radius:16px;background:rgba(15,23,42,0.05);color:#334155;word-break:break-all;}'
+      + '#content-hifly-digital-human .hifly-file-meta.is-error{display:block;background:rgba(220,38,38,0.08);border:1px solid rgba(220,38,38,0.24);color:#b42318;line-height:1.55;}'
       + '#content-hifly-digital-human .hifly-radio-row{display:flex;gap:0.7rem;flex-wrap:wrap;}'
       + '#content-hifly-digital-human .hifly-radio-card{display:inline-flex;align-items:center;gap:0.45rem;padding:0.65rem 0.82rem;border-radius:999px;border:1px solid rgba(124,94,255,0.16);cursor:pointer;}'
       + 'body.hifly-modal-open{overflow:hidden;}'
@@ -2233,7 +2354,7 @@
               <ol class="hifly-requirement-list">
                 <li>尽量保证人脸清晰完整，不要遮挡。</li>
                 <li>建议分辨率 720p 或 1080p，时长 5 秒到 30 分钟。</li>
-                <li>支持 mp4 / mov，文件大小不超过 500MB。</li>
+                <li>支持 mp4 / mov，文件大小不超过 200MB。</li>
               </ol>
             </div>
             <input id="hiflyAvatarVideoFile" type="file" accept=".mp4,.mov,video/mp4,video/quicktime" style="display:none;">
