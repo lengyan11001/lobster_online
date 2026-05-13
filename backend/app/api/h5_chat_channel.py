@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +31,32 @@ from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
+_SCHEDULED_CREATIVE_ANGLES = [
+    "痛点切入",
+    "场景体验",
+    "结果收益",
+    "工艺实力",
+    "交付效率",
+    "信任背书",
+    "对比反差",
+    "客户视角",
+]
+_SCHEDULED_CAPTION_STYLES = [
+    "像朋友分享一次新发现",
+    "突出一个明确业务结果",
+    "用轻松口吻讲专业能力",
+    "强调省心和交付确定性",
+    "从客户常见问题切入",
+    "用一句有记忆点的结论收束",
+]
+
+
+def _scheduled_variant(seed: str, options: List[str]) -> str:
+    if not options:
+        return ""
+    raw = str(seed or "scheduled").encode("utf-8", "ignore")
+    digest = hashlib.sha1(raw).digest()
+    return options[int.from_bytes(digest[:2], "big") % len(options)]
 
 
 def _enabled() -> bool:
@@ -541,7 +568,7 @@ async def _run_openclaw_chat(
         return
     await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "已交给本机 OpenClaw"})
     messages = [
-        {"role": "system", "content": "你是用户的远程 H5 会话助手。根据用户消息自然完成任务，使用中文回复。"},
+        {"role": "system", "content": "你是用户的手机会话助手。根据用户消息自然完成任务，使用中文回复。"},
         {"role": "user", "content": content},
     ]
     try:
@@ -768,14 +795,14 @@ async def _call_scheduled_llm(
 
 def _fallback_goal(task_title: str) -> str:
     title = (task_title or "").strip()
-    if title and title not in {"能力定时任务", "目标成片"}:
+    if title and title not in {"能力定时任务", "目标成片", "创意成片"}:
         return f"根据我的记忆和任务名称“{title}”，生成一个 8 秒抖音 9:16 中文宣传视频。"
     return "根据我的记忆，自动选择最适合推广的产品或服务，生成一个 8 秒抖音 9:16 中文宣传视频。"
 
 
 def _fallback_hifly_script(task_title: str) -> str:
     title = (task_title or "").strip()
-    subject = title[:12] if title and title not in {"能力定时任务", "飞影数字人"} else "这款产品"
+    subject = title[:12] if title and title not in {"能力定时任务", "飞影数字人", "飞鹰数字人", "必火数字人"} else "这款产品"
     return f"大家好，今天带你了解{subject}，一起看看核心亮点。"
 
 
@@ -793,14 +820,18 @@ async def _generate_scheduled_content(
     capability_id: str,
     task_title: str,
     asset_context: str,
+    run_id: str = "",
 ) -> Dict[str, Any]:
-    ability = "飞影数字人" if capability_id == "hifly.video.create_by_tts" else "目标成片"
+    ability = "必火数字人" if capability_id == "hifly.video.create_by_tts" else "创意成片"
     query = "\n".join([task_title or ability, ability, asset_context or ""]).strip()
     memory_context = _scheduled_memory_context(jwt_token, installation_id, query)
+    seed = "|".join([run_id, capability_id, task_title, str(len(memory_context)), str(len(asset_context))])
+    creative_angle = _scheduled_variant(seed, _SCHEDULED_CREATIVE_ANGLES)
+    caption_style = _scheduled_variant(seed + "|caption", _SCHEDULED_CAPTION_STYLES)
     if capability_id == "hifly.video.create_by_tts":
         system = (
             "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为飞影数字人口播生成内容。"
+            "根据用户记忆和可用素材，为必火数字人口播生成内容。"
             "字段：title(string), script(string), caption_hint(string)。"
             "script 是数字人口播文案，中文，一句话，必须完整通顺，最多 50 个字。"
             "不要先写长文案，不要分段，不要要求用户补充信息，不要编造素材 ID。"
@@ -808,18 +839,29 @@ async def _generate_scheduled_content(
     else:
         system = (
             "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为目标成片流水线生成目标。"
-            "字段：title(string), goal(string), caption_hint(string)。"
-            "goal 要能直接传给目标成片能力，明确 8 秒、抖音、9:16、中文宣传视频；不要要求用户补充信息，不要编造素材 ID。"
+            "根据用户记忆和可用素材，为创意成片流水线生成目标。"
+            "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
+            "先从记忆里抽取真实卖点，再围绕指定创意角度生成本次视频目标。"
+            "goal 要能直接传给创意成片能力，明确 8 秒、抖音、9:16、中文宣传视频，并写出本次成片的切入角度、画面方向和核心短文案。"
+            "每次都要换表达，不要复用固定开头、固定句式或通用宣传套话；不要要求用户补充信息，不要编造素材 ID。"
         )
     user_payload = {
         "task_title": task_title,
         "ability": ability,
+        "creative_angle": creative_angle,
+        "caption_style": caption_style,
+        "variation_rule": "本次必须围绕 creative_angle 取材和表达，避免和以往定时任务使用同一套宣传话术。",
         "memory_context": memory_context[:12000],
         "asset_context": asset_context[:4000],
     }
     try:
-        text = await _call_scheduled_llm(base=base, headers=headers, system=system, user_payload=user_payload)
+        text = await _call_scheduled_llm(
+            base=base,
+            headers=headers,
+            system=system,
+            user_payload=user_payload,
+            temperature=0.75 if capability_id == "goal.video.pipeline" else 0.35,
+        )
         data = _extract_json_object_text(text)
     except Exception as exc:
         logger.warning("[SCHEDULED-TASK] generate content failed capability_id=%s: %s", capability_id, exc)
@@ -833,15 +875,20 @@ async def _generate_scheduled_content(
             "title": title or "数字人口播",
             "script": script,
             "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
+            "creative_angle": creative_angle,
+            "caption_style": caption_style,
             "memory_context_used": bool(memory_context),
         }
     goal = str(data.get("goal") or "").strip()
     if not goal:
         goal = _fallback_goal(task_title)
     return {
-        "title": title or "目标成片",
+        "title": title or "创意成片",
         "goal": goal[:1000],
         "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
+        "creative_angle": str(data.get("creative_angle") or creative_angle).strip()[:40],
+        "caption_style": caption_style,
+        "selling_points": data.get("selling_points") if isinstance(data.get("selling_points"), list) else [],
         "memory_context_used": bool(memory_context),
     }
 
@@ -953,6 +1000,36 @@ def _scheduled_capability_error(result: Any) -> str:
     return ""
 
 
+def _scheduled_caption_candidate(value: Any) -> str:
+    text = " ".join(str(value or "").strip().strip('"“”`').split())
+    text = re.sub(r"^(发布文案|朋友圈文案|文案)\s*[:：]\s*", "", text).strip()
+    return text if 0 < len(text) <= 50 else ""
+
+
+def _fallback_scheduled_caption(capability_id: str, generated: Dict[str, Any]) -> str:
+    hint = _scheduled_caption_candidate(generated.get("caption_hint"))
+    if hint:
+        return hint
+    title = str(generated.get("title") or "").strip()
+    subject = title[:12] if title and title not in {"能力定时任务", "目标成片", "创意成片", "数字人口播"} else "这次内容"
+    angle = str(generated.get("creative_angle") or "").strip()
+    options = {
+        "痛点切入": f"{subject}把难点讲清楚，选型和落地都更有底气。",
+        "场景体验": f"把{subject}放进真实场景里看，价值会更直观。",
+        "结果收益": f"{subject}不只好看，更要带来效率、品质和确定性。",
+        "工艺实力": f"用细节呈现{subject}实力，让专业能力被一眼看见。",
+        "交付效率": f"{subject}从需求到交付更顺畅，少等待，多确定。",
+        "信任背书": f"靠谱的{subject}，来自持续稳定的能力和服务。",
+        "对比反差": f"同样做{subject}，差别往往藏在细节和交付里。",
+        "客户视角": f"站在客户角度看{subject}，省心就是最大的价值。",
+    }
+    if angle in options:
+        return options[angle]
+    if capability_id == "hifly.video.create_by_tts":
+        return f"{subject}亮点已生成，适合直接分享给客户看看。"
+    return f"{subject}宣传视频已生成，换个角度看看产品价值。"
+
+
 async def _generate_scheduled_caption(
     *,
     base: str,
@@ -961,9 +1038,15 @@ async def _generate_scheduled_caption(
     generated: Dict[str, Any],
     result: Any,
 ) -> str:
-    fallback = str(generated.get("caption_hint") or "").strip() or "今天的成片已生成，欢迎查看效果。"
-    system = "你只负责写发布文案。输出一条中文朋友圈文案，不超过 50 个字，不要 Markdown，不要解释。"
+    fallback = _fallback_scheduled_caption(capability_id, generated)
+    system = (
+        "你只负责写发布朋友圈文案。输出一条中文，一句完整话，35 到 50 个字，不要 Markdown，不要解释。"
+        "必须根据 generated_content 里的 goal/script、caption_hint、creative_angle 和 result_refs 重新创作，"
+        "不要照抄 caption_hint，不要使用固定宣传口号。"
+        "同一用户多次执行时要换切入角度和句式，让每次发布看起来不是同一模板。"
+    )
     refs = _collect_scheduled_result_refs(result)
+    text = ""
     try:
         text = await _call_scheduled_llm(
             base=base,
@@ -973,14 +1056,34 @@ async def _generate_scheduled_caption(
                 "ability": capability_id,
                 "generated_content": generated,
                 "result_refs": refs,
+                "creative_angle": generated.get("creative_angle"),
+                "caption_style": generated.get("caption_style"),
+                "prompt_sent_to_skill": generated.get("goal") or generated.get("script"),
+                "length_rule": "必须是一句完整中文，最多 50 个字，不允许先生成长文再截断。",
             },
-            temperature=0.4,
+            temperature=0.85 if capability_id == "goal.video.pipeline" else 0.55,
         )
     except Exception as exc:
         logger.warning("[SCHEDULED-TASK] caption failed capability_id=%s: %s", capability_id, exc)
-        text = fallback
-    text = " ".join(str(text or fallback).strip().strip('"“”`').split())
-    return (text or fallback)[:50]
+    caption = _scheduled_caption_candidate(text)
+    if not caption and text:
+        try:
+            rewrite = await _call_scheduled_llm(
+                base=base,
+                headers=headers,
+                system="把原文重写为一条完整中文朋友圈文案，最多 50 个字，不要 Markdown，不要解释。",
+                user_payload={
+                    "ability": capability_id,
+                    "generated_content": generated,
+                    "original_caption": text,
+                    "length_rule": "不要截断，直接重写成一句完整话。",
+                },
+                temperature=0.6,
+            )
+            caption = _scheduled_caption_candidate(rewrite)
+        except Exception as exc:
+            logger.warning("[SCHEDULED-TASK] caption rewrite failed capability_id=%s: %s", capability_id, exc)
+    return caption or fallback
 
 
 def _scheduled_complete_text(
@@ -1144,6 +1247,7 @@ async def _run_scheduled_capability(
                 capability_id=capability_id,
                 task_title=task_title,
                 asset_context=asset_context,
+                run_id=run_id,
             )
             if capability_id == "goal.video.pipeline":
                 cap_payload = {
@@ -1208,7 +1312,7 @@ async def _run_scheduled_capability(
                 if capability_id == "hifly.video.create_by_tts"
                 else _scheduled_refs_with_asset_urls(raw_refs, jwt_token)
             )
-            skill_prompt = str(cap_payload.get("text") or result.get("skill_prompt") or "").strip()
+            skill_prompt = str(cap_payload.get("text") or cap_payload.get("goal") or result.get("skill_prompt") or "").strip()
             await _complete_task_run(
                 cloud,
                 base,

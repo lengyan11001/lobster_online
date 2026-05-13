@@ -1,6 +1,6 @@
 {
-  "version": "1.0.34",
-  "build": 40,
-  "applied_at": "2026-05-13T09:56:28+08:00",
-  "note": "OTA build 40 for scheduled Hifly prompt and preview links"
+  "version": "1.0.35",
+  "build": 41,
+  "applied_at": "2026-05-13T18:55:00+08:00",
+  "note": "OTA build 41 for mobile session labels and creative scheduled captions"
 }
