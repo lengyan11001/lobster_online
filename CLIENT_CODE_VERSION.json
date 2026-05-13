@@ -1,6 +1,6 @@
 {
-  "version": "1.0.35",
-  "build": 41,
-  "applied_at": "2026-05-13T18:55:00+08:00",
-  "note": "OTA build 41 for mobile session labels and creative scheduled captions"
+  "version": "1.0.36",
+  "build": 42,
+  "applied_at": "2026-05-13T19:08:00+08:00",
+  "note": "OTA build 42 for online mobile session labels and capability names"
 }

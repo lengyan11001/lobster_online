@@ -62,7 +62,7 @@
     }
   },
   "goal.video.pipeline": {
-    "description": "目标成片：当用户只给目标、产品名或要求，并希望结合记忆自动生成宣传短视频/图生视频时使用。不要因为素材库没有产品图而停止；本能力会先检索记忆，生成文案、图片提示词和视频提示词，再调用 image.generate 生成图片、video.generate 生成视频，完成后返回 final_asset_id/video_asset_id。",
+    "description": "创意成片：当用户只给目标、产品名或要求，并希望结合记忆自动生成宣传短视频/图生视频时使用。不要因为素材库没有产品图而停止；本能力会先检索记忆，生成文案、图片提示词和视频提示词，再调用 image.generate 生成图片、video.generate 生成视频，完成后返回 final_asset_id/video_asset_id。",
     "upstream": "local",
     "upstream_tool": "invoke",
     "enabled": true,
@@ -155,7 +155,7 @@
     }
   },
   "hifly.video.create_by_tts": {
-    "description": "飞影数字人：使用已选数字人和声音生成数字人口播视频，口播文案由调用方根据记忆生成。本能力内部负责 HiFly 创建、轮询和计费结算。",
+    "description": "必火数字人：使用已选数字人和声音生成数字人口播视频，口播文案由调用方根据记忆生成。本能力内部负责 HiFly 创建、轮询和计费结算。",
     "upstream": "local",
     "upstream_tool": "invoke",
     "enabled": true,

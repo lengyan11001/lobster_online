@@ -108,7 +108,7 @@ window._openGoalVideoChat = function() {
   if (nav) nav.click();
   var input = document.getElementById('chatInput');
   if (input) {
-    var starter = '用目标成片，根据我的记忆，给某产品生成一个 8 秒抖音 9:16 宣传视频。';
+    var starter = '用创意成片，根据我的记忆，给某产品生成一个 8 秒抖音 9:16 宣传视频。';
     if (!String(input.value || '').trim()) input.value = starter;
     input.focus();
     try { input.setSelectionRange(input.value.length, input.value.length); } catch (e1) {}
@@ -1034,7 +1034,7 @@ function loadSkillStore() {
           var goalCap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
           return '<div class="skill-store-card goal-video-pipeline-card" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(91,124,255,0.05));">' +
             '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">对话可用</span></div>' +
-            '<div class="card-value">' + escapeHtml(pkg.name || '目标成片') + '</div>' +
+            '<div class="card-value">' + escapeHtml(pkg.name || '创意成片') + '</div>' +
             '<div class="card-desc">' + escapeHtml(pkg.description || '') + goalCap + '</div>' +
             '<div class="card-tags">' + goalTags + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm goal-video-chat-entry-btn">去对话生成</button></div></div>';

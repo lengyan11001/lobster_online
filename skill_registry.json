@@ -831,7 +831,7 @@
       ]
     },
     "goal_video_pipeline_skill": {
-      "name": "目标成片",
+      "name": "创意成片",
       "description": "根据用户目标和记忆自动生成文案、图片和宣传短视频，完成后返回素材库 final_asset_id，适合“根据我的记忆给某产品生成抖音视频”。",
       "type": "builtin",
       "store_visibility": "popular",
@@ -839,7 +839,7 @@
       "status": "installed",
       "capabilities": {
         "goal.video.pipeline": {
-          "description": "目标成片：当用户只给目标、产品名或要求，并希望结合记忆自动生成宣传短视频/图生视频时使用。不要因为素材库没有产品图而停止；本能力会先检索记忆，生成文案、图片提示词和视频提示词，再调用 image.generate 生成图片、video.generate 生成视频，完成后返回 final_asset_id/video_asset_id。",
+          "description": "创意成片：当用户只给目标、产品名或要求，并希望结合记忆自动生成宣传短视频/图生视频时使用。不要因为素材库没有产品图而停止；本能力会先检索记忆，生成文案、图片提示词和视频提示词，再调用 image.generate 生成图片、video.generate 生成视频，完成后返回 final_asset_id/video_asset_id。",
           "upstream": "local",
           "upstream_tool": "invoke",
           "enabled": true,

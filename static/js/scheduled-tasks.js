@@ -5,11 +5,11 @@
 
   var CAPABILITIES = {
     'goal.video.pipeline': {
-      label: '目标成片',
+      label: '创意成片',
       description: '根据记忆和目标自动生成图片/视频成片。'
     },
     'hifly.video.create_by_tts': {
-      label: '飞影数字人',
+      label: '必火数字人',
       description: '选择本机已有数字人/模板数字人和声音，生成数字人口播视频。'
     }
   };
@@ -406,7 +406,7 @@
     }).catch(function (e) {
       if (avatarSel) avatarSel.innerHTML = optionHtml('', '数字人加载失败');
       if (voiceSel) voiceSel.innerHTML = optionHtml('', '声音加载失败');
-      showMsg('scheduledTaskMsg', e.message || '飞影资源加载失败', true);
+      showMsg('scheduledTaskMsg', e.message || '必火数字人资源加载失败', true);
     }).then(function () {
       state.hiflyLoading = false;
     }, function (e) {
@@ -436,7 +436,7 @@
     var sel = document.getElementById('scheduledTaskCapability');
     if (!sel) return Promise.resolve();
     var current = sel.value;
-    sel.innerHTML = optionHtml('goal.video.pipeline', '目标成片') + optionHtml('hifly.video.create_by_tts', '飞影数字人');
+    sel.innerHTML = optionHtml('goal.video.pipeline', '创意成片') + optionHtml('hifly.video.create_by_tts', '必火数字人');
     sel.value = CAPABILITIES[current] ? current : 'goal.video.pipeline';
     toggleCapability();
     return Promise.resolve();

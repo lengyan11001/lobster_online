@@ -1423,7 +1423,7 @@ async def _mcp_poll_goal_video_pipeline_until_done(
             last["next_action"] = "poll_pipeline"
             last["next_payload"] = {"action": "poll_pipeline", "job_id": jid}
             last["message"] = (
-                "目标成片任务已提交，当前仍在运行。只能告知用户继续生成中，并使用 next_payload 继续查询；"
+                "创意成片任务已提交，当前仍在运行。只能告知用户继续生成中，并使用 next_payload 继续查询；"
                 "不要说能力不可用，不要改用普通 image.generate/video.generate。"
             )
             last["reply_rules"] = [
@@ -1445,7 +1445,7 @@ async def _mcp_poll_goal_video_pipeline_until_done(
         "result_ready": False,
         "next_action": "poll_pipeline",
         "next_payload": {"action": "poll_pipeline", "job_id": jid},
-        "message": "目标成片任务已提交，但本轮未取到最新进度；请继续用 poll_pipeline + job_id 查询，不要改用普通生成能力。",
+        "message": "创意成片任务已提交，但本轮未取到最新进度；请继续用 poll_pipeline + job_id 查询，不要改用普通生成能力。",
     }
 
 
@@ -1497,7 +1497,7 @@ async def _mcp_poll_hifly_tts_until_done(
         last.setdefault("status_text", "生成中")
         last["status"] = last.get("status") or 2
         last["result_ready"] = False
-        last["message"] = "飞影数字人口播任务仍在生成中。"
+        last["message"] = "必火数字人口播任务仍在生成中。"
         return last
     return {"ok": True, "task_id": tid, "status": 2, "status_text": "生成中", "result_ready": False}
 
@@ -1638,7 +1638,7 @@ def _tool_definitions(
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
                             "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由 MCP 按默认配置补齐。"
                             "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由后端按模型默认值处理）；model 可省略并由 MCP 按默认视频模型补齐；prompt 只写视频画面/动作，不写发布账号或发布文案；图生视频可传 image_url 或 asset_id。"
-                            "goal.video.pipeline: 目标成片专用；当用户说目标成片、根据记忆给某产品生成宣传视频时，直接传 action=start_pipeline、goal、platform、duration、aspect_ratio；goal 必填，使用用户原话或整理后的目标，不要反问主题；没有素材也可以调用，不要先卡在素材库；若返回 status=running/openclaw_async/next_payload，说明任务仍在跑，只能继续 poll_pipeline，禁止改用普通 image.generate/video.generate。"
+                            "goal.video.pipeline: 创意成片专用；当用户说创意成片、目标成片或根据记忆给某产品生成宣传视频时，直接传 action=start_pipeline、goal、platform、duration、aspect_ratio；goal 必填，使用用户原话或整理后的目标，不要反问主题；没有素材也可以调用，不要先卡在素材库；若返回 status=running/openclaw_async/next_payload，说明任务仍在跑，只能继续 poll_pipeline，禁止改用普通 image.generate/video.generate。"
                             "image.understand/video.understand: 必须带 image_url/video_url、对应 *_urls 数组或 asset_id。"
                             "task.get_result: 含 task_id。"
                         ),
@@ -4906,9 +4906,9 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                     elif capability_id == "comfly.ecommerce.detail_pipeline":
                         fail_msg = "电商详情图流水线后端调用失败"
                     elif capability_id == "goal.video.pipeline":
-                        fail_msg = "目标成片流水线后端调用失败"
+                        fail_msg = "创意成片流水线后端调用失败"
                     elif capability_id == "hifly.video.create_by_tts":
-                        fail_msg = "飞影数字人口播后端调用失败"
+                        fail_msg = "必火数字人口播后端调用失败"
                     elif capability_id == "ecommerce.publish":
                         fail_msg = "电商商品发布后端调用失败"
                     else:
