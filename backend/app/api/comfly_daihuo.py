@@ -182,6 +182,26 @@ def _video_model_from_result(result: Dict[str, Any]) -> str:
     return str(cfg.get("video_model") or "") if isinstance(cfg, dict) else ""
 
 
+def _pipeline_merge_required(result: Dict[str, Any], fallback: bool = True) -> bool:
+    cfg = result.get("config") if isinstance(result.get("config"), dict) else {}
+    if isinstance(cfg, dict) and "merge_clips" in cfg:
+        return bool(cfg.get("merge_clips"))
+    return bool(fallback)
+
+
+def _pipeline_merge_delivery_error(result: Dict[str, Any], fallback: bool = True) -> Optional[str]:
+    if not _pipeline_merge_required(result, fallback=fallback):
+        return None
+    fv = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    kind = str(fv.get("kind") or "").strip()
+    if kind == "merged_local" and str(fv.get("path") or "").strip():
+        return None
+    hint = str(fv.get("hint") or "").strip()
+    if kind:
+        return f"TVC merge did not produce a saved final video: final_video.kind={kind}; {hint}".strip()
+    return "TVC merge did not produce a saved final video."
+
+
 async def _daihuo_job_runner(job_id: str) -> None:
     """后台跑流水线；完成后按任务记录中的 auto_save 入库。"""
     j = get_job(job_id)
@@ -228,6 +248,20 @@ async def _daihuo_job_runner(job_id: str) -> None:
             if merged_row:
                 saved_assets.append(merged_row)
             else:
+                merge_delivery_error = _pipeline_merge_delivery_error(result, fallback=True)
+                if merge_delivery_error:
+                    update_job(
+                        job_id,
+                        status="failed",
+                        error=merge_delivery_error[:2000],
+                        result=result,
+                    )
+                    logger.warning(
+                        "[comfly_daihuo] job %s merge delivery failed; not falling back to clips: %s",
+                        job_id[:12],
+                        merge_delivery_error[:500],
+                    )
+                    return
                 pairs = collect_video_urls_from_pipeline_result(result)
                 if pairs:
                     try:
@@ -379,11 +413,18 @@ async def comfly_daihuo_pipeline_run(
                     video_model=video_model,
                 )
             except Exception:
-                logger.exception("[comfly_daihuo] merged local save failed, fallback to clip URLs")
+                logger.exception("[comfly_daihuo] merged local save failed")
                 merged_row = None
         if merged_row:
             saved_assets.append(merged_row)
         else:
+            merge_delivery_error = _pipeline_merge_delivery_error(result, fallback=pl.merge_clips)
+            if merge_delivery_error:
+                logger.warning(
+                    "[comfly_daihuo] merge delivery failed; not falling back to clips: %s",
+                    merge_delivery_error[:500],
+                )
+                raise HTTPException(status_code=500, detail=merge_delivery_error[:2000])
             pairs = collect_video_urls_from_pipeline_result(result)
             if pairs:
                 try:

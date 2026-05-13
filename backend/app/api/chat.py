@@ -4002,38 +4002,6 @@ async def _exec_tool(
         success = False
         result_text = cost_confirm_result_text
 
-    daihuo_inline_done = False
-    if (
-        name == "invoke_capability"
-        and capability_id == "comfly.daihuo.pipeline"
-        and progress_cb is not None
-        and request is not None
-        and not cost_confirm_cancel
-        and not skip_mcp
-    ):
-        pl_dh = args.get("payload") if isinstance(args.get("payload"), dict) else {}
-        dh_act = (pl_dh.get("action") or "").strip() or "run_pipeline"
-        if dh_act != "poll_pipeline":
-            try:
-                result_text, success = await _chat_daihuo_inline_start_and_poll(
-                    args, token, request, progress_cb
-                )
-            except Exception as e:
-                logger.warning("[对话] 爆款TVC 内联 start/轮询异常: %s", e, exc_info=True)
-                result_text = json.dumps(
-                    {
-                        "capability_id": "comfly.daihuo.pipeline",
-                        "ok": False,
-                        "error": _friendly_tool_error(e),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                success = False
-            daihuo_inline_done = True
-    if daihuo_inline_done:
-        skip_mcp = True
-
     try:
         if skip_mcp:
             raise _SkipMcpToolCall()
