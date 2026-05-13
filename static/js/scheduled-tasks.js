@@ -173,15 +173,39 @@
     }).slice(0, 4);
   }
 
+  function fileNameFromUrl(url, fallback) {
+    try {
+      var name = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+      return name || fallback;
+    } catch (e) {
+      var clean = String(url || '').split(/[?#]/)[0].split('/').pop() || '';
+      return clean || fallback;
+    }
+  }
+
+  function downloadAnchor(url, label, fallbackName) {
+    return '<a href="' + html(url) + '" download="' + html(fileNameFromUrl(url, fallbackName)) + '" target="_blank" rel="noopener noreferrer" style="font-size:0.78rem;">'
+      + html(label)
+      + '</a>';
+  }
+
   function mediaPreviewHtml(urls) {
     if (!urls || !urls.length) return '';
     return '<div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-top:0.45rem;">' + urls.map(function (u) {
       var low = u.toLowerCase();
       if (/\.(mp4|webm|mov)(\?|#|$)/.test(low)) {
-        return '<video controls src="' + html(u) + '" style="width:140px;max-width:100%;height:86px;object-fit:cover;border-radius:8px;background:#111;"></video>';
+        return '<div style="display:grid;gap:0.25rem;width:140px;max-width:100%;">'
+          + '<video controls src="' + html(u) + '" style="width:140px;max-width:100%;height:86px;object-fit:cover;border-radius:8px;background:#111;"></video>'
+          + '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">'
+          + '<a href="' + html(u) + '" target="_blank" rel="noopener noreferrer" style="font-size:0.78rem;">打开</a>'
+          + downloadAnchor(u, '下载视频', 'lobster-video.mp4')
+          + '</div></div>';
       }
       if (/\.(png|jpe?g|webp|gif)(\?|#|$)/.test(low)) {
-        return '<a href="' + html(u) + '" target="_blank" rel="noopener noreferrer"><img src="' + html(u) + '" style="width:86px;height:86px;object-fit:cover;border-radius:8px;border:1px solid var(--border);"></a>';
+        return '<div style="display:grid;gap:0.25rem;width:86px;">'
+          + '<a href="' + html(u) + '" target="_blank" rel="noopener noreferrer"><img src="' + html(u) + '" style="width:86px;height:86px;object-fit:cover;border-radius:8px;border:1px solid var(--border);"></a>'
+          + downloadAnchor(u, '下载图片', 'lobster-image.png')
+          + '</div>';
       }
       return '<a href="' + html(u) + '" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;min-height:2rem;">打开预览</a>';
     }).join('') + '</div>';
@@ -189,14 +213,20 @@
 
   function taskActionHtml(task) {
     var status = String((task && task.status) || '').toLowerCase();
-    if (status === 'cancelled' || status === 'completed') return '';
-    var next = status === 'paused' ? 'active' : 'paused';
-    var label = status === 'paused' ? '恢复' : '暂停';
-    return '<button type="button" class="btn btn-ghost btn-sm scheduled-task-status-btn" data-task-id="'
+    var parts = [];
+    if (status !== 'cancelled' && status !== 'completed') {
+      var next = status === 'paused' ? 'active' : 'paused';
+      var label = status === 'paused' ? '恢复' : '暂停';
+      parts.push('<button type="button" class="btn btn-ghost btn-sm scheduled-task-status-btn" data-task-id="'
+        + html(task.id)
+        + '" data-next-status="' + html(next) + '">'
+        + html(label)
+        + '</button>');
+    }
+    parts.push('<button type="button" class="btn btn-ghost btn-sm scheduled-task-delete-btn" data-task-id="'
       + html(task.id)
-      + '" data-next-status="' + html(next) + '">'
-      + html(label)
-      + '</button>';
+      + '">删除</button>');
+    return parts.join(' ');
   }
 
   function rowCapabilityId(row) {
@@ -573,6 +603,28 @@
     });
   }
 
+  function deleteTask(taskId, btn) {
+    if (!taskId) return;
+    if (!window.confirm('删除前会先停止任务，并取消未完成的执行记录。确认删除？')) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '删除中...';
+    }
+    api('/api/scheduled-tasks/tasks/' + encodeURIComponent(taskId), {
+      method: 'DELETE'
+    }).then(function () {
+      showMsg('scheduledTaskMsg', '已停止并删除任务', false);
+      loadTasks();
+      loadRuns();
+    }).catch(function (e) {
+      showMsg('scheduledTaskMsg', e.message, true);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '删除';
+      }
+    });
+  }
+
   function loadRuns() {
     var el = document.getElementById('scheduledTaskRunsList');
     if (el) el.innerHTML = '<p class="meta">加载中...</p>';
@@ -654,6 +706,11 @@
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-task-status-btn') : null;
       if (!btn) return;
       updateTaskStatus(btn.getAttribute('data-task-id'), btn.getAttribute('data-next-status'), btn);
+    });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-task-delete-btn') : null;
+      if (!btn) return;
+      deleteTask(btn.getAttribute('data-task-id'), btn);
     });
     var kind = document.getElementById('scheduledTaskKind');
     if (kind) kind.value = 'capability';

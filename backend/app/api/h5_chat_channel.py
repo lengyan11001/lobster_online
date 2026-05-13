@@ -267,6 +267,19 @@ async def proxy_patch_scheduled_task(
     )
 
 
+@router.delete("/api/scheduled-tasks/tasks/{task_id}", summary="Proxy delete scheduled task for local online UI")
+async def proxy_delete_scheduled_task(
+    task_id: int,
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    return await _proxy_cloud_json(
+        request,
+        "DELETE",
+        f"/api/scheduled-tasks/tasks/{task_id}",
+    )
+
+
 @router.post("/api/scheduled-tasks/tasks/{task_id}/run-now", summary="Proxy run scheduled task now for local online UI")
 async def proxy_run_scheduled_task_now(
     task_id: int,
@@ -971,6 +984,29 @@ def _scheduled_refs_asset_urls_only(
     return _scheduled_refs_with_asset_urls({"asset_ids": (refs or {}).get("asset_ids") or [], "urls": []}, jwt_token)
 
 
+def _scheduled_hifly_result_refs(result: Any, jwt_token: str) -> Dict[str, List[str]]:
+    raw = _collect_scheduled_result_refs(result)
+    out = {"asset_ids": list(raw.get("asset_ids") or [])[:12], "urls": []}
+
+    def add_url(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                add_url(item)
+            return
+        s = str(value or "").strip()
+        if s.startswith(("http://", "https://")) and s not in out["urls"]:
+            out["urls"].append(s[:500])
+
+    if isinstance(result, dict):
+        add_url(result.get("source_media_urls"))
+        inner = result.get("result")
+        if isinstance(inner, dict):
+            add_url(inner.get("video_url"))
+    if not out["urls"]:
+        return _scheduled_refs_asset_urls_only(raw, jwt_token)
+    return {"asset_ids": out["asset_ids"], "urls": out["urls"][:8]}
+
+
 def _scheduled_result_ready(result: Any) -> bool:
     if not isinstance(result, dict):
         return True
@@ -1308,7 +1344,7 @@ async def _run_scheduled_capability(
             )
             raw_refs = _collect_scheduled_result_refs(result)
             refs = (
-                _scheduled_refs_asset_urls_only(raw_refs, jwt_token)
+                _scheduled_hifly_result_refs(result, jwt_token)
                 if capability_id == "hifly.video.create_by_tts"
                 else _scheduled_refs_with_asset_urls(raw_refs, jwt_token)
             )

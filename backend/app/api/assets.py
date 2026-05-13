@@ -394,9 +394,38 @@ def _is_internal_asset_http_url(url: str) -> bool:
         return False
 
 
+def _is_current_tos_asset_url(url: str) -> bool:
+    """是否已经是当前 TOS public_domain 下的 assets 长期链。"""
+    u = (url or "").strip()
+    if not u.startswith(("http://", "https://")):
+        return False
+    cfg = _get_tos_config()
+    if not cfg:
+        return False
+    public_domain = str(cfg.get("public_domain") or "").strip().rstrip("/")
+    if not public_domain:
+        return False
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(u)
+        base = urlparse(public_domain)
+        if (parsed.hostname or "").lower() != (base.hostname or "").lower():
+            return False
+        base_path = (base.path or "").rstrip("/")
+        asset_path = parsed.path or ""
+        if base_path:
+            if not asset_path.startswith(base_path + "/"):
+                return False
+            asset_path = asset_path[len(base_path):]
+        return asset_path.startswith("/assets/")
+    except Exception:
+        return False
+
+
 def _skip_tos_mirror_for_downloaded_url(effective_url: str) -> bool:
-    """已成功从该 URL 下载时：若为公网可直接给上游用的链，则不再二次上传 TOS。"""
-    return not _is_internal_asset_http_url(effective_url)
+    """save-url 默认转存 TOS；只有已经是当前 TOS /assets/ 链时才跳过二次上传。"""
+    return _is_current_tos_asset_url(effective_url)
 
 
 def _content_type_for_asset_filename(filename: str) -> str:
@@ -613,7 +642,7 @@ def _maybe_backfill_prompt_model_on_dedupe(
 
 
 def _autosave_tags_require_tos(tags: Optional[str]) -> bool:
-    """MCP 自动入库使用 tags=auto,<capability_id>：下载源已是公网链时可不写 TOS，否则仍要求 TOS 成功。"""
+    """MCP 自动入库使用 tags=auto,<capability_id>：必须得到当前 TOS 长期链。"""
     return (tags or "").strip().startswith("auto,")
 
 
@@ -1020,59 +1049,22 @@ async def _save_asset_from_url_locked(
     if not skip_tos_mirror:
         tos_url = _upload_to_tos(data, f"assets/{fname}", ct)
 
-    if _autosave_tags_require_tos(body.tags):
-        if skip_tos_mirror:
-            source_url = effective_url
-        elif _get_tos_config() is None:
-            _unlink_safe_asset_file(ASSETS_DIR / fname)
-            raise HTTPException(
-                status_code=503,
-                detail="对话生成素材入库需配置 TOS_CONFIG（custom_configs.json，含 access_key/secret_key/endpoint/region/bucket_name/public_domain），未配置无法保存可预览的公网地址。",
-            )
-        elif not tos_url:
-            _unlink_safe_asset_file(ASSETS_DIR / fname)
-            raise HTTPException(
-                status_code=503,
-                detail="对话生成素材已下载但火山 TOS 上传失败，无法入库。请检查 TOS 配置与网络后重试。",
-            )
-        else:
-            source_url = tos_url
-    elif skip_tos_mirror:
+    if skip_tos_mirror:
         source_url = effective_url
+    elif _get_tos_config() is None:
+        _unlink_safe_asset_file(ASSETS_DIR / fname)
+        raise HTTPException(
+            status_code=503,
+            detail="save-url 入库需配置 TOS_CONFIG（custom_configs.json，含 access_key/secret_key/endpoint/region/bucket_name/public_domain），未配置无法保存统一 CDN 地址。",
+        )
+    elif not tos_url:
+        _unlink_safe_asset_file(ASSETS_DIR / fname)
+        raise HTTPException(
+            status_code=503,
+            detail="save-url 已下载素材但火山 TOS 上传失败，无法入库。请检查 TOS 配置与网络后重试。",
+        )
     else:
-        source_url = tos_url if tos_url else effective_url
-        if not tos_url and body.url:
-            # 检测是否是内部地址
-            from urllib.parse import urlparse
-            import ipaddress
-            try:
-                parsed = urlparse(body.url)
-                hostname = (parsed.hostname or "").lower()
-                is_internal = (
-                    not hostname or
-                    hostname in ("localhost", "127.0.0.1", "0.0.0.0") or
-                    "42.194.209.150" in hostname or "bhzn.top" in hostname or
-                    (hostname and ("token=" in body.url or "?token" in body.url))
-                )
-                if not is_internal:
-                    try:
-                        ip = ipaddress.ip_address(hostname)
-                        is_internal = ip.is_private or ip.is_loopback
-                    except ValueError:
-                        pass
-
-                if is_internal:
-                    # 尝试通过 sutui.transfer_url 转存
-                    try:
-                        transfer_url = await _transfer_url_via_sutui(
-                            body.url, effective_mt, current_user, request=request
-                        )
-                        if transfer_url:
-                            source_url = transfer_url
-                    except Exception as e:
-                        logger.debug("[素材] save-url 时 sutui.transfer_url 转存失败: %s", e)
-            except Exception as e:
-                logger.debug("[素材] save-url 时检测内部地址失败: %s", e)
+        source_url = tos_url
 
     meta: dict = {"save_url_dedupe": dk}
     gtid = (body.generation_task_id or "").strip()

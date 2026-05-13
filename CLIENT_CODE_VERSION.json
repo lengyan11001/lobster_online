@@ -1,6 +1,6 @@
 {
-  "version": "1.0.36",
-  "build": 42,
-  "applied_at": "2026-05-13T19:08:00+08:00",
-  "note": "OTA build 42 for online mobile session labels and capability names"
+  "version": "1.0.38",
+  "build": 44,
+  "applied_at": "2026-05-13T14:01:16+08:00",
+  "note": "OTA build for scheduled task delete proxy"
 }
