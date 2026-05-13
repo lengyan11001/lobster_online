@@ -1,6 +1,6 @@
 {
   "version": "1.0.34",
-  "build": 39,
-  "applied_at": "2026-05-12T20:59:08+08:00",
-  "note": "OTA build 39 for scheduled task pause and direct H5 media links"
+  "build": 40,
+  "applied_at": "2026-05-13T09:56:28+08:00",
+  "note": "OTA build 40 for scheduled Hifly prompt and preview links"
 }

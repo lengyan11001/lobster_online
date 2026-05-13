@@ -775,8 +775,13 @@ def _fallback_goal(task_title: str) -> str:
 
 def _fallback_hifly_script(task_title: str) -> str:
     title = (task_title or "").strip()
-    subject = f"“{title}”" if title and title not in {"能力定时任务", "飞影数字人"} else "这款产品"
-    return f"大家好，今天给大家分享{subject}。我们会结合真实资料提炼核心亮点，用简洁直接的方式帮你快速了解它的价值。"
+    subject = title[:12] if title and title not in {"能力定时任务", "飞影数字人"} else "这款产品"
+    return f"大家好，今天带你了解{subject}，一起看看核心亮点。"
+
+
+def _hifly_script_text(text: Any) -> str:
+    s = re.sub(r"\s+", "", str(text or "").strip())
+    return s if len(s) <= 50 else ""
 
 
 async def _generate_scheduled_content(
@@ -797,7 +802,8 @@ async def _generate_scheduled_content(
             "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
             "根据用户记忆和可用素材，为飞影数字人口播生成内容。"
             "字段：title(string), script(string), caption_hint(string)。"
-            "script 是数字人口播文案，中文，80 到 180 字，不要要求用户补充信息，不要编造素材 ID。"
+            "script 是数字人口播文案，中文，一句话，必须完整通顺，最多 50 个字。"
+            "不要先写长文案，不要分段，不要要求用户补充信息，不要编造素材 ID。"
         )
     else:
         system = (
@@ -820,12 +826,12 @@ async def _generate_scheduled_content(
         data = {}
     title = str(data.get("title") or task_title or ability).strip()[:120]
     if capability_id == "hifly.video.create_by_tts":
-        script = str(data.get("script") or "").strip()
+        script = _hifly_script_text(data.get("script"))
         if not script:
             script = _fallback_hifly_script(task_title)
         return {
             "title": title or "数字人口播",
-            "script": script[:1000],
+            "script": script,
             "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
             "memory_context_used": bool(memory_context),
         }
@@ -911,6 +917,13 @@ def _scheduled_refs_with_asset_urls(
     return {"asset_ids": out["asset_ids"][:12], "urls": out["urls"][:8]}
 
 
+def _scheduled_refs_asset_urls_only(
+    refs: Dict[str, List[str]],
+    jwt_token: str,
+) -> Dict[str, List[str]]:
+    return _scheduled_refs_with_asset_urls({"asset_ids": (refs or {}).get("asset_ids") or [], "urls": []}, jwt_token)
+
+
 def _scheduled_result_ready(result: Any) -> bool:
     if not isinstance(result, dict):
         return True
@@ -970,9 +983,16 @@ async def _generate_scheduled_caption(
     return (text or fallback)[:50]
 
 
-def _scheduled_complete_text(result: Any, caption: str, refs: Optional[Dict[str, List[str]]] = None) -> str:
+def _scheduled_complete_text(
+    result: Any,
+    caption: str,
+    refs: Optional[Dict[str, List[str]]] = None,
+    skill_prompt: str = "",
+) -> str:
     ready = _scheduled_result_ready(result)
     lines = ["生成完成。" if ready else "任务已提交，仍在生成中。", f"发布文案：{caption}"]
+    if skill_prompt:
+        lines.append(f"传给技能的提示词：{skill_prompt}")
     refs = refs or _collect_scheduled_result_refs(result)
     if refs["asset_ids"]:
         lines.append("素材：" + "、".join(refs["asset_ids"][:6]))
@@ -1081,10 +1101,11 @@ async def _invoke_hifly_cloud_tts(
             out: Dict[str, Any] = {
                 "capability_id": "hifly.video.create_by_tts",
                 "result": last,
+                "skill_prompt": body["text"],
                 "saved_assets": saved,
             }
             if video_url:
-                out["media_urls"] = [video_url]
+                out["source_media_urls"] = [video_url]
             return out
         if status == 4:
             raise RuntimeError(str(last.get("message") or last.get("detail") or "HiFly 任务失败")[:500])
@@ -1143,11 +1164,12 @@ async def _run_scheduled_capability(
                     raise RuntimeError("请选择数字人")
                 if not voice:
                     raise RuntimeError("请选择声音")
+                skill_prompt = _hifly_script_text(generated.get("script")) or _fallback_hifly_script(task_title)
                 cap_payload = {
                     "title": (generated.get("title") or task_title or "数字人口播")[:20],
                     "avatar": avatar,
                     "voice": voice,
-                    "text": generated.get("script") or _fallback_hifly_script(task_title),
+                    "text": skill_prompt,
                     "st_show": 1,
                     "aigc_flag": 0,
                     "poll_interval_seconds": 10,
@@ -1180,17 +1202,24 @@ async def _run_scheduled_capability(
                 generated=generated,
                 result=result,
             )
-            refs = _scheduled_refs_with_asset_urls(_collect_scheduled_result_refs(result), jwt_token)
+            raw_refs = _collect_scheduled_result_refs(result)
+            refs = (
+                _scheduled_refs_asset_urls_only(raw_refs, jwt_token)
+                if capability_id == "hifly.video.create_by_tts"
+                else _scheduled_refs_with_asset_urls(raw_refs, jwt_token)
+            )
+            skill_prompt = str(cap_payload.get("text") or result.get("skill_prompt") or "").strip()
             await _complete_task_run(
                 cloud,
                 base,
                 headers,
                 run_id,
-                result_text=_scheduled_complete_text(result, caption, refs),
+                result_text=_scheduled_complete_text(result, caption, refs, skill_prompt),
                 result_payload={
                     "capability_id": capability_id,
                     "generated": generated,
                     "caption": caption,
+                    "skill_prompt": skill_prompt,
                     "mcp_result": result,
                     "result_refs": refs,
                     "media_urls": refs["urls"],
