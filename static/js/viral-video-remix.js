@@ -171,7 +171,15 @@
       if (bd) bd.addEventListener('click', function() { close(false); });
       var ok = modal.querySelector('.viral-modal-confirm');
       var rechargeBtn = modal.querySelector('.viral-modal-recharge');
-      if (ok) ok.addEventListener('click', function() { close(true); });
+      if (ok) {
+        ok.disabled = true;
+        ok.style.opacity = '0.5';
+        ok.style.cursor = 'not-allowed';
+        ok.addEventListener('click', function() {
+          if (ok.disabled) return;
+          close(true);
+        });
+      }
       if (rechargeBtn) rechargeBtn.addEventListener('click', function() {
         close(false);
         gotoRechargePage();
@@ -199,6 +207,7 @@
           if (ok) { ok.disabled = true; ok.style.opacity = '0.5'; ok.style.cursor = 'not-allowed'; }
         } else {
           if (hint) hint.textContent = '余额充足，扣减后剩余 ' + (balance - credits) + ' 算力。';
+          if (ok) { ok.disabled = false; ok.style.opacity = ''; ok.style.cursor = ''; }
         }
       });
     });

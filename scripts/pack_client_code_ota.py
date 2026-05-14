@@ -97,6 +97,9 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
 _OTA_SKIP_SKILLS_TOOL_DIRS = {"ffmpeg"}
+_OTA_INCLUDE_SKILLS_TOOL_PREFIXES: tuple[str, ...] = (
+    "skills/comfly_veo3_daihuo_video/tools/ffmpeg/",
+)
 
 # /chat 从该两文件读 system；此前 OTA 排除整个 workspace 会导致覆盖安装后「无工具提示」、模型不调 MCP
 _OTA_OPENCLAW_POLICY_RELS: tuple[str, ...] = (
@@ -125,6 +128,9 @@ def _norm(p: str) -> str:
 
 def _skip_file(rel: str) -> bool:
     r = _norm(rel).lower()
+    nr = _norm(rel)
+    if any(nr.startswith(p) for p in _OTA_INCLUDE_SKILLS_TOOL_PREFIXES):
+        return False
     if r in _OTA_SECRET_REL_PATHS:
         return True
     if r.endswith(".pyc"):
@@ -132,7 +138,6 @@ def _skip_file(rel: str) -> bool:
     parts = r.split("/")
     if "__pycache__" in parts:
         return True
-    nr = _norm(rel)
     if any(nr.startswith(p) for p in OTA_SKIP_REL_PREFIXES):
         return True
     if len(parts) >= 3 and parts[0] == "skills" and parts[2] in _OTA_SKIP_SKILLS_DIRS:
@@ -159,6 +164,11 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
             if d not in SKIP_DIR_NAMES
             and not any(_norm(os.path.join(rel_here, d)).startswith(p) for p in OTA_SKIP_REL_PREFIXES)
             and not (
+                not any(
+                    _norm(os.path.join(rel_here, d)).startswith(p.rstrip("/"))
+                    for p in _OTA_INCLUDE_SKILLS_TOOL_PREFIXES
+                )
+                and
                 rel_here.startswith("skills/")
                 and rel_here.count("/") == 2
                 and rel_here.endswith("/tools")

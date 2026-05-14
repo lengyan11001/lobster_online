@@ -49,7 +49,7 @@ _UPLOADED_ASSET_CACHE: Dict[str, str] = {}
 _VIDEO_DOWNLOAD_APPID = "682e90c19520118284FGb2"
 _VIDEO_DOWNLOAD_API_URL = "https://watermark-api.hlyphp.top/Watermark/Index"
 _VIRAL_REMIX_CAPABILITY_ID = "viral.video.remix"
-_VIRAL_REMIX_SEEDANCE_CREDITS_PER_SECOND = 100
+_VIRAL_REMIX_SEEDANCE_CREDITS_PER_SECOND = 1
 _VIRAL_REMIX_NARRATION_SPLIT_CREDITS_PER_CALL = 1
 
 
@@ -70,16 +70,28 @@ def _viral_remix_upload_cache_root() -> Path:
 
 
 def _bundled_ffmpeg_exe() -> Optional[str]:
-    p = _lobster_root() / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffmpeg.exe"
-    if sys.platform == "win32" and p.is_file():
-        return str(p)
+    root = _lobster_root()
+    candidates = [
+        root / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffmpeg.exe",
+        root / "deps" / "ffmpeg" / "ffmpeg.exe",
+    ]
+    if sys.platform == "win32":
+        for path in candidates:
+            if path.is_file():
+                return str(path)
     return shutil.which("ffmpeg")
 
 
 def _bundled_ffprobe_exe() -> Optional[str]:
-    p = _lobster_root() / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffprobe.exe"
-    if sys.platform == "win32" and p.is_file():
-        return str(p)
+    root = _lobster_root()
+    candidates = [
+        root / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffprobe.exe",
+        root / "deps" / "ffmpeg" / "ffprobe.exe",
+    ]
+    if sys.platform == "win32":
+        for path in candidates:
+            if path.is_file():
+                return str(path)
     return shutil.which("ffprobe")
 
 
@@ -276,6 +288,32 @@ def _pick_error_detail(resp: httpx.Response) -> str:
                 return msg.strip()
     text = (resp.text or "").strip()
     return text[:800] if text else f"上游接口请求失败：HTTP {resp.status_code}"
+
+
+def _leaf_exception_messages(exc: BaseException) -> List[str]:
+    if isinstance(exc, BaseExceptionGroup):
+        messages: List[str] = []
+        for child in exc.exceptions:
+            messages.extend(_leaf_exception_messages(child))
+        unique: List[str] = []
+        seen = set()
+        for msg in messages:
+            key = msg.strip()
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(key)
+        return unique
+    msg = str(exc).strip()
+    return [msg] if msg else [exc.__class__.__name__]
+
+
+def _display_exception_message(exc: BaseException) -> str:
+    messages = _leaf_exception_messages(exc)
+    if not messages:
+        return str(exc)[:2000]
+    if len(messages) == 1:
+        return messages[0][:2000]
+    return "；".join(messages)[:2000]
 
 
 def _image_preview(item: Dict[str, Any]) -> Dict[str, str]:
@@ -1816,9 +1854,10 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
         )
         # 计费由服务端 /api/comfly-proxy 在每次提交 seedance 任务时自动扣减，本地不做结算
     except Exception as exc:
-        logger.exception("[viral_video_remix] remix job failed job_id=%s", job_id)
+        display_error = _display_exception_message(exc)
+        logger.exception("[viral_video_remix] remix job failed job_id=%s error=%s", job_id, display_error)
         # 任务失败时，服务端代理会对未成功的 submit 调用做全额退款；本地仅记录失败状态
-        failed_patch: Dict[str, Any] = {"status": "failed", "stage": "failed", "error": str(exc)[:2000]}
+        failed_patch: Dict[str, Any] = {"status": "failed", "stage": "failed", "error": display_error}
         update_job(job_id, **failed_patch)
 
 

@@ -32,9 +32,15 @@ def _pipeline_script_path() -> Path:
 
 
 def _bundled_ffmpeg_exe() -> Optional[str]:
-    p = _lobster_root() / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffmpeg.exe"
-    if sys.platform == "win32" and p.is_file():
-        return str(p)
+    root = _lobster_root()
+    candidates = [
+        root / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffmpeg.exe",
+        root / "deps" / "ffmpeg" / "ffmpeg.exe",
+    ]
+    if sys.platform == "win32":
+        for path in candidates:
+            if path.is_file():
+                return str(path)
     return None
 
 

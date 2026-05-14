@@ -265,6 +265,14 @@ function findLastChatSessionIdByMode(mode, excludeSid) {
 
 /** 流式 /chat/stream 根地址：与发送消息一致，缺省时用当前页 origin（同源部署） */
 function _chatStreamApiBase() {
+  if (typeof EDITION !== 'undefined' && EDITION === 'online') {
+    var publicRemote = (typeof LOBSTER_SERVER_PUBLIC !== 'undefined' && LOBSTER_SERVER_PUBLIC)
+      ? String(LOBSTER_SERVER_PUBLIC).replace(/\/$/, '')
+      : '';
+    if (publicRemote) return publicRemote;
+    var remote = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
+    if (remote) return remote;
+  }
   var b = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
   if (b) return b;
   if (typeof window !== 'undefined' && window.location && window.location.origin) {
@@ -3178,6 +3186,16 @@ function sendChatMessage() {
   refreshChatInputState();
   var streamKindResume = false;
   var streamPath = sessionMode === CHAT_MODE_WORKSPACE ? '/chat/workbench/stream' : '/chat/stream';
+  try {
+    console.info('[chat] stream request', {
+      base: chatBase,
+      path: streamPath,
+      model: body.model || '',
+      edition: typeof EDITION !== 'undefined' ? EDITION : '',
+      apiBase: typeof API_BASE !== 'undefined' ? API_BASE : '',
+      localApiBase: typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : ''
+    });
+  } catch (eLog) {}
   fetch(chatBase + streamPath, { method: 'POST', headers: headers, body: bodyStr, signal: abortController.signal })
     .then(function(r) {
       if (!r.ok) {

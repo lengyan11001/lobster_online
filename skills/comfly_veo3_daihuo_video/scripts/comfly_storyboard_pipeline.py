@@ -1180,6 +1180,17 @@ def _download_file(url: str, destination: Path, timeout_seconds: int) -> Path:
     return destination
 
 
+def _validate_downloaded_clip(path: Path) -> None:
+    if not path.exists():
+        raise PipelineError(f"downloaded clip missing: {path}")
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise PipelineError(f"cannot stat downloaded clip: {path} ({exc})") from exc
+    if size <= 0:
+        raise PipelineError(f"downloaded clip is empty: {path}")
+
+
 def _skill_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -1243,32 +1254,66 @@ def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
     return [str(stream.get("codec_type", "")).strip().lower() for stream in streams if isinstance(stream, dict)]
 
 
+def _ensure_ffmpeg_available(ffmpeg_binary: str) -> None:
+    try:
+        proc = subprocess.run(
+            [ffmpeg_binary, "-version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError as exc:
+        raise PipelineError(f"ffmpeg executable not found: {ffmpeg_binary}") from exc
+    except OSError as exc:
+        raise PipelineError(f"ffmpeg unavailable or missing runtime dependencies: {ffmpeg_binary} ({exc})") from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+        raise PipelineError(f"ffmpeg unavailable: {detail}")
+
+
 def _merge_completed_shots(config: PipelineConfig, logger: RunLogger, shots: List[Dict[str, Any]]) -> Dict[str, Any]:
     ffmpeg_binary = _resolve_tool_binary("ffmpeg", config.ffmpeg_path)
     if not ffmpeg_binary:
         raise PipelineError(f"ffmpeg not found: {config.ffmpeg_path}")
+    _ensure_ffmpeg_available(ffmpeg_binary)
 
     clips_dir = logger.run_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
     downloaded: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
 
     for shot in sorted(shots, key=lambda item: int(item.get("index", 0))):
         index = int(shot.get("index", 0))
         clip_url = _first_text(shot, "mp4url")
         if not clip_url:
-            raise PipelineError(f"Shot {index} missing mp4url for merge")
+            payload = {"index": index, "error": f"Shot {index} missing mp4url for merge"}
+            skipped.append(payload)
+            logger.shot(index, "merge_download", "failed", error=payload["error"], payload=payload)
+            continue
         clip_path = clips_dir / f"shot_{index:02d}.mp4"
         payload = {"index": index, "url": clip_url, "path": str(clip_path)}
         logger.shot(index, "merge_download", "running", payload=payload)
-        downloaded_path, attempts = _retry(
-            f"download_clip_{index:02d}",
-            config.clip_download_retries,
-            config.network_retry_delay_seconds,
-            logger,
-            lambda clip_url=clip_url, clip_path=clip_path: _download_file(clip_url, clip_path, config.clip_download_timeout_seconds),
-        )
+        try:
+            downloaded_path, attempts = _retry(
+                f"download_clip_{index:02d}",
+                config.clip_download_retries,
+                config.network_retry_delay_seconds,
+                logger,
+                lambda clip_url=clip_url, clip_path=clip_path: _download_file(clip_url, clip_path, config.clip_download_timeout_seconds),
+            )
+            _validate_downloaded_clip(Path(downloaded_path))
+        except Exception as exc:
+            payload = {"index": index, "url": clip_url, "path": str(clip_path), "error": str(exc)}
+            skipped.append(payload)
+            logger.shot(index, "merge_download", "failed", error=str(exc), payload=payload)
+            continue
         logger.shot(index, "merge_download", "success", attempts=attempts, payload={"index": index, "path": str(downloaded_path), "url": clip_url})
         downloaded.append({"index": index, "url": clip_url, "path": str(downloaded_path)})
+
+    if not downloaded:
+        detail = "; ".join(f"shot {item.get('index')}: {item.get('error')}" for item in skipped[:3]) or "no clips available"
+        raise PipelineError(f"no downloadable clips available for merge: {detail}")
 
     merged_path = logger.run_dir / "merged_output.mp4"
     output_arg = merged_path.resolve().as_posix()
@@ -1280,6 +1325,7 @@ def _merge_completed_shots(config: PipelineConfig, logger: RunLogger, shots: Lis
             "merged_video_path": str(merged_path),
             "ffmpeg_command": None,
             "downloaded_clips": downloaded,
+            "skipped_clips": skipped,
             "merge_mode": "single_clip_copy",
             "audio_preserved": "audio" in stream_types,
         }
@@ -1338,6 +1384,7 @@ def _merge_completed_shots(config: PipelineConfig, logger: RunLogger, shots: Lis
         "merged_video_path": str(merged_path),
         "ffmpeg_command": cmd,
         "downloaded_clips": downloaded,
+        "skipped_clips": skipped,
         "merge_mode": "ffmpeg_concat_filter",
         "audio_preserved": audio_preserved,
     }
