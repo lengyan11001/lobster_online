@@ -63,6 +63,7 @@ class Input(TypedDict, total=False):
     shot_refill_retries: int
     image_request_style: str
     image_size: str
+    generation_time_limit_seconds: int
 
 
 class Output(TypedDict):
@@ -105,11 +106,23 @@ class PipelineConfig:
     clip_download_timeout_seconds: int = 180
     shot_refill_retries: int = 2
     # 与 Comfly /v1/images/generations（Banana-2 Pro）对齐：无 OpenAI 的 n 字段；image_size 仅 banana-2
+    generation_time_limit_seconds: int = 1200
     image_request_style: str = "comfly"
 
 
 class PipelineError(RuntimeError):
     pass
+
+
+def _ensure_before_deadline(deadline_monotonic: float | None, label: str = "generation") -> None:
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        raise PipelineError(f"{label} deadline reached")
+
+
+def _seconds_until_deadline(deadline_monotonic: float | None) -> float | None:
+    if deadline_monotonic is None:
+        return None
+    return max(0.0, deadline_monotonic - time.monotonic())
 
 
 MODEL_UNIT_COSTS: Dict[str, int] = {
@@ -158,6 +171,7 @@ class RunLogger:
                 "clip_download_retries": config.clip_download_retries,
                 "clip_download_timeout_seconds": config.clip_download_timeout_seconds,
                 "shot_refill_retries": config.shot_refill_retries,
+                "generation_time_limit_seconds": config.generation_time_limit_seconds,
             },
             "input": {k: v for k, v in raw_input.items() if k != "apikey"},
             "usage": {
@@ -491,9 +505,10 @@ class ComflyClient:
 
         return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
-    def poll_video(self, task_id: str, poll_interval_seconds: int, max_polls: int) -> Dict[str, Any]:
+    def poll_video(self, task_id: str, poll_interval_seconds: int, max_polls: int, deadline_monotonic: float | None = None) -> Dict[str, Any]:
         history: List[Dict[str, Any]] = []
         for attempt in range(1, max_polls + 1):
+            _ensure_before_deadline(deadline_monotonic, "video polling")
             def call() -> Dict[str, Any]:
                 poll_url = f"{self.base_url}/v2/videos/generations/{task_id}"
                 self._trace_request("videos_generations_poll", poll_url, None, None)
@@ -510,7 +525,11 @@ class ComflyClient:
                 return {"task_id": task_id, "status": status, "progress": progress, "mp4url": mp4url, "raw": payload, "history": history}
             if status == "FAILURE":
                 raise PipelineError(f"Video task failed: {fail_reason or payload}")
-            time.sleep(poll_interval_seconds)
+            remaining = _seconds_until_deadline(deadline_monotonic)
+            if remaining is not None and remaining <= 0:
+                raise PipelineError("video polling deadline reached")
+            sleep_seconds = min(float(poll_interval_seconds), remaining) if remaining is not None else float(poll_interval_seconds)
+            time.sleep(max(0.1, sleep_seconds))
         raise PipelineError(f"Video task timed out: {task_id}")
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
@@ -589,6 +608,7 @@ def _build_config(data: Input) -> PipelineConfig:
         clip_download_retries=int(data.get("clip_download_retries", 2)),
         clip_download_timeout_seconds=int(data.get("clip_download_timeout_seconds", 180)),
         shot_refill_retries=int(data.get("shot_refill_retries", 2)),
+        generation_time_limit_seconds=max(60, int(data.get("generation_time_limit_seconds", 1200))),
         image_request_style=irs,
     )
 
@@ -1390,7 +1410,8 @@ def _merge_completed_shots(config: PipelineConfig, logger: RunLogger, shots: Lis
     }
 
 
-def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, storyboard: Dict[str, Any], product_image_url: str, character_image_url: str, character: Dict[str, Any], product_summary: Dict[str, Any], round_index: int = 1) -> Dict[str, Any]:
+def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, storyboard: Dict[str, Any], product_image_url: str, character_image_url: str, character: Dict[str, Any], product_summary: Dict[str, Any], round_index: int = 1, deadline_monotonic: float | None = None) -> Dict[str, Any]:
+    _ensure_before_deadline(deadline_monotonic, "shot generation")
     index = int(storyboard.get("index", 0))
     round_tag = f"round_{round_index}"
     image_prompt = _compose_image_prompt(storyboard, character, product_summary)
@@ -1407,6 +1428,7 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
             "submitted_video_prompt": video_prompt,
         },
     )
+    _ensure_before_deadline(deadline_monotonic, "shot image generation")
     image_result, image_attempts = client.generate_image(config.image_model, image_prompt, config.aspect_ratio, [product_image_url, character_image_url], f"shot_{index:02d}_image_{round_tag}")
     logger.shot(index, f"image_{round_tag}", "success", attempts=image_attempts, payload=image_result)
     logger.record_usage(
@@ -1417,10 +1439,11 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
     )
     last_error = ""
     for video_attempt in range(1, config.video_generation_retries + 1):
+        _ensure_before_deadline(deadline_monotonic, "shot video generation")
         try:
             submit_result, submit_attempts = client.submit_video(video_prompt, config.video_model, [image_result["url"]], config.aspect_ratio, config.enhance_prompt, config.watermark, f"shot_{index:02d}_submit_{round_tag}_{video_attempt}")
             logger.shot(index, f"submit_{round_tag}_{video_attempt}", "success", attempts=submit_attempts, payload=submit_result)
-            poll_result = client.poll_video(submit_result["task_id"], config.poll_interval_seconds, config.max_polls)
+            poll_result = client.poll_video(submit_result["task_id"], config.poll_interval_seconds, config.max_polls, deadline_monotonic=deadline_monotonic)
             logger.shot(index, f"poll_{round_tag}_{video_attempt}", "success", attempts=len(poll_result.get("history", [])), payload=poll_result)
             logger.record_usage(
                 "video",
@@ -1499,45 +1522,99 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         merge_result: Dict[str, Any] | None = None
         pending_storyboards = [sb for sb in storyboards[: config.storyboard_count] if isinstance(sb, dict)]
         max_rounds = max(1, config.shot_refill_retries + 1)
+        generation_started_at = time.monotonic()
+        generation_deadline = generation_started_at + config.generation_time_limit_seconds
+        deadline_hit = False
+        logger.step(
+            "79_generation_deadline",
+            "running",
+            payload={
+                "generation_time_limit_seconds": config.generation_time_limit_seconds,
+                "deadline_started_at": datetime.now().isoformat(),
+            },
+        )
         for round_index in range(1, max_rounds + 1):
             if not pending_storyboards:
+                break
+            remaining_seconds = generation_deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                deadline_hit = True
+                for sb in pending_storyboards:
+                    idx = int(sb.get("index", 0))
+                    failure_map[idx] = {
+                        "index": idx,
+                        "title_cn": sb.get("title_cn"),
+                        "round_index": round_index,
+                        "error": f"generation deadline reached after {config.generation_time_limit_seconds}s",
+                    }
+                    logger.shot(idx, f"deadline_round_{round_index}", "failed", error=failure_map[idx]["error"], payload=failure_map[idx])
                 break
             logger.step(
                 f"80_generation_round_{round_index}",
                 "running",
                 attempts=round_index,
-                payload={"round_index": round_index, "pending_storyboard_indexes": [int(sb.get("index", 0)) for sb in pending_storyboards]},
+                payload={
+                    "round_index": round_index,
+                    "pending_storyboard_indexes": [int(sb.get("index", 0)) for sb in pending_storyboards],
+                    "remaining_seconds": max(0, int(remaining_seconds)),
+                },
             )
             round_failures: List[Dict[str, Any]] = []
-            with concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency) as ex:
-                futures = {
-                    ex.submit(
-                        _run_shot,
-                        client,
-                        config,
-                        logger,
-                        sb,
-                        product_image_url,
-                        character_image_url,
-                        character,
-                        product_summary if isinstance(product_summary, dict) else {},
-                        round_index,
-                    ): sb
-                    for sb in pending_storyboards
-                }
-                for future in concurrent.futures.as_completed(futures):
-                    sb = futures[future]
-                    idx = int(sb.get("index", 0))
-                    try:
-                        result = future.result()
-                        results_map[idx] = result
-                        failure_map.pop(idx, None)
-                        logger.shot(idx, f"final_round_{round_index}", "success", payload=result)
-                    except Exception as exc:
-                        payload = {"index": idx, "title_cn": sb.get("title_cn"), "round_index": round_index, "error": str(exc), "traceback": traceback.format_exc()}
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency)
+            futures = {
+                ex.submit(
+                    _run_shot,
+                    client,
+                    config,
+                    logger,
+                    sb,
+                    product_image_url,
+                    character_image_url,
+                    character,
+                    product_summary if isinstance(product_summary, dict) else {},
+                    round_index,
+                    generation_deadline,
+                ): sb
+                for sb in pending_storyboards
+            }
+            try:
+                unfinished_futures = set(futures.keys())
+                try:
+                    done_iter = concurrent.futures.as_completed(futures, timeout=max(1, remaining_seconds))
+                    for future in done_iter:
+                        unfinished_futures.discard(future)
+                        sb = futures[future]
+                        idx = int(sb.get("index", 0))
+                        try:
+                            result = future.result()
+                            results_map[idx] = result
+                            failure_map.pop(idx, None)
+                            logger.shot(idx, f"final_round_{round_index}", "success", payload=result)
+                        except Exception as exc:
+                            payload = {"index": idx, "title_cn": sb.get("title_cn"), "round_index": round_index, "error": str(exc), "traceback": traceback.format_exc()}
+                            failure_map[idx] = payload
+                            round_failures.append(payload)
+                            logger.shot(idx, f"final_round_{round_index}", "failed", error=str(exc), payload=payload)
+                except concurrent.futures.TimeoutError:
+                    deadline_hit = True
+                if deadline_hit:
+                    for future in unfinished_futures:
+                        future.cancel()
+                        sb = futures[future]
+                        idx = int(sb.get("index", 0))
+                        payload = {
+                            "index": idx,
+                            "title_cn": sb.get("title_cn"),
+                            "round_index": round_index,
+                            "error": f"generation deadline reached after {config.generation_time_limit_seconds}s",
+                        }
                         failure_map[idx] = payload
                         round_failures.append(payload)
-                        logger.shot(idx, f"final_round_{round_index}", "failed", error=str(exc), payload=payload)
+                        logger.shot(idx, f"deadline_round_{round_index}", "failed", error=payload["error"], payload=payload)
+                    pending_storyboards = []
+                    break
+            finally:
+                ex.shutdown(wait=not deadline_hit, cancel_futures=deadline_hit)
             round_failure_indexes = {item["index"] for item in round_failures}
             rerun_storyboards = [
                 sb
@@ -1556,8 +1633,22 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 },
             )
             pending_storyboards = rerun_storyboards
+            if deadline_hit:
+                break
         results = sorted(results_map.values(), key=lambda x: int(x.get("index", 0)))
         errors = [failure_map[idx] for idx in sorted(failure_map.keys())]
+        generation_elapsed_seconds = int(time.monotonic() - generation_started_at)
+        logger.step(
+            "79_generation_deadline",
+            "deadline_hit" if deadline_hit else "success",
+            payload={
+                "generation_time_limit_seconds": config.generation_time_limit_seconds,
+                "generation_elapsed_seconds": generation_elapsed_seconds,
+                "deadline_hit": deadline_hit,
+                "completed_count": len(results),
+                "failed_count": len(errors),
+            },
+        )
         if results and config.merge_clips:
             try:
                 merge_result = _merge_completed_shots(config, logger, results)
@@ -1577,6 +1668,8 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             "storyboards": storyboards,
             "completed_shots": results,
             "failed_shots": errors,
+            "deadline_hit": deadline_hit,
+            "generation_elapsed_seconds": generation_elapsed_seconds,
             "merge_result": merge_result,
             "usage": logger.usage_snapshot(),
             "config": {
@@ -1598,6 +1691,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "clip_download_retries": config.clip_download_retries,
                 "clip_download_timeout_seconds": config.clip_download_timeout_seconds,
                 "shot_refill_retries": config.shot_refill_retries,
+                "generation_time_limit_seconds": config.generation_time_limit_seconds,
             },
         }
         logger.finish("partial_failure" if errors else "success", output)
