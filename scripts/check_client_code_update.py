@@ -5,8 +5,10 @@
 - 仅在 .env 配置 CLIENT_CODE_MANIFEST_URL（HTTPS）时拉取 manifest。
 - 本地版本：CLIENT_CODE_VERSION.json 的 build（整数）与 version（语义版本，默认 1.0.0）。
 - 满足任一即更新：① 服务端 build 更大；② build 相同且 manifest.version 高于本地（如 1.0.0 → 1.0.1，便于只发「小版本」包）。
-- 下载 bundle_url，校验 sha256 后，对 manifest.paths 所列路径做「整路径覆盖」
+- 兼容旧 manifest：下载 bundle_url，校验 sha256 后，对 manifest.paths 所列路径做「整路径覆盖」
   （目录则先删再拷，文件则覆盖）；绝不触碰 python/、deps/、browser_chromium/、nodejs 可执行文件等。
+- 新 manifest 可额外下发 patches/resources：新 updater 会优先应用增量补丁；补丁失败时回退到旧
+  bundle_url 全量包。老 updater 会忽略新字段，继续走 bundle_url。
 - openclaw/：覆盖前保留本地 workspace、运行态目录、.env/登录态文件；gateway token 跟随 OTA 包覆盖，
   保证根 .env 与 openclaw.json 一致；覆盖后把 zip 内
   openclaw/workspace/LOBSTER_CHAT_POLICY_*.md 合并进保留后的 workspace（避免 OTA 丢策略导致 /chat 不调 MCP）。
@@ -26,6 +28,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Any
 
 
 def _ssl_context(*, allow_unverified: bool = False) -> ssl.SSLContext:
@@ -129,6 +132,7 @@ ALLOWED_NODEJS_TREE_PREFIXES: tuple[str, ...] = (
 # 与 backend chat 读取路径一致；OTA 宜随包更新，安装机保留其余 workspace 文件
 _OPENCLAW_POLICY_FILENAMES = ("LOBSTER_CHAT_POLICY_INTRO.md", "LOBSTER_CHAT_POLICY_TOOLS.md")
 _PRESERVED_STATIC_REL_PATHS = ("static/hifly_previews",)
+_RESOURCE_STATE_DIR = ROOT / "static" / ".resource_packs"
 
 
 def _load_dotenv_simple(path: Path) -> dict[str, str]:
@@ -304,6 +308,41 @@ def _path_allowed(rel: str) -> bool:
     return True
 
 
+def _as_int(v, default: int = 0) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _valid_sha256(value: str) -> bool:
+    s = (value or "").strip().lower()
+    return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+
+
+def _artifact_url(item: dict[str, Any]) -> str:
+    return str(item.get("url") or item.get("bundle_url") or "").strip()
+
+
+def _artifact_sha(item: dict[str, Any]) -> str:
+    return str(item.get("sha256") or "").strip().lower()
+
+
+def _artifact_paths(item: dict[str, Any], default_paths: tuple[str, ...] | list[str] = DEFAULT_PATHS) -> list[str]:
+    paths = item.get("paths")
+    if not isinstance(paths, list) or not paths:
+        paths = list(default_paths)
+    return [_norm_rel(str(p)) for p in paths if _norm_rel(str(p))]
+
+
+def _validate_paths(paths: list[str]) -> bool:
+    for rel in paths:
+        if not _path_allowed(rel):
+            print(f"[code] [ERR] 禁止通过热更新覆盖的路径: {rel}", flush=True)
+            return False
+    return True
+
+
 def _zip_inner_root(extract_root: Path) -> Path:
     """zip 根下只有一层 lobster_online/ 等时，进入该子目录再取 paths。"""
     inner = extract_root
@@ -473,6 +512,181 @@ def _apply_path(src: Path, dst: Path) -> None:
             shutil.rmtree(tmp_root, ignore_errors=True)
 
 
+def _extract_zip_to(path: Path, target: Path) -> Path:
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            zf.extractall(target)
+    except zipfile.BadZipFile as e:
+        raise RuntimeError(f"zip 损坏: {e}") from e
+    return _zip_inner_root(target)
+
+
+def _download_verified(url: str, expect_sha: str, dest: Path, *, label: str) -> bool:
+    if not url.lower().startswith(("https://", "http://")):
+        print(f"[code] [ERR] {label}.url 格式无效。", flush=True)
+        return False
+    if not _valid_sha256(expect_sha):
+        print(f"[code] [ERR] {label}.sha256 无效。", flush=True)
+        return False
+    try:
+        _download_file(url, dest)
+    except Exception as e:
+        print(f"[code] [WARN] {label} 下载失败: {e}", flush=True)
+        return False
+    got = _sha256_file(dest)
+    if got.lower() != expect_sha:
+        print(
+            f"[code] [ERR] {label} SHA256 不匹配（期望 {expect_sha[:16]}… 实际 {got[:16]}…）。",
+            flush=True,
+        )
+        return False
+    return True
+
+
+def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
+    extract_root = tdir / ("extracted_" + hashlib.sha1(str(zpath).encode("utf-8")).hexdigest()[:8])
+    inner = _extract_zip_to(zpath, extract_root)
+    applied: list[str] = []
+    for rel in paths:
+        src = inner / rel.replace("/", os.sep)
+        if not src.exists():
+            print(f"[code] [WARN] 包内无路径 {rel}，跳过。", flush=True)
+            continue
+        dst = ROOT / rel.replace("/", os.sep)
+        _apply_path(src, dst)
+        applied.append(rel)
+    return applied
+
+
+def _patch_matches_local(patch: dict[str, Any], local_build: int, local_ver: str) -> bool:
+    from_build = patch.get("from_build")
+    if from_build is not None and _as_int(from_build, -1) != int(local_build):
+        return False
+    from_version = str(patch.get("from_version") or "").strip()
+    if from_version and from_version != local_ver:
+        return False
+    return True
+
+
+def _select_patch(manifest: dict[str, Any], local_build: int, local_ver: str, remote_build: int) -> dict[str, Any] | None:
+    patches = manifest.get("patches")
+    if not isinstance(patches, list):
+        return None
+    candidates: list[dict[str, Any]] = []
+    for item in patches:
+        if not isinstance(item, dict):
+            continue
+        to_build = _as_int(item.get("to_build", item.get("build", remote_build)), 0)
+        if to_build != remote_build:
+            continue
+        if not _patch_matches_local(item, local_build, local_ver):
+            continue
+        candidates.append(item)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: _as_int(x.get("priority"), 0), reverse=True)
+    return candidates[0]
+
+
+def _resource_state_path() -> Path:
+    return _RESOURCE_STATE_DIR / "installed.json"
+
+
+def _load_resource_state() -> dict[str, Any]:
+    path = _resource_state_path()
+    if not path.is_file():
+        return {"resources": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data.setdefault("resources", {})
+            return data
+    except Exception:
+        pass
+    return {"resources": {}}
+
+
+def _save_resource_state(state: dict[str, Any]) -> None:
+    _RESOURCE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _resource_state_path().write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _resource_installed(item: dict[str, Any], state: dict[str, Any]) -> bool:
+    rid = str(item.get("id") or item.get("name") or "").strip()
+    expect_sha = _artifact_sha(item)
+    installed = (state.get("resources") or {}).get(rid)
+    if not rid or not isinstance(installed, dict):
+        return False
+    if expect_sha and str(installed.get("sha256") or "").lower() != expect_sha:
+        return False
+    marker = item.get("marker")
+    if marker:
+        return (ROOT / _norm_rel(str(marker))).exists()
+    for rel in _artifact_paths(item, []):
+        if not (ROOT / rel.replace("/", os.sep)).exists():
+            return False
+    return True
+
+
+def _apply_resources(resources: Any, tdir: Path) -> None:
+    if not isinstance(resources, list) or not resources:
+        return
+    state = _load_resource_state()
+    for item in resources:
+        if not isinstance(item, dict):
+            continue
+        rid = str(item.get("id") or item.get("name") or "").strip() or "resource"
+        mode = str(item.get("mode") or "once").strip().lower()
+        if mode == "once" and _resource_installed(item, state):
+            print(f"[code] 资源包已存在，跳过: {rid}", flush=True)
+            continue
+        url = _artifact_url(item)
+        sha = _artifact_sha(item)
+        zpath = tdir / f"resource_{rid}.zip"
+        print(f"[code] 下载资源包: {rid}", flush=True)
+        if not _download_verified(url, sha, zpath, label=f"resource {rid}"):
+            continue
+        paths = _artifact_paths(item, [])
+        if not paths:
+            print(f"[code] [WARN] resource {rid} 未声明 paths，跳过应用。", flush=True)
+            continue
+        if not _validate_paths(paths):
+            continue
+        try:
+            applied = _apply_bundle_zip(zpath, paths, tdir)
+        except Exception as e:
+            print(f"[code] [WARN] resource {rid} 应用失败: {e}", flush=True)
+            continue
+        state.setdefault("resources", {})[rid] = {
+            "sha256": sha,
+            "applied_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "paths": applied,
+        }
+        _save_resource_state(state)
+        print(f"[code] 资源包已应用: {rid} ({len(applied)} paths)", flush=True)
+
+
+def _apply_update_artifact(artifact: dict[str, Any], tdir: Path, *, label: str) -> list[str] | None:
+    url = _artifact_url(artifact)
+    sha = _artifact_sha(artifact)
+    paths = _artifact_paths(artifact)
+    if not _validate_paths(paths):
+        return None
+    zpath = tdir / f"{label}.zip"
+    if not _download_verified(url, sha, zpath, label=label):
+        return None
+    try:
+        applied = _apply_bundle_zip(zpath, paths, tdir)
+    except Exception as e:
+        print(f"[code] [ERR] {label} 应用失败: {e}", flush=True)
+        return None
+    if not applied:
+        print(f"[code] [ERR] {label} 包内未找到任何可覆盖路径。", flush=True)
+        return None
+    return applied
+
+
 def main() -> int:
     env = _load_dotenv_simple(ROOT / ".env")
     env.update({k: v for k, v in os.environ.items() if k.startswith("CLIENT_CODE_")})
@@ -502,32 +716,15 @@ def main() -> int:
         print("[code] [WARN] manifest 缺少合法整数 build，跳过更新。", flush=True)
         return 0
 
-    bundle_url = (manifest.get("bundle_url") or "").strip()
-    expect_sha = (manifest.get("sha256") or "").strip().lower()
-    paths = manifest.get("paths")
-    if not isinstance(paths, list) or not paths:
-        paths = list(DEFAULT_PATHS)
-
     remote_ver = str(manifest.get("version") or "").strip()
     need_update = remote_build > local
     if not need_update and remote_build == local and remote_ver and _semver_is_newer(remote_ver, local_ver):
         need_update = True
     if not need_update:
         print(f"[code] 本地代码包已是最新 (build={local}, version={local_ver})。", flush=True)
+        with tempfile.TemporaryDirectory() as td:
+            _apply_resources(manifest.get("resources"), Path(td))
         return 0
-
-    if not bundle_url.lower().startswith(("https://", "http://")):
-        print("[code] [ERR] manifest.bundle_url 格式无效，未应用更新。", flush=True)
-        return 0
-    if not expect_sha or len(expect_sha) != 64:
-        print("[code] [ERR] manifest.sha256 无效，未应用更新。", flush=True)
-        return 0
-
-    for p in paths:
-        rel = _norm_rel(str(p))
-        if not _path_allowed(rel):
-            print(f"[code] [ERR] 禁止通过热更新覆盖的路径: {rel}", flush=True)
-            return 0
 
     if remote_build > local:
         print(f"[code] 发现新版本 build={remote_build}（本地 build={local}），正在下载…", flush=True)
@@ -539,51 +736,28 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as td:
         tdir = Path(td)
-        zpath = tdir / "bundle.zip"
-        try:
-            _download_file(bundle_url, zpath)
-        except Exception as e:
-            print(f"[code] [WARN] 下载失败，不修改本地文件: {e}", flush=True)
+        applied: list[str] | None = None
+        patch = _select_patch(manifest, local, local_ver, remote_build)
+        if patch is not None:
+            p_from = patch.get("from_build", patch.get("from_version", "?"))
+            print(f"[code] 优先尝试增量补丁: {p_from} -> {remote_build}", flush=True)
+            applied = _apply_update_artifact(patch, tdir, label="patch")
+            if applied is None:
+                print("[code] [WARN] 增量补丁失败，回退 full OTA。", flush=True)
+
+        if applied is None:
+            full_artifact = {
+                "url": manifest.get("bundle_url"),
+                "sha256": manifest.get("sha256"),
+                "paths": manifest.get("paths") or list(DEFAULT_PATHS),
+            }
+            applied = _apply_update_artifact(full_artifact, tdir, label="bundle")
+
+        if applied is None:
+            print("[code] [ERR] 未成功应用任何更新，未写入版本号。", flush=True)
             return 0
 
-        got = _sha256_file(zpath)
-        if got.lower() != expect_sha:
-            print(
-                f"[code] [ERR] SHA256 不匹配（期望 {expect_sha[:16]}… 实际 {got[:16]}…），不应用更新。",
-                flush=True,
-            )
-            return 0
-
-        extract_root = tdir / "extracted"
-        extract_root.mkdir(parents=True, exist_ok=True)
-        try:
-            with zipfile.ZipFile(zpath, "r") as zf:
-                zf.extractall(extract_root)
-        except zipfile.BadZipFile as e:
-            print(f"[code] [ERR] zip 损坏: {e}", flush=True)
-            return 0
-
-        inner = _zip_inner_root(extract_root)
-        applied: list[str] = []
-        for p in paths:
-            rel = _norm_rel(str(p))
-            if not rel:
-                continue
-            src = inner / rel.replace("/", os.sep)
-            if not src.exists():
-                print(f"[code] [WARN] 包内无路径 {rel}，跳过。", flush=True)
-                continue
-            dst = ROOT / rel.replace("/", os.sep)
-            try:
-                _apply_path(src, dst)
-                applied.append(rel)
-            except OSError as e:
-                print(f"[code] [ERR] 写入 {rel} 失败: {e}，中止（未更新版本号）。", flush=True)
-                return 0
-
-        if not applied:
-            print("[code] [ERR] 包内未找到任何可覆盖路径，未写入版本号。", flush=True)
-            return 0
+        _apply_resources(manifest.get("resources"), tdir)
 
     mver = manifest.get("version")
     mver_s = str(mver).strip() if mver is not None else ""
