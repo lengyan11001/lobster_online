@@ -363,8 +363,8 @@ function _renderSeedanceTvcStudioCard() {
     : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先在本机保存 <strong>Comfly API Key</strong>，再进入这个视频工作台。当前先提供结构化 UI，方便把图片参考、参考视频、自动分镜和手动提示词放在一个界面里。</div>';
   return '<div class="skill-store-card seedance-tvc-card" style="cursor:pointer;border-color:rgba(91,124,255,0.28);background:linear-gradient(135deg,rgba(91,124,255,0.09),rgba(14,165,233,0.05));">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
-    '<div class="card-value">视频分镜工作台</div>' +
-    '<div class="card-desc">面向参考图、参考视频和纯提示词的统一视频创作界面。左侧管参数与输入方式，右侧同时看分镜预览和最终成片位。</div>' +
+    '<div class="card-value">创意分镜头视频</div>' +
+    '<div class="card-desc">面向参考图、参考视频和纯提示词的统一视频创作界面。左侧管参数与输入方式，右侧同时看创意分镜预览和最终成片位。</div>' +
     sub +
     '<div class="card-tags"><span class="tag">TVC</span><span class="tag">Seedance</span><span class="tag">分镜</span><span class="tag">Comfly</span></div>' +
     '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
@@ -388,13 +388,18 @@ function _renderViralVideoRemixCard() {
     '</div></div>';
 }
 
-function _renderHiflyDigitalHumanCard() {
+function _renderHiflyDigitalHumanCard(pkg) {
+  pkg = pkg || {};
+  var title = escapeHtml(pkg.name || '必火数字人');
+  var desc = escapeHtml(pkg.description || '选择数字人和声音，输入口播文案后生成必火数字人视频。');
+  var rawTags = Array.isArray(pkg.tags) && pkg.tags.length ? pkg.tags : ['数字人', '口播', 'TTS', '必火'];
+  var tags = rawTags.map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
   return '<div class="skill-store-card hifly-digital-human-card" style="cursor:pointer;border-color:rgba(14,165,233,0.35);background:linear-gradient(135deg,rgba(14,165,233,0.09),rgba(20,184,166,0.06));">' +
-    '<div class="card-label">&#25968;&#23383;&#20154; &middot; HiFly <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
-    '<div class="card-value">&#39134;&#24433;&#25968;&#23383;&#20154;</div>' +
-    '<div class="card-desc">&#36890;&#36807; HiFly API &#36873;&#25321;&#25968;&#23383;&#20154;&#21644;&#22768;&#38899;&#65292;&#36755;&#20837;&#21475;&#25773;&#25991;&#26696;&#21518;&#29983;&#25104;&#25968;&#23383;&#20154;&#35270;&#39057;&#12290;</div>' +
-    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">&#38656;&#35201;&#20808;&#22312; HiFly &#20010;&#20154;&#20013;&#24515;&#33719;&#21462; API Token&#65292;&#24182;&#20934;&#22791;&#21487;&#29992;&#30340;&#25968;&#23383;&#20154;&#21644;&#22768;&#38899;&#12290;</div>' +
-    '<div class="card-tags"><span class="tag">&#25968;&#23383;&#20154;</span><span class="tag">&#21475;&#25773;</span><span class="tag">TTS</span><span class="tag">HiFly</span></div>' +
+    '<div class="card-label">数字人 &middot; 必火 <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
+    '<div class="card-value">' + title + '</div>' +
+    '<div class="card-desc">' + desc + '</div>' +
+    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">创作服务由平台统一托管，用户无需填写 API Token。</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm hifly-digital-human-entry-btn">&#36827;&#20837;&#24037;&#20316;&#21488;</button></div>' +
     '</div>';
 }
@@ -938,7 +943,6 @@ function loadSkillStore() {
         if (hasComflyPkg || isSkillAdmin) html += _renderComflyCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderSeedanceTvcStudioCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderViralVideoRemixCard();
-        html += _renderHiflyDigitalHumanCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
         if (isSkillAdmin && browserUsePkg) {
@@ -982,6 +986,7 @@ function loadSkillStore() {
           if (pkg.id === 'openclaw_memory_skill') return '';
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
+          if (pkg.id === 'hifly_digital_human_skill') return _renderHiflyDigitalHumanCard(pkg);
           if (pkg.id === 'youtube_publish') {
             if (typeof EDITION === 'undefined' || EDITION !== 'online') return '';
             if (!isSkillAdmin) return '';

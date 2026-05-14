@@ -352,7 +352,7 @@
       ]
     },
     "comfly_seedance_tvc_skill": {
-      "name": "分镜TVC（Seedance）",
+      "name": "创意分镜头视频",
       "description": "上传商品/品牌参考图后，按 10 秒一段自动设计同一条 TVC 的连续分镜板，再用 gpt-image-2 生成分镜设计图，并为每张分镜图生成 10 秒 Seedance 视频，最后强制合成为 1 条完整成片。总时长支持 10/20/30/40/50/60 秒，适合美妆护肤、品牌广告、招商页风格 TVC。",
       "type": "builtin",
       "store_visibility": "popular",

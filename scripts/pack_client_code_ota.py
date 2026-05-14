@@ -96,6 +96,11 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
 )
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
+# 爆款 TVC 的最终合并依赖 comfly_veo3_daihuo_video 内置 ffmpeg。
+# 其它技能的 tools/ffmpeg 仍按默认跳过，避免 OTA 被无关二进制撑大。
+_OTA_ALLOW_SKILLS_TOOL_RELS = {
+    "skills/comfly_veo3_daihuo_video/tools/ffmpeg",
+}
 _OTA_SKIP_SKILLS_TOOL_DIRS = {"ffmpeg"}
 _OTA_INCLUDE_SKILLS_TOOL_PREFIXES: tuple[str, ...] = (
     "skills/comfly_veo3_daihuo_video/tools/ffmpeg/",
@@ -142,7 +147,13 @@ def _skip_file(rel: str) -> bool:
         return True
     if len(parts) >= 3 and parts[0] == "skills" and parts[2] in _OTA_SKIP_SKILLS_DIRS:
         return True
-    if len(parts) >= 4 and parts[0] == "skills" and parts[2] == "tools" and parts[3] in _OTA_SKIP_SKILLS_TOOL_DIRS:
+    if (
+        len(parts) >= 4
+        and parts[0] == "skills"
+        and parts[2] == "tools"
+        and parts[3] in _OTA_SKIP_SKILLS_TOOL_DIRS
+        and not any(r.startswith(allow + "/") or r == allow for allow in _OTA_ALLOW_SKILLS_TOOL_RELS)
+    ):
         return True
     return False
 
@@ -168,8 +179,7 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
                     _norm(os.path.join(rel_here, d)).startswith(p.rstrip("/"))
                     for p in _OTA_INCLUDE_SKILLS_TOOL_PREFIXES
                 )
-                and
-                rel_here.startswith("skills/")
+                and rel_here.startswith("skills/")
                 and rel_here.count("/") == 2
                 and rel_here.endswith("/tools")
                 and d in _OTA_SKIP_SKILLS_TOOL_DIRS

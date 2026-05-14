@@ -476,7 +476,7 @@ function _isH5MirrorSession(session) {
 }
 
 function _h5MirrorTitle() {
-  return 'H5 \u6d88\u606f';
+  return '手机消息';
 }
 
 function _h5MirrorWaitingText() {
@@ -484,7 +484,7 @@ function _h5MirrorWaitingText() {
 }
 
 function _h5MirrorErrorText(message) {
-  return 'H5 \u6d88\u606f\u540c\u6b65\u5931\u8d25\uff1a' + (message || '\u672a\u77e5\u9519\u8bef');
+  return '手机消息同步失败：' + (message || '\u672a\u77e5\u9519\u8bef');
 }
 
 function _h5EventLabel(ev) {
@@ -853,11 +853,11 @@ function refreshChatInputState() {
     btn.disabled = true;
     if (input) {
       input.disabled = true;
-      input.placeholder = 'H5 \u6d88\u606f\u955c\u50cf\u4f1a\u8bdd\u4ec5\u5c55\u793a\uff0c\u70b9\u51fb\u5de6\u4fa7 H5 \u6d88\u606f\u53ef\u5237\u65b0';
+      input.placeholder = '手机消息镜像会话仅展示，点击左侧手机消息可刷新';
     }
     if (cancelBtn) {
       cancelBtn.disabled = true;
-      cancelBtn.title = 'H5 \u6d88\u606f\u955c\u50cf\u4f1a\u8bdd\u65e0\u9700\u53d6\u6d88';
+      cancelBtn.title = '手机消息镜像会话无需取消';
     }
     return;
   }
@@ -1247,11 +1247,11 @@ function _getChatSuggestionMeta(title) {
     '创建技能': { tone: 'video', icon: '✳', desc: '从零搭建新的技能能力' },
     '参数设计': { tone: 'plan', icon: '≣', desc: '把参数和规则设计清楚' },
     'AI对话': { tone: 'video', icon: '⌕', desc: '回到本机智能对话' },
-    'H5对话': { tone: 'ecommerce', icon: '○', desc: '查看远程会话消息' },
+    '手机对话': { tone: 'ecommerce', icon: '○', desc: '查看手机消息' },
     '帮我创作': { tone: 'publish', icon: '≡', desc: '填入创作需求' },
     '创作图片': { tone: 'content', icon: '▣', desc: '进入图片工作台' },
     '爆款TVC': { tone: 'image', icon: '▶', desc: '填入视频生成话术' },
-    '视频分镜': { tone: 'plan', icon: '▶', desc: '进入分镜工作台' },
+    '创意分镜头视频': { tone: 'plan', icon: '▶', desc: '进入创意分镜头视频工作台' },
     '发布中心': { tone: 'publish', icon: '▣', desc: '管理发布账号和记录' },
     '技能商店': { tone: 'ecommerce', icon: '</>', desc: '查看可用技能' }
   };
@@ -1589,7 +1589,7 @@ function updateChatModeUi(mode) {
       _setChatSuggestionAction(chip1, 'data-chat-open-default', '1');
     }
     if (chip2) {
-      _renderChatSuggestionChip(chip2, 'H5对话');
+      _renderChatSuggestionChip(chip2, '手机对话');
       _setChatSuggestionAction(chip2, 'data-h5-chat-sync', '1');
     }
     if (chip3) {
@@ -1603,7 +1603,7 @@ function updateChatModeUi(mode) {
       _renderChatSuggestionChip(chip5, '爆款TVC', '用爆款tvc帮我生成一个视频。');
     }
     if (chip6) {
-      _renderChatSuggestionChip(chip6, '视频分镜');
+      _renderChatSuggestionChip(chip6, '创意分镜头视频');
       _setChatSuggestionAction(chip6, 'data-open-hidden-view', 'seedance-tvc-studio');
     }
     if (chip7) {
@@ -1773,7 +1773,7 @@ function renderChatSessionList() {
     var active = s.id === currentSessionId ? ' active' : '';
     var memoryBadgeText = (!_isH5MirrorSession(s) && !_isWorkspaceSession(s)) ? _getSessionMemoryBadge(s) : '';
     var modeBadge = _isH5MirrorSession(s)
-      ? '<span class="session-mode-badge">H5</span>'
+      ? '<span class="session-mode-badge">手机</span>'
       : (_isWorkspaceSession(s)
         ? '<span class="session-mode-badge">云端</span>'
         : (memoryBadgeText ? '<span class="session-mode-badge">' + escapeHtml(memoryBadgeText) + '</span>' : ''));
