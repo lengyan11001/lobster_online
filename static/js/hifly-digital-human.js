@@ -83,6 +83,33 @@
       + '</button>';
   }
 
+  function numericParam(value, fallback, min, max) {
+    var num = Number(value);
+    if (!isFinite(num)) num = Number(fallback);
+    num = Math.min(max, Math.max(min, num));
+    return Number(num.toFixed(2));
+  }
+
+  function formatParamValue(value) {
+    return String(Number(value).toFixed(2)).replace(/\.?0+$/, '');
+  }
+
+  function readVoiceParamsFromScope(el) {
+    var scope = el && el.closest ? el.closest('.hifly-voice-card,.hifly-selected-voice') : null;
+    var rate = 1;
+    var volume = 1;
+    var pitch = 1;
+    if (scope) {
+      var rateInput = scope.querySelector('.hifly-voice-param-input[data-param="rate"]');
+      var volumeInput = scope.querySelector('.hifly-voice-param-input[data-param="volume"]');
+      var pitchInput = scope.querySelector('.hifly-voice-param-input[data-param="pitch"]');
+      rate = numericParam(rateInput && rateInput.value, 1, 0.5, 2);
+      volume = numericParam(volumeInput && volumeInput.value, 1, 0.1, 2);
+      pitch = numericParam(pitchInput && pitchInput.value, 1, 0.1, 2);
+    }
+    return { rate: rate, volume: volume, pitch: pitch };
+  }
+
   function normalizeAssetUrl(url) {
     var raw = String(url || '').trim();
     if (!raw) return '';
@@ -161,6 +188,9 @@
         if (!voicePreviewPlayer) voicePreviewPlayer = new Audio();
         voicePreviewButton = btn;
         voicePreviewPlayer.src = url;
+        var params = readVoiceParamsFromScope(btn);
+        voicePreviewPlayer.playbackRate = params.rate;
+        voicePreviewPlayer.volume = Math.min(1, Math.max(0, params.volume / 2));
         btn.classList.add('is-playing');
         btn.innerHTML = '<span class="hifly-preview-play-icon">■</span><span>停止</span>';
         voicePreviewPlayer.onended = function() { stopVoicePreview(); };
@@ -272,12 +302,87 @@
     return requestGetTo(cloudBaseUrl(), path);
   }
 
+  function requestCloudDelete(path) {
+    return fetch(cloudBaseUrl() + path, {
+      method: 'DELETE',
+      headers: Object.assign({ 'Accept': 'application/json' }, authHeadersSafe())
+    }).then(function(resp) {
+      return resp.json().catch(function() { return {}; }).then(function(data) {
+        if (!resp.ok || data.ok === false) {
+          var msg = data.detail || data.error || data.message || '删除失败';
+          throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        }
+        return data;
+      });
+    });
+  }
+
   function showMessage(text, isError) {
     var el = $('hiflyMsg');
     if (!el) return;
     el.textContent = text || '';
     el.style.display = text ? 'block' : 'none';
     el.classList.toggle('err', !!isError);
+  }
+
+  function showConfirmDialog(options) {
+    options = options || {};
+    return new Promise(function(resolve) {
+      var host = $('content-hifly-digital-human') || document.body;
+      var modal = $('hiflyConfirmModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'hiflyConfirmModal';
+        modal.className = 'hifly-modal hifly-confirm-modal';
+        modal.style.display = 'none';
+        modal.innerHTML = ''
+          + '<div class="hifly-modal-backdrop" data-confirm-action="cancel"></div>'
+          + '<div class="hifly-modal-card hifly-confirm-card" role="dialog" aria-modal="true" aria-labelledby="hiflyConfirmTitle">'
+          + '<div class="hifly-modal-head">'
+          + '<h4 id="hiflyConfirmTitle" class="hifly-modal-title"></h4>'
+          + '<button type="button" class="hifly-modal-close" data-confirm-action="cancel" aria-label="关闭">×</button>'
+          + '</div>'
+          + '<div class="hifly-modal-body"><p id="hiflyConfirmMessage" class="hifly-confirm-copy"></p></div>'
+          + '<div class="hifly-modal-foot">'
+          + '<button type="button" class="btn btn-ghost" data-confirm-action="cancel">取消</button>'
+          + '<button type="button" class="btn btn-primary hifly-confirm-submit" data-confirm-action="confirm">确认</button>'
+          + '</div>'
+          + '</div>';
+        host.appendChild(modal);
+      }
+      var titleEl = modal.querySelector('#hiflyConfirmTitle');
+      var messageEl = modal.querySelector('#hiflyConfirmMessage');
+      var submitBtn = modal.querySelector('.hifly-confirm-submit');
+      if (titleEl) titleEl.textContent = options.title || '确认操作';
+      if (messageEl) messageEl.textContent = options.message || '';
+      if (submitBtn) {
+        submitBtn.textContent = options.confirmText || '确认';
+        submitBtn.classList.toggle('hifly-confirm-danger', options.tone === 'danger');
+      }
+      var done = false;
+      function finish(value) {
+        if (done) return;
+        done = true;
+        modal.style.display = 'none';
+        Array.prototype.forEach.call(modal.querySelectorAll('[data-confirm-action]'), function(btn) {
+          btn.onclick = null;
+        });
+        var stillOpen = Array.prototype.some.call(document.querySelectorAll('.hifly-modal'), function(item) {
+          return item.style.display !== 'none';
+        });
+        if (!stillOpen) document.body.classList.remove('hifly-modal-open');
+        resolve(!!value);
+      }
+      Array.prototype.forEach.call(modal.querySelectorAll('[data-confirm-action]'), function(btn) {
+        btn.onclick = function(ev) {
+          if (ev && ev.stopPropagation) ev.stopPropagation();
+          finish(btn.getAttribute('data-confirm-action') === 'confirm');
+        };
+      });
+      modal.style.display = 'block';
+      document.body.classList.add('hifly-modal-open');
+      if (submitBtn && submitBtn.focus) submitBtn.focus();
+    });
   }
 
   function getVideoCreateMode() {
@@ -516,6 +621,15 @@
     return [];
   }
 
+  function voiceParams(item) {
+    var params = item && item.voice_params && typeof item.voice_params === 'object' ? item.voice_params : {};
+    return {
+      rate: String(params.rate || '1.0'),
+      volume: String(params.volume || '1.0'),
+      pitch: String(params.pitch || '1.0')
+    };
+  }
+
   function previewUrlForVoiceId(voiceId, fallbackUrl) {
     var cached = voiceId && state.voicePreviewMap ? state.voicePreviewMap[voiceId] : '';
     return normalizeAssetUrl(cached || fallbackUrl || '');
@@ -553,6 +667,8 @@
       demo_url: overrideDemoUrl || pickedStyle.demo_url || group.demo_url || '',
       section: group.section || '',
       section_label: group.section_label || '声音',
+      is_mine: group.is_mine === true,
+      voice_params: voiceParams(group),
       tags: tags,
       styles: voiceStyles(group).map(function(row) { return voiceStyleWithPreview(row); }),
       style_count: group.style_count || voiceStyles(group).length || 1
@@ -791,11 +907,15 @@
 
   function renderAvatarCard(item) {
     var selected = state.selectedAvatar && state.selectedAvatar.avatar === item.avatar;
+    var canDelete = !!(item && item.is_mine === true && item.id != null);
     var tags = (item.tags || []).slice(0, 2).map(function(tag) {
       return '<span class="hifly-card-tag">' + escapeHtml(tag) + '</span>';
     }).join('');
     var countText = item.material_count ? (item.material_count + ' 个素材') : '已就绪';
     var key = avatarKey(item);
+    var deleteBtn = canDelete
+      ? '<button type="button" class="btn btn-ghost btn-sm hifly-avatar-delete-btn" data-avatar-asset-id="' + escapeHtml(item.id) + '">删除数字人</button>'
+      : '';
     return ''
       + '<article class="hifly-avatar-card' + (selected ? ' is-selected' : '') + '" data-avatar-key="' + escapeHtml(key) + '" style="cursor:pointer;">'
       + '<div class="hifly-avatar-card-cover">'
@@ -812,6 +932,7 @@
       + '<div class="hifly-avatar-card-actions">'
       + '<button type="button" class="btn btn-ghost btn-sm hifly-avatar-detail-btn hifly-avatar-pick-btn" data-avatar-key="' + escapeHtml(key) + '">查看详情</button>'
       + '<button type="button" class="btn ' + (selected ? 'btn-ghost' : 'btn-primary') + ' btn-sm hifly-avatar-pick-btn" data-avatar-id="' + escapeHtml(item.avatar) + '">' + (selected ? '已选择' : '选择数字人') + '</button>'
+      + deleteBtn
       + '</div>'
       + '</div>'
       + '</article>';
@@ -834,6 +955,20 @@
         + '</button>';
     }).join('');
     var audio = voicePreviewButtonHtml(activeStyle && activeStyle.demo_url ? activeStyle.demo_url : '');
+    var canEdit = !!(item && item.is_mine === true && activeStyle && activeStyle.voice);
+    var params = voiceParams(item);
+    var editPanel = canEdit ? ''
+      + '<div class="hifly-voice-param-panel" data-voice-id="' + escapeHtml(activeStyle.voice) + '" data-voice-asset-id="' + escapeHtml(item.id || '') + '">'
+      + '<div class="hifly-voice-param-head">'
+      + '<div class="hifly-voice-param-title"><strong>声音参数</strong><span>试听跟随语速/音量，语调生成生效</span></div>'
+      + '<button type="button" class="btn btn-sm hifly-voice-param-save">保存</button>'
+      + '</div>'
+      + '<div class="hifly-voice-param-grid">'
+      + '<label><span>语速</span><input class="hifly-voice-param-input" data-param="rate" data-min="0.5" data-max="2" data-step="0.1" type="text" readonly value="' + escapeHtml(params.rate) + '"></label>'
+      + '<label><span>音量</span><input class="hifly-voice-param-input" data-param="volume" data-min="0.1" data-max="2" data-step="0.1" type="text" readonly value="' + escapeHtml(params.volume) + '"></label>'
+      + '<label><span>语调</span><input class="hifly-voice-param-input" data-param="pitch" data-min="0.1" data-max="2" data-step="0.1" type="text" readonly value="' + escapeHtml(params.pitch) + '"></label>'
+      + '</div>'
+      + '</div>' : '';
     return ''
       + '<article class="hifly-voice-card' + (selected ? ' is-selected' : '') + '">'
       + '<div class="hifly-voice-card-top">'
@@ -848,6 +983,7 @@
       + '</div>'
       + '</div>'
       + '<div class="hifly-voice-audio">' + audio + '</div>'
+      + editPanel
       + '<button type="button" class="btn ' + (selected ? 'btn-ghost' : 'btn-primary') + ' btn-sm hifly-voice-pick-btn" data-voice-id="' + escapeHtml(activeStyle && activeStyle.voice ? activeStyle.voice : item.voice) + '">' + (selected ? '已选择当前风格' : '选择当前风格') + '</button>'
       + '</article>';
   }
@@ -1008,6 +1144,46 @@
         if (picked) openAvatarDetail(picked);
       };
     });
+    Array.prototype.forEach.call(document.querySelectorAll('.hifly-avatar-delete-btn'), function(btn) {
+      btn.onclick = function(ev) {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        var id = btn.getAttribute('data-avatar-asset-id') || '';
+        if (!id) return showMessage('无法删除该数字人记录，请刷新后重试。', true);
+        showConfirmDialog({
+          title: '删除数字人',
+          message: '确认删除这个数字人？删除后不会再显示在“我的数字人”列表。',
+          confirmText: '删除',
+          tone: 'danger'
+        }).then(function(confirmed) {
+          if (!confirmed) return;
+          var oldText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '删除中...';
+          requestCloudDelete('/api/hifly/my/avatar/' + encodeURIComponent(id))
+            .then(function() {
+              var deleted = null;
+              state.avatarLibrary.mine = (state.avatarLibrary.mine || []).filter(function(item) {
+                var hit = String(item.id) === String(id);
+                if (hit) deleted = item;
+                return !hit;
+              });
+              if (deleted && state.selectedAvatar && state.selectedAvatar.avatar === deleted.avatar) {
+                var all = (state.avatarLibrary.mine || []).concat(state.avatarLibrary.public || []);
+                state.selectedAvatar = all[0] || null;
+                renderSelectedAvatar();
+              }
+              renderAvatarLibrary();
+              showMessage('数字人已删除。', false);
+              return loadAvatarLibrary(true);
+            })
+            .catch(function(err) {
+              btn.disabled = false;
+              btn.textContent = oldText;
+              showMessage(err && err.message ? err.message : '删除数字人失败', true);
+            });
+        });
+      };
+    });
     /** 点卡片任意位置（除按钮）也打开详情弹窗 */
     Array.prototype.forEach.call(document.querySelectorAll('.hifly-avatar-card[data-avatar-key]'), function(card) {
       card.onclick = function(ev) {
@@ -1018,7 +1194,125 @@
     });
   }
 
+  function ensureVoiceParamSlider() {
+    var panel = $('hiflyVoiceParamSlider');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'hiflyVoiceParamSlider';
+    panel.className = 'hifly-voice-param-popover';
+    panel.style.display = 'none';
+    panel.innerHTML = ''
+      + '<div class="hifly-param-popover-head"><strong id="hiflyParamSliderTitle">参数</strong><span id="hiflyParamSliderValue">1.0</span></div>'
+      + '<input id="hiflyParamSliderRange" class="hifly-param-slider" type="range">'
+      + '<div class="hifly-param-slider-scale"><span id="hiflyParamSliderMin">0.5</span><span id="hiflyParamSliderMax">2.0</span></div>';
+    document.body.appendChild(panel);
+    panel.onmousedown = function(ev) {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+    };
+    return panel;
+  }
+
+  function closeVoiceParamSlider() {
+    var panel = $('hiflyVoiceParamSlider');
+    if (panel) {
+      panel.style.display = 'none';
+      panel._targetInput = null;
+    }
+  }
+
+  function openVoiceParamSlider(input) {
+    var panel = ensureVoiceParamSlider();
+    var min = Number(input.getAttribute('data-min') || input.min || 0);
+    var max = Number(input.getAttribute('data-max') || input.max || 2);
+    var step = Number(input.getAttribute('data-step') || input.step || 0.1);
+    var value = numericParam(input.value, 1, min, max);
+    var range = $('hiflyParamSliderRange');
+    var title = $('hiflyParamSliderTitle');
+    var valueEl = $('hiflyParamSliderValue');
+    var minEl = $('hiflyParamSliderMin');
+    var maxEl = $('hiflyParamSliderMax');
+    var label = input.parentElement ? (input.parentElement.querySelector('span') || {}).textContent || '参数' : '参数';
+    panel._targetInput = input;
+    if (title) title.textContent = label;
+    if (valueEl) valueEl.textContent = formatParamValue(value);
+    if (minEl) minEl.textContent = formatParamValue(min);
+    if (maxEl) maxEl.textContent = formatParamValue(max);
+    if (range) {
+      range.min = String(min);
+      range.max = String(max);
+      range.step = String(step);
+      range.value = String(value);
+      range.oninput = function() {
+        var next = numericParam(range.value, value, min, max);
+        input.value = formatParamValue(next);
+        if (valueEl) valueEl.textContent = input.value;
+      };
+    }
+    var rect = input.getBoundingClientRect();
+    panel.style.display = 'block';
+    var panelWidth = 236;
+    var left = Math.min(window.innerWidth - panelWidth - 12, Math.max(12, rect.left + rect.width / 2 - panelWidth / 2));
+    var top = rect.bottom + 8;
+    if (top + 126 > window.innerHeight) top = Math.max(12, rect.top - 132);
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+  }
+
   function bindVoiceCardEvents() {
+    Array.prototype.forEach.call(document.querySelectorAll('.hifly-voice-param-input'), function(input) {
+      input.onclick = function(ev) {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        openVoiceParamSlider(input);
+      };
+      input.onfocus = function() {
+        openVoiceParamSlider(input);
+      };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.hifly-voice-param-save'), function(btn) {
+      btn.onclick = function(ev) {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        var panel = btn.closest ? btn.closest('.hifly-voice-param-panel') : null;
+        if (!panel) return;
+        var voiceId = panel.getAttribute('data-voice-id') || '';
+        if (!voiceId) return showMessage('无法保存声音参数，请刷新声音列表后重试。', true);
+        var payload = { voice: voiceId };
+        Array.prototype.forEach.call(panel.querySelectorAll('.hifly-voice-param-input'), function(input) {
+          payload[input.getAttribute('data-param')] = input.value;
+        });
+        var oldText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '保存中...';
+        requestCloud('/api/hifly/my/voice/edit', payload)
+          .then(function(data) {
+            var updated = data && data.item ? data.item : null;
+            if (updated) {
+              updated.is_mine = true;
+              state.voiceLibrary.mine = (state.voiceLibrary.mine || []).map(function(item) {
+                if (String(item.id) === String(updated.id) || item.voice === updated.voice) {
+                  return Object.assign({}, item, updated, { is_mine: true });
+                }
+                return item;
+              });
+              if (state.selectedVoice && state.selectedVoice.voice === updated.voice) {
+                var found = findVoiceGroupByVoiceId(updated.voice);
+                if (found) state.selectedVoice = buildSelectedVoice(found.group, found.style);
+                renderSelectedVoice();
+              }
+              renderVoiceLibrary();
+            }
+            if (data && data.synced === false && data.sync_error) {
+              showMessage('声音参数已保存到本地。' + data.sync_error, false);
+            } else {
+              showMessage('声音参数已保存。试听音频如未变化，以后续生成效果为准。', false);
+            }
+          })
+          .catch(function(err) {
+            btn.disabled = false;
+            btn.textContent = oldText;
+            showMessage(err && err.message ? err.message : '保存声音参数失败', true);
+          });
+      };
+    });
     Array.prototype.forEach.call(document.querySelectorAll('.hifly-voice-pick-btn'), function(btn) {
       btn.onclick = function() {
         var voiceId = btn.getAttribute('data-voice-id') || '';
@@ -1045,8 +1339,8 @@
       var mineData = results[0] || {};
       var data = results[1] || {};
       state.avatarLibrary = {
-        mine: mineData.items || [],
-        public: data.public || [],
+        mine: (mineData.items || []).map(function(item) { return Object.assign({}, item, { is_mine: true }); }),
+        public: (data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); }),
         mine_supported: true,
         mine_message: '',
         using_default_token: !!data.using_default_token,
@@ -1101,8 +1395,8 @@
       var data = results[1] || {};
       var previousVoiceId = state.selectedVoice && state.selectedVoice.voice ? state.selectedVoice.voice : '';
       state.voiceLibrary = hydrateVoiceLibraryPreview({
-        mine: mineData.items || [],
-        public: data.public || [],
+        mine: (mineData.items || []).map(function(item) { return Object.assign({}, item, { is_mine: true }); }),
+        public: (data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); }),
         mine_supported: true,
         mine_message: '',
         using_default_token: !!data.using_default_token
@@ -1231,13 +1525,20 @@
       btn.onclick = function() {
         var id = btn.getAttribute('data-id') || '';
         if (!id) return;
-        if (!window.confirm('确认删除这条口播任务记录？转存的视频素材不会被删除。')) return;
-        btn.disabled = true;
-        fetch(cloudBaseUrl() + '/api/hifly/my/video/' + encodeURIComponent(id), {
-          method: 'DELETE',
-          headers: Object.assign({ 'Accept': 'application/json' }, authHeadersSafe())
-        }).then(function() { loadVideoHistory(true); })
-          .catch(function() { btn.disabled = false; });
+        showConfirmDialog({
+          title: '删除口播记录',
+          message: '确认删除这条口播任务记录？转存的视频素材不会被删除。',
+          confirmText: '删除',
+          tone: 'danger'
+        }).then(function(confirmed) {
+          if (!confirmed) return;
+          btn.disabled = true;
+          fetch(cloudBaseUrl() + '/api/hifly/my/video/' + encodeURIComponent(id), {
+            method: 'DELETE',
+            headers: Object.assign({ 'Accept': 'application/json' }, authHeadersSafe())
+          }).then(function() { loadVideoHistory(true); })
+            .catch(function() { btn.disabled = false; });
+        });
       };
     });
   }
@@ -1609,6 +1910,9 @@
       avatar: avatar,
       voice: voice,
       text: text,
+      rate: state.selectedVoice && state.selectedVoice.voice_params ? state.selectedVoice.voice_params.rate : undefined,
+      volume: state.selectedVoice && state.selectedVoice.voice_params ? state.selectedVoice.voice_params.volume : undefined,
+      pitch: state.selectedVoice && state.selectedVoice.voice_params ? state.selectedVoice.voice_params.pitch : undefined,
       st_show: (($('hiflySubtitleCheck') || {}).checked ? 1 : 0),
       aigc_flag: Number((($('hiflyAigcFlagSelect') || {}).value || 0)),
       token: tokenValue()
@@ -1795,6 +2099,15 @@
       state.voiceSearch = ev.target.value || '';
       renderVoiceLibrary();
     });
+    document.addEventListener('click', function(ev) {
+      var panel = $('hiflyVoiceParamSlider');
+      if (!panel || panel.style.display === 'none') return;
+      var target = ev.target;
+      if (panel.contains(target)) return;
+      if (target && target.classList && target.classList.contains('hifly-voice-param-input')) return;
+      closeVoiceParamSlider();
+    });
+    window.addEventListener('resize', closeVoiceParamSlider);
 
     [
       ['hiflyMineMoreBtn', 'avatarMine'],
@@ -1958,6 +2271,8 @@
       + '#content-hifly-digital-human .hifly-avatar-card-tags{display:flex;gap:0.38rem;flex-wrap:wrap;min-height:1.8rem;align-items:flex-start;}'
       + '#content-hifly-digital-human .hifly-avatar-card-meta{display:flex;align-items:center;justify-content:flex-start;font-size:0.8rem;color:#6b7280;}'
       + '#content-hifly-digital-human .hifly-avatar-card-actions{display:grid;grid-template-columns:1fr 1fr;gap:0.55rem;margin-top:auto;}'
+      + '#content-hifly-digital-human .hifly-avatar-delete-btn{grid-column:1/-1;justify-content:center;color:#b42318;border-color:rgba(180,35,24,0.22);}'
+      + '#content-hifly-digital-human .hifly-avatar-delete-btn:hover{background:rgba(180,35,24,0.08);}'
       + '#content-hifly-digital-human .hifly-card-tag{display:inline-flex;align-items:center;padding:0.24rem 0.5rem;border-radius:999px;background:rgba(15,23,42,0.06);color:#61708a;font-size:0.72rem;}'
       + '#content-hifly-digital-human .hifly-avatar-pick-btn,#content-hifly-digital-human .hifly-voice-pick-btn{width:100%;margin-top:0.75rem;justify-content:center;}'
       + '#content-hifly-digital-human .hifly-avatar-card-actions .hifly-avatar-pick-btn{margin-top:0;}'
@@ -1974,6 +2289,26 @@
       + '#content-hifly-digital-human .hifly-voice-style-text{min-width:0;font-size:0.84rem;color:#25324a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
       + '#content-hifly-digital-human .hifly-voice-style-state{font-size:0.72rem;color:#6d7791;white-space:nowrap;}'
       + '#content-hifly-digital-human .hifly-voice-audio{margin-top:0.75rem;}'
+      + '#content-hifly-digital-human .hifly-voice-param-panel{margin-top:0.72rem;padding:0.7rem;border-radius:14px;background:linear-gradient(180deg,rgba(248,250,255,0.92),rgba(255,255,255,0.98));border:1px solid rgba(124,94,255,0.10);}'
+      + '#content-hifly-digital-human .hifly-voice-param-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:0.58rem;margin-bottom:0.62rem;}'
+      + '#content-hifly-digital-human .hifly-voice-param-title{display:flex;flex-direction:column;gap:0.14rem;min-width:0;line-height:1.25;}'
+      + '#content-hifly-digital-human .hifly-voice-param-title strong{font-size:0.82rem;color:#27324a;white-space:nowrap;}'
+      + '#content-hifly-digital-human .hifly-voice-param-title span{font-size:0.68rem;color:#8a94a8;white-space:normal;overflow-wrap:anywhere;}'
+      + '#content-hifly-digital-human .hifly-voice-param-save{margin:0;min-width:56px;min-height:32px;padding:0.38rem 0.62rem;border:none;border-radius:11px;background:linear-gradient(135deg,#7c5eff,#5b6cff);color:#fff;font-weight:800;box-shadow:0 8px 18px rgba(92,87,216,0.22);white-space:nowrap;}'
+      + '#content-hifly-digital-human .hifly-voice-param-save:hover{background:linear-gradient(135deg,#6d55ef,#4f5df1);box-shadow:0 10px 22px rgba(92,87,216,0.28);}'
+      + '#content-hifly-digital-human .hifly-voice-param-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0.42rem;}'
+      + '#content-hifly-digital-human .hifly-voice-param-grid label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:0.34rem;padding:0.32rem 0.42rem;border-radius:12px;background:#fff;border:1px solid rgba(15,23,42,0.07);}'
+      + '#content-hifly-digital-human .hifly-voice-param-grid label span{font-size:0.7rem;font-weight:700;color:#748096;white-space:nowrap;}'
+      + '#content-hifly-digital-human .hifly-voice-param-grid input{width:100%;min-width:0;box-sizing:border-box;border:none;border-radius:8px;padding:0.22rem 0.1rem;font-size:0.86rem;font-weight:700;color:#27324a;background:transparent;text-align:right;outline:none;}'
+      + '#content-hifly-digital-human .hifly-voice-param-grid input:focus{box-shadow:0 0 0 2px rgba(124,94,255,0.14);background:rgba(124,94,255,0.045);}'
+      + '#content-hifly-digital-human .hifly-voice-param-grid input::-webkit-outer-spin-button,#content-hifly-digital-human .hifly-voice-param-grid input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}'
+      + '@media (max-width:980px){#content-hifly-digital-human .hifly-voice-param-head{grid-template-columns:minmax(0,1fr);}#content-hifly-digital-human .hifly-voice-param-save{width:100%;}}'
+      + '.hifly-voice-param-popover{position:fixed;z-index:2600;width:236px;padding:0.82rem;border-radius:16px;background:#fff;border:1px solid rgba(124,94,255,0.16);box-shadow:0 22px 52px rgba(31,41,55,0.18);}'
+      + '.hifly-param-popover-head{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.72rem;}'
+      + '.hifly-param-popover-head strong{font-size:0.86rem;color:#26334d;}'
+      + '.hifly-param-popover-head span{min-width:2.6rem;text-align:center;padding:0.22rem 0.42rem;border-radius:999px;background:rgba(124,94,255,0.10);color:#5d4cdc;font-size:0.82rem;font-weight:800;}'
+      + '.hifly-param-slider{width:100%;accent-color:#7c5eff;}'
+      + '.hifly-param-slider-scale{display:flex;justify-content:space-between;margin-top:0.32rem;color:#8a94a8;font-size:0.72rem;font-weight:700;}'
       + '#content-hifly-digital-human .hifly-section-empty{display:none;padding:1rem 1.05rem;border-radius:18px;border:1px dashed rgba(124,94,255,0.20);background:rgba(249,247,255,0.82);color:#68748f;font-size:0.84rem;line-height:1.7;}'
       + '#content-hifly-digital-human .hifly-more-row{margin-top:0.92rem;display:flex;justify-content:center;}'
       + '#content-hifly-digital-human .hifly-result-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:0.85rem;}'
@@ -1999,6 +2334,12 @@
       + '#content-hifly-digital-human .hifly-modal-close{border:none;background:transparent;font-size:2rem;line-height:1;color:#64748b;cursor:pointer;}'
       + '#content-hifly-digital-human .hifly-modal-body{padding:1.25rem;display:flex;flex-direction:column;gap:1rem;}'
       + '#content-hifly-digital-human .hifly-modal-foot{display:flex;justify-content:flex-end;gap:0.75rem;padding:1rem 1.25rem 1.25rem;border-top:1px solid rgba(15,23,42,0.08);}'
+      + '#content-hifly-digital-human .hifly-confirm-modal{z-index:2200;}'
+      + '#content-hifly-digital-human .hifly-confirm-card{width:min(92vw,440px);margin:18vh auto 0;border-radius:20px;}'
+      + '#content-hifly-digital-human .hifly-confirm-card .hifly-modal-title{font-size:1.18rem;}'
+      + '#content-hifly-digital-human .hifly-confirm-copy{margin:0;color:#344054;line-height:1.7;font-size:0.95rem;}'
+      + '#content-hifly-digital-human .hifly-confirm-danger{background:#d92d20;border-color:#d92d20;}'
+      + '#content-hifly-digital-human .hifly-confirm-danger:hover{background:#b42318;border-color:#b42318;}'
       + '#content-hifly-digital-human .hifly-mode-list{display:flex;flex-direction:column;gap:1rem;padding:1.25rem;}'
       + '#content-hifly-digital-human .hifly-mode-option{display:flex;align-items:center;gap:1rem;padding:1.2rem 1.25rem;border-radius:24px;border:1px solid rgba(15,23,42,0.08);background:#fff;cursor:pointer;text-align:left;box-shadow:0 12px 30px rgba(15,23,42,0.06);}'
       + '#content-hifly-digital-human .hifly-mode-option:hover{transform:translateY(-1px);box-shadow:0 16px 34px rgba(15,23,42,0.10);}'
