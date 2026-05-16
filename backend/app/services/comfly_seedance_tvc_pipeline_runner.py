@@ -149,6 +149,7 @@ def build_pipeline_input(
     task_text: str = "",
     analysis_model: Optional[str] = None,
     image_model: Optional[str] = None,
+    image_model_fallback: Optional[str] = None,
     video_model: Optional[str] = None,
     aspect_ratio: Optional[str] = None,
     generate_audio: Optional[bool] = None,
@@ -190,6 +191,8 @@ def build_pipeline_input(
         inp["analysis_model"] = analysis_model.strip()
     if (image_model or "").strip():
         inp["image_model"] = image_model.strip()
+    if (image_model_fallback or "").strip():
+        inp["image_model_fallback"] = image_model_fallback.strip()
     if (video_model or "").strip():
         inp["video_model"] = video_model.strip()
     if (aspect_ratio or "").strip():

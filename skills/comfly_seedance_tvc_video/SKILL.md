@@ -1,6 +1,6 @@
 ---
 name: comfly_seedance_tvc_video
-description: Generate 20-second storyboard-driven promo videos by first creating two polished 10-second storyboard board images with gpt-image-2 and then turning those boards into two Seedance clips with `doubao-seedance-2-0-fast-260128`. Use when the user provides product references plus a storyboard-board style target and wants a premium TVC workflow for beauty, skincare, FMCG, tea, and other brand-heavy commercial videos.
+description: Generate 20-second storyboard-driven promo videos by first creating two polished 10-second storyboard board images with gpt-image-2 (with automatic fallback to nano-banana-2 when gpt-image-2 fails) and then turning those boards into two Seedance clips with `doubao-seedance-2-0-fast-260128`. Use when the user provides product references plus a storyboard-board style target and wants a premium TVC workflow for beauty, skincare, FMCG, tea, and other brand-heavy commercial videos.
 metadata: {"openclaw":{"emoji":"video","homepage":"https://ai.comfly.chat"}}
 ---
 
@@ -19,7 +19,7 @@ This skill is intentionally different from `comfly_veo3_daihuo_video`:
 - it accepts multiple reference images
 - it produces two complete storyboard board images rather than many single-frame stills
 - each board is designed as a 10-second segment with Chinese copy and narration guidance
-- it uses `gpt-image-2` for the board images
+- it uses `gpt-image-2` for the board images by default, and automatically falls back to `nano-banana-2` if `gpt-image-2` exhausts its retries (e.g. the upstream `image=[url]` reference path is unstable)
 - it uses `doubao-seedance-2-0-fast-260128` on the Seedance official-format endpoint for lower-cost testing
 
 ## Confirmed API pattern
@@ -33,7 +33,7 @@ This skill is intentionally different from `comfly_veo3_daihuo_video`:
 ## Default model choices
 
 - analysis model: `gpt-4.1-mini`
-- storyboard board image model: `gpt-image-2`
+- storyboard board image model: `gpt-image-2` (primary), `nano-banana-2` (fallback)
 - video model: `doubao-seedance-2-0-fast-260128`
 
 ## Workflow
@@ -47,7 +47,7 @@ This skill is intentionally different from `comfly_veo3_daihuo_video`:
    - Chinese voice-over text for that 10-second segment
    - English board-image prompt
    - English Seedance motion prompt
-3. Render two polished storyboard board images with `gpt-image-2`.
+3. Render two polished storyboard board images with `gpt-image-2` (auto fallback to `nano-banana-2` on failure).
 4. Submit two Seedance tasks in parallel:
    - board image as `first_frame`
    - all uploaded references as `reference_image`
@@ -80,6 +80,7 @@ It accepts:
 - `language`
 - `analysis_model`
 - `image_model`
+- `image_model_fallback`
 - `video_model`
 - `storyboard_count` / `segment_count`
 - `segment_duration_seconds`

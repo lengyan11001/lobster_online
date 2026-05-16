@@ -58,6 +58,7 @@ class ComflySeedancePipelinePayload(BaseModel):
     isolate_job_dir: bool = True
     analysis_model: Optional[str] = None
     image_model: Optional[str] = None
+    image_model_fallback: Optional[str] = None
     video_model: Optional[str] = None
     aspect_ratio: str = "9:16"
     generate_audio: bool = True
@@ -127,6 +128,7 @@ async def _prepare_pipeline_input(
         task_text=pl.task_text,
         analysis_model=pl.analysis_model,
         image_model=pl.image_model,
+        image_model_fallback=pl.image_model_fallback,
         video_model=pl.video_model,
         aspect_ratio=pl.aspect_ratio,
         generate_audio=pl.generate_audio,

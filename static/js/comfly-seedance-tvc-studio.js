@@ -621,7 +621,19 @@
     if (!videoSurface) return;
 
     if (state.currentResultVideoUrl) {
-      videoSurface.innerHTML = '<video src="' + escapeHtml(state.currentResultVideoUrl) + '" controls playsinline preload="metadata"></video>';
+      var resultUrl = String(state.currentResultVideoUrl);
+      var bare = resultUrl.split('?')[0].toLowerCase();
+      var looksVideo = /\.(mp4|mov|m4v|webm|mkv)$/.test(bare);
+      if (looksVideo) {
+        videoSurface.innerHTML = '<video src="' + escapeHtml(resultUrl) + '" controls playsinline preload="metadata"></video>';
+      } else {
+        videoSurface.innerHTML = [
+          '<div class="tvc-video-placeholder">',
+          '<strong>未拿到完整成片</strong>',
+          '<span>本次任务返回的素材不是视频文件（' + escapeHtml(resultUrl.slice(0, 200)) + '），可能某段视频生成失败。请在素材库里查看分段结果，或重新提交任务。</span>',
+          '</div>'
+        ].join('');
+      }
       return;
     }
 
@@ -793,11 +805,20 @@
   function extractResultVideoUrl(resp) {
     if (!resp || typeof resp !== 'object') return '';
 
+    function _looksLikeVideoUrl(u) {
+      if (!u) return false;
+      var s = String(u).split('?')[0].toLowerCase();
+      return /\.(mp4|mov|m4v|webm|mkv)$/.test(s);
+    }
+
     var saved = Array.isArray(resp.saved_assets) ? resp.saved_assets : [];
     for (var i = 0; i < saved.length; i += 1) {
       var asset = saved[i] && saved[i].asset;
-      var src = asset && (asset.source_url || asset.preview_url || '');
-      if (src) return src;
+      if (!asset) continue;
+      var mt = String(asset.media_type || asset.type || '').toLowerCase();
+      var src = String(asset.source_url || asset.preview_url || '').trim();
+      if (!src) continue;
+      if (mt === 'video' || _looksLikeVideoUrl(src)) return src;
     }
 
     var result = resp.result || {};

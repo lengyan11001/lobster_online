@@ -37,6 +37,7 @@ class Input(TypedDict, total=False):
     language: str
     analysis_model: str
     image_model: str
+    image_model_fallback: str
     video_model: str
     aspect_ratio: str
     storyboard_count: int
@@ -71,6 +72,7 @@ class PipelineConfig:
     language: str = "zh-CN"
     analysis_model: str = "gpt-4.1-mini"
     image_model: str = "gpt-image-2"
+    image_model_fallback: str = "nano-banana-2"
     video_model: str = "doubao-seedance-2-0-fast-260128"
     aspect_ratio: str = "9:16"
     segment_count: int = 2
@@ -128,6 +130,7 @@ class RunLogger:
                 "base_url": config.base_url,
                 "analysis_model": config.analysis_model,
                 "image_model": config.image_model,
+                "image_model_fallback": config.image_model_fallback,
                 "video_model": config.video_model,
                 "aspect_ratio": config.aspect_ratio,
                 "segment_count": config.segment_count,
@@ -666,29 +669,54 @@ class ComflySeedanceClient:
         return _retry("analyze", self.config.analysis_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
     def generate_board_image(self, prompt: str, refs: List[str], action: str) -> tuple[Dict[str, Any], int]:
-        body: Dict[str, Any] = {
-            "model": self.config.image_model,
-            "prompt": prompt,
-            "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
-            "response_format": "url",
-        }
-        if refs:
-            body["image"] = refs
+        primary = (self.config.image_model or "").strip()
+        fallback = (self.config.image_model_fallback or "").strip()
+        models: List[str] = [primary] if primary else []
+        if fallback and fallback != primary:
+            models.append(fallback)
+        if not models:
+            raise PipelineError("No image model configured")
 
-        def call() -> Dict[str, Any]:
-            img_url = f"{self.base_url}/v1/images/generations"
-            self._trace_request("images_generations", img_url, body)
-            r = self.session.post(img_url, headers={"Content-Type": "application/json"}, json=body, timeout=300)
-            payload = self._check(r)
-            data = payload.get("data", [])
-            if not isinstance(data, list) or not data:
-                raise PipelineError(f"Image generation returned no data: {payload}")
-            url = data[0].get("url")
-            if not isinstance(url, str) or not url:
-                raise PipelineError(f"Image generation returned no url: {payload}")
-            return {"url": url, "revised_prompt": data[0].get("revised_prompt"), "raw": payload, "request": body}
+        last_exc: Optional[Exception] = None
+        total_attempts = 0
+        for model_idx, model_id in enumerate(models):
+            body: Dict[str, Any] = {
+                "model": model_id,
+                "prompt": prompt,
+                "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+                "response_format": "url",
+            }
+            if refs:
+                body["image"] = refs
+            tag = action if model_idx == 0 else f"{action}_fallback_{model_id}"
 
-        return _retry(action, self.config.image_generation_retries, self.config.network_retry_delay_seconds, self.logger, call)
+            def call(_body=body) -> Dict[str, Any]:
+                img_url = f"{self.base_url}/v1/images/generations"
+                self._trace_request("images_generations", img_url, _body)
+                r = self.session.post(img_url, headers={"Content-Type": "application/json"}, json=_body, timeout=300)
+                payload = self._check(r)
+                data = payload.get("data", [])
+                if not isinstance(data, list) or not data:
+                    raise PipelineError(f"Image generation returned no data: {payload}")
+                url = data[0].get("url")
+                if not isinstance(url, str) or not url:
+                    raise PipelineError(f"Image generation returned no url: {payload}")
+                return {"url": url, "revised_prompt": data[0].get("revised_prompt"), "raw": payload, "request": _body, "model": model_id}
+
+            try:
+                result, attempts = _retry(tag, self.config.image_generation_retries, self.config.network_retry_delay_seconds, self.logger, call)
+                total_attempts += attempts
+                if model_idx > 0:
+                    result["fallback_used"] = True
+                    result["primary_model_failure"] = str(last_exc) if last_exc else None
+                return result, total_attempts
+            except Exception as exc:
+                total_attempts += self.config.image_generation_retries
+                last_exc = exc
+                if model_idx + 1 < len(models):
+                    self.logger.error(action, f"primary model {model_id} exhausted, falling back to {models[model_idx + 1]}: {exc}")
+                    continue
+        raise PipelineError(f"{action} failed across image models {models}: {last_exc}")
 
     def submit_seedance_video(
         self,
@@ -954,6 +982,7 @@ def _build_config(data: Input) -> PipelineConfig:
         language=(data.get("language") or "zh-CN").strip() or "zh-CN",
         analysis_model=(data.get("analysis_model") or "gpt-4.1-mini").strip() or "gpt-4.1-mini",
         image_model=(data.get("image_model") or "gpt-image-2").strip() or "gpt-image-2",
+        image_model_fallback=(data.get("image_model_fallback") or "nano-banana-2").strip() or "nano-banana-2",
         video_model=(data.get("video_model") or "doubao-seedance-2-0-fast-260128").strip() or "doubao-seedance-2-0-fast-260128",
         aspect_ratio=_normalize_aspect_ratio(str(data.get("aspect_ratio") or "9:16"), "9:16"),
         segment_count=segment_count,
@@ -1134,6 +1163,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             "config": {
                 "analysis_model": config.analysis_model,
                 "image_model": config.image_model,
+                "image_model_fallback": config.image_model_fallback,
                 "video_model": config.video_model,
                 "aspect_ratio": config.aspect_ratio,
                 "segment_count": config.segment_count,
