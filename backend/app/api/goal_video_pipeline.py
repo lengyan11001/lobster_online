@@ -32,10 +32,10 @@ TERMINAL_FAILURE = {"failed", "error", "cancelled", "canceled", "timeout", "reje
 class GoalVideoPipelinePayload(BaseModel):
     action: str = Field("run_pipeline", description="run_pipeline/start_pipeline/poll_pipeline")
     job_id: Optional[str] = None
-    goal: str = Field("", description="用户目标，例如：给某产品生成 8 秒宣传视频")
+    goal: str = Field("", description="用户目标，例如：给某产品生成 6 秒宣传视频")
     platform: str = "douyin"
     language: str = "中文"
-    duration: Optional[int] = Field(8, ge=3, le=60)
+    duration: Optional[int] = Field(6, ge=3, le=60)
     aspect_ratio: str = "9:16"
     memory_scope: str = "default"
     planning_model: Optional[str] = None

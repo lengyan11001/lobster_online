@@ -60,6 +60,7 @@ _comfly_image_models_cache: list[str] = []
 _comfly_image_models_ts: float = 0
 _remote_image_generate_default_model_cache: str = ""
 _remote_video_generate_default_model_cache: str = ""
+_remote_generation_config_refreshing = False
 _COMFLY_CACHE_TTL = 600  # 10 minutes
 
 
@@ -105,6 +106,32 @@ def _refresh_remote_generation_config() -> None:
     _comfly_image_models_ts = now
 
 
+def _refresh_remote_generation_config_background() -> None:
+    """Warm generation defaults without blocking an OpenClaw-first chat turn."""
+    global _remote_generation_config_refreshing
+    now = time.time()
+    if _comfly_image_models_ts and (now - _comfly_image_models_ts) < _COMFLY_CACHE_TTL:
+        return
+    if _remote_generation_config_refreshing:
+        return
+    _remote_generation_config_refreshing = True
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        _remote_generation_config_refreshing = False
+        return
+
+    async def _worker() -> None:
+        global _remote_generation_config_refreshing
+        try:
+            await asyncio.to_thread(_refresh_remote_generation_config)
+        finally:
+            _remote_generation_config_refreshing = False
+
+    asyncio.create_task(_worker())
+
+
 def _get_comfly_image_models() -> list[str]:
     """Fetch Comfly image model IDs from server /capabilities/comfly-pricing, cached with TTL."""
     _refresh_remote_generation_config()
@@ -121,6 +148,14 @@ def _get_default_image_generate_model() -> str:
 def _get_default_video_generate_model(_has_image: bool = False) -> str:
     """Server-controlled default video model with local fallback for offline/old servers."""
     _refresh_remote_generation_config()
+    local_fallback = (getattr(settings, "lobster_default_video_generate_model", None) or "").strip()
+    bundled_fallback = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
+    return _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
+
+
+def _get_default_video_generate_model_cached(_has_image: bool = False) -> str:
+    """Return cached/local default and refresh remote config in background."""
+    _refresh_remote_generation_config_background()
     local_fallback = (getattr(settings, "lobster_default_video_generate_model", None) or "").strip()
     bundled_fallback = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
     return _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
@@ -703,6 +738,31 @@ def _build_lobster_main_system_prompt(edition: str, has_tools: bool) -> str:
         )
     else:
         body = _no_tools_sys_hint(edition)
+    return intro + body + _LOBSTER_CHAT_POLICY_CLOSING
+
+
+def _build_lobster_openclaw_system_prompt(edition: str) -> str:
+    """OpenClaw route owns MCP discovery, so avoid local tools/list and remote pricing prefetch here."""
+    intro = _load_lobster_chat_policy_intro(edition)
+    body = _load_lobster_chat_policy_tools_body()
+    if not body.strip():
+        body = (
+            "\n【能力调用】生成图片、视频、创意成片、素材理解、发布等均通过 OpenClaw 已连接的龙虾 MCP 工具完成。"
+            "需要能力清单时调用 list_capabilities；需要执行时调用 invoke_capability。"
+            "不要因为本机直连对话没有预取工具列表就声称没有能力。\n\n"
+        )
+    default_image_model = (
+        _remote_image_generate_default_model_cache
+        or (getattr(settings, "lobster_default_image_generate_model", None) or "").strip()
+        or _DEFAULT_IMAGE_GENERATE_MODEL
+    )
+    default_video_model = _get_default_video_generate_model_cached()
+    body += (
+        "【图片模型】用户未指定时默认使用 "
+        f"{default_image_model}；用户指定模型时按用户指定传 payload.model。\n"
+        "【视频模型】用户未指定时默认使用 "
+        f"{default_video_model}；文生视频和图生视频都先使用该默认视频模型，禁止自行替换。\n"
+    )
     return intro + body + _LOBSTER_CHAT_POLICY_CLOSING
 
 
@@ -2037,9 +2097,32 @@ def _infer_video_model_lock_from_user_text(user_message: str, has_attachment: bo
     return _get_default_video_generate_model(has_attachment), "default"
 
 
+def _infer_video_model_lock_for_openclaw(user_message: str, has_attachment: bool = False) -> Tuple[str, str]:
+    """Infer OpenClaw video model without blocking on remote pricing refresh."""
+    text = _strip_lobster_attachment_block(user_message)
+    probe = {"capability_id": "video.generate", "payload": {}}
+    _infer_video_model_from_user_text(probe, text, has_attachment)
+    inner = probe.get("payload") if isinstance(probe, dict) else {}
+    model = ""
+    if isinstance(inner, dict):
+        model = str(inner.get("model") or "").strip()
+    if model:
+        return model, "user"
+    low = (text or "").lower()
+    for alias, canonical in sorted(_VIDEO_MODEL_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        alias_low = alias.lower()
+        pattern = r"(?<![a-z0-9])" + re.escape(alias_low).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+        if re.search(pattern, low):
+            return canonical, "user"
+    short_model = _VIDEO_SHORT_MODEL_ID_RE.search(text or "")
+    if short_model:
+        return short_model.group(1).strip(), "user"
+    return _get_default_video_generate_model_cached(has_attachment), "default"
+
+
 _DEFAULT_IMAGE_GENERATE_MODEL = "gpt-image2"
-_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "veo3.1-fast"
-_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "veo3.1-fast"
+_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "grok-video-3"
+_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "grok-video-3"
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
     "gpt-image": "gpt-image-2",
@@ -2076,6 +2159,9 @@ _VIDEO_MODEL_ALIASES: Dict[str, str] = {
     "veo3 fast": "veo3.1-fast",
     "veo-fast": "veo3.1-fast",
     "veo fast": "veo3.1-fast",
+    "grok": "grok-video-3",
+    "grok video": "grok-video-3",
+    "grok-video-3": "grok-video-3",
     "hailuo": "fal-ai/minimax/hailuo-2.3/standard/text-to-video",
     "kling": "fal-ai/kling-video/v3/standard/text-to-video",
     "wan": "wan/v2.6/text-to-video",
@@ -7338,20 +7424,25 @@ async def chat_endpoint(
         if not model or model == "openclaw":
             model = _pick_default_model()
 
-    mcp_tools = await _fetch_mcp_tools(raw_token)
     review_drafts_only = bool(getattr(payload, "review_prompt_drafts_only", False))
     _review_prompt_drafts_only_active.set(review_drafts_only)
     direct_llm = bool(getattr(payload, "direct_llm", False))
-    if review_drafts_only:
-        mcp_tools = []
+    want_oc_first = _want_openclaw_first_this_turn(
+        review_drafts_only, direct_llm, _oc_pfx_hit
+    )
+    mcp_tools: List[Dict] = []
+    if not want_oc_first and not review_drafts_only and not direct_llm:
+        mcp_tools = await _fetch_mcp_tools(raw_token)
+    elif review_drafts_only:
         logger.info(
             "[CHAT] review_prompt_drafts_only：已禁用 MCP；使用极简 system（见 app.log 历史：主对话 system 曾导致只输出闲聊而非 JSON）"
         )
     elif direct_llm:
-        mcp_tools = []
         logger.info("[CHAT] direct_llm：不挂 MCP，极简 system，用户内容直送当前模型")
+    elif want_oc_first:
+        logger.info("[CHAT] OpenClaw 优先：跳过本机 MCP tools/list，交由 OpenClaw MCP 自行发现工具")
     has_tools = bool(mcp_tools)
-    if not has_tools:
+    if not has_tools and not want_oc_first:
         logger.info(
             "MCP tools empty (port 8001 may be down or unreachable), chat has no capabilities; "
             "user will see 'cannot generate image'. Check that MCP service is started (run_mcp.bat / start.bat)."
@@ -7370,10 +7461,12 @@ async def chat_endpoint(
         sys_prompt = _REVIEW_PROMPT_DRAFTS_SYSTEM
     elif direct_llm:
         sys_prompt = _DIRECT_LLM_SYSTEM
+    elif want_oc_first:
+        sys_prompt = _build_lobster_openclaw_system_prompt(edition)
     else:
         sys_prompt = _build_lobster_main_system_prompt(edition, has_tools)
 
-    if not review_drafts_only and not direct_llm:
+    if not review_drafts_only and not direct_llm and not want_oc_first:
         sys_prompt = await _maybe_append_capabilities_snapshot_to_system(
             sys_prompt, (payload.message or "").strip(), raw_token, request, has_tools
         )
@@ -7405,14 +7498,11 @@ async def chat_endpoint(
     attachment_urls = _get_attachment_public_urls(
         getattr(payload, "attachment_asset_ids", None), request, db, current_user.id
     )
-    openclaw_video_model_lock, openclaw_video_model_lock_source = _infer_video_model_lock_from_user_text(
+    openclaw_video_model_lock, openclaw_video_model_lock_source = _infer_video_model_lock_for_openclaw(
         payload.message or "",
         bool(attachment_urls),
     )
 
-    want_oc_first = _want_openclaw_first_this_turn(
-        review_drafts_only, direct_llm, _oc_pfx_hit
-    )
     openclaw_tried_first = False
 
     if want_oc_first:
@@ -7462,6 +7552,17 @@ async def chat_endpoint(
             logger.warning("[CHAT] OpenClaw 前缀轮次：Gateway 无有效回复，且无直连/速推配置，不回退 detail=%s", detail)
             raise HTTPException(status_code=503, detail=detail)
         logger.info("[CHAT] OpenClaw 优先：Gateway 无有效回复，回退直连+MCP")
+        if not mcp_tools and not review_drafts_only and not direct_llm:
+            mcp_tools = await _fetch_mcp_tools(raw_token)
+            has_tools = bool(mcp_tools)
+            sys_prompt = _build_lobster_main_system_prompt(edition, has_tools)
+            sys_prompt = await _maybe_append_capabilities_snapshot_to_system(
+                sys_prompt, (payload.message or "").strip(), raw_token, request, has_tools
+            )
+            sys_prompt = await _maybe_append_sutui_models_snapshot_to_system(
+                sys_prompt, (payload.message or "").strip(), raw_token, request, has_tools
+            )
+            messages[0]["content"] = sys_prompt
 
     cfg = cfg_pre
     if cfg:
@@ -7638,17 +7739,24 @@ async def _chat_stream_events(
             model = payload.model or getattr(current_user, "preferred_model", None) or ""
             if not model or model == "openclaw":
                 model = _pick_default_model()
-        mcp_tools = await _fetch_mcp_tools(raw_token)
         _is_sched_orch = bool(getattr(payload, "schedule_orchestration", False))
         _schedule_orchestration_active.set(_is_sched_orch)
         _cost_cancelled_caps_ctx.set(set())
-        _review_prompt_drafts_only_active.set(bool(getattr(payload, "review_prompt_drafts_only", False)))
+        review_po = bool(getattr(payload, "review_prompt_drafts_only", False))
+        _review_prompt_drafts_only_active.set(review_po)
         direct_llm = bool(getattr(payload, "direct_llm", False))
-        if direct_llm:
-            mcp_tools = []
+        want_oc = _want_openclaw_first_this_turn(
+            review_po, direct_llm, openclaw_prefixed_turn
+        )
+        mcp_tools: List[Dict] = []
+        if not want_oc and not review_po and not direct_llm:
+            mcp_tools = await _fetch_mcp_tools(raw_token)
+        elif direct_llm:
             logger.info("[CHAT/stream] direct_llm：不挂 MCP，极简 system")
+        elif want_oc:
+            logger.info("[CHAT/stream] OpenClaw 优先：跳过本机 MCP tools/list，交由 OpenClaw MCP 自行发现工具")
         has_tools = bool(mcp_tools)
-        if not has_tools:
+        if not has_tools and not want_oc:
             logger.info("MCP tools empty (stream path), chat has no capabilities")
         sutui_override_url: Optional[str] = None
         sutui_override_headers: Optional[Dict[str, str]] = None
@@ -7661,9 +7769,11 @@ async def _chat_stream_events(
             cfg_pre = _resolve_config(resolve_model) if resolve_model else None
         if direct_llm:
             sys_prompt = _DIRECT_LLM_SYSTEM
+        elif want_oc:
+            sys_prompt = _build_lobster_openclaw_system_prompt(edition)
         else:
             sys_prompt = _build_lobster_main_system_prompt(edition, has_tools)
-        if not direct_llm:
+        if not direct_llm and not want_oc:
             sys_prompt = await _maybe_append_capabilities_snapshot_to_system(
                 sys_prompt, (payload.message or "").strip(), raw_token, request, has_tools
             )
@@ -7707,11 +7817,7 @@ async def _chat_stream_events(
             error_holder.append(det if isinstance(det, str) else str(det))
         if not error_holder:
             cfg = cfg_pre
-            review_po = bool(getattr(payload, "review_prompt_drafts_only", False))
-            want_oc = _want_openclaw_first_this_turn(
-                review_po, direct_llm, openclaw_prefixed_turn
-            )
-            stream_video_model_lock, stream_video_model_lock_source = _infer_video_model_lock_from_user_text(
+            stream_video_model_lock, stream_video_model_lock_source = _infer_video_model_lock_for_openclaw(
                 payload.message or "",
                 bool(stream_attachment_urls),
             )
@@ -7751,6 +7857,17 @@ async def _chat_stream_events(
                             error_holder.append(_openclaw_failure_detail(_OC_ONLY_CHAT_FAIL_DETAIL))
                         elif openclaw_prefixed_turn and not cfg:
                             error_holder.append(_openclaw_failure_detail(_OC_PREFIX_CHAT_FAIL_DETAIL))
+                        elif not mcp_tools and not review_po and not direct_llm:
+                            mcp_tools = await _fetch_mcp_tools(raw_token)
+                            has_tools = bool(mcp_tools)
+                            sys_prompt = _build_lobster_main_system_prompt(edition, has_tools)
+                            sys_prompt = await _maybe_append_capabilities_snapshot_to_system(
+                                sys_prompt, (payload.message or "").strip(), raw_token, request, has_tools
+                            )
+                            sys_prompt = await _maybe_append_sutui_models_snapshot_to_system(
+                                sys_prompt, (payload.message or "").strip(), raw_token, request, has_tools
+                            )
+                            messages[0]["content"] = sys_prompt
 
                 if not reply_holder and not error_holder and cfg:
                     _mcp_sh: Dict[str, str] = {}

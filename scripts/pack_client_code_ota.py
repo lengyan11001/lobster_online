@@ -8,7 +8,7 @@
 不含 python/、deps/、browser_chromium/、nodejs 可执行文件；openclaw 不含 workspace* 整目录（避免 .git/ 与用户数据），
 但强制纳入「主对话」必需的 openclaw/workspace/LOBSTER_CHAT_POLICY_*.md（与 backend chat 单一事实来源一致）。
 logs、OpenClaw 登录态均不打包；根 .env 作为产品配置随 OTA 下发。
-openclaw.json 会随包更新，gateway.auth.token 与根 .env 一起覆盖，保证本机 backend 与 Gateway 通信 token 一致。
+openclaw/openclaw.json 属于运行态配置，不随 OTA 覆盖；backend 启动/重启 Gateway 前会按本机 .env 同步必要字段。
 默认产物与 pack_slim_zip 一致：写在 lobster_online 的上一级目录（例如 d:\\lobster_online → d:\\）。
 """
 from __future__ import annotations
@@ -75,15 +75,19 @@ _OTA_OPENCLAW_SKIP_DIR_NAMES = {
     "user_memory",
 }
 _OTA_OPENCLAW_SKIP_FILE_NAMES = {
+    ".lobster_plugin_state_backup.json",
     ".env",
     ".channel_fallback.json",
     ".weixin_login_last.json",
+    "openclaw.json",
     "update-check.json",
 }
 _OTA_SECRET_REL_PATHS = {
+    "openclaw/.lobster_plugin_state_backup.json",
     "openclaw/.env",
     "openclaw/.channel_fallback.json",
     "openclaw/.weixin_login_last.json",
+    "openclaw/openclaw.json",
     "openclaw/update-check.json",
 }
 

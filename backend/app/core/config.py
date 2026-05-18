@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     """服务器未返回默认生图模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
     lobster_default_image_generate_model: str = "gpt-image2"
     """服务器未返回默认视频模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
-    lobster_default_video_generate_model: str = "veo3.1-fast"
+    lobster_default_video_generate_model: str = "grok-video-3"
     """定时编排（schedule_orchestration=True）时使用的速推子模型。不填则用默认对话模型。"""
     lobster_orchestration_sutui_chat_model: Optional[str] = None
     openclaw_gateway_url: Optional[str] = None
@@ -98,6 +98,8 @@ class Settings(BaseSettings):
     openclaw_weixin_single_device_jwt: bool = True
     """非空时：OpenClaw→本代理→认证中心 sutui-chat 的 JSON 里 model 一律改为此值（与网页「速推 LLM」子模型 id 一致，可选）。"""
     openclaw_sutui_upstream_model: Optional[str] = None
+    """OpenClaw MCP 意图识别/工具裁剪总开关。默认关闭，避免误判导致工具权限被压成只读。"""
+    openclaw_tool_scope_enabled: bool = False
     """为 True 时主对话先尝试 OpenClaw Gateway；与 lobster_openclaw_chat_prefix_gate 组合见 chat 路由说明。"""
     lobster_openclaw_primary_chat: bool = False
     """为 True 时主对话仅走 OpenClaw，失败不回退直连+MCP（审核稿与 direct_llm 仍可直连）。"""

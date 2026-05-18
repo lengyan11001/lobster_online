@@ -590,7 +590,7 @@ async def _run_openclaw_chat(
             openclaw_fallback_model(),
             jwt_token,
             installation_id=installation_id,
-            video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "veo3.1-fast"),
+            video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "grok-video-3"),
             video_model_lock_source="default",
         )
         if not reply:
@@ -663,7 +663,7 @@ async def _run_scheduled_chat_message(
                 openclaw_fallback_model(),
                 jwt_token,
                 installation_id=installation_id,
-                video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "veo3.1-fast"),
+                video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "grok-video-3"),
                 video_model_lock_source="default",
             )
             if not reply:
@@ -809,8 +809,8 @@ async def _call_scheduled_llm(
 def _fallback_goal(task_title: str) -> str:
     title = (task_title or "").strip()
     if title and title not in {"能力定时任务", "目标成片", "创意成片"}:
-        return f"根据我的记忆和任务名称“{title}”，生成一个 8 秒抖音 9:16 中文宣传视频。"
-    return "根据我的记忆，自动选择最适合推广的产品或服务，生成一个 8 秒抖音 9:16 中文宣传视频。"
+        return f"根据我的记忆和任务名称“{title}”，生成一个 6 秒抖音 9:16 中文宣传视频。"
+    return "根据我的记忆，自动选择最适合推广的产品或服务，生成一个 6 秒抖音 9:16 中文宣传视频。"
 
 
 def _fallback_hifly_script(task_title: str) -> str:
@@ -855,7 +855,7 @@ async def _generate_scheduled_content(
             "根据用户记忆和可用素材，为创意成片流水线生成目标。"
             "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
             "先从记忆里抽取真实卖点，再围绕指定创意角度生成本次视频目标。"
-            "goal 要能直接传给创意成片能力，明确 8 秒、抖音、9:16、中文宣传视频，并写出本次成片的切入角度、画面方向和核心短文案。"
+            "goal 要能直接传给创意成片能力，明确 6 秒、抖音、9:16、中文宣传视频，并写出本次成片的切入角度、画面方向和核心短文案。"
             "每次都要换表达，不要复用固定开头、固定句式或通用宣传套话；不要要求用户补充信息，不要编造素材 ID。"
         )
     user_payload = {
@@ -1290,7 +1290,7 @@ async def _run_scheduled_capability(
                     "action": "start_pipeline",
                     "goal": generated.get("goal") or _fallback_goal(task_title),
                     "platform": "douyin",
-                    "duration": 8,
+                    "duration": 6,
                     "aspect_ratio": "9:16",
                     "language": "zh",
                     "memory_scope": "default",

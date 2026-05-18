@@ -1172,7 +1172,7 @@ def _build_config(data: Input) -> PipelineConfig:
     detail_template_id = str(data.get("detail_template_id", "")).strip() or "detail_template_01"
     showcase_template_id = str(data.get("showcase_template_id", "")).strip() or DEFAULT_SHOWCASE_TEMPLATE_ID
     return PipelineConfig(
-        base_url=str(data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.chat"))).strip(),
+        base_url=str(data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.org"))).strip(),
         api_key=api_key,
         sku=str(data.get("sku", "")).strip(),
         selling_points=selling_points or None,

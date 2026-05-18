@@ -212,12 +212,12 @@ function checkOcStatus() {
   fetch((LOCAL_API_BASE || '') + '/api/openclaw/status', { headers: authHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      if (d.online) {
+      if (d.online || d.listener_online) {
         dot.className = 'status-dot online';
-        text.textContent = 'OpenClaw Gateway 运行中';
+        text.textContent = d.message || 'OpenClaw Gateway 运行中';
       } else {
         dot.className = 'status-dot offline';
-        text.textContent = 'OpenClaw Gateway 未运行';
+        text.textContent = d.message || 'OpenClaw Gateway 未运行';
       }
     })
     .catch(function() {

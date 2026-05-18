@@ -139,7 +139,7 @@ async def _resolve_viral_remix_user(request: Request) -> _ServerUser:
 
 
 def _default_comfly_base() -> str:
-    return ((settings.comfly_api_base or "").strip().rstrip("/")) or "https://ai.comfly.chat/v1"
+    return ((settings.comfly_api_base or "").strip().rstrip("/")) or "https://ai.comfly.org"
 
 
 def _endpoint(api_base: str, path: str) -> str:

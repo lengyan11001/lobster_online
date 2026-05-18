@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 def _default_comfly_api_base() -> str:
-    return ((settings.comfly_api_base or "").strip().rstrip("/")) or "https://ai.comfly.chat/v1"
+    return ((settings.comfly_api_base or "").strip().rstrip("/")) or "https://ai.comfly.org"
 
 
 def _mask_secret(s: str) -> str:

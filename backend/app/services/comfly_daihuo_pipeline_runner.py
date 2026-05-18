@@ -45,7 +45,7 @@ def _bundled_ffmpeg_exe() -> Optional[str]:
 
 
 def _api_base_for_pipeline(api_base: str) -> str:
-    """技能脚本在 host 根下拼 /v1、/v2；LOBSTER 常配 https://ai.comfly.chat/v1，需去掉尾部 /v1。"""
+    """技能脚本在 host 根下拼 /v1、/v2；旧配置如带尾部 /v1，需去掉后再交给脚本。"""
     b = (api_base or "").strip().rstrip("/")
     if b.lower().endswith("/v1"):
         return b[:-3].rstrip("/")

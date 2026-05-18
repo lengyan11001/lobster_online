@@ -6,6 +6,7 @@ import logging
 import platform
 import re
 import sys
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from .auth import _ServerUser, get_current_user_media_edit
+from .openclaw_config import build_openclaw_status_snapshot
 from ..core.config import settings
 
 router = APIRouter()
@@ -116,9 +118,26 @@ def _settings_summary() -> dict:
         "lobster_openclaw_primary_chat": getattr(settings, "lobster_openclaw_primary_chat", None),
         "lobster_openclaw_only_chat": getattr(settings, "lobster_openclaw_only_chat", None),
         "lobster_openclaw_chat_prefix_gate": getattr(settings, "lobster_openclaw_chat_prefix_gate", None),
+        "openclaw_tool_scope_enabled": getattr(settings, "openclaw_tool_scope_enabled", None),
         "chat_require_capability_cost_confirm": getattr(settings, "chat_require_capability_cost_confirm", None),
         "lobster_chat_generation_early_finish": getattr(settings, "lobster_chat_generation_early_finish", None),
     }
+
+
+def _external_log_candidates() -> list[tuple[str, Path]]:
+    candidates: list[tuple[str, Path]] = []
+    openclaw_temp = Path(tempfile.gettempdir()) / "openclaw"
+    if openclaw_temp.is_dir():
+        try:
+            logs = sorted(
+                [p for p in openclaw_temp.glob("openclaw-*.log") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            candidates.extend((f"external/openclaw/{p.name}", p) for p in logs[:4])
+        except OSError:
+            pass
+    return candidates
 
 
 def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
@@ -150,6 +169,19 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
             zf.writestr(arcname, _redact_text(text))
             summary["files"].append({"path": rel, "size": size, "truncated": truncated})
 
+        for arcname, path in _external_log_candidates():
+            try:
+                text, size, truncated = _read_tail_text(path, _DIAGNOSTIC_TAIL_BYTES)
+            except OSError as e:
+                summary["files"].append({"path": arcname, "source": str(path), "error": str(e)})
+                continue
+            if truncated:
+                text = f"[tail only: last {_DIAGNOSTIC_TAIL_BYTES} bytes of {size}]\n" + text
+            zf.writestr(_safe_arcname(arcname), _redact_text(text))
+            summary["files"].append(
+                {"path": arcname, "source": str(path), "size": size, "truncated": truncated}
+            )
+
         for rel in _CONFIG_CANDIDATES:
             path = (_BASE / rel).resolve()
             if not path.exists() or not path.is_file():
@@ -164,6 +196,35 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
                 text = f"[tail only: last {_DIAGNOSTIC_CONFIG_BYTES} bytes of {size}]\n" + text
             zf.writestr(arcname, _redact_text(text))
             summary["files"].append({"path": rel, "size": size, "truncated": truncated, "redacted": True})
+
+        openclaw_status: dict | None = None
+        try:
+            openclaw_status = build_openclaw_status_snapshot()
+        except Exception as e:
+            openclaw_status = {"error": str(e)}
+        zf.writestr(
+            "openclaw_status.json",
+            json.dumps(openclaw_status, ensure_ascii=False, indent=2) + "\n",
+        )
+        summary["openclaw_status"] = openclaw_status
+
+        openclaw_config = (_BASE / "openclaw" / "openclaw.json").resolve()
+        if openclaw_config.is_file():
+            try:
+                text, size, truncated = _read_tail_text(openclaw_config, _DIAGNOSTIC_CONFIG_BYTES)
+                if truncated:
+                    text = f"[tail only: last {_DIAGNOSTIC_CONFIG_BYTES} bytes of {size}]\n" + text
+                zf.writestr("openclaw/openclaw.json.redacted", _redact_text(text))
+                summary["files"].append(
+                    {
+                        "path": "openclaw/openclaw.json",
+                        "size": size,
+                        "truncated": truncated,
+                        "redacted": True,
+                    }
+                )
+            except OSError as e:
+                summary["files"].append({"path": "openclaw/openclaw.json", "error": str(e)})
 
         zf.writestr(
             "diagnostic_summary.json",

@@ -89,6 +89,15 @@ def set_openclaw_tool_scope_for_agent(
         _openclaw_tool_scope_cache[agent_id] = (headers, time.time() + float(ttl_seconds))
 
 
+def clear_openclaw_tool_scope_for_agent(agent_id: Optional[str] = None) -> None:
+    """Remove stale OpenClaw scope headers before starting a new turn."""
+    with _cache_lock:
+        if agent_id:
+            _openclaw_tool_scope_cache.pop(agent_id, None)
+        else:
+            _openclaw_tool_scope_cache.clear()
+
+
 def extend_mcp_token_ttl_for_jwt(token: str, ttl_seconds: int = MCP_TOKEN_TTL_SECONDS) -> None:
     """将缓存里等于该 JWT 的条目全部续期（滑动窗口）。
 
@@ -285,6 +294,7 @@ async def mcp_gateway_proxy(request: Request) -> Response:
     scope_headers = _openclaw_tool_scope_headers_for_mcp_forward(request)
     if scope_headers:
         headers.update(scope_headers)
+    headers["X-Lobster-OpenClaw-Mcp"] = "1"
     mcp_method = ""
     try:
         parsed = json.loads(body)

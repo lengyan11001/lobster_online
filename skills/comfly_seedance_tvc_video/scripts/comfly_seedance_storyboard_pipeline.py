@@ -974,7 +974,7 @@ def _build_config(data: Input) -> PipelineConfig:
             f"segment_count/storyboard_count must match total_duration_seconds / {FIXED_SEGMENT_DURATION_SECONDS}"
         )
     return PipelineConfig(
-        base_url=(data.get("base_url") or "https://ai.comfly.chat").rstrip("/"),
+        base_url=(data.get("base_url") or "https://ai.comfly.org").rstrip("/"),
         api_key=api_key,
         task_text=(data.get("task_text") or "").strip(),
         platform=(data.get("platform") or "brand_tvc").strip() or "brand_tvc",

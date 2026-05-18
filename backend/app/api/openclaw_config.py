@@ -1,4 +1,5 @@
 """OpenClaw Gateway configuration: status check, API key management, model selection, restart."""
+import asyncio
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -40,7 +42,11 @@ _OC_DIR = _BASE_DIR / "openclaw"
 _OC_CONFIG = _OC_DIR / "openclaw.json"
 _WEIXIN_LEDGER = _OC_DIR / ".weixin_login_last.json"
 _OC_ENV = _OC_DIR / ".env"
+_OC_PLUGIN_STATE_BACKUP = _OC_DIR / ".lobster_plugin_state_backup.json"
 _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER = "LOBSTER_AUTO_TOKEN_PLACEHOLDER"
+_OPENCLAW_PLUGIN_MODE_LEAN = "lean"
+_OPENCLAW_PLUGIN_MODE_WEIXIN = "weixin"
+_OPENCLAW_WEIXIN_PLUGIN_ID = "openclaw-weixin"
 
 SUPPORTED_PROVIDERS = [
     {"id": "anthropic", "name": "Anthropic", "env_key": "ANTHROPIC_API_KEY",
@@ -109,7 +115,283 @@ def _write_oc_config(config: dict):
     _OC_CONFIG.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def _ensure_openclaw_json_for_local_launch() -> bool:
+def _read_plugin_state_backup() -> dict:
+    if not _OC_PLUGIN_STATE_BACKUP.exists():
+        return {}
+    try:
+        data = json.loads(_OC_PLUGIN_STATE_BACKUP.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_plugin_state_backup(data: dict) -> None:
+    _OC_DIR.mkdir(parents=True, exist_ok=True)
+    _OC_PLUGIN_STATE_BACKUP.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _stash_openclaw_plugin_state(config: dict) -> bool:
+    backup = _read_plugin_state_backup()
+    next_backup = dict(backup)
+    plugins = config.get("plugins")
+    channels = config.get("channels")
+    changed = False
+    if isinstance(plugins, dict) and plugins:
+        next_backup["plugins"] = plugins
+    if isinstance(channels, dict) and _OPENCLAW_WEIXIN_PLUGIN_ID in channels:
+        saved_channels = next_backup.get("channels")
+        if not isinstance(saved_channels, dict):
+            saved_channels = {}
+        saved_channels[_OPENCLAW_WEIXIN_PLUGIN_ID] = channels[_OPENCLAW_WEIXIN_PLUGIN_ID]
+        next_backup["channels"] = saved_channels
+    if isinstance(channels, dict) and isinstance(channels.get("slack"), dict):
+        saved_channels = next_backup.get("channels")
+        if not isinstance(saved_channels, dict):
+            saved_channels = {}
+        saved_channels["slack"] = channels["slack"]
+        next_backup["channels"] = saved_channels
+    if next_backup != backup:
+        _write_plugin_state_backup(next_backup)
+        changed = True
+    return changed
+
+
+def _restore_openclaw_plugin_state(config: dict) -> bool:
+    backup = _read_plugin_state_backup()
+    changed = False
+    plugins = backup.get("plugins")
+    if isinstance(plugins, dict) and plugins and config.get("plugins") != plugins:
+        config["plugins"] = plugins
+        changed = True
+    saved_channels = backup.get("channels")
+    if isinstance(saved_channels, dict) and _OPENCLAW_WEIXIN_PLUGIN_ID in saved_channels:
+        channels = config.setdefault("channels", {})
+        if isinstance(channels, dict) and channels.get(_OPENCLAW_WEIXIN_PLUGIN_ID) != saved_channels[_OPENCLAW_WEIXIN_PLUGIN_ID]:
+            channels[_OPENCLAW_WEIXIN_PLUGIN_ID] = saved_channels[_OPENCLAW_WEIXIN_PLUGIN_ID]
+            changed = True
+    return changed
+
+
+def _is_openclaw_install_stage_path(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return ".openclaw-install-stage-" in value.replace("\\", "/")
+
+
+def _cleanup_openclaw_install_stage_dirs() -> list[str]:
+    """Remove OpenClaw plugin install staging leftovers before gateway launch.
+
+    The OpenClaw gateway auto-discovers extension directories. If an interrupted
+    plugin install leaves .openclaw-install-stage-* directories behind, the same
+    plugin can be loaded multiple times and gateway startup can take much longer.
+    """
+    ext_dir = _OC_DIR / "extensions"
+    if not ext_dir.is_dir():
+        return []
+    removed: list[str] = []
+    for path in ext_dir.iterdir():
+        if not path.is_dir() or not path.name.startswith(".openclaw-install-stage-"):
+            continue
+        err = _rmtree_best_effort(path)
+        if err:
+            logger.warning("Failed to remove OpenClaw staging extension %s: %s", path, err)
+        else:
+            removed.append(str(path))
+    return removed
+
+
+def _set_openclaw_plugin_launch_mode(config: dict, mode: str = _OPENCLAW_PLUGIN_MODE_LEAN) -> bool:
+    """Keep normal OpenClaw startup light; enable channel plugins only when needed."""
+    mode = mode if mode == _OPENCLAW_PLUGIN_MODE_WEIXIN else _OPENCLAW_PLUGIN_MODE_LEAN
+    if mode == _OPENCLAW_PLUGIN_MODE_LEAN:
+        changed = _stash_openclaw_plugin_state(config)
+        lean_plugins = {"enabled": False, "entries": {}, "installs": {}, "load": {"paths": []}}
+        if config.get("plugins") != lean_plugins:
+            config["plugins"] = lean_plugins
+            changed = True
+        channels = config.get("channels")
+        if isinstance(channels, dict) and _OPENCLAW_WEIXIN_PLUGIN_ID in channels:
+            channels.pop(_OPENCLAW_WEIXIN_PLUGIN_ID, None)
+            changed = True
+        channels = config.setdefault("channels", {})
+        if isinstance(channels, dict):
+            slack_cfg = channels.setdefault("slack", {})
+            if not isinstance(slack_cfg, dict):
+                slack_cfg = {}
+                channels["slack"] = slack_cfg
+                changed = True
+            if slack_cfg.get("enabled") is not False:
+                slack_cfg["enabled"] = False
+                changed = True
+        return changed
+
+    changed = _restore_openclaw_plugin_state(config)
+    plugins = config.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        config["plugins"] = plugins = {}
+        changed = True
+    desired_enabled = True
+    if plugins.get("enabled") is not desired_enabled:
+        plugins["enabled"] = desired_enabled
+        changed = True
+
+    entries = plugins.setdefault("entries", {})
+    if not isinstance(entries, dict):
+        entries = {}
+        plugins["entries"] = entries
+        changed = True
+    installs = plugins.get("installs")
+    if not isinstance(installs, dict):
+        installs = {}
+
+    plugin_ids = set(entries.keys()) | set(installs.keys())
+    plugin_ids.add(_OPENCLAW_WEIXIN_PLUGIN_ID)
+
+    for plugin_id in sorted(pid for pid in plugin_ids if isinstance(pid, str) and pid.strip()):
+        entry = entries.setdefault(plugin_id, {})
+        if not isinstance(entry, dict):
+            entry = {}
+            entries[plugin_id] = entry
+            changed = True
+        should_enable = plugin_id == _OPENCLAW_WEIXIN_PLUGIN_ID
+        if entry.get("enabled") is not should_enable:
+            entry["enabled"] = should_enable
+            changed = True
+
+    deny = plugins.get("deny")
+    if not isinstance(deny, list):
+        deny = []
+    deny_set = {str(x) for x in deny if isinstance(x, str) and x.strip()}
+    deny_set.discard(_OPENCLAW_WEIXIN_PLUGIN_ID)
+    desired_denied = set(plugin_ids)
+    desired_denied.discard(_OPENCLAW_WEIXIN_PLUGIN_ID)
+    new_deny = sorted(deny_set | desired_denied)
+    if new_deny != deny:
+        plugins["deny"] = new_deny
+        changed = True
+
+    allow = plugins.get("allow")
+    if isinstance(allow, list) and allow:
+        allow_set = {str(x) for x in allow if isinstance(x, str) and x.strip()}
+        allow_set.add(_OPENCLAW_WEIXIN_PLUGIN_ID)
+        new_allow = sorted(allow_set)
+        if new_allow != allow:
+            plugins["allow"] = new_allow
+            changed = True
+
+    load = plugins.setdefault("load", {})
+    if not isinstance(load, dict):
+        load = {}
+        plugins["load"] = load
+        changed = True
+    paths = load.get("paths")
+    if not isinstance(paths, list):
+        paths = []
+    stable_weixin = _OC_DIR / "extensions" / "openclaw-weixin"
+    bundled_weixin = _BASE_DIR / "nodejs" / "node_modules" / "@tencent-weixin" / "openclaw-weixin"
+    stable_weixin_s = str(stable_weixin)
+    if stable_weixin.exists():
+        new_paths = [stable_weixin_s]
+        if new_paths != paths:
+            load["paths"] = new_paths
+            changed = True
+    elif bundled_weixin.exists():
+        new_paths = [str(bundled_weixin)]
+        if new_paths != paths:
+            load["paths"] = new_paths
+            changed = True
+    else:
+        new_paths = [
+            p for p in paths
+            if not (isinstance(p, str) and ("openclaw-weixin" in p or _is_openclaw_install_stage_path(p)))
+        ]
+        if new_paths != paths:
+            load["paths"] = new_paths
+            changed = True
+
+    return changed
+
+
+def _openclaw_json_needs_local_launch_patch(plugin_mode: str = _OPENCLAW_PLUGIN_MODE_LEAN) -> bool:
+    """Read-only check used while Gateway may already be running.
+
+    Writing openclaw.json while OpenClaw is alive can trigger its own config
+    watcher and an in-process restart. On Windows that restart can stall for
+    minutes, so callers must use this read-only probe and then restart kill-first.
+    """
+    if plugin_mode != _OPENCLAW_PLUGIN_MODE_LEAN:
+        return False
+    try:
+        if not _OC_CONFIG.exists():
+            return False
+        cfg = _read_oc_config()
+        if not isinstance(cfg, dict) or not cfg:
+            return False
+        lean_plugins = {"enabled": False, "entries": {}, "installs": {}, "load": {"paths": []}}
+        plugins = cfg.get("plugins")
+        if plugins != lean_plugins:
+            return True
+        if isinstance(plugins, dict):
+            load = plugins.get("load")
+            if isinstance(load, dict):
+                paths = load.get("paths")
+                if isinstance(paths, list) and any(_is_openclaw_install_stage_path(p) for p in paths):
+                    return True
+            entries = plugins.get("entries")
+            if isinstance(entries, dict):
+                for plugin_cfg in entries.values():
+                    if not isinstance(plugin_cfg, dict):
+                        continue
+                    for key in ("path", "source", "sourcePath", "installPath"):
+                        if _is_openclaw_install_stage_path(plugin_cfg.get(key)):
+                            return True
+            installs = plugins.get("installs")
+            if isinstance(installs, dict):
+                for install_cfg in installs.values():
+                    if not isinstance(install_cfg, dict):
+                        continue
+                    for key in ("sourcePath", "installPath"):
+                        if _is_openclaw_install_stage_path(install_cfg.get(key)):
+                            return True
+        channels = cfg.get("channels")
+        if not isinstance(channels, dict):
+            return True
+        if _OPENCLAW_WEIXIN_PLUGIN_ID in channels:
+            return True
+        slack_cfg = channels.get("slack")
+        if not isinstance(slack_cfg, dict) or slack_cfg.get("enabled") is not False:
+            return True
+        gateway = cfg.get("gateway")
+        if not isinstance(gateway, dict):
+            return True
+        reload_cfg = gateway.get("reload")
+        if not isinstance(reload_cfg, dict) or reload_cfg.get("mode") != "off":
+            return True
+        discovery = cfg.get("discovery")
+        if not isinstance(discovery, dict):
+            return True
+        mdns_cfg = discovery.get("mdns")
+        if not isinstance(mdns_cfg, dict) or mdns_cfg.get("mode") != "off":
+            return True
+        return False
+    except Exception as e:
+        logger.warning("openclaw_json_needs_local_launch_patch failed: %s", e)
+        return False
+
+
+def _openclaw_gateway_needs_local_restart() -> bool:
+    """Whether the local Gateway should be restarted before chat/status use."""
+    return (
+        _openclaw_json_needs_local_launch_patch()
+        or _openclaw_gateway_slack_stage_patch_needed()
+        or _openclaw_gateway_pricing_patch_needed()
+    )
+
+
+def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_MODE_LEAN) -> bool:
     """在拉起 OpenClaw 子进程前修正磁盘上的 openclaw.json。
 
     - OpenClaw 将 plugins.load.paths 里的相对路径按 process.cwd() 解析；若 cwd 非项目根会找不到插件。
@@ -126,6 +408,8 @@ def _ensure_openclaw_json_for_local_launch() -> bool:
         changed = False
         plugins = cfg.get("plugins")
         if isinstance(plugins, dict):
+            stable_weixin = _OC_DIR / "extensions" / "openclaw-weixin"
+            stable_weixin_index = stable_weixin / "index.ts"
             load = plugins.get("load")
             if isinstance(load, dict):
                 paths = load.get("paths")
@@ -136,6 +420,11 @@ def _ensure_openclaw_json_for_local_launch() -> bool:
                             new_paths.append(raw)
                             continue
                         p = raw.strip()
+                        if _is_openclaw_install_stage_path(p):
+                            if stable_weixin.exists():
+                                new_paths.append(str(stable_weixin))
+                            changed = True
+                            continue
                         r = Path(p)
                         if r.is_absolute():
                             new_paths.append(p)
@@ -148,8 +437,46 @@ def _ensure_openclaw_json_for_local_launch() -> bool:
                         else:
                             new_paths.append(p)
                     load["paths"] = new_paths
+            entries = plugins.get("entries")
+            if isinstance(entries, dict):
+                for plugin_id, plugin_cfg in list(entries.items()):
+                    if not isinstance(plugin_cfg, dict):
+                        continue
+                    for key in ("path", "source", "sourcePath", "installPath"):
+                        val = plugin_cfg.get(key)
+                        if not _is_openclaw_install_stage_path(val):
+                            continue
+                        if plugin_id == "openclaw-weixin" and stable_weixin.exists():
+                            plugin_cfg[key] = str(stable_weixin if key == "installPath" else (stable_weixin_index if stable_weixin_index.exists() else stable_weixin))
+                        else:
+                            plugin_cfg.pop(key, None)
+                        changed = True
+            installs = plugins.get("installs")
+            if isinstance(installs, dict):
+                for plugin_id, install_cfg in list(installs.items()):
+                    if not isinstance(install_cfg, dict):
+                        continue
+                    for key in ("sourcePath", "installPath"):
+                        val = install_cfg.get(key)
+                        if not _is_openclaw_install_stage_path(val):
+                            continue
+                        if plugin_id == "openclaw-weixin" and stable_weixin.exists():
+                            install_cfg[key] = str(stable_weixin if key == "installPath" else (stable_weixin_index if stable_weixin_index.exists() else stable_weixin))
+                        else:
+                            install_cfg.pop(key, None)
+                        changed = True
+        if _set_openclaw_plugin_launch_mode(cfg, plugin_mode):
+            changed = True
         gateway = cfg.setdefault("gateway", {})
         if isinstance(gateway, dict):
+            reload_cfg = gateway.setdefault("reload", {})
+            if not isinstance(reload_cfg, dict):
+                reload_cfg = {}
+                gateway["reload"] = reload_cfg
+                changed = True
+            if reload_cfg.get("mode") != "off":
+                reload_cfg["mode"] = "off"
+                changed = True
             auth = gateway.setdefault("auth", {})
             if isinstance(auth, dict):
                 env_gateway_token = (settings.openclaw_gateway_token or os.environ.get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
@@ -161,6 +488,16 @@ def _ensure_openclaw_json_for_local_launch() -> bool:
                 ):
                     auth["token"] = env_gateway_token
                     changed = True
+        discovery = cfg.setdefault("discovery", {})
+        if isinstance(discovery, dict):
+            mdns_cfg = discovery.setdefault("mdns", {})
+            if not isinstance(mdns_cfg, dict):
+                mdns_cfg = {}
+                discovery["mdns"] = mdns_cfg
+                changed = True
+            if mdns_cfg.get("mode") != "off":
+                mdns_cfg["mode"] = "off"
+                changed = True
         env_data = _read_oc_env()
         models = cfg.get("models")
         if isinstance(models, dict):
@@ -176,7 +513,11 @@ def _ensure_openclaw_json_for_local_launch() -> bool:
                         changed = True
         if changed:
             _write_oc_config(cfg)
-            logger.info("Patched openclaw.json for local OpenClaw launch (plugin paths / lobster-sutui apiKey)")
+            logger.info(
+                "Patched openclaw.json for local OpenClaw launch "
+                "(plugin mode=%s / plugin paths / staging refs / lobster-sutui apiKey)",
+                plugin_mode,
+            )
         return changed
     except Exception as e:
         logger.warning("ensure_openclaw_json_for_local_launch failed: %s", e)
@@ -249,14 +590,47 @@ def _ensure_agents_list(config: dict):
 _DEFAULT_PRIMARY = "anthropic/claude-sonnet-4-5"
 
 
+def build_openclaw_status_snapshot() -> dict:
+    """Return the local Gateway launch state for UI and diagnostics.
+
+    `online` intentionally means "the Gateway port is listening".  Config or
+    patch drift is returned separately so the UI does not look stuck in
+    "starting" while a usable Gateway process already exists.
+    """
+    listener_pids = _find_listener_pids_on_18789()
+    gateway_pids = _find_openclaw_gateway_process_pids()
+    needs_restart = _openclaw_gateway_needs_local_restart()
+    entry = _find_openclaw_entry()
+    online = bool(listener_pids)
+    if online and needs_restart:
+        state = "running_needs_sync"
+        message = "OpenClaw Gateway 已启动，配置待同步重启"
+    elif online:
+        state = "running"
+        message = "OpenClaw Gateway 运行中"
+    elif entry:
+        state = "starting"
+        message = "OpenClaw Gateway 启动中"
+    else:
+        state = "missing_entry"
+        message = "未找到 node 或 openclaw.mjs，请使用完整安装包或检查 nodejs 目录"
+    return {
+        "online": online,
+        "status_code": 200 if online else None,
+        "listener_online": online,
+        "listener_pids": listener_pids,
+        "gateway_pids": gateway_pids,
+        "config_synced": not needs_restart,
+        "needs_restart": bool(needs_restart),
+        "entry_found": bool(entry),
+        "state": state,
+        "message": message,
+    }
+
+
 @router.get("/api/openclaw/status", summary="OpenClaw Gateway 状态")
 async def openclaw_status(current_user: _ServerUser = Depends(get_current_user_for_local)):
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get("http://127.0.0.1:18789/")
-        return {"online": True, "status_code": r.status_code}
-    except Exception:
-        return {"online": False, "status_code": None}
+    return await asyncio.to_thread(build_openclaw_status_snapshot)
 
 
 @router.get("/api/openclaw/config", summary="读取 OpenClaw 配置")
@@ -427,11 +801,334 @@ def _wait_until_no_openclaw_gateway_processes(max_wait: float = 6.0) -> None:
         time.sleep(0.2)
 
 
+def _read_log_tail_for_warning(path: Path, max_bytes: int = 12000) -> str:
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > max_bytes:
+                f.seek(max(0, size - max_bytes))
+            data = f.read(max_bytes)
+        text = data.decode("utf-8", errors="replace")
+        if size > max_bytes:
+            return f"[tail only: last {max_bytes} bytes of {size}]\n{text}"
+        return text
+    except Exception as exc:
+        return f"<cannot read {path}: {exc}>"
+
+
+def _openclaw_log_candidates(limit: int = 4) -> list[Path]:
+    paths: list[Path] = []
+    root_log = _BASE_DIR / "openclaw.log"
+    if root_log.is_file():
+        paths.append(root_log)
+    temp_dir = Path(tempfile.gettempdir()) / "openclaw"
+    if temp_dir.is_dir():
+        try:
+            temp_logs = sorted(
+                [p for p in temp_dir.glob("openclaw-*.log") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            paths.extend(temp_logs[:limit])
+        except OSError:
+            pass
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for p in paths:
+        try:
+            key = p.resolve()
+        except OSError:
+            key = p
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(p)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _openclaw_package_version(mjs_path: str) -> str:
+    pkg = Path(mjs_path).parent / "package.json"
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+        return str(data.get("version") or "")
+    except Exception:
+        return ""
+
+
+def _openclaw_gateway_slack_stage_patch_needed() -> bool:
+    try:
+        entry = _find_openclaw_entry()
+        if not entry:
+            return False
+        _node_path, mjs_path = entry
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        for path in sorted(dist_dir.glob("gateway-cli-*.js")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE" in text:
+                continue
+            if 'name: "slack"' in text and "handleSlackHttpRequest(req, res)" in text:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("openclaw_gateway_slack_stage_patch_needed failed: %s", e)
+        return False
+
+
+def _openclaw_gateway_pricing_patch_needed() -> bool:
+    try:
+        entry = _find_openclaw_entry()
+        if not entry:
+            return False
+        _node_path, mjs_path = entry
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        for path in sorted(dist_dir.glob("usage-format-*.js")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING" in text:
+                continue
+            if "function startGatewayModelPricingRefresh(params)" in text:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("openclaw_gateway_pricing_patch_needed failed: %s", e)
+        return False
+
+
+def _patch_openclaw_gateway_slack_stage(mjs_path: str) -> bool:
+    """Disable OpenClaw's built-in Slack HTTP stage when local product does not use it.
+
+    OpenClaw 2026.4.1 registers the Slack stage unconditionally. If
+    @slack/web-api is not bundled, every Gateway request can throw before the
+    normal chat/model stages. This tiny runtime patch keeps the bundled version
+    fixed while allowing normal startup on machines without Slack dependencies.
+    """
+    marker = "LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE"
+    try:
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        candidates = sorted(dist_dir.glob("gateway-cli-*.js"))
+        changed = False
+        old = (
+            '\t\t\t\t{\n'
+            '\t\t\t\t\tname: "slack",\n'
+            '\t\t\t\t\trun: () => handleSlackHttpRequest(req, res)\n'
+            '\t\t\t\t}\n'
+        )
+        new = (
+            '\t\t\t\t{\n'
+            '\t\t\t\t\tname: "slack",\n'
+            '\t\t\t\t\trun: () => {\n'
+            f'\t\t\t\t\t\tif (String(process.env.{marker} ?? "").trim() === "1") return false;\n'
+            '\t\t\t\t\t\tif (configSnapshot.channels?.slack?.enabled === false) return false;\n'
+            '\t\t\t\t\t\treturn handleSlackHttpRequest(req, res);\n'
+            '\t\t\t\t\t}\n'
+            '\t\t\t\t}\n'
+        )
+        for path in candidates:
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                continue
+            if old not in text:
+                logger.warning("OpenClaw Slack stage patch skipped, pattern not found: %s", path)
+                continue
+            path.write_text(text.replace(old, new, 1), encoding="utf-8")
+            logger.info("Patched OpenClaw Gateway Slack stage guard: %s", path)
+            changed = True
+        return changed
+    except Exception as e:
+        logger.warning("patch_openclaw_gateway_slack_stage failed: %s", e)
+        return False
+
+
+def _patch_openclaw_gateway_pricing_refresh(mjs_path: str) -> bool:
+    """Allow local launch to skip OpenRouter pricing bootstrap."""
+    marker = "LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING"
+    try:
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        candidates = sorted(dist_dir.glob("usage-format-*.js"))
+        changed = False
+        old = "function startGatewayModelPricingRefresh(params) {\n\trefreshGatewayModelPricingCache(params).catch((error) => {"
+        new = (
+            "function startGatewayModelPricingRefresh(params) {\n"
+            f"\tif (String(process.env.{marker} ?? \"\").trim() === \"1\") return () => {{ clearRefreshTimer(); }};\n"
+            "\trefreshGatewayModelPricingCache(params).catch((error) => {"
+        )
+        for path in candidates:
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                continue
+            if old not in text:
+                logger.warning("OpenClaw pricing refresh patch skipped, pattern not found: %s", path)
+                continue
+            path.write_text(text.replace(old, new, 1), encoding="utf-8")
+            logger.info("Patched OpenClaw model pricing refresh guard: %s", path)
+            changed = True
+        return changed
+    except Exception as e:
+        logger.warning("patch_openclaw_gateway_pricing_refresh failed: %s", e)
+        return False
+
+
+def _patch_openclaw_latency_trace(mjs_path: str) -> bool:
+    """Add lightweight OpenClaw 2026.4.1 latency probes around chat and agent runs.
+
+    This is diagnostic-only: it does not change routing, prompts, tool access, or
+    model behavior. It writes timing markers into the normal OpenClaw log so the
+    next diagnostic upload can show where long pre-tool delays happen.
+    """
+    marker = "LOBSTER_OPENCLAW_LATENCY_TRACE"
+    try:
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        changed = False
+
+        gateway_candidates = sorted(dist_dir.glob("gateway-cli-*.js"))
+        gateway_old = (
+            "\tif (!stream) {\n"
+            "\t\ttry {\n"
+            "\t\t\tconst content = resolveAgentResponseText(await agentCommandFromIngress(commandInput, defaultRuntime, deps));"
+        )
+        gateway_new = (
+            "\tconst lobsterTraceId = String(req.headers[\"x-lobster-trace-id\"] ?? \"\").trim() || runId;\n"
+            "\tconst lobsterTraceStart = Date.now();\n"
+            "\tlogWarn(`[LOBSTER_TRACE] trace_id=${lobsterTraceId} stage=openai_compat_received run_id=${runId} agent_id=${agentId} session=${sessionKey} stream=${stream} model=${model} msg_chars=${String(prompt.message ?? \"\").length} image_count=${images.length}`);\n"
+            "\tif (!stream) {\n"
+            "\t\ttry {\n"
+            "\t\t\tlogWarn(`[LOBSTER_TRACE] trace_id=${lobsterTraceId} stage=agent_command_start run_id=${runId} elapsed_ms=${Date.now() - lobsterTraceStart}`);\n"
+            "\t\t\tconst lobsterAgentStart = Date.now();\n"
+            "\t\t\tconst content = resolveAgentResponseText(await agentCommandFromIngress(commandInput, defaultRuntime, deps));\n"
+            "\t\t\tlogWarn(`[LOBSTER_TRACE] trace_id=${lobsterTraceId} stage=agent_command_end run_id=${runId} duration_ms=${Date.now() - lobsterAgentStart} total_ms=${Date.now() - lobsterTraceStart} content_chars=${String(content ?? \"\").length}`);"
+        )
+        for path in gateway_candidates:
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                continue
+            if gateway_old not in text:
+                logger.warning("OpenClaw latency trace gateway patch skipped, pattern not found: %s", path)
+                continue
+            text = f"// {marker}\n" + text.replace(gateway_old, gateway_new, 1)
+            path.write_text(text, encoding="utf-8")
+            logger.info("Patched OpenClaw latency trace gateway probes: %s", path)
+            changed = True
+
+        runner_candidates = sorted(dist_dir.glob("agent-runner.runtime-*.js"))
+        runner_old = (
+            "\t\t\t\tconst { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({"
+        )
+        runner_new = (
+            "\t\t\t\tconst lobsterRunnerTraceStart = Date.now();\n"
+            "\t\t\t\tdefaultRuntime.error(`[LOBSTER_TRACE] stage=runner_embedded_prepare run_id=${runId} provider=${String(provider)} model=${String(model)} session=${String(params.sessionKey ?? \"\")} cmd_chars=${String(params.commandBody ?? \"\").length}`);\n"
+            "\t\t\t\tconst { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({"
+        )
+        tool_old = (
+            "\t\t\t\t\t\t\tonAgentEvent: async (evt) => {\n"
+            "\t\t\t\t\t\t\t\tconst hasLifecyclePhase = evt.stream === \"lifecycle\" && typeof evt.data.phase === \"string\";"
+        )
+        tool_new = (
+            "\t\t\t\t\t\t\tonAgentEvent: async (evt) => {\n"
+            "\t\t\t\t\t\t\t\ttry {\n"
+            "\t\t\t\t\t\t\t\t\tif (evt?.stream === \"tool\") defaultRuntime.error(`[LOBSTER_TRACE] stage=runner_tool_event run_id=${runId} phase=${String(evt.data?.phase ?? \"\")} name=${String(evt.data?.name ?? \"\")} elapsed_ms=${Date.now() - lobsterRunnerTraceStart}`);\n"
+            "\t\t\t\t\t\t\t\t\tif (evt?.stream === \"lifecycle\" && typeof evt.data?.phase === \"string\") defaultRuntime.error(`[LOBSTER_TRACE] stage=runner_lifecycle run_id=${runId} phase=${String(evt.data.phase)} elapsed_ms=${Date.now() - lobsterRunnerTraceStart}`);\n"
+            "\t\t\t\t\t\t\t\t} catch {}\n"
+            "\t\t\t\t\t\t\t\tconst hasLifecyclePhase = evt.stream === \"lifecycle\" && typeof evt.data.phase === \"string\";"
+        )
+        embedded_old = "\t\t\t\t\t\tconst result = await runEmbeddedPiAgent({"
+        embedded_new = (
+            "\t\t\t\t\t\tdefaultRuntime.error(`[LOBSTER_TRACE] stage=run_embedded_start run_id=${runId} elapsed_ms=${Date.now() - lobsterRunnerTraceStart}`);\n"
+            "\t\t\t\t\t\tconst result = await runEmbeddedPiAgent({"
+        )
+        embedded_end_old = "\t\t\t\t\t\tbootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(result.meta?.systemPromptReport);"
+        embedded_end_new = (
+            "\t\t\t\t\t\tdefaultRuntime.error(`[LOBSTER_TRACE] stage=run_embedded_end run_id=${runId} duration_ms=${Date.now() - lobsterRunnerTraceStart}`);\n"
+            "\t\t\t\t\t\tbootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(result.meta?.systemPromptReport);"
+        )
+        for path in runner_candidates:
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                continue
+            if not all(pat in text for pat in (runner_old, tool_old, embedded_old, embedded_end_old)):
+                logger.warning("OpenClaw latency trace runner patch skipped, pattern not found: %s", path)
+                continue
+            runner_idx = text.find(runner_old)
+            if runner_idx < 0:
+                logger.warning("OpenClaw latency trace runner anchor missing: %s", path)
+                continue
+            prefix = text[:runner_idx]
+            target = text[runner_idx:]
+            if not all(pat in target for pat in (tool_old, embedded_old, embedded_end_old)):
+                logger.warning("OpenClaw latency trace runner target block incomplete: %s", path)
+                continue
+            next_run_idx = target.find("const result = await runEmbeddedPiAgent({", target.find(embedded_old) + len(embedded_old))
+            if next_run_idx > 0:
+                target_block = target[:next_run_idx]
+                target_rest = target[next_run_idx:]
+            else:
+                target_block = target
+                target_rest = ""
+            if not all(pat in target_block for pat in (tool_old, embedded_old, embedded_end_old)):
+                logger.warning("OpenClaw latency trace runner target block markers crossed next run: %s", path)
+                continue
+            target_block = target_block.replace(runner_old, runner_new, 1)
+            target_block = target_block.replace(tool_old, tool_new, 1)
+            target_block = target_block.replace(embedded_old, embedded_new, 1)
+            target_block = target_block.replace(embedded_end_old, embedded_end_new, 1)
+            target = target_block + target_rest
+            path.write_text(f"// {marker}\n" + prefix + target, encoding="utf-8")
+            logger.info("Patched OpenClaw latency trace runner probes: %s", path)
+            changed = True
+        return changed
+    except Exception as e:
+        logger.warning("patch_openclaw_latency_trace failed: %s", e)
+        return False
+
+
+def _log_openclaw_gateway_start_diagnostics(
+    reason: str,
+    proc: Optional[subprocess.Popen] = None,
+    last_error: str = "",
+) -> None:
+    returncode = None
+    try:
+        returncode = proc.poll() if proc is not None else None
+    except Exception:
+        returncode = None
+    logger.warning(
+        "OpenClaw Gateway start diagnostics: reason=%s returncode=%s listener_pids=%s gateway_pids=%s last_error=%s",
+        reason,
+        returncode,
+        _find_listener_pids_on_18789(),
+        _find_openclaw_gateway_process_pids(),
+        last_error or "-",
+    )
+    for path in _openclaw_log_candidates():
+        logger.warning("OpenClaw log tail path=%s\n%s", path, _read_log_tail_for_warning(path))
+
+
 def _wait_for_openclaw_gateway_ready(
     max_wait: float = 30.0,
     proc: Optional[subprocess.Popen] = None,
 ) -> Optional[int]:
-    """Wait until the Gateway both listens on 18789 and answers HTTP."""
+    """Wait until the Gateway listens on 18789.
+
+    Do not probe the OpenClaw HTTP root here. Some OpenClaw gateway builds run
+    channel middleware even for a health-style GET, and optional channels with
+    missing dependencies can make readiness checks look like real chat hangs.
+    """
     deadline = time.time() + max_wait
     last_error = ""
     while time.time() < deadline:
@@ -440,19 +1137,16 @@ def _wait_for_openclaw_gateway_ready(
                 "OpenClaw Gateway process exited before listening, returncode=%s",
                 proc.returncode,
             )
+            _log_openclaw_gateway_start_diagnostics("process-exited", proc, last_error)
             return None
         pid = _find_openclaw_pid()
         if pid:
-            try:
-                with httpx.Client(timeout=2.0, trust_env=False) as client:
-                    r = client.get("http://127.0.0.1:18789/")
-                logger.info("OpenClaw Gateway ready, PID %s status=%s", pid, r.status_code)
-                return pid
-            except Exception as exc:
-                last_error = f"{exc.__class__.__name__}: {exc}"
+            logger.info("OpenClaw Gateway ready, PID %s listening on 18789", pid)
+            return pid
         time.sleep(0.5)
     if last_error:
         logger.warning("OpenClaw Gateway listener found but HTTP readiness timed out: %s", last_error)
+    _log_openclaw_gateway_start_diagnostics("readiness-timeout", proc, last_error)
     return None
 
 
@@ -468,7 +1162,7 @@ def _wait_until_no_listener_on_18789(max_wait: float = 6.0) -> None:
 def _kill_pid(pid: int):
     try:
         if platform.system() == "Windows":
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                            capture_output=True, timeout=10)
         else:
             os.kill(pid, 9)
@@ -483,6 +1177,9 @@ def _build_openclaw_env() -> dict:
     env.update(oc_env)
     env["OPENCLAW_CONFIG_PATH"] = str(_OC_CONFIG)
     env["OPENCLAW_STATE_DIR"] = str(_OC_DIR)
+    env.setdefault("OPENCLAW_DISABLE_BONJOUR", "1")
+    env.setdefault("LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE", "1")
+    env.setdefault("LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING", "1")
     return env
 
 
@@ -905,7 +1602,7 @@ def _weixin_login_worker(job_id: str) -> None:
         return
 
     node_path, mjs_path = entry
-    _ensure_openclaw_json_for_local_launch()
+    _ensure_openclaw_json_for_local_launch(_OPENCLAW_PLUGIN_MODE_WEIXIN)
     env = _build_openclaw_env()
     cmd = [node_path, mjs_path, "channels", "login", "--channel", "openclaw-weixin"]
     log_buf: list[str] = []
@@ -976,7 +1673,7 @@ def _weixin_login_worker(job_id: str) -> None:
                 _weixin_job_update(job_id, status="success", message="微信渠道已登录，凭证已写入 OpenClaw 状态目录")
                 _write_weixin_login_ledger(job_id, True, "channels login exit 0")
                 try:
-                    restarted = _restart_openclaw_gateway()
+                    restarted = _restart_openclaw_gateway(plugin_mode=_OPENCLAW_PLUGIN_MODE_WEIXIN)
                     _weixin_job_update(
                         job_id,
                         gateway_restarted=restarted,
@@ -998,8 +1695,12 @@ def _weixin_login_worker(job_id: str) -> None:
                 _weixin_login_active_job_id = None
 
 
-def _restart_openclaw_gateway_impl(wait_ready_sec: float = 30.0) -> bool:
+def _restart_openclaw_gateway_impl(
+    wait_ready_sec: float = 30.0,
+    plugin_mode: str = _OPENCLAW_PLUGIN_MODE_LEAN,
+) -> bool:
     """在已持有 _OPENCLAW_RESTART_LOCK 时调用：杀光监听 PID，等端口释放，再启动唯一 Gateway。"""
+    started_at = time.perf_counter()
     for pid in sorted(set(_find_listener_pids_on_18789()) | set(_find_openclaw_gateway_process_pids())):
         logger.info("Killing OpenClaw Gateway PID %s", pid)
         _kill_pid(pid)
@@ -1012,6 +1713,7 @@ def _restart_openclaw_gateway_impl(wait_ready_sec: float = 30.0) -> bool:
             _kill_pid(pid)
         _wait_until_no_listener_on_18789(4.0)
         _wait_until_no_openclaw_gateway_processes(4.0)
+    logger.info("OpenClaw Gateway preflight cleanup took %.2fs", time.perf_counter() - started_at)
 
     # nodejs/npm 与 OpenClaw 依赖仅在「微信授权」流程中在线安装，启动/Gateway 重启不在此下载，以免拖死服务启动。
     entry = _find_openclaw_entry()
@@ -1019,9 +1721,16 @@ def _restart_openclaw_gateway_impl(wait_ready_sec: float = 30.0) -> bool:
         logger.warning("Cannot restart OpenClaw: node or openclaw.mjs not found")
         return False
 
-    _ensure_openclaw_json_for_local_launch()
+    _ensure_openclaw_json_for_local_launch(plugin_mode)
+    removed_staging = _cleanup_openclaw_install_stage_dirs()
+    if removed_staging:
+        logger.info("Removed OpenClaw staging extension leftovers before launch: %s", removed_staging)
+    logger.info("OpenClaw Gateway config/dependency preflight took %.2fs", time.perf_counter() - started_at)
 
     node_path, mjs_path = entry
+    _patch_openclaw_gateway_slack_stage(mjs_path)
+    _patch_openclaw_gateway_pricing_refresh(mjs_path)
+    _patch_openclaw_latency_trace(mjs_path)
     env = _build_openclaw_env()
     log_path = _BASE_DIR / "openclaw.log"
 
@@ -1050,29 +1759,61 @@ def _restart_openclaw_gateway_impl(wait_ready_sec: float = 30.0) -> bool:
         if platform.system() == "Windows":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
+        popen_started_at = time.perf_counter()
         proc = subprocess.Popen(cmd, **kwargs)
         if hasattr(log_file, "close"):
             try:
                 log_file.close()
             except Exception:
                 pass
-        logger.info("OpenClaw Gateway restarting: %s", " ".join(cmd))
+        logger.info(
+            "OpenClaw Gateway restarting: %s (openclaw=%s plugin_mode=%s)",
+            " ".join(cmd),
+            _openclaw_package_version(mjs_path) or "unknown",
+            plugin_mode,
+        )
 
         new_pid = _wait_for_openclaw_gateway_ready(wait_ready_sec, proc)
         if new_pid:
-            logger.info("OpenClaw Gateway restarted, PID %s", new_pid)
+            logger.info(
+                "OpenClaw Gateway restarted, PID %s, node_ready=%.2fs total=%.2fs",
+                new_pid,
+                time.perf_counter() - popen_started_at,
+                time.perf_counter() - started_at,
+            )
             return True
         logger.warning("OpenClaw Gateway process started but not ready after %.1fs", wait_ready_sec)
+        leftovers = sorted(set(_find_listener_pids_on_18789()) | set(_find_openclaw_gateway_process_pids()))
+        if leftovers:
+            logger.warning("Killing OpenClaw Gateway PIDs after readiness timeout: %s", leftovers)
+            for pid in leftovers:
+                _kill_pid(pid)
+            _wait_until_no_listener_on_18789(4.0)
+            _wait_until_no_openclaw_gateway_processes(4.0)
         return False
     except Exception as e:
         logger.error("Failed to restart OpenClaw Gateway: %s", e)
         return False
 
 
-def _restart_openclaw_gateway(wait_ready_sec: float = 30.0) -> bool:
+def _restart_openclaw_gateway(
+    wait_ready_sec: float = 30.0,
+    plugin_mode: str = _OPENCLAW_PLUGIN_MODE_LEAN,
+) -> bool:
     """串行重启，避免「清除配置」与「保存 Key」等并发各拉起一个 node。"""
     with _OPENCLAW_RESTART_LOCK:
-        return _restart_openclaw_gateway_impl(wait_ready_sec=wait_ready_sec)
+        return _restart_openclaw_gateway_impl(wait_ready_sec=wait_ready_sec, plugin_mode=plugin_mode)
+
+
+def _ensure_openclaw_gateway_running(
+    wait_ready_sec: float = 30.0,
+    plugin_mode: str = _OPENCLAW_PLUGIN_MODE_LEAN,
+) -> bool:
+    """Start/restart Gateway only if it is still needed after acquiring the lock."""
+    with _OPENCLAW_RESTART_LOCK:
+        if _find_openclaw_pid() and not _openclaw_gateway_needs_local_restart():
+            return True
+        return _restart_openclaw_gateway_impl(wait_ready_sec=wait_ready_sec, plugin_mode=plugin_mode)
 
 
 @router.post("/api/openclaw/restart", summary="重启 OpenClaw Gateway")

@@ -27,7 +27,7 @@ var _comflyStatus = {
   has_user_key: false,
   masked_user_key: '',
   user_api_base: '',
-  default_api_base_hint: 'https://ai.comfly.chat/v1',
+  default_api_base_hint: 'https://ai.comfly.org',
 };
 var _youtubePublishStatus = { has_ready: false, accounts_count: 0 };
 var _skillStoreFetchCache = {};
@@ -108,7 +108,7 @@ window._openGoalVideoChat = function() {
   if (nav) nav.click();
   var input = document.getElementById('chatInput');
   if (input) {
-    var starter = '用创意成片，根据我的记忆，给某产品生成一个 8 秒抖音 9:16 宣传视频。';
+    var starter = '用创意成片，根据我的记忆，给某产品生成一个 6 秒抖音 9:16 宣传视频。';
     if (!String(input.value || '').trim()) input.value = starter;
     input.focus();
     try { input.setSelectionRange(input.value.length, input.value.length); } catch (e1) {}
@@ -299,7 +299,7 @@ function _loadComflyStatus(cb) {
         has_user_key: !!d.has_user_key,
         masked_user_key: d.masked_user_key || '',
         user_api_base: d.user_api_base || '',
-        default_api_base_hint: d.default_api_base_hint || 'https://ai.comfly.chat/v1',
+        default_api_base_hint: d.default_api_base_hint || 'https://ai.comfly.org',
       };
       if (cb) cb();
     })
@@ -1362,7 +1362,7 @@ function _bindComflyConfigBtn__legacy_unused() {
       }
       if (baseInput) {
         baseInput.value = _comflyStatus.user_api_base || '';
-        baseInput.placeholder = _comflyStatus.default_api_base_hint || 'https://ai.comfly.chat/v1';
+        baseInput.placeholder = _comflyStatus.default_api_base_hint || 'https://ai.comfly.org';
       }
       var msgEl = document.getElementById('comflyModalMsg');
       if (msgEl) { msgEl.style.display = 'none'; msgEl.textContent = ''; }
@@ -1384,7 +1384,7 @@ function _bindComflyConfigBtn__legacy_unused() {
     }
     if (baseInput) {
       baseInput.value = _comflyStatus.user_api_base || '';
-      baseInput.placeholder = _comflyStatus.default_api_base_hint || 'https://ai.comfly.chat/v1';
+      baseInput.placeholder = _comflyStatus.default_api_base_hint || 'https://ai.comfly.org';
     }
     var msgEl = document.getElementById('comflyModalMsg');
     if (msgEl) { msgEl.style.display = 'none'; msgEl.textContent = ''; }

@@ -211,12 +211,12 @@
     },
     "comfly_veo_skill": {
       "name": "爆款TVC",
-      "description": "用一张商品/主图自动做多分镜 + 多段 Veo 成片，可选拼接为一条 TVC；用户对话里可说「用爆款TVC和这个素材做个视频」。技能卡片**必须**在本账号下配置 Comfly 的 API Key 与 API 根地址（每用户独立，不走服务端环境变量兜底），分镜、提示词、模型与拼接由技能内置流程完成，无需用户在卡片里改流水线参数。下方 package_config 中的模型字段仅供系统/高级覆盖，普通用户可忽略。无需算力解锁。技术说明：提示词走 OpenAI 兼容 chat（根地址常为 https://ai.comfly.chat/v1）；视频任务走 Comfly v2（POST /v2/videos/generations，以官方文档为准）。",
+      "description": "用一张商品/主图自动做多分镜 + 多段 Veo 成片，可选拼接为一条 TVC；用户对话里可说「用爆款TVC和这个素材做个视频」。技能卡片**必须**在本账号下配置 Comfly 的 API Key 与 API 根地址（每用户独立，不走服务端环境变量兜底），分镜、提示词、模型与拼接由技能内置流程完成，无需用户在卡片里改流水线参数。下方 package_config 中的模型字段仅供系统/高级覆盖，普通用户可忽略。无需算力解锁。技术说明：提示词走 OpenAI 兼容 chat（根地址常为 https://ai.comfly.org）；视频任务走 Comfly v2（POST /v2/videos/generations，以官方文档为准）。",
       "type": "builtin",
       "store_visibility": "popular",
       "status": "available",
       "package_config": {
-        "comfly_api_base": "https://ai.comfly.chat/v1",
+        "comfly_api_base": "https://ai.comfly.org",
         "video_model": "veo3.1",
         "analysis_model": "gemini-2.5-pro",
         "aspect_ratio": "9:16",
@@ -866,7 +866,7 @@
               },
               "goal": {
                 "type": "string",
-                "description": "用户的目标原文，例如：根据我的记忆，给某产品生成 8 秒抖音 9:16 宣传视频"
+                "description": "用户的目标原文，例如：根据我的记忆，给某产品生成 6 秒抖音 9:16 宣传视频"
               },
               "job_id": {
                 "type": "string",
@@ -884,8 +884,8 @@
               },
               "duration": {
                 "type": "integer",
-                "default": 8,
-                "description": "视频时长，默认 8 秒"
+                "default": 6,
+                "description": "视频时长，默认 6 秒"
               },
               "aspect_ratio": {
                 "type": "string",

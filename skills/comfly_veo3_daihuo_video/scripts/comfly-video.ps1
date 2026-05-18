@@ -42,7 +42,7 @@ function Resolve-Setting {
     return $DefaultValue
 }
 
-$BaseUrl = (Resolve-Setting -ExplicitValue $BaseUrl -EnvName "COMFLY_API_BASE" -DefaultValue "https://ai.comfly.chat").TrimEnd("/")
+$BaseUrl = (Resolve-Setting -ExplicitValue $BaseUrl -EnvName "COMFLY_API_BASE" -DefaultValue "https://ai.comfly.org").TrimEnd("/")
 $ApiKey = Resolve-Setting -ExplicitValue $ApiKey -EnvName "COMFLY_API_KEY"
 $ConfiguredVideoModel = Resolve-Setting -ExplicitValue $Model -EnvName "COMFLY_VIDEO_MODEL" -DefaultValue "veo3.1-fast"
 

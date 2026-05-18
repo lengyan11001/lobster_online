@@ -13,7 +13,7 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent / "comfly_storyboard_pipeline.py"
 # app.log / COMFLY_PIPE_HTTP_DEBUG 同款
 APIKEY = "sk-FtluOvNh9Vu1w3DMpfquIpcKxK5jbkPI1YZmMm0Hci24oymp"
-BASE_URL = "https://ai.comfly.chat"
+BASE_URL = "https://ai.comfly.org"
 PRODUCT_IMAGE = "https://cdn-video.51sux.com/mcp-images/20260401/f136eb57-b075-48bb-b9a7-ebaaa414c1b9.png"
 
 payload = {

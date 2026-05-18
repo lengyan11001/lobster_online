@@ -19,6 +19,11 @@
     .chat-mode-pill:hover { border-color:rgba(66,98,223,0.28); color:var(--text); transform:translateY(-1px); }
     .chat-mode-pill.is-active { background:rgba(66,98,223,0.1); border-color:rgba(66,98,223,0.26); color:#4262df; box-shadow:inset 0 0 0 1px rgba(66,98,223,0.06); }
     .chat-mode-hint { font-size:0.82rem; color:var(--text-muted); }
+    .chat-openclaw-status { display:inline-flex; align-items:center; gap:0.38rem; min-height:28px; padding:0.28rem 0.68rem; border-radius:999px; border:1px solid rgba(245,158,11,0.22); background:rgba(245,158,11,0.09); color:#9a6700; font-size:0.78rem; line-height:1; white-space:nowrap; }
+    .chat-openclaw-status-dot { width:7px; height:7px; border-radius:999px; background:#f59e0b; box-shadow:0 0 0 4px rgba(245,158,11,0.12); animation:chat-openclaw-pulse 1.35s ease-in-out infinite; }
+    .chat-openclaw-status.is-ready { border-color:rgba(16,185,129,0.26); background:rgba(16,185,129,0.1); color:#047857; }
+    .chat-openclaw-status.is-ready .chat-openclaw-status-dot { background:#10b981; box-shadow:0 0 0 4px rgba(16,185,129,0.12); animation:none; }
+    @keyframes chat-openclaw-pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.55; transform:scale(0.84); } }
     .chat-toolbar-actions { display:flex; align-items:center; justify-content:flex-end; gap:0.5rem; margin-left:auto; flex-wrap:wrap; }
     .chat-memory-sync-status { max-width:min(44vw, 520px); font-size:0.78rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     @media (max-width: 760px) {
@@ -4591,6 +4596,10 @@
                   <button type="button" class="chat-mode-pill is-active" data-chat-mode="default">智能对话</button>
                   <button type="button" class="chat-mode-pill" data-chat-mode="workspace_cli" hidden aria-hidden="true">云端工作台</button>
                   <div class="chat-mode-hint" id="chatModeHint">默认模式：继续走现在这套智能对话链路。</div>
+                  <div class="chat-openclaw-status is-starting" id="chatOpenClawStatus" title="OpenClaw 启动状态" aria-live="polite">
+                    <span class="chat-openclaw-status-dot" aria-hidden="true"></span>
+                    <span id="chatOpenClawStatusText">OpenClaw 启动中</span>
+                  </div>
                   <div class="chat-toolbar-actions">
                     <label for="chatMemoryScopeSelect" class="chat-memory-scope-label">记忆:</label>
                     <select id="chatMemoryScopeSelect" class="chat-memory-scope-select" title="本会话使用的记忆范围">
@@ -7041,7 +7050,7 @@
   <script src="/static/js/help-hints.js"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260514-voice-param-button-polish"></script>
-  <script src="/static/js/chat.js?v=20260513-online-chat-remote"></script>
+  <script src="/static/js/chat.js?v=20260515-openclaw-status"></script>
   <script src="/static/js/skill.js?v=20260514-hifly-store-name"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>

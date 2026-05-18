@@ -1319,7 +1319,7 @@ function loadBillingView() {
           });
           html += '</ul>';
         } else {
-          html += '<p style="margin:0.65rem 0 0;"><strong>默认扣除</strong>：日常对话 10 算力/次，生成图片 60 算力/次，图生视频 8 秒 160 算力/次。</p>';
+          html += '<p style="margin:0.65rem 0 0;"><strong>默认扣除</strong>：日常对话 10 算力/次，生成图片 60 算力/次，默认视频生成 160 算力/次。</p>';
         }
         pricingContent.innerHTML = html;
       })

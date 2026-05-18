@@ -1,12 +1,12 @@
 ---
 name: comfly_veo3_daihuo_video
-description: Generate ecommerce promo videos from product images through ai.comfly.chat Google-Veo endpoints. Use when the user wants VEO3 or VEO3.1 image-to-video generation, especially with the user-confirmed `veo3.1-fast` model alias, plus 9:16 short-form带货视频, async task submission, task polling, and prompt generation from product images for OpenClaw.
-metadata: {"openclaw":{"emoji":"video","homepage":"https://ai.comfly.chat/api-set"}}
+description: Generate ecommerce promo videos from product images through ai.comfly.org Google-Veo endpoints. Use when the user wants VEO3 or VEO3.1 image-to-video generation, especially with the user-confirmed `veo3.1-fast` model alias, plus 9:16 short-form带货视频, async task submission, task polling, and prompt generation from product images for OpenClaw.
+metadata: {"openclaw":{"emoji":"video","homepage":"https://ai.comfly.org/api-set"}}
 ---
 
 # Comfly Google-Veo 带货视频
 
-Use this skill when the user wants to turn product images into ecommerce promo videos through `ai.comfly.chat`, especially for Google Veo models such as `veo3.1-fast`, `veo3.1-pro`, `veo3.1-components`, `veo3-pro-frames`, and `veo3-fast-frames`.
+Use this skill when the user wants to turn product images into ecommerce promo videos through `ai.comfly.org`, especially for Google Veo models such as `veo3.1-fast`, `veo3.1-pro`, `veo3.1-components`, `veo3-pro-frames`, and `veo3-fast-frames`.
 
 This skill is based on two confirmed sources:
 
@@ -156,7 +156,7 @@ If the user insists on exact `30-60` seconds:
     "entries": {
       "comfly_veo3_daihuo_video": {
         "env": {
-          "COMFLY_API_BASE": "https://ai.comfly.chat",
+          "COMFLY_API_BASE": "https://ai.comfly.org",
           "COMFLY_API_KEY": "sk-xxxx",
           "COMFLY_VIDEO_MODEL": "veo3.1-fast"
         }

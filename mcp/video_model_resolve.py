@@ -184,7 +184,7 @@ def _build_alias_map() -> Dict[str, Pair]:
     )
 
     # —— Grok ——
-    grok = _p("xai/grok-imagine-video/text-to-video", "xai/grok-imagine-video/image-to-video")
+    grok = _p("grok-video-3", "grok-video-3")
     add(("grok", "grok imagine", "grok video", "grok imagine video"), grok)
 
     # —— 海螺 / Hailuo 2.3 ——
@@ -338,11 +338,7 @@ def _heuristic_video_model(model: str, has_image: bool) -> str:
         return "fal-ai/veo3.1"
 
     if "grok" in model_lower:
-        return (
-            "xai/grok-imagine-video/image-to-video"
-            if has_image
-            else "xai/grok-imagine-video/text-to-video"
-        )
+        return "grok-video-3"
 
     if "hailuo" in model_lower or "海螺" in model:
         if "fast" in model_lower or "快速" in model:

@@ -1,7 +1,7 @@
 ---
 name: comfly_seedance_tvc_video
 description: Generate 20-second storyboard-driven promo videos by first creating two polished 10-second storyboard board images with gpt-image-2 (with automatic fallback to nano-banana-2 when gpt-image-2 fails) and then turning those boards into two Seedance clips with `doubao-seedance-2-0-fast-260128`. Use when the user provides product references plus a storyboard-board style target and wants a premium TVC workflow for beauty, skincare, FMCG, tea, and other brand-heavy commercial videos.
-metadata: {"openclaw":{"emoji":"video","homepage":"https://ai.comfly.chat"}}
+metadata: {"openclaw":{"emoji":"video","homepage":"https://ai.comfly.org"}}
 ---
 
 # Comfly Seedance TVC

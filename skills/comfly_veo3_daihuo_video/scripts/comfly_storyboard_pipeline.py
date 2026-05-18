@@ -85,7 +85,7 @@ class PipelineConfig:
     # SKILL 默认 nano-banana-2；图生 body 仅对该模型附加 image_size（默认 1K）
     image_model: str = "nano-banana-2"
     image_size: str = "1K"
-    video_model: str = "veo3.1-fast"
+    video_model: str = "grok-video-3"
     aspect_ratio: str = "9:16"
     enhance_prompt: bool = False
     watermark: bool = False
@@ -487,9 +487,20 @@ class ComflyClient:
 
     def submit_video(self, prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool, watermark: bool, action: str) -> tuple[Dict[str, Any], int]:
         ar = _normalize_aspect_ratio_for_comfly(aspect_ratio)
-        body: Dict[str, Any] = {"prompt": prompt, "model": model, "images": images, "aspect_ratio": ar, "watermark": bool(watermark)}
-        if enhance_prompt:
-            body["enhance_prompt"] = True
+        if model.strip().lower() == "grok-video-3":
+            body: Dict[str, Any] = {
+                "prompt": prompt,
+                "model": model,
+                "images": images[:1],
+                "ratio": ar if ar in ("9:16", "16:9", "1:1", "2:3", "3:2") else "9:16",
+                "resolution": "720P",
+                "duration": 6,
+            }
+        else:
+            body = {"prompt": prompt, "model": model, "images": images, "watermark": bool(watermark)}
+            body["aspect_ratio"] = ar
+            if enhance_prompt:
+                body["enhance_prompt"] = True
 
         def call() -> Dict[str, Any]:
             vid_url = f"{self.base_url}/v2/videos/generations"
@@ -578,7 +589,7 @@ def _build_config(data: Input) -> PipelineConfig:
     _raw_imsz = str(data.get("image_size") or "1K").strip().upper()
     _imsz = _raw_imsz if _raw_imsz in ("1K", "2K", "4K") else "1K"
     return PipelineConfig(
-        base_url=data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.chat")),
+        base_url=data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.org")),
         api_key=api_key,
         task_text=locale_inputs["task_text"],
         platform=locale_inputs["platform"],
@@ -588,7 +599,7 @@ def _build_config(data: Input) -> PipelineConfig:
         analysis_model=data.get("analysis_model", "gemini-2.5-pro"),
         image_model=data.get("image_model", "nano-banana-2"),
         image_size=_imsz,
-        video_model=data.get("video_model", "veo3.1-fast"),
+        video_model=data.get("video_model", "grok-video-3"),
         aspect_ratio=_normalize_aspect_ratio_for_comfly(str(data.get("aspect_ratio") or "9:16")),
         enhance_prompt=bool(data.get("enhance_prompt", False)),
         watermark=bool(data.get("watermark", False)),

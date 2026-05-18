@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import contextvars
 import asyncio
+import uuid
+import time
 import json
 import logging
 import os
@@ -49,9 +51,16 @@ except ImportError:
         return _OpenClawFallbackScope()
 
 try:
-    from .mcp_gateway import set_mcp_token_for_agent, set_openclaw_tool_scope_for_agent
+    from .mcp_gateway import (
+        clear_openclaw_tool_scope_for_agent,
+        set_mcp_token_for_agent,
+        set_openclaw_tool_scope_for_agent,
+    )
 except ImportError:
     from .mcp_gateway import set_mcp_token_for_agent
+
+    def clear_openclaw_tool_scope_for_agent(_agent_id: Optional[str] = None) -> None:
+        return None
 
     def set_openclaw_tool_scope_for_agent(_agent_id: str, _headers: Dict[str, str]) -> None:
         return None
@@ -96,6 +105,7 @@ _OPENCLAW_STAGE_LABELS = {
     "upstream_error_body": "OpenClaw 上游模型/工具",
     "upstream_timeout": "OpenClaw 上游模型/工具超时",
     "memory_followup": "记忆资料二次追问",
+    "generation_followup": "生成执行二次追问",
     "timeout": "请求 OpenClaw Gateway",
     "exception": "OpenClaw 调用异常",
 }
@@ -170,6 +180,23 @@ async def _restart_local_openclaw_gateway_for_retry(oc_base: str, exc: Exception
         return bool(await asyncio.to_thread(_restart_openclaw_gateway, wait_ready_sec=75.0))
     except Exception as restart_exc:
         logger.warning("[OPENCLAW] local Gateway restart retry failed: %s", restart_exc)
+        return False
+
+
+async def _ensure_local_openclaw_gateway_lean(oc_base: str) -> bool:
+    if not _is_local_openclaw_gateway_url(oc_base):
+        return False
+    try:
+        from .openclaw_config import _find_openclaw_pid, _openclaw_gateway_needs_local_restart, _ensure_openclaw_gateway_running
+
+        local_pid = await asyncio.to_thread(_find_openclaw_pid)
+        needs_restart = (not local_pid) or await asyncio.to_thread(_openclaw_gateway_needs_local_restart)
+        if not needs_restart:
+            return False
+        logger.warning("[OPENCLAW] local Gateway unavailable or needs sync; restarting kill-first before chat request")
+        return bool(await asyncio.to_thread(_ensure_openclaw_gateway_running, 75.0))
+    except Exception as exc:
+        logger.warning("[OPENCLAW] ensure lean Gateway before request failed: %s", exc)
         return False
 
 
@@ -370,6 +397,80 @@ def _last_user_text(msgs: List[Dict]) -> str:
         if isinstance(m, dict) and m.get("role") == "user":
             return str(m.get("content") or "").strip()
     return ""
+
+
+_OPENCLAW_GENERATION_REQUEST_RE = re.compile(
+    r"(?:生成|做|制作|创建|出|画|设计|合成|剪辑).{0,36}(?:视频|短视频|宣传视频|片子|动画|图|图片|海报|产品图)|"
+    r"文生视频|图生视频|视频生成|短视频生成|文生图|图生图|生图|作图|"
+    r"创意成片|目标成片|爆款TVC|带货视频|用.{0,24}素材.{0,24}(?:生成|做|制作)",
+    re.IGNORECASE,
+)
+_OPENCLAW_GENERATION_EVIDENCE_RE = re.compile(
+    r"(?:task_id|saved_assets|media_urls?|final_asset_id|video_asset_id|output_url|preview_url|"
+    r"(?:已提交|已生成|生成完成|已保存|保存成功).{0,90}(?:task_id|asset_id|资产\s*ID|素材\s*ID|https?://)|"
+    r"(?:预览|视频直链|图片直链|下载链接|成品链接|output|result).{0,90}https?://)",
+    re.IGNORECASE,
+)
+_OPENCLAW_PREP_ONLY_RE = re.compile(
+    r"(?:我先|先来|先查|先看|先确认|需要先|让我|正在).{0,28}(?:素材|能力|列表|资料|URL|链接|source_url|公开URL|可用工具)|"
+    r"(?:找素材|查询素材|查一下素材|确认.*能力|能力列表|素材库|当前可用的能力)",
+    re.IGNORECASE,
+)
+_OPENCLAW_NON_MCP_TOOL_HINT_RE = re.compile(
+    r'<[\uff5c|]+DSML[\uff5c|]+invoke\s+name="(?:exec|shell|browser|python|node)"',
+    re.IGNORECASE,
+)
+
+
+def _openclaw_user_requests_generation(msgs: List[Dict]) -> bool:
+    text = _last_user_text(msgs)
+    return bool(_OPENCLAW_GENERATION_REQUEST_RE.search(text or ""))
+
+
+def _openclaw_generation_reply_has_execution_evidence(content: str) -> bool:
+    raw = content or ""
+    if _OPENCLAW_GENERATION_EVIDENCE_RE.search(raw):
+        return True
+    return False
+
+
+def _openclaw_generation_reply_is_prep_only(content: str, msgs: List[Dict]) -> bool:
+    if not _openclaw_user_requests_generation(msgs):
+        return False
+    raw = content or ""
+    if not raw.strip():
+        return True
+    if _openclaw_generation_reply_has_execution_evidence(raw):
+        return False
+    cleaned = _strip_dsml(raw).strip()
+    if _DSML_FC_RE.search(raw) or _PIPE_TOOL_CALLS_WRAPPER_RE.search(raw):
+        if not cleaned or len(cleaned) < 180:
+            return True
+    if _OPENCLAW_NON_MCP_TOOL_HINT_RE.search(raw):
+        return True
+    if _OPENCLAW_PREP_ONLY_RE.search(cleaned):
+        return True
+    # A generation request with only a short acknowledgement is not enough:
+    # the H5 needs evidence that a generation tool actually started.
+    if len(cleaned) <= 220 and re.search(r"(好的|可以|马上|处理中|开始|正在|接下来|下一步|准备|将|会)", cleaned):
+        return True
+    return False
+
+
+def _generation_force_followup_text(raw_content: str) -> str:
+    cleaned = _strip_dsml(raw_content).strip()
+    previous = f"\n你刚才的可见回复是：{cleaned[:500]}\n" if cleaned else ""
+    return (
+        f"{previous}"
+        "用户本轮已经明确要求生成素材。不要把“查素材、确认能力、稍后处理”作为最终回复；"
+        "也不要调用 exec/shell/browser 之类工具。"
+        "如果用户消息或系统注入内容里已有 asset_id、URL 或附件，就直接使用它；"
+        "MCP 会在 invoke_capability 边界自动把 asset_id 解析成公网素材 URL。"
+        "请在本轮立即调用 lobster__invoke_capability 执行对应生成能力："
+        "视频用 video.generate，图片用 image.generate，创意成片用 goal.video.pipeline。"
+        "如果需要查询结果，只能使用工具真实返回的 task_id。"
+        "最终回复必须包含 task_id、asset_id、预览链接或明确的工具错误；没有这些证据不要说已处理。"
+    )
 
 
 def _load_user_memory_index(user_id: int) -> List[Dict[str, Any]]:
@@ -758,6 +859,7 @@ OpenClaw 主对话补充规则：
 - 费用/扣费只能引用工具返回的 credits_used、credits_charged、credits_final 等龙虾积分字段；禁止把上游 result.price/cost/fee 或模型价格口径说成用户已扣积分。若工具没有明确扣费字段，就说“本轮工具未返回可展示的扣费信息”。
 - 如果工具返回 openclaw_evidence，请严格按其中 claim_rules 回答；claim_rules 不允许的状态必须如实说明还不能确认，不要用经验或历史内容补齐。
 - 查询任务进度必须使用本会话工具返回的真实 task_id 或用户明确提供的 task_id；找不到真实 task_id 时说明“没有拿到可查询的任务 ID”，不要生成看起来像 ID 的字符串。
+- 用户明确要求生成图片/视频/创意成片时，本轮必须直接调用 lobster__invoke_capability 执行对应生成能力；不要只回复“我先找素材/先查能力/确认可用工具”。如果消息中已有 asset_id 或系统已注入素材 URL，直接用于生成，MCP 边界会自动补齐素材 URL。禁止用 exec/shell/browser 代替业务能力。
 """
 
 
@@ -835,29 +937,43 @@ async def try_openclaw(
             missing.append("OPENCLAW_GATEWAY_TOKEN")
         _set_openclaw_failure("config_missing", "缺少 OpenClaw Gateway 配置", missing=",".join(missing))
         return None
+    await _ensure_local_openclaw_gateway_lean(oc_base)
 
     agent_id = _openclaw_agent_id_from_chat_model(model)
     openclaw_body_model = _openclaw_gateway_body_model(agent_id)
-    scope = classify_openclaw_tool_scope(msgs)
-    scope_headers = scope.headers()
+    tool_scope_enabled = bool(getattr(settings, "openclaw_tool_scope_enabled", False))
+    scope = classify_openclaw_tool_scope(msgs) if tool_scope_enabled else None
+    scope_headers = scope.headers() if scope is not None else {}
     locked_video_model = str(video_model_lock or "").strip()
     locked_video_model_source = str(video_model_lock_source or "").strip()
     if locked_video_model:
         scope_headers["X-Lobster-Video-Model-Lock"] = locked_video_model
         scope_headers["X-Lobster-Video-Model-Lock-Source"] = locked_video_model_source or "default"
-    set_openclaw_tool_scope_for_agent(agent_id, scope_headers)
-    logger.info(
-        "[OPENCLAW] tool scope intent=%s tools=%s caps=%s video_model_lock=%s source=%s",
-        scope.intent,
-        ",".join(sorted(scope.allowed_tools)) or "-",
-        (
-            "ALL"
-            if scope.allowed_capabilities is None
-            else (",".join(sorted(scope.allowed_capabilities)) or "-")
-        ),
-        locked_video_model or "-",
-        locked_video_model_source or "-",
-    )
+    if tool_scope_enabled:
+        clear_openclaw_tool_scope_for_agent(agent_id)
+    else:
+        clear_openclaw_tool_scope_for_agent()
+    if scope_headers:
+        set_openclaw_tool_scope_for_agent(agent_id, scope_headers)
+    if scope is not None:
+        logger.info(
+            "[OPENCLAW] tool scope intent=%s tools=%s caps=%s video_model_lock=%s source=%s",
+            scope.intent,
+            ",".join(sorted(scope.allowed_tools)) or "-",
+            (
+                "ALL"
+                if scope.allowed_capabilities is None
+                else (",".join(sorted(scope.allowed_capabilities)) or "-")
+            ),
+            locked_video_model or "-",
+            locked_video_model_source or "-",
+        )
+    else:
+        logger.info(
+            "[OPENCLAW] tool scope disabled; mcp capabilities unscoped video_model_lock=%s source=%s",
+            locked_video_model or "-",
+            locked_video_model_source or "-",
+        )
 
     xi = (installation_id or "").strip()
     rt = (raw_token or "").strip()
@@ -870,6 +986,8 @@ async def try_openclaw(
         "Authorization": f"Bearer {oc_token}",
         "x-openclaw-agent-id": agent_id,
     }
+    trace_id = uuid.uuid4().hex[:12]
+    headers["X-Lobster-Trace-Id"] = trace_id
     if rt and not is_internal_lobster_jwt:
         headers["x-user-authorization"] = f"Bearer {raw_token}"
     if xi and not is_internal_lobster_jwt:
@@ -877,7 +995,7 @@ async def try_openclaw(
 
     stage = "prepare_messages"
     try:
-        hint_parts = [scope.system_hint()]
+        hint_parts = [scope.system_hint()] if scope is not None else []
         model_lock_hint = _video_model_lock_hint(locked_video_model, locked_video_model_source)
         if model_lock_hint:
             hint_parts.append(model_lock_hint)
@@ -893,10 +1011,27 @@ async def try_openclaw(
         async def _post_gateway(messages: List[Dict]) -> Tuple[Optional[str], Optional[httpx.Response]]:
             nonlocal stage
             stage = "gateway_request"
+            req_started_at = time.perf_counter()
+            logger.info(
+                "[OPENCLAW_TRACE] trace_id=%s stage=gateway_request_start agent_id=%s model=%s messages=%s chars=%s memory=%s",
+                trace_id,
+                agent_id,
+                openclaw_body_model,
+                len(messages),
+                sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict)),
+                bool(memory_context),
+            )
             resp = await client.post(
                 f"{oc_base}/v1/chat/completions",
                 json={"model": openclaw_body_model, "messages": messages, "stream": False},
                 headers=headers,
+            )
+            logger.info(
+                "[OPENCLAW_TRACE] trace_id=%s stage=gateway_response_headers status=%s duration_ms=%s bytes=%s",
+                trace_id,
+                resp.status_code,
+                int((time.perf_counter() - req_started_at) * 1000),
+                len(resp.content or b""),
             )
             if resp.status_code != 200:
                 return None, resp
@@ -1018,6 +1153,56 @@ async def try_openclaw(
                             model=model,
                             agent_id=agent_id,
                         )
+                if _openclaw_generation_reply_is_prep_only(raw_content, msgs):
+                    followup_messages = list(openclaw_messages)
+                    cleaned = _strip_dsml(raw_content).strip()
+                    if cleaned:
+                        followup_messages.append({"role": "assistant", "content": cleaned})
+                    followup_messages.append({"role": "user", "content": _generation_force_followup_text(raw_content)})
+                    async with httpx.AsyncClient(timeout=_OPENCLAW_GATEWAY_HTTP_TIMEOUT_SEC, trust_env=False) as client:
+                        stage = "generation_followup"
+                        retry_content, retry_resp = await _post_gateway(followup_messages)
+                    if retry_resp and retry_resp.status_code == 200 and retry_content:
+                        if _openclaw_body_looks_like_upstream_http_error(retry_content):
+                            is_retry_timeout = _openclaw_body_looks_like_upstream_timeout(retry_content)
+                            _set_openclaw_failure(
+                                "upstream_timeout" if is_retry_timeout else "upstream_error_body",
+                                "生成执行二次追问后 OpenClaw 上游模型/工具超时"
+                                if is_retry_timeout
+                                else "生成执行二次追问后仍返回上游模型/工具错误内容",
+                                model=model,
+                                agent_id=agent_id,
+                                body=_diag_snippet(retry_content),
+                            )
+                            return None
+                        if not _openclaw_generation_reply_is_prep_only(retry_content, msgs):
+                            logger.info("[OPENCLAW] generation follow-up produced executable reply agent_id=%s", agent_id)
+                            return retry_content
+                        _set_openclaw_failure(
+                            "generation_followup",
+                            "OpenClaw 二次追问后仍只返回生成前的准备话术，未看到 task_id/素材/链接等执行证据",
+                            model=model,
+                            agent_id=agent_id,
+                            body=_diag_snippet(retry_content),
+                        )
+                        return None
+                    if retry_resp and retry_resp.status_code != 200:
+                        retry_body = (retry_resp.text or "").replace("\n", " ").strip()
+                        _set_openclaw_failure(
+                            "gateway_http_status",
+                            f"生成执行二次追问返回 HTTP {retry_resp.status_code}",
+                            model=model,
+                            agent_id=agent_id,
+                            body=_diag_snippet(retry_body),
+                        )
+                    else:
+                        _set_openclaw_failure(
+                            "generation_followup",
+                            "生成执行二次追问没有得到有效回复",
+                            model=model,
+                            agent_id=agent_id,
+                        )
+                    return None
                 return raw_content
             logger.warning("[OPENCLAW] Gateway 200 but choices empty model=%s agent_id=%s", model, agent_id)
         elif resp:

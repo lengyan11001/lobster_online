@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -67,6 +68,7 @@ from .db import Base, engine, SessionLocal
 from . import models  # noqa: F401
 
 logger = logging.getLogger(__name__)
+_OPENCLAW_AUTOSTART_THREAD: threading.Thread | None = None
 
 
 def _ensure_default_user():
@@ -385,34 +387,48 @@ def _sync_missing_capabilities_from_catalog():
         db.close()
 
 
-def _auto_start_openclaw():
+def _auto_start_openclaw_blocking():
     """若本机已有 openclaw 入口则尝试拉起 Gateway；不会在启动时下载 npm/node 依赖（依赖仅在微信点授权时安装）。"""
     try:
         from .api.openclaw_config import (
-            _ensure_openclaw_json_for_local_launch,
             _find_openclaw_pid,
-            _restart_openclaw_gateway,
+            _openclaw_gateway_needs_local_restart,
+            _ensure_openclaw_gateway_running,
         )
 
-        config_changed = _ensure_openclaw_json_for_local_launch()
-        if config_changed:
-            logger.info("OpenClaw Gateway config synced from .env, restarting...")
-            ok = _restart_openclaw_gateway()
-            if ok:
-                logger.info("OpenClaw Gateway restarted after config sync")
-            else:
-                logger.warning("OpenClaw Gateway restart after config sync failed")
-        elif not _find_openclaw_pid():
+        if not _find_openclaw_pid():
             logger.info("OpenClaw Gateway not detected, auto-starting...")
-            ok = _restart_openclaw_gateway()
+            ok = _ensure_openclaw_gateway_running(wait_ready_sec=120.0)
             if ok:
                 logger.info("OpenClaw Gateway auto-started successfully")
             else:
                 logger.warning("OpenClaw auto-start failed (chat will use direct LLM API)")
+        elif _openclaw_gateway_needs_local_restart():
+            logger.info("OpenClaw Gateway needs local sync; restarting with kill-first flow...")
+            ok = _ensure_openclaw_gateway_running(wait_ready_sec=120.0)
+            if ok:
+                logger.info("OpenClaw Gateway restarted with synced local launch state")
+            else:
+                logger.warning("OpenClaw restart for synced local launch state failed")
         else:
             logger.info("OpenClaw Gateway already running")
     except Exception as e:
         logger.warning("OpenClaw auto-start skipped: %s", e)
+
+
+def _auto_start_openclaw():
+    """Schedule OpenClaw startup without blocking the FastAPI app startup."""
+    global _OPENCLAW_AUTOSTART_THREAD
+    if _OPENCLAW_AUTOSTART_THREAD and _OPENCLAW_AUTOSTART_THREAD.is_alive():
+        logger.info("OpenClaw Gateway auto-start already scheduled")
+        return
+    _OPENCLAW_AUTOSTART_THREAD = threading.Thread(
+        target=_auto_start_openclaw_blocking,
+        name="openclaw-autostart",
+        daemon=True,
+    )
+    _OPENCLAW_AUTOSTART_THREAD.start()
+    logger.info("OpenClaw Gateway auto-start scheduled in background")
 
 
 def _migrate_kf_customer_group():

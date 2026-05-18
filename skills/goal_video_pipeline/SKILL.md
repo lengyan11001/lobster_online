@@ -13,7 +13,7 @@
     "action": "start_pipeline",
     "goal": "用户的目标原文",
     "platform": "douyin",
-    "duration": 8,
+    "duration": 6,
     "aspect_ratio": "9:16"
   }
 }

@@ -25,14 +25,14 @@ from ..models import Asset, UserComflyConfig  # UserComflyConfig 仍被高级用
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_VIDEO_MODEL = "veo3.1"
+_DEFAULT_VIDEO_MODEL = "grok-video-3"
 _DEFAULT_ANALYSIS_MODEL = "gemini-2.5-pro"
 _DEFAULT_ASPECT = "9:16"
 LOCAL_COMFLY_CONFIG_USER_ID = 0
 
 
 def _default_comfly_api_base() -> str:
-    return ((settings.comfly_api_base or "").strip().rstrip("/")) or "https://ai.comfly.chat/v1"
+    return ((settings.comfly_api_base or "").strip().rstrip("/")) or "https://ai.comfly.org"
 
 
 def _comfly_upload_failure_detail(aid: str, user_id: int, db: Session) -> str:
@@ -259,6 +259,8 @@ def _veo_clamp_images_for_model(model: str, images: List[str]) -> List[str]:
     """Comfly POST /v2/videos/generations：不同 model 对 images 条数上限不同。"""
     clean = [u.strip() for u in (images or []) if isinstance(u, str) and u.strip()]
     m = (model or "").strip().lower()
+    if m == "grok-video-3":
+        return clean[:1]
     if m == "veo3-pro-frames":
         return clean[:1]
     if m in ("veo3-fast-frames", "veo2-fast-frames"):
@@ -430,17 +432,31 @@ async def run_comfly_veo(
         images = _veo_clamp_images_for_model(video_model, images)
         if not images:
             raise HTTPException(status_code=400, detail="submit_video 参考图为空（经 model 裁剪后无有效 URL）")
-        body: Dict[str, Any] = {
-            "prompt": prompt,
-            "model": video_model,
-            "images": images,
-            "watermark": bool(payload.get("watermark", False)),
-        }
         ar = (payload.get("aspect_ratio") or aspect_ratio or "").strip()
-        if ar in ("9:16", "16:9"):
-            body["aspect_ratio"] = ar
-        if payload.get("enhance_prompt") is True:
-            body["enhance_prompt"] = True
+        if video_model.strip().lower() == "grok-video-3":
+            body = {
+                "prompt": prompt,
+                "model": video_model,
+                "images": images[:1],
+                "ratio": ar if ar in ("9:16", "16:9", "1:1", "2:3", "3:2") else "9:16",
+                "resolution": str(payload.get("resolution") or "720P"),
+            }
+            try:
+                duration = int(payload.get("duration") or payload.get("seconds") or 6)
+            except (TypeError, ValueError):
+                duration = 6
+            body["duration"] = 10 if duration == 10 else 6
+        else:
+            body = {
+                "prompt": prompt,
+                "model": video_model,
+                "images": images,
+                "watermark": bool(payload.get("watermark", False)),
+            }
+            if ar in ("9:16", "16:9"):
+                body["aspect_ratio"] = ar
+            if payload.get("enhance_prompt") is True:
+                body["enhance_prompt"] = True
         submit_path = (getattr(settings, "comfly_veo_submit_path", None) or "/v2/videos/generations").strip()
         post_url = _comfly_request_url(api_base, submit_path)
         sh = _headers(api_key)

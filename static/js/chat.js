@@ -3460,6 +3460,61 @@ var chatSendBtn = document.getElementById('chatSendBtn');
 var chatInput = document.getElementById('chatInput');
 var chatAttachBtn = document.getElementById('chatAttachBtn');
 var chatFileInput = document.getElementById('chatFileInput');
+var chatOpenClawStatusTimer = null;
+var chatOpenClawStatusInFlight = false;
+
+function setChatOpenClawStatus(ready) {
+  var wrap = document.getElementById('chatOpenClawStatus');
+  var text = document.getElementById('chatOpenClawStatusText');
+  if (!wrap || !text) return;
+  wrap.classList.toggle('is-ready', !!ready);
+  wrap.classList.toggle('is-starting', !ready);
+  text.textContent = ready ? 'OpenClaw 已就绪' : 'OpenClaw 启动中';
+}
+
+function setChatOpenClawStatusData(data) {
+  var ready = !!(data && (data.online || data.listener_online));
+  var wrap = document.getElementById('chatOpenClawStatus');
+  var text = document.getElementById('chatOpenClawStatusText');
+  setChatOpenClawStatus(ready);
+  if (!wrap || !text) return;
+  if (ready) {
+    text.textContent = (data && data.message) || 'OpenClaw 已就绪';
+    return;
+  }
+  if (data && data.state === 'missing_entry') {
+    text.textContent = 'OpenClaw 组件缺失';
+    return;
+  }
+  text.textContent = (data && data.message) || 'OpenClaw 启动中';
+}
+
+function refreshChatOpenClawStatus() {
+  if (chatOpenClawStatusInFlight) return;
+  if (!document.getElementById('chatOpenClawStatus')) return;
+  chatOpenClawStatusInFlight = true;
+  fetch((typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') + '/api/openclaw/status', { headers: authHeaders() })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      setChatOpenClawStatusData(d);
+    })
+    .catch(function() {
+      setChatOpenClawStatus(false);
+    })
+    .finally(function() {
+      chatOpenClawStatusInFlight = false;
+    });
+}
+
+function startChatOpenClawStatusWatcher() {
+  setChatOpenClawStatus(false);
+  refreshChatOpenClawStatus();
+  if (chatOpenClawStatusTimer) clearInterval(chatOpenClawStatusTimer);
+  chatOpenClawStatusTimer = setInterval(refreshChatOpenClawStatus, 5000);
+}
+
+startChatOpenClawStatusWatcher();
+
 if (chatSendBtn) chatSendBtn.addEventListener('click', sendChatMessage);
 var chatCancelBtn = document.getElementById('chatCancelBtn');
 if (chatCancelBtn) {

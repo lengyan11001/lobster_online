@@ -34,7 +34,7 @@ _DEFAULT_CREDIT_PACKAGES = [
 _DEFAULT_USAGE_COSTS = [
     {"label": "日常对话", "credits": 10, "unit": "次"},
     {"label": "生成图片", "credits": 60, "unit": "次"},
-    {"label": "图生视频 8 秒", "credits": 160, "unit": "次"},
+    {"label": "默认视频生成", "credits": 160, "unit": "次"},
 ]
 
 

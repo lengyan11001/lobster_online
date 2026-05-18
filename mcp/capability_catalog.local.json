@@ -83,7 +83,7 @@
         },
         "goal": {
           "type": "string",
-          "description": "用户的目标原文，例如：根据我的记忆，给某产品生成 8 秒抖音 9:16 宣传视频"
+          "description": "用户的目标原文，例如：根据我的记忆，给某产品生成 6 秒抖音 9:16 宣传视频"
         },
         "job_id": {
           "type": "string",
@@ -101,8 +101,8 @@
         },
         "duration": {
           "type": "integer",
-          "default": 8,
-          "description": "视频时长，默认 8 秒"
+          "default": 6,
+          "description": "视频时长，默认 6 秒"
         },
         "aspect_ratio": {
           "type": "string",

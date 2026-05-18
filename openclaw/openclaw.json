@@ -19,25 +19,11 @@
     "profile": "full"
   },
   "plugins": {
-    "enabled": true,
+    "enabled": false,
+    "entries": {},
+    "installs": {},
     "load": {
-      "paths": [
-        "D:\\lobster_online\\nodejs\\node_modules\\@tencent-weixin\\openclaw-weixin"
-      ]
-    },
-    "entries": {
-      "openclaw-weixin": {
-        "enabled": true
-      }
-    },
-    "installs": {
-      "openclaw-weixin": {
-        "source": "path",
-        "sourcePath": "D:\\lobster_online\\nodejs\\node_modules\\@tencent-weixin\\openclaw-weixin",
-        "installPath": "D:\\lobster_online\\openclaw\\extensions\\openclaw-weixin",
-        "version": "2.1.6",
-        "installedAt": "2026-04-29T09:47:30.307Z"
-      }
+      "paths": []
     }
   },
   "gateway": {
@@ -51,6 +37,9 @@
           "enabled": true
         }
       }
+    },
+    "reload": {
+      "mode": "off"
     }
   },
   "mcp": {
@@ -238,8 +227,13 @@
     ]
   },
   "channels": {
-    "openclaw-weixin": {
-      "channelConfigUpdatedAt": "2026-04-29T09:48:23.512Z"
+    "slack": {
+      "enabled": false
+    }
+  },
+  "discovery": {
+    "mdns": {
+      "mode": "off"
     }
   }
 }

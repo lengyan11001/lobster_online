@@ -555,6 +555,9 @@ def _track_openclaw_background_task(task: asyncio.Task) -> None:
 _OPENCLAW_TASK_REGISTRY: Dict[str, Tuple[float, set[str]]] = {}
 _OPENCLAW_TASK_REGISTRY_TTL_SEC = 6 * 60 * 60.0
 _OPENCLAW_TASK_REGISTRY_MAX = 256
+_OPENCLAW_GENERATION_RESULT_GUARD_INTENTS = frozenset(
+    {"image_generate", "image_generate_publish", "video_generate", "video_generate_publish"}
+)
 
 
 def _openclaw_guard_key(request: Optional[Any], token: Optional[str]) -> str:
@@ -609,7 +612,8 @@ def _openclaw_task_id_guard_error(
     request: Optional[Any],
     token: Optional[str],
 ) -> str:
-    if not _openclaw_scope_intent(request) or not isinstance(payload, dict):
+    intent = _openclaw_scope_intent(request)
+    if not intent or not isinstance(payload, dict):
         return ""
     task_id = str(payload.get("task_id") or payload.get("taskId") or payload.get("taskid") or "").strip()
     if not task_id:
@@ -627,6 +631,12 @@ def _openclaw_task_id_guard_error(
             "不能用 task.get_result 查询。"
         )
     known = _known_openclaw_task_ids(request, token)
+    if intent in _OPENCLAW_GENERATION_RESULT_GUARD_INTENTS and task_id not in known:
+        return (
+            "OpenClaw task.get_result 已拦截：该 task_id 不是本轮 image.generate/video.generate "
+            "工具返回并登记的真实任务 ID。请只查询工具结果 JSON 里的 task_id；如果生成工具没有返回 task_id，"
+            "请如实告知任务未成功提交，不要编造或复用其它任务号。"
+        )
     if known and task_id not in known and not task_id.isdigit():
         return (
             "OpenClaw task.get_result 已拦截：该 task_id 不在本轮已登记的生成任务中。"
@@ -647,6 +657,10 @@ def _request_has_auth_material(request: Optional[Any]) -> bool:
         if (_request_header_raw(request, name) or "").strip():
             return True
     return False
+
+
+def _request_from_openclaw_mcp(request: Optional[Any]) -> bool:
+    return (_request_header_raw(request, "X-Lobster-OpenClaw-Mcp") or "").strip() == "1"
 
 
 def _effective_openclaw_scope(
@@ -2099,6 +2113,23 @@ def _replace_openclaw_video_image_refs(payload: Dict[str, Any], image_url: str) 
     return out
 
 
+def _ensure_openclaw_video_generate_prompt(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    out = dict(payload or {})
+    prompt = str(out.get("prompt") or "").strip()
+    if prompt:
+        return out, ""
+    if _collect_video_image_refs(out) or _collect_asset_id_hints(out):
+        out["prompt"] = (
+            "用户上传的图片转换为动态视频，保持原图风格和主体，画面自然流畅地动起来\n"
+            f"{_VIDEO_NO_SOCIAL_GUARD}"
+        )
+        return out, ""
+    return out, (
+        "OpenClaw video.generate 已拦截：缺少视频生成 prompt。"
+        "请根据用户本轮需求整理画面描述后再调用 video.generate，不要空 prompt 提交。"
+    )
+
+
 async def _stabilize_openclaw_video_generate_payload(
     payload: Dict[str, Any],
     token: Optional[str],
@@ -2107,7 +2138,9 @@ async def _stabilize_openclaw_video_generate_payload(
     """OpenClaw-only: rehost image refs through the asset library before video generation."""
     if not _openclaw_scope_intent(request) or not isinstance(payload, dict):
         return payload, ""
-    out = dict(payload)
+    out, prompt_guard = _ensure_openclaw_video_generate_prompt(payload)
+    if prompt_guard:
+        return out, prompt_guard
 
     for aid in _collect_asset_id_hints(out):
         resolved = await _resolve_asset_public_url(aid, token, request)
@@ -2339,8 +2372,8 @@ _IMAGE_MODEL_ALIASES: Dict[str, str] = {
 
 _DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "gpt-image2").strip() or "gpt-image2"
 _DEFAULT_VIDEO_MODEL = (
-    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or "veo3.1-fast"
-).strip() or "veo3.1-fast"
+    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or "grok-video-3"
+).strip() or "grok-video-3"
 _IMAGE_SOCIAL_PLATFORM_PATTERN = r"(?:抖音|小红书|今日头条|头条|快手|B站|b站|视频号|微博|TikTok|tiktok|YouTube|youtube|Instagram|instagram)"
 _IMAGE_PUBLISH_CONTEXT_RE = re.compile(
     rf"(?:发布|投稿|上传|发到|发至|发送到|同步到|{_IMAGE_SOCIAL_PLATFORM_PATTERN}.{{0,12}}(?:账号|帐号|账户|昵称|发布|文案|配文|话题))",
@@ -2760,18 +2793,18 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         _merge_common_video_ui_fields(out, payload)
         return out
 
-    # Grok Imagine Video：i2v 用 image_url，支持 duration
+    # Grok Video: Comfly /v2/videos/generations uses ratio/resolution/images.
     if "grok" in model.lower():
         out = {"model": model, "prompt": prompt}
         if first_url:
             out["image_url"] = first_url
+            out["images"] = [first_url]
         _has_ar = _payload_get_aspect_ratio(payload) is not None
         if not first_url or _has_ar:
-            out["aspect_ratio"] = aspect_ratio if ratio_ok else "16:9"
-        out["duration"] = duration_sec
+            out["ratio"] = aspect_ratio if ratio_ok else "9:16"
+        out["duration"] = 10 if duration_sec == 10 else 6
         _ger = _sanitize_video_resolution_value(payload.get("resolution"))
-        if _ger is not None:
-            out["resolution"] = _ger
+        out["resolution"] = _ger or "720P"
         for k in ["audio", "seed", "negative_prompt"]:
             if k in payload:
                 out[k] = payload[k]
@@ -5510,8 +5543,11 @@ async def _handle_single_message(msg: Dict[str, Any], request: Request) -> Optio
     if method == "tools/list":
         catalog = _load_capability_catalog()
         token = _get_token_from_request(request)
-        is_admin = await _fetch_is_skill_store_admin(token)
         allowed_tools, allowed_caps, intent, scoped = _effective_openclaw_scope(request)
+        if _request_from_openclaw_mcp(request):
+            is_admin = False
+        else:
+            is_admin = await _fetch_is_skill_store_admin(token)
         tools = _tool_definitions(
             catalog,
             is_skill_store_admin=is_admin,
