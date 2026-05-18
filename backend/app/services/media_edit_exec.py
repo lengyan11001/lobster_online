@@ -453,6 +453,18 @@ def find_ffmpeg() -> str:
         if bundled.is_file():
             logger.info("[media_edit_exec] ffmpeg bundled=%s", bundled)
             return str(bundled.resolve())
+        skill_bundled = (
+            _BASE_DIR
+            / "skills"
+            / "comfly_veo3_daihuo_video"
+            / "tools"
+            / "ffmpeg"
+            / "windows"
+            / "ffmpeg.exe"
+        )
+        if skill_bundled.is_file():
+            logger.info("[media_edit_exec] ffmpeg skill bundled=%s", skill_bundled)
+            return str(skill_bundled.resolve())
 
     if os.name != "nt":
         bundled = _BASE_DIR / "deps" / "ffmpeg" / "ffmpeg"
@@ -462,9 +474,10 @@ def find_ffmpeg() -> str:
 
     p = shutil.which("ffmpeg")
     if not p:
-        logger.error("[media_edit_exec] ffmpeg not found (no bundled deps/ffmpeg, not in PATH)")
+        logger.error("[media_edit_exec] ffmpeg not found (no bundled deps/ffmpeg or skill ffmpeg, not in PATH)")
         raise RuntimeError(
-            "未找到 ffmpeg：请将 ffmpeg.exe 放入本目录 deps/ffmpeg/ffmpeg.exe（打代码包前执行 "
+            "未找到 ffmpeg：请将 ffmpeg.exe 放入本目录 deps/ffmpeg/ffmpeg.exe，或保留技能内置 "
+            "skills/comfly_veo3_daihuo_video/tools/ffmpeg/windows/ffmpeg.exe（打代码包前执行 "
             "python scripts/ensure_ffmpeg_windows.py），或安装 ffmpeg 并加入 PATH，或设置 LOBSTER_FFMPEG_PATH。"
         )
     logger.debug("[media_edit_exec] ffmpeg from PATH=%s", p)

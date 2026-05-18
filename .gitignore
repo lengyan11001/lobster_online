@@ -6,6 +6,8 @@ deps/
 assets/
 logs/
 dist/
+build/
+*.spec
 .pack_python_shim/
 
 # Node.js（顶层打包的 Node 运行时；openclaw 内的 node_modules 也排除）
@@ -76,6 +78,8 @@ static/uploads/
 static/hifly_previews/
 data/hifly_public_avatars_cache.json
 lobster.exe
+lobster_fixed.exe
+必火AI员工.exe
 
 # ── 系统 / 编辑器 ──
 .DS_Store

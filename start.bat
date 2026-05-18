@@ -23,14 +23,37 @@ if exist "python\python.exe" (
     set "PYTHON=%ROOT%\python\python.exe"
     goto :check_uvicorn
 )
-where python >nul 2>&1
+python --version >nul 2>&1
 if not errorlevel 1 (
     set "PYTHON=python"
     goto :check_uvicorn
 )
+call :detect_py_launcher 3.12
+if defined PYTHON goto :check_uvicorn
+call :detect_py_launcher 3.11
+if defined PYTHON goto :check_uvicorn
+call :detect_py_launcher 3.10
+if defined PYTHON goto :check_uvicorn
+call :detect_py_launcher 3
+if defined PYTHON goto :check_uvicorn
 echo [ERR] Python not found
 pause
 exit /b 1
+
+:detect_py_launcher
+set "PY_PROBE=%TEMP%\lobster_py_path_!RANDOM!.txt"
+py -%~1 -c "import sys; print(sys.executable)" > "!PY_PROBE!" 2>nul
+if errorlevel 1 (
+    if exist "!PY_PROBE!" del /f /q "!PY_PROBE!" >nul 2>&1
+    exit /b 1
+)
+set /p PYTHON=<"!PY_PROBE!"
+if exist "!PY_PROBE!" del /f /q "!PY_PROBE!" >nul 2>&1
+if not exist "!PYTHON!" (
+    set "PYTHON="
+    exit /b 1
+)
+exit /b 0
 
 :check_uvicorn
 "%PYTHON%" -m uvicorn --version >nul 2>&1
@@ -38,11 +61,26 @@ if errorlevel 1 goto :try_alt_python
 goto :python_ready
 
 :try_alt_python
-where python >nul 2>&1
-if errorlevel 1 goto :no_uvicorn
 python -m uvicorn --version >nul 2>&1
-if errorlevel 1 goto :no_uvicorn
+if errorlevel 1 goto :try_alt_py_launcher
 set "PYTHON=python"
+goto :python_ready
+
+:try_alt_py_launcher
+set "PYTHON="
+call :detect_py_launcher 3.12
+if defined PYTHON goto :check_uvicorn_alt
+call :detect_py_launcher 3.11
+if defined PYTHON goto :check_uvicorn_alt
+call :detect_py_launcher 3.10
+if defined PYTHON goto :check_uvicorn_alt
+call :detect_py_launcher 3
+if defined PYTHON goto :check_uvicorn_alt
+goto :no_uvicorn
+
+:check_uvicorn_alt
+"%PYTHON%" -m uvicorn --version >nul 2>&1
+if errorlevel 1 goto :no_uvicorn
 goto :python_ready
 
 :no_uvicorn

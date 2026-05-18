@@ -10,10 +10,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = $Root.TrimEnd('\', '/')
 $jsonPath = Join-Path $Root 'static\branding\brands.json'
+$desktopExe = Join-Path $Root '必火AI员工.exe'
+$legacyDesktopExe = Join-Path $Root 'lobster.exe'
 $bat = Join-Path $Root 'start.bat'
 
-if (-not (Test-Path -LiteralPath $bat)) {
-    Write-Host "[desktop-shortcut] start.bat not found, skip."
+if (-not (Test-Path -LiteralPath $desktopExe) -and -not (Test-Path -LiteralPath $legacyDesktopExe) -and -not (Test-Path -LiteralPath $bat)) {
+    Write-Host "[desktop-shortcut] neither 必火AI员工.exe/lobster.exe nor start.bat found, skip."
     exit 2
 }
 if (-not (Test-Path -LiteralPath $jsonPath)) {
@@ -78,13 +80,19 @@ if ([string]::IsNullOrWhiteSpace($desktop)) {
 }
 
 $desc = [string]$inst.shortcut_description
-if ([string]::IsNullOrWhiteSpace($desc)) { $desc = 'Lobster local server' }
+if ([string]::IsNullOrWhiteSpace($desc)) { $desc = '必火AI员工本地客户端' }
 
 $lnkPath = Join-Path $desktop $lnkName
 try {
     $shell = New-Object -ComObject WScript.Shell
     $sc = $shell.CreateShortcut($lnkPath)
-    $sc.TargetPath = $bat
+    if (Test-Path -LiteralPath $desktopExe) {
+        $sc.TargetPath = $desktopExe
+    } elseif (Test-Path -LiteralPath $legacyDesktopExe) {
+        $sc.TargetPath = $legacyDesktopExe
+    } else {
+        $sc.TargetPath = $bat
+    }
     $sc.WorkingDirectory = $Root
     $sc.IconLocation = "$ico,0"
     $sc.Description = $desc

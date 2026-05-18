@@ -22,15 +22,39 @@ if exist "python\python.exe" (
     echo [OK] Using embedded Python
     goto :python_ok
 )
-where python >nul 2>&1
+python --version >nul 2>&1
 if not errorlevel 1 (
     set "PYTHON=python"
     echo [OK] Using system Python
     goto :python_ok
 )
+call :detect_py_launcher 3.12
+if defined PYTHON goto :python_ok
+call :detect_py_launcher 3.11
+if defined PYTHON goto :python_ok
+call :detect_py_launcher 3.10
+if defined PYTHON goto :python_ok
+call :detect_py_launcher 3
+if defined PYTHON goto :python_ok
 echo [ERR] Python not found. Install Python 3.10+ or place embedded python in python\ folder
 pause
 exit /b 1
+
+:detect_py_launcher
+set "PY_PROBE=%TEMP%\lobster_py_path_%RANDOM%.txt"
+py -%~1 -c "import sys; print(sys.executable)" > "%PY_PROBE%" 2>nul
+if errorlevel 1 (
+    if exist "%PY_PROBE%" del /f /q "%PY_PROBE%" >nul 2>&1
+    exit /b 1
+)
+set /p PYTHON=<"%PY_PROBE%"
+if exist "%PY_PROBE%" del /f /q "%PY_PROBE%" >nul 2>&1
+if not exist "%PYTHON%" (
+    set "PYTHON="
+    exit /b 1
+)
+echo [OK] Using Python Launcher py -%~1: %PYTHON%
+exit /b 0
 
 :python_ok
 %PYTHON% --version
@@ -382,6 +406,17 @@ echo [6b/7] ffmpeg for media edit...
 if exist "deps\ffmpeg\ffmpeg.exe" (
     echo   [OK] deps\ffmpeg\ffmpeg.exe
     goto :ffmpeg_install_done
+)
+if exist "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffmpeg.exe" (
+    echo   Found bundled skill ffmpeg, copying to deps\ffmpeg\ ...
+    if not exist "deps\ffmpeg" mkdir "deps\ffmpeg"
+    copy /y "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffmpeg.exe" "deps\ffmpeg\ffmpeg.exe" >nul
+    if exist "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffprobe.exe" copy /y "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffprobe.exe" "deps\ffmpeg\ffprobe.exe" >nul
+    copy /y "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\*.dll" "deps\ffmpeg\" >nul 2>&1
+    if exist "deps\ffmpeg\ffmpeg.exe" (
+        echo   [OK] deps\ffmpeg populated from bundled skill ffmpeg
+        goto :ffmpeg_install_done
+    )
 )
 if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
     echo   [ERR] LOBSTER_OFFLINE_ONLY=1 but deps\ffmpeg\ffmpeg.exe missing. Full offline pack must include it ^(or copy from build machine^).

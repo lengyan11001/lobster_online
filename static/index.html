@@ -6,7 +6,7 @@
   <title>必火AI员工</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
-  <link rel="stylesheet" href="/static/css/common.css">
+  <link rel="stylesheet" href="/static/css/common.css?v=20260518-desktop-scroll">
   <style>
     .model-selector { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
     .model-selector select { padding: 0.35rem 0.6rem; font-size: 0.82rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: var(--radius-sm); color: var(--text); min-width: 180px; }
@@ -2135,7 +2135,9 @@
     }
     .dashboard-main {
       width: 100%;
-      overflow: visible;
+      overflow-x: hidden;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .content-block {
       display: none;
@@ -4303,6 +4305,95 @@
       .tvc-storyboard-strip {
         grid-template-columns: 1fr 1fr;
       }
+    }
+    /* Desktop shell scroll model: keep the top header fixed while only page content scrolls. */
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      min-height: 100%;
+      overflow: hidden !important;
+    }
+    body {
+      position: fixed;
+      inset: 0;
+    }
+    .page {
+      height: 100vh;
+      height: 100dvh;
+      max-height: 100dvh;
+      min-height: 0;
+      overflow: hidden !important;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      flex: 0 0 auto;
+      position: relative !important;
+      top: auto !important;
+      z-index: 10000;
+    }
+    #pageHero {
+      flex: 0 0 auto;
+    }
+    #authPanel {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 1rem;
+    }
+    .dashboard.visible {
+      flex: 1 1 auto;
+      height: auto;
+      min-height: 0;
+      overflow: hidden !important;
+      display: flex !important;
+      flex-direction: column;
+    }
+    .dashboard-layout {
+      flex: 1 1 auto;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden !important;
+    }
+    .dashboard-main {
+      flex: 1 1 auto;
+      height: 100%;
+      max-height: 100%;
+      min-height: 0;
+      padding-bottom: 1.5rem;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+    #content-chat.content-block.visible {
+      display: flex !important;
+      flex-direction: column;
+      min-height: 100%;
+      overflow: visible;
+    }
+    .chat-area-wrap {
+      flex: 1 0 auto;
+      min-height: 0;
+    }
+    .chat-main {
+      min-height: 0;
+    }
+    .chat-main.is-home-empty {
+      min-height: auto;
+    }
+    .chat-main.is-home-empty .chat-workspace,
+    .chat-workspace.is-empty {
+      overflow: visible;
+    }
+    .chat-workspace:not(.is-empty) {
+      min-height: min(720px, calc(100dvh - 190px));
+    }
+    .chat-workspace.is-empty .chat-home-tools {
+      padding-bottom: 1.5rem;
     }
     @keyframes fadeSlideIn {
       from {

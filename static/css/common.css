@@ -17,6 +17,7 @@
     }
     html {
       color-scheme: dark;
+      height: 100%;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -67,6 +68,11 @@
       padding-bottom: 0.75rem;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      z-index: 3500;
+      background: color-mix(in srgb, var(--bg) 88%, transparent);
+      backdrop-filter: blur(14px);
     }
     .logo {
       display: flex;
@@ -486,6 +492,7 @@
       min-height: 0;
       overflow-x: hidden;
       overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       display: flex;
       flex-direction: column;
     }

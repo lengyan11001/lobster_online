@@ -68,7 +68,22 @@ def main() -> int:
             "一键结果包会下载；无则部分原生模块可能需本机 VC++",
         )
     )
-    rows.append(("deps/ffmpeg/ffmpeg.exe", (BASE / "deps" / "ffmpeg" / "ffmpeg.exe").is_file(), "剪辑"))
+    rows.append(
+        (
+            "ffmpeg.exe",
+            (BASE / "deps" / "ffmpeg" / "ffmpeg.exe").is_file()
+            or (
+                BASE
+                / "skills"
+                / "comfly_veo3_daihuo_video"
+                / "tools"
+                / "ffmpeg"
+                / "windows"
+                / "ffmpeg.exe"
+            ).is_file(),
+            "剪辑；优先 deps/ffmpeg，缺失时可复用 comfly_veo3_daihuo_video 内置 ffmpeg",
+        )
+    )
     rows.append(
         (
             "browser_chromium/",
