@@ -814,6 +814,7 @@ class ChatRequest(BaseModel):
     context_id: Optional[str] = None
     model: Optional[str] = None
     attachment_asset_ids: Optional[List[str]] = Field(default_factory=list, description="本条消息附带的素材 ID，将生成可访问 URL 供速推等使用")
+    attachment_image_urls: Optional[List[str]] = Field(default_factory=list, description="本条消息附带的公网图片 URL，用于手机端上传图生视频等场景")
     # 默认 False：智能会话等现有客户端不传该字段，行为与增加此字段前一致。
     review_prompt_drafts_only: bool = Field(
         False,
@@ -7411,6 +7412,32 @@ def _build_user_content_with_attachments(
     user_id: Optional[int] = None,
 ) -> str:
     user_content = (payload.message or "").strip()
+    explicit_image_urls = [
+        str(u or "").strip()
+        for u in (getattr(payload, "attachment_image_urls", None) or [])[: _MAX_VIDEO_IMAGE_ATTACHMENTS]
+        if isinstance(u, str) and str(u or "").strip().startswith(("http://", "https://"))
+    ]
+    explicit_image_urls = list(dict.fromkeys(explicit_image_urls))
+    if explicit_image_urls:
+        clean_request = _strip_lobster_attachment_block(user_content)
+        wants_understand = _user_wants_media_understand(clean_request or "")
+        wants_video = bool(_PLAIN_VIDEO_REQUEST_RE.search(clean_request or "")) and not wants_understand
+        wants_image = bool(_IMAGE_REQUEST_RE.search(clean_request or "")) and not wants_video
+        media_summary = "image"
+        user_content += "\n\n【用户本条消息上传的素材】\n"
+        user_content += f"- 素材类型：{media_summary}\n"
+        user_content += "- 生成类 prompt 只写画面/动作；发布平台、账号、标题、正文、话题必须留给 publish_content，不要写进 image.generate/video.generate prompt。\n"
+        if wants_understand:
+            user_content += "- 用户本轮要求理解/分析素材：必须调用 image.understand；禁止调用 image.generate、video.generate、media.edit 或爆款TVC管线。\n"
+        elif wants_video:
+            user_content += "- 用户本轮要求视频生成：必须优先调用 video.generate；不要改用爆款TVC管线。\n"
+            user_content += "- 有附件时，后端会把下方公网 URL 注入 video.generate 的 filePaths/media_files/images/image_files，必要时注入 image_url。\n"
+            user_content += "- 不要因为附件存在而改成 image.generate，除非用户明确要求生成/编辑图片。\n"
+        elif wants_image:
+            user_content += "- 用户本轮要求图片生成/编辑：调用 image.generate；如需使用附件，在 payload 设置 image_url 为下方 URL。\n"
+        else:
+            user_content += "- 先按用户原话判断任务；不要仅因附件存在就调用生成、发布或爆款TVC管线。\n"
+        user_content += "\n".join(f"- asset_id: mobile_upload_{idx + 1}  media_type: image  URL: {url}" for idx, url in enumerate(explicit_image_urls))
     if getattr(payload, "attachment_asset_ids", None) and request and db is not None and user_id is not None:
         from backend.app.api.assets import get_asset_public_url
 
@@ -7584,6 +7611,13 @@ async def chat_endpoint(
     attachment_urls = _get_attachment_public_urls(
         getattr(payload, "attachment_asset_ids", None), request, db, current_user.id
     )
+    explicit_attachment_urls = [
+        str(u or "").strip()
+        for u in (getattr(payload, "attachment_image_urls", None) or [])[: _MAX_VIDEO_IMAGE_ATTACHMENTS]
+        if isinstance(u, str) and str(u or "").strip().startswith(("http://", "https://"))
+    ]
+    if explicit_attachment_urls:
+        attachment_urls = list(dict.fromkeys([*attachment_urls, *explicit_attachment_urls]))
     openclaw_video_model_lock, openclaw_video_model_lock_source = _infer_video_model_lock_for_openclaw(
         payload.message or "",
         bool(attachment_urls),
@@ -7898,6 +7932,13 @@ async def _chat_stream_events(
                 db,
                 current_user.id,
             )
+            explicit_stream_urls = [
+                str(u or "").strip()
+                for u in (getattr(payload, "attachment_image_urls", None) or [])[: _MAX_VIDEO_IMAGE_ATTACHMENTS]
+                if isinstance(u, str) and str(u or "").strip().startswith(("http://", "https://"))
+            ]
+            if explicit_stream_urls:
+                stream_attachment_urls = list(dict.fromkeys([*stream_attachment_urls, *explicit_stream_urls]))
         except HTTPException as e:
             det = e.detail
             error_holder.append(det if isinstance(det, str) else str(det))

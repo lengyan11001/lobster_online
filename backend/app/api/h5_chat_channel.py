@@ -31,6 +31,10 @@ from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
+_MOBILE_UPLOAD_TITLE = "【手机上传素材】"
+_MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
+_MOBILE_UPLOAD_URL_RE = re.compile(r"\bURL:\s*(?P<url>https?://[^\s]+)", re.IGNORECASE)
+_MOBILE_UPLOAD_ASSET_RE = re.compile(r"\basset_id:\s*(?P<asset_id>[A-Za-z0-9_-]{4,80})", re.IGNORECASE)
 _SCHEDULED_CREATIVE_ANGLES = [
     "痛点切入",
     "场景体验",
@@ -370,6 +374,29 @@ def _local_chat_url() -> str:
     return f"http://127.0.0.1:{port}/chat/stream"
 
 
+def _extract_mobile_upload_attachments(content: str) -> tuple[str, List[str], List[str]]:
+    raw = str(content or "")
+    match = _MOBILE_UPLOAD_BLOCK_RE.search(raw)
+    if not match:
+        return raw.strip(), [], []
+    clean = raw[: match.start()].strip()
+    body = match.group("body") or ""
+    asset_ids: List[str] = []
+    urls: List[str] = []
+    for line in body.splitlines():
+        aid_match = _MOBILE_UPLOAD_ASSET_RE.search(line or "")
+        if aid_match:
+            aid = (aid_match.group("asset_id") or "").strip()
+            if aid and aid not in asset_ids:
+                asset_ids.append(aid)
+        url_match = _MOBILE_UPLOAD_URL_RE.search(line or "")
+        if url_match:
+            url = (url_match.group("url") or "").strip().rstrip("，。；;)")
+            if url and url not in urls:
+                urls.append(url)
+    return clean, asset_ids[:8], urls[:8]
+
+
 def _scheduled_payload(item: Dict[str, Any]) -> Dict[str, Any]:
     payload = item.get("payload")
     return payload if isinstance(payload, dict) else {}
@@ -500,16 +527,25 @@ async def _run_direct_chat(
 ) -> None:
     message_id = str(item.get("id") or "").strip()
     content = str(item.get("content") or "").strip()
-    if not message_id or not content:
+    clean_content, attachment_asset_ids, attachment_urls = _extract_mobile_upload_attachments(content)
+    if not message_id or not (clean_content or attachment_urls):
         return
 
     await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "本地直连链路正在处理"})
     payload = {
-        "message": content,
+        "message": clean_content or "请根据上传图片继续处理。",
         "history": [],
         "session_id": f"h5-{message_id}",
         "context_id": f"h5-{message_id}",
     }
+    if attachment_urls:
+        payload["attachment_image_urls"] = attachment_urls
+        logger.info(
+            "[H5-CHAT] mobile upload attachments injected message_id=%s asset_ids=%s urls=%d",
+            message_id,
+            attachment_asset_ids,
+            len(attachment_urls),
+        )
     timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
     final_reply = ""
     final_error = ""
@@ -577,12 +613,20 @@ async def _run_openclaw_chat(
 ) -> None:
     message_id = str(item.get("id") or "").strip()
     content = str(item.get("content") or "").strip()
-    if not message_id or not content:
+    clean_content, attachment_asset_ids, attachment_urls = _extract_mobile_upload_attachments(content)
+    if not message_id or not (clean_content or attachment_urls):
         return
     await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "已交给本机 OpenClaw"})
+    user_content = clean_content or "请根据上传图片继续处理。"
+    if attachment_urls:
+        upload_lines = "\n".join(
+            f"- asset_id: {attachment_asset_ids[idx] if idx < len(attachment_asset_ids) else ''}  media_type: image  URL: {url}"
+            for idx, url in enumerate(attachment_urls)
+        )
+        user_content += f"\n\n{_MOBILE_UPLOAD_TITLE}\n{upload_lines}"
     messages = [
         {"role": "system", "content": "你是用户的手机会话助手。根据用户消息自然完成任务，使用中文回复。"},
-        {"role": "user", "content": content},
+        {"role": "user", "content": user_content},
     ]
     try:
         reply = await try_openclaw(
