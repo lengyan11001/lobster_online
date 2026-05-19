@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import datetime
+import errno
 import hashlib
 import json
 import os
@@ -72,6 +73,7 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "skill_registry.json",
     "upstream_urls.json",
     ".env",
+    "必火AI员工.exe",
     "openclaw",
     "requirements.txt",
     ".env.example",
@@ -133,6 +135,9 @@ ALLOWED_NODEJS_TREE_PREFIXES: tuple[str, ...] = (
 _OPENCLAW_POLICY_FILENAMES = ("LOBSTER_CHAT_POLICY_INTRO.md", "LOBSTER_CHAT_POLICY_TOOLS.md")
 _PRESERVED_STATIC_REL_PATHS = ("static/hifly_previews",)
 _RESOURCE_STATE_DIR = ROOT / "static" / ".resource_packs"
+_DESKTOP_EXE_NAME = "必火AI员工.exe"
+_PENDING_UPDATE_DIR = ROOT / ".updates"
+_PENDING_EXE_MARKER = _PENDING_UPDATE_DIR / "pending_exe_replace.json"
 
 
 def _load_dotenv_simple(path: Path) -> dict[str, str]:
@@ -274,6 +279,101 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _locked_file_error(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if not isinstance(exc, OSError):
+        return False
+    winerror = getattr(exc, "winerror", None)
+    if winerror in {5, 32, 33}:
+        return True
+    return getattr(exc, "errno", None) in {errno.EACCES, errno.EPERM}
+
+
+def _remove_pending_exe_marker_for_target(dst: Path) -> None:
+    if not _PENDING_EXE_MARKER.is_file():
+        return
+    try:
+        data = json.loads(_PENDING_EXE_MARKER.read_text(encoding="utf-8"))
+        target = ROOT / _norm_rel(str(data.get("target_path") or "")).replace("/", os.sep)
+        if target.resolve() == dst.resolve():
+            _PENDING_EXE_MARKER.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _stage_pending_exe_replace(src: Path, dst: Path, exc: BaseException) -> None:
+    _PENDING_UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+    sha = _sha256_file(src)
+    pending = _PENDING_UPDATE_DIR / f"{dst.name}.{sha[:16]}.pending"
+    shutil.copy2(src, pending)
+    payload = {
+        "target_path": _norm_rel(str(dst.relative_to(ROOT))),
+        "pending_path": _norm_rel(str(pending.relative_to(ROOT))),
+        "sha256": sha,
+        "staged_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "reason": str(exc)[:500],
+    }
+    _PENDING_EXE_MARKER.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(
+        f"[code] [WARN] {dst.name} 正在被占用，已暂存为下次启动替换: {payload['pending_path']}",
+        flush=True,
+    )
+
+
+def _apply_pending_exe_replace() -> None:
+    if not _PENDING_EXE_MARKER.is_file():
+        return
+    try:
+        data = json.loads(_PENDING_EXE_MARKER.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[code] [WARN] pending exe 标记损坏，已忽略: {exc}", flush=True)
+        _PENDING_EXE_MARKER.unlink(missing_ok=True)
+        return
+    target_rel = _norm_rel(str(data.get("target_path") or ""))
+    pending_rel = _norm_rel(str(data.get("pending_path") or ""))
+    if not target_rel or not pending_rel:
+        _PENDING_EXE_MARKER.unlink(missing_ok=True)
+        return
+    dst = ROOT / target_rel.replace("/", os.sep)
+    pending = ROOT / pending_rel.replace("/", os.sep)
+    if not pending.is_file():
+        print(f"[code] [WARN] pending exe 文件不存在，已清理标记: {pending_rel}", flush=True)
+        _PENDING_EXE_MARKER.unlink(missing_ok=True)
+        return
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(str(pending), str(dst))
+        _PENDING_EXE_MARKER.unlink(missing_ok=True)
+        print(f"[code] 已完成上次暂存的 EXE 替换: {target_rel}", flush=True)
+    except OSError as exc:
+        if _locked_file_error(exc):
+            print(f"[code] [WARN] {dst.name} 仍被占用，继续保留 pending，下次启动再替换。", flush=True)
+            return
+        print(f"[code] [WARN] pending exe 替换失败: {exc}", flush=True)
+
+
+def _apply_exe_file(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.updating.{os.getpid()}")
+    try:
+        if tmp.exists():
+            tmp.unlink()
+        shutil.copy2(src, tmp)
+        os.replace(str(tmp), str(dst))
+        _remove_pending_exe_marker_for_target(dst)
+    except OSError as exc:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        if _locked_file_error(exc):
+            _stage_pending_exe_replace(src, dst, exc)
+            return
+        raise
 
 
 def _norm_rel(name: str) -> str:
@@ -468,6 +568,9 @@ def _apply_path(src: Path, dst: Path) -> None:
     rel = _norm_rel(str(dst.relative_to(ROOT)))
     if rel == "openclaw" and src.is_dir():
         _apply_openclaw_with_preserve(src, dst)
+        return
+    if rel == _DESKTOP_EXE_NAME and src.is_file():
+        _apply_exe_file(src, dst)
         return
     preserved: list[tuple[str, Path]] = []
     tmp_root: Path | None = None
@@ -688,6 +791,7 @@ def _apply_update_artifact(artifact: dict[str, Any], tdir: Path, *, label: str) 
 
 
 def main() -> int:
+    _apply_pending_exe_replace()
     env = _load_dotenv_simple(ROOT / ".env")
     env.update({k: v for k, v in os.environ.items() if k.startswith("CLIENT_CODE_")})
 

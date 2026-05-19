@@ -590,7 +590,7 @@ async def _run_openclaw_chat(
             openclaw_fallback_model(),
             jwt_token,
             installation_id=installation_id,
-            video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "grok-video-3"),
+            video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "xai/grok-imagine-video/text-to-video"),
             video_model_lock_source="default",
         )
         if not reply:
@@ -663,7 +663,7 @@ async def _run_scheduled_chat_message(
                 openclaw_fallback_model(),
                 jwt_token,
                 installation_id=installation_id,
-                video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "grok-video-3"),
+                video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "xai/grok-imagine-video/text-to-video"),
                 video_model_lock_source="default",
             )
             if not reply:
@@ -1036,6 +1036,74 @@ def _scheduled_capability_error(result: Any) -> str:
     return ""
 
 
+def _goal_video_pipeline_has_video_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    raw_refs = _collect_scheduled_result_refs(result)
+    if any(str(u or "").lower().split("?", 1)[0].split("#", 1)[0].endswith((".mp4", ".webm", ".mov", ".m4v", ".avi")) for u in raw_refs.get("urls") or []):
+        return True
+    stack = [result]
+    seen: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        oid = id(cur)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        if isinstance(cur, dict):
+            for key in ("video_asset_id", "final_asset_id"):
+                if str(cur.get(key) or "").strip():
+                    return True
+            for item in cur.get("saved_assets") or []:
+                if isinstance(item, dict) and str(item.get("media_type") or "").strip().lower() == "video":
+                    if str(item.get("asset_id") or item.get("id") or "").strip():
+                        return True
+            for value in cur.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(cur, list):
+            stack.extend(v for v in cur if isinstance(v, (dict, list)))
+    return False
+
+
+def _goal_video_pipeline_pending_reason(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    statuses: List[str] = []
+    stack = [result]
+    seen: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        oid = id(cur)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        if isinstance(cur, dict):
+            status = str(cur.get("status") or cur.get("state") or cur.get("task_status") or cur.get("taskStatus") or "").strip().lower()
+            if status:
+                statuses.append(status)
+            video = cur.get("video")
+            if isinstance(video, dict):
+                video_status = str(video.get("status") or "").strip().lower()
+                if video_status in {"running", "processing", "pending", "queued", "waiting"}:
+                    task_id = str(video.get("task_id") or "").strip()
+                    return f"创意成片视频仍在生成中{('，task_id=' + task_id) if task_id else ''}"
+                final = video.get("final_result")
+                if isinstance(final, dict):
+                    final_status = str(final.get("status") or (final.get("result") or {}).get("status") or "").strip().lower()
+                    if final_status in {"running", "processing", "pending", "queued", "waiting"}:
+                        task_id = str(video.get("task_id") or (final.get("result") or {}).get("task_id") or "").strip()
+                        return f"创意成片视频仍在生成中{('，task_id=' + task_id) if task_id else ''}"
+            for value in cur.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(cur, list):
+            stack.extend(v for v in cur if isinstance(v, (dict, list)))
+    if any(s in {"running", "processing", "pending", "queued", "waiting"} for s in statuses):
+        return "创意成片视频仍在生成中"
+    return ""
+
+
 def _scheduled_caption_candidate(value: Any) -> str:
     text = " ".join(str(value or "").strip().strip('"“”`').split())
     text = re.sub(r"^(发布文案|朋友圈文案|文案)\s*[:：]\s*", "", text).strip()
@@ -1334,6 +1402,8 @@ async def _run_scheduled_capability(
             cap_error = _scheduled_capability_error(result)
             if cap_error:
                 raise RuntimeError(cap_error)
+            if capability_id == "goal.video.pipeline" and not _goal_video_pipeline_has_video_result(result):
+                raise RuntimeError(_goal_video_pipeline_pending_reason(result) or "创意成片视频仍未完成，未取得视频素材或视频链接")
             await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在生成发布文案"})
             caption = await _generate_scheduled_caption(
                 base=base,

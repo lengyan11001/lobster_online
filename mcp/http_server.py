@@ -2317,6 +2317,15 @@ def _sanitize_video_resolution_value(raw: Any) -> Optional[str]:
     return s
 
 
+def _coerce_grok_video_resolution(raw: Any) -> Optional[str]:
+    s = str(raw or "").strip().lower().replace(" ", "")
+    if not s or s in ("auto", "automatic", "default", "original"):
+        return None
+    if "480" in s:
+        return "480p"
+    return "720p"
+
+
 def _sanitize_options_dict_resolution(options: Dict[str, Any]) -> None:
     """Seedance 等 options.resolution 合并后去掉 auto 占位。"""
     if not isinstance(options, dict) or "resolution" not in options:
@@ -2372,8 +2381,8 @@ _IMAGE_MODEL_ALIASES: Dict[str, str] = {
 
 _DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "gpt-image2").strip() or "gpt-image2"
 _DEFAULT_VIDEO_MODEL = (
-    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or "grok-video-3"
-).strip() or "grok-video-3"
+    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or "xai/grok-imagine-video/text-to-video"
+).strip() or "xai/grok-imagine-video/text-to-video"
 _IMAGE_SOCIAL_PLATFORM_PATTERN = r"(?:抖音|小红书|今日头条|头条|快手|B站|b站|视频号|微博|TikTok|tiktok|YouTube|youtube|Instagram|instagram)"
 _IMAGE_PUBLISH_CONTEXT_RE = re.compile(
     rf"(?:发布|投稿|上传|发到|发至|发送到|同步到|{_IMAGE_SOCIAL_PLATFORM_PATTERN}.{{0,12}}(?:账号|帐号|账户|昵称|发布|文案|配文|话题))",
@@ -2793,18 +2802,18 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         _merge_common_video_ui_fields(out, payload)
         return out
 
-    # Grok Video: Comfly /v2/videos/generations uses ratio/resolution/images.
+    # Grok Imagine Video: use SuTui/xskill model ids, not the unstable Comfly alias.
     if "grok" in model.lower():
         out = {"model": model, "prompt": prompt}
         if first_url:
             out["image_url"] = first_url
-            out["images"] = [first_url]
         _has_ar = _payload_get_aspect_ratio(payload) is not None
         if not first_url or _has_ar:
-            out["ratio"] = aspect_ratio if ratio_ok else "9:16"
-        out["duration"] = 10 if duration_sec == 10 else 6
-        _ger = _sanitize_video_resolution_value(payload.get("resolution"))
-        out["resolution"] = _ger or "720P"
+            out["aspect_ratio"] = aspect_ratio if ratio_ok else "9:16"
+        out["duration"] = duration_sec
+        _ger = _coerce_grok_video_resolution(payload.get("resolution"))
+        if _ger is not None:
+            out["resolution"] = _ger
         for k in ["audio", "seed", "negative_prompt"]:
             if k in payload:
                 out[k] = payload[k]

@@ -52,6 +52,140 @@
     .skill-store-card .card-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.5rem; }
     .skill-store-card .tag { font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: rgba(6,182,212,0.12); color: var(--accent); }
     .skill-store-card .card-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; }
+    #skillStoreList.skill-store-grid,
+    #mcpRegistryResults.skill-store-grid {
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0.72rem;
+    }
+    #skillStoreList .skill-store-card,
+    #mcpRegistryResults .skill-store-card {
+      position: relative;
+      min-height: 126px;
+      padding: 0.95rem 0.8rem;
+      border-radius: 8px;
+      display: grid;
+      grid-template-rows: 42px minmax(2.6em, auto) auto;
+      align-content: start;
+      align-items: center;
+      justify-items: center;
+      text-align: center;
+      gap: 0.5rem;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    #skillStoreList .skill-store-card::before,
+    #mcpRegistryResults .skill-store-card::before {
+      content: "";
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l1.8 4.8L19 9.6l-4.8 1.8L12 17l-1.8-5.6L5 9.6l5.2-1.8L12 3z'/%3E%3Cpath d='M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z'/%3E%3C/svg%3E");
+      --skill-icon-bg: linear-gradient(135deg, #4262df 0%, #14b8a6 100%);
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background-image: var(--skill-icon), var(--skill-icon-bg);
+      background-position: center, center;
+      background-repeat: no-repeat, no-repeat;
+      background-size: 22px 22px, cover;
+      box-shadow: 0 10px 22px rgba(66,98,223,0.16);
+      flex: 0 0 auto;
+      grid-row: 1;
+      align-self: start;
+      justify-self: center;
+    }
+    #skillStoreList .comfly-veo-card::before,
+    #skillStoreList .seedance-tvc-card::before,
+    #skillStoreList .viral-video-remix-card::before,
+    #skillStoreList .goal-video-pipeline-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M7 4.8v14.4c0 .8.9 1.3 1.6.9l11.2-7.2c.6-.4.6-1.4 0-1.8L8.6 3.9C7.9 3.5 7 4 7 4.8z'/%3E%3C/svg%3E");
+    }
+    #skillStoreList .comfly-veo-card::before { --skill-icon-bg: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%); }
+    #skillStoreList .seedance-tvc-card::before { --skill-icon-bg: linear-gradient(135deg, #5b7cff 0%, #06b6d4 100%); }
+    #skillStoreList .viral-video-remix-card::before { --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #f59e0b 100%); }
+    #skillStoreList .hifly-digital-human-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M4.5 20c1.7-3.2 4.2-4.8 7.5-4.8s5.8 1.6 7.5 4.8'/%3E%3C/svg%3E");
+      --skill-icon-bg: linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%);
+    }
+    #skillStoreList .goal-video-pipeline-card::before { --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #5b7cff 100%); }
+    #skillStoreList .ecommerce-detail-card::before,
+    #skillStoreList .ecommerce-publish-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 7h12l-1 13H7L6 7z'/%3E%3Cpath d='M9 7a3 3 0 0 1 6 0'/%3E%3C/svg%3E");
+      --skill-icon-bg: linear-gradient(135deg, #ec4899 0%, #f59e0b 100%);
+    }
+    #skillStoreList .messenger-reply-card::before,
+    #skillStoreList .twilio-whatsapp-card::before,
+    #skillStoreList .wecom-reply-card::before,
+    #skillStoreList .openclaw-weixin-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5.5h16v10H8l-4 3v-13z'/%3E%3Cpath d='M8 9h8M8 12h5'/%3E%3C/svg%3E");
+    }
+    #skillStoreList .messenger-reply-card::before { --skill-icon-bg: linear-gradient(135deg, #6366f1 0%, #22c55e 100%); }
+    #skillStoreList .twilio-whatsapp-card::before { --skill-icon-bg: linear-gradient(135deg, #25d366 0%, #128c7e 100%); }
+    #skillStoreList .wecom-reply-card::before,
+    #skillStoreList .openclaw-weixin-card::before { --skill-icon-bg: linear-gradient(135deg, #07c160 0%, #4262df 100%); }
+    #skillStoreList .openclaw-memory-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 4h9l3 3v13H6V4z'/%3E%3Cpath d='M14 4v4h4M8.5 12h7M8.5 15h7'/%3E%3C/svg%3E");
+      --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #334155 100%);
+    }
+    #skillStoreList .openclaw-skill-workspace-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='5' width='16' height='11' rx='2'/%3E%3Cpath d='M9 20h6M12 16v4'/%3E%3C/svg%3E");
+      --skill-icon-bg: linear-gradient(135deg, #6366f1 0%, #0ea5e9 100%);
+    }
+    #skillStoreList .youtube-publish-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 16V5M7 10l5-5 5 5'/%3E%3Cpath d='M5 18h14'/%3E%3C/svg%3E");
+      --skill-icon-bg: linear-gradient(135deg, #ff0000 0%, #f97316 100%);
+    }
+    #skillStoreList .meta-social-card::before {
+      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='5' width='14' height='14' rx='4'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Cpath d='M16.5 8h.01'/%3E%3C/svg%3E");
+      --skill-icon-bg: linear-gradient(135deg, #1877f2 0%, #e1306c 100%);
+    }
+    #skillStoreList .skill-store-card .card-label,
+    #skillStoreList .skill-store-card .card-desc,
+    #skillStoreList .skill-store-card .card-tags,
+    #mcpRegistryResults .skill-store-card .card-label,
+    #mcpRegistryResults .skill-store-card .card-desc,
+    #mcpRegistryResults .skill-store-card .card-tags {
+      display: none !important;
+    }
+    #skillStoreList .skill-store-card > :not(.card-value):not(.card-actions),
+    #mcpRegistryResults .skill-store-card > :not(.card-value):not(.card-actions) {
+      display: none !important;
+    }
+    #skillStoreList .skill-store-card .card-value,
+    #mcpRegistryResults .skill-store-card .card-value {
+      font-size: 0.95rem;
+      font-weight: 750;
+      line-height: 1.32;
+      max-width: 100%;
+      min-height: 2.6em;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow-wrap: anywhere;
+      overflow: hidden;
+      align-self: center;
+      justify-self: center;
+    }
+    #skillStoreList .skill-store-card .card-actions,
+    #mcpRegistryResults .skill-store-card .card-actions {
+      margin-top: 0;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      align-self: end;
+      justify-self: center;
+    }
+    #skillStoreList .skill-store-card .card-actions:empty,
+    #mcpRegistryResults .skill-store-card .card-actions:empty {
+      display: none;
+    }
+    #skillStoreList .skill-store-card .card-actions .btn,
+    #mcpRegistryResults .skill-store-card .card-actions .btn {
+      min-height: 30px;
+      padding: 0.28rem 0.58rem;
+      font-size: 0.74rem;
+      border-radius: 8px;
+    }
     .badge-installed { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: rgba(16,185,129,0.15); color: #6ee7b7; }
     .badge-coming { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: rgba(255,255,255,0.08); color: var(--text-muted); }
     .config-form { max-width: 700px; }
@@ -88,6 +222,48 @@
     .store-tab, .pub-tab, .sys-tab, .wecom-detail-tab, .account-type-tab { background: none; border: none; padding: 0.6rem 1.25rem; font-size: 0.9rem; font-weight: 500; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
     .store-tab:hover, .pub-tab:hover, .sys-tab:hover, .wecom-detail-tab:hover, .account-type-tab:hover { color: var(--text); }
     .store-tab.active, .pub-tab.active, .sys-tab.active, .wecom-detail-tab.active, .account-type-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    #content-scheduled-tasks .store-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(140px, 1fr));
+      gap: 0.5rem;
+      padding: 0.35rem;
+      border: 1px solid rgba(66,98,223,0.12);
+      border-radius: 10px;
+      background: rgba(66,98,223,0.06);
+      max-width: 430px;
+    }
+    #content-scheduled-tasks .sched-tab {
+      min-height: 46px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      font-weight: 750;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+    }
+    #content-scheduled-tasks .sched-tab:hover {
+      color: #22324f;
+      background: rgba(255,255,255,0.62);
+    }
+    #content-scheduled-tasks .sched-tab.active {
+      color: #4262df;
+      background: #fff;
+      box-shadow: 0 8px 18px rgba(36,54,88,0.08);
+    }
+    #content-scheduled-tasks select,
+    #content-scheduled-tasks input,
+    #content-scheduled-tasks textarea {
+      min-height: 40px;
+    }
+    #content-scheduled-tasks #scheduledTaskCreateBtn {
+      min-height: 40px;
+      padding: 0.52rem 1.05rem;
+      font-size: 0.86rem;
+      border-radius: 8px;
+    }
     .category-chip { display: inline-block; padding: 0.25rem 0.65rem; font-size: 0.78rem; border-radius: 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: var(--text-muted); cursor: pointer; transition: all 0.15s; }
     .category-chip:hover { background: rgba(6,182,212,0.12); border-color: var(--accent); color: var(--accent); }
     .category-chip.active { background: rgba(6,182,212,0.18); border-color: var(--accent); color: var(--accent); font-weight: 500; }
@@ -4399,6 +4575,337 @@
     }
     .chat-workspace.is-empty .chat-home-tools {
       padding-bottom: 1.5rem;
+    }
+    /* EXE fixed-window safeguards: every page must remain reachable when the shell cannot resize. */
+    .content-block.visible {
+      min-width: 0;
+      max-width: 100%;
+      padding-bottom: 1.25rem;
+    }
+    .content-block.visible > *,
+    .content-block.visible .card,
+    .content-block.visible .page-section-shell,
+    .content-block.visible .ecom-panel,
+    .content-block.visible .tvc-panel,
+    .content-block.visible .imglab-panel,
+    .content-block.visible .publish-list-panel,
+    .content-block.visible .account-detail-shell {
+      max-width: 100%;
+      min-width: 0;
+    }
+    .content-block.visible .card,
+    .content-block.visible .page-section-shell,
+    .content-block.visible .publish-list-panel,
+    .content-block.visible .account-detail-shell {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .content-block.visible table {
+      min-width: max-content;
+    }
+    .content-block.visible pre,
+    .content-block.visible code {
+      overflow-wrap: anywhere;
+    }
+    .modal-mask,
+    .tvc-video-modal-mask,
+    #content-viral-video-remix .viral-video-modal {
+      overflow: auto !important;
+      align-items: center !important;
+      justify-content: center !important;
+      padding: 1rem !important;
+      -webkit-overflow-scrolling: touch;
+    }
+    .modal,
+    .tvc-video-modal,
+    #content-viral-video-remix .viral-video-modal-card {
+      max-height: calc(100dvh - 2rem) !important;
+      overflow: auto !important;
+      box-sizing: border-box;
+    }
+    .table-wrap,
+    .sch-tasks-table,
+    #scheduledTaskRunsList,
+    #scheduledTaskList,
+    #taskList,
+    #assetList,
+    #accountList,
+    #prodList,
+    #logsContent,
+    #agentSubUserList {
+      max-width: 100%;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .store-tabs,
+    .account-type-tabs,
+    .gc-tabs,
+    .ecom-workspace-tabs,
+    .workspace-category-tabs {
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+    .store-tabs > button,
+    .account-type-tabs > button,
+    .gc-tabs > button,
+    .ecom-workspace-tabs > button,
+    .workspace-category-tabs > button {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    #content-scheduled-tasks .sched-tab-panel,
+    #content-billing .billing-tab-panel,
+    #content-publish .pub-tab-panel,
+    #content-sys-config .sys-tab-panel,
+    #content-wecom-detail .wecom-tab-panel,
+    #content-twilio-whatsapp-detail .twilio-tab-panel {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    #twilioTabMessages > div[style*="display:flex"],
+    #wecomTabMessages > div[style*="display:flex"],
+    #wecomTabContacts > div[style*="display:flex"],
+    #wecomTabWechatKf > div[style*="display:flex"] {
+      max-width: 100%;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    #content-ecommerce-detail-studio .ecom-studio-shell,
+    #content-ecommerce-detail-studio .ecom-browser-layout,
+    .tvc-shell,
+    .tvc-preview-grid,
+    .imglab-shell,
+    #content-hifly-digital-human .hifly-shell {
+      min-height: 0;
+      max-width: 100%;
+    }
+    .tvc-sidebar,
+    .imglab-sidebar,
+    #content-hifly-digital-human .hifly-sidebar {
+      overscroll-behavior: contain;
+    }
+    .tvc-video-surface,
+    .imglab-result-surface,
+    #content-viral-video-remix .viral-character-stage,
+    #content-viral-video-remix .viral-product-stage,
+    #content-viral-video-remix .viral-output-stage {
+      max-height: calc(100dvh - 220px);
+      overflow: auto;
+    }
+    .imglab-result-surface img,
+    .tvc-video-surface video,
+    #content-viral-video-remix #viralCharacterResult img,
+    #content-viral-video-remix #viralProductReferenceResult img,
+    #content-viral-video-remix #viralRemixVideoSurface video {
+      max-width: 100%;
+      height: auto;
+      min-height: 0;
+    }
+    @media (max-width: 1280px), (max-height: 820px) {
+      .dashboard-main {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+      }
+      #content-scheduled-tasks .card > div[style*="grid-template-columns"],
+      #content-group-control .card > div[style*="grid-template-columns"],
+      #content-agent-center .card > div[style*="grid-template-columns"],
+      #content-agent .card > div[style*="grid-template-columns"] {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+      .ecom-studio-shell,
+      .ecom-browser-layout,
+      .tvc-shell,
+      .tvc-preview-grid,
+      .imglab-shell,
+      #content-hifly-digital-human .hifly-shell,
+      #content-viral-video-remix .tvc-shell {
+        grid-template-columns: minmax(0, 1fr) !important;
+        min-height: 0 !important;
+      }
+      .tvc-sidebar,
+      .imglab-sidebar,
+      #content-hifly-digital-human .hifly-sidebar,
+      #content-viral-video-remix .tvc-sidebar {
+        position: static !important;
+        top: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        padding-right: 0 !important;
+      }
+      .tvc-studio-hero,
+      .imglab-hero,
+      .tvc-focus-layout,
+      .tvc-focus-grid,
+      .tvc-video-meta,
+      .ecom-inline-grid,
+      .ecom-choice-grid,
+      .ecom-preset-grid,
+      .ecom-result-overview,
+      .imglab-inline-grid,
+      .tvc-inline-grid,
+      .tvc-check-grid {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+      .tvc-duration-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+      }
+      .tvc-case-grid,
+      .tvc-example-grid,
+      .imglab-example-grid,
+      .ecom-example-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+      }
+      .hifly-avatar-grid {
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+      }
+      .tvc-video-surface,
+      .imglab-result-surface {
+        min-height: 280px !important;
+      }
+      .imglab-result-surface img {
+        min-height: 280px !important;
+      }
+    }
+    @media (max-height: 680px) {
+      .page {
+        padding-top: 0.65rem;
+        padding-bottom: 0.65rem;
+      }
+      .header {
+        padding-top: 0.55rem;
+        padding-bottom: 0.55rem;
+        margin-bottom: 0.55rem;
+      }
+      .dashboard-main {
+        padding-bottom: 0.85rem;
+      }
+      .page-hero-card,
+      .card,
+      .page-section-shell,
+      .ecom-panel,
+      .tvc-panel,
+      .imglab-panel {
+        padding: 0.85rem;
+      }
+      .chat-workspace:not(.is-empty) {
+        min-height: calc(100dvh - 150px);
+      }
+      .chat-composer-body,
+      .chat-input-row textarea {
+        min-height: 58px;
+      }
+      .modal-mask,
+      .tvc-video-modal-mask,
+      #content-viral-video-remix .viral-video-modal {
+        align-items: flex-start !important;
+      }
+    }
+    @media (max-width: 900px) {
+      #twilioTabMessages > div[style*="display:flex"],
+      #wecomTabMessages > div[style*="display:flex"],
+      #wecomTabContacts > div[style*="display:flex"],
+      #wecomTabWechatKf > div[style*="display:flex"] {
+        flex-direction: column !important;
+        min-height: 0 !important;
+        height: auto !important;
+        max-height: none !important;
+      }
+      #twilioTabMessages > div[style*="display:flex"] > div,
+      #wecomTabMessages > div[style*="display:flex"] > div,
+      #wecomTabContacts > div[style*="display:flex"] > div,
+      #wecomTabWechatKf > div[style*="display:flex"] > div {
+        width: 100% !important;
+        border-radius: var(--radius) !important;
+        border-left: 1px solid var(--border) !important;
+      }
+    }
+    /* 创意分镜头视频：EXE 固定窗口内，hero 之外的左右两列各自滚动。 */
+    #content-seedance-tvc-studio.content-block.visible {
+      display: flex !important;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      padding-bottom: 0 !important;
+    }
+    #content-seedance-tvc-studio .tvc-studio {
+      flex: 1 1 auto;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #content-seedance-tvc-studio .tvc-studio-hero {
+      flex: 0 0 auto;
+    }
+    #content-seedance-tvc-studio .tvc-shell {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      align-items: stretch;
+    }
+    #content-seedance-tvc-studio .tvc-sidebar {
+      position: relative !important;
+      top: auto !important;
+      height: 100% !important;
+      max-height: none !important;
+      min-height: 0;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      padding-right: 0.2rem !important;
+      padding-bottom: 1.25rem !important;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+    }
+    #content-seedance-tvc-studio .tvc-main {
+      height: 100% !important;
+      min-height: 0;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      padding-right: 0.1rem;
+      padding-bottom: 1.25rem;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+    }
+    #content-seedance-tvc-studio .tvc-sidebar .tvc-quick-actions {
+      position: sticky;
+      bottom: 0;
+      z-index: 3;
+      margin: 0 -0.1rem -0.45rem;
+      padding: 0.6rem 0.1rem 0.45rem;
+      background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.98) 22%, rgba(255,255,255,0.98));
+    }
+    #content-seedance-tvc-studio .tvc-sidebar .tvc-quick-actions .btn {
+      min-height: 40px;
+    }
+    #content-seedance-tvc-studio .tvc-sidebar .tvc-panel:last-child,
+    #content-seedance-tvc-studio .tvc-sidebar .tvc-quick-actions:last-child {
+      margin-bottom: 0.75rem;
+    }
+    @media (max-width: 900px) {
+      #content-seedance-tvc-studio.content-block.visible,
+      #content-seedance-tvc-studio .tvc-studio {
+        height: auto;
+        overflow: visible;
+      }
+      #content-seedance-tvc-studio .tvc-shell {
+        overflow: visible;
+      }
+      #content-seedance-tvc-studio .tvc-sidebar {
+        position: static !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        padding-right: 0 !important;
+      }
+      #content-seedance-tvc-studio .tvc-main {
+        height: auto !important;
+        overflow: visible !important;
+        padding-right: 0;
+      }
     }
     @keyframes fadeSlideIn {
       from {

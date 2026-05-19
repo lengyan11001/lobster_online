@@ -51,6 +51,10 @@ from .openclaw_chat_gateway import (
     try_openclaw as _try_openclaw,
     want_openclaw_first_this_turn as _want_openclaw_first_this_turn,
 )
+try:
+    from ..services.openclaw_tool_scope import classify_openclaw_tool_scope as _classify_openclaw_tool_scope
+except Exception:  # pragma: no cover - optional in legacy builds
+    _classify_openclaw_tool_scope = None  # type: ignore[assignment]
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -2121,8 +2125,8 @@ def _infer_video_model_lock_for_openclaw(user_message: str, has_attachment: bool
 
 
 _DEFAULT_IMAGE_GENERATE_MODEL = "gpt-image2"
-_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "grok-video-3"
-_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "grok-video-3"
+_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "xai/grok-imagine-video/text-to-video"
+_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "xai/grok-imagine-video/image-to-video"
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
     "gpt-image": "gpt-image-2",
@@ -2159,9 +2163,9 @@ _VIDEO_MODEL_ALIASES: Dict[str, str] = {
     "veo3 fast": "veo3.1-fast",
     "veo-fast": "veo3.1-fast",
     "veo fast": "veo3.1-fast",
-    "grok": "grok-video-3",
-    "grok video": "grok-video-3",
-    "grok-video-3": "grok-video-3",
+    "grok": _DEFAULT_VIDEO_GENERATE_MODEL_T2V,
+    "grok video": _DEFAULT_VIDEO_GENERATE_MODEL_T2V,
+    "grok-video-3": _DEFAULT_VIDEO_GENERATE_MODEL_T2V,
     "hailuo": "fal-ai/minimax/hailuo-2.3/standard/text-to-video",
     "kling": "fal-ai/kling-video/v3/standard/text-to-video",
     "wan": "wan/v2.6/text-to-video",
@@ -2171,7 +2175,7 @@ _VIDEO_MODEL_ALIASES: Dict[str, str] = {
 
 _VIDEO_MODEL_USER_HINT_RE = re.compile(
     r"(sora\s*2?|seedance|veo\s*3(?:[\._]?\s*1)?|hailuo|kling|wan\s*2(?:\.\s*6)?|"
-    r"super[-_\s]*seed|st-ai|vidu|grok|fal-ai/|sora2pub/|ark/|minimax)",
+    r"super[-_\s]*seed|st-ai|vidu|grok|fal-ai/|sora2pub/|ark/|xai/|minimax)",
     re.IGNORECASE,
 )
 
@@ -5741,6 +5745,76 @@ def _extract_task_id_from_result(result_text: str) -> str:
     return ""
 
 
+_TASK_ID_LABEL_RE = re.compile(
+    r"(?:task[_\s-]*id|任务\s*ID|任务号)\s*[:：`\"' ]+\s*([A-Za-z0-9][A-Za-z0-9_.:-]{3,127})",
+    re.IGNORECASE,
+)
+
+
+def _recent_task_id_from_messages(messages: List[Dict]) -> str:
+    for msg in reversed(list(messages or [])[-12:]):
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        tid = _extract_task_id_from_result(content)
+        if tid:
+            return tid
+        m = _TASK_ID_LABEL_RE.search(content)
+        if m and _task_id_token_ok(m.group(1)):
+            return m.group(1).strip()[:128]
+    return ""
+
+
+def _is_task_status_lookup_turn(messages: List[Dict]) -> bool:
+    if _classify_openclaw_tool_scope is None:
+        return False
+    try:
+        return getattr(_classify_openclaw_tool_scope(messages), "intent", "") == "task_status_lookup"
+    except Exception:
+        return False
+
+
+def _guard_generation_submit_for_status_lookup(
+    args: Dict[str, Any],
+    messages: List[Dict],
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    cap = (args.get("capability_id") or "").strip() if isinstance(args, dict) else ""
+    if cap not in ("image.generate", "video.generate"):
+        return args, None
+    if not _is_task_status_lookup_turn(messages):
+        return args, None
+
+    tid = _recent_task_id_from_messages(messages)
+    if tid:
+        logger.warning(
+            "[CHAT] 当前轮为任务结果查询，拦截 %s 重新提交并改为 task.get_result task_id=%s",
+            cap,
+            tid[:96],
+        )
+        return (
+            {
+                "capability_id": "task.get_result",
+                "payload": {"task_id": tid, "capability_id": cap},
+            },
+            None,
+        )
+    logger.warning("[CHAT] 当前轮为任务结果查询，但上下文未找到 task_id，已拦截 %s 重新提交", cap)
+    return (
+        {"capability_id": "task.get_result", "payload": {}},
+        json.dumps(
+            {
+                "error": (
+                    "当前用户是在查询生成结果，已拦截重新提交生成任务；"
+                    "上下文没有找到可查询的真实 task_id，请让用户提供任务 ID 或重新打开对应执行记录。"
+                )
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
 def _task_id_from_invoke_capability_args(args: Dict[str, Any]) -> str:
     pl = args.get("payload") if isinstance(args.get("payload"), dict) else {}
     return str(pl.get("task_id") or args.get("task_id") or "").strip()
@@ -6440,6 +6514,7 @@ async def _chat_openai(
             generation_failed_reply = ""
             for tc in tcs:
                 fn = tc.get("function", {})
+                _status_lookup_guard_res = None
                 try:
                     a = json.loads(fn.get("arguments", "{}"))
                 except Exception:
@@ -6469,6 +6544,7 @@ async def _chat_openai(
                         _inject_image_media_urls(a, attachment_urls, last_user_content)
                         _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
+                        a, _status_lookup_guard_res = _guard_generation_submit_for_status_lookup(a, cur)
                 logger.info("[CHAT] tool_call: %s(%s)", fn.get("name"), list(a.keys()))
                 if fn.get("name") == "publish_content" and _publish_fail_count >= 1:
                     logger.warning("[CHAT] publish_content 已失败 %d 次，拦截重试", _publish_fail_count)
@@ -6495,6 +6571,8 @@ async def _chat_openai(
                 if _mismatch_err:
                     logger.warning("[CHAT] 模型/能力类型不匹配: %s", _mismatch_err)
                     res = json.dumps({"error": _mismatch_err}, ensure_ascii=False)
+                elif fn.get("name") == "invoke_capability" and _status_lookup_guard_res:
+                    res = _status_lookup_guard_res
                 elif _cap_id in _generate_cap_done:
                     logger.warning("[CHAT] 拦截重复 %s 调用 rnd=%d（本轮已调用或取消过）", _cap_id, rnd)
                     res = '{"error": "本轮对话已调用或取消过 ' + _cap_id + '，禁止重复调用。请直接回复用户。"}'
@@ -6676,6 +6754,7 @@ async def _chat_openai(
             gen_cap_for_reply_tc = ""
             generation_failed_reply_tc = ""
             for tc_info in text_calls:
+                _status_lookup_guard_res_tc = None
                 if not isinstance(tc_info.get("arguments"), dict):
                     tc_info["arguments"] = {}
                 _mismatch_err_tc = None
@@ -6703,6 +6782,7 @@ async def _chat_openai(
                         _inject_image_media_urls(tc_info["arguments"], attachment_urls, last_user_content)
                         _ensure_image_generate_prompt_and_aspect(tc_info["arguments"], last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(tc_info["arguments"], attachment_asset_ids, attachment_urls, last_user_content)
+                        tc_info["arguments"], _status_lookup_guard_res_tc = _guard_generation_submit_for_status_lookup(tc_info["arguments"], cur)
                 logger.info("[CHAT] text_tool_call: %s(%s)", tc_info["name"], list(tc_info["arguments"].keys()))
                 ta = tc_info["arguments"]
                 if not isinstance(ta, dict):
@@ -6733,6 +6813,8 @@ async def _chat_openai(
                 if _mismatch_err_tc:
                     logger.warning("[CHAT] 模型/能力类型不匹配: %s", _mismatch_err_tc)
                     res = json.dumps({"error": _mismatch_err_tc}, ensure_ascii=False)
+                elif tc_info["name"] == "invoke_capability" and _status_lookup_guard_res_tc:
+                    res = _status_lookup_guard_res_tc
                 elif _tc_cap in _generate_cap_done:
                     logger.warning("[CHAT] 拦截重复 %s(text_calls) rnd=%d", _tc_cap, rnd)
                     res = '{"error": "本轮对话已调用或取消过 ' + _tc_cap + '，禁止重复调用。请直接回复用户。"}'
@@ -6931,6 +7013,7 @@ async def _chat_openai(
                     forced_wants_publish = _openai_round_has_publish_intent(tcs2, last_user_content)
                     for tc in tcs2:
                         fn = tc.get("function", {})
+                        _status_lookup_guard_res_fc = None
                         try:
                             a = json.loads(fn.get("arguments", "{}"))
                         except Exception:
@@ -6957,11 +7040,14 @@ async def _chat_openai(
                                 _inject_image_media_urls(a, attachment_urls, last_user_content)
                                 _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                                 _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
+                                a, _status_lookup_guard_res_fc = _guard_generation_submit_for_status_lookup(a, cur)
                         logger.info("[CHAT] tool_call(forced): %s(%s)", fn.get("name"), list(a.keys()))
                         _fc_cap = (a.get("capability_id") or "").strip() if fn.get("name") == "invoke_capability" else ""
                         if _mismatch_err_fc:
                             logger.warning("[CHAT] 模型/能力类型不匹配(forced): %s", _mismatch_err_fc)
                             res = json.dumps({"error": _mismatch_err_fc}, ensure_ascii=False)
+                        elif fn.get("name") == "invoke_capability" and _status_lookup_guard_res_fc:
+                            res = _status_lookup_guard_res_fc
                         elif _fc_cap in _generate_cap_done:
                             logger.warning("[CHAT] 拦截重复 %s(forced) rnd=%d", _fc_cap, rnd)
                             res = '{"error": "本轮对话已调用或取消过 ' + _fc_cap + '，禁止重复调用。请直接回复用户。"}'

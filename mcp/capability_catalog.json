@@ -41,7 +41,7 @@
       "properties": {
         "model": {
           "type": "string",
-          "description": "可选（省略时由 MCP 使用默认视频模型，当前默认 grok-video-3）。用户说「用 Seedance」「用 wan」等即指定此字段。"
+          "description": "可选（省略时由 MCP 使用默认视频模型：文生视频 xai/grok-imagine-video/text-to-video，图生视频 xai/grok-imagine-video/image-to-video）。用户说「用 Seedance」「用 wan」等即指定此字段。"
         },
         "prompt": {
           "type": "string",

@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     """服务器未返回默认生图模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
     lobster_default_image_generate_model: str = "gpt-image2"
     """服务器未返回默认视频模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
-    lobster_default_video_generate_model: str = "grok-video-3"
+    lobster_default_video_generate_model: str = "xai/grok-imagine-video/text-to-video"
     """定时编排（schedule_orchestration=True）时使用的速推子模型。不填则用默认对话模型。"""
     lobster_orchestration_sutui_chat_model: Optional[str] = None
     openclaw_gateway_url: Optional[str] = None

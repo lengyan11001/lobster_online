@@ -110,11 +110,15 @@ def _collect_urls(obj: Any, *, want: str = "") -> List[str]:
     if isinstance(obj, str):
         for u in re.findall(r"https?://[^\s\"'<>，。；;、)\]\}]+", obj):
             low = u.lower().split("?", 1)[0].split("#", 1)[0]
-            is_video = low.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi")) or "video" in low
-            is_image = low.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")) or "image" in low
+            is_video = low.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi"))
+            is_image = low.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"))
             if want == "video" and is_image and not is_video:
                 continue
             if want == "image" and is_video:
+                continue
+            if want == "video" and not is_video:
+                continue
+            if want == "image" and not is_image:
                 continue
             out.append(u)
         return out
@@ -125,6 +129,40 @@ def _collect_urls(obj: Any, *, want: str = "") -> List[str]:
         for v in obj:
             out.extend(_collect_urls(v, want=want))
     return _dedupe_strings(out)
+
+
+def _url_matches_kind(url: Any, kind: str) -> bool:
+    low = str(url or "").strip().lower().split("?", 1)[0].split("#", 1)[0]
+    if kind == "video":
+        return low.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi"))
+    if kind == "image":
+        return low.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"))
+    return bool(low)
+
+
+def _saved_assets_for_kind(saved: List[Dict[str, Any]], kind: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in saved or []:
+        if not isinstance(item, dict):
+            continue
+        mt = str(item.get("media_type") or item.get("type") or "").strip().lower()
+        if mt:
+            if kind == "video" and mt != "video":
+                continue
+            if kind == "image" and mt != "image":
+                continue
+        elif kind in {"video", "image"}:
+            refs = [
+                item.get("filename"),
+                item.get("url"),
+                item.get("source_url"),
+                item.get("public_url"),
+                item.get("preview_url"),
+            ]
+            if not any(_url_matches_kind(ref, kind) for ref in refs):
+                continue
+        out.append(item)
+    return out
 
 
 def _collect_task_ids(obj: Any) -> List[str]:
@@ -419,7 +457,7 @@ async def _submit_and_wait_generation(
     )
     task_ids = _collect_task_ids(submit)
     task_id = task_ids[0] if task_ids else ""
-    saved = _collect_saved_assets(submit)
+    saved = _saved_assets_for_kind(_collect_saved_assets(submit), kind)
     urls = _collect_urls(submit, want=kind)
     if saved or urls:
         return {
@@ -449,10 +487,10 @@ async def _submit_and_wait_generation(
             installation_id=installation_id,
             timeout=360.0,
         )
-        saved = _collect_saved_assets(last)
+        saved = _saved_assets_for_kind(_collect_saved_assets(last), kind)
         urls = _collect_urls(last, want=kind)
         status = _extract_status(last)
-        if saved or urls or status in TERMINAL_SUCCESS:
+        if saved or urls:
             return {
                 "task_id": task_id,
                 "submit_result": submit,
@@ -461,6 +499,9 @@ async def _submit_and_wait_generation(
                 "media_urls": urls,
                 "status": status or "completed",
             }
+        if status in TERMINAL_SUCCESS:
+            detail = _failure_message(last) or _json_preview(last, 1200)
+            raise RuntimeError(f"{capability_id} task completed but returned no {kind} media: {detail}")
         if status in TERMINAL_FAILURE:
             raise RuntimeError(_failure_message(last) or f"{capability_id} task failed: {status}")
         await asyncio.sleep(max(5, int(interval_seconds)))

@@ -10,12 +10,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = $Root.TrimEnd('\', '/')
 $jsonPath = Join-Path $Root 'static\branding\brands.json'
-$desktopExe = Join-Path $Root '必火AI员工.exe'
+$desktopExeName = -join ([char]0x5fc5, [char]0x706b, 'AI', [char]0x5458, [char]0x5de5, '.exe')
+$desktopExe = Join-Path $Root $desktopExeName
 $legacyDesktopExe = Join-Path $Root 'lobster.exe'
 $bat = Join-Path $Root 'start.bat'
 
 if (-not (Test-Path -LiteralPath $desktopExe) -and -not (Test-Path -LiteralPath $legacyDesktopExe) -and -not (Test-Path -LiteralPath $bat)) {
-    Write-Host "[desktop-shortcut] neither 必火AI员工.exe/lobster.exe nor start.bat found, skip."
+    Write-Host "[desktop-shortcut] neither desktop exe/lobster.exe nor start.bat found, skip."
     exit 2
 }
 if (-not (Test-Path -LiteralPath $jsonPath)) {
@@ -80,7 +81,7 @@ if ([string]::IsNullOrWhiteSpace($desktop)) {
 }
 
 $desc = [string]$inst.shortcut_description
-if ([string]::IsNullOrWhiteSpace($desc)) { $desc = '必火AI员工本地客户端' }
+if ([string]::IsNullOrWhiteSpace($desc)) { $desc = 'Bihuo AI Employee local client' }
 
 $lnkPath = Join-Path $desktop $lnkName
 try {

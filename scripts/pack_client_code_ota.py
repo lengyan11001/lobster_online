@@ -33,6 +33,7 @@ OTA_PATHS: tuple[str, ...] = (
     "skill_registry.json",
     "upstream_urls.json",
     ".env",
+    "必火AI员工.exe",
     "openclaw",
     "requirements.txt",
     ".env.example",
@@ -94,6 +95,7 @@ _OTA_SECRET_REL_PATHS = {
 # 本地调试/抓页面临时目录，非交付代码（曾占 OTA 包约 16MB+）
 # skills 下各技能的 runs/job_runs 为执行缓存（音视频等），不应随 OTA 分发（否则单包可膨胀 200MB+）
 OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
+    ".updates",
     "scripts/_probe",
     "static/hifly_previews",
     "static/uploads",

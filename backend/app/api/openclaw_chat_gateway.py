@@ -859,6 +859,7 @@ OpenClaw 主对话补充规则：
 - 费用/扣费只能引用工具返回的 credits_used、credits_charged、credits_final 等龙虾积分字段；禁止把上游 result.price/cost/fee 或模型价格口径说成用户已扣积分。若工具没有明确扣费字段，就说“本轮工具未返回可展示的扣费信息”。
 - 如果工具返回 openclaw_evidence，请严格按其中 claim_rules 回答；claim_rules 不允许的状态必须如实说明还不能确认，不要用经验或历史内容补齐。
 - 查询任务进度必须使用本会话工具返回的真实 task_id 或用户明确提供的 task_id；找不到真实 task_id 时说明“没有拿到可查询的任务 ID”，不要生成看起来像 ID 的字符串。
+- task.get_result 返回 pending/processing/running 且 output/result 为空时，只能告诉用户“仍在生成中”并保留 task_id；不要说已完成，也不要说“不确定无结果”。
 - 用户明确要求生成图片/视频/创意成片时，本轮必须直接调用 lobster__invoke_capability 执行对应生成能力；不要只回复“我先找素材/先查能力/确认可用工具”。如果消息中已有 asset_id 或系统已注入素材 URL，直接用于生成，MCP 边界会自动补齐素材 URL。禁止用 exec/shell/browser 代替业务能力。
 """
 
@@ -942,14 +943,18 @@ async def try_openclaw(
     agent_id = _openclaw_agent_id_from_chat_model(model)
     openclaw_body_model = _openclaw_gateway_body_model(agent_id)
     tool_scope_enabled = bool(getattr(settings, "openclaw_tool_scope_enabled", False))
-    scope = classify_openclaw_tool_scope(msgs) if tool_scope_enabled else None
+    classified_scope = classify_openclaw_tool_scope(msgs)
+    # Even when the general OpenClaw intent limiter is disabled, keep this narrow
+    # billing-safety guard: a result/progress follow-up must never submit a fresh
+    # image/video generation task.
+    scope = classified_scope if (tool_scope_enabled or classified_scope.intent == "task_status_lookup") else None
     scope_headers = scope.headers() if scope is not None else {}
     locked_video_model = str(video_model_lock or "").strip()
     locked_video_model_source = str(video_model_lock_source or "").strip()
     if locked_video_model:
         scope_headers["X-Lobster-Video-Model-Lock"] = locked_video_model
         scope_headers["X-Lobster-Video-Model-Lock-Source"] = locked_video_model_source or "default"
-    if tool_scope_enabled:
+    if scope is not None:
         clear_openclaw_tool_scope_for_agent(agent_id)
     else:
         clear_openclaw_tool_scope_for_agent()
@@ -957,7 +962,7 @@ async def try_openclaw(
         set_openclaw_tool_scope_for_agent(agent_id, scope_headers)
     if scope is not None:
         logger.info(
-            "[OPENCLAW] tool scope intent=%s tools=%s caps=%s video_model_lock=%s source=%s",
+            "[OPENCLAW] tool scope intent=%s tools=%s caps=%s video_model_lock=%s source=%s enabled=%s",
             scope.intent,
             ",".join(sorted(scope.allowed_tools)) or "-",
             (
@@ -967,6 +972,7 @@ async def try_openclaw(
             ),
             locked_video_model or "-",
             locked_video_model_source or "-",
+            tool_scope_enabled,
         )
     else:
         logger.info(

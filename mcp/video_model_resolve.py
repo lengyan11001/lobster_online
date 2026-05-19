@@ -184,7 +184,7 @@ def _build_alias_map() -> Dict[str, Pair]:
     )
 
     # —— Grok ——
-    grok = _p("grok-video-3", "grok-video-3")
+    grok = _p("xai/grok-imagine-video/text-to-video", "xai/grok-imagine-video/image-to-video")
     add(("grok", "grok imagine", "grok video", "grok imagine video"), grok)
 
     # —— 海螺 / Hailuo 2.3 ——
@@ -338,7 +338,7 @@ def _heuristic_video_model(model: str, has_image: bool) -> str:
         return "fal-ai/veo3.1"
 
     if "grok" in model_lower:
-        return "grok-video-3"
+        return "xai/grok-imagine-video/image-to-video" if has_image else "xai/grok-imagine-video/text-to-video"
 
     if "hailuo" in model_lower or "海螺" in model:
         if "fast" in model_lower or "快速" in model:
@@ -393,6 +393,13 @@ def resolve_video_model_id(raw: str, has_image: bool) -> str:
     for rx, pair in _BAD_SUBSTR_REWRITE:
         if rx.search(low):
             return _pick(pair, has_image)
+
+    if low.startswith("xai/grok-imagine-video/"):
+        return (
+            "xai/grok-imagine-video/image-to-video"
+            if has_image
+            else "xai/grok-imagine-video/text-to-video"
+        )
 
     # 已是标准 id：直接透传（rewrite 后 sora2pub 已变 fal-ai/sora-2/...）
     if _looks_like_canonical_id(m):
