@@ -4,7 +4,7 @@
     duration: 20,
     activeBoardIndex: 0,
     images: [],
-    examplesOpen: false,
+    examplesOpen: true,
     examplesLoading: false,
     exampleCatalog: [],
     exampleFeaturedCount: 0,
@@ -278,6 +278,12 @@
 
   function localBase() {
     return (typeof LOCAL_API_BASE !== 'undefined' ? (LOCAL_API_BASE || '') : '').replace(/\/$/, '');
+  }
+
+  function pipelineBase() {
+    var primary = (typeof API_BASE !== 'undefined' ? (API_BASE || '') : '').replace(/\/$/, '');
+    if (primary) return primary;
+    return localBase();
   }
 
   function stopPolling() {
@@ -716,8 +722,8 @@
   function uploadAssetItem(item) {
     if (!item || item.asset_id) return Promise.resolve(item);
     if (!item.file) return Promise.reject(new Error('缺少本地文件，无法上传'));
-    var base = localBase();
-    if (!base) return Promise.reject(new Error('当前未检测到本机 LOCAL_API_BASE'));
+    var base = pipelineBase();
+    if (!base) return Promise.reject(new Error('当前未检测到可用的后端地址'));
 
     var fd = new FormData();
     fd.append('file', item.file);
@@ -857,7 +863,7 @@
   }
 
   function refreshJobStatus(showToast) {
-    var base = localBase();
+    var base = pipelineBase();
     if (!base || !state.currentJobId) return;
 
     fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(state.currentJobId), {
@@ -902,10 +908,10 @@
   }
 
   function startRun() {
-    var base = localBase();
+    var base = pipelineBase();
 
     if (!base) {
-      showMessage('当前未检测到本机 LOCAL_API_BASE，无法提交 Seedance 视频任务。');
+      showMessage('当前未检测到可用的后端地址，无法提交 Seedance 视频任务。');
       return;
     }
 
@@ -918,6 +924,8 @@
     var userCredits = totalEstimatedCredits * 2; // 用户消耗 = 采购价 × 2倍
 
     setSubmitBusy(true, '检查算力...');
+    state.examplesOpen = false;
+    renderWorkspace();
 
     fetch((typeof API_BASE !== 'undefined' ? API_BASE : '') + '/auth/me', {
       headers: (typeof authHeaders === 'function' ? authHeaders() : {})
@@ -960,11 +968,12 @@
           throw new Error(responseErrorText(result.data, '任务提交失败'));
         }
 
-        state.currentJobId = result.data.job_id;
-        state.currentJobStatus = 'running';
-        state.currentResultVideoUrl = '';
-        setSubmitBusy(false);
-        renderWorkspace();
+      state.currentJobId = result.data.job_id;
+      state.currentJobStatus = 'running';
+      state.currentResultVideoUrl = '';
+      state.examplesOpen = false;
+      setSubmitBusy(false);
+      renderWorkspace();
         showMessage('任务已提交，开始自动查询生成结果。');
         refreshJobStatus(false);
       })
@@ -1132,7 +1141,7 @@
       releaseMediaItems(state.images);
       state.images = [];
       state.activeBoardIndex = 0;
-      state.examplesOpen = false;
+      state.examplesOpen = true;
       state.activeExampleId = '';
       state.exampleCategory = 'all';
       state.exampleSearch = '';

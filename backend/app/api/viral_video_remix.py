@@ -393,6 +393,23 @@ def _remember_uploaded_asset(source_url: str, local_path: Path) -> None:
     _UPLOADED_ASSET_CACHE[quoted] = str(local_path)
 
 
+def _local_static_url_for_path(request: Request, path: Path) -> str:
+    root = (_lobster_root() / "static").resolve()
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise RuntimeError(f"path is not under static root: {resolved}") from exc
+
+    host = (request.headers.get("host") or "").strip()
+    if host:
+        scheme = getattr(request.url, "scheme", None) or "http"
+        base = f"{scheme}://{host}"
+    else:
+        base = f"http://127.0.0.1:{getattr(settings, 'port', 8000)}"
+    return _quote_public_url(f"{base.rstrip('/')}/static/{relative}")
+
+
 def _cached_uploaded_asset_path(source_url: str) -> Optional[Path]:
     value = (source_url or "").strip()
     for key in (value, _quote_public_url(value)):
@@ -925,7 +942,6 @@ async def resolve_viral_video_share_link(
     share_url = _extract_first_http_url(share_text)
     if not share_url:
         raise HTTPException(status_code=400, detail="未识别到视频分享链接，请粘贴包含 http/https 的完整分享文案。")
-    api_base, api_key = _resolve_local_comfly_credentials(request)
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(
@@ -966,13 +982,17 @@ async def resolve_viral_video_share_link(
     if path_suffix in {".mp4", ".mov", ".webm"}:
         suffix = path_suffix
     download_path = _viral_remix_upload_cache_root() / f"share_{current_user.id}_{int(time.time() * 1000)}{suffix}"
-    await _download_to_file(direct_video_url, download_path, timeout_seconds=300.0)
-    source_url = await _upload_local_file_to_comfly(
-        api_base,
-        api_key,
-        download_path,
-        _guess_video_content_type(direct_video_url),
-    )
+    try:
+        await _download_to_file(direct_video_url, download_path, timeout_seconds=300.0)
+    except Exception as exc:
+        logger.exception(
+            "[viral_video_remix] share video download failed user_id=%s share_url=%s direct_url=%s",
+            current_user.id,
+            share_url[:180],
+            direct_video_url[:240],
+        )
+        raise HTTPException(status_code=502, detail=f"视频已解析成功，但下载原视频失败：{exc}") from exc
+    source_url = _local_static_url_for_path(request, download_path)
     _remember_uploaded_asset(source_url, download_path)
     logger.info(
         "[viral_video_remix] share video resolved user_id=%s share_url=%s source_url=%s title=%s",

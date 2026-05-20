@@ -22,6 +22,7 @@
 
   var state = {
     initialized: false,
+    view: 'examples',
     references: [],
     results: [],
     activeResultIndex: 0,
@@ -199,6 +200,14 @@
     }).join('');
   }
 
+  function setRightView(view) {
+    state.view = view === 'result' ? 'result' : 'examples';
+    var resultPanel = $('imglabResultPanel');
+    var examplesPanel = $('imglabExamplesPanel');
+    if (resultPanel) resultPanel.hidden = state.view !== 'result';
+    if (examplesPanel) examplesPanel.hidden = state.view !== 'examples';
+  }
+
   function exampleImage(item) {
     return item.cover_image || item.image || '';
   }
@@ -282,6 +291,7 @@
     state.references = [];
     state.results = [];
     state.activeResultIndex = 0;
+    state.view = 'examples';
     state.submitting = false;
     if ($('imglabPromptInput')) $('imglabPromptInput').value = '';
     if ($('imglabAspectRatioSelect')) $('imglabAspectRatioSelect').value = '1:1';
@@ -292,6 +302,7 @@
     showMessage('');
     renderReferenceList();
     renderResultSurface();
+    setRightView('examples');
   }
 
   function setSubmitting(submitting) {
@@ -460,6 +471,7 @@
     }
 
     setSubmitting(true);
+    setRightView('result');
     showMessage('正在提交图片生成任务...', false);
 
     var form = new FormData();
@@ -495,6 +507,7 @@
       });
       state.activeResultIndex = 0;
       renderResultSurface();
+      setRightView('result');
       showMessage('图片已生成，右侧可以直接查看结果。', false);
     } catch (err) {
       showMessage(err && err.message ? err.message : '图片生成失败，请稍后重试', true);
@@ -629,6 +642,7 @@
     renderReferenceList();
     renderResultSurface();
     renderExamples();
+    setRightView((state.results.length || state.submitting) ? state.view : 'examples');
   }
 
   function init() {

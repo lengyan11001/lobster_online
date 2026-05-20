@@ -14,6 +14,7 @@ import json
 import urllib.request
 import webbrowser
 from pathlib import Path
+from ctypes import wintypes
 
 
 APP_NAME = "必火AI员工"
@@ -55,6 +56,39 @@ def message_box(title: str, body: str) -> None:
         ctypes.windll.user32.MessageBoxW(None, body, title, 0x40)
     except Exception:
         log(f"{title}: {body}")
+
+
+def screen_work_area() -> tuple[int, int]:
+    if os.name != "nt":
+        return 1366, 768
+    try:
+        user32 = ctypes.windll.user32
+        try:
+            user32.SetProcessDPIAware()
+        except Exception:
+            pass
+        rect = wintypes.RECT()
+        ok = ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+        if ok:
+            return max(900, rect.right - rect.left), max(640, rect.bottom - rect.top)
+        return max(900, user32.GetSystemMetrics(0)), max(640, user32.GetSystemMetrics(1))
+    except Exception as exc:
+        log(f"detect screen size failed: {exc}")
+        return 1366, 768
+
+
+def adaptive_window_size(requested_width: int, requested_height: int) -> tuple[int, int]:
+    work_w, work_h = screen_work_area()
+    max_w = max(900, work_w - 48)
+    max_h = max(640, work_h - 64)
+    target_w = requested_width if requested_width > 0 else 1440
+    target_h = requested_height if requested_height > 0 else 920
+    width = min(target_w, max_w)
+    height = min(target_h, max_h)
+    width = max(900, width)
+    height = max(640, height)
+    log(f"screen work_area={work_w}x{work_h}, window={width}x{height}")
+    return width, height
 
 
 def read_env_value(name: str, default: str) -> str:
@@ -410,7 +444,7 @@ def run_window(url: str, title: str, width: int, height: int) -> bool:
             url,
             width=width,
             height=height,
-            min_size=(1100, 720),
+            min_size=(900, 640),
             text_select=True,
             js_api=DesktopApi(),
         )
@@ -480,7 +514,8 @@ def main() -> int:
         open_browser(url)
         return 0
 
-    ok = run_window(url, title, args.width, args.height)
+    window_width, window_height = adaptive_window_size(args.width, args.height)
+    ok = run_window(url, title, window_width, window_height)
     if not ok:
         open_browser(url)
         message_box(

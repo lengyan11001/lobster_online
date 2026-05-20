@@ -13,6 +13,17 @@
     videoCreateMode: 'tts',
     voicePreviewMap: {},
     uploadPreviews: {},
+    voiceCreateRecordedFile: null,
+    voiceRecordStream: null,
+    voiceRecordContext: null,
+    voiceRecordSource: null,
+    voiceRecordProcessor: null,
+    voiceRecordBuffers: [],
+    voiceRecordStartedAt: 0,
+    voiceRecordTimer: null,
+    voiceRecording: false,
+    voiceRecordingPending: false,
+    voiceCreatePromptIndex: 0,
     selectedAvatar: null,
     selectedVoice: null,
     avatarSearch: '',
@@ -25,10 +36,22 @@
     }
   };
 
-  var HIFLY_TEMPLATE_VERSION = '20260512-video-size-inline-error';
-  var HIFLY_STYLE_VERSION = '20260511-brand-voice-preview-3';
+  var HIFLY_TEMPLATE_VERSION = '20260520-voice-preview-normal-speed';
+  var HIFLY_STYLE_VERSION = '20260520-voice-preview-normal-speed';
   var HIFLY_AVATAR_COVER_MANIFEST = '/static/data/hifly-public-avatar-covers.json?v=20260512';
   var HIFLY_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
+  var HIFLY_VOICE_RECORD_PROMPTS = {
+    zh: [
+      '你好，欢迎使用声音创建功能。请保持自然语速和清晰发音，完整朗读这段文字。今天的风很轻，阳光也刚刚好，希望这段录音可以帮助系统更准确地识别你的声音特点。',
+      '现在开始录制声音样本，请放松语气，像平时说话一样自然朗读。这个功能会根据你的发音、语速和停顿来创建声音，所以请尽量在安静环境中连续读完这一小段内容。',
+      '接下来请对着麦克风清楚地读出这段话，速度不用太快，也不要刻意放慢。只要保持正常表达和稳定音量，大约十几秒的录音就可以帮助系统完成声音创建。'
+    ],
+    en: [
+      'Hello and welcome. Please read this short passage in a clear and natural voice. Keep a steady pace and stay close to your microphone so the system can capture enough detail to build your custom voice.',
+      'We are collecting a short voice sample. Please speak naturally, keep your volume stable, and read this text in one go. A calm environment and about ten to twenty seconds of speech will work best.',
+      'Please read this paragraph out loud as if you were speaking normally. Do not rush, and try to keep your pronunciation clear and consistent. This short recording will be used to create your new voice.'
+    ]
+  };
   var avatarCoverManifest = { by_basename: {} };
   var avatarCoverManifestPromise = null;
 
@@ -120,6 +143,10 @@
     return base + '/' + raw.replace(/^\.?\//, '');
   }
 
+  function isConsumerPreviewVoice(value) {
+    return String(value || '').trim().indexOf('consumer_') === 0;
+  }
+
   function assetBasename(url) {
     var raw = String(url || '').trim();
     if (!raw) return '';
@@ -188,9 +215,8 @@
         if (!voicePreviewPlayer) voicePreviewPlayer = new Audio();
         voicePreviewButton = btn;
         voicePreviewPlayer.src = url;
-        var params = readVoiceParamsFromScope(btn);
-        voicePreviewPlayer.playbackRate = params.rate;
-        voicePreviewPlayer.volume = Math.min(1, Math.max(0, params.volume / 2));
+        voicePreviewPlayer.playbackRate = 1;
+        voicePreviewPlayer.volume = 1;
         btn.classList.add('is-playing');
         btn.innerHTML = '<span class="hifly-preview-play-icon">■</span><span>停止</span>';
         voicePreviewPlayer.onended = function() { stopVoicePreview(); };
@@ -323,6 +349,15 @@
     el.textContent = text || '';
     el.style.display = text ? 'block' : 'none';
     el.classList.toggle('err', !!isError);
+  }
+
+  function setFieldError(inputId, errorId, message) {
+    var input = $(inputId);
+    var error = $(errorId);
+    if (input) input.classList.toggle('is-error', !!message);
+    if (!error) return;
+    error.textContent = message || '';
+    error.style.display = message ? 'block' : 'none';
   }
 
   function showConfirmDialog(options) {
@@ -621,6 +656,34 @@
     return [];
   }
 
+  function submittableVoiceStyles(item) {
+    return voiceStyles(item).filter(function(style) {
+      return style && style.voice && !isConsumerPreviewVoice(style.voice);
+    });
+  }
+
+  function isSubmittableVoiceGroup(item) {
+    return submittableVoiceStyles(item).length > 0;
+  }
+
+  function filterSubmittableVoiceGroups(rows) {
+    return (rows || []).filter(isSubmittableVoiceGroup).map(function(item) {
+      var cloned = Object.assign({}, item);
+      var styles = submittableVoiceStyles(cloned);
+      cloned.styles = styles;
+      cloned.style_count = styles.length;
+      if (!cloned.voice || isConsumerPreviewVoice(cloned.voice)) {
+        cloned.voice = styles[0] && styles[0].voice ? styles[0].voice : '';
+      }
+      cloned.tags = (cloned.tags || []).filter(function(tag) {
+        var text = String(tag || '').trim();
+        return text && text !== '可试听' && text !== '仅试听';
+      });
+      if (!cloned.tags.length) cloned.tags = ['公共声音'];
+      return cloned;
+    });
+  }
+
   function voiceParams(item) {
     var params = item && item.voice_params && typeof item.voice_params === 'object' ? item.voice_params : {};
     return {
@@ -633,6 +696,40 @@
   function previewUrlForVoiceId(voiceId, fallbackUrl) {
     var cached = voiceId && state.voicePreviewMap ? state.voicePreviewMap[voiceId] : '';
     return normalizeAssetUrl(cached || fallbackUrl || '');
+  }
+
+  function downloadUrlForVideo(videoUrl, filename) {
+    var local = baseUrl();
+    var safeName = filename || 'digital-human.mp4';
+    if (!local) return videoUrl || '';
+    return local + '/api/hifly/video/download?url=' + encodeURIComponent(videoUrl || '') + '&filename=' + encodeURIComponent(safeName);
+  }
+
+  function openExternalUrl(url) {
+    if (!url) return;
+    try {
+      var opened = window.open(url, '_blank', 'noopener');
+      if (opened) return;
+    } catch (e) {}
+    window.location.href = url;
+  }
+
+  function bindVideoResultActions() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-hifly-video-download]'), function(btn) {
+      btn.onclick = function() {
+        var url = btn.getAttribute('data-hifly-video-download') || '';
+        if (!url) return showMessage('视频地址为空，无法下载。', true);
+        openExternalUrl(downloadUrlForVideo(url, btn.getAttribute('data-download-filename') || 'digital-human.mp4'));
+        showMessage('已发起下载。如果系统没有弹出下载，请点击“打开视频”后在浏览器中另存。', false);
+      };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-hifly-video-open]'), function(btn) {
+      btn.onclick = function() {
+        var url = btn.getAttribute('data-hifly-video-open') || '';
+        if (!url) return showMessage('视频地址为空，无法打开。', true);
+        openExternalUrl(url);
+      };
+    });
   }
 
   function voiceStyleWithPreview(style) {
@@ -747,7 +844,15 @@
   function renderResultVideo(videoUrl) {
     var el = $('hiflyResultSurface');
     if (!el) return;
-    el.innerHTML = '<video src="' + escapeHtml(videoUrl) + '" controls style="width:100%;height:100%;object-fit:contain;background:#000;border-radius:20px;"></video>';
+    el.innerHTML = ''
+      + '<div class="hifly-video-result-wrap">'
+      + '<video src="' + escapeHtml(videoUrl) + '" controls style="width:100%;height:100%;object-fit:contain;background:#000;border-radius:20px;"></video>'
+      + '<div class="hifly-video-result-actions">'
+      + '<button type="button" class="btn btn-primary btn-sm" data-hifly-video-download="' + escapeHtml(videoUrl) + '" data-download-filename="digital-human.mp4">下载视频</button>'
+      + '<button type="button" class="btn btn-ghost btn-sm" data-hifly-video-open="' + escapeHtml(videoUrl) + '">打开视频</button>'
+      + '</div>'
+      + '</div>';
+    bindVideoResultActions();
   }
 
   function renderResultSuccessCard(title, bodyHtml) {
@@ -782,6 +887,7 @@
       if (btn) btn.disabled = !!flag;
     });
     syncCreateSubmitStates();
+    syncVoiceRecordButtons();
   }
 
   function syncCreateSubmitStates() {
@@ -795,6 +901,7 @@
       if (!button) return;
       button.disabled = !!state.submitting || !(checkbox && checkbox.checked);
     });
+    syncVoiceRecordButtons();
   }
 
   function selectAvatar(item, shouldScroll) {
@@ -960,7 +1067,7 @@
     var editPanel = canEdit ? ''
       + '<div class="hifly-voice-param-panel" data-voice-id="' + escapeHtml(activeStyle.voice) + '" data-voice-asset-id="' + escapeHtml(item.id || '') + '">'
       + '<div class="hifly-voice-param-head">'
-      + '<div class="hifly-voice-param-title"><strong>声音参数</strong><span>试听跟随语速/音量，语调生成生效</span></div>'
+      + '<div class="hifly-voice-param-title"><strong>声音参数</strong><span>参数仅影响生成效果，试听按原音频播放</span></div>'
       + '<button type="button" class="btn btn-sm hifly-voice-param-save">保存</button>'
       + '</div>'
       + '<div class="hifly-voice-param-grid">'
@@ -1340,7 +1447,7 @@
       var data = results[1] || {};
       state.avatarLibrary = {
         mine: (mineData.items || []).map(function(item) { return Object.assign({}, item, { is_mine: true }); }),
-        public: (data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); }),
+        public: filterSubmittableVoiceGroups((data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); })),
         mine_supported: true,
         mine_message: '',
         using_default_token: !!data.using_default_token,
@@ -1457,6 +1564,10 @@
       ? '<button type="button" class="btn btn-ghost btn-sm hifly-video-history-play" data-task-id="'
         + escapeHtml(item.task_id || '') + '">预览</button>'
       : '';
+    var downloadBtn = (videoUrl && item.status === 'success')
+      ? '<button type="button" class="btn btn-primary btn-sm" data-hifly-video-download="'
+        + escapeHtml(videoUrl) + '" data-download-filename="' + escapeHtml((item.title || 'digital-human') + '.mp4') + '">下载</button>'
+      : '';
     var refreshBtn = (item.status !== 'success' && item.status !== 'failed')
       ? '<button type="button" class="btn btn-ghost btn-sm hifly-video-history-refresh" data-task-id="'
         + escapeHtml(item.task_id || '') + '">刷新</button>'
@@ -1474,7 +1585,7 @@
       + statusBadge
       + '</div>'
       + (textSnippet ? '<div style="font-size:0.75rem;color:#75839a;line-height:1.45;">' + escapeHtml(textSnippet) + '</div>' : '')
-      + '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + openBtn + refreshBtn + deleteBtn + '</div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + openBtn + downloadBtn + refreshBtn + deleteBtn + '</div>'
       + '</div>';
   }
 
@@ -1497,6 +1608,7 @@
     grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(220px, 1fr))';
     grid.style.gap = '12px';
     bindVideoHistoryEvents();
+    bindVideoResultActions();
   }
 
   function bindVideoHistoryEvents() {
@@ -1564,6 +1676,9 @@
   function closeModal(id) {
     var el = $(id);
     if (!el) return;
+    if (id === 'hiflyVoiceCreateModal' && state.voiceRecording) {
+      stopVoiceRecording(false);
+    }
     el.style.display = 'none';
     var stillOpen = Array.prototype.some.call(document.querySelectorAll('.hifly-modal'), function(modal) {
       return modal.style.display !== 'none';
@@ -1575,10 +1690,14 @@
     ['hiflyAvatarImageName', 'hiflyAvatarVideoName', 'hiflyVoiceCreateName'].forEach(function(id) {
       if ($(id)) $(id).value = '';
     });
+    if ($('hiflyVoiceLanguageSelect')) $('hiflyVoiceLanguageSelect').value = 'zh';
+    setFieldError('hiflyVoiceCreateName', 'hiflyVoiceCreateNameError', '');
     ['hiflyAvatarImageFile', 'hiflyAvatarVideoFile', 'hiflyVoiceCreateFile'].forEach(function(id) {
       if ($(id)) $(id).value = '';
       revokeUploadPreview(id);
     });
+    cancelVoiceRecording();
+    state.voiceCreateRecordedFile = null;
     ['hiflyAvatarImageFileMeta', 'hiflyAvatarVideoFileMeta', 'hiflyVoiceFileMeta'].forEach(function(id) {
       if ($(id)) {
         $(id).style.display = 'none';
@@ -1599,6 +1718,8 @@
     Array.prototype.forEach.call(radios, function(radio) {
       radio.checked = radio.value === '2';
     });
+    refreshVoiceRecordPrompt(true);
+    setVoiceRecordStatus('可上传本地音频，或直接使用电脑麦克风录音。', 'muted');
     syncCreateSubmitStates();
   }
 
@@ -1607,6 +1728,264 @@
     if (!isFinite(num) || num <= 0) return '--';
     if (num >= 1024 * 1024) return (num / (1024 * 1024)).toFixed(2) + ' MB';
     return (num / 1024).toFixed(1) + ' KB';
+  }
+
+  function formatRecordDuration(ms) {
+    var totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+    var minutes = Math.floor(totalSeconds / 60);
+    var seconds = totalSeconds % 60;
+    return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+  }
+
+  function currentVoicePromptList() {
+    var language = (($('hiflyVoiceLanguageSelect') || {}).value || 'zh').trim().toLowerCase();
+    return HIFLY_VOICE_RECORD_PROMPTS[language] || HIFLY_VOICE_RECORD_PROMPTS.zh;
+  }
+
+  function syncVoiceRecordButtons() {
+    var supported = !!(navigator.mediaDevices
+      && typeof navigator.mediaDevices.getUserMedia === 'function'
+      && (window.AudioContext || window.webkitAudioContext));
+    var startBtn = $('hiflyVoiceRecordStartBtn');
+    var stopBtn = $('hiflyVoiceRecordStopBtn');
+    var promptBtn = $('hiflyVoicePromptShuffleBtn');
+    if (startBtn) {
+      startBtn.disabled = !!state.submitting || state.voiceRecording || state.voiceRecordingPending || !supported;
+      startBtn.classList.toggle('is-recording', !!state.voiceRecording);
+      startBtn.classList.toggle('is-pending', !!state.voiceRecordingPending);
+      if (state.voiceRecording) {
+        startBtn.innerHTML = '<span class="hifly-record-live-dot"></span><span>录音中…</span>';
+      } else if (state.voiceRecordingPending) {
+        startBtn.innerHTML = '<span class="hifly-record-live-dot"></span><span>等待麦克风许可…</span>';
+      } else {
+        startBtn.innerHTML = '开始录音';
+      }
+    }
+    if (stopBtn) {
+      stopBtn.disabled = !!state.submitting || (!state.voiceRecording && !state.voiceRecordingPending);
+      stopBtn.classList.add('hifly-record-stop-btn');
+    }
+    if (promptBtn) promptBtn.disabled = !!state.submitting || state.voiceRecording;
+  }
+
+  function setVoiceRecordStatus(text, tone) {
+    var el = $('hiflyVoiceRecordStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    el.setAttribute('data-tone', tone || 'muted');
+  }
+
+  function refreshVoiceRecordPrompt(pickRandom) {
+    var prompts = currentVoicePromptList();
+    if (!prompts.length) return;
+    if (pickRandom) {
+      state.voiceCreatePromptIndex = Math.floor(Math.random() * prompts.length);
+    } else if (state.voiceCreatePromptIndex >= prompts.length) {
+      state.voiceCreatePromptIndex = 0;
+    }
+    var el = $('hiflyVoiceRecordPrompt');
+    if (el) el.textContent = prompts[state.voiceCreatePromptIndex];
+  }
+
+  function rotateVoiceRecordPrompt() {
+    var prompts = currentVoicePromptList();
+    if (!prompts.length) return;
+    state.voiceCreatePromptIndex = (state.voiceCreatePromptIndex + 1) % prompts.length;
+    refreshVoiceRecordPrompt(false);
+  }
+
+  function stopVoiceRecordTimer() {
+    if (state.voiceRecordTimer) {
+      clearInterval(state.voiceRecordTimer);
+      state.voiceRecordTimer = null;
+    }
+  }
+
+  function cleanupVoiceRecordRuntime() {
+    stopVoiceRecordTimer();
+    if (state.voiceRecordProcessor) {
+      try {
+        state.voiceRecordProcessor.disconnect();
+      } catch (e) {}
+      state.voiceRecordProcessor.onaudioprocess = null;
+    }
+    if (state.voiceRecordSource) {
+      try {
+        state.voiceRecordSource.disconnect();
+      } catch (e) {}
+    }
+    if (state.voiceRecordStream) {
+      try {
+        state.voiceRecordStream.getTracks().forEach(function(track) { track.stop(); });
+      } catch (e) {}
+    }
+    if (state.voiceRecordContext) {
+      try {
+        state.voiceRecordContext.close();
+      } catch (e) {}
+    }
+    state.voiceRecordProcessor = null;
+    state.voiceRecordSource = null;
+    state.voiceRecordStream = null;
+    state.voiceRecordContext = null;
+  }
+
+  function mergeRecordBuffers(buffers) {
+    var totalLength = buffers.reduce(function(sum, chunk) { return sum + (chunk ? chunk.length : 0); }, 0);
+    var merged = new Float32Array(totalLength);
+    var offset = 0;
+    buffers.forEach(function(chunk) {
+      if (!chunk || !chunk.length) return;
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    });
+    return merged;
+  }
+
+  function writeWaveString(view, offset, value) {
+    for (var i = 0; i < value.length; i += 1) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  }
+
+  function encodeWaveFile(buffers, sampleRate) {
+    var samples = mergeRecordBuffers(buffers);
+    var dataLength = samples.length * 2;
+    var wavBuffer = new ArrayBuffer(44 + dataLength);
+    var view = new DataView(wavBuffer);
+    var offset = 0;
+    writeWaveString(view, offset, 'RIFF'); offset += 4;
+    view.setUint32(offset, 36 + dataLength, true); offset += 4;
+    writeWaveString(view, offset, 'WAVE'); offset += 4;
+    writeWaveString(view, offset, 'fmt '); offset += 4;
+    view.setUint32(offset, 16, true); offset += 4;
+    view.setUint16(offset, 1, true); offset += 2;
+    view.setUint16(offset, 1, true); offset += 2;
+    view.setUint32(offset, sampleRate, true); offset += 4;
+    view.setUint32(offset, sampleRate * 2, true); offset += 4;
+    view.setUint16(offset, 2, true); offset += 2;
+    view.setUint16(offset, 16, true); offset += 2;
+    writeWaveString(view, offset, 'data'); offset += 4;
+    view.setUint32(offset, dataLength, true); offset += 4;
+    for (var i = 0; i < samples.length; i += 1) {
+      var sample = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+    return new Blob([wavBuffer], { type: 'audio/wav' });
+  }
+
+  function setInputFileValue(inputId, file) {
+    var input = $(inputId);
+    if (!input) return;
+    if (typeof DataTransfer !== 'undefined') {
+      try {
+        var transfer = new DataTransfer();
+        transfer.items.add(file);
+        input.files = transfer.files;
+        return;
+      } catch (e) {}
+    }
+    try {
+      Object.defineProperty(input, 'files', {
+        configurable: true,
+        value: [file]
+      });
+    } catch (e) {}
+  }
+
+  function applyRecordedVoiceFile(file) {
+    if (!file) return;
+    state.voiceCreateRecordedFile = file;
+    setInputFileValue('hiflyVoiceCreateFile', file);
+    syncUploadSelection('hiflyVoiceUploadBox', 'hiflyVoiceCreateFile', 'hiflyVoiceFilePreview', 'hiflyVoiceFileMeta', 'audio', file);
+    setVoiceRecordStatus('录音已生成，可先试听后直接提交。', 'success');
+  }
+
+  function cancelVoiceRecording(message) {
+    cleanupVoiceRecordRuntime();
+    state.voiceRecording = false;
+    state.voiceRecordingPending = false;
+    state.voiceRecordBuffers = [];
+    state.voiceRecordStartedAt = 0;
+    syncVoiceRecordButtons();
+    if (message) setVoiceRecordStatus(message, 'muted');
+  }
+
+  function stopVoiceRecording(shouldSave) {
+    if (!state.voiceRecordContext) {
+      cancelVoiceRecording('可上传本地音频，或直接使用电脑麦克风录音。');
+      return;
+    }
+    var sampleRate = state.voiceRecordContext.sampleRate || 44100;
+    var buffers = state.voiceRecordBuffers.slice();
+    var durationMs = Date.now() - (state.voiceRecordStartedAt || Date.now());
+    cleanupVoiceRecordRuntime();
+    state.voiceRecording = false;
+    state.voiceRecordingPending = false;
+    state.voiceRecordBuffers = [];
+    state.voiceRecordStartedAt = 0;
+    syncVoiceRecordButtons();
+    if (!shouldSave) {
+      setVoiceRecordStatus('录音已取消，可重新开始。', 'muted');
+      return;
+    }
+    if (durationMs < 3000 || !buffers.length) {
+      setVoiceRecordStatus('录音时间太短，请至少录制 3 秒。', 'danger');
+      showMessage('录音时间太短，请至少录制 3 秒。', true);
+      return;
+    }
+    var waveBlob = encodeWaveFile(buffers, sampleRate);
+    var stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+    var recordedFile = new File([waveBlob], 'voice-record-' + stamp + '.wav', { type: 'audio/wav' });
+    applyRecordedVoiceFile(recordedFile);
+  }
+
+  function startVoiceRecording() {
+    if (state.voiceRecording || state.voiceRecordingPending) return;
+    if (!(navigator.mediaDevices
+      && typeof navigator.mediaDevices.getUserMedia === 'function'
+      && (window.AudioContext || window.webkitAudioContext))) {
+      setVoiceRecordStatus('当前浏览器不支持直接录音，请改用本地音频上传。', 'danger');
+      return showMessage('当前浏览器不支持直接录音，请改用本地音频上传。', true);
+    }
+    state.voiceRecordingPending = true;
+    syncVoiceRecordButtons();
+    setVoiceRecordStatus('正在请求麦克风权限，请在浏览器弹窗中点击允许。', 'recording');
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+      var AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      var context = new AudioContextCtor();
+      var source = context.createMediaStreamSource(stream);
+      var processor = context.createScriptProcessor(4096, 1, 1);
+      state.voiceRecordStream = stream;
+      state.voiceRecordContext = context;
+      state.voiceRecordSource = source;
+      state.voiceRecordProcessor = processor;
+      state.voiceRecordBuffers = [];
+      state.voiceRecordStartedAt = Date.now();
+      state.voiceRecordingPending = false;
+      state.voiceRecording = true;
+      processor.onaudioprocess = function(ev) {
+        if (!state.voiceRecording) return;
+        var channelData = ev.inputBuffer.getChannelData(0);
+        state.voiceRecordBuffers.push(new Float32Array(channelData));
+      };
+      source.connect(processor);
+      processor.connect(context.destination);
+      stopVoiceRecordTimer();
+      state.voiceRecordTimer = setInterval(function() {
+        setVoiceRecordStatus('录音中 ' + formatRecordDuration(Date.now() - state.voiceRecordStartedAt) + '，请自然朗读上方文案。', 'recording');
+      }, 300);
+      setVoiceRecordStatus('录音中 00:00，请自然朗读上方文案。', 'recording');
+      syncVoiceRecordButtons();
+    }).catch(function(err) {
+      state.voiceRecording = false;
+      state.voiceRecordingPending = false;
+      cleanupVoiceRecordRuntime();
+      syncVoiceRecordButtons();
+      setVoiceRecordStatus('麦克风无法使用，请检查浏览器权限或设备设置。', 'danger');
+      showMessage(err && err.message ? ('麦克风打开失败：' + err.message) : '麦克风打开失败，请检查权限设置。', true);
+    });
   }
 
   function avatarVideoSizeLimitMessage(file) {
@@ -1716,6 +2095,10 @@
   function clearUploadSelection(triggerId, inputId, previewId, metaId, previewKind) {
     var input = $(inputId);
     if (input) input.value = '';
+    if (inputId === 'hiflyVoiceCreateFile') {
+      state.voiceCreateRecordedFile = null;
+      setVoiceRecordStatus('已清空声音样本，可重新上传或重新录音。', 'muted');
+    }
     revokeUploadPreview(inputId);
     syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, null);
   }
@@ -1728,6 +2111,10 @@
     trigger.addEventListener('click', function() { input.click(); });
     input.addEventListener('change', function() {
       var file = input.files && input.files[0] ? input.files[0] : null;
+      if (inputId === 'hiflyVoiceCreateFile') {
+        state.voiceCreateRecordedFile = file || null;
+        if (file) setVoiceRecordStatus('已选择本地音频，可直接提交创建声音。', 'success');
+      }
       if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
         if (input) input.value = '';
         revokeUploadPreview(inputId);
@@ -1749,6 +2136,10 @@
       trigger.classList.remove('is-dragover');
       if (!ev.dataTransfer || !ev.dataTransfer.files || !ev.dataTransfer.files.length) return;
       var file = ev.dataTransfer.files[0];
+      if (inputId === 'hiflyVoiceCreateFile') {
+        state.voiceCreateRecordedFile = file || null;
+        if (file) setVoiceRecordStatus('已选择本地音频，可直接提交创建声音。', 'success');
+      }
       if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
         if (input) input.value = '';
         revokeUploadPreview(inputId);
@@ -1866,6 +2257,7 @@
     if (!avatar) return showMessage('请先从右侧选择一个数字人。', true);
     if (mode === 'tts') {
       if (!voice) return showMessage('请先从右侧选择一个声音。', true);
+      if (isConsumerPreviewVoice(voice)) return showMessage('该公共声音仅支持试听，请选择可生成公共声音或“我的声音”。', true);
       if (!text) return showMessage('请先填写口播文案。', true);
     } else if (!audioFile) {
       return showMessage('请先上传驱动音频。', true);
@@ -2027,11 +2419,18 @@
 
   function submitVoiceCreate() {
     var file = $('hiflyVoiceCreateFile') && $('hiflyVoiceCreateFile').files ? $('hiflyVoiceCreateFile').files[0] : null;
+    if (!file && state.voiceCreateRecordedFile) file = state.voiceCreateRecordedFile;
     var title = (($('hiflyVoiceCreateName') || {}).value || '').trim();
     var language = (($('hiflyVoiceLanguageSelect') || {}).value || 'zh').trim();
     var agree = !!(($('hiflyVoiceCreateAgree') || {}).checked);
-    if (!title) return showMessage('请填写声音名称。', true);
-    if (!file) return showMessage('请先上传声音样本。', true);
+    if (!title) {
+      setFieldError('hiflyVoiceCreateName', 'hiflyVoiceCreateNameError', '请输入声音名称后再提交。');
+      showMessage('请填写声音名称。', true);
+      if ($('hiflyVoiceCreateName') && $('hiflyVoiceCreateName').focus) $('hiflyVoiceCreateName').focus();
+      return;
+    }
+    setFieldError('hiflyVoiceCreateName', 'hiflyVoiceCreateNameError', '');
+    if (!file) return showMessage('请先上传声音样本，或使用电脑录音生成样本。', true);
     if (!agree) return showMessage('请先勾选同意承诺。', true);
 
     var formData = new FormData();
@@ -2156,6 +2555,15 @@
     wireFileBox('hiflyAvatarVideoUploadBox', 'hiflyAvatarVideoFile', 'hiflyAvatarVideoFileMeta', 'hiflyAvatarVideoPreview', 'video');
     wireFileBox('hiflyVoiceUploadBox', 'hiflyVoiceCreateFile', 'hiflyVoiceFileMeta', 'hiflyVoiceFilePreview', 'audio');
     wireFileBox('hiflyAudioDriveUploadBox', 'hiflyAudioDriveFile', 'hiflyAudioDriveFileMeta', 'hiflyAudioDrivePreview', 'audio');
+    if ($('hiflyVoiceRecordStartBtn')) $('hiflyVoiceRecordStartBtn').addEventListener('click', startVoiceRecording);
+    if ($('hiflyVoiceRecordStopBtn')) $('hiflyVoiceRecordStopBtn').addEventListener('click', function() { stopVoiceRecording(true); });
+    if ($('hiflyVoicePromptShuffleBtn')) $('hiflyVoicePromptShuffleBtn').addEventListener('click', rotateVoiceRecordPrompt);
+    if ($('hiflyVoiceLanguageSelect')) $('hiflyVoiceLanguageSelect').addEventListener('change', function() {
+      refreshVoiceRecordPrompt(true);
+    });
+    if ($('hiflyVoiceCreateName')) $('hiflyVoiceCreateName').addEventListener('input', function() {
+      if ((this.value || '').trim()) setFieldError('hiflyVoiceCreateName', 'hiflyVoiceCreateNameError', '');
+    });
 
     if ($('hiflyAvatarImageSubmitBtn')) $('hiflyAvatarImageSubmitBtn').addEventListener('click', submitAvatarImageCreate);
     if ($('hiflyAvatarVideoSubmitBtn')) $('hiflyAvatarVideoSubmitBtn').addEventListener('click', submitAvatarVideoCreate);
@@ -2163,6 +2571,8 @@
     ['hiflyAvatarImageAgree', 'hiflyAvatarVideoAgree', 'hiflyVoiceCreateAgree'].forEach(function(id) {
       if ($(id)) $(id).addEventListener('change', syncCreateSubmitStates);
     });
+    refreshVoiceRecordPrompt(true);
+    setVoiceRecordStatus('可上传本地音频，或直接使用电脑麦克风录音。', 'muted');
     syncCreateSubmitStates();
   }
 
@@ -2213,6 +2623,28 @@
       + '#content-hifly-digital-human .hifly-mode-chip{appearance:none;border:1px solid rgba(99,102,241,0.18);background:#fff;border-radius:999px;padding:0.7rem 1rem;font-weight:700;color:#475569;cursor:pointer;transition:all .18s ease;box-shadow:0 8px 24px rgba(15,23,42,0.05);}'
       + '#content-hifly-digital-human .hifly-mode-chip.is-active{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;border-color:transparent;box-shadow:0 12px 28px rgba(79,70,229,0.24);}'
       + '#content-hifly-digital-human .btn.is-disabled{opacity:0.55;cursor:not-allowed;pointer-events:none;}'
+      + '#content-hifly-digital-human .hifly-record-divider{position:relative;margin:0.2rem 0 0.4rem;text-align:center;}'
+      + '#content-hifly-digital-human .hifly-record-divider:before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(148,163,184,0.25);}'
+      + '#content-hifly-digital-human .hifly-record-divider span{position:relative;display:inline-block;padding:0 0.8rem;background:#fff;color:#64748b;font-size:0.78rem;font-weight:700;}'
+      + '#content-hifly-digital-human .hifly-record-box{border:1px solid rgba(99,102,241,0.12);border-radius:18px;background:linear-gradient(180deg,rgba(248,250,255,0.98),rgba(255,255,255,0.98));padding:0.9rem 1rem;display:flex;flex-direction:column;gap:0.75rem;}'
+      + '#content-hifly-digital-human .hifly-record-box-head{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;}'
+      + '#content-hifly-digital-human .hifly-record-box-head strong{font-size:0.95rem;color:#1f2b42;}'
+      + '#content-hifly-digital-human .hifly-record-box-hint{margin:0;color:#667189;font-size:0.82rem;line-height:1.7;}'
+      + '#content-hifly-digital-human .hifly-record-prompt{padding:0.9rem 1rem;border-radius:16px;background:rgba(99,102,241,0.06);border:1px solid rgba(99,102,241,0.14);color:#2b3345;font-size:0.9rem;line-height:1.8;}'
+      + '#content-hifly-digital-human .hifly-record-actions{display:flex;gap:0.6rem;flex-wrap:wrap;}'
+      + '#content-hifly-digital-human .hifly-record-actions .btn{display:inline-flex;align-items:center;gap:0.4rem;}'
+      + '#content-hifly-digital-human .hifly-record-live-dot{width:0.55rem;height:0.55rem;border-radius:999px;background:currentColor;display:inline-block;box-shadow:0 0 0 0 rgba(255,255,255,0.55);animation:hiflyRecordPulse 1.2s ease infinite;}'
+      + '#content-hifly-digital-human .hifly-record-start-btn.is-recording{background:linear-gradient(135deg,#ef4444,#dc2626)!important;border-color:transparent!important;color:#fff!important;box-shadow:0 10px 22px rgba(220,38,38,0.26);}'
+      + '#content-hifly-digital-human .hifly-record-start-btn.is-pending{background:linear-gradient(135deg,#f59e0b,#d97706)!important;border-color:transparent!important;color:#fff!important;box-shadow:0 10px 22px rgba(217,119,6,0.24);}'
+      + '#content-hifly-digital-human .hifly-record-stop-btn{background:rgba(239,68,68,0.10)!important;border:1px solid rgba(239,68,68,0.28)!important;color:#b42318!important;}'
+      + '#content-hifly-digital-human .hifly-record-stop-btn:not(:disabled){background:linear-gradient(135deg,#ef4444,#dc2626)!important;border-color:transparent!important;color:#fff!important;box-shadow:0 10px 22px rgba(220,38,38,0.22);}'
+      + '#content-hifly-digital-human .hifly-record-status{border-radius:14px;padding:0.72rem 0.85rem;font-size:0.82rem;line-height:1.6;background:rgba(148,163,184,0.12);color:#5b677b;}'
+      + '#content-hifly-digital-human .hifly-record-status[data-tone="recording"]{background:rgba(239,68,68,0.10);color:#b42318;font-weight:700;}'
+      + '#content-hifly-digital-human .hifly-record-status[data-tone="success"]{background:rgba(16,185,129,0.12);color:#0f766e;font-weight:700;}'
+      + '#content-hifly-digital-human .hifly-record-status[data-tone="danger"]{background:rgba(239,68,68,0.10);color:#b42318;font-weight:700;}'
+      + '#content-hifly-digital-human .hifly-field-error{display:none;margin-top:0.45rem;color:#b42318;font-size:0.8rem;line-height:1.5;font-weight:600;}'
+      + '#content-hifly-digital-human input.is-error,#content-hifly-digital-human select.is-error,#content-hifly-digital-human textarea.is-error{border-color:rgba(220,38,38,0.48)!important;box-shadow:0 0 0 3px rgba(220,38,38,0.10)!important;background:#fff8f8;}'
+      + '@keyframes hiflyRecordPulse{0%{transform:scale(0.96);box-shadow:0 0 0 0 rgba(255,255,255,0.45);}70%{transform:scale(1);box-shadow:0 0 0 8px rgba(255,255,255,0);}100%{transform:scale(0.96);box-shadow:0 0 0 0 rgba(255,255,255,0);}}'
       + '#content-hifly-digital-human .hifly-selected-avatar,#content-hifly-digital-human .hifly-selected-voice{border:1px solid rgba(26,39,68,0.08);border-radius:20px;background:#fff;box-shadow:0 18px 38px rgba(26,39,68,0.08);padding:0.9rem;}'
       + '#content-hifly-digital-human .hifly-selected-avatar{display:grid;grid-template-columns:124px minmax(0,1fr);gap:0.9rem;align-items:start;}'
       + '#content-hifly-digital-human .hifly-selected-voice{display:grid;grid-template-columns:112px minmax(0,1fr);gap:0.9rem;align-items:start;}'
@@ -2319,6 +2751,9 @@
       + '#content-hifly-digital-human #hiflyTaskStatusText[data-tone="processing"]{color:#5c57d8;background:rgba(92,87,216,0.12);}'
       + '#content-hifly-digital-human .hifly-result-status-head{display:flex;gap:0.74rem;align-items:flex-start;}'
       + '#content-hifly-digital-human .hifly-result-spinner{flex:0 0 auto;width:34px;height:34px;border-radius:999px;border:3px solid rgba(124,94,255,0.14);border-top-color:#7c5eff;animation:viral-spin 0.85s linear infinite;}'
+      + '#content-hifly-digital-human .hifly-video-result-wrap{width:100%;height:100%;display:flex;flex-direction:column;gap:0.75rem;}'
+      + '#content-hifly-digital-human .hifly-video-result-wrap video{min-height:320px;}'
+      + '#content-hifly-digital-human .hifly-video-result-actions{display:flex;gap:0.55rem;flex-wrap:wrap;justify-content:flex-end;}'
       + '#content-hifly-digital-human .hifly-success-card{width:min(92%,640px);padding:1.2rem 1.25rem;border-radius:22px;background:#fff;border:1px solid rgba(124,94,255,0.14);box-shadow:0 18px 42px rgba(31,41,55,0.10);}'
       + '#content-hifly-digital-human .hifly-success-card strong{display:block;font-size:1.04rem;color:#20314d;}'
       + '#content-hifly-digital-human .hifly-success-card span{display:block;margin-top:0.5rem;color:#5f6f87;line-height:1.65;}'
@@ -2726,6 +3161,7 @@
             <div class="tvc-field">
               <label for="hiflyVoiceCreateName">声音名称</label>
               <input id="hiflyVoiceCreateName" type="text" maxlength="20" placeholder="输入声音名称">
+              <div id="hiflyVoiceCreateNameError" class="hifly-field-error"></div>
             </div>
             <div class="tvc-field">
               <label for="hiflyVoiceLanguageSelect">语言</label>
@@ -2750,6 +3186,20 @@
             </button>
             <div id="hiflyVoiceFilePreview" class="hifly-upload-preview" style="display:none;"></div>
             <div id="hiflyVoiceFileMeta" class="hifly-file-meta" style="display:none;"></div>
+            <div class="hifly-record-divider"><span>或者直接电脑录音</span></div>
+            <div class="hifly-record-box">
+              <div class="hifly-record-box-head">
+                <strong>电脑录音建声</strong>
+                <button type="button" id="hiflyVoicePromptShuffleBtn" class="btn btn-ghost btn-sm">换一段文案</button>
+              </div>
+              <p class="hifly-record-box-hint">点击开始录音后，对着麦克风自然朗读下方文案，建议录制 10 到 20 秒。</p>
+              <div id="hiflyVoiceRecordPrompt" class="hifly-record-prompt"></div>
+              <div class="hifly-record-actions">
+                <button type="button" id="hiflyVoiceRecordStartBtn" class="btn btn-primary btn-sm hifly-record-start-btn">开始录音</button>
+                <button type="button" id="hiflyVoiceRecordStopBtn" class="btn btn-ghost btn-sm hifly-record-stop-btn" disabled>停止并使用录音</button>
+              </div>
+              <div id="hiflyVoiceRecordStatus" class="hifly-record-status" data-tone="muted">可上传本地音频，或直接使用电脑麦克风录音。</div>
+            </div>
             <label class="tvc-check"><input type="checkbox" id="hiflyVoiceCreateAgree" checked>我已阅读并同意《使用者承诺须知》</label>
           </div>
           <div class="hifly-modal-foot">

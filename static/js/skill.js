@@ -103,6 +103,12 @@ window._openHiflyDigitalHumanView = function() {
   try { location.hash = 'hifly-digital-human'; } catch (e1) {}
 };
 
+window._openShanjianSmartClipView = function() {
+  _switchToHiddenView('shanjian-smart-clip');
+  if (typeof window.initShanjianSmartClipView === 'function') window.initShanjianSmartClipView();
+  try { location.hash = 'shanjian-smart-clip'; } catch (e1) {}
+};
+
 window._openGoalVideoChat = function() {
   var nav = document.querySelector('.nav-left-item[data-view="chat"]');
   if (nav) nav.click();
@@ -121,6 +127,10 @@ window._openHiddenWorkspaceView = function(view) {
   if (!target) return;
   if (target === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
     window._openHiflyDigitalHumanView();
+    return;
+  }
+  if (target === 'shanjian-smart-clip' && typeof window._openShanjianSmartClipView === 'function') {
+    window._openShanjianSmartClipView();
     return;
   }
   if (target === 'viral-video-remix' && typeof window._openViralVideoRemixView === 'function') {
@@ -401,6 +411,17 @@ function _renderHiflyDigitalHumanCard(pkg) {
     '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">创作服务由平台统一托管，用户无需填写 API Token。</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm hifly-digital-human-entry-btn">&#36827;&#20837;&#24037;&#20316;&#21488;</button></div>' +
+    '</div>';
+}
+
+function _renderShanjianSmartClipCard() {
+  return '<div class="skill-store-card shanjian-smart-clip-card" style="cursor:pointer;border-color:rgba(37,99,235,0.35);background:linear-gradient(135deg,rgba(37,99,235,0.08),rgba(20,184,166,0.05));">' +
+    '<div class="card-label">视频合成 &middot; 山涧 <span class="badge-installed">新页面</span></div>' +
+    '<div class="card-value">智能剪辑</div>' +
+    '<div class="card-desc">拉取山涧模板、公共数字人和公共声音，选择模板后提交数字人口播混剪任务。</div>' +
+    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(37,99,235,0.06);border:1px solid rgba(37,99,235,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">数字人口播混剪约 1 算力/秒，1 分钟约 60 算力。</div>' +
+    '<div class="card-tags"><span class="tag">智能剪辑</span><span class="tag">模板</span><span class="tag">数字人</span><span class="tag">山涧</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm shanjian-smart-clip-entry-btn">进入智能剪辑</button></div>' +
     '</div>';
 }
 
@@ -943,6 +964,7 @@ function loadSkillStore() {
         if (hasComflyPkg || isSkillAdmin) html += _renderComflyCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderSeedanceTvcStudioCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderViralVideoRemixCard();
+        html += _renderShanjianSmartClipCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
         if (isSkillAdmin && browserUsePkg) {
@@ -1075,6 +1097,7 @@ function loadSkillStore() {
         _bindSeedanceTvcCardEntry();
         _bindViralVideoRemixCardEntry();
         _bindHiflyDigitalHumanCardEntry();
+        _bindShanjianSmartClipCardEntry();
         _bindGoalVideoPipelineCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
@@ -1328,6 +1351,21 @@ function _bindHiflyDigitalHumanCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+    });
+  });
+}
+
+function _bindShanjianSmartClipCardEntry() {
+  document.querySelectorAll('.shanjian-smart-clip-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openShanjianSmartClipView === 'function') window._openShanjianSmartClipView();
+    });
+  });
+  document.querySelectorAll('.shanjian-smart-clip-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openShanjianSmartClipView === 'function') window._openShanjianSmartClipView();
     });
   });
 }

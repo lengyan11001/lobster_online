@@ -9,9 +9,11 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..core.config import settings
@@ -383,7 +385,7 @@ def _raise_for_hifly_business_error(payload: Dict[str, Any]) -> None:
 
 
 async def _get(path: str, token: Optional[str], params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=8.0) as client:
         resp = await client.get(_url(path), headers=_headers(token), params=params or {})
     if resp.status_code == 401:
         raise HTTPException(status_code=401, detail="HiFly Token 无效或已过期")
@@ -905,7 +907,7 @@ async def _fetch_remote_library(path: str, token: Optional[str]) -> Dict[str, An
     body: Dict[str, Any] = {"token": (token or "").strip()}
     if not body["token"]:
         body.pop("token", None)
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=8.0) as client:
         resp = await client.post(f"{base}{path}", json=body)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=(resp.text or "")[:500])
@@ -1350,45 +1352,211 @@ def _merge_voice_rows(primary_rows: List[Dict[str, Any]], extra_rows: List[Dict[
     return [by_key[key] for key in order]
 
 
+def _is_consumer_preview_voice(value: Any) -> bool:
+    return str(value or "").strip().startswith("consumer_")
+
+
+def _is_submittable_voice_row(row: Dict[str, Any]) -> bool:
+    styles = row.get("styles") or []
+    if isinstance(styles, list) and styles:
+        return any(
+            isinstance(style, dict) and not _is_consumer_preview_voice(style.get("voice"))
+            for style in styles
+        )
+    return bool(row.get("voice")) and not _is_consumer_preview_voice(row.get("voice"))
+
+
+def _submittable_voice_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        cloned = dict(row)
+        styles = cloned.get("styles") or []
+        if isinstance(styles, list) and styles:
+            kept_styles = [
+                dict(style)
+                for style in styles
+                if isinstance(style, dict) and not _is_consumer_preview_voice(style.get("voice"))
+            ]
+            if not kept_styles:
+                continue
+            cloned["styles"] = kept_styles
+            cloned["style_count"] = len(kept_styles)
+            cloned["voice"] = str(kept_styles[0].get("voice") or cloned.get("voice") or "")
+            cloned["demo_url"] = str(kept_styles[0].get("demo_url") or cloned.get("demo_url") or "")
+        elif not _is_submittable_voice_row(cloned):
+            continue
+        tags = [
+            str(tag)
+            for tag in (cloned.get("tags") or [])
+            if str(tag).strip() not in {"可试听", "仅试听"}
+        ]
+        cloned["tags"] = tags or ["公共声音"]
+        result.append(cloned)
+    return result
+
+
+def _norm_voice_match_text(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip()).lower()
+    return text
+
+
+def _api_voice_lookup(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    lookup: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        voice = str(row.get("voice") or "").strip()
+        title = _norm_voice_match_text(row.get("title"))
+        if not voice or not title:
+            continue
+        lookup.setdefault(title, []).append(row)
+    return lookup
+
+
+def _match_api_voice_for_preview(
+    *,
+    group_title: str,
+    style_title: str,
+    lookup: Dict[str, List[Dict[str, Any]]],
+    used_by_key: Dict[str, int],
+) -> Optional[Dict[str, Any]]:
+    group = _norm_voice_match_text(group_title)
+    style = _norm_voice_match_text(style_title)
+    candidates: List[str] = []
+    if style:
+        candidates.append(style)
+    if group and style and not style.startswith(group):
+        candidates.append(f"{group} {style}".strip())
+    if group and style in {"默认", "默认风格", "普通话", "默认风格 普通话"}:
+        candidates.append(group)
+    seen: set[str] = set()
+    for key in candidates:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        rows = lookup.get(key) or []
+        if len(rows) == 1:
+            used_by_key[key] = 1
+            return rows[0]
+        if len(rows) > 1:
+            idx = used_by_key.get(key, 0)
+            if idx < len(rows):
+                used_by_key[key] = idx + 1
+                return rows[idx]
+    return None
+
+
+def _attach_hifly_voice_ids_to_local_previews(
+    preview_rows: List[Dict[str, Any]],
+    api_rows: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], int, int]:
+    lookup = _api_voice_lookup(api_rows)
+    used_by_key: Dict[str, int] = {}
+    converted = 0
+    unresolved = 0
+    result: List[Dict[str, Any]] = []
+    for row in preview_rows or []:
+        if not isinstance(row, dict):
+            continue
+        group_title = str(row.get("title") or "").strip()
+        cloned = dict(row)
+        styles_out: List[Dict[str, Any]] = []
+        for style in cloned.get("styles") or []:
+            if not isinstance(style, dict):
+                continue
+            style_copy = dict(style)
+            matched = _match_api_voice_for_preview(
+                group_title=group_title,
+                style_title=str(style_copy.get("title") or style_copy.get("label") or ""),
+                lookup=lookup,
+                used_by_key=used_by_key,
+            )
+            if matched:
+                style_copy["preview_voice"] = str(style_copy.get("voice") or "")
+                style_copy["voice"] = str(matched.get("voice") or "").strip()
+                style_copy["hifly_title"] = str(matched.get("title") or "").strip()
+                style_copy["rate"] = str(matched.get("rate") or style_copy.get("rate") or "")
+                style_copy["pitch"] = str(matched.get("pitch") or style_copy.get("pitch") or "")
+                style_copy["volume"] = str(matched.get("volume") or style_copy.get("volume") or "")
+                converted += 1
+            else:
+                unresolved += 1
+            styles_out.append(style_copy)
+        if styles_out:
+            cloned["styles"] = styles_out
+            first_submittable = next((s for s in styles_out if not _is_consumer_preview_voice(s.get("voice"))), styles_out[0])
+            cloned["voice"] = str(first_submittable.get("voice") or cloned.get("voice") or "")
+            cloned["demo_url"] = str(first_submittable.get("demo_url") or cloned.get("demo_url") or "")
+            cloned["style_count"] = len(styles_out)
+        result.append(cloned)
+    return result, converted, unresolved
+
+
 @router.post("/api/hifly/voice/library")
 async def hifly_voice_library(body: HiflyTokenBody, background_tasks: BackgroundTasks):
     mine_resp: Dict[str, Any] = {"data": [], "unsupported": False, "message": ""}
     if _has_hifly_token(body.token):
         mine_resp = await _safe_voice_list(body.token, 1)
+    public_resp: Dict[str, Any] = {"data": [], "unsupported": False, "message": ""}
+    if _has_hifly_token(body.token):
+        public_resp = await _safe_voice_list(body.token, 2)
     public_manifest = _local_preview_manifest_rows()
-    source = "local" if public_manifest else "remote"
+    public_api_rows = public_resp.get("data") or []
+    source = "local_preview_mapped" if public_manifest else "hifly_api"
+    mapped_count = 0
+    unresolved_count = 0
     if public_manifest:
-        remote_base = _remote_resource_base()
-        try:
-            remote_public = [
-                _with_remote_preview_urls(row, remote_base)
-                for row in await _fetch_remote_public_rows("/api/hifly/voice/library", body.token)
-            ]
-            if remote_public:
-                background_tasks.add_task(_cache_remote_voice_previews, remote_public, remote_base)
-        except HTTPException:
-            remote_public = []
-            logger.warning("[hifly] remote voice library refresh failed; using local preview manifest", exc_info=True)
-        public_merged = _merge_voice_rows(public_manifest, remote_public)
+        public_merged, mapped_count, unresolved_count = _attach_hifly_voice_ids_to_local_previews(public_manifest, public_api_rows)
     else:
-        remote_base = _remote_resource_base()
-        remote_public = [
-            _with_remote_preview_urls(row, remote_base)
-            for row in await _fetch_remote_public_rows("/api/hifly/voice/library", body.token)
-        ]
-        if remote_public:
-            background_tasks.add_task(_cache_remote_voice_previews, remote_public, remote_base)
-        public_merged = remote_public
+        public_merged = _enrich_voice_rows(public_api_rows, "public")
+    if not public_merged:
+        source = "local_preview"
+        public_merged = public_manifest
+    public_submittable = _submittable_voice_rows(public_merged)
     return {
         "ok": True,
         "mine": _enrich_voice_rows(mine_resp.get("data") or [], "mine"),
-        "public": public_merged,
+        "public": public_submittable,
         "mine_supported": not bool(mine_resp.get("unsupported")),
         "mine_message": mine_resp.get("message") or "",
+        "public_supported": not bool(public_resp.get("unsupported")),
+        "public_message": public_resp.get("message") or "",
+        "public_api_total": len(public_api_rows),
+        "public_preview_mapped": mapped_count,
+        "public_preview_unresolved": unresolved_count,
         "manifest_count": len(public_manifest),
+        "public_total": len(public_submittable),
+        "public_preview_only_removed": max(0, len(public_merged) - len(public_submittable)),
         "using_default_token": bool((settings.hifly_default_token or "").strip() and not (body.token or "").strip()),
         "source": source,
     }
+
+
+@router.get("/api/hifly/video/download")
+async def hifly_video_download(url: str = Query(..., min_length=1), filename: str = Query("digital-human.mp4")):
+    video_url = str(url or "").strip()
+    if not re.match(r"^https?://", video_url, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="无效的视频地址")
+    safe_filename = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", str(filename or "digital-human.mp4")).strip("._")
+    if not safe_filename:
+        safe_filename = "digital-human.mp4"
+    if "." not in Path(safe_filename).name:
+        safe_filename += ".mp4"
+
+    async def _stream():
+        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
+            async with client.stream("GET", video_url) as resp:
+                if resp.status_code >= 400:
+                    detail = (await resp.aread())[:240].decode("utf-8", errors="ignore")
+                    raise HTTPException(status_code=resp.status_code, detail=f"视频下载失败: {detail}")
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
+
+    headers = {"Content-Disposition": f'attachment; filename="digital-human.mp4"; filename*=UTF-8\'\'{quote(safe_filename)}'}
+    return StreamingResponse(_stream(), media_type="video/mp4", headers=headers)
 
 
 @router.post("/api/hifly/video/create-by-tts")

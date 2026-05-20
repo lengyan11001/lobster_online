@@ -4898,6 +4898,168 @@
         min-height: 280px !important;
       }
     }
+    /* Desktop EXE adaptive layout: keep the app usable on 1366x768 and high-DPI scaled screens. */
+    @media (max-width: 1368px), (max-height: 820px) {
+      .page {
+        padding: 0.65rem 0.75rem 0.8rem;
+      }
+      .header {
+        margin-bottom: 0.55rem;
+        padding: 0.55rem 0.7rem;
+        border-radius: 16px;
+        gap: 0.55rem;
+        align-items: center;
+      }
+      .header-left {
+        gap: 0.45rem;
+        max-width: min(260px, 25vw);
+      }
+      .logo {
+        font-size: 1.12rem;
+        gap: 0.38rem;
+      }
+      .logo-mark,
+      .header-avatar-badge {
+        width: 28px;
+        height: 28px;
+      }
+      .header-version {
+        font-size: 0.66rem;
+        max-width: 132px;
+      }
+      .app-top-nav {
+        justify-content: flex-start;
+        gap: 0.22rem;
+      }
+      .app-top-nav .nav-left-item {
+        padding: 0.42rem 0.62rem;
+        font-size: 0.82rem;
+      }
+      .header-actions {
+        gap: 0.35rem;
+      }
+      #sutuiBalanceWrap {
+        margin-right: 0.25rem !important;
+        font-size: 0.78rem !important;
+      }
+      #sutuiRechargeBtn {
+        padding: 0.22rem 0.42rem;
+      }
+      .header-avatar-btn {
+        padding: 0.24rem 0.38rem;
+        gap: 0.35rem;
+      }
+      .header-avatar-name {
+        max-width: 78px;
+        font-size: 0.82rem;
+      }
+      .dashboard-main {
+        padding-bottom: 0.75rem;
+      }
+      .chat-area-wrap {
+        gap: 0.55rem;
+      }
+      .chat-history-sidebar {
+        width: clamp(160px, 19vw, 188px);
+        padding: 0.45rem;
+        border-radius: 14px;
+      }
+      .chat-sidebar-brand {
+        margin-bottom: 0.45rem !important;
+      }
+      .chat-sidebar-brand-avatar {
+        width: 34px !important;
+        height: 34px !important;
+      }
+      .chat-sidebar-brand-title {
+        font-size: 0.9rem !important;
+      }
+      .chat-sidebar-brand-subtitle,
+      .chat-sidebar-shortcut {
+        display: none !important;
+      }
+      .chat-sidebar-entry,
+      .chat-history-sidebar .btn-new-session {
+        min-height: 34px !important;
+        padding: 0.42rem 0.5rem !important;
+        font-size: 0.82rem !important;
+      }
+      .chat-sidebar-entry-icon {
+        width: 1.1rem !important;
+      }
+      .chat-workspace.is-empty {
+        min-height: 0 !important;
+      }
+      .chat-workspace.is-empty .chat-empty-state {
+        padding-top: clamp(0.25rem, 2vh, 1rem) !important;
+      }
+      .chat-home-copy {
+        margin-bottom: 0.8rem !important;
+      }
+      .chat-home-title {
+        font-size: clamp(1.55rem, 3.1vw, 2.35rem) !important;
+        line-height: 1.18 !important;
+      }
+      .chat-home-subtitle {
+        font-size: clamp(0.92rem, 1.5vw, 1.08rem) !important;
+      }
+      .chat-home-visual {
+        transform: scale(0.86);
+        transform-origin: center;
+      }
+      .chat-home-tools {
+        gap: 0.45rem !important;
+      }
+      .workspace-category-tabs,
+      .workspace-status-strip {
+        margin-bottom: 0.55rem !important;
+      }
+      .workspace-category-tab,
+      .workspace-status-pill {
+        min-height: 30px;
+        padding: 0.32rem 0.66rem;
+        font-size: 0.76rem;
+      }
+    }
+    @media (max-width: 1180px), (max-height: 720px) {
+      .header {
+        flex-wrap: wrap;
+      }
+      .header-left {
+        max-width: calc(100% - 220px);
+      }
+      .app-top-nav {
+        order: 3;
+        flex-basis: 100%;
+        padding-top: 0.15rem;
+      }
+      .chat-area-wrap {
+        display: grid;
+        grid-template-columns: minmax(138px, 170px) minmax(0, 1fr);
+      }
+      .chat-history-sidebar {
+        width: auto;
+        min-width: 0;
+      }
+      .chat-sidebar-brand-copy {
+        min-width: 0;
+      }
+      .chat-sidebar-entry-copy {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .chat-home-visual {
+        display: none !important;
+      }
+      .chat-main.is-home-empty .chat-workspace,
+      .chat-workspace.is-empty {
+        overflow-y: auto !important;
+      }
+      .chat-workspace.is-empty .chat-empty-state {
+        display: block !important;
+      }
+    }
     @media (max-height: 680px) {
       .page {
         padding-top: 0.65rem;
@@ -5033,6 +5195,31 @@
         height: auto !important;
         overflow: visible !important;
         padding-right: 0;
+      }
+    }
+    @media (max-height: 680px) {
+      .page {
+        padding-top: 0.45rem;
+      }
+      .header {
+        padding-top: 0.42rem;
+        padding-bottom: 0.42rem;
+      }
+      .chat-history-sidebar {
+        overflow-y: auto;
+      }
+      .chat-workspace.is-empty .chat-home-tools {
+        padding-bottom: 0.75rem !important;
+      }
+      .chat-composer-shell {
+        padding: 0.55rem !important;
+      }
+      .chat-input-row {
+        padding-top: 0.45rem;
+      }
+      .chat-input-row textarea {
+        min-height: 2.1rem !important;
+        max-height: 6.5rem;
       }
     }
     @keyframes fadeSlideIn {
@@ -5875,7 +6062,7 @@
                 </aside>
 
                 <section class="imglab-main">
-                  <div class="imglab-panel">
+                  <div class="imglab-panel" id="imglabResultPanel" hidden>
                     <div class="tvc-toolbar" style="margin-bottom:0.2rem;">
                       <div>
                         <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">结果展示</h4>
@@ -5887,11 +6074,11 @@
                     <div id="imglabResultGallery" class="imglab-result-gallery"></div>
                   </div>
 
-                  <div class="imglab-panel">
+                  <div class="imglab-panel" id="imglabExamplesPanel">
                     <div class="imglab-example-toolbar">
                       <div>
-                        <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">提示词示例</h4>
-                        <p class="imglab-panel-hint" style="margin:0;">点一下示例会把中文提示词带到左侧编辑区。</p>
+                        <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">精品案例</h4>
+                        <p class="imglab-panel-hint" style="margin:0;">点一下案例会把中文提示词带到左侧编辑区。</p>
                       </div>
                       <div id="imglabExamplesStatus" class="imglab-example-status">正在加载示例...</div>
                     </div>
@@ -6031,6 +6218,8 @@
           </div>
 
           <!-- Seedance 视频分镜工作台 -->
+          <div id="content-shanjian-smart-clip" class="content-block"></div>
+
           <div id="content-seedance-tvc-studio" class="content-block">
             <div class="tvc-studio">
               <div class="tvc-studio-hero">
@@ -6190,7 +6379,7 @@
                   <div id="seedanceExamplesPanel" class="tvc-panel" hidden>
                     <div class="tvc-toolbar" style="margin-bottom:0.8rem;">
                       <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">视频灵感案例</h4>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">精品案例</h4>
                         <p class="tvc-panel-hint" style="margin:0;">点任意案例卡，会把中文提示词回填到左侧输入框。</p>
                       </div>
                       <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;justify-content:flex-end;">
@@ -7689,7 +7878,7 @@
 
   <script src="/static/js/help-hints.js"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
-  <script src="/static/js/hifly-digital-human.js?v=20260514-voice-param-button-polish"></script>
+  <script src="/static/js/hifly-digital-human.js?v=20260520-voice-preview-normal-speed"></script>
   <script src="/static/js/chat.js?v=20260515-openclaw-status"></script>
   <script src="/static/js/skill.js?v=20260514-hifly-store-name"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
@@ -7702,9 +7891,10 @@
   <script src="/static/js/wecom-detail.js?v=20260416e"></script>
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260503-ecom-master-copy"></script>
-  <script src="/static/js/comfly-image-studio.js?v=20260503-reference-purpose-fix"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260516-video-url-guard"></script>
+  <script src="/static/js/comfly-image-studio.js?v=20260519-default-examples"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260519-default-examples"></script>
   <script src="/static/js/viral-video-remix.js?v=20260513-taskgroup-error-balance-guard"></script>
+  <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js?v=20260520-generation-history"></script>

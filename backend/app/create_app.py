@@ -49,6 +49,7 @@ from .api.comfly_image_studio import router as comfly_image_studio_router
 from .api.goal_video_pipeline import router as goal_video_pipeline_router
 from .api.viral_video_remix import router as viral_video_remix_router
 from .api.hifly_digital_human import router as hifly_digital_human_router
+from .api.shanjian_smart_clip import router as shanjian_smart_clip_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
 except ModuleNotFoundError as e:
@@ -915,6 +916,7 @@ def create_app() -> FastAPI:
     app.include_router(goal_video_pipeline_router, prefix="")
     app.include_router(viral_video_remix_router, prefix="")
     app.include_router(hifly_digital_human_router, prefix="")
+    app.include_router(shanjian_smart_clip_router, prefix="")
     if ecommerce_publish_router is not None:
         app.include_router(ecommerce_publish_router, prefix="")
     else:
