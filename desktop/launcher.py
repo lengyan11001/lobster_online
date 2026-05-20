@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import ctypes
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import time
 import uuid
+import json
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -106,10 +108,164 @@ def http_ready(url: str, timeout: float = 1.2) -> bool:
         return False
 
 
+def http_json(url: str, timeout: float = 1.2) -> dict:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "LobsterDesktop/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(256 * 1024)
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def same_path(a: str, b: Path) -> bool:
+    if not str(a or "").strip():
+        return False
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(str(b.resolve()))
+    except Exception:
+        return False
+
+
 def creation_flags() -> int:
     if os.name != "nt":
         return 0
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def safe_filename(name: str, fallback: str = "lobster-asset") -> str:
+    value = Path(name or "").name.strip()
+    if not value:
+        value = fallback
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
+    return value or fallback
+
+
+def asset_file_for_id(asset_id: str) -> Path | None:
+    aid = str(asset_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{4,80}", aid):
+        return None
+    assets_dir = (ROOT / "assets").resolve()
+    if not assets_dir.is_dir():
+        return None
+    for path in sorted(assets_dir.glob(f"{aid}.*")):
+        try:
+            resolved = path.resolve()
+            if assets_dir in resolved.parents and resolved.is_file():
+                return resolved
+        except Exception:
+            continue
+    exact = assets_dir / aid
+    return exact if exact.is_file() else None
+
+
+def netstat_listening_pids(port: int) -> set[int]:
+    if os.name != "nt":
+        return set()
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano"],
+            text=True,
+            errors="ignore",
+            creationflags=creation_flags(),
+        )
+    except Exception as exc:
+        log(f"netstat failed: {exc}")
+        return set()
+    pids: set[int] = set()
+    markers = (f":{port} ", f":{port}\t")
+    for raw in out.splitlines():
+        line = raw.strip()
+        if "LISTENING" not in line.upper():
+            continue
+        if not any(m in line for m in markers):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            pids.add(int(parts[-1]))
+        except Exception:
+            pass
+    return pids
+
+
+def process_command_line(pid: int) -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        out = subprocess.check_output(
+            ["wmic", "process", "where", f"ProcessId={int(pid)}", "get", "CommandLine", "/value"],
+            text=True,
+            errors="ignore",
+            creationflags=creation_flags(),
+            timeout=4,
+        )
+    except Exception:
+        return ""
+    for raw in out.splitlines():
+        line = raw.strip()
+        if line.lower().startswith("commandline="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def process_looks_lobster(pid: int) -> bool:
+    cmd = process_command_line(pid).lower()
+    if not cmd:
+        return False
+    markers = (
+        "lobster_online",
+        "lobster-server",
+        "lobster_server",
+        "backend\\run.py",
+        "backend/run.py",
+        "run_mcp.bat",
+        "run_backend.bat",
+        "run_module('mcp'",
+        'run_module("mcp"',
+    )
+    return any(m in cmd for m in markers)
+
+
+def wait_port_closed(port: int, seconds: float = 6.0) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if not port_open("127.0.0.1", port, timeout=0.2):
+            return True
+        time.sleep(0.25)
+    return not port_open("127.0.0.1", port, timeout=0.2)
+
+
+def kill_pid_tree(pid: int, name: str) -> None:
+    if os.name == "nt":
+        try:
+            log(f"{name}: taskkill /T /F pid={pid}")
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                cwd=str(ROOT),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creation_flags(),
+                timeout=8,
+            )
+            return
+        except Exception as exc:
+            log(f"{name}: taskkill failed pid={pid}: {exc}")
+    try:
+        os.kill(pid, 15)
+    except Exception:
+        pass
+
+
+def stop_port_processes(port: int, name: str) -> None:
+    pids = netstat_listening_pids(port)
+    if not pids:
+        return
+    for pid in sorted(pids):
+        kill_pid_tree(pid, name)
+    wait_port_closed(port, 6.0)
 
 
 def start_bat(name: str, bat_name: str, env: dict[str, str]) -> subprocess.Popen | None:
@@ -144,6 +300,49 @@ def wait_for_backend(port: int, seconds: int) -> bool:
     return False
 
 
+def wait_for_own_backend(port: int, seconds: int) -> bool:
+    health = f"http://127.0.0.1:{port}/api/health"
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        data = http_json(health)
+        if same_path(str(data.get("client_root") or ""), ROOT):
+            return True
+        time.sleep(0.8)
+    return False
+
+
+def port_owned_by_this_root(port: int) -> bool:
+    data = http_json(f"http://127.0.0.1:{port}/api/health", timeout=0.8)
+    return same_path(str(data.get("client_root") or ""), ROOT)
+
+
+def choose_backend_port(preferred: int) -> int:
+    if not port_open("127.0.0.1", preferred):
+        return preferred
+    pids = netstat_listening_pids(preferred)
+    if port_owned_by_this_root(preferred):
+        log(f"Backend: port {preferred} is occupied by previous process from this root; restarting it")
+    elif any(process_looks_lobster(pid) for pid in pids):
+        log(f"Backend: port {preferred} is occupied by another lobster process; stopping it to keep default port")
+    else:
+        log(f"Backend: port {preferred} is occupied by an unknown process; keep default port and report startup failure")
+        return preferred
+    stop_port_processes(preferred, "Backend")
+    return preferred
+
+
+def choose_mcp_port(preferred: int, backend_port: int) -> int:
+    if not port_open("127.0.0.1", preferred):
+        return preferred
+    pids = netstat_listening_pids(preferred)
+    if any(process_looks_lobster(pid) for pid in pids):
+        log(f"MCP: port {preferred} is occupied by previous lobster MCP; stopping it to keep default port")
+        stop_port_processes(preferred, "MCP")
+    else:
+        log(f"MCP: port {preferred} is occupied by an unknown process; keep default port and report startup failure")
+    return preferred
+
+
 def open_browser(url: str) -> None:
     log(f"opening system browser fallback: {url}")
     webbrowser.open(url)
@@ -151,6 +350,9 @@ def open_browser(url: str) -> None:
 
 def stop_process(proc: subprocess.Popen | None, name: str) -> None:
     if proc is None or proc.poll() is not None:
+        return
+    if os.name == "nt":
+        kill_pid_tree(int(proc.pid), name)
         return
     try:
         log(f"{name}: terminating")
@@ -161,6 +363,38 @@ def stop_process(proc: subprocess.Popen | None, name: str) -> None:
             proc.kill()
         except Exception:
             pass
+
+
+class DesktopApi:
+    def save_asset_as(self, asset_id: str, suggested_name: str = "") -> dict:
+        source = asset_file_for_id(asset_id)
+        if not source:
+            return {"ok": False, "error": "本机素材文件不存在"}
+        try:
+            import webview  # type: ignore
+
+            window = webview.active_window()
+            default_name = safe_filename(suggested_name or source.name, source.name)
+            result = window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=default_name,
+                file_types=("视频文件 (*.mp4;*.webm;*.mov;*.m4v)", "图片文件 (*.png;*.jpg;*.jpeg;*.webp)", "所有文件 (*.*)"),
+            )
+        except Exception as exc:
+            log(f"save dialog failed: {exc}")
+            return {"ok": False, "error": f"无法打开保存窗口：{exc}"}
+
+        if not result:
+            return {"ok": False, "cancelled": True}
+        target_raw = result[0] if isinstance(result, (list, tuple)) else result
+        target = Path(str(target_raw)).expanduser()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        except Exception as exc:
+            log(f"save asset failed asset_id={asset_id} target={target}: {exc}")
+            return {"ok": False, "error": f"保存失败：{exc}"}
+        return {"ok": True, "path": str(target), "filename": target.name}
 
 
 def run_window(url: str, title: str, width: int, height: int) -> bool:
@@ -178,6 +412,7 @@ def run_window(url: str, title: str, width: int, height: int) -> bool:
             height=height,
             min_size=(1100, 720),
             text_select=True,
+            js_api=DesktopApi(),
         )
         webview.start(
             gui="edgechromium" if os.name == "nt" else None,
@@ -207,29 +442,30 @@ def main() -> int:
 
     if not (ROOT / ".env").is_file():
         log(".env not found; launcher will continue with built-in/default environment values")
-    port = args.port or int(read_env_value("PORT", str(DEFAULT_PORT)) or DEFAULT_PORT)
-    mcp_port = int(read_env_value("MCP_PORT", str(DEFAULT_MCP_PORT)) or DEFAULT_MCP_PORT)
+    configured_port = args.port or int(read_env_value("PORT", str(DEFAULT_PORT)) or DEFAULT_PORT)
+    port = choose_backend_port(configured_port)
+    configured_mcp_port = int(read_env_value("MCP_PORT", str(DEFAULT_MCP_PORT)) or DEFAULT_MCP_PORT)
+    mcp_port = choose_mcp_port(configured_mcp_port, port)
     title = args.title or read_env_value("LOBSTER_DESKTOP_TITLE", APP_NAME)
     url = f"http://127.0.0.1:{port}/?desktop=1&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
     env = build_env()
+    env["PORT"] = str(port)
+    env["MCP_PORT"] = str(mcp_port)
 
     log(f"launcher root={ROOT}")
     log(f"target url={url}")
 
     mcp_proc = None
     backend_proc = None
-    if not port_open("127.0.0.1", mcp_port):
-        mcp_proc = start_bat("MCP", "run_mcp.bat", env)
-        time.sleep(1.2)
-    else:
-        log(f"MCP: port {mcp_port} already open")
+    mcp_proc = start_bat("MCP", "run_mcp.bat", env)
+    time.sleep(1.2)
 
-    if not wait_for_backend(port, 2):
+    if not wait_for_own_backend(port, 2):
         backend_proc = start_bat("Backend", "run_backend.bat", env)
     else:
         log(f"Backend: port {port} already ready")
 
-    if not wait_for_backend(port, args.wait):
+    if not wait_for_own_backend(port, args.wait):
         body = (
             f"本机服务启动失败，页面无法打开。\n\n"
             f"请查看：\n{ROOT / 'backend.log'}\n{ROOT / 'mcp.log'}\n{LOG_PATH}\n\n"

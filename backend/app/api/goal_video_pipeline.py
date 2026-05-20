@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -24,7 +25,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-MCP_URL = "http://127.0.0.1:8001/mcp"
+
+def _local_mcp_url() -> str:
+    port = os.environ.get("MCP_PORT") or str(getattr(settings, "mcp_port", 8001))
+    return f"http://127.0.0.1:{port}/mcp"
 TERMINAL_SUCCESS = {"completed", "complete", "success", "succeeded", "finished", "done"}
 TERMINAL_FAILURE = {"failed", "error", "cancelled", "canceled", "timeout", "rejected"}
 
@@ -324,7 +328,7 @@ async def _invoke_capability(
         },
     }
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        r = await client.post(MCP_URL, json=body, headers=_mcp_headers(token, installation_id))
+        r = await client.post(_local_mcp_url(), json=body, headers=_mcp_headers(token, installation_id))
     try:
         data = r.json() if r.content else {}
     except Exception as e:

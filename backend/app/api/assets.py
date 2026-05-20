@@ -6,11 +6,12 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -40,6 +41,8 @@ _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ASSETS_DIR = _BASE_DIR / "assets"
 ASSETS_DIR.mkdir(exist_ok=True)
 _CUSTOM_CONFIGS_FILE = _BASE_DIR / "custom_configs.json"
+CHAT_STORAGE_DIR = _BASE_DIR / "chat_storage"
+CHAT_STORAGE_DIR.mkdir(exist_ok=True)
 
 # 带签名的临时访问：用于会话里上传的图/视频生成可被速推拉取的 URL
 _ASSET_FILE_EXPIRY_SEC = 600  # 10 分钟
@@ -300,10 +303,10 @@ async def _transfer_url_via_sutui_inner(
         hdrs["X-Sutui-Token"] = sutui_token
 
         tp = _transfer_payload_type(media_type)
-        MCP_URL = "http://127.0.0.1:8001/mcp"
+        mcp_url = f"http://127.0.0.1:{os.environ.get('MCP_PORT') or getattr(settings, 'mcp_port', 8001)}/mcp"
         async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
             resp = await client.post(
-                MCP_URL,
+                mcp_url,
                 json={
                     "jsonrpc": "2.0",
                     "id": "transfer",
@@ -542,6 +545,28 @@ def _asset_local_path(asset: Asset) -> Optional[Path]:
     return path if path.exists() else None
 
 
+def _safe_download_filename(name: str, fallback: str = "lobster-asset") -> str:
+    base = Path(name or "").name.strip()
+    if not base:
+        base = fallback
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base).strip(" .")
+    return base or fallback
+
+
+def _unique_download_path(download_dir: Path, filename: str) -> Path:
+    filename = _safe_download_filename(filename)
+    target = download_dir / filename
+    if not target.exists():
+        return target
+    stem = target.stem or "lobster-asset"
+    suffix = target.suffix
+    for i in range(1, 1000):
+        candidate = download_dir / f"{stem} ({i}){suffix}"
+        if not candidate.exists():
+            return candidate
+    return download_dir / f"{stem}-{int(time.time())}{suffix}"
+
+
 def _save_bytes(data: bytes, ext: str) -> tuple[str, str, int]:
     """Save raw bytes, return (asset_id, filename, size)."""
     aid = _gen_asset_id()
@@ -609,6 +634,28 @@ class SaveAssetReq(BaseModel):
     dedupe_hint_url: Optional[str] = None
     # 速推异步任务 id：与「文件级」base 去重键组合，同一 task 内同一输出只存一行；同一 task 可有多个不同 URL（多文件）
     generation_task_id: Optional[str] = None
+
+
+class SaveAssetToDownloadsReq(BaseModel):
+    filename: Optional[str] = None
+
+
+class ChatSessionBackupReq(BaseModel):
+    key: str
+    sessions: List[Any] = []
+    last_session_id: Optional[str] = None
+
+
+def _safe_chat_backup_key(key: str) -> str:
+    raw = (key or "").strip()
+    if not raw:
+        raw = "lobster_chat_sessions_anon"
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", raw)[:120].strip("._-")
+    return safe or "lobster_chat_sessions_anon"
+
+
+def _chat_backup_path(key: str) -> Path:
+    return CHAT_STORAGE_DIR / f"{_safe_chat_backup_key(key)}.json"
 
 
 def _save_url_prompt_is_placeholder(s: Optional[str]) -> bool:
@@ -1489,6 +1536,91 @@ def get_asset_content(
         filename=a.filename,
         content_disposition_type="inline",
     )
+
+
+@router.post("/api/assets/{asset_id}/save-to-downloads", summary="保存素材到本机下载目录")
+def save_asset_to_downloads(
+    asset_id: str,
+    body: SaveAssetToDownloadsReq | None = None,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    a = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not a:
+        raise HTTPException(404, detail="素材不存在")
+    source = _asset_local_path(a)
+    if not source:
+        raise HTTPException(404, detail="文件不存在")
+
+    download_dir = Path.home() / "Downloads"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    requested_name = (body.filename if body else None) or a.filename or source.name
+    dest = _unique_download_path(download_dir, requested_name)
+    if not dest.suffix and source.suffix:
+        dest = dest.with_suffix(source.suffix)
+        if dest.exists():
+            dest = _unique_download_path(download_dir, dest.name)
+    try:
+        shutil.copy2(source, dest)
+    except Exception as exc:
+        logger.exception("[assets] save to downloads failed asset_id=%s dest=%s", asset_id, dest)
+        raise HTTPException(500, detail=f"保存失败：{exc}") from exc
+    return {
+        "ok": True,
+        "asset_id": a.asset_id,
+        "filename": dest.name,
+        "path": str(dest),
+    }
+
+
+@router.get("/api/chat-sessions/backup", summary="读取本机会话备份")
+def get_chat_sessions_backup(
+    key: str = Query("lobster_chat_sessions_anon"),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    path = _chat_backup_path(f"u{current_user.id}_{key}")
+    if not path.exists():
+        path = _chat_backup_path(key)
+    if not path.exists():
+        return {"ok": True, "sessions": [], "last_session_id": ""}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("[chat] backup read failed path=%s err=%s", path, exc)
+        return {"ok": False, "sessions": [], "last_session_id": "", "error": "会话备份读取失败"}
+    sessions = data.get("sessions") if isinstance(data, dict) else []
+    if not isinstance(sessions, list):
+        sessions = []
+    return {
+        "ok": True,
+        "sessions": sessions,
+        "last_session_id": str(data.get("last_session_id") or "") if isinstance(data, dict) else "",
+        "updated_at": data.get("updated_at") if isinstance(data, dict) else "",
+    }
+
+
+@router.post("/api/chat-sessions/backup", summary="写入本机会话备份")
+def save_chat_sessions_backup(
+    body: ChatSessionBackupReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    sessions = body.sessions if isinstance(body.sessions, list) else []
+    payload = {
+        "key": body.key,
+        "user_id": current_user.id,
+        "sessions": sessions[:200],
+        "last_session_id": (body.last_session_id or "").strip(),
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+    path = _chat_backup_path(f"u{current_user.id}_{body.key}")
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:
+        logger.exception("[chat] backup write failed path=%s", path)
+        raise HTTPException(500, detail=f"会话备份写入失败：{exc}") from exc
+    return {"ok": True, "count": len(payload["sessions"]), "path": str(path)}
 
 
 @router.get("/api/assets/file/{asset_id}", summary="素材文件（带签名公开访问，供速推等拉取）")

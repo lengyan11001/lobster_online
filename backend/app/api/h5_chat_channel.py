@@ -33,6 +33,11 @@ router = APIRouter()
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
+
+
+def _local_mcp_url() -> str:
+    port = os.environ.get("MCP_PORT") or str(getattr(settings, "mcp_port", 8001))
+    return f"http://127.0.0.1:{port}/mcp"
 _MOBILE_UPLOAD_URL_RE = re.compile(r"\bURL:\s*(?P<url>https?://[^\s]+)", re.IGNORECASE)
 _MOBILE_UPLOAD_ASSET_RE = re.compile(r"\basset_id:\s*(?P<asset_id>[A-Za-z0-9_-]{4,80})", re.IGNORECASE)
 _SCHEDULED_CREATIVE_ANGLES = [
@@ -1288,7 +1293,7 @@ async def _invoke_local_capability(
     }
     timeout = httpx.Timeout(7200.0, connect=10.0, read=7200.0, write=30.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
-        resp = await local.post("http://127.0.0.1:8001/mcp", json=rpc, headers=headers)
+        resp = await local.post(_local_mcp_url(), json=rpc, headers=headers)
     if resp.status_code >= 400:
         raise RuntimeError((resp.text or f"MCP HTTP {resp.status_code}")[:500])
     data = resp.json()

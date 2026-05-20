@@ -1,11 +1,16 @@
 import logging
+import os
 import socket
 import httpx
 from fastapi import APIRouter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-MCP_URL = "http://127.0.0.1:8001/mcp"
+
+
+def _local_mcp_url() -> str:
+    port = os.environ.get("MCP_PORT") or "8001"
+    return f"http://127.0.0.1:{port}/mcp"
 
 
 def _get_lan_ip() -> str:
@@ -24,7 +29,7 @@ async def _mcp_status() -> dict:
     try:
         async with httpx.AsyncClient(timeout=2.0) as c:
             r = await c.post(
-                MCP_URL,
+                _local_mcp_url(),
                 json={"jsonrpc": "2.0", "id": "health", "method": "tools/list", "params": {}},
             )
             if r.status_code == 200:
@@ -41,6 +46,7 @@ async def health():
     return {
         "status": "ok",
         "lan_ip": _get_lan_ip(),
+        "client_root": os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")),
         "mcp": mcp,
     }
 

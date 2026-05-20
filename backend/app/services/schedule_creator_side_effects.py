@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import httpx
@@ -14,8 +15,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 与 chat 一致：本机 MCP HTTP
-_DEFAULT_MCP = "http://127.0.0.1:8001/mcp"
+def _default_mcp_url() -> str:
+    port = os.environ.get("MCP_PORT") or "8001"
+    return f"http://127.0.0.1:{port}/mcp"
 
 
 async def run_schedule_video_generate_if_configured(
@@ -69,7 +71,7 @@ async def run_schedule_video_generate_if_configured(
     else:
         payload["model"] = "wan/v2.6/text-to-video"
 
-    mcp_url = _DEFAULT_MCP
+    mcp_url = _default_mcp_url()
     body = {
         "jsonrpc": "2.0",
         "id": "creator-schedule",

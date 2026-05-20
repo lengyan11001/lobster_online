@@ -367,6 +367,35 @@ def _strip_dsml(content: str) -> str:
     return cleaned
 
 
+def _task_id_from_text(content: str) -> str:
+    raw = content or ""
+    for pattern in (
+        r'"task_id"\s*:\s*"([^"\r\n]{8,128})"',
+        r"\btask_id\s*[:=]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
+        r"\b任务\s*ID\s*[:：]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
+    ):
+        m = re.search(pattern, raw, re.IGNORECASE)
+        if m:
+            return m.group(1).strip().strip("`")
+    return ""
+
+
+def _openclaw_visible_reply(content: str, *, generation_request: bool = False) -> str:
+    """Never expose text-embedded tool markup as the user-facing reply."""
+    raw = content or ""
+    cleaned = _strip_dsml(raw).strip()
+    if cleaned != raw.strip():
+        if not generation_request:
+            return cleaned
+        if _openclaw_generation_reply_has_execution_evidence(cleaned):
+            return cleaned
+        task_id = _task_id_from_text(raw)
+        if task_id:
+            return f"任务已提交，正在生成中。\n任务ID：`{task_id}`"
+        return "任务已提交，正在生成中。"
+    return raw.strip()
+
+
 def _decode_token_user_id(raw_token: str, installation_id: str = "") -> Optional[int]:
     xi = (installation_id or "").strip()
     m = re.match(r"^lobster-internal-(\d+)$", xi, re.IGNORECASE)
@@ -928,6 +957,7 @@ async def try_openclaw(
 ) -> Optional[str]:
     """Attempt to get a reply via OpenClaw Gateway. Returns None on failure."""
     _OPENCLAW_LAST_FAILURE.set("")
+    user_requests_generation = _openclaw_user_requests_generation(msgs)
     oc_base = (settings.openclaw_gateway_url or "").strip().rstrip("/")
     oc_token = (settings.openclaw_gateway_token or "").strip()
     if not oc_base or not oc_token:
@@ -1132,7 +1162,10 @@ async def try_openclaw(
                     if retry_resp and retry_resp.status_code == 200 and retry_content:
                         if not _openclaw_body_looks_like_upstream_http_error(retry_content):
                             logger.info("[OPENCLAW] memory-context follow-up produced final reply agent_id=%s", agent_id)
-                            return retry_content
+                            return _openclaw_visible_reply(
+                                retry_content,
+                                generation_request=user_requests_generation,
+                            )
                         is_retry_timeout = _openclaw_body_looks_like_upstream_timeout(retry_content)
                         _set_openclaw_failure(
                             "upstream_timeout" if is_retry_timeout else "upstream_error_body",
@@ -1183,7 +1216,10 @@ async def try_openclaw(
                             return None
                         if not _openclaw_generation_reply_is_prep_only(retry_content, msgs):
                             logger.info("[OPENCLAW] generation follow-up produced executable reply agent_id=%s", agent_id)
-                            return retry_content
+                            return _openclaw_visible_reply(
+                                retry_content,
+                                generation_request=user_requests_generation,
+                            )
                         _set_openclaw_failure(
                             "generation_followup",
                             "OpenClaw 二次追问后仍只返回生成前的准备话术，未看到 task_id/素材/链接等执行证据",
@@ -1209,7 +1245,10 @@ async def try_openclaw(
                             agent_id=agent_id,
                         )
                     return None
-                return raw_content
+                return _openclaw_visible_reply(
+                    raw_content,
+                    generation_request=user_requests_generation,
+                )
             logger.warning("[OPENCLAW] Gateway 200 but choices empty model=%s agent_id=%s", model, agent_id)
         elif resp:
             body_prefix = (resp.text or "").replace("\n", " ").strip()

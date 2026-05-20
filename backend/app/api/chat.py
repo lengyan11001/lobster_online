@@ -18,6 +18,7 @@ import copy
 import contextvars
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -208,7 +209,10 @@ def _effective_max_tool_rounds() -> int:
     return MAX_TOOL_ROUNDS_ORCHESTRATION if _schedule_orchestration_active.get() else MAX_TOOL_ROUNDS
 # 单条历史消息最大字符数，避免长回复再次送入模型导致重复/延续上一条
 MAX_HISTORY_MESSAGE_CHARS = 1200
-MCP_URL = "http://127.0.0.1:8001/mcp"
+
+def local_mcp_url() -> str:
+    port = os.environ.get("MCP_PORT") or str(getattr(settings, "mcp_port", 8001))
+    return f"http://127.0.0.1:{port}/mcp"
 
 
 class _SkipMcpToolCall(Exception):
@@ -973,7 +977,7 @@ async def _fetch_mcp_tools(raw_token: Optional[str] = None) -> List[Dict]:
             headers["Authorization"] = f"Bearer {t}" if not t.lower().startswith("bearer ") else t
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as c:
             r = await c.post(
-                MCP_URL,
+                local_mcp_url(),
                 json={"jsonrpc": "2.0", "id": "lt", "method": "tools/list", "params": {}},
                 headers=headers,
             )
@@ -4123,7 +4127,7 @@ async def _exec_tool(
                 images,
             )
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as c:
-            r = await c.post(MCP_URL, json={
+            r = await c.post(local_mcp_url(), json={
                 "jsonrpc": "2.0", "id": "ct",
                 "method": "tools/call",
                 "params": {"name": name, "arguments": args},

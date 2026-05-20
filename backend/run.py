@@ -50,7 +50,7 @@ from backend.app.core.config import settings
 
 def _start_mcp_if_needed():
     """若 8001 未被占用则启动 MCP，使对话侧速推/能力可用。"""
-    mcp_port = int(getattr(settings, "mcp_port", 8001))
+    mcp_port = int(os.environ.get("MCP_PORT", str(getattr(settings, "mcp_port", 8001))))
     try:
         import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -97,7 +97,7 @@ def _start_mcp_if_needed():
         _cu = (getattr(settings, "capability_upstream_urls_json", None) or "").strip()
         if _cu:
             _mcp_env["CAPABILITY_UPSTREAM_URLS_JSON"] = _cu
-        _py_port = int(getattr(settings, "port", 8000))
+        _py_port = int(os.environ.get("PORT", str(getattr(settings, "port", 8000))))
         _mcp_env.setdefault(
             "AI_TEST_PLATFORM_BASE_URL",
             (os.environ.get("AI_TEST_PLATFORM_BASE_URL") or "").strip() or f"http://127.0.0.1:{_py_port}",

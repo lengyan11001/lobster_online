@@ -43,6 +43,7 @@ exit /b 0
 :python_ready
 cd /d "%ROOT%"
 set "PYTHONPATH=%ROOT%"
-"%PY%" -c "import sys; sys.path.insert(0, r'%ROOT%'); sys.argv = ['mcp', '--port', '8001']; import runpy; runpy.run_module('mcp', run_name='__main__', alter_sys=True)" 1>>"%ROOT%\mcp.log" 2>&1
+if not defined MCP_PORT set "MCP_PORT=8001"
+"%PY%" -c "import os, sys; sys.path.insert(0, r'%ROOT%'); sys.argv = ['mcp', '--port', os.environ.get('MCP_PORT', '8001')]; import runpy; runpy.run_module('mcp', run_name='__main__', alter_sys=True)" 1>>"%ROOT%\mcp.log" 2>&1
 
 

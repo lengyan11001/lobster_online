@@ -1,6 +1,43 @@
 /** 在线版：独立认证时优先显示账号+验证码登录/注册，扫码为备选；/api/edition 可覆盖 */
 var USE_INDEPENDENT_AUTH = true;
 
+(function bindDesktopHardRefresh() {
+  function isDesktopWindow() {
+    try {
+      return new URLSearchParams(window.location.search || '').get('desktop') === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+  function nextDesktopUrl() {
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.set('desktop', '1');
+      u.searchParams.set('v', Date.now() + '-' + Math.random().toString(16).slice(2, 8));
+      return u.toString();
+    } catch (e) {
+      var sep = window.location.href.indexOf('?') >= 0 ? '&' : '?';
+      return window.location.href + sep + 'desktop=1&v=' + Date.now();
+    }
+  }
+  function bind() {
+    var btn = document.getElementById('desktopHardRefreshBtn');
+    if (!btn) return;
+    if (!isDesktopWindow()) {
+      btn.style.display = 'none';
+      return;
+    }
+    btn.style.display = '';
+    btn.onclick = function() {
+      btn.disabled = true;
+      btn.textContent = '刷新中...';
+      window.location.replace(nextDesktopUrl());
+    };
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
+
 /**
  * 认证中心注册接口在「在线版 + 安装槽位」下强制要求合法 X-Installation-Id。
  * 若 app.js 未加载、脚本顺序异常或 localStorage 曾异常，避免发空请求头导致「请使用最新客户端」。

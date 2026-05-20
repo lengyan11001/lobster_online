@@ -3538,6 +3538,49 @@ def _extract_media_urls_for_auto_save(upstream_resp: Any) -> List[str]:
     return _reorder_cdn_urls_for_autosave(order)[:12]
 
 
+def _extract_generation_input_urls(obj: Any, _depth: int = 0) -> set[str]:
+    """Collect prompt input URLs so task polling never saves the source image as output."""
+    urls: set[str] = set()
+    if _depth > 12 or obj is None:
+        return urls
+    input_keys = {
+        "image_url",
+        "imageurl",
+        "input_image",
+        "inputimage",
+        "source_url",
+        "sourceurl",
+        "first_frame_image",
+        "firstframeimage",
+        "reference_image",
+        "referenceimage",
+    }
+
+    def add_url(value: Any) -> None:
+        if isinstance(value, str):
+            s = value.strip()
+            if s.startswith(("http://", "https://")):
+                urls.add(s.split("?")[0].split("#")[0])
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            nk = _norm_json_key(k)
+            if nk in input_keys:
+                add_url(v)
+                if isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, dict):
+                            for vv in item.values():
+                                add_url(vv)
+                        else:
+                            add_url(item)
+            urls.update(_extract_generation_input_urls(v, _depth + 1))
+    elif isinstance(obj, list):
+        for item in obj:
+            urls.update(_extract_generation_input_urls(item, _depth + 1))
+    return urls
+
+
 def _extract_generation_prompt_from_upstream(obj: Any, _depth: int = 0) -> str:
     """从 task.get_result 等上游 JSON 里尽量捞出文生/图生用的 prompt（供 save-url 入库）。"""
     if _depth > 15 or obj is None:
@@ -3703,6 +3746,10 @@ async def _auto_save_generated_assets(
     if not model_text:
         model_text = _extract_model_id_from_upstream(upstream_resp) or ""
 
+    cap_for_dedupe = (capability_id or "").strip()
+    if cap_for_dedupe == "task.get_result" and _is_task_still_in_progress(upstream_resp):
+        return []
+
     gen_tid = (
         (payload.get("task_id") or payload.get("taskId") or payload.get("taskid") or "")
         .strip()
@@ -3739,8 +3786,18 @@ async def _auto_save_generated_assets(
     if not pairs:
         return []
 
+    if cap_for_dedupe == "task.get_result":
+        input_urls = _extract_generation_input_urls(upstream_resp)
+        if input_urls:
+            pairs = [
+                (u, mt)
+                for u, mt in pairs
+                if u.split("?")[0].split("#")[0] not in input_urls
+            ]
+            if not pairs:
+                return []
+
     saved: List[Dict[str, str]] = []
-    cap_for_dedupe = (capability_id or "").strip()
     transfer_src_for_hint = ""
     if cap_for_dedupe == "sutui.transfer_url" and isinstance(payload, dict):
         transfer_src_for_hint = (payload.get("url") or "").strip()
@@ -3967,10 +4024,18 @@ def _attach_openclaw_evidence_contract(
         requested_task_id = str(payload.get("task_id") or payload.get("taskId") or payload.get("taskid") or "").strip()
     task_id = confirmed_task_id or ("" if has_error else requested_task_id)
 
-    media_urls = _extract_media_urls_for_auto_save(upstream_resp)[:3]
     status = _extract_status_from_upstream(upstream_resp)
     in_progress = _is_task_still_in_progress(upstream_resp) if isinstance(upstream_resp, dict) else False
     terminal_success = _task_result_has_terminal_success(upstream_resp)
+    if in_progress:
+        media_urls: List[str] = []
+    else:
+        input_urls = _extract_generation_input_urls(upstream_resp)
+        media_urls = [
+            u
+            for u in _extract_media_urls_for_auto_save(upstream_resp)
+            if u.split("?")[0].split("#")[0] not in input_urls
+        ][:3]
     output_available = bool(media_urls or asset_ids)
     can_say_completed = bool((not has_error) and output_available and (terminal_success or not in_progress))
     can_say_submitted = bool((not has_error) and (task_id or output_available))

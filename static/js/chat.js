@@ -1141,16 +1141,107 @@ function saveChatSessionsToStorage() {
     var key = getChatSessionsStorageKey();
     if (!key) return;
     localStorage.setItem(key, JSON.stringify(chatSessions));
+    backupChatSessionsToBackendSoon();
   } catch (e) {}
 }
 /** task_poll 高频时避免每次全量 stringify 写盘卡死主线程；备份键仍即时写入 */
 var _saveChatSessionsScheduledTimer = null;
+var _chatBackupSaveTimer = null;
+var _chatBackupRestoreInFlight = false;
+
+function chatLocalApiBase() {
+  return (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+}
+
+function chatBackupStorageKey() {
+  return getChatSessionsStorageKey();
+}
+
+function backupChatSessionsToBackendSoon() {
+  if (_chatBackupSaveTimer != null) clearTimeout(_chatBackupSaveTimer);
+  _chatBackupSaveTimer = setTimeout(function() {
+    _chatBackupSaveTimer = null;
+    backupChatSessionsToBackend();
+  }, 900);
+}
+
+function backupChatSessionsToBackend() {
+  var base = chatLocalApiBase();
+  if (!base || typeof authHeaders !== 'function') return;
+  var key = chatBackupStorageKey();
+  if (!key) return;
+  var body = {
+    key: key,
+    sessions: Array.isArray(chatSessions) ? chatSessions : [],
+    last_session_id: getLastActiveChatSessionIdFromStorage()
+  };
+  try {
+    fetch(base + '/api/chat-sessions/backup', {
+      method: 'POST',
+      headers: Object.assign({}, authHeaders(), { 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body)
+    }).catch(function() {});
+  } catch (e) {}
+}
+
+function restoreChatSessionsFromBackendIfEmpty() {
+  if (_chatBackupRestoreInFlight) return;
+  var hasOnlyBlankSession = Array.isArray(chatSessions)
+    && chatSessions.length === 1
+    && Array.isArray(chatSessions[0].messages)
+    && chatSessions[0].messages.length === 0
+    && /^s\d+$/.test(String(chatSessions[0].id || ''));
+  if (Array.isArray(chatSessions) && chatSessions.length && !hasOnlyBlankSession) return;
+  var base = chatLocalApiBase();
+  if (!base || typeof authHeaders !== 'function') return;
+  var key = chatBackupStorageKey();
+  if (!key) return;
+  _chatBackupRestoreInFlight = true;
+  fetch(base + '/api/chat-sessions/backup?key=' + encodeURIComponent(key), { headers: authHeaders() })
+    .then(function(r) {
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    })
+    .then(function(d) {
+      if (!d || !Array.isArray(d.sessions) || !d.sessions.length) return;
+      var stillOnlyBlank = Array.isArray(chatSessions)
+        && chatSessions.length === 1
+        && Array.isArray(chatSessions[0].messages)
+        && chatSessions[0].messages.length === 0
+        && /^s\d+$/.test(String(chatSessions[0].id || ''));
+      if (Array.isArray(chatSessions) && chatSessions.length && !stillOnlyBlank) return;
+      chatSessions = d.sessions;
+      chatPendingBySession = {};
+      chatSessions.forEach(function(s) {
+        if (s.id != null) s.id = String(s.id);
+        s.mode = _getSessionMode(s);
+        s.messages = Array.isArray(s.messages || s.history) ? (s.messages || s.history) : [];
+        mergePollResumeFromBackupIntoSession(s);
+        _normalizeSessionPendingAfterLoad(s);
+        if (s.pending) chatPendingBySession[s.id] = true;
+      });
+      saveChatSessionsToStorage();
+      if (d.last_session_id) saveLastActiveChatSessionToStorage(d.last_session_id);
+      var targetId = d.last_session_id && chatSessions.some(function(s) { return String(s.id) === String(d.last_session_id); })
+        ? String(d.last_session_id)
+        : String(chatSessions[0].id);
+      currentSessionId = null;
+      switchChatSession(targetId);
+      renderChatSessionList();
+    })
+    .catch(function() {})
+    .finally(function() {
+      _chatBackupRestoreInFlight = false;
+    });
+}
+
 function scheduleSaveChatSessionsToStorage() {
   if (_saveChatSessionsScheduledTimer != null) clearTimeout(_saveChatSessionsScheduledTimer);
   _saveChatSessionsScheduledTimer = setTimeout(function() {
     _saveChatSessionsScheduledTimer = null;
     try {
       saveChatSessionsToStorage();
+      backupChatSessionsToBackendSoon();
     } catch (e) {}
   }, 500);
 }
@@ -1160,6 +1251,7 @@ function flushPendingChatSessionsSave() {
     _saveChatSessionsScheduledTimer = null;
     try {
       saveChatSessionsToStorage();
+      backupChatSessionsToBackendSoon();
     } catch (e) {}
   }
 }
@@ -1846,6 +1938,7 @@ function bindChatModeSwitch() {
 function initChatSessions() {
   loadChatSessionsFromStorage();
   if (chatSessions.length === 0) {
+    restoreChatSessionsFromBackendIfEmpty();
     createNewSession(_getStoredChatMode());
     return;
   }
@@ -2193,6 +2286,47 @@ function savedAssetPrimaryHttpUrl(a) {
   return ((a && (a.source_url || a.url)) || '').trim();
 }
 
+function savedAssetFilename(a) {
+  var id = ((a && a.asset_id) || '').trim();
+  var mediaType = ((a && a.media_type) || '').toLowerCase();
+  var url = savedAssetPrimaryHttpUrl(a);
+  var ext = '';
+  try {
+    var path = url ? new URL(url, window.location.href).pathname : '';
+    var m = path.match(/\.([A-Za-z0-9]{2,5})(?:$|\?)/);
+    if (m) ext = '.' + m[1].toLowerCase();
+  } catch (e) {}
+  if (!ext) {
+    if (mediaType === 'video') ext = '.mp4';
+    else if (mediaType === 'audio') ext = '.mp3';
+    else ext = '.png';
+  }
+  return (id || 'lobster-asset') + ext;
+}
+
+function chatCopyText(text) {
+  var value = String(text || '');
+  if (!value) return Promise.reject(new Error('没有可复制的内容'));
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(value);
+  }
+  return new Promise(function(resolve, reject) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = value;
+      ta.setAttribute('readonly', 'readonly');
+      ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      ok ? resolve() : reject(new Error('复制失败'));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 function scrollChatMessagesToBottom() {
   var container = document.getElementById('chatMessages');
   if (container) container.scrollTop = container.scrollHeight;
@@ -2280,6 +2414,127 @@ function appendSavedAssetDom(parent, a, opts) {
     scrollChatMessagesToBottom();
   }
 
+  function setActionStatus(text, tone) {
+    if (!actionStatus) return;
+    actionStatus.textContent = text || '';
+    actionStatus.className = 'chat-generated-asset-action-status' + (tone ? ' ' + tone : '');
+  }
+
+  function saveToDownloads(btn) {
+    if (!assetId) {
+      setActionStatus('未入库素材暂不能直接保存', 'err');
+      return;
+    }
+    var filename = savedAssetFilename(a);
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_asset_as === 'function') {
+      var oldDesktopText = btn ? btn.textContent : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '选择位置';
+      }
+      setActionStatus('', '');
+      window.pywebview.api.save_asset_as(assetId, filename)
+        .then(function(d) {
+          if (d && d.cancelled) {
+            setActionStatus('已取消保存', '');
+            return;
+          }
+          if (!d || !d.ok) throw new Error((d && d.error) || '保存失败');
+          setActionStatus('已保存：' + (d.path || d.filename || ''), 'ok');
+        })
+        .catch(function(e) {
+          setActionStatus((e && e.message) ? e.message : '保存失败', 'err');
+        })
+        .finally(function() {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = oldDesktopText || '保存到本机';
+          }
+        });
+      return;
+    }
+    var base = getLocalApiBaseForAssets();
+    if (!base || typeof authHeaders !== 'function') {
+      setActionStatus('本机后端未连接', 'err');
+      return;
+    }
+    var oldText = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '保存中';
+    }
+    setActionStatus('', '');
+    fetch(base + '/api/assets/' + encodeURIComponent(assetId) + '/save-to-downloads', {
+      method: 'POST',
+      headers: Object.assign({}, authHeaders(), { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ filename: filename })
+    })
+      .then(function(r) {
+        return r.json().catch(function() { return {}; }).then(function(d) {
+          if (!r.ok) throw new Error((d && d.detail) || r.statusText || '保存失败');
+          return d;
+        });
+      })
+      .then(function(d) {
+        setActionStatus('已保存到下载目录：' + (d.path || d.filename || ''), 'ok');
+      })
+      .catch(function(e) {
+        setActionStatus((e && e.message) ? e.message : '保存失败', 'err');
+      })
+      .finally(function() {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = oldText || '保存到本机';
+        }
+      });
+  }
+
+  function appendActions() {
+    var openUrl = savedAssetPrimaryHttpUrl(a);
+    var actionRow = document.createElement('div');
+    actionRow.className = 'chat-generated-asset-actions';
+
+    if (openUrl) {
+      var openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'chat-generated-asset-action';
+      openBtn.textContent = '打开';
+      openBtn.addEventListener('click', function() {
+        window.open(openUrl, '_blank', 'noopener');
+      });
+      actionRow.appendChild(openBtn);
+    }
+
+    if (assetId) {
+      var saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'chat-generated-asset-action primary';
+      saveBtn.textContent = (window.pywebview && window.pywebview.api) ? '另存为' : '保存到本机';
+      saveBtn.addEventListener('click', function() { saveToDownloads(saveBtn); });
+      actionRow.appendChild(saveBtn);
+    }
+
+    if (openUrl) {
+      var copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'chat-generated-asset-action';
+      copyBtn.textContent = '复制链接';
+      copyBtn.addEventListener('click', function() {
+        chatCopyText(openUrl)
+          .then(function() { setActionStatus('链接已复制', 'ok'); })
+          .catch(function(e) { setActionStatus((e && e.message) ? e.message : '复制失败', 'err'); });
+      });
+      actionRow.appendChild(copyBtn);
+    }
+
+    actionStatus = document.createElement('div');
+    actionStatus.className = 'chat-generated-asset-action-status';
+    if (actionRow.childNodes.length) {
+      box.appendChild(actionRow);
+      box.appendChild(actionStatus);
+    }
+  }
+
   function appendHttpPreview(url) {
     removeLoading();
     var u = url;
@@ -2321,6 +2576,8 @@ function appendSavedAssetDom(parent, a, opts) {
   }
 
   box.appendChild(mediaWrap);
+  var actionStatus = null;
+  appendActions();
   parent.appendChild(box);
 
   var base = getLocalApiBaseForAssets();

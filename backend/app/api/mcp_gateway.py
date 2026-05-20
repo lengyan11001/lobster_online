@@ -32,7 +32,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # 默认转发到同机 MCP 服务
-MCP_BACKEND_URL = os.environ.get("AI_TEST_PLATFORM_MCP_GATEWAY_BACKEND_URL", "http://127.0.0.1:8001/mcp").rstrip("/")
+def _mcp_backend_url() -> str:
+    configured = (os.environ.get("AI_TEST_PLATFORM_MCP_GATEWAY_BACKEND_URL") or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    port = os.environ.get("MCP_PORT") or str(getattr(settings, "mcp_port", 8001))
+    return f"http://127.0.0.1:{port}/mcp"
+
+
 MCP_TOKEN_TTL_SECONDS = int(os.environ.get("MCP_GATEWAY_TOKEN_TTL_SECONDS", "600"))
 # OpenClaw 单次 tools/call 可长达数十分钟（如 task.get_result 等效于网页对话轮询）；默认 120s 会先断流导致 MCP -32001
 MCP_GATEWAY_FORWARD_TIMEOUT_SEC = float(os.environ.get("MCP_GATEWAY_FORWARD_TIMEOUT_SEC", "2400"))
@@ -307,11 +314,12 @@ async def mcp_gateway_proxy(request: Request) -> Response:
         _t = MCP_GATEWAY_FORWARD_TIMEOUT_SEC
         _timeout = httpx.Timeout(_t, connect=min(60.0, _t))
         async with httpx.AsyncClient(timeout=_timeout) as client:
-            r = await client.post(MCP_BACKEND_URL, content=body, headers=headers)
+            backend_url = _mcp_backend_url()
+            r = await client.post(backend_url, content=body, headers=headers)
         fwd_ms = int((time.perf_counter() - t_fwd0) * 1000)
         logger.info(
             "[mcp_gateway] -> %s method=%s status=%s duration_ms=%s req_bytes=%s agent=%s intent=%s",
-            MCP_BACKEND_URL,
+            backend_url,
             mcp_method or "?",
             r.status_code,
             fwd_ms,

@@ -631,6 +631,35 @@
     .chat-msg.typing .chat-generated-asset-meta {
       font-size: 0.8rem; color: var(--text); margin-bottom: 0.35rem; line-height: 1.35; word-break: break-word;
     }
+    .chat-msg.assistant .chat-generated-asset-actions,
+    .chat-msg.typing .chat-generated-asset-actions {
+      display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem;
+    }
+    .chat-msg.assistant .chat-generated-asset-action,
+    .chat-msg.typing .chat-generated-asset-action {
+      border: 1px solid rgba(91, 124, 255, 0.18); background: rgba(91, 124, 255, 0.08);
+      color: #3156d4; border-radius: 999px; padding: 0.26rem 0.58rem; font-size: 0.74rem; line-height: 1.2; cursor: pointer;
+    }
+    .chat-msg.assistant .chat-generated-asset-action.primary,
+    .chat-msg.typing .chat-generated-asset-action.primary {
+      background: linear-gradient(135deg, #5d7cfc, #24b7d6); color: #fff; border-color: transparent;
+    }
+    .chat-msg.assistant .chat-generated-asset-action:disabled,
+    .chat-msg.typing .chat-generated-asset-action:disabled {
+      cursor: wait; opacity: 0.68;
+    }
+    .chat-msg.assistant .chat-generated-asset-action-status,
+    .chat-msg.typing .chat-generated-asset-action-status {
+      margin-top: 0.3rem; min-height: 1em; font-size: 0.7rem; line-height: 1.3; color: var(--text-muted); word-break: break-word;
+    }
+    .chat-msg.assistant .chat-generated-asset-action-status.ok,
+    .chat-msg.typing .chat-generated-asset-action-status.ok {
+      color: #0f9f6e;
+    }
+    .chat-msg.assistant .chat-generated-asset-action-status.err,
+    .chat-msg.typing .chat-generated-asset-action-status.err {
+      color: #d14343;
+    }
     .chat-msg-body .chat-msg-line { margin: 0 0 0.15em 0; display: block; }
     /* 智能对话：左侧聊天 + 右侧历史列表（侧栏高度与左侧列对齐，会话列表过长时内部滚动） */
     .chat-area-wrap {
