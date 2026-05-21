@@ -44,6 +44,7 @@ _LOG_CANDIDATES = [
     "openclaw_stderr.log",
     "openclaw_stderr2.log",
     "launcher.log",
+    "desktop_launcher.log",
 ]
 _CONFIG_CANDIDATES = [
     ".env",

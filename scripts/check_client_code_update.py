@@ -65,6 +65,7 @@ DEFAULT_CLIENT_SEMVER = "1.0.0"
 DEFAULT_PATHS: tuple[str, ...] = (
     "CLIENT_CODE_VERSION.json",
     "backend",
+    "desktop",
     "mcp",
     "static",
     "scripts",

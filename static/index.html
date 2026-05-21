@@ -2259,6 +2259,16 @@
       box-shadow: inset 0 0 0 1px rgba(91, 124, 255, 0.16);
       font-weight: 600;
     }
+    .header-dropdown-divider {
+      height: 1px;
+      margin: 0.35rem 0;
+      background: rgba(226, 232, 240, 0.95);
+    }
+    .header-dropdown-menu .header-menu-view {
+      justify-content: flex-start;
+      width: 100%;
+      font-weight: 500;
+    }
     .header-actions {
       gap: 0.6rem;
       flex-shrink: 0;
@@ -5251,9 +5261,9 @@
         <button type="button" class="nav-left-item" data-view="publish">发布中心</button>
         <button type="button" class="nav-left-item" data-view="scheduled-tasks">定时任务</button>
         <button type="button" class="nav-left-item" data-view="production">生成历史</button>
-        <button type="button" class="nav-left-item" data-view="billing">消费记录</button>
-        <button type="button" class="nav-left-item" data-view="sys-config">系统配置</button>
-        <button type="button" class="nav-left-item" data-view="logs">日志</button>
+        <button type="button" class="nav-left-item nav-hidden-route" data-view="billing" hidden>消费记录</button>
+        <button type="button" class="nav-left-item nav-hidden-route" data-view="sys-config" hidden>系统配置</button>
+        <button type="button" class="nav-left-item nav-hidden-route" data-view="logs" hidden>日志</button>
         <button type="button" class="nav-left-item" data-view="agent" id="navAgent" style="display:none;">代理商</button>
       </nav>
       <div class="header-actions" id="headerActions" style="display: none;">
@@ -5269,6 +5279,10 @@
           </button>
           <div class="header-dropdown-menu">
             <div class="dropdown-email" id="userEmail">-</div>
+            <button type="button" class="header-menu-view" data-view="billing">消费记录</button>
+            <button type="button" class="header-menu-view" data-view="sys-config">系统配置</button>
+            <button type="button" class="header-menu-view" data-view="logs">日志</button>
+            <div class="header-dropdown-divider"></div>
             <button type="button" id="logout">退出登录</button>
           </div>
         </div>
@@ -6902,11 +6916,23 @@
                       <select id="scheduledTaskScheduleType" style="width:100%;padding:0.45rem;">
                         <option value="once">一次性</option>
                         <option value="interval">按间隔循环</option>
+                        <option value="daily_times">每天固定时间</option>
                       </select>
                     </div>
-                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                    <div class="modal-field" id="scheduledTaskStartAtBlock" style="margin-bottom:0.55rem;">
+                      <label>开始时间（可选）</label>
+                      <input type="datetime-local" id="scheduledTaskStartAt">
+                    </div>
+                    <div class="modal-field" id="scheduledTaskIntervalBlock" style="margin-bottom:0.55rem;">
                       <label>间隔分钟</label>
                       <input type="number" id="scheduledTaskIntervalMinutes" min="1" value="60">
+                    </div>
+                    <div class="modal-field" id="scheduledTaskDailyTimesBlock" style="display:none;margin-bottom:0.55rem;">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.35rem;">
+                        <label style="margin:0;">每天执行时间</label>
+                        <button type="button" class="btn btn-ghost btn-sm daily-time-add-btn" data-prefix="scheduledTask">+ 添加时间点</button>
+                      </div>
+                      <div id="scheduledTaskDailyTimesList" style="display:grid;gap:0.4rem;"></div>
                     </div>
                     <div class="modal-field" style="margin-bottom:0.55rem;">
                       <label>指定设备（可选，多选）</label>
@@ -7282,11 +7308,23 @@
                     <select id="agentTaskScheduleType" style="width:100%;padding:0.45rem;">
                       <option value="once">一次性</option>
                       <option value="interval">按间隔循环</option>
+                      <option value="daily_times">每天固定时间</option>
                     </select>
                   </div>
-                  <div class="modal-field" style="margin-bottom:0.55rem;">
+                  <div class="modal-field" id="agentTaskStartAtBlock" style="margin-bottom:0.55rem;">
+                    <label>开始时间（可选）</label>
+                    <input type="datetime-local" id="agentTaskStartAt">
+                  </div>
+                  <div class="modal-field" id="agentTaskIntervalBlock" style="margin-bottom:0.55rem;">
                     <label>间隔分钟</label>
                     <input type="number" id="agentTaskIntervalMinutes" min="1" value="60">
+                  </div>
+                  <div class="modal-field" id="agentTaskDailyTimesBlock" style="display:none;margin-bottom:0.55rem;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.35rem;">
+                      <label style="margin:0;">每天执行时间</label>
+                      <button type="button" class="btn btn-ghost btn-sm daily-time-add-btn" data-prefix="agentTask">+ 添加时间点</button>
+                    </div>
+                    <div id="agentTaskDailyTimesList" style="display:grid;gap:0.4rem;"></div>
                   </div>
                 </div>
                 <div>
@@ -7899,8 +7937,8 @@
   <script src="/static/js/publish.js"></script>
   <script src="/static/js/production.js?v=20260520-generation-history"></script>
   <script src="/static/js/sysconfig.js?v=20260429-chat-route-bind"></script>
-  <script src="/static/js/scheduled-tasks.js"></script>
-  <script src="/static/js/agent.js"></script>
-  <script src="/static/js/init.js?v=20260520-desktop-refresh"></script>
+  <script src="/static/js/scheduled-tasks.js?v=20260521-run-delete"></script>
+  <script src="/static/js/agent.js?v=20260520-daily-time-points"></script>
+  <script src="/static/js/init.js?v=20260521-avatar-menu"></script>
 </body>
 </html>

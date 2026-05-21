@@ -20,16 +20,10 @@
   },
   "plugins": {
     "enabled": false,
-    "entries": {
-      "openclaw-weixin": {
-        "enabled": true
-      }
-    },
+    "entries": {},
     "installs": {},
     "load": {
-      "paths": [
-        "nodejs/node_modules/@tencent-weixin/openclaw-weixin"
-      ]
+      "paths": []
     }
   },
   "gateway": {

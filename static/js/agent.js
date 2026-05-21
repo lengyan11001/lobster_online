@@ -94,6 +94,47 @@
     el.textContent = text || '';
   }
 
+  function timezoneOffsetMinutes() {
+    return -new Date().getTimezoneOffset();
+  }
+
+  function collectDailyTimes() {
+    return Array.prototype.slice.call(document.querySelectorAll('[data-daily-time-prefix="agentTask"]'))
+      .map(function (el) { return String(el.value || '').trim(); })
+      .filter(Boolean);
+  }
+
+  function addDailyTime(value) {
+    var list = document.getElementById('agentTaskDailyTimesList');
+    if (!list) return;
+    var row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0.4rem;align-items:center;';
+    var input = document.createElement('input');
+    input.type = 'time';
+    input.step = '60';
+    input.value = value || '';
+    input.setAttribute('data-daily-time-prefix', 'agentTask');
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn-ghost btn-sm';
+    remove.textContent = '-';
+    remove.title = '删除时间点';
+    remove.addEventListener('click', function () { row.remove(); });
+    row.appendChild(input);
+    row.appendChild(remove);
+    list.appendChild(row);
+  }
+
+  function toggleScheduleFields() {
+    var type = (document.getElementById('agentTaskScheduleType') || {}).value || 'once';
+    var intervalBlock = document.getElementById('agentTaskIntervalBlock');
+    var daily = document.getElementById('agentTaskDailyTimesBlock');
+    var start = document.getElementById('agentTaskStartAtBlock');
+    if (intervalBlock) intervalBlock.style.display = type === 'interval' ? '' : 'none';
+    if (daily) daily.style.display = type === 'daily_times' ? '' : 'none';
+    if (start) start.style.display = type === 'daily_times' ? 'none' : '';
+  }
+
   function selectedDevices() {
     var el = document.getElementById('agentTaskDevices');
     if (!el) return [];
@@ -192,6 +233,9 @@
     var kind = (document.getElementById('agentTaskKind') || {}).value || 'openclaw_message';
     var scheduleType = (document.getElementById('agentTaskScheduleType') || {}).value || 'once';
     var intervalMin = parseInt((document.getElementById('agentTaskIntervalMinutes') || {}).value || '60', 10);
+    var startAt = ((document.getElementById('agentTaskStartAt') || {}).value || '').trim();
+    var dailyTimes = collectDailyTimes();
+    if (scheduleType === 'daily_times' && !dailyTimes.length) throw new Error('请填写每天执行时间，例如 9,12,18 或 09:00,12:00,18:00');
     var body = {
       user_id: parseInt((document.getElementById('agentTaskUserSelect') || {}).value || '0', 10),
       title: ((document.getElementById('agentTaskTitle') || {}).value || '').trim(),
@@ -199,9 +243,12 @@
       content: ((document.getElementById('agentTaskContent') || {}).value || '').trim(),
       payload: {},
       schedule_type: scheduleType,
-      interval_seconds: Math.max(60, (isNaN(intervalMin) ? 60 : intervalMin) * 60),
+      timezone_offset_minutes: timezoneOffsetMinutes(),
       installation_ids: selectedDevices()
     };
+    if (startAt && scheduleType !== 'daily_times') body.start_at = startAt;
+    if (scheduleType === 'interval') body.interval_seconds = Math.max(60, (isNaN(intervalMin) ? 60 : intervalMin) * 60);
+    if (scheduleType === 'daily_times') body.daily_times = dailyTimes;
     if (!body.user_id) throw new Error('请选择下级用户');
     if (kind === 'capability') {
       var parsed = parsePayload((document.getElementById('agentTaskPayload') || {}).value || '');
@@ -245,6 +292,13 @@
   if (userSelect) userSelect.addEventListener('change', loadDevices);
   var kind = document.getElementById('agentTaskKind');
   if (kind) kind.addEventListener('change', togglePayload);
+  var scheduleType = document.getElementById('agentTaskScheduleType');
+  if (scheduleType) scheduleType.addEventListener('change', toggleScheduleFields);
+  document.addEventListener('click', function (evt) {
+    var btn = evt.target && evt.target.closest ? evt.target.closest('.daily-time-add-btn[data-prefix="agentTask"]') : null;
+    if (!btn) return;
+    addDailyTime();
+  });
   var submit = document.getElementById('agentTaskSubmitBtn');
   if (submit) submit.addEventListener('click', submitTask);
   var oldLoad = window.loadAgentSubUsers;
@@ -253,4 +307,5 @@
     loadAgentTaskPanel();
   };
   togglePayload();
+  toggleScheduleFields();
 })();

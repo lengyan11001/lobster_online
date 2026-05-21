@@ -224,6 +224,19 @@ async def proxy_scheduled_task_runs(
     )
 
 
+@router.delete("/api/scheduled-tasks/runs/{run_id}", summary="Proxy delete scheduled task run for local online UI")
+async def proxy_delete_scheduled_task_run(
+    run_id: str,
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    return await _proxy_cloud_json(
+        request,
+        "DELETE",
+        f"/api/scheduled-tasks/runs/{run_id}",
+    )
+
+
 @router.get("/api/scheduled-tasks/tasks", summary="Proxy cloud scheduled tasks for local online UI")
 async def proxy_scheduled_tasks(
     request: Request,

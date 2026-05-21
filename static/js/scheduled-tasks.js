@@ -229,6 +229,12 @@
     return parts.join(' ');
   }
 
+  function runActionHtml(run) {
+    return '<button type="button" class="btn btn-ghost btn-sm scheduled-run-delete-btn" data-run-id="'
+      + html(run && run.id)
+      + '">删除</button>';
+  }
+
   function rowCapabilityId(row) {
     var payload = row && row.payload && typeof row.payload === 'object' ? row.payload : {};
     return String(payload.capability_id || '');
@@ -256,6 +262,57 @@
   function setVal(id, value) {
     var el = document.getElementById(id);
     if (el) el.value = value == null ? '' : String(value);
+  }
+
+  function timezoneOffsetMinutes() {
+    return -new Date().getTimezoneOffset();
+  }
+
+  function collectDailyTimes(prefix) {
+    return Array.prototype.slice.call(document.querySelectorAll('[data-daily-time-prefix="' + prefix + '"]'))
+      .map(function (el) { return String(el.value || '').trim(); })
+      .filter(Boolean);
+  }
+
+  function addDailyTime(prefix, value) {
+    var list = document.getElementById(prefix + 'DailyTimesList');
+    if (!list) return;
+    var row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0.4rem;align-items:center;';
+    var input = document.createElement('input');
+    input.type = 'time';
+    input.step = '60';
+    input.value = value || '';
+    input.setAttribute('data-daily-time-prefix', prefix);
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn-ghost btn-sm';
+    remove.textContent = '-';
+    remove.title = '删除时间点';
+    remove.addEventListener('click', function () { row.remove(); });
+    row.appendChild(input);
+    row.appendChild(remove);
+    list.appendChild(row);
+  }
+
+  function scheduleText(task) {
+    if (task && task.schedule_label) return task.schedule_label;
+    if (task && task.schedule_type === 'daily_times') {
+      var cfg = task.schedule_config || {};
+      return '每天 ' + (Array.isArray(cfg.daily_times) ? cfg.daily_times.join('、') : '');
+    }
+    if (task && task.schedule_type === 'interval') return '每 ' + Math.round((task.interval_seconds || 0) / 60) + ' 分钟';
+    return '一次性';
+  }
+
+  function updateScheduleFields(prefix) {
+    var scheduleType = (document.getElementById(prefix + 'ScheduleType') || {}).value || 'once';
+    var intervalBlock = document.getElementById(prefix + 'IntervalBlock');
+    var dailyBlock = document.getElementById(prefix + 'DailyTimesBlock');
+    var startBlock = document.getElementById(prefix + 'StartAtBlock');
+    if (intervalBlock) intervalBlock.style.display = scheduleType === 'interval' ? '' : 'none';
+    if (dailyBlock) dailyBlock.style.display = scheduleType === 'daily_times' ? '' : 'none';
+    if (startBlock) startBlock.style.display = scheduleType === 'daily_times' ? 'none' : '';
   }
 
   function parseAssetIds(text) {
@@ -512,18 +569,25 @@
     var capabilityId = val(prefix + 'Capability') || 'goal.video.pipeline';
     var scheduleType = (document.getElementById(prefix + 'ScheduleType') || {}).value || 'once';
     var intervalMin = parseInt((document.getElementById(prefix + 'IntervalMinutes') || {}).value || '60', 10);
+    var startAt = val(prefix + 'StartAt');
+    var dailyTimes = collectDailyTimes(prefix);
     var installationIds = prefix === 'scheduledTask' ? [currentInstallationId()].filter(Boolean) : getSelected(prefix + 'Devices');
     var title = val(prefix + 'Title') || (capabilityText(capabilityId) || '能力定时任务');
     var capPayload = collectCapabilityPayload();
-    return {
+    if (scheduleType === 'daily_times' && !dailyTimes.length) throw new Error('请填写每天执行时间，例如 9,12,18 或 09:00,12:00,18:00');
+    var body = {
       title: title,
       task_kind: kind,
       content: '定时调用能力 ' + capabilityId,
       payload: { capability_id: capabilityId, payload: capPayload },
       schedule_type: scheduleType,
-      interval_seconds: Math.max(60, (isNaN(intervalMin) ? 60 : intervalMin) * 60),
+      timezone_offset_minutes: timezoneOffsetMinutes(),
       installation_ids: installationIds
     };
+    if (startAt && scheduleType !== 'daily_times') body.start_at = startAt;
+    if (scheduleType === 'interval') body.interval_seconds = Math.max(60, (isNaN(intervalMin) ? 60 : intervalMin) * 60);
+    if (scheduleType === 'daily_times') body.daily_times = dailyTimes;
+    return body;
   }
 
   function renderRuns(rows) {
@@ -536,7 +600,7 @@
     var h = '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.82rem;">'
       + '<thead><tr style="text-align:left;border-bottom:1px solid var(--border);">'
       + '<th style="padding:0.5rem;">时间</th><th style="padding:0.5rem;">任务</th><th style="padding:0.5rem;">类型</th>'
-      + '<th style="padding:0.5rem;">设备</th><th style="padding:0.5rem;">状态</th><th style="padding:0.5rem;">结果/错误</th>'
+      + '<th style="padding:0.5rem;">设备</th><th style="padding:0.5rem;">状态</th><th style="padding:0.5rem;">结果/错误</th><th style="padding:0.5rem;">操作</th>'
       + '</tr></thead><tbody>';
     rows.forEach(function (r) {
       var result = r.error || r.result_text || (r.progress && (r.progress.text || r.progress.message)) || '';
@@ -548,6 +612,7 @@
         + '<td style="padding:0.5rem;font-size:0.75rem;color:var(--text-muted);">' + html(r.installation_id || '任意设备') + '</td>'
         + '<td style="padding:0.5rem;white-space:nowrap;">' + html(statusText(r.status)) + '</td>'
         + '<td style="padding:0.5rem;max-width:26rem;white-space:pre-wrap;word-break:break-word;">' + html(result || '-') + previews + '</td>'
+        + '<td style="padding:0.5rem;white-space:nowrap;">' + runActionHtml(r) + '</td>'
         + '</tr>';
     });
     h += '</tbody></table></div>';
@@ -567,11 +632,10 @@
       + '<th style="padding:0.5rem;">状态</th><th style="padding:0.5rem;">下次执行</th><th style="padding:0.5rem;">次数</th><th style="padding:0.5rem;">操作</th>'
       + '</tr></thead><tbody>';
     rows.forEach(function (t) {
-      var interval = t.schedule_type === 'interval' ? ('每 ' + Math.round((t.interval_seconds || 0) / 60) + ' 分钟') : '一次性';
       h += '<tr style="border-bottom:1px solid rgba(255,255,255,0.08);">'
         + '<td style="padding:0.5rem;">' + html(t.title || t.content || t.id) + '</td>'
         + '<td style="padding:0.5rem;white-space:nowrap;">' + html(capabilityText(rowCapabilityId(t)) || kindText(t.task_kind)) + '</td>'
-        + '<td style="padding:0.5rem;white-space:nowrap;">' + html(interval) + '</td>'
+        + '<td style="padding:0.5rem;white-space:nowrap;">' + html(scheduleText(t)) + '</td>'
         + '<td style="padding:0.5rem;white-space:nowrap;">' + html(statusText(t.status)) + '</td>'
         + '<td style="padding:0.5rem;white-space:nowrap;">' + html(fmtTime(t.next_run_at)) + '</td>'
         + '<td style="padding:0.5rem;">' + (t.run_count || 0) + '</td>'
@@ -615,6 +679,27 @@
     }).then(function () {
       showMsg('scheduledTaskMsg', '已停止并删除任务', false);
       loadTasks();
+      loadRuns();
+    }).catch(function (e) {
+      showMsg('scheduledTaskMsg', e.message, true);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '删除';
+      }
+    });
+  }
+
+  function deleteRun(runId, btn) {
+    if (!runId) return;
+    if (!window.confirm('确认删除这条执行记录？执行中的记录请等待完成或先删除任务。')) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '删除中...';
+    }
+    api('/api/scheduled-tasks/runs/' + encodeURIComponent(runId), {
+      method: 'DELETE'
+    }).then(function () {
+      showMsg('scheduledTaskMsg', '已删除执行记录', false);
       loadRuns();
     }).catch(function (e) {
       showMsg('scheduledTaskMsg', e.message, true);
@@ -712,12 +797,27 @@
       if (!btn) return;
       deleteTask(btn.getAttribute('data-task-id'), btn);
     });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-delete-btn') : null;
+      if (!btn) return;
+      deleteRun(btn.getAttribute('data-run-id'), btn);
+    });
     var kind = document.getElementById('scheduledTaskKind');
     if (kind) kind.value = 'capability';
     var capability = document.getElementById('scheduledTaskCapability');
     if (capability) capability.addEventListener('change', toggleCapability);
+    var scheduleType = document.getElementById('scheduledTaskScheduleType');
+    if (scheduleType) scheduleType.addEventListener('change', function () { updateScheduleFields('scheduledTask'); });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.daily-time-add-btn') : null;
+      if (!btn) return;
+      var prefix = btn.getAttribute('data-prefix') || 'scheduledTask';
+      if (prefix !== 'scheduledTask') return;
+      addDailyTime(prefix);
+    });
     var autoFill = document.getElementById('scheduledTaskAutoFillBtn');
     if (autoFill) autoFill.addEventListener('click', autoFillParams);
+    updateScheduleFields('scheduledTask');
   }
 
   window.initScheduledTasksView = function initScheduledTasksView() {

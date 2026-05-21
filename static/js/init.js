@@ -840,6 +840,15 @@ document.getElementById('logout').addEventListener('click', function() {
     btn.addEventListener('click', function(e) { e.stopPropagation(); dropdown.classList.toggle('open'); });
     document.addEventListener('click', function() { dropdown.classList.remove('open'); });
   }
+  document.querySelectorAll('.header-menu-view[data-view]').forEach(function(item) {
+    item.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var view = item.getAttribute('data-view');
+      var navBtn = view ? document.querySelector('.nav-left-item[data-view="' + view + '"]') : null;
+      if (navBtn) navBtn.click();
+      if (dropdown) dropdown.classList.remove('open');
+    });
+  });
 })();
 
 function decorateWorkspacePages() {

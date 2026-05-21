@@ -37,7 +37,7 @@ def pngs_to_ico(png_paths: list[Path], out_ico: Path) -> None:
 
 def main() -> None:
     base = Path(__file__).resolve().parent
-    sizes = [16, 32, 48, 64, 128, 256]
+    sizes = [16, 24, 32, 48, 64, 128, 256]
     pngs = []
     for s in sizes:
         p = base / f"bihu_{s}.png"

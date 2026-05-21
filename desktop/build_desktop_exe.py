@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -9,13 +9,24 @@ from pathlib import Path
 APP_NAME = "必火AI员工"
 
 
+def find_csc() -> str | None:
+    csc = shutil.which("csc") or shutil.which("csc.exe")
+    if csc:
+        return csc
+    candidates = [
+        Path(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+        Path(r"C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"),
+        Path(r"C:\Windows\Microsoft.NET\Framework64\v3.5\csc.exe"),
+        Path(r"C:\Windows\Microsoft.NET\Framework\v3.5\csc.exe"),
+    ]
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    return None
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    python = root / "python" / "python.exe"
-    py = str(python) if python.is_file() else sys.executable
-
-    req = root / "desktop" / "requirements-desktop.txt"
-    subprocess.check_call([py, "-m", "pip", "install", "-r", str(req)], cwd=str(root))
 
     icon = root / "static" / "bihu_box.ico"
     env_path = root / ".env"
@@ -30,26 +41,28 @@ def main() -> int:
                     icon = yingshi_icon
                 break
 
+    dist = root / "dist"
+    dist.mkdir(exist_ok=True)
+    out = root / "dist" / f"{APP_NAME}.exe"
+    csc = find_csc()
+    if not csc:
+        raise SystemExit("找不到 csc.exe，无法构建轻量启动器。请确认已安装 .NET Framework SDK 或 Visual Studio Build Tools。")
     cmd = [
-        py,
-        "-m",
-        "PyInstaller",
-        "--noconfirm",
-        "--clean",
-        "--onefile",
-        "--windowed",
-        "--name",
-        APP_NAME,
-        "--icon",
-        str(icon),
-        str(root / "desktop" / "launcher.py"),
+        csc,
+        "/nologo",
+        "/target:winexe",
+        "/platform:x64",
+        "/optimize+",
+        f"/out:{out}",
+        f"/win32icon:{icon}",
+        "/reference:System.Windows.Forms.dll",
+        str(root / "desktop" / "launcher_stub.cs"),
     ]
     subprocess.check_call(cmd, cwd=str(root))
 
-    out = root / "dist" / f"{APP_NAME}.exe"
     print()
     print(f"[desktop] Built: {out}")
-    print(f"[desktop] Copy {out.name} to project root before packaging/installing.")
+    print(f"[desktop] Lightweight launcher starts pythonw.exe desktop\\launcher.py without PyInstaller extraction.")
     return 0
 
 

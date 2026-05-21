@@ -25,6 +25,7 @@ from pathlib import Path
 OTA_PATHS: tuple[str, ...] = (
     "CLIENT_CODE_VERSION.json",
     "backend",
+    "desktop",
     "mcp",
     "static",
     "scripts",

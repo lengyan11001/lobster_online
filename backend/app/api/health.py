@@ -41,8 +41,11 @@ async def _mcp_status() -> dict:
 
 
 @router.get("/api/health", summary="健康检查（含 MCP 能力服务状态）")
-async def health():
-    mcp = await _mcp_status()
+async def health(fast: bool = False):
+    if fast:
+        mcp = {"reachable": None, "tools_count": 0, "skipped": True}
+    else:
+        mcp = await _mcp_status()
     return {
         "status": "ok",
         "lan_ip": _get_lan_ip(),
