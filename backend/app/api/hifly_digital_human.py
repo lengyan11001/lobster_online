@@ -1199,13 +1199,18 @@ async def hifly_avatar_library(body: HiflyAvatarLibraryBody, background_tasks: B
             background_tasks.add_task(_save_public_avatar_cache, remote_rows)
             public_rows = _merge_avatar_rows(local_public, remote_rows)
             source = "local+remote"
-        except HTTPException:
+        except Exception:
             background_tasks.add_task(_cache_remote_public_avatars, body.token)
             logger.warning("[hifly] remote avatar library refresh failed; using local public rows", exc_info=True)
     else:
-        public_rows = await _fetch_remote_public_rows("/api/hifly/avatar/library", body.token)
-        source = "remote"
-        background_tasks.add_task(_save_public_avatar_cache, public_rows)
+        try:
+            public_rows = await _fetch_remote_public_rows("/api/hifly/avatar/library", body.token)
+            source = "remote"
+            background_tasks.add_task(_save_public_avatar_cache, public_rows)
+        except Exception:
+            logger.warning("[hifly] remote avatar library unavailable; using empty public rows", exc_info=True)
+            public_rows = []
+            source = "remote_unavailable"
     public_rows = _merge_avatar_rows(public_rows)
 
     return {

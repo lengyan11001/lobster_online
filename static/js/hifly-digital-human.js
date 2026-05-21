@@ -3,6 +3,7 @@
     token: '',
     taskId: '',
     taskType: '',
+    taskApiScope: '',
     taskKindLabel: '未开始',
     pollTimer: null,
     submitting: false,
@@ -36,8 +37,8 @@
     }
   };
 
-  var HIFLY_TEMPLATE_VERSION = '20260520-voice-preview-normal-speed';
-  var HIFLY_STYLE_VERSION = '20260520-voice-preview-normal-speed';
+  var HIFLY_TEMPLATE_VERSION = '20260521-hifly-avatar-filter-fix';
+  var HIFLY_STYLE_VERSION = '20260521-hifly-avatar-filter-fix';
   var HIFLY_AVATAR_COVER_MANIFEST = '/static/data/hifly-public-avatar-covers.json?v=20260512';
   var HIFLY_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
   var HIFLY_VOICE_RECORD_PROMPTS = {
@@ -278,7 +279,14 @@
   }
 
   function requestLibrary(path, body) {
+    var local = baseUrl();
     var cloud = cloudBaseUrl();
+    if (local) {
+      return requestTo(local, path, body).catch(function(err) {
+        if (cloud) return requestTo(cloud, path, body);
+        throw err;
+      });
+    }
     if (cloud) return requestTo(cloud, path, body);
     return request(path, body);
   }
@@ -1447,7 +1455,7 @@
       var data = results[1] || {};
       state.avatarLibrary = {
         mine: (mineData.items || []).map(function(item) { return Object.assign({}, item, { is_mine: true }); }),
-        public: filterSubmittableVoiceGroups((data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); })),
+        public: (data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); }),
         mine_supported: true,
         mine_message: '',
         using_default_token: !!data.using_default_token,
@@ -1503,7 +1511,7 @@
       var previousVoiceId = state.selectedVoice && state.selectedVoice.voice ? state.selectedVoice.voice : '';
       state.voiceLibrary = hydrateVoiceLibraryPreview({
         mine: (mineData.items || []).map(function(item) { return Object.assign({}, item, { is_mine: true }); }),
-        public: (data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); }),
+        public: filterSubmittableVoiceGroups((data.public || []).map(function(item) { return Object.assign({}, item, { is_mine: false }); })),
         mine_supported: true,
         mine_message: '',
         using_default_token: !!data.using_default_token
@@ -2153,9 +2161,10 @@
     syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, input.files && input.files[0] ? input.files[0] : null);
   }
 
-  function startTask(taskType, taskKindLabel, taskId) {
+  function startTask(taskType, taskKindLabel, taskId, taskApiScope) {
     state.taskType = taskType || '';
     state.taskId = taskId || '';
+    state.taskApiScope = taskApiScope || '';
     updateTaskKind(taskKindLabel || '任务处理中');
     updateTaskStatus('提交中', 'processing');
     setActiveView('result');
@@ -2203,9 +2212,9 @@
     if (!state.taskId || !state.taskType) return;
     state.pollTimer = setTimeout(function() {
       var path = state.taskType === 'video'
-        ? '/api/hifly/my/video/task'
+        ? (state.taskApiScope === 'local' ? '/api/hifly/video/task' : '/api/hifly/my/video/task')
         : (state.taskType.indexOf('avatar') === 0 ? '/api/hifly/my/avatar/task' : '/api/hifly/my/voice/task');
-      var pollRequest = requestCloud;
+      var pollRequest = state.taskType === 'video' && state.taskApiScope === 'local' ? request : requestCloud;
       pollRequest(path, { task_id: state.taskId, token: tokenValue() })
         .then(function(data) {
           var status = Number(data.status || 0);
@@ -2264,7 +2273,7 @@
     }
 
     setBusy(true);
-    startTask('video', mode === 'audio' ? '声音驱动视频' : '数字人口播');
+    startTask('video', mode === 'audio' ? '声音驱动视频' : '数字人口播', '', 'cloud');
     renderResultPlaceholder('任务已提交', mode === 'audio' ? '正在提交声音驱动视频任务...' : '正在提交必火智能数字人口播任务...', true);
     showMessage(mode === 'audio' ? '正在提交声音驱动视频任务...' : '正在提交必火智能数字人口播任务...', false);
 
@@ -2278,7 +2287,7 @@
       formData.append('file', audioFile);
 
       requestCloudForm('/api/hifly/my/video/create-by-audio-upload', formData).then(function(data) {
-        startTask('video', '声音驱动视频', data.task_id || '');
+        startTask('video', '声音驱动视频', data.task_id || '', 'cloud');
         updateTaskStatus('等待中', 'processing');
         var createBilling = billingSummaryText(data.billing);
         renderResultPlaceholder('任务已提交', '正在生成声音驱动视频...' + (createBilling ? ' ' + createBilling : ''), true);
@@ -2309,7 +2318,7 @@
       aigc_flag: Number((($('hiflyAigcFlagSelect') || {}).value || 0)),
       token: tokenValue()
     }).then(function(data) {
-      startTask('video', '数字人口播', data.task_id || '');
+      startTask('video', '数字人口播', data.task_id || '', 'cloud');
       updateTaskStatus('等待中', 'processing');
       var createBilling = billingSummaryText(data.billing);
       renderResultPlaceholder('任务已提交', '正在生成数字人口播视频...' + (createBilling ? ' ' + createBilling : ''), true);
