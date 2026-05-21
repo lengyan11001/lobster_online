@@ -194,6 +194,13 @@ def _has_hifly_token(token: Optional[str]) -> bool:
     return bool((token or "").strip() or (settings.hifly_default_token or "").strip())
 
 
+def _try_resolved_token(token: Optional[str]) -> str:
+    try:
+        return _resolved_token(token)
+    except HTTPException:
+        return ""
+
+
 def _headers(token: Optional[str]) -> Dict[str, str]:
     return {
         "Authorization": f"Bearer {_resolved_token(token)}",
@@ -1283,15 +1290,25 @@ def _load_consumer_preview_manifest(require_local_files: bool = False) -> List[D
                 continue
             mtitle = str(m.get("title") or "").strip() or gtitle
             # voice 字段用 "consumer_<numeric_id>" 前缀，避免与开放 API voice 混淆
-            voice_str = f"consumer_{mid}"
+            preview_voice = f"consumer_{mid}"
+            voice_str = str(m.get("voice") or "").strip() or preview_voice
             label = mtitle if mtitle and mtitle != gtitle else "默认风格"
-            styles.append({
+            style_row = {
                 "voice": voice_str,
                 "title": mtitle or gtitle,
                 "label": label,
                 "demo_url": str(m.get("preview_url") or ""),
-                "rate": "", "pitch": "", "volume": "", "language": "",
-            })
+                "rate": str(m.get("rate") or ""),
+                "pitch": str(m.get("pitch") or ""),
+                "volume": str(m.get("volume") or ""),
+                "language": str(m.get("language") or ""),
+            }
+            if voice_str != preview_voice:
+                style_row["preview_voice"] = preview_voice
+                hifly_title = str(m.get("hifly_title") or "").strip()
+                if hifly_title:
+                    style_row["hifly_title"] = hifly_title
+            styles.append(style_row)
 
         if not styles:
             continue
@@ -1472,6 +1489,10 @@ def _attach_hifly_voice_ids_to_local_previews(
             if not isinstance(style, dict):
                 continue
             style_copy = dict(style)
+            if style_copy.get("voice") and not _is_consumer_preview_voice(style_copy.get("voice")):
+                converted += 1
+                styles_out.append(style_copy)
+                continue
             matched = _match_api_voice_for_preview(
                 group_title=group_title,
                 style_title=str(style_copy.get("title") or style_copy.get("label") or ""),
@@ -1502,12 +1523,19 @@ def _attach_hifly_voice_ids_to_local_previews(
 @router.post("/api/hifly/voice/library")
 async def hifly_voice_library(body: HiflyTokenBody, background_tasks: BackgroundTasks):
     mine_resp: Dict[str, Any] = {"data": [], "unsupported": False, "message": ""}
-    if _has_hifly_token(body.token):
-        mine_resp = await _safe_voice_list(body.token, 1)
+    token_for_hifly = _try_resolved_token(body.token)
+    if token_for_hifly:
+        mine_resp = await _safe_voice_list(token_for_hifly, 1)
     public_resp: Dict[str, Any] = {"data": [], "unsupported": False, "message": ""}
-    if _has_hifly_token(body.token):
-        public_resp = await _safe_voice_list(body.token, 2)
     public_manifest = _local_preview_manifest_rows()
+    manifest_has_voice_ids = any(
+        not _is_consumer_preview_voice(style.get("voice"))
+        for row in public_manifest
+        for style in (row.get("styles") or [])
+        if isinstance(style, dict)
+    )
+    if token_for_hifly and not manifest_has_voice_ids:
+        public_resp = await _safe_voice_list(token_for_hifly, 2)
     public_api_rows = public_resp.get("data") or []
     source = "local_preview_mapped" if public_manifest else "hifly_api"
     mapped_count = 0
