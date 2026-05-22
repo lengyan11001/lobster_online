@@ -38,9 +38,13 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
         return True
     if rel_posix.startswith("browser_data/"):
         return True
+    if rel_posix.startswith(("_pack_exe_test/", "_lobster_runtime/", "dist/", "build/", "tmp_responsive_check/", ".updates/")):
+        return True
+    if rel_posix.startswith("desktop/webview2/fixed-runtime/"):
+        return True
     if rel_posix.startswith("assets/"):
         return True
-    if rel_posix.startswith("static/hifly_previews/"):
+    if rel_posix.startswith("chat_storage/"):
         return True
     if rel_posix == "sutui_config.json":
         return True
@@ -60,6 +64,14 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
         return True
 
     if root_name:
+        if root_name.endswith(".log"):
+            return True
+        if fnmatch.fnmatch(root_name, "backend*.log") or fnmatch.fnmatch(root_name, "mcp*.log"):
+            return True
+        if root_name in ("lobster.exe", "lobster_fixed.exe"):
+            return True
+        if fnmatch.fnmatch(root_name, "build_*.txt"):
+            return True
         if fnmatch.fnmatch(root_name, f"{proj}_*.zip"):
             return True
         if fnmatch.fnmatch(root_name, "*.tar.gz"):

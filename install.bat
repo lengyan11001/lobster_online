@@ -460,6 +460,77 @@ if errorlevel 1 (
 :fw_done
 echo.
 
+REM Step 7b: Microsoft Edge WebView2 Runtime for desktop exe window.
+REM Dependency installation belongs to install.bat, not exe startup.
+echo   [7b/7] Checking Microsoft Edge WebView2 Runtime...
+set "WV2_FIXED_DIR=%CD%\desktop\webview2\fixed-runtime"
+if exist "%WV2_FIXED_DIR%\msedgewebview2.exe" (
+    echo   [OK] Bundled fixed WebView2 Runtime ready
+    goto :webview2_after
+)
+if exist "%WV2_FIXED_DIR%" (
+    for /r "%WV2_FIXED_DIR%" %%f in (msedgewebview2.exe) do (
+        echo   [OK] Bundled fixed WebView2 Runtime ready
+        goto :webview2_after
+    )
+)
+set "WV2_FIXED_CAB="
+if exist "desktop\webview2\Microsoft.WebView2.FixedVersionRuntime.148.0.3967.70.x64.cab" set "WV2_FIXED_CAB=%CD%\desktop\webview2\Microsoft.WebView2.FixedVersionRuntime.148.0.3967.70.x64.cab"
+if not defined WV2_FIXED_CAB for %%f in (desktop\webview2\Microsoft.WebView2.FixedVersionRuntime.*.x64.cab) do if not defined WV2_FIXED_CAB set "WV2_FIXED_CAB=%CD%\%%f"
+if defined WV2_FIXED_CAB (
+    echo   Extracting bundled fixed WebView2 Runtime...
+    if not exist "%WV2_FIXED_DIR%" mkdir "%WV2_FIXED_DIR%"
+    expand -F:* "%WV2_FIXED_CAB%" "%WV2_FIXED_DIR%" >nul
+    if exist "%WV2_FIXED_DIR%" (
+        for /r "%WV2_FIXED_DIR%" %%f in (msedgewebview2.exe) do (
+            echo   [OK] Bundled fixed WebView2 Runtime extracted
+            goto :webview2_after
+        )
+    )
+    echo   [WARN] Failed to extract fixed WebView2 Runtime, will check system runtime.
+)
+reg query "HKCU\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>&1
+if not errorlevel 1 goto :webview2_done
+reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>&1
+if not errorlevel 1 goto :webview2_done
+reg query "HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>&1
+if not errorlevel 1 goto :webview2_done
+
+set "WV2_SETUP="
+if exist "desktop\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe" set "WV2_SETUP=%CD%\desktop\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+if not defined WV2_SETUP if exist "desktop\webview2\MicrosoftEdgeWebView2RuntimeInstaller.exe" set "WV2_SETUP=%CD%\desktop\webview2\MicrosoftEdgeWebView2RuntimeInstaller.exe"
+if defined WV2_SETUP (
+    echo   Installing bundled WebView2 Runtime bootstrapper...
+    goto :webview2_install
+)
+if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
+    echo   [WARN] WebView2 Runtime not found and LOBSTER_OFFLINE_ONLY=1. Put MicrosoftEdgeWebView2RuntimeInstallerX64.exe under desktop\webview2\ and run install.bat again.
+    goto :webview2_after
+)
+echo   WebView2 Runtime not found - downloading bootstrapper ^(needs network^)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $p = Join-Path $env:TEMP 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'; Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $p -UseBasicParsing; exit 0 } catch { exit 1 }"
+if errorlevel 1 (
+    echo   [WARN] WebView2 Runtime bootstrapper download failed. The desktop exe may fall back to browser until WebView2 is installed.
+    goto :webview2_after
+)
+if exist "%TEMP%\MicrosoftEdgeWebView2RuntimeInstallerX64.exe" set "WV2_SETUP=%TEMP%\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+if not defined WV2_SETUP (
+    echo   [WARN] WebView2 Runtime bootstrapper file missing after download.
+    goto :webview2_after
+)
+
+:webview2_install
+start /wait "" "%WV2_SETUP%" /silent /install
+set "WV2_EC=%ERRORLEVEL%"
+if "%WV2_EC%"=="0" goto :webview2_done
+if "%WV2_EC%"=="3010" goto :webview2_done
+echo   [WARN] WebView2 Runtime installer exited with code %WV2_EC%. The desktop exe may fall back to browser.
+goto :webview2_after
+:webview2_done
+echo   [OK] WebView2 Runtime ready
+:webview2_after
+echo.
+
 REM Desktop shortcut: paths and .lnk name from static\branding\brands.json (marks.%LOBSTER_BRAND_MARK%.install)
 REM If user already set LOBSTER_BRAND_MARK in the shell, keep it; else read from .env / .env.example (double-click has no env)
 if defined LOBSTER_BRAND_MARK goto :brand_mark_done

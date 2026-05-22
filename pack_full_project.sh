@@ -41,7 +41,9 @@ if command -v zip >/dev/null 2>&1; then
   zip -r "$OUT_NAME" "$PROJ" \
     -x "${PROJ}/.git/*" \
     -x "${PROJ}/*.pyc" "${PROJ}/*__pycache__*" "${PROJ}/*.db" \
-    -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" "${PROJ}/static/hifly_previews/*" \
+    -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" \
+    -x "${PROJ}/_pack_exe_test/*" "${PROJ}/_lobster_runtime/*" "${PROJ}/dist/*" "${PROJ}/build/*" "${PROJ}/tmp_responsive_check/*" "${PROJ}/.updates/*" "${PROJ}/chat_storage/*" \
+    -x "${PROJ}/desktop/webview2/fixed-runtime/*" \
     -x "${PROJ}/sutui_config.json" \
     -x "${PROJ}/pack_bundle.env" \
     -x "${PROJ}/${PROJ}_*.zip" "${PROJ}/*.tar.gz" "${PROJ}/explore_douyin.py" \
@@ -54,6 +56,8 @@ if command -v zip >/dev/null 2>&1; then
     -x "${PROJ}/xskill_*.json" \
     -x "${PROJ}/xskill_*.jsonl" \
     -x "${PROJ}/openclaw.log" \
+    -x "${PROJ}/*.log" "${PROJ}/backend*.log" "${PROJ}/mcp*.log" \
+    -x "${PROJ}/lobster.exe" "${PROJ}/lobster_fixed.exe" "${PROJ}/build_*.txt" \
     -x "${PROJ}/installed_packages.json" \
     -x "${PROJ}/mcp_registry_cache.json" \
     -x "${PROJ}/logs/*" \

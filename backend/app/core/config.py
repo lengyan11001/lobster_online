@@ -150,10 +150,6 @@ class Settings(BaseSettings):
     twilio_remote_api_base: Optional[str] = None
     """创作者作品同步（Playwright）是否默认无头；与详情页「无头同步」一致，可由 perform_creator_content_sync(headless=) 覆盖。"""
     creator_sync_headless: bool = True
-    """互亿无线短信 APIID"""
-    ihuyi_sms_account: Optional[str] = None
-    """互亿无线 APIKEY（对应 Submit.json 的 password）"""
-    ihuyi_sms_password: Optional[str] = None
     """Comfly API 根。生成提示词用 OpenAI 兼容 chat（相对此根拼 chat/completions，多为 …/v1/chat/completions）；Veo 提交由 comfly_veo_submit_path 走 v2（默认 /v2/videos/generations）。mock：scripts/mock_comfly_server.py"""
     comfly_api_base: Optional[str] = None
     # comfly_api_key：不作为用户凭据兜底；爆款TVC / comfly.daihuo 仅使用技能商店 UserComflyConfig。

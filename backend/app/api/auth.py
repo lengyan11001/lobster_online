@@ -1,12 +1,10 @@
 import asyncio
 import hashlib
 import logging
-import random
 import re
-import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 from urllib.parse import quote
 
 import bcrypt
@@ -26,20 +24,12 @@ from ..services.openclaw_channel_auth_store import (
     persist_channel_fallback_for_login,
     persist_weixin_openclaw_peer_for_user,
 )
-from ..services.sms_ihuyi import send_verify_code_sms
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 ONLINE_USER_EMAIL = "online@sutui.lobster.local"
 REGISTER_INITIAL_CREDITS = 100
 
-_SMS_LOCK = threading.Lock()
-_SMS_CODE_STORE: dict[str, tuple[str, float]] = {}
-_SMS_SEND_AT: dict[str, float] = {}
-_SMS_SEND_HOUR_COUNT: dict[str, tuple[float, int]] = {}
-SMS_CODE_TTL_SEC = 600
-SMS_SEND_COOLDOWN_SEC = 60
-SMS_MAX_PER_HOUR = 10
 PHONE_EMAIL_SUFFIX = "@sms.lobster.local"
 _CN_MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
 
@@ -65,8 +55,10 @@ class UserOut(BaseModel):
     id: int
     email: str
     preferred_model: str
-    credits: Optional[int] = None
+    credits: Optional[float] = None
     brand_mark: Optional[str] = None
+    wecom_userid: Optional[str] = None
+    is_agent: bool = False
 
 
 class Token(BaseModel):
@@ -108,6 +100,7 @@ class RegisterPhoneBody(BaseModel):
     code: str
     password: str
     brand_mark: Optional[str] = None
+    parent_account: Optional[str] = None
 
 
 def _normalize_cn_mobile(raw: str) -> str:
@@ -119,11 +112,6 @@ def _normalize_cn_mobile(raw: str) -> str:
 
 def _phone_account_email(mobile: str) -> str:
     return f"{mobile}{PHONE_EMAIL_SUFFIX}"
-
-
-def _purge_sms_stale_locked(now_m: float) -> None:
-    for k in [x for x, v in _SMS_CODE_STORE.items() if v[1] <= now_m]:
-        del _SMS_CODE_STORE[k]
 
 
 def _login_account_key(username: str) -> str:
@@ -138,8 +126,96 @@ def _login_account_key(username: str) -> str:
     return u_raw.lower()
 
 
+def _auth_server_base_or_none() -> str:
+    return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+
+
+def _auth_server_base_required() -> str:
+    base = _auth_server_base_or_none()
+    if not base:
+        raise HTTPException(status_code=503, detail="未配置认证中心（AUTH_SERVER_BASE）")
+    return base
+
+
+def _client_error_detail(resp: httpx.Response) -> Any:
+    try:
+        data = resp.json()
+    except Exception:
+        text = (resp.text or "").strip()
+        return text or f"HTTP {resp.status_code}"
+    if isinstance(data, dict) and "detail" in data:
+        return data.get("detail")
+    return data
+
+
+def _raise_auth_server_response(resp: httpx.Response) -> None:
+    if 400 <= resp.status_code < 500:
+        raise HTTPException(status_code=resp.status_code, detail=_client_error_detail(resp))
+    raise HTTPException(status_code=502, detail="认证中心暂时不可用")
+
+
+def _forward_headers_to_auth_server(request: Request, *, include_auth: bool = False) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
+    if xi:
+        headers["X-Installation-Id"] = xi
+    if include_auth:
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth:
+            headers["Authorization"] = auth
+    return headers
+
+
+def _persist_remote_token_for_openclaw(token: str, request: Request, user_id: Optional[int] = None) -> None:
+    persist_channel_fallback_for_login(
+        jwt_token=token,
+        request=request,
+        user_id=user_id,
+        db=None,
+    )
+
+
+async def _proxy_auth_form(path: str, form: Dict[str, str], request: Request) -> Dict[str, Any]:
+    base = _auth_server_base_required()
+    headers = _forward_headers_to_auth_server(request)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
+            resp = await client.post(f"{base}{path}", data=form, headers=headers)
+        except httpx.RequestError as e:
+            logger.warning("[auth-proxy] %s request failed: %s", path, e)
+            raise HTTPException(status_code=503, detail="认证中心不可达") from e
+    if resp.status_code >= 400:
+        _raise_auth_server_response(resp)
+    return resp.json()
+
+
+async def _proxy_auth_json(path: str, payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+    base = _auth_server_base_required()
+    headers = _forward_headers_to_auth_server(request)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
+            resp = await client.post(f"{base}{path}", json=payload, headers=headers)
+        except httpx.RequestError as e:
+            logger.warning("[auth-proxy] %s request failed: %s", path, e)
+            raise HTTPException(status_code=503, detail="认证中心不可达") from e
+    if resp.status_code >= 400:
+        _raise_auth_server_response(resp)
+    return resp.json()
+
+
 @router.get("/captcha", summary="获取图片验证码（登录/注册前调用）")
-def get_captcha():
+async def get_captcha():
+    base = _auth_server_base_or_none()
+    if base:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.get(f"{base}/auth/captcha")
+            except httpx.RequestError as e:
+                logger.warning("[auth-proxy] captcha request failed: %s", e)
+                raise HTTPException(status_code=503, detail="认证中心不可达") from e
+        if resp.status_code >= 400:
+            _raise_auth_server_response(resp)
+        return resp.json()
     captcha_id, image_data_uri = create_captcha()
     return {"captcha_id": captcha_id, "image": image_data_uri}
 
@@ -431,6 +507,21 @@ async def login(request: Request, db: Session = Depends(get_db)):
     password = form.get("password") or ""
     captcha_id = (form.get("captcha_id") or "").strip()
     captcha_answer = (form.get("captcha_answer") or "").strip()
+    if _auth_server_base_or_none():
+        data = await _proxy_auth_form(
+            "/auth/login",
+            {
+                "username": username,
+                "password": password,
+                "captcha_id": captcha_id,
+                "captcha_answer": captcha_answer,
+            },
+            request,
+        )
+        access_token = str(data.get("access_token") or "").strip()
+        if access_token:
+            _persist_remote_token_for_openclaw(access_token, request)
+        return data
     if not username or not password:
         raise HTTPException(status_code=400, detail="请输入账号和密码")
     if not verify_captcha(captcha_id, captcha_answer):
@@ -457,91 +548,33 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
 
 
 @router.post("/sms/send", summary="发送手机注册短信验证码（需先通过图形验证码）")
-def send_register_sms(body: SmsSendBody, request: Request):
+async def send_register_sms(body: SmsSendBody, request: Request):
     from ..core.config import settings
 
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
     use_independent = getattr(settings, "lobster_independent_auth", True)
     if edition != "online" or not use_independent:
         raise HTTPException(status_code=400, detail="当前版本不支持")
-    acc = (getattr(settings, "ihuyi_sms_account", None) or "").strip()
-    pwd = (getattr(settings, "ihuyi_sms_password", None) or "").strip()
-    if not acc or not pwd:
-        raise HTTPException(status_code=503, detail="未配置短信通道（IHUYI_SMS_ACCOUNT / IHUYI_SMS_PASSWORD）")
-    if not verify_captcha(body.captcha_id or "", body.captcha_answer or ""):
-        raise HTTPException(status_code=400, detail="图形验证码错误或已过期，请刷新后重试")
-    mobile = _normalize_cn_mobile(body.phone)
-    now_m = time.monotonic()
-    with _SMS_LOCK:
-        _purge_sms_stale_locked(now_m)
-        last = _SMS_SEND_AT.get(mobile, 0.0)
-        if now_m - last < SMS_SEND_COOLDOWN_SEC:
-            raise HTTPException(status_code=429, detail="发送过于频繁，请 1 分钟后再试")
-        win = _SMS_SEND_HOUR_COUNT.get(mobile)
-        if win:
-            wstart, cnt = win
-            if now_m - wstart > 3600:
-                _SMS_SEND_HOUR_COUNT[mobile] = (now_m, 1)
-            elif cnt >= SMS_MAX_PER_HOUR:
-                raise HTTPException(status_code=429, detail="该号码本小时发送次数过多，请稍后再试")
-            else:
-                _SMS_SEND_HOUR_COUNT[mobile] = (wstart, cnt + 1)
-        else:
-            _SMS_SEND_HOUR_COUNT[mobile] = (now_m, 1)
-        code = f"{random.randint(0, 999999):06d}"
-        _SMS_CODE_STORE[mobile] = (code, now_m + SMS_CODE_TTL_SEC)
-        _SMS_SEND_AT[mobile] = now_m
-    try:
-        send_verify_code_sms(account=acc, api_key=pwd, mobile=mobile, code=code)
-    except RuntimeError as e:
-        with _SMS_LOCK:
-            _SMS_CODE_STORE.pop(mobile, None)
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    logger.info("[auth/sms/send] mobile=%s ok=1", mobile[:3] + "****" + mobile[-4:])
-    return {"ok": True}
+    if not _auth_server_base_or_none():
+        raise HTTPException(status_code=503, detail="未配置认证中心（AUTH_SERVER_BASE），无法发送短信")
+    return await _proxy_auth_json("/auth/sms/send", body.model_dump(), request)
 
 
 @router.post("/register-phone", response_model=Token, summary="手机号注册（短信验证码 + 密码）")
-def register_phone(request: Request, body: RegisterPhoneBody, db: Session = Depends(get_db)):
+async def register_phone(request: Request, body: RegisterPhoneBody, db: Session = Depends(get_db)):
     from ..core.config import settings
 
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
     use_independent = getattr(settings, "lobster_independent_auth", True)
     if edition != "online" or not use_independent:
         raise HTTPException(status_code=400, detail="当前版本不支持自主注册")
-    mobile = _normalize_cn_mobile(body.phone)
-    code_in = (body.code or "").strip()
-    if not code_in or len(code_in) > 8:
-        raise HTTPException(status_code=400, detail="短信验证码无效")
-    now_m = time.monotonic()
-    with _SMS_LOCK:
-        _purge_sms_stale_locked(now_m)
-        row = _SMS_CODE_STORE.get(mobile)
-        if not row or row[1] <= now_m or row[0] != code_in:
-            raise HTTPException(status_code=400, detail="短信验证码错误或已过期，请重新获取")
-        del _SMS_CODE_STORE[mobile]
-    if len(body.password or "") < 6:
-        raise HTTPException(status_code=400, detail="密码至少 6 位")
-    email = _phone_account_email(mobile)
-    existing = db.query(User).filter(User.email == email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="该手机号已注册，请直接登录")
-    user = User(
-        email=email,
-        hashed_password=get_password_hash(body.password),
-        credits=REGISTER_INITIAL_CREDITS,
-        role="user",
-        preferred_model="sutui",
-        brand_mark=_normalize_brand_mark(body.brand_mark),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    access_token = create_access_token(data={"sub": str(user.id)})
-    persist_channel_fallback_for_login(
-        jwt_token=access_token, request=request, user_id=user.id, db=db
-    )
-    return Token(access_token=access_token)
+    if not _auth_server_base_or_none():
+        raise HTTPException(status_code=503, detail="未配置认证中心（AUTH_SERVER_BASE），无法注册")
+    data = await _proxy_auth_json("/auth/register-phone", body.model_dump(), request)
+    access_token = str(data.get("access_token") or "").strip()
+    if access_token:
+        _persist_remote_token_for_openclaw(access_token, request)
+    return data
 
 
 @router.post("/persist-openclaw-channel-fallback", summary="浏览器 OAuth 落 token 后同步 OpenClaw 微信渠道凭证")
@@ -602,7 +635,26 @@ async def persist_weixin_openclaw_peer_endpoint(
 
 
 @router.get("/me", response_model=UserOut, summary="当前用户信息")
-def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(
+    request: Request,
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    base = _auth_server_base_or_none()
+    if base:
+        headers = _forward_headers_to_auth_server(request, include_auth=True)
+        if "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {token}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.get(f"{base}/auth/me", headers=headers)
+            except httpx.RequestError as e:
+                logger.warning("[auth-proxy] me request failed: %s", e)
+                raise HTTPException(status_code=503, detail="认证中心不可达") from e
+        if resp.status_code >= 400:
+            _raise_auth_server_response(resp)
+        return resp.json()
+    current_user = await get_current_user(token=token, db=db)
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
     preferred = "sutui" if edition == "online" else (getattr(current_user, "preferred_model", "openclaw") or "openclaw")
     return UserOut(

@@ -35,6 +35,7 @@ OTA_PATHS: tuple[str, ...] = (
     "upstream_urls.json",
     ".env",
     "必火AI员工.exe",
+    "desktop/webview2",
     "openclaw",
     "requirements.txt",
     ".env.example",
@@ -93,12 +94,15 @@ _OTA_SECRET_REL_PATHS = {
     "openclaw/update-check.json",
 }
 
+_OTA_SKIP_DIR_RELS = {
+    "desktop/webview2/fixed-runtime",
+}
+
 # 本地调试/抓页面临时目录，非交付代码（曾占 OTA 包约 16MB+）
 # skills 下各技能的 runs/job_runs 为执行缓存（音视频等），不应随 OTA 分发（否则单包可膨胀 200MB+）
 OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     ".updates",
     "scripts/_probe",
-    "static/hifly_previews",
     "static/uploads",
 )
 
@@ -152,6 +156,8 @@ def _skip_file(rel: str) -> bool:
         return True
     if any(nr.startswith(p) for p in OTA_SKIP_REL_PREFIXES):
         return True
+    if any(r.startswith(p + "/") or r == p for p in _OTA_SKIP_DIR_RELS):
+        return True
     if len(parts) >= 3 and parts[0] == "skills" and parts[2] in _OTA_SKIP_SKILLS_DIRS:
         return True
     if (
@@ -172,7 +178,8 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
     if base.is_file():
         if _skip_file(rel_dir):
             return
-        zf.write(base, rel_dir)
+        if rel_dir not in zf.NameToInfo:
+            zf.write(base, rel_dir)
         return
     for dirpath, dirnames, filenames in os.walk(base):
         rel_here = _norm(os.path.relpath(dirpath, str(root)))
@@ -181,6 +188,7 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
             for d in dirnames
             if d not in SKIP_DIR_NAMES
             and not any(_norm(os.path.join(rel_here, d)).startswith(p) for p in OTA_SKIP_REL_PREFIXES)
+            and _norm(os.path.join(rel_here, d)).lower() not in _OTA_SKIP_DIR_RELS
             and not (
                 not any(
                     _norm(os.path.join(rel_here, d)).startswith(p.rstrip("/"))
@@ -196,6 +204,8 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
             full = Path(dirpath) / name
             rel = _norm(os.path.relpath(str(full), str(root)))
             if _skip_file(rel):
+                continue
+            if rel in zf.NameToInfo:
                 continue
             try:
                 if full.is_symlink() and not full.exists():

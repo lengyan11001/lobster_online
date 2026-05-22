@@ -223,6 +223,29 @@ def build_env() -> dict[str, str]:
     return env
 
 
+def find_fixed_webview2_runtime() -> Path | None:
+    base = ROOT / "desktop" / "webview2"
+    candidates = [
+        base / "fixed-runtime",
+        base / "Microsoft.WebView2.FixedVersionRuntime",
+    ]
+    candidates.extend(sorted(base.glob("Microsoft.WebView2.FixedVersionRuntime.*.x64")))
+    candidates.extend(sorted(base.glob("Microsoft.WebView2.FixedVersionRuntime.*")))
+    for path in candidates:
+        if not path.is_dir():
+            continue
+        exe = path / "msedgewebview2.exe"
+        if exe.is_file():
+            return path
+        try:
+            nested = next(path.rglob("msedgewebview2.exe"), None)
+        except Exception:
+            nested = None
+        if nested is not None and nested.is_file():
+            return nested.parent
+    return None
+
+
 def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -602,6 +625,17 @@ def choose_mcp_port(preferred: int, backend_port: int) -> int:
 def open_browser(url: str) -> None:
     log(f"opening system browser fallback: {url}")
     webbrowser.open(url)
+
+
+def open_legacy_browser_mode(port: int, mcp_port: int, env: dict[str, str], wait_seconds: int) -> int:
+    ok, url, backend_proc, mcp_proc, _error = start_services_blocking(port, mcp_port, env, wait_seconds)
+    if ok:
+        open_browser(url)
+        return 0
+    stop_process(backend_proc, "Backend")
+    stop_process(mcp_proc, "MCP")
+    start_bat("LegacyStart", "start.bat", env)
+    return 0
 
 
 def start_services_blocking(port: int, mcp_port: int, env: dict[str, str], wait_seconds: int) -> tuple[bool, str, subprocess.Popen | None, subprocess.Popen | None, str]:
@@ -1034,6 +1068,13 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
     except Exception as exc:
         log(f"pywebview unavailable: {exc}")
         return False, None, None
+    fixed_runtime = find_fixed_webview2_runtime()
+    if fixed_runtime is not None:
+        try:
+            webview.settings["WEBVIEW2_RUNTIME_PATH"] = str(fixed_runtime)
+            log(f"using bundled fixed WebView2 runtime: {fixed_runtime}")
+        except Exception as exc:
+            log(f"set bundled fixed WebView2 runtime failed: {exc}")
 
     runtime: dict[str, object] = {"backend_proc": None, "mcp_proc": None}
     try:
@@ -1109,31 +1150,12 @@ def main() -> int:
     log(f"launcher root={ROOT}")
 
     if args.browser:
-        ok, url, backend_proc, mcp_proc, _error = start_services_blocking(port, mcp_port, env, args.wait)
-        if not ok:
-            body = (
-                f"本机服务启动失败，页面无法打开。\n\n"
-                f"请查看：\n{ROOT / 'backend.log'}\n{ROOT / 'mcp.log'}\n{LOG_PATH}\n\n"
-                f"也可以先运行 install.bat 后重试。"
-            )
-            message_box(APP_NAME, body)
-            stop_process(backend_proc, "Backend")
-            stop_process(mcp_proc, "MCP")
-            return 1
-        open_browser(url)
-        return 0
+        return open_legacy_browser_mode(port, mcp_port, env, args.wait)
 
     window_width, window_height = adaptive_window_size(args.width, args.height)
     ok, backend_proc, mcp_proc = run_window(url, title, window_width, window_height, port, mcp_port, env, args.wait)
     if not ok:
-        open_browser(url)
-        message_box(
-            APP_NAME,
-            "当前电脑的 WebView2/pywebview 环境不可用，已自动改用系统浏览器打开客户端。\n\n"
-            "本机服务会继续在后台运行；如需停止，请关闭相关 python 进程或运行 stop.bat。\n\n"
-            "后续安装器应内置 Microsoft Edge WebView2 Runtime 以减少此问题。",
-        )
-        return 0
+        return open_legacy_browser_mode(port, mcp_port, env, args.wait)
 
     stop_process(backend_proc, "Backend")
     stop_process(mcp_proc, "MCP")

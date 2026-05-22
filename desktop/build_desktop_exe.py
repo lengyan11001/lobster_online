@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -43,7 +42,7 @@ def main() -> int:
 
     dist = root / "dist"
     dist.mkdir(exist_ok=True)
-    out = root / "dist" / f"{APP_NAME}.exe"
+    out = dist / f"{APP_NAME}.exe"
     csc = find_csc()
     if not csc:
         raise SystemExit("找不到 csc.exe，无法构建轻量启动器。请确认已安装 .NET Framework SDK 或 Visual Studio Build Tools。")
@@ -60,9 +59,12 @@ def main() -> int:
     ]
     subprocess.check_call(cmd, cwd=str(root))
 
+    root_out = root / f"{APP_NAME}.exe"
+    root_out.write_bytes(out.read_bytes())
+
     print()
     print(f"[desktop] Built: {out}")
-    print(f"[desktop] Lightweight launcher starts pythonw.exe desktop\\launcher.py without PyInstaller extraction.")
+    print(f"[desktop] Copied lightweight launcher to: {root_out}")
     return 0
 
 

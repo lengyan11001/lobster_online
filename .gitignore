@@ -7,6 +7,7 @@ assets/
 logs/
 dist/
 build/
+desktop/webview2/
 *.spec
 .pack_python_shim/
 

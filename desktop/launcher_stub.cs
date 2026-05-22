@@ -19,12 +19,7 @@ namespace LobsterDesktopLauncher
 
             if (!File.Exists(script) || string.IsNullOrWhiteSpace(runtime))
             {
-                MessageBox.Show(
-                    "客户端目录不完整，找不到 desktop\\launcher.py 或 python\\pythonw.exe。\n\n当前目录：" + root,
-                    "必火AI员工",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
+                StartLegacy(root);
                 return;
             }
 
@@ -41,7 +36,34 @@ namespace LobsterDesktopLauncher
             }
             catch (Exception ex)
             {
-                MessageBox.Show("启动失败：" + ex.Message, "必火AI员工", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                try
+                {
+                    File.AppendAllText(Path.Combine(root, "desktop_launcher.log"), "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] lightweight launcher failed: " + ex.Message + Environment.NewLine, Encoding.UTF8);
+                }
+                catch
+                {
+                }
+                StartLegacy(root);
+            }
+        }
+
+        private static void StartLegacy(string root)
+        {
+            string startBat = Path.Combine(root, "start.bat");
+            if (!File.Exists(startBat))
+            {
+                return;
+            }
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = startBat;
+                psi.WorkingDirectory = root;
+                psi.UseShellExecute = true;
+                Process.Start(psi);
+            }
+            catch
+            {
             }
         }
 
