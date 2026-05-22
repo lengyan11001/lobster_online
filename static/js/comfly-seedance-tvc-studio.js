@@ -281,8 +281,6 @@
   }
 
   function pipelineBase() {
-    var primary = (typeof API_BASE !== 'undefined' ? (API_BASE || '') : '').replace(/\/$/, '');
-    if (primary) return primary;
     return localBase();
   }
 

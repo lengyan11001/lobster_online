@@ -464,17 +464,25 @@ def start_bat(name: str, bat_name: str, env: dict[str, str]) -> subprocess.Popen
 
 def bundled_python() -> str:
     py = ROOT / "python" / "python.exe"
-    return str(py) if py.is_file() else sys.executable
+    if py.is_file():
+        return str(py)
+    if _is_frozen():
+        return ""
+    return sys.executable
 
 
 def run_client_code_update(env: dict[str, str]) -> None:
     script = ROOT / "scripts" / "check_client_code_update.py"
     if not script.is_file():
         return
+    py = bundled_python()
+    if not py:
+        log("CodeUpdate: skipped because no bundled python is available in frozen launcher")
+        return
     log("CodeUpdate: checking client code pack update")
     try:
         cp = subprocess.run(
-            [bundled_python(), str(script)],
+            [py, str(script)],
             cwd=str(ROOT),
             env=env,
             stdin=subprocess.DEVNULL,
