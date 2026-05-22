@@ -284,6 +284,49 @@
     return localBase();
   }
 
+  function downloadUrlForVideo(videoUrl, filename) {
+    var local = localBase();
+    var safeName = filename || 'seedance-tvc-result.mp4';
+    var rawUrl = String(videoUrl || '').trim();
+    var absoluteUrl = rawUrl;
+    try {
+      absoluteUrl = new URL(rawUrl, window.location.origin).href;
+    } catch (e) {}
+    if (!local) return absoluteUrl || rawUrl;
+    return local + '/api/hifly/video/download?url=' + encodeURIComponent(absoluteUrl || rawUrl) + '&filename=' + encodeURIComponent(safeName);
+  }
+
+  function openExternalUrl(url) {
+    if (!url) return;
+    var target = String(url || '').trim();
+    try {
+      target = new URL(target, window.location.origin).href;
+    } catch (e) {}
+    try {
+      var opened = window.open(target, '_blank', 'noopener');
+      if (opened) return;
+    } catch (e) {}
+    window.location.href = target;
+  }
+
+  function bindResultVideoActions() {
+    document.querySelectorAll('[data-seedance-video-download]').forEach(function(btn) {
+      btn.onclick = function() {
+        var url = btn.getAttribute('data-seedance-video-download') || '';
+        if (!url) return showMessage('视频地址为空，无法下载。');
+        openExternalUrl(downloadUrlForVideo(url, btn.getAttribute('data-download-filename') || 'seedance-tvc-result.mp4'));
+        showMessage('已发起下载。如果系统没有弹出下载，请点击“打开视频”后在浏览器中另存。');
+      };
+    });
+    document.querySelectorAll('[data-seedance-video-open]').forEach(function(btn) {
+      btn.onclick = function() {
+        var url = btn.getAttribute('data-seedance-video-open') || '';
+        if (!url) return showMessage('视频地址为空，无法打开。');
+        openExternalUrl(url);
+      };
+    });
+  }
+
   function stopPolling() {
     if (state.pollTimer) {
       clearTimeout(state.pollTimer);
@@ -629,7 +672,18 @@
       var bare = resultUrl.split('?')[0].toLowerCase();
       var looksVideo = /\.(mp4|mov|m4v|webm|mkv)$/.test(bare);
       if (looksVideo) {
-        videoSurface.innerHTML = '<video src="' + escapeHtml(resultUrl) + '" controls playsinline preload="metadata"></video>';
+        videoSurface.innerHTML = [
+          '<div class="seedance-result-video-wrap">',
+          '<div class="seedance-result-video-frame">',
+          '<video src="' + escapeHtml(resultUrl) + '" controls controlsList="nodownload" playsinline preload="metadata"></video>',
+          '</div>',
+          '<div class="seedance-result-video-actions">',
+          '<button type="button" class="btn btn-primary btn-sm" data-seedance-video-download="' + escapeHtml(resultUrl) + '" data-download-filename="seedance-tvc-result.mp4">下载视频</button>',
+          '<button type="button" class="btn btn-ghost btn-sm" data-seedance-video-open="' + escapeHtml(resultUrl) + '">打开视频</button>',
+          '</div>',
+          '</div>'
+        ].join('');
+        bindResultVideoActions();
       } else {
         videoSurface.innerHTML = [
           '<div class="tvc-video-placeholder">',
