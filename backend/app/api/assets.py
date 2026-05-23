@@ -11,7 +11,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -644,6 +644,42 @@ class ChatSessionBackupReq(BaseModel):
     key: str
     sessions: List[Any] = []
     last_session_id: Optional[str] = None
+
+
+class CreativeCandidateGroupReq(BaseModel):
+    group_name: str
+
+
+def _creative_candidate_group(meta: Optional[dict]) -> str:
+    if not isinstance(meta, dict):
+        return ""
+    current = str(meta.get("creative_candidate_group") or "").strip()
+    if current:
+        return current[:40]
+    raw = meta.get("creative_candidate_groups")
+    if isinstance(raw, str):
+        raw_items = re.split(r"[,\s，、;；]+", raw)
+    elif isinstance(raw, list):
+        raw_items = raw
+    else:
+        raw_items = []
+    for item in raw_items:
+        name = str(item or "").strip()
+        if name:
+            return name[:40]
+    return ""
+
+
+def _creative_candidate_groups(meta: Optional[dict]) -> List[str]:
+    group = _creative_candidate_group(meta)
+    return [group] if group else []
+
+
+def _clean_creative_group_name(value: str) -> str:
+    name = re.sub(r"\s+", " ", str(value or "").strip())
+    if not name:
+        raise HTTPException(400, detail="备选组名字不能为空")
+    return name[:40]
 
 
 def _safe_chat_backup_key(key: str) -> str:
@@ -1444,6 +1480,7 @@ def list_assets(
     request: Request,
     media_type: Optional[str] = None,
     q: Optional[str] = None,
+    creative_group: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -1459,8 +1496,19 @@ def list_assets(
             | (Asset.prompt.ilike(pat))
             | (Asset.filename.ilike(pat))
         )
-    total = query.count()
-    rows = query.order_by(Asset.created_at.desc()).offset(offset).limit(min(limit, 200)).all()
+    creative_group_name = (creative_group or "").strip()
+    max_limit = min(limit, 200)
+    if creative_group_name:
+        matched = [
+            row
+            for row in query.order_by(Asset.created_at.desc()).all()
+            if _creative_candidate_group(row.meta) == creative_group_name
+        ]
+        total = len(matched)
+        rows = matched[offset : offset + max_limit]
+    else:
+        total = query.count()
+        rows = query.order_by(Asset.created_at.desc()).offset(offset).limit(max_limit).all()
     out = []
     for r in rows:
         mt = (r.media_type or "").lower()
@@ -1508,10 +1556,53 @@ def list_assets(
                 "prompt": r.prompt,
                 "model": r.model,
                 "tags": r.tags,
+                "creative_candidate_group": _creative_candidate_group(r.meta),
+                "creative_candidate_groups": _creative_candidate_groups(r.meta),
                 "created_at": r.created_at.isoformat() if r.created_at else "",
             }
         )
     return {"total": total, "assets": out}
+
+
+@router.get("/api/assets/creative-candidate-groups", summary="创意成片备选素材组列表")
+def list_creative_candidate_groups(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    rows = db.query(Asset).filter(Asset.user_id == current_user.id, Asset.media_type == "image").all()
+    groups: Dict[str, int] = {}
+    for row in rows:
+        name = _creative_candidate_group(row.meta)
+        if name:
+            groups[name] = groups.get(name, 0) + 1
+    return {
+        "ok": True,
+        "groups": [
+            {"name": name, "count": count}
+            for name, count in sorted(groups.items(), key=lambda kv: (-kv[1], kv[0]))
+        ],
+    }
+
+
+@router.post("/api/assets/{asset_id}/creative-candidate-groups", summary="加入创意成片备选素材组")
+def add_asset_to_creative_candidate_group(
+    asset_id: str,
+    body: CreativeCandidateGroupReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    if (row.media_type or "").strip().lower() != "image":
+        raise HTTPException(400, detail="只有图片素材可以设为创意成片备选素材")
+    group_name = _clean_creative_group_name(body.group_name)
+    meta = dict(row.meta or {})
+    meta["creative_candidate_group"] = group_name
+    meta["creative_candidate_groups"] = [group_name]
+    row.meta = meta
+    db.commit()
+    return {"ok": True, "asset_id": row.asset_id, "group_name": group_name, "groups": [group_name]}
 
 
 # ── Get single + serve file ──────────────────────────────────────
@@ -1685,6 +1776,8 @@ def get_asset(
         "open_url": open_url,
         "prompt": a.prompt,
         "tags": a.tags,
+        "creative_candidate_group": _creative_candidate_group(a.meta),
+        "creative_candidate_groups": _creative_candidate_groups(a.meta),
         "created_at": a.created_at.isoformat() if a.created_at else "",
     }
 

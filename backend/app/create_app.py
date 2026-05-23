@@ -560,6 +560,24 @@ def _migrate_user_client_installation_id():
         logger.warning("Migration user client_installation_id skipped: %s", e)
 
 
+def _migrate_assets_meta_column():
+    """Older client DBs may have assets created before Asset.meta existed."""
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        if not insp.has_table("assets"):
+            return
+        cols = [c["name"] for c in insp.get_columns("assets")]
+        if "meta" in cols:
+            return
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE assets ADD COLUMN meta JSON"))
+        logger.info("Migrated assets.meta column")
+    except Exception as e:
+        logger.warning("Migration assets.meta skipped: %s", e)
+
+
 def _migrate_publish_account_creator_schedule_v2():
     """interval + next_run_at；旧表可能仅有 daily 时间点字段。"""
     from sqlalchemy import text
@@ -840,6 +858,7 @@ def create_app() -> FastAPI:
     _migrate_user_wechat_openid()
     _migrate_user_brand_mark()
     _migrate_user_client_installation_id()
+    _migrate_assets_meta_column()
     _migrate_publish_account_creator_schedule_v2()
     _migrate_publish_account_creator_schedule_v3()
     _migrate_publish_account_creator_schedule_v4()

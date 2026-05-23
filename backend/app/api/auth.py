@@ -98,7 +98,7 @@ class SmsSendBody(BaseModel):
 class RegisterPhoneBody(BaseModel):
     phone: str
     code: str
-    password: str
+    password: Optional[str] = None
     brand_mark: Optional[str] = None
     parent_account: Optional[str] = None
 
@@ -544,10 +544,10 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
     use_independent = getattr(settings, "lobster_independent_auth", True)
     if edition != "online" or not use_independent:
         raise HTTPException(status_code=400, detail="当前版本不支持自主注册")
-    raise HTTPException(status_code=400, detail="已关闭账号密码注册，请使用手机号与短信验证码注册")
+    raise HTTPException(status_code=400, detail="已关闭账号密码注册，请使用手机号验证码登录/注册")
 
 
-@router.post("/sms/send", summary="发送手机注册短信验证码（需先通过图形验证码）")
+@router.post("/sms/send", summary="发送手机登录/注册短信验证码（需先通过图形验证码）")
 async def send_register_sms(body: SmsSendBody, request: Request):
     from ..core.config import settings
 
@@ -560,7 +560,7 @@ async def send_register_sms(body: SmsSendBody, request: Request):
     return await _proxy_auth_json("/auth/sms/send", body.model_dump(), request)
 
 
-@router.post("/register-phone", response_model=Token, summary="手机号注册（短信验证码 + 密码）")
+@router.post("/register-phone", response_model=Token, summary="手机号验证码注册和登录")
 async def register_phone(request: Request, body: RegisterPhoneBody, db: Session = Depends(get_db)):
     from ..core.config import settings
 

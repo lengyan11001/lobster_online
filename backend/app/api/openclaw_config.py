@@ -2039,7 +2039,7 @@ def _default_recharge_shops():
     """默认充值档位（当 get_pay_info_list 失败时使用）。"""
     return [
         {"shop_id": 0, "money_yuan": 100, "title": "100 元 - 10000 算力"},
-        {"shop_id": 0, "money_yuan": 200, "title": "200 元 - 20000 算力"},
+        {"shop_id": 0, "money_yuan": 300, "title": "300 元 - 30000 算力"},
         {"shop_id": 0, "money_yuan": 500, "title": "500 元 - 50000 算力"},
         {"shop_id": 0, "money_yuan": 1000, "title": "1000 元 - 100000 算力"},
     ]

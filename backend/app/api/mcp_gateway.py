@@ -313,7 +313,7 @@ async def mcp_gateway_proxy(request: Request) -> Response:
     try:
         _t = MCP_GATEWAY_FORWARD_TIMEOUT_SEC
         _timeout = httpx.Timeout(_t, connect=min(60.0, _t))
-        async with httpx.AsyncClient(timeout=_timeout) as client:
+        async with httpx.AsyncClient(timeout=_timeout, trust_env=False) as client:
             backend_url = _mcp_backend_url()
             r = await client.post(backend_url, content=body, headers=headers)
         fwd_ms = int((time.perf_counter() - t_fwd0) * 1000)

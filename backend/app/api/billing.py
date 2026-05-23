@@ -27,7 +27,7 @@ _CUSTOM_CONFIGS_FILE = _BASE_DIR / "custom_configs.json"
 _DEFAULT_SKILL_UNLOCK = {"min_yuan": 98, "max_yuan": 198}
 _DEFAULT_CREDIT_PACKAGES = [
     {"price_yuan": 100, "credits": 10000, "label": "100元 - 10000算力"},
-    {"price_yuan": 200, "credits": 20000, "label": "200元 - 20000算力"},
+    {"price_yuan": 300, "credits": 30000, "label": "300元 - 30000算力"},
     {"price_yuan": 500, "credits": 50000, "label": "500元 - 50000算力"},
     {"price_yuan": 1000, "credits": 100000, "label": "1000元 - 100000算力"},
 ]
@@ -75,10 +75,17 @@ def _get_billing_pricing() -> dict[str, Any]:
                 price = p.get("price_yuan") or p.get("price")
                 credits = p.get("credits")
                 if price is not None and credits is not None:
-                    label = (p.get("label") or "").strip() or f"{int(price)}元 - {int(credits)}算力"
+                    price_int = int(price)
+                    credits_int = int(credits)
+                    label = (p.get("label") or "").strip()
+                    if price_int == 200 and credits_int == 20000:
+                        price_int = 300
+                        credits_int = 30000
+                        label = "300元 - 30000算力"
+                    label = label or f"{price_int}元 - {credits_int}算力"
                     out.append({
-                        "price_yuan": int(price),
-                        "credits": int(credits),
+                        "price_yuan": price_int,
+                        "credits": credits_int,
                         "label": label,
                     })
             if out:

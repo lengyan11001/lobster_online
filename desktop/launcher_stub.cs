@@ -13,9 +13,8 @@ namespace LobsterDesktopLauncher
         {
             string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string script = Path.Combine(root, "desktop", "launcher.py");
-            string pythonw = Path.Combine(root, "python", "pythonw.exe");
-            string python = Path.Combine(root, "python", "python.exe");
-            string runtime = File.Exists(pythonw) ? pythonw : (File.Exists(python) ? python : "");
+            string runtimeArgs = "";
+            string runtime = FindPythonRuntime(root, out runtimeArgs);
 
             if (!File.Exists(script) || string.IsNullOrWhiteSpace(runtime))
             {
@@ -27,7 +26,7 @@ namespace LobsterDesktopLauncher
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = runtime;
-                psi.Arguments = Quote(script) + BuildForwardArgs(args);
+                psi.Arguments = runtimeArgs + Quote(script) + BuildForwardArgs(args);
                 psi.WorkingDirectory = root;
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
@@ -45,6 +44,76 @@ namespace LobsterDesktopLauncher
                 }
                 StartLegacy(root);
             }
+        }
+
+        private static string FindPythonRuntime(string root, out string runtimeArgs)
+        {
+            runtimeArgs = "";
+            string pythonw = Path.Combine(root, "python", "pythonw.exe");
+            if (File.Exists(pythonw))
+            {
+                return pythonw;
+            }
+            string python = Path.Combine(root, "python", "python.exe");
+            if (File.Exists(python))
+            {
+                return python;
+            }
+
+            string found = FindOnPath("pythonw.exe");
+            if (!string.IsNullOrWhiteSpace(found))
+            {
+                return found;
+            }
+            found = FindOnPath("python.exe");
+            if (!string.IsNullOrWhiteSpace(found))
+            {
+                return found;
+            }
+            found = FindOnPath("pyw.exe");
+            if (!string.IsNullOrWhiteSpace(found))
+            {
+                runtimeArgs = "-3 ";
+                return found;
+            }
+            found = FindOnPath("py.exe");
+            if (!string.IsNullOrWhiteSpace(found))
+            {
+                runtimeArgs = "-3 ";
+                return found;
+            }
+            return "";
+        }
+
+        private static string FindOnPath(string fileName)
+        {
+            string pathValue = Environment.GetEnvironmentVariable("PATH") ?? "";
+            foreach (string rawDir in pathValue.Split(Path.PathSeparator))
+            {
+                string dir = (rawDir ?? "").Trim().Trim('"');
+                if (string.IsNullOrWhiteSpace(dir))
+                {
+                    continue;
+                }
+                try
+                {
+                    string candidate = Path.Combine(dir, fileName);
+                    if (File.Exists(candidate) && !IsWindowsAppsAlias(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            return "";
+        }
+
+        private static bool IsWindowsAppsAlias(string path)
+        {
+            string value = (path ?? "").ToLowerInvariant();
+            return value.Contains("\\microsoft\\windowsapps\\");
         }
 
         private static void StartLegacy(string root)

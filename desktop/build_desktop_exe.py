@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 
-APP_NAME = "必火AI员工"
+APP_NAME = "必火智能AI"
 
 
 def find_csc() -> str | None:

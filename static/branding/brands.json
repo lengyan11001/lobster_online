@@ -5,8 +5,8 @@
       "document_title": "必火AI员工",
       "logo_primary": "必火",
       "logo_accent": "AI员工",
-      "hero_title": "龙虾 - 你的私人 AI 助手",
-      "hero_subtitle": "对话驱动，随装随用，能力无限扩展",
+      "hero_title": "龙虾 - 您的私人 AI 助手",
+      "hero_subtitle": "必火智能的远景：\n成为全球领先的企业AI员工解决方案服务商",
       "icons": {
         "favicon_32": "/static/bihu_32.png",
         "apple_touch": "/static/bihu_128.png",
@@ -16,17 +16,17 @@
       },
       "install": {
         "desktop_ico": "static/bihu_box.ico",
-        "shortcut_lnk_name": "Bihu_AI_BOX.lnk",
-        "shortcut_description": "Bihu AI BOX - Lobster local server",
-        "install_complete_hint": "Double-click desktop Bihu_AI_BOX.lnk or start.bat in this folder"
+        "shortcut_lnk_name": "必火智能AI.lnk",
+        "shortcut_description": "必火智能AI - 本地客户端",
+        "install_complete_hint": "双击桌面 必火智能AI.lnk 或本目录 start.bat 启动"
       }
     },
     "yingshi": {
       "document_title": "InsClaw",
       "logo_primary": "Ins",
       "logo_accent": "Claw",
-      "hero_title": "InsClaw - 你的私人 AI 助手",
-      "hero_subtitle": "对话驱动，随装随用，能力无限扩展",
+      "hero_title": "InsClaw - 您的私人 AI 助手",
+      "hero_subtitle": "必火智能的远景：\n成为全球领先的企业AI员工解决方案服务商",
       "icons": {
         "favicon_32": "/static/yingshi_32.png",
         "apple_touch": "/static/yingshi_128.png",

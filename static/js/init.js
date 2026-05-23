@@ -1,4 +1,4 @@
-/** 在线版：独立认证时优先显示账号+验证码登录/注册，扫码为备选；/api/edition 可覆盖 */
+/** 在线版：独立认证时显示手机号验证码注册和登录；/api/edition 可覆盖。 */
 var USE_INDEPENDENT_AUTH = true;
 
 (function bindDesktopHardRefresh() {
@@ -60,6 +60,17 @@ var USE_INDEPENDENT_AUTH = true;
 
 /** 本机后端 /api/branding 与 .env LOBSTER_BRAND_MARK、static/branding/brands.json 一致 */
 function applyBrandingFromApi() {
+  function setHeroSubtitle(el, value) {
+    if (!el) return;
+    var lines = String(value == null ? '' : value).split(/\r?\n/);
+    el.textContent = '';
+    lines.forEach(function(line) {
+      var span = document.createElement('span');
+      span.className = 'hero-subtitle-line';
+      span.textContent = line;
+      el.appendChild(span);
+    });
+  }
   var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
   if (!base) return;
   fetch(base + '/api/branding', { credentials: 'same-origin' })
@@ -90,7 +101,7 @@ function applyBrandingFromApi() {
       var heroH = document.getElementById('brandHeroTitle');
       var heroP = document.getElementById('brandHeroSubtitle');
       if (heroH && b.hero_title != null) heroH.textContent = b.hero_title;
-      if (heroP && b.hero_subtitle != null) heroP.textContent = b.hero_subtitle;
+      if (heroP && b.hero_subtitle != null) setHeroSubtitle(heroP, b.hero_subtitle);
     })
     .catch(function(e) {
       if (typeof console !== 'undefined') console.warn('[branding]', e);
@@ -136,23 +147,10 @@ function billingCreditsPerYuan(p) {
   return Math.round((c / yuan) * 100) / 100;
 }
 function billingRatioHintLinesHtml(packages) {
-  if (!Array.isArray(packages) || !packages.length) return '';
-  return packages.map(function(p) {
-    var yuan = billingPackageYuan(p);
-    var credits = Number(p && p.credits || 0);
-    if (!yuan || !credits) return '';
-    return escapeHtml(yuan + ' 元到账 ' + credits + ' 算力（1 元 = ' + billingCreditsPerYuan(p) + ' 算力）');
-  }).filter(Boolean).join('<br>');
+  return '';
 }
 function billingRatioHintPlainText(packages) {
-  if (!Array.isArray(packages) || !packages.length) return '';
-  var lines = packages.map(function(p) {
-    var yuan = billingPackageYuan(p);
-    var credits = Number(p && p.credits || 0);
-    if (!yuan || !credits) return '';
-    return yuan + ' 元到账 ' + credits + ' 算力，按 1 元 = ' + billingCreditsPerYuan(p) + ' 算力计算';
-  }).filter(Boolean);
-  return lines.join('；');
+  return '';
 }
 
 function loadLoginCaptcha() {
@@ -203,35 +201,23 @@ function loadRegisterCaptcha() {
 }
 
 function applyEditionLoginUI() {
-  var loginView = document.getElementById('authLoginView');
   var registerView = document.getElementById('authRegisterView');
-  var tabLogin = document.getElementById('authTabLogin');
-  var tabRegister = document.getElementById('authTabRegister');
   var ownWechatBlock = document.getElementById('ownWechatLoginBlock');
-  /** 仅 online 且关闭独立认证时走服务号扫码；其余为账号密码登录，且 login 打 API_BASE 时须验证码 */
+  /** 仅 online 且关闭独立认证时走服务号扫码；其余走手机号验证码注册和登录。 */
   if (EDITION === 'online' && !USE_INDEPENDENT_AUTH) {
-    if (loginView) loginView.style.display = 'none';
     if (registerView) registerView.style.display = 'none';
-    if (tabLogin) tabLogin.style.display = 'none';
-    if (tabRegister) tabRegister.style.display = 'none';
     if (ownWechatBlock) {
       ownWechatBlock.style.display = 'block';
       startOwnWechatLogin();
     }
   } else {
-    if (loginView) loginView.style.display = ''; if (registerView) registerView.style.display = 'none'; loadLoginCaptcha();
     if (ownWechatBlock) ownWechatBlock.style.display = 'none';
-    if (tabLogin) tabLogin.style.display = ''; if (tabRegister) tabRegister.style.display = '';
-    var loginImg = document.getElementById('loginCaptchaImg');
-    var loginRefresh = document.getElementById('loginCaptchaRefresh');
-    if (loginImg) loginImg.onclick = function() { loadLoginCaptcha(); };
-    if (loginRefresh) loginRefresh.onclick = function(e) { e.preventDefault(); loadLoginCaptcha(); };
+    if (registerView) registerView.style.display = '';
     var regImg = document.getElementById('registerCaptchaImg');
     var regRefresh = document.getElementById('registerCaptchaRefresh');
     if (regImg) regImg.onclick = function() { loadRegisterCaptcha(); };
     if (regRefresh) regRefresh.onclick = function(e) { e.preventDefault(); loadRegisterCaptcha(); };
-    if (tabLogin) tabLogin.onclick = function() { if (loginView) loginView.style.display = ''; if (registerView) registerView.style.display = 'none'; loadLoginCaptcha(); if (tabLogin) { tabLogin.style.borderBottomColor = 'var(--accent)'; tabLogin.style.color = 'var(--accent)'; } if (tabRegister) { tabRegister.style.borderBottomColor = 'transparent'; tabRegister.style.color = 'var(--text-muted)'; } };
-    if (tabRegister) tabRegister.onclick = function() { if (loginView) loginView.style.display = 'none'; if (registerView) registerView.style.display = ''; loadRegisterCaptcha(); if (tabRegister) { tabRegister.style.borderBottomColor = 'var(--accent)'; tabRegister.style.color = 'var(--accent)'; } if (tabLogin) { tabLogin.style.borderBottomColor = 'transparent'; tabLogin.style.color = 'var(--text-muted)'; } };
+    loadRegisterCaptcha();
   }
 }
 (function fetchEdition() {
@@ -396,39 +382,42 @@ window.addEventListener('message', function(e) {
   }
 });
 
-document.getElementById('loginForm').addEventListener('submit', function(e) {
-  e.preventDefault();
-  var fd = new FormData(this);
-  var body = new URLSearchParams({
-    username: fd.get('username'),
-    password: fd.get('password'),
-    captcha_id: fd.get('captcha_id') || '',
-    captcha_answer: fd.get('captcha_answer') || ''
-  });
-  var msgEl = document.getElementById('loginMsg');
-  fetch(API_BASE + '/auth/login', {
-    method: 'POST',
-    body: body,
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : ''
-    }
-  })
-    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
-    .then(function(x) {
-      if (x.ok) {
-        token = x.data.access_token;
-        localStorage.setItem('token', token);
-        if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
-        showMsg(msgEl, '登录成功', false);
-        loadDashboard();
-      } else {
-        showMsg(msgEl, normalizeAuthErrorDetail(x.data.detail) || '登录失败', true);
-        if (typeof loadLoginCaptcha === 'function') loadLoginCaptcha();
+var loginForm = document.getElementById('loginForm');
+if (loginForm) {
+  loginForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var fd = new FormData(this);
+    var body = new URLSearchParams({
+      username: fd.get('username'),
+      password: fd.get('password'),
+      captcha_id: fd.get('captcha_id') || '',
+      captcha_answer: fd.get('captcha_answer') || ''
+    });
+    var msgEl = document.getElementById('loginMsg');
+    fetch(API_BASE + '/auth/login', {
+      method: 'POST',
+      body: body,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : ''
       }
     })
-    .catch(function() { showMsg(msgEl, '网络错误', true); if (typeof loadLoginCaptcha === 'function') loadLoginCaptcha(); });
-});
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(x) {
+        if (x.ok) {
+          token = x.data.access_token;
+          localStorage.setItem('token', token);
+          if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
+          showMsg(msgEl, '登录成功', false);
+          loadDashboard();
+        } else {
+          showMsg(msgEl, normalizeAuthErrorDetail(x.data.detail) || '登录失败', true);
+          if (typeof loadLoginCaptcha === 'function') loadLoginCaptcha();
+        }
+      })
+      .catch(function() { showMsg(msgEl, '网络错误', true); if (typeof loadLoginCaptcha === 'function') loadLoginCaptcha(); });
+  });
+}
 function validateCnPhone(raw) {
   var d = String(raw || '').replace(/\D/g, '');
   if (!d) return null;
@@ -509,14 +498,12 @@ if (registerForm) {
     e.preventDefault();
     var phone = validateCnPhone((document.getElementById('registerPhone') || {}).value);
     var smsCode = ((document.getElementById('registerSmsCode') || {}).value || '').trim();
-    var password = (document.getElementById('registerPassword') || {}).value || '';
     var msgEl = document.getElementById('registerMsg');
     if (!phone) { showMsg(msgEl, '请输入有效的 11 位手机号', true); return; }
     if (!smsCode) { showMsg(msgEl, '请填写短信验证码', true); return; }
-    if (password.length < 6) { showMsg(msgEl, '密码至少 6 位', true); return; }
 
     function postRegisterPhone(brandMark, parentAccount) {
-      var payload = { phone: phone, code: smsCode, password: password };
+      var payload = { phone: phone, code: smsCode };
       if (brandMark) payload.brand_mark = brandMark;
       if (parentAccount) payload.parent_account = parentAccount;
       fetch(API_BASE + '/auth/register-phone', {
@@ -533,12 +520,12 @@ if (registerForm) {
             token = x.data.access_token;
             localStorage.setItem('token', token);
             if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
-            showMsg(msgEl, '注册成功', false);
+            showMsg(msgEl, '登录成功', false);
             setRegisterSmsButtonCooldown(0);
             loadDashboard();
           } else {
             var detail = normalizeAuthErrorDetail(x.data.detail);
-            showMsg(msgEl, detail || '注册失败', true);
+            showMsg(msgEl, detail || '登录失败', true);
           }
         })
         .catch(function() { showMsg(msgEl, '网络错误', true); });
@@ -582,12 +569,21 @@ function syncOpenclawMemoryFromServerIfOnline() {
   _syncOpenclawMemoryFromCloud({ silent: true, reload: false }).catch(function() {});
 }
 
+function setAuthenticatedChrome(isAuthenticated) {
+  var header = document.getElementById('appHeader');
+  var nav = document.getElementById('appTopNav');
+  var actions = document.getElementById('headerActions');
+  if (header) header.classList.toggle('auth-guest', !isAuthenticated);
+  if (nav) nav.style.display = isAuthenticated ? 'flex' : 'none';
+  if (actions) actions.style.display = isAuthenticated ? 'flex' : 'none';
+}
+
 function loadDashboard() {
   if (!token) {
     if (typeof window.resetChatSessionsForLogout === 'function') window.resetChatSessionsForLogout();
     document.getElementById('authPanel').style.display = 'block';
     document.getElementById('dashboard').classList.remove('visible');
-    document.getElementById('headerActions').style.display = 'none';
+    setAuthenticatedChrome(false);
     var heroEl = document.getElementById('pageHero');
     if (heroEl) heroEl.style.display = '';
     return;
@@ -612,7 +608,7 @@ function loadDashboard() {
       document.getElementById('headerUserEmail').textContent = (d.email || '').split('@')[0];
       var avatarEl = document.getElementById('headerUserAvatar');
       if (avatarEl) avatarEl.textContent = ((d.email || 'U').trim().charAt(0) || 'U').toUpperCase();
-      document.getElementById('headerActions').style.display = 'flex';
+      setAuthenticatedChrome(true);
       document.getElementById('authPanel').style.display = 'none';
       document.getElementById('dashboard').classList.add('visible');
       var heroEl = document.getElementById('pageHero');
@@ -828,7 +824,7 @@ document.getElementById('logout').addEventListener('click', function() {
   if (avatarEl) avatarEl.textContent = 'U';
   document.getElementById('dashboard').classList.remove('visible');
   document.getElementById('authPanel').style.display = 'block';
-  document.getElementById('headerActions').style.display = 'none';
+  setAuthenticatedChrome(false);
   var heroEl = document.getElementById('pageHero');
   if (heroEl) heroEl.style.display = '';
 });
@@ -869,10 +865,19 @@ function decorateWorkspacePages() {
       id: 'content-publish',
       kicker: '发布与运营',
       title: '发布中心',
-      desc: '统一管理发布账号、素材和发布记录，让生成结果能够顺手进入分发和运营阶段。',
+      desc: '统一管理发布账号和发布记录，让生成结果能够顺手进入分发和运营阶段。',
       actions: [
         { label: '刷新内容', clickId: 'refreshPublishBtn', primary: true },
         { label: '账号列表', jumpView: 'publish' }
+      ]
+    },
+    {
+      id: 'content-assets',
+      kicker: '素材管理',
+      title: '素材库',
+      desc: '管理图片、视频和创意成片备选素材组，让生成任务能直接复用本机素材。',
+      actions: [
+        { label: '刷新素材', clickId: 'assetTopRefreshBtn', primary: true }
       ]
     },
     {
@@ -1048,7 +1053,7 @@ function decorateWorkspaceSubsections() {
   });
   addSectionChrome(document.getElementById('pubTabAssets'), {
     kicker: 'Library',
-    title: readLabel('.pub-tab[data-pub-tab="assets"]', 'Assets'),
+    title: '素材列表',
     desc: 'Collect generated media in one place so it can flow naturally into chat, editing, and publishing.'
   });
   addSectionChrome(document.getElementById('pubTabTasks'), {
@@ -1106,6 +1111,7 @@ document.querySelectorAll('.nav-left-item').forEach(function(el) {
     }
     if (view === 'skill-store') { loadSkillStore(); if (typeof initOnlineSkillStore === 'function') initOnlineSkillStore(); }
     if (view === 'publish') { if (typeof initPublishView === 'function') initPublishView(); }
+    if (view === 'assets') { if (typeof initAssetLibraryView === 'function') initAssetLibraryView(); }
     if (view === 'scheduled-tasks') { if (typeof initScheduledTasksView === 'function') initScheduledTasksView(); }
     if (view === 'production') { if (typeof initProductionView === 'function') initProductionView(); }
     if (view === 'billing') { if (typeof loadBillingView === 'function') loadBillingView(); }
@@ -1356,7 +1362,7 @@ function loadBillingView() {
           });
           html += '</ul>';
         } else {
-          html = '<p style="margin:0;"><strong>算力套餐</strong>：100元/10000算力、200元/20000算力、500元/50000算力、1000元/100000算力。</p>';
+          html = '<p style="margin:0;"><strong>算力套餐</strong>：100元/10000算力、300元/30000算力、500元/50000算力、1000元/100000算力。</p>';
         }
         if (usageCosts.length) {
           html += '<p style="margin:0.65rem 0 0.35rem 0;"><strong>默认扣除</strong>：</p><ul style="margin:0;padding-left:1.25rem;">';

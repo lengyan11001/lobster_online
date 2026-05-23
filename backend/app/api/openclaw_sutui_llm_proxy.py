@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import time
 import uuid
 from typing import Any, AsyncIterator, Dict, Optional
 
@@ -74,6 +75,64 @@ def _upstream_resp_summary(data: Any) -> str:
     except Exception:
         s = str(slim)
     return s[:1200] if len(s) > 1200 else s
+
+
+def _message_from_error_payload(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in ("detail", "message", "msg"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    err = data.get("error")
+    if isinstance(err, str) and err.strip():
+        return err.strip()
+    if isinstance(err, dict):
+        for key in ("message", "detail", "msg", "code"):
+            val = err.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
+def _upstream_error_message(status_code: int, content: bytes, min_charge: str = "") -> str:
+    raw = (content or b"").decode("utf-8", "replace").strip()
+    msg = ""
+    if raw:
+        try:
+            msg = _message_from_error_payload(json.loads(raw))
+        except Exception:
+            msg = raw
+    if not msg:
+        msg = f"上游模型服务返回 HTTP {status_code}。"
+    if status_code == 402 and not any(k in msg for k in ("积分", "算力", "余额", "充值", "不足")):
+        need = (min_charge or "").strip()
+        need_text = f"单次最低需 {need} 算力" if need else "算力不足"
+        msg = f"积分不足：LLM 对话{need_text}，请先充值后再试。"
+    return msg[:1200]
+
+
+def _openai_stream_text_event(text: str, *, model: str) -> bytes:
+    completion_id = f"chatcmpl_lobster_error_{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    def _chunk(delta: Dict[str, Any], finish_reason: Optional[str] = None) -> str:
+        payload = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model or "deepseek-chat",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+    body = (
+        _chunk({"role": "assistant"})
+        + _chunk({"content": text})
+        + _chunk({}, "stop")
+        + "data: [DONE]\n\n"
+    )
+    return body.encode("utf-8")
 
 
 def _response_has_fake_tool_text(data: Any) -> bool:
@@ -262,7 +321,12 @@ async def openclaw_sutui_chat_completions(request: Request):
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
         TRACE_HEADER: trace_id,
+        "X-Lobster-OpenClaw-Internal": "1",
+        "X-Lobster-LLM-Billing-Mode": "openclaw_internal",
     }
+    billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
+    if billing_key:
+        headers["X-Lobster-Mcp-Billing"] = billing_key
     xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
     if not xi:
         xi = (_installation_id_for_mcp_forward(request) or "").strip()
@@ -381,11 +445,17 @@ async def openclaw_sutui_chat_completions(request: Request):
                         r.status_code,
                     )
                     if r.status_code >= 400:
+                        content = await r.aread()
+                        min_charge = (r.headers.get("X-Lobster-Min-Charge-Credits") or "").strip()
+                        msg = _upstream_error_message(r.status_code, content, min_charge=min_charge)
+                        preview = (content or b"").decode("utf-8", "replace").replace("\n", " ")[:800]
                         logger.warning(
                             "[openclaw-sutui-proxy] 认证中心 sutui-chat HTTP %s（流式）url=%s",
                             r.status_code,
                             url,
                         )
+                        yield _openai_stream_text_event(msg, model=model_forward)
+                        return
                     async for chunk in r.aiter_bytes():
                         yield chunk
         except httpx.RequestError as e:

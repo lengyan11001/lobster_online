@@ -372,6 +372,9 @@ def _task_id_from_text(content: str) -> str:
     for pattern in (
         r'"task_id"\s*:\s*"([^"\r\n]{8,128})"',
         r"\btask_id\s*[:=]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
+        r"(?:asset_id|assetId|final_asset_id|video_asset_id|"
+        r"\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID)"
+        r"\s*[:\uff1a=]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
         r"\b任务\s*ID\s*[:：]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
     ):
         m = re.search(pattern, raw, re.IGNORECASE)
@@ -434,10 +437,39 @@ _OPENCLAW_GENERATION_REQUEST_RE = re.compile(
     r"创意成片|目标成片|爆款TVC|带货视频|用.{0,24}素材.{0,24}(?:生成|做|制作)",
     re.IGNORECASE,
 )
+_OPENCLAW_TEXT_ONLY_CREATIVE_PLAN_RE = re.compile(
+    r"(?:生成|写|出|给|给出|设计|制定|策划|整理|帮我).{0,24}"
+    r"(?:短视频|视频|宣传片|tvc)?.{0,24}"
+    r"(?:方案|创意方案|拍摄方案|镜头脚本|分镜脚本|分镜|镜头表|拍摄脚本|口播文案|脚本|文案|storyboard|shot\s*list)|"
+    r"(?:短视频|视频|宣传片|tvc).{0,16}"
+    r"(?:方案|创意方案|拍摄方案|镜头脚本|分镜脚本|分镜|镜头表|拍摄脚本|口播文案|脚本|文案)",
+    re.IGNORECASE,
+)
+_OPENCLAW_TEXT_PLAN_TO_VIDEO_EXEC_RE = re.compile(
+    r"(?:按|根据|用|把).{0,32}(?:这个|上面|刚才|方案|脚本|分镜|镜头脚本|提示词).{0,24}"
+    r"(?:生成|制作|做成|渲染|输出|出).{0,16}(?:视频|成片|片子|mp4|视频文件)|"
+    r"(?:开始|现在|直接|马上|立刻).{0,16}(?:生成|制作|做成|渲染|输出|出).{0,16}(?:视频|成片|片子|mp4|视频文件)|"
+    r"(?:生成|制作|做成|渲染|输出).{0,16}(?:成片|mp4|视频文件)|"
+    r"(?:调用|执行).{0,24}(?:video\.generate|goal\.video\.pipeline|生成能力|视频生成)",
+    re.IGNORECASE,
+)
 _OPENCLAW_GENERATION_EVIDENCE_RE = re.compile(
     r"(?:task_id|saved_assets|media_urls?|final_asset_id|video_asset_id|output_url|preview_url|"
     r"(?:已提交|已生成|生成完成|已保存|保存成功).{0,90}(?:task_id|asset_id|资产\s*ID|素材\s*ID|https?://)|"
     r"(?:预览|视频直链|图片直链|下载链接|成品链接|output|result).{0,90}https?://)",
+    re.IGNORECASE,
+)
+_OPENCLAW_EXECUTION_ID_EVIDENCE_RE = re.compile(
+    r"(?:task_id|asset_id|assetId|saved_assets|final_asset_id|video_asset_id|media_urls?|output_url|preview_url|"
+    r"\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID)"
+    r"\s*[:\uff1a=]\s*`?[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}`?",
+    re.IGNORECASE,
+)
+_OPENCLAW_GENERATION_SUCCESS_WITH_ID_RE = re.compile(
+    r"(?:\u751f\u6210\u6210\u529f|\u751f\u6210\u5b8c\u6210|\u5df2\u751f\u6210|\u5df2\u5b8c\u6210|"
+    r"\u5df2\u4fdd\u5b58|\u5df2\u81ea\u52a8\u4fdd\u5b58|\u4fdd\u5b58\u5230\u7d20\u6750\u5e93)"
+    r"[\s\S]{0,180}(?:task_id|asset_id|assetId|\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|"
+    r"\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID|https?://)",
     re.IGNORECASE,
 )
 _OPENCLAW_PREP_ONLY_RE = re.compile(
@@ -453,11 +485,26 @@ _OPENCLAW_NON_MCP_TOOL_HINT_RE = re.compile(
 
 def _openclaw_user_requests_generation(msgs: List[Dict]) -> bool:
     text = _last_user_text(msgs)
+    if _openclaw_user_requests_text_only_creative_plan(text):
+        return False
     return bool(_OPENCLAW_GENERATION_REQUEST_RE.search(text or ""))
+
+
+def _openclaw_user_requests_text_only_creative_plan(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if not _OPENCLAW_TEXT_ONLY_CREATIVE_PLAN_RE.search(raw):
+        return False
+    return not _OPENCLAW_TEXT_PLAN_TO_VIDEO_EXEC_RE.search(raw)
 
 
 def _openclaw_generation_reply_has_execution_evidence(content: str) -> bool:
     raw = content or ""
+    if _OPENCLAW_EXECUTION_ID_EVIDENCE_RE.search(raw):
+        return True
+    if _OPENCLAW_GENERATION_SUCCESS_WITH_ID_RE.search(raw):
+        return True
     if _OPENCLAW_GENERATION_EVIDENCE_RE.search(raw):
         return True
     return False
@@ -889,6 +936,7 @@ OpenClaw 主对话补充规则：
 - 如果工具返回 openclaw_evidence，请严格按其中 claim_rules 回答；claim_rules 不允许的状态必须如实说明还不能确认，不要用经验或历史内容补齐。
 - 查询任务进度必须使用本会话工具返回的真实 task_id 或用户明确提供的 task_id；找不到真实 task_id 时说明“没有拿到可查询的任务 ID”，不要生成看起来像 ID 的字符串。
 - task.get_result 返回 pending/processing/running 且 output/result 为空时，只能告诉用户“仍在生成中”并保留 task_id；不要说已完成，也不要说“不确定无结果”。
+- 用户要求“短视频方案 / 创意方案 / 拍摄方案 / 镜头脚本 / 分镜脚本 / 口播文案 / 文案脚本”时，这是文字创作任务，只输出可执行方案和脚本，不调用 image.generate、video.generate 或 goal.video.pipeline；资料不足时先给通用可执行版本并注明可按行业再细化，不要把补充问题当作唯一回复。只有用户明确说“开始生成视频 / 做成片 / 渲染成视频 / 按这个脚本生成视频”时，才调用生成能力。
 - 用户明确要求生成图片/视频/创意成片时，本轮必须直接调用 lobster__invoke_capability 执行对应生成能力；不要只回复“我先找素材/先查能力/确认可用工具”。如果消息中已有 asset_id 或系统已注入素材 URL，直接用于生成，MCP 边界会自动补齐素材 URL。禁止用 exec/shell/browser 代替业务能力。
 """
 

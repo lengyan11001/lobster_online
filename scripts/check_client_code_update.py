@@ -74,14 +74,12 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "skill_registry.json",
     "upstream_urls.json",
     ".env",
-    "必火AI员工.exe",
+    "必火智能AI.exe",
     "openclaw",
     "requirements.txt",
     ".env.example",
     "install.bat",
     "start.bat",
-    "start_online.bat",
-    "start_headless.bat",
     "run_backend.bat",
     "run_mcp.bat",
     "nodejs/package.json",
@@ -135,8 +133,10 @@ ALLOWED_NODEJS_TREE_PREFIXES: tuple[str, ...] = (
 # 与 backend chat 读取路径一致；OTA 宜随包更新，安装机保留其余 workspace 文件
 _OPENCLAW_POLICY_FILENAMES = ("LOBSTER_CHAT_POLICY_INTRO.md", "LOBSTER_CHAT_POLICY_TOOLS.md")
 _PRESERVED_STATIC_REL_PATHS = ("static/hifly_previews",)
+_PRESERVED_DESKTOP_REL_PATHS = ("desktop/webview2",)
 _RESOURCE_STATE_DIR = ROOT / "static" / ".resource_packs"
-_DESKTOP_EXE_NAME = "必火AI员工.exe"
+_DESKTOP_EXE_NAME = "必火智能AI.exe"
+_DESKTOP_EXE_NAMES = (_DESKTOP_EXE_NAME, "必火AI员工.exe")
 _PENDING_UPDATE_DIR = ROOT / ".updates"
 _PENDING_EXE_MARKER = _PENDING_UPDATE_DIR / "pending_exe_replace.json"
 
@@ -570,14 +570,19 @@ def _apply_path(src: Path, dst: Path) -> None:
     if rel == "openclaw" and src.is_dir():
         _apply_openclaw_with_preserve(src, dst)
         return
-    if rel == _DESKTOP_EXE_NAME and src.is_file():
+    if rel in _DESKTOP_EXE_NAMES and src.is_file():
         _apply_exe_file(src, dst)
         return
     preserved: list[tuple[str, Path]] = []
     tmp_root: Path | None = None
+    preserve_rels: tuple[str, ...] = ()
     if src.is_dir() and rel == "static":
-        tmp_root = Path(tempfile.mkdtemp(prefix="lobster_static_preserve_"))
-        for child_rel in _PRESERVED_STATIC_REL_PATHS:
+        preserve_rels = _PRESERVED_STATIC_REL_PATHS
+    elif src.is_dir() and rel == "desktop":
+        preserve_rels = _PRESERVED_DESKTOP_REL_PATHS
+    if preserve_rels:
+        tmp_root = Path(tempfile.mkdtemp(prefix="lobster_path_preserve_"))
+        for child_rel in preserve_rels:
             child = ROOT / child_rel
             if not child.exists():
                 continue

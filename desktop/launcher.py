@@ -18,8 +18,13 @@ import webbrowser
 from pathlib import Path
 from ctypes import wintypes
 
+if os.name == "nt":
+    import winreg
+else:
+    winreg = None
 
-APP_NAME = "必火AI员工"
+
+APP_NAME = "必火智能AI"
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
 LOADING_HTML = """<!doctype html>
@@ -27,7 +32,7 @@ LOADING_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>必火AI员工</title>
+  <title>必火智能AI</title>
   <style>
     html, body {
       margin: 0;
@@ -77,7 +82,7 @@ LOADING_HTML = """<!doctype html>
     <div class="panel">
       <div class="brand">
         <img src="__LOADING_MARK__" alt="">
-        <span>必火 AI员工</span>
+        <span>必火AI员工</span>
       </div>
       <div class="text">正在打开客户端，请稍候...</div>
     </div>
@@ -244,6 +249,29 @@ def find_fixed_webview2_runtime() -> Path | None:
         if nested is not None and nested.is_file():
             return nested.parent
     return None
+
+
+def system_webview2_runtime_available() -> bool:
+    if os.name != "nt" or winreg is None:
+        return True
+    keys = [
+        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+    ]
+    for hive, subkey in keys:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                value, _ = winreg.QueryValueEx(key, "pv")
+            if str(value or "").strip():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def webview2_runtime_available() -> bool:
+    return find_fixed_webview2_runtime() is not None or system_webview2_runtime_available()
 
 
 def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -636,7 +664,7 @@ def open_browser(url: str) -> None:
 
 
 def open_legacy_browser_mode(port: int, mcp_port: int, env: dict[str, str], wait_seconds: int) -> int:
-    ok, url, backend_proc, mcp_proc, _error = start_services_blocking(port, mcp_port, env, wait_seconds)
+    ok, url, backend_proc, mcp_proc, _error = start_services_blocking(port, mcp_port, env, wait_seconds, ensure_runtime=False)
     if ok:
         open_browser(url)
         return 0
@@ -646,7 +674,13 @@ def open_legacy_browser_mode(port: int, mcp_port: int, env: dict[str, str], wait
     return 0
 
 
-def start_services_blocking(port: int, mcp_port: int, env: dict[str, str], wait_seconds: int) -> tuple[bool, str, subprocess.Popen | None, subprocess.Popen | None, str]:
+def start_services_blocking(
+    port: int,
+    mcp_port: int,
+    env: dict[str, str],
+    wait_seconds: int,
+    ensure_runtime: bool = True,
+) -> tuple[bool, str, subprocess.Popen | None, subprocess.Popen | None, str]:
     port = choose_backend_port(port)
     mcp_port = choose_mcp_port(mcp_port, port)
     env["PORT"] = str(port)
@@ -654,7 +688,8 @@ def start_services_blocking(port: int, mcp_port: int, env: dict[str, str], wait_
     ready_url = f"http://127.0.0.1:{port}/?desktop=1&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
     log(f"target url={ready_url}")
     run_client_code_update(env)
-    ensure_desktop_runtime(env)
+    if ensure_runtime:
+        ensure_desktop_runtime(env)
     mcp_proc = start_bat("MCP", "run_mcp.bat", env)
     time.sleep(1.2)
     backend_proc = None
@@ -894,7 +929,7 @@ class NativeLoadingWindow:
                 if self._font_title:
                     old_font = gdi32.SelectObject(hdc, self._font_title)
                     gdi32.SetTextColor(hdc, 0x00102033)
-                    user32.DrawTextW(hdc, "必火 AI员工", -1, ctypes.byref(title_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
+                    user32.DrawTextW(hdc, "必火AI员工", -1, ctypes.byref(title_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
                     gdi32.SelectObject(hdc, old_font)
                 if self._font_text:
                     old_font = gdi32.SelectObject(hdc, self._font_text)
@@ -1071,6 +1106,10 @@ def start_services_with_loading(
 
 
 def run_window(url: str, title: str, width: int, height: int, port: int, mcp_port: int, env: dict[str, str], wait_seconds: int) -> tuple[bool, subprocess.Popen | None, subprocess.Popen | None]:
+    if not webview2_runtime_available():
+        log("WebView2 runtime unavailable; using browser fallback")
+        return False, None, None
+    ensure_desktop_runtime(env)
     try:
         import webview  # type: ignore
     except Exception as exc:
@@ -1088,7 +1127,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
     try:
         def start_services_then_load(window) -> None:
             try:
-                ok, actual_url, backend_proc, mcp_proc, error = start_services_blocking(port, mcp_port, env, wait_seconds)
+                ok, actual_url, backend_proc, mcp_proc, error = start_services_blocking(port, mcp_port, env, wait_seconds, ensure_runtime=False)
                 runtime["backend_proc"] = backend_proc
                 runtime["mcp_proc"] = mcp_proc
                 if ok:

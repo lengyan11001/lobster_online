@@ -34,15 +34,12 @@ OTA_PATHS: tuple[str, ...] = (
     "skill_registry.json",
     "upstream_urls.json",
     ".env",
-    "必火AI员工.exe",
-    "desktop/webview2",
+    "必火智能AI.exe",
     "openclaw",
     "requirements.txt",
     ".env.example",
     "install.bat",
     "start.bat",
-    "start_online.bat",
-    "start_headless.bat",
     "run_backend.bat",
     "run_mcp.bat",
     "nodejs/package.json",
@@ -95,7 +92,7 @@ _OTA_SECRET_REL_PATHS = {
 }
 
 _OTA_SKIP_DIR_RELS = {
-    "desktop/webview2/fixed-runtime",
+    "desktop/webview2",
 }
 
 # 本地调试/抓页面临时目录，非交付代码（曾占 OTA 包约 16MB+）

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.46",
-  "build": 73,
-  "applied_at": "2026-05-21T15:36:04+08:00",
-  "note": "Use single WebView loading window during desktop startup"
+  "version": "1.0.50",
+  "build": 77,
+  "applied_at": "2026-05-23T15:30:00+08:00",
+  "note": "Fix OpenClaw generation success evidence detection"
 }

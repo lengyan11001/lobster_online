@@ -630,6 +630,152 @@ async def run_goal_video_pipeline(
     }
 
 
+async def run_goal_image_pipeline(
+    *,
+    pl: GoalVideoPipelinePayload,
+    token: str,
+    installation_id: str,
+    progress: Optional[Callable[[str, str, Optional[Dict[str, Any]]], None]] = None,
+) -> Dict[str, Any]:
+    """创意成片的前半段：根据目标/记忆规划文案和图片提示词，只生成图片后结束。"""
+    if not (pl.goal or "").strip():
+        raise HTTPException(status_code=400, detail="goal is required")
+
+    def emit(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        if progress:
+            progress(stage, message, extra)
+
+    plan = await _retry_async(
+        "plan",
+        2,
+        lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
+        emit,
+    )
+    emit("plan_done", "plan generated", {"title": plan.get("title")})
+
+    image_payload: Dict[str, Any] = {
+        "prompt": plan["image_prompt"],
+        "aspect_ratio": pl.aspect_ratio,
+    }
+    if pl.image_model:
+        image_payload["model"] = pl.image_model
+    if pl.reference_image_urls:
+        image_payload["image_url"] = pl.reference_image_urls[0]
+        image_payload["image_urls"] = pl.reference_image_urls
+    if pl.reference_asset_ids:
+        image_payload["asset_id"] = pl.reference_asset_ids[0]
+        image_payload["asset_ids"] = pl.reference_asset_ids
+
+    image_result = await _retry_async(
+        "image",
+        pl.image_retry_count + 1,
+        lambda: _submit_and_wait_generation(
+            kind="image",
+            submit_payload=image_payload,
+            token=token,
+            installation_id=installation_id,
+            timeout_seconds=pl.image_poll_timeout_seconds,
+            interval_seconds=pl.poll_interval_seconds,
+            progress=emit,
+        ),
+        emit,
+    )
+    image_asset_id = _first_asset_id(image_result, "image") or _first_asset_id(image_result)
+    image_urls = _collect_urls(image_result, want="image")
+    return {
+        "ok": True,
+        "pipeline": "goal_image_pipeline",
+        "status": "completed",
+        "plan": plan,
+        "image": image_result,
+        "saved_assets": _collect_saved_assets({"saved_assets": image_result.get("saved_assets") or []}),
+        "image_asset_id": image_asset_id,
+        "final_asset_id": image_asset_id,
+        "media_urls": {
+            "image": image_urls,
+        },
+        "skill_prompt": plan.get("image_prompt") or "",
+        "message": "已按目标生成文案和创意图片；请以 final_asset_id/image_asset_id 为准，不要编造素材 ID。",
+    }
+
+
+async def run_goal_video_from_reference_pipeline(
+    *,
+    pl: GoalVideoPipelinePayload,
+    token: str,
+    installation_id: str,
+    reference_asset_id: str = "",
+    reference_image_url: str = "",
+    progress: Optional[Callable[[str, str, Optional[Dict[str, Any]]], None]] = None,
+) -> Dict[str, Any]:
+    """根据目标/记忆规划文案和视频提示词，跳过图片生成，直接用指定参考图生成视频。"""
+    if not (pl.goal or "").strip():
+        raise HTTPException(status_code=400, detail="goal is required")
+    reference_asset_id = (reference_asset_id or "").strip()
+    reference_image_url = (reference_image_url or "").strip()
+    if not reference_asset_id and not reference_image_url:
+        raise RuntimeError("reference image is required")
+
+    def emit(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        if progress:
+            progress(stage, message, extra)
+
+    plan = await _retry_async(
+        "plan",
+        2,
+        lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
+        emit,
+    )
+    emit("plan_done", "plan generated", {"title": plan.get("title")})
+
+    video_payload: Dict[str, Any] = {
+        "prompt": plan["video_prompt"],
+        "aspect_ratio": pl.aspect_ratio,
+    }
+    if pl.duration:
+        video_payload["duration"] = int(pl.duration)
+    if pl.video_model:
+        video_payload["model"] = pl.video_model
+    if reference_asset_id:
+        video_payload["asset_id"] = reference_asset_id
+    if reference_image_url:
+        video_payload["image_url"] = reference_image_url
+
+    video_result = await _retry_async(
+        "video",
+        pl.video_retry_count + 1,
+        lambda: _submit_and_wait_generation(
+            kind="video",
+            submit_payload=video_payload,
+            token=token,
+            installation_id=installation_id,
+            timeout_seconds=pl.video_poll_timeout_seconds,
+            interval_seconds=pl.poll_interval_seconds,
+            progress=emit,
+        ),
+        emit,
+    )
+    video_asset_id = _first_asset_id(video_result, "video") or _first_asset_id(video_result)
+    video_urls = _collect_urls(video_result, want="video")
+    return {
+        "ok": True,
+        "pipeline": "goal_video_reference_pipeline",
+        "status": "completed",
+        "plan": plan,
+        "reference_asset_id": reference_asset_id,
+        "reference_image_url": reference_image_url,
+        "video": video_result,
+        "saved_assets": _collect_saved_assets({"saved_assets": video_result.get("saved_assets") or []}),
+        "video_asset_id": video_asset_id,
+        "final_asset_id": video_asset_id,
+        "media_urls": {
+            "video": video_urls,
+        },
+        "skill_prompt": plan.get("video_prompt") or "",
+        "message": "已按目标生成文案，并用备选图片生成视频；请以 final_asset_id/video_asset_id 为准，不要编造素材 ID。",
+    }
+
+
 async def _background_runner(job_id: str, pl: GoalVideoPipelinePayload, token: str, installation_id: str) -> None:
     def progress(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
         append_goal_video_progress(job_id, stage=stage, message=message, extra=extra)

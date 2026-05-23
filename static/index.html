@@ -6,7 +6,7 @@
   <title>必火AI员工</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
-  <link rel="stylesheet" href="/static/css/common.css?v=20260518-desktop-scroll">
+  <link rel="stylesheet" href="/static/css/common.css?v=20260522-hero-vision-indent">
   <style>
     .model-selector { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
     .model-selector select { padding: 0.35rem 0.6rem; font-size: 0.82rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: var(--radius-sm); color: var(--text); min-width: 180px; }
@@ -224,16 +224,21 @@
     .store-tab.active, .pub-tab.active, .sys-tab.active, .wecom-detail-tab.active, .account-type-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
     #content-scheduled-tasks .store-tabs {
       display: grid;
-      grid-template-columns: repeat(2, minmax(140px, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 0.5rem;
       padding: 0.35rem;
       border: 1px solid rgba(66,98,223,0.12);
       border-radius: 10px;
       background: rgba(66,98,223,0.06);
-      max-width: 430px;
+      max-width: 680px;
+      min-width: 0;
+      overflow-x: auto;
+      white-space: nowrap;
     }
     #content-scheduled-tasks .sched-tab {
       min-height: 46px;
+      min-width: 0;
+      white-space: nowrap;
       border: 0;
       border-radius: 8px;
       background: transparent;
@@ -4763,7 +4768,8 @@
     }
     .table-wrap,
     .sch-tasks-table,
-    #scheduledTaskRunsList,
+    #scheduledTaskRunningRunsList,
+    #scheduledTaskFinishedRunsList,
     #scheduledTaskList,
     #taskList,
     #assetList,
@@ -5287,19 +5293,20 @@
 </head>
 <body>
   <div class="page">
-            <header class="header">
+            <header class="header auth-guest" id="appHeader">
       <div class="header-left">
         <div class="logo">
           <img class="logo-mark" id="brandLogoMark" src="/static/bihu_32.png" width="32" height="32" alt="">
-          <span id="brandLogoPrimary" class="logo-primary">必火</span><span id="brandLogoAccent" class="logo-accent">AI员工</span>
+          <span class="logo-text"><span id="brandLogoPrimary" class="logo-primary">必火</span><span id="brandLogoAccent" class="logo-accent">AI员工</span></span>
         </div>
         <span id="clientVersionLabel" class="header-version" title="客户端版本"></span>
         <button type="button" class="btn btn-ghost btn-sm desktop-refresh-btn" id="desktopHardRefreshBtn" title="刷新桌面窗口，重新加载最新页面" style="display:none;">刷新页面</button>
       </div>
-      <nav class="app-top-nav" id="appTopNav" aria-label="主导航">
+      <nav class="app-top-nav" id="appTopNav" aria-label="主导航" style="display:none;">
         <button type="button" class="nav-left-item active" data-view="chat">首页</button>
         <button type="button" class="nav-left-item" data-view="skill-store">技能商店</button>
         <button type="button" class="nav-left-item" data-view="publish">发布中心</button>
+        <button type="button" class="nav-left-item" data-view="assets">素材库</button>
         <button type="button" class="nav-left-item" data-view="scheduled-tasks">定时任务</button>
         <button type="button" class="nav-left-item" data-view="production">生成历史</button>
         <button type="button" class="nav-left-item nav-hidden-route" data-view="billing" hidden>消费记录</button>
@@ -5332,37 +5339,17 @@
 
     <section class="hero" id="pageHero">
       <h1 id="brandHeroTitle">龙虾 - 您的私人 AI 助手</h1>
-      <p id="brandHeroSubtitle">对话驱动，随装随用，能力无限扩展</p>
+      <p id="brandHeroSubtitle"><span class="hero-subtitle-line">必火智能的远景：</span><span class="hero-subtitle-line">成为全球领先的企业AI员工解决方案服务商</span></p>
     </section>
 
     <div id="authPanel">
       <div class="auth-card">
-        <div class="auth-tabs" style="display:flex;gap:0;margin-bottom:1.25rem;border-bottom:1px solid var(--border);">
-          <button type="button" id="authTabLogin" class="auth-tab active" style="flex:1;padding:0.5rem 1rem;background:none;border:none;border-bottom:2px solid var(--accent);color:var(--accent);font-size:1rem;cursor:pointer;">登录</button>
-          <button type="button" id="authTabRegister" class="auth-tab" style="flex:1;padding:0.5rem 1rem;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:1rem;cursor:pointer;">手机注册</button>
-        </div>
-        <div id="authLoginView" class="auth-view">
-          <form id="loginForm">
-            <label>账号</label>
-            <input type="text" name="username" required autocomplete="username">
-            <label>密码</label>
-            <input type="password" name="password" required placeholder="输入密码" autocomplete="current-password">
-            <label>验证码</label>
-            <div class="captcha-row" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
-              <img id="loginCaptchaImg" src="" alt="验证码" style="height:44px;width:120px;background:#f5f5f5;border-radius:4px;cursor:pointer;" title="点击刷新">
-              <a href="#" id="loginCaptchaRefresh" style="font-size:0.85rem;color:var(--primary);">换一张</a>
-              <input type="text" name="captcha_answer" id="loginCaptchaAnswer" required placeholder="输入验证码" maxlength="6" autocomplete="off" style="min-width:5.5em;width:6.5em;padding:0.4em 0.5em;box-sizing:border-box;">
-            </div>
-            <input type="hidden" name="captcha_id" id="loginCaptchaId" value="">
-            <button type="submit">登录</button>
-            <div id="loginMsg" class="msg"></div>
-          </form>
-        </div>
-        <div id="authRegisterView" class="auth-view" style="display:none;">
+        <div id="authRegisterView" class="auth-view">
+          <h3 style="margin:0 0 1rem 0;font-size:1.15rem;color:var(--text);">手机号注册和登录</h3>
           <form id="registerForm">
             <label>手机号</label>
             <input type="tel" id="registerPhone" required placeholder="11 位手机号" autocomplete="tel" inputmode="numeric" maxlength="11" pattern="1[3-9][0-9]{9}" title="请输入 11 位中国大陆手机号">
-            <label>图形验证码（仅「获取短信验证码」时需要，点注册不必填）</label>
+            <label>图形验证码（仅「获取短信验证码」时需要）</label>
             <div class="captcha-row" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;flex-wrap:wrap;">
               <img id="registerCaptchaImg" src="" alt="验证码" style="height:44px;width:120px;background:#f5f5f5;border-radius:4px;cursor:pointer;" title="点击刷新">
               <a href="#" id="registerCaptchaRefresh" style="font-size:0.85rem;color:var(--primary);">换一张</a>
@@ -5372,9 +5359,7 @@
             <input type="hidden" id="registerCaptchaId" value="">
             <label>短信验证码</label>
             <input type="text" id="registerSmsCode" required placeholder="6 位短信码" inputmode="numeric" maxlength="8" autocomplete="one-time-code">
-            <label>设置密码（至少 6 位）</label>
-            <input type="password" id="registerPassword" required placeholder="登录密码" minlength="6" autocomplete="new-password">
-            <button type="submit">注册</button>
+            <button type="submit">登录 / 注册</button>
             <div id="registerMsg" class="msg"></div>
           </form>
         </div>
@@ -6923,22 +6908,17 @@
               </div>
               <p class="meta" style="margin:0.55rem 0 0 0;">给本机盒子下发一次性或间隔执行任务，执行结果会同步到手机消息/执行记录。</p>
               <div class="store-tabs" style="margin-top:0.75rem;">
-                <button type="button" class="sched-tab active" data-sched-tab="runs">执行记录</button>
-                <button type="button" class="sched-tab" data-sched-tab="tasks">定时任务</button>
+                <button type="button" class="sched-tab active" data-sched-tab="create">创建新任务</button>
+                <button type="button" class="sched-tab" data-sched-tab="running">执行中任务</button>
+                <button type="button" class="sched-tab" data-sched-tab="finished">执行结束任务</button>
               </div>
             </div>
 
-            <div id="schedTabRuns" class="sched-tab-panel">
-              <div class="card">
-                <div id="scheduledTaskRunsList"><p class="meta">加载中...</p></div>
-              </div>
-            </div>
-
-            <div id="schedTabTasks" class="sched-tab-panel" style="display:none;">
+            <div id="schedTabCreate" class="sched-tab-panel">
               <div class="card">
                 <div style="display:grid;grid-template-columns:minmax(220px,320px) minmax(420px,1fr);gap:0.85rem;align-items:start;">
                   <div>
-                    <h4 style="margin:0 0 0.65rem 0;">添加任务</h4>
+                    <h4 style="margin:0 0 0.65rem 0;">创建新任务</h4>
                     <div class="modal-field" style="margin-bottom:0.55rem;">
                       <label>任务名称</label>
                       <input type="text" id="scheduledTaskTitle" placeholder="例如：每天生成一条宣传视频文案">
@@ -6948,6 +6928,7 @@
                       <label>能力</label>
                       <select id="scheduledTaskCapability" style="width:100%;padding:0.45rem;">
                         <option value="goal.video.pipeline">创意成片</option>
+                        <option value="goal.image.pipeline">文案+创意图片</option>
                         <option value="hifly.video.create_by_tts">必火数字人</option>
                       </select>
                       <p class="meta" id="scheduledTaskCapabilityHint" style="margin:0.35rem 0 0 0;"></p>
@@ -7010,6 +6991,18 @@
                 <div id="scheduledTaskList"><p class="meta">加载中...</p></div>
               </div>
             </div>
+
+            <div id="schedTabRunning" class="sched-tab-panel" style="display:none;">
+              <div class="card">
+                <div id="scheduledTaskRunningRunsList"><p class="meta">加载中...</p></div>
+              </div>
+            </div>
+
+            <div id="schedTabFinished" class="sched-tab-panel" style="display:none;">
+              <div class="card">
+                <div id="scheduledTaskFinishedRunsList"><p class="meta">加载中...</p></div>
+              </div>
+            </div>
           </div>
 
           <!-- Billing / 消费记录 + 算力充值 -->
@@ -7067,7 +7060,6 @@
               </div>
               <div class="store-tabs" style="margin-top:0.75rem;">
                 <button type="button" class="pub-tab active" data-pub-tab="accounts">发布账号</button>
-                <button type="button" class="pub-tab" data-pub-tab="assets">素材库</button>
                 <button type="button" class="pub-tab" data-pub-tab="tasks">发布记录</button>
               </div>
             </div>
@@ -7185,13 +7177,34 @@
               </div>
             </div>
 
-            <!-- Assets Tab -->
-            <div id="pubTabAssets" class="pub-tab-panel" style="display:none;">
+            <!-- Tasks Tab：单次 PublishTask；创作者定时任务见账号「执行记录」 -->
+            <div id="pubTabTasks" class="pub-tab-panel" style="display:none;">
+              <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.35rem;">
+                <span style="font-size:0.82rem;color:var(--text-muted);">单次发布任务记录</span>
+                <button type="button" class="help-q" data-help-key="publish_tasks_tab" aria-label="说明">?</button>
+              </div>
+              <div id="taskList" style="margin-top:0.5rem;"></div>
+            </div>
+          </div>
+
+          <!-- Asset Library -->
+          <div id="content-assets" class="content-block">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+                <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">素材库 <button type="button" class="help-q" data-help-key="publish_assets" aria-label="说明">?</button></h3>
+                <button type="button" id="assetTopRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+              </div>
+              <p class="meta" style="margin:0.55rem 0 0 0;">管理本机图片、视频素材；图片可加入创意成片备选组，定时任务会从组里随机取图生成视频。</p>
+            </div>
+            <div id="pubTabAssets" class="pub-tab-panel">
               <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;padding:0.5rem 0;">
                 <select id="assetTypeFilter" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                   <option value="">全部类型</option>
                   <option value="image">图片</option>
                   <option value="video">视频</option>
+                </select>
+                <select id="assetCreativeGroupFilter" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+                  <option value="">全部备选组</option>
                 </select>
                 <input type="text" id="assetSearchInput" placeholder="搜索素材..." style="flex:1;min-width:100px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <button type="button" id="assetSearchBtn" class="btn btn-ghost btn-sm">搜索</button>
@@ -7207,15 +7220,6 @@
                 <span id="assetUploadMsg" class="msg" style="display:none;font-size:0.8rem;"></span>
               </div>
               <div id="assetList" class="skill-store-grid"></div>
-            </div>
-
-            <!-- Tasks Tab：单次 PublishTask；创作者定时任务见账号「执行记录」 -->
-            <div id="pubTabTasks" class="pub-tab-panel" style="display:none;">
-              <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.35rem;">
-                <span style="font-size:0.82rem;color:var(--text-muted);">单次发布任务记录</span>
-                <button type="button" class="help-q" data-help-key="publish_tasks_tab" aria-label="说明">?</button>
-              </div>
-              <div id="taskList" style="margin-top:0.5rem;"></div>
             </div>
           </div>
 
@@ -7414,6 +7418,29 @@
       </ol>
       <div class="btns" style="justify-content:flex-end;margin-top:1rem;">
         <button type="button" class="btn btn-primary" id="chatTipsModalClose">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="assetCreativeGroupModal" class="modal-mask" style="display:none;">
+    <div class="modal" style="max-width:440px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
+        <div>
+          <h4 style="margin:0;font-size:1.05rem;">设置创意备选组</h4>
+          <p id="assetCreativeGroupAssetId" class="meta" style="margin:0.35rem 0 0 0;font-size:0.78rem;"></p>
+        </div>
+        <button type="button" id="assetCreativeGroupClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
+      </div>
+      <p class="meta" style="margin:0.75rem 0 0.65rem 0;">每个素材只能属于一个备选组，保存后会覆盖上一次设置。</p>
+      <div class="modal-field" style="margin-bottom:0.75rem;">
+        <label>备选组名字</label>
+        <input type="text" id="assetCreativeGroupInput" list="assetCreativeGroupOptions" placeholder="例如：恒辉产品图" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.48rem 0.55rem;font-size:0.88rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+        <datalist id="assetCreativeGroupOptions"></datalist>
+      </div>
+      <div id="assetCreativeGroupMsg" class="msg" style="display:none;margin-bottom:0.65rem;font-size:0.82rem;"></div>
+      <div class="btns" style="justify-content:flex-end;">
+        <button type="button" id="assetCreativeGroupCancel" class="btn btn-ghost">取消</button>
+        <button type="button" id="assetCreativeGroupSave" class="btn btn-primary">保存</button>
       </div>
     </div>
   </div>
@@ -7955,7 +7982,7 @@
     </div>
   </div>
 
-  <script src="/static/js/help-hints.js"></script>
+  <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260521-hifly-avatar-filter-fix"></script>
   <script src="/static/js/chat.js?v=20260515-openclaw-status"></script>
@@ -7975,11 +8002,11 @@
   <script src="/static/js/viral-video-remix.js?v=20260513-taskgroup-error-balance-guard"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
-  <script src="/static/js/publish.js"></script>
+  <script src="/static/js/publish.js?v=20260522-assets-candidates"></script>
   <script src="/static/js/production.js?v=20260520-generation-history"></script>
   <script src="/static/js/sysconfig.js?v=20260429-chat-route-bind"></script>
-  <script src="/static/js/scheduled-tasks.js?v=20260521-run-delete"></script>
+  <script src="/static/js/scheduled-tasks.js?v=20260522-scheduled-tabs"></script>
   <script src="/static/js/agent.js?v=20260520-daily-time-points"></script>
-  <script src="/static/js/init.js?v=20260521-avatar-menu"></script>
+  <script src="/static/js/init.js?v=20260522-login-nav"></script>
 </body>
 </html>

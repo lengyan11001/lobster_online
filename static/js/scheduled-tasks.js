@@ -6,7 +6,11 @@
   var CAPABILITIES = {
     'goal.video.pipeline': {
       label: '创意成片',
-      description: '根据记忆和目标自动生成图片/视频成片。'
+      description: '根据记忆生成文案，从备选素材组随机取图生成视频。'
+    },
+    'goal.image.pipeline': {
+      label: '文案+创意图片',
+      description: '根据记忆生成文案和创意图片，生成图片后结束。'
     },
     'hifly.video.create_by_tts': {
       label: '必火数字人',
@@ -18,6 +22,7 @@
     bound: false,
     avatarRows: [],
     voiceRows: [],
+    candidateGroups: [],
     hiflyLoaded: false,
     hiflyLoading: false
   };
@@ -165,6 +170,11 @@
     var raw = [];
     if (Array.isArray(payload.media_urls)) raw = raw.concat(payload.media_urls);
     if (Array.isArray(refs.urls)) raw = raw.concat(refs.urls);
+    if (rowCapabilityId(row) === 'goal.video.pipeline') {
+      raw = raw.filter(function (u) {
+        return /\.(mp4|webm|mov|m4v|avi)(\?|#|$)/i.test(String(u || ''));
+      }).slice(0, 1);
+    }
     var seen = {};
     return raw.map(function (u) { return String(u || '').trim(); }).filter(function (u) {
       if (!/^https?:\/\//i.test(u) || seen[u]) return false;
@@ -238,6 +248,11 @@
   function rowCapabilityId(row) {
     var payload = row && row.payload && typeof row.payload === 'object' ? row.payload : {};
     return String(payload.capability_id || '');
+  }
+
+  function runIsRunning(row) {
+    var s = String((row && row.status) || '').toLowerCase();
+    return ['pending', 'processing', 'running', 'queued', 'waiting'].indexOf(s) >= 0;
   }
 
   function getSelected(selectId) {
@@ -411,6 +426,54 @@
   }
 
   function renderGoalFields(host) {
+    host.innerHTML = compactGrid(
+      fieldHtml('备选素材组', selectHtml('scheduledTaskCandidateGroup', optionHtml('', '加载中...')))
+    );
+    fillCandidateGroupSelect();
+    loadCandidateGroups();
+  }
+
+  function fillCandidateGroupSelect() {
+    var sel = document.getElementById('scheduledTaskCandidateGroup');
+    if (!sel) return;
+    var current = sel.value;
+    if (!state.candidateGroups.length) {
+      sel.innerHTML = optionHtml('', '暂无备选组，请先到素材库设置');
+      return;
+    }
+    sel.innerHTML = state.candidateGroups.map(function (row) {
+      return optionHtml(row.name, row.name + (row.count ? ('（' + row.count + '张）') : ''));
+    }).join('');
+    if (current && state.candidateGroups.some(function (row) { return row.name === current; })) sel.value = current;
+  }
+
+  function loadCandidateGroups() {
+    if (typeof window.loadCreativeCandidateGroups === 'function') {
+      return window.loadCreativeCandidateGroups().then(function (groups) {
+        state.candidateGroups = Array.isArray(groups) ? groups : [];
+        fillCandidateGroupSelect();
+      });
+    }
+    var b = base();
+    if (!b) return Promise.resolve();
+    return fetchWithTimeout(b + '/api/assets/creative-candidate-groups', { headers: headers(false) }, 12000)
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status)); return d; }); })
+      .then(function (d) {
+        state.candidateGroups = Array.isArray(d.groups) ? d.groups : [];
+        fillCandidateGroupSelect();
+      })
+      .catch(function () {
+        state.candidateGroups = [];
+        fillCandidateGroupSelect();
+      });
+  }
+
+  window.refreshScheduledCreativeGroups = function (groups) {
+    state.candidateGroups = Array.isArray(groups) ? groups : [];
+    fillCandidateGroupSelect();
+  };
+
+  function renderImageFields(host) {
     host.innerHTML = '';
   }
 
@@ -516,6 +579,7 @@
     if (!host) return;
     var capabilityId = val('scheduledTaskCapability') || 'goal.video.pipeline';
     if (capabilityId === 'hifly.video.create_by_tts') renderHiflyFields(host);
+    else if (capabilityId === 'goal.image.pipeline') renderImageFields(host);
     else renderGoalFields(host);
   }
 
@@ -523,7 +587,9 @@
     var sel = document.getElementById('scheduledTaskCapability');
     if (!sel) return Promise.resolve();
     var current = sel.value;
-    sel.innerHTML = optionHtml('goal.video.pipeline', '创意成片') + optionHtml('hifly.video.create_by_tts', '必火数字人');
+    sel.innerHTML = optionHtml('goal.video.pipeline', '创意成片')
+      + optionHtml('goal.image.pipeline', '文案+创意图片')
+      + optionHtml('hifly.video.create_by_tts', '必火数字人');
     sel.value = CAPABILITIES[current] ? current : 'goal.video.pipeline';
     toggleCapability();
     return Promise.resolve();
@@ -534,7 +600,7 @@
     var hint = document.getElementById('scheduledTaskCapabilityHint');
     if (hint) hint.textContent = (CAPABILITIES[capabilityId] || {}).description || '';
     var paramBlock = document.getElementById('scheduledTaskParamBlock');
-    if (paramBlock) paramBlock.style.display = capabilityId === 'hifly.video.create_by_tts' ? '' : 'none';
+    if (paramBlock) paramBlock.style.display = capabilityId === 'goal.image.pipeline' ? 'none' : '';
     var autoFill = document.getElementById('scheduledTaskAutoFillBtn');
     if (autoFill) autoFill.style.display = capabilityId === 'hifly.video.create_by_tts' ? '' : 'none';
     renderParamFields();
@@ -559,6 +625,13 @@
       return {
         avatar: avatar,
         voice: voice
+      };
+    }
+    if (capabilityId === 'goal.video.pipeline') {
+      var group = val('scheduledTaskCandidateGroup');
+      if (!group) throw new Error('请选择创意成片备选素材组');
+      return {
+        candidate_group: group
       };
     }
     return {};
@@ -590,11 +663,11 @@
     return body;
   }
 
-  function renderRuns(rows) {
-    var el = document.getElementById('scheduledTaskRunsList');
+  function renderRuns(rows, targetId, emptyText) {
+    var el = document.getElementById(targetId || 'scheduledTaskRunningRunsList');
     if (!el) return;
     if (!rows || !rows.length) {
-      el.innerHTML = '<p class="meta">暂无执行记录。</p>';
+      el.innerHTML = '<p class="meta">' + html(emptyText || '暂无执行记录。') + '</p>';
       return;
     }
     var h = '<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.82rem;">'
@@ -710,13 +783,25 @@
     });
   }
 
+  function renderRunsByStatus(rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    var running = rows.filter(runIsRunning);
+    var finished = rows.filter(function (row) { return !runIsRunning(row); });
+    renderRuns(running, 'scheduledTaskRunningRunsList', '暂无执行中的任务。');
+    renderRuns(finished, 'scheduledTaskFinishedRunsList', '暂无执行结束任务。');
+  }
+
   function loadRuns() {
-    var el = document.getElementById('scheduledTaskRunsList');
-    if (el) el.innerHTML = '<p class="meta">加载中...</p>';
+    var runningEl = document.getElementById('scheduledTaskRunningRunsList');
+    var finishedEl = document.getElementById('scheduledTaskFinishedRunsList');
+    if (runningEl) runningEl.innerHTML = '<p class="meta">加载中...</p>';
+    if (finishedEl) finishedEl.innerHTML = '<p class="meta">加载中...</p>';
     return api('/api/scheduled-tasks/runs?limit=80').then(function (d) {
-      renderRuns(d.runs || []);
+      renderRunsByStatus(d.runs || []);
     }).catch(function (e) {
-      if (el) el.innerHTML = '<p class="meta" style="color:#e74c3c;">' + html(e.message) + '</p>';
+      var errHtml = '<p class="meta" style="color:#e74c3c;">' + html(e.message) + '</p>';
+      if (runningEl) runningEl.innerHTML = errHtml;
+      if (finishedEl) finishedEl.innerHTML = errHtml;
     });
   }
 
@@ -776,11 +861,11 @@
       tab.addEventListener('click', function () {
         var name = tab.getAttribute('data-sched-tab');
         document.querySelectorAll('.sched-tab').forEach(function (x) { x.classList.toggle('active', x === tab); });
-        var runs = document.getElementById('schedTabRuns');
-        var tasks = document.getElementById('schedTabTasks');
-        if (runs) runs.style.display = name === 'runs' ? '' : 'none';
-        if (tasks) tasks.style.display = name === 'tasks' ? '' : 'none';
-        if (name === 'runs') loadRuns(); else loadTasks();
+        ['create', 'running', 'finished'].forEach(function (key) {
+          var panel = document.getElementById('schedTab' + key.charAt(0).toUpperCase() + key.slice(1));
+          if (panel) panel.style.display = name === key ? '' : 'none';
+        });
+        if (name === 'create') loadTasks(); else loadRuns();
       });
     });
     var refresh = document.getElementById('scheduledTaskRefreshBtn');

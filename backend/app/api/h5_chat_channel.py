@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +27,11 @@ from ..models import Asset
 from ..services.openclaw_channel_auth_store import read_channel_fallback
 from .auth import get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
+from .goal_video_pipeline import (
+    GoalVideoPipelinePayload,
+    run_goal_image_pipeline,
+    run_goal_video_from_reference_pipeline,
+)
 from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
 logger = logging.getLogger(__name__)
@@ -66,6 +72,26 @@ def _scheduled_variant(seed: str, options: List[str]) -> str:
     raw = str(seed or "scheduled").encode("utf-8", "ignore")
     digest = hashlib.sha1(raw).digest()
     return options[int.from_bytes(digest[:2], "big") % len(options)]
+
+
+def _asset_creative_candidate_groups(meta: Any) -> List[str]:
+    if not isinstance(meta, dict):
+        return []
+    current = str(meta.get("creative_candidate_group") or "").strip()
+    if current:
+        return [current]
+    raw = meta.get("creative_candidate_groups")
+    if isinstance(raw, str):
+        values = re.split(r"[,\s，、;；]+", raw)
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = []
+    for item in values:
+        name = str(item or "").strip()
+        if name:
+            return [name]
+    return []
 
 
 def _enabled() -> bool:
@@ -535,6 +561,47 @@ def _scheduled_asset_open_url(row: Asset, asset_id: str, user_id: int, request: 
     return ""
 
 
+def _pick_creative_candidate_asset(
+    group_name: str,
+    jwt_token: str,
+) -> Dict[str, str]:
+    name = str(group_name or "").strip()
+    if not name:
+        raise RuntimeError("请先选择创意成片备选素材组")
+    uid = int(_decode_jwt_sub(jwt_token) or "0")
+    if uid <= 0:
+        raise RuntimeError("未识别到当前用户，无法读取备选素材组")
+    db = SessionLocal()
+    try:
+        rows = db.query(Asset).filter(Asset.user_id == uid, Asset.media_type == "image").all()
+        candidates = [
+            row
+            for row in rows
+            if name in _asset_creative_candidate_groups(getattr(row, "meta", None))
+        ]
+        if not candidates:
+            raise RuntimeError(f"备选组“{name}”里没有图片素材")
+        req = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+        usable: List[tuple[Asset, str]] = []
+        for candidate in candidates:
+            url = get_asset_public_url(candidate.asset_id, uid, req, db) or ""
+            if url:
+                usable.append((candidate, url))
+        if not usable:
+            raise RuntimeError(f"备选组“{name}”里没有可用于视频生成的公网图片素材，请重新上传或保存 URL 后再设为备选")
+        row, url = random.choice(usable)
+        if not url:
+            raise RuntimeError(f"备选组“{name}”选中的图片没有可用链接")
+        return {
+            "asset_id": row.asset_id,
+            "url": url,
+            "group_name": name,
+            "filename": row.filename,
+        }
+    finally:
+        db.close()
+
+
 async def _run_direct_chat(
     cloud: httpx.AsyncClient,
     base: str,
@@ -875,6 +942,13 @@ def _fallback_goal(task_title: str) -> str:
     return "根据我的记忆，自动选择最适合推广的产品或服务，生成一个 6 秒抖音 9:16 中文宣传视频。"
 
 
+def _fallback_image_goal(task_title: str) -> str:
+    title = (task_title or "").strip()
+    if title and title not in {"能力定时任务", "文案+创意图片", "创意图片"}:
+        return f"根据我的记忆和任务名称“{title}”，生成一张适合朋友圈或短视频封面的中文宣传创意图片。"
+    return "根据我的记忆，自动选择最适合推广的产品或服务，生成一张中文宣传创意图片。"
+
+
 def _fallback_hifly_script(task_title: str) -> str:
     title = (task_title or "").strip()
     subject = title[:12] if title and title not in {"能力定时任务", "飞影数字人", "飞鹰数字人", "必火数字人"} else "这款产品"
@@ -897,7 +971,12 @@ async def _generate_scheduled_content(
     asset_context: str,
     run_id: str = "",
 ) -> Dict[str, Any]:
-    ability = "必火数字人" if capability_id == "hifly.video.create_by_tts" else "创意成片"
+    if capability_id == "hifly.video.create_by_tts":
+        ability = "必火数字人"
+    elif capability_id == "goal.image.pipeline":
+        ability = "文案+创意图片"
+    else:
+        ability = "创意成片"
     query = "\n".join([task_title or ability, ability, asset_context or ""]).strip()
     memory_context = _scheduled_memory_context(jwt_token, installation_id, query)
     seed = "|".join([run_id, capability_id, task_title, str(len(memory_context)), str(len(asset_context))])
@@ -910,6 +989,14 @@ async def _generate_scheduled_content(
             "字段：title(string), script(string), caption_hint(string)。"
             "script 是数字人口播文案，中文，一句话，必须完整通顺，最多 50 个字。"
             "不要先写长文案，不要分段，不要要求用户补充信息，不要编造素材 ID。"
+        )
+    elif capability_id == "goal.image.pipeline":
+        system = (
+            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
+            "根据用户记忆和可用素材，为文案+创意图片任务生成目标。"
+            "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
+            "goal 要能直接传给创意图片能力，明确要生成一张中文宣传创意图片，并写出本次图片的切入角度、画面方向和核心短文案。"
+            "每次都要换表达，不要复用固定开头、固定句式或通用宣传套话；不要要求用户补充信息，不要编造素材 ID。"
         )
     else:
         system = (
@@ -935,7 +1022,7 @@ async def _generate_scheduled_content(
             headers=headers,
             system=system,
             user_payload=user_payload,
-            temperature=0.75 if capability_id == "goal.video.pipeline" else 0.35,
+            temperature=0.75 if capability_id in {"goal.video.pipeline", "goal.image.pipeline"} else 0.35,
         )
         data = _extract_json_object_text(text)
     except Exception as exc:
@@ -956,9 +1043,9 @@ async def _generate_scheduled_content(
         }
     goal = str(data.get("goal") or "").strip()
     if not goal:
-        goal = _fallback_goal(task_title)
+        goal = _fallback_image_goal(task_title) if capability_id == "goal.image.pipeline" else _fallback_goal(task_title)
     return {
-        "title": title or "创意成片",
+        "title": title or ("创意图片" if capability_id == "goal.image.pipeline" else "创意成片"),
         "goal": goal[:1000],
         "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
         "creative_angle": str(data.get("creative_angle") or creative_angle).strip()[:40],
@@ -1044,6 +1131,31 @@ def _scheduled_refs_asset_urls_only(
     jwt_token: str,
 ) -> Dict[str, List[str]]:
     return _scheduled_refs_with_asset_urls({"asset_ids": (refs or {}).get("asset_ids") or [], "urls": []}, jwt_token)
+
+
+def _scheduled_goal_video_result_refs(result: Any, jwt_token: str) -> Dict[str, List[str]]:
+    """创意成片只返回最终视频素材，避免把备选图/上游临时链接一起塞给 H5。"""
+    if not isinstance(result, dict):
+        return _scheduled_refs_with_asset_urls(_collect_scheduled_result_refs(result), jwt_token)
+    video_asset_id = str(result.get("video_asset_id") or result.get("final_asset_id") or "").strip()
+    if video_asset_id:
+        return _scheduled_refs_asset_urls_only({"asset_ids": [video_asset_id]}, jwt_token)
+
+    video_urls: List[str] = []
+    media_urls = result.get("media_urls")
+    if isinstance(media_urls, dict):
+        raw_urls = media_urls.get("video")
+        if isinstance(raw_urls, list):
+            video_urls = [str(u or "").strip() for u in raw_urls if str(u or "").strip()]
+        elif isinstance(raw_urls, str) and raw_urls.strip():
+            video_urls = [raw_urls.strip()]
+    if not video_urls:
+        raw_refs = _collect_scheduled_result_refs(result.get("video") if isinstance(result.get("video"), dict) else result)
+        video_urls = [
+            u for u in (raw_refs.get("urls") or [])
+            if str(u or "").lower().split("?", 1)[0].split("#", 1)[0].endswith((".mp4", ".webm", ".mov", ".m4v", ".avi"))
+        ]
+    return {"asset_ids": [], "urls": video_urls[:1]}
 
 
 def _scheduled_hifly_result_refs(result: Any, jwt_token: str) -> Dict[str, List[str]]:
@@ -1227,7 +1339,7 @@ async def _generate_scheduled_caption(
                 "prompt_sent_to_skill": generated.get("goal") or generated.get("script"),
                 "length_rule": "必须是一句完整中文，最多 50 个字，不允许先生成长文再截断。",
             },
-            temperature=0.85 if capability_id == "goal.video.pipeline" else 0.55,
+            temperature=0.85 if capability_id in {"goal.video.pipeline", "goal.image.pipeline"} else 0.55,
         )
     except Exception as exc:
         logger.warning("[SCHEDULED-TASK] caption failed capability_id=%s: %s", capability_id, exc)
@@ -1257,14 +1369,22 @@ def _scheduled_complete_text(
     caption: str,
     refs: Optional[Dict[str, List[str]]] = None,
     skill_prompt: str = "",
+    input_refs: Optional[Dict[str, Any]] = None,
 ) -> str:
     ready = _scheduled_result_ready(result)
     lines = ["生成完成。" if ready else "任务已提交，仍在生成中。", f"发布文案：{caption}"]
     if skill_prompt:
         lines.append(f"传给技能的提示词：{skill_prompt}")
+    if input_refs:
+        group = str(input_refs.get("candidate_group") or "").strip()
+        ref_asset = str(input_refs.get("reference_asset_id") or "").strip()
+        if group:
+            lines.append(f"备选组：{group}")
+        if ref_asset:
+            lines.append(f"使用备选素材：{ref_asset}")
     refs = refs or _collect_scheduled_result_refs(result)
     if refs["asset_ids"]:
-        lines.append("素材：" + "、".join(refs["asset_ids"][:6]))
+        lines.append("生成素材：" + "、".join(refs["asset_ids"][:6]))
     if refs["urls"]:
         lines.append("预览链接：")
         lines.extend(refs["urls"][:6])
@@ -1384,6 +1504,95 @@ async def _invoke_hifly_cloud_tts(
     return {"capability_id": "hifly.video.create_by_tts", "result": last}
 
 
+async def _run_goal_image_scheduled_pipeline(
+    *,
+    jwt_token: str,
+    installation_id: str,
+    generated: Dict[str, Any],
+    task_title: str,
+    attachment_asset_ids: List[str],
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+) -> Dict[str, Any]:
+    pl = GoalVideoPipelinePayload(
+        action="run_pipeline",
+        goal=generated.get("goal") or _fallback_image_goal(task_title),
+        platform="douyin",
+        duration=6,
+        aspect_ratio="9:16",
+        language="zh",
+        memory_scope="default",
+        reference_asset_ids=attachment_asset_ids[:8],
+    )
+
+    def progress(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        if not run_id:
+            return
+        asyncio.create_task(
+            _post_task_event(cloud, base, headers, run_id, stage[:32], {"text": message, **(extra or {})})
+        )
+
+    return await run_goal_image_pipeline(
+        pl=pl,
+        token=jwt_token,
+        installation_id=installation_id,
+        progress=progress,
+    )
+
+
+async def _run_goal_video_scheduled_pipeline(
+    *,
+    jwt_token: str,
+    installation_id: str,
+    generated: Dict[str, Any],
+    task_title: str,
+    candidate_group: str,
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+) -> Dict[str, Any]:
+    picked = _pick_creative_candidate_asset(candidate_group, jwt_token)
+    await _post_task_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        "thinking",
+        {"text": f"已从备选组“{picked['group_name']}”随机选择图片素材 {picked['asset_id']}"},
+    )
+    pl = GoalVideoPipelinePayload(
+        action="run_pipeline",
+        goal=generated.get("goal") or _fallback_goal(task_title),
+        platform="douyin",
+        duration=6,
+        aspect_ratio="9:16",
+        language="zh",
+        memory_scope="default",
+    )
+
+    def progress(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        if not run_id:
+            return
+        asyncio.create_task(
+            _post_task_event(cloud, base, headers, run_id, stage[:32], {"text": message, **(extra or {})})
+        )
+
+    result = await run_goal_video_from_reference_pipeline(
+        pl=pl,
+        token=jwt_token,
+        installation_id=installation_id,
+        reference_asset_id=picked["asset_id"],
+        reference_image_url=picked["url"],
+        progress=progress,
+    )
+    result["candidate_group"] = picked["group_name"]
+    result["reference_asset_id"] = picked["asset_id"]
+    return result
+
+
 async def _run_scheduled_capability(
     cloud: httpx.AsyncClient,
     base: str,
@@ -1402,7 +1611,7 @@ async def _run_scheduled_capability(
         return
     try:
         task_title = str(item.get("title") or "").strip()
-        if capability_id in {"goal.video.pipeline", "hifly.video.create_by_tts"}:
+        if capability_id in {"goal.video.pipeline", "goal.image.pipeline", "hifly.video.create_by_tts"}:
             asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
             await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在根据记忆生成本次内容"})
             generated = await _generate_scheduled_content(
@@ -1416,17 +1625,16 @@ async def _run_scheduled_capability(
                 run_id=run_id,
             )
             if capability_id == "goal.video.pipeline":
+                candidate_group = str(cap_payload.get("candidate_group") or cap_payload.get("candidate_group_name") or "").strip()
+                if not candidate_group:
+                    raise RuntimeError("创意成片需要先在素材库选择一个备选素材组")
                 cap_payload = {
-                    "action": "start_pipeline",
-                    "goal": generated.get("goal") or _fallback_goal(task_title),
-                    "platform": "douyin",
-                    "duration": 6,
-                    "aspect_ratio": "9:16",
-                    "language": "zh",
-                    "memory_scope": "default",
+                    "candidate_group": candidate_group,
                 }
-                if attachment_asset_ids:
-                    cap_payload["reference_asset_ids"] = attachment_asset_ids[:8]
+            elif capability_id == "goal.image.pipeline":
+                cap_payload = {
+                    "goal": generated.get("goal") or _fallback_image_goal(task_title),
+                }
             else:
                 avatar = str(cap_payload.get("avatar") or "").strip()
                 voice = str(cap_payload.get("voice") or "").strip()
@@ -1454,6 +1662,30 @@ async def _run_scheduled_capability(
                     headers=headers,
                     cap_payload=cap_payload,
                 )
+            elif capability_id == "goal.image.pipeline":
+                result = await _run_goal_image_scheduled_pipeline(
+                    jwt_token=jwt_token,
+                    installation_id=installation_id,
+                    generated=generated,
+                    task_title=task_title,
+                    attachment_asset_ids=attachment_asset_ids,
+                    cloud=cloud,
+                    base=base,
+                    headers=headers,
+                    run_id=run_id,
+                )
+            elif capability_id == "goal.video.pipeline":
+                result = await _run_goal_video_scheduled_pipeline(
+                    jwt_token=jwt_token,
+                    installation_id=installation_id,
+                    generated=generated,
+                    task_title=task_title,
+                    candidate_group=str(cap_payload.get("candidate_group") or "").strip(),
+                    cloud=cloud,
+                    base=base,
+                    headers=headers,
+                    run_id=run_id,
+                )
             else:
                 result = await _invoke_local_capability(
                     headers=headers,
@@ -1475,24 +1707,36 @@ async def _run_scheduled_capability(
                 result=result,
             )
             raw_refs = _collect_scheduled_result_refs(result)
-            refs = (
-                _scheduled_hifly_result_refs(result, jwt_token)
-                if capability_id == "hifly.video.create_by_tts"
-                else _scheduled_refs_with_asset_urls(raw_refs, jwt_token)
-            )
+            if capability_id == "hifly.video.create_by_tts":
+                refs = _scheduled_hifly_result_refs(result, jwt_token)
+            elif capability_id == "goal.video.pipeline":
+                refs = _scheduled_goal_video_result_refs(result, jwt_token)
+            else:
+                refs = _scheduled_refs_with_asset_urls(raw_refs, jwt_token)
             skill_prompt = str(cap_payload.get("text") or cap_payload.get("goal") or result.get("skill_prompt") or "").strip()
+            if capability_id == "goal.video.pipeline":
+                skill_prompt = str((result.get("plan") or {}).get("video_prompt") or skill_prompt).strip()
+            elif capability_id == "goal.image.pipeline":
+                skill_prompt = str((result.get("plan") or {}).get("image_prompt") or skill_prompt).strip()
+            input_refs = {}
+            if capability_id == "goal.video.pipeline":
+                input_refs = {
+                    "candidate_group": result.get("candidate_group"),
+                    "reference_asset_id": result.get("reference_asset_id"),
+                }
             await _complete_task_run(
                 cloud,
                 base,
                 headers,
                 run_id,
-                result_text=_scheduled_complete_text(result, caption, refs, skill_prompt),
+                result_text=_scheduled_complete_text(result, caption, refs, skill_prompt, input_refs),
                 result_payload={
                     "capability_id": capability_id,
                     "generated": generated,
                     "caption": caption,
                     "skill_prompt": skill_prompt,
                     "mcp_result": result,
+                    "input_refs": input_refs,
                     "result_refs": refs,
                     "media_urls": refs["urls"],
                 },

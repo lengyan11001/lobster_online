@@ -83,6 +83,12 @@
       letter-spacing: -0.02em;
       color: var(--text);
     }
+    .logo-text {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0;
+      white-space: nowrap;
+    }
     .logo-mark {
       width: 32px;
       height: 32px;
@@ -108,6 +114,16 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .header.auth-guest {
+      justify-content: flex-start;
+    }
+    .header.auth-guest .header-left {
+      max-width: 100%;
+      flex: 1 1 auto;
+    }
+    .header.auth-guest .header-version {
+      max-width: min(360px, 48vw);
+    }
     .header-actions {
       display: flex;
       align-items: center;
@@ -128,9 +144,21 @@
     }
     .hero p {
       color: var(--text-muted);
+      display: inline-block;
       font-size: 1rem;
-      max-width: 480px;
+      line-height: 1.7;
+      max-width: 620px;
       margin: 0 auto;
+      text-align: left;
+      white-space: normal;
+    }
+    .hero-subtitle-line {
+      display: block;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .hero-subtitle-line + .hero-subtitle-line {
+      padding-left: 2em;
     }
     /* Auth card */
     .auth-card {
@@ -737,7 +765,8 @@
       .logo { font-size: 1.15rem; }
       .hero { margin-bottom: 1.5rem; }
       .hero h1 { font-size: 1.5rem; }
-      .hero p { font-size: 0.9rem; }
+      .hero p { font-size: 0.9rem; max-width: 100%; }
+      .hero-subtitle-line { font-size: clamp(0.78rem, 3.5vw, 0.9rem); }
       .dashboard-layout { flex-direction: column; margin-top: 0.75rem; }
       .nav-left {
         width: 100%; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border);

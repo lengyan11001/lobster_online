@@ -10,13 +10,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = $Root.TrimEnd('\', '/')
 $jsonPath = Join-Path $Root 'static\branding\brands.json'
-$desktopExeName = -join ([char]0x5fc5, [char]0x706b, 'AI', [char]0x5458, [char]0x5de5, '.exe')
+$desktopExeName = -join ([char]0x5fc5, [char]0x706b, [char]0x667a, [char]0x80fd, 'AI', '.exe')
 $desktopExe = Join-Path $Root $desktopExeName
-$legacyDesktopExe = Join-Path $Root 'lobster.exe'
+$legacyDesktopExeName = -join ([char]0x5fc5, [char]0x706b, 'AI', [char]0x5458, [char]0x5de5, '.exe')
+$legacyDesktopExe = Join-Path $Root $legacyDesktopExeName
+$legacyLobsterExe = Join-Path $Root 'lobster.exe'
 $bat = Join-Path $Root 'start.bat'
 
-if (-not (Test-Path -LiteralPath $desktopExe) -and -not (Test-Path -LiteralPath $legacyDesktopExe) -and -not (Test-Path -LiteralPath $bat)) {
-    Write-Host "[desktop-shortcut] neither desktop exe/lobster.exe nor start.bat found, skip."
+if (-not (Test-Path -LiteralPath $desktopExe) -and -not (Test-Path -LiteralPath $legacyDesktopExe) -and -not (Test-Path -LiteralPath $legacyLobsterExe) -and -not (Test-Path -LiteralPath $bat)) {
+    Write-Host "[desktop-shortcut] neither desktop exe nor start.bat found, skip."
     exit 2
 }
 if (-not (Test-Path -LiteralPath $jsonPath)) {
@@ -91,6 +93,8 @@ try {
         $sc.TargetPath = $desktopExe
     } elseif (Test-Path -LiteralPath $legacyDesktopExe) {
         $sc.TargetPath = $legacyDesktopExe
+    } elseif (Test-Path -LiteralPath $legacyLobsterExe) {
+        $sc.TargetPath = $legacyLobsterExe
     } else {
         $sc.TargetPath = $bat
     }
