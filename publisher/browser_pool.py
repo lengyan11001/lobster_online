@@ -6,18 +6,25 @@ The pool lazily starts the Playwright instance on first use.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import importlib.util
 import json
 import logging
 import os
+import random
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from .pw_timeouts import ms as _pw_ms
 from .pw_timeouts import navigation_timeout_ms
 
 logger = logging.getLogger(__name__)
+
+_DOUYIN_IM_PROTO: Optional[Tuple[Any, Any]] = None
 
 DEFAULT_CHROME_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -97,6 +104,21 @@ def browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
     return base
 
 
+def douyin_workbench_browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
+    """Browser options for Douyin front-site workflows.
+
+    The reference Douyin project uses a persistent real Chrome profile.  Keep
+    this scoped to the workbench so creator-center publishing behavior does not
+    change unexpectedly.
+    """
+    opts = browser_options_from_publish_meta(meta)
+    if not opts.get("channel") and not opts.get("executable_path"):
+        opts = {**opts, "channel": _BROWSER_CHANNEL or "chrome"}
+    if not opts.get("viewport"):
+        opts = {**opts, "viewport": {"width": 1440, "height": 960}}
+    return opts
+
+
 def browser_options_from_youtube_proxy_fields(
     proxy_server: Optional[str],
     proxy_username: Optional[str],
@@ -149,7 +171,13 @@ def _fingerprint_browser_options(opts: Dict[str, Any]) -> str:
             "password": proxy.get("password"),
         }
     blob = json.dumps(
-        {"user_agent": opts["user_agent"], "proxy": proxy_canon},
+        {
+            "user_agent": opts["user_agent"],
+            "proxy": proxy_canon,
+            "channel": opts.get("channel") or "",
+            "executable_path": opts.get("executable_path") or "",
+            "viewport": opts.get("viewport") or None,
+        },
         sort_keys=True,
         ensure_ascii=True,
     )
@@ -343,7 +371,7 @@ async def _acquire_context(
 
     launch_kwargs: Dict[str, Any] = {
         "headless": bool(new_headless),
-        "viewport": {"width": 1280, "height": 800},
+        "viewport": opts.get("viewport") or {"width": 1280, "height": 800},
         "locale": "zh-CN",
         "permissions": ["geolocation"],
         "args": [
@@ -358,6 +386,8 @@ async def _acquire_context(
         launch_kwargs["proxy"] = opts["proxy"]
     if channel_override:
         launch_kwargs["channel"] = channel_override
+    elif opts.get("executable_path") and Path(str(opts.get("executable_path"))).exists():
+        launch_kwargs["executable_path"] = str(opts.get("executable_path"))
     elif _CHROMIUM_PATH and Path(_CHROMIUM_PATH).exists():
         launch_kwargs["executable_path"] = _CHROMIUM_PATH
 
@@ -369,6 +399,14 @@ async def _acquire_context(
     launch_kwargs["ignore_default_args"] = _ida
 
     Path(profile_dir).mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "[BROWSER] launch persistent context profile=%s headless=%s channel=%s executable=%s viewport=%s",
+        profile_dir[-80:],
+        bool(new_headless),
+        launch_kwargs.get("channel") or "",
+        "set" if launch_kwargs.get("executable_path") else "",
+        launch_kwargs.get("viewport"),
+    )
     ctx = await _pw_instance.chromium.launch_persistent_context(
         profile_dir, **launch_kwargs,
     )
@@ -486,6 +524,27 @@ async def _ensure_visible_interactive_context(
         is_h = _context_headless.get(sk, False)
     if cached and is_h:
         logger.info("[BROWSER] replace headless pool context with visible (publish/login): profile=%s", profile_dir)
+        await _drop_cached_context(profile_dir, cached, browser_options=opts)
+
+
+async def _ensure_headless_background_context(
+    profile_dir: str,
+    browser_options: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Replace a visible cached context with a headless one for background protocol work."""
+    if _cdp_enabled():
+        return
+    opts = (
+        browser_options
+        if browser_options is not None
+        else _default_browser_options()
+    )
+    sk = _storage_key(profile_dir, opts)
+    async with _lock:
+        cached = _contexts.get(sk)
+        is_h = _context_headless.get(sk, False)
+    if cached and not is_h:
+        logger.info("[BROWSER] replace visible pool context with headless (douyin protocol): profile=%s", profile_dir)
         await _drop_cached_context(profile_dir, cached, browser_options=opts)
 
 
@@ -817,6 +876,1211 @@ async def check_browser_login(
         return logged_in
     except Exception:
         return False
+
+
+async def open_douyin_front_browser(
+    profile_dir: str,
+    url: str = "https://www.douyin.com/jingxuan",
+    browser_options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Open the Douyin consumer site in the account's persistent browser profile."""
+    opts = browser_options if browser_options is not None else _default_browser_options()
+    await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
+    ctx, created_new = await _acquire_context(
+        profile_dir, new_headless=False, browser_options=opts
+    )
+    try:
+        page, ctx = await _get_page_with_reacquire(profile_dir, ctx, browser_options=opts)
+        await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=navigation_timeout_ms(45000),
+        )
+        try:
+            await page.wait_for_timeout(1000)
+        except Exception:
+            await asyncio.sleep(1)
+        state = await _read_douyin_front_login_state(page, ctx)
+        _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+        logged_in = bool(state.get("logged_in"))
+        return {
+            "ok": True,
+            "logged_in": logged_in,
+            "message": "已打开抖音前台页面，当前账号已登录。" if logged_in else "已打开抖音前台页面，请在窗口里完成登录。",
+            **state,
+        }
+    except Exception as e:
+        if created_new:
+            await _drop_cached_context(profile_dir, ctx, browser_options=opts)
+        return {"ok": False, "logged_in": False, "message": str(e)}
+
+
+async def _read_douyin_front_login_state(page: Any, ctx: Any) -> Dict[str, Any]:
+    cookies = []
+    try:
+        cookies = await ctx.cookies(["https://www.douyin.com"])
+    except Exception:
+        cookies = []
+    has_session_cookie = any(
+        str(cookie.get("name", "")) in {"sessionid", "sessionid_ss", "sid_guard"}
+        and str(cookie.get("value", "")).strip()
+        for cookie in cookies
+        if isinstance(cookie, dict)
+    )
+    state: Dict[str, Any] = {}
+    try:
+        state = await page.evaluate(
+            """
+            () => {
+              const compact = (value) => String(value || '').replace(/\\s+/g, '');
+              const bodyText = compact(document.body && document.body.innerText || '');
+              const loginTexts = ['登录', '立即登录', '扫码登录', '去登录', '手机号登录', '验证码登录'];
+              const loginPrompt = Array.from(document.querySelectorAll('button, a, div, span'))
+                .some((el) => {
+                  const text = compact(el.innerText || el.textContent || '');
+                  return text && loginTexts.includes(text);
+                });
+              const qrLoginVisible = Array.from(document.querySelectorAll('img, canvas, div'))
+                .some((el) => {
+                  const className = compact(el.className || '').toLowerCase();
+                  const alt = compact(el.getAttribute && el.getAttribute('alt') || '').toLowerCase();
+                  const text = compact(el.innerText || '');
+                  return className.includes('qrcode')
+                    || className.includes('qr-code')
+                    || alt.includes('qr')
+                    || text.includes('扫码登录')
+                    || text.includes('二维码');
+                });
+              const profileHints = ['退出登录', '账号与安全', '我的作品', '我的喜欢', '获赞', '粉丝', '关注']
+                .some((text) => bodyText.includes(text));
+              const profileLinkCount = document.querySelectorAll('a[href*="/user/"]').length;
+              return {
+                loginPrompt,
+                qrLoginVisible,
+                profileHints,
+                profileLinkCount,
+                path: location.pathname || '',
+              };
+            }
+            """
+        )
+    except Exception:
+        state = {}
+    login_prompt = bool(state.get("loginPrompt"))
+    qr_login_visible = bool(state.get("qrLoginVisible"))
+    logged_in = bool(has_session_cookie and not login_prompt and not qr_login_visible)
+    return {
+        "logged_in": logged_in,
+        "cookie": bool(has_session_cookie),
+        "login_prompt": login_prompt,
+        "qr_login_visible": qr_login_visible,
+        "profile_hints": bool(state.get("profileHints")),
+        "profile_link_count": int(state.get("profileLinkCount", 0) or 0),
+        "path": str(state.get("path", "") or ""),
+    }
+
+
+async def check_douyin_front_login(
+    profile_dir: str,
+    url: str = "https://www.douyin.com/jingxuan",
+    browser_options: Optional[Dict[str, Any]] = None,
+    *,
+    headless: bool = True,
+) -> Dict[str, Any]:
+    """Check Douyin consumer-site login state without using creator-center routes."""
+    opts = browser_options if browser_options is not None else _default_browser_options()
+    if not Path(profile_dir).exists():
+        return {"logged_in": False, "message": "账号浏览器目录不存在，请先打开登录。", "cookie": False}
+    if not headless:
+        await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
+    ctx, created_new = await _acquire_context(
+        profile_dir,
+        new_headless=bool(headless),
+        browser_options=opts,
+    )
+    try:
+        page, ctx = await _get_page_with_reacquire(
+            profile_dir,
+            ctx,
+            new_headless_on_recreate=bool(headless),
+            browser_options=opts,
+        )
+        await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=navigation_timeout_ms(45000),
+        )
+        try:
+            await page.wait_for_timeout(2500)
+        except Exception:
+            await asyncio.sleep(2.5)
+        state = await _read_douyin_front_login_state(page, ctx)
+        logged_in = bool(state.get("logged_in"))
+        if not headless:
+            _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+        return {
+            "logged_in": logged_in,
+            "message": "抖音前台已登录" if logged_in else "抖音前台未检测到登录，请点击“打开登录”完成扫码。",
+            **state,
+        }
+    except Exception as e:
+        if created_new:
+            await _drop_cached_context(profile_dir, ctx, browser_options=opts)
+        return {"logged_in": False, "message": str(e), "cookie": False}
+
+
+def _extract_douyin_aweme_id(url: str) -> str:
+    import re
+
+    text = str(url or "")
+    for pattern in (r"/video/(\d+)", r"[?&]modal_id=(\d+)", r"/note/(\d+)"):
+        m = re.search(pattern, text)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _douyin_protocol_platform_params() -> Dict[str, str]:
+    return {
+        "device_platform": "webapp",
+        "aid": "6383",
+        "channel": "channel_pc_web",
+        "pc_client_type": "1",
+        "update_version_code": "170400",
+        "version_code": "170400",
+        "version_name": "17.4.0",
+        "cookie_enabled": "true",
+        "screen_width": "1707",
+        "screen_height": "960",
+        "browser_language": "zh-CN",
+        "browser_platform": "Win32",
+        "browser_name": "Edge",
+        "browser_version": "125.0.0.0",
+        "browser_online": "true",
+        "engine_name": "Blink",
+        "engine_version": "125.0.0.0",
+        "os_name": "Windows",
+        "os_version": "10",
+        "cpu_core_num": "32",
+        "device_memory": "8",
+        "platform": "PC",
+        "downlink": "10",
+        "effective_type": "4g",
+        "round_trip_time": "100",
+    }
+
+
+def _normalize_douyin_protocol_comment(comment: Dict[str, Any]) -> Dict[str, Any]:
+    user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+    sec_uid = str(user.get("sec_uid", "") or "").strip()
+    profile_url = f"https://www.douyin.com/user/{sec_uid}" if sec_uid else ""
+    return {
+        "comment_id": str(comment.get("cid", "") or "").strip(),
+        "aweme_id": str(comment.get("aweme_id", "") or "").strip(),
+        "text": str(comment.get("text", "") or "").strip(),
+        "create_time": int(comment.get("create_time", 0) or 0),
+        "digg_count": int(comment.get("digg_count", 0) or 0),
+        "reply_comment_total": int(comment.get("reply_comment_total", 0) or 0),
+        "nickname": str(user.get("nickname", "") or "").strip(),
+        "uid": str(user.get("uid", "") or "").strip(),
+        "sec_uid": sec_uid,
+        "profile_url": profile_url,
+        "avatar_url": str(
+            ((user.get("avatar_thumb") or {}).get("url_list") or [""])[0]
+            if isinstance(user.get("avatar_thumb"), dict)
+            else ""
+        ).strip(),
+    }
+
+
+def _collect_douyin_comments_protocol_sync(
+    auth: Dict[str, Any],
+    video_url: str,
+    max_comments: int,
+) -> Dict[str, Any]:
+    import requests
+    from backend.douyin_protocol_runtime import (
+        HeaderBuilder,
+        HeaderType,
+        generate_a_bogus,
+        generate_msToken,
+        generate_webid,
+        splice_url,
+    )
+
+    requests.packages.urllib3.disable_warnings()
+    aweme_id = _extract_douyin_aweme_id(video_url)
+    if not aweme_id:
+        raise RuntimeError("无法从视频地址解析 aweme_id")
+    cookie_map = auth.get("cookie") if isinstance(auth.get("cookie"), dict) else {}
+    s_v_web_id = str(cookie_map.get("s_v_web_id", "") or "").strip()
+    if not s_v_web_id:
+        raise RuntimeError("协议模式缺少 s_v_web_id，请先在抖音前台打开账号页面刷新登录态")
+    ms_token = str(cookie_map.get("msToken", "") or "").strip() or generate_msToken()
+    cookie_map["msToken"] = ms_token
+    referer = f"https://www.douyin.com/video/{aweme_id}"
+    comments: List[Dict[str, Any]] = []
+    cursor = 0
+    has_more = 1
+    while has_more == 1 and len(comments) < max_comments:
+        count = min(20, max(1, max_comments - len(comments)))
+        params = _douyin_protocol_platform_params()
+        params.update({
+            "aweme_id": aweme_id,
+            "cursor": str(max(0, int(cursor or 0))),
+            "count": str(count),
+            "item_type": "0",
+            "whale_cut_token": "",
+            "cut_version": "1",
+            "rcFT": "",
+        })
+        params["webid"] = generate_webid(type("Auth", (), {"cookie_str": auth.get("cookie_str", "")})(), referer)
+        params["verifyFp"] = s_v_web_id
+        params["fp"] = s_v_web_id
+        params["msToken"] = ms_token
+        query = splice_url(params)
+        params["a_bogus"] = generate_a_bogus(query, "")
+        headers = HeaderBuilder.build(HeaderType.GET)
+        headers.set_referer(referer)
+        response = requests.get(
+            "https://www.douyin.com/aweme/v1/web/comment/list/",
+            headers=headers.get(),
+            cookies=cookie_map,
+            params=params,
+            verify=False,
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        status_code = int(payload.get("status_code", 0) or 0)
+        if status_code != 0:
+            raise RuntimeError(
+                f"评论协议接口返回异常 status_code={status_code}, status_msg={payload.get('status_msg') or '-'}"
+            )
+        page_comments = payload.get("comments") or []
+        if not isinstance(page_comments, list) or not page_comments:
+            break
+        for item in page_comments:
+            if isinstance(item, dict):
+                comments.append(_normalize_douyin_protocol_comment(item))
+                if len(comments) >= max_comments:
+                    break
+        has_more = int(payload.get("has_more", 0) or 0)
+        cursor = int(payload.get("cursor", 0) or 0)
+        if has_more == 1 and len(comments) < max_comments:
+            time.sleep(0.35)
+    return {
+        "aweme_id": aweme_id,
+        "video_url": referer,
+        "comments": comments,
+        "count": len(comments),
+    }
+
+
+async def _extract_douyin_protocol_auth_from_context(page: Optional[Any], ctx: Any) -> Dict[str, Any]:
+    try:
+        cookies = await ctx.cookies(["https://www.douyin.com"])
+    except Exception:
+        cookies = []
+    cookie_map = {
+        str(item.get("name", "")).strip(): str(item.get("value", "")).strip()
+        for item in cookies
+        if isinstance(item, dict) and str(item.get("name", "")).strip()
+    }
+    crypt_sdk_raw = ""
+    web_protect_raw = ""
+    if page is not None:
+        try:
+            crypt_sdk_raw = await page.evaluate('() => localStorage.getItem("security-sdk/s_sdk_crypt_sdk")')
+        except Exception:
+            crypt_sdk_raw = ""
+        try:
+            web_protect_raw = await page.evaluate('() => localStorage.getItem("security-sdk/s_sdk_sign_data_key/web_protect")')
+        except Exception:
+            web_protect_raw = ""
+    if not cookie_map.get("msToken"):
+        try:
+            from backend.douyin_protocol_runtime import generate_msToken
+
+            cookie_map["msToken"] = generate_msToken()
+        except Exception:
+            pass
+    return {
+        "cookie": cookie_map,
+        "cookie_str": "; ".join(f"{key}={value}" for key, value in cookie_map.items()),
+        "crypt_sdk_raw": str(crypt_sdk_raw or ""),
+        "web_protect_raw": str(web_protect_raw or ""),
+    }
+
+
+def _douyin_protocol_cookie_ready(auth: Dict[str, Any]) -> Tuple[bool, bool]:
+    cookie_map = auth.get("cookie") if isinstance(auth.get("cookie"), dict) else {}
+    has_session_cookie = any(
+        str(cookie_map.get(name, "") or "").strip()
+        for name in ("sessionid", "sessionid_ss", "sid_guard")
+    )
+    has_web_id = bool(str(cookie_map.get("s_v_web_id", "") or "").strip())
+    return has_session_cookie, has_web_id
+
+
+def _decode_douyin_storage_payload(raw: Any) -> Dict[str, Any]:
+    if raw is None:
+        return {}
+    text = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
+    text = text.strip()
+    if not text:
+        return {}
+    try:
+        outer = json.loads(text)
+    except Exception:
+        return {}
+    if isinstance(outer, dict) and isinstance(outer.get("data"), str):
+        try:
+            inner = json.loads(outer["data"])
+        except Exception:
+            return {}
+        return inner if isinstance(inner, dict) else {}
+    return outer if isinstance(outer, dict) else {}
+
+
+def _load_douyin_im_proto_modules() -> Tuple[Any, Any]:
+    global _DOUYIN_IM_PROTO
+    if _DOUYIN_IM_PROTO is not None:
+        return _DOUYIN_IM_PROTO
+    from backend.douyin_protocol_runtime import STATIC_DIR
+
+    def _load(module_name: str, path: Path) -> Any:
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"failed to load douyin protobuf module: {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    _DOUYIN_IM_PROTO = (
+        _load("lobster_douyin_im_request_pb2", STATIC_DIR / "Request_pb2.py"),
+        _load("lobster_douyin_im_response_pb2", STATIC_DIR / "Response_pb2.py"),
+    )
+    return _DOUYIN_IM_PROTO
+
+
+def _extract_douyin_sec_user_id(profile_url: str) -> str:
+    text = str(profile_url or "").strip()
+    if not text:
+        return ""
+    if "/user/" in text:
+        return text.split("/user/", 1)[1].split("?", 1)[0].split("/", 1)[0].strip()
+    if text.startswith("MS4") or text.startswith("MS"):
+        return text
+    return ""
+
+
+def _douyin_im_auth_material(auth: Dict[str, Any]) -> Dict[str, Any]:
+    from backend.douyin_protocol_runtime import generate_msToken
+
+    cookie_map = dict(auth.get("cookie") if isinstance(auth.get("cookie"), dict) else {})
+    cookie_map = {str(k).strip(): str(v).strip() for k, v in cookie_map.items() if str(k).strip()}
+    if not cookie_map.get("msToken"):
+        cookie_map["msToken"] = generate_msToken()
+    crypt_sdk = _decode_douyin_storage_payload(auth.get("crypt_sdk_raw"))
+    web_protect = _decode_douyin_storage_payload(auth.get("web_protect_raw"))
+    material = {
+        "cookie": cookie_map,
+        "cookie_str": "; ".join(f"{key}={value}" for key, value in cookie_map.items()),
+        "ms_token": cookie_map.get("msToken", ""),
+        "private_key": str(crypt_sdk.get("ec_privateKey", "") or "").strip(),
+        "ticket": str(web_protect.get("ticket", "") or "").strip(),
+        "ts_sign": str(web_protect.get("ts_sign", "") or "").strip(),
+        "client_cert": str(web_protect.get("client_cert", "") or "").strip(),
+        "my_uid": None,
+    }
+    missing = [
+        name for name, value in (
+            ("ec_privateKey", material["private_key"]),
+            ("ticket", material["ticket"]),
+            ("ts_sign", material["ts_sign"]),
+            ("client_cert", material["client_cert"]),
+            ("s_v_web_id", cookie_map.get("s_v_web_id", "")),
+        )
+        if not str(value or "").strip()
+    ]
+    if missing:
+        raise RuntimeError("私信协议缺少登录签名材料：" + "、".join(missing))
+    logger.info(
+        "[DOUYIN-IM] auth material ready cookies=%s has_private_key=%s has_ticket=%s has_ts_sign=%s cert_len=%s webid=%s",
+        ",".join(sorted(cookie_map.keys())),
+        bool(material["private_key"]),
+        bool(material["ticket"]),
+        bool(material["ts_sign"]),
+        len(material["client_cert"]),
+        bool(cookie_map.get("s_v_web_id")),
+    )
+    return material
+
+
+def _douyin_im_auth_proxy(material: Dict[str, Any]) -> Any:
+    return type(
+        "DouyinImAuth",
+        (),
+        {
+            "cookie": material["cookie"],
+            "cookie_str": material["cookie_str"],
+            "ticket": material["ticket"],
+            "ts_sign": material["ts_sign"],
+            "private_key": material["private_key"],
+        },
+    )()
+
+
+def _douyin_im_with_a_bogus(params: Dict[str, Any], data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from backend.douyin_protocol_runtime import generate_a_bogus, splice_url
+
+    params = dict(params)
+    params["a_bogus"] = generate_a_bogus(splice_url(params), splice_url(data or {}) if data else "")
+    return params
+
+
+def _douyin_im_public_error_message(exc: BaseException) -> str:
+    raw = str(exc or "").strip()
+    if "444 Client Error" in raw and "douyin.com" in raw:
+        return "抖音接口拒绝本次协议请求，账号环境可能被风控，请重新打开登录页刷新后再试。"
+    if "Client Error" in raw and "douyin.com" in raw:
+        return "抖音接口返回异常，请稍后重试或重新打开登录后再试。"
+    if " for url: " in raw:
+        raw = raw.split(" for url: ", 1)[0].strip()
+    if len(raw) > 240:
+        raw = raw[:240] + "..."
+    return raw or "私信发送失败，请稍后重试。"
+
+
+def _douyin_im_query_current_uid(material: Dict[str, Any]) -> int:
+    import requests
+    from backend.douyin_protocol_runtime import HeaderBuilder, HeaderType, generate_webid
+
+    auth_proxy = _douyin_im_auth_proxy(material)
+    params = _douyin_protocol_platform_params()
+    params["webid"] = generate_webid(auth_proxy, "https://www.douyin.com/")
+    params["msToken"] = material["ms_token"]
+    params["verifyFp"] = material["cookie"]["s_v_web_id"]
+    params["fp"] = material["cookie"]["s_v_web_id"]
+    params = _douyin_im_with_a_bogus(params)
+    headers = HeaderBuilder.build(HeaderType.GET)
+    headers.set_referer("https://www.douyin.com/")
+    response = requests.get(
+        "https://www.douyin.com/aweme/v1/web/query/user/",
+        headers=headers.get(),
+        cookies=material["cookie"],
+        params=params,
+        verify=False,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if int(payload.get("status_code", 0) or 0) != 0:
+        raise RuntimeError(f"查询当前抖音账号失败：{payload.get('status_msg') or payload}")
+    return int(payload.get("user_uid") or 0)
+
+
+def _douyin_im_query_target_user(material: Dict[str, Any], profile_url: str) -> Dict[str, Any]:
+    import requests
+    from backend.douyin_protocol_runtime import HeaderBuilder, HeaderType, generate_webid
+
+    sec_user_id = _extract_douyin_sec_user_id(profile_url)
+    if not sec_user_id:
+        raise RuntimeError("客户缺少有效主页链接或 sec_user_id")
+    profile_url = f"https://www.douyin.com/user/{sec_user_id}"
+    auth_proxy = _douyin_im_auth_proxy(material)
+    params = _douyin_protocol_platform_params()
+    params.update({
+        "publish_video_strategy_type": "2",
+        "source": "channel_pc_web",
+        "sec_user_id": sec_user_id,
+        "personal_center_strategy": "1",
+    })
+    params["webid"] = generate_webid(auth_proxy, profile_url)
+    params["msToken"] = material["ms_token"]
+    params["verifyFp"] = material["cookie"]["s_v_web_id"]
+    params["fp"] = material["cookie"]["s_v_web_id"]
+    params = _douyin_im_with_a_bogus(params)
+    headers = HeaderBuilder.build(HeaderType.GET)
+    headers.set_referer(profile_url)
+    response = requests.get(
+        "https://www.douyin.com/aweme/v1/web/user/profile/other/",
+        headers=headers.get(),
+        cookies=material["cookie"],
+        params=params,
+        verify=False,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if int(payload.get("status_code", 0) or 0) != 0:
+        raise RuntimeError(f"查询客户主页失败：{payload.get('status_msg') or payload}")
+    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+    if not str(user.get("uid", "") or "").strip():
+        raise RuntimeError("客户主页失效或不存在，无法发送私信")
+    return payload
+
+
+def _douyin_im_build_request(material: Dict[str, Any], cmd: int) -> Any:
+    from backend.douyin_protocol_runtime import HeaderBuilder, generate_webid
+
+    RequestProto, _ = _load_douyin_im_proto_modules()
+    request = RequestProto.Request()
+    request.cmd = int(cmd)
+    request.sequence_id = random.randint(10000, 11000)
+    request.sdk_version = "1.1.3"
+    request.token = material["ticket"]
+    request.refer = 3
+    request.inbox_type = 0
+    request.build_number = "5fa6ff1:Detached: 5fa6ff1111fd53aafc4c753505d3c93daad74d27"
+    request.device_id = "0"
+    request.device_platform = "douyin_pc"
+    request.headers["session_aid"] = "6383"
+    request.headers["session_did"] = "0"
+    request.headers["app_name"] = "douyin_pc"
+    request.headers["priority_region"] = "cn"
+    request.headers["user_agent"] = HeaderBuilder.ua
+    request.headers["cookie_enabled"] = "true"
+    request.headers["browser_language"] = "zh-CN"
+    request.headers["browser_platform"] = "Win32"
+    request.headers["browser_name"] = "Mozilla"
+    request.headers["browser_version"] = HeaderBuilder.ua.split("Mozilla/")[-1]
+    request.headers["browser_online"] = "true"
+    request.headers["screen_width"] = "1707"
+    request.headers["screen_height"] = "960"
+    request.headers["referer"] = ""
+    request.headers["timezone_name"] = "Etc/GMT-8"
+    request.headers["deviceId"] = "0"
+    # Keep this aligned with _reference/DouYin_Spider: proto headers use the
+    # default generated webid rather than the authenticated root-page webid.
+    request.headers["webid"] = generate_webid()
+    request.headers["fp"] = material["cookie"]["s_v_web_id"]
+    request.headers["is-retry"] = "0"
+    request.auth_type = 4
+    request.biz = "douyin_web"
+    request.access = "web_sdk"
+    request.ts_sign = material["ts_sign"]
+    request.sdk_cert = base64.b64encode(material["client_cert"].encode("utf-8")).decode("utf-8")
+    return request
+
+
+def _douyin_im_parse_response(content: bytes) -> Dict[str, Any]:
+    from google.protobuf.json_format import MessageToDict
+
+    _, ResponseProto = _load_douyin_im_proto_modules()
+    response = ResponseProto.Response()
+    response.ParseFromString(content)
+    return MessageToDict(response, preserving_proto_field_name=True)
+
+
+def _douyin_im_response_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+    notify = body.get("new_message_notify") if isinstance(body.get("new_message_notify"), dict) else {}
+    message_body = notify.get("message") if isinstance(notify.get("message"), dict) else {}
+    create_body = body.get("create_conversation_v2_body") if isinstance(body.get("create_conversation_v2_body"), dict) else {}
+    conversations = create_body.get("conversation_info_list") if isinstance(create_body.get("conversation_info_list"), list) else []
+    return {
+        "cmd": payload.get("cmd"),
+        "sequence_id": payload.get("sequence_id"),
+        "message": payload.get("message"),
+        "error_desc": payload.get("error_desc"),
+        "inbox_type": payload.get("inbox_type"),
+        "conversation_count": len(conversations),
+        "notify_type": notify.get("notify_type"),
+        "server_message_id": message_body.get("server_message_id"),
+        "index_in_conversation": message_body.get("index_in_conversation"),
+        "message_type": message_body.get("message_type"),
+        "sender": message_body.get("sender"),
+        "content": message_body.get("content"),
+    }
+
+
+def _douyin_im_create_conversation(material: Dict[str, Any], to_user_id: int) -> Dict[str, Any]:
+    import requests
+    from backend.douyin_protocol_runtime import HeaderBuilder, HeaderType, generate_req_sign
+
+    if material.get("my_uid") is None:
+        material["my_uid"] = _douyin_im_query_current_uid(material)
+    my_uid = int(material["my_uid"])
+    request = _douyin_im_build_request(material, 609)
+    request.body.create_conversation_v2_body.conversation_type = 1
+    request.body.create_conversation_v2_body.participants.extend([int(to_user_id), my_uid])
+    request.reuqest_sign = generate_req_sign(
+        {
+            "sign_data": f"avatar_url=&idempotent_id=&name=&participants={int(to_user_id)},{my_uid}",
+            "certType": "cookie",
+            "scene": "web_protect",
+        },
+        material["private_key"],
+    )
+    headers = HeaderBuilder.build(HeaderType.PROTOBUF)
+    headers.set_referer("https://www.douyin.com/")
+    response = requests.post(
+        "https://imapi.douyin.com/v2/conversation/create",
+        headers=headers.get(),
+        cookies=material["cookie"],
+        data=request.SerializeToString(),
+        verify=False,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = _douyin_im_parse_response(response.content)
+    logger.info("[DOUYIN-IM] create_conversation response=%s", json.dumps(_douyin_im_response_summary(payload), ensure_ascii=False))
+    conversations = (
+        payload.get("body", {})
+        .get("create_conversation_v2_body", {})
+        .get("conversation_info_list", [])
+    )
+    if not conversations:
+        raise RuntimeError("创建私信会话失败")
+    conversation = conversations[0]
+    return {
+        "conversation_id": conversation.get("conversation_id", ""),
+        "conversation_short_id": conversation.get("conversation_short_id", ""),
+        "ticket": conversation.get("ticket", ""),
+    }
+
+
+def _douyin_im_send_text_message(
+    material: Dict[str, Any],
+    conversation_id: str,
+    conversation_short_id: str,
+    ticket: str,
+    message: str,
+) -> Dict[str, Any]:
+    import requests
+    from backend.douyin_protocol_runtime import HeaderBuilder, HeaderType, generate_msToken, generate_req_sign
+
+    RequestProto, _ = _load_douyin_im_proto_modules()
+    request = _douyin_im_build_request(material, 100)
+    client_message_id = str(uuid.uuid4())
+    conversation_short_id_int = int(str(conversation_short_id or "0").strip() or "0")
+    msg_content = {
+        "mention_users": [],
+        "aweType": 700,
+        "richTextInfos": [],
+        "text": str(message or ""),
+    }
+    content_text = json.dumps(msg_content, ensure_ascii=False, separators=(",", ":"))
+    request.body.send_message_body.conversation_id = str(conversation_id)
+    request.body.send_message_body.conversation_type = 1
+    request.body.send_message_body.conversation_short_id = conversation_short_id_int
+    request.body.send_message_body.content = content_text
+    request.body.send_message_body.ext.append(RequestProto.ExtValue(key="s:client_message_id", value=client_message_id))
+    request.body.send_message_body.ext.append(RequestProto.ExtValue(key="s:stime", value=str(int(time.time() * 1000))))
+    request.body.send_message_body.ext.append(RequestProto.ExtValue(key="s:mentioned_users", value=""))
+    request.body.send_message_body.message_type = 7
+    request.body.send_message_body.ticket = str(ticket)
+    request.body.send_message_body.client_message_id = client_message_id
+    request.reuqest_sign = generate_req_sign(
+        {
+            "sign_data": f"content={content_text}&conversation_id={conversation_id}&conversation_short_id={conversation_short_id}",
+            "certType": "cookie",
+            "scene": "web_protect",
+        },
+        material["private_key"],
+    )
+    params = {
+        "verifyFp": material["cookie"]["s_v_web_id"],
+        "fp": material["cookie"]["s_v_web_id"],
+        "msToken": generate_msToken(),
+    }
+    params = _douyin_im_with_a_bogus(params)
+    headers = HeaderBuilder.build(HeaderType.PROTOBUF)
+    headers.set_referer("https://www.douyin.com/")
+    logger.info(
+        "[DOUYIN-IM] send_message request conversation_id=%s short_id=%s ticket=%s client_message_id=%s content_len=%s req_sign_len=%s",
+        str(conversation_id or "")[:80],
+        str(conversation_short_id or ""),
+        bool(str(ticket or "").strip()),
+        client_message_id,
+        len(str(message or "")),
+        len(str(request.reuqest_sign or "")),
+    )
+    response = requests.post(
+        "https://imapi.douyin.com/v1/message/send",
+        params=params,
+        headers=headers.get(),
+        cookies=material["cookie"],
+        data=request.SerializeToString(),
+        verify=False,
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = _douyin_im_parse_response(response.content)
+    summary = _douyin_im_response_summary(payload)
+    logger.info("[DOUYIN-IM] send_message response=%s", json.dumps(summary, ensure_ascii=False))
+    logger.debug("[DOUYIN-IM] send_message raw_response=%s", json.dumps(payload, ensure_ascii=False)[:4000])
+    response_message = str(payload.get("message", "") or "").strip()
+    if response_message and response_message.upper() != "OK":
+        raise RuntimeError("发送私信失败：" + response_message)
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+    notify = body.get("new_message_notify") if isinstance(body.get("new_message_notify"), dict) else {}
+    message_body = notify.get("message") if isinstance(notify.get("message"), dict) else {}
+    server_message_id = str(message_body.get("server_message_id", "") or "").strip()
+    return {
+        "raw": payload,
+        "summary": summary,
+        "server_message_id": server_message_id,
+        "client_message_id": client_message_id,
+        "ack_only": not bool(server_message_id),
+    }
+
+
+def _send_douyin_private_messages_protocol_sync(
+    auth: Dict[str, Any],
+    targets: List[Dict[str, Any]],
+    message: str,
+) -> Dict[str, Any]:
+    material = _douyin_im_auth_material(auth)
+    results: List[Dict[str, Any]] = []
+    for target in targets:
+        nickname = str(target.get("nickname") or target.get("author") or target.get("name") or "").strip()
+        profile_url = str(target.get("profile_url") or "").strip()
+        sec_user_id = str(target.get("sec_user_id") or target.get("sec_uid") or "").strip()
+        if not profile_url and sec_user_id:
+            profile_url = f"https://www.douyin.com/user/{sec_user_id}"
+        row = {
+            "nickname": nickname or sec_user_id or profile_url or "客户",
+            "profile_url": profile_url,
+            "sec_user_id": sec_user_id,
+            "ok": False,
+            "message": "",
+        }
+        try:
+            user_info = _douyin_im_query_target_user(material, profile_url or sec_user_id)
+            user = user_info.get("user") if isinstance(user_info.get("user"), dict) else {}
+            to_user_id = int(user.get("uid") or 0)
+            if not to_user_id:
+                raise RuntimeError("客户 uid 为空")
+            conversation = _douyin_im_create_conversation(material, to_user_id)
+            send_result = _douyin_im_send_text_message(
+                material,
+                conversation["conversation_id"],
+                conversation["conversation_short_id"],
+                conversation["ticket"],
+                message,
+            )
+            row.update({
+                "ok": True,
+                "message": "发送成功" if send_result.get("server_message_id") else "发送成功（抖音仅返回 OK 确认）",
+                "target_uid": to_user_id,
+                "conversation_id": conversation["conversation_id"],
+                "conversation_short_id": conversation["conversation_short_id"],
+                "server_message_id": send_result.get("server_message_id", ""),
+                "client_message_id": send_result.get("client_message_id", ""),
+                "ack_only": bool(send_result.get("ack_only")),
+            })
+        except Exception as exc:
+            logger.exception("[DOUYIN-IM] send target failed nickname=%s profile=%s", nickname, profile_url or sec_user_id)
+            row["message"] = _douyin_im_public_error_message(exc)
+        results.append(row)
+    success = sum(1 for item in results if item.get("ok"))
+    failed = len(results) - success
+    return {
+        "ok": success > 0,
+        "message": f"私信发送完成：成功 {success} 个，失败 {failed} 个。",
+        "success": success,
+        "failed": failed,
+        "results": results,
+    }
+
+
+async def send_douyin_private_messages_protocol(
+    profile_dir: str,
+    targets: List[Dict[str, Any]],
+    message: str,
+    browser_options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    message = str(message or "").strip()
+    if not message:
+        return {"ok": False, "logged_in": True, "message": "请先填写私信内容。", "results": []}
+    targets = [item for item in (targets or []) if isinstance(item, dict)]
+    if not targets:
+        return {"ok": False, "logged_in": True, "message": "请先选择要发送私信的客户。", "results": []}
+    opts = browser_options if browser_options is not None else _default_browser_options()
+    if not Path(profile_dir).exists():
+        return {"ok": False, "logged_in": False, "message": "账号浏览器目录不存在，请先打开登录。", "results": []}
+
+    await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
+    ctx, created_new = await _acquire_context(profile_dir, new_headless=False, browser_options=opts)
+    try:
+        page, ctx = await _get_page_with_reacquire(
+            profile_dir,
+            ctx,
+            new_headless_on_recreate=False,
+            browser_options=opts,
+        )
+        await page.goto(
+            "https://www.douyin.com/",
+            wait_until="domcontentloaded",
+            timeout=navigation_timeout_ms(45000),
+        )
+        try:
+            await page.wait_for_timeout(2500)
+        except Exception:
+            await asyncio.sleep(2.5)
+        login_state = await _read_douyin_front_login_state(page, ctx)
+        auth = await _extract_douyin_protocol_auth_from_context(page, ctx)
+        has_session_cookie, _ = _douyin_protocol_cookie_ready(auth)
+        if not has_session_cookie:
+            return {
+                "ok": False,
+                "logged_in": False,
+                "message": "抖音前台未检测到登录，请先点击“打开登录”。",
+                "results": [],
+                **login_state,
+            }
+        payload = await asyncio.to_thread(
+            _send_douyin_private_messages_protocol_sync,
+            auth,
+            targets,
+            message,
+        )
+        payload["logged_in"] = True
+        return payload
+    except Exception as e:
+        if created_new:
+            await _drop_cached_context(profile_dir, ctx, browser_options=opts)
+        return {"ok": False, "logged_in": True, "message": str(e), "results": []}
+
+
+async def collect_douyin_search_results(
+    profile_dir: str,
+    keyword: str,
+    max_results: int = 30,
+    browser_options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Collect Douyin search video cards from the consumer site using a persistent profile."""
+    keyword = str(keyword or "").strip()
+    if not keyword:
+        return {"ok": False, "logged_in": False, "message": "请输入抖音搜索关键词", "data": []}
+    max_results = max(1, min(int(max_results or 30), 100))
+    opts = browser_options if browser_options is not None else _default_browser_options()
+    if not Path(profile_dir).exists():
+        return {"ok": False, "logged_in": False, "message": "账号浏览器目录不存在，请先打开登录。", "data": []}
+
+    await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
+    ctx, created_new = await _acquire_context(
+        profile_dir,
+        new_headless=False,
+        browser_options=opts,
+    )
+    page = None
+    try:
+        page, ctx = await _get_page_with_reacquire(
+            profile_dir,
+            ctx,
+            new_headless_on_recreate=False,
+            browser_options=opts,
+        )
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
+        search_url = f"https://www.douyin.com/search/{quote(keyword)}?type=video"
+        await page.goto(
+            search_url,
+            wait_until="domcontentloaded",
+            timeout=navigation_timeout_ms(60000),
+        )
+        try:
+            await page.wait_for_timeout(2500)
+        except Exception:
+            await asyncio.sleep(2.5)
+        login_state = await _read_douyin_front_login_state(page, ctx)
+        if not login_state.get("logged_in"):
+            _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+            return {
+                "ok": False,
+                "logged_in": False,
+                "message": "抖音前台未检测到登录，请先点击“打开登录”。",
+                "data": [],
+                **login_state,
+            }
+        page_text = ""
+        try:
+            page_text = await page.evaluate(
+                "() => String(document.body && document.body.innerText || '').slice(0, 4000)"
+            )
+        except Exception:
+            page_text = ""
+
+        seen: Dict[str, Dict[str, Any]] = {}
+        rounds = 0
+        stable_rounds = 0
+        while len(seen) < max_results and rounds < 12 and stable_rounds < 4:
+            rounds += 1
+            batch = await page.evaluate(
+                """
+                (limit) => {
+                  const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                  const absolute = (href) => {
+                    try { return new URL(String(href || ''), location.origin).href.split('?')[0]; }
+                    catch (e) { return String(href || '').split('?')[0]; }
+                  };
+                  const awemeIdOf = (href) => {
+                    const text = String(href || '');
+                    const m1 = text.match(/\\/video\\/(\\d+)/);
+                    if (m1) return m1[1];
+                    const m2 = text.match(/[?&]modal_id=(\\d+)/);
+                    if (m2) return m2[1];
+                    return '';
+                  };
+                  const pickCard = (anchor) => {
+                    let best = anchor;
+                    let node = anchor;
+                    for (let i = 0; i < 8 && node; i += 1, node = node.parentElement) {
+                      const text = normalize(node.innerText || node.textContent || '');
+                      const imgCount = node.querySelectorAll ? node.querySelectorAll('img').length : 0;
+                      const userCount = node.querySelectorAll ? node.querySelectorAll('a[href*="/user/"]').length : 0;
+                      if ((imgCount || userCount) && text.length >= 4 && text.length <= 1200) best = node;
+                    }
+                    return best;
+                  };
+                  const readStats = (text) => {
+                    const out = { likes_text: '', comments_text: '', likes: 0, comments: 0 };
+                    const compact = normalize(text);
+                    const likeMatch = compact.match(/([\\d.]+\\s*[万wWkK]?)(?:\\s*)(?:点赞|赞|喜欢)/);
+                    const commentMatch = compact.match(/([\\d.]+\\s*[万wWkK]?)(?:\\s*)(?:评论|条评论)/);
+                    if (likeMatch) out.likes_text = likeMatch[1];
+                    if (commentMatch) out.comments_text = commentMatch[1];
+                    return out;
+                  };
+                  const anchors = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="modal_id="]'));
+                  const rows = [];
+                  const seen = new Set();
+                  for (const anchor of anchors) {
+                    const rawHref = anchor.href || anchor.getAttribute('href') || '';
+                    const awemeId = awemeIdOf(rawHref);
+                    const url = awemeId ? `https://www.douyin.com/video/${awemeId}` : absolute(rawHref);
+                    const key = awemeId || url;
+                    if (!key || seen.has(key)) continue;
+                    seen.add(key);
+                    const card = pickCard(anchor);
+                    const img = Array.from(card.querySelectorAll('img')).find((item) => {
+                      const src = String(item.currentSrc || item.src || '').trim();
+                      const w = Number(item.naturalWidth || item.width || 0);
+                      const h = Number(item.naturalHeight || item.height || 0);
+                      return src && (w >= 60 || h >= 60);
+                    }) || card.querySelector('img');
+                    const userLink = Array.from(card.querySelectorAll('a[href*="/user/"]')).find((item) => {
+                      const href = String(item.href || item.getAttribute('href') || '');
+                      return href.includes('/user/') && !href.includes('/user/self');
+                    });
+                    const cardText = normalize(card.innerText || card.textContent || '');
+                    const anchorText = normalize(anchor.getAttribute('aria-label') || anchor.getAttribute('title') || anchor.innerText || anchor.textContent || '');
+                    let title = anchorText || cardText.split(/\\n| · | 作者 | 评论 | 点赞 /)[0] || '';
+                    if (title.length > 120) title = title.slice(0, 120);
+                    const author = normalize(
+                      userLink?.innerText
+                      || userLink?.textContent
+                      || userLink?.getAttribute('title')
+                      || ''
+                    );
+                    const profileUrl = userLink ? absolute(userLink.href || userLink.getAttribute('href') || '') : '';
+                    const cover = String(img?.currentSrc || img?.src || '').trim();
+                    const stats = readStats(cardText);
+                    rows.push({
+                      aweme_id: awemeId,
+                      url,
+                      title,
+                      author,
+                      profile_url: profileUrl,
+                      cover_image: cover,
+                      likes_text: stats.likes_text,
+                      comments_text: stats.comments_text,
+                    });
+                    if (rows.length >= limit) break;
+                  }
+                  return rows;
+                }
+                """,
+                max_results,
+            )
+            before = len(seen)
+            if isinstance(batch, list):
+                for item in batch:
+                    if not isinstance(item, dict):
+                        continue
+                    url = str(item.get("url", "") or "").strip()
+                    aweme_id = _extract_douyin_aweme_id(url) or str(item.get("aweme_id", "") or "").strip()
+                    key = aweme_id or url
+                    if not key or key in seen:
+                        continue
+                    item["aweme_id"] = aweme_id
+                    item["url"] = f"https://www.douyin.com/video/{aweme_id}" if aweme_id else url
+                    seen[key] = item
+                    if len(seen) >= max_results:
+                        break
+            stable_rounds = stable_rounds + 1 if len(seen) == before else 0
+            if len(seen) >= max_results:
+                break
+            try:
+                await page.mouse.wheel(0, 1800)
+                await page.wait_for_timeout(1200)
+            except Exception:
+                await asyncio.sleep(1.2)
+
+        rows = list(seen.values())[:max_results]
+        if not rows:
+            challenge_words = ("验证码", "验证", "安全校验", "环境异常", "访问过于频繁", "扫码")
+            if any(word in page_text for word in challenge_words):
+                _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+                return {
+                    "ok": False,
+                    "logged_in": True,
+                    "message": "抖音搜索页需要验证码或安全校验，已打开浏览器窗口，请在窗口里处理后再点击开始采集。",
+                    "data": [],
+                    "total": 0,
+                    "search_url": search_url,
+                }
+        for index, item in enumerate(rows, start=1):
+            item["index"] = index
+            item["keyword"] = keyword
+            item["export_selected"] = False
+            profile_url = str(item.get("profile_url", "") or "").strip()
+            sec_user_id = ""
+            if "/user/" in profile_url:
+                sec_user_id = profile_url.split("/user/", 1)[-1].split("?", 1)[0].strip("/")
+            item["sec_user_id"] = sec_user_id
+        _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+        return {
+            "ok": True,
+            "logged_in": True,
+            "message": f"抖音搜索完成，共采集到 {len(rows)} 条视频。",
+            "data": rows,
+            "total": len(rows),
+            "search_url": search_url,
+        }
+    except Exception as e:
+        if created_new:
+            await _drop_cached_context(profile_dir, ctx, browser_options=opts)
+        return {"ok": False, "logged_in": False, "message": str(e), "data": []}
+
+
+async def collect_douyin_video_customers_protocol(
+    profile_dir: str,
+    video_url: str,
+    max_comments: int = 100,
+    browser_options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Collect commenters under a Douyin video through the web comment protocol."""
+    video_url = str(video_url or "").strip()
+    aweme_id = _extract_douyin_aweme_id(video_url)
+    if not aweme_id:
+        return {"ok": False, "message": "缺少有效的视频地址或 aweme_id", "comments": [], "customers": []}
+    max_comments = max(1, min(int(max_comments or 100), 500))
+    opts = browser_options if browser_options is not None else _default_browser_options()
+    if not Path(profile_dir).exists():
+        return {"ok": False, "message": "账号浏览器目录不存在，请先打开登录。", "comments": [], "customers": []}
+
+    ctx, created_new = await _acquire_context(
+        profile_dir,
+        new_headless=True,
+        browser_options=opts,
+    )
+    try:
+        target_url = f"https://www.douyin.com/video/{aweme_id}"
+        auth = await _extract_douyin_protocol_auth_from_context(None, ctx)
+        has_session_cookie, has_web_id = _douyin_protocol_cookie_ready(auth)
+        if not has_session_cookie or not has_web_id:
+            page, ctx = await _get_page_with_reacquire(
+                profile_dir,
+                ctx,
+                new_headless_on_recreate=True,
+                browser_options=opts,
+            )
+            await page.goto(
+                "https://www.douyin.com/jingxuan",
+                wait_until="domcontentloaded",
+                timeout=navigation_timeout_ms(45000),
+            )
+            try:
+                await page.wait_for_timeout(1800)
+            except Exception:
+                await asyncio.sleep(1.8)
+            login_state = await _read_douyin_front_login_state(page, ctx)
+            auth = await _extract_douyin_protocol_auth_from_context(page, ctx)
+            has_session_cookie, has_web_id = _douyin_protocol_cookie_ready(auth)
+        else:
+            login_state = {
+                "logged_in": True,
+                "cookie": True,
+                "login_prompt": False,
+                "qr_login_visible": False,
+                "path": "",
+            }
+        if not has_session_cookie:
+            return {
+                "ok": False,
+                "logged_in": False,
+                "message": "抖音前台未检测到登录，请先点击“打开登录”。",
+                "comments": [],
+                "customers": [],
+                **login_state,
+            }
+        if not has_web_id:
+            return {
+                "ok": False,
+                "logged_in": True,
+                "message": "协议采集缺少 s_v_web_id，请点击“打开登录”在抖音前台页面刷新一次后再试。",
+                "comments": [],
+                "customers": [],
+                **login_state,
+            }
+        payload = await asyncio.to_thread(
+            _collect_douyin_comments_protocol_sync,
+            auth,
+            target_url,
+            max_comments,
+        )
+        comments = payload.get("comments") if isinstance(payload, dict) else []
+        customers_by_key: Dict[str, Dict[str, Any]] = {}
+        for row in comments if isinstance(comments, list) else []:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("sec_uid") or row.get("uid") or row.get("profile_url") or row.get("nickname") or "").strip()
+            if not key:
+                continue
+            current = customers_by_key.get(key)
+            if not current:
+                current = {
+                    "id": key,
+                    "nickname": str(row.get("nickname", "") or "").strip(),
+                    "author": str(row.get("nickname", "") or "").strip(),
+                    "uid": str(row.get("uid", "") or "").strip(),
+                    "sec_user_id": str(row.get("sec_uid", "") or "").strip(),
+                    "profile_url": str(row.get("profile_url", "") or "").strip(),
+                    "avatar_url": str(row.get("avatar_url", "") or "").strip(),
+                    "comment_count": 0,
+                    "digg_count": 0,
+                    "latest_comment": "",
+                    "aweme_id": aweme_id,
+                    "video_url": target_url,
+                }
+                customers_by_key[key] = current
+            current["comment_count"] = int(current.get("comment_count", 0) or 0) + 1
+            current["digg_count"] = int(current.get("digg_count", 0) or 0) + int(row.get("digg_count", 0) or 0)
+            if not current.get("latest_comment"):
+                current["latest_comment"] = str(row.get("text", "") or "").strip()
+        customers = list(customers_by_key.values())
+        return {
+            "ok": True,
+            "logged_in": True,
+            "message": f"协议模式采集完成，共采集 {len(comments or [])} 条评论，沉淀 {len(customers)} 位客户。",
+            "aweme_id": aweme_id,
+            "video_url": target_url,
+            "comments": comments or [],
+            "customers": customers,
+            "total_comments": len(comments or []),
+            "total_customers": len(customers),
+        }
+    except Exception as e:
+        if created_new:
+            await _drop_cached_context(profile_dir, ctx, browser_options=opts)
+        return {"ok": False, "message": str(e), "comments": [], "customers": [], "aweme_id": aweme_id}
 
 
 async def run_publish_task(

@@ -9,7 +9,10 @@ from typing import Dict, List, Optional
 
 import httpx
 
-from publisher.browser_pool import browser_options_from_publish_meta
+from publisher.browser_pool import (
+    browser_options_from_publish_meta,
+    douyin_workbench_browser_options_from_publish_meta,
+)
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import OperationalError
@@ -424,6 +427,8 @@ SUPPORTED_PLATFORMS = {
     "pinduoduo": {"name": "拼多多", "login_url": "https://mms.pinduoduo.com/"},
 }
 
+DOUYIN_WORKBENCH_URL = "https://www.douyin.com/jingxuan"
+
 def _ensure_tiny_mp4(path: Path) -> Path:
     # A tiny MP4 (base64) for dry-run uploads.
     import base64
@@ -456,6 +461,33 @@ class AddAccountReq(BaseModel):
     proxy_username: Optional[str] = None
     proxy_password: Optional[str] = None
     user_agent: Optional[str] = None
+
+
+class DouyinSearchCollectReq(BaseModel):
+    keyword: str
+    account_id: Optional[int] = None
+    max_results: Optional[int] = 30
+
+
+class DouyinVideoCustomersReq(BaseModel):
+    account_id: Optional[int] = None
+    video_url: Optional[str] = None
+    aweme_id: Optional[str] = None
+    max_comments: Optional[int] = 100
+
+
+class DouyinMessageTarget(BaseModel):
+    nickname: Optional[str] = None
+    author: Optional[str] = None
+    profile_url: Optional[str] = None
+    sec_user_id: Optional[str] = None
+    sec_uid: Optional[str] = None
+
+
+class DouyinMessageSendReq(BaseModel):
+    account_id: Optional[int] = None
+    message: str
+    targets: List[DouyinMessageTarget] = []
 
 
 @router.get("/api/accounts", summary="列出发布账号")
@@ -717,6 +749,90 @@ async def check_login_status(
         return {"logged_in": False, "message": str(e)}
 
 
+@router.post("/api/accounts/{account_id}/douyin-workbench/open", summary="打开抖音获客工作台登录页")
+async def open_douyin_workbench_browser(
+    account_id: int,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    acct = db.query(PublishAccount).filter(
+        PublishAccount.id == account_id,
+        PublishAccount.user_id == current_user.id,
+    ).first()
+    if not acct:
+        raise HTTPException(404, detail="账号不存在")
+    if acct.platform != "douyin":
+        raise HTTPException(400, detail="该入口只支持抖音账号")
+
+    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
+    try:
+        from publisher.browser_pool import open_douyin_front_browser
+
+        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        result = await open_douyin_front_browser(
+            profile_dir=profile_dir,
+            url=DOUYIN_WORKBENCH_URL,
+            browser_options=bopts,
+        )
+        if result.get("ok"):
+            logged_in = bool(result.get("logged_in"))
+            acct.status = "active" if logged_in else "pending"
+            if logged_in:
+                acct.last_login = datetime.utcnow()
+            db.commit()
+        return result
+    except Exception as e:
+        logger.exception("Open douyin workbench browser failed")
+        return {"ok": False, "logged_in": False, "message": str(e)}
+
+
+@router.get("/api/accounts/{account_id}/douyin-workbench/login-status", summary="检查抖音获客工作台登录状态")
+async def check_douyin_workbench_login_status(
+    account_id: int,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    acct = db.query(PublishAccount).filter(
+        PublishAccount.id == account_id,
+        PublishAccount.user_id == current_user.id,
+    ).first()
+    if not acct:
+        raise HTTPException(404, detail="账号不存在")
+    if acct.platform != "douyin":
+        raise HTTPException(400, detail="该入口只支持抖音账号")
+
+    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
+    try:
+        from publisher.browser_pool import check_douyin_front_login
+
+        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        result = await check_douyin_front_login(
+            profile_dir=profile_dir,
+            url=DOUYIN_WORKBENCH_URL,
+            browser_options=bopts,
+            headless=True,
+        )
+        logged_in = bool(result.get("logged_in"))
+        acct.status = "active" if logged_in else "pending"
+        if logged_in:
+            acct.last_login = datetime.utcnow()
+        db.commit()
+        return {
+            "logged_in": logged_in,
+            "status": acct.status,
+            "message": result.get("message") or ("抖音前台已登录" if logged_in else "抖音前台未登录"),
+            "detail": {
+                "cookie": bool(result.get("cookie")),
+                "login_prompt": bool(result.get("login_prompt")),
+                "path": result.get("path") or "",
+                "entry_url": DOUYIN_WORKBENCH_URL,
+            },
+        }
+    except Exception as e:
+        logger.exception("Check douyin workbench login status failed")
+        return {"logged_in": False, "status": "error", "message": str(e)}
+
+
 @router.delete("/api/accounts/{account_id}", summary="删除发布账号")
 def delete_account(
     account_id: int,
@@ -793,6 +909,219 @@ async def douyin_dryrun(
     except Exception as e:
         logger.exception("Douyin dryrun failed")
         return {"ok": False, "error": str(e)}
+
+
+@router.post("/api/douyin/search/collect", summary="抖音工作台：搜索采集视频线索")
+async def douyin_workbench_search_collect(
+    body: DouyinSearchCollectReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    keyword = (body.keyword or "").strip()
+    if not keyword:
+        return {"code": 400, "msg": "请输入抖音搜索关键词", "data": [], "total": 0}
+    query = db.query(PublishAccount).filter(
+        PublishAccount.user_id == current_user.id,
+        PublishAccount.platform == "douyin",
+    )
+    if body.account_id:
+        query = query.filter(PublishAccount.id == int(body.account_id))
+    else:
+        query = query.order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
+    acct = query.first()
+    if not acct:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "没有可用的抖音账号，请先在左侧添加并登录。",
+            "data": [],
+            "total": 0,
+        }
+
+    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
+    try:
+        from publisher.browser_pool import collect_douyin_search_results
+
+        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        result = await collect_douyin_search_results(
+            profile_dir=profile_dir,
+            keyword=keyword,
+            max_results=int(body.max_results or 30),
+            browser_options=bopts,
+        )
+        if not result.get("ok"):
+            return {
+                "code": 400 if not result.get("logged_in") else 500,
+                "type": "no_online_account" if not result.get("logged_in") else "search_failed",
+                "msg": result.get("message") or "抖音搜索采集失败",
+                "data": [],
+                "total": 0,
+                "account_id": acct.id,
+            }
+        acct.status = "active"
+        acct.last_login = datetime.utcnow()
+        db.commit()
+        return {
+            "code": 200,
+            "msg": result.get("message") or f"抖音搜索完成，共 {int(result.get('total') or 0)} 条结果。",
+            "data": result.get("data") or [],
+            "total": int(result.get("total") or 0),
+            "account_id": acct.id,
+            "search_url": result.get("search_url") or "",
+        }
+    except Exception as e:
+        logger.exception("Douyin workbench search collect failed")
+        return {"code": 500, "msg": f"抖音搜索采集失败：{e}", "data": [], "total": 0, "account_id": acct.id}
+
+
+@router.post("/api/douyin/video/customers", summary="抖音工作台：协议模式采集视频评论客户")
+async def douyin_workbench_video_customers(
+    body: DouyinVideoCustomersReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    video_url = (body.video_url or "").strip()
+    aweme_id = (body.aweme_id or "").strip()
+    if not video_url and aweme_id:
+        video_url = f"https://www.douyin.com/video/{aweme_id}"
+    if not video_url:
+        return {"code": 400, "msg": "请选择一个要采集客户的视频", "customers": [], "comments": []}
+
+    query = db.query(PublishAccount).filter(
+        PublishAccount.user_id == current_user.id,
+        PublishAccount.platform == "douyin",
+    )
+    if body.account_id:
+        query = query.filter(PublishAccount.id == int(body.account_id))
+    else:
+        query = query.order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
+    acct = query.first()
+    if not acct:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "没有可用的抖音账号，请先在左侧添加并登录。",
+            "customers": [],
+            "comments": [],
+        }
+
+    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
+    try:
+        from publisher.browser_pool import collect_douyin_video_customers_protocol
+
+        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        result = await collect_douyin_video_customers_protocol(
+            profile_dir=profile_dir,
+            video_url=video_url,
+            max_comments=int(body.max_comments or 100),
+            browser_options=bopts,
+        )
+        if not result.get("ok"):
+            return {
+                "code": 400 if not result.get("logged_in") else 500,
+                "type": "no_online_account" if not result.get("logged_in") else "collect_failed",
+                "msg": result.get("message") or "采集视频客户失败",
+                "customers": [],
+                "comments": [],
+                "account_id": acct.id,
+            }
+        acct.status = "active"
+        acct.last_login = datetime.utcnow()
+        db.commit()
+        return {
+            "code": 200,
+            "msg": result.get("message") or "视频客户采集完成",
+            "customers": result.get("customers") or [],
+            "comments": result.get("comments") or [],
+            "total_customers": int(result.get("total_customers") or 0),
+            "total_comments": int(result.get("total_comments") or 0),
+            "account_id": acct.id,
+            "aweme_id": result.get("aweme_id") or aweme_id,
+            "video_url": result.get("video_url") or video_url,
+        }
+    except Exception as e:
+        logger.exception("Douyin workbench video customers failed")
+        return {"code": 500, "msg": f"采集视频客户失败：{e}", "customers": [], "comments": [], "account_id": acct.id}
+
+
+@router.post("/api/douyin/message/send", summary="抖音工作台：协议模式发送私信")
+async def douyin_workbench_message_send(
+    body: DouyinMessageSendReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    message = (body.message or "").strip()
+    if not message:
+        return {"code": 400, "msg": "请先填写私信内容。", "results": []}
+    targets = [item.dict() for item in (body.targets or [])]
+    cleaned_targets = []
+    seen = set()
+    for item in targets:
+        profile_url = (item.get("profile_url") or "").strip()
+        sec_user_id = (item.get("sec_user_id") or item.get("sec_uid") or "").strip()
+        key = profile_url or sec_user_id
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned_targets.append(item)
+    if not cleaned_targets:
+        return {"code": 400, "msg": "请先选择有主页链接或 sec_user_id 的客户。", "results": []}
+
+    query = db.query(PublishAccount).filter(
+        PublishAccount.user_id == current_user.id,
+        PublishAccount.platform == "douyin",
+    )
+    if body.account_id:
+        query = query.filter(PublishAccount.id == int(body.account_id))
+    else:
+        query = query.order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
+    acct = query.first()
+    if not acct:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "没有可用的抖音账号，请先在左侧添加并登录。",
+            "results": [],
+        }
+
+    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
+    try:
+        from publisher.browser_pool import send_douyin_private_messages_protocol
+
+        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        result = await send_douyin_private_messages_protocol(
+            profile_dir=profile_dir,
+            targets=cleaned_targets,
+            message=message,
+            browser_options=bopts,
+        )
+        if not result.get("ok"):
+            fail_reason = ""
+            for item in result.get("results") or []:
+                if isinstance(item, dict) and not item.get("ok") and str(item.get("message", "") or "").strip():
+                    fail_reason = str(item.get("message", "") or "").strip()
+                    break
+            return {
+                "code": 400 if not result.get("logged_in") else 500,
+                "type": "no_online_account" if not result.get("logged_in") else "send_failed",
+                "msg": fail_reason or result.get("message") or "私信发送失败",
+                "results": result.get("results") or [],
+                "account_id": acct.id,
+            }
+        acct.status = "active"
+        acct.last_login = datetime.utcnow()
+        db.commit()
+        return {
+            "code": 200,
+            "msg": result.get("message") or "私信发送完成",
+            "results": result.get("results") or [],
+            "success": int(result.get("success") or 0),
+            "failed": int(result.get("failed") or 0),
+            "account_id": acct.id,
+        }
+    except Exception as e:
+        logger.exception("Douyin workbench message send failed")
+        return {"code": 500, "msg": f"私信发送失败：{e}", "results": [], "account_id": acct.id}
 
 
 def _bearer_from_request(request: Request) -> str:

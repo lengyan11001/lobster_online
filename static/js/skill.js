@@ -30,6 +30,13 @@ var _comflyStatus = {
   default_api_base_hint: 'https://ai.comfly.org',
 };
 var _youtubePublishStatus = { has_ready: false, accounts_count: 0 };
+var _douyinWorkbenchState = {
+  accounts: [],
+  selectedAccountId: null,
+  searchResults: [],
+  leads: [],
+  selectedLeadIds: {}
+};
 var _skillStoreFetchCache = {};
 var _SKILL_STORE_FETCH_TTL_MS = 60000;
 var _SKILL_STORE_FETCH_TIMEOUT_MS = 8000;
@@ -51,6 +58,869 @@ function _switchToHiddenView(view) {
   if (contentEl) contentEl.classList.add('visible');
   if (typeof currentView !== 'undefined') currentView = view;
 }
+
+function _ensureDouyinWorkbenchHost() {
+  var host = document.getElementById('content-douyin-workbench');
+  if (host && host.dataset.douyinLayoutVersion === 'tabs-20260522') return host;
+  var main = document.querySelector('.dashboard-main');
+  if (!main) return null;
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'content-douyin-workbench';
+    main.appendChild(host);
+  }
+  host.className = 'content-block';
+  host.dataset.douyinLayoutVersion = 'tabs-20260522';
+  delete host.dataset.douyinTabsBound;
+  host.innerHTML = `
+    <div class="tvc-studio">
+      <div class="tvc-studio-hero">
+        <div>
+          <h3>抖音获客工作台</h3>
+          <p>左侧管理抖音账号，右侧在搜索采集和私信发送两个工位之间切换。</p>
+          <div class="tvc-hero-meta">参考独立抖音工作台的结构：账号常驻左侧，采集和触达在右侧分屏处理。</div>
+        </div>
+        <div class="douyin-toolbar">
+          <button type="button" id="douyinWorkbenchBackBtn" class="btn btn-ghost btn-sm">返回首页</button>
+          <button type="button" id="douyinReloadAccountsBtn" class="btn btn-ghost btn-sm">刷新账号</button>
+          <button type="button" id="douyinOpenLoginBtn" class="btn btn-primary btn-sm">打开登录</button>
+        </div>
+      </div>
+      <div class="douyin-workflow-strip">
+        <div class="douyin-step-pill"><span class="douyin-step-index">1</span><span class="douyin-step-copy"><strong>登录账号</strong><span>左侧固定账号和登录状态</span></span></div>
+        <div class="douyin-step-pill"><span class="douyin-step-index">2</span><span class="douyin-step-copy"><strong>搜索采集</strong><span>右侧页签采集视频和客户</span></span></div>
+        <div class="douyin-step-pill"><span class="douyin-step-index">3</span><span class="douyin-step-copy"><strong>私信发送</strong><span>上面配置消息，下面选客户</span></span></div>
+      </div>
+      <div class="douyin-shell">
+        <aside class="douyin-sidebar">
+          <div class="tvc-panel">
+            <h4 class="tvc-panel-title">抖音账号</h4>
+            <p class="tvc-panel-hint">这里直接添加和管理抖音获客账号，登录会打开抖音前台页面，不走创作者中心。</p>
+            <div class="tvc-field">
+              <label for="douyinNewAccountNicknameInput">添加抖音账号</label>
+              <div class="douyin-inline-grid">
+                <input id="douyinNewAccountNicknameInput" type="text" placeholder="账号备注，例如：主号、探店号">
+                <button type="button" id="douyinCreateAccountBtn" class="btn btn-primary btn-sm">添加账号</button>
+              </div>
+            </div>
+            <div class="tvc-field">
+              <label for="douyinAccountSelect">选择账号</label>
+              <select id="douyinAccountSelect"></select>
+            </div>
+            <div class="douyin-toolbar">
+              <button type="button" id="douyinOpenLoginInlineBtn" class="btn btn-primary btn-sm">打开登录</button>
+              <button type="button" id="douyinCheckStatusBtn" class="btn btn-ghost btn-sm">检查登录</button>
+            </div>
+            <p class="tvc-panel-hint" style="margin:0.45rem 0 0;">检查登录会打开抖音前台精选页，并基于页面登录状态判断。</p>
+            <div id="douyinAccountList" class="douyin-account-list"></div>
+          </div>
+          <div class="tvc-panel tvc-panel-compact">
+            <h4 class="tvc-panel-title">当前状态</h4>
+            <div id="douyinStatusBox" class="douyin-status">等待加载抖音账号。</div>
+          </div>
+        </aside>
+        <main class="douyin-main">
+          <div class="douyin-tabbar" role="tablist" aria-label="抖音工作区">
+            <button type="button" class="douyin-tab-btn is-active" data-douyin-tab="search">搜索采集</button>
+            <button type="button" class="douyin-tab-btn" data-douyin-tab="message">私信发送</button>
+          </div>
+          <section class="douyin-tab-panel is-active" data-douyin-panel="search">
+            <div class="tvc-panel douyin-search-card">
+              <div class="douyin-panel-head">
+                <div>
+                  <h4 class="tvc-panel-title">搜索采集</h4>
+                  <p class="tvc-panel-hint" style="margin:0;">先按关键词采集视频和作者线索，采集完成后沉淀到客户列表。</p>
+                </div>
+                <div class="douyin-count-badges">
+                  <span class="douyin-badge" id="douyinLeadCountBadge">客户 0</span>
+                  <span class="douyin-badge is-muted" id="douyinVideoCountBadge">视频 0</span>
+                </div>
+              </div>
+              <div class="douyin-collect-form">
+                <div class="tvc-field">
+                  <label for="douyinKeywordInput">搜索关键词</label>
+                  <input id="douyinKeywordInput" type="text" placeholder="例如：本地探店、母婴好物、装修案例">
+                </div>
+                <div class="tvc-field">
+                  <label for="douyinMaxResultsInput">采集数量</label>
+                  <input id="douyinMaxResultsInput" type="number" min="1" max="100" value="30">
+                </div>
+              </div>
+              <div class="douyin-toolbar" style="margin-top:0.7rem;">
+                <button type="button" id="douyinCollectBtn" class="btn btn-primary">开始采集</button>
+                <button type="button" id="douyinClearResultsBtn" class="btn btn-ghost">清空结果</button>
+              </div>
+              <div id="douyinSearchResults" class="douyin-result-host" style="margin-top:0.85rem;">
+                <div class="douyin-empty">抖音搜索结果会显示在这里，视频列表保留封面、标题、作者和采集进度。</div>
+              </div>
+            </div>
+          </section>
+          <section class="douyin-tab-panel" data-douyin-panel="message">
+            <div class="tvc-panel">
+              <div class="douyin-panel-head">
+                <div>
+                  <h4 class="tvc-panel-title">私信发送</h4>
+                  <p class="tvc-panel-hint" style="margin:0;">上方配置消息和发送类型，下方从采集客户列表选择对象。</p>
+                </div>
+                <div class="douyin-count-badges">
+                  <span class="douyin-badge" id="douyinMessageTargetBadge">已选 0</span>
+                  <span class="douyin-badge is-muted" id="douyinCustomerCountBadge">客户 0</span>
+                </div>
+              </div>
+              <div class="douyin-send-grid">
+                <div>
+                  <div class="douyin-message-grid">
+                    <div class="tvc-field">
+                      <label for="douyinMessageInput">私信内容</label>
+                      <textarea id="douyinMessageInput" style="min-height:132px;" placeholder="支持多行内容，系统会逐行发送非空消息。"></textarea>
+                    </div>
+                    <div class="tvc-field">
+                      <label for="douyinMessageTypeSelect">发送类型</label>
+                      <select id="douyinMessageTypeSelect">
+                        <option value="selected">发送给选中客户</option>
+                        <option value="all">发送给全部客户</option>
+                        <option value="intent">只发精准客户</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="douyin-toolbar" style="margin-top:0.7rem;">
+                    <button type="button" id="douyinSendMessageBtn" class="btn btn-primary">发送私信</button>
+                    <button type="button" id="douyinSelectAllCustomersBtn" class="btn btn-ghost">全选客户</button>
+                    <button type="button" id="douyinClearCustomerSelectionBtn" class="btn btn-ghost">清空选择</button>
+                  </div>
+                  <div class="douyin-interaction-note">私信对象来自下方客户列表，也可以在右侧手动填写主页链接或 sec_user_id。</div>
+                </div>
+                <div class="douyin-target-card">
+                  <div id="douyinSelectedTargetCard">
+                    <div class="douyin-target-title">尚未选择客户</div>
+                    <div class="douyin-selected-target">在下面的客户列表里选择一个或多个对象开始私信。</div>
+                  </div>
+                  <div class="tvc-field" style="margin-top:0.65rem;">
+                    <label for="douyinProfileUrlInput">主页链接</label>
+                    <input id="douyinProfileUrlInput" type="text" placeholder="https://www.douyin.com/user/...">
+                  </div>
+                  <div class="tvc-field">
+                    <label for="douyinSecUserIdInput">sec_user_id</label>
+                    <input id="douyinSecUserIdInput" type="text" placeholder="没有主页链接时可填写 sec_user_id">
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="tvc-panel" style="margin-top:0.85rem;">
+              <div class="douyin-panel-head">
+                <div>
+                  <h4 class="tvc-panel-title">客户列表</h4>
+                  <p class="tvc-panel-hint" style="margin:0;">采集出来的客户会沉淀在这里，选择后再执行私信。</p>
+                </div>
+              </div>
+              <div id="douyinCustomerList" class="douyin-customer-list">
+                <div class="douyin-empty">暂无客户。请先到“搜索采集”页按关键词采集视频和作者线索。</div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>`;
+  return host;
+}
+
+function _bindDouyinWorkbenchTabs(host) {
+  if (!host || host.dataset.douyinTabsBound === '1') return;
+  host.dataset.douyinTabsBound = '1';
+  host.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-douyin-tab]');
+    if (!btn || !host.contains(btn)) return;
+    var tab = btn.getAttribute('data-douyin-tab') || 'search';
+    host.querySelectorAll('[data-douyin-tab]').forEach(function(item) {
+      item.classList.toggle('is-active', item === btn);
+    });
+    host.querySelectorAll('[data-douyin-panel]').forEach(function(panel) {
+      panel.classList.toggle('is-active', panel.getAttribute('data-douyin-panel') === tab);
+    });
+  });
+}
+
+function _douyinWorkbenchApiBase() {
+  return (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE)
+    ? String(LOCAL_API_BASE).replace(/\/$/, '')
+    : '';
+}
+
+function _douyinWorkbenchHeaders() {
+  var headers = (typeof authHeaders === 'function') ? Object.assign({}, authHeaders() || {}) : {};
+  headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  return headers;
+}
+
+function _douyinWorkbenchFetch(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign(_douyinWorkbenchHeaders(), opts.headers || {});
+  return fetch(_douyinWorkbenchApiBase() + path, opts).then(function(r) {
+    return r.text().then(function(text) {
+      var data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch (e1) {
+        data = { detail: text || ('HTTP ' + r.status) };
+      }
+      if (!r.ok) {
+        var msg = data.detail || data.message || ('HTTP ' + r.status);
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      }
+      return data;
+    });
+  });
+}
+
+function _douyinWorkbenchStatus(text, type) {
+  var box = document.getElementById('douyinStatusBox');
+  if (!box) return;
+  var statusType = (typeof type === 'string') ? type : (type ? 'error' : 'info');
+  box.classList.remove('is-error', 'is-loading', 'is-success', 'is-warning');
+  if (statusType && statusType !== 'info') box.classList.add('is-' + statusType);
+  box.innerHTML = (statusType === 'loading' ? '<span class="douyin-status-spinner" aria-hidden="true"></span>' : '') +
+    '<span>' + escapeHtml(String(text || '')) + '</span>';
+}
+
+function _douyinWorkbenchSelectedAccount() {
+  var id = parseInt(_douyinWorkbenchState.selectedAccountId, 10) || 0;
+  return (_douyinWorkbenchState.accounts || []).find(function(acct) {
+    return parseInt(acct.id, 10) === id;
+  }) || null;
+}
+
+function _douyinWorkbenchSetBusy(ids, busy) {
+  (ids || []).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.disabled = !!busy;
+      el.classList.toggle('is-loading', !!busy);
+    }
+  });
+}
+
+function _douyinWorkbenchSetVideoBusy(index, busy) {
+  document.querySelectorAll('[data-douyin-video-action="collect-customers"][data-douyin-video-index="' + String(index) + '"]').forEach(function(el) {
+    el.disabled = !!busy;
+    el.classList.toggle('is-loading', !!busy);
+  });
+}
+
+function _douyinWorkbenchStatusLabel(status) {
+  if (status === 'active') return '已登录';
+  if (status === 'error') return '异常';
+  return '待登录';
+}
+
+function _douyinWorkbenchRenderAccounts() {
+  var accounts = _douyinWorkbenchState.accounts || [];
+  var select = document.getElementById('douyinAccountSelect');
+  var list = document.getElementById('douyinAccountList');
+  if (!select || !list) return;
+
+  if (!accounts.length) {
+    _douyinWorkbenchState.selectedAccountId = null;
+    select.innerHTML = '<option value="">暂无抖音账号</option>';
+    list.innerHTML = '<div class="douyin-empty">还没有抖音账号。先在上方填写备注并点击“添加账号”。</div>';
+    _douyinWorkbenchStatus('暂无抖音账号，请先添加账号。');
+    return;
+  }
+
+  var selected = parseInt(_douyinWorkbenchState.selectedAccountId, 10) || 0;
+  if (!accounts.some(function(acct) { return parseInt(acct.id, 10) === selected; })) {
+    selected = parseInt(accounts[0].id, 10) || 0;
+    _douyinWorkbenchState.selectedAccountId = selected;
+  }
+
+  select.innerHTML = accounts.map(function(acct) {
+    return '<option value="' + escapeAttr(String(acct.id)) + '">' +
+      escapeHtml(String(acct.nickname || '抖音账号')) + ' · ' +
+      escapeHtml(_douyinWorkbenchStatusLabel(acct.status)) +
+      '</option>';
+  }).join('');
+  select.value = String(selected);
+
+  list.innerHTML = accounts.map(function(acct) {
+    var id = parseInt(acct.id, 10) || 0;
+    var active = id === selected;
+    var status = String(acct.status || 'pending');
+    var lastLogin = acct.last_login ? String(acct.last_login).replace('T', ' ').replace('Z', '') : '未记录';
+    return '<div class="douyin-account-card' + (active ? ' is-active' : '') + '" data-douyin-account-id="' + escapeAttr(String(id)) + '">' +
+      '<div class="douyin-account-main">' +
+        '<div class="douyin-account-name">' + escapeHtml(String(acct.nickname || '抖音账号')) + '</div>' +
+        '<div class="douyin-account-meta">最近登录：' + escapeHtml(lastLogin) + '</div>' +
+      '</div>' +
+      '<span class="douyin-login-state is-' + escapeAttr(status) + '">' + escapeHtml(_douyinWorkbenchStatusLabel(status)) + '</span>' +
+      '<div class="douyin-account-actions">' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-douyin-account-action="select">选择</button>' +
+        '<button type="button" class="btn btn-primary btn-sm" data-douyin-account-action="open">登录</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-douyin-account-action="check">检测</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-douyin-account-action="delete">删除</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  var current = _douyinWorkbenchSelectedAccount();
+  if (current) {
+    _douyinWorkbenchStatus(
+      current.status === 'active'
+        ? '当前账号“' + current.nickname + '”已登录，可以继续采集和私信。'
+        : '当前账号“' + current.nickname + '”待登录，请点击“打开登录”。'
+    );
+  }
+}
+
+function loadDouyinWorkbenchAccounts() {
+  _douyinWorkbenchStatus('正在加载抖音账号...', 'loading');
+  return _douyinWorkbenchFetch('/api/accounts', { headers: _douyinWorkbenchHeaders() })
+    .then(function(data) {
+      var rows = Array.isArray(data.accounts) ? data.accounts : [];
+      _douyinWorkbenchState.accounts = rows.filter(function(acct) {
+        return acct && acct.platform === 'douyin';
+      });
+      _douyinWorkbenchRenderAccounts();
+    })
+    .catch(function(err) {
+      _douyinWorkbenchStatus('加载账号失败：' + (err && err.message ? err.message : err), true);
+    });
+}
+
+function createDouyinWorkbenchAccount() {
+  var input = document.getElementById('douyinNewAccountNicknameInput');
+  var nick = input ? String(input.value || '').trim() : '';
+  if (!nick) {
+    _douyinWorkbenchStatus('请先填写账号备注，例如“主号”或“探店号”。', true);
+    if (input) input.focus();
+    return;
+  }
+  _douyinWorkbenchSetBusy(['douyinCreateAccountBtn'], true);
+  _douyinWorkbenchStatus('正在添加抖音账号...', 'loading');
+  _douyinWorkbenchFetch('/api/accounts', {
+    method: 'POST',
+    body: JSON.stringify({ platform: 'douyin', nickname: nick })
+  }).then(function(data) {
+    if (input) input.value = '';
+    if (data && data.id) _douyinWorkbenchState.selectedAccountId = parseInt(data.id, 10);
+    _douyinWorkbenchStatus('账号已添加，请点击“打开登录”完成抖音扫码。', 'success');
+    return loadDouyinWorkbenchAccounts();
+  }).catch(function(err) {
+    _douyinWorkbenchStatus('添加账号失败：' + (err && err.message ? err.message : err), true);
+  }).finally(function() {
+    _douyinWorkbenchSetBusy(['douyinCreateAccountBtn'], false);
+  });
+}
+
+function openDouyinWorkbenchLogin(accountId) {
+  var id = parseInt(accountId || _douyinWorkbenchState.selectedAccountId, 10) || 0;
+  if (!id) {
+    _douyinWorkbenchStatus('请先添加或选择一个抖音账号。', true);
+    return;
+  }
+  _douyinWorkbenchSetBusy(['douyinOpenLoginBtn', 'douyinOpenLoginInlineBtn'], true);
+  _douyinWorkbenchStatus('正在打开抖音前台登录页...', 'loading');
+  _douyinWorkbenchFetch('/api/accounts/' + encodeURIComponent(String(id)) + '/douyin-workbench/open', {
+    method: 'POST'
+  }).then(function(data) {
+    _douyinWorkbenchStatus(data.message || '已打开抖音前台页面，请在浏览器窗口里完成登录。', data.logged_in ? 'success' : 'warning');
+    return loadDouyinWorkbenchAccounts();
+  }).catch(function(err) {
+    _douyinWorkbenchStatus('打开登录失败：' + (err && err.message ? err.message : err), true);
+  }).finally(function() {
+    _douyinWorkbenchSetBusy(['douyinOpenLoginBtn', 'douyinOpenLoginInlineBtn'], false);
+  });
+}
+
+function checkDouyinWorkbenchLogin(accountId) {
+  var id = parseInt(accountId || _douyinWorkbenchState.selectedAccountId, 10) || 0;
+  if (!id) {
+    _douyinWorkbenchStatus('请先添加或选择一个抖音账号。', true);
+    return;
+  }
+  _douyinWorkbenchSetBusy(['douyinCheckStatusBtn'], true);
+  _douyinWorkbenchStatus('正在检测抖音前台登录状态...', 'loading');
+  _douyinWorkbenchFetch('/api/accounts/' + encodeURIComponent(String(id)) + '/douyin-workbench/login-status', {
+    method: 'GET'
+  }).then(function(data) {
+    _douyinWorkbenchStatus(data.message || (data.logged_in ? '抖音前台已登录。' : '抖音前台未登录。'), data.logged_in ? 'success' : 'warning');
+    return loadDouyinWorkbenchAccounts();
+  }).catch(function(err) {
+    _douyinWorkbenchStatus('检测登录失败：' + (err && err.message ? err.message : err), true);
+  }).finally(function() {
+    _douyinWorkbenchSetBusy(['douyinCheckStatusBtn'], false);
+  });
+}
+
+function deleteDouyinWorkbenchAccount(accountId) {
+  var id = parseInt(accountId, 10) || 0;
+  if (!id) return;
+  var acct = (_douyinWorkbenchState.accounts || []).find(function(item) {
+    return parseInt(item.id, 10) === id;
+  });
+  var name = acct ? acct.nickname : ('账号 ' + id);
+  if (!window.confirm('确定删除抖音账号“' + name + '”？浏览器登录目录也会一起删除。')) return;
+  _douyinWorkbenchStatus('正在删除账号...', 'loading');
+  _douyinWorkbenchFetch('/api/accounts/' + encodeURIComponent(String(id)), { method: 'DELETE' })
+    .then(function() {
+      if (parseInt(_douyinWorkbenchState.selectedAccountId, 10) === id) {
+        _douyinWorkbenchState.selectedAccountId = null;
+      }
+      return loadDouyinWorkbenchAccounts();
+    })
+    .catch(function(err) {
+      _douyinWorkbenchStatus('删除账号失败：' + (err && err.message ? err.message : err), true);
+    });
+}
+
+function _douyinLeadKey(item) {
+  item = item || {};
+  return String(item.sec_user_id || item.profile_url || item.author || item.aweme_id || item.url || '').trim();
+}
+
+function _douyinWorkbenchUpdateCounts() {
+  var videos = _douyinWorkbenchState.searchResults || [];
+  var leads = _douyinWorkbenchState.leads || [];
+  var selectedCount = Object.keys(_douyinWorkbenchState.selectedLeadIds || {}).filter(function(key) {
+    return _douyinWorkbenchState.selectedLeadIds[key];
+  }).length;
+  var videoBadge = document.getElementById('douyinVideoCountBadge');
+  var leadBadge = document.getElementById('douyinLeadCountBadge');
+  var customerBadge = document.getElementById('douyinCustomerCountBadge');
+  var targetBadge = document.getElementById('douyinMessageTargetBadge');
+  if (videoBadge) videoBadge.textContent = '视频 ' + videos.length;
+  if (leadBadge) leadBadge.textContent = '客户 ' + leads.length;
+  if (customerBadge) customerBadge.textContent = '客户 ' + leads.length;
+  if (targetBadge) targetBadge.textContent = '已选 ' + selectedCount;
+}
+
+function _douyinWorkbenchBuildLeads(results) {
+  var map = {};
+  (results || []).forEach(function(item) {
+    var key = _douyinLeadKey(item);
+    if (!key) return;
+    if (!map[key]) {
+      map[key] = {
+        id: key,
+        author: item.author || '未知作者',
+        profile_url: item.profile_url || '',
+        sec_user_id: item.sec_user_id || '',
+        avatar_url: item.avatar_url || '',
+        source_title: item.title || '',
+        source_cover: item.cover_image || '',
+        aweme_id: item.aweme_id || ''
+      };
+    }
+  });
+  return Object.keys(map).map(function(key) { return map[key]; });
+}
+
+function _douyinWorkbenchMergeCustomers(customers, sourceVideo) {
+  var map = {};
+  (_douyinWorkbenchState.leads || []).forEach(function(lead) {
+    var key = _douyinLeadKey(lead);
+    if (key) map[key] = Object.assign({}, lead);
+  });
+  (customers || []).forEach(function(customer) {
+    var key = _douyinLeadKey({
+      sec_user_id: customer.sec_user_id || customer.sec_uid,
+      profile_url: customer.profile_url,
+      author: customer.author || customer.nickname,
+      aweme_id: customer.aweme_id
+    });
+    if (!key) return;
+    var existing = map[key] || {};
+    map[key] = Object.assign({}, existing, {
+      id: key,
+      author: customer.author || customer.nickname || existing.author || '未知客户',
+      nickname: customer.nickname || customer.author || existing.nickname || '',
+      profile_url: customer.profile_url || existing.profile_url || '',
+      sec_user_id: customer.sec_user_id || customer.sec_uid || existing.sec_user_id || '',
+      avatar_url: customer.avatar_url || existing.avatar_url || '',
+      latest_comment: customer.latest_comment || existing.latest_comment || '',
+      comment_count: customer.comment_count || existing.comment_count || 0,
+      digg_count: customer.digg_count || existing.digg_count || 0,
+      source_title: (sourceVideo && sourceVideo.title) || existing.source_title || '',
+      source_cover: (sourceVideo && sourceVideo.cover_image) || existing.source_cover || '',
+      aweme_id: customer.aweme_id || (sourceVideo && sourceVideo.aweme_id) || existing.aweme_id || '',
+      video_url: customer.video_url || (sourceVideo && sourceVideo.url) || existing.video_url || ''
+    });
+  });
+  _douyinWorkbenchState.leads = Object.keys(map).map(function(key) { return map[key]; });
+}
+
+function _douyinWorkbenchRenderSearchResults(results) {
+  var box = document.getElementById('douyinSearchResults');
+  if (!box) return;
+  results = Array.isArray(results) ? results : [];
+  _douyinWorkbenchState.searchResults = results;
+  _douyinWorkbenchState.leads = _douyinWorkbenchBuildLeads(results);
+  if (!results.length) {
+    box.innerHTML = '<div class="douyin-empty">暂无搜索结果。已用可见 Chrome 打开抖音搜索页；如果页面有验证码、安全校验或内容未加载，请先在浏览器里处理后再点击“开始采集”。</div>';
+    _douyinWorkbenchRenderCustomers();
+    _douyinWorkbenchUpdateCounts();
+    return;
+  }
+  box.innerHTML = results.map(function(item, idx) {
+    var title = String(item.title || '未命名视频').trim();
+    var author = String(item.author || '未知作者').trim();
+    var cover = String(item.cover_image || '').trim();
+    var likes = String(item.likes_text || item.likes || '').trim();
+    var comments = String(item.comments_text || item.comments || '').trim();
+    return '<div class="douyin-video-card">' +
+      '<div class="douyin-video-thumb">' +
+        (cover ? '<img src="' + escapeAttr(cover) + '" alt="视频封面" loading="lazy">' : '<span>无封面</span>') +
+      '</div>' +
+      '<div class="douyin-video-body">' +
+        '<div class="douyin-video-title">' + escapeHtml(title) + '</div>' +
+        '<div class="douyin-video-meta">作者：' + escapeHtml(author) + '</div>' +
+        '<div class="douyin-video-tags">' +
+          '<span>序号 ' + (idx + 1) + '</span>' +
+          (likes ? '<span>点赞 ' + escapeHtml(likes) + '</span>' : '') +
+          (comments ? '<span>评论 ' + escapeHtml(comments) + '</span>' : '') +
+        '</div>' +
+        '<div class="douyin-video-actions">' +
+          '<button type="button" class="btn btn-primary btn-sm" data-douyin-video-action="collect-customers" data-douyin-video-index="' + idx + '">采集客户</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-douyin-video-action="select-video" data-douyin-video-index="' + idx + '">选中视频</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  _douyinWorkbenchRenderCustomers();
+  _douyinWorkbenchUpdateCounts();
+}
+
+function _douyinWorkbenchRenderCustomers() {
+  var list = document.getElementById('douyinCustomerList');
+  if (!list) return;
+  var leads = _douyinWorkbenchState.leads || [];
+  if (!leads.length) {
+    list.innerHTML = '<div class="douyin-empty">暂无客户。请先到“搜索采集”页按关键词采集视频和作者线索。</div>';
+    _douyinWorkbenchUpdateSelectedTargetCard();
+    return;
+  }
+  list.innerHTML = leads.map(function(lead) {
+    var key = _douyinLeadKey(lead);
+    var checked = !!(_douyinWorkbenchState.selectedLeadIds || {})[key];
+    return '<label class="douyin-customer-card' + (checked ? ' is-selected' : '') + '">' +
+      '<input type="checkbox" data-douyin-lead-id="' + escapeAttr(key) + '"' + (checked ? ' checked' : '') + '>' +
+      '<div class="douyin-customer-main">' +
+        '<div class="douyin-target-title">' + escapeHtml(String(lead.author || '未知客户')) + '</div>' +
+        '<div class="douyin-selected-target">' + escapeHtml(String(lead.latest_comment || lead.source_title || lead.profile_url || lead.sec_user_id || '来自搜索采集')) + '</div>' +
+        (lead.comment_count ? '<div class="douyin-selected-target">评论 ' + escapeHtml(String(lead.comment_count)) + ' 条</div>' : '') +
+        (lead.message_status ? '<div class="douyin-message-state is-' + escapeAttr(lead.message_status) + '">' + escapeHtml(lead.message_status === 'sent' ? ('私信已发送' + (lead.server_message_id ? '：' + lead.server_message_id : '')) : ('私信失败：' + (lead.message_error || '请重试'))) + '</div>' : '') +
+      '</div>' +
+    '</label>';
+  }).join('');
+  _douyinWorkbenchUpdateSelectedTargetCard();
+  _douyinWorkbenchUpdateCounts();
+}
+
+function _douyinWorkbenchUpdateSelectedTargetCard() {
+  var card = document.getElementById('douyinSelectedTargetCard');
+  if (!card) return;
+  var leads = _douyinWorkbenchState.leads || [];
+  var selected = leads.filter(function(lead) {
+    return !!(_douyinWorkbenchState.selectedLeadIds || {})[_douyinLeadKey(lead)];
+  });
+  if (!selected.length) {
+    card.innerHTML = '<div class="douyin-target-title">尚未选择客户</div>' +
+      '<div class="douyin-selected-target">在下面的客户列表里选择一个或多个对象开始私信。</div>';
+    return;
+  }
+  card.innerHTML = '<div class="douyin-target-title">已选择 ' + selected.length + ' 个客户</div>' +
+    '<div class="douyin-selected-target">' + escapeHtml(selected.slice(0, 4).map(function(item) { return item.author || item.sec_user_id || '客户'; }).join('、')) +
+    (selected.length > 4 ? ' 等' : '') + '</div>';
+}
+
+function _douyinWorkbenchSelectedMessageTargets() {
+  var leads = _douyinWorkbenchState.leads || [];
+  var modeEl = document.getElementById('douyinMessageTypeSelect');
+  var profileEl = document.getElementById('douyinProfileUrlInput');
+  var secEl = document.getElementById('douyinSecUserIdInput');
+  var mode = modeEl ? String(modeEl.value || 'selected') : 'selected';
+  var manualProfile = profileEl ? String(profileEl.value || '').trim() : '';
+  var manualSec = secEl ? String(secEl.value || '').trim() : '';
+  var targets = [];
+  if (manualProfile || manualSec) {
+    targets.push({
+      nickname: '手动客户',
+      author: '手动客户',
+      profile_url: manualProfile || (manualSec ? ('https://www.douyin.com/user/' + manualSec) : ''),
+      sec_user_id: manualSec
+    });
+  }
+  leads.forEach(function(lead) {
+    var key = _douyinLeadKey(lead);
+    var selected = !!(_douyinWorkbenchState.selectedLeadIds || {})[key];
+    if (mode === 'selected' && !selected) return;
+    if (mode === 'intent' && !lead.is_high_intent && !selected) return;
+    if (mode === 'all' || mode === 'selected' || mode === 'intent') {
+      targets.push({
+        nickname: lead.nickname || lead.author || '',
+        author: lead.author || lead.nickname || '',
+        profile_url: lead.profile_url || '',
+        sec_user_id: lead.sec_user_id || lead.sec_uid || ''
+      });
+    }
+  });
+  var seen = {};
+  return targets.filter(function(item) {
+    var key = String(item.profile_url || item.sec_user_id || '').trim();
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+function sendDouyinWorkbenchMessages() {
+  var account = _douyinWorkbenchSelectedAccount();
+  var messageEl = document.getElementById('douyinMessageInput');
+  var message = messageEl ? String(messageEl.value || '').trim() : '';
+  var targets = _douyinWorkbenchSelectedMessageTargets();
+  if (!account) {
+    _douyinWorkbenchStatus('请先添加或选择一个抖音账号。', true);
+    return;
+  }
+  if (!message) {
+    _douyinWorkbenchStatus('请先填写私信内容。', true);
+    if (messageEl) messageEl.focus();
+    return;
+  }
+  if (!targets.length) {
+    _douyinWorkbenchStatus('请先在客户列表选择客户，或手动填写主页链接/sec_user_id。', true);
+    return;
+  }
+  _douyinWorkbenchSetBusy(['douyinSendMessageBtn'], true);
+  _douyinWorkbenchStatus('正在发送私信，共 ' + targets.length + ' 个客户...', 'loading');
+  _douyinWorkbenchFetch('/api/douyin/message/send', {
+    method: 'POST',
+    body: JSON.stringify({
+      account_id: account.id,
+      message: message,
+      targets: targets
+    })
+  }).then(function(data) {
+    if (data.code !== 200) {
+      throw new Error(data.msg || data.detail || '私信发送失败');
+    }
+    var rows = Array.isArray(data.results) ? data.results : [];
+    rows.forEach(function(row) {
+      var key = String(row.profile_url || row.sec_user_id || '').trim();
+      (_douyinWorkbenchState.leads || []).forEach(function(lead) {
+        var leadKey = String(lead.profile_url || lead.sec_user_id || '').trim();
+        if (key && key === leadKey) {
+          lead.message_status = row.ok ? 'sent' : 'failed';
+          lead.message_error = row.ok ? '' : (row.message || '发送失败');
+          lead.server_message_id = row.server_message_id || '';
+        }
+      });
+    });
+    _douyinWorkbenchRenderCustomers();
+    var failed = parseInt(data.failed, 10) || 0;
+    var firstOk = rows.find(function(row) { return row && row.ok; });
+    var firstFail = rows.find(function(row) { return row && !row.ok; });
+    var extra = firstOk && firstOk.server_message_id ? (' 消息ID：' + firstOk.server_message_id) : '';
+    if (firstFail && firstFail.message) extra += ' 失败原因：' + firstFail.message;
+    _douyinWorkbenchStatus((data.msg || ('私信发送完成，成功 ' + (data.success || 0) + ' 个，失败 ' + failed + ' 个。')) + extra, failed ? 'warning' : 'success');
+    return loadDouyinWorkbenchAccounts();
+  }).catch(function(err) {
+    _douyinWorkbenchStatus('私信发送失败：' + (err && err.message ? err.message : err), true);
+  }).finally(function() {
+    _douyinWorkbenchSetBusy(['douyinSendMessageBtn'], false);
+  });
+}
+
+function startDouyinWorkbenchCollect() {
+  var account = _douyinWorkbenchSelectedAccount();
+  var keywordEl = document.getElementById('douyinKeywordInput');
+  var maxEl = document.getElementById('douyinMaxResultsInput');
+  var keyword = keywordEl ? String(keywordEl.value || '').trim() : '';
+  var maxResults = maxEl ? parseInt(maxEl.value, 10) || 30 : 30;
+  if (!account) {
+    _douyinWorkbenchStatus('请先添加或选择一个抖音账号。', true);
+    return;
+  }
+  if (!keyword) {
+    _douyinWorkbenchStatus('请输入抖音搜索关键词。', true);
+    if (keywordEl) keywordEl.focus();
+    return;
+  }
+  _douyinWorkbenchSetBusy(['douyinCollectBtn'], true);
+  _douyinWorkbenchStatus('正在打开可见 Chrome 搜索抖音；如果页面出现验证码，请先在浏览器里处理后再重试采集。', 'loading');
+  var box = document.getElementById('douyinSearchResults');
+  if (box) box.innerHTML = '<div class="douyin-empty">正在用可见浏览器采集“' + escapeHtml(keyword) + '”的搜索结果；遇到验证码请先在打开的 Chrome 窗口处理。</div>';
+  _douyinWorkbenchFetch('/api/douyin/search/collect', {
+    method: 'POST',
+    body: JSON.stringify({
+      keyword: keyword,
+      account_id: account.id,
+      max_results: maxResults
+    })
+  }).then(function(data) {
+    if (data.code !== 200) {
+      throw new Error(data.msg || data.detail || '抖音搜索采集失败');
+    }
+    var rows = Array.isArray(data.data) ? data.data : [];
+    _douyinWorkbenchState.selectedLeadIds = {};
+    _douyinWorkbenchRenderSearchResults(rows);
+    _douyinWorkbenchStatus(data.msg || ('采集完成，共 ' + rows.length + ' 条视频。'), rows.length === 0 ? 'warning' : 'success');
+    return loadDouyinWorkbenchAccounts();
+  }).catch(function(err) {
+    _douyinWorkbenchRenderSearchResults([]);
+    _douyinWorkbenchStatus('采集失败：' + (err && err.message ? err.message : err), true);
+  }).finally(function() {
+    _douyinWorkbenchSetBusy(['douyinCollectBtn'], false);
+  });
+}
+
+function collectDouyinWorkbenchVideoCustomers(videoIndex) {
+  var account = _douyinWorkbenchSelectedAccount();
+  var results = _douyinWorkbenchState.searchResults || [];
+  var item = results[parseInt(videoIndex, 10)];
+  if (!account) {
+    _douyinWorkbenchStatus('请先添加或选择一个抖音账号。', true);
+    return;
+  }
+  if (!item || (!item.url && !item.aweme_id)) {
+    _douyinWorkbenchStatus('请选择一个有效的视频后再采集客户。', true);
+    return;
+  }
+  _douyinWorkbenchSetVideoBusy(parseInt(videoIndex, 10), true);
+  _douyinWorkbenchStatus('正在通过协议模式采集《' + (item.title || '当前视频') + '》下方客户...', 'loading');
+  _douyinWorkbenchFetch('/api/douyin/video/customers', {
+    method: 'POST',
+    body: JSON.stringify({
+      account_id: account.id,
+      video_url: item.url || '',
+      aweme_id: item.aweme_id || '',
+      max_comments: 120
+    })
+  }).then(function(data) {
+    if (data.code !== 200) {
+      throw new Error(data.msg || data.detail || '采集视频客户失败');
+    }
+    var customers = Array.isArray(data.customers) ? data.customers : [];
+    _douyinWorkbenchMergeCustomers(customers, item);
+    _douyinWorkbenchRenderCustomers();
+    var messageTab = document.querySelector('[data-douyin-tab="message"]');
+    if (messageTab) messageTab.click();
+    _douyinWorkbenchStatus(data.msg || ('客户采集完成，共沉淀 ' + customers.length + ' 位客户。'), customers.length === 0 ? 'warning' : 'success');
+  }).catch(function(err) {
+    _douyinWorkbenchStatus('采集视频客户失败：' + (err && err.message ? err.message : err), true);
+  }).finally(function() {
+    _douyinWorkbenchSetVideoBusy(parseInt(videoIndex, 10), false);
+  });
+}
+
+function _bindDouyinWorkbenchActions(host) {
+  if (!host || host.dataset.douyinActionsBound === '1') return;
+  host.dataset.douyinActionsBound = '1';
+  host.addEventListener('click', function(e) {
+    var target = e.target;
+    if (!target) return;
+    if (target.closest('#douyinWorkbenchBackBtn')) {
+      var nav = document.querySelector('.nav-left-item[data-view="chat"]');
+      if (nav) nav.click();
+      return;
+    }
+    if (target.closest('#douyinReloadAccountsBtn')) {
+      loadDouyinWorkbenchAccounts();
+      return;
+    }
+    if (target.closest('#douyinCreateAccountBtn')) {
+      createDouyinWorkbenchAccount();
+      return;
+    }
+    if (target.closest('#douyinOpenLoginBtn') || target.closest('#douyinOpenLoginInlineBtn')) {
+      openDouyinWorkbenchLogin();
+      return;
+    }
+    if (target.closest('#douyinCheckStatusBtn')) {
+      checkDouyinWorkbenchLogin();
+      return;
+    }
+    if (target.closest('#douyinCollectBtn')) {
+      startDouyinWorkbenchCollect();
+      return;
+    }
+    if (target.closest('#douyinClearResultsBtn')) {
+      _douyinWorkbenchState.searchResults = [];
+      _douyinWorkbenchState.leads = [];
+      _douyinWorkbenchState.selectedLeadIds = {};
+      _douyinWorkbenchRenderSearchResults([]);
+      _douyinWorkbenchStatus('已清空搜索结果和客户列表。');
+      return;
+    }
+    if (target.closest('#douyinSelectAllCustomersBtn')) {
+      (_douyinWorkbenchState.leads || []).forEach(function(lead) {
+        var key = _douyinLeadKey(lead);
+        if (key) _douyinWorkbenchState.selectedLeadIds[key] = true;
+      });
+      _douyinWorkbenchRenderCustomers();
+      return;
+    }
+    if (target.closest('#douyinClearCustomerSelectionBtn')) {
+      _douyinWorkbenchState.selectedLeadIds = {};
+      _douyinWorkbenchRenderCustomers();
+      return;
+    }
+    if (target.closest('#douyinSendMessageBtn')) {
+      sendDouyinWorkbenchMessages();
+      return;
+    }
+    var videoAction = target.closest('[data-douyin-video-action]');
+    if (videoAction) {
+      var idx = parseInt(videoAction.getAttribute('data-douyin-video-index'), 10);
+      var actionName = videoAction.getAttribute('data-douyin-video-action');
+      if (actionName === 'collect-customers') {
+        collectDouyinWorkbenchVideoCustomers(idx);
+      } else if (actionName === 'select-video') {
+        var item = (_douyinWorkbenchState.searchResults || [])[idx];
+        if (item) _douyinWorkbenchStatus('已选中视频《' + (item.title || item.aweme_id || '未命名视频') + '》，点击“采集客户”会采集该视频下方评论客户。');
+      }
+      return;
+    }
+    var actionBtn = target.closest('[data-douyin-account-action]');
+    if (actionBtn) {
+      var card = actionBtn.closest('[data-douyin-account-id]');
+      var id = card ? parseInt(card.getAttribute('data-douyin-account-id'), 10) : 0;
+      var action = actionBtn.getAttribute('data-douyin-account-action');
+      if (id) _douyinWorkbenchState.selectedAccountId = id;
+      _douyinWorkbenchRenderAccounts();
+      if (action === 'open') openDouyinWorkbenchLogin(id);
+      if (action === 'check') checkDouyinWorkbenchLogin(id);
+      if (action === 'delete') deleteDouyinWorkbenchAccount(id);
+      return;
+    }
+  });
+  host.addEventListener('change', function(e) {
+    var select = e.target && e.target.closest('#douyinAccountSelect');
+    if (!select) return;
+    _douyinWorkbenchState.selectedAccountId = parseInt(select.value, 10) || null;
+    _douyinWorkbenchRenderAccounts();
+  });
+  host.addEventListener('change', function(e) {
+    var checkbox = e.target && e.target.closest('[data-douyin-lead-id]');
+    if (!checkbox) return;
+    var key = checkbox.getAttribute('data-douyin-lead-id') || '';
+    if (!key) return;
+    _douyinWorkbenchState.selectedLeadIds[key] = !!checkbox.checked;
+    _douyinWorkbenchRenderCustomers();
+  });
+  var nickInput = host.querySelector('#douyinNewAccountNicknameInput');
+  if (nickInput) {
+    nickInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        createDouyinWorkbenchAccount();
+      }
+    });
+  }
+}
+
+window.initDouyinWorkbenchView = function() {
+  var host = _ensureDouyinWorkbenchHost();
+  _bindDouyinWorkbenchTabs(host);
+  _bindDouyinWorkbenchActions(host);
+  loadDouyinWorkbenchAccounts();
+};
 
 function _openMessengerConfigView() {
   _switchToHiddenView('messenger-config');
@@ -103,6 +973,15 @@ window._openHiflyDigitalHumanView = function() {
   try { location.hash = 'hifly-digital-human'; } catch (e1) {}
 };
 
+window._openDouyinWorkbenchView = function() {
+  var host = _ensureDouyinWorkbenchHost();
+  _bindDouyinWorkbenchTabs(host);
+  _bindDouyinWorkbenchActions(host);
+  _switchToHiddenView('douyin-workbench');
+  if (typeof window.initDouyinWorkbenchView === 'function') window.initDouyinWorkbenchView();
+  try { location.hash = 'douyin-workbench'; } catch (e1) {}
+};
+
 window._openShanjianSmartClipView = function() {
   _switchToHiddenView('shanjian-smart-clip');
   if (typeof window.initShanjianSmartClipView === 'function') window.initShanjianSmartClipView();
@@ -127,6 +1006,10 @@ window._openHiddenWorkspaceView = function(view) {
   if (!target) return;
   if (target === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
     window._openHiflyDigitalHumanView();
+    return;
+  }
+  if (target === 'douyin-workbench' && typeof window._openDouyinWorkbenchView === 'function') {
+    window._openDouyinWorkbenchView();
     return;
   }
   if (target === 'shanjian-smart-clip' && typeof window._openShanjianSmartClipView === 'function') {
