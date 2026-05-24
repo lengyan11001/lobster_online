@@ -70,6 +70,76 @@ DEEPSEEK_PROVIDER_TEMPLATE = {
     ],
 }
 
+LOBSTER_SUTUI_PROVIDER_ID = "lobster-sutui"
+LOBSTER_SUTUI_BASE_URL = "http://127.0.0.1:8000/internal/openclaw-sutui/v1"
+LOBSTER_SUTUI_CHAT_MODEL_ID = "deepseek-chat"
+LOBSTER_SUTUI_CHAT_MODEL = f"{LOBSTER_SUTUI_PROVIDER_ID}/{LOBSTER_SUTUI_CHAT_MODEL_ID}"
+LOBSTER_SUTUI_AGENT_ID = "lobster-sutui-deepseek-chat"
+LOBSTER_SUTUI_SKILL_MODEL_ID = "openclaw-skill-chat"
+LOBSTER_SUTUI_SKILL_MODEL = f"{LOBSTER_SUTUI_PROVIDER_ID}/{LOBSTER_SUTUI_SKILL_MODEL_ID}"
+LOBSTER_SUTUI_MODEL_ENTRIES = [
+    {
+        "id": LOBSTER_SUTUI_CHAT_MODEL_ID,
+        "name": "Sutui DeepSeek Chat",
+        "reasoning": False,
+        "input": ["text"],
+        "contextWindow": 65536,
+        "maxTokens": 8192,
+    },
+    {
+        "id": LOBSTER_SUTUI_SKILL_MODEL_ID,
+        "name": "Sutui OpenClaw Skill Chat",
+        "reasoning": False,
+        "input": ["text"],
+        "contextWindow": 65536,
+        "maxTokens": 8192,
+    },
+]
+LOBSTER_SUTUI_MAIN_AGENT_TOOLS = {
+    "deny": [
+        "group:runtime",
+        "group:fs",
+        "group:ui",
+        "group:web",
+        "group:automation",
+        "group:nodes",
+        "x_search",
+    ],
+    "exec": {"security": "deny", "ask": "off"},
+}
+
+
+def _apply_lobster_sutui_provider_config(provider: dict, proxy_key: str = "") -> bool:
+    changed = False
+    if provider.get("baseUrl") != LOBSTER_SUTUI_BASE_URL:
+        provider["baseUrl"] = LOBSTER_SUTUI_BASE_URL
+        changed = True
+    if provider.get("api") != "openai-completions":
+        provider["api"] = "openai-completions"
+        changed = True
+    if proxy_key and provider.get("apiKey") != proxy_key:
+        provider["apiKey"] = proxy_key
+        changed = True
+    entries = provider.setdefault("models", [])
+    if not isinstance(entries, list):
+        entries = []
+        provider["models"] = entries
+        changed = True
+    for desired in LOBSTER_SUTUI_MODEL_ENTRIES:
+        existing = next(
+            (item for item in entries if isinstance(item, dict) and item.get("id") == desired["id"]),
+            None,
+        )
+        if not existing:
+            entries.append(dict(desired))
+            changed = True
+            continue
+        for key, value in desired.items():
+            if existing.get(key) != value:
+                existing[key] = value
+                changed = True
+    return changed
+
 
 def _mask_key(key: str) -> str:
     if not key or len(key) < 8:
@@ -315,6 +385,242 @@ def _set_openclaw_plugin_launch_mode(config: dict, mode: str = _OPENCLAW_PLUGIN_
     return changed
 
 
+def _openclaw_local_model_patch_needed(config: dict) -> bool:
+    try:
+        agents = config.get("agents")
+        if not isinstance(agents, dict):
+            return True
+        defaults = agents.get("defaults")
+        if not isinstance(defaults, dict):
+            return True
+        model_cfg = defaults.get("model")
+        if not isinstance(model_cfg, dict) or model_cfg.get("primary") != LOBSTER_SUTUI_CHAT_MODEL:
+            return True
+        if int(defaults.get("timeoutSeconds") or 0) < 600:
+            return True
+
+        models = config.get("models")
+        if not isinstance(models, dict) or models.get("mode") != "merge":
+            return True
+        providers = models.get("providers")
+        if not isinstance(providers, dict):
+            return True
+        provider = providers.get(LOBSTER_SUTUI_PROVIDER_ID)
+        if not isinstance(provider, dict):
+            return True
+        if provider.get("baseUrl") != LOBSTER_SUTUI_BASE_URL or provider.get("api") != "openai-completions":
+            return True
+        entries = provider.get("models")
+        if not isinstance(entries, list):
+            return True
+        entry_ids = {item.get("id") for item in entries if isinstance(item, dict)}
+        if not {LOBSTER_SUTUI_CHAT_MODEL_ID, LOBSTER_SUTUI_SKILL_MODEL_ID}.issubset(entry_ids):
+            return True
+
+        agent_list = agents.get("list")
+        if not isinstance(agent_list, list):
+            return True
+        found_main = False
+        found_sutui = False
+        for item in agent_list:
+            if not isinstance(item, dict):
+                continue
+            if item.get("id") == "main":
+                found_main = True
+                if item.get("model") not in (None, "", LOBSTER_SUTUI_CHAT_MODEL):
+                    return True
+            if item.get("id") == LOBSTER_SUTUI_AGENT_ID and item.get("model") == LOBSTER_SUTUI_CHAT_MODEL:
+                found_sutui = True
+        return not (found_main and found_sutui)
+    except Exception:
+        return True
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _ensure_lobster_sutui_local_models(config: dict) -> bool:
+    changed = False
+    if not isinstance(config, dict):
+        return False
+
+    models = config.setdefault("models", {})
+    if not isinstance(models, dict):
+        models = {}
+        config["models"] = models
+        changed = True
+    if models.get("mode") != "merge":
+        models["mode"] = "merge"
+        changed = True
+    providers = models.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        models["providers"] = providers
+        changed = True
+    provider = providers.setdefault(LOBSTER_SUTUI_PROVIDER_ID, {})
+    if not isinstance(provider, dict):
+        provider = {}
+        providers[LOBSTER_SUTUI_PROVIDER_ID] = provider
+        changed = True
+    if provider.get("baseUrl") != LOBSTER_SUTUI_BASE_URL:
+        provider["baseUrl"] = LOBSTER_SUTUI_BASE_URL
+        changed = True
+    if provider.get("api") != "openai-completions":
+        provider["api"] = "openai-completions"
+        changed = True
+    env_data = _read_oc_env()
+    proxy_key = env_data.get("OPENCLAW_SUTUI_PROXY_KEY", "").strip()
+    if not proxy_key:
+        proxy_key = (settings.openclaw_sutui_proxy_key or "").strip()
+    if _apply_lobster_sutui_provider_config(provider, proxy_key):
+        changed = True
+
+    mcp = config.setdefault("mcp", {})
+    if not isinstance(mcp, dict):
+        mcp = {}
+        config["mcp"] = mcp
+        changed = True
+    servers = mcp.setdefault("servers", {})
+    if not isinstance(servers, dict):
+        servers = {}
+        mcp["servers"] = servers
+        changed = True
+    desired_mcp = {"url": "http://127.0.0.1:8000/mcp-gateway", "transport": "streamable-http"}
+    if servers.get("lobster") != desired_mcp:
+        servers["lobster"] = desired_mcp
+        changed = True
+
+    agents = config.setdefault("agents", {})
+    if not isinstance(agents, dict):
+        agents = {}
+        config["agents"] = agents
+        changed = True
+    defaults = agents.setdefault("defaults", {})
+    if not isinstance(defaults, dict):
+        defaults = {}
+        agents["defaults"] = defaults
+        changed = True
+    model_cfg = defaults.setdefault("model", {})
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+        defaults["model"] = model_cfg
+        changed = True
+    if model_cfg.get("primary") != LOBSTER_SUTUI_CHAT_MODEL:
+        model_cfg["primary"] = LOBSTER_SUTUI_CHAT_MODEL
+        changed = True
+    if _safe_int(defaults.get("timeoutSeconds"), 0) < 600:
+        defaults["timeoutSeconds"] = 600
+        changed = True
+
+    agent_list = agents.setdefault("list", [])
+    if not isinstance(agent_list, list):
+        agent_list = []
+        agents["list"] = agent_list
+        changed = True
+
+    def ensure_agent(agent_id: str, *, model: str | None = None, default: bool = False) -> None:
+        nonlocal changed
+        found = next((item for item in agent_list if isinstance(item, dict) and item.get("id") == agent_id), None)
+        if not found:
+            found = {"id": agent_id}
+            agent_list.append(found)
+            changed = True
+        if default and found.get("default") is not True:
+            found["default"] = True
+            changed = True
+        if model is not None and found.get("model") != model:
+            found["model"] = model
+            changed = True
+        if agent_id in {"main", LOBSTER_SUTUI_AGENT_ID}:
+            tools = found.get("tools")
+            if not isinstance(tools, dict):
+                found["tools"] = json.loads(json.dumps(LOBSTER_SUTUI_MAIN_AGENT_TOOLS))
+                changed = True
+            else:
+                if tools.get("deny") != LOBSTER_SUTUI_MAIN_AGENT_TOOLS["deny"]:
+                    tools["deny"] = list(LOBSTER_SUTUI_MAIN_AGENT_TOOLS["deny"])
+                    changed = True
+                exec_cfg = tools.get("exec")
+                if not isinstance(exec_cfg, dict):
+                    tools["exec"] = dict(LOBSTER_SUTUI_MAIN_AGENT_TOOLS["exec"])
+                    changed = True
+                else:
+                    for key, value in LOBSTER_SUTUI_MAIN_AGENT_TOOLS["exec"].items():
+                        if exec_cfg.get(key) != value:
+                            exec_cfg[key] = value
+                            changed = True
+
+    ensure_agent("main", default=True)
+    ensure_agent(LOBSTER_SUTUI_AGENT_ID, model=LOBSTER_SUTUI_CHAT_MODEL)
+    return changed
+
+
+def _ensure_lobster_sutui_agent_model_files() -> bool:
+    changed = False
+    env_data = _read_oc_env()
+    proxy_key = env_data.get("OPENCLAW_SUTUI_PROXY_KEY", "").strip()
+    if not proxy_key:
+        proxy_key = (settings.openclaw_sutui_proxy_key or "").strip()
+    agent_root = _OC_DIR / "agents"
+    if not agent_root.is_dir():
+        return False
+    for path in agent_root.glob("*/agent/models.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Skipping invalid OpenClaw agent models file: %s", path)
+            continue
+        if not isinstance(data, dict):
+            continue
+        providers = data.setdefault("providers", {})
+        if not isinstance(providers, dict):
+            providers = {}
+            data["providers"] = providers
+        provider = providers.setdefault(LOBSTER_SUTUI_PROVIDER_ID, {})
+        if not isinstance(provider, dict):
+            provider = {}
+            providers[LOBSTER_SUTUI_PROVIDER_ID] = provider
+        before = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        _apply_lobster_sutui_provider_config(provider, proxy_key)
+        after = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        if after != before:
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            changed = True
+    return changed
+
+
+def _openclaw_agent_model_patch_needed() -> bool:
+    agent_root = _OC_DIR / "agents"
+    if not agent_root.is_dir():
+        return False
+    for path in agent_root.glob("*/agent/models.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return True
+        if not isinstance(data, dict):
+            return True
+        providers = data.get("providers")
+        if not isinstance(providers, dict):
+            return True
+        provider = providers.get(LOBSTER_SUTUI_PROVIDER_ID)
+        if not isinstance(provider, dict):
+            return True
+        if provider.get("baseUrl") != LOBSTER_SUTUI_BASE_URL or provider.get("api") != "openai-completions":
+            return True
+        entries = provider.get("models")
+        if not isinstance(entries, list):
+            return True
+        entry_ids = {item.get("id") for item in entries if isinstance(item, dict)}
+        if not {LOBSTER_SUTUI_CHAT_MODEL_ID, LOBSTER_SUTUI_SKILL_MODEL_ID}.issubset(entry_ids):
+            return True
+    return False
+
+
 def _openclaw_json_needs_local_launch_patch(plugin_mode: str = _OPENCLAW_PLUGIN_MODE_LEAN) -> bool:
     """Read-only check used while Gateway may already be running.
 
@@ -330,6 +636,10 @@ def _openclaw_json_needs_local_launch_patch(plugin_mode: str = _OPENCLAW_PLUGIN_
         cfg = _read_oc_config()
         if not isinstance(cfg, dict) or not cfg:
             return False
+        if _openclaw_local_model_patch_needed(cfg):
+            return True
+        if _openclaw_agent_model_patch_needed():
+            return True
         lean_plugins = {"enabled": False, "entries": {}, "installs": {}, "load": {"paths": []}}
         plugins = cfg.get("plugins")
         if plugins != lean_plugins:
@@ -388,6 +698,7 @@ def _openclaw_gateway_needs_local_restart() -> bool:
         _openclaw_json_needs_local_launch_patch()
         or _openclaw_gateway_slack_stage_patch_needed()
         or _openclaw_gateway_pricing_patch_needed()
+        or _openclaw_mcp_tool_timeout_patch_needed()
     )
 
 
@@ -499,6 +810,10 @@ def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_M
                 mdns_cfg["mode"] = "off"
                 changed = True
         env_data = _read_oc_env()
+        if _ensure_lobster_sutui_local_models(cfg):
+            changed = True
+        if _ensure_lobster_sutui_agent_model_files():
+            changed = True
         models = cfg.get("models")
         if isinstance(models, dict):
             provs = models.get("providers")
@@ -515,7 +830,7 @@ def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_M
             _write_oc_config(cfg)
             logger.info(
                 "Patched openclaw.json for local OpenClaw launch "
-                "(plugin mode=%s / plugin paths / staging refs / lobster-sutui apiKey)",
+                "(plugin mode=%s / plugin paths / staging refs / lobster-sutui provider)",
                 plugin_mode,
             )
         return changed
@@ -608,9 +923,12 @@ def build_openclaw_status_snapshot() -> dict:
     elif online:
         state = "running"
         message = "OpenClaw Gateway 运行中"
-    elif entry:
+    elif gateway_pids:
         state = "starting"
         message = "OpenClaw Gateway 启动中"
+    elif entry:
+        state = "stopped"
+        message = "OpenClaw Gateway 未运行"
     else:
         state = "missing_entry"
         message = "未找到 node 或 openclaw.mjs，请使用完整安装包或检查 nodejs 目录"
@@ -905,6 +1223,30 @@ def _openclaw_gateway_pricing_patch_needed() -> bool:
         return False
 
 
+def _openclaw_mcp_tool_timeout_patch_needed() -> bool:
+    try:
+        entry = _find_openclaw_entry()
+        if not entry:
+            return False
+        _node_path, mjs_path = entry
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        for path in sorted(dist_dir.glob("content-blocks-*.js")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS" in text:
+                continue
+            if "return await session.client.callTool({" in text:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("openclaw_mcp_tool_timeout_patch_needed failed: %s", e)
+        return False
+
+
 def _patch_openclaw_gateway_slack_stage(mjs_path: str) -> bool:
     """Disable OpenClaw's built-in Slack HTTP stage when local product does not use it.
 
@@ -980,6 +1322,50 @@ def _patch_openclaw_gateway_pricing_refresh(mjs_path: str) -> bool:
         return changed
     except Exception as e:
         logger.warning("patch_openclaw_gateway_pricing_refresh failed: %s", e)
+        return False
+
+
+def _patch_openclaw_mcp_tool_timeout(mjs_path: str) -> bool:
+    """Raise OpenClaw MCP tool-call wait time above the SDK default 60s.
+
+    The MCP SDK default request timeout is 60000ms. Image/video generation can
+    legitimately take longer than that, and timing out at the OpenClaw tool
+    layer can make the model retry while the upstream task is still running.
+    """
+    marker = "LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS"
+    try:
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        candidates = sorted(dist_dir.glob("content-blocks-*.js"))
+        changed = False
+        old = (
+            "\t\t\treturn await session.client.callTool({\n"
+            "\t\t\t\tname: toolName,\n"
+            "\t\t\t\targuments: isMcpConfigRecord(input) ? input : {}\n"
+            "\t\t\t});"
+        )
+        new = (
+            "\t\t\tconst lobsterToolTimeoutMsRaw = Number(process.env.LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS ?? 600000);\n"
+            "\t\t\tconst lobsterToolTimeoutMs = Number.isFinite(lobsterToolTimeoutMsRaw) && lobsterToolTimeoutMsRaw > 0 ? Math.floor(lobsterToolTimeoutMsRaw) : 600000;\n"
+            "\t\t\treturn await session.client.callTool({\n"
+            "\t\t\t\tname: toolName,\n"
+            "\t\t\t\targuments: isMcpConfigRecord(input) ? input : {}\n"
+            "\t\t\t}, void 0, { timeout: lobsterToolTimeoutMs });"
+        )
+        for path in candidates:
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                continue
+            if old not in text:
+                logger.warning("OpenClaw MCP tool timeout patch skipped, pattern not found: %s", path)
+                continue
+            path.write_text(text.replace(old, new, 1), encoding="utf-8")
+            logger.info("Patched OpenClaw MCP tool timeout: %s", path)
+            changed = True
+        return changed
+    except Exception as e:
+        logger.warning("patch_openclaw_mcp_tool_timeout failed: %s", e)
         return False
 
 
@@ -1180,6 +1566,7 @@ def _build_openclaw_env() -> dict:
     env.setdefault("OPENCLAW_DISABLE_BONJOUR", "1")
     env.setdefault("LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE", "1")
     env.setdefault("LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING", "1")
+    env.setdefault("LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS", "600000")
     return env
 
 
@@ -1730,6 +2117,7 @@ def _restart_openclaw_gateway_impl(
     node_path, mjs_path = entry
     _patch_openclaw_gateway_slack_stage(mjs_path)
     _patch_openclaw_gateway_pricing_refresh(mjs_path)
+    _patch_openclaw_mcp_tool_timeout(mjs_path)
     _patch_openclaw_latency_trace(mjs_path)
     env = _build_openclaw_env()
     log_path = _BASE_DIR / "openclaw.log"

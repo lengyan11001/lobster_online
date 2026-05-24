@@ -1353,7 +1353,6 @@ function loadBillingView() {
         if (!pricingContent) return;
         if (!d) { pricingContent.innerHTML = '<span class="meta">收费说明加载失败</span>'; return; }
         var packages = d.credit_packages || [];
-        var usageCosts = d.usage_costs || [];
         var html = '';
         if (packages.length) {
           html += '<p style="margin:0 0 0.35rem 0;"><strong>算力套餐</strong>：</p><ul style="margin:0;padding-left:1.25rem;">';
@@ -1363,15 +1362,6 @@ function loadBillingView() {
           html += '</ul>';
         } else {
           html = '<p style="margin:0;"><strong>算力套餐</strong>：100元/10000算力、300元/30000算力、500元/50000算力、1000元/100000算力。</p>';
-        }
-        if (usageCosts.length) {
-          html += '<p style="margin:0.65rem 0 0.35rem 0;"><strong>默认扣除</strong>：</p><ul style="margin:0;padding-left:1.25rem;">';
-          usageCosts.forEach(function(item) {
-            html += '<li>' + escapeHtml(item.label || '能力调用') + '：' + escapeHtml(String(item.credits || 0)) + ' 算力/' + escapeHtml(item.unit || '次') + '</li>';
-          });
-          html += '</ul>';
-        } else {
-          html += '<p style="margin:0.65rem 0 0;"><strong>默认扣除</strong>：日常对话 10 算力/次，生成图片 60 算力/次，默认视频生成 160 算力/次。</p>';
         }
         pricingContent.innerHTML = html;
       })

@@ -427,7 +427,7 @@ _OPENCLAW_VIDEO_MODEL_LOCK_SOURCE_HEADER = "X-Lobster-Video-Model-Lock-Source"
 _NO_AUTH_UNSCOPED_SAFE_TOOLS = frozenset({"list_capabilities", "list_assets"})
 _OPENCLAW_LONG_CAPABILITY_IDS = frozenset({"image.generate", "video.generate"})
 _OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC = float(
-    os.environ.get("LOBSTER_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC", "45") or "45"
+    os.environ.get("LOBSTER_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC", "240") or "240"
 )
 _OPENCLAW_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
@@ -495,7 +495,9 @@ def _apply_openclaw_video_model_lock(
 
 
 def _openclaw_should_detach_long_capability(request: Optional[Any], capability_id: str) -> bool:
-    return bool(_openclaw_scope_intent(request)) and capability_id in _OPENCLAW_LONG_CAPABILITY_IDS
+    if capability_id not in _OPENCLAW_LONG_CAPABILITY_IDS:
+        return False
+    return bool(_openclaw_scope_intent(request)) or _request_from_openclaw_mcp(request)
 
 
 def _openclaw_long_capability_pending_payload(
@@ -935,6 +937,15 @@ def _backend_headers(token: Optional[str], request: Optional[Request] = None) ->
         cm = (request.headers.get("X-Chat-Model") or request.headers.get("x-chat-model") or "").strip()
         if cm:
             h["X-Chat-Model"] = cm
+        turn_charged = (request.headers.get("X-Lobster-Chat-Turn-Charged") or request.headers.get("x-lobster-chat-turn-charged") or "").strip()
+        turn_id = (request.headers.get("X-Lobster-Chat-Turn-Id") or request.headers.get("x-lobster-chat-turn-id") or "").strip()
+        turn_mode = (request.headers.get("X-Lobster-LLM-Billing-Mode") or request.headers.get("x-lobster-llm-billing-mode") or "").strip()
+        if turn_charged:
+            h["X-Lobster-Chat-Turn-Charged"] = turn_charged
+        if turn_id:
+            h["X-Lobster-Chat-Turn-Id"] = turn_id[:128]
+        if turn_mode:
+            h["X-Lobster-LLM-Billing-Mode"] = turn_mode
     bk = (os.environ.get("LOBSTER_MCP_BILLING_INTERNAL_KEY") or "").strip()
     if bk:
         h["X-Lobster-Mcp-Billing"] = bk

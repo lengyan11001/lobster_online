@@ -132,7 +132,29 @@ def _headers(jwt_token: str, installation_id: str) -> Dict[str, str]:
     h = {"Authorization": f"Bearer {jwt_token}"}
     if installation_id:
         h["X-Installation-Id"] = installation_id
+    h["X-Lobster-Chat-Turn-Billing"] = "pre_deduct_v1"
     return h
+
+
+def _local_chat_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    out = dict(headers or {})
+    billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
+    if billing_key:
+        out["X-Lobster-Mcp-Billing"] = billing_key
+    return out
+
+
+def _chat_turn_payload_fields(item: Dict[str, Any], fallback_prefix: str) -> Dict[str, Any]:
+    charged = bool(item.get("chat_turn_charged"))
+    turn_id = str(item.get("chat_turn_id") or "").strip()
+    if not charged:
+        return {}
+    if not turn_id:
+        item_id = str(item.get("id") or "").strip()
+        turn_id = f"{fallback_prefix}:{item_id}" if item_id else ""
+    if not turn_id:
+        return {}
+    return {"chat_turn_charged": True, "chat_turn_id": turn_id[:128]}
 
 
 def _request_bearer_token(request: Request) -> str:
@@ -631,6 +653,7 @@ async def _run_direct_chat(
             attachment_asset_ids,
             len(attachment_urls),
         )
+    payload.update(_chat_turn_payload_fields(item, "h5"))
     timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
     final_reply = ""
     final_error = ""
@@ -648,7 +671,7 @@ async def _run_direct_chat(
 
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
-            async with local.stream("POST", _local_chat_url(), json=payload, headers=headers) as resp:
+            async with local.stream("POST", _local_chat_url(), json=payload, headers=_local_chat_headers(headers)) as resp:
                 if resp.status_code != 200:
                     text = (await resp.aread()).decode("utf-8", errors="replace")
                     raise RuntimeError(text[:500] or f"local chat HTTP {resp.status_code}")
@@ -721,6 +744,8 @@ async def _run_openclaw_chat(
             installation_id=installation_id,
             video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "xai/grok-imagine-video/text-to-video"),
             video_model_lock_source="default",
+            chat_turn_id=str(item.get("chat_turn_id") or f"h5:{message_id}")[:128],
+            chat_turn_precharged=bool(item.get("chat_turn_charged")),
         )
         if not reply:
             await _complete_cloud_message(
@@ -794,6 +819,8 @@ async def _run_scheduled_chat_message(
                 installation_id=installation_id,
                 video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "xai/grok-imagine-video/text-to-video"),
                 video_model_lock_source="default",
+                chat_turn_id=str(item.get("chat_turn_id") or f"scheduled:{run_id}")[:128],
+                chat_turn_precharged=bool(item.get("chat_turn_charged")),
             )
             if not reply:
                 raise RuntimeError("OpenClaw returned no reply")
@@ -814,11 +841,12 @@ async def _run_scheduled_chat_message(
             "context_id": f"scheduled-{run_id}",
             "attachment_asset_ids": attachment_asset_ids,
         }
+        payload.update(_chat_turn_payload_fields(item, "scheduled"))
         timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
         final_reply = ""
         final_error = ""
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
-            async with local.stream("POST", _local_chat_url(), json=payload, headers=headers) as resp:
+            async with local.stream("POST", _local_chat_url(), json=payload, headers=_local_chat_headers(headers)) as resp:
                 if resp.status_code != 200:
                     text = (await resp.aread()).decode("utf-8", errors="replace")
                     raise RuntimeError(text[:500] or f"local chat HTTP {resp.status_code}")

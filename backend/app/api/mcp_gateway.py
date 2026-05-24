@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import hashlib
 import threading
 import time
 from typing import Optional
@@ -48,13 +49,22 @@ MCP_GATEWAY_FORWARD_TIMEOUT_SEC = float(os.environ.get("MCP_GATEWAY_FORWARD_TIME
 # OpenClaw 调 MCP 时常不带 X-Installation-Id；认证中心 capabilities 在槽位开启时必填该头，故与 JWT 一并缓存。
 _mcp_token_cache: dict[str, tuple[str, float, Optional[str]]] = {}
 _openclaw_tool_scope_cache: dict[str, tuple[dict[str, str], float]] = {}
+_openclaw_chat_turn_billing_cache: dict[str, tuple[dict[str, str], float, str]] = {}
 _cache_lock = threading.Lock()
+CHAT_TURN_CHARGED_HEADER = "X-Lobster-Chat-Turn-Charged"
+CHAT_TURN_ID_HEADER = "X-Lobster-Chat-Turn-Id"
+CHAT_TURN_BILLING_MODE_HEADER = "X-Lobster-LLM-Billing-Mode"
 _OPENCLAW_SCOPE_CACHE_HEADERS = {
     HEADER_INTENT,
     HEADER_ALLOWED_TOOLS,
     HEADER_ALLOWED_CAPABILITIES,
     HEADER_VIDEO_MODEL_LOCK,
     HEADER_VIDEO_MODEL_LOCK_SOURCE,
+}
+_OPENCLAW_CHAT_TURN_HEADERS = {
+    CHAT_TURN_CHARGED_HEADER,
+    CHAT_TURN_ID_HEADER,
+    CHAT_TURN_BILLING_MODE_HEADER,
 }
 
 
@@ -103,6 +113,90 @@ def clear_openclaw_tool_scope_for_agent(agent_id: Optional[str] = None) -> None:
             _openclaw_tool_scope_cache.pop(agent_id, None)
         else:
             _openclaw_tool_scope_cache.clear()
+
+
+def set_openclaw_chat_turn_billing_for_agent(
+    agent_id: str,
+    turn_id: str,
+    ttl_seconds: int = MCP_TOKEN_TTL_SECONDS,
+    user_token: str = "",
+) -> None:
+    """Cache per-turn billing headers; OpenClaw model-provider requests may not preserve app headers."""
+    aid = (agent_id or "").strip()
+    tid = (turn_id or "").strip()[:128]
+    if not aid or not tid:
+        return
+    headers = {
+        CHAT_TURN_CHARGED_HEADER: "1",
+        CHAT_TURN_ID_HEADER: tid,
+        CHAT_TURN_BILLING_MODE_HEADER: "turn_precharged",
+    }
+    with _cache_lock:
+        _openclaw_chat_turn_billing_cache[aid] = (
+            headers,
+            time.time() + float(ttl_seconds),
+            _chat_turn_token_fingerprint(user_token),
+        )
+
+
+def clear_openclaw_chat_turn_billing_for_agent(agent_id: Optional[str] = None) -> None:
+    with _cache_lock:
+        if agent_id:
+            _openclaw_chat_turn_billing_cache.pop(agent_id, None)
+        else:
+            _openclaw_chat_turn_billing_cache.clear()
+
+
+def _chat_turn_token_fingerprint(token: str) -> str:
+    token = (token or "").strip()
+    if not token:
+        return ""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:24]
+
+
+def _chat_turn_entry_matches_user(entry_token_fp: str, user_token_fp: str) -> bool:
+    if not entry_token_fp:
+        return True
+    return bool(user_token_fp and entry_token_fp == user_token_fp)
+
+
+def openclaw_chat_turn_billing_headers_from_request(request: Request, user_token: str = "") -> dict[str, str]:
+    explicit = {}
+    for h in _OPENCLAW_CHAT_TURN_HEADERS:
+        v = (request.headers.get(h) or request.headers.get(h.lower()) or "").strip()
+        if v:
+            explicit[h] = v
+    if explicit:
+        return explicit
+
+    aid = (request.headers.get("x-openclaw-agent-id") or "").strip()
+    now = time.time()
+    user_fp = _chat_turn_token_fingerprint(user_token)
+    with _cache_lock:
+        if aid:
+            entry = _openclaw_chat_turn_billing_cache.get(aid)
+            if entry:
+                headers, exp, entry_fp = entry
+                if exp > now and _chat_turn_entry_matches_user(entry_fp, user_fp):
+                    return dict(headers)
+                if exp <= now:
+                    _openclaw_chat_turn_billing_cache.pop(aid, None)
+        best_headers: Optional[dict[str, str]] = None
+        best_exp = 0.0
+        stale_keys: list[str] = []
+        for k, entry in _openclaw_chat_turn_billing_cache.items():
+            headers, exp, entry_fp = entry
+            if exp <= now:
+                stale_keys.append(k)
+                continue
+            if not _chat_turn_entry_matches_user(entry_fp, user_fp):
+                continue
+            if exp > best_exp:
+                best_exp = exp
+                best_headers = dict(headers)
+        for k in stale_keys:
+            _openclaw_chat_turn_billing_cache.pop(k, None)
+    return best_headers or {}
 
 
 def extend_mcp_token_ttl_for_jwt(token: str, ttl_seconds: int = MCP_TOKEN_TTL_SECONDS) -> None:

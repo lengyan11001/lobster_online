@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
@@ -203,6 +204,10 @@ _cost_cancelled_caps_ctx: contextvars.ContextVar[set] = contextvars.ContextVar(
 _review_prompt_drafts_only_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_review_prompt_drafts_only_active", default=False
 )
+
+CHAT_TURN_CHARGED_HEADER = "X-Lobster-Chat-Turn-Charged"
+CHAT_TURN_ID_HEADER = "X-Lobster-Chat-Turn-Id"
+CHAT_TURN_BILLING_MODE_HEADER = "X-Lobster-LLM-Billing-Mode"
 
 
 def _effective_max_tool_rounds() -> int:
@@ -844,6 +849,17 @@ class ChatRequest(BaseModel):
     )
 
 
+    chat_turn_charged: bool = Field(
+        False,
+        description="内部通道使用：云端领取任务时已扣本轮对话费用，后续 LLM 调用只透传标记。",
+    )
+    chat_turn_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="内部通道使用：已扣费对话轮次 ID。",
+    )
+
+
 class ChatResponse(BaseModel):
     reply: str
     orchestration: Optional[Dict[str, Any]] = None
@@ -905,6 +921,8 @@ def _online_resolve_cfg_and_overrides(
     raw_token: str,
     *,
     schedule_orchestration: bool = False,
+    chat_turn_id: str = "",
+    chat_turn_precharged: bool = False,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, str]]]:
     """在线版：对话固定走认证中心 /api/sutui-chat/completions，模型由 lobster_default_sutui_chat_model（默认 deepseek-chat）决定；忽略前端 model 与直连 Key。
     schedule_orchestration=True 时优先使用 lobster_orchestration_sutui_chat_model（tool_calls 遵从率更高的模型）。
@@ -933,15 +951,102 @@ def _online_resolve_cfg_and_overrides(
         "model_name": inner,
         "provider": "sutui",
     }
+    override_headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {raw_token}",
+    }
+    billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
+    if chat_turn_precharged and chat_turn_id and billing_key:
+        override_headers["X-Lobster-Mcp-Billing"] = billing_key
+        override_headers[CHAT_TURN_CHARGED_HEADER] = "1"
+        override_headers[CHAT_TURN_ID_HEADER] = chat_turn_id[:128]
+        override_headers[CHAT_TURN_BILLING_MODE_HEADER] = "turn_precharged"
+
     return (
         req_model,
         cfg,
         f"{asb}/api/sutui-chat/completions",
-        {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {raw_token}",
-        },
+        override_headers,
     )
+
+
+def _local_internal_billing_key_ok(request: Optional[Request]) -> bool:
+    expected = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
+    if not expected or request is None:
+        return False
+    got = (request.headers.get("X-Lobster-Mcp-Billing") or request.headers.get("x-lobster-mcp-billing") or "").strip()
+    return bool(got and got == expected)
+
+
+def _chat_turn_headers_from_payload(payload: ChatRequest, request: Optional[Request] = None) -> tuple[bool, str]:
+    charged = bool(getattr(payload, "chat_turn_charged", False))
+    turn_id = str(getattr(payload, "chat_turn_id", None) or "").strip()[:128]
+    if charged and turn_id and not _local_internal_billing_key_ok(request):
+        logger.warning("[CHAT] ignored untrusted chat_turn_charged marker turn_id=%s", turn_id)
+        return False, ""
+    return charged and bool(turn_id), turn_id
+
+
+def _new_online_chat_turn_id(payload: ChatRequest) -> str:
+    session_id = str(getattr(payload, "session_id", None) or "").strip()[:48]
+    if session_id:
+        return f"online:{session_id}:{uuid.uuid4().hex[:16]}"[:128]
+    return f"online:{uuid.uuid4().hex}"[:128]
+
+
+async def _pre_deduct_online_chat_turn(
+    payload: ChatRequest,
+    raw_token: str,
+    *,
+    source: str,
+    request: Optional[Request] = None,
+) -> tuple[bool, str]:
+    existing_charged, existing_turn_id = _chat_turn_headers_from_payload(payload, request)
+    if existing_charged:
+        return True, existing_turn_id
+
+    edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
+    asb = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
+    if edition != "online" or not asb:
+        return False, ""
+    if not billing_key:
+        logger.warning("[CHAT] skip chat turn pre-deduct: LOBSTER_MCP_BILLING_INTERNAL_KEY is empty")
+        return False, ""
+
+    turn_id = _new_online_chat_turn_id(payload)
+    body = {
+        "turn_id": turn_id,
+        "source": source,
+        "session_id": getattr(payload, "session_id", None),
+        "context_id": getattr(payload, "context_id", None),
+    }
+    headers = {
+        "Authorization": f"Bearer {raw_token}",
+        "Content-Type": "application/json",
+        "X-Lobster-Mcp-Billing": billing_key,
+        "X-Billing-Idempotency-Key": turn_id,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+            resp = await client.post(f"{asb}/api/sutui-chat/turn-pre-deduct", json=body, headers=headers)
+    except httpx.RequestError as exc:
+        logger.warning("[CHAT] chat turn pre-deduct request failed: %s", exc)
+        raise HTTPException(status_code=503, detail="对话计费服务暂时不可用，请稍后再试") from exc
+    if resp.status_code in (404, 405):
+        logger.warning("[CHAT] chat turn pre-deduct endpoint unavailable on auth server; fallback to legacy LLM billing")
+        return False, ""
+    if resp.status_code >= 400:
+        detail = ""
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                detail = str(data.get("detail") or data.get("message") or "")
+        except Exception:
+            detail = ""
+        raise HTTPException(status_code=resp.status_code, detail=detail or resp.text[:500] or f"HTTP {resp.status_code}")
+    logger.info("[CHAT] chat turn pre-deduct ok source=%s turn_id=%s", source, turn_id)
+    return True, turn_id
 
 
 def _pick_default_model() -> str:
@@ -7547,6 +7652,12 @@ async def chat_endpoint(
     want_oc_first = _want_openclaw_first_this_turn(
         review_drafts_only, direct_llm, _oc_pfx_hit
     )
+    chat_turn_precharged, chat_turn_id = await _pre_deduct_online_chat_turn(
+        payload,
+        raw_token,
+        source="online_chat",
+        request=request,
+    )
     mcp_tools: List[Dict] = []
     if not want_oc_first and not review_drafts_only and not direct_llm:
         mcp_tools = await _fetch_mcp_tools(raw_token)
@@ -7568,7 +7679,11 @@ async def chat_endpoint(
     sutui_override_headers: Optional[Dict[str, str]] = None
     if edition == "online":
         resolve_model, cfg_pre, sutui_override_url, sutui_override_headers = _online_resolve_cfg_and_overrides(
-            payload, raw_token, schedule_orchestration=is_schedule_orch
+            payload,
+            raw_token,
+            schedule_orchestration=is_schedule_orch,
+            chat_turn_id=chat_turn_id,
+            chat_turn_precharged=chat_turn_precharged,
         )
     else:
         resolve_model = model
@@ -7649,6 +7764,8 @@ async def chat_endpoint(
             memory_scope=_openclaw_memory_scope_from_request(request),
             video_model_lock=openclaw_video_model_lock,
             video_model_lock_source=openclaw_video_model_lock_source,
+            chat_turn_id=chat_turn_id,
+            chat_turn_precharged=chat_turn_precharged,
         )
         if oc_reply:
             ms = round((time.perf_counter() - t0) * 1000)
@@ -7695,6 +7812,10 @@ async def chat_endpoint(
         _mn = (cfg.get("model_name") or "").strip()
         if _prov and _mn:
             _mcp_hdrs["X-Chat-Model"] = f"{_prov}/{_mn}"
+        if chat_turn_precharged and chat_turn_id:
+            _mcp_hdrs[CHAT_TURN_CHARGED_HEADER] = "1"
+            _mcp_hdrs[CHAT_TURN_ID_HEADER] = chat_turn_id
+            _mcp_hdrs[CHAT_TURN_BILLING_MODE_HEADER] = "turn_precharged"
         _vurls_tok = _recent_task_video_urls_ctx.set([])
         _pub_hints_tok = _recent_publish_asset_hints_ctx.set([])
         _hints_tok = _generation_hints_by_task_id.set({})
@@ -7771,6 +7892,8 @@ async def chat_endpoint(
             memory_scope=_openclaw_memory_scope_from_request(request),
             video_model_lock=openclaw_video_model_lock,
             video_model_lock_source=openclaw_video_model_lock_source,
+            chat_turn_id=chat_turn_id,
+            chat_turn_precharged=chat_turn_precharged,
         )
         if oc_reply:
             ms = round((time.perf_counter() - t0) * 1000)
@@ -7872,8 +7995,22 @@ async def _chat_stream_events(
         want_oc = _want_openclaw_first_this_turn(
             review_po, direct_llm, openclaw_prefixed_turn
         )
+        chat_turn_precharged = False
+        chat_turn_id = ""
+        try:
+            chat_turn_precharged, chat_turn_id = await _pre_deduct_online_chat_turn(
+                payload,
+                raw_token,
+                source="online_chat_stream",
+                request=request,
+            )
+        except HTTPException as e:
+            error_holder.append(e.detail if isinstance(e.detail, str) else str(e.detail))
+        except Exception as e:
+            logger.exception("[CHAT/stream] chat turn pre-deduct failed")
+            error_holder.append(_friendly_chat_stream_exception(e))
         mcp_tools: List[Dict] = []
-        if not want_oc and not review_po and not direct_llm:
+        if not error_holder and not want_oc and not review_po and not direct_llm:
             mcp_tools = await _fetch_mcp_tools(raw_token)
         elif direct_llm:
             logger.info("[CHAT/stream] direct_llm：不挂 MCP，极简 system")
@@ -7885,9 +8022,16 @@ async def _chat_stream_events(
         sutui_override_url: Optional[str] = None
         sutui_override_headers: Optional[Dict[str, str]] = None
         if edition == "online":
-            resolve_model, cfg_pre, sutui_override_url, sutui_override_headers = _online_resolve_cfg_and_overrides(
-                payload, raw_token, schedule_orchestration=_is_sched_orch
-            )
+            if error_holder:
+                resolve_model, cfg_pre = None, None
+            else:
+                resolve_model, cfg_pre, sutui_override_url, sutui_override_headers = _online_resolve_cfg_and_overrides(
+                    payload,
+                    raw_token,
+                    schedule_orchestration=_is_sched_orch,
+                    chat_turn_id=chat_turn_id,
+                    chat_turn_precharged=chat_turn_precharged,
+                )
         else:
             resolve_model = model
             cfg_pre = _resolve_config(resolve_model) if resolve_model else None
@@ -7974,6 +8118,8 @@ async def _chat_stream_events(
                             memory_scope=_openclaw_memory_scope_from_request(request),
                             video_model_lock=stream_video_model_lock,
                             video_model_lock_source=stream_video_model_lock_source,
+                            chat_turn_id=chat_turn_id,
+                            chat_turn_precharged=chat_turn_precharged,
                         )
                         if oc_reply:
                             reply_holder.append(oc_reply)
@@ -8006,6 +8152,10 @@ async def _chat_stream_events(
                     _sm = (cfg.get("model_name") or "").strip()
                     if _sp and _sm:
                         _mcp_sh["X-Chat-Model"] = f"{_sp}/{_sm}"
+                    if chat_turn_precharged and chat_turn_id:
+                        _mcp_sh[CHAT_TURN_CHARGED_HEADER] = "1"
+                        _mcp_sh[CHAT_TURN_ID_HEADER] = chat_turn_id
+                        _mcp_sh[CHAT_TURN_BILLING_MODE_HEADER] = "turn_precharged"
                     _vurls_stream_tok = _recent_task_video_urls_ctx.set([])
                     _pub_hints_stream_tok = _recent_publish_asset_hints_ctx.set([])
                     _hints_stream_tok = _generation_hints_by_task_id.set({})
@@ -8064,6 +8214,8 @@ async def _chat_stream_events(
                             memory_scope=_openclaw_memory_scope_from_request(request),
                             video_model_lock=stream_video_model_lock,
                             video_model_lock_source=stream_video_model_lock_source,
+                            chat_turn_id=chat_turn_id,
+                            chat_turn_precharged=chat_turn_precharged,
                         )
                         if oc_reply:
                             reply_holder.append(oc_reply)

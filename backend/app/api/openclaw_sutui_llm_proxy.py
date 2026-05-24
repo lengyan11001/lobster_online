@@ -29,6 +29,7 @@ from .mcp_gateway import (
     _installation_id_for_mcp_forward,
     extend_mcp_token_ttl_for_jwt,
     get_mcp_token_from_request,
+    openclaw_chat_turn_billing_headers_from_request,
     set_mcp_token_for_agent,
 )
 
@@ -37,6 +38,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 TRACE_HEADER = "X-Lobster-Chat-Trace-Id"
+CHAT_TURN_CHARGED_HEADER = "X-Lobster-Chat-Turn-Charged"
+CHAT_TURN_ID_HEADER = "X-Lobster-Chat-Turn-Id"
 _OPENCLAW_SKILL_AGENT_IDS = {"lobster-browser-use", "lobster-computer-use"}
 _OPENCLAW_SKILL_SERVER_MODEL_ALIAS = "openclaw-skill-chat"
 
@@ -327,6 +330,12 @@ async def openclaw_sutui_chat_completions(request: Request):
     billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
     if billing_key:
         headers["X-Lobster-Mcp-Billing"] = billing_key
+    turn_headers = openclaw_chat_turn_billing_headers_from_request(request, user_jwt)
+    if turn_headers.get(CHAT_TURN_CHARGED_HEADER):
+        headers[CHAT_TURN_CHARGED_HEADER] = turn_headers[CHAT_TURN_CHARGED_HEADER]
+        if turn_headers.get(CHAT_TURN_ID_HEADER):
+            headers[CHAT_TURN_ID_HEADER] = turn_headers[CHAT_TURN_ID_HEADER][:128]
+        headers["X-Lobster-LLM-Billing-Mode"] = "turn_precharged"
     xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
     if not xi:
         xi = (_installation_id_for_mcp_forward(request) or "").strip()
@@ -346,7 +355,7 @@ async def openclaw_sutui_chat_completions(request: Request):
     wx_log = (wx_uid[-16:] if wx_uid and len(wx_uid) > 16 else wx_uid) or "-"
     logger.info(
         "[chat_trace] trace_id=%s path=openclaw_sutui_proxy route=lobster-sutui->POST_AUTH_SUTUI_CHAT "
-        "model_in=%s model_forward=%s stream=%s user_auth=%s agent_id=%s wx_tail=%s installation_id_set=%s auth_center=%s",
+        "model_in=%s model_forward=%s stream=%s user_auth=%s agent_id=%s wx_tail=%s installation_id_set=%s auth_center=%s chat_turn_id=%s",
         trace_id,
         model_in or "-",
         model_forward or "-",
@@ -356,6 +365,7 @@ async def openclaw_sutui_chat_completions(request: Request):
         wx_log,
         bool(xi),
         asb,
+        headers.get(CHAT_TURN_ID_HEADER, "-"),
     )
 
     if not stream:

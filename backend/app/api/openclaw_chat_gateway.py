@@ -52,14 +52,27 @@ except ImportError:
 
 try:
     from .mcp_gateway import (
+        clear_openclaw_chat_turn_billing_for_agent,
         clear_openclaw_tool_scope_for_agent,
+        set_openclaw_chat_turn_billing_for_agent,
         set_mcp_token_for_agent,
         set_openclaw_tool_scope_for_agent,
     )
 except ImportError:
     from .mcp_gateway import set_mcp_token_for_agent
 
+    def clear_openclaw_chat_turn_billing_for_agent(_agent_id: Optional[str] = None) -> None:
+        return None
+
     def clear_openclaw_tool_scope_for_agent(_agent_id: Optional[str] = None) -> None:
+        return None
+
+    def set_openclaw_chat_turn_billing_for_agent(
+        _agent_id: str,
+        _turn_id: str,
+        ttl_seconds: int = 600,
+        user_token: str = "",
+    ) -> None:
         return None
 
     def set_openclaw_tool_scope_for_agent(_agent_id: str, _headers: Dict[str, str]) -> None:
@@ -1002,6 +1015,8 @@ async def try_openclaw(
     memory_scope: str = _OPENCLAW_MEMORY_SCOPE_DEFAULT,
     video_model_lock: str = "",
     video_model_lock_source: str = "",
+    chat_turn_id: str = "",
+    chat_turn_precharged: bool = False,
 ) -> Optional[str]:
     """Attempt to get a reply via OpenClaw Gateway. Returns None on failure."""
     _OPENCLAW_LAST_FAILURE.set("")
@@ -1036,6 +1051,10 @@ async def try_openclaw(
         clear_openclaw_tool_scope_for_agent(agent_id)
     else:
         clear_openclaw_tool_scope_for_agent()
+    if chat_turn_precharged and chat_turn_id:
+        set_openclaw_chat_turn_billing_for_agent(agent_id, chat_turn_id, user_token=raw_token)
+    else:
+        clear_openclaw_chat_turn_billing_for_agent(agent_id)
     if scope_headers:
         set_openclaw_tool_scope_for_agent(agent_id, scope_headers)
     if scope is not None:
@@ -1076,6 +1095,10 @@ async def try_openclaw(
         headers["x-user-authorization"] = f"Bearer {raw_token}"
     if xi and not is_internal_lobster_jwt:
         headers["X-Installation-Id"] = xi
+    if chat_turn_precharged and chat_turn_id:
+        headers["X-Lobster-Chat-Turn-Charged"] = "1"
+        headers["X-Lobster-Chat-Turn-Id"] = chat_turn_id[:128]
+        headers["X-Lobster-LLM-Billing-Mode"] = "turn_precharged"
 
     stage = "prepare_messages"
     try:
