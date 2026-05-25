@@ -200,13 +200,22 @@ async def _ensure_local_openclaw_gateway_lean(oc_base: str) -> bool:
     if not _is_local_openclaw_gateway_url(oc_base):
         return False
     try:
-        from .openclaw_config import _find_openclaw_pid, _openclaw_gateway_needs_local_restart, _ensure_openclaw_gateway_running
+        from .openclaw_config import (
+            _ensure_openclaw_gateway_running,
+            _find_openclaw_pid,
+            _openclaw_gateway_local_restart_reasons,
+        )
 
         local_pid = await asyncio.to_thread(_find_openclaw_pid)
-        needs_restart = (not local_pid) or await asyncio.to_thread(_openclaw_gateway_needs_local_restart)
+        restart_reasons = await asyncio.to_thread(_openclaw_gateway_local_restart_reasons)
+        needs_restart = (not local_pid) or bool(restart_reasons)
         if not needs_restart:
             return False
-        logger.warning("[OPENCLAW] local Gateway unavailable or needs sync; restarting kill-first before chat request")
+        logger.warning(
+            "[OPENCLAW] local Gateway unavailable or needs sync; restarting kill-first before chat request pid=%s reasons=%s",
+            local_pid,
+            restart_reasons or ["missing_pid"],
+        )
         return bool(await asyncio.to_thread(_ensure_openclaw_gateway_running, 75.0))
     except Exception as exc:
         logger.warning("[OPENCLAW] ensure lean Gateway before request failed: %s", exc)

@@ -10,6 +10,7 @@ default 600000ms, configurable by LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -17,17 +18,30 @@ ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "nodejs" / "node_modules" / "openclaw" / "dist"
 MARKER = "LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS"
 
-OLD = """\t\t\treturn await session.client.callTool({
-\t\t\t\tname: toolName,
-\t\t\t\targuments: isMcpConfigRecord(input) ? input : {}
-\t\t\t});"""
+CALL_RE = re.compile(
+    r"(?P<indent>[ \t]*)return\s+await\s+session\.client\.callTool\(\{\s*"
+    r"name:\s*toolName\s*,\s*"
+    r"arguments:\s*isMcpConfigRecord\(input\)\s*\?\s*input\s*:\s*\{\}\s*"
+    r"\}\s*\)\s*;",
+    re.DOTALL,
+)
 
-NEW = """\t\t\tconst lobsterToolTimeoutMsRaw = Number(process.env.LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS ?? 600000);
-\t\t\tconst lobsterToolTimeoutMs = Number.isFinite(lobsterToolTimeoutMsRaw) && lobsterToolTimeoutMsRaw > 0 ? Math.floor(lobsterToolTimeoutMsRaw) : 600000;
-\t\t\treturn await session.client.callTool({
-\t\t\t\tname: toolName,
-\t\t\t\targuments: isMcpConfigRecord(input) ? input : {}
-\t\t\t}, void 0, { timeout: lobsterToolTimeoutMs });"""
+
+def apply_patch(text: str) -> tuple[str, bool]:
+    def repl(match: re.Match[str]) -> str:
+        indent = match.group("indent") or ""
+        inner = indent + "\t"
+        return (
+            f"{indent}const lobsterToolTimeoutMsRaw = Number(process.env.LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS ?? 600000);\n"
+            f"{indent}const lobsterToolTimeoutMs = Number.isFinite(lobsterToolTimeoutMsRaw) && lobsterToolTimeoutMsRaw > 0 ? Math.floor(lobsterToolTimeoutMsRaw) : 600000;\n"
+            f"{indent}return await session.client.callTool({{\n"
+            f"{inner}name: toolName,\n"
+            f"{inner}arguments: isMcpConfigRecord(input) ? input : {{}}\n"
+            f"{indent}}}, void 0, {{ timeout: lobsterToolTimeoutMs }});"
+        )
+
+    new_text, count = CALL_RE.subn(repl, text or "", count=1)
+    return new_text, bool(count)
 
 
 def main() -> int:
@@ -49,11 +63,12 @@ def main() -> int:
             already_patched = True
             print(f"[ok] already patched {target}")
             continue
-        if OLD not in text:
+        new_text, patched = apply_patch(text)
+        if not patched:
             missed += 1
-            print(f"[warn] expected snippet not found; manual merge needed: {target}", file=sys.stderr)
+            print(f"[warn] compatible callTool snippet not found; skipped: {target}", file=sys.stderr)
             continue
-        target.write_text(text.replace(OLD, NEW, 1), encoding="utf-8")
+        target.write_text(new_text, encoding="utf-8")
         changed = True
         print(f"[ok] patched {target}")
 

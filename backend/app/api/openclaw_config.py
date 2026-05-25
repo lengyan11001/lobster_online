@@ -692,14 +692,27 @@ def _openclaw_json_needs_local_launch_patch(plugin_mode: str = _OPENCLAW_PLUGIN_
         return False
 
 
+def _openclaw_gateway_local_restart_reasons() -> list[str]:
+    """Return concrete local drift reasons that require a Gateway restart."""
+    reasons: list[str] = []
+    checks = (
+        ("openclaw_json", _openclaw_json_needs_local_launch_patch),
+        ("slack_stage_patch", _openclaw_gateway_slack_stage_patch_needed),
+        ("pricing_refresh_patch", _openclaw_gateway_pricing_patch_needed),
+        ("mcp_tool_timeout_patch", _openclaw_mcp_tool_timeout_patch_needed),
+    )
+    for name, check in checks:
+        try:
+            if check():
+                reasons.append(name)
+        except Exception as e:
+            logger.warning("OpenClaw restart reason check failed: reason=%s error=%s", name, e)
+    return reasons
+
+
 def _openclaw_gateway_needs_local_restart() -> bool:
     """Whether the local Gateway should be restarted before chat/status use."""
-    return (
-        _openclaw_json_needs_local_launch_patch()
-        or _openclaw_gateway_slack_stage_patch_needed()
-        or _openclaw_gateway_pricing_patch_needed()
-        or _openclaw_mcp_tool_timeout_patch_needed()
-    )
+    return bool(_openclaw_gateway_local_restart_reasons())
 
 
 def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_MODE_LEAN) -> bool:
@@ -914,7 +927,8 @@ def build_openclaw_status_snapshot() -> dict:
     """
     listener_pids = _find_listener_pids_on_18789()
     gateway_pids = _find_openclaw_gateway_process_pids()
-    needs_restart = _openclaw_gateway_needs_local_restart()
+    restart_reasons = _openclaw_gateway_local_restart_reasons()
+    needs_restart = bool(restart_reasons)
     entry = _find_openclaw_entry()
     online = bool(listener_pids)
     if online and needs_restart:
@@ -940,6 +954,7 @@ def build_openclaw_status_snapshot() -> dict:
         "gateway_pids": gateway_pids,
         "config_synced": not needs_restart,
         "needs_restart": bool(needs_restart),
+        "restart_reasons": restart_reasons,
         "entry_found": bool(entry),
         "state": state,
         "message": message,
@@ -1239,12 +1254,42 @@ def _openclaw_mcp_tool_timeout_patch_needed() -> bool:
                 continue
             if "LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS" in text:
                 continue
-            if "return await session.client.callTool({" in text:
+            if _openclaw_mcp_tool_timeout_patchable(text):
                 return True
         return False
     except Exception as e:
         logger.warning("openclaw_mcp_tool_timeout_patch_needed failed: %s", e)
         return False
+
+
+def _openclaw_mcp_tool_timeout_patchable(text: str) -> bool:
+    return _OPENCLAW_MCP_TOOL_TIMEOUT_CALL_RE.search(text or "") is not None
+
+
+_OPENCLAW_MCP_TOOL_TIMEOUT_CALL_RE = re.compile(
+    r"(?P<indent>[ \t]*)return\s+await\s+session\.client\.callTool\(\{\s*"
+    r"name:\s*toolName\s*,\s*"
+    r"arguments:\s*isMcpConfigRecord\(input\)\s*\?\s*input\s*:\s*\{\}\s*"
+    r"\}\s*\)\s*;",
+    re.DOTALL,
+)
+
+
+def _apply_openclaw_mcp_tool_timeout_patch(text: str) -> tuple[str, bool]:
+    def repl(match: re.Match[str]) -> str:
+        indent = match.group("indent") or ""
+        inner = indent + "\t"
+        return (
+            f"{indent}const lobsterToolTimeoutMsRaw = Number(process.env.LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS ?? 600000);\n"
+            f"{indent}const lobsterToolTimeoutMs = Number.isFinite(lobsterToolTimeoutMsRaw) && lobsterToolTimeoutMsRaw > 0 ? Math.floor(lobsterToolTimeoutMsRaw) : 600000;\n"
+            f"{indent}return await session.client.callTool({{\n"
+            f"{inner}name: toolName,\n"
+            f"{inner}arguments: isMcpConfigRecord(input) ? input : {{}}\n"
+            f"{indent}}}, void 0, {{ timeout: lobsterToolTimeoutMs }});"
+        )
+
+    new_text, count = _OPENCLAW_MCP_TOOL_TIMEOUT_CALL_RE.subn(repl, text or "", count=1)
+    return new_text, bool(count)
 
 
 def _patch_openclaw_gateway_slack_stage(mjs_path: str) -> bool:
@@ -1339,28 +1384,18 @@ def _patch_openclaw_mcp_tool_timeout(mjs_path: str) -> bool:
             return False
         candidates = sorted(dist_dir.glob("content-blocks-*.js"))
         changed = False
-        old = (
-            "\t\t\treturn await session.client.callTool({\n"
-            "\t\t\t\tname: toolName,\n"
-            "\t\t\t\targuments: isMcpConfigRecord(input) ? input : {}\n"
-            "\t\t\t});"
-        )
-        new = (
-            "\t\t\tconst lobsterToolTimeoutMsRaw = Number(process.env.LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS ?? 600000);\n"
-            "\t\t\tconst lobsterToolTimeoutMs = Number.isFinite(lobsterToolTimeoutMsRaw) && lobsterToolTimeoutMsRaw > 0 ? Math.floor(lobsterToolTimeoutMsRaw) : 600000;\n"
-            "\t\t\treturn await session.client.callTool({\n"
-            "\t\t\t\tname: toolName,\n"
-            "\t\t\t\targuments: isMcpConfigRecord(input) ? input : {}\n"
-            "\t\t\t}, void 0, { timeout: lobsterToolTimeoutMs });"
-        )
         for path in candidates:
             text = path.read_text(encoding="utf-8")
             if marker in text:
                 continue
-            if old not in text:
-                logger.warning("OpenClaw MCP tool timeout patch skipped, pattern not found: %s", path)
+            new_text, patched = _apply_openclaw_mcp_tool_timeout_patch(text)
+            if not patched:
+                logger.warning(
+                    "OpenClaw MCP tool timeout patch skipped, unsupported callTool shape; will not force restart for this patch: %s",
+                    path,
+                )
                 continue
-            path.write_text(text.replace(old, new, 1), encoding="utf-8")
+            path.write_text(new_text, encoding="utf-8")
             logger.info("Patched OpenClaw MCP tool timeout: %s", path)
             changed = True
         return changed
@@ -2199,8 +2234,15 @@ def _ensure_openclaw_gateway_running(
 ) -> bool:
     """Start/restart Gateway only if it is still needed after acquiring the lock."""
     with _OPENCLAW_RESTART_LOCK:
-        if _find_openclaw_pid() and not _openclaw_gateway_needs_local_restart():
+        pid = _find_openclaw_pid()
+        restart_reasons = _openclaw_gateway_local_restart_reasons()
+        if pid and not restart_reasons:
             return True
+        logger.warning(
+            "OpenClaw Gateway ensure will restart: pid=%s reasons=%s",
+            pid,
+            restart_reasons or ["missing_pid"],
+        )
         return _restart_openclaw_gateway_impl(wait_ready_sec=wait_ready_sec, plugin_mode=plugin_mode)
 
 

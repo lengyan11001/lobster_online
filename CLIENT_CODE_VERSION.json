@@ -1,6 +1,6 @@
 {
   "version": "1.0.50",
-  "build": 78,
-  "applied_at": "2026-05-23T19:11:05+08:00",
-  "note": "Fix OpenClaw local runtime migration and recharge copy"
+  "build": 79,
+  "applied_at": "2026-05-25T11:19:04+08:00",
+  "note": "Fix OpenClaw restart loop diagnostics"
 }
