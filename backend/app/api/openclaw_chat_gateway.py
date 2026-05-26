@@ -376,8 +376,8 @@ _PIPE_TOOL_CALLS_WRAPPER_RE = re.compile(
 # OpenClaw messaging 通道（如 weixin 扩展）发送失败时，LLM 会把 logger 错误回流成
 # "⚠️ ✉️ Message: `<url>` failed" 这种噪音串；主对话用户根本没用 messaging，去掉避免误导。
 _OPENCLAW_MESSAGING_FAIL_RE = re.compile(
-    r"(?:⚠️\s*)?(?:✉️\s*)?Message:\s*`?[^`\r\n]+`?\s+failed[^\r\n]*",
-    re.IGNORECASE,
+    r"^[^\r\n]*\bMessage(?:\s*:\s*`?[^`\r\n]+`?)?\s+failed[^\r\n]*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -389,11 +389,16 @@ def _strip_dsml(content: str) -> str:
     return cleaned
 
 
+def _strip_markdown_emphasis_for_evidence(content: str) -> str:
+    return (content or "").replace("**", "").replace("__", "")
+
+
 def _task_id_from_text(content: str) -> str:
-    raw = content or ""
+    raw = _strip_markdown_emphasis_for_evidence(content)
     for pattern in (
         r'"task_id"\s*:\s*"([^"\r\n]{8,128})"',
         r"\btask_id\s*[:=]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
+        r"\b(?:task_id|asset_id|assetId|final_asset_id|video_asset_id)\b[^A-Za-z0-9\r\n]{0,12}`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
         r"(?:asset_id|assetId|final_asset_id|video_asset_id|"
         r"\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID)"
         r"\s*[:\uff1a=]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
@@ -484,7 +489,7 @@ _OPENCLAW_GENERATION_EVIDENCE_RE = re.compile(
 _OPENCLAW_EXECUTION_ID_EVIDENCE_RE = re.compile(
     r"(?:task_id|asset_id|assetId|saved_assets|final_asset_id|video_asset_id|media_urls?|output_url|preview_url|"
     r"\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID)"
-    r"\s*[:\uff1a=]\s*`?[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}`?",
+    r"[^A-Za-z0-9\r\n]{0,12}`?[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}`?",
     re.IGNORECASE,
 )
 _OPENCLAW_GENERATION_SUCCESS_WITH_ID_RE = re.compile(
@@ -501,6 +506,15 @@ _OPENCLAW_PREP_ONLY_RE = re.compile(
 )
 _OPENCLAW_NON_MCP_TOOL_HINT_RE = re.compile(
     r'<[\uff5c|]+DSML[\uff5c|]+invoke\s+name="(?:exec|shell|browser|python|node)"',
+    re.IGNORECASE,
+)
+_OPENCLAW_GENERATION_STARTED_RE = re.compile(
+    r"(?:"
+    r"\u4efb\u52a1\s*(?:\u5df2)?\s*(?:\u63d0\u4ea4|\u5f00\u59cb|\u53d1\u8d77)|"
+    r"(?:\u5df2|done|success).{0,12}(?:\u63d0\u4ea4|\u53d1\u8d77)|"
+    r"(?:\u6b63\u5728|\u8fd8\u5728|\u5df2\u8fdb\u5165|\u540e\u53f0).{0,16}(?:\u751f\u6210|\u5904\u7406|\u961f\u5217)|"
+    r"(?:\u751f\u6210\u4e2d|\u5904\u7406\u4e2d|\u6392\u961f\u4e2d|pending|processing|queued)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -522,7 +536,7 @@ def _openclaw_user_requests_text_only_creative_plan(text: str) -> bool:
 
 
 def _openclaw_generation_reply_has_execution_evidence(content: str) -> bool:
-    raw = content or ""
+    raw = _strip_markdown_emphasis_for_evidence(content)
     if _OPENCLAW_EXECUTION_ID_EVIDENCE_RE.search(raw):
         return True
     if _OPENCLAW_GENERATION_SUCCESS_WITH_ID_RE.search(raw):
@@ -530,6 +544,13 @@ def _openclaw_generation_reply_has_execution_evidence(content: str) -> bool:
     if _OPENCLAW_GENERATION_EVIDENCE_RE.search(raw):
         return True
     return False
+
+
+def _openclaw_generation_reply_says_started(content: str) -> bool:
+    raw = _strip_dsml(content or "").strip()
+    if not raw:
+        return False
+    return bool(_OPENCLAW_GENERATION_STARTED_RE.search(raw))
 
 
 def _openclaw_generation_reply_is_prep_only(content: str, msgs: List[Dict]) -> bool:
@@ -1273,6 +1294,17 @@ async def try_openclaw(
                             agent_id=agent_id,
                         )
                 if _openclaw_generation_reply_is_prep_only(raw_content, msgs):
+                    if _openclaw_generation_reply_says_started(raw_content):
+                        logger.warning(
+                            "[OPENCLAW] generation reply says task already started but lacks task_id; "
+                            "skip generation_followup to avoid duplicate tool call agent_id=%s trace_id=%s",
+                            agent_id,
+                            trace_id,
+                        )
+                        return _openclaw_visible_reply(
+                            raw_content,
+                            generation_request=user_requests_generation,
+                        )
                     followup_messages = list(openclaw_messages)
                     cleaned = _strip_dsml(raw_content).strip()
                     if cleaned:

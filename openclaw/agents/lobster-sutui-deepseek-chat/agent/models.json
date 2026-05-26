@@ -12,7 +12,7 @@
       "models": [
         {
           "id": "deepseek-chat",
-          "name": "速推 DeepSeek Chat（经龙虾代理）",
+          "name": "Sutui DeepSeek Chat",
           "reasoning": false,
           "input": [
             "text"
@@ -22,7 +22,7 @@
         },
         {
           "id": "openclaw-skill-chat",
-          "name": "Sutui OpenClaw Skill Chat (server scheduled)",
+          "name": "Sutui OpenClaw Skill Chat",
           "reasoning": false,
           "input": [
             "text"

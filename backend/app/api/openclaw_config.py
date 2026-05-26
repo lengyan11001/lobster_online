@@ -43,6 +43,9 @@ _OC_CONFIG = _OC_DIR / "openclaw.json"
 _WEIXIN_LEDGER = _OC_DIR / ".weixin_login_last.json"
 _OC_ENV = _OC_DIR / ".env"
 _OC_PLUGIN_STATE_BACKUP = _OC_DIR / ".lobster_plugin_state_backup.json"
+_OPENCLAW_STARTUP_LOG_DIR = _BASE_DIR / "logs" / "openclaw_startup"
+_OPENCLAW_STARTUP_DIAG_LOCK = threading.Lock()
+_OPENCLAW_LAST_STARTUP_DIAG: Dict[str, Any] = {}
 _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER = "LOBSTER_AUTO_TOKEN_PLACEHOLDER"
 _OPENCLAW_PLUGIN_MODE_LEAN = "lean"
 _OPENCLAW_PLUGIN_MODE_WEIXIN = "weixin"
@@ -700,6 +703,7 @@ def _openclaw_gateway_local_restart_reasons() -> list[str]:
         ("slack_stage_patch", _openclaw_gateway_slack_stage_patch_needed),
         ("pricing_refresh_patch", _openclaw_gateway_pricing_patch_needed),
         ("mcp_tool_timeout_patch", _openclaw_mcp_tool_timeout_patch_needed),
+        ("mcp_sdk_timeout_patch", _openclaw_mcp_sdk_timeout_patch_needed),
     )
     for name, check in checks:
         try:
@@ -958,6 +962,7 @@ def build_openclaw_status_snapshot() -> dict:
         "entry_found": bool(entry),
         "state": state,
         "message": message,
+        "last_startup": _openclaw_last_startup_diag_snapshot(),
     }
 
 
@@ -1149,11 +1154,96 @@ def _read_log_tail_for_warning(path: Path, max_bytes: int = 12000) -> str:
         return f"<cannot read {path}: {exc}>"
 
 
+_SENSITIVE_ENV_RE = re.compile(r"(TOKEN|KEY|SECRET|PASSWORD|PASSWD|COOKIE|AUTHORIZATION)", re.IGNORECASE)
+
+
+def _safe_startup_env_summary(env: dict) -> dict:
+    names = [
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_DISABLE_BONJOUR",
+        "LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE",
+        "LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING",
+        "LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS",
+        "LOBSTER_OPENCLAW_MCP_SDK_TIMEOUT_MS",
+        "OPENCLAW_GATEWAY_URL",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_SUTUI_PROXY_KEY",
+        "PATH",
+    ]
+    summary: dict[str, str] = {}
+    for name in names:
+        raw = str(env.get(name) or "")
+        if _SENSITIVE_ENV_RE.search(name):
+            summary[name] = "<set>" if raw else ""
+        elif name == "PATH":
+            summary[name] = raw[:500]
+        else:
+            summary[name] = raw[:1000]
+    return summary
+
+
+def _startup_diag_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _new_openclaw_startup_log_path() -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    suffix = uuid.uuid4().hex[:8]
+    return _OPENCLAW_STARTUP_LOG_DIR / f"openclaw-startup-{stamp}-{suffix}.log"
+
+
+def _write_openclaw_startup_diag_line(path: Optional[Path], event: str, **fields: Any) -> None:
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": _startup_diag_now(),
+            "event": event,
+            **fields,
+        }
+        with path.open("a", encoding="utf-8", errors="replace") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception as exc:
+        logger.warning("Failed writing OpenClaw startup diagnostic %s: %s", path, exc)
+
+
+def _remember_openclaw_startup_diag(**fields: Any) -> None:
+    with _OPENCLAW_STARTUP_DIAG_LOCK:
+        _OPENCLAW_LAST_STARTUP_DIAG.clear()
+        _OPENCLAW_LAST_STARTUP_DIAG.update(
+            {
+                "updated_at": _startup_diag_now(),
+                **fields,
+            }
+        )
+
+
+def _openclaw_last_startup_diag_snapshot() -> dict:
+    with _OPENCLAW_STARTUP_DIAG_LOCK:
+        return dict(_OPENCLAW_LAST_STARTUP_DIAG)
+
+
+def _openclaw_startup_log_candidates(limit: int = 4) -> list[Path]:
+    try:
+        if not _OPENCLAW_STARTUP_LOG_DIR.is_dir():
+            return []
+        return sorted(
+            [p for p in _OPENCLAW_STARTUP_LOG_DIR.glob("openclaw-startup-*.log") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:limit]
+    except OSError:
+        return []
+
+
 def _openclaw_log_candidates(limit: int = 4) -> list[Path]:
     paths: list[Path] = []
     root_log = _BASE_DIR / "openclaw.log"
     if root_log.is_file():
         paths.append(root_log)
+    paths.extend(_openclaw_startup_log_candidates(limit))
     temp_dir = Path(tempfile.gettempdir()) / "openclaw"
     if temp_dir.is_dir():
         try:
@@ -1262,6 +1352,27 @@ def _openclaw_mcp_tool_timeout_patch_needed() -> bool:
         return False
 
 
+def _openclaw_mcp_sdk_timeout_patch_needed() -> bool:
+    try:
+        entry = _find_openclaw_entry()
+        if not entry:
+            return False
+        _node_path, mjs_path = entry
+        for path in _openclaw_mcp_sdk_protocol_paths(mjs_path):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "LOBSTER_OPENCLAW_MCP_SDK_TIMEOUT_MS" in text:
+                continue
+            if _openclaw_mcp_sdk_timeout_patchable(text):
+                return True
+        return False
+    except Exception as e:
+        logger.warning("openclaw_mcp_sdk_timeout_patch_needed failed: %s", e)
+        return False
+
+
 def _openclaw_mcp_tool_timeout_patchable(text: str) -> bool:
     return _OPENCLAW_MCP_TOOL_TIMEOUT_CALL_RE.search(text or "") is not None
 
@@ -1289,6 +1400,66 @@ def _apply_openclaw_mcp_tool_timeout_patch(text: str) -> tuple[str, bool]:
         )
 
     new_text, count = _OPENCLAW_MCP_TOOL_TIMEOUT_CALL_RE.subn(repl, text or "", count=1)
+    return new_text, bool(count)
+
+
+_OPENCLAW_MCP_SDK_TIMEOUT_ESM_RE = re.compile(
+    r"export\s+const\s+DEFAULT_REQUEST_TIMEOUT_MSEC\s*=\s*60000\s*;"
+)
+_OPENCLAW_MCP_SDK_TIMEOUT_CJS_RE = re.compile(
+    r"exports\.DEFAULT_REQUEST_TIMEOUT_MSEC\s*=\s*60000\s*;"
+)
+
+
+def _openclaw_mcp_sdk_protocol_paths(mjs_path: str) -> list[Path]:
+    openclaw_dir = Path(mjs_path).resolve().parent
+    sdk_dirs = [
+        openclaw_dir.parent / "@modelcontextprotocol" / "sdk" / "dist",
+        openclaw_dir / "node_modules" / "@modelcontextprotocol" / "sdk" / "dist",
+    ]
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for sdk_dir in sdk_dirs:
+        for candidate in (
+            sdk_dir / "esm" / "shared" / "protocol.js",
+            sdk_dir / "cjs" / "shared" / "protocol.js",
+        ):
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            paths.append(candidate)
+    return paths
+
+
+def _openclaw_mcp_sdk_timeout_patchable(text: str) -> bool:
+    raw = text or ""
+    return bool(
+        _OPENCLAW_MCP_SDK_TIMEOUT_ESM_RE.search(raw)
+        or _OPENCLAW_MCP_SDK_TIMEOUT_CJS_RE.search(raw)
+    )
+
+
+def _apply_openclaw_mcp_sdk_timeout_patch(text: str) -> tuple[str, bool]:
+    raw = text or ""
+    timeout_expr = (
+        "(() => {\n"
+        "\tconst raw = Number(process.env.LOBSTER_OPENCLAW_MCP_SDK_TIMEOUT_MS ?? process.env.LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS ?? 600000);\n"
+        "\treturn Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600000;\n"
+        "})()"
+    )
+    new_text, count = _OPENCLAW_MCP_SDK_TIMEOUT_ESM_RE.subn(
+        f"export const DEFAULT_REQUEST_TIMEOUT_MSEC = {timeout_expr};",
+        raw,
+        count=1,
+    )
+    if count:
+        return new_text, True
+    new_text, count = _OPENCLAW_MCP_SDK_TIMEOUT_CJS_RE.subn(
+        f"exports.DEFAULT_REQUEST_TIMEOUT_MSEC = {timeout_expr};",
+        raw,
+        count=1,
+    )
     return new_text, bool(count)
 
 
@@ -1401,6 +1572,35 @@ def _patch_openclaw_mcp_tool_timeout(mjs_path: str) -> bool:
         return changed
     except Exception as e:
         logger.warning("patch_openclaw_mcp_tool_timeout failed: %s", e)
+        return False
+
+
+def _patch_openclaw_mcp_sdk_timeout(mjs_path: str) -> bool:
+    """Raise MCP SDK's default request timeout for OpenClaw's bundled runtime.
+
+    OpenClaw can route tools through SDK helpers that fall back to the MCP
+    default 60000ms. The H5 failure in diag_20260526073230_aaf96528 hit that
+    exact boundary while the local MCP server was still saving generated assets.
+    """
+    marker = "LOBSTER_OPENCLAW_MCP_SDK_TIMEOUT_MS"
+    changed = False
+    try:
+        for path in _openclaw_mcp_sdk_protocol_paths(mjs_path):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                continue
+            new_text, patched = _apply_openclaw_mcp_sdk_timeout_patch(text)
+            if not patched:
+                logger.warning("OpenClaw MCP SDK timeout patch skipped, pattern not found: %s", path)
+                continue
+            path.write_text(new_text, encoding="utf-8")
+            logger.info("Patched OpenClaw MCP SDK default timeout: %s", path)
+            changed = True
+        return changed
+    except Exception as e:
+        logger.warning("patch_openclaw_mcp_sdk_timeout failed: %s", e)
         return False
 
 
@@ -1522,20 +1722,42 @@ def _log_openclaw_gateway_start_diagnostics(
     reason: str,
     proc: Optional[subprocess.Popen] = None,
     last_error: str = "",
+    startup_log_path: Optional[Path] = None,
 ) -> None:
     returncode = None
     try:
         returncode = proc.poll() if proc is not None else None
     except Exception:
         returncode = None
+    listener_pids = _find_listener_pids_on_18789()
+    gateway_pids = _find_openclaw_gateway_process_pids()
     logger.warning(
         "OpenClaw Gateway start diagnostics: reason=%s returncode=%s listener_pids=%s gateway_pids=%s last_error=%s",
         reason,
         returncode,
-        _find_listener_pids_on_18789(),
-        _find_openclaw_gateway_process_pids(),
+        listener_pids,
+        gateway_pids,
         last_error or "-",
     )
+    if startup_log_path is not None:
+        _write_openclaw_startup_diag_line(
+            startup_log_path,
+            "readiness_diagnostics",
+            reason=reason,
+            returncode=returncode,
+            listener_pids=listener_pids,
+            gateway_pids=gateway_pids,
+            last_error=last_error or "",
+        )
+        _remember_openclaw_startup_diag(
+            status="failed",
+            reason=reason,
+            returncode=returncode,
+            listener_pids=listener_pids,
+            gateway_pids=gateway_pids,
+            last_error=last_error or "",
+            log_path=str(startup_log_path),
+        )
     for path in _openclaw_log_candidates():
         logger.warning("OpenClaw log tail path=%s\n%s", path, _read_log_tail_for_warning(path))
 
@@ -1543,6 +1765,7 @@ def _log_openclaw_gateway_start_diagnostics(
 def _wait_for_openclaw_gateway_ready(
     max_wait: float = 30.0,
     proc: Optional[subprocess.Popen] = None,
+    startup_log_path: Optional[Path] = None,
 ) -> Optional[int]:
     """Wait until the Gateway listens on 18789.
 
@@ -1551,6 +1774,8 @@ def _wait_for_openclaw_gateway_ready(
     missing dependencies can make readiness checks look like real chat hangs.
     """
     deadline = time.time() + max_wait
+    wait_started_at = time.time()
+    next_diag_at = wait_started_at + 10.0
     last_error = ""
     while time.time() < deadline:
         if proc is not None and proc.poll() is not None:
@@ -1558,16 +1783,35 @@ def _wait_for_openclaw_gateway_ready(
                 "OpenClaw Gateway process exited before listening, returncode=%s",
                 proc.returncode,
             )
-            _log_openclaw_gateway_start_diagnostics("process-exited", proc, last_error)
+            _log_openclaw_gateway_start_diagnostics("process-exited", proc, last_error, startup_log_path)
             return None
         pid = _find_openclaw_pid()
         if pid:
             logger.info("OpenClaw Gateway ready, PID %s listening on 18789", pid)
+            if startup_log_path is not None:
+                _write_openclaw_startup_diag_line(
+                    startup_log_path,
+                    "ready",
+                    pid=pid,
+                    elapsed_sec=round(time.time() - wait_started_at, 3),
+                )
+                _remember_openclaw_startup_diag(status="ready", pid=pid, log_path=str(startup_log_path))
             return pid
+        now = time.time()
+        if startup_log_path is not None and now >= next_diag_at:
+            _write_openclaw_startup_diag_line(
+                startup_log_path,
+                "readiness_probe",
+                elapsed_sec=round(now - wait_started_at, 3),
+                returncode=proc.poll() if proc is not None else None,
+                listener_pids=_find_listener_pids_on_18789(),
+                gateway_pids=_find_openclaw_gateway_process_pids(),
+            )
+            next_diag_at = now + 10.0
         time.sleep(0.5)
     if last_error:
         logger.warning("OpenClaw Gateway listener found but HTTP readiness timed out: %s", last_error)
-    _log_openclaw_gateway_start_diagnostics("readiness-timeout", proc, last_error)
+    _log_openclaw_gateway_start_diagnostics("readiness-timeout", proc, last_error, startup_log_path)
     return None
 
 
@@ -1602,6 +1846,7 @@ def _build_openclaw_env() -> dict:
     env.setdefault("LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE", "1")
     env.setdefault("LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING", "1")
     env.setdefault("LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS", "600000")
+    env.setdefault("LOBSTER_OPENCLAW_MCP_SDK_TIMEOUT_MS", env.get("LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS", "600000"))
     return env
 
 
@@ -2153,29 +2398,39 @@ def _restart_openclaw_gateway_impl(
     _patch_openclaw_gateway_slack_stage(mjs_path)
     _patch_openclaw_gateway_pricing_refresh(mjs_path)
     _patch_openclaw_mcp_tool_timeout(mjs_path)
+    _patch_openclaw_mcp_sdk_timeout(mjs_path)
     _patch_openclaw_latency_trace(mjs_path)
     env = _build_openclaw_env()
     log_path = _BASE_DIR / "openclaw.log"
+    startup_log_path = _new_openclaw_startup_log_path()
 
     try:
         cmd = [node_path, mjs_path, "gateway", "--port", "18789"]
-        log_file = None
-        for _ in range(2):
-            try:
-                log_file = open(log_path, "a", encoding="utf-8")
-                break
-            except OSError as e:
-                if getattr(e, "errno", None) == 13:  # Permission denied (file locked by previous process)
-                    time.sleep(0.5)
-                    continue
-                raise
-        if log_file is None:
-            logger.warning("openclaw.log locked, OpenClaw stdout/stderr will not be written to file")
-            log_file = subprocess.DEVNULL
+        startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_openclaw_startup_diag_line(
+            startup_log_path,
+            "launch_prepare",
+            cmd=cmd,
+            cwd=str(_BASE_DIR),
+            node_path=str(node_path),
+            mjs_path=str(mjs_path),
+            plugin_mode=plugin_mode,
+            openclaw_version=_openclaw_package_version(mjs_path) or "unknown",
+            env=_safe_startup_env_summary(env),
+            preflight_elapsed_sec=round(time.perf_counter() - started_at, 3),
+        )
+        _remember_openclaw_startup_diag(
+            status="launching",
+            reason="launch_prepare",
+            log_path=str(startup_log_path),
+            plugin_mode=plugin_mode,
+            openclaw_version=_openclaw_package_version(mjs_path) or "unknown",
+        )
+        startup_log_file = startup_log_path.open("a", encoding="utf-8", errors="replace")
 
         kwargs = {
-            "stdout": log_file,
-            "stderr": log_file,
+            "stdout": startup_log_file,
+            "stderr": startup_log_file,
             "env": env,
             "cwd": str(_BASE_DIR),
         }
@@ -2184,11 +2439,16 @@ def _restart_openclaw_gateway_impl(
 
         popen_started_at = time.perf_counter()
         proc = subprocess.Popen(cmd, **kwargs)
-        if hasattr(log_file, "close"):
-            try:
-                log_file.close()
-            except Exception:
-                pass
+        try:
+            startup_log_file.close()
+        except Exception:
+            pass
+        _write_openclaw_startup_diag_line(startup_log_path, "process_started", pid=proc.pid)
+        _remember_openclaw_startup_diag(
+            status="waiting_for_listener",
+            pid=proc.pid,
+            log_path=str(startup_log_path),
+        )
         logger.info(
             "OpenClaw Gateway restarting: %s (openclaw=%s plugin_mode=%s)",
             " ".join(cmd),
@@ -2196,8 +2456,15 @@ def _restart_openclaw_gateway_impl(
             plugin_mode,
         )
 
-        new_pid = _wait_for_openclaw_gateway_ready(wait_ready_sec, proc)
+        new_pid = _wait_for_openclaw_gateway_ready(wait_ready_sec, proc, startup_log_path)
         if new_pid:
+            _write_openclaw_startup_diag_line(
+                startup_log_path,
+                "launch_success",
+                pid=new_pid,
+                node_ready_sec=round(time.perf_counter() - popen_started_at, 3),
+                total_sec=round(time.perf_counter() - started_at, 3),
+            )
             logger.info(
                 "OpenClaw Gateway restarted, PID %s, node_ready=%.2fs total=%.2fs",
                 new_pid,
@@ -2209,6 +2476,12 @@ def _restart_openclaw_gateway_impl(
         leftovers = sorted(set(_find_listener_pids_on_18789()) | set(_find_openclaw_gateway_process_pids()))
         if leftovers:
             logger.warning("Killing OpenClaw Gateway PIDs after readiness timeout: %s", leftovers)
+            _write_openclaw_startup_diag_line(
+                startup_log_path,
+                "kill_after_timeout",
+                leftovers=leftovers,
+                wait_ready_sec=wait_ready_sec,
+            )
             for pid in leftovers:
                 _kill_pid(pid)
             _wait_until_no_listener_on_18789(4.0)
@@ -2216,6 +2489,8 @@ def _restart_openclaw_gateway_impl(
         return False
     except Exception as e:
         logger.error("Failed to restart OpenClaw Gateway: %s", e)
+        _write_openclaw_startup_diag_line(startup_log_path, "launch_exception", error=str(e))
+        _remember_openclaw_startup_diag(status="failed", reason="launch_exception", error=str(e), log_path=str(startup_log_path))
         return False
 
 

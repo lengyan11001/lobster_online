@@ -206,6 +206,7 @@ function loadOpenClawConfig() {
 function checkOcStatus() {
   var dot = document.getElementById('ocStatusDot');
   var text = document.getElementById('ocStatusText');
+  var msgEl = document.getElementById('ocSaveMsg');
   if (!dot || !text) return;
   dot.className = 'status-dot';
   text.textContent = '检查中...';
@@ -215,9 +216,19 @@ function checkOcStatus() {
       if (d.online || d.listener_online) {
         dot.className = 'status-dot online';
         text.textContent = d.message || 'OpenClaw Gateway 运行中';
+        if (msgEl && msgEl.textContent && msgEl.textContent.indexOf('上次启动') === 0) {
+          msgEl.style.display = 'none';
+        }
       } else {
         dot.className = 'status-dot offline';
         text.textContent = d.message || 'OpenClaw Gateway 未运行';
+        if (d.last_startup && d.last_startup.status === 'failed') {
+          var reason = d.last_startup.reason || '启动失败';
+          var pids = d.last_startup.gateway_pids && d.last_startup.gateway_pids.length
+            ? ('，进程 ' + d.last_startup.gateway_pids.join(','))
+            : '';
+          showMsg(msgEl, '上次启动：' + reason + pids, true);
+        }
       }
     })
     .catch(function() {
@@ -359,14 +370,16 @@ if (restartOcBtn) {
     var msgEl = document.getElementById('ocSaveMsg');
     restartOcBtn.disabled = true;
     restartOcBtn.textContent = '重启中…';
+    showMsg(msgEl, '正在重启 OpenClaw，请稍等...', false);
     fetch((LOCAL_API_BASE || '') + '/api/openclaw/restart', { method: 'POST', headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(d) {
         showMsg(msgEl, d.message || (d.ok ? '重启成功' : '重启失败'), !d.ok);
+        checkOcStatus();
         setTimeout(checkOcStatus, 3000);
       })
       .catch(function() { showMsg(msgEl, '网络错误', true); })
-      .finally(function() { restartOcBtn.disabled = false; restartOcBtn.textContent = '重启 Gateway'; });
+      .finally(function() { restartOcBtn.disabled = false; restartOcBtn.textContent = '重启 OpenClaw'; });
   });
 }
 var saveCustomBtn = document.getElementById('saveCustomConfigBtn');

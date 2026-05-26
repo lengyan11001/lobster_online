@@ -127,6 +127,17 @@ def _settings_summary() -> dict:
 
 def _external_log_candidates() -> list[tuple[str, Path]]:
     candidates: list[tuple[str, Path]] = []
+    startup_dir = _BASE / "logs" / "openclaw_startup"
+    if startup_dir.is_dir():
+        try:
+            logs = sorted(
+                [p for p in startup_dir.glob("openclaw-startup-*.log") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            candidates.extend((f"logs/openclaw_startup/{p.name}", p) for p in logs[:4])
+        except OSError:
+            pass
     openclaw_temp = Path(tempfile.gettempdir()) / "openclaw"
     if openclaw_temp.is_dir():
         try:

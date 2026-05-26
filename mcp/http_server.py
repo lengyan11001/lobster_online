@@ -427,7 +427,7 @@ _OPENCLAW_VIDEO_MODEL_LOCK_SOURCE_HEADER = "X-Lobster-Video-Model-Lock-Source"
 _NO_AUTH_UNSCOPED_SAFE_TOOLS = frozenset({"list_capabilities", "list_assets"})
 _OPENCLAW_LONG_CAPABILITY_IDS = frozenset({"image.generate", "video.generate"})
 _OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC = float(
-    os.environ.get("LOBSTER_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC", "240") or "240"
+    os.environ.get("LOBSTER_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC", "45") or "45"
 )
 _OPENCLAW_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
@@ -2379,9 +2379,10 @@ def _merge_common_video_ui_fields(out: Dict[str, Any], payload: Dict[str, Any]) 
 
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
-    "gpt-image": "gpt-image-2",
-    "gpt-image2": "gpt-image-2",
-    "gptimage2": "gpt-image-2",
+    "gpt-image": "openai/gpt-image-2",
+    "gpt-image2": "openai/gpt-image-2",
+    "gpt-image-2": "openai/gpt-image-2",
+    "gptimage2": "openai/gpt-image-2",
     "flux-2/flash": "fal-ai/flux-2/flash",
     "flux2/flash": "fal-ai/flux-2/flash",
     "flux2-flash": "fal-ai/flux-2/flash",
@@ -2390,7 +2391,7 @@ _IMAGE_MODEL_ALIASES: Dict[str, str] = {
     "flux-2": "fal-ai/flux-2/flash",
 }
 
-_DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "gpt-image2").strip() or "gpt-image2"
+_DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "openai/gpt-image-2").strip() or "openai/gpt-image-2"
 _DEFAULT_VIDEO_MODEL = (
     os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or "xai/grok-imagine-video/text-to-video"
 ).strip() or "xai/grok-imagine-video/text-to-video"
@@ -2940,6 +2941,14 @@ def _sutui_upstream_is_server_gateway(server_url: str) -> bool:
     return "mcp-gateway" in u
 
 
+def _httpx_trust_env_for_upstream(server_url: str) -> bool:
+    # Online traffic to our own auth/MCP gateway should not depend on a local
+    # system proxy. The proxy can add queueing and makes local diagnostics noisy.
+    if _sutui_upstream_is_server_gateway(server_url):
+        return False
+    return True
+
+
 def _unwrap_lobster_server_gateway_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     """经 lobster_server /mcp-gateway 转发到**服务器 lobster MCP** 时，响应为 JSON-RPC；
     tools/call 的正文在同构 lobster 的 result.content[].text 里，为 JSON 字符串，
@@ -3136,7 +3145,8 @@ async def _call_upstream_mcp_tool(
         _upstream_call_read_timeout = 120.0
 
     _init_timeout = httpx.Timeout(connect=30.0, read=120.0, write=120.0, pool=30.0)
-    async with httpx.AsyncClient(timeout=_init_timeout) as client:
+    trust_env = _httpx_trust_env_for_upstream(server_url)
+    async with httpx.AsyncClient(timeout=_init_timeout, trust_env=trust_env) as client:
         init_body = {
             "jsonrpc": "2.0", "id": "init",
             "method": "initialize",
@@ -3194,7 +3204,7 @@ async def _call_upstream_mcp_tool(
     # users a false "generation failed" after the video task was already submitted.
     call_attempts = 3 if tool_name == "invoke_capability" and _cap_for_timeout == "task.get_result" else 1
     for attempt in range(1, call_attempts + 1):
-        async with httpx.AsyncClient(timeout=_call_timeout) as client:
+        async with httpx.AsyncClient(timeout=_call_timeout, trust_env=trust_env) as client:
             try:
                 r = await client.post(server_url, json=call_body, headers=call_headers)
             except httpx.HTTPError as exc:

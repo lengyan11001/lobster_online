@@ -2264,6 +2264,12 @@
       box-shadow: inset 0 0 0 1px rgba(91, 124, 255, 0.16);
       font-weight: 600;
     }
+    .page:has(#dashboard.visible) #appTopNav {
+      display: flex !important;
+    }
+    .page:has(#dashboard.visible) #headerActions {
+      display: flex !important;
+    }
     .header-dropdown-divider {
       height: 1px;
       margin: 0.35rem 0;
@@ -7631,11 +7637,14 @@
             <div class="card" style="padding-bottom:0;">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
                 <h3 style="margin:0;">系统配置</h3>
-                <div style="display:flex;align-items:center;gap:0.5rem;">
+                <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;">
                   <span class="status-dot" id="ocStatusDot"></span>
                   <span id="ocStatusText" style="font-size:0.82rem;">检查中...</span>
+                  <button type="button" id="refreshOcStatusBtn" class="btn btn-ghost btn-sm">刷新状态</button>
+                  <button type="button" id="restartOcBtn" class="btn btn-primary btn-sm">重启 OpenClaw</button>
                 </div>
               </div>
+              <span id="ocSaveMsg" class="msg" style="display:none;margin-top:0.6rem;"></span>
             </div>
 
             <div id="sysTabModel" class="sys-tab-panel" style="margin-top:0.75rem;">
@@ -8395,6 +8404,6 @@
   <script src="/static/js/sysconfig.js?v=20260429-chat-route-bind"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260522-scheduled-tabs"></script>
   <script src="/static/js/agent.js?v=20260520-daily-time-points"></script>
-  <script src="/static/js/init.js?v=20260522-login-nav"></script>
+  <script src="/static/js/init.js?v=20260526-login-nav-shell-cache"></script>
 </body>
 </html>

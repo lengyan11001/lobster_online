@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     """在线版：未选子模型、payload 为 sutui_aggregate/空、且无可用直连 Key 时，对话默认使用的速推子模型 ID（拼成 sutui/<id>）。"""
     lobster_default_sutui_chat_model: str = "deepseek-chat"
     """服务器未返回默认生图模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
-    lobster_default_image_generate_model: str = "gpt-image2"
+    lobster_default_image_generate_model: str = "openai/gpt-image-2"
     """服务器未返回默认视频模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
     lobster_default_video_generate_model: str = "xai/grok-imagine-video/text-to-video"
     """定时编排（schedule_orchestration=True）时使用的速推子模型。不填则用默认对话模型。"""

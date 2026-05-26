@@ -2234,14 +2234,15 @@ def _infer_video_model_lock_for_openclaw(user_message: str, has_attachment: bool
     return _get_default_video_generate_model_cached(has_attachment), "default"
 
 
-_DEFAULT_IMAGE_GENERATE_MODEL = "gpt-image2"
+_DEFAULT_IMAGE_GENERATE_MODEL = "openai/gpt-image-2"
 _DEFAULT_VIDEO_GENERATE_MODEL_T2V = "xai/grok-imagine-video/text-to-video"
 _DEFAULT_VIDEO_GENERATE_MODEL_I2V = "xai/grok-imagine-video/image-to-video"
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
-    "gpt-image": "gpt-image-2",
-    "gpt-image2": "gpt-image-2",
-    "gpt-image-2": "gpt-image-2",
+    "gpt-image": "openai/gpt-image-2",
+    "gpt-image2": "openai/gpt-image-2",
+    "gpt-image-2": "openai/gpt-image-2",
+    "gptimage2": "openai/gpt-image-2",
     "flux": "fal-ai/flux-2/flash",
     "flux2": "fal-ai/flux-2/flash",
     "flux-2": "fal-ai/flux-2/flash",
@@ -3943,6 +3944,7 @@ async def _exec_tool(
     request: Optional[Request] = None,
     db: Optional[Session] = None,
     user_id: Optional[int] = None,
+    timeout_override: Optional[float] = None,
 ) -> str:
     """Execute a tool on the local MCP server and return the text result. progress_cb: 可选，用于流式推送进度（tool_start/tool_end）。"""
     if name == "list_capabilities":
@@ -4114,6 +4116,11 @@ async def _exec_tool(
         timeout = 45 * 60.0  # 多账号 Playwright 同步作品数据
     elif name == "get_creator_publish_data":
         timeout = 120.0
+    if timeout_override is not None:
+        try:
+            timeout = max(1.0, float(timeout_override))
+        except Exception:
+            pass
 
     def _friendly_tool_error(err: Exception) -> str:
         raw = (str(err) if err is not None else "").strip()
@@ -5874,6 +5881,15 @@ def _recent_task_id_from_messages(messages: List[Dict]) -> str:
         m = _TASK_ID_LABEL_RE.search(content)
         if m and _task_id_token_ok(m.group(1)):
             return m.group(1).strip()[:128]
+        for pat in (
+            r"\bdaihuo_[0-9a-f]{32}\b",
+            r"\bvideo_[A-Za-z0-9_.:-]{6,127}\b",
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            r"\b\d{12,}\b",
+        ):
+            mm = re.search(pat, content, re.IGNORECASE)
+            if mm and _task_id_token_ok(mm.group(0)):
+                return mm.group(0).strip()[:128]
     return ""
 
 
@@ -5884,6 +5900,47 @@ def _is_task_status_lookup_turn(messages: List[Dict]) -> bool:
         return getattr(_classify_openclaw_tool_scope(messages), "intent", "") == "task_status_lookup"
     except Exception:
         return False
+
+
+def _task_status_lookup_messages_from_payload(payload: ChatRequest) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    for m in (getattr(payload, "history", None) or []):
+        role = getattr(m, "role", "")
+        content = (getattr(m, "content", "") or "").strip()
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    cur = (getattr(payload, "message", "") or "").strip()
+    if cur:
+        messages.append({"role": "user", "content": cur})
+    return messages[-12:]
+
+
+_TASK_STATUS_DIRECT_RE = re.compile(
+    r"(?:"
+    r"(?:查|查询|看|看看|看下|刷新|继续查看|继续查|再查|轮询).{0,12}(?:进度|状态|结果|任务|生成|视频|图片|素材)|"
+    r"(?:生成|视频|图片|任务|结果).{0,12}(?:好了吗|好了没|出来没|完成了吗|成功了吗|失败了吗|怎么样了|什么状态|进度)|"
+    r"^(?:继续|继续查看|继续查|再查|查一下|查询|查结果|看下结果|看看结果|刷新|轮询|好了没|出来没|完成了吗|怎么样了|结果呢|视频结果|图片结果)$"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _task_status_lookup_candidate_from_payload(payload: ChatRequest) -> Tuple[bool, str]:
+    messages = _task_status_lookup_messages_from_payload(payload)
+    if not messages:
+        return False, ""
+    current = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            current = _strip_lobster_attachment_block(msg.get("content") or "").strip()
+            break
+    tid = _recent_task_id_from_messages(messages)
+    direct_lookup = bool(current and _TASK_STATUS_DIRECT_RE.search(current))
+    if direct_lookup:
+        return True, tid
+    if not _is_task_status_lookup_turn(messages):
+        return False, ""
+    return True, tid
 
 
 def _guard_generation_submit_for_status_lookup(
@@ -6150,6 +6207,171 @@ async def _resume_chat_task_poll_only(
         poll_a, res, raw_token, sutui_token, progress_cb, request, db=db, user_id=uid
     )
     return res or ""
+
+
+async def _query_daihuo_job_once(
+    task_id: str,
+    raw_token: str,
+    request: Optional[Request],
+) -> str:
+    tid = (task_id or "").strip()
+    jid = tid[len("daihuo_") :].strip().lower() if tid.startswith("daihuo_") else tid.strip().lower()
+    if len(jid) != 32 or any(c not in "0123456789abcdef" for c in jid):
+        raise HTTPException(status_code=400, detail="无效的爆款TVC job_id")
+    if request is None:
+        raise HTTPException(status_code=400, detail="缺少 request 上下文，无法查询 pipeline")
+    base = str(request.base_url).rstrip("/")
+    hdrs = _chat_internal_api_headers(raw_token, request)
+    async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+        resp = await client.get(
+            f"{base}/api/comfly-daihuo/pipeline/jobs/{jid}",
+            headers=hdrs,
+        )
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"ok": False, "error": (resp.text or "")[:800]}
+    if not isinstance(data, dict):
+        data = {"ok": False, "error": str(data)}
+    if resp.status_code >= 400:
+        data.setdefault("status", "failed")
+        data.setdefault("error", f"HTTP {resp.status_code}")
+    wrap = {
+        "capability_id": "comfly.daihuo.pipeline",
+        "ok": resp.status_code < 400 and data.get("ok", True) is not False,
+        "job_id": jid,
+        "result": data,
+    }
+    return json.dumps(wrap, ensure_ascii=False, indent=2)
+
+
+async def _query_task_status_once(
+    task_id: str,
+    raw_token: str,
+    current_user: Union[User, _ServerUser],
+    db: Session,
+    request: Optional[Request],
+    progress_cb: Optional[Callable[[Dict], Awaitable[None]]] = None,
+) -> str:
+    """查询一次任务进度并立刻返回；用于“继续查看/生成好了吗”，避免再跑完整 LLM agent。"""
+    tid = (task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="没有找到可查询的任务 ID。请打开对应执行记录，或直接发送任务 ID。")
+    uid = getattr(current_user, "id", None)
+    if progress_cb:
+        try:
+            await progress_cb(
+                {
+                    "type": "task_poll",
+                    "message": "正在查询生成结果…",
+                    "task_id": tid,
+                    "fast_lookup": True,
+                }
+            )
+        except Exception:
+            pass
+    if tid.startswith("daihuo_"):
+        res = await _query_daihuo_job_once(tid, raw_token, request)
+        if progress_cb:
+            try:
+                ev = _daihuo_polling_final_progress_event(result_text=res, task_id=tid)
+                st = (json.loads(res).get("result") or {}).get("status") if res.strip().startswith("{") else ""
+                if str(st or "").strip().lower() not in ("completed", "failed"):
+                    ev["in_progress"] = True
+                    ev["success"] = True
+                    ev.pop("media_type", None)
+                await progress_cb(ev)
+            except Exception:
+                pass
+        return res
+    if tid.startswith("video_"):
+        poll_a: Dict[str, Any] = {
+            "capability_id": "comfly.daihuo",
+            "payload": {"action": "poll_video", "task_id": tid},
+        }
+        res = await _exec_tool(
+            "invoke_capability",
+            poll_a,
+            raw_token,
+            None,
+            progress_cb=progress_cb,
+            request=request,
+            db=db,
+            user_id=uid,
+            timeout_override=25.0,
+        )
+        return res or ""
+    poll_a = _normalize_invoke_task_get_result_args(
+        {
+            "capability_id": "task.get_result",
+            "payload": {"task_id": tid},
+        }
+    )
+    return await _exec_tool(
+        "invoke_capability",
+        poll_a,
+        raw_token,
+        None,
+        progress_cb=progress_cb,
+        request=request,
+        db=db,
+        user_id=uid,
+        timeout_override=25.0,
+    )
+
+
+def _task_status_lookup_user_reply(task_id: str, result_text: str) -> str:
+    tid = (task_id or "").strip()
+    raw = (result_text or "").strip()
+    if not raw:
+        return f"任务 {tid} 暂时没有返回状态，请稍后再查。" if tid else "暂时没有返回任务状态，请稍后再查。"
+    if tid.startswith("daihuo_"):
+        dh = _parse_daihuo_pipeline_tool_result(raw)
+        inner = dh.get("result") if isinstance(dh, dict) else {}
+        if isinstance(inner, dict):
+            st = str(inner.get("status") or "").strip()
+            hint = _daihuo_job_progress_hint(inner)
+            if st.lower() == "completed":
+                return _user_visible_daihuo_pipeline_json_reply(raw) or "爆款TVC 已完成。"
+            if st.lower() == "failed":
+                err = _sanitize_user_visible_hint(str(inner.get("error") or inner.get("detail") or "").strip())
+                return ("爆款TVC 生成失败。" + (f" 说明：{err}" if err else ""))[:500]
+            bits = [f"任务 {tid} 仍在生成中"]
+            if st:
+                bits.append(f"状态：{st}")
+            if hint and hint != st:
+                bits.append(f"进度：{hint}")
+            bits.append("我没有重新提交任务，稍后可以继续查看。")
+            return "，".join(bits)
+        return _reply_for_user(raw)
+    if tid.startswith("video_"):
+        if _comfly_veo_poll_should_continue(raw):
+            hint = _comfly_veo_poll_result_hint(raw)
+            return (
+                f"任务 {tid} 还在生成中"
+                + (f"，当前状态：{hint}" if hint else "")
+                + "。我没有重新提交任务，稍后可以继续查看。"
+            )
+        sse = _saved_assets_from_comfly_veo_poll_success(raw)
+        if sse:
+            return "视频已生成完成，已返回结果，可在素材库查看。"
+        return _reply_for_user(raw)
+    if _is_task_result_in_progress(raw):
+        hint = _task_result_hint(raw)
+        return (
+            f"任务 {tid} 还在生成中"
+            + (f"，{hint}" if hint else "")
+            + "。我没有重新提交任务，稍后可以继续查看。"
+        )
+    if _is_generation_failure_result(raw):
+        reason = _extract_generation_failure_reason(raw)
+        return ("任务生成失败。" + (f" 原因：{reason}" if reason else ""))[:600]
+    saved = _terminal_saved_assets_for_task_result(raw)
+    if saved:
+        media = _extract_media_type_from_task_result(raw)
+        kind = "视频" if media == "video" else "图片" if media == "image" else "素材"
+        return f"{kind}已生成完成，已返回结果，可在素材库查看。"
+    return _reply_for_user(raw)
 
 
 async def _poll_task_get_result_until_terminal(
@@ -7635,6 +7857,75 @@ async def chat_endpoint(
         payload = payload.model_copy(update={"message": _oc_pfx_rest})
         logger.info("[CHAT] OpenClaw 消息前缀已剥离，本轮优先 Gateway")
 
+    t0 = time.perf_counter()
+    fast_status_turn, fast_status_tid = _task_status_lookup_candidate_from_payload(payload)
+    if fast_status_turn:
+        chat_turn_precharged, chat_turn_id = await _pre_deduct_online_chat_turn(
+            payload,
+            raw_token,
+            source="online_chat_task_status_fast",
+            request=request,
+        )
+        _ = chat_turn_precharged
+        if not fast_status_tid:
+            reply = "这次是在查生成进度，但我没有在最近对话里找到可查询的任务 ID。请打开对应执行记录，或直接发送任务 ID。"
+            _log_turn(
+                db,
+                current_user.id,
+                payload.message,
+                reply,
+                payload.session_id,
+                payload.context_id,
+                {"model": "sutui", "mode": "task_status_fast_lookup_missing_task_id", "chat_turn_id": chat_turn_id},
+            )
+            db.commit()
+            orch = _build_orchestration_report() if want_orch_report else None
+            _orchestration_tool_log.reset(_orch_tok)
+            return JSONResponse(
+                content=ChatResponse(reply=reply, orchestration=orch).model_dump(exclude_none=not want_orch_report),
+                headers={"X-Duration-Ms": str(round((time.perf_counter() - t0) * 1000)), "X-Chat-Mode": "task_status_fast_lookup"},
+            )
+        try:
+            result_text = await _query_task_status_once(
+                fast_status_tid,
+                raw_token,
+                current_user,
+                db,
+                request,
+                progress_cb=None,
+            )
+            reply = _task_status_lookup_user_reply(fast_status_tid, result_text)
+            _flush_tool_logs(db, current_user.id, payload.session_id, "sutui")
+            _log_turn(
+                db,
+                current_user.id,
+                payload.message,
+                reply,
+                payload.session_id,
+                payload.context_id,
+                {
+                    "model": "sutui",
+                    "mode": "task_status_fast_lookup",
+                    "task_id": fast_status_tid[:128],
+                    "chat_turn_id": chat_turn_id,
+                    "duration_ms": round((time.perf_counter() - t0) * 1000),
+                },
+            )
+            db.commit()
+            orch = _build_orchestration_report() if want_orch_report else None
+            _orchestration_tool_log.reset(_orch_tok)
+            return JSONResponse(
+                content=ChatResponse(reply=reply, orchestration=orch).model_dump(exclude_none=not want_orch_report),
+                headers={"X-Duration-Ms": str(round((time.perf_counter() - t0) * 1000)), "X-Chat-Mode": "task_status_fast_lookup"},
+            )
+        except HTTPException:
+            _orchestration_tool_log.reset(_orch_tok)
+            raise
+        except Exception as e:
+            logger.exception("[CHAT] task_status_fast_lookup failed")
+            _orchestration_tool_log.reset(_orch_tok)
+            raise HTTPException(status_code=503, detail=_friendly_chat_stream_exception(e))
+
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
     if edition == "online":
         model = "sutui"
@@ -7723,8 +8014,6 @@ async def chat_endpoint(
     messages.append({"role": "user", "content": _build_user_content_with_attachments(payload, request, db=db, user_id=current_user.id)})
     if direct_llm:
         _wrap_last_user_for_direct_llm(messages)
-
-    t0 = time.perf_counter()
 
     # ── Primary path: direct LLM API with MCP tools ──
     attachment_urls = _get_attachment_public_urls(
@@ -7975,6 +8264,72 @@ async def _chat_stream_events(
                 fr = f"错误：{fe}"
             else:
                 fr = _reply_for_user(result_text) if result_text else "查询已结束。"
+            await queue.put({"type": "done", "reply": fr, "error": fe})
+            return
+        fast_status_turn, fast_status_tid = _task_status_lookup_candidate_from_payload(payload)
+        if fast_status_turn:
+            result_text = ""
+            fe = None
+            chat_turn_id = ""
+            try:
+                _charged, chat_turn_id = await _pre_deduct_online_chat_turn(
+                    payload,
+                    raw_token,
+                    source="online_chat_stream_task_status_fast",
+                    request=request,
+                )
+                _ = _charged
+            except HTTPException as e:
+                fe = e.detail if isinstance(e.detail, str) else str(e.detail)
+                await queue.put({"type": "done", "reply": f"错误：{fe}", "error": fe})
+                return
+            except Exception as e:
+                logger.exception("[CHAT/stream] task_status_fast pre-deduct failed")
+                fe = _friendly_chat_stream_exception(e)
+                await queue.put({"type": "done", "reply": f"错误：{fe}", "error": fe})
+                return
+            if not fast_status_tid:
+                fr = "这次是在查生成进度，但我没有在最近对话里找到可查询的任务 ID。请打开对应执行记录，或直接发送任务 ID。"
+                _log_turn(
+                    db,
+                    current_user.id,
+                    payload.message,
+                    fr,
+                    payload.session_id,
+                    payload.context_id,
+                    {"model": "sutui", "mode": "task_status_fast_lookup_missing_task_id", "chat_turn_id": chat_turn_id},
+                )
+                db.commit()
+                await queue.put({"type": "done", "reply": fr, "error": None})
+                return
+            try:
+                result_text = await _query_task_status_once(
+                    fast_status_tid,
+                    raw_token,
+                    current_user,
+                    db,
+                    request,
+                    progress_cb=progress_cb,
+                )
+                _flush_tool_logs(db, current_user.id, payload.session_id, "sutui")
+                fr = _task_status_lookup_user_reply(fast_status_tid, result_text)
+                _log_turn(
+                    db,
+                    current_user.id,
+                    payload.message,
+                    fr,
+                    payload.session_id,
+                    payload.context_id,
+                    {"model": "sutui", "mode": "task_status_fast_lookup", "task_id": fast_status_tid[:128], "chat_turn_id": chat_turn_id},
+                )
+                db.commit()
+            except HTTPException as e:
+                fe = e.detail if isinstance(e.detail, str) else str(e.detail)
+                fr = f"错误：{fe}"
+            except Exception as e:
+                logger.exception("[CHAT/stream] task_status_fast_lookup")
+                fe = _friendly_chat_stream_exception(e)
+                fr = f"错误：{fe}"
             await queue.put({"type": "done", "reply": fr, "error": fe})
             return
         edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
