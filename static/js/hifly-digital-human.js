@@ -37,8 +37,8 @@
     }
   };
 
-  var HIFLY_TEMPLATE_VERSION = '20260521-hifly-avatar-filter-fix';
-  var HIFLY_STYLE_VERSION = '20260521-hifly-avatar-filter-fix';
+  var HIFLY_TEMPLATE_VERSION = '20260526-hifly-voice-delete-preview';
+  var HIFLY_STYLE_VERSION = '20260526-hifly-voice-delete-preview';
   var HIFLY_AVATAR_COVER_MANIFEST = '/static/data/hifly-public-avatar-covers.json?v=20260512';
   var HIFLY_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
   var HIFLY_VOICE_RECORD_PROMPTS = {
@@ -81,8 +81,25 @@
 
   var voicePreviewPlayer = null;
   var voicePreviewButton = null;
+  var voicePreviewAudioContext = null;
+  var voicePreviewSource = null;
+  var voicePreviewGain = null;
+  var voicePreviewPlaying = false;
+  var voicePreviewRunId = 0;
 
   function stopVoicePreview(exceptButton) {
+    voicePreviewRunId += 1;
+    voicePreviewPlaying = false;
+    if (voicePreviewSource) {
+      try { voicePreviewSource.onended = null; } catch (e) {}
+      try { voicePreviewSource.stop(0); } catch (err) {}
+      try { voicePreviewSource.disconnect(); } catch (disconnectErr) {}
+      voicePreviewSource = null;
+    }
+    if (voicePreviewGain) {
+      try { voicePreviewGain.disconnect(); } catch (gainErr) {}
+      voicePreviewGain = null;
+    }
     if (voicePreviewPlayer) {
       try {
         voicePreviewPlayer.pause();
@@ -98,11 +115,81 @@
     if (!exceptButton) voicePreviewButton = null;
   }
 
-  function voicePreviewButtonHtml(url) {
+  function ensureVoicePreviewAudioContext() {
+    var AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return null;
+    if (!voicePreviewAudioContext) voicePreviewAudioContext = new AudioContextCtor();
+    if (voicePreviewAudioContext.state === 'suspended' && voicePreviewAudioContext.resume) {
+      return voicePreviewAudioContext.resume().then(function() { return voicePreviewAudioContext; });
+    }
+    return Promise.resolve(voicePreviewAudioContext);
+  }
+
+  function playVoicePreviewFallback(url, params, btn, runId) {
+    if (runId !== voicePreviewRunId || voicePreviewButton !== btn) return Promise.resolve();
+    if (!voicePreviewPlayer) voicePreviewPlayer = new Audio();
+    voicePreviewPlayer.src = url;
+    voicePreviewPlayer.playbackRate = params.rate;
+    voicePreviewPlayer.volume = Math.max(0, Math.min(1, params.volume));
+    voicePreviewPlayer.onended = function() { stopVoicePreview(); };
+    voicePreviewPlayer.onerror = function() {
+      stopVoicePreview();
+      showMessage('试听音频加载失败，请刷新后重试', true);
+    };
+    return voicePreviewPlayer.play().then(function() {
+      voicePreviewPlaying = true;
+    });
+  }
+
+  function playVoicePreviewWithParams(url, params, btn) {
+    voicePreviewRunId += 1;
+    var runId = voicePreviewRunId;
+    var pitchRate = numericParam(params.pitch, 1, 0.1, 2);
+    return ensureVoicePreviewAudioContext()
+      .then(function(audioContext) {
+        if (!audioContext) return playVoicePreviewFallback(url, params, btn, runId);
+        return fetch(url, { cache: 'force-cache' })
+          .then(function(resp) {
+            if (!resp.ok) throw new Error('preview fetch ' + resp.status);
+            return resp.arrayBuffer();
+          })
+          .then(function(buffer) {
+            return new Promise(function(resolve, reject) {
+              audioContext.decodeAudioData(buffer.slice(0), resolve, reject);
+            });
+          })
+          .then(function(audioBuffer) {
+            if (runId !== voicePreviewRunId || voicePreviewButton !== btn) return;
+            var source = audioContext.createBufferSource();
+            var gain = audioContext.createGain();
+            source.buffer = audioBuffer;
+            source.playbackRate.value = Math.max(0.1, Math.min(4, params.rate * pitchRate));
+            gain.gain.value = Math.max(0, Math.min(2, params.volume));
+            source.connect(gain);
+            gain.connect(audioContext.destination);
+            voicePreviewSource = source;
+            voicePreviewGain = gain;
+            voicePreviewPlaying = true;
+            source.onended = function() {
+              if (runId === voicePreviewRunId) stopVoicePreview();
+            };
+            source.start(0);
+          })
+          .catch(function() {
+            return playVoicePreviewFallback(url, params, btn, runId);
+          });
+      });
+  }
+
+  function voicePreviewButtonHtml(url, params) {
     url = normalizeAssetUrl(url);
     if (!url) return '';
+    params = params || {};
     return ''
-      + '<button type="button" class="hifly-preview-play-btn" data-preview-url="' + escapeHtml(url) + '">'
+      + '<button type="button" class="hifly-preview-play-btn" data-preview-url="' + escapeHtml(url) + '"'
+      + ' data-preview-rate="' + escapeHtml(params.rate || '1') + '"'
+      + ' data-preview-volume="' + escapeHtml(params.volume || '1') + '"'
+      + ' data-preview-pitch="' + escapeHtml(params.pitch || '1') + '">'
       + '<span class="hifly-preview-play-icon">▶</span><span>试听</span>'
       + '</button>';
   }
@@ -120,16 +207,16 @@
 
   function readVoiceParamsFromScope(el) {
     var scope = el && el.closest ? el.closest('.hifly-voice-card,.hifly-selected-voice') : null;
-    var rate = 1;
-    var volume = 1;
-    var pitch = 1;
+    var rate = numericParam(el && el.getAttribute ? el.getAttribute('data-preview-rate') : 1, 1, 0.5, 2);
+    var volume = numericParam(el && el.getAttribute ? el.getAttribute('data-preview-volume') : 1, 1, 0.1, 2);
+    var pitch = numericParam(el && el.getAttribute ? el.getAttribute('data-preview-pitch') : 1, 1, 0.1, 2);
     if (scope) {
       var rateInput = scope.querySelector('.hifly-voice-param-input[data-param="rate"]');
       var volumeInput = scope.querySelector('.hifly-voice-param-input[data-param="volume"]');
       var pitchInput = scope.querySelector('.hifly-voice-param-input[data-param="pitch"]');
-      rate = numericParam(rateInput && rateInput.value, 1, 0.5, 2);
-      volume = numericParam(volumeInput && volumeInput.value, 1, 0.1, 2);
-      pitch = numericParam(pitchInput && pitchInput.value, 1, 0.1, 2);
+      if (rateInput) rate = numericParam(rateInput.value, rate, 0.5, 2);
+      if (volumeInput) volume = numericParam(volumeInput.value, volume, 0.1, 2);
+      if (pitchInput) pitch = numericParam(pitchInput.value, pitch, 0.1, 2);
     }
     return { rate: rate, volume: volume, pitch: pitch };
   }
@@ -208,24 +295,16 @@
         if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
         var url = btn.getAttribute('data-preview-url') || '';
         if (!url) return;
-        if (voicePreviewButton === btn && voicePreviewPlayer && !voicePreviewPlayer.paused) {
+        if (voicePreviewButton === btn && voicePreviewPlaying) {
           stopVoicePreview();
           return;
         }
         stopVoicePreview(btn);
-        if (!voicePreviewPlayer) voicePreviewPlayer = new Audio();
+        var params = readVoiceParamsFromScope(btn);
         voicePreviewButton = btn;
-        voicePreviewPlayer.src = url;
-        voicePreviewPlayer.playbackRate = 1;
-        voicePreviewPlayer.volume = 1;
         btn.classList.add('is-playing');
         btn.innerHTML = '<span class="hifly-preview-play-icon">■</span><span>停止</span>';
-        voicePreviewPlayer.onended = function() { stopVoicePreview(); };
-        voicePreviewPlayer.onerror = function() {
-          stopVoicePreview();
-          showMessage('试听音频加载失败，请刷新后重试', true);
-        };
-        voicePreviewPlayer.play().catch(function() {
+        playVoicePreviewWithParams(url, params, btn).catch(function() {
           stopVoicePreview();
           showMessage('试听音频播放失败，请刷新后重试', true);
         });
@@ -694,10 +773,11 @@
 
   function voiceParams(item) {
     var params = item && item.voice_params && typeof item.voice_params === 'object' ? item.voice_params : {};
+    var style = getSelectedStyleForVoiceItem(item) || {};
     return {
-      rate: String(params.rate || '1.0'),
-      volume: String(params.volume || '1.0'),
-      pitch: String(params.pitch || '1.0')
+      rate: String(params.rate || item && item.rate || style.rate || '1.0'),
+      volume: String(params.volume || item && item.volume || style.volume || '1.0'),
+      pitch: String(params.pitch || item && item.pitch || style.pitch || '1.0')
     };
   }
 
@@ -1000,7 +1080,7 @@
     var tags = (item.tags || []).slice(0, 4).map(function(tag) {
       return '<span class="hifly-mini-tag">' + escapeHtml(tag) + '</span>';
     }).join('');
-    var audio = voicePreviewButtonHtml(item.demo_url);
+    var audio = voicePreviewButtonHtml(item.demo_url, voiceParams(item));
 
     el.className = 'hifly-selected-voice';
     el.innerHTML = ''
@@ -1069,13 +1149,14 @@
         + '<span class="hifly-voice-style-state">' + escapeHtml(preview ? '可试听' : '选择') + '</span>'
         + '</button>';
     }).join('');
-    var audio = voicePreviewButtonHtml(activeStyle && activeStyle.demo_url ? activeStyle.demo_url : '');
+    var audio = voicePreviewButtonHtml(activeStyle && activeStyle.demo_url ? activeStyle.demo_url : '', voiceParams(item));
     var canEdit = !!(item && item.is_mine === true && activeStyle && activeStyle.voice);
+    var canDelete = !!(item && item.is_mine === true && item.id != null);
     var params = voiceParams(item);
     var editPanel = canEdit ? ''
       + '<div class="hifly-voice-param-panel" data-voice-id="' + escapeHtml(activeStyle.voice) + '" data-voice-asset-id="' + escapeHtml(item.id || '') + '">'
       + '<div class="hifly-voice-param-head">'
-      + '<div class="hifly-voice-param-title"><strong>声音参数</strong><span>参数仅影响生成效果，试听按原音频播放</span></div>'
+      + '<div class="hifly-voice-param-title"><strong>声音参数</strong><span>语速/音量会即时影响试听，语调在生成视频时生效</span></div>'
       + '<button type="button" class="btn btn-sm hifly-voice-param-save">保存</button>'
       + '</div>'
       + '<div class="hifly-voice-param-grid">'
@@ -1099,7 +1180,10 @@
       + '</div>'
       + '<div class="hifly-voice-audio">' + audio + '</div>'
       + editPanel
+      + '<div class="hifly-voice-card-actions">'
       + '<button type="button" class="btn ' + (selected ? 'btn-ghost' : 'btn-primary') + ' btn-sm hifly-voice-pick-btn" data-voice-id="' + escapeHtml(activeStyle && activeStyle.voice ? activeStyle.voice : item.voice) + '">' + (selected ? '已选择当前风格' : '选择当前风格') + '</button>'
+      + (canDelete ? '<button type="button" class="btn btn-ghost btn-sm hifly-voice-delete-btn" data-voice-asset-id="' + escapeHtml(item.id) + '">删除声音</button>' : '')
+      + '</div>'
       + '</article>';
   }
 
@@ -1418,7 +1502,7 @@
             if (data && data.synced === false && data.sync_error) {
               showMessage('声音参数已保存到本地。' + data.sync_error, false);
             } else {
-              showMessage('声音参数已保存。试听音频如未变化，以后续生成效果为准。', false);
+              showMessage('声音参数已保存。语速/音量会影响试听，语调会在生成视频时生效。', false);
             }
           })
           .catch(function(err) {
@@ -1426,6 +1510,53 @@
             btn.textContent = oldText;
             showMessage(err && err.message ? err.message : '保存声音参数失败', true);
           });
+      };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.hifly-voice-delete-btn'), function(btn) {
+      btn.onclick = function(ev) {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        var id = btn.getAttribute('data-voice-asset-id') || '';
+        if (!id) return showMessage('无法删除该声音记录，请刷新后重试。', true);
+        showConfirmDialog({
+          title: '删除声音',
+          message: '确认删除这个声音？删除后不会再显示在“我的声音”列表。',
+          confirmText: '删除',
+          tone: 'danger'
+        }).then(function(confirmed) {
+          if (!confirmed) return;
+          var oldText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '删除中...';
+          requestCloudDelete('/api/hifly/my/voice/' + encodeURIComponent(id))
+            .then(function() {
+              var deleted = null;
+              state.voiceLibrary.mine = (state.voiceLibrary.mine || []).filter(function(item) {
+                var hit = String(item.id) === String(id);
+                if (hit) deleted = item;
+                return !hit;
+              });
+              if (deleted && state.selectedVoice) {
+                var deletedStyles = voiceStyles(deleted);
+                var selectedDeleted = deletedStyles.some(function(style) {
+                  return style.voice === state.selectedVoice.voice;
+                });
+                if (selectedDeleted) {
+                  var all = (state.voiceLibrary.mine || []).concat(state.voiceLibrary.public || []);
+                  state.selectedVoice = all.length ? buildSelectedVoice(all[0], getSelectedStyleForVoiceItem(all[0])) : null;
+                  if ($('hiflyVoiceInput')) $('hiflyVoiceInput').value = state.selectedVoice && state.selectedVoice.voice ? state.selectedVoice.voice : '';
+                  renderSelectedVoice();
+                }
+              }
+              renderVoiceLibrary();
+              showMessage('声音已删除。', false);
+              return loadVoices(true);
+            })
+            .catch(function(err) {
+              btn.disabled = false;
+              btn.textContent = oldText;
+              showMessage(err && err.message ? err.message : '删除声音失败', true);
+            });
+        });
       };
     });
     Array.prototype.forEach.call(document.querySelectorAll('.hifly-voice-pick-btn'), function(btn) {
@@ -2717,6 +2848,10 @@
       + '#content-hifly-digital-human .hifly-card-tag{display:inline-flex;align-items:center;padding:0.24rem 0.5rem;border-radius:999px;background:rgba(15,23,42,0.06);color:#61708a;font-size:0.72rem;}'
       + '#content-hifly-digital-human .hifly-avatar-pick-btn,#content-hifly-digital-human .hifly-voice-pick-btn{width:100%;margin-top:0.75rem;justify-content:center;}'
       + '#content-hifly-digital-human .hifly-avatar-card-actions .hifly-avatar-pick-btn{margin-top:0;}'
+      + '#content-hifly-digital-human .hifly-voice-card-actions{display:grid;grid-template-columns:1fr;gap:0.5rem;margin-top:0.72rem;}'
+      + '#content-hifly-digital-human .hifly-voice-card-actions .hifly-voice-pick-btn{margin-top:0;}'
+      + '#content-hifly-digital-human .hifly-voice-delete-btn{justify-content:center;color:#b42318;border-color:rgba(180,35,24,0.22);}'
+      + '#content-hifly-digital-human .hifly-voice-delete-btn:hover{background:rgba(180,35,24,0.08);}'
       + '#content-hifly-digital-human .hifly-voice-card-top{display:grid;grid-template-columns:74px minmax(0,1fr);gap:0.82rem;align-items:start;}'
       + '#content-hifly-digital-human .hifly-voice-card-thumb{width:74px;height:74px;border-radius:20px;overflow:hidden;background:linear-gradient(135deg, rgba(124,94,255,0.18), rgba(14,165,233,0.18));box-shadow:inset 0 0 0 1px rgba(255,255,255,0.32);}'
       + '#content-hifly-digital-human .hifly-voice-card-main{min-width:0;}'
