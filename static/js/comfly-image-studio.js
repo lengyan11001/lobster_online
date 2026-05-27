@@ -34,8 +34,15 @@
     examplesLoading: false,
     examplesLimit: 24,
     exampleCategory: 'all',
-    exampleSearch: ''
+    exampleSearch: '',
+    currentJobId: '',
+    currentJobStatus: '',
+    pollTimer: null,
+    recentJobs: []
   };
+
+  var JOB_RESTORE_WINDOW_MS = 6 * 60 * 60 * 1000;
+  var JOB_HISTORY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
   var PURPOSE_LABELS = {
     auto: '普通参考',
@@ -86,6 +93,68 @@
     if (size >= 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
     if (size >= 1024) return Math.round(size / 1024) + ' KB';
     return size + ' B';
+  }
+
+  function localBase() {
+    return (typeof LOCAL_API_BASE !== 'undefined' ? (LOCAL_API_BASE || '') : '').replace(/\/$/, '');
+  }
+
+  function jobsStorageKey() {
+    var uid = (window.__currentUserId || window.currentUserId || 'anon');
+    return 'lobster_image_studio_jobs_' + String(uid || 'anon');
+  }
+
+  function loadRecentJobs() {
+    try {
+      var raw = window.localStorage ? window.localStorage.getItem(jobsStorageKey()) : '';
+      var rows = JSON.parse(raw || '[]');
+      var now = Date.now();
+      state.recentJobs = (Array.isArray(rows) ? rows : []).filter(function(item) {
+        if (!item || !item.jobId) return false;
+        if (item.updatedAt && now - Number(item.updatedAt) > JOB_HISTORY_WINDOW_MS) return false;
+        if (item.status === 'completed' && !item.image && !item.resultCount) return false;
+        return true;
+      }).slice(0, 12);
+    } catch (e) {
+      state.recentJobs = [];
+    }
+  }
+
+  function saveRecentJobs() {
+    try {
+      if (window.localStorage) window.localStorage.setItem(jobsStorageKey(), JSON.stringify(state.recentJobs.slice(0, 12)));
+    } catch (e) {}
+  }
+
+  function rememberJob(job) {
+    if (!job || !job.jobId) return;
+    var next = state.recentJobs.filter(function(item) { return item && item.jobId !== job.jobId; });
+    next.unshift(Object.assign({}, job, { updatedAt: Date.now() }));
+    state.recentJobs = next.slice(0, 12);
+    saveRecentJobs();
+  }
+
+  function updateRememberedJob(jobId, patch) {
+    if (!jobId) return;
+    state.recentJobs = state.recentJobs.map(function(item) {
+      if (!item || item.jobId !== jobId) return item;
+      return Object.assign({}, item, patch || {}, { updatedAt: Date.now() });
+    });
+    saveRecentJobs();
+  }
+
+  function stopPolling() {
+    if (state.pollTimer) {
+      clearTimeout(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }
+
+  function schedulePoll(delayMs) {
+    stopPolling();
+    state.pollTimer = setTimeout(function() {
+      refreshJobStatus(false);
+    }, delayMs || 3000);
   }
 
   function releaseItems(items) {
@@ -161,6 +230,76 @@
     return item.data_url || item.url || '';
   }
 
+  function jobStatusText(status) {
+    if (status === 'completed') return '已完成';
+    if (status === 'failed') return '失败';
+    if (status === 'running') return '生成中';
+    if (status === 'stale') return '待刷新';
+    return '等待中';
+  }
+
+  function friendlyImageTaskFailureMessage() {
+    return '可能网络波动导致任务提交失败，请尝试重新提交。';
+  }
+
+  function resultCardsHtml() {
+    var cards = [];
+    if (state.currentJobId && state.currentJobStatus === 'running') {
+      cards.push({
+        type: 'job',
+        jobId: state.currentJobId,
+        title: '当前图片任务',
+        status: 'running'
+      });
+    }
+    state.results.forEach(function(item, index) {
+      cards.push({
+        type: 'result',
+        index: index,
+        title: '生成结果 ' + (index + 1),
+        status: 'completed',
+        image: resultPreviewUrl(item),
+        assetId: item.assetId || ''
+      });
+    });
+    state.recentJobs.forEach(function(job) {
+      if (!job || !job.jobId) return;
+      if (job.jobId === state.currentJobId && state.currentJobStatus === 'running') return;
+      if (job.status === 'completed' && !job.image && !job.resultCount) return;
+      var displayStatus = job.status || 'running';
+      if (displayStatus === 'running') displayStatus = 'stale';
+      cards.push({
+        type: 'job',
+        jobId: job.jobId,
+        title: job.title || '图片任务',
+        status: displayStatus,
+        image: job.image || '',
+        resultCount: job.resultCount || 0
+      });
+    });
+    if (!cards.length) {
+      return '<div class="imglab-empty-slot" style="grid-column:1 / -1;">还没有图片任务，提交一次后这里会出现任务卡片。</div>';
+    }
+    return cards.slice(0, 12).map(function(card) {
+      var attrs = card.type === 'result'
+        ? 'data-result-index="' + card.index + '"'
+        : 'data-imglab-job="' + escapeHtml(card.jobId) + '"';
+      var media = card.status === 'completed' && card.image
+        ? '<img src="' + escapeHtml(card.image) + '" alt="' + escapeHtml(card.title) + '">'
+        : '<div class="imglab-task-card-pending">' + (card.status === 'running' ? '<span class="imglab-task-spinner" aria-hidden="true"></span>' : '<span class="imglab-task-done-mark">' + (card.status === 'stale' ? '刷新' : '完成') + '</span>') + '</div>';
+      if (card.status === 'failed') media = '<div class="imglab-task-card-failed">失败</div>';
+      return [
+        '<button type="button" class="imglab-task-card' + (card.type === 'result' && card.index === state.activeResultIndex ? ' is-active' : '') + ' is-' + escapeHtml(card.status || 'running') + '" ' + attrs + '>',
+        '<div class="imglab-task-card-media">' + media + '</div>',
+        '<div class="imglab-task-card-body">',
+        '<span class="imglab-task-card-title">' + escapeHtml(card.title || '图片任务') + '</span>',
+        '<span class="imglab-task-card-meta">' + escapeHtml(jobStatusText(card.status)) + (card.resultCount ? ' · ' + escapeHtml(card.resultCount) + ' 张' : '') + (card.assetId ? ' · 素材 ' + escapeHtml(card.assetId) : '') + '</span>',
+        '</div>',
+        '</button>'
+      ].join('');
+    }).join('');
+  }
+
   function renderResultSurface() {
     var surface = $('imglabResultSurface');
     var meta = $('imglabResultMeta');
@@ -168,6 +307,19 @@
     if (!surface || !meta || !gallery) return;
 
     var active = currentResult();
+    if (!active && state.currentJobStatus === 'running') {
+      surface.innerHTML = [
+        '<div class="imglab-result-placeholder">',
+        '<strong>图片正在生成中</strong>',
+        '<span>任务已提交，您可以切换页面或继续提交新任务；完成后回到这里会继续展示结果。</span>',
+        '</div>'
+      ].join('');
+      meta.innerHTML = '<div class="imglab-result-pills"><span class="imglab-result-pill">任务 ' + escapeHtml(state.currentJobId ? state.currentJobId.slice(0, 8) : '') + '</span><span class="imglab-result-pill">生成中</span></div>';
+      gallery.innerHTML = resultCardsHtml();
+      bindRecentJobButtons();
+      return;
+    }
+
     if (!active) {
       surface.innerHTML = [
         '<div class="imglab-result-placeholder">',
@@ -176,7 +328,8 @@
         '</div>'
       ].join('');
       meta.innerHTML = '';
-      gallery.innerHTML = '';
+      gallery.innerHTML = resultCardsHtml();
+      bindRecentJobButtons();
       return;
     }
 
@@ -187,17 +340,39 @@
       active.model ? '<span class="imglab-result-pill">' + escapeHtml(active.model) + '</span>' : '',
       active.aspectRatio ? '<span class="imglab-result-pill">' + escapeHtml(active.aspectRatio) + '</span>' : '',
       active.size ? '<span class="imglab-result-pill">' + escapeHtml(active.size) + '</span>' : '',
+      active.assetId ? '<span class="imglab-result-pill">素材 ' + escapeHtml(active.assetId) + '</span>' : '',
       '</div>',
-      active.url ? '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(active.url) + '" target="_blank" rel="noopener">打开原图</a>' : '<span></span>'
+      (active.sourceUrl || active.url) ? '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(active.sourceUrl || active.url) + '" target="_blank" rel="noopener">打开原图</a>' : '<span></span>'
     ].join('');
 
-    gallery.innerHTML = state.results.map(function(item, index) {
-      return [
-        '<button type="button" class="imglab-result-thumb' + (index === state.activeResultIndex ? ' is-active' : '') + '" data-result-index="' + index + '">',
-        '<img src="' + escapeHtml(resultPreviewUrl(item)) + '" alt="结果缩略图 ' + (index + 1) + '">',
-        '</button>'
-      ].join('');
-    }).join('');
+    gallery.innerHTML = resultCardsHtml();
+    bindRecentJobButtons();
+  }
+
+  function bindRecentJobButtons() {
+    document.querySelectorAll('[data-result-index]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        state.activeResultIndex = Number(btn.getAttribute('data-result-index')) || 0;
+        renderResultSurface();
+      });
+    });
+    document.querySelectorAll('[data-imglab-job]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        var jobId = btn.getAttribute('data-imglab-job') || '';
+        if (!jobId) return;
+        state.currentJobId = jobId;
+        var hit = state.recentJobs.find(function(item) { return item && item.jobId === jobId; });
+        state.currentJobStatus = (hit && hit.status) || 'running';
+        if (state.currentJobStatus === 'stale') state.currentJobStatus = 'running';
+        setRightView('result');
+        renderResultSurface();
+        refreshJobStatus(true);
+      });
+    });
   }
 
   function setRightView(view) {
@@ -287,12 +462,15 @@
   }
 
   function resetWorkspace() {
+    stopPolling();
     releaseItems(state.references);
     state.references = [];
     state.results = [];
     state.activeResultIndex = 0;
     state.view = 'examples';
     state.submitting = false;
+    state.currentJobId = '';
+    state.currentJobStatus = '';
     if ($('imglabPromptInput')) $('imglabPromptInput').value = '';
     if ($('imglabAspectRatioSelect')) $('imglabAspectRatioSelect').value = '1:1';
     if ($('imglabModelSelect')) $('imglabModelSelect').value = 'gpt-image-2';
@@ -310,7 +488,7 @@
     var btn = $('imglabGenerateBtn');
     if (!btn) return;
     btn.disabled = !!submitting;
-    btn.textContent = submitting ? '生成中...' : '开始生成图片';
+    btn.textContent = submitting ? '提交中...' : '开始生成图片';
   }
 
   function authHeadersSafe() {
@@ -321,6 +499,75 @@
       return headers;
     }
     return {};
+  }
+
+  function applyJobResult(payload) {
+    state.results = (payload.images || []).map(function(item) {
+      return {
+        url: item.url || '',
+        data_url: item.data_url || '',
+        assetId: item.asset_id || '',
+        sourceUrl: item.source_url || '',
+        model: payload.meta && payload.meta.model,
+        aspectRatio: payload.meta && payload.meta.aspect_ratio,
+        size: payload.meta && payload.meta.size
+      };
+    });
+    state.activeResultIndex = 0;
+    renderResultSurface();
+    setRightView('result');
+  }
+
+  function refreshJobStatus(showToast) {
+    if (!state.currentJobId) return;
+    fetch(localBase() + '/api/comfly-image-studio/jobs/' + encodeURIComponent(state.currentJobId), {
+      headers: authHeadersSafe()
+    })
+      .then(function(response) {
+        return response.json().then(function(data) {
+          return { ok: response.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) {
+          throw new Error(friendlyImageTaskFailureMessage());
+        }
+        var status = String(result.data.status || '').trim();
+        state.currentJobStatus = status;
+        updateRememberedJob(state.currentJobId, { status: status });
+        if (status === 'running') {
+          renderResultSurface();
+          schedulePoll(3000);
+          return;
+        }
+        stopPolling();
+        if (status === 'completed') {
+          applyJobResult(result.data);
+          var savedCount = state.results.filter(function(item) { return item.assetId; }).length;
+          var first = state.results[0] || {};
+          updateRememberedJob(state.currentJobId, {
+            status: 'completed',
+            title: '图片任务',
+            resultCount: state.results.length,
+            image: resultPreviewUrl(first)
+          });
+          showMessage(savedCount ? '图片任务已完成，并已保存到素材库。' : '图片任务已完成，素材库保存失败时会记录到日志。', false);
+        } else if (status === 'failed') {
+          renderResultSurface();
+          updateRememberedJob(state.currentJobId, { status: 'failed' });
+          showMessage(friendlyImageTaskFailureMessage(), true);
+        } else if (showToast) {
+          showMessage('任务状态已刷新。', false);
+        }
+      })
+      .catch(function(err) {
+        console.warn('图片任务状态刷新失败', err);
+        stopPolling();
+        state.currentJobStatus = 'failed';
+        updateRememberedJob(state.currentJobId, { status: 'failed' });
+        renderResultSurface();
+        showMessage(friendlyImageTaskFailureMessage(), true);
+      });
   }
 
   function translateKnownMissingPrompt(item, promptEn) {
@@ -472,6 +719,8 @@
 
     setSubmitting(true);
     setRightView('result');
+    state.currentJobId = '';
+    state.currentJobStatus = '';
     showMessage('正在提交图片生成任务...', false);
 
     var form = new FormData();
@@ -486,31 +735,37 @@
     });
 
     try {
-      var resp = await fetch((typeof LOCAL_API_BASE !== 'undefined' ? (LOCAL_API_BASE || '') : '') + '/api/comfly-image-studio/generate', {
+      var resp = await fetch(localBase() + '/api/comfly-image-studio/generate/start', {
         method: 'POST',
         headers: authHeadersSafe(),
         body: form
       });
       var payload = await resp.json().catch(function() { return {}; });
       if (!resp.ok) {
-        throw new Error(payload.detail || payload.error || '图片生成失败');
+        throw new Error(friendlyImageTaskFailureMessage());
       }
 
-      state.results = (payload.images || []).map(function(item) {
-        return {
-          url: item.url || '',
-          data_url: item.data_url || '',
-          model: payload.meta && payload.meta.model,
-          aspectRatio: payload.meta && payload.meta.aspect_ratio,
-          size: payload.meta && payload.meta.size
-        };
+      state.currentJobId = payload.job_id || '';
+      if (!state.currentJobId) {
+        throw new Error(friendlyImageTaskFailureMessage());
+      }
+      state.currentJobStatus = 'running';
+      state.results = [];
+      rememberJob({
+        jobId: state.currentJobId,
+        status: 'running',
+        title: prompt.slice(0, 18) || '图片任务'
       });
-      state.activeResultIndex = 0;
       renderResultSurface();
       setRightView('result');
-      showMessage('图片已生成，右侧可以直接查看结果。', false);
+      showMessage('图片任务已提交，可以切换页面或继续提交新任务。', false);
+      refreshJobStatus(false);
     } catch (err) {
-      showMessage(err && err.message ? err.message : '图片生成失败，请稍后重试', true);
+      console.warn('图片任务提交失败', err);
+      state.currentJobId = '';
+      state.currentJobStatus = '';
+      renderResultSurface();
+      showMessage(friendlyImageTaskFailureMessage(), true);
     } finally {
       setSubmitting(false);
     }
@@ -536,6 +791,7 @@
     var resetBtn = $('imglabResetBtn');
     var generateBtn = $('imglabGenerateBtn');
     var backBtn = $('imglabStudioBackBtn');
+    var showExamplesBtn = $('imglabShowExamplesBtn');
     var moreBtn = $('imglabExamplesMoreBtn');
     var searchInput = $('imglabExampleSearchInput');
     var purposeSelect = $('imglabReferencePurposeSelect');
@@ -612,6 +868,22 @@
         if (btn) btn.click();
       });
     }
+    if (showExamplesBtn && !showExamplesBtn.dataset.bound) {
+      showExamplesBtn.dataset.bound = '1';
+      showExamplesBtn.addEventListener('click', function() {
+        setRightView('examples');
+        loadExamples(false);
+      });
+    }
+    document.querySelectorAll('[data-imglab-show-result]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        state.view = 'result';
+        setRightView('result');
+        renderResultSurface();
+      });
+    });
     if (moreBtn && !moreBtn.dataset.bound) {
       moreBtn.dataset.bound = '1';
       moreBtn.addEventListener('click', function() {
@@ -642,14 +914,26 @@
     renderReferenceList();
     renderResultSurface();
     renderExamples();
-    setRightView((state.results.length || state.submitting) ? state.view : 'examples');
+    setRightView((state.results.length || state.submitting || state.currentJobStatus === 'running') ? state.view : 'examples');
   }
 
   function init() {
     bindEvents();
     if (!state.initialized) {
       state.initialized = true;
+      loadRecentJobs();
       loadExamples(true);
+      var now = Date.now();
+      var active = state.recentJobs.find(function(item) {
+        if (!item || item.status !== 'running' || !item.jobId) return false;
+        return !item.updatedAt || now - Number(item.updatedAt) <= JOB_RESTORE_WINDOW_MS;
+      });
+      if (active) {
+        state.currentJobId = active.jobId;
+        state.currentJobStatus = 'running';
+        state.view = 'result';
+        refreshJobStatus(false);
+      }
     }
     renderWorkspace();
   }

@@ -1,6 +1,7 @@
 (function() {
   var state = {
     mode: 'image_auto',
+    mainView: 'storyboard',
     duration: 20,
     activeBoardIndex: 0,
     images: [],
@@ -16,9 +17,11 @@
     currentJobId: '',
     currentJobStatus: '',
     currentResultVideoUrl: '',
+    currentJobTitle: '',
     submitBusy: false,
     submitLabel: '',
-    pollTimer: null
+    pollTimer: null,
+    recentJobs: []
   };
 
   var defaults = {
@@ -282,6 +285,44 @@
 
   function pipelineBase() {
     return localBase();
+  }
+
+  function jobsStorageKey() {
+    var uid = (window.__currentUserId || window.currentUserId || 'anon');
+    return 'lobster_seedance_tvc_jobs_' + String(uid || 'anon');
+  }
+
+  function loadRecentJobs() {
+    try {
+      var raw = window.localStorage ? window.localStorage.getItem(jobsStorageKey()) : '';
+      var rows = JSON.parse(raw || '[]');
+      state.recentJobs = Array.isArray(rows) ? rows.slice(0, 12) : [];
+    } catch (e) {
+      state.recentJobs = [];
+    }
+  }
+
+  function saveRecentJobs() {
+    try {
+      if (window.localStorage) window.localStorage.setItem(jobsStorageKey(), JSON.stringify(state.recentJobs.slice(0, 12)));
+    } catch (e) {}
+  }
+
+  function rememberJob(job) {
+    if (!job || !job.jobId) return;
+    var next = state.recentJobs.filter(function(item) { return item && item.jobId !== job.jobId; });
+    next.unshift(Object.assign({}, job, { updatedAt: Date.now() }));
+    state.recentJobs = next.slice(0, 12);
+    saveRecentJobs();
+  }
+
+  function updateRememberedJob(jobId, patch) {
+    if (!jobId) return;
+    state.recentJobs = state.recentJobs.map(function(item) {
+      if (!item || item.jobId !== jobId) return item;
+      return Object.assign({}, item, patch || {}, { updatedAt: Date.now() });
+    });
+    saveRecentJobs();
   }
 
   function downloadUrlForVideo(videoUrl, filename) {
@@ -663,16 +704,13 @@
     });
   }
 
-  function renderVideoStage(values, boards) {
-    var videoSurface = $('seedanceVideoSurface');
-    if (!videoSurface) return;
-
+  function resultVideoHtml(values, boards) {
     if (state.currentResultVideoUrl) {
       var resultUrl = String(state.currentResultVideoUrl);
       var bare = resultUrl.split('?')[0].toLowerCase();
       var looksVideo = /\.(mp4|mov|m4v|webm|mkv)$/.test(bare);
       if (looksVideo) {
-        videoSurface.innerHTML = [
+        return [
           '<div class="seedance-result-video-wrap">',
           '<div class="seedance-result-video-frame">',
           '<video src="' + escapeHtml(resultUrl) + '" controls controlsList="nodownload" playsinline preload="metadata"></video>',
@@ -683,20 +721,17 @@
           '</div>',
           '</div>'
         ].join('');
-        bindResultVideoActions();
-      } else {
-        videoSurface.innerHTML = [
-          '<div class="tvc-video-placeholder">',
-          '<strong>未拿到完整成片</strong>',
-          '<span>本次任务返回的素材不是视频文件（' + escapeHtml(resultUrl.slice(0, 200)) + '），可能某段视频生成失败。请在素材库里查看分段结果，或重新提交任务。</span>',
-          '</div>'
-        ].join('');
       }
-      return;
+      return [
+        '<div class="tvc-video-placeholder">',
+        '<strong>未拿到完整成片</strong>',
+        '<span>本次任务返回的素材不是视频文件（' + escapeHtml(resultUrl.slice(0, 200)) + '），可能某段视频生成失败。请在素材库里查看分段结果，或重新提交任务。</span>',
+        '</div>'
+      ].join('');
     }
 
     if (state.currentJobStatus === 'running') {
-      videoSurface.innerHTML = [
+      return [
         '<div class="tvc-video-placeholder is-busy">',
         '<div class="tvc-status-head">',
         '<span class="tvc-status-spinner" aria-hidden="true"></span>',
@@ -707,17 +742,15 @@
         '</div>',
         '</div>'
       ].join('');
-      return;
     }
 
     if (state.currentJobStatus === 'failed') {
-      videoSurface.innerHTML = [
+      return [
         '<div class="tvc-video-placeholder">',
         '<strong>视频生成失败</strong>',
         '<span>请调整素材或参数后重新提交任务。</span>',
         '</div>'
       ].join('');
-      return;
     }
 
     var summary = state.duration + ' 秒 / ' + boards.length + ' 张分镜 / ' + values.aspectRatio;
@@ -725,7 +758,7 @@
       ? '当前是纯提示词规划模式，右侧先展示分镜草案。真正提交成片时，后端还需要补上纯文生视频支持。'
       : '点击“开始生成视频”后，这里会展示最后合成的视频结果。';
 
-    videoSurface.innerHTML = [
+    return [
       '<div class="tvc-video-placeholder">',
       '<strong>最终结果视频展示区</strong>',
       '<span>' + escapeHtml(summary + '。' + detail) + '</span>',
@@ -733,14 +766,106 @@
     ].join('');
   }
 
+  function renderVideoStage(values, boards) {
+    var videoSurface = $('seedanceVideoSurface');
+    if (!videoSurface) return;
+    videoSurface.innerHTML = resultVideoHtml(values, boards);
+    bindResultVideoActions();
+  }
+
+  function bindRecentJobButtons() {
+    document.querySelectorAll('[data-seedance-job]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        var jobId = btn.getAttribute('data-seedance-job') || '';
+        if (!jobId) return;
+        state.currentJobId = jobId;
+        var hit = state.recentJobs.find(function(item) { return item && item.jobId === jobId; });
+        state.currentJobStatus = (hit && hit.status) || 'running';
+        state.currentResultVideoUrl = (hit && hit.videoUrl) || '';
+        state.currentJobTitle = (hit && hit.title) || '创意视频任务';
+        state.examplesOpen = false;
+        state.mainView = 'result';
+        renderWorkspace();
+        refreshJobStatus(true);
+      });
+    });
+  }
+
+  function statusLabel(status) {
+    if (status === 'completed') return '已完成';
+    if (status === 'failed') return '失败';
+    if (status === 'running') return '生成中';
+    return '等待提交';
+  }
+
+  function statusTone(status) {
+    if (status === 'completed') return 'success';
+    if (status === 'failed') return 'danger';
+    if (status === 'running') return 'processing';
+    return 'idle';
+  }
+
+  function renderBusinessResultView() {
+    var view = $('seedanceBusinessResultView');
+    var stage = $('seedanceBusinessResultSurface');
+    var status = $('seedanceTaskStatusText');
+    var kind = $('seedanceTaskKindText');
+    var title = $('seedanceCurrentTaskTitle');
+    if (!view || !stage) return;
+
+    if (status) {
+      status.textContent = statusLabel(state.currentJobStatus);
+      status.setAttribute('data-tone', statusTone(state.currentJobStatus));
+    }
+    if (kind) {
+      kind.textContent = state.currentJobId ? ('任务 ' + state.currentJobId.slice(0, 8)) : '未开始';
+      kind.setAttribute('data-tone', state.currentJobId ? 'processing' : 'idle');
+    }
+    if (title) title.textContent = state.currentJobTitle || '还没有提交创意视频任务';
+
+    stage.innerHTML = resultVideoHtml(getFormValues(), buildBoards());
+    bindResultVideoActions();
+
+    var list = $('seedanceBusinessHistoryGrid');
+    var empty = $('seedanceBusinessHistoryEmpty');
+    var count = $('seedanceBusinessHistoryCount');
+    if (count) count.textContent = String(state.recentJobs.length || 0);
+    if (list) {
+      list.innerHTML = state.recentJobs.map(function(job) {
+        var selected = job.jobId === state.currentJobId ? ' is-active' : '';
+        return [
+          '<button type="button" class="seedance-business-job' + selected + '" data-seedance-job="' + escapeHtml(job.jobId) + '">',
+          '<span class="seedance-business-job-title">' + escapeHtml(job.title || '创意视频任务') + '</span>',
+          '<span class="seedance-business-job-meta">' + escapeHtml(statusLabel(job.status)) + ' · ' + escapeHtml((job.jobId || '').slice(0, 8)) + '</span>',
+          '</button>'
+        ].join('');
+      }).join('');
+      bindRecentJobButtons();
+    }
+    if (empty) empty.style.display = state.recentJobs.length ? 'none' : 'block';
+  }
+
+  function setMainView(view) {
+    state.mainView = view === 'result' ? 'result' : 'storyboard';
+    state.examplesOpen = false;
+    renderWorkspace();
+  }
+
   function renderWorkspace() {
     var values = getFormValues();
     var boards = buildBoards();
     var resultPanel = $('seedanceResultPanel');
-    if (resultPanel) resultPanel.hidden = !!state.examplesOpen;
+    var businessPanel = $('seedanceBusinessResultView');
+    if (resultPanel) resultPanel.hidden = !!state.examplesOpen || state.mainView === 'result';
+    if (businessPanel) businessPanel.hidden = !!state.examplesOpen || state.mainView !== 'result';
+    if ($('seedanceStoryboardTabBtn')) $('seedanceStoryboardTabBtn').classList.toggle('is-active', state.mainView !== 'result' && !state.examplesOpen);
+    if ($('seedanceBusinessResultTabBtn')) $('seedanceBusinessResultTabBtn').classList.toggle('is-active', state.mainView === 'result' && !state.examplesOpen);
     renderUploadList('seedanceImageList', state.images);
     renderBoards(boards);
     renderVideoStage(values, boards);
+    renderBusinessResultView();
     renderExamplesPanel();
     updateStartButtonState();
   }
@@ -755,8 +880,8 @@
   function updateStartButtonState() {
     var btn = $('seedanceStartBtn');
     if (!btn) return;
-    var isBusy = !!state.submitBusy || state.currentJobStatus === 'running';
-    var label = state.submitLabel || (state.currentJobStatus === 'running' ? '生成中，请稍候' : '开始生成视频');
+    var isBusy = !!state.submitBusy;
+    var label = state.submitLabel || '开始生成视频';
     btn.disabled = isBusy;
     btn.classList.toggle('is-loading', isBusy);
     btn.innerHTML = [
@@ -933,6 +1058,10 @@
 
         state.currentJobStatus = String(result.data.status || '').trim();
         state.currentResultVideoUrl = extractResultVideoUrl(result.data) || state.currentResultVideoUrl;
+        updateRememberedJob(state.currentJobId, {
+          status: state.currentJobStatus,
+          videoUrl: state.currentResultVideoUrl || ''
+        });
         renderWorkspace();
 
         if (state.currentJobStatus === 'running') {
@@ -1023,10 +1152,17 @@
       state.currentJobId = result.data.job_id;
       state.currentJobStatus = 'running';
       state.currentResultVideoUrl = '';
+      state.currentJobTitle = ($('seedanceTaskPromptInput').value || '创意视频').trim().slice(0, 18) || '创意视频任务';
       state.examplesOpen = false;
+      state.mainView = 'result';
+      rememberJob({
+        jobId: state.currentJobId,
+        status: 'running',
+        title: state.currentJobTitle
+      });
       setSubmitBusy(false);
       renderWorkspace();
-        showMessage('任务已提交，开始自动查询生成结果。');
+        showMessage('任务已提交，可以切换页面或继续提交新任务。');
         refreshJobStatus(false);
       })
       .catch(function(err) {
@@ -1163,6 +1299,24 @@
       });
     }
 
+    if ($('seedanceStoryboardTabBtn')) {
+      $('seedanceStoryboardTabBtn').addEventListener('click', function() {
+        setMainView('storyboard');
+      });
+    }
+
+    if ($('seedanceBusinessResultTabBtn')) {
+      $('seedanceBusinessResultTabBtn').addEventListener('click', function() {
+        setMainView('result');
+      });
+    }
+
+    if ($('seedanceBusinessResultBackBtn')) {
+      $('seedanceBusinessResultBackBtn').addEventListener('click', function() {
+        setMainView('storyboard');
+      });
+    }
+
     [
       'seedanceAspectRatioSelect',
       'seedanceVisualToneSelect',
@@ -1194,6 +1348,7 @@
       state.images = [];
       state.activeBoardIndex = 0;
       state.examplesOpen = true;
+      state.mainView = 'storyboard';
       state.activeExampleId = '';
       state.exampleCategory = 'all';
       state.exampleSearch = '';
@@ -1201,6 +1356,7 @@
       state.currentJobId = '';
       state.currentJobStatus = '';
       state.currentResultVideoUrl = '';
+      state.currentJobTitle = '';
       setSubmitBusy(false);
       if ($('seedanceExampleSearchInput')) $('seedanceExampleSearchInput').value = '';
       document.querySelectorAll('[data-seedance-category]').forEach(function(item) {
@@ -1224,6 +1380,17 @@
       resetFormFields();
       setMode(state.mode);
       setDuration(state.duration);
+      loadRecentJobs();
+      var active = state.recentJobs.find(function(item) { return item && item.status === 'running' && item.jobId; });
+      if (active) {
+        state.currentJobId = active.jobId;
+        state.currentJobStatus = 'running';
+        state.currentResultVideoUrl = active.videoUrl || '';
+        state.currentJobTitle = active.title || '创意视频任务';
+        state.examplesOpen = false;
+        state.mainView = 'result';
+        refreshJobStatus(false);
+      }
     }
 
     updateExamplesBadge();

@@ -1311,6 +1311,110 @@
       color:#5c57d8;
       background:rgba(92,87,216,0.12);
     }
+    #content-seedance-tvc-studio .seedance-view-tabs {
+      display:flex;
+      gap:0.65rem;
+      flex-wrap:wrap;
+      align-items:center;
+    }
+    #content-seedance-tvc-studio .seedance-view-tab {
+      border:none;
+      padding:0.58rem 0.98rem;
+      border-radius:999px;
+      background:rgba(91,124,255,0.08);
+      color:#58627e;
+      font-weight:700;
+      cursor:pointer;
+      transition:all 0.18s ease;
+    }
+    #content-seedance-tvc-studio .seedance-view-tab.is-active {
+      background:linear-gradient(135deg, #5b7cff, #22c6b8);
+      color:#fff;
+      box-shadow:0 14px 30px rgba(61,104,214,0.20);
+    }
+    #content-seedance-tvc-studio .seedance-result-meta {
+      display:flex;
+      flex-wrap:wrap;
+      gap:0.65rem;
+      margin-top:0.58rem;
+    }
+    #content-seedance-tvc-studio .seedance-result-panel-head {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:1rem;
+      flex-wrap:wrap;
+      margin-bottom:0.85rem;
+    }
+    #content-seedance-tvc-studio .seedance-result-pill {
+      display:inline-flex;
+      align-items:center;
+      gap:0.38rem;
+      padding:0.42rem 0.74rem;
+      border-radius:999px;
+      background:rgba(91,124,255,0.10);
+      color:#3c55c7;
+      font-size:0.78rem;
+      font-weight:700;
+    }
+    #content-seedance-tvc-studio .seedance-result-pill[data-tone="success"] {
+      color:#1f8f5f;
+      background:rgba(31,143,95,0.12);
+    }
+    #content-seedance-tvc-studio .seedance-result-pill[data-tone="danger"] {
+      color:#c23b3b;
+      background:rgba(194,59,59,0.12);
+    }
+    #content-seedance-tvc-studio .seedance-result-pill[data-tone="processing"] {
+      color:#315ac6;
+      background:rgba(49,90,198,0.12);
+    }
+    #content-seedance-tvc-studio .seedance-business-history {
+      margin-top:1rem;
+    }
+    #content-seedance-tvc-studio .seedance-business-history-grid {
+      display:grid;
+      grid-template-columns:repeat(auto-fill, minmax(210px, 1fr));
+      gap:0.7rem;
+    }
+    #content-seedance-tvc-studio .seedance-business-job {
+      text-align:left;
+      border:1px solid rgba(42,61,102,0.08);
+      background:linear-gradient(180deg, #fff, rgba(247,250,255,0.98));
+      border-radius:16px;
+      padding:0.75rem 0.82rem;
+      cursor:pointer;
+      transition:border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+    }
+    #content-seedance-tvc-studio .seedance-business-job:hover,
+    #content-seedance-tvc-studio .seedance-business-job.is-active {
+      border-color:rgba(91,124,255,0.34);
+      box-shadow:0 14px 28px rgba(42,61,102,0.08);
+      transform:translateY(-1px);
+    }
+    #content-seedance-tvc-studio .seedance-business-job-title,
+    #content-seedance-tvc-studio .seedance-business-job-meta {
+      display:block;
+    }
+    #content-seedance-tvc-studio .seedance-business-job-title {
+      color:#1f2b42;
+      font-weight:700;
+      line-height:1.45;
+    }
+    #content-seedance-tvc-studio .seedance-business-job-meta {
+      margin-top:0.28rem;
+      color:#70809b;
+      font-size:0.76rem;
+    }
+    #content-seedance-tvc-studio .seedance-business-empty {
+      padding:1rem 1.05rem;
+      border-radius:16px;
+      border:1px dashed rgba(91,124,255,0.22);
+      background:rgba(247,250,255,0.86);
+      color:#68748f;
+      font-size:0.84rem;
+      line-height:1.7;
+    }
     #content-hifly-digital-human .hifly-inline-check {
       display:flex;
       align-items:center;
@@ -1982,6 +2086,17 @@
     }
     .imglab-actions { display:flex; gap:0.55rem; flex-wrap:wrap; margin-top:0.78rem; }
     .imglab-actions .btn { flex:1 1 140px; }
+    .imglab-result-entry-btn {
+      border:none;
+      background:linear-gradient(135deg, #5b7cff, #22c6b8);
+      color:#fff;
+      box-shadow:0 14px 28px rgba(61,104,214,0.20);
+    }
+    .imglab-result-entry-btn:hover {
+      color:#fff;
+      transform:translateY(-1px);
+      box-shadow:0 18px 34px rgba(61,104,214,0.25);
+    }
     .imglab-result-surface {
       min-height:420px; border-radius:24px; overflow:hidden; border:1px solid rgba(116,134,168,0.16);
       background:
@@ -2013,6 +2128,97 @@
     }
     .imglab-result-thumb.is-active { box-shadow:inset 0 0 0 2px rgba(91,124,255,0.26), 0 10px 22px rgba(91,124,255,0.08); }
     .imglab-result-thumb img { width:100%; aspect-ratio:1 / 1; object-fit:cover; border-radius:14px; display:block; background:#eef3fb; }
+    .imglab-task-card {
+      border:none;
+      cursor:pointer;
+      padding:0;
+      text-align:left;
+      border-radius:18px;
+      overflow:hidden;
+      background:linear-gradient(180deg, rgba(255,255,255,0.99), rgba(246,249,254,0.99));
+      box-shadow:inset 0 0 0 1px rgba(116,134,168,0.14), 0 10px 22px rgba(36,54,88,0.05);
+      transition:transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    .imglab-task-card:hover,
+    .imglab-task-card.is-active {
+      transform:translateY(-1px);
+      box-shadow:inset 0 0 0 2px rgba(91,124,255,0.28), 0 14px 28px rgba(36,54,88,0.09);
+    }
+    .imglab-task-card-media {
+      aspect-ratio:1 / 1;
+      background:#eef3fb;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:hidden;
+    }
+    .imglab-task-card-media img {
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
+    }
+    .imglab-task-card-body {
+      padding:0.6rem 0.66rem 0.68rem;
+      display:flex;
+      flex-direction:column;
+      gap:0.2rem;
+      min-height:54px;
+    }
+    .imglab-task-card-title {
+      color:#243755;
+      font-weight:700;
+      font-size:0.78rem;
+      line-height:1.35;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .imglab-task-card-meta {
+      color:#72819a;
+      font-size:0.7rem;
+      line-height:1.35;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .imglab-task-card-pending,
+    .imglab-task-card-failed {
+      width:100%;
+      height:100%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+    .imglab-task-card-pending {
+      background:linear-gradient(135deg, rgba(91,124,255,0.10), rgba(34,198,184,0.12));
+    }
+    .imglab-task-card-failed {
+      color:#b94646;
+      background:rgba(248,113,113,0.10);
+      font-weight:700;
+      font-size:0.78rem;
+    }
+    .imglab-task-done-mark {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:52px;
+      height:28px;
+      border-radius:999px;
+      background:rgba(31,143,95,0.12);
+      color:#1f8f5f;
+      font-size:0.74rem;
+      font-weight:700;
+    }
+    .imglab-task-spinner {
+      width:28px;
+      height:28px;
+      border-radius:999px;
+      border:3px solid rgba(91,124,255,0.16);
+      border-top-color:#5b7cff;
+      animation:viral-spin 0.86s linear infinite;
+    }
     .imglab-example-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:0.9rem; }
     .imglab-example-toolbar {
       display:flex; align-items:center; justify-content:space-between; gap:0.8rem; flex-wrap:wrap; margin-bottom:0.8rem;
@@ -6490,6 +6696,7 @@
 
                     <div class="imglab-actions">
                       <button type="button" id="imglabGenerateBtn" class="btn btn-primary">开始生成图片</button>
+                      <button type="button" class="btn imglab-result-entry-btn" data-imglab-show-result>查看任务结果</button>
                       <button type="button" id="imglabResetBtn" class="btn btn-ghost">重置</button>
                     </div>
                   </div>
@@ -6500,8 +6707,9 @@
                     <div class="tvc-toolbar" style="margin-bottom:0.2rem;">
                       <div>
                         <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">结果展示</h4>
-                        <p class="imglab-panel-hint" style="margin:0;">生成完成后直接在这里看大图，下面的小图只负责切换结果，不做复杂的中间解释。</p>
+                        <p class="imglab-panel-hint" style="margin:0;">上方展示当前选中的结果，下面的卡片展示任务状态和历史结果。</p>
                       </div>
+                      <button type="button" id="imglabShowExamplesBtn" class="btn btn-ghost btn-sm">查看案例</button>
                     </div>
                     <div id="imglabResultSurface" class="imglab-result-surface"></div>
                     <div id="imglabResultMeta" class="imglab-result-meta"></div>
@@ -6514,7 +6722,10 @@
                         <h4 class="imglab-panel-title" style="margin-bottom:0.2rem;">精品案例</h4>
                         <p class="imglab-panel-hint" style="margin:0;">点一下案例会把中文提示词带到左侧编辑区。</p>
                       </div>
-                      <div id="imglabExamplesStatus" class="imglab-example-status">正在加载示例...</div>
+                      <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;justify-content:flex-end;">
+                        <div id="imglabExamplesStatus" class="imglab-example-status">正在加载示例...</div>
+                        <button type="button" class="btn btn-sm imglab-result-entry-btn" data-imglab-show-result>查看任务结果</button>
+                      </div>
                     </div>
                     <div class="imglab-example-filters">
                       <button type="button" class="category-chip active" data-imglab-category="all">全部</button>
@@ -6787,6 +6998,16 @@
                 </aside>
 
                 <section class="tvc-main">
+                  <div class="tvc-toolbar" style="margin-bottom:0.85rem;">
+                    <div>
+                      <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">创意视频</h4>
+                      <p class="tvc-panel-hint" style="margin:0;">左侧负责提交，右侧分开看分镜预览和业务结果。</p>
+                    </div>
+                    <div class="seedance-view-tabs">
+                      <button type="button" id="seedanceStoryboardTabBtn" class="seedance-view-tab is-active">分镜预览</button>
+                      <button type="button" id="seedanceBusinessResultTabBtn" class="seedance-view-tab">创作结果</button>
+                    </div>
+                  </div>
                   <div class="tvc-panel" id="seedanceResultPanel">
                     <div class="tvc-toolbar" style="margin-bottom:0.2rem;">
                       <div>
@@ -6808,6 +7029,35 @@
                       <span id="seedanceBoardsCounter" class="tvc-summary-pill">2 张分镜</span>
                     </div>
                     <div id="seedanceStoryboardStrip" class="tvc-storyboard-strip"></div>
+                  </div>
+
+                  <div class="tvc-panel" id="seedanceBusinessResultView" hidden>
+                    <div class="seedance-result-panel-head">
+                      <div>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.25rem;">创作结果</h4>
+                        <p class="tvc-panel-hint" style="margin:0;">提交后会自动切到这里，生成状态、最终视频和最近任务都在这一屏查看。</p>
+                        <div class="seedance-result-meta">
+                          <span class="seedance-result-pill" id="seedanceTaskStatusText" data-tone="idle">等待提交</span>
+                          <span class="seedance-result-pill" id="seedanceTaskKindText" data-tone="idle">未开始</span>
+                        </div>
+                      </div>
+                      <button type="button" id="seedanceBusinessResultBackBtn" class="btn btn-ghost btn-sm">返回分镜预览</button>
+                    </div>
+                    <div class="tvc-panel-hint" id="seedanceCurrentTaskTitle" style="margin:-0.35rem 0 0.75rem 0;">还没有提交创意视频任务</div>
+                    <div class="tvc-video-stage">
+                      <div id="seedanceBusinessResultSurface" class="tvc-video-surface"></div>
+                    </div>
+                    <div class="seedance-business-history">
+                      <div class="tvc-toolbar" style="margin-bottom:0.72rem;">
+                        <div>
+                          <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">最近任务</h4>
+                          <p class="tvc-panel-hint" style="margin:0;">任务提交后可以离开页面，回来后点任务继续查看。</p>
+                        </div>
+                        <span class="tvc-summary-pill"><span id="seedanceBusinessHistoryCount">0</span> 个</span>
+                      </div>
+                      <div id="seedanceBusinessHistoryGrid" class="seedance-business-history-grid"></div>
+                      <div id="seedanceBusinessHistoryEmpty" class="seedance-business-empty">还没有创意视频任务，提交一次后这里会出现。</div>
+                    </div>
                   </div>
 
                   <div id="seedanceExamplesPanel" class="tvc-panel" hidden>
@@ -8394,8 +8644,8 @@
   <script src="/static/js/wecom-detail.js?v=20260416e"></script>
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260503-ecom-master-copy"></script>
-  <script src="/static/js/comfly-image-studio.js?v=20260519-default-examples"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260522-result-download"></script>
+  <script src="/static/js/comfly-image-studio.js?v=20260527-task-cards-result-entry"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260527-business-result"></script>
   <script src="/static/js/viral-video-remix.js?v=20260513-taskgroup-error-balance-guard"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>

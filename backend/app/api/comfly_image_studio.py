@@ -7,8 +7,17 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from pathlib import Path
 from sqlalchemy.orm import Session
 
-from ..db import get_db
+from ..db import SessionLocal, get_db
+from ..services.comfly_image_studio_job_store import create_job_record, get_job, update_job
 from ..services.comfly_veo_exec import _resolve_comfly_credentials
+from .assets import (
+    SaveAssetReq,
+    _compute_save_url_dedupe_key,
+    _final_save_url_dedupe_key,
+    _resolve_v3_tasks_url_for_download,
+    _save_asset_from_url_locked,
+    _save_url_lock_for,
+)
 from .auth import _ServerUser, get_current_user_media_edit
 
 logger = logging.getLogger(__name__)
@@ -133,18 +142,37 @@ def _comfly_endpoint(api_base: str, path: str) -> str:
     return f"{base}{path}"
 
 
-@router.post("/api/comfly-image-studio/generate")
-async def comfly_image_studio_generate(
+def _status_response(job: Dict[str, Any]) -> Dict[str, Any]:
+    st = str(job.get("status") or "").strip()
+    out: Dict[str, Any] = {
+        "ok": st != "failed",
+        "job_id": job.get("job_id"),
+        "status": st,
+        "stage": job.get("stage"),
+        "created_at_ts": job.get("created_at_ts"),
+        "updated_at_ts": job.get("updated_at_ts"),
+    }
+    if st == "completed":
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        out.update(result)
+        out["saved_assets"] = job.get("saved_assets") or result.get("saved_assets") or []
+    elif st == "failed":
+        out["error"] = job.get("error") or "图片生成失败"
+    return out
+
+
+async def _generate_image_studio_core(
+    *,
     request: Request,
-    prompt: str = Form(""),
-    model: str = Form("gpt-image-2"),
-    aspect_ratio: str = Form("1:1"),
-    quality: str = Form("high"),
-    background: str = Form("auto"),
-    images: List[UploadFile] = File(None),
-    current_user: _ServerUser = Depends(get_current_user_media_edit),
-    db: Session = Depends(get_db),
-):
+    current_user: _ServerUser,
+    db: Session,
+    prompt: str,
+    model: str,
+    aspect_ratio: str,
+    quality: str,
+    background: str,
+    upload_payloads: List[Dict[str, Any]],
+) -> Dict[str, Any]:
     prompt = (prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="请输入图片提示词")
@@ -153,7 +181,6 @@ async def comfly_image_studio_generate(
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
     model_id = (model or "gpt-image-2").strip() or "gpt-image-2"
     quality_id = (quality or "high").strip() or "high"
-    valid_uploads = [item for item in (images or []) if item and (item.filename or "").strip()]
 
     body = {
         "prompt": prompt,
@@ -167,21 +194,20 @@ async def comfly_image_studio_generate(
         body["background"] = background
 
     files: List[tuple[str, tuple[str, bytes, str]]] = []
-    if valid_uploads:
-        for upload in valid_uploads:
-            raw = await upload.read()
-            if not raw:
-                continue
-            files.append(
+    for upload in upload_payloads:
+        raw = upload.get("bytes")
+        if not isinstance(raw, (bytes, bytearray)) or not raw:
+            continue
+        files.append(
+            (
+                "image",
                 (
-                    "image",
-                    (
-                        upload.filename or "reference.png",
-                        raw,
-                        (upload.content_type or "image/png").strip() or "image/png",
-                    ),
-                )
+                    str(upload.get("filename") or "reference.png"),
+                    bytes(raw),
+                    str(upload.get("content_type") or "image/png").strip() or "image/png",
+                ),
             )
+        )
 
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     try:
@@ -225,14 +251,246 @@ async def comfly_image_studio_generate(
     if not previews:
         raise HTTPException(status_code=502, detail="图片生成成功，但结果暂时不可预览")
 
+    saved_assets = await _save_image_studio_results(
+        previews=previews,
+        request=request,
+        current_user=current_user,
+        prompt=prompt,
+        model=model_id,
+    )
+
     return {
         "ok": True,
         "images": previews,
+        "saved_assets": saved_assets,
         "meta": {
             "model": model_id,
             "aspect_ratio": aspect_ratio,
             "size": size,
             "quality": quality_id,
-            "reference_count": len(valid_uploads),
+            "reference_count": len(files),
         },
     }
+
+
+async def _run_image_studio_job(
+    *,
+    job_id: str,
+    user_id: int,
+    token: str,
+    install_id: str,
+    payload: Dict[str, Any],
+    upload_payloads: List[Dict[str, Any]],
+) -> None:
+    from starlette.datastructures import Headers
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/comfly-image-studio/generate/start",
+        "headers": [],
+        "scheme": "http",
+        "server": ("127.0.0.1", 80),
+        "client": ("127.0.0.1", 0),
+    }
+    headers = {"authorization": f"Bearer {token}"}
+    if install_id:
+        headers["x-installation-id"] = install_id
+    request = Request({**scope, "headers": Headers(headers).raw})
+    current_user = _ServerUser(id=user_id)
+    update_job(job_id, status="running", stage="generating")
+    db = SessionLocal()
+    try:
+        result = await _generate_image_studio_core(
+            request=request,
+            current_user=current_user,
+            db=db,
+            prompt=str(payload.get("prompt") or ""),
+            model=str(payload.get("model") or "gpt-image-2"),
+            aspect_ratio=str(payload.get("aspect_ratio") or "1:1"),
+            quality=str(payload.get("quality") or "high"),
+            background=str(payload.get("background") or "auto"),
+            upload_payloads=upload_payloads,
+        )
+        update_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            result=result,
+            saved_assets=result.get("saved_assets") or [],
+            error=None,
+        )
+    except HTTPException as exc:
+        update_job(job_id, status="failed", stage="failed", error=str(exc.detail or "")[:2000])
+    except Exception as exc:
+        logger.exception("[comfly_image_studio] async job failed job_id=%s", job_id)
+        update_job(job_id, status="failed", stage="failed", error=str(exc)[:2000])
+    finally:
+        db.close()
+
+
+async def _upload_files_to_payloads(images: List[UploadFile]) -> List[Dict[str, Any]]:
+    uploads: List[Dict[str, Any]] = []
+    for upload in [item for item in (images or []) if item and (item.filename or "").strip()]:
+        raw = await upload.read()
+        if not raw:
+            continue
+        uploads.append(
+            {
+                "filename": upload.filename or "reference.png",
+                "content_type": (upload.content_type or "image/png").strip() or "image/png",
+                "bytes": raw,
+            }
+        )
+    return uploads
+
+
+async def _save_image_studio_results(
+    *,
+    previews: List[Dict[str, str]],
+    request: Request,
+    current_user: _ServerUser,
+    prompt: str,
+    model: str,
+) -> List[Dict[str, Any]]:
+    saved: List[Dict[str, Any]] = []
+    for index, item in enumerate(previews):
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        body = SaveAssetReq(
+            url=url,
+            media_type="image",
+            tags="auto,comfly.image_studio",
+            prompt=prompt[:500] if prompt else None,
+            model=(model or "")[:128] or None,
+        )
+        try:
+            effective = await _resolve_v3_tasks_url_for_download(body.url, "image", current_user, request=request)
+            base_dk = _compute_save_url_dedupe_key(body.url, effective, body.dedupe_hint_url)
+            dk = _final_save_url_dedupe_key(
+                base_dk,
+                body.generation_task_id,
+                dedupe_hint_url=body.dedupe_hint_url,
+                body_url=body.url,
+            )
+            async with _save_url_lock_for(current_user.id, dk):
+                row = await _save_asset_from_url_locked(
+                    dk,
+                    body,
+                    request,
+                    current_user,
+                    effective_url_resolved=effective,
+                )
+            item["asset_id"] = str(row.get("asset_id") or "")
+            item["source_url"] = str(row.get("source_url") or "")
+            saved.append({"index": index, "source_url": url, "asset": row})
+            logger.info(
+                "[comfly_image_studio] save-url ok user_id=%s index=%s asset_id=%s",
+                current_user.id,
+                index,
+                row.get("asset_id"),
+            )
+        except Exception:
+            logger.warning(
+                "[comfly_image_studio] save-url failed user_id=%s index=%s url=%s",
+                current_user.id,
+                index,
+                url[:120],
+                exc_info=True,
+            )
+    return saved
+
+
+@router.post("/api/comfly-image-studio/generate")
+async def comfly_image_studio_generate(
+    request: Request,
+    prompt: str = Form(""),
+    model: str = Form("gpt-image-2"),
+    aspect_ratio: str = Form("1:1"),
+    quality: str = Form("high"),
+    background: str = Form("auto"),
+    images: List[UploadFile] = File(None),
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+    db: Session = Depends(get_db),
+):
+    return await _generate_image_studio_core(
+        request=request,
+        current_user=current_user,
+        db=db,
+        prompt=prompt,
+        model=model,
+        aspect_ratio=aspect_ratio,
+        quality=quality,
+        background=background,
+        upload_payloads=await _upload_files_to_payloads(images or []),
+    )
+
+
+@router.post("/api/comfly-image-studio/generate/start")
+async def comfly_image_studio_generate_start(
+    request: Request,
+    prompt: str = Form(""),
+    model: str = Form("gpt-image-2"),
+    aspect_ratio: str = Form("1:1"),
+    quality: str = Form("high"),
+    background: str = Form("auto"),
+    images: List[UploadFile] = File(None),
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+):
+    payload = {
+        "prompt": (prompt or "").strip(),
+        "model": (model or "gpt-image-2").strip() or "gpt-image-2",
+        "aspect_ratio": (aspect_ratio or "1:1").strip() or "1:1",
+        "quality": (quality or "high").strip() or "high",
+        "background": (background or "auto").strip() or "auto",
+    }
+    if not payload["prompt"]:
+        raise HTTPException(status_code=400, detail="请输入图片提示词")
+    upload_payloads = await _upload_files_to_payloads(images or [])
+    job_id = create_job_record(user_id=current_user.id, payload=payload)
+    auth = (request.headers.get("Authorization") or "").strip()
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+    install_id = (request.headers.get("X-Installation-Id") or "").strip()
+
+    async def _runner() -> None:
+        await _run_image_studio_job(
+            job_id=job_id,
+            user_id=current_user.id,
+            token=token,
+            install_id=install_id,
+            payload=payload,
+            upload_payloads=upload_payloads,
+        )
+
+    import asyncio
+
+    task = asyncio.create_task(_runner())
+
+    def _log_task_done(done: asyncio.Task) -> None:
+        try:
+            _ = done.exception()
+        except asyncio.CancelledError:
+            pass
+
+    task.add_done_callback(_log_task_done)
+    return {
+        "ok": True,
+        "async": True,
+        "job_id": job_id,
+        "status": "running",
+        "poll_path": f"/api/comfly-image-studio/jobs/{job_id}",
+    }
+
+
+@router.get("/api/comfly-image-studio/jobs/{job_id}")
+async def comfly_image_studio_job_status(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    if int(job.get("user_id") or -1) != int(current_user.id):
+        raise HTTPException(status_code=403, detail="无权查看该任务")
+    return _status_response(job)
