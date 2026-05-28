@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
+from ..core.config import get_settings
+from ..services.creative_job_cloud_sync import sync_creative_job_to_cloud
 from ..services.comfly_seedance_tvc_job_store import (
     create_job_record,
     get_job,
@@ -37,6 +41,7 @@ from .assets import (
 from .auth import _ServerUser, get_current_user_media_edit
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class ComflySeedancePipelinePayload(BaseModel):
@@ -136,12 +141,95 @@ async def _prepare_pipeline_input(
     )
 
 
+def _request_auth_header(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    return (request.headers.get("Authorization") or "").strip()
+
+
+def _request_installation_id(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    return (
+        request.headers.get("X-Installation-Id")
+        or request.headers.get("x-installation-id")
+        or ""
+    ).strip()
+
+
+def _normalized_auth_header(auth_header: str) -> str:
+    raw = (auth_header or "").strip()
+    if not raw:
+        return ""
+    return raw if raw.lower().startswith("bearer ") else f"Bearer {raw}"
+
+
+async def _save_seedance_video_to_server(
+    body: SaveAssetReq,
+    *,
+    auth_header: str = "",
+    installation_id: str = "",
+) -> Optional[Dict[str, Any]]:
+    server_base = (get_settings().auth_server_base or "").strip().rstrip("/")
+    auth = _normalized_auth_header(auth_header)
+    if not server_base or not auth:
+        logger.warning(
+            "[seedance-tvc] skip cloud asset save: auth_server_base=%s auth_header=%s",
+            bool(server_base),
+            bool(auth),
+        )
+        return None
+
+    payload: Dict[str, Any] = {
+        "url": body.url,
+        "media_type": "video",
+        "tags": body.tags,
+        "prompt": body.prompt,
+        "model": body.model,
+    }
+    if body.dedupe_hint_url:
+        payload["dedupe_hint_url"] = body.dedupe_hint_url
+    if body.generation_task_id:
+        payload["generation_task_id"] = body.generation_task_id
+
+    headers = {
+        "Authorization": auth,
+        "Content-Type": "application/json",
+    }
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True, trust_env=False) as client:
+            resp = await client.post(f"{server_base}/api/assets/save-url", json=payload, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning(
+                "[seedance-tvc] cloud asset save failed status=%s body=%s url=%s",
+                resp.status_code,
+                (resp.text or "")[:500],
+                body.url[:160],
+            )
+            return None
+        data = resp.json()
+        logger.info(
+            "[seedance-tvc] cloud asset saved asset_id=%s source_url=%s",
+            data.get("asset_id"),
+            str(data.get("source_url") or "")[:160],
+        )
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        logger.warning("[seedance-tvc] cloud asset save error: %s", e, exc_info=True)
+        return None
+
+
 async def _save_pipeline_videos(
     *,
     urls: List[tuple],
     request: Optional[Request],
     current_user: _ServerUser,
     video_model: str,
+    auth_header: str = "",
+    installation_id: str = "",
 ) -> List[Dict[str, Any]]:
     saved: List[Dict[str, Any]] = []
     for url, task_id, title_hint in urls:
@@ -163,13 +251,26 @@ async def _save_pipeline_videos(
         )
         async with _save_url_lock_for(current_user.id, dk):
             row = await _save_asset_from_url_locked(dk, body, request, current_user, effective_url_resolved=effective)
-        saved.append({"source_url": url, "task_id": task_id, "asset": row})
+        cloud_row = await _save_seedance_video_to_server(
+            body,
+            auth_header=auth_header or _request_auth_header(request),
+            installation_id=installation_id or _request_installation_id(request),
+        )
+        item = {"source_url": url, "task_id": task_id, "asset": row}
+        if cloud_row:
+            item["cloud_asset"] = cloud_row
+        saved.append(item)
     return saved
 
 
 def _video_model_from_result(result: Dict[str, Any]) -> str:
     cfg = result.get("config") if isinstance(result.get("config"), dict) else {}
     return str(cfg.get("video_model") or "") if isinstance(cfg, dict) else ""
+
+
+def _seedance_task_text(inp: Dict[str, Any]) -> str:
+    task = inp.get("task") if isinstance(inp.get("task"), dict) else {}
+    return str(task.get("text") or inp.get("task_text") or "").strip()
 
 
 async def _seedance_job_runner(job_id: str) -> None:
@@ -179,10 +280,40 @@ async def _seedance_job_runner(job_id: str) -> None:
     inp = deepcopy(job.get("inp") or {})
     auto_save = bool(job.get("auto_save"))
     user_id = int(job.get("user_id") or 0)
+    auth_header = str(job.get("auth_header") or "")
+    installation_id = str(job.get("installation_id") or "")
+    task_text = _seedance_task_text(inp)
+    request_payload = {"inp": inp, "auto_save": auto_save}
+    await sync_creative_job_to_cloud(
+        auth_header=auth_header,
+        installation_id=installation_id,
+        job_id=job_id,
+        feature_type="seedance_tvc",
+        provider="comfly_seedance",
+        status="running",
+        stage="generating",
+        title="创意视频任务",
+        prompt=task_text,
+        request_payload=request_payload,
+    )
     try:
         result = await asyncio.to_thread(run_storyboard_pipeline_sync, inp)
     except Exception as e:
-        update_job(job_id, status="failed", error=str(e)[:2000])
+        error = str(e)[:2000]
+        update_job(job_id, status="failed", error=error)
+        await sync_creative_job_to_cloud(
+            auth_header=auth_header,
+            installation_id=installation_id,
+            job_id=job_id,
+            feature_type="seedance_tvc",
+            provider="comfly_seedance",
+            status="failed",
+            stage="failed",
+            title="创意视频任务",
+            prompt=task_text,
+            request_payload=request_payload,
+            error=error,
+        )
         return
 
     saved_assets: List[Dict[str, Any]] = []
@@ -196,15 +327,47 @@ async def _seedance_job_runner(job_id: str) -> None:
                     request=None,
                     current_user=_ServerUser(id=user_id),
                     video_model=_video_model_from_result(result),
+                    auth_header=auth_header,
+                    installation_id=installation_id,
                 )
             except HTTPException as he:
                 detail = he.detail if isinstance(he.detail, str) else str(he.detail)
+                error = f"Seedance pipeline completed but asset save failed: {detail}"
                 update_job(job_id, status="failed", error=f"流水线成功但入库失败: {detail}", result=result)
+                await sync_creative_job_to_cloud(
+                    auth_header=auth_header,
+                    installation_id=installation_id,
+                    job_id=job_id,
+                    feature_type="seedance_tvc",
+                    provider="comfly_seedance",
+                    status="failed",
+                    stage="failed",
+                    title="创意视频任务",
+                    prompt=task_text,
+                    request_payload=request_payload,
+                    result_payload=result,
+                    error=error,
+                )
                 db.close()
                 return
             finally:
                 db.close()
     update_job(job_id, status="completed", error=None, result=result, saved_assets=saved_assets)
+    await sync_creative_job_to_cloud(
+        auth_header=auth_header,
+        installation_id=installation_id,
+        job_id=job_id,
+        feature_type="seedance_tvc",
+        provider="comfly_seedance",
+        status="completed",
+        stage="completed",
+        title="创意视频任务",
+        prompt=task_text,
+        request_payload=request_payload,
+        result_payload=result,
+        saved_assets=saved_assets,
+        meta={"auto_save": auto_save},
+    )
 
 
 def _redact_progress_for_client(prog: Any) -> Any:
@@ -291,6 +454,8 @@ async def comfly_seedance_pipeline_run(
                 request=request,
                 current_user=current_user,
                 video_model=_video_model_from_result(result),
+                auth_header=_request_auth_header(request),
+                installation_id=_request_installation_id(request),
             )
     return {"ok": True, "pipeline": "comfly_seedance_tvc_video", "result": result, "saved_assets": saved_assets}
 
@@ -320,7 +485,22 @@ async def comfly_seedance_pipeline_start(
         auto_save=pl.auto_save,
         job_output_dir=effective_dir,
         job_id=job_id,
+        auth_header=_request_auth_header(request),
+        installation_id=_request_installation_id(request),
     )
+    asyncio.create_task(sync_creative_job_to_cloud(
+        auth_header=_request_auth_header(request),
+        installation_id=_request_installation_id(request),
+        job_id=job_id,
+        feature_type="seedance_tvc",
+        provider="comfly_seedance",
+        status="running",
+        stage="queued",
+        title="创意视频任务",
+        prompt=pl.task_text,
+        request_payload={"payload": pl.model_dump(), "inp": inp},
+        meta={"auto_save": pl.auto_save, "duration": pl.total_duration_seconds},
+    ))
 
     def _log_task_done(task: asyncio.Task) -> None:
         try:

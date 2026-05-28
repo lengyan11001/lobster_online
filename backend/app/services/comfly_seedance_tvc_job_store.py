@@ -22,7 +22,16 @@ def _prune_stale_unlocked(now: float) -> None:
         _JOBS.pop(jid, None)
 
 
-def create_job_record(*, user_id: int, inp: Dict[str, Any], auto_save: bool, job_output_dir: str, job_id: Optional[str] = None) -> str:
+def create_job_record(
+    *,
+    user_id: int,
+    inp: Dict[str, Any],
+    auto_save: bool,
+    job_output_dir: str,
+    job_id: Optional[str] = None,
+    auth_header: str = "",
+    installation_id: str = "",
+) -> str:
     jid = (job_id or "").strip().lower()
     if not jid or len(jid) != 32 or any(c not in "0123456789abcdef" for c in jid):
         jid = uuid.uuid4().hex
@@ -38,6 +47,8 @@ def create_job_record(*, user_id: int, inp: Dict[str, Any], auto_save: bool, job
             "inp": inp,
             "auto_save": bool(auto_save),
             "job_output_dir": job_output_dir,
+            "auth_header": (auth_header or "").strip(),
+            "installation_id": (installation_id or "").strip(),
             "error": None,
             "result": None,
             "saved_assets": [],

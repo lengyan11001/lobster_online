@@ -99,6 +99,10 @@
     return (typeof LOCAL_API_BASE !== 'undefined' ? (LOCAL_API_BASE || '') : '').replace(/\/$/, '');
   }
 
+  function cloudBase() {
+    return (typeof API_BASE !== 'undefined' ? (API_BASE || '') : '').replace(/\/$/, '');
+  }
+
   function jobsStorageKey() {
     var uid = (window.__currentUserId || window.currentUserId || 'anon');
     return 'lobster_image_studio_jobs_' + String(uid || 'anon');
@@ -140,6 +144,21 @@
       if (!item || item.jobId !== jobId) return item;
       return Object.assign({}, item, patch || {}, { updatedAt: Date.now() });
     });
+    saveRecentJobs();
+  }
+
+  function mergeRecentJobs(rows) {
+    var byId = {};
+    (state.recentJobs || []).concat(rows || []).forEach(function(item) {
+      if (!item || !item.jobId) return;
+      var old = byId[item.jobId] || {};
+      byId[item.jobId] = Object.assign({}, old, item, {
+        updatedAt: item.updatedAt || old.updatedAt || Date.now()
+      });
+    });
+    state.recentJobs = Object.keys(byId).map(function(id) { return byId[id]; })
+      .sort(function(a, b) { return Number(b.updatedAt || 0) - Number(a.updatedAt || 0); })
+      .slice(0, 12);
     saveRecentJobs();
   }
 
@@ -227,7 +246,73 @@
 
   function resultPreviewUrl(item) {
     if (!item) return '';
-    return item.data_url || item.url || '';
+    return item.sourceUrl || item.data_url || item.url || '';
+  }
+
+  function cloudImageUrlFromJob(job) {
+    var assets = (job && job.assets) || {};
+    var ids = Array.isArray(job && job.asset_ids) ? job.asset_ids : [];
+    for (var i = 0; i < ids.length; i += 1) {
+      var asset = assets[ids[i]] || {};
+      var src = String(asset.source_url || asset.preview_url || '').trim();
+      if (src) return src;
+    }
+    var saved = Array.isArray(job && job.saved_assets) ? job.saved_assets : [];
+    for (var j = 0; j < saved.length; j += 1) {
+      var item = saved[j] || {};
+      var row = item.asset || item.cloud_asset || {};
+      var url = String(row.source_url || row.preview_url || item.source_url || '').trim();
+      if (url) return url;
+    }
+    var payload = (job && job.result_payload) || {};
+    var images = Array.isArray(payload.images) ? payload.images : [];
+    return images[0] ? String(images[0].source_url || images[0].url || images[0].data_url || '').trim() : '';
+  }
+
+  function normalizeCloudJob(job) {
+    if (!job || !job.job_id) return null;
+    var payload = job.result_payload || {};
+    var images = Array.isArray(payload.images) ? payload.images : [];
+    var ids = Array.isArray(job.asset_ids) ? job.asset_ids : [];
+    return {
+      jobId: String(job.job_id || ''),
+      status: String(job.status || 'running'),
+      title: job.title || '图片任务',
+      image: cloudImageUrlFromJob(job),
+      resultCount: ids.length || images.length || 0,
+      updatedAt: Date.parse(job.updated_at || job.completed_at || job.created_at || '') || Date.now(),
+      cloud: true,
+      cloudJob: job
+    };
+  }
+
+  function applyCloudJobResult(job) {
+    var payload = (job && job.result_payload) || {};
+    var assets = (job && job.assets) || {};
+    var saved = Array.isArray(job && job.saved_assets) ? job.saved_assets : [];
+    state.results = (Array.isArray(payload.images) ? payload.images : []).map(function(item, index) {
+      var savedItem = saved[index] || {};
+      var row = savedItem.asset || savedItem.cloud_asset || {};
+      var aid = item.asset_id || savedItem.asset_id || row.asset_id || '';
+      var asset = aid ? (assets[aid] || {}) : {};
+      return {
+        url: item.url || '',
+        data_url: item.data_url || '',
+        assetId: aid,
+        sourceUrl: asset.source_url || row.source_url || item.source_url || savedItem.source_url || '',
+        model: payload.meta && payload.meta.model,
+        aspectRatio: payload.meta && payload.meta.aspect_ratio,
+        size: payload.meta && payload.meta.size
+      };
+    });
+    if (!state.results.length) {
+      var fallback = cloudImageUrlFromJob(job);
+      if (fallback) state.results = [{ url: fallback, sourceUrl: fallback, assetId: (job.asset_ids || [])[0] || '' }];
+    }
+    state.activeResultIndex = 0;
+    state.currentJobStatus = String((job && job.status) || 'completed');
+    renderResultSurface();
+    setRightView('result');
   }
 
   function jobStatusText(status) {
@@ -369,6 +454,11 @@
         state.currentJobStatus = (hit && hit.status) || 'running';
         if (state.currentJobStatus === 'stale') state.currentJobStatus = 'running';
         setRightView('result');
+        if (hit && hit.cloud && hit.cloudJob && hit.status === 'completed') {
+          applyCloudJobResult(hit.cloudJob);
+          showMessage('已加载服务器保存的历史结果。', false);
+          return;
+        }
         renderResultSurface();
         refreshJobStatus(true);
       });
@@ -516,6 +606,32 @@
     state.activeResultIndex = 0;
     renderResultSurface();
     setRightView('result');
+  }
+
+  function loadCloudJobHistory() {
+    var base = cloudBase();
+    if (!base) return Promise.resolve([]);
+    return fetch(base + '/api/creative-jobs?feature_type=image_studio&limit=12', {
+      headers: authHeadersSafe()
+    })
+      .then(function(response) {
+        return response.json().then(function(data) {
+          return { ok: response.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error('cloud history failed');
+        var rows = (Array.isArray(result.data.items) ? result.data.items : [])
+          .map(normalizeCloudJob)
+          .filter(Boolean);
+        mergeRecentJobs(rows);
+        renderWorkspace();
+        return rows;
+      })
+      .catch(function(err) {
+        console.warn('图片云端历史加载失败', err);
+        return [];
+      });
   }
 
   function refreshJobStatus(showToast) {
@@ -922,6 +1038,7 @@
     if (!state.initialized) {
       state.initialized = true;
       loadRecentJobs();
+      loadCloudJobHistory();
       loadExamples(true);
       var now = Date.now();
       var active = state.recentJobs.find(function(item) {

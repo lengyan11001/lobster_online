@@ -1,5 +1,6 @@
 import json
 import logging
+import asyncio
 from typing import Any, Dict, List
 
 import httpx
@@ -8,6 +9,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
+from ..services.creative_job_cloud_sync import sync_creative_job_to_cloud
 from ..services.comfly_image_studio_job_store import create_job_record, get_job, update_job
 from ..services.comfly_veo_exec import _resolve_comfly_credentials
 from .assets import (
@@ -299,6 +301,20 @@ async def _run_image_studio_job(
     request = Request({**scope, "headers": Headers(headers).raw})
     current_user = _ServerUser(id=user_id)
     update_job(job_id, status="running", stage="generating")
+    auth_header = f"Bearer {token}" if token else ""
+    await sync_creative_job_to_cloud(
+        auth_header=auth_header,
+        installation_id=install_id,
+        job_id=job_id,
+        feature_type="image_studio",
+        provider="comfly",
+        status="running",
+        stage="generating",
+        title="图片任务",
+        prompt=str(payload.get("prompt") or ""),
+        request_payload=payload,
+        meta={"reference_count": len(upload_payloads or [])},
+    )
     db = SessionLocal()
     try:
         result = await _generate_image_studio_core(
@@ -320,11 +336,54 @@ async def _run_image_studio_job(
             saved_assets=result.get("saved_assets") or [],
             error=None,
         )
+        await sync_creative_job_to_cloud(
+            auth_header=auth_header,
+            installation_id=install_id,
+            job_id=job_id,
+            feature_type="image_studio",
+            provider="comfly",
+            status="completed",
+            stage="completed",
+            title="图片任务",
+            prompt=str(payload.get("prompt") or ""),
+            request_payload=payload,
+            result_payload=result,
+            saved_assets=result.get("saved_assets") or [],
+            meta=result.get("meta") if isinstance(result.get("meta"), dict) else {},
+        )
     except HTTPException as exc:
-        update_job(job_id, status="failed", stage="failed", error=str(exc.detail or "")[:2000])
+        error = str(exc.detail or "")[:2000]
+        update_job(job_id, status="failed", stage="failed", error=error)
+        await sync_creative_job_to_cloud(
+            auth_header=auth_header,
+            installation_id=install_id,
+            job_id=job_id,
+            feature_type="image_studio",
+            provider="comfly",
+            status="failed",
+            stage="failed",
+            title="图片任务",
+            prompt=str(payload.get("prompt") or ""),
+            request_payload=payload,
+            error=error,
+        )
     except Exception as exc:
         logger.exception("[comfly_image_studio] async job failed job_id=%s", job_id)
-        update_job(job_id, status="failed", stage="failed", error=str(exc)[:2000])
+        error = str(exc)[:2000]
+        update_job(job_id, status="failed", stage="failed", error=error)
+        await sync_creative_job_to_cloud(
+            auth_header=auth_header,
+            installation_id=install_id,
+            job_id=job_id,
+            feature_type="image_studio",
+            provider="comfly",
+            status="failed",
+            stage="failed",
+            title="图片任务",
+            prompt=str(payload.get("prompt") or ""),
+            request_payload=payload,
+            error=error,
+        )
     finally:
         db.close()
 
@@ -452,6 +511,19 @@ async def comfly_image_studio_generate_start(
     auth = (request.headers.get("Authorization") or "").strip()
     token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
     install_id = (request.headers.get("X-Installation-Id") or "").strip()
+    asyncio.create_task(sync_creative_job_to_cloud(
+        auth_header=auth,
+        installation_id=install_id,
+        job_id=job_id,
+        feature_type="image_studio",
+        provider="comfly",
+        status="running",
+        stage="queued",
+        title="图片任务",
+        prompt=str(payload.get("prompt") or ""),
+        request_payload=payload,
+        meta={"reference_count": len(upload_payloads or [])},
+    ))
 
     async def _runner() -> None:
         await _run_image_studio_job(
@@ -462,8 +534,6 @@ async def comfly_image_studio_generate_start(
             payload=payload,
             upload_payloads=upload_payloads,
         )
-
-    import asyncio
 
     task = asyncio.create_task(_runner())
 

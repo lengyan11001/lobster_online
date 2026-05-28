@@ -283,6 +283,10 @@
     return (typeof LOCAL_API_BASE !== 'undefined' ? (LOCAL_API_BASE || '') : '').replace(/\/$/, '');
   }
 
+  function cloudBase() {
+    return (typeof API_BASE !== 'undefined' ? (API_BASE || '') : '').replace(/\/$/, '');
+  }
+
   function pipelineBase() {
     return localBase();
   }
@@ -322,6 +326,21 @@
       if (!item || item.jobId !== jobId) return item;
       return Object.assign({}, item, patch || {}, { updatedAt: Date.now() });
     });
+    saveRecentJobs();
+  }
+
+  function mergeRecentJobs(rows) {
+    var byId = {};
+    (state.recentJobs || []).concat(rows || []).forEach(function(item) {
+      if (!item || !item.jobId) return;
+      var old = byId[item.jobId] || {};
+      byId[item.jobId] = Object.assign({}, old, item, {
+        updatedAt: item.updatedAt || old.updatedAt || Date.now()
+      });
+    });
+    state.recentJobs = Object.keys(byId).map(function(id) { return byId[id]; })
+      .sort(function(a, b) { return Number(b.updatedAt || 0) - Number(a.updatedAt || 0); })
+      .slice(0, 12);
     saveRecentJobs();
   }
 
@@ -788,6 +807,10 @@
         state.examplesOpen = false;
         state.mainView = 'result';
         renderWorkspace();
+        if (hit && hit.cloud && hit.status === 'completed' && hit.videoUrl) {
+          showMessage('已加载服务器保存的历史视频结果。');
+          return;
+        }
         refreshJobStatus(true);
       });
     });
@@ -1037,6 +1060,66 @@
     }
 
     return '';
+  }
+
+  function cloudVideoUrlFromJob(job) {
+    var assets = (job && job.assets) || {};
+    var ids = Array.isArray(job && job.asset_ids) ? job.asset_ids : [];
+    for (var i = 0; i < ids.length; i += 1) {
+      var asset = assets[ids[i]] || {};
+      var src = String(asset.source_url || asset.preview_url || '').trim();
+      if (src) return src;
+    }
+    var saved = Array.isArray(job && job.saved_assets) ? job.saved_assets : [];
+    for (var j = 0; j < saved.length; j += 1) {
+      var item = saved[j] || {};
+      var row = item.cloud_asset || item.asset || {};
+      var url = String(row.source_url || row.preview_url || item.source_url || '').trim();
+      if (url) return url;
+    }
+    return extractResultVideoUrl({
+      result: (job && job.result_payload) || {},
+      saved_assets: saved
+    });
+  }
+
+  function normalizeCloudJob(job) {
+    if (!job || !job.job_id) return null;
+    return {
+      jobId: String(job.job_id || ''),
+      status: String(job.status || 'running'),
+      title: job.title || '创意视频任务',
+      videoUrl: cloudVideoUrlFromJob(job),
+      updatedAt: Date.parse(job.updated_at || job.completed_at || job.created_at || '') || Date.now(),
+      cloud: true,
+      cloudJob: job
+    };
+  }
+
+  function loadCloudJobHistory() {
+    var base = cloudBase();
+    if (!base) return Promise.resolve([]);
+    return fetch(base + '/api/creative-jobs?feature_type=seedance_tvc&limit=12', {
+      headers: authHeadersSafe()
+    })
+      .then(function(response) {
+        return response.json().then(function(data) {
+          return { ok: response.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error('cloud history failed');
+        var rows = (Array.isArray(result.data.items) ? result.data.items : [])
+          .map(normalizeCloudJob)
+          .filter(Boolean);
+        mergeRecentJobs(rows);
+        renderWorkspace();
+        return rows;
+      })
+      .catch(function(err) {
+        console.warn('Seedance 云端历史加载失败', err);
+        return [];
+      });
   }
 
   function refreshJobStatus(showToast) {
@@ -1381,6 +1464,7 @@
       setMode(state.mode);
       setDuration(state.duration);
       loadRecentJobs();
+      loadCloudJobHistory();
       var active = state.recentJobs.find(function(item) { return item && item.status === 'running' && item.jobId; });
       if (active) {
         state.currentJobId = active.jobId;
