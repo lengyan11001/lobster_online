@@ -1,0 +1,53 @@
+<!-- System Config -->
+<div id="content-sys-config" class="content-block">
+  <div class="card" style="padding-bottom:0;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+      <h3 style="margin:0;">系统配置</h3>
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;">
+        <span class="status-dot" id="ocStatusDot"></span>
+        <span id="ocStatusText" style="font-size:0.82rem;">检查中...</span>
+        <button type="button" id="refreshOcStatusBtn" class="btn btn-ghost btn-sm">刷新状态</button>
+        <button type="button" id="restartOcBtn" class="btn btn-primary btn-sm">重启 OpenClaw</button>
+      </div>
+    </div>
+    <span id="ocSaveMsg" class="msg" style="display:none;margin-top:0.6rem;"></span>
+  </div>
+
+  <div id="sysTabModel" class="sys-tab-panel" style="margin-top:0.75rem;">
+    <div class="config-form">
+      <div class="form-group" id="chatRouteModeBlock">
+        <label>智能对话路由</label>
+        <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
+          <label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.45rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;">
+            <input type="radio" name="chatRouteMode" value="direct" checked>
+            <span>直连 + MCP（默认）</span>
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.45rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;">
+            <input type="radio" name="chatRouteMode" value="openclaw">
+            <span>OpenClaw Gateway</span>
+          </label>
+        </div>
+        <div class="form-hint">控制智能对话主路径；保存后立即生效，不需要改 .env 或重启。选 OpenClaw 后，主对话直接走 Gateway。</div>
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-top:0.35rem;">
+          <button type="button" id="saveChatRouteModeBtn" class="btn btn-ghost btn-sm">保存对话路由</button>
+          <span id="chatRouteModeMsg" class="msg" style="display:none;"></span>
+        </div>
+      </div>
+      <div id="sutuiTokenBlock" class="form-group" style="display:none;">
+        <label>速推 / xSkill Token</label>
+        <input type="password" id="sutuiTokenInput" placeholder="" style="max-width:24rem;">
+        <div class="form-hint" id="sutuiTokenHint">在线版：能力由服务器统一提供，无需在此配置速推 Token。</div>
+        <button type="button" id="saveSutuiTokenBtn" class="btn btn-ghost btn-sm" style="margin-top:0.25rem;">保存 Token</button>
+        <span id="sutuiTokenMsg" class="msg" style="display:none;margin-left:0.5rem;"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1rem;border:1px solid rgba(248,113,113,0.28);">
+    <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;">清除本机个人配置</h4>
+    <button type="button" id="clearLocalUserConfigBtn" class="btn btn-ghost btn-sm" style="color:#f87171;border-color:rgba(248,113,113,0.45);">一键清除个人配置</button>
+    <span id="clearLocalUserConfigMsg" class="msg" style="display:none;margin-left:0.75rem;"></span>
+    <button type="button" id="clearOpenclawMemoryBtn" class="btn btn-ghost btn-sm" style="color:#f59e0b;border-color:rgba(245,158,11,0.45);margin-left:0.5rem;">一键清除个人记忆</button>
+    <span id="clearOpenclawMemoryMsg" class="msg" style="display:none;margin-left:0.75rem;"></span>
+  </div>
+</div>

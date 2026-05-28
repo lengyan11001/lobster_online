@@ -2,23 +2,29 @@
 
 var _currentPubTab = 'accounts';
 
-document.querySelectorAll('.pub-tab').forEach(function(tab) {
-  tab.addEventListener('click', function() {
-    if (typeof window.closeAllPublishModals === 'function') window.closeAllPublishModals();
-    var target = tab.getAttribute('data-pub-tab');
-    if (!target || target === _currentPubTab) return;
-    _currentPubTab = target;
-    document.querySelectorAll('.pub-tab').forEach(function(t) { t.classList.remove('active'); });
-    tab.classList.add('active');
-    document.getElementById('pubTabAccounts').style.display = (target === 'accounts') ? '' : 'none';
-    document.getElementById('pubTabTasks').style.display = (target === 'tasks') ? '' : 'none';
-    if (target === 'accounts') {
-      hideAccountDetailPanel();
-      loadAccounts();
-    }
-    if (target === 'tasks') loadTasks();
+function bindPublishTabs() {
+  document.querySelectorAll('.pub-tab').forEach(function(tab) {
+    if (tab._pubTabBound) return;
+    tab._pubTabBound = true;
+    tab.addEventListener('click', function() {
+      if (typeof window.closeAllPublishModals === 'function') window.closeAllPublishModals();
+      var target = tab.getAttribute('data-pub-tab');
+      if (!target || target === _currentPubTab) return;
+      _currentPubTab = target;
+      document.querySelectorAll('.pub-tab').forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      var accounts = document.getElementById('pubTabAccounts');
+      var tasks = document.getElementById('pubTabTasks');
+      if (accounts) accounts.style.display = (target === 'accounts') ? '' : 'none';
+      if (tasks) tasks.style.display = (target === 'tasks') ? '' : 'none';
+      if (target === 'accounts') {
+        hideAccountDetailPanel();
+        loadAccounts();
+      }
+      if (target === 'tasks') loadTasks();
+    });
   });
-});
+}
 
 var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
 var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'bilibili', 'xiaohongshu', 'kuaishou', 'toutiao'];
@@ -1653,24 +1659,30 @@ function _setAccountType(type) {
   }
 }
 
-document.querySelectorAll('.account-type-tab').forEach(function(tab) {
-  tab.addEventListener('click', function() {
-    _setAccountType(tab.getAttribute('data-account-type'));
+function bindPublishAccountUi() {
+  document.querySelectorAll('.account-type-tab').forEach(function(tab) {
+    if (tab._accountTypeTabBound) return;
+    tab._accountTypeTabBound = true;
+    tab.addEventListener('click', function() {
+      _setAccountType(tab.getAttribute('data-account-type'));
+    });
   });
-});
 
-_syncAccountTypeUi();
+  _syncAccountTypeUi();
 
-// 选平台筛选：切换时只显示当前类型下的平台账号，并确保下方列表立即刷新
-var accountPlatformFilter = document.getElementById('accountPlatformFilter');
-if (accountPlatformFilter) {
-  accountPlatformFilter.addEventListener('change', function() {
-    if (_allAccounts.length === 0) {
-      loadAccounts();
-    } else {
-      _applyAccountPlatformFilter();
-    }
-  });
+  // 选平台筛选：切换时只显示当前类型下的平台账号，并确保下方列表立即刷新
+  var accountPlatformFilter = document.getElementById('accountPlatformFilter');
+  if (accountPlatformFilter && !accountPlatformFilter._accountPlatformFilterBound) {
+    accountPlatformFilter._accountPlatformFilterBound = true;
+    accountPlatformFilter.addEventListener('change', function() {
+      if (_allAccounts.length === 0) {
+        loadAccounts();
+      } else {
+        _applyAccountPlatformFilter();
+      }
+    });
+  }
+  bindPublishAccountModalUi();
 }
 
 // Add publish account（弹窗）
@@ -1696,25 +1708,30 @@ function closeAllPublishModals() {
 }
 window.closeAllPublishModals = closeAllPublishModals;
 
+function bindPublishAccountModalUi() {
 var openAddPubAcctBtn = document.getElementById('openAddPublishAccountModalBtn');
-if (openAddPubAcctBtn) {
+if (openAddPubAcctBtn && !openAddPubAcctBtn._publishAddAccountBound) {
+  openAddPubAcctBtn._publishAddAccountBound = true;
   openAddPubAcctBtn.addEventListener('click', openAddPublishAccountModal);
 }
 
 var addPubAcctCancel = document.getElementById('addPublishAccountModalCancel');
-if (addPubAcctCancel) {
+if (addPubAcctCancel && !addPubAcctCancel._publishAddAccountBound) {
+  addPubAcctCancel._publishAddAccountBound = true;
   addPubAcctCancel.addEventListener('click', closeAddPublishAccountModal);
 }
 
 var addPubAcctMask = document.getElementById('addPublishAccountModal');
-if (addPubAcctMask) {
+if (addPubAcctMask && !addPubAcctMask._publishAddAccountBound) {
+  addPubAcctMask._publishAddAccountBound = true;
   addPubAcctMask.addEventListener('click', function(e) {
     if (e.target === addPubAcctMask) closeAddPublishAccountModal();
   });
 }
 
 var addPubAcctSubmit = document.getElementById('addPublishAccountModalSubmit');
-if (addPubAcctSubmit) {
+if (addPubAcctSubmit && !addPubAcctSubmit._publishAddAccountBound) {
+  addPubAcctSubmit._publishAddAccountBound = true;
   addPubAcctSubmit.addEventListener('click', function() {
     var platform = document.getElementById('modalAddAcctPlatform').value;
     var nickname = (document.getElementById('modalAddAcctNickname').value || '').trim();
@@ -1780,6 +1797,7 @@ if (addPubAcctSubmit) {
       })
       .finally(function() { addPubAcctSubmit.disabled = false; });
   });
+}
 }
 
 // ── Assets ───────────────────────────────────────────────────────
@@ -2217,57 +2235,8 @@ function loadAssets(query) {
     .catch(function() { el.innerHTML = '<div class="page-empty-card msg err">加载失败</div>'; });
 }
 
-// Search
-var assetSearchBtn = document.getElementById('assetSearchBtn');
-if (assetSearchBtn) {
-  assetSearchBtn.addEventListener('click', function() {
-    loadAssets(_currentAssetSearchQuery());
-  });
-}
-
-// Filter by media type
-var assetTypeFilter = document.getElementById('assetTypeFilter');
-if (assetTypeFilter) {
-  assetTypeFilter.addEventListener('change', function() {
-    loadAssets(_currentAssetSearchQuery());
-  });
-}
-
-var assetCreativeGroupFilter = document.getElementById('assetCreativeGroupFilter');
-if (assetCreativeGroupFilter) {
-  assetCreativeGroupFilter.addEventListener('change', function() {
-    loadAssets(_currentAssetSearchQuery());
-  });
-}
-
-var assetRefreshBtn = document.getElementById('assetRefreshBtn');
-if (assetRefreshBtn) {
-  assetRefreshBtn.addEventListener('click', function() {
-    loadCreativeCandidateGroups().then(function() {
-      loadAssets(_currentAssetSearchQuery());
-    });
-  });
-}
-
-var assetCreativeGroupClose = document.getElementById('assetCreativeGroupClose');
-if (assetCreativeGroupClose) assetCreativeGroupClose.addEventListener('click', _closeAssetCreativeGroupModal);
-var assetCreativeGroupCancel = document.getElementById('assetCreativeGroupCancel');
-if (assetCreativeGroupCancel) assetCreativeGroupCancel.addEventListener('click', _closeAssetCreativeGroupModal);
-var assetCreativeGroupSave = document.getElementById('assetCreativeGroupSave');
-if (assetCreativeGroupSave) assetCreativeGroupSave.addEventListener('click', _saveAssetCreativeGroup);
-var assetCreativeGroupInput = document.getElementById('assetCreativeGroupInput');
-if (assetCreativeGroupInput) {
-  assetCreativeGroupInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      _saveAssetCreativeGroup();
-    }
-  });
-}
-
-// Upload local files（仅火山链接算成功，上传中灰色）
-var assetUploadFile = document.getElementById('assetUploadFile');
-var assetUploadLabel = assetUploadFile ? assetUploadFile.closest('label') : null;
+var assetUploadFile = null;
+var assetUploadLabel = null;
 function setAssetUploadState(loading, text) {
   if (assetUploadLabel) {
     assetUploadLabel.style.opacity = loading ? '0.5' : '1';
@@ -2275,8 +2244,74 @@ function setAssetUploadState(loading, text) {
   }
   if (text) _assetMsgShow(text, false);
 }
-if (assetUploadFile) {
-  assetUploadFile.addEventListener('change', function() {
+
+function bindAssetLibraryUi() {
+  var assetSearchBtn = document.getElementById('assetSearchBtn');
+  if (assetSearchBtn && !assetSearchBtn._assetLibraryBound) {
+    assetSearchBtn._assetLibraryBound = true;
+    assetSearchBtn.addEventListener('click', function() {
+      loadAssets(_currentAssetSearchQuery());
+    });
+  }
+
+  var assetTypeFilter = document.getElementById('assetTypeFilter');
+  if (assetTypeFilter && !assetTypeFilter._assetLibraryBound) {
+    assetTypeFilter._assetLibraryBound = true;
+    assetTypeFilter.addEventListener('change', function() {
+      loadAssets(_currentAssetSearchQuery());
+    });
+  }
+
+  var assetCreativeGroupFilter = document.getElementById('assetCreativeGroupFilter');
+  if (assetCreativeGroupFilter && !assetCreativeGroupFilter._assetLibraryBound) {
+    assetCreativeGroupFilter._assetLibraryBound = true;
+    assetCreativeGroupFilter.addEventListener('change', function() {
+      loadAssets(_currentAssetSearchQuery());
+    });
+  }
+
+  var assetRefreshBtn = document.getElementById('assetRefreshBtn');
+  if (assetRefreshBtn && !assetRefreshBtn._assetLibraryBound) {
+    assetRefreshBtn._assetLibraryBound = true;
+    assetRefreshBtn.addEventListener('click', function() {
+      loadCreativeCandidateGroups().then(function() {
+        loadAssets(_currentAssetSearchQuery());
+      });
+    });
+  }
+
+  var assetCreativeGroupClose = document.getElementById('assetCreativeGroupClose');
+  if (assetCreativeGroupClose && !assetCreativeGroupClose._assetLibraryBound) {
+    assetCreativeGroupClose._assetLibraryBound = true;
+    assetCreativeGroupClose.addEventListener('click', _closeAssetCreativeGroupModal);
+  }
+  var assetCreativeGroupCancel = document.getElementById('assetCreativeGroupCancel');
+  if (assetCreativeGroupCancel && !assetCreativeGroupCancel._assetLibraryBound) {
+    assetCreativeGroupCancel._assetLibraryBound = true;
+    assetCreativeGroupCancel.addEventListener('click', _closeAssetCreativeGroupModal);
+  }
+  var assetCreativeGroupSave = document.getElementById('assetCreativeGroupSave');
+  if (assetCreativeGroupSave && !assetCreativeGroupSave._assetLibraryBound) {
+    assetCreativeGroupSave._assetLibraryBound = true;
+    assetCreativeGroupSave.addEventListener('click', _saveAssetCreativeGroup);
+  }
+  var assetCreativeGroupInput = document.getElementById('assetCreativeGroupInput');
+  if (assetCreativeGroupInput && !assetCreativeGroupInput._assetLibraryBound) {
+    assetCreativeGroupInput._assetLibraryBound = true;
+    assetCreativeGroupInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        _saveAssetCreativeGroup();
+      }
+    });
+  }
+
+  // Upload local files（仅火山链接算成功，上传中灰色）
+  assetUploadFile = document.getElementById('assetUploadFile');
+  assetUploadLabel = assetUploadFile ? assetUploadFile.closest('label') : null;
+  if (assetUploadFile && !assetUploadFile._assetLibraryBound) {
+    assetUploadFile._assetLibraryBound = true;
+    assetUploadFile.addEventListener('change', function() {
     var files = assetUploadFile.files;
     if (!files || !files.length) return;
     var total = files.length;
@@ -2326,6 +2361,7 @@ if (assetUploadFile) {
         });
     });
   });
+  }
 }
 
 function loadCreativeCandidateGroups() {
@@ -2348,34 +2384,37 @@ function loadCreativeCandidateGroups() {
 }
 window.loadCreativeCandidateGroups = loadCreativeCandidateGroups;
 
-// Save URL asset
-var assetSaveUrlBtn = document.getElementById('assetSaveUrlBtn');
-if (assetSaveUrlBtn) {
-  assetSaveUrlBtn.addEventListener('click', function() {
-    var urlInput = document.getElementById('assetUrlInput');
-    var rawUrl = (urlInput ? urlInput.value : '').trim();
-    if (!rawUrl) { _assetMsgShow('请输入素材URL', true); return; }
-    assetSaveUrlBtn.disabled = true;
-    _assetMsgShow('正在保存…', false);
-    var ext = rawUrl.split('?')[0].split('#')[0].split('.').pop().toLowerCase();
-    var mtype = 'image';
-    if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv'].indexOf(ext) >= 0) mtype = 'video';
-    fetch(publishLocalBase() + '/api/assets/save-url', {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-      body: JSON.stringify({ url: rawUrl, media_type: mtype })
-    })
-      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function(d) {
-        if (urlInput) urlInput.value = '';
-        _assetMsgShow('保存成功 (ID: ' + (d.asset_id || '') + ')', false);
-        loadCreativeCandidateGroups().then(function() {
-          loadAssets(_currentAssetSearchQuery());
-        });
+function bindAssetSaveUrlUi() {
+  var assetSaveUrlBtn = document.getElementById('assetSaveUrlBtn');
+  if (assetSaveUrlBtn && !assetSaveUrlBtn._assetSaveUrlBound) {
+    assetSaveUrlBtn._assetSaveUrlBound = true;
+    assetSaveUrlBtn.addEventListener('click', function() {
+      var urlInput = document.getElementById('assetUrlInput');
+      var rawUrl = (urlInput ? urlInput.value : '').trim();
+      if (!rawUrl) { _assetMsgShow('请输入素材URL', true); return; }
+      assetSaveUrlBtn.disabled = true;
+      _assetMsgShow('正在保存…', false);
+      var ext = rawUrl.split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+      var mtype = 'image';
+      if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv'].indexOf(ext) >= 0) mtype = 'video';
+      fetch(publishLocalBase() + '/api/assets/save-url', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+        body: JSON.stringify({ url: rawUrl, media_type: mtype })
       })
-      .catch(function(e) { _assetMsgShow('保存失败: ' + e.message, true); })
-      .finally(function() { assetSaveUrlBtn.disabled = false; });
-  });
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(d) {
+          if (urlInput) urlInput.value = '';
+          _assetMsgShow('保存成功 (ID: ' + (d.asset_id || '') + ')', false);
+          loadCreativeCandidateGroups().then(function() {
+            loadAssets(_currentAssetSearchQuery());
+          });
+        })
+        .catch(function(e) { _assetMsgShow('保存失败: ' + e.message, true); })
+        .finally(function() { assetSaveUrlBtn.disabled = false; });
+    });
+  }
+  bindAssetSaveUrlUi();
 }
 
 // ── Tasks ────────────────────────────────────────────────────────
@@ -2447,35 +2486,45 @@ function loadTasks() {
 
 // ── Refresh button ───────────────────────────────────────────────
 
-var refreshPubBtn = document.getElementById('refreshPublishBtn');
-if (refreshPubBtn) {
-  refreshPubBtn.addEventListener('click', function() {
-    if (_currentPubTab === 'accounts') {
-      if (_detailAccountId) {
-        var ac = _allAccounts.filter(function(a) { return a.id === _detailAccountId; })[0];
-        if (ac) openAccountDetailPanel(_detailAccountId);
+function bindPublishRefreshButtons() {
+  var refreshPubBtn = document.getElementById('refreshPublishBtn');
+  if (refreshPubBtn && !refreshPubBtn._publishRefreshBound) {
+    refreshPubBtn._publishRefreshBound = true;
+    refreshPubBtn.addEventListener('click', function() {
+      if (_currentPubTab === 'accounts') {
+        if (_detailAccountId) {
+          var ac = _allAccounts.filter(function(a) { return a.id === _detailAccountId; })[0];
+          if (ac) openAccountDetailPanel(_detailAccountId);
+        }
+        loadAccounts();
       }
-      loadAccounts();
-    }
-    if (_currentPubTab === 'tasks') loadTasks();
-  });
-}
+      if (_currentPubTab === 'tasks') loadTasks();
+    });
+  }
 
-var assetTopRefreshBtn = document.getElementById('assetTopRefreshBtn');
-if (assetTopRefreshBtn) {
-  assetTopRefreshBtn.addEventListener('click', function() {
-    loadCreativeCandidateGroups();
-    loadAssets(_currentAssetSearchQuery());
-  });
+  var assetTopRefreshBtn = document.getElementById('assetTopRefreshBtn');
+  if (assetTopRefreshBtn && !assetTopRefreshBtn._assetTopRefreshBound) {
+    assetTopRefreshBtn._assetTopRefreshBound = true;
+    assetTopRefreshBtn.addEventListener('click', function() {
+      loadCreativeCandidateGroups();
+      loadAssets(_currentAssetSearchQuery());
+    });
+  }
 }
 
 function initPublishView() {
+  bindPublishTabs();
+  bindPublishAccountUi();
+  bindPublishRefreshButtons();
+  bindPublishAccountDetailAndSchedule();
   hideAccountDetailPanel();
   loadAccounts();
   loadCreativeCandidateGroups();
 }
 
 function initAssetLibraryView() {
+  bindAssetLibraryUi();
+  bindPublishRefreshButtons();
   loadCreativeCandidateGroups().then(function() {
     loadAssets(_currentAssetSearchQuery());
   });
@@ -2551,7 +2600,7 @@ function _creatorRenderItems(items, gridId) {
   }).join('');
 }
 
-(function bindPublishAccountDetailAndSchedule() {
+function bindPublishAccountDetailAndSchedule() {
   var back = document.getElementById('accountDetailBack');
   if (back && !back._bound) {
     back._bound = true;
@@ -2761,7 +2810,7 @@ function _creatorRenderItems(items, gridId) {
     schTasksRefreshBtn._bound = true;
     schTasksRefreshBtn.addEventListener('click', loadCreatorScheduleTasks);
   }
-})();
+}
 
 (function bindReviewSnapshotUi() {
   if (document.body._reviewSnapshotUi) return;

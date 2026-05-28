@@ -1,0 +1,134 @@
+<div id="content-publish" class="content-block">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+                <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">发布中心 <button type="button" class="help-q" data-help-key="publish_overview" aria-label="说明">?</button></h3>
+                <button type="button" id="refreshPublishBtn" class="btn btn-ghost btn-sm">刷新</button>
+              </div>
+              <div class="store-tabs" style="margin-top:0.75rem;">
+                <button type="button" class="pub-tab active" data-pub-tab="accounts">发布账号</button>
+                <button type="button" class="pub-tab" data-pub-tab="tasks">发布记录</button>
+              </div>
+            </div>
+
+            <!-- Accounts Tab -->
+            <div id="pubTabAccounts" class="pub-tab-panel">
+              <div class="account-type-tabs" id="accountTypeTabs">
+                <button type="button" class="account-type-tab active" data-account-type="publish">发布账号</button>
+                <button type="button" class="account-type-tab" data-account-type="ecommerce">电商平台</button>
+              </div>
+              <div id="accountAddToolbar" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;padding:0.5rem 0;">
+                <button type="button" id="openAddPublishAccountModalBtn" class="btn btn-primary btn-sm">添加发布账号</button>
+              </div>
+              <div id="accountFilterToolbar" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.4rem 0;">
+                <span id="accountPlatformFilterLabel" style="font-size:0.82rem;color:var(--text-muted);">选账号平台：</span>
+                <select id="accountPlatformFilter" style="min-width:7rem;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+                  <option value="">全部</option>
+                  <option value="douyin">抖音</option>
+                  <option value="bilibili">B站</option>
+                  <option value="xiaohongshu">小红书</option>
+                  <option value="kuaishou">快手</option>
+                  <option value="toutiao">今日头条</option>
+                </select>
+              </div>
+              <div id="accountPublishShell">
+                <div id="accountListPanel">
+                  <div id="accountList" class="skill-store-grid"></div>
+                </div>
+                <div id="accountDetailPanel" style="display:none;">
+                  <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
+                    <button type="button" id="accountDetailBack" class="btn btn-ghost btn-sm">返回账号列表</button>
+                    <span id="accountDetailTitle" style="font-weight:600;font-size:1rem;"></span>
+                  </div>
+                  <div class="store-tabs" id="accountDetailTabs" style="margin-bottom:0.75rem;">
+                    <button type="button" class="sys-tab active" data-ad-tab="data">数据</button>
+                    <button type="button" class="sys-tab" data-ad-tab="schedule">定时任务</button>
+                  </div>
+                  <div id="accountDetailTabData">
+                  <div class="card" style="padding:1rem;">
+                    <div style="font-weight:600;margin-bottom:0.75rem;display:flex;align-items:center;gap:0.35rem;">作品数据 <button type="button" class="help-q" data-help-key="account_detail_works" aria-label="说明">?</button></div>
+                    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem;align-items:center;">
+                      <button type="button" id="detailCreatorLoadBtn" class="btn btn-ghost btn-sm">加载缓存</button>
+                      <button type="button" id="detailCreatorSyncBtn" class="btn btn-primary btn-sm">从平台同步</button>
+                      <label style="font-size:0.8rem;color:var(--text-muted);display:flex;align-items:center;gap:0.35rem;cursor:pointer;">
+                        <input type="checkbox" id="detailCreatorHeadlessChk"> 无头同步
+                      </label>
+                    </div>
+                    <p id="detailCreatorStatusMsg" class="meta" style="min-height:1.2em;margin-bottom:0.5rem;"></p>
+                    <div id="detailCreatorToutiaoInsights" style="display:none;margin-bottom:0.75rem;"></div>
+                    <div id="detailCreatorItemGrid" class="skill-store-grid"></div>
+                  </div>
+                  </div>
+                  <div id="accountDetailTabSchedule" style="display:none;">
+                  <div class="card" style="margin-bottom:0.75rem;padding:0.75rem 1rem;">
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+                      <button type="button" id="accountDetailScheduleBtn" class="btn btn-primary btn-sm">完整配置（间隔/类型/要求）</button>
+                      <button type="button" id="accountDetailScheduleTasksBtn" class="btn btn-ghost btn-sm">任务列表</button>
+                      <button type="button" class="help-q" data-help-key="account_detail_schedule_btns" aria-label="说明">?</button>
+                    </div>
+                  </div>
+                  <div class="card" style="margin-bottom:1rem;padding:1rem;">
+                    <div style="font-weight:600;margin-bottom:0.5rem;">定时任务</div>
+                    <p id="accountDetailScheduleSummary" class="meta" style="font-size:0.85rem;line-height:1.45;"></p>
+                    <div class="modal-field-inline" style="margin:0.75rem 0;">
+                      <label class="field-label-inline" for="accountDetailScheduleMode" style="font-size:0.82rem;">发布模式</label>
+                      <select id="accountDetailScheduleMode" style="min-width:14rem;padding:0.4rem;font-size:0.85rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+                        <option value="immediate">立即发布（到点按说明直接编排）</option>
+                        <option value="review">审核后发布（先准备提示词与预览，确认后再发）</option>
+                      </select>
+                    </div>
+                    <div id="accountDetailReviewBlock" style="display:none;margin:0.75rem 0;padding:0.75rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
+                      <div style="font-weight:600;margin-bottom:0.65rem;display:flex;align-items:center;gap:0.35rem;">生成发布内容 <button type="button" class="help-q" data-help-key="account_detail_review" aria-label="说明">?</button></div>
+                      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.65rem;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:0.5rem;">
+                        <button type="button" class="btn btn-primary btn-sm review-subtab" data-review-subtab="current">当前草稿</button>
+                        <button type="button" class="btn btn-ghost btn-sm review-subtab" data-review-subtab="history">历史记录</button>
+                      </div>
+                      <div id="accountDetailReviewPanelCurrent">
+                        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.5rem;">
+                          <label style="font-size:0.82rem;">出几次</label>
+                          <input type="number" id="accountDetailReviewVariantCount" min="1" max="10" value="3" style="width:4rem;padding:0.3rem;font-size:0.85rem;">
+                          <button type="button" id="accountDetailReviewGenerateBtn" class="btn btn-ghost btn-sm" data-action="review-generate">智能生成提示词</button>
+                        </div>
+                        <div class="modal-field-inline" style="margin:0 0 0.55rem 0;">
+                          <label class="field-label-inline" for="accountDetailReviewFirstDelayMinutes" style="font-size:0.82rem;max-width:12rem;line-height:1.35;">首条发布时间（延后）</label>
+                          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;flex:1;min-width:10rem;">
+                            <input type="number" id="accountDetailReviewFirstDelayMinutes" min="0" max="10080" value="0" step="1" style="width:5.5rem;padding:0.35rem;font-size:0.85rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+                            <span class="meta" style="font-size:0.8rem;">分钟</span>
+                            <button type="button" class="help-q" data-help-key="account_review_timing" aria-label="说明">?</button>
+                          </div>
+                        </div>
+                        <p id="accountDetailReviewMsg" class="meta" style="font-size:0.78rem;margin:0 0 0.5rem 0;display:none;"></p>
+                        <div id="accountDetailReviewGenProgress" style="display:none;margin:0 0 0.55rem 0;padding:0.55rem 0.65rem;border-radius:var(--radius-sm);background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.22);font-size:0.78rem;line-height:1.55;"></div>
+                        <div id="accountDetailReviewDraftsList"></div>
+                        <div style="margin-top:0.65rem;display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem;">
+                          <button type="button" id="accountDetailReviewGenAssetsBtn" class="btn btn-primary btn-sm" data-action="review-generate-assets">生成发布内容</button>
+                          <button type="button" class="help-q" data-help-key="schedule_review_actions" aria-label="说明">?</button>
+                        </div>
+                        <div style="margin-top:0.75rem;display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;">
+                          <button type="button" id="accountDetailReviewConfirmBtn" class="btn btn-primary btn-sm" data-action="review-confirm">确认并发布</button>
+                          <button type="button" class="help-q" data-help-key="account_review_confirm_publish" aria-label="说明">?</button>
+                        </div>
+                      </div>
+                      <div id="accountDetailReviewPanelHistory" style="display:none;">
+                        <div style="margin-bottom:0.5rem;display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                          <button type="button" class="btn btn-ghost btn-sm" id="accountDetailReviewSnapshotRefreshBtn">刷新列表</button>
+                          <button type="button" class="help-q" data-help-key="account_review_snapshots" aria-label="说明">?</button>
+                        </div>
+                        <div id="accountDetailReviewSnapshotList"><p class="meta" style="margin:0;">切换到本页后自动加载。</p></div>
+                        <div id="accountDetailReviewSnapshotDetail" style="display:none;margin-top:0.5rem;padding:0.65rem;border-radius:var(--radius-sm);background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);max-height:280px;overflow:auto;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tasks Tab：单次 PublishTask；创作者定时任务见账号「执行记录」 -->
+            <div id="pubTabTasks" class="pub-tab-panel" style="display:none;">
+              <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.35rem;">
+                <span style="font-size:0.82rem;color:var(--text-muted);">单次发布任务记录</span>
+                <button type="button" class="help-q" data-help-key="publish_tasks_tab" aria-label="说明">?</button>
+              </div>
+              <div id="taskList" style="margin-top:0.5rem;"></div>
+            </div>
+          </div>

@@ -3,21 +3,27 @@
 var STORE_OFFICIAL_TAB_ENABLED = false;
 var _currentStoreTab = 'popular';
 
-document.querySelectorAll('.store-tab').forEach(function(tab) {
-  tab.addEventListener('click', function() {
-    var target = tab.getAttribute('data-store-tab');
-    if (target === 'official' && !STORE_OFFICIAL_TAB_ENABLED) return;
-    if (!target || target === _currentStoreTab) return;
-    _currentStoreTab = target;
-    document.querySelectorAll('.store-tab').forEach(function(t) { t.classList.remove('active'); });
-    tab.classList.add('active');
-    document.getElementById('storeTabPopular').style.display = (target === 'popular') ? '' : 'none';
-    document.getElementById('storeTabOfficial').style.display = (target === 'official') ? '' : 'none';
-    if (target === 'official' && !_officialLoaded) {
-      browseOfficialPage(1);
-    }
+function bindSkillStoreTabs() {
+  document.querySelectorAll('.store-tab').forEach(function(tab) {
+    if (tab._skillStoreTabBound) return;
+    tab._skillStoreTabBound = true;
+    tab.addEventListener('click', function() {
+      var target = tab.getAttribute('data-store-tab');
+      if (target === 'official' && !STORE_OFFICIAL_TAB_ENABLED) return;
+      if (!target || target === _currentStoreTab) return;
+      _currentStoreTab = target;
+      document.querySelectorAll('.store-tab').forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      var popular = document.getElementById('storeTabPopular');
+      var official = document.getElementById('storeTabOfficial');
+      if (popular) popular.style.display = (target === 'popular') ? '' : 'none';
+      if (official) official.style.display = (target === 'official') ? '' : 'none';
+      if (target === 'official' && !_officialLoaded) {
+        browseOfficialPage(1);
+      }
+    });
   });
-});
+}
 
 // ── 热门 Tab: local skills ──────────────────────────────────────────
 
@@ -2708,7 +2714,7 @@ function _bindInstallUninstall(el) {
 }
 
 // Add MCP Modal
-(function() {
+function bindAddMcpModal() {
   var modal = document.getElementById('addMcpModal');
   var openBtn = document.getElementById('openAddMcpModal');
   var cancelBtn = document.getElementById('addMcpModalCancel');
@@ -2717,19 +2723,30 @@ function _bindInstallUninstall(el) {
 
   function closeModal() { modal.classList.remove('visible'); }
 
-  if (openBtn) openBtn.addEventListener('click', function() {
-    var nameInput = document.getElementById('addMcpName');
-    var urlInput = document.getElementById('addMcpUrl');
-    var msgEl = document.getElementById('addMcpMsg');
-    if (nameInput) nameInput.value = '';
-    if (urlInput) urlInput.value = '';
-    if (msgEl) msgEl.style.display = 'none';
-    modal.classList.add('visible');
-  });
-  if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
-  modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
+  if (openBtn && !openBtn._addMcpModalBound) {
+    openBtn._addMcpModalBound = true;
+    openBtn.addEventListener('click', function() {
+      var nameInput = document.getElementById('addMcpName');
+      var urlInput = document.getElementById('addMcpUrl');
+      var msgEl = document.getElementById('addMcpMsg');
+      if (nameInput) nameInput.value = '';
+      if (urlInput) urlInput.value = '';
+      if (msgEl) msgEl.style.display = 'none';
+      modal.classList.add('visible');
+    });
+  }
+  if (cancelBtn && !cancelBtn._addMcpModalBound) {
+    cancelBtn._addMcpModalBound = true;
+    cancelBtn.addEventListener('click', closeModal);
+  }
+  if (!modal._addMcpMaskBound) {
+    modal._addMcpMaskBound = true;
+    modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
+  }
 
-  if (addBtn) addBtn.addEventListener('click', function() {
+  if (addBtn && !addBtn._addMcpModalBound) {
+    addBtn._addMcpModalBound = true;
+    addBtn.addEventListener('click', function() {
     var nameInput = document.getElementById('addMcpName');
     var urlInput = document.getElementById('addMcpUrl');
     var msgEl = document.getElementById('addMcpMsg');
@@ -2750,15 +2767,19 @@ function _bindInstallUninstall(el) {
       })
       .catch(function() { showMsg(msgEl, '网络错误', true); })
       .finally(function() { addBtn.disabled = false; });
-  });
-})();
+    });
+  }
+}
 
-var refreshStoreBtn = document.getElementById('refreshStoreBtn');
-if (refreshStoreBtn) {
-  refreshStoreBtn.addEventListener('click', function() {
-    loadSkillStore();
-    if (STORE_OFFICIAL_TAB_ENABLED && _currentStoreTab === 'official') browseOfficialPage(_officialPage);
-  });
+function bindSkillStoreRefreshButton() {
+  var refreshStoreBtn = document.getElementById('refreshStoreBtn');
+  if (refreshStoreBtn && !refreshStoreBtn._skillStoreRefreshBound) {
+    refreshStoreBtn._skillStoreRefreshBound = true;
+    refreshStoreBtn.addEventListener('click', function() {
+      loadSkillStore();
+      if (STORE_OFFICIAL_TAB_ENABLED && _currentStoreTab === 'official') browseOfficialPage(_officialPage);
+    });
+  }
 }
 
 // ── 官方在线 Tab: paginated browsing + cached search ───────────────
@@ -2955,24 +2976,28 @@ function _bindAddButtons(container) {
 }
 
 // search bar + enter key
-var mcpSearchBtn = document.getElementById('mcpRegistrySearchBtn');
-var mcpSearchInput = document.getElementById('mcpRegistrySearch');
-if (mcpSearchBtn) {
-  mcpSearchBtn.addEventListener('click', function() {
-    var q = mcpSearchInput ? mcpSearchInput.value.trim() : '';
-    if (!q && !_activeCategory) { browseOfficialPage(1); return; }
-    searchCachedSkills(q, _activeCategory, 1);
-  });
-}
-if (mcpSearchInput) {
-  mcpSearchInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      var q = mcpSearchInput.value.trim();
+function bindSkillStoreRegistrySearch() {
+  var mcpSearchBtn = document.getElementById('mcpRegistrySearchBtn');
+  var mcpSearchInput = document.getElementById('mcpRegistrySearch');
+  if (mcpSearchBtn && !mcpSearchBtn._mcpRegistrySearchBound) {
+    mcpSearchBtn._mcpRegistrySearchBound = true;
+    mcpSearchBtn.addEventListener('click', function() {
+      var q = mcpSearchInput ? mcpSearchInput.value.trim() : '';
       if (!q && !_activeCategory) { browseOfficialPage(1); return; }
       searchCachedSkills(q, _activeCategory, 1);
-    }
-  });
+    });
+  }
+  if (mcpSearchInput && !mcpSearchInput._mcpRegistrySearchBound) {
+    mcpSearchInput._mcpRegistrySearchBound = true;
+    mcpSearchInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var q = mcpSearchInput.value.trim();
+        if (!q && !_activeCategory) { browseOfficialPage(1); return; }
+        searchCachedSkills(q, _activeCategory, 1);
+      }
+    });
+  }
 }
 
 function _clearOpenclawWeixinQrInModal() {
@@ -3001,9 +3026,10 @@ function _showOpenclawWeixinQrInModal(url) {
   wrap.style.display = 'block';
 }
 
-(function _initOpenclawWeixinSkillStore() {
+function bindOpenclawWeixinSkillStore() {
   var list = document.getElementById('skillStoreList');
-  if (list) {
+  if (list && !list._openclawWeixinAuthBound) {
+    list._openclawWeixinAuthBound = true;
     list.addEventListener('click', function OpenclawWeixinAuthDelegate(ev) {
       var t = ev.target && ev.target.closest && ev.target.closest('.js-openclaw-weixin-auth');
       if (!t) return;
@@ -3016,7 +3042,8 @@ function _showOpenclawWeixinQrInModal(url) {
     });
   }
   var closeBtn = document.getElementById('openclawWeixinLoginModalClose');
-  if (closeBtn) {
+  if (closeBtn && !closeBtn._openclawWeixinCloseBound) {
+    closeBtn._openclawWeixinCloseBound = true;
     closeBtn.addEventListener('click', function() {
       var m = document.getElementById('openclawWeixinLoginModal');
       if (m) m.classList.remove('visible');
@@ -3027,7 +3054,7 @@ function _showOpenclawWeixinQrInModal(url) {
       }
     });
   }
-})();
+}
 
 function _startOpenclawWeixinLoginFlow() {
   var lb = _openclawWeixinResolveBase();
@@ -3098,6 +3125,11 @@ function _startOpenclawWeixinLoginFlow() {
 }
 
 function initOnlineSkillStore() {
+  bindSkillStoreTabs();
+  bindAddMcpModal();
+  bindSkillStoreRefreshButton();
+  bindSkillStoreRegistrySearch();
+  bindOpenclawWeixinSkillStore();
   if (STORE_OFFICIAL_TAB_ENABLED && _currentStoreTab === 'official' && !_officialLoaded) {
     browseOfficialPage(1);
   }

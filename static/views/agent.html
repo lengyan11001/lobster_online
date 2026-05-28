@@ -1,0 +1,76 @@
+<!-- 代理商 -->
+<div id="content-agent" class="content-block">
+  <div class="card">
+    <h3 style="margin:0 0 1rem 0;">代理商管理</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;">
+      <span id="agentSubUserCount" style="font-size:0.9rem;color:var(--text-muted);">下级用户：加载中…</span>
+      <button type="button" id="agentRefreshBtn" class="btn btn-primary btn-sm">刷新</button>
+    </div>
+    <div id="agentSubUserList" style="overflow:auto;max-height:calc(100vh - 260px);"></div>
+  </div>
+  <div class="card" id="agentTaskDispatchCard" style="display:none;">
+    <h3 style="margin:0 0 0.75rem 0;">代理商任务下发</h3>
+    <p class="meta" id="agentTaskDispatchHint" style="margin:0 0 0.75rem 0;">选择一个下级用户和设备，下发一次性或定时任务。</p>
+    <div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:1rem;align-items:start;">
+      <div>
+        <div class="modal-field" style="margin-bottom:0.55rem;">
+          <label>下级用户</label>
+          <select id="agentTaskUserSelect" style="width:100%;padding:0.45rem;"></select>
+        </div>
+        <div class="modal-field" style="margin-bottom:0.55rem;">
+          <label>设备（可多选）</label>
+          <select id="agentTaskDevices" multiple size="5" style="width:100%;padding:0.45rem;"></select>
+        </div>
+        <div class="modal-field" style="margin-bottom:0.55rem;">
+          <label>任务名称</label>
+          <input type="text" id="agentTaskTitle" placeholder="例如：下发 OpenClaw 跑视频任务">
+        </div>
+        <div class="modal-field" style="margin-bottom:0.55rem;">
+          <label>任务类型</label>
+          <select id="agentTaskKind" style="width:100%;padding:0.45rem;">
+            <option value="openclaw_message">发消息给 OpenClaw</option>
+            <option value="chat_message">本地对话链路</option>
+            <option value="capability">调用能力 invoke_capability</option>
+          </select>
+        </div>
+        <div class="modal-field" style="margin-bottom:0.55rem;">
+          <label>执行方式</label>
+          <select id="agentTaskScheduleType" style="width:100%;padding:0.45rem;">
+            <option value="once">一次性</option>
+            <option value="interval">按间隔循环</option>
+            <option value="daily_times">每天固定时间</option>
+          </select>
+        </div>
+        <div class="modal-field" id="agentTaskStartAtBlock" style="margin-bottom:0.55rem;">
+          <label>开始时间（可选）</label>
+          <input type="datetime-local" id="agentTaskStartAt">
+        </div>
+        <div class="modal-field" id="agentTaskIntervalBlock" style="margin-bottom:0.55rem;">
+          <label>间隔分钟</label>
+          <input type="number" id="agentTaskIntervalMinutes" min="1" value="60">
+        </div>
+        <div class="modal-field" id="agentTaskDailyTimesBlock" style="display:none;margin-bottom:0.55rem;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.35rem;">
+            <label style="margin:0;">每天执行时间</label>
+            <button type="button" class="btn btn-ghost btn-sm daily-time-add-btn" data-prefix="agentTask">+ 添加时间点</button>
+          </div>
+          <div id="agentTaskDailyTimesList" style="display:grid;gap:0.4rem;"></div>
+        </div>
+      </div>
+      <div>
+        <div class="modal-field" id="agentTaskContentWrap" style="margin-bottom:0.55rem;">
+          <label>要执行的内容</label>
+          <textarea id="agentTaskContent" rows="7" placeholder="例如：打开 OpenClaw，按这个产品卖点生成视频并回传结果。"></textarea>
+        </div>
+        <div class="modal-field" id="agentTaskPayloadWrap" style="margin-bottom:0.55rem;">
+          <label>能力调用 JSON</label>
+          <textarea id="agentTaskPayload" rows="7" placeholder='{"capability_id":"video.generate","payload":{"prompt":"..."}}'></textarea>
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <button type="button" id="agentTaskSubmitBtn" class="btn btn-primary btn-sm">下发任务</button>
+          <span id="agentTaskMsg" class="msg" style="display:none;"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

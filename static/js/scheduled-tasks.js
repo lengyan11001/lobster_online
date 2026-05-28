@@ -6,11 +6,11 @@
   var CAPABILITIES = {
     'goal.video.pipeline': {
       label: '创意成片',
-      description: '根据记忆生成文案，从备选素材组随机取图生成视频。'
+      description: '根据记忆或自定义提示词生成文案，可从备选素材组随机取图，或先 AI 生成首帧再生成视频。'
     },
     'goal.image.pipeline': {
       label: '文案+创意图片',
-      description: '根据记忆生成文案和创意图片，生成图片后结束。'
+      description: '根据记忆或自定义提示词生成文案和创意图片，生成图片后结束。'
     },
     'hifly.video.create_by_tts': {
       label: '必火数字人',
@@ -23,6 +23,9 @@
     avatarRows: [],
     voiceRows: [],
     candidateGroups: [],
+    publishAccounts: [],
+    publishAccountsLoaded: false,
+    publishAccountsLoading: false,
     hiflyLoaded: false,
     hiflyLoading: false
   };
@@ -164,6 +167,23 @@
     return row && row.result_payload && typeof row.result_payload === 'object' ? row.result_payload : {};
   }
 
+  function publishDraft(row) {
+    var payload = resultPayload(row);
+    var draft = payload.publish_draft;
+    return draft && typeof draft === 'object' ? draft : null;
+  }
+
+  function publishStatusText(status) {
+    return {
+      ready: '待发布',
+      draft: '待发布',
+      pending: '等待发布',
+      processing: '发布中',
+      published: '已发布',
+      failed: '发布失败'
+    }[String(status || '').toLowerCase()] || '发布';
+  }
+
   function collectMediaUrls(row) {
     var payload = resultPayload(row);
     var refs = payload.result_refs && typeof payload.result_refs === 'object' ? payload.result_refs : {};
@@ -240,9 +260,25 @@
   }
 
   function runActionHtml(run) {
-    return '<button type="button" class="btn btn-ghost btn-sm scheduled-run-delete-btn" data-run-id="'
+    var parts = [];
+    var draft = publishDraft(run);
+    if (draft) {
+      var status = String(draft.status || 'ready').toLowerCase();
+      if (status !== 'published') {
+        var disabled = status === 'pending' || status === 'processing';
+        parts.push('<button type="button" class="btn btn-ghost btn-sm scheduled-run-publish-btn" data-run-id="'
+          + html(run && run.id)
+          + '"' + (disabled ? ' disabled' : '') + '>'
+          + html(status === 'failed' ? '重新发布' : publishStatusText(status))
+          + '</button>');
+      } else {
+        parts.push('<span class="meta">' + html(publishStatusText(status)) + '</span>');
+      }
+    }
+    parts.push('<button type="button" class="btn btn-ghost btn-sm scheduled-run-delete-btn" data-run-id="'
       + html(run && run.id)
-      + '">删除</button>';
+      + '">删除</button>');
+    return parts.join(' ');
   }
 
   function rowCapabilityId(row) {
@@ -421,14 +457,137 @@
     return '<select id="' + html(id) + '" style="width:100%;padding:0.45rem;">' + options + '</select>';
   }
 
+  function checkboxHtml(id, label, checked) {
+    return '<label style="display:flex;align-items:center;gap:0.45rem;min-height:2.35rem;">'
+      + '<input id="' + html(id) + '" type="checkbox" ' + (checked ? 'checked' : '') + ' style="width:auto;min-height:auto;">'
+      + '<span>' + html(label) + '</span>'
+      + '</label>';
+  }
+
   function textareaHtml(id, rows, placeholder) {
-    return '<textarea id="' + html(id) + '" rows="' + html(rows || 3) + '" placeholder="' + html(placeholder || '') + '"></textarea>';
+    return '<textarea id="' + html(id) + '" rows="' + html(rows || 3) + '" placeholder="' + html(placeholder || '') + '" style="width:100%;box-sizing:border-box;"></textarea>';
+  }
+
+  function platformDisplayName(platform) {
+    var p = String(platform || '').trim();
+    var names = {
+      douyin: '抖音',
+      xiaohongshu: '小红书',
+      toutiao: '今日头条',
+      kuaishou: '快手',
+      bilibili: 'B站'
+    };
+    return names[p] || p || '-';
+  }
+
+  function publishAccountLabel(row) {
+    if (!row) return '-';
+    return (row.platform_name || platformDisplayName(row.platform)) + ' · ' + (row.nickname || ('账号 #' + row.id));
+  }
+
+  function currentPublishAccounts(platform) {
+    var p = String(platform || '').trim();
+    return (state.publishAccounts || []).filter(function (row) {
+      return row && (!p || String(row.platform || '') === p);
+    });
+  }
+
+  function fillPublishPlatformSelect() {
+    var sel = document.getElementById('scheduledTaskPublishPlatform');
+    if (!sel) return;
+    var current = sel.value;
+    var seen = {};
+    var rows = [];
+    (state.publishAccounts || []).forEach(function (row) {
+      var p = String(row && row.platform || '').trim();
+      if (!p || seen[p]) return;
+      seen[p] = true;
+      rows.push({ platform: p, name: row.platform_name || platformDisplayName(p) });
+    });
+    sel.innerHTML = optionHtml('', '不发布，仅生成记录') + rows.map(function (row) {
+      return optionHtml(row.platform, row.name);
+    }).join('');
+    if (current && seen[current]) sel.value = current;
+    fillPublishAccountSelect();
+  }
+
+  function fillPublishAccountSelect() {
+    var sel = document.getElementById('scheduledTaskPublishAccount');
+    if (!sel) return;
+    var platform = val('scheduledTaskPublishPlatform');
+    var current = sel.value;
+    var rows = currentPublishAccounts(platform);
+    if (!platform) {
+      sel.innerHTML = optionHtml('', '先选择发布平台');
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    if (!rows.length) {
+      sel.innerHTML = optionHtml('', state.publishAccountsLoading ? '加载账号中...' : '该平台暂无账号');
+      return;
+    }
+    sel.innerHTML = rows.map(function (row) {
+      return optionHtml(row.id, publishAccountLabel(row));
+    }).join('');
+    if (current && rows.some(function (row) { return String(row.id) === String(current); })) {
+      sel.value = current;
+    }
+  }
+
+  function loadPublishAccounts() {
+    if (state.publishAccountsLoaded || state.publishAccountsLoading) return Promise.resolve(state.publishAccounts);
+    state.publishAccountsLoading = true;
+    fillPublishPlatformSelect();
+    return api('/api/accounts')
+      .then(function (d) {
+        state.publishAccounts = Array.isArray(d.accounts) ? d.accounts : [];
+        state.publishAccountsLoaded = true;
+        fillPublishPlatformSelect();
+        return state.publishAccounts;
+      })
+      .catch(function (e) {
+        state.publishAccounts = [];
+        fillPublishPlatformSelect();
+        showMsg('scheduledTaskMsg', e.message || '发布账号加载失败', true);
+        return [];
+      })
+      .then(function (rows) {
+        state.publishAccountsLoading = false;
+        fillPublishPlatformSelect();
+        return rows;
+      }, function (e) {
+        state.publishAccountsLoading = false;
+        fillPublishPlatformSelect();
+        throw e;
+      });
+  }
+
+  function updateGoalVideoSourceMode() {
+    var mode = val('scheduledTaskVideoSourceMode') || 'asset_random';
+    var groupField = document.getElementById('scheduledTaskCandidateGroupField');
+    if (groupField) groupField.style.display = mode === 'ai_image' ? 'none' : '';
   }
 
   function renderGoalFields(host) {
     host.innerHTML = compactGrid(
-      fieldHtml('备选素材组', selectHtml('scheduledTaskCandidateGroup', optionHtml('', '加载中...')))
+      fieldHtml('首帧图片来源', selectHtml('scheduledTaskVideoSourceMode',
+        optionHtml('asset_random', '从素材库备选组随机图片')
+        + optionHtml('ai_image', 'AI 生成图片')
+      ))
+      + '<div id="scheduledTaskCandidateGroupField" style="margin:0;">'
+      + fieldHtml('备选素材组', selectHtml('scheduledTaskCandidateGroup', optionHtml('', '加载中...')))
+      + '</div>'
+      + fieldHtml(
+        '提示词（可选）',
+        textareaHtml('scheduledTaskCreativePrompt', 3, '填写后直接按这段提示词生成；留空则根据记忆资料自动生成文案和画面方向')
+        + '<p class="meta" style="margin:0.35rem 0 0;">留空时沿用记忆资料自动生成；填写后不再先生成本次文案。</p>',
+        true
+      )
     );
+    var modeSel = document.getElementById('scheduledTaskVideoSourceMode');
+    if (modeSel) modeSel.addEventListener('change', updateGoalVideoSourceMode);
+    updateGoalVideoSourceMode();
     fillCandidateGroupSelect();
     loadCandidateGroups();
   }
@@ -474,7 +633,27 @@
   };
 
   function renderImageFields(host) {
-    host.innerHTML = '';
+    host.innerHTML = compactGrid(
+      fieldHtml('发布平台', selectHtml('scheduledTaskPublishPlatform', optionHtml('', '不发布，仅生成记录')))
+      + fieldHtml('发布账号', selectHtml('scheduledTaskPublishAccount', optionHtml('', '先选择发布平台')))
+      + fieldHtml(
+        '发布方式',
+        checkboxHtml('scheduledTaskPublishAuto', '生成后自动发布', false)
+        + '<p class="meta" style="margin:0.35rem 0 0;">不勾选时只推送到 H5/小程序/online 记录，之后可手动点击发布。</p>',
+        true
+      )
+      +
+      fieldHtml(
+        '提示词（可选）',
+        textareaHtml('scheduledTaskCreativePrompt', 3, '填写后直接按这段提示词生成图片；留空则根据记忆资料自动生成文案和画面方向')
+        + '<p class="meta" style="margin:0.35rem 0 0;">留空时沿用记忆资料自动生成；填写后不再先生成本次文案。</p>',
+        true
+      )
+    );
+    var platformSel = document.getElementById('scheduledTaskPublishPlatform');
+    if (platformSel) platformSel.addEventListener('change', fillPublishAccountSelect);
+    fillPublishPlatformSelect();
+    loadPublishAccounts();
   }
 
   function avatarLabel(row) {
@@ -600,7 +779,7 @@
     var hint = document.getElementById('scheduledTaskCapabilityHint');
     if (hint) hint.textContent = (CAPABILITIES[capabilityId] || {}).description || '';
     var paramBlock = document.getElementById('scheduledTaskParamBlock');
-    if (paramBlock) paramBlock.style.display = capabilityId === 'goal.image.pipeline' ? 'none' : '';
+    if (paramBlock) paramBlock.style.display = '';
     var autoFill = document.getElementById('scheduledTaskAutoFillBtn');
     if (autoFill) autoFill.style.display = capabilityId === 'hifly.video.create_by_tts' ? '' : 'none';
     renderParamFields();
@@ -628,10 +807,47 @@
       };
     }
     if (capabilityId === 'goal.video.pipeline') {
+      var sourceMode = val('scheduledTaskVideoSourceMode') || 'asset_random';
       var group = val('scheduledTaskCandidateGroup');
-      if (!group) throw new Error('请选择创意成片备选素材组');
+      var prompt = val('scheduledTaskCreativePrompt');
+      if (sourceMode !== 'ai_image' && !group) throw new Error('请选择创意成片备选素材组');
       return {
-        candidate_group: group
+        source_mode: sourceMode,
+        candidate_group: sourceMode === 'ai_image' ? '' : group,
+        prompt: prompt
+      };
+    }
+    if (capabilityId === 'goal.image.pipeline') {
+      var publishPlatform = val('scheduledTaskPublishPlatform');
+      var publishAccountId = val('scheduledTaskPublishAccount');
+      var autoPublish = !!(document.getElementById('scheduledTaskPublishAuto') || {}).checked;
+      var publishAccount = null;
+      if (publishAccountId) {
+        publishAccount = (state.publishAccounts || []).find(function (row) {
+          return row && String(row.id) === String(publishAccountId);
+        }) || null;
+      }
+      var payload = {
+        prompt: val('scheduledTaskCreativePrompt')
+      };
+      if (publishPlatform || publishAccountId || autoPublish) {
+        if (!publishPlatform) throw new Error('请选择发布平台');
+        if (!publishAccountId) throw new Error('请选择发布账号');
+        var parsedAccountId = parseInt(publishAccountId, 10);
+        if (isNaN(parsedAccountId)) throw new Error('发布账号无效');
+        payload.publish_platform = publishPlatform;
+        payload.publish_platform_name = publishAccount ? (publishAccount.platform_name || platformDisplayName(publishPlatform)) : platformDisplayName(publishPlatform);
+        payload.publish_account_id = parsedAccountId;
+        payload.publish_account_nickname = publishAccount ? (publishAccount.nickname || '') : '';
+        payload.publish_auto = autoPublish;
+      }
+      return {
+        prompt: payload.prompt,
+        publish_platform: payload.publish_platform,
+        publish_platform_name: payload.publish_platform_name,
+        publish_account_id: payload.publish_account_id,
+        publish_account_nickname: payload.publish_account_nickname,
+        publish_auto: payload.publish_auto
       };
     }
     return {};
@@ -783,6 +999,27 @@
     });
   }
 
+  function requestPublishRun(runId, btn) {
+    if (!runId) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '提交发布中...';
+    }
+    api('/api/scheduled-tasks/runs/' + encodeURIComponent(runId) + '/publish-request', {
+      method: 'POST',
+      body: JSON.stringify({})
+    }).then(function () {
+      showMsg('scheduledTaskMsg', '已提交发布，本机 online 将使用已绑定账号执行发布', false);
+      loadRuns();
+    }).catch(function (e) {
+      showMsg('scheduledTaskMsg', e.message || '提交发布失败', true);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '发布';
+      }
+    });
+  }
+
   function renderRunsByStatus(rows) {
     rows = Array.isArray(rows) ? rows : [];
     var running = rows.filter(runIsRunning);
@@ -886,6 +1123,11 @@
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-delete-btn') : null;
       if (!btn) return;
       deleteRun(btn.getAttribute('data-run-id'), btn);
+    });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-publish-btn') : null;
+      if (!btn) return;
+      requestPublishRun(btn.getAttribute('data-run-id'), btn);
     });
     var kind = document.getElementById('scheduledTaskKind');
     if (kind) kind.value = 'capability';
