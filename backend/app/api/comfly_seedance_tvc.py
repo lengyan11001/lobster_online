@@ -81,8 +81,14 @@ def _default_runs_root() -> str:
 def _validate_payload(pl: ComflySeedancePipelinePayload) -> None:
     if bool(pl.asset_id and pl.image_url):
         raise HTTPException(status_code=400, detail="asset_id 与 image_url 请勿同时传")
-    if not pl.asset_id and not pl.image_url:
-        raise HTTPException(status_code=400, detail="请提供 asset_id 或 image_url")
+    has_reference = bool(
+        (pl.asset_id or "").strip()
+        or (pl.image_url or "").strip()
+        or any(str(x).strip() for x in (pl.reference_asset_ids or []))
+        or any(str(x).strip() for x in (pl.reference_image_urls or []))
+    )
+    if not has_reference and not (pl.task_text or "").strip():
+        raise HTTPException(status_code=400, detail="请提供参考图或创意提示词")
     if pl.segment_duration_seconds is not None and int(pl.segment_duration_seconds) != 10:
         raise HTTPException(status_code=400, detail="segment_duration_seconds 目前固定为 10 秒")
 
@@ -117,7 +123,7 @@ async def _prepare_pipeline_input(
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
     _ = _api_base_for_pipeline(api_base)
     return build_pipeline_input(
-        reference_image=reference_images[0],
+        reference_image=reference_images[0] if reference_images else "",
         reference_images=reference_images,
         api_key=api_key,
         api_base=api_base,

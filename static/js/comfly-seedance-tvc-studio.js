@@ -949,6 +949,9 @@
   }
 
   function ensureImageAssetsUploaded() {
+    if (state.mode === 'prompt_only') {
+      return Promise.resolve([]);
+    }
     return state.images.reduce(function(chain, item) {
       return chain.then(function(list) {
         return uploadAssetItem(item).then(function(doneItem) {
@@ -977,9 +980,26 @@
   function buildRunPayload(uploadedImages) {
     var values = getFormValues();
     var uploaded = uploadedImages || [];
+    var basePayload = {
+      total_duration_seconds: state.duration,
+      segment_count: Math.max(1, Math.floor(state.duration / 10)),
+      segment_duration_seconds: 10,
+      merge_clips: !!values.needMerge,
+      auto_save: true,
+      analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
+      image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
+      video_model: values.model,
+      aspect_ratio: values.aspectRatio,
+      generate_audio: !!values.needAudio,
+      watermark: false
+    };
 
     if (state.mode === 'prompt_only') {
-      return { error: '当前后端还不支持纯提示词直接提交，请先上传参考图后再生成。' };
+      if (!values.prompt) {
+        return { error: '请先输入创意提示词后再开始生成。' };
+      }
+      basePayload.task_text = values.prompt;
+      return { payload: basePayload };
     }
 
     if (!uploaded.length || !uploaded[0].asset_id) {
@@ -987,24 +1007,13 @@
     }
 
     return {
-      payload: {
+      payload: Object.assign(basePayload, {
         asset_id: uploaded[0].asset_id,
         reference_asset_ids: uploaded.slice(1).map(function(item) {
           return item.asset_id;
         }).filter(Boolean),
-        total_duration_seconds: state.duration,
-        segment_count: Math.max(1, Math.floor(state.duration / 10)),
-        segment_duration_seconds: 10,
-        merge_clips: !!values.needMerge,
-        auto_save: true,
-        task_text: buildPromptWithReferenceHints(values.prompt || '', uploaded),
-        analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
-        image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
-        video_model: values.model,
-        aspect_ratio: values.aspectRatio,
-        generate_audio: !!values.needAudio,
-        watermark: false
-      }
+        task_text: buildPromptWithReferenceHints(values.prompt || '', uploaded)
+      })
     };
   }
 
@@ -1202,7 +1211,7 @@
         }
 
         setSubmitBusy(true, '提交中...');
-        showMessage('正在上传参考素材并提交视频任务，请稍候...');
+        showMessage(state.mode === 'prompt_only' ? '正在提交纯提示词视频任务，请稍候...' : '正在上传参考素材并提交视频任务，请稍候...');
 
         return ensureImageAssetsUploaded();
       })

@@ -80,7 +80,7 @@ def resolve_reference_image_for_pipeline(
         return u
     aid = (asset_id or "").strip()
     if not aid:
-        raise HTTPException(status_code=400, detail="请提供 asset_id 或 image_url")
+        return ""
     url = get_asset_public_url(aid, user_id, request, db)
     if not url:
         raise HTTPException(status_code=400, detail=_comfly_upload_failure_detail(aid, user_id, db))
@@ -161,11 +161,13 @@ def build_pipeline_input(
     if effective_total_duration is None and requested_count is not None:
         effective_total_duration = int(requested_count) * 10
     inp: Dict[str, Any] = {
-        "reference_image": reference_image,
         "apikey": api_key,
         "base_url": base,
         "merge_clips": True,
     }
+    primary_ref = str(reference_image or "").strip()
+    if primary_ref:
+        inp["reference_image"] = primary_ref
     refs = [str(x).strip() for x in (reference_images or []) if str(x).strip()]
     if refs:
         inp["reference_images"] = refs

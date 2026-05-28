@@ -399,7 +399,7 @@ def _locale_guidance(config: PipelineConfig) -> str:
 def _analysis_prompt(config: PipelineConfig) -> str:
     return (
         "You are a senior TVC storyboard director and premium commercial planner.\n"
-        "The user uploads one or more reference images. The first image can be a storyboard board example, and other images may be product references, packaging references, scene references, or style references.\n"
+        "The user may upload one or more reference images, or may provide only a text task brief. If reference images are present, the first image can be a storyboard board example, and other images may be product references, packaging references, scene references, or style references. If no reference image is present, infer the product, scene, and style from the text task brief.\n"
         "Your task is to plan one coherent commercial film with a single visual identity, a single campaign arc, and smooth transitions between segments.\n"
         f"The final film must be exactly {config.total_duration_seconds} seconds, split into exactly {config.segment_count} storyboard boards.\n"
         f"Each storyboard board must represent exactly {FIXED_SEGMENT_DURATION_SECONDS} seconds of the same film.\n"
@@ -1016,8 +1016,6 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         primary = (data.get("reference_image") or "").strip()
         if primary and primary not in raw_refs:
             raw_refs.insert(0, primary)
-        if not raw_refs:
-            raise PipelineError("Missing reference_image or reference_images")
 
         client = ComflySeedanceClient(config, logger_obj)
         reference_image_urls: List[str] = []
