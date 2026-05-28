@@ -18,6 +18,8 @@
     currentJobStatus: '',
     currentResultVideoUrl: '',
     currentJobTitle: '',
+    currentJobError: '',
+    currentJobProgress: null,
     submitBusy: false,
     submitLabel: '',
     pollTimer: null,
@@ -147,6 +149,39 @@
 
   function responseErrorText(data, fallback) {
     return normalizeApiErrorText(data && (data.detail || data.message || data.error || data), fallback);
+  }
+
+  function progressSummary(progress) {
+    if (!progress || typeof progress !== 'object') return '';
+    var errors = Array.isArray(progress.errors) ? progress.errors : [];
+    for (var i = errors.length - 1; i >= 0; i -= 1) {
+      var err = errors[i];
+      var text = '';
+      if (typeof err === 'string') text = err;
+      else if (err && typeof err === 'object') text = err.error || err.message || err.detail || '';
+      text = normalizeApiErrorText(text, '').trim();
+      if (text) return text;
+    }
+    var steps = Array.isArray(progress.last_steps) ? progress.last_steps : [];
+    for (var j = steps.length - 1; j >= 0; j -= 1) {
+      var step = steps[j] || {};
+      if (step.error) return normalizeApiErrorText(step.error, '').trim();
+    }
+    if (steps.length) {
+      var last = steps[steps.length - 1] || {};
+      var name = String(last.name || '').replace(/^0\d_/, '').replace(/_/g, ' ');
+      var status = String(last.status || '').trim();
+      if (name || status) return (name || '处理中') + (status ? ' · ' + status : '');
+    }
+    if (progress.step_count) return '已执行 ' + progress.step_count + ' 个步骤';
+    return '';
+  }
+
+  function jobDetailText(job) {
+    if (!job) return '';
+    var err = normalizeApiErrorText(job.error || '', '').trim();
+    if (err) return err;
+    return progressSummary(job.progress);
   }
 
   function formatFileSize(size) {
@@ -724,6 +759,11 @@
   }
 
   function resultVideoHtml(values, boards) {
+    var detailText = jobDetailText({
+      error: state.currentJobError,
+      progress: state.currentJobProgress
+    });
+
     if (state.currentResultVideoUrl) {
       var resultUrl = String(state.currentResultVideoUrl);
       var bare = resultUrl.split('?')[0].toLowerCase();
@@ -756,7 +796,7 @@
         '<span class="tvc-status-spinner" aria-hidden="true"></span>',
         '<div>',
         '<strong>视频正在生成中</strong>',
-        '<span>任务已提交，正在分析分镜、生成片段并合成最终视频，完成后这里会自动切换到成片结果。</span>',
+        '<span>' + escapeHtml(detailText || '任务已提交，正在分析分镜、生成片段并合成最终视频，完成后这里会自动切换到成片结果。') + '</span>',
         '</div>',
         '</div>',
         '</div>'
@@ -767,14 +807,14 @@
       return [
         '<div class="tvc-video-placeholder">',
         '<strong>视频生成失败</strong>',
-        '<span>请调整素材或参数后重新提交任务。</span>',
+        '<span>' + escapeHtml(detailText || '请调整素材或参数后重新提交任务。') + '</span>',
         '</div>'
       ].join('');
     }
 
     var summary = state.duration + ' 秒 / ' + boards.length + ' 张分镜 / ' + values.aspectRatio;
     var detail = state.mode === 'prompt_only'
-      ? '当前是纯提示词规划模式，右侧先展示分镜草案。真正提交成片时，后端还需要补上纯文生视频支持。'
+      ? '当前是纯提示词规划模式，会直接按提示词规划分镜并生成视频。'
       : '点击“开始生成视频”后，这里会展示最后合成的视频结果。';
 
     return [
@@ -804,6 +844,8 @@
         state.currentJobStatus = (hit && hit.status) || 'running';
         state.currentResultVideoUrl = (hit && hit.videoUrl) || '';
         state.currentJobTitle = (hit && hit.title) || '创意视频任务';
+        state.currentJobError = (hit && hit.error) || '';
+        state.currentJobProgress = (hit && hit.progress) || null;
         state.examplesOpen = false;
         state.mainView = 'result';
         renderWorkspace();
@@ -858,10 +900,19 @@
     if (list) {
       list.innerHTML = state.recentJobs.map(function(job) {
         var selected = job.jobId === state.currentJobId ? ' is-active' : '';
+        var detail = jobDetailText(job);
+        var resultHint = '';
+        if (job.status === 'completed' && job.videoUrl) {
+          resultHint = ' · 有结果';
+        } else if (job.status === 'failed' && detail) {
+          resultHint = ' · ' + shortenText(detail, 36);
+        } else if (job.status === 'running' && detail) {
+          resultHint = ' · ' + shortenText(detail, 30);
+        }
         return [
           '<button type="button" class="seedance-business-job' + selected + '" data-seedance-job="' + escapeHtml(job.jobId) + '">',
           '<span class="seedance-business-job-title">' + escapeHtml(job.title || '创意视频任务') + '</span>',
-          '<span class="seedance-business-job-meta">' + escapeHtml(statusLabel(job.status)) + ' · ' + escapeHtml((job.jobId || '').slice(0, 8)) + '</span>',
+          '<span class="seedance-business-job-meta">' + escapeHtml(statusLabel(job.status)) + ' · ' + escapeHtml((job.jobId || '').slice(0, 8)) + escapeHtml(resultHint) + '</span>',
           '</button>'
         ].join('');
       }).join('');
@@ -1099,6 +1150,8 @@
       status: String(job.status || 'running'),
       title: job.title || '创意视频任务',
       videoUrl: cloudVideoUrlFromJob(job),
+      error: String(job.error || '').trim(),
+      progress: null,
       updatedAt: Date.parse(job.updated_at || job.completed_at || job.created_at || '') || Date.now(),
       cloud: true,
       cloudJob: job
@@ -1150,9 +1203,13 @@
 
         state.currentJobStatus = String(result.data.status || '').trim();
         state.currentResultVideoUrl = extractResultVideoUrl(result.data) || state.currentResultVideoUrl;
+        state.currentJobError = normalizeApiErrorText(result.data.error || '', '').trim();
+        state.currentJobProgress = result.data.progress || null;
         updateRememberedJob(state.currentJobId, {
           status: state.currentJobStatus,
-          videoUrl: state.currentResultVideoUrl || ''
+          videoUrl: state.currentResultVideoUrl || '',
+          error: state.currentJobError,
+          progress: state.currentJobProgress
         });
         renderWorkspace();
 
@@ -1169,14 +1226,21 @@
             showMessage('任务已完成，但未拿到可播放的视频地址，请刷新任务状态或到素材库查看。');
           }
         } else if (state.currentJobStatus === 'failed') {
-          showMessage('任务失败：' + normalizeApiErrorText(result.data.error, '未知错误'));
+          showMessage('任务失败：' + (state.currentJobError || progressSummary(state.currentJobProgress) || '未知错误'));
         } else if (showToast) {
           showMessage('任务状态已刷新。');
         }
       })
       .catch(function(err) {
         stopPolling();
-        showMessage('刷新任务状态失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
+        state.currentJobStatus = 'failed';
+        state.currentJobError = normalizeApiErrorText(err && (err.message || err), '未知错误');
+        updateRememberedJob(state.currentJobId, {
+          status: 'failed',
+          error: state.currentJobError
+        });
+        renderWorkspace();
+        showMessage('刷新任务状态失败：' + state.currentJobError);
       });
   }
 
@@ -1245,12 +1309,16 @@
       state.currentJobStatus = 'running';
       state.currentResultVideoUrl = '';
       state.currentJobTitle = ($('seedanceTaskPromptInput').value || '创意视频').trim().slice(0, 18) || '创意视频任务';
+      state.currentJobError = '';
+      state.currentJobProgress = null;
       state.examplesOpen = false;
       state.mainView = 'result';
       rememberJob({
         jobId: state.currentJobId,
         status: 'running',
-        title: state.currentJobTitle
+        title: state.currentJobTitle,
+        error: '',
+        progress: null
       });
       setSubmitBusy(false);
       renderWorkspace();
@@ -1449,6 +1517,8 @@
       state.currentJobStatus = '';
       state.currentResultVideoUrl = '';
       state.currentJobTitle = '';
+      state.currentJobError = '';
+      state.currentJobProgress = null;
       setSubmitBusy(false);
       if ($('seedanceExampleSearchInput')) $('seedanceExampleSearchInput').value = '';
       document.querySelectorAll('[data-seedance-category]').forEach(function(item) {
@@ -1480,6 +1550,8 @@
         state.currentJobStatus = 'running';
         state.currentResultVideoUrl = active.videoUrl || '';
         state.currentJobTitle = active.title || '创意视频任务';
+        state.currentJobError = active.error || '';
+        state.currentJobProgress = active.progress || null;
         state.examplesOpen = false;
         state.mainView = 'result';
         refreshJobStatus(false);

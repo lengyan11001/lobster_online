@@ -411,10 +411,9 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str
         "updated_at_ts": job.get("updated_at_ts"),
     }
     job_out = job.get("job_output_dir") or ""
-    if st == "running":
-        prog = read_manifest_progress(str(job_out))
-        if prog:
-            out["progress"] = _redact_progress_for_client(prog)
+    prog = read_manifest_progress(str(job_out))
+    if prog:
+        out["progress"] = _redact_progress_for_client(prog)
     if st == "failed":
         out["error"] = job.get("error")
         if include_full and job.get("result") is not None:
@@ -423,9 +422,6 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str
         if include_full:
             out["result"] = job.get("result")
             out["saved_assets"] = job.get("saved_assets") or []
-        prog = read_manifest_progress(str(job_out))
-        if prog:
-            out["progress"] = _redact_progress_for_client(prog)
     return out
 
 
