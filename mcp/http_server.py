@@ -79,6 +79,16 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
 _INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish"})
 
+_LOCAL_PIPELINE_JOB_LOOKUP_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("comfly.daihuo.pipeline", "/api/comfly-daihuo/pipeline/jobs/{job_id}", "local_comfly_daihuo_job"),
+    ("comfly.seedance.tvc.pipeline", "/api/comfly-seedance-tvc/pipeline/jobs/{job_id}", "local_seedance_tvc_job"),
+    ("goal.video.pipeline", "/api/goal-video/pipeline/jobs/{job_id}", "local_goal_video_job"),
+    ("comfly.ecommerce.detail_pipeline", "/api/comfly-ecommerce-detail/pipeline/jobs/{job_id}", "local_ecommerce_detail_job"),
+)
+_LOCAL_PIPELINE_JOB_LOOKUP_BY_CAPABILITY = {
+    cap: (cap, path, source) for cap, path, source in _LOCAL_PIPELINE_JOB_LOOKUP_SPECS
+}
+
 
 def _normalize_invoke_task_get_result_args(args: Dict[str, Any]) -> Dict[str, Any]:
     """task.get_result：上游只认 payload.task_id；模型常误写 taskid/taskId 或把 task_id 放在 arguments 顶层。"""
@@ -337,6 +347,85 @@ def _normalize_invoke_goal_video_pipeline_args(args: Dict[str, Any]) -> Dict[str
     return out
 
 
+def _looks_like_local_pipeline_job_id(value: Any) -> bool:
+    s = str(value or "").strip().lower()
+    return len(s) == 32 and all(c in "0123456789abcdef" for c in s)
+
+
+async def _lookup_local_pipeline_job_from_task_get_result(
+    *,
+    job_id: str,
+    token: Optional[str],
+    request: Optional[Any],
+    preferred_capability_id: str = "",
+) -> Optional[Dict[str, Any]]:
+    jid = (job_id or "").strip().lower()
+    if not _looks_like_local_pipeline_job_id(jid):
+        return None
+    specs: list[tuple[str, str, str]] = []
+    preferred = _LOCAL_PIPELINE_JOB_LOOKUP_BY_CAPABILITY.get((preferred_capability_id or "").strip())
+    if preferred:
+        specs.append(preferred)
+    for spec in _LOCAL_PIPELINE_JOB_LOOKUP_SPECS:
+        if preferred and spec[0] == preferred[0]:
+            continue
+        specs.append(spec)
+
+    headers = _backend_headers(token, request)
+    for capability_id, path_tpl, source in specs:
+        url = f"{BASE_URL.rstrip('/')}{path_tpl.format(job_id=jid)}"
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await client.get(url, headers=headers)
+        except Exception as exc:
+            logger.warning(
+                "[MCP task.get_result] local pipeline lookup request failed capability_id=%s job_id=%s err=%s",
+                capability_id,
+                jid[:16],
+                exc,
+            )
+            continue
+        if r.status_code == 404:
+            continue
+        if r.status_code >= 400:
+            err = ""
+            try:
+                body = r.json() if r.content else {}
+                err = str(body.get("detail") or body)
+            except Exception:
+                err = (r.text or "")[:1000]
+            return {
+                "capability_id": capability_id,
+                "job_id": jid,
+                "status_source": source,
+                "ok": False,
+                "error": err,
+            }
+        data = r.json() if r.content else {}
+        if not isinstance(data, dict):
+            data = {"raw": data}
+        out = dict(data)
+        out.setdefault("ok", True)
+        out["capability_id"] = capability_id
+        out["job_id"] = jid
+        out["status_source"] = source
+        status = str(out.get("status") or "").strip().lower()
+        out["result_ready"] = status == "completed"
+        if status and status not in ("completed", "failed"):
+            out["openclaw_async"] = True
+            out["next_action"] = "poll_pipeline"
+            out["next_payload"] = {"action": "poll_pipeline", "job_id": jid}
+            out["message"] = "本地流水线任务仍在后台生成；后续请继续用 poll_pipeline + job_id 查询，不要用 task.get_result 查询。"
+        logger.info(
+            "[MCP task.get_result] redirected local pipeline job lookup capability_id=%s job_id=%s status=%s",
+            capability_id,
+            jid[:16],
+            status or "-",
+        )
+        return out
+    return None
+
+
 def _sutui_rest_phase_label(tool_name: str) -> str:
     if tool_name == "generate":
         return "创建任务|tasks/create"
@@ -425,7 +514,7 @@ _OPENCLAW_SCOPE_HEADER_CAPS = "X-Lobster-Allowed-Capabilities"
 _OPENCLAW_VIDEO_MODEL_LOCK_HEADER = "X-Lobster-Video-Model-Lock"
 _OPENCLAW_VIDEO_MODEL_LOCK_SOURCE_HEADER = "X-Lobster-Video-Model-Lock-Source"
 _NO_AUTH_UNSCOPED_SAFE_TOOLS = frozenset({"list_capabilities", "list_assets"})
-_OPENCLAW_LONG_CAPABILITY_IDS = frozenset({"image.generate", "video.generate"})
+_OPENCLAW_LONG_CAPABILITY_IDS = frozenset({"image.generate", "video.generate", "comfly.daihuo.pipeline"})
 _OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC = float(
     os.environ.get("LOBSTER_OPENCLAW_LONG_TOOL_FOREGROUND_TIMEOUT_SEC", "45") or "45"
 )
@@ -454,6 +543,10 @@ def _csv_scope_header(request: Optional[Any], name: str) -> Optional[set[str]]:
 
 def _openclaw_scope_intent(request: Optional[Any]) -> str:
     return (_request_header_raw(request, _OPENCLAW_SCOPE_HEADER_INTENT) or "").strip()
+
+
+def _request_from_openclaw_mcp(request: Optional[Any]) -> bool:
+    return (_request_header_raw(request, "X-Lobster-OpenClaw-Mcp") or "").strip() == "1"
 
 
 def _openclaw_video_model_lock(request: Optional[Any]) -> Tuple[str, str]:
@@ -588,7 +681,7 @@ def _register_openclaw_task_id(
     capability_id: str,
     upstream_resp: Any,
 ) -> None:
-    if not _openclaw_scope_intent(request) or capability_id not in _OPENCLAW_LONG_CAPABILITY_IDS:
+    if not (_openclaw_scope_intent(request) or _request_from_openclaw_mcp(request)) or capability_id not in _OPENCLAW_LONG_CAPABILITY_IDS:
         return
     task_id = _extract_task_id_from_upstream(upstream_resp)
     if not task_id:
@@ -615,7 +708,7 @@ def _openclaw_task_id_guard_error(
     token: Optional[str],
 ) -> str:
     intent = _openclaw_scope_intent(request)
-    if not intent or not isinstance(payload, dict):
+    if not (intent or _request_from_openclaw_mcp(request)) or not isinstance(payload, dict):
         return ""
     task_id = str(payload.get("task_id") or payload.get("taskId") or payload.get("taskid") or "").strip()
     if not task_id:
@@ -659,10 +752,6 @@ def _request_has_auth_material(request: Optional[Any]) -> bool:
         if (_request_header_raw(request, name) or "").strip():
             return True
     return False
-
-
-def _request_from_openclaw_mcp(request: Optional[Any]) -> bool:
-    return (_request_header_raw(request, "X-Lobster-OpenClaw-Mcp") or "").strip() == "1"
 
 
 def _effective_openclaw_scope(
@@ -1160,6 +1249,53 @@ _COMFLY_DAIHUO_MCP_POLL_MAX_SEC = 7200  # 整包流水线可能极长（2 小时
 _GOAL_VIDEO_OPENCLAW_FOREGROUND_POLL_MAX_SEC = float(
     os.environ.get("LOBSTER_GOAL_VIDEO_OPENCLAW_FOREGROUND_POLL_MAX_SEC", "8") or "8"
 )
+
+
+def _mcp_daihuo_pipeline_running_payload(
+    data: Dict[str, Any],
+    job_id: str,
+    *,
+    just_started: bool,
+) -> Dict[str, Any]:
+    jid = (job_id or str(data.get("job_id") or "")).strip().lower()
+    out = dict(data)
+    out["ok"] = True
+    out["capability_id"] = "comfly.daihuo.pipeline"
+    if jid:
+        out["job_id"] = jid
+        out["next_payload"] = {"action": "poll_pipeline", "job_id": jid}
+    out["status"] = "running"
+    out["openclaw_async"] = True
+    out["result_ready"] = False
+    out["next_action"] = "poll_pipeline"
+    out["message"] = (
+        "爆款TVC任务已提交，正在后台生成；不要重复 start_pipeline，后续用 poll_pipeline 查询进度。"
+        if just_started
+        else "爆款TVC任务仍在后台生成；不要重复 start_pipeline，后续继续用 poll_pipeline 查询进度。"
+    )
+    out["reply_rules"] = [
+        "Do not call start_pipeline again for the same TVC asset/job.",
+        "Do not claim generation completed until status is completed and saved_assets or final video evidence is present.",
+        "When status is running, tell the user the TVC is still generating and they can check progress later.",
+    ]
+    out["openclaw_evidence"] = {
+        "capability_id": "comfly.daihuo.pipeline",
+        "task_id": "",
+        "job_id": jid,
+        "status_source": "local_comfly_daihuo_job",
+        "completion_check": "poll_pipeline_job_status",
+        "result_ready": False,
+        "media_urls": [],
+        "saved_asset_ids": [],
+        "claim_rules": {
+            "tool_evidence_required": True,
+            "can_say_task_submitted": bool(jid),
+            "can_say_generation_completed": False,
+            "can_say_asset_saved": False,
+            "can_say_user_credits_used": False,
+        },
+    }
+    return out
 
 
 def _mcp_comfly_upstream_dict(raw: Any) -> Dict[str, Any]:
@@ -4391,6 +4527,29 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                             ),
                         }
                     ], True
+                _tid_for_local_job = str(payload.get("task_id") or payload.get("taskId") or payload.get("taskid") or "").strip()
+                _preferred_local_cap = str(payload.get("capability_id") or payload.get("source_capability_id") or "").strip()
+                _local_job_status = await _lookup_local_pipeline_job_from_task_get_result(
+                    job_id=_tid_for_local_job,
+                    token=token,
+                    request=request,
+                    preferred_capability_id=_preferred_local_cap,
+                )
+                if _local_job_status is not None:
+                    _local_job_error = _mcp_payload_failure_message(_local_job_status)
+                    return [
+                        {
+                            "type": "text",
+                            "text": _json_dumps_mcp_payload(
+                                {
+                                    "capability_id": "task.get_result",
+                                    "redirected_capability_id": _local_job_status.get("capability_id"),
+                                    "result": _local_job_status,
+                                    **({"error": _local_job_error} if _local_job_error else {}),
+                                }
+                            ),
+                        }
+                    ], bool(_local_job_error)
                 _task_guard_error = _openclaw_task_id_guard_error(payload, request, token)
                 if _task_guard_error:
                     return [{"type": "text", "text": _task_guard_error}], True
@@ -4822,25 +4981,45 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         if dh_act2 == "start_pipeline":
                             jid2 = (data.get("job_id") or "").strip()
                             if jid2:
-                                logger.info(
-                                    "[MCP comfly.daihuo.pipeline] start 成功，开始轮询 job_id=%s",
-                                    jid2[:16],
-                                )
-                                polled = await _mcp_poll_daihuo_pipeline_until_done(
-                                    base_url=BASE_URL,
-                                    token=token,
-                                    job_id=jid2,
-                                    request=request,
-                                )
-                                if isinstance(polled, dict) and (polled.get("status") or "").strip():
-                                    data = polled
+                                if _openclaw_should_detach_long_capability(request, capability_id):
+                                    logger.info(
+                                        "[MCP comfly.daihuo.pipeline] start ok; OpenClaw async return job_id=%s",
+                                        jid2[:16],
+                                    )
+                                    data = _mcp_daihuo_pipeline_running_payload(
+                                        data,
+                                        jid2,
+                                        just_started=True,
+                                    )
                                 else:
-                                    data = {
-                                        "ok": False,
-                                        "job_id": jid2,
-                                        "start_ack": data,
-                                        "poll_error": polled,
-                                    }
+                                    logger.info(
+                                        "[MCP comfly.daihuo.pipeline] start ok; polling job_id=%s",
+                                        jid2[:16],
+                                    )
+                                    polled = await _mcp_poll_daihuo_pipeline_until_done(
+                                        base_url=BASE_URL,
+                                        token=token,
+                                        job_id=jid2,
+                                        request=request,
+                                    )
+                                    if isinstance(polled, dict) and (polled.get("status") or "").strip():
+                                        data = polled
+                                    else:
+                                        data = {
+                                            "ok": False,
+                                            "job_id": jid2,
+                                            "start_ack": data,
+                                            "poll_error": polled,
+                                        }
+                        elif dh_act2 == "poll_pipeline":
+                            st2 = (data.get("status") or "").strip().lower()
+                            jid2 = (data.get("job_id") or _p.get("job_id") or "").strip()
+                            if st2 not in ("completed", "failed"):
+                                data = _mcp_daihuo_pipeline_running_payload(
+                                    data,
+                                    jid2,
+                                    just_started=False,
+                                )
                     if (
                         capability_id == "comfly.ecommerce.detail_pipeline"
                         and isinstance(data, dict)

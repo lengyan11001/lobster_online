@@ -97,7 +97,8 @@
       "compaction": {
         "mode": "safeguard"
       },
-      "timeoutSeconds": 600
+      "timeoutSeconds": 600,
+      "thinkingDefault": "off"
     },
     "list": [
       {
@@ -117,7 +118,8 @@
             "security": "deny",
             "ask": "off"
           }
-        }
+        },
+        "thinkingDefault": "off"
       },
       {
         "id": "lobster-sutui-deepseek-chat",
@@ -136,7 +138,8 @@
             "security": "deny",
             "ask": "off"
           }
-        }
+        },
+        "thinkingDefault": "off"
       },
       {
         "id": "lobster-browser-use",

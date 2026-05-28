@@ -5917,9 +5917,9 @@ def _task_status_lookup_messages_from_payload(payload: ChatRequest) -> List[Dict
 
 _TASK_STATUS_DIRECT_RE = re.compile(
     r"(?:"
-    r"(?:查|查询|看|看看|看下|刷新|继续查看|继续查|再查|轮询).{0,12}(?:进度|状态|结果|任务|生成|视频|图片|素材)|"
-    r"(?:生成|视频|图片|任务|结果).{0,12}(?:好了吗|好了没|出来没|完成了吗|成功了吗|失败了吗|怎么样了|什么状态|进度)|"
-    r"^(?:继续|继续查看|继续查|再查|查一下|查询|查结果|看下结果|看看结果|刷新|轮询|好了没|出来没|完成了吗|怎么样了|结果呢|视频结果|图片结果)$"
+    r"(?:查|查询|查下|查看|看|看看|看下|刷新|继续查看|继续查|再查|再看|轮询).{0,12}(?:进度|状态|结果|任务|生成|视频|图片|素材)|"
+    r"(?:生成|视频|图片|任务|结果).{0,12}(?:好了吗|好了没|好了没有|好没好|出来没|出来了吗|出了吗|完成了吗|完成没有|成功了吗|失败了吗|怎么样了|什么状态|有结果了吗|进度)|"
+    r"^(?:继续|继续查看|继续查|继续看|再查|再查一下|查一下|查下|查询|查结果|再看一下|看下结果|看看结果|刷新|轮询|好了没|好了没有|出来没|出来了吗|出了吗|完成了吗|完成没有|有结果了吗|怎么样了|结果呢|视频结果|图片结果)$"
     r")",
     re.IGNORECASE,
 )
@@ -5941,6 +5941,149 @@ def _task_status_lookup_candidate_from_payload(payload: ChatRequest) -> Tuple[bo
     if not _is_task_status_lookup_turn(messages):
         return False, ""
     return True, tid
+
+
+def _task_id_from_any_recent_record(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        tid = _extract_comfly_veo_task_id_from_submit_result(raw) or _extract_task_id_from_result(raw)
+        if tid:
+            return tid[:128]
+        if len(raw) == 32 and all(c in "0123456789abcdefABCDEF" for c in raw):
+            return f"daihuo_{raw.lower()}"[:128]
+        m = _TASK_ID_LABEL_RE.search(raw)
+        if m and _task_id_token_ok(m.group(1)):
+            return m.group(1).strip()[:128]
+        for pat in (
+            r"\bdaihuo_[0-9a-f]{32}\b",
+            r"\bvideo_[A-Za-z0-9_.:-]{6,127}\b",
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            r"\b\d{12,}\b",
+        ):
+            mm = re.search(pat, raw, re.IGNORECASE)
+            if mm and _task_id_token_ok(mm.group(0)):
+                return mm.group(0).strip()[:128]
+        return ""
+    if isinstance(value, dict):
+        for k in ("job_id", "jobId", "jobid"):
+            v = value.get(k)
+            if isinstance(v, str) and len(v.strip()) == 32 and all(c in "0123456789abcdefABCDEF" for c in v.strip()):
+                return f"daihuo_{v.strip().lower()}"[:128]
+        tid = _task_id_deep_in_obj(value)
+        if tid:
+            return tid[:128]
+        for v in value.values():
+            tid = _task_id_from_any_recent_record(v)
+            if tid:
+                return tid[:128]
+        return ""
+    if isinstance(value, list):
+        for item in value:
+            tid = _task_id_from_any_recent_record(item)
+            if tid:
+                return tid[:128]
+    return ""
+
+
+def _latest_task_id_from_local_logs(
+    db: Session,
+    user_id: int,
+    payload: ChatRequest,
+) -> str:
+    """Find the latest generation task id when mobile/H5 history did not carry it back."""
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return ""
+    sid = (getattr(payload, "session_id", None) or "").strip()[:128]
+    cid = (getattr(payload, "context_id", None) or "").strip()[:128]
+
+    def collect_for_scope(session_only: bool) -> List[Tuple[Any, str]]:
+        rows: List[Tuple[Any, str]] = []
+        try:
+            q = db.query(ToolCallLog).filter(ToolCallLog.user_id == uid)
+            if session_only and sid:
+                q = q.filter(ToolCallLog.session_id == sid)
+            for row in q.order_by(ToolCallLog.created_at.desc()).limit(24).all():
+                for source in (getattr(row, "result_text", None), getattr(row, "arguments", None), getattr(row, "result_urls", None)):
+                    tid = _task_id_from_any_recent_record(source)
+                    if tid:
+                        rows.append((getattr(row, "created_at", None), tid))
+                        break
+        except Exception:
+            logger.debug("[CHAT] recent ToolCallLog task_id lookup failed", exc_info=True)
+
+        try:
+            q2 = db.query(CapabilityCallLog).filter(
+                CapabilityCallLog.user_id == uid,
+                CapabilityCallLog.capability_id.in_(
+                    [
+                        "image.generate",
+                        "video.generate",
+                        "task.get_result",
+                        "comfly.daihuo",
+                        "comfly.daihuo.pipeline",
+                        "goal.video.pipeline",
+                    ]
+                ),
+            )
+            if session_only:
+                if sid:
+                    q2 = q2.filter(CapabilityCallLog.chat_session_id == sid)
+                elif cid:
+                    q2 = q2.filter(CapabilityCallLog.chat_context_id == cid)
+            for row in q2.order_by(CapabilityCallLog.created_at.desc()).limit(24).all():
+                for source in (getattr(row, "response_payload", None), getattr(row, "request_payload", None), getattr(row, "error_message", None)):
+                    tid = _task_id_from_any_recent_record(source)
+                    if tid:
+                        rows.append((getattr(row, "created_at", None), tid))
+                        break
+        except Exception:
+            logger.debug("[CHAT] recent CapabilityCallLog task_id lookup failed", exc_info=True)
+
+        try:
+            q3 = db.query(ChatTurnLog).filter(ChatTurnLog.user_id == uid)
+            if session_only:
+                if sid:
+                    q3 = q3.filter(ChatTurnLog.session_id == sid)
+                elif cid:
+                    q3 = q3.filter(ChatTurnLog.context_id == cid)
+            for row in q3.order_by(ChatTurnLog.created_at.desc()).limit(12).all():
+                for source in (getattr(row, "meta", None), getattr(row, "assistant_reply", None), getattr(row, "user_message", None)):
+                    tid = _task_id_from_any_recent_record(source)
+                    if tid:
+                        rows.append((getattr(row, "created_at", None), tid))
+                        break
+        except Exception:
+            logger.debug("[CHAT] recent ChatTurnLog task_id lookup failed", exc_info=True)
+        return rows
+
+    candidates = collect_for_scope(True) if sid or cid else []
+    if not candidates:
+        candidates = collect_for_scope(False)
+    candidates = [(ts, tid) for ts, tid in candidates if tid]
+    if not candidates:
+        return ""
+    def _ts_key(value: Any) -> float:
+        try:
+            if hasattr(value, "timestamp"):
+                return float(value.timestamp())
+        except Exception:
+            pass
+        return 0.0
+
+    candidates.sort(key=lambda x: _ts_key(x[0]), reverse=True)
+    tid = candidates[0][1].strip()[:128]
+    logger.info(
+        "[CHAT] task_status_fast resolved task_id from local logs session_id=%s context_id=%s task_id=%s",
+        sid or "-",
+        cid or "-",
+        tid[:96],
+    )
+    return tid
 
 
 def _guard_generation_submit_for_status_lookup(
@@ -7859,6 +8002,8 @@ async def chat_endpoint(
 
     t0 = time.perf_counter()
     fast_status_turn, fast_status_tid = _task_status_lookup_candidate_from_payload(payload)
+    if fast_status_turn and not fast_status_tid:
+        fast_status_tid = _latest_task_id_from_local_logs(db, current_user.id, payload)
     if fast_status_turn:
         chat_turn_precharged, chat_turn_id = await _pre_deduct_online_chat_turn(
             payload,
@@ -8267,6 +8412,8 @@ async def _chat_stream_events(
             await queue.put({"type": "done", "reply": fr, "error": fe})
             return
         fast_status_turn, fast_status_tid = _task_status_lookup_candidate_from_payload(payload)
+        if fast_status_turn and not fast_status_tid:
+            fast_status_tid = _latest_task_id_from_local_logs(db, current_user.id, payload)
         if fast_status_turn:
             result_text = ""
             fe = None
@@ -8275,7 +8422,7 @@ async def _chat_stream_events(
                 _charged, chat_turn_id = await _pre_deduct_online_chat_turn(
                     payload,
                     raw_token,
-                    source="online_chat_stream_task_status_fast",
+                    source="online_stream_status_fast",
                     request=request,
                 )
                 _ = _charged

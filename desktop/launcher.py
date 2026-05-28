@@ -223,6 +223,12 @@ def build_env() -> dict[str, str]:
     env.setdefault("OPENCLAW_CONFIG_PATH", str(ROOT / "openclaw" / "openclaw.json"))
     env.setdefault("OPENCLAW_STATE_DIR", str(ROOT / "openclaw"))
     env.setdefault("OPENCLAW_DISABLE_BONJOUR", "1")
+    env.setdefault("OPENCLAW_NO_RESPAWN", "1")
+    env.setdefault("OPENCLAW_DEBUG_INGRESS_TIMING", "1")
+    env["NODE_DISABLE_COMPILE_CACHE"] = "1"
+    env.pop("NODE_COMPILE_CACHE", None)
+    env.setdefault("LOBSTER_OPENCLAW_FAST_THINKING_OFF", "1")
+    env.setdefault("LOBSTER_OPENCLAW_SKIP_SKILLS_SNAPSHOT", "1")
     env.setdefault("LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE", "1")
     env.setdefault("LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING", "1")
     return env

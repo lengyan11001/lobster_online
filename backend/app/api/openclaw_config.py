@@ -110,6 +110,7 @@ LOBSTER_SUTUI_MAIN_AGENT_TOOLS = {
     ],
     "exec": {"security": "deny", "ask": "off"},
 }
+LOBSTER_SUTUI_THINKING_DEFAULT = "off"
 
 
 def _apply_lobster_sutui_provider_config(provider: dict, proxy_key: str = "") -> bool:
@@ -186,6 +187,49 @@ def _read_oc_config() -> dict:
 def _write_oc_config(config: dict):
     _OC_DIR.mkdir(parents=True, exist_ok=True)
     _OC_CONFIG.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _new_openclaw_local_launch_config() -> dict[str, Any]:
+    """Build the minimum runtime config OpenClaw needs for local Gateway launch."""
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "meta": {"lastTouchedAt": now},
+        "commands": {
+            "native": "auto",
+            "nativeSkills": "auto",
+            "restart": True,
+            "ownerDisplay": "raw",
+        },
+        "tools": {"profile": "full"},
+        "plugins": {
+            "enabled": False,
+            "entries": {},
+            "installs": {},
+            "load": {"paths": []},
+        },
+        "gateway": {
+            "mode": "local",
+            "auth": {},
+            "http": {
+                "endpoints": {
+                    "chatCompletions": {"enabled": True},
+                },
+            },
+            "reload": {"mode": "off"},
+        },
+        "mcp": {
+            "servers": {
+                "lobster": {
+                    "url": "http://127.0.0.1:8000/mcp-gateway",
+                    "transport": "streamable-http",
+                },
+            },
+        },
+        "models": {"mode": "merge", "providers": {}},
+        "agents": {"defaults": {}, "list": []},
+        "channels": {"slack": {"enabled": False}},
+        "discovery": {"mdns": {"mode": "off"}},
+    }
 
 
 def _read_plugin_state_backup() -> dict:
@@ -399,6 +443,8 @@ def _openclaw_local_model_patch_needed(config: dict) -> bool:
         model_cfg = defaults.get("model")
         if not isinstance(model_cfg, dict) or model_cfg.get("primary") != LOBSTER_SUTUI_CHAT_MODEL:
             return True
+        if defaults.get("thinkingDefault") != LOBSTER_SUTUI_THINKING_DEFAULT:
+            return True
         if int(defaults.get("timeoutSeconds") or 0) < 600:
             return True
 
@@ -432,8 +478,12 @@ def _openclaw_local_model_patch_needed(config: dict) -> bool:
                 found_main = True
                 if item.get("model") not in (None, "", LOBSTER_SUTUI_CHAT_MODEL):
                     return True
+                if item.get("thinkingDefault") != LOBSTER_SUTUI_THINKING_DEFAULT:
+                    return True
             if item.get("id") == LOBSTER_SUTUI_AGENT_ID and item.get("model") == LOBSTER_SUTUI_CHAT_MODEL:
                 found_sutui = True
+                if item.get("thinkingDefault") != LOBSTER_SUTUI_THINKING_DEFAULT:
+                    return True
         return not (found_main and found_sutui)
     except Exception:
         return True
@@ -515,6 +565,9 @@ def _ensure_lobster_sutui_local_models(config: dict) -> bool:
     if model_cfg.get("primary") != LOBSTER_SUTUI_CHAT_MODEL:
         model_cfg["primary"] = LOBSTER_SUTUI_CHAT_MODEL
         changed = True
+    if defaults.get("thinkingDefault") != LOBSTER_SUTUI_THINKING_DEFAULT:
+        defaults["thinkingDefault"] = LOBSTER_SUTUI_THINKING_DEFAULT
+        changed = True
     if _safe_int(defaults.get("timeoutSeconds"), 0) < 600:
         defaults["timeoutSeconds"] = 600
         changed = True
@@ -537,6 +590,9 @@ def _ensure_lobster_sutui_local_models(config: dict) -> bool:
             changed = True
         if model is not None and found.get("model") != model:
             found["model"] = model
+            changed = True
+        if agent_id in {"main", LOBSTER_SUTUI_AGENT_ID} and found.get("thinkingDefault") != LOBSTER_SUTUI_THINKING_DEFAULT:
+            found["thinkingDefault"] = LOBSTER_SUTUI_THINKING_DEFAULT
             changed = True
         if agent_id in {"main", LOBSTER_SUTUI_AGENT_ID}:
             tools = found.get("tools")
@@ -635,10 +691,10 @@ def _openclaw_json_needs_local_launch_patch(plugin_mode: str = _OPENCLAW_PLUGIN_
         return False
     try:
         if not _OC_CONFIG.exists():
-            return False
+            return True
         cfg = _read_oc_config()
         if not isinstance(cfg, dict) or not cfg:
-            return False
+            return True
         if _openclaw_local_model_patch_needed(cfg):
             return True
         if _openclaw_agent_model_patch_needed():
@@ -680,6 +736,17 @@ def _openclaw_json_needs_local_launch_patch(plugin_mode: str = _OPENCLAW_PLUGIN_
         gateway = cfg.get("gateway")
         if not isinstance(gateway, dict):
             return True
+        if gateway.get("mode") != "local":
+            return True
+        http_cfg = gateway.get("http")
+        if not isinstance(http_cfg, dict):
+            return True
+        endpoints = http_cfg.get("endpoints")
+        if not isinstance(endpoints, dict):
+            return True
+        chat_endpoint = endpoints.get("chatCompletions")
+        if not isinstance(chat_endpoint, dict) or chat_endpoint.get("enabled") is not True:
+            return True
         reload_cfg = gateway.get("reload")
         if not isinstance(reload_cfg, dict) or reload_cfg.get("mode") != "off":
             return True
@@ -704,6 +771,8 @@ def _openclaw_gateway_local_restart_reasons() -> list[str]:
         ("pricing_refresh_patch", _openclaw_gateway_pricing_patch_needed),
         ("mcp_tool_timeout_patch", _openclaw_mcp_tool_timeout_patch_needed),
         ("mcp_sdk_timeout_patch", _openclaw_mcp_sdk_timeout_patch_needed),
+        ("gateway_startup_preflight_patch", _openclaw_gateway_startup_preflight_patch_needed),
+        ("latency_fast_path_patch", _openclaw_latency_fast_path_patch_needed),
     )
     for name, check in checks:
         try:
@@ -728,12 +797,12 @@ def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_M
       在校验阶段尚未注入 process 时报警。
     """
     try:
-        if not _OC_CONFIG.exists():
-            return False
         cfg = _read_oc_config()
-        if not cfg:
-            return False
         changed = False
+        if not isinstance(cfg, dict) or not cfg:
+            cfg = _new_openclaw_local_launch_config()
+            changed = True
+            logger.info("Recreated missing or invalid openclaw.json for local OpenClaw launch")
         plugins = cfg.get("plugins")
         if isinstance(plugins, dict):
             stable_weixin = _OC_DIR / "extensions" / "openclaw-weixin"
@@ -795,37 +864,67 @@ def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_M
                         changed = True
         if _set_openclaw_plugin_launch_mode(cfg, plugin_mode):
             changed = True
-        gateway = cfg.setdefault("gateway", {})
-        if isinstance(gateway, dict):
-            reload_cfg = gateway.setdefault("reload", {})
-            if not isinstance(reload_cfg, dict):
-                reload_cfg = {}
-                gateway["reload"] = reload_cfg
-                changed = True
-            if reload_cfg.get("mode") != "off":
-                reload_cfg["mode"] = "off"
-                changed = True
-            auth = gateway.setdefault("auth", {})
-            if isinstance(auth, dict):
-                env_gateway_token = (settings.openclaw_gateway_token or os.environ.get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
-                cfg_gateway_token = str(auth.get("token") or "").strip()
-                if (
-                    env_gateway_token
-                    and env_gateway_token != _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER
-                    and cfg_gateway_token != env_gateway_token
-                ):
-                    auth["token"] = env_gateway_token
-                    changed = True
-        discovery = cfg.setdefault("discovery", {})
-        if isinstance(discovery, dict):
-            mdns_cfg = discovery.setdefault("mdns", {})
-            if not isinstance(mdns_cfg, dict):
-                mdns_cfg = {}
-                discovery["mdns"] = mdns_cfg
-                changed = True
-            if mdns_cfg.get("mode") != "off":
-                mdns_cfg["mode"] = "off"
-                changed = True
+        gateway = cfg.get("gateway")
+        if not isinstance(gateway, dict):
+            gateway = {}
+            cfg["gateway"] = gateway
+            changed = True
+        if gateway.get("mode") != "local":
+            gateway["mode"] = "local"
+            changed = True
+        http_cfg = gateway.setdefault("http", {})
+        if not isinstance(http_cfg, dict):
+            http_cfg = {}
+            gateway["http"] = http_cfg
+            changed = True
+        endpoints = http_cfg.setdefault("endpoints", {})
+        if not isinstance(endpoints, dict):
+            endpoints = {}
+            http_cfg["endpoints"] = endpoints
+            changed = True
+        chat_endpoint = endpoints.setdefault("chatCompletions", {})
+        if not isinstance(chat_endpoint, dict):
+            chat_endpoint = {}
+            endpoints["chatCompletions"] = chat_endpoint
+            changed = True
+        if chat_endpoint.get("enabled") is not True:
+            chat_endpoint["enabled"] = True
+            changed = True
+        reload_cfg = gateway.setdefault("reload", {})
+        if not isinstance(reload_cfg, dict):
+            reload_cfg = {}
+            gateway["reload"] = reload_cfg
+            changed = True
+        if reload_cfg.get("mode") != "off":
+            reload_cfg["mode"] = "off"
+            changed = True
+        auth = gateway.setdefault("auth", {})
+        if not isinstance(auth, dict):
+            auth = {}
+            gateway["auth"] = auth
+            changed = True
+        env_gateway_token = (settings.openclaw_gateway_token or os.environ.get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
+        cfg_gateway_token = str(auth.get("token") or "").strip()
+        if (
+            env_gateway_token
+            and env_gateway_token != _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER
+            and cfg_gateway_token != env_gateway_token
+        ):
+            auth["token"] = env_gateway_token
+            changed = True
+        discovery = cfg.get("discovery")
+        if not isinstance(discovery, dict):
+            discovery = {}
+            cfg["discovery"] = discovery
+            changed = True
+        mdns_cfg = discovery.setdefault("mdns", {})
+        if not isinstance(mdns_cfg, dict):
+            mdns_cfg = {}
+            discovery["mdns"] = mdns_cfg
+            changed = True
+        if mdns_cfg.get("mode") != "off":
+            mdns_cfg["mode"] = "off"
+            changed = True
         env_data = _read_oc_env()
         if _ensure_lobster_sutui_local_models(cfg):
             changed = True
@@ -956,6 +1055,7 @@ def build_openclaw_status_snapshot() -> dict:
         "listener_online": online,
         "listener_pids": listener_pids,
         "gateway_pids": gateway_pids,
+        "gateway_processes": _find_openclaw_gateway_process_infos(),
         "config_synced": not needs_restart,
         "needs_restart": bool(needs_restart),
         "restart_reasons": restart_reasons,
@@ -1094,41 +1194,100 @@ def _find_openclaw_pid() -> Optional[int]:
     return pids[0] if pids else None
 
 
-def _find_openclaw_gateway_process_pids() -> list[int]:
-    """Return node processes that are running `openclaw.mjs gateway --port 18789`."""
+_PROCESS_SECRET_RE = re.compile(
+    r"(?i)(--(?:token|gateway-token|password|gateway-password)\s+)(\S+)|"
+    r"((?:TOKEN|KEY|SECRET|PASSWORD|PASSWD)=)([^\s]+)"
+)
+
+
+def _safe_process_command_line(value: Any, max_len: int = 1600) -> str:
+    text = str(value or "")
+    text = _PROCESS_SECRET_RE.sub(lambda m: (m.group(1) or m.group(3) or "") + "<redacted>", text)
+    if len(text) > max_len:
+        return text[:max_len] + "...<truncated>"
+    return text
+
+
+def _find_openclaw_gateway_process_infos() -> list[dict[str, Any]]:
+    """Return process snapshots for `openclaw.mjs gateway --port 18789`."""
     try:
         if platform.system() == "Windows":
             script = (
-                "Get-CimInstance Win32_Process | "
+                "$items = Get-CimInstance Win32_Process | "
                 "Where-Object { "
                 "$_.Name -match '^node(\\.exe)?$' -and "
                 "$_.CommandLine -match 'openclaw\\.mjs' -and "
                 "$_.CommandLine -match '\\bgateway\\b' -and "
                 "$_.CommandLine -match '18789' "
-                "} | ForEach-Object { $_.ProcessId }"
+                "} | Select-Object "
+                "@{Name='pid';Expression={$_.ProcessId}},"
+                "@{Name='ppid';Expression={$_.ParentProcessId}},"
+                "@{Name='name';Expression={$_.Name}},"
+                "@{Name='command_line';Expression={$_.CommandLine}}; "
+                "$items | ConvertTo-Json -Compress"
             )
             out = subprocess.check_output(
                 ["powershell", "-NoProfile", "-Command", script],
                 text=True,
+                errors="replace",
                 stderr=subprocess.DEVNULL,
             )
-            return sorted({int(x.strip()) for x in out.splitlines() if x.strip().isdigit()})
+            raw = out.strip()
+            if not raw:
+                return []
+            parsed = json.loads(raw)
+            rows = parsed if isinstance(parsed, list) else [parsed]
+            infos: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    pid = int(row.get("pid") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if pid <= 0:
+                    continue
+                try:
+                    ppid: Optional[int] = int(row.get("ppid") or 0)
+                except (TypeError, ValueError):
+                    ppid = None
+                infos.append(
+                    {
+                        "pid": pid,
+                        "ppid": ppid,
+                        "name": str(row.get("name") or ""),
+                        "command_line": _safe_process_command_line(row.get("command_line")),
+                    }
+                )
+            return sorted(infos, key=lambda x: int(x.get("pid") or 0))
         out = subprocess.check_output(
-            ["ps", "-eo", "pid=,args="],
+            ["ps", "-eo", "pid=,ppid=,comm=,args="],
             text=True,
+            errors="replace",
             stderr=subprocess.DEVNULL,
         )
-        pids: set[int] = set()
+        infos: list[dict[str, Any]] = []
         for line in out.splitlines():
-            parts = line.strip().split(maxsplit=1)
-            if len(parts) != 2 or not parts[0].isdigit():
+            parts = line.strip().split(maxsplit=3)
+            if len(parts) < 4 or not parts[0].isdigit():
                 continue
-            cmdline = parts[1]
+            cmdline = parts[3]
             if "openclaw.mjs" in cmdline and "gateway" in cmdline and "18789" in cmdline:
-                pids.add(int(parts[0]))
-        return sorted(pids)
+                infos.append(
+                    {
+                        "pid": int(parts[0]),
+                        "ppid": int(parts[1]) if parts[1].isdigit() else None,
+                        "name": parts[2],
+                        "command_line": _safe_process_command_line(cmdline),
+                    }
+                )
+        return sorted(infos, key=lambda x: int(x.get("pid") or 0))
     except Exception:
         return []
+
+
+def _find_openclaw_gateway_process_pids() -> list[int]:
+    return [int(info["pid"]) for info in _find_openclaw_gateway_process_infos() if info.get("pid")]
 
 
 def _wait_until_no_openclaw_gateway_processes(max_wait: float = 6.0) -> None:
@@ -1162,6 +1321,12 @@ def _safe_startup_env_summary(env: dict) -> dict:
         "OPENCLAW_CONFIG_PATH",
         "OPENCLAW_STATE_DIR",
         "OPENCLAW_DISABLE_BONJOUR",
+        "OPENCLAW_NO_RESPAWN",
+        "OPENCLAW_DEBUG_INGRESS_TIMING",
+        "NODE_DISABLE_COMPILE_CACHE",
+        "NODE_COMPILE_CACHE",
+        "LOBSTER_OPENCLAW_FAST_THINKING_OFF",
+        "LOBSTER_OPENCLAW_SKIP_SKILLS_SNAPSHOT",
         "LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE",
         "LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING",
         "LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS",
@@ -1370,6 +1535,52 @@ def _openclaw_mcp_sdk_timeout_patch_needed() -> bool:
         return False
     except Exception as e:
         logger.warning("openclaw_mcp_sdk_timeout_patch_needed failed: %s", e)
+        return False
+
+
+def _openclaw_latency_fast_path_patch_needed() -> bool:
+    try:
+        entry = _find_openclaw_entry()
+        if not entry:
+            return False
+        _node_path, mjs_path = entry
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        for path in sorted(dist_dir.glob("agent-command-*.js")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "LOBSTER_OPENCLAW_LATENCY_TRACE_V3" not in text:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("openclaw_latency_fast_path_patch_needed failed: %s", e)
+        return False
+
+
+def _openclaw_gateway_startup_preflight_patch_needed() -> bool:
+    try:
+        entry = _find_openclaw_entry()
+        if not entry:
+            return False
+        _node_path, mjs_path = entry
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        for path in sorted(dist_dir.glob("logger-*.js")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "LOBSTER_OPENCLAW_SKIP_GATEWAY_DOCTOR_PREFLIGHT" in text:
+                continue
+            if 'if (primary === "agent") return false;' in text and "function shouldMigrateStateFromPath" in text:
+                return True
+        return False
+    except Exception as e:
+        logger.warning("openclaw_gateway_startup_preflight_patch_needed failed: %s", e)
         return False
 
 
@@ -1604,6 +1815,199 @@ def _patch_openclaw_mcp_sdk_timeout(mjs_path: str) -> bool:
         return False
 
 
+def _patch_openclaw_gateway_startup_preflight(mjs_path: str) -> bool:
+    """Skip OpenClaw's generic doctor/config preflight for gateway startup.
+
+    Gateway still reads and validates config inside its own command path. This
+    avoids an expensive pre-listener preflight that can hang silently on some
+    Windows machines, leaving only a node.exe process and no 18789 listener.
+    """
+    marker = "LOBSTER_OPENCLAW_SKIP_GATEWAY_DOCTOR_PREFLIGHT"
+    try:
+        dist_dir = Path(mjs_path).resolve().parent / "dist"
+        if not dist_dir.is_dir():
+            return False
+        changed = False
+        old = 'if (primary === "agent") return false;'
+        new = 'if (primary === "agent" || primary === "gateway") return false;'
+        for path in sorted(dist_dir.glob("logger-*.js")):
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                continue
+            if old not in text or "function shouldMigrateStateFromPath" not in text:
+                continue
+            text = text.replace(old, new, 1)
+            path.write_text(f"// {marker}\n" + text, encoding="utf-8")
+            logger.info("Patched OpenClaw gateway startup preflight skip: %s", path)
+            changed = True
+        return changed
+    except Exception as e:
+        logger.warning("patch_openclaw_gateway_startup_preflight failed: %s", e)
+        return False
+
+
+def _apply_openclaw_agent_command_fast_path_patch(text: str) -> tuple[str, bool]:
+    marker = "LOBSTER_OPENCLAW_LATENCY_TRACE_V3"
+    if marker in text:
+        return text, False
+
+    original = text
+    replacements: list[tuple[str, str, str]] = [
+        (
+            "\t\tlet resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;",
+            (
+                "\t\tlet resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;\n"
+                "\t\tconst lobsterV3TraceStart = Date.now();\n"
+                "\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=post_prepare_enter run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart}`); } catch {}\n"
+                "\t\tif (!resolvedThinkLevel && process.env.LOBSTER_OPENCLAW_FAST_THINKING_OFF === \"1\") {\n"
+                "\t\t\tconst lobsterDefaultThinking = agentCfg?.thinkingDefault ?? cfg?.agents?.defaults?.thinkingDefault;\n"
+                "\t\t\tif (String(lobsterDefaultThinking ?? \"\").trim().toLowerCase() === \"off\") {\n"
+                "\t\t\t\tresolvedThinkLevel = \"off\";\n"
+                "\t\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=thinking_default_fast_off run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart}`); } catch {}\n"
+                "\t\t\t}\n"
+                "\t\t}"
+            ),
+            "thinking default fast path",
+        ),
+        (
+            (
+                "\t\tconst needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;\n"
+                "\t\tconst skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);\n"
+                "\t\tconst skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);\n"
+                "\t\tconst skillsSnapshot = needsSkillsSnapshot ? buildWorkspaceSkillSnapshot(workspaceDir, {\n"
+                "\t\t\tconfig: cfg,\n"
+                "\t\t\teligibility: { remote: getRemoteSkillEligibility() },\n"
+                "\t\t\tsnapshotVersion: skillsSnapshotVersion,\n"
+                "\t\t\tskillFilter\n"
+                "\t\t}) : sessionEntry?.skillsSnapshot;"
+            ),
+            (
+                "\t\tconst lobsterSkipSkillsSnapshot = process.env.LOBSTER_OPENCLAW_SKIP_SKILLS_SNAPSHOT === \"1\" && (sessionAgentId === \"main\" || String(sessionAgentId).startsWith(\"lobster-sutui-\"));\n"
+                "\t\tconst needsSkillsSnapshot = !lobsterSkipSkillsSnapshot && (isNewSession || !sessionEntry?.skillsSnapshot);\n"
+                "\t\tconst skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);\n"
+                "\t\tconst skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);\n"
+                "\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=skills_snapshot_decision run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} skip=${String(lobsterSkipSkillsSnapshot)} needs=${String(needsSkillsSnapshot)}`); } catch {}\n"
+                "\t\tconst skillsSnapshot = lobsterSkipSkillsSnapshot ? {\n"
+                "\t\t\tprompt: \"\",\n"
+                "\t\t\tskills: [],\n"
+                "\t\t\tresolvedSkills: [],\n"
+                "\t\t\tversion: skillsSnapshotVersion,\n"
+                "\t\t\t...(skillFilter === void 0 ? {} : { skillFilter })\n"
+                "\t\t} : needsSkillsSnapshot ? (() => {\n"
+                "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=skills_snapshot_start run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart}`); } catch {}\n"
+                "\t\t\tconst snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {\n"
+                "\t\t\t\tconfig: cfg,\n"
+                "\t\t\t\teligibility: { remote: getRemoteSkillEligibility() },\n"
+                "\t\t\t\tsnapshotVersion: skillsSnapshotVersion,\n"
+                "\t\t\t\tskillFilter\n"
+                "\t\t\t});\n"
+                "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=skills_snapshot_end run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} skill_count=${String(snapshot?.skills?.length ?? 0)}`); } catch {}\n"
+                "\t\t\treturn snapshot;\n"
+                "\t\t})() : sessionEntry?.skillsSnapshot;"
+            ),
+            "skills snapshot fast path",
+        ),
+        (
+            "\t\tconst configuredDefaultRef = resolveDefaultModelForAgent({",
+            (
+                "\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=model_resolution_start run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart}`); } catch {}\n"
+                "\t\tconst configuredDefaultRef = resolveDefaultModelForAgent({"
+            ),
+            "model resolution start",
+        ),
+        (
+            (
+                "\t\tif (needsModelCatalog) {\n"
+                "\t\t\tmodelCatalog = await loadModelCatalog({ config: cfg });"
+            ),
+            (
+                "\t\tif (needsModelCatalog) {\n"
+                "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=model_catalog_start run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} reason=allowlist_or_override`); } catch {}\n"
+                "\t\t\tmodelCatalog = await loadModelCatalog({ config: cfg });\n"
+                "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=model_catalog_end run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} reason=allowlist_or_override count=${String(modelCatalog?.length ?? 0)}`); } catch {}"
+            ),
+            "model catalog timing",
+        ),
+        (
+            (
+                "\t\t\tif (!catalogForThinking || catalogForThinking.length === 0) {\n"
+                "\t\t\t\tmodelCatalog = await loadModelCatalog({ config: cfg });\n"
+                "\t\t\t\tcatalogForThinking = modelCatalog;\n"
+                "\t\t\t}"
+            ),
+            (
+                "\t\t\tif (!catalogForThinking || catalogForThinking.length === 0) {\n"
+                "\t\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=model_catalog_start run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} reason=thinking_default`); } catch {}\n"
+                "\t\t\t\tmodelCatalog = await loadModelCatalog({ config: cfg });\n"
+                "\t\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=model_catalog_end run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} reason=thinking_default count=${String(modelCatalog?.length ?? 0)}`); } catch {}\n"
+                "\t\t\t\tcatalogForThinking = modelCatalog;\n"
+                "\t\t\t}"
+            ),
+            "thinking catalog timing",
+        ),
+        (
+            (
+                "\t\t\tconst resolvedSessionFile = await resolveSessionTranscriptFile({\n"
+                "\t\t\t\tsessionId,"
+            ),
+            (
+                "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=session_file_resolve_start run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} kind=store_key`); } catch {}\n"
+                "\t\t\tconst resolvedSessionFile = await resolveSessionTranscriptFile({\n"
+                "\t\t\t\tsessionId,"
+            ),
+            "session file start",
+        ),
+        (
+            (
+                "\t\t\tsessionFile = resolvedSessionFile.sessionFile;\n"
+                "\t\t\tsessionEntry = resolvedSessionFile.sessionEntry;"
+            ),
+            (
+                "\t\t\tsessionFile = resolvedSessionFile.sessionFile;\n"
+                "\t\t\tsessionEntry = resolvedSessionFile.sessionEntry;\n"
+                "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=session_file_resolve_end run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} kind=store_key`); } catch {}"
+            ),
+            "session file end",
+        ),
+        (
+            (
+                "\t\tif (!sessionFile) {\n"
+                "\t\t\tconst resolvedSessionFile = await resolveSessionTranscriptFile({"
+            ),
+            (
+                "\t\tif (!sessionFile) {\n"
+                "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=session_file_resolve_start run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} kind=fallback`); } catch {}\n"
+                "\t\t\tconst resolvedSessionFile = await resolveSessionTranscriptFile({"
+            ),
+            "fallback session file start",
+        ),
+        (
+            (
+                "\t\tconst startedAt = Date.now();\n"
+                "\t\tlet lifecycleEnded = false;"
+            ),
+            (
+                "\t\ttry { runtime.error(`[LOBSTER_TRACE_V3] stage=pre_fallback_ready run_id=${runId} elapsed_ms=${Date.now() - lobsterV3TraceStart} provider=${String(provider)} model=${String(model)} think=${String(resolvedThinkLevel ?? \"\")}`); } catch {}\n"
+                "\t\tconst startedAt = Date.now();\n"
+                "\t\tlet lifecycleEnded = false;"
+            ),
+            "pre fallback ready",
+        ),
+    ]
+
+    missing: list[str] = []
+    for old, new, label in replacements:
+        if old not in text:
+            missing.append(label)
+            continue
+        text = text.replace(old, new, 1)
+    if missing:
+        logger.warning("OpenClaw latency fast-path patch partially skipped: %s", ", ".join(missing))
+    if text == original:
+        return original, False
+    return f"// {marker}\n" + text, True
+
+
 def _patch_openclaw_latency_trace(mjs_path: str) -> bool:
     """Add lightweight OpenClaw 2026.4.1 latency probes around chat and agent runs.
 
@@ -1712,6 +2116,483 @@ def _patch_openclaw_latency_trace(mjs_path: str) -> bool:
             path.write_text(f"// {marker}\n" + prefix + target, encoding="utf-8")
             logger.info("Patched OpenClaw latency trace runner probes: %s", path)
             changed = True
+
+        # OpenAI-compatible Gateway requests do not go through
+        # agent-runner.runtime in OpenClaw 2026.4.1. They enter via
+        # agent-command -> pi-embedded, so add a second layer of probes there.
+        marker_v2 = "LOBSTER_OPENCLAW_LATENCY_TRACE_V2"
+
+        command_candidates = sorted(dist_dir.glob("agent-command-*.js"))
+        command_replacements = [
+            (
+                (
+                    "async function agentCommandInternal(opts, runtime = defaultRuntime, deps = createDefaultDeps()) {\n"
+                    "\tconst prepared = await prepareAgentCommandExecution(opts, runtime);"
+                ),
+                (
+                    "async function agentCommandInternal(opts, runtime = defaultRuntime, deps = createDefaultDeps()) {\n"
+                    "\tconst lobsterAgentTraceStart = Date.now();\n"
+                    "\tconst lobsterAgentTraceRunId = String(opts.runId ?? \"\");\n"
+                    "\tconst lobsterAgentTraceSession = String(opts.sessionKey ?? opts.sessionId ?? \"\");\n"
+                    "\ttry { runtime.error(`[LOBSTER_TRACE_V2] stage=agent_internal_enter run_id=${lobsterAgentTraceRunId} session=${lobsterAgentTraceSession}`); } catch {}\n"
+                    "\ttry { runtime.error(`[LOBSTER_TRACE_V2] stage=agent_prepare_start run_id=${lobsterAgentTraceRunId} elapsed_ms=${Date.now() - lobsterAgentTraceStart}`); } catch {}\n"
+                    "\tconst prepared = await prepareAgentCommandExecution(opts, runtime);\n"
+                    "\ttry { runtime.error(`[LOBSTER_TRACE_V2] stage=agent_prepare_end run_id=${String(prepared?.runId ?? lobsterAgentTraceRunId)} elapsed_ms=${Date.now() - lobsterAgentTraceStart} workspace=${String(prepared?.workspaceDir ?? \"\")}`); } catch {}"
+                ),
+                "agent-command prepare",
+            ),
+            (
+                "\t\t\tconst fallbackResult = await runWithModelFallback({",
+                (
+                    "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V2] stage=fallback_wrapper_start run_id=${runId} elapsed_ms=${Date.now() - lobsterAgentTraceStart} provider=${String(provider)} model=${String(model)}`); } catch {}\n"
+                    "\t\t\tconst fallbackResult = await runWithModelFallback({"
+                ),
+                "agent-command fallback start",
+            ),
+            (
+                (
+                    "\t\t\t\trun: async (providerOverride, modelOverride, runOptions) => {\n"
+                    "\t\t\t\t\tconst isFallbackRetry = fallbackAttemptIndex > 0;\n"
+                    "\t\t\t\t\tfallbackAttemptIndex += 1;\n"
+                    "\t\t\t\t\treturn runAgentAttempt({"
+                ),
+                (
+                    "\t\t\t\trun: async (providerOverride, modelOverride, runOptions) => {\n"
+                    "\t\t\t\t\tconst isFallbackRetry = fallbackAttemptIndex > 0;\n"
+                    "\t\t\t\t\tfallbackAttemptIndex += 1;\n"
+                    "\t\t\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V2] stage=run_agent_attempt_start run_id=${runId} elapsed_ms=${Date.now() - lobsterAgentTraceStart} attempt=${fallbackAttemptIndex} provider=${String(providerOverride)} model=${String(modelOverride)}`); } catch {}\n"
+                    "\t\t\t\t\treturn runAgentAttempt({"
+                ),
+                "agent-command attempt start",
+            ),
+            (
+                "\t\t\tresult = fallbackResult.result;",
+                (
+                    "\t\t\ttry { runtime.error(`[LOBSTER_TRACE_V2] stage=fallback_wrapper_end run_id=${runId} elapsed_ms=${Date.now() - lobsterAgentTraceStart} provider=${String(fallbackResult.provider)} model=${String(fallbackResult.model)}`); } catch {}\n"
+                    "\t\t\tresult = fallbackResult.result;"
+                ),
+                "agent-command fallback end",
+            ),
+        ]
+        for path in command_candidates:
+            text = path.read_text(encoding="utf-8")
+            if marker_v2 in text:
+                continue
+            original = text
+            missing: list[str] = []
+            for old, new, label in command_replacements:
+                if old not in text:
+                    missing.append(label)
+                    continue
+                text = text.replace(old, new, 1)
+            if missing:
+                logger.warning("OpenClaw latency trace v2 agent-command patch partially skipped %s: %s", path, ", ".join(missing))
+            if text != original:
+                path.write_text(f"// {marker_v2}\n" + text, encoding="utf-8")
+                logger.info("Patched OpenClaw latency trace v2 agent-command probes: %s", path)
+                changed = True
+
+        for path in command_candidates:
+            text = path.read_text(encoding="utf-8")
+            new_text, patched = _apply_openclaw_agent_command_fast_path_patch(text)
+            if patched:
+                path.write_text(new_text, encoding="utf-8")
+                logger.info("Patched OpenClaw latency fast-path agent-command probes: %s", path)
+                changed = True
+
+        embedded_candidates = sorted(dist_dir.glob("pi-embedded-*.js"))
+        embedded_replacements = [
+            (
+                (
+                    "async function runEmbeddedAttempt(params) {\n"
+                    "\tconst resolvedWorkspace = resolveUserPath(params.workspaceDir);"
+                ),
+                (
+                    "async function runEmbeddedAttempt(params) {\n"
+                    "\tconst lobsterAttemptTraceStart = Date.now();\n"
+                    "\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_enter run_id=${String(params.runId ?? \"\")} session=${String(params.sessionKey ?? params.sessionId ?? \"\")} provider=${String(params.provider ?? \"\")} model=${String(params.modelId ?? \"\")}`); } catch {}\n"
+                    "\tconst resolvedWorkspace = resolveUserPath(params.workspaceDir);"
+                ),
+                "attempt enter",
+            ),
+            (
+                "\tawait fs.mkdir(effectiveWorkspace, { recursive: true });",
+                (
+                    "\tawait fs.mkdir(effectiveWorkspace, { recursive: true });\n"
+                    "\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_workspace_ready run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} workspace=${String(effectiveWorkspace)}`); } catch {}"
+                ),
+                "attempt workspace",
+            ),
+            (
+                "\t\tconst { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_skills_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\tconst { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({"
+                ),
+                "attempt skills start",
+            ),
+            (
+                "\t\tconst sessionLabel = params.sessionKey ?? params.sessionId;",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_skills_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\tconst sessionLabel = params.sessionKey ?? params.sessionId;"
+                ),
+                "attempt skills end",
+            ),
+            (
+                "\t\tconst { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_bootstrap_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\tconst { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({"
+                ),
+                "attempt bootstrap start",
+            ),
+            (
+                "\t\tconst bootstrapMaxChars = resolveBootstrapMaxChars(params.config);",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_bootstrap_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} bootstrap_files=${hookAdjustedBootstrapFiles.length} context_files=${contextFiles.length}`); } catch {}\n"
+                    "\t\tconst bootstrapMaxChars = resolveBootstrapMaxChars(params.config);"
+                ),
+                "attempt bootstrap end",
+            ),
+            (
+                "\t\tconst toolsRaw = params.disableTools ? [] : (() => {",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_builtin_tools_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} disable_tools=${String(params.disableTools === true)}`); } catch {}\n"
+                    "\t\tconst toolsRaw = params.disableTools ? [] : (() => {"
+                ),
+                "attempt builtin tools start",
+            ),
+            (
+                "\t\t})();\n\t\tconst toolsEnabled = supportsModelTools(params.model);",
+                (
+                    "\t\t})();\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_builtin_tools_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} tool_count=${toolsRaw.length}`); } catch {}\n"
+                    "\t\tconst toolsEnabled = supportsModelTools(params.model);"
+                ),
+                "attempt builtin tools end",
+            ),
+            (
+                "\t\tconst bundleMcpSessionRuntime = toolsEnabled ? await getOrCreateSessionMcpRuntime({",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_mcp_session_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} tools_enabled=${String(toolsEnabled)}`); } catch {}\n"
+                    "\t\tconst bundleMcpSessionRuntime = toolsEnabled ? await getOrCreateSessionMcpRuntime({"
+                ),
+                "attempt mcp session start",
+            ),
+            (
+                "\t\t}) : void 0;\n\t\tconst bundleMcpRuntime = bundleMcpSessionRuntime ? await materializeBundleMcpToolsForRun({",
+                (
+                    "\t\t}) : void 0;\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_mcp_session_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} has_runtime=${String(Boolean(bundleMcpSessionRuntime))}`); } catch {}\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_mcp_materialize_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\tconst bundleMcpRuntime = bundleMcpSessionRuntime ? await materializeBundleMcpToolsForRun({"
+                ),
+                "attempt mcp materialize start",
+            ),
+            (
+                "\t\t}) : void 0;\n\t\tconst bundleLspRuntime = toolsEnabled ? await createBundleLspToolRuntime({",
+                (
+                    "\t\t}) : void 0;\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_mcp_materialize_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} mcp_tools=${String(bundleMcpRuntime?.tools?.length ?? 0)}`); } catch {}\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_lsp_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\tconst bundleLspRuntime = toolsEnabled ? await createBundleLspToolRuntime({"
+                ),
+                "attempt lsp start",
+            ),
+            (
+                "\t\t}) : void 0;\n\t\tconst effectiveTools = [",
+                (
+                    "\t\t}) : void 0;\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_lsp_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} lsp_tools=${String(bundleLspRuntime?.tools?.length ?? 0)}`); } catch {}\n"
+                    "\t\tconst effectiveTools = ["
+                ),
+                "attempt lsp end",
+            ),
+            (
+                "\t\tconst machineName = await getMachineDisplayName();",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_system_prompt_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} effective_tools=${effectiveTools.length}`); } catch {}\n"
+                    "\t\tconst machineName = await getMachineDisplayName();"
+                ),
+                "attempt system prompt start",
+            ),
+            (
+                "\t\tlet systemPromptText = createSystemPromptOverride(appendPrompt)();",
+                (
+                    "\t\tlet systemPromptText = createSystemPromptOverride(appendPrompt)();\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_system_prompt_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} system_chars=${String(systemPromptText ?? \"\").length}`); } catch {}"
+                ),
+                "attempt system prompt end",
+            ),
+            (
+                "\t\tconst sessionLock = await acquireSessionWriteLock({",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_session_lock_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} session_file=${String(params.sessionFile ?? \"\")}`); } catch {}\n"
+                    "\t\tconst sessionLock = await acquireSessionWriteLock({"
+                ),
+                "attempt session lock start",
+            ),
+            (
+                "\t\t});\n\t\tlet sessionManager;",
+                (
+                    "\t\t});\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_session_lock_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\tlet sessionManager;"
+                ),
+                "attempt session lock end",
+            ),
+            (
+                "\t\t\tsessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {",
+                (
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_session_open_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\tsessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {"
+                ),
+                "attempt session open start",
+            ),
+            (
+                "\t\t\ttrackSessionManagerAccess(params.sessionFile);",
+                (
+                    "\t\t\ttrackSessionManagerAccess(params.sessionFile);\n"
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_session_open_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} had_session_file=${String(hadSessionFile)}`); } catch {}"
+                ),
+                "attempt session open end",
+            ),
+            (
+                "\t\t\tawait runAttemptContextEngineBootstrap({",
+                (
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_context_bootstrap_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\tawait runAttemptContextEngineBootstrap({"
+                ),
+                "attempt context bootstrap start",
+            ),
+            (
+                "\t\t\tawait prepareSessionManagerForRun({",
+                (
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_context_bootstrap_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_prepare_session_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\tawait prepareSessionManagerForRun({"
+                ),
+                "attempt prepare session start",
+            ),
+            (
+                "\t\t\tconst settingsManager = createPreparedEmbeddedPiSettingsManager({",
+                (
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_prepare_session_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\tconst settingsManager = createPreparedEmbeddedPiSettingsManager({"
+                ),
+                "attempt prepare session end",
+            ),
+            (
+                "\t\t\t\tawait resourceLoader.reload();",
+                (
+                    "\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_resource_reload_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\t\tawait resourceLoader.reload();\n"
+                    "\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_resource_reload_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}"
+                ),
+                "attempt resource reload",
+            ),
+            (
+                "\t\t\t({session} = await createAgentSession({",
+                (
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_create_session_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\t({session} = await createAgentSession({"
+                ),
+                "attempt create session start",
+            ),
+            (
+                "\t\t\tapplySystemPromptOverrideToSession(session, systemPromptText);",
+                (
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_create_session_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart}`); } catch {}\n"
+                    "\t\t\tapplySystemPromptOverrideToSession(session, systemPromptText);"
+                ),
+                "attempt create session end",
+            ),
+            (
+                "\t\t\t\tconst prior = await sanitizeSessionHistory({",
+                (
+                    "\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_history_sanitize_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} messages=${activeSession.messages.length}`); } catch {}\n"
+                    "\t\t\t\tconst prior = await sanitizeSessionHistory({"
+                ),
+                "attempt history sanitize start",
+            ),
+            (
+                "\t\t\t\tcacheTrace?.recordStage(\"session:limited\", { messages: limited });",
+                (
+                    "\t\t\t\tcacheTrace?.recordStage(\"session:limited\", { messages: limited });\n"
+                    "\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_history_sanitize_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} limited_messages=${limited.length}`); } catch {}"
+                ),
+                "attempt history sanitize end",
+            ),
+            (
+                "\t\t\tconst prePromptMessageCount = activeSession.messages.length;",
+                (
+                    "\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_prompt_phase_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} messages=${activeSession.messages.length}`); } catch {}\n"
+                    "\t\t\tconst prePromptMessageCount = activeSession.messages.length;"
+                ),
+                "attempt prompt phase start",
+            ),
+            (
+                (
+                    "\t\t\t\t\tif (imageResult.images.length > 0) await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));\n"
+                    "\t\t\t\t\telse await abortable(activeSession.prompt(effectivePrompt));"
+                ),
+                (
+                    "\t\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_prompt_call_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} prompt_chars=${effectivePrompt.length} history_messages=${activeSession.messages.length} prompt_images=${imageResult.images.length}`); } catch {}\n"
+                    "\t\t\t\t\tif (imageResult.images.length > 0) await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));\n"
+                    "\t\t\t\t\telse await abortable(activeSession.prompt(effectivePrompt));\n"
+                    "\t\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=attempt_prompt_call_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterAttemptTraceStart} messages=${activeSession.messages.length}`); } catch {}"
+                ),
+                "attempt prompt call",
+            ),
+            (
+                (
+                    "async function runEmbeddedPiAgent(params) {\n"
+                    "\tconst sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);"
+                ),
+                (
+                    "async function runEmbeddedPiAgent(params) {\n"
+                    "\tconst lobsterEmbeddedTraceStart = Date.now();\n"
+                    "\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_agent_enter run_id=${String(params.runId ?? \"\")} session=${String(params.sessionKey ?? params.sessionId ?? \"\")} provider=${String(params.provider ?? \"\")} model=${String(params.model ?? \"\")}`); } catch {}\n"
+                    "\tconst sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);"
+                ),
+                "embedded enter",
+            ),
+            (
+                "\treturn enqueueSession(() => enqueueGlobal(async () => {\n\t\tconst started = Date.now();",
+                (
+                    "\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_agent_enqueue run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\treturn enqueueSession(() => enqueueGlobal(async () => {\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_queue_enter run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\t\tconst started = Date.now();"
+                ),
+                "embedded queue",
+            ),
+            (
+                "\t\tif (workspaceResolution.usedFallback) log$13.warn(`[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`);\n\t\tensureRuntimePluginsLoaded({",
+                (
+                    "\t\tif (workspaceResolution.usedFallback) log$13.warn(`[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`);\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_plugins_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart} workspace=${redactedWorkspace}`); } catch {}\n"
+                    "\t\tensureRuntimePluginsLoaded({"
+                ),
+                "embedded plugins start",
+            ),
+            (
+                "\t\t});\n\t\tlet provider = (params.provider ?? \"anthropic\").trim() || \"anthropic\";",
+                (
+                    "\t\t});\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_plugins_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\t\tlet provider = (params.provider ?? \"anthropic\").trim() || \"anthropic\";"
+                ),
+                "embedded plugins end",
+            ),
+            (
+                "\t\tawait ensureOpenClawModelsJson(params.config, agentDir);",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_models_json_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\t\tawait ensureOpenClawModelsJson(params.config, agentDir);\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_models_json_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}"
+                ),
+                "embedded models json",
+            ),
+            (
+                "\t\tconst hookSelection = await resolveHookModelSelection({",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_hook_model_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\t\tconst hookSelection = await resolveHookModelSelection({"
+                ),
+                "embedded hook start",
+            ),
+            (
+                "\t\tprovider = hookSelection.provider;",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_hook_model_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\t\tprovider = hookSelection.provider;"
+                ),
+                "embedded hook end",
+            ),
+            (
+                "\t\tconst { model, error, authStorage, modelRegistry } = await resolveModelAsync(provider, modelId, agentDir, params.config);",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_resolve_model_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart} provider=${provider} model=${modelId}`); } catch {}\n"
+                    "\t\tconst { model, error, authStorage, modelRegistry } = await resolveModelAsync(provider, modelId, agentDir, params.config);\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_resolve_model_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart} model_ok=${String(Boolean(model))}`); } catch {}"
+                ),
+                "embedded resolve model",
+            ),
+            (
+                "\t\tawait initializeAuthProfile();",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_auth_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\t\tawait initializeAuthProfile();\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_auth_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}"
+                ),
+                "embedded auth",
+            ),
+            (
+                "\t\tconst contextEngine = await resolveContextEngine(params.config);",
+                (
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_context_engine_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart}`); } catch {}\n"
+                    "\t\tconst contextEngine = await resolveContextEngine(params.config);\n"
+                    "\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_context_engine_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart} owns_compaction=${String(contextEngine?.info?.ownsCompaction === true)}`); } catch {}"
+                ),
+                "embedded context engine",
+            ),
+            (
+                "\t\t\t\tconst attempt = await runEmbeddedAttempt({",
+                (
+                    "\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_attempt_start run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart} iteration=${runLoopIterations}`); } catch {}\n"
+                    "\t\t\t\tconst attempt = await runEmbeddedAttempt({"
+                ),
+                "embedded attempt start",
+            ),
+            (
+                "\t\t\t\tconst { aborted, promptError, timedOut, timedOutDuringCompaction, sessionIdUsed, lastAssistant } = attempt;",
+                (
+                    "\t\t\t\ttry { log$13.warn(`[LOBSTER_TRACE_V2] stage=embedded_attempt_end run_id=${String(params.runId ?? \"\")} elapsed_ms=${Date.now() - lobsterEmbeddedTraceStart} aborted=${String(attempt?.aborted === true)} timed_out=${String(attempt?.timedOut === true)} tool_count=${String(attempt?.toolMetas?.length ?? 0)}`); } catch {}\n"
+                    "\t\t\t\tconst { aborted, promptError, timedOut, timedOutDuringCompaction, sessionIdUsed, lastAssistant } = attempt;"
+                ),
+                "embedded attempt end",
+            ),
+        ]
+        for path in embedded_candidates:
+            text = path.read_text(encoding="utf-8")
+            if marker_v2 in text:
+                continue
+            original = text
+            missing: list[str] = []
+            attempt_start = text.find("async function runEmbeddedAttempt(params) {")
+            embedded_start = text.find("async function runEmbeddedPiAgent(params) {")
+            if attempt_start < 0 or embedded_start < 0 or embedded_start <= attempt_start:
+                logger.warning("OpenClaw latency trace v2 embedded patch skipped, function anchors not found: %s", path)
+                continue
+            prefix = text[:attempt_start]
+            attempt_block = text[attempt_start:embedded_start]
+            embedded_block = text[embedded_start:]
+            for old, new, label in embedded_replacements:
+                if label.startswith("attempt "):
+                    target_block = attempt_block
+                elif label.startswith("embedded "):
+                    target_block = embedded_block
+                else:
+                    target_block = text
+                if old not in target_block:
+                    missing.append(label)
+                    continue
+                target_block = target_block.replace(old, new, 1)
+                if label.startswith("attempt "):
+                    attempt_block = target_block
+                elif label.startswith("embedded "):
+                    embedded_block = target_block
+                else:
+                    text = target_block
+            text = prefix + attempt_block + embedded_block
+            if missing:
+                logger.warning("OpenClaw latency trace v2 embedded patch partially skipped %s: %s", path, ", ".join(missing))
+            if text != original:
+                path.write_text(f"// {marker_v2}\n" + text, encoding="utf-8")
+                logger.info("Patched OpenClaw latency trace v2 embedded probes: %s", path)
+                changed = True
         return changed
     except Exception as e:
         logger.warning("patch_openclaw_latency_trace failed: %s", e)
@@ -1730,13 +2611,15 @@ def _log_openclaw_gateway_start_diagnostics(
     except Exception:
         returncode = None
     listener_pids = _find_listener_pids_on_18789()
-    gateway_pids = _find_openclaw_gateway_process_pids()
+    gateway_processes = _find_openclaw_gateway_process_infos()
+    gateway_pids = [int(info["pid"]) for info in gateway_processes if info.get("pid")]
     logger.warning(
-        "OpenClaw Gateway start diagnostics: reason=%s returncode=%s listener_pids=%s gateway_pids=%s last_error=%s",
+        "OpenClaw Gateway start diagnostics: reason=%s returncode=%s listener_pids=%s gateway_pids=%s gateway_processes=%s last_error=%s",
         reason,
         returncode,
         listener_pids,
         gateway_pids,
+        gateway_processes,
         last_error or "-",
     )
     if startup_log_path is not None:
@@ -1747,6 +2630,7 @@ def _log_openclaw_gateway_start_diagnostics(
             returncode=returncode,
             listener_pids=listener_pids,
             gateway_pids=gateway_pids,
+            gateway_processes=gateway_processes,
             last_error=last_error or "",
         )
         _remember_openclaw_startup_diag(
@@ -1755,6 +2639,7 @@ def _log_openclaw_gateway_start_diagnostics(
             returncode=returncode,
             listener_pids=listener_pids,
             gateway_pids=gateway_pids,
+            gateway_processes=gateway_processes,
             last_error=last_error or "",
             log_path=str(startup_log_path),
         )
@@ -1799,13 +2684,15 @@ def _wait_for_openclaw_gateway_ready(
             return pid
         now = time.time()
         if startup_log_path is not None and now >= next_diag_at:
+            gateway_processes = _find_openclaw_gateway_process_infos()
             _write_openclaw_startup_diag_line(
                 startup_log_path,
                 "readiness_probe",
                 elapsed_sec=round(now - wait_started_at, 3),
                 returncode=proc.poll() if proc is not None else None,
                 listener_pids=_find_listener_pids_on_18789(),
-                gateway_pids=_find_openclaw_gateway_process_pids(),
+                gateway_pids=[int(info["pid"]) for info in gateway_processes if info.get("pid")],
+                gateway_processes=gateway_processes,
             )
             next_diag_at = now + 10.0
         time.sleep(0.5)
@@ -1842,9 +2729,19 @@ def _build_openclaw_env() -> dict:
     env.update(oc_env)
     env["OPENCLAW_CONFIG_PATH"] = str(_OC_CONFIG)
     env["OPENCLAW_STATE_DIR"] = str(_OC_DIR)
-    env.setdefault("OPENCLAW_DISABLE_BONJOUR", "1")
-    env.setdefault("LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE", "1")
-    env.setdefault("LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING", "1")
+    env["OPENCLAW_DISABLE_BONJOUR"] = "1"
+    env["OPENCLAW_NO_RESPAWN"] = "1"
+    env.setdefault("OPENCLAW_DEBUG_INGRESS_TIMING", "1")
+    # Windows users have repeatedly hit a silent pre-listener stall while Node
+    # builds/reads its compile cache. Prefer deterministic gateway startup over
+    # caching here; OpenClaw chat latency is dominated by the running gateway,
+    # not by this one-time import cache.
+    env["NODE_DISABLE_COMPILE_CACHE"] = "1"
+    env.pop("NODE_COMPILE_CACHE", None)
+    env.setdefault("LOBSTER_OPENCLAW_FAST_THINKING_OFF", "1")
+    env.setdefault("LOBSTER_OPENCLAW_SKIP_SKILLS_SNAPSHOT", "1")
+    env["LOBSTER_OPENCLAW_DISABLE_SLACK_STAGE"] = "1"
+    env["LOBSTER_OPENCLAW_DISABLE_MODEL_PRICING"] = "1"
     env.setdefault("LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS", "600000")
     env.setdefault("LOBSTER_OPENCLAW_MCP_SDK_TIMEOUT_MS", env.get("LOBSTER_OPENCLAW_MCP_TOOL_TIMEOUT_MS", "600000"))
     return env
@@ -1938,6 +2835,70 @@ def _nodejs_npm_spawn_ready(bundle: Path) -> bool:
     nb = bundle / "node_modules" / "npm" / "bin"
     lib = bundle / "node_modules" / "npm" / "lib" / "cli.js"
     return (nb / "npm-cli.js").is_file() and (nb / "npm-prefix.js").is_file() and lib.is_file()
+
+
+def _nodejs_npm_cache_ready(bundle: Path) -> bool:
+    nb = bundle / ".openclaw" / "npm" / "bin"
+    lib = bundle / ".openclaw" / "npm" / "lib" / "cli.js"
+    return (nb / "npm-cli.js").is_file() and (nb / "npm-prefix.js").is_file() and lib.is_file()
+
+
+def _sync_nodejs_npm_from_cache(bundle: Path) -> Optional[str]:
+    """Restore node_modules/npm from bundled .openclaw/npm without network access."""
+    src = bundle / ".openclaw" / "npm"
+    dst = bundle / "node_modules" / "npm"
+    if not _nodejs_npm_cache_ready(bundle):
+        return "nodejs/.openclaw/npm cache is incomplete; cannot repair npm CLI offline"
+    err = _rmtree_best_effort(dst)
+    if err:
+        return err
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src, dst)
+    except Exception as exc:
+        return f"offline npm CLI sync failed: {exc}"
+    if not _nodejs_npm_spawn_ready(bundle):
+        return "npm CLI is still incomplete after offline sync"
+    return None
+
+
+def _ensure_nodejs_npm_spawn_ready_for_gateway(startup_log_path: Path) -> bool:
+    """Keep Gateway startup local-only: sync cached npm if possible, never download."""
+    bundle = _nodejs_bundle_dir()
+    if _nodejs_npm_spawn_ready(bundle):
+        _write_openclaw_startup_diag_line(
+            startup_log_path,
+            "npm_spawn_ready",
+            bundle=str(bundle),
+            source="node_modules",
+        )
+        return True
+    _write_openclaw_startup_diag_line(
+        startup_log_path,
+        "npm_spawn_missing",
+        bundle=str(bundle),
+        cache_ready=_nodejs_npm_cache_ready(bundle),
+    )
+    if _nodejs_npm_cache_ready(bundle):
+        err = _sync_nodejs_npm_from_cache(bundle)
+        _write_openclaw_startup_diag_line(
+            startup_log_path,
+            "npm_spawn_cache_sync",
+            ok=not err,
+            error=err or "",
+        )
+        if not err:
+            logger.info("[openclaw] restored npm CLI from bundled cache before Gateway launch")
+            return True
+        logger.warning("[openclaw] failed to restore npm CLI from cache before Gateway launch: %s", err)
+    message = "nodejs/npm CLI is incomplete; continuing Gateway launch without startup download."
+    logger.warning("[openclaw] %s", message)
+    _write_openclaw_startup_diag_line(
+        startup_log_path,
+        "npm_spawn_unavailable",
+        message=message,
+    )
+    return True
 
 
 def _rmtree_best_effort(path: Path) -> Optional[str]:
@@ -2399,14 +3360,16 @@ def _restart_openclaw_gateway_impl(
     _patch_openclaw_gateway_pricing_refresh(mjs_path)
     _patch_openclaw_mcp_tool_timeout(mjs_path)
     _patch_openclaw_mcp_sdk_timeout(mjs_path)
+    _patch_openclaw_gateway_startup_preflight(mjs_path)
     _patch_openclaw_latency_trace(mjs_path)
     env = _build_openclaw_env()
-    log_path = _BASE_DIR / "openclaw.log"
     startup_log_path = _new_openclaw_startup_log_path()
 
     try:
         cmd = [node_path, mjs_path, "gateway", "--port", "18789"]
         startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+        if platform.system() == "Windows":
+            _ensure_nodejs_npm_spawn_ready_for_gateway(startup_log_path)
         _write_openclaw_startup_diag_line(
             startup_log_path,
             "launch_prepare",
@@ -2443,7 +3406,15 @@ def _restart_openclaw_gateway_impl(
             startup_log_file.close()
         except Exception:
             pass
-        _write_openclaw_startup_diag_line(startup_log_path, "process_started", pid=proc.pid)
+        time.sleep(0.2)
+        gateway_processes = _find_openclaw_gateway_process_infos()
+        _write_openclaw_startup_diag_line(
+            startup_log_path,
+            "process_started",
+            pid=proc.pid,
+            gateway_pids=[int(info["pid"]) for info in gateway_processes if info.get("pid")],
+            gateway_processes=gateway_processes,
+        )
         _remember_openclaw_startup_diag(
             status="waiting_for_listener",
             pid=proc.pid,
@@ -2473,13 +3444,15 @@ def _restart_openclaw_gateway_impl(
             )
             return True
         logger.warning("OpenClaw Gateway process started but not ready after %.1fs", wait_ready_sec)
-        leftovers = sorted(set(_find_listener_pids_on_18789()) | set(_find_openclaw_gateway_process_pids()))
+        leftover_processes = _find_openclaw_gateway_process_infos()
+        leftovers = sorted(set(_find_listener_pids_on_18789()) | {int(info["pid"]) for info in leftover_processes if info.get("pid")})
         if leftovers:
             logger.warning("Killing OpenClaw Gateway PIDs after readiness timeout: %s", leftovers)
             _write_openclaw_startup_diag_line(
                 startup_log_path,
                 "kill_after_timeout",
                 leftovers=leftovers,
+                gateway_processes=leftover_processes,
                 wait_ready_sec=wait_ready_sec,
             )
             for pid in leftovers:

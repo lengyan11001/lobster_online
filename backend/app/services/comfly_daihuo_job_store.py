@@ -56,6 +56,45 @@ def create_job_record(
     return jid
 
 
+def find_recent_running_job(
+    *,
+    user_id: int,
+    asset_id: str = "",
+    image_url: str = "",
+    task_text: str = "",
+    max_age_sec: float = 300.0,
+) -> Optional[Dict[str, Any]]:
+    now = time.time()
+    aid = (asset_id or "").strip()
+    img = (image_url or "").strip()
+    txt = (task_text or "").strip()
+    with JOBS_LOCK:
+        _prune_stale_unlocked(now)
+        candidates = sorted(
+            _JOBS.values(),
+            key=lambda j: float(j.get("created_at_ts") or 0),
+            reverse=True,
+        )
+        for job in candidates:
+            if int(job.get("user_id") or -1) != int(user_id):
+                continue
+            if (job.get("status") or "").strip() != "running":
+                continue
+            if now - float(job.get("created_at_ts") or 0) > max_age_sec:
+                continue
+            inp = job.get("inp") if isinstance(job.get("inp"), dict) else {}
+            if aid and (inp.get("_request_asset_id") or "").strip() == aid:
+                return dict(job)
+            if img and (
+                (inp.get("_request_image_url") or "").strip() == img
+                or (inp.get("product_image") or "").strip() == img
+            ):
+                return dict(job)
+            if txt and (inp.get("task_text") or "").strip() == txt:
+                return dict(job)
+    return None
+
+
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     jid = (job_id or "").strip().lower()
     if not jid or len(jid) != 32 or any(c not in "0123456789abcdef" for c in jid):

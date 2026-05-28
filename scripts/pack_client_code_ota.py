@@ -62,6 +62,7 @@ SKIP_DIR_NAMES = {"__pycache__", ".git"}
 # Product defaults are emitted separately under openclaw/global_workspace_defaults.
 _OTA_OPENCLAW_SKIP_DIR_NAMES = {
     ".openclaw",
+    ".node_compile_cache",
     "agents",
     "browser",
     "cron",

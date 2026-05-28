@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from ..db import SessionLocal, get_db
 from ..services.comfly_daihuo_job_store import (
     create_job_record,
+    find_recent_running_job,
     get_job,
     read_manifest_progress,
     update_job,
@@ -458,6 +459,30 @@ async def comfly_daihuo_pipeline_start(
     pl = body.payload
     _validate_payload(pl)
 
+    existing = find_recent_running_job(
+        user_id=current_user.id,
+        asset_id=pl.asset_id or "",
+        image_url=pl.image_url or "",
+        task_text=pl.task_text or "",
+        max_age_sec=300.0,
+    )
+    if existing:
+        jid_existing = str(existing.get("job_id") or "").strip()
+        if jid_existing:
+            logger.info(
+                "[comfly_daihuo] reuse running pipeline job user_id=%s job_id=%s asset_id=%s",
+                current_user.id,
+                jid_existing[:12],
+                (pl.asset_id or "")[:24],
+            )
+            return {
+                "ok": True,
+                "async": True,
+                "reused": True,
+                "job_id": jid_existing,
+                "poll_path": f"/api/comfly-daihuo/pipeline/jobs/{jid_existing}",
+            }
+
     runs_root = (pl.output_dir or "").strip() or _default_runs_root()
     job_id = uuid.uuid4().hex
     if pl.isolate_job_dir:
@@ -472,6 +497,8 @@ async def comfly_daihuo_pipeline_start(
         request=request,
         effective_output_dir=effective_dir,
     )
+    inp["_request_asset_id"] = (pl.asset_id or "").strip()
+    inp["_request_image_url"] = (pl.image_url or "").strip()
 
     create_job_record(
         user_id=current_user.id,

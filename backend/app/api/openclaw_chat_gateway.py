@@ -397,8 +397,10 @@ def _task_id_from_text(content: str) -> str:
     raw = _strip_markdown_emphasis_for_evidence(content)
     for pattern in (
         r'"task_id"\s*:\s*"([^"\r\n]{8,128})"',
+        r'"job_id"\s*:\s*"([0-9a-f]{32})"',
         r"\btask_id\s*[:=]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
-        r"\b(?:task_id|asset_id|assetId|final_asset_id|video_asset_id)\b[^A-Za-z0-9\r\n]{0,12}`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
+        r"\bjob_id\s*[:=]\s*`?([0-9a-f]{32})`?",
+        r"\b(?:task_id|job_id|asset_id|assetId|final_asset_id|video_asset_id)\b[^A-Za-z0-9\r\n]{0,12}`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
         r"(?:asset_id|assetId|final_asset_id|video_asset_id|"
         r"\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID)"
         r"\s*[:\uff1a=]\s*`?([A-Za-z0-9][A-Za-z0-9_.:-]{7,127})`?",
@@ -408,6 +410,18 @@ def _task_id_from_text(content: str) -> str:
         if m:
             return m.group(1).strip().strip("`")
     return ""
+
+
+def _execution_id_label_from_text(content: str, execution_id: str) -> str:
+    if not execution_id:
+        return "任务ID"
+    raw = _strip_markdown_emphasis_for_evidence(content)
+    escaped = re.escape(execution_id)
+    if re.search(rf"(?:\"job_id\"|\bjob_id\b)[^A-Za-z0-9\r\n]{{0,24}}`?{escaped}`?", raw, re.IGNORECASE):
+        return "任务ID"
+    if re.fullmatch(r"[0-9a-f]{32}", execution_id.strip(), re.IGNORECASE):
+        return "任务ID"
+    return "任务ID"
 
 
 def _openclaw_visible_reply(content: str, *, generation_request: bool = False) -> str:
@@ -421,7 +435,8 @@ def _openclaw_visible_reply(content: str, *, generation_request: bool = False) -
             return cleaned
         task_id = _task_id_from_text(raw)
         if task_id:
-            return f"任务已提交，正在生成中。\n任务ID：`{task_id}`"
+            label = _execution_id_label_from_text(raw, task_id)
+            return f"任务已提交，正在生成中。\n{label}：`{task_id}`"
         return "任务已提交，正在生成中。"
     return raw.strip()
 
@@ -481,13 +496,13 @@ _OPENCLAW_TEXT_PLAN_TO_VIDEO_EXEC_RE = re.compile(
     re.IGNORECASE,
 )
 _OPENCLAW_GENERATION_EVIDENCE_RE = re.compile(
-    r"(?:task_id|saved_assets|media_urls?|final_asset_id|video_asset_id|output_url|preview_url|"
+    r"(?:task_id|job_id|saved_assets|media_urls?|final_asset_id|video_asset_id|output_url|preview_url|"
     r"(?:已提交|已生成|生成完成|已保存|保存成功).{0,90}(?:task_id|asset_id|资产\s*ID|素材\s*ID|https?://)|"
     r"(?:预览|视频直链|图片直链|下载链接|成品链接|output|result).{0,90}https?://)",
     re.IGNORECASE,
 )
 _OPENCLAW_EXECUTION_ID_EVIDENCE_RE = re.compile(
-    r"(?:task_id|asset_id|assetId|saved_assets|final_asset_id|video_asset_id|media_urls?|output_url|preview_url|"
+    r"(?:task_id|job_id|asset_id|assetId|saved_assets|final_asset_id|video_asset_id|media_urls?|output_url|preview_url|"
     r"\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID)"
     r"[^A-Za-z0-9\r\n]{0,12}`?[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}`?",
     re.IGNORECASE,
@@ -495,7 +510,7 @@ _OPENCLAW_EXECUTION_ID_EVIDENCE_RE = re.compile(
 _OPENCLAW_GENERATION_SUCCESS_WITH_ID_RE = re.compile(
     r"(?:\u751f\u6210\u6210\u529f|\u751f\u6210\u5b8c\u6210|\u5df2\u751f\u6210|\u5df2\u5b8c\u6210|"
     r"\u5df2\u4fdd\u5b58|\u5df2\u81ea\u52a8\u4fdd\u5b58|\u4fdd\u5b58\u5230\u7d20\u6750\u5e93)"
-    r"[\s\S]{0,180}(?:task_id|asset_id|assetId|\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|"
+    r"[\s\S]{0,180}(?:task_id|job_id|asset_id|assetId|\u4efb\u52a1\s*ID|\u7d20\u6750\s*ID|"
     r"\u56fe\u7247\s*ID|\u89c6\u9891\s*ID|\u8d44\u4ea7\s*ID|https?://)",
     re.IGNORECASE,
 )
@@ -587,8 +602,8 @@ def _generation_force_followup_text(raw_content: str) -> str:
         "MCP 会在 invoke_capability 边界自动把 asset_id 解析成公网素材 URL。"
         "请在本轮立即调用 lobster__invoke_capability 执行对应生成能力："
         "视频用 video.generate，图片用 image.generate，创意成片用 goal.video.pipeline。"
-        "如果需要查询结果，只能使用工具真实返回的 task_id。"
-        "最终回复必须包含 task_id、asset_id、预览链接或明确的工具错误；没有这些证据不要说已处理。"
+        "如果需要查询结果，只能使用工具真实返回的 task_id；本机流水线类能力返回 job_id 时，必须用对应能力的 poll_pipeline 查询本地 job 状态，不能改用 task.get_result。"
+        "最终回复必须包含 task_id、job_id、asset_id、预览链接或明确的工具错误；没有这些证据不要说已处理。"
     )
 
 
@@ -974,10 +989,10 @@ OpenClaw 主对话补充规则：
 - 如果 memory_search 返回用户上传文档，优先基于该文档回答；不要把同名网页公司误当成用户资料。
 - 用户要求发布到某账号时，调用 list_publish_accounts 后必须扫描 accounts 全量列表，并同时核对 platform 与 nickname；“抖音账号123”匹配 platform="douyin" 且 nickname="123"，douyin_shop/抖店不是抖音。发布时传 account_nickname，不要把 id 当昵称。若历史回复曾说账号不存在，以最新工具结果为准。
 - 绝对不要把 DSML、XML、tool_calls、function_calls 或工具调用参数作为正文输出给用户。需要工具时使用工具调用；不能调用时用自然语言说明。
-- 生成图片/视频、查询任务、保存素材、发布内容时，只能引用工具返回 JSON 里的真实字段。没有 task_id 时禁止说“任务已提交”；没有 media_urls/saved_assets 时禁止说“已生成完成”；没有 saved_assets 或 save_asset 返回时禁止编素材 ID；没有 publish_content 成功返回时禁止说已发布。
+- 生成图片/视频、查询任务、保存素材、发布内容时，只能引用工具返回 JSON 里的真实字段。没有 task_id 或本机流水线 job_id 时禁止说“任务已提交”；没有 media_urls/saved_assets 时禁止说“已生成完成”；没有 saved_assets 或 save_asset 返回时禁止编素材 ID；没有 publish_content 成功返回时禁止说已发布。
 - 费用/扣费只能引用工具返回的 credits_used、credits_charged、credits_final 等龙虾积分字段；禁止把上游 result.price/cost/fee 或模型价格口径说成用户已扣积分。若工具没有明确扣费字段，就说“本轮工具未返回可展示的扣费信息”。
 - 如果工具返回 openclaw_evidence，请严格按其中 claim_rules 回答；claim_rules 不允许的状态必须如实说明还不能确认，不要用经验或历史内容补齐。
-- 查询任务进度必须使用本会话工具返回的真实 task_id 或用户明确提供的 task_id；找不到真实 task_id 时说明“没有拿到可查询的任务 ID”，不要生成看起来像 ID 的字符串。
+- 查询任务进度必须使用本会话工具返回的真实 task_id，或本机流水线能力返回的 job_id。comfly.daihuo.pipeline 这类本机脚本只能用同能力 poll_pipeline + job_id 查询，不能改用 task.get_result；找不到真实 ID 时说明“没有拿到可查询的任务 ID”，不要生成看起来像 ID 的字符串。
 - task.get_result 返回 pending/processing/running 且 output/result 为空时，只能告诉用户“仍在生成中”并保留 task_id；不要说已完成，也不要说“不确定无结果”。
 - 用户要求“短视频方案 / 创意方案 / 拍摄方案 / 镜头脚本 / 分镜脚本 / 口播文案 / 文案脚本”时，这是文字创作任务，只输出可执行方案和脚本，不调用 image.generate、video.generate 或 goal.video.pipeline；资料不足时先给通用可执行版本并注明可按行业再细化，不要把补充问题当作唯一回复。只有用户明确说“开始生成视频 / 做成片 / 渲染成视频 / 按这个脚本生成视频”时，才调用生成能力。
 - 用户明确要求生成图片/视频/创意成片时，本轮必须直接调用 lobster__invoke_capability 执行对应生成能力；不要只回复“我先找素材/先查能力/确认可用工具”。如果消息中已有 asset_id 或系统已注入素材 URL，直接用于生成，MCP 边界会自动补齐素材 URL。禁止用 exec/shell/browser 代替业务能力。
@@ -1296,7 +1311,7 @@ async def try_openclaw(
                 if _openclaw_generation_reply_is_prep_only(raw_content, msgs):
                     if _openclaw_generation_reply_says_started(raw_content):
                         logger.warning(
-                            "[OPENCLAW] generation reply says task already started but lacks task_id; "
+                            "[OPENCLAW] generation reply says generation already started but lacks task_id/job_id; "
                             "skip generation_followup to avoid duplicate tool call agent_id=%s trace_id=%s",
                             agent_id,
                             trace_id,
