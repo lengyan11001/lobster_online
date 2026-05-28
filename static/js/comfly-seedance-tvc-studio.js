@@ -1240,19 +1240,20 @@
     return true;
   }
 
-  function keepCurrentJobRunningFromCloud(message) {
-    state.currentJobStatus = 'running';
-    state.currentJobError = '';
+  function markCurrentJobInterrupted(message) {
+    stopPolling();
+    state.currentJobStatus = 'failed';
+    state.currentJobError = message || '本地生成任务已中断，请重新提交任务。';
     state.currentJobProgress = {
-      last_steps: [{ name: message || '等待服务端任务结果', status: 'running' }]
+      last_steps: [{ name: state.currentJobError, status: 'failed' }]
     };
     updateRememberedJob(state.currentJobId, {
-      status: 'running',
-      error: '',
+      status: 'failed',
+      error: state.currentJobError,
       progress: state.currentJobProgress
     });
     renderWorkspace();
-    if (message) showMessage(message);
+    showMessage('任务失败：' + state.currentJobError);
   }
 
   function refreshJobStatus(showToast) {
@@ -1274,8 +1275,7 @@
           if (statusCode === 404 || /任务不存在|已过期|not found/i.test(message)) {
             return fetchCloudJob(state.currentJobId).then(function(cloudJob) {
               if (cloudJob && cloudJob.status === 'completed' && !cloudJob.videoUrl) {
-                keepCurrentJobRunningFromCloud('服务器已有任务记录，最终视频还在同步中。');
-                schedulePoll(5000);
+                markCurrentJobInterrupted('本地生成任务已中断，服务器没有可播放的最终视频。');
                 return null;
               }
               if (cloudJob && applyJobSnapshot(cloudJob, cloudJob.status)) {
@@ -1287,13 +1287,11 @@
                   stopPolling();
                   showMessage('任务失败：' + (cloudJob.error || '服务器历史记录显示失败。'));
                 } else {
-                  keepCurrentJobRunningFromCloud('已从服务器找到任务记录，当前仍在合成中。');
-                  schedulePoll(5000);
+                  markCurrentJobInterrupted('本地生成任务已中断，服务器仍未返回最终视频结果。');
                 }
                 return null;
               }
-              keepCurrentJobRunningFromCloud('服务端暂未返回最终结果，继续显示合成中。');
-              schedulePoll(8000);
+              markCurrentJobInterrupted('本地生成任务已中断，服务器暂时没有可恢复的结果。');
               return null;
             });
           }
@@ -1333,19 +1331,18 @@
       })
       .catch(function(err) {
         stopPolling();
-        state.currentJobStatus = 'running';
-        state.currentJobError = '';
+        state.currentJobStatus = 'failed';
+        state.currentJobError = '状态刷新失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误');
         state.currentJobProgress = {
-          last_steps: [{ name: '服务端状态暂时获取失败，稍后自动刷新', status: 'running' }]
+          last_steps: [{ name: state.currentJobError, status: 'failed' }]
         };
         updateRememberedJob(state.currentJobId, {
-          status: 'running',
-          error: '',
+          status: 'failed',
+          error: state.currentJobError,
           progress: state.currentJobProgress
         });
         renderWorkspace();
-        showMessage('服务端状态暂时获取失败，继续显示合成中。');
-        schedulePoll(8000);
+        showMessage('任务失败：' + state.currentJobError);
       });
   }
 
