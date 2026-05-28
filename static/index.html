@@ -4048,12 +4048,13 @@
     }
     .douyin-send-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(230px, 0.8fr);
+      grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.45fr);
       gap: 0.85rem;
     }
     .douyin-target-card {
       display: grid;
       gap: 0.65rem;
+      align-content: start;
       padding: 0.78rem;
       border-radius: 12px;
       border: 1px solid var(--douyin-line);
@@ -4144,6 +4145,65 @@
       background: rgba(250, 252, 255, 0.82);
       font-size: 0.84rem;
       line-height: 1.55;
+    }
+    .douyin-badge.is-intent {
+      color: #155e4d;
+      background: rgba(16, 185, 129, 0.14);
+    }
+    .douyin-intent-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--douyin-muted);
+      font-size: 0.76rem;
+      line-height: 1.45;
+    }
+    .douyin-checkline {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      color: var(--douyin-ink);
+      font-size: 0.83rem;
+      font-weight: 650;
+      line-height: 1.35;
+      cursor: pointer;
+      user-select: none;
+    }
+    .douyin-checkline input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--douyin-blue);
+    }
+    .douyin-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      padding: 1.2rem;
+      background: rgba(15, 23, 42, 0.36);
+      backdrop-filter: blur(8px);
+    }
+    .douyin-modal-card {
+      width: min(720px, 100%);
+      max-height: min(760px, calc(100vh - 2.4rem));
+      overflow: auto;
+      padding: 1.1rem;
+      border-radius: 14px;
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      background: #fff;
+      box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+    }
+    .douyin-modal-body {
+      display: grid;
+      gap: 0.75rem;
+    }
+    .douyin-modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.55rem;
+      margin-top: 1rem;
     }
     @media (max-width: 1080px) {
       .douyin-shell,
@@ -8686,7 +8746,7 @@
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260526-hifly-voice-delete-preview"></script>
   <script src="/static/js/chat.js?v=20260515-openclaw-status"></script>
-  <script src="/static/js/skill.js?v=20260514-hifly-store-name"></script>
+  <script src="/static/js/skill.js?v=20260528-douyin-message-clean"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>

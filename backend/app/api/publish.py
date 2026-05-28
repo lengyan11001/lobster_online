@@ -1,11 +1,12 @@
 """Publishing accounts and task management."""
 import asyncio
+import json
 import logging
 import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -21,6 +22,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .auth import _ServerUser, get_current_user_for_local
+from ..core.config import settings
 from ..datetime_iso import isoformat_utc
 from ..db import get_db
 from ..models import (
@@ -50,6 +52,64 @@ async def _get_account_publish_lock(account_id: int) -> asyncio.Lock:
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 BROWSER_DATA_DIR = _BASE_DIR / "browser_data"
 BROWSER_DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR = _BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+DOUYIN_WORKBENCH_CONFIG_PATH = DATA_DIR / "douyin_workbench_config.json"
+DOUYIN_INTENT_DIRECTION_DEFAULT = (
+    "请筛选评论中是否属于精准客户。这里的精准客户指：有真实需求、了解意愿、"
+    "咨询意愿、联系意愿的人。优先保留想了解、想咨询、感兴趣、想试试、想做、"
+    "想进一步沟通，以及询问价格、费用、怎么买、怎么报名、怎么合作、怎么联系、"
+    "适合我吗、新手能做吗、怎么开始这类评论。排除纯夸赞、纯围观、纯玩笑、"
+    "无明确需求、重复内容。只判断是否精准，不做分层。"
+)
+DOUYIN_COMMENT_FILTER_STRATEGIES = {"prompt", "reverse"}
+
+
+def _normalize_douyin_comment_filter_strategy(value: object) -> str:
+    normalized = str(value or "prompt").strip().lower()
+    return normalized if normalized in DOUYIN_COMMENT_FILTER_STRATEGIES else "prompt"
+
+
+def _default_douyin_workbench_config() -> Dict[str, Any]:
+    return {
+        "ai_filter_enabled": True,
+        "comment_direction": DOUYIN_INTENT_DIRECTION_DEFAULT,
+        "comment_filter_strategy": "prompt",
+        "comment_max_comments": 120,
+    }
+
+
+def _load_douyin_workbench_config() -> Dict[str, Any]:
+    config = _default_douyin_workbench_config()
+    try:
+        if DOUYIN_WORKBENCH_CONFIG_PATH.exists():
+            raw = json.loads(DOUYIN_WORKBENCH_CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                config.update(raw)
+    except Exception as exc:
+        logger.warning("[DOUYIN-WORKBENCH] load config failed: %s", exc)
+    config["comment_direction"] = str(config.get("comment_direction") or "").strip() or DOUYIN_INTENT_DIRECTION_DEFAULT
+    config["comment_filter_strategy"] = _normalize_douyin_comment_filter_strategy(config.get("comment_filter_strategy"))
+    config["comment_max_comments"] = max(1, min(int(config.get("comment_max_comments") or 120), 500))
+    config["ai_filter_enabled"] = bool(config.get("ai_filter_enabled", True))
+    return config
+
+
+def _save_douyin_workbench_config(patch: Dict[str, Any]) -> Dict[str, Any]:
+    config = _load_douyin_workbench_config()
+    if "ai_filter_enabled" in patch:
+        config["ai_filter_enabled"] = bool(patch.get("ai_filter_enabled"))
+    if "comment_direction" in patch:
+        config["comment_direction"] = str(patch.get("comment_direction") or "").strip() or DOUYIN_INTENT_DIRECTION_DEFAULT
+    if "comment_filter_strategy" in patch:
+        config["comment_filter_strategy"] = _normalize_douyin_comment_filter_strategy(patch.get("comment_filter_strategy"))
+    if "comment_max_comments" in patch:
+        config["comment_max_comments"] = max(1, min(int(patch.get("comment_max_comments") or 120), 500))
+    try:
+        DOUYIN_WORKBENCH_CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("[DOUYIN-WORKBENCH] save config failed: %s", exc)
+    return config
 
 # 主素材为下列后缀时，头条图文应按「单图封面」上传主图，忽略模型误传的 toutiao_graphic_no_cover。
 _IMAGE_MAIN_ASSET_SUFFIX = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -474,6 +534,16 @@ class DouyinVideoCustomersReq(BaseModel):
     video_url: Optional[str] = None
     aweme_id: Optional[str] = None
     max_comments: Optional[int] = 100
+    ai_filter_enabled: Optional[bool] = True
+    comment_direction: Optional[str] = None
+    comment_filter_strategy: Optional[str] = "prompt"
+
+
+class DouyinWorkbenchConfigReq(BaseModel):
+    ai_filter_enabled: Optional[bool] = None
+    comment_direction: Optional[str] = None
+    comment_filter_strategy: Optional[str] = None
+    comment_max_comments: Optional[int] = None
 
 
 class DouyinMessageTarget(BaseModel):
@@ -488,6 +558,267 @@ class DouyinMessageSendReq(BaseModel):
     account_id: Optional[int] = None
     message: str
     targets: List[DouyinMessageTarget] = []
+
+
+def _douyin_comment_text(row: Dict[str, Any]) -> str:
+    return str(row.get("content") or row.get("comment") or row.get("text") or row.get("latest_comment") or "").strip()
+
+
+def _douyin_comment_user(row: Dict[str, Any]) -> str:
+    return str(row.get("username") or row.get("nickname") or row.get("author") or "").strip()
+
+
+def _douyin_comment_key(row: Dict[str, Any]) -> str:
+    return str(
+        row.get("sec_user_id")
+        or row.get("sec_uid")
+        or row.get("user_xsec_token")
+        or row.get("profile_url")
+        or row.get("uid")
+        or row.get("user_id")
+        or _douyin_comment_user(row)
+        or row.get("comment_id")
+        or ""
+    ).strip()
+
+
+def _extract_json_object_from_text(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("模型返回为空")
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw)
+    if fenced:
+        blob = fenced.group(1)
+    else:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("模型返回中未找到 JSON")
+        blob = raw[start : end + 1]
+    data = json.loads(blob)
+    if not isinstance(data, dict):
+        raise ValueError("模型 JSON 根节点不是对象")
+    return data
+
+
+def _normalize_douyin_filter_ref(ref: Dict[str, Any], comments: List[Dict[str, Any]], fallback_index: int) -> Optional[Dict[str, Any]]:
+    try:
+        comment_index = int(ref.get("comment_index") or ref.get("index") or fallback_index)
+    except Exception:
+        comment_index = fallback_index
+    if comment_index < 1 or comment_index > len(comments):
+        return None
+    source = comments[comment_index - 1] if isinstance(comments[comment_index - 1], dict) else {}
+    content = _douyin_comment_text(source)
+    if not content:
+        return None
+    nickname = _douyin_comment_user(source)
+    out = {
+        "comment_index": comment_index,
+        "username": nickname,
+        "nickname": nickname,
+        "author": nickname,
+        "user_id": str(source.get("user_id") or source.get("uid") or "").strip(),
+        "uid": str(source.get("uid") or source.get("user_id") or "").strip(),
+        "user_xsec_token": str(source.get("user_xsec_token") or "").strip(),
+        "sec_user_id": str(source.get("sec_user_id") or source.get("sec_uid") or "").strip(),
+        "sec_uid": str(source.get("sec_uid") or source.get("sec_user_id") or "").strip(),
+        "comment_id": str(source.get("comment_id") or "").strip(),
+        "comment": content,
+        "content": content,
+        "latest_comment": content,
+        "comment_time": str(source.get("comment_time") or source.get("create_time") or "").strip(),
+        "like_count": source.get("like_count", source.get("digg_count", "")),
+        "digg_count": source.get("digg_count", source.get("like_count", 0)),
+        "reply_count": source.get("reply_count", source.get("reply_comment_total", "")),
+        "profile_url": str(source.get("profile_url") or "").strip(),
+        "avatar_url": str(source.get("avatar_url") or "").strip(),
+        "intent_level": str(ref.get("intent_level") or "high").strip() or "high",
+        "reason": str(ref.get("reason") or "").strip(),
+        "score": ref.get("score", 0.8),
+    }
+    return out
+
+
+def _dedupe_douyin_filter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        key = _douyin_comment_key(row) or f"{row.get('comment_index')}|{_douyin_comment_text(row)}"
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def _douyin_prompt_fallback_filter(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    keywords = (
+        "多少钱", "价格", "费用", "收费", "报价", "套餐",
+        "怎么买", "怎么下单", "怎么购买", "怎么报名", "哪里报名", "想报名", "想买", "下单",
+        "怎么合作", "合作", "商务合作", "加盟", "代理",
+        "怎么联系", "联系方式", "求联系方式", "电话", "微信", "私信", "私聊", "对接",
+        "咨询", "想咨询", "想了解", "了解一下", "详细聊聊", "给个方案", "有没有方案",
+        "我需要", "我想", "适合我吗", "适不适合我", "能不能做", "可以做吗",
+        "感兴趣", "有兴趣", "想试试", "想做", "怎么弄", "怎么搞", "怎么开始",
+        "想入手", "入手", "能下手吗", "能不能买", "可以买吗", "可以入吗",
+        "有没有", "有吗", "怎么选", "推荐一下", "回复我", "回我一下",
+    )
+    refs = []
+    for index, row in enumerate(comments, start=1):
+        compact = "".join(_douyin_comment_text(row).split())
+        if compact and any(word in compact for word in keywords):
+            refs.append({"comment_index": index, "intent_level": "medium", "reason": "抖音意向关键词兜底筛选", "score": 0.6})
+    return [_normalize_douyin_filter_ref(ref, comments, idx) for idx, ref in enumerate(refs, start=1) if _normalize_douyin_filter_ref(ref, comments, idx)]
+
+
+def _douyin_reverse_fallback_filter(comments: List[Dict[str, Any]], post_title: str = "") -> List[Dict[str, Any]]:
+    trivial_exact = {
+        "哈哈", "哈哈哈", "呵呵", "哦", "嗯", "好的", "收到", "来了", "路过", "打卡", "支持",
+        "不错", "真好", "牛", "厉害", "赞", "好", "好看", "看看", "学到了", "收藏了",
+        "先收藏", "滴滴", "在吗", "回我", "回一下", "回复一下",
+    }
+    off_topic_exact = {"吃了吗", "吃饭了吗", "穿什么", "穿啥", "在干嘛", "干嘛呢", "睡了吗", "早安", "晚安"}
+    abusive_keywords = ("骗子", "骗人", "垃圾", "滚", "有病", "智商税", "脑残", "傻", "装逼", "坑人", "恶心")
+    intent_keywords = ("价格", "费用", "收费", "报价", "多少钱", "怎么卖", "怎么买", "合作", "联系方式", "联系", "微信", "私信", "咨询", "了解", "想买", "想要", "需要", "推荐", "可以吗", "能吗", "适合")
+    title_tokens = set(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{2,8}", str(post_title or "").lower()))
+    refs = []
+    for index, row in enumerate(comments, start=1):
+        text = _douyin_comment_text(row)
+        compact = "".join(text.split())
+        if not compact or compact in trivial_exact or compact in off_topic_exact:
+            continue
+        if any(word in compact for word in abusive_keywords):
+            continue
+        text_only = re.sub(r"[^A-Za-z0-9\u4e00-\u9fff]", "", compact)
+        if len(text_only) <= 1:
+            continue
+        has_intent = any(word in compact for word in intent_keywords)
+        has_topic = (not title_tokens) or any(token in compact.lower() for token in title_tokens)
+        if not has_intent and not has_topic:
+            continue
+        refs.append({"comment_index": index, "intent_level": "high", "reason": "保留有效互动评论", "score": 0.65 if not has_intent else 0.78})
+    rows = [_normalize_douyin_filter_ref(ref, comments, idx) for idx, ref in enumerate(refs, start=1)]
+    return [row for row in rows if row]
+
+
+async def _filter_douyin_comments_for_workbench(
+    *,
+    comments: List[Dict[str, Any]],
+    post_title: str,
+    direction: str,
+    strategy: str,
+    request: Request,
+) -> Dict[str, Any]:
+    comments = [row for row in (comments or []) if isinstance(row, dict) and _douyin_comment_text(row)]
+    strategy = _normalize_douyin_comment_filter_strategy(strategy)
+    if not comments:
+        return {"high_intent_users": [], "fallback_used": False, "message": "没有可筛选的评论"}
+
+    fallback = _douyin_reverse_fallback_filter if strategy == "reverse" else lambda rows, title="": _douyin_prompt_fallback_filter(rows)
+    raw_token = _bearer_from_request(request)
+    asb = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    model = (getattr(settings, "lobster_default_sutui_chat_model", None) or "deepseek-chat").strip() or "deepseek-chat"
+    if not raw_token or not asb:
+        rows = _dedupe_douyin_filter_rows(fallback(comments, post_title))
+        return {"high_intent_users": rows, "fallback_used": True, "message": "未获取到登录 Token，已使用本地规则兜底筛选。"}
+
+    system_prompt = (
+        "你是一个抖音评论反向筛选助手。只保留和当前视频主题相关、且有意义的互动评论；排除无意义、灌水、攻击、广告、跑题闲聊。"
+        if strategy == "reverse"
+        else "你是一个抖音评论筛选助手。必须以用户提供的精准客户筛选提示词为最高优先级，只判断评论是不是精准客户，符合就返回。"
+    )
+    lines = []
+    for index, row in enumerate(comments, start=1):
+        lines.append(f"{index}. 用户：{_douyin_comment_user(row) or '未知'}；评论：{_douyin_comment_text(row)}")
+    user_prompt = (
+        f"视频标题：{post_title or '未提供'}\n\n"
+        f"精准客户筛选提示词：{direction or DOUYIN_INTENT_DIRECTION_DEFAULT}\n\n"
+        "评论列表：\n" + "\n".join(lines) + "\n\n"
+        "请严格返回 JSON，格式为：{\"high_intent_refs\":[{\"comment_index\":1,\"intent_level\":\"high\",\"reason\":\"理由\",\"score\":0.8}]}。"
+        "comment_index 必须来自评论列表序号；如果没有符合条件的评论，返回空数组。"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=45.0, trust_env=False) as client:
+            resp = await client.post(
+                f"{asb}/api/sutui-chat/completions",
+                json={
+                    "model_name": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "stream": False,
+                    "temperature": 0.1,
+                },
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {raw_token}"},
+            )
+            resp.raise_for_status()
+        payload = resp.json() if resp.content else {}
+        content = ""
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        if isinstance(choices, list) and choices:
+            msg = choices[0].get("message") if isinstance(choices[0], dict) else {}
+            content = str((msg or {}).get("content") or choices[0].get("text") or "")
+        if not content:
+            content = str(payload.get("content") or payload.get("text") or "")
+        parsed = _extract_json_object_from_text(content)
+        refs = parsed.get("high_intent_refs") or parsed.get("high_intent_users") or []
+        if not isinstance(refs, list):
+            refs = []
+        rows = []
+        for index, ref in enumerate(refs, start=1):
+            if not isinstance(ref, dict):
+                continue
+            row = _normalize_douyin_filter_ref(ref, comments, index)
+            if row:
+                rows.append(row)
+        return {"high_intent_users": _dedupe_douyin_filter_rows(rows), "fallback_used": False, "message": "AI 筛选完成"}
+    except Exception as exc:
+        logger.warning("[DOUYIN-WORKBENCH] AI filter failed, fallback used: %s", exc)
+        rows = _dedupe_douyin_filter_rows(fallback(comments, post_title))
+        return {"high_intent_users": rows, "fallback_used": True, "message": "AI 筛选暂不可用，已使用本地规则兜底筛选。"}
+
+
+def _merge_douyin_high_intent_into_customers(
+    customers: List[Dict[str, Any]],
+    high_intent_users: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for row in customers or []:
+        if not isinstance(row, dict):
+            continue
+        key = _douyin_comment_key(row)
+        if key:
+            by_key[key] = dict(row)
+
+    for item in high_intent_users or []:
+        if not isinstance(item, dict):
+            continue
+        key = _douyin_comment_key(item)
+        if not key:
+            continue
+        current = by_key.get(key, {})
+        current.update(
+            {
+                "id": current.get("id") or key,
+                "nickname": current.get("nickname") or item.get("nickname") or item.get("username") or item.get("author") or "",
+                "author": current.get("author") or item.get("author") or item.get("nickname") or item.get("username") or "",
+                "uid": current.get("uid") or item.get("uid") or item.get("user_id") or "",
+                "sec_user_id": current.get("sec_user_id") or item.get("sec_user_id") or item.get("sec_uid") or "",
+                "profile_url": current.get("profile_url") or item.get("profile_url") or "",
+                "avatar_url": current.get("avatar_url") or item.get("avatar_url") or "",
+                "latest_comment": current.get("latest_comment") or item.get("latest_comment") or item.get("comment") or item.get("content") or "",
+                "comment_count": current.get("comment_count") or 1,
+                "digg_count": current.get("digg_count") or item.get("digg_count") or item.get("like_count") or 0,
+                "is_high_intent": True,
+                "intent_level": item.get("intent_level") or "high",
+                "intent_reason": item.get("reason") or "",
+                "intent_score": item.get("score", ""),
+            }
+        )
+        by_key[key] = current
+    return list(by_key.values())
 
 
 @router.get("/api/accounts", summary="列出发布账号")
@@ -911,6 +1242,24 @@ async def douyin_dryrun(
         return {"ok": False, "error": str(e)}
 
 
+@router.get("/api/douyin/workbench/config", summary="抖音工作台：读取采集默认配置")
+async def douyin_workbench_get_config(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    _ = current_user
+    return {"code": 200, **_load_douyin_workbench_config()}
+
+
+@router.post("/api/douyin/workbench/config", summary="抖音工作台：保存采集默认配置")
+async def douyin_workbench_save_config(
+    body: DouyinWorkbenchConfigReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    _ = current_user
+    patch = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else body.dict(exclude_unset=True)
+    return {"code": 200, "msg": "抖音采集默认配置已保存。", **_save_douyin_workbench_config(patch)}
+
+
 @router.post("/api/douyin/search/collect", summary="抖音工作台：搜索采集视频线索")
 async def douyin_workbench_search_collect(
     body: DouyinSearchCollectReq,
@@ -977,6 +1326,7 @@ async def douyin_workbench_search_collect(
 @router.post("/api/douyin/video/customers", summary="抖音工作台：协议模式采集视频评论客户")
 async def douyin_workbench_video_customers(
     body: DouyinVideoCustomersReq,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
@@ -1009,6 +1359,10 @@ async def douyin_workbench_video_customers(
     try:
         from publisher.browser_pool import collect_douyin_video_customers_protocol
 
+        default_config = _load_douyin_workbench_config()
+        ai_filter_enabled = bool(body.ai_filter_enabled if body.ai_filter_enabled is not None else default_config.get("ai_filter_enabled", True))
+        comment_direction = (body.comment_direction or default_config.get("comment_direction") or DOUYIN_INTENT_DIRECTION_DEFAULT).strip()
+        comment_filter_strategy = _normalize_douyin_comment_filter_strategy(body.comment_filter_strategy or default_config.get("comment_filter_strategy"))
         bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
         result = await collect_douyin_video_customers_protocol(
             profile_dir=profile_dir,
@@ -1028,13 +1382,55 @@ async def douyin_workbench_video_customers(
         acct.status = "active"
         acct.last_login = datetime.utcnow()
         db.commit()
+        raw_comments = result.get("comments") if isinstance(result.get("comments"), list) else []
+        normalized_comments: List[Dict[str, Any]] = []
+        for row in raw_comments:
+            if not isinstance(row, dict):
+                continue
+            normalized = dict(row)
+            normalized.setdefault("content", _douyin_comment_text(row))
+            normalized.setdefault("comment", _douyin_comment_text(row))
+            normalized.setdefault("username", _douyin_comment_user(row))
+            normalized.setdefault("author", _douyin_comment_user(row))
+            normalized.setdefault("sec_user_id", str(row.get("sec_user_id") or row.get("sec_uid") or "").strip())
+            normalized_comments.append(normalized)
+        customers = result.get("customers") or []
+        high_intent_users: List[Dict[str, Any]] = []
+        ai_filter_result = {
+            "enabled": ai_filter_enabled,
+            "strategy": comment_filter_strategy,
+            "prompt": comment_direction,
+            "fallback_used": False,
+            "message": "",
+        }
+        if ai_filter_enabled:
+            filter_result = await _filter_douyin_comments_for_workbench(
+                comments=normalized_comments,
+                post_title=video_url,
+                direction=comment_direction,
+                strategy=comment_filter_strategy,
+                request=request,
+            )
+            high_intent_users = filter_result.get("high_intent_users") or []
+            ai_filter_result.update(
+                {
+                    "fallback_used": bool(filter_result.get("fallback_used")),
+                    "message": filter_result.get("message") or "",
+                    "precise_count": len(high_intent_users),
+                }
+            )
+            customers = _merge_douyin_high_intent_into_customers(customers, high_intent_users)
         return {
             "code": 200,
             "msg": result.get("message") or "视频客户采集完成",
-            "customers": result.get("customers") or [],
-            "comments": result.get("comments") or [],
-            "total_customers": int(result.get("total_customers") or 0),
-            "total_comments": int(result.get("total_comments") or 0),
+            "customers": customers,
+            "comments": normalized_comments,
+            "high_intent_users": high_intent_users,
+            "precise_customers": high_intent_users,
+            "total_customers": len(customers),
+            "total_comments": len(normalized_comments),
+            "total_high_intent": len(high_intent_users),
+            "ai_filter": ai_filter_result,
             "account_id": acct.id,
             "aweme_id": result.get("aweme_id") or aweme_id,
             "video_url": result.get("video_url") or video_url,

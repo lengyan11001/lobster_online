@@ -35,7 +35,14 @@ var _douyinWorkbenchState = {
   selectedAccountId: null,
   searchResults: [],
   leads: [],
-  selectedLeadIds: {}
+  selectedLeadIds: {},
+  config: {
+    ai_filter_enabled: true,
+    comment_direction: '',
+    comment_filter_strategy: 'prompt',
+    comment_max_comments: 120
+  },
+  pendingVideoIndex: null
 };
 var _skillStoreFetchCache = {};
 var _SKILL_STORE_FETCH_TTL_MS = 60000;
@@ -61,7 +68,7 @@ function _switchToHiddenView(view) {
 
 function _ensureDouyinWorkbenchHost() {
   var host = document.getElementById('content-douyin-workbench');
-  if (host && host.dataset.douyinLayoutVersion === 'tabs-20260522') return host;
+  if (host && host.dataset.douyinLayoutVersion === 'tabs-20260528-message-clean') return host;
   var main = document.querySelector('.dashboard-main');
   if (!main) return null;
   if (!host) {
@@ -70,7 +77,7 @@ function _ensureDouyinWorkbenchHost() {
     main.appendChild(host);
   }
   host.className = 'content-block';
-  host.dataset.douyinLayoutVersion = 'tabs-20260522';
+  host.dataset.douyinLayoutVersion = 'tabs-20260528-message-clean';
   delete host.dataset.douyinTabsBound;
   host.innerHTML = `
     <div class="tvc-studio">
@@ -160,7 +167,7 @@ function _ensureDouyinWorkbenchHost() {
               <div class="douyin-panel-head">
                 <div>
                   <h4 class="tvc-panel-title">私信发送</h4>
-                  <p class="tvc-panel-hint" style="margin:0;">上方配置消息和发送类型，下方从采集客户列表选择对象。</p>
+                  <p class="tvc-panel-hint" style="margin:0;">配置私信内容后，从下方客户列表选择发送对象。</p>
                 </div>
                 <div class="douyin-count-badges">
                   <span class="douyin-badge" id="douyinMessageTargetBadge">已选 0</span>
@@ -188,20 +195,12 @@ function _ensureDouyinWorkbenchHost() {
                     <button type="button" id="douyinSelectAllCustomersBtn" class="btn btn-ghost">全选客户</button>
                     <button type="button" id="douyinClearCustomerSelectionBtn" class="btn btn-ghost">清空选择</button>
                   </div>
-                  <div class="douyin-interaction-note">私信对象来自下方客户列表，也可以在右侧手动填写主页链接或 sec_user_id。</div>
+                  <div class="douyin-interaction-note">私信对象来自下方客户列表，精准客户会自动排在前面。</div>
                 </div>
                 <div class="douyin-target-card">
                   <div id="douyinSelectedTargetCard">
                     <div class="douyin-target-title">尚未选择客户</div>
                     <div class="douyin-selected-target">在下面的客户列表里选择一个或多个对象开始私信。</div>
-                  </div>
-                  <div class="tvc-field" style="margin-top:0.65rem;">
-                    <label for="douyinProfileUrlInput">主页链接</label>
-                    <input id="douyinProfileUrlInput" type="text" placeholder="https://www.douyin.com/user/...">
-                  </div>
-                  <div class="tvc-field">
-                    <label for="douyinSecUserIdInput">sec_user_id</label>
-                    <input id="douyinSecUserIdInput" type="text" placeholder="没有主页链接时可填写 sec_user_id">
                   </div>
                 </div>
               </div>
@@ -210,7 +209,7 @@ function _ensureDouyinWorkbenchHost() {
               <div class="douyin-panel-head">
                 <div>
                   <h4 class="tvc-panel-title">客户列表</h4>
-                  <p class="tvc-panel-hint" style="margin:0;">采集出来的客户会沉淀在这里，选择后再执行私信。</p>
+                  <p class="tvc-panel-hint" style="margin:0;">精准客户优先展示，勾选后即可发送私信。</p>
                 </div>
               </div>
               <div id="douyinCustomerList" class="douyin-customer-list">
@@ -221,6 +220,54 @@ function _ensureDouyinWorkbenchHost() {
         </main>
       </div>
     </div>`;
+  if (!document.getElementById('douyinCustomerCollectModal')) {
+    var modal = document.createElement('div');
+    modal.id = 'douyinCustomerCollectModal';
+    modal.className = 'douyin-modal-backdrop';
+    modal.style.display = 'none';
+    modal.innerHTML = `
+      <div class="douyin-modal-card" role="dialog" aria-modal="true" aria-labelledby="douyinCustomerCollectTitle">
+        <div class="douyin-panel-head">
+          <div>
+            <h4 class="tvc-panel-title" id="douyinCustomerCollectTitle">采集视频客户</h4>
+            <p class="tvc-panel-hint" id="douyinCustomerCollectSubtitle" style="margin:0;">采集评论客户后，可同步用 AI 筛出精准客户。</p>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="douyinCollectModalCloseBtn">关闭</button>
+        </div>
+        <div class="douyin-modal-body">
+          <div class="douyin-collect-form">
+            <div class="tvc-field">
+              <label for="douyinCollectMaxCommentsInput">采集评论数</label>
+              <input id="douyinCollectMaxCommentsInput" type="number" min="1" max="500" value="120">
+            </div>
+            <label class="douyin-checkline" for="douyinAiFilterEnabledInput">
+              <input id="douyinAiFilterEnabledInput" type="checkbox" checked>
+              <span>启用 AI 筛选精准客户</span>
+            </label>
+          </div>
+          <div class="tvc-field">
+            <label for="douyinCommentFilterStrategySelect">筛选策略</label>
+            <select id="douyinCommentFilterStrategySelect">
+              <option value="prompt">正向筛选：按提示词筛精准客户</option>
+              <option value="reverse">反向筛选：保留有效互动，排除灌水无关评论</option>
+            </select>
+          </div>
+          <div class="tvc-field">
+            <label for="douyinCommentDirectionTextarea">精准客户筛选提示词</label>
+            <textarea id="douyinCommentDirectionTextarea" style="min-height:138px;" placeholder="描述什么样的评论用户算精准客户"></textarea>
+          </div>
+          <label class="douyin-checkline" for="douyinSaveFilterConfigInput">
+            <input id="douyinSaveFilterConfigInput" type="checkbox" checked>
+            <span>保存为下次默认规则</span>
+          </label>
+        </div>
+        <div class="douyin-modal-actions">
+          <button type="button" class="btn btn-ghost" id="douyinCollectModalCancelBtn">取消</button>
+          <button type="button" class="btn btn-primary" id="douyinCollectModalConfirmBtn">开始采集客户</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
   return host;
 }
 
@@ -278,6 +325,107 @@ function _douyinWorkbenchStatus(text, type) {
   if (statusType && statusType !== 'info') box.classList.add('is-' + statusType);
   box.innerHTML = (statusType === 'loading' ? '<span class="douyin-status-spinner" aria-hidden="true"></span>' : '') +
     '<span>' + escapeHtml(String(text || '')) + '</span>';
+}
+
+function _douyinWorkbenchDefaultDirection() {
+  return '请筛选评论中是否属于精准客户。这里的精准客户指：有真实需求、了解意愿、咨询意愿、联系意愿的人。优先保留想了解、想咨询、感兴趣、想试试、想做、想进一步沟通，以及询问价格、费用、怎么买、怎么报名、怎么合作、怎么联系、适合我吗、新手能做吗、怎么开始这类评论。排除纯夸赞、纯围观、纯玩笑、无明确需求、重复内容。只判断是否精准，不做分层。';
+}
+
+function _normalizeDouyinFilterStrategy(value) {
+  value = String(value || 'prompt').trim().toLowerCase();
+  return value === 'reverse' ? 'reverse' : 'prompt';
+}
+
+function loadDouyinWorkbenchConfig(silent) {
+  return _douyinWorkbenchFetch('/api/douyin/workbench/config', { method: 'GET' })
+    .then(function(data) {
+      if (data && data.code === 200) {
+        _douyinWorkbenchState.config = {
+          ai_filter_enabled: data.ai_filter_enabled !== false,
+          comment_direction: String(data.comment_direction || '').trim() || _douyinWorkbenchDefaultDirection(),
+          comment_filter_strategy: _normalizeDouyinFilterStrategy(data.comment_filter_strategy),
+          comment_max_comments: parseInt(data.comment_max_comments, 10) || 120
+        };
+      }
+      return _douyinWorkbenchState.config;
+    })
+    .catch(function(err) {
+      _douyinWorkbenchState.config = Object.assign({}, _douyinWorkbenchState.config || {}, {
+        comment_direction: (_douyinWorkbenchState.config && _douyinWorkbenchState.config.comment_direction) || _douyinWorkbenchDefaultDirection(),
+        comment_filter_strategy: _normalizeDouyinFilterStrategy(_douyinWorkbenchState.config && _douyinWorkbenchState.config.comment_filter_strategy),
+        comment_max_comments: parseInt(_douyinWorkbenchState.config && _douyinWorkbenchState.config.comment_max_comments, 10) || 120
+      });
+      if (!silent) _douyinWorkbenchStatus('加载 AI 筛选默认配置失败，已使用内置默认规则：' + (err && err.message ? err.message : err), 'warning');
+      return _douyinWorkbenchState.config;
+    });
+}
+
+function saveDouyinWorkbenchConfigFromModal() {
+  var enabledEl = document.getElementById('douyinAiFilterEnabledInput');
+  var maxEl = document.getElementById('douyinCollectMaxCommentsInput');
+  var strategyEl = document.getElementById('douyinCommentFilterStrategySelect');
+  var directionEl = document.getElementById('douyinCommentDirectionTextarea');
+  var payload = {
+    ai_filter_enabled: enabledEl ? !!enabledEl.checked : true,
+    comment_direction: directionEl ? String(directionEl.value || '').trim() : '',
+    comment_filter_strategy: _normalizeDouyinFilterStrategy(strategyEl ? strategyEl.value : 'prompt'),
+    comment_max_comments: maxEl ? (parseInt(maxEl.value, 10) || 120) : 120
+  };
+  _douyinWorkbenchState.config = Object.assign({}, _douyinWorkbenchState.config || {}, payload);
+  return _douyinWorkbenchFetch('/api/douyin/workbench/config', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }).catch(function(err) {
+    _douyinWorkbenchStatus('默认规则保存失败，本次仍会按当前弹窗设置采集：' + (err && err.message ? err.message : err), 'warning');
+  });
+}
+
+function _douyinWorkbenchModalPayload() {
+  var enabledEl = document.getElementById('douyinAiFilterEnabledInput');
+  var maxEl = document.getElementById('douyinCollectMaxCommentsInput');
+  var strategyEl = document.getElementById('douyinCommentFilterStrategySelect');
+  var directionEl = document.getElementById('douyinCommentDirectionTextarea');
+  return {
+    ai_filter_enabled: enabledEl ? !!enabledEl.checked : true,
+    comment_direction: directionEl ? String(directionEl.value || '').trim() : '',
+    comment_filter_strategy: _normalizeDouyinFilterStrategy(strategyEl ? strategyEl.value : 'prompt'),
+    max_comments: Math.max(1, Math.min(parseInt(maxEl ? maxEl.value : '120', 10) || 120, 500))
+  };
+}
+
+function _douyinWorkbenchFillCollectModal(videoIndex) {
+  var config = _douyinWorkbenchState.config || {};
+  var item = (_douyinWorkbenchState.searchResults || [])[parseInt(videoIndex, 10)] || {};
+  var subtitle = document.getElementById('douyinCustomerCollectSubtitle');
+  var enabledEl = document.getElementById('douyinAiFilterEnabledInput');
+  var maxEl = document.getElementById('douyinCollectMaxCommentsInput');
+  var strategyEl = document.getElementById('douyinCommentFilterStrategySelect');
+  var directionEl = document.getElementById('douyinCommentDirectionTextarea');
+  if (subtitle) subtitle.textContent = '视频：' + (item.title || item.aweme_id || '未命名视频');
+  if (enabledEl) enabledEl.checked = config.ai_filter_enabled !== false;
+  if (maxEl) maxEl.value = parseInt(config.comment_max_comments, 10) || 120;
+  if (strategyEl) strategyEl.value = _normalizeDouyinFilterStrategy(config.comment_filter_strategy);
+  if (directionEl) directionEl.value = String(config.comment_direction || '').trim() || _douyinWorkbenchDefaultDirection();
+}
+
+function openDouyinWorkbenchCollectModal(videoIndex) {
+  var modal = document.getElementById('douyinCustomerCollectModal');
+  _douyinWorkbenchState.pendingVideoIndex = parseInt(videoIndex, 10);
+  loadDouyinWorkbenchConfig(true).then(function() {
+    _douyinWorkbenchFillCollectModal(videoIndex);
+    if (modal) {
+      modal.style.display = 'flex';
+      modal.classList.add('is-open');
+    }
+  });
+}
+
+function closeDouyinWorkbenchCollectModal() {
+  var modal = document.getElementById('douyinCustomerCollectModal');
+  if (modal) {
+    modal.classList.remove('is-open');
+    modal.style.display = 'none';
+  }
 }
 
 function _douyinWorkbenchSelectedAccount() {
@@ -536,6 +684,10 @@ function _douyinWorkbenchMergeCustomers(customers, sourceVideo) {
       latest_comment: customer.latest_comment || existing.latest_comment || '',
       comment_count: customer.comment_count || existing.comment_count || 0,
       digg_count: customer.digg_count || existing.digg_count || 0,
+      is_high_intent: customer.is_high_intent || existing.is_high_intent || false,
+      intent_level: customer.intent_level || existing.intent_level || '',
+      intent_reason: customer.intent_reason || customer.reason || existing.intent_reason || '',
+      intent_score: customer.intent_score || customer.score || existing.intent_score || '',
       source_title: (sourceVideo && sourceVideo.title) || existing.source_title || '',
       source_cover: (sourceVideo && sourceVideo.cover_image) || existing.source_cover || '',
       aweme_id: customer.aweme_id || (sourceVideo && sourceVideo.aweme_id) || existing.aweme_id || '',
@@ -589,7 +741,18 @@ function _douyinWorkbenchRenderSearchResults(results) {
 function _douyinWorkbenchRenderCustomers() {
   var list = document.getElementById('douyinCustomerList');
   if (!list) return;
-  var leads = _douyinWorkbenchState.leads || [];
+  var leads = (_douyinWorkbenchState.leads || []).slice().sort(function(a, b) {
+    var ai = a && a.is_high_intent ? 1 : 0;
+    var bi = b && b.is_high_intent ? 1 : 0;
+    if (ai !== bi) return bi - ai;
+    var as = !!(_douyinWorkbenchState.selectedLeadIds || {})[_douyinLeadKey(a)];
+    var bs = !!(_douyinWorkbenchState.selectedLeadIds || {})[_douyinLeadKey(b)];
+    if (as !== bs) return bs ? 1 : -1;
+    var ac = parseInt(a && a.comment_count, 10) || 0;
+    var bc = parseInt(b && b.comment_count, 10) || 0;
+    if (ac !== bc) return bc - ac;
+    return String(a && (a.author || a.nickname || '')).localeCompare(String(b && (b.author || b.nickname || '')), 'zh-Hans-CN');
+  });
   if (!leads.length) {
     list.innerHTML = '<div class="douyin-empty">暂无客户。请先到“搜索采集”页按关键词采集视频和作者线索。</div>';
     _douyinWorkbenchUpdateSelectedTargetCard();
@@ -602,6 +765,7 @@ function _douyinWorkbenchRenderCustomers() {
       '<input type="checkbox" data-douyin-lead-id="' + escapeAttr(key) + '"' + (checked ? ' checked' : '') + '>' +
       '<div class="douyin-customer-main">' +
         '<div class="douyin-target-title">' + escapeHtml(String(lead.author || '未知客户')) + '</div>' +
+        (lead.is_high_intent ? '<div class="douyin-intent-row"><span class="douyin-badge is-intent">精准客户</span>' + (lead.intent_reason ? '<span>' + escapeHtml(String(lead.intent_reason)) + '</span>' : '') + '</div>' : '') +
         '<div class="douyin-selected-target">' + escapeHtml(String(lead.latest_comment || lead.source_title || lead.profile_url || lead.sec_user_id || '来自搜索采集')) + '</div>' +
         (lead.comment_count ? '<div class="douyin-selected-target">评论 ' + escapeHtml(String(lead.comment_count)) + ' 条</div>' : '') +
         (lead.message_status ? '<div class="douyin-message-state is-' + escapeAttr(lead.message_status) + '">' + escapeHtml(lead.message_status === 'sent' ? ('私信已发送' + (lead.server_message_id ? '：' + lead.server_message_id : '')) : ('私信失败：' + (lead.message_error || '请重试'))) + '</div>' : '') +
@@ -619,33 +783,24 @@ function _douyinWorkbenchUpdateSelectedTargetCard() {
   var selected = leads.filter(function(lead) {
     return !!(_douyinWorkbenchState.selectedLeadIds || {})[_douyinLeadKey(lead)];
   });
+  var preciseCount = leads.filter(function(lead) { return !!(lead && lead.is_high_intent); }).length;
   if (!selected.length) {
     card.innerHTML = '<div class="douyin-target-title">尚未选择客户</div>' +
-      '<div class="douyin-selected-target">在下面的客户列表里选择一个或多个对象开始私信。</div>';
+      '<div class="douyin-selected-target">从下方客户列表勾选对象。当前共有 ' + leads.length + ' 位客户，其中精准客户 ' + preciseCount + ' 位。</div>';
     return;
   }
+  var selectedPrecise = selected.filter(function(item) { return !!(item && item.is_high_intent); }).length;
   card.innerHTML = '<div class="douyin-target-title">已选择 ' + selected.length + ' 个客户</div>' +
-    '<div class="douyin-selected-target">' + escapeHtml(selected.slice(0, 4).map(function(item) { return item.author || item.sec_user_id || '客户'; }).join('、')) +
-    (selected.length > 4 ? ' 等' : '') + '</div>';
+    '<div class="douyin-selected-target">' + escapeHtml(selected.slice(0, 4).map(function(item) { return item.author || item.nickname || '客户'; }).join('、')) +
+    (selected.length > 4 ? ' 等' : '') + '</div>' +
+    '<div class="douyin-selected-target">其中精准客户 ' + selectedPrecise + ' 位。</div>';
 }
 
 function _douyinWorkbenchSelectedMessageTargets() {
   var leads = _douyinWorkbenchState.leads || [];
   var modeEl = document.getElementById('douyinMessageTypeSelect');
-  var profileEl = document.getElementById('douyinProfileUrlInput');
-  var secEl = document.getElementById('douyinSecUserIdInput');
   var mode = modeEl ? String(modeEl.value || 'selected') : 'selected';
-  var manualProfile = profileEl ? String(profileEl.value || '').trim() : '';
-  var manualSec = secEl ? String(secEl.value || '').trim() : '';
   var targets = [];
-  if (manualProfile || manualSec) {
-    targets.push({
-      nickname: '手动客户',
-      author: '手动客户',
-      profile_url: manualProfile || (manualSec ? ('https://www.douyin.com/user/' + manualSec) : ''),
-      sec_user_id: manualSec
-    });
-  }
   leads.forEach(function(lead) {
     var key = _douyinLeadKey(lead);
     var selected = !!(_douyinWorkbenchState.selectedLeadIds || {})[key];
@@ -684,7 +839,7 @@ function sendDouyinWorkbenchMessages() {
     return;
   }
   if (!targets.length) {
-    _douyinWorkbenchStatus('请先在客户列表选择客户，或手动填写主页链接/sec_user_id。', true);
+    _douyinWorkbenchStatus('请先在客户列表选择客户。', true);
     return;
   }
   _douyinWorkbenchSetBusy(['douyinSendMessageBtn'], true);
@@ -770,10 +925,11 @@ function startDouyinWorkbenchCollect() {
   });
 }
 
-function collectDouyinWorkbenchVideoCustomers(videoIndex) {
+function collectDouyinWorkbenchVideoCustomers(videoIndex, collectOptions) {
   var account = _douyinWorkbenchSelectedAccount();
   var results = _douyinWorkbenchState.searchResults || [];
   var item = results[parseInt(videoIndex, 10)];
+  collectOptions = collectOptions || {};
   if (!account) {
     _douyinWorkbenchStatus('请先添加或选择一个抖音账号。', true);
     return;
@@ -782,16 +938,24 @@ function collectDouyinWorkbenchVideoCustomers(videoIndex) {
     _douyinWorkbenchStatus('请选择一个有效的视频后再采集客户。', true);
     return;
   }
+  var saveEl = document.getElementById('douyinSaveFilterConfigInput');
+  var savePromise = (saveEl && saveEl.checked) ? saveDouyinWorkbenchConfigFromModal() : Promise.resolve();
+  closeDouyinWorkbenchCollectModal();
   _douyinWorkbenchSetVideoBusy(parseInt(videoIndex, 10), true);
-  _douyinWorkbenchStatus('正在通过协议模式采集《' + (item.title || '当前视频') + '》下方客户...', 'loading');
-  _douyinWorkbenchFetch('/api/douyin/video/customers', {
-    method: 'POST',
-    body: JSON.stringify({
-      account_id: account.id,
-      video_url: item.url || '',
-      aweme_id: item.aweme_id || '',
-      max_comments: 120
-    })
+  _douyinWorkbenchStatus('正在通过协议模式采集《' + (item.title || '当前视频') + '》下方客户，完成后会筛选精准客户...', 'loading');
+  savePromise.then(function() {
+    return _douyinWorkbenchFetch('/api/douyin/video/customers', {
+      method: 'POST',
+      body: JSON.stringify({
+        account_id: account.id,
+        video_url: item.url || '',
+        aweme_id: item.aweme_id || '',
+        max_comments: collectOptions.max_comments || 120,
+        ai_filter_enabled: collectOptions.ai_filter_enabled !== false,
+        comment_direction: collectOptions.comment_direction || '',
+        comment_filter_strategy: collectOptions.comment_filter_strategy || 'prompt'
+      })
+    });
   }).then(function(data) {
     if (data.code !== 200) {
       throw new Error(data.msg || data.detail || '采集视频客户失败');
@@ -801,7 +965,10 @@ function collectDouyinWorkbenchVideoCustomers(videoIndex) {
     _douyinWorkbenchRenderCustomers();
     var messageTab = document.querySelector('[data-douyin-tab="message"]');
     if (messageTab) messageTab.click();
-    _douyinWorkbenchStatus(data.msg || ('客户采集完成，共沉淀 ' + customers.length + ' 位客户。'), customers.length === 0 ? 'warning' : 'success');
+    var ai = data.ai_filter || {};
+    var precise = parseInt(data.total_high_intent, 10) || (Array.isArray(data.high_intent_users) ? data.high_intent_users.length : 0);
+    var suffix = ai.enabled ? ('，AI 筛出精准客户 ' + precise + ' 位' + (ai.fallback_used ? '（已用本地规则兜底）' : '')) : '';
+    _douyinWorkbenchStatus((data.msg || ('客户采集完成，共沉淀 ' + customers.length + ' 位客户。')) + suffix, customers.length === 0 ? 'warning' : 'success');
   }).catch(function(err) {
     _douyinWorkbenchStatus('采集视频客户失败：' + (err && err.message ? err.message : err), true);
   }).finally(function() {
@@ -870,7 +1037,7 @@ function _bindDouyinWorkbenchActions(host) {
       var idx = parseInt(videoAction.getAttribute('data-douyin-video-index'), 10);
       var actionName = videoAction.getAttribute('data-douyin-video-action');
       if (actionName === 'collect-customers') {
-        collectDouyinWorkbenchVideoCustomers(idx);
+        openDouyinWorkbenchCollectModal(idx);
       } else if (actionName === 'select-video') {
         var item = (_douyinWorkbenchState.searchResults || [])[idx];
         if (item) _douyinWorkbenchStatus('已选中视频《' + (item.title || item.aweme_id || '未命名视频') + '》，点击“采集客户”会采集该视频下方评论客户。');
@@ -913,12 +1080,29 @@ function _bindDouyinWorkbenchActions(host) {
       }
     });
   }
+  var modal = document.getElementById('douyinCustomerCollectModal');
+  if (modal && modal.dataset.douyinModalBound !== '1') {
+    modal.dataset.douyinModalBound = '1';
+    modal.addEventListener('click', function(e) {
+      var target = e.target;
+      if (target === modal || target.closest('#douyinCollectModalCloseBtn') || target.closest('#douyinCollectModalCancelBtn')) {
+        closeDouyinWorkbenchCollectModal();
+        return;
+      }
+      if (target.closest('#douyinCollectModalConfirmBtn')) {
+        var idx = parseInt(_douyinWorkbenchState.pendingVideoIndex, 10);
+        if (Number.isNaN(idx)) return;
+        collectDouyinWorkbenchVideoCustomers(idx, _douyinWorkbenchModalPayload());
+      }
+    });
+  }
 }
 
 window.initDouyinWorkbenchView = function() {
   var host = _ensureDouyinWorkbenchHost();
   _bindDouyinWorkbenchTabs(host);
   _bindDouyinWorkbenchActions(host);
+  loadDouyinWorkbenchConfig(true);
   loadDouyinWorkbenchAccounts();
 };
 

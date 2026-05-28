@@ -13,6 +13,10 @@ import json
 import logging
 import os
 import random
+import shutil
+import socket
+import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -112,10 +116,16 @@ def douyin_workbench_browser_options_from_publish_meta(meta: Optional[dict]) -> 
     change unexpectedly.
     """
     opts = browser_options_from_publish_meta(meta)
+    opts = {**opts, "douyin_cdp": True}
     if not opts.get("channel") and not opts.get("executable_path"):
         opts = {**opts, "channel": _BROWSER_CHANNEL or "chrome"}
     if not opts.get("viewport"):
         opts = {**opts, "viewport": {"width": 1440, "height": 960}}
+    if isinstance(meta, dict):
+        br = meta.get("browser") if isinstance(meta.get("browser"), dict) else {}
+        port = (br or {}).get("douyin_cdp_port") or (br or {}).get("cdp_port")
+        if port:
+            opts = {**opts, "douyin_cdp_port": int(port)}
     return opts
 
 
@@ -177,6 +187,8 @@ def _fingerprint_browser_options(opts: Dict[str, Any]) -> str:
             "channel": opts.get("channel") or "",
             "executable_path": opts.get("executable_path") or "",
             "viewport": opts.get("viewport") or None,
+            "douyin_cdp": bool(opts.get("douyin_cdp")),
+            "douyin_cdp_port": int(opts.get("douyin_cdp_port") or opts.get("cdp_port") or 0),
         },
         sort_keys=True,
         ensure_ascii=True,
@@ -217,10 +229,165 @@ _CDP_URL = (
     or os.environ.get("TAOBAO_CDP_URL", "").strip()
 )
 _cdp_browser: Any = None
+_douyin_cdp_browsers: Dict[int, Any] = {}
 
 
 def _cdp_enabled() -> bool:
     return bool(_CDP_URL)
+
+
+def _is_port_open(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.8)
+            sock.connect((host, int(port)))
+            return True
+    except Exception:
+        return False
+
+
+def _extract_windows_executable_path(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith('"'):
+        end = text.find('"', 1)
+        if end > 1:
+            return text[1:end]
+    marker = ".exe"
+    index = text.lower().find(marker)
+    if index >= 0:
+        return text[: index + len(marker)].strip()
+    return text
+
+
+def _find_chrome_executable() -> str:
+    explicit = (os.environ.get("CHROME_PATH") or os.environ.get("PLAYWRIGHT_CHROME_PATH") or "").strip()
+    candidates: List[str] = []
+    if explicit:
+        candidates.append(_extract_windows_executable_path(explicit))
+    if sys.platform == "win32":
+        for env_var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base = os.environ.get(env_var, "")
+            if base:
+                candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+        try:
+            import winreg
+
+            registry_locations = (
+                (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", ""),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", ""),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", ""),
+                (winreg.HKEY_CURRENT_USER, r"Software\Clients\StartMenuInternet\Google Chrome\shell\open\command", ""),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\Clients\StartMenuInternet\Google Chrome\shell\open\command", ""),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Clients\StartMenuInternet\Google Chrome\shell\open\command", ""),
+            )
+            for root, key_path, value_name in registry_locations:
+                try:
+                    with winreg.OpenKey(root, key_path) as key:
+                        value, _ = winreg.QueryValueEx(key, value_name)
+                    path = _extract_windows_executable_path(str(value or ""))
+                    if path:
+                        candidates.append(path)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        candidates.extend(
+            [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ]
+        )
+    else:
+        candidates.extend(["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium-browser", "/usr/bin/chromium"])
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    found = (
+        shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+        or shutil.which("chromium-browser")
+        or shutil.which("chromium")
+        or shutil.which("chrome")
+        or shutil.which("chrome.exe")
+    )
+    if found:
+        return found
+    raise RuntimeError("未找到 Google Chrome，请先安装 Chrome 或设置 CHROME_PATH。")
+
+
+def _douyin_cdp_port_from_profile(profile_dir: str, browser_options: Optional[Dict[str, Any]] = None) -> int:
+    opts = browser_options or {}
+    explicit = opts.get("cdp_port") or opts.get("douyin_cdp_port")
+    if explicit:
+        return int(explicit)
+    digest = int(hashlib.sha1(str(profile_dir).encode("utf-8", "ignore")).hexdigest()[:6], 16)
+    return 9331 + (digest % 500)
+
+
+async def _connect_douyin_cdp_context(profile_dir: str, port: int) -> Any:
+    global _pw_instance
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise RuntimeError("playwright 未安装")
+    if _pw_instance is None:
+        _pw_instance = await async_playwright().__aenter__()
+    browser = _douyin_cdp_browsers.get(port)
+    if browser is None or not browser.is_connected():
+        logger.info("[BROWSER][DOUYIN-CDP] connect_over_cdp port=%s profile=%s", port, profile_dir[-80:])
+        browser = await _pw_instance.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        _douyin_cdp_browsers[port] = browser
+    contexts = list(getattr(browser, "contexts", []) or [])
+    if not contexts:
+        raise RuntimeError(f"抖音账号 Chrome 调试端口 {port} 没有可用 context")
+    ctx = contexts[0]
+    try:
+        setattr(ctx, "_lobster_cdp_external", True)
+    except Exception:
+        pass
+    return ctx
+
+
+async def _ensure_douyin_cdp_context(
+    profile_dir: str,
+    *,
+    start_url: str = "https://www.douyin.com/jingxuan",
+    browser_options: Optional[Dict[str, Any]] = None,
+) -> Any:
+    port = _douyin_cdp_port_from_profile(profile_dir, browser_options)
+    Path(profile_dir).mkdir(parents=True, exist_ok=True)
+    if not _is_port_open(port):
+        chrome_path = _find_chrome_executable()
+        cmd = [
+            chrome_path,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--remote-allow-origins=*",
+            "--new-window",
+            start_url,
+        ]
+        creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) or 0) if sys.platform == "win32" else 0
+        logger.info("[BROWSER][DOUYIN-CDP] launch chrome profile=%s port=%s url=%s", profile_dir[-80:], port, start_url)
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+            close_fds=True,
+        )
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            if _is_port_open(port):
+                break
+            await asyncio.sleep(0.35)
+        if not _is_port_open(port):
+            raise RuntimeError(f"抖音账号 Chrome 启动失败，调试端口 {port} 未打开。")
+    return await _connect_douyin_cdp_context(profile_dir, port)
 
 
 async def _connect_cdp_browser() -> Any:
@@ -315,6 +482,37 @@ async def _acquire_context(
         else _default_browser_options()
     )
     key = _storage_key(profile_dir, opts)
+
+    if opts.get("douyin_cdp"):
+        existing_key = f"douyin-cdp:{profile_dir}\0{_douyin_cdp_port_from_profile(profile_dir, opts)}"
+        old_context: Any = None
+        async with _lock:
+            old_key = _profile_active_key.get(profile_dir)
+            if old_key and old_key != existing_key:
+                old_context = _contexts.pop(old_key, None)
+                _context_headless.pop(old_key, None)
+                _profile_active_key.pop(profile_dir, None)
+            existing = _contexts.get(existing_key)
+            if existing is not None:
+                try:
+                    if hasattr(existing, "is_closed") and existing.is_closed():
+                        _contexts.pop(existing_key, None)
+                    else:
+                        _profile_active_key[profile_dir] = existing_key
+                        return existing, False
+                except Exception:
+                    _contexts.pop(existing_key, None)
+        if old_context is not None:
+            try:
+                await old_context.close()
+            except Exception:
+                pass
+        ctx = await _ensure_douyin_cdp_context(profile_dir, browser_options=opts)
+        async with _lock:
+            _contexts[existing_key] = ctx
+            _context_headless[existing_key] = False
+            _profile_active_key[profile_dir] = existing_key
+        return ctx, False
 
     # CDP 模式：不启浏览器，连 用户已开的 Chrome，profile_dir 仅作缓存键
     if _cdp_enabled():
@@ -885,6 +1083,8 @@ async def open_douyin_front_browser(
 ) -> Dict[str, Any]:
     """Open the Douyin consumer site in the account's persistent browser profile."""
     opts = browser_options if browser_options is not None else _default_browser_options()
+    if opts.get("douyin_cdp"):
+        await _ensure_douyin_cdp_context(profile_dir, start_url=url, browser_options=opts)
     await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
     ctx, created_new = await _acquire_context(
         profile_dir, new_headless=False, browser_options=opts
@@ -991,6 +1191,8 @@ async def check_douyin_front_login(
     opts = browser_options if browser_options is not None else _default_browser_options()
     if not Path(profile_dir).exists():
         return {"logged_in": False, "message": "账号浏览器目录不存在，请先打开登录。", "cookie": False}
+    if opts.get("douyin_cdp"):
+        await _ensure_douyin_cdp_context(profile_dir, start_url=url, browser_options=opts)
     if not headless:
         await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
     ctx, created_new = await _acquire_context(
@@ -1703,6 +1905,8 @@ async def send_douyin_private_messages_protocol(
     if not Path(profile_dir).exists():
         return {"ok": False, "logged_in": False, "message": "账号浏览器目录不存在，请先打开登录。", "results": []}
 
+    if opts.get("douyin_cdp"):
+        await _ensure_douyin_cdp_context(profile_dir, start_url="https://www.douyin.com/", browser_options=opts)
     await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
     ctx, created_new = await _acquire_context(profile_dir, new_headless=False, browser_options=opts)
     try:
@@ -1761,6 +1965,9 @@ async def collect_douyin_search_results(
     if not Path(profile_dir).exists():
         return {"ok": False, "logged_in": False, "message": "账号浏览器目录不存在，请先打开登录。", "data": []}
 
+    search_url = f"https://www.douyin.com/search/{quote(keyword)}?type=video"
+    if opts.get("douyin_cdp"):
+        await _ensure_douyin_cdp_context(profile_dir, start_url=search_url, browser_options=opts)
     await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
     ctx, created_new = await _acquire_context(
         profile_dir,
@@ -1779,7 +1986,6 @@ async def collect_douyin_search_results(
             await page.bring_to_front()
         except Exception:
             pass
-        search_url = f"https://www.douyin.com/search/{quote(keyword)}?type=video"
         await page.goto(
             search_url,
             wait_until="domcontentloaded",
@@ -1976,6 +2182,8 @@ async def collect_douyin_video_customers_protocol(
     if not Path(profile_dir).exists():
         return {"ok": False, "message": "账号浏览器目录不存在，请先打开登录。", "comments": [], "customers": []}
 
+    if opts.get("douyin_cdp"):
+        await _ensure_douyin_cdp_context(profile_dir, start_url=f"https://www.douyin.com/video/{aweme_id}", browser_options=opts)
     ctx, created_new = await _acquire_context(
         profile_dir,
         new_headless=True,
