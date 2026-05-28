@@ -812,15 +812,6 @@
       ].join('');
     }
 
-    if (state.currentJobStatus === 'stale' || state.currentJobStatus === 'interrupted') {
-      return [
-        '<div class="tvc-video-placeholder">',
-        '<strong>任务状态待刷新</strong>',
-        '<span>' + escapeHtml(detailText || '本地生成进程已中断或重启，正在尝试从服务器历史恢复结果；如果服务器仍显示生成中，请重新提交任务。') + '</span>',
-        '</div>'
-      ].join('');
-    }
-
     var summary = state.duration + ' 秒 / ' + boards.length + ' 张分镜 / ' + values.aspectRatio;
     var detail = state.mode === 'prompt_only'
       ? '当前是纯提示词规划模式，会直接按提示词规划分镜并生成视频。'
@@ -871,8 +862,6 @@
     if (status === 'completed') return '已完成';
     if (status === 'failed') return '失败';
     if (status === 'running') return '生成中';
-    if (status === 'stale') return '待刷新';
-    if (status === 'interrupted') return '已中断';
     return '等待提交';
   }
 
@@ -880,7 +869,6 @@
     if (status === 'completed') return 'success';
     if (status === 'failed') return 'danger';
     if (status === 'running') return 'processing';
-    if (status === 'stale' || status === 'interrupted') return 'idle';
     return 'idle';
   }
 
@@ -1219,7 +1207,7 @@
 
   function applyJobSnapshot(job, fallbackStatus) {
     if (!job || !job.jobId) return false;
-    var status = job.status || fallbackStatus || 'stale';
+    var status = job.status || fallbackStatus || 'running';
     state.currentJobStatus = status;
     state.currentResultVideoUrl = job.videoUrl || state.currentResultVideoUrl || '';
     state.currentJobTitle = job.title || state.currentJobTitle || '创意视频任务';
@@ -1236,18 +1224,19 @@
     return true;
   }
 
-  function markCurrentJobStale(message) {
-    stopPolling();
-    state.currentJobStatus = 'stale';
-    state.currentJobError = message || '本地任务状态已丢失，请刷新或等待服务器历史同步。';
-    state.currentJobProgress = null;
+  function keepCurrentJobRunningFromCloud(message) {
+    state.currentJobStatus = 'running';
+    state.currentJobError = '';
+    state.currentJobProgress = {
+      last_steps: [{ name: message || '等待服务端任务结果', status: 'running' }]
+    };
     updateRememberedJob(state.currentJobId, {
-      status: 'stale',
-      error: state.currentJobError,
-      progress: null
+      status: 'running',
+      error: '',
+      progress: state.currentJobProgress
     });
     renderWorkspace();
-    showMessage(state.currentJobError);
+    if (message) showMessage(message);
   }
 
   function refreshJobStatus(showToast) {
@@ -1259,7 +1248,7 @@
     })
       .then(function(response) {
         return response.json().then(function(data) {
-          return { ok: response.ok, data: data || {} };
+          return { ok: response.ok, status: response.status, data: data || {} };
         });
       })
       .then(function(result) {
@@ -1268,6 +1257,11 @@
           var message = responseErrorText(result.data, '状态查询失败');
           if (statusCode === 404 || /任务不存在|已过期|not found/i.test(message)) {
             return fetchCloudJob(state.currentJobId).then(function(cloudJob) {
+              if (cloudJob && cloudJob.status === 'completed' && !cloudJob.videoUrl) {
+                keepCurrentJobRunningFromCloud('服务器已有任务记录，最终视频还在同步中。');
+                schedulePoll(5000);
+                return null;
+              }
               if (cloudJob && applyJobSnapshot(cloudJob, cloudJob.status)) {
                 renderWorkspace();
                 if (cloudJob.status === 'completed' && cloudJob.videoUrl) {
@@ -1277,11 +1271,13 @@
                   stopPolling();
                   showMessage('任务失败：' + (cloudJob.error || '服务器历史记录显示失败。'));
                 } else {
-                  markCurrentJobStale('本地生成任务已中断或过期，服务器历史仍未返回最终结果。请刷新任务状态或重新提交。');
+                  keepCurrentJobRunningFromCloud('已从服务器找到任务记录，当前仍在合成中。');
+                  schedulePoll(5000);
                 }
                 return null;
               }
-              markCurrentJobStale('本地生成任务已中断或过期，服务器暂时没有可恢复的结果。请刷新任务状态或重新提交。');
+              keepCurrentJobRunningFromCloud('服务端暂未返回最终结果，继续显示合成中。');
+              schedulePoll(8000);
               return null;
             });
           }
@@ -1321,14 +1317,19 @@
       })
       .catch(function(err) {
         stopPolling();
-        state.currentJobStatus = 'stale';
-        state.currentJobError = normalizeApiErrorText(err && (err.message || err), '未知错误');
+        state.currentJobStatus = 'running';
+        state.currentJobError = '';
+        state.currentJobProgress = {
+          last_steps: [{ name: normalizeApiErrorText(err && (err.message || err), '服务端状态暂时获取失败，稍后自动刷新'), status: 'running' }]
+        };
         updateRememberedJob(state.currentJobId, {
-          status: 'stale',
-          error: state.currentJobError
+          status: 'running',
+          error: '',
+          progress: state.currentJobProgress
         });
         renderWorkspace();
-        showMessage('刷新任务状态失败：' + state.currentJobError);
+        showMessage('服务端状态暂时获取失败，继续显示合成中。');
+        schedulePoll(8000);
       });
   }
 

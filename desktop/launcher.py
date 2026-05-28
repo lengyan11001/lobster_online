@@ -638,11 +638,12 @@ def choose_backend_port(preferred: int) -> int:
         stop_port_processes(preferred, "Backend")
         return preferred
     if port_owned_by_this_root(preferred):
-        log(f"Backend: port {preferred} is occupied by previous process from this root; reusing it")
-        return preferred
+        log(f"Backend: port {preferred} is occupied by previous process from this root; restarting it")
     else:
         log(f"Backend: port {preferred} is occupied by an unknown process; keep default port and report startup failure")
         return preferred
+    stop_port_processes(preferred, "Backend")
+    return preferred
 
 
 def choose_mcp_port(preferred: int, backend_port: int) -> int:
@@ -1203,7 +1204,8 @@ def main() -> int:
     if not ok:
         return open_legacy_browser_mode(port, mcp_port, env, args.wait)
 
-    log("desktop window closed; keeping local services alive for background generation tasks")
+    stop_process(backend_proc, "Backend")
+    stop_process(mcp_proc, "MCP")
     return 0
 
 
