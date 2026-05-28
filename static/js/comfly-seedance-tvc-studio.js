@@ -177,6 +177,26 @@
     return '';
   }
 
+  function jobStageText(job) {
+    if (!job) return '';
+    if (job.status === 'completed') {
+      return job.videoUrl ? '最终视频已生成，可以点击查看。' : '任务已完成，正在同步最终视频。';
+    }
+    if (job.status === 'failed') {
+      return jobDetailText(job) || '任务失败，请查看错误后重新提交。';
+    }
+    var detail = jobDetailText(job);
+    if (detail && detail !== '未知错误') return detail;
+    return '正在合成视频，完成后会自动切换到成片结果。';
+  }
+
+  function jobMediaHtml(job) {
+    var status = String((job && job.status) || 'running');
+    if (status === 'completed') return '<span>完成</span>';
+    if (status === 'failed') return '<span>失败</span>';
+    return '<span class="tvc-status-spinner" aria-hidden="true"></span>';
+  }
+
   function jobDetailText(job) {
     if (!job) return '';
     var err = normalizeApiErrorText(job.error || '', '').trim();
@@ -900,19 +920,15 @@
     if (list) {
       list.innerHTML = state.recentJobs.map(function(job) {
         var selected = job.jobId === state.currentJobId ? ' is-active' : '';
-        var detail = jobDetailText(job);
-        var resultHint = '';
-        if (job.status === 'completed' && job.videoUrl) {
-          resultHint = ' · 有结果';
-        } else if (job.status === 'failed' && detail) {
-          resultHint = ' · ' + shortenText(detail, 36);
-        } else if (job.status === 'running' && detail) {
-          resultHint = ' · ' + shortenText(detail, 30);
-        }
+        var stageText = jobStageText(job);
         return [
           '<button type="button" class="seedance-business-job' + selected + '" data-seedance-job="' + escapeHtml(job.jobId) + '">',
+          '<span class="seedance-business-job-media" data-status="' + escapeHtml(job.status || 'running') + '">' + jobMediaHtml(job) + '</span>',
+          '<span class="seedance-business-job-body">',
           '<span class="seedance-business-job-title">' + escapeHtml(job.title || '创意视频任务') + '</span>',
-          '<span class="seedance-business-job-meta">' + escapeHtml(statusLabel(job.status)) + ' · ' + escapeHtml((job.jobId || '').slice(0, 8)) + escapeHtml(resultHint) + '</span>',
+          '<span class="seedance-business-job-meta">' + escapeHtml(statusLabel(job.status)) + ' · ' + escapeHtml((job.jobId || '').slice(0, 8)) + '</span>',
+          '<span class="seedance-business-job-detail">' + escapeHtml(stageText) + '</span>',
+          '</span>',
           '</button>'
         ].join('');
       }).join('');
@@ -1320,7 +1336,7 @@
         state.currentJobStatus = 'running';
         state.currentJobError = '';
         state.currentJobProgress = {
-          last_steps: [{ name: normalizeApiErrorText(err && (err.message || err), '服务端状态暂时获取失败，稍后自动刷新'), status: 'running' }]
+          last_steps: [{ name: '服务端状态暂时获取失败，稍后自动刷新', status: 'running' }]
         };
         updateRememberedJob(state.currentJobId, {
           status: 'running',
