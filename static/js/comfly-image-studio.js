@@ -327,6 +327,15 @@
     return '可能网络波动导致任务提交失败，请尝试重新提交。';
   }
 
+  function imageTaskFailureMessage(data, fallback) {
+    var detail = data && (data.error || data.detail || data.message);
+    if (typeof detail === 'string' && detail.trim()) return detail.trim();
+    if (detail && typeof detail === 'object') {
+      try { return JSON.stringify(detail); } catch (err) {}
+    }
+    return fallback || friendlyImageTaskFailureMessage();
+  }
+
   function resultCardsHtml() {
     var cards = [];
     if (state.currentJobId && state.currentJobStatus === 'running') {
@@ -646,7 +655,7 @@
       })
       .then(function(result) {
         if (!result.ok) {
-          throw new Error(friendlyImageTaskFailureMessage());
+          throw new Error(imageTaskFailureMessage(result.data));
         }
         var status = String(result.data.status || '').trim();
         state.currentJobStatus = status;
@@ -671,7 +680,7 @@
         } else if (status === 'failed') {
           renderResultSurface();
           updateRememberedJob(state.currentJobId, { status: 'failed' });
-          showMessage(friendlyImageTaskFailureMessage(), true);
+          showMessage(imageTaskFailureMessage(result.data), true);
         } else if (showToast) {
           showMessage('任务状态已刷新。', false);
         }
@@ -682,7 +691,7 @@
         state.currentJobStatus = 'failed';
         updateRememberedJob(state.currentJobId, { status: 'failed' });
         renderResultSurface();
-        showMessage(friendlyImageTaskFailureMessage(), true);
+        showMessage(imageTaskFailureMessage({ error: err && err.message }), true);
       });
   }
 
@@ -858,7 +867,7 @@
       });
       var payload = await resp.json().catch(function() { return {}; });
       if (!resp.ok) {
-        throw new Error(friendlyImageTaskFailureMessage());
+        throw new Error(imageTaskFailureMessage(payload));
       }
 
       state.currentJobId = payload.job_id || '';
@@ -881,7 +890,7 @@
       state.currentJobId = '';
       state.currentJobStatus = '';
       renderResultSurface();
-      showMessage(friendlyImageTaskFailureMessage(), true);
+      showMessage(imageTaskFailureMessage({ error: err && err.message }), true);
     } finally {
       setSubmitting(false);
     }
