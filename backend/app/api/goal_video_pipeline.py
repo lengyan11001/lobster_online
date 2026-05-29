@@ -31,6 +31,10 @@ def _local_mcp_url() -> str:
     return f"http://127.0.0.1:{port}/mcp"
 TERMINAL_SUCCESS = {"completed", "complete", "success", "succeeded", "finished", "done"}
 TERMINAL_FAILURE = {"failed", "error", "cancelled", "canceled", "timeout", "rejected"}
+VIDEO_NO_TEXT_CONSTRAINT = (
+    "画面中不要出现任何可读文字、字母、数字、字幕、标题、商标标识、水印、招牌、界面元素、标签、"
+    "英文、拼音、随机乱码字符或伪文字；只用真实画面、构图、光影和人物/产品动作表达。"
+)
 
 
 class GoalVideoPipelinePayload(BaseModel):
@@ -86,6 +90,15 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
 
 def _safe_str(value: Any, limit: int = 4000) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _with_video_no_text_constraint(prompt: Any, limit: int = 2500) -> str:
+    text = _safe_str(prompt, limit).strip()
+    if not text:
+        return VIDEO_NO_TEXT_CONSTRAINT[:limit]
+    if "不要出现任何可读文字" in text or "随机乱码字符" in text:
+        return text[:limit]
+    return f"{text}\n\n反向约束：{VIDEO_NO_TEXT_CONSTRAINT}"[:limit]
 
 
 def _json_preview(value: Any, limit: int = 1200) -> str:
@@ -393,7 +406,8 @@ async def _call_planning_llm(*, pl: GoalVideoPipelinePayload, token: str, instal
         "根据用户目标和记忆资料，生成真实可执行的宣传视频方案。\n"
         "必须包含字段：selling_points(array), copy(string), image_prompt(string), video_prompt(string), title(string)。\n"
         "不要编造素材 ID、任务 ID、费用或已完成状态。image_prompt 只描述需要生成的关键画面；"
-        "video_prompt 只描述从该图片生成视频的镜头运动、主体动作、氛围和字幕方向。"
+        "video_prompt 只描述从该图片生成视频的镜头运动、主体动作和氛围。"
+        "video_prompt 不要要求字幕、标题、文字、字母、数字、商标标识、水印或任何可读字符。"
     )
     user = {
         "goal": pl.goal,
@@ -433,7 +447,7 @@ async def _call_planning_llm(*, pl: GoalVideoPipelinePayload, token: str, instal
     plan["selling_points"] = [str(x).strip() for x in (plan.get("selling_points") or []) if str(x).strip()][:8]
     plan["copy"] = _safe_str(plan.get("copy"), 2000)
     plan["image_prompt"] = _safe_str(plan.get("image_prompt"), 2500)
-    plan["video_prompt"] = _safe_str(plan.get("video_prompt"), 2500)
+    plan["video_prompt"] = _with_video_no_text_constraint(plan.get("video_prompt"), 2500)
     plan["title"] = _safe_str(plan.get("title"), 120)
     if not plan["image_prompt"] or not plan["video_prompt"]:
         raise RuntimeError("plan missing image_prompt or video_prompt")
@@ -545,6 +559,7 @@ async def run_goal_video_pipeline(
         emit,
     )
     emit("plan_done", "plan generated", {"title": plan.get("title")})
+    plan["image_prompt"] = _with_video_no_text_constraint(plan.get("image_prompt"), 2500)
 
     image_payload: Dict[str, Any] = {
         "prompt": plan["image_prompt"],

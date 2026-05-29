@@ -1,0 +1,104 @@
+<div id="content-scheduled-tasks" class="content-block">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                <h3 style="margin:0;">定时任务</h3>
+                <button type="button" id="scheduledTaskRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+              </div>
+              <p class="meta" style="margin:0.55rem 0 0 0;">给本机盒子下发一次性或间隔执行任务，执行结果会同步到手机消息/执行记录。</p>
+              <div class="store-tabs" style="margin-top:0.75rem;">
+                <button type="button" class="sched-tab active" data-sched-tab="create">创建新任务</button>
+                <button type="button" class="sched-tab" data-sched-tab="running">执行中任务</button>
+                <button type="button" class="sched-tab" data-sched-tab="finished">执行结束任务</button>
+              </div>
+            </div>
+
+            <div id="schedTabCreate" class="sched-tab-panel">
+              <div class="card">
+                <div style="display:grid;grid-template-columns:minmax(220px,320px) minmax(420px,1fr);gap:0.85rem;align-items:start;">
+                  <div>
+                    <h4 style="margin:0 0 0.65rem 0;">创建新任务</h4>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>任务名称</label>
+                      <input type="text" id="scheduledTaskTitle" placeholder="例如：每天生成一条宣传视频文案">
+                    </div>
+                    <input type="hidden" id="scheduledTaskKind" value="capability">
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>能力</label>
+                      <select id="scheduledTaskCapability" style="width:100%;padding:0.45rem;">
+                        <option value="goal.video.pipeline">创意成片</option>
+                        <option value="goal.image.pipeline">文案+创意图片</option>
+                        <option value="hifly.video.create_by_tts">必火数字人</option>
+                      </select>
+                      <p class="meta" id="scheduledTaskCapabilityHint" style="margin:0.35rem 0 0 0;"></p>
+                    </div>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>执行方式</label>
+                      <select id="scheduledTaskScheduleType" style="width:100%;padding:0.45rem;">
+                        <option value="once">一次性</option>
+                        <option value="interval">按间隔循环</option>
+                        <option value="daily_times">每天固定时间</option>
+                      </select>
+                    </div>
+                    <div class="modal-field" id="scheduledTaskStartAtBlock" style="margin-bottom:0.55rem;">
+                      <label>开始时间（可选）</label>
+                      <input type="datetime-local" id="scheduledTaskStartAt">
+                    </div>
+                    <div class="modal-field" id="scheduledTaskIntervalBlock" style="margin-bottom:0.55rem;">
+                      <label>间隔分钟</label>
+                      <input type="number" id="scheduledTaskIntervalMinutes" min="1" value="60">
+                    </div>
+                    <div class="modal-field" id="scheduledTaskDailyTimesBlock" style="display:none;margin-bottom:0.55rem;">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.35rem;">
+                        <label style="margin:0;">每天执行时间</label>
+                        <button type="button" class="btn btn-ghost btn-sm daily-time-add-btn" data-prefix="scheduledTask">+ 添加时间点</button>
+                      </div>
+                      <div id="scheduledTaskDailyTimesList" style="display:grid;gap:0.4rem;"></div>
+                    </div>
+                    <div class="modal-field" style="margin-bottom:0.55rem;">
+                      <label>指定设备（可选，多选）</label>
+                      <select id="scheduledTaskDevices" multiple size="4" style="width:100%;padding:0.45rem;"></select>
+                      <p class="meta" style="margin:0.35rem 0 0 0;">不选则任意在线盒子可领取。</p>
+                    </div>
+                  </div>
+                  <div>
+                    <div id="scheduledTaskParamBlock" class="modal-field" style="margin-bottom:0.55rem;">
+                      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.35rem;">
+                        <label style="margin:0;">能力参数</label>
+                        <button type="button" id="scheduledTaskAutoFillBtn" class="btn btn-ghost btn-sm">自动选择</button>
+                      </div>
+                      <div id="scheduledTaskParamFields"></div>
+                    </div>
+                    <div id="scheduledTaskAssetUploadBlock" class="modal-field" style="display:none;margin-bottom:0.55rem;">
+                      <label>附加素材（可选）</label>
+                      <input type="file" id="scheduledTaskAssetUpload" accept="image/*,video/*,audio/*" multiple>
+                      <p class="meta" style="margin:0.35rem 0 0 0;">可上传图片/视频/音频，创建任务前会先保存到素材库。</p>
+                    </div>
+                    <div id="scheduledTaskAssetIdsBlock" class="modal-field" style="display:none;margin-bottom:0.55rem;">
+                      <label>指定素材 ID（可选，多个用换行或逗号分隔）</label>
+                      <textarea id="scheduledTaskAssetIds" rows="3" placeholder="例如：3baf1f4ee8c9&#10;7208d5c35823"></textarea>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                      <button type="button" id="scheduledTaskCreateBtn" class="btn btn-primary btn-sm">添加并下发</button>
+                      <span id="scheduledTaskMsg" class="msg" style="display:none;"></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <h4 style="margin:0 0 0.65rem 0;">任务列表</h4>
+                <div id="scheduledTaskList"><p class="meta">加载中...</p></div>
+              </div>
+            </div>
+
+            <div id="schedTabRunning" class="sched-tab-panel" style="display:none;">
+              <div class="card">
+                <div id="scheduledTaskRunningRunsList"><p class="meta">加载中...</p></div>
+              </div>
+            </div>
+
+            <div id="schedTabFinished" class="sched-tab-panel" style="display:none;">
+              <div class="card">
+                <div id="scheduledTaskFinishedRunsList"><p class="meta">加载中...</p></div>
+              </div>
+            </div>
+          </div>

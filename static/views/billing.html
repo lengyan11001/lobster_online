@@ -1,0 +1,45 @@
+<!-- Billing / 消费记录 + 算力充值 -->
+<div id="content-billing" class="content-block">
+  <div class="card">
+    <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">消费记录</h3>
+    <!-- 算力说明（套餐数据来自 /api/billing/pricing） -->
+    <div id="billingPricingBlock" style="margin-top:0.75rem;padding:1rem;background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.2);border-radius:var(--radius-sm);font-size:0.88rem;">
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">算力</h4>
+      <div id="billingPricingContent"><span class="meta">加载中…</span></div>
+    </div>
+    <div id="billingBalance" style="margin-top:0.75rem;padding:0.65rem;background:rgba(255,255,255,0.04);border-radius:var(--radius-sm);font-size:0.9rem;"></div>
+    <!-- 在线版：算力充值 -->
+    <div id="rechargeBlock" style="display:none;margin-top:1rem;padding:1rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-sm);">
+      <h4 style="margin:0 0 0.75rem 0;font-size:0.95rem;display:flex;align-items:center;gap:0.35rem;">算力充值 <button type="button" class="help-q" data-help-key="billing_recharge" aria-label="说明">?</button></h4>
+      <div style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:flex-end;">
+        <div class="form-group" style="margin:0;">
+          <label style="font-size:0.82rem;color:var(--text-muted);">充值档位</label>
+          <select id="rechargeAmount" style="padding:0.4rem 0.6rem;font-size:0.9rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);min-width:8rem;"></select>
+        </div>
+        <div class="form-group" style="margin:0;display:none;" id="rechargePaymentTypeWrap">
+          <label style="font-size:0.82rem;color:var(--text-muted);">支付方式</label>
+          <select id="rechargePaymentType" style="padding:0.4rem 0.6rem;font-size:0.9rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);min-width:7rem;"></select>
+        </div>
+        <button type="button" id="rechargeSubmitBtn" class="btn btn-primary btn-sm">去充值</button>
+        <span id="rechargeMsg" class="msg" style="display:none;font-size:0.82rem;"></span>
+      </div>
+      <p id="rechargeRatioHint" class="meta" style="display:none;margin-top:0.65rem;font-size:0.82rem;line-height:1.45;color:var(--text-muted);"></p>
+      <div id="rechargeResult" style="display:none;margin-top:0.75rem;padding:0.75rem;background:var(--bg-secondary);border-radius:var(--radius-sm);font-size:0.85rem;"></div>
+    </div>
+    <div style="margin-top:1rem;">
+      <button type="button" id="billingRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+    </div>
+    <div class="store-tabs" style="margin-top:1rem;">
+      <button type="button" class="store-tab active" data-billing-tab="recharge">充值</button>
+      <button type="button" class="store-tab" data-billing-tab="consumption">消费</button>
+    </div>
+    <div id="billingTabRecharge" class="billing-tab-panel" style="margin-top:0.75rem;">
+      <div id="billingRechargeList" style="overflow-x:auto;"></div>
+      <div id="billingRechargePager" style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;"></div>
+    </div>
+    <div id="billingTabConsumption" class="billing-tab-panel" style="display:none;margin-top:0.75rem;">
+      <div id="billingCreditHistory" style="overflow-x:auto;"></div>
+      <div id="billingCreditPager" style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;"></div>
+    </div>
+  </div>
+</div>

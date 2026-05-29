@@ -1,0 +1,23 @@
+<!-- 日志 -->
+<div id="content-logs" class="content-block">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
+      <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">系统日志 <button type="button" class="help-q" data-help-key="logs" aria-label="说明">?</button></h3>
+      <div style="display:flex;align-items:center;gap:0.5rem;">
+        <label style="font-size:0.82rem;color:var(--text-muted);">末尾</label>
+        <select id="logsTail" style="padding:0.35rem 0.6rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+          <option value="500">500 行</option>
+          <option value="1000">1000 行</option>
+          <option value="2000" selected>2000 行</option>
+          <option value="5000">5000 行</option>
+        </select>
+        <button type="button" id="logsRefreshBtn" class="btn btn-primary btn-sm">刷新</button>
+        <button type="button" id="logsLoadBtn" class="btn btn-ghost btn-sm" title="手动请求日志">加载日志</button>
+        <button type="button" id="logsExportBtn" class="btn btn-ghost btn-sm" title="按当前「末尾」行数导出为 txt">导出 txt</button>
+        <button type="button" id="logsUploadDiagnosticBtn" class="btn btn-ghost btn-sm" title="打包本机日志并上传到服务器">上传诊断</button>
+      </div>
+    </div>
+    <div id="logsDiagnosticUploadMsg" style="display:none;margin-top:0.65rem;font-size:0.82rem;color:var(--text-muted);"></div>
+    <pre id="logsContent" style="margin:1rem 0 0;padding:0.75rem;background:rgba(0,0,0,0.25);border-radius:var(--radius-sm);font-size:0.78rem;line-height:1.45;overflow:auto;max-height:calc(100vh - 220px);white-space:pre-wrap;word-break:break-all;">点击「刷新」加载日志</pre>
+  </div>
+</div>

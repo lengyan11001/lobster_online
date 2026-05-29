@@ -1,0 +1,14 @@
+<!-- 生成历史：按 task_id 聚合生成与查询记录 -->
+<div id="content-production" class="content-block">
+  <div class="card" style="padding-bottom:0.75rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+      <div>
+        <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">生成历史 <button type="button" class="help-q" data-help-key="production" aria-label="说明">?</button></h3>
+        <p class="meta" style="margin:0.35rem 0 0 0;">对话里创建的图片、视频任务会按 task_id 聚合；对话查询不稳定时，可在这里手动刷新进度。</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="prodRefreshBtn">刷新</button>
+    </div>
+  </div>
+  <div id="prodList" style="margin-top:0.5rem;overflow-y:auto;max-height:calc(100vh - 200px);"></div>
+  <div id="prodPagination" style="display:flex;justify-content:center;align-items:center;gap:0.75rem;padding:0.5rem 0;"></div>
+</div>

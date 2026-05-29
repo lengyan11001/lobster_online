@@ -27,9 +27,11 @@ from ..models import Asset
 from ..services.openclaw_channel_auth_store import read_channel_fallback
 from .auth import get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
+from .chat import _get_default_image_generate_model
 from .goal_video_pipeline import (
     GoalVideoPipelinePayload,
     run_goal_image_pipeline,
+    run_goal_video_pipeline,
     run_goal_video_from_reference_pipeline,
 )
 from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
@@ -64,6 +66,8 @@ _SCHEDULED_CAPTION_STYLES = [
     "从客户常见问题切入",
     "用一句有记忆点的结论收束",
 ]
+_SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM = "asset_random"
+_SCHEDULED_VIDEO_SOURCE_AI_IMAGE = "ai_image"
 
 
 def _scheduled_variant(seed: str, options: List[str]) -> str:
@@ -282,6 +286,25 @@ async def proxy_delete_scheduled_task_run(
         request,
         "DELETE",
         f"/api/scheduled-tasks/runs/{run_id}",
+    )
+
+
+@router.post("/api/scheduled-tasks/runs/{run_id}/publish-request", summary="Proxy scheduled task publish request")
+async def proxy_request_scheduled_task_publish(
+    run_id: str,
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    return await _proxy_cloud_json(
+        request,
+        "POST",
+        f"/api/scheduled-tasks/runs/{run_id}/publish-request",
+        json_body=body if isinstance(body, dict) else {},
+        timeout_sec=30.0,
     )
 
 
@@ -988,6 +1011,37 @@ def _hifly_script_text(text: Any) -> str:
     return s if len(s) <= 50 else ""
 
 
+def _scheduled_custom_prompt(cap_payload: Dict[str, Any]) -> str:
+    for key in ("prompt", "creative_prompt", "goal", "description"):
+        value = str((cap_payload or {}).get(key) or "").strip()
+        if value:
+            return value[:1000]
+    return ""
+
+
+def _generated_from_scheduled_prompt(capability_id: str, task_title: str, prompt: str) -> Dict[str, Any]:
+    title = (task_title or "").strip()
+    if not title or title in {"能力定时任务", "目标成片", "创意成片", "文案+创意图片", "创意图片"}:
+        title = "创意图片" if capability_id == "goal.image.pipeline" else "创意成片"
+    return {
+        "title": title[:120],
+        "goal": prompt[:1000],
+        "caption_hint": "",
+        "creative_angle": "自定义提示词",
+        "caption_style": "根据用户提示词生成发布文案",
+        "selling_points": [],
+        "memory_context_used": False,
+        "custom_prompt_used": True,
+    }
+
+
+def _normalize_goal_video_source_mode(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"ai_image", "ai", "generated_image", "image_generate", "generate_image"}:
+        return _SCHEDULED_VIDEO_SOURCE_AI_IMAGE
+    return _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM
+
+
 async def _generate_scheduled_content(
     *,
     base: str,
@@ -1152,6 +1206,181 @@ def _scheduled_refs_with_asset_urls(
     finally:
         db.close()
     return {"asset_ids": out["asset_ids"][:12], "urls": out["urls"][:8]}
+
+
+def _scheduled_publish_config(cap_payload: Dict[str, Any]) -> Dict[str, Any]:
+    payload = cap_payload if isinstance(cap_payload, dict) else {}
+    platform = str(payload.get("publish_platform") or payload.get("platform") or "").strip()
+    account_id = payload.get("publish_account_id") or payload.get("account_id")
+    try:
+        account_id_int = int(account_id) if account_id not in (None, "") else None
+    except (TypeError, ValueError):
+        account_id_int = None
+    account_nickname = str(payload.get("publish_account_nickname") or payload.get("account_nickname") or "").strip()
+    auto_publish = str(payload.get("publish_auto") or payload.get("auto_publish") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "是",
+    } or payload.get("publish_auto") is True or payload.get("auto_publish") is True
+    if not (platform or account_id_int or account_nickname or auto_publish):
+        return {}
+    return {
+        "platform": platform,
+        "platform_name": str(payload.get("publish_platform_name") or "").strip(),
+        "account_id": account_id_int,
+        "account_nickname": account_nickname,
+        "auto_publish": auto_publish,
+    }
+
+
+def _scheduled_publish_asset_id(result: Any, refs: Dict[str, List[str]]) -> str:
+    keys = ("final_asset_id", "image_asset_id", "asset_id", "video_asset_id")
+    stack: List[Any] = [result]
+    seen: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        oid = id(cur)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        if isinstance(cur, dict):
+            for key in keys:
+                value = str(cur.get(key) or "").strip()
+                if value:
+                    return value[:128]
+            for item in cur.get("saved_assets") or []:
+                if isinstance(item, dict):
+                    aid = str(item.get("asset_id") or item.get("id") or "").strip()
+                    media_type = str(item.get("media_type") or item.get("type") or "").strip().lower()
+                    if aid and (not media_type or media_type in {"image", "video"}):
+                        return aid[:128]
+            for value in cur.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(cur, list):
+            stack.extend(v for v in cur if isinstance(v, (dict, list)))
+    for aid in (refs or {}).get("asset_ids") or []:
+        s = str(aid or "").strip()
+        if s:
+            return s[:128]
+    return ""
+
+
+def _clean_publish_tags(value: Any) -> str:
+    raw: List[str] = []
+    if isinstance(value, list):
+        raw = [str(x or "").strip() for x in value]
+    else:
+        raw = re.split(r"[,，\s#、]+", str(value or ""))
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        tag = re.sub(r"^#+", "", item.strip())
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        out.append(tag[:20])
+        if len(out) >= 8:
+            break
+    return " ".join(f"#{tag}" for tag in out)
+
+
+def _platform_publish_rules(platform: str) -> str:
+    p = (platform or "").strip().lower()
+    if p == "xiaohongshu":
+        return "小红书：标题 12-20 字，有种草感；正文 80-180 字，分段自然，结尾带 3-6 个话题标签。"
+    if p == "toutiao":
+        return "今日头条：标题 18-30 字，信息明确；正文 120-300 字，适合图文资讯口吻，少用夸张符号。"
+    if p == "kuaishou":
+        return "快手：标题短直接；正文 40-100 字，生活化、接地气，带 2-4 个标签。"
+    if p == "bilibili":
+        return "B站：标题 16-32 字；简介说明亮点和看点，带 2-5 个标签。"
+    return "抖音：标题 10-24 字，正文 40-90 字，开头有吸引力，带 2-5 个话题标签。"
+
+
+async def _generate_scheduled_publish_copy(
+    *,
+    base: str,
+    headers: Dict[str, str],
+    capability_id: str,
+    generated: Dict[str, Any],
+    result: Any,
+    refs: Dict[str, List[str]],
+    platform: str,
+    task_title: str,
+    caption: str,
+) -> Dict[str, str]:
+    fallback_title = (str(generated.get("title") or task_title or "AI 创意内容").strip() or "AI 创意内容")[:30]
+    fallback_desc = caption or _fallback_scheduled_caption(capability_id, generated)
+    fallback_tags = _clean_publish_tags(generated.get("tags") or generated.get("keywords") or "")
+    system = (
+        "你是中文社交平台运营。只输出 JSON 对象，字段必须是 title、description、tags。"
+        "不要 Markdown，不要解释。"
+        + _platform_publish_rules(platform)
+    )
+    try:
+        text = await _call_scheduled_llm(
+            base=base,
+            headers=headers,
+            system=system,
+            user_payload={
+                "platform": platform,
+                "task_title": task_title,
+                "generated_content": generated,
+                "caption": caption,
+                "skill_result_summary": _compact_result_text(result)[:1200],
+                "result_refs": refs,
+                "requirements": "标题、正文、标签要适合所选平台；不要编造不存在的优惠、价格或地址。",
+            },
+            temperature=0.55,
+        )
+        data = _extract_json_object_text(text)
+        title = " ".join(str(data.get("title") or fallback_title).split())[:60]
+        desc = str(data.get("description") or data.get("desc") or fallback_desc).strip()[:1200]
+        tags = _clean_publish_tags(data.get("tags") or fallback_tags)
+        return {"title": title or fallback_title, "description": desc or fallback_desc, "tags": tags}
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] publish copy failed platform=%s: %s", platform, exc)
+        return {"title": fallback_title, "description": fallback_desc, "tags": fallback_tags}
+
+
+async def _submit_local_publish_draft(
+    *,
+    draft: Dict[str, Any],
+    headers: Dict[str, str],
+) -> Dict[str, Any]:
+    asset_id = str(draft.get("asset_id") or "").strip()
+    if not asset_id:
+        raise RuntimeError("发布草稿缺少素材 asset_id")
+    body = {
+        "asset_id": asset_id,
+        "account_id": draft.get("account_id"),
+        "account_nickname": str(draft.get("account_nickname") or "").strip() or None,
+        "title": str(draft.get("title") or "").strip(),
+        "description": str(draft.get("description") or "").strip(),
+        "tags": str(draft.get("tags") or "").strip(),
+        "ai_publish_copy": False,
+        "options": draft.get("options") if isinstance(draft.get("options"), dict) else {},
+    }
+    timeout = httpx.Timeout(2400.0, connect=10.0, read=2400.0, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        resp = await client.post(
+            f"http://127.0.0.1:{int(getattr(settings, 'port', 8000) or 8000)}/api/publish",
+            json=body,
+            headers=headers,
+        )
+    try:
+        data = resp.json() if resp.content else {}
+    except ValueError:
+        data = {"text": resp.text[:500]}
+    if resp.status_code >= 400:
+        detail = data.get("detail") if isinstance(data, dict) else ""
+        raise RuntimeError(str(detail or resp.text or f"publish HTTP {resp.status_code}")[:500])
+    if isinstance(data, dict) and data.get("code") not in (None, 0, 200):
+        raise RuntimeError(str(data.get("msg") or data.get("message") or data)[:500])
+    return data if isinstance(data, dict) else {"result": data}
 
 
 def _scheduled_refs_asset_urls_only(
@@ -1398,14 +1627,21 @@ def _scheduled_complete_text(
     refs: Optional[Dict[str, List[str]]] = None,
     skill_prompt: str = "",
     input_refs: Optional[Dict[str, Any]] = None,
+    publish_draft: Optional[Dict[str, Any]] = None,
 ) -> str:
     ready = _scheduled_result_ready(result)
     lines = ["生成完成。" if ready else "任务已提交，仍在生成中。", f"发布文案：{caption}"]
     if skill_prompt:
         lines.append(f"传给技能的提示词：{skill_prompt}")
     if input_refs:
+        source_mode = str(input_refs.get("source_mode") or "").strip()
+        image_model = str(input_refs.get("image_model") or "").strip()
         group = str(input_refs.get("candidate_group") or "").strip()
         ref_asset = str(input_refs.get("reference_asset_id") or "").strip()
+        if source_mode == _SCHEDULED_VIDEO_SOURCE_AI_IMAGE:
+            lines.append(f"首帧来源：AI 生成图片{('（' + image_model + '）') if image_model else ''}")
+        elif source_mode:
+            lines.append("首帧来源：素材库备选组随机图片")
         if group:
             lines.append(f"备选组：{group}")
         if ref_asset:
@@ -1416,6 +1652,20 @@ def _scheduled_complete_text(
     if refs["urls"]:
         lines.append("预览链接：")
         lines.extend(refs["urls"][:6])
+    if publish_draft:
+        status = str(publish_draft.get("status") or "ready").strip()
+        platform = str(publish_draft.get("platform_name") or publish_draft.get("platform") or "").strip()
+        acct = str(publish_draft.get("account_nickname") or publish_draft.get("account_id") or "").strip()
+        label = {
+            "ready": "待发布",
+            "pending": "等待发布",
+            "processing": "发布中",
+            "published": "已发布",
+            "failed": "发布失败",
+        }.get(status, status or "待发布")
+        lines.append("发布状态：" + label + (f"（{platform} · {acct}）" if platform or acct else ""))
+        if publish_draft.get("error"):
+            lines.append("发布错误：" + str(publish_draft.get("error"))[:200])
     return "\n".join(lines)
 
 
@@ -1551,7 +1801,7 @@ async def _run_goal_image_scheduled_pipeline(
         duration=6,
         aspect_ratio="9:16",
         language="zh",
-        memory_scope="default",
+        memory_scope="none" if generated.get("custom_prompt_used") else "default",
         reference_asset_ids=attachment_asset_ids[:8],
     )
 
@@ -1576,21 +1826,13 @@ async def _run_goal_video_scheduled_pipeline(
     installation_id: str,
     generated: Dict[str, Any],
     task_title: str,
+    source_mode: str,
     candidate_group: str,
     cloud: httpx.AsyncClient,
     base: str,
     headers: Dict[str, str],
     run_id: str,
 ) -> Dict[str, Any]:
-    picked = _pick_creative_candidate_asset(candidate_group, jwt_token)
-    await _post_task_event(
-        cloud,
-        base,
-        headers,
-        run_id,
-        "thinking",
-        {"text": f"已从备选组“{picked['group_name']}”随机选择图片素材 {picked['asset_id']}"},
-    )
     pl = GoalVideoPipelinePayload(
         action="run_pipeline",
         goal=generated.get("goal") or _fallback_goal(task_title),
@@ -1598,7 +1840,7 @@ async def _run_goal_video_scheduled_pipeline(
         duration=6,
         aspect_ratio="9:16",
         language="zh",
-        memory_scope="default",
+        memory_scope="none" if generated.get("custom_prompt_used") else "default",
     )
 
     def progress(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
@@ -1608,6 +1850,37 @@ async def _run_goal_video_scheduled_pipeline(
             _post_task_event(cloud, base, headers, run_id, stage[:32], {"text": message, **(extra or {})})
         )
 
+    if source_mode == _SCHEDULED_VIDEO_SOURCE_AI_IMAGE:
+        pl.image_model = _get_default_image_generate_model()
+        if pl.image_model and not pl.image_model.startswith("openai/") and "/" not in pl.image_model:
+            pl.image_model = f"openai/{pl.image_model}"
+        await _post_task_event(
+            cloud,
+            base,
+            headers,
+            run_id,
+            "thinking",
+            {"text": "将先用 AI 生成首帧图片，再用该图片生成视频"},
+        )
+        result = await run_goal_video_pipeline(
+            pl=pl,
+            token=jwt_token,
+            installation_id=installation_id,
+            progress=progress,
+        )
+        result["source_mode"] = _SCHEDULED_VIDEO_SOURCE_AI_IMAGE
+        result["image_model"] = pl.image_model
+        return result
+
+    picked = _pick_creative_candidate_asset(candidate_group, jwt_token)
+    await _post_task_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        "thinking",
+        {"text": f"已从备选组“{picked['group_name']}”随机选择图片素材 {picked['asset_id']}"},
+    )
     result = await run_goal_video_from_reference_pipeline(
         pl=pl,
         token=jwt_token,
@@ -1616,6 +1889,7 @@ async def _run_goal_video_scheduled_pipeline(
         reference_image_url=picked["url"],
         progress=progress,
     )
+    result["source_mode"] = _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM
     result["candidate_group"] = picked["group_name"]
     result["reference_asset_id"] = picked["asset_id"]
     return result
@@ -1634,6 +1908,7 @@ async def _run_scheduled_capability(
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     capability_id = str(payload.get("capability_id") or "").strip()
     cap_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    original_cap_payload = dict(cap_payload or {})
     attachment_asset_ids = _scheduled_attachment_asset_ids(item)
     if not run_id or not capability_id:
         return
@@ -1641,29 +1916,43 @@ async def _run_scheduled_capability(
         task_title = str(item.get("title") or "").strip()
         if capability_id in {"goal.video.pipeline", "goal.image.pipeline", "hifly.video.create_by_tts"}:
             asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
-            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在根据记忆生成本次内容"})
-            generated = await _generate_scheduled_content(
-                base=base,
-                headers=headers,
-                jwt_token=jwt_token,
-                installation_id=installation_id,
-                capability_id=capability_id,
-                task_title=task_title,
-                asset_context=asset_context,
-                run_id=run_id,
-            )
+            custom_prompt = _scheduled_custom_prompt(cap_payload)
+            if custom_prompt and capability_id in {"goal.video.pipeline", "goal.image.pipeline"}:
+                await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在使用自定义提示词生成本次内容"})
+                generated = _generated_from_scheduled_prompt(capability_id, task_title, custom_prompt)
+            else:
+                await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在根据记忆生成本次内容"})
+                generated = await _generate_scheduled_content(
+                    base=base,
+                    headers=headers,
+                    jwt_token=jwt_token,
+                    installation_id=installation_id,
+                    capability_id=capability_id,
+                    task_title=task_title,
+                    asset_context=asset_context,
+                    run_id=run_id,
+                )
             if capability_id == "goal.video.pipeline":
+                source_mode = _normalize_goal_video_source_mode(
+                    cap_payload.get("source_mode")
+                    or cap_payload.get("video_source_mode")
+                    or cap_payload.get("image_source")
+                )
                 candidate_group = str(cap_payload.get("candidate_group") or cap_payload.get("candidate_group_name") or "").strip()
-                if not candidate_group:
+                if source_mode != _SCHEDULED_VIDEO_SOURCE_AI_IMAGE and not candidate_group:
                     raise RuntimeError("创意成片需要先在素材库选择一个备选素材组")
                 cap_payload = {
+                    "source_mode": source_mode,
                     "candidate_group": candidate_group,
+                    "goal": generated.get("goal") or _fallback_goal(task_title),
                 }
             elif capability_id == "goal.image.pipeline":
+                publish_cfg = _scheduled_publish_config(original_cap_payload)
                 cap_payload = {
                     "goal": generated.get("goal") or _fallback_image_goal(task_title),
                 }
             else:
+                publish_cfg = {}
                 avatar = str(cap_payload.get("avatar") or "").strip()
                 voice = str(cap_payload.get("voice") or "").strip()
                 if not avatar:
@@ -1708,6 +1997,7 @@ async def _run_scheduled_capability(
                     installation_id=installation_id,
                     generated=generated,
                     task_title=task_title,
+                    source_mode=str(cap_payload.get("source_mode") or _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM),
                     candidate_group=str(cap_payload.get("candidate_group") or "").strip(),
                     cloud=cloud,
                     base=base,
@@ -1747,27 +2037,80 @@ async def _run_scheduled_capability(
             elif capability_id == "goal.image.pipeline":
                 skill_prompt = str((result.get("plan") or {}).get("image_prompt") or skill_prompt).strip()
             input_refs = {}
+            publish_draft: Optional[Dict[str, Any]] = None
             if capability_id == "goal.video.pipeline":
                 input_refs = {
+                    "source_mode": result.get("source_mode") or cap_payload.get("source_mode"),
+                    "image_model": result.get("image_model"),
                     "candidate_group": result.get("candidate_group"),
                     "reference_asset_id": result.get("reference_asset_id"),
                 }
+            elif capability_id == "goal.image.pipeline" and publish_cfg:
+                asset_id = _scheduled_publish_asset_id(result, refs)
+                copy = await _generate_scheduled_publish_copy(
+                    base=base,
+                    headers=headers,
+                    capability_id=capability_id,
+                    generated=generated,
+                    result=result,
+                    refs=refs,
+                    platform=str(publish_cfg.get("platform") or ""),
+                    task_title=task_title,
+                    caption=caption,
+                )
+                publish_draft = {
+                    "run_id": run_id,
+                    "status": "ready",
+                    "auto_publish": bool(publish_cfg.get("auto_publish")),
+                    "platform": publish_cfg.get("platform"),
+                    "platform_name": publish_cfg.get("platform_name") or _platform_publish_rules(str(publish_cfg.get("platform") or "")).split("：", 1)[0],
+                    "account_id": publish_cfg.get("account_id"),
+                    "account_nickname": publish_cfg.get("account_nickname"),
+                    "asset_id": asset_id,
+                    "title": copy.get("title") or "",
+                    "description": copy.get("description") or "",
+                    "tags": copy.get("tags") or "",
+                    "options": {"scheduled_publish": True, "source_run_id": run_id},
+                }
+                if not asset_id:
+                    publish_draft["status"] = "failed"
+                    publish_draft["error"] = "未取得可发布素材 asset_id"
+                elif publish_draft["auto_publish"]:
+                    await _post_task_event(
+                        cloud,
+                        base,
+                        headers,
+                        run_id,
+                        "thinking",
+                        {"text": "正在按所选平台自动发布"},
+                    )
+                    try:
+                        publish_result = await _submit_local_publish_draft(draft=publish_draft, headers=headers)
+                        publish_draft["status"] = "published"
+                        publish_draft["publish_result"] = publish_result
+                    except Exception as exc:
+                        logger.exception("[SCHEDULED-TASK] auto publish failed run_id=%s", run_id)
+                        publish_draft["status"] = "failed"
+                        publish_draft["error"] = str(exc)[:500] or "自动发布失败"
+            result_payload = {
+                "capability_id": capability_id,
+                "generated": generated,
+                "caption": caption,
+                "skill_prompt": skill_prompt,
+                "mcp_result": result,
+                "input_refs": input_refs,
+                "result_refs": refs,
+                "media_urls": refs["urls"],
+            }
+            if publish_draft:
+                result_payload["publish_draft"] = publish_draft
             await _complete_task_run(
                 cloud,
                 base,
                 headers,
                 run_id,
-                result_text=_scheduled_complete_text(result, caption, refs, skill_prompt, input_refs),
-                result_payload={
-                    "capability_id": capability_id,
-                    "generated": generated,
-                    "caption": caption,
-                    "skill_prompt": skill_prompt,
-                    "mcp_result": result,
-                    "input_refs": input_refs,
-                    "result_refs": refs,
-                    "media_urls": refs["urls"],
-                },
+                result_text=_scheduled_complete_text(result, caption, refs, skill_prompt, input_refs, publish_draft),
+                result_payload=result_payload,
             )
             return
 
@@ -1915,6 +2258,47 @@ async def _process_scheduled_task_detached(
                     pass
 
 
+async def _process_publish_request_detached(
+    base: str,
+    jwt_token: str,
+    installation_id: str,
+    item: Dict[str, Any],
+) -> None:
+    run_id = str(item.get("id") or "").strip()
+    payload = item.get("result_payload") if isinstance(item.get("result_payload"), dict) else {}
+    draft = payload.get("publish_draft") if isinstance(payload.get("publish_draft"), dict) else {}
+    if not run_id or not draft:
+        return
+    headers = _headers(jwt_token, installation_id)
+    timeout = httpx.Timeout(2400.0, connect=10.0, read=2400.0, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        try:
+            await _post_task_event(
+                client,
+                base,
+                headers,
+                run_id,
+                "publish_claimed",
+                {"run_id": run_id, "publish_draft": draft},
+            )
+            result = await _submit_local_publish_draft(draft=draft, headers=headers)
+            await client.post(
+                f"{base}/api/scheduled-tasks/runs/{run_id}/publish-complete",
+                json={"publish_result": result},
+                headers=headers,
+            )
+        except Exception as exc:
+            logger.exception("[SCHEDULED-TASK] publish request failed run_id=%s", run_id)
+            try:
+                await client.post(
+                    f"{base}/api/scheduled-tasks/runs/{run_id}/publish-complete",
+                    json={"error": str(exc)[:500] or "发布失败", "publish_result": {}},
+                    headers=headers,
+                )
+            except Exception as post_exc:
+                logger.warning("[SCHEDULED-TASK] publish failure callback failed run_id=%s: %s", run_id, post_exc)
+
+
 async def h5_chat_poll_loop() -> None:
     if not _enabled():
         logger.info("[H5-CHAT] remote H5 chat channel disabled")
@@ -1925,12 +2309,15 @@ async def h5_chat_poll_loop() -> None:
     logged_missing = False
     max_h5_concurrency = _channel_concurrency("LOBSTER_H5_CHAT_CONCURRENCY", 1, 5)
     max_task_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_TASK_CONCURRENCY", 2, 10)
+    max_publish_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_PUBLISH_CONCURRENCY", 1, 3)
     active_items: set[asyncio.Task] = set()
     active_task_runs: set[asyncio.Task] = set()
+    active_publish_runs: set[asyncio.Task] = set()
 
     while True:
         _reap_channel_tasks(active_items, "H5-CHAT")
         _reap_channel_tasks(active_task_runs, "SCHEDULED-TASK")
+        _reap_channel_tasks(active_publish_runs, "SCHEDULED-PUBLISH")
 
         base = _cloud_base()
         jwt_token, installation_id = _auth_context()
@@ -1977,7 +2364,23 @@ async def h5_chat_poll_loop() -> None:
                         task_items = (task_resp.json() or {}).get("items") or []
                     elif task_resp.status_code != 404:
                         logger.debug("[SCHEDULED-TASK] pending request HTTP %s: %s", task_resp.status_code, task_resp.text[:300])
-                if not items and not task_items:
+                publish_items: list[Dict[str, Any]] = []
+                publish_slots = max(0, max_publish_concurrency - len(active_publish_runs))
+                if publish_slots > 0:
+                    publish_resp = await client.get(
+                        f"{base}/api/scheduled-tasks/publish/pending",
+                        params={"limit": publish_slots},
+                        headers=headers,
+                    )
+                    if publish_resp.status_code == 401:
+                        logger.warning("[SCHEDULED-PUBLISH] cloud auth rejected; waiting for next login token")
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
+                    if publish_resp.status_code < 400:
+                        publish_items = (publish_resp.json() or {}).get("items") or []
+                    elif publish_resp.status_code != 404:
+                        logger.debug("[SCHEDULED-PUBLISH] pending request HTTP %s: %s", publish_resp.status_code, publish_resp.text[:300])
+                if not items and not task_items and not publish_items:
                     await asyncio.sleep(sleep_empty)
                     continue
                 for item in items:
@@ -1985,6 +2388,10 @@ async def h5_chat_poll_loop() -> None:
                 for item in task_items:
                     active_task_runs.add(
                         asyncio.create_task(_process_scheduled_task_detached(base, jwt_token, installation_id, item))
+                    )
+                for item in publish_items:
+                    active_publish_runs.add(
+                        asyncio.create_task(_process_publish_request_detached(base, jwt_token, installation_id, item))
                     )
                 await asyncio.sleep(0.2)
         except asyncio.CancelledError:

@@ -1,0 +1,39 @@
+<div id="content-skill-store" class="content-block">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+                <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">技能商店 <button type="button" class="help-q" data-help-key="skill_store" aria-label="说明">?</button></h3>
+                <div style="display:flex;gap:0.5rem;">
+                  <button type="button" id="openAddMcpModal" class="btn btn-primary btn-sm">+ 添加 MCP</button>
+                  <button type="button" id="refreshStoreBtn" class="btn btn-ghost btn-sm">刷新</button>
+                </div>
+              </div>
+              <!-- Tab bar（官方在线暂隐藏，仅保留热门） -->
+              <div class="store-tabs" style="margin-top:0.75rem;">
+                <button type="button" class="store-tab active" data-store-tab="popular">热门</button>
+                <button type="button" class="store-tab" data-store-tab="official" hidden aria-hidden="true" style="display:none;">官方在线</button>
+              </div>
+            </div>
+
+            <!-- Tab: 热门 (Popular / self-owned MCPs) -->
+            <div id="storeTabPopular" class="store-tab-panel">
+              <div id="skillStoreList" class="skill-store-grid"></div>
+            </div>
+
+            <!-- Tab: 官方在线（暂隐藏，与 .store-tab[data-store-tab=official] 同步） -->
+            <div id="storeTabOfficial" class="store-tab-panel" style="display:none !important;" hidden aria-hidden="true">
+              <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+                  <span style="font-size:0.9rem;font-weight:600;">MCP 官方技能注册表</span>
+                  <span id="mcpRegistryTotal" style="font-size:0.82rem;color:var(--text-muted);"></span>
+                </div>
+                <p style="font-size:0.82rem;color:var(--text-muted);margin-top:0.35rem;">浏览全球开发者共享的 MCP 技能，点击「添加」一键接入龙虾。</p>
+                <div id="mcpCategoryBar" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.75rem;"></div>
+                <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
+                  <input type="text" id="mcpRegistrySearch" placeholder="搜索已缓存的技能 (浏览过的页会缓存到本地)..." style="flex:1;padding:0.4rem 0.6rem;font-size:0.85rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);box-sizing:border-box;">
+                  <button type="button" id="mcpRegistrySearchBtn" class="btn btn-primary" style="white-space:nowrap;">搜索</button>
+                </div>
+              </div>
+              <div id="mcpRegistryResults" class="skill-store-grid" style="margin-top:0.75rem;"></div>
+              <div id="mcpRegistryPaging" style="margin-top:0.75rem;text-align:center;display:flex;justify-content:center;align-items:center;gap:0.75rem;"></div>
+            </div>
+          </div>
