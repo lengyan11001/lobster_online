@@ -1290,6 +1290,8 @@ async def upload_asset(
         mtype = "video"
     elif ext.lower() in (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"):
         mtype = "audio"
+    elif ext.lower() in (".ppt", ".pptx", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".md"):
+        mtype = "document"
 
     ct = (file.content_type or "").strip() or "application/octet-stream"
     if mtype == "image":
@@ -1619,7 +1621,12 @@ def get_asset_content(
     path = ASSETS_DIR / a.filename
     if not path.exists():
         raise HTTPException(404, detail="文件不存在")
-    mt_map = {"image": "image/jpeg", "video": "video/mp4", "audio": "audio/mpeg"}
+    mt_map = {
+        "image": "image/jpeg",
+        "video": "video/mp4",
+        "audio": "audio/mpeg",
+        "document": _content_type_for_asset_filename(a.filename),
+    }
     ct = mt_map.get((a.media_type or "").lower(), "application/octet-stream")
     return FileResponse(
         path,
@@ -1735,7 +1742,12 @@ def serve_asset_file(
     if not path.exists():
         raise HTTPException(404, detail="文件不存在")
     media_type = a.media_type or "application/octet-stream"
-    mt_map = {"image": "image/jpeg", "video": "video/mp4", "audio": "audio/mpeg"}
+    mt_map = {
+        "image": "image/jpeg",
+        "video": "video/mp4",
+        "audio": "audio/mpeg",
+        "document": _content_type_for_asset_filename(a.filename),
+    }
     ct = mt_map.get(media_type, "application/octet-stream")
     return FileResponse(
         path,

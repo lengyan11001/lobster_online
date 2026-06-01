@@ -1044,7 +1044,21 @@ async def _pre_deduct_online_chat_turn(
                 detail = str(data.get("detail") or data.get("message") or "")
         except Exception:
             detail = ""
-        raise HTTPException(status_code=resp.status_code, detail=detail or resp.text[:500] or f"HTTP {resp.status_code}")
+        detail_text = detail or resp.text[:500] or f"HTTP {resp.status_code}"
+        if resp.status_code == 403 and (
+            "X-Lobster-Mcp-Billing" in detail_text
+            or "internal billing" in detail_text.lower()
+            or "billing authorization" in detail_text.lower()
+            or "缺少内部计费授权" in detail_text
+            or "计费授权" in detail_text
+        ):
+            logger.warning(
+                "[CHAT] chat turn pre-deduct forbidden by internal billing key; fallback to legacy LLM billing source=%s detail=%s",
+                source,
+                detail_text[:300],
+            )
+            return False, ""
+        raise HTTPException(status_code=resp.status_code, detail=detail_text)
     logger.info("[CHAT] chat turn pre-deduct ok source=%s turn_id=%s", source, turn_id)
     return True, turn_id
 
@@ -1330,6 +1344,122 @@ def _early_finish_generation_user_reply(kind_cn: str) -> str:
 def _strip_lobster_attachment_block(text: str) -> str:
     """只保留用户原始需求，避免后端注入的附件说明影响意图判断。"""
     return re.split(r"\n*【用户本条消息上传的素材】", str(text or ""), maxsplit=1)[0].strip()
+
+
+_PPT_TOPIC_PATTERNS = (
+    re.compile(r"(?:主题|主题是|题目|题目是|关于|围绕|做一份|做一个|生成一份|生成一个|制作一份|制作一个)\s*[：:]\s*(.+)$", re.I),
+    re.compile(r"(?:主题|题目)\s*(?:是|为)\s*(.+)$", re.I),
+    re.compile(r"(?:关于|围绕)\s*(.+?)\s*(?:的)?\s*(?:ppt|powerpoint|幻灯片|演示文稿|课件)", re.I),
+)
+
+
+_PPT_GENERIC_TOPIC_RE = re.compile(
+    r"^(?:我)?(?:想|要|需要|请|帮我|给我|麻烦|直接|现在|用\s*AI\s*模式|AI\s*模式|做|生成|制作|创建|一份|一个|个|的|吧|一下|谢谢)*$",
+    re.I,
+)
+
+
+def _clean_ppt_topic_candidate(text: str) -> str:
+    s = _strip_lobster_attachment_block(text)
+    s = re.sub(r"```[\s\S]*?```", " ", s)
+    s = re.sub(r"\s+", " ", s).strip(" \t\r\n：:，,。.;；")
+    if re.search(r"(?:主题|题目)\s*(?:是|为)?\s*[：:]?\s*$", s, re.I):
+        return ""
+    s = re.sub(r"^(?:请|帮我|麻烦|直接|现在|用\s*AI\s*模式|AI\s*模式|给我|为我)+", "", s, flags=re.I).strip()
+    s = re.sub(r"(?:帮我|给我)?(?:做|生成|制作|创建)(?:一份|一个|个)?", "", s).strip()
+    s = re.sub(r"(?:ppt|powerpoint|幻灯片|演示文稿|课件)", "", s, flags=re.I).strip()
+    s = re.sub(r"^(?:主题|题目)\s*(?:是|为)?\s*[：:]?", "", s).strip(" \t\r\n：:，,。.;；")
+    s = re.sub(r"(?:要求|风格|页数|模式)\s*[：:].*$", "", s).strip(" \t\r\n：:，,。.;；")
+    s = re.sub(r"^(?:我)?(?:想|要|需要)\s*", "", s).strip(" \t\r\n：:，,。.;；")
+    if not s or s.lower() in {"ppt", "powerpoint"} or _PPT_GENERIC_TOPIC_RE.fullmatch(s):
+        return ""
+    if re.search(r"(?:主题|题目)\s*(?:是|为)?\s*[：:]?\s*$", text, re.I):
+        return ""
+    return s[:120]
+
+
+def _extract_ppt_topic_from_user_text(last_user_content: str) -> str:
+    text = _strip_lobster_attachment_block(last_user_content)
+    if not text:
+        return ""
+    for pat in _PPT_TOPIC_PATTERNS:
+        m = pat.search(text)
+        if m:
+            topic = _clean_ppt_topic_candidate(m.group(1))
+            if topic:
+                return topic
+    if re.search(r"(ppt|powerpoint|幻灯片|演示文稿|课件)", text, re.I):
+        return _clean_ppt_topic_candidate(text)
+    return ""
+
+
+def _ensure_ppt_create_payload_from_current_turn(args: Dict, last_user_content: str) -> Dict:
+    if not args or (args.get("capability_id") or "").strip() != "ppt.create":
+        return args
+    fixed = dict(args)
+    payload = fixed.get("payload") if isinstance(fixed.get("payload"), dict) else {}
+    payload = dict(payload)
+    nested = payload.get("payload")
+    if isinstance(nested, dict):
+        base = {k: v for k, v in payload.items() if k != "payload"}
+        payload = {**base, **nested}
+    for key in (
+        "mode",
+        "topic",
+        "outline_markdown",
+        "slide_count",
+        "theme",
+        "language",
+        "instructions",
+        "filename",
+        "slide_prompts",
+        "image_model",
+        "image_quality",
+        "image_background",
+        "aspect_ratio",
+    ):
+        if key in fixed and fixed[key] is not None and key not in payload:
+            payload[key] = fixed[key]
+
+    topic = str(payload.get("topic") or "").strip()
+    outline = str(payload.get("outline_markdown") or "").strip()
+    prompts = payload.get("slide_prompts")
+    has_prompts = isinstance(prompts, list) and any(str(x or "").strip() for x in prompts)
+    if not topic or topic.upper() == "PPT":
+        inferred = _extract_ppt_topic_from_user_text(last_user_content)
+        if inferred:
+            payload["topic"] = inferred
+            logger.info("[CHAT] ppt.create topic inferred from current turn: %s", inferred[:80])
+    if not str(payload.get("mode") or "").strip():
+        payload["mode"] = "outline" if outline else "ai"
+    if "slide_count" not in payload and str(payload.get("mode") or "").strip().lower() == "ai":
+        payload["slide_count"] = 10
+    fixed["payload"] = payload
+    if not str(payload.get("topic") or "").strip() and not outline and not has_prompts:
+        logger.warning("[CHAT] ppt.create missing topic and cannot infer from current turn")
+    return fixed
+
+
+def _ppt_create_missing_topic_result(args: Dict) -> str:
+    if not args or (args.get("capability_id") or "").strip() != "ppt.create":
+        return ""
+    payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    nested = payload.get("payload")
+    if isinstance(nested, dict):
+        base = {k: v for k, v in payload.items() if k != "payload"}
+        payload = {**base, **nested}
+    topic = str(payload.get("topic") or "").strip()
+    outline = str(payload.get("outline_markdown") or "").strip()
+    prompts = payload.get("slide_prompts")
+    has_prompts = isinstance(prompts, list) and any(str(x or "").strip() for x in prompts)
+    if (not topic or topic.upper() == "PPT") and not outline and not has_prompts:
+        return json.dumps(
+            {
+                "error": "请告诉我具体 PPT 主题，例如：OpenClaw 主机市场分析。收到主题后我会按 AI 模式生成每页合成图并制作 PPT。"
+            },
+            ensure_ascii=False,
+        )
+    return ""
 
 
 def _correct_video_to_image_if_user_asked_image(args: Dict, last_user_content: str) -> Dict:
@@ -4443,6 +4573,12 @@ async def _exec_tool(
                 "[对话] image.generate SSE saved_assets 条数=%s（含 MCP 已入库或待前端 save-url）",
                 len(sse_saved),
             )
+    if success and name == "invoke_capability" and capability_id == "ppt.create":
+        sse_ppt = _extract_saved_assets_from_task_result(result_text)
+        if sse_ppt:
+            ev_end["saved_assets"] = sse_ppt
+            ev_end["media_type"] = "document"
+            logger.info("[对话] ppt.create tool_end saved_assets 条数=%s", len(sse_ppt))
     if success and phase in ("video_submit", "image_submit") and capability_id in (
         "video.generate",
         "image.generate",
@@ -4845,9 +4981,60 @@ def _user_visible_daihuo_pipeline_json_reply(raw: str) -> str:
     return "爆款TVC 仍在生成中。刷新页面可自动恢复进度显示。"
 
 
+def _user_visible_ppt_create_json_reply(raw: str) -> str:
+    t = (raw or "").strip()
+    if not t.startswith("{"):
+        return ""
+    try:
+        d = json.loads(t)
+    except Exception:
+        return ""
+    if not isinstance(d, dict):
+        return ""
+    if (d.get("capability_id") or "").strip() != "ppt.create":
+        return ""
+    if d.get("ok") is False:
+        err = str(d.get("error") or "").strip()
+        return ("PPT 生成失败。" + (f" 说明：{_sanitize_user_visible_hint(err)}" if err else ""))[:500]
+    result = d.get("result") if isinstance(d.get("result"), dict) else {}
+    topic = str(result.get("topic") or "").strip()
+    filename = str(result.get("filename") or "").strip()
+    pptx_path = str(result.get("pptx_path") or "").strip()
+    download_url = str(result.get("download_url") or "").strip()
+    saved = result.get("saved_assets") if isinstance(result.get("saved_assets"), list) else []
+    asset_id = ""
+    source_url = ""
+    if saved:
+        first = saved[0] if isinstance(saved[0], dict) else {}
+        asset_id = str(first.get("asset_id") or "").strip()
+        source_url = str(first.get("source_url") or first.get("url") or "").strip()
+    meta = result.get("generation_meta") if isinstance(result.get("generation_meta"), dict) else {}
+    slide_count = meta.get("slide_count") or ""
+    lines = ["PPT 已生成完成。"]
+    if topic:
+        lines.append(f"主题：{topic}")
+    if slide_count:
+        lines.append(f"页数：{slide_count} 页")
+    if filename:
+        lines.append(f"文件：{filename}")
+    if pptx_path:
+        lines.append(f"本地路径：{pptx_path}")
+    if asset_id:
+        lines.append(f"素材库 ID：{asset_id}")
+    if source_url:
+        lines.append(f"素材库链接：{source_url}")
+    elif download_url:
+        lines.append(f"下载链接：{download_url}")
+    return "\n".join(lines).strip()
+
+
 def _reply_for_user(reply: str) -> str:
     """Strip DSML from reply so user never sees raw function_calls; use friendly text if nothing left."""
     r0 = (reply or "").strip()
+    if r0.startswith("{") and "ppt.create" in r0:
+        ppt = _user_visible_ppt_create_json_reply(r0)
+        if ppt:
+            return ppt
     if r0.startswith("{") and "comfly.daihuo.pipeline" in r0:
         dh = _user_visible_daihuo_pipeline_json_reply(r0)
         if dh:
@@ -7000,6 +7187,7 @@ async def _chat_openai(
                     a = _correct_video_to_image_if_user_asked_image(a, last_user_content)
                     a = _correct_image_to_video_or_tvc_if_user_asked(a, last_user_content)
                     a = _correct_daihuo_pipeline_to_video_if_plain_video(a, last_user_content)
+                    a = _ensure_ppt_create_payload_from_current_turn(a, last_user_content)
                     a = _ensure_media_edit_payload_from_current_turn(a, last_user_content, _aid_list)
                     _mismatch_err = _detect_model_capability_mismatch(a)
                     if not _mismatch_err:
@@ -7046,6 +7234,8 @@ async def _chat_openai(
                 if _mismatch_err:
                     logger.warning("[CHAT] 模型/能力类型不匹配: %s", _mismatch_err)
                     res = json.dumps({"error": _mismatch_err}, ensure_ascii=False)
+                elif fn.get("name") == "invoke_capability" and _ppt_create_missing_topic_result(a):
+                    res = _ppt_create_missing_topic_result(a)
                 elif fn.get("name") == "invoke_capability" and _status_lookup_guard_res:
                     res = _status_lookup_guard_res
                 elif _cap_id in _generate_cap_done:
@@ -7154,6 +7344,19 @@ async def _chat_openai(
                     if sse_saved:
                         terminal_saved_after_gen = sse_saved
                         gen_cap_for_reply = _cap_id
+                if (
+                    fn.get("name") == "invoke_capability"
+                    and _cap_id == "ppt.create"
+                    and res
+                    and '"error"' not in res
+                ):
+                    try:
+                        sse_saved = _extract_saved_assets_from_task_result(res or "")
+                    except Exception:
+                        sse_saved = []
+                    if sse_saved:
+                        terminal_saved_after_gen = sse_saved
+                        gen_cap_for_reply = "ppt.create"
             # ── publish_content 成功后提前结束（避免再调 LLM 导致 ReadTimeout） ──
             if generation_failed_reply:
                 return generation_failed_reply
@@ -7188,7 +7391,7 @@ async def _chat_openai(
                 _lobster_chat_generation_early_finish_enabled()
                 and not _round_wants_publish
                 and terminal_saved_after_gen
-                and gen_cap_for_reply in ("image.generate", "video.generate")
+                and gen_cap_for_reply in ("image.generate", "video.generate", "ppt.create")
             ):
                 logger.info("[CHAT] early_finish 触发: cap=%s", gen_cap_for_reply)
                 sse_saved = terminal_saved_after_gen
@@ -7197,6 +7400,8 @@ async def _chat_openai(
                         _enrich_saved_assets_asset_ids_from_db(sse_saved, db, int(user_id))
                     except Exception:
                         pass
+                if gen_cap_for_reply == "ppt.create":
+                    return _reply_for_user(res or "")
                 kind = "图片" if gen_cap_for_reply == "image.generate" else "视频"
                 first = sse_saved[0] if isinstance(sse_saved[0], dict) else {}
                 aid = (first.get("asset_id") or "").strip() if isinstance(first, dict) else ""
@@ -7238,6 +7443,7 @@ async def _chat_openai(
                     tc_info["arguments"] = _correct_video_to_image_if_user_asked_image(tc_info["arguments"], last_user_content)
                     tc_info["arguments"] = _correct_image_to_video_or_tvc_if_user_asked(tc_info["arguments"], last_user_content)
                     tc_info["arguments"] = _correct_daihuo_pipeline_to_video_if_plain_video(tc_info["arguments"], last_user_content)
+                    tc_info["arguments"] = _ensure_ppt_create_payload_from_current_turn(tc_info["arguments"], last_user_content)
                     tc_info["arguments"] = _ensure_media_edit_payload_from_current_turn(tc_info["arguments"], last_user_content, _aid_list)
                     _mismatch_err_tc = _detect_model_capability_mismatch(tc_info["arguments"])
                     if not _mismatch_err_tc:
@@ -7288,6 +7494,8 @@ async def _chat_openai(
                 if _mismatch_err_tc:
                     logger.warning("[CHAT] 模型/能力类型不匹配: %s", _mismatch_err_tc)
                     res = json.dumps({"error": _mismatch_err_tc}, ensure_ascii=False)
+                elif tc_info["name"] == "invoke_capability" and _ppt_create_missing_topic_result(ta):
+                    res = _ppt_create_missing_topic_result(ta)
                 elif tc_info["name"] == "invoke_capability" and _status_lookup_guard_res_tc:
                     res = _status_lookup_guard_res_tc
                 elif _tc_cap in _generate_cap_done:
@@ -7385,6 +7593,19 @@ async def _chat_openai(
                     if sse_saved_tc:
                         terminal_saved_after_gen_tc = sse_saved_tc
                         gen_cap_for_reply_tc = _tc_cap
+                if (
+                    tc_info["name"] == "invoke_capability"
+                    and _tc_cap == "ppt.create"
+                    and res
+                    and '"error"' not in res
+                ):
+                    try:
+                        sse_saved_tc = _extract_saved_assets_from_task_result(res or "")
+                    except Exception:
+                        sse_saved_tc = []
+                    if sse_saved_tc:
+                        terminal_saved_after_gen_tc = sse_saved_tc
+                        gen_cap_for_reply_tc = "ppt.create"
                 if tc_info["name"] == "publish_content" and res and "执行失败" in res:
                     _publish_fail_count += 1
                     logger.info("[CHAT] text_calls publish_content 失败计数: %d", _publish_fail_count)
@@ -7408,7 +7629,7 @@ async def _chat_openai(
                 _lobster_chat_generation_early_finish_enabled()
                 and not round_wants_publish_tc
                 and terminal_saved_after_gen_tc
-                and gen_cap_for_reply_tc in ("image.generate", "video.generate")
+                and gen_cap_for_reply_tc in ("image.generate", "video.generate", "ppt.create")
             ):
                 sse_saved = terminal_saved_after_gen_tc
                 if db is not None and user_id is not None:
@@ -7416,6 +7637,8 @@ async def _chat_openai(
                         _enrich_saved_assets_asset_ids_from_db(sse_saved, db, int(user_id))
                     except Exception:
                         pass
+                if gen_cap_for_reply_tc == "ppt.create":
+                    return _reply_for_user(res or "")
                 kind = "图片" if gen_cap_for_reply_tc == "image.generate" else "视频"
                 first = sse_saved[0] if isinstance(sse_saved[0], dict) else {}
                 aid = (first.get("asset_id") or "").strip() if isinstance(first, dict) else ""
@@ -7499,6 +7722,7 @@ async def _chat_openai(
                             a = _correct_video_to_image_if_user_asked_image(a, last_user_content)
                             a = _correct_image_to_video_or_tvc_if_user_asked(a, last_user_content)
                             a = _correct_daihuo_pipeline_to_video_if_plain_video(a, last_user_content)
+                            a = _ensure_ppt_create_payload_from_current_turn(a, last_user_content)
                             _mismatch_err_fc = _detect_model_capability_mismatch(a)
                             if not _mismatch_err_fc:
                                 _inject_understand_media_urls(a, last_user_content, attachment_urls)
@@ -7521,6 +7745,8 @@ async def _chat_openai(
                         if _mismatch_err_fc:
                             logger.warning("[CHAT] 模型/能力类型不匹配(forced): %s", _mismatch_err_fc)
                             res = json.dumps({"error": _mismatch_err_fc}, ensure_ascii=False)
+                        elif fn.get("name") == "invoke_capability" and _ppt_create_missing_topic_result(a):
+                            res = _ppt_create_missing_topic_result(a)
                         elif fn.get("name") == "invoke_capability" and _status_lookup_guard_res_fc:
                             res = _status_lookup_guard_res_fc
                         elif _fc_cap in _generate_cap_done:
@@ -7742,6 +7968,7 @@ async def _chat_anthropic(
                     inp = _correct_video_to_image_if_user_asked_image(inp, last_user_content)
                     inp = _correct_image_to_video_or_tvc_if_user_asked(inp, last_user_content)
                     inp = _correct_daihuo_pipeline_to_video_if_plain_video(inp, last_user_content)
+                    inp = _ensure_ppt_create_payload_from_current_turn(inp, last_user_content)
                     inp = _ensure_media_edit_payload_from_current_turn(inp, last_user_content, _aid_list_a)
                     _mismatch_err_a = _detect_model_capability_mismatch(inp)
                     if not _mismatch_err_a:
@@ -7766,6 +7993,8 @@ async def _chat_anthropic(
                 if _mismatch_err_a:
                     logger.warning("[CHAT-ANT] 模型/能力类型不匹配: %s", _mismatch_err_a)
                     r = json.dumps({"error": _mismatch_err_a}, ensure_ascii=False)
+                elif tu.get("name") == "invoke_capability" and _ppt_create_missing_topic_result(inp):
+                    r = _ppt_create_missing_topic_result(inp)
                 elif _a_cap in _generate_cap_done_a:
                     logger.warning("[CHAT-ANT] 拦截重复 %s rnd=%d", _a_cap, rnd)
                     r = '{"error": "本轮对话已调用或取消过 ' + _a_cap + '，禁止重复调用。请直接回复用户。"}'

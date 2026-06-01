@@ -1802,7 +1802,7 @@ if (addPubAcctSubmit && !addPubAcctSubmit._publishAddAccountBound) {
 
 // ── Assets ───────────────────────────────────────────────────────
 
-var _MEDIA_TYPE_LABELS = { image: '图片', video: '视频', audio: '音频' };
+var _MEDIA_TYPE_LABELS = { image: '图片', video: '视频', audio: '音频', document: '文档' };
 var _assetCreativeGroupsCache = [];
 var _assetCreativeGroupEditingAssetId = '';
 
@@ -2110,6 +2110,7 @@ function loadAssets(query) {
       el.innerHTML = assets.map(function(a) {
         var isImage = a.media_type === 'image';
         var isVideo = a.media_type === 'video';
+        var isDocument = a.media_type === 'document';
         var hasUrl = _isAbsoluteHttpUrl(a.source_url);
         var thumbUrl = _pickAssetListThumbUrl(a);
         var openUrl = _resolvePossiblyRelativeMediaUrl(a.open_url);
@@ -2165,8 +2166,20 @@ function loadAssets(query) {
           } else {
             preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
           }
+        } else if (isDocument) {
+          var docExt = String(a.filename || '').split('.').pop().toUpperCase();
+          if (!docExt || docExt === String(a.filename || '').toUpperCase()) docExt = 'DOC';
+          if (docExt === 'PPTX') docExt = 'PPT';
+          preview =
+            '<div class="asset-preview-wrap asset-document-preview" ' +
+            wrapAttrs +
+            '><div class="asset-document-preview-inner">' +
+            '<div class="asset-document-icon">' + escapeHtml(docExt.slice(0, 4)) + '</div>' +
+            '<div class="asset-document-name">' + escapeHtml(a.filename || 'document') + '</div>' +
+            '<div class="asset-document-meta">文档文件</div>' +
+            '</div></div>';
         } else {
-          preview = '<div style="margin:0.5rem 0;font-size:0.8rem;color:var(--text-muted);">[' + escapeHtml(a.media_type) + '] ' + escapeHtml(a.filename) + '</div>';
+          preview = '<div class="asset-preview-wrap asset-document-preview" ' + wrapAttrs + '><div class="asset-document-preview-inner"><div class="asset-document-icon">FILE</div><div class="asset-document-name">' + escapeHtml(a.filename || a.media_type || 'file') + '</div><div class="asset-document-meta">' + escapeHtml(a.media_type || '文件') + '</div></div></div>';
         }
         var typeLabel = _MEDIA_TYPE_LABELS[a.media_type] || a.media_type;
         var tags = a.tags ? '<div class="card-tags">' + a.tags.split(',').map(function(t) { return '<span class="tag">' + escapeHtml(t.trim()) + '</span>'; }).join('') + '</div>' : '';
@@ -2176,10 +2189,11 @@ function loadAssets(query) {
         var useAsAttachBtn = (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
         var candidateBtn = isImage ? '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '">设为创意备选</button>' : '';
         var deleteBtn = '<button type="button" class="btn btn-ghost btn-sm" data-delete-asset="' + escapeAttr(a.asset_id) + '">删除</button>';
+        var badgeColor = isImage ? '#6366f1' : isVideo ? '#f59e0b' : isDocument ? '#64748b' : '#888';
         return '<div class="skill-store-card asset-card">' +
-          '<div class="card-label"><span class="asset-card-badge" style="background:' + (isImage ? '#6366f1' : isVideo ? '#f59e0b' : '#888') + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
+          '<div class="card-label"><span class="asset-card-badge" style="background:' + badgeColor + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
           preview +
-          '<div class="card-desc" style="font-size:0.78rem;">' + escapeHtml(a.prompt || a.filename) + '</div>' +
+          '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(a.prompt || a.filename) + '</div>' +
           tags +
           groupHtml +
           '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +

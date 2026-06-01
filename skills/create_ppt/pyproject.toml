@@ -1,0 +1,26 @@
+[project]
+name = "ppt-maker"
+version = "0.1.0"
+description = "专业 PPT 创建工具 - 支持大纲输入和 AI 辅助生成"
+requires-python = ">=3.9"
+dependencies = [
+    "python-pptx>=1.0.0",
+    "pydantic>=2.0",
+    "typer[all]>=0.9.0",
+    "pyyaml>=6.0",
+    "openai>=1.0.0",
+    "rich>=13.0",
+]
+
+[project.scripts]
+ppt-maker = "ppt_maker.cli.app:app"
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
