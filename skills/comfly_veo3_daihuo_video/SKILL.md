@@ -20,6 +20,18 @@ This skill is based on two confirmed sources:
 - Submit Veo image-to-video task: `POST /v2/videos/generations`
 - Query Veo task: `GET /v2/videos/generations/{task_id}`
 
+## Yunwu video channel
+
+The packaged pipeline can route only the video generation step through Yunwu while keeping analysis and storyboard image generation on the configured Comfly-compatible base.
+
+- Set `video_channel` to `yunwu`.
+- Use `video_base_url=https://yunwu.ai` unless the deployment overrides it.
+- Use `video_model=veo3.1` for Yunwu.
+- Submit with `POST /v1/video/create`.
+- Poll with `GET /v1/video/query?id=<task_id>`.
+- A successful create response returns fields such as `id`, `status`, and `status_update_time`.
+- A completed poll response returns `status=completed` and `video_url`.
+
 ## Confirmed request model values from the current docs
 
 - `veo3.1`
@@ -181,11 +193,11 @@ There is also a Python runtime-compatible pipeline at:
 It implements this flow:
 
 1. upload product image
-2. use `gemini-2.5-pro` to analyze the product image and generate:
+2. use `gpt-5.4` to analyze the product image and generate, falling back to `gemini-2.5-pro` if the primary analysis model fails:
    - product summary
    - main character definition
    - 6 storyboard plans by default
-3. generate one consistent main character reference image with `nano-banana-2`
+3. generate one consistent main character reference image with `gpt-image-2`, falling back to `nano-banana-2` if the primary model fails
 4. generate 6 storyboard images in parallel by default, each using:
    - product image
    - character image
@@ -194,12 +206,13 @@ It implements this flow:
 6. poll 6 Veo video tasks in parallel by default
 
 The Python pipeline defaults to `veo3.1-fast`.
-The storyboard and character image generation defaults to `nano-banana-2`, matching the existing `nanobanna2` reference project flow.
+The storyboard and character image generation defaults to `gpt-image-2`, with automatic fallback to `nano-banana-2` when the primary image model fails.
 It now also writes step-by-step debug artifacts under `runs/` and retries upload, analysis, image generation, video submit, and video generation failures.
 It also returns a `usage` summary for the current run:
 
 - successful analysis call = `1` point
-- successful image generation call = `2` points
+- successful `gpt-image-2` image generation call = `1` point
+- successful `nano-banana-2` fallback image generation call = `2` points
 - successful video generation result = `2` points
 
 Failed calls do not count toward the returned points total.

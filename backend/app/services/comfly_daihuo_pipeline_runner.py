@@ -110,6 +110,14 @@ def build_pipeline_input(
     language: str,
     task_text: str = "",
     image_request_style: Optional[str] = None,
+    analysis_model: Optional[str] = None,
+    analysis_model_fallback: Optional[str] = None,
+    image_model: Optional[str] = None,
+    image_model_fallback: Optional[str] = None,
+    video_channel: Optional[str] = None,
+    video_base_url: Optional[str] = None,
+    video_model: Optional[str] = None,
+    generation_time_limit_seconds: Optional[int] = None,
     enhance_prompt: bool = False,
     watermark: bool = False,
 ) -> Dict[str, Any]:
@@ -134,6 +142,22 @@ def build_pipeline_input(
         inp["language"] = language.strip()
     if (task_text or "").strip():
         inp["task_text"] = task_text.strip()
+    if (analysis_model or "").strip():
+        inp["analysis_model"] = analysis_model.strip()
+    if (analysis_model_fallback or "").strip():
+        inp["analysis_model_fallback"] = analysis_model_fallback.strip()
+    if (image_model or "").strip():
+        inp["image_model"] = image_model.strip()
+    if (image_model_fallback or "").strip():
+        inp["image_model_fallback"] = image_model_fallback.strip()
+    if (video_channel or "").strip():
+        inp["video_channel"] = video_channel.strip()
+    if (video_base_url or "").strip():
+        inp["video_base_url"] = _api_base_for_pipeline(video_base_url)
+    if (video_model or "").strip():
+        inp["video_model"] = video_model.strip()
+    if generation_time_limit_seconds is not None:
+        inp["generation_time_limit_seconds"] = int(generation_time_limit_seconds)
     ff = _bundled_ffmpeg_exe()
     if ff:
         inp["ffmpeg_path"] = ff

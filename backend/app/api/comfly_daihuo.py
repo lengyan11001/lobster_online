@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
+from ..core.config import settings
 from ..services.comfly_daihuo_job_store import (
     create_job_record,
     find_recent_running_job,
@@ -71,8 +72,16 @@ class ComflyDaihuoPipelinePayload(BaseModel):
         None,
         description="图生 Body 形态：openai_images（model + prompt/n/size，Comfly 网关要求 model）或 comfly（model/aspect_ratio/可选 image）；默认 openai_images",
     )
+    analysis_model: Optional[str] = Field(None, description="分析图片/规划分镜主模型，默认 gpt-5.4")
+    analysis_model_fallback: Optional[str] = Field(None, description="分析主模型失败时的兜底模型，默认 gemini-2.5-pro")
+    image_model: Optional[str] = Field(None, description="角色/分镜图主模型，默认 gpt-image-2")
+    image_model_fallback: Optional[str] = Field(None, description="角色/分镜图主模型失败时的兜底模型，默认 nano-banana-2")
 
 
+    video_channel: Optional[str] = Field(None, description="Video provider channel: comfly or yunwu. Default comfly.")
+    video_base_url: Optional[str] = Field(None, description="Optional video provider base URL. Yunwu uses https://yunwu.ai.")
+    video_model: Optional[str] = Field(None, description="Video generation model. Comfly default veo3.1-fast; Yunwu can use veo3.1.")
+    generation_time_limit_seconds: Optional[int] = Field(None, ge=60, le=7200, description="整包生成等待上限；到时用已成功视频片段合成，默认 600 秒")
     enhance_prompt: bool = Field(False, description="Veo prompt enhancement switch; default off to avoid accidental subtitles or on-screen text")
     watermark: bool = Field(False, description="Veo watermark switch; default off")
 
@@ -114,12 +123,23 @@ async def _prepare_pipeline_input(
     )
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
     pipe_base = _api_base_for_pipeline(api_base)
+    configured_video_channel = (getattr(settings, "comfly_daihuo_video_channel", "") or "").strip().lower()
+    video_channel = (pl.video_channel or configured_video_channel or "").strip()
+    video_base_url = (pl.video_base_url or "").strip()
+    video_model = (pl.video_model or "").strip()
+    if video_channel in {"yunwu", "云雾", "雲霧"}:
+        video_channel = "yunwu"
+        video_base_url = video_base_url or pipe_base
+        video_model = video_model or (getattr(settings, "comfly_daihuo_yunwu_video_model", None) or "veo3.1")
     logger.info(
-        "[comfly.daihuo.pipeline] credentials user_id=%s key_len=%s api_base=%s pipeline_base=%s",
+        "[comfly.daihuo.pipeline] credentials user_id=%s key_len=%s api_base=%s pipeline_base=%s video_channel=%s video_base=%s video_model=%s",
         current_user.id,
         len((api_key or "").strip()),
         (api_base or "")[:120],
         (pipe_base or "")[:120],
+        video_channel or "comfly",
+        (video_base_url or "")[:120],
+        video_model or "",
     )
     return build_pipeline_input(
         product_image=product_image,
@@ -133,6 +153,14 @@ async def _prepare_pipeline_input(
         language=pl.language,
         task_text=pl.task_text,
         image_request_style=pl.image_request_style,
+        analysis_model=pl.analysis_model,
+        analysis_model_fallback=pl.analysis_model_fallback,
+        image_model=pl.image_model,
+        image_model_fallback=pl.image_model_fallback,
+        video_channel=video_channel,
+        video_base_url=video_base_url,
+        video_model=video_model,
+        generation_time_limit_seconds=pl.generation_time_limit_seconds,
         enhance_prompt=pl.enhance_prompt,
         watermark=pl.watermark,
     )

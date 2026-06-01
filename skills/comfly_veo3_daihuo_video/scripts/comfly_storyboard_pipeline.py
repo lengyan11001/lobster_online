@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import traceback
+from urllib.parse import urlencode
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -40,8 +41,11 @@ class Input(TypedDict, total=False):
     language: str
     target_market: str
     analysis_model: str
+    analysis_model_fallback: str
     image_model: str
     video_model: str
+    video_channel: str
+    video_base_url: str
     aspect_ratio: str
     enhance_prompt: bool
     watermark: bool
@@ -81,11 +85,15 @@ class PipelineConfig:
     country: str = ""
     language: str = ""
     target_market: str = ""
-    analysis_model: str = "gemini-2.5-pro"
-    # SKILL 默认 nano-banana-2；图生 body 仅对该模型附加 image_size（默认 1K）
-    image_model: str = "nano-banana-2"
+    analysis_model: str = "gpt-5.4"
+    analysis_model_fallback: str = "gemini-2.5-pro"
+    # 默认用 gpt-image-2 生成角色/分镜图；失败时自动降级到 nano-banana-2。
+    image_model: str = "gpt-image-2"
+    image_model_fallback: str = "nano-banana-2"
     image_size: str = "1K"
-    video_model: str = "grok-video-3"
+    video_model: str = "veo3.1-fast"
+    video_channel: str = "comfly"
+    video_base_url: str = ""
     aspect_ratio: str = "9:16"
     enhance_prompt: bool = False
     watermark: bool = False
@@ -106,8 +114,8 @@ class PipelineConfig:
     clip_download_timeout_seconds: int = 180
     shot_refill_retries: int = 2
     # 与 Comfly /v1/images/generations（Banana-2 Pro）对齐：无 OpenAI 的 n 字段；image_size 仅 banana-2
-    generation_time_limit_seconds: int = 1200
-    image_request_style: str = "comfly"
+    generation_time_limit_seconds: int = 600
+    image_request_style: str = "openai_images"
 
 
 class PipelineError(RuntimeError):
@@ -127,9 +135,23 @@ def _seconds_until_deadline(deadline_monotonic: float | None) -> float | None:
 
 MODEL_UNIT_COSTS: Dict[str, int] = {
     "analysis": 1,
-    "image": 2,
+    "image": 1,
     "video": 2,
 }
+
+IMAGE_MODEL_UNIT_COSTS: Dict[str, int] = {
+    "gpt-image-2": 1,
+    "openai/gpt-image-2": 1,
+    "nano-banana-2": 2,
+    "fal-ai/nano-banana-2": 2,
+    "nano-banana-pro": 2,
+    "fal-ai/nano-banana-pro": 2,
+}
+
+
+def _image_model_unit_cost(model: str) -> int:
+    key = (model or "").strip().lower()
+    return IMAGE_MODEL_UNIT_COSTS.get(key, MODEL_UNIT_COSTS["image"])
 
 
 class RunLogger:
@@ -154,8 +176,12 @@ class RunLogger:
                 "country": config.country,
                 "language": config.language,
                 "analysis_model": config.analysis_model,
+                "analysis_model_fallback": config.analysis_model_fallback,
                 "image_model": config.image_model,
+                "image_model_fallback": config.image_model_fallback,
                 "video_model": config.video_model,
+                "video_channel": config.video_channel,
+                "video_base_url": config.video_base_url,
                 "aspect_ratio": config.aspect_ratio,
                 "enhance_prompt": config.enhance_prompt,
                 "watermark": config.watermark,
@@ -176,6 +202,7 @@ class RunLogger:
             "input": {k: v for k, v in raw_input.items() if k != "apikey"},
             "usage": {
                 "unit_costs": dict(MODEL_UNIT_COSTS),
+                "image_model_unit_costs": dict(IMAGE_MODEL_UNIT_COSTS),
                 "summary": {
                     "analysis_count": 0,
                     "image_count": 0,
@@ -300,10 +327,119 @@ def _normalize_comfly_api_key(raw: str) -> str:
     return k
 
 
+def _normalize_video_channel(raw: str) -> str:
+    s = (raw or "").strip().lower()
+    if s in {"yunwu", "yw", "cloudmist", "cloud-mist", "云雾", "雲霧"}:
+        return "yunwu"
+    return "comfly"
+
+
+def _normalize_api_base_url(raw: str, default: str) -> str:
+    base = (raw or default or "").strip().rstrip("/")
+    if base.lower().endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    if base.lower().endswith("/v2"):
+        base = base[:-3].rstrip("/")
+    return base
+
+
+def _yunwu_video_create_body(prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool) -> Dict[str, Any]:
+    return {
+        "enable_upsample": True,
+        "enhance_prompt": bool(enhance_prompt),
+        "images": images,
+        "model": model,
+        "prompt": prompt,
+        "aspect_ratio": _normalize_aspect_ratio_for_comfly(aspect_ratio),
+    }
+
+
+def _task_id_from_video_submit_payload(payload: Dict[str, Any]) -> str:
+    data = payload.get("data")
+    data_obj = data if isinstance(data, dict) else {}
+    for value in (
+        payload.get("task_id"),
+        payload.get("id"),
+        data_obj.get("task_id"),
+        data_obj.get("id"),
+        data_obj.get("taskId"),
+        payload.get("taskId"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _first_str(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        for item in value:
+            s = _first_str(item)
+            if s:
+                return s
+    if isinstance(value, dict):
+        for key in ("output", "url", "video_url", "videoUrl", "mp4url", "mp4_url"):
+            s = _first_str(value.get(key))
+            if s:
+                return s
+    return ""
+
+
+def _video_poll_fields(payload: Dict[str, Any]) -> Dict[str, str]:
+    data = payload.get("data")
+    data_obj = data if isinstance(data, dict) else {}
+    status = (
+        payload.get("status")
+        or payload.get("state")
+        or payload.get("task_status")
+        or data_obj.get("status")
+        or data_obj.get("state")
+        or data_obj.get("task_status")
+        or ""
+    )
+    progress = payload.get("progress") or data_obj.get("progress") or ""
+    fail_reason = (
+        payload.get("fail_reason")
+        or payload.get("error")
+        or payload.get("message")
+        or data_obj.get("fail_reason")
+        or data_obj.get("error")
+        or data_obj.get("message")
+        or ""
+    )
+    output = _first_str(data_obj.get("output"))
+    if not output:
+        output = _first_str(data_obj.get("outputs"))
+    if not output:
+        output = _first_str(data_obj.get("video_url") or data_obj.get("url") or data_obj.get("result"))
+    if not output:
+        output = _first_str(payload.get("output") or payload.get("outputs") or payload.get("video_url") or payload.get("url") or payload.get("result"))
+    return {
+        "status": str(status or "").strip(),
+        "progress": str(progress or "").strip(),
+        "fail_reason": str(fail_reason or "").strip(),
+        "mp4url": output,
+    }
+
+
 def _comfly_model_supports_image_size_field(model: str) -> bool:
     """Comfly 文档：image_size 仅 nano-banana-2；勿对 nano-banana / Flash 等误传。"""
     m = (model or "").strip().lower()
     return m == "nano-banana-2" or m.startswith("nano-banana-2-")
+
+
+_OPENAI_IMAGE_ASPECT_TO_SIZE: Dict[str, str] = {
+    "1:1": "1024x1024",
+    "3:2": "1536x1024",
+    "16:9": "1536x1024",
+    "2:3": "1024x1536",
+    "9:16": "1024x1536",
+}
+
+
+def _openai_image_size_for_aspect(aspect_ratio: str) -> str:
+    return _OPENAI_IMAGE_ASPECT_TO_SIZE.get(_normalize_aspect_ratio_for_comfly(aspect_ratio), "1024x1024")
 
 
 # Comfly 图生 / Veo 提交允许的 aspect_ratio（与上游校验一致）；默认与 SKILL「Ecommerce defaults → output ratio 9:16」一致。
@@ -364,12 +500,20 @@ class ComflyClient:
     def __init__(self, config: PipelineConfig, logger: RunLogger) -> None:
         self.config = config
         self.logger = logger
-        self.base_url = config.base_url.rstrip("/")
+        self.base_url = _normalize_api_base_url(config.base_url, "https://ai.comfly.org")
+        self.video_channel = _normalize_video_channel(config.video_channel)
+        default_video_base = "https://yunwu.ai" if self.video_channel == "yunwu" else self.base_url
+        self.video_base_url = _normalize_api_base_url(config.video_base_url, default_video_base)
         self.session = requests.Session()
         self.session.headers.update(
             {"Authorization": f"Bearer {_normalize_comfly_api_key(config.api_key)}", "Accept": "application/json"}
         )
-        self._trace_request("session_init", self.base_url, None, None)
+        self._trace_request(
+            "session_init",
+            self.base_url,
+            None,
+            {"video_channel": self.video_channel, "video_base_url": self.video_base_url},
+        )
 
     def _effective_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         h = {str(k): str(v) for k, v in self.session.headers.items()}
@@ -454,20 +598,64 @@ class ComflyClient:
 
         return _retry("analyze", self.config.analysis_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
+    def analyze_with_fallback(self, prompt: str, image_urls: List[str]) -> tuple[Dict[str, Any], int, str, bool]:
+        primary = (self.config.analysis_model or "").strip() or "gpt-5.4"
+        fallback = (self.config.analysis_model_fallback or "").strip()
+        tried: List[str] = []
+        last_error = ""
+        total_attempts = 0
+        for model in [primary, fallback]:
+            model = (model or "").strip()
+            if not model or model in tried:
+                continue
+            tried.append(model)
+            try:
+                result, attempts = self.analyze(model, prompt, image_urls)
+                total_attempts += attempts
+                result["_analysis_model"] = model
+                result["_used_analysis_fallback"] = model != primary
+                if model != primary:
+                    result["_primary_analysis_error"] = last_error
+                return result, total_attempts, model, model != primary
+            except Exception as exc:
+                total_attempts += max(1, self.config.analysis_retries)
+                current_error = str(exc)
+                if last_error and model != primary:
+                    last_error = f"primary {primary} failed: {last_error}; fallback {model} failed: {current_error}"
+                else:
+                    last_error = current_error
+                self.logger.error("02_storyboard_plan", f"analysis model {model} failed: {current_error}")
+                if model == primary and fallback:
+                    time.sleep(self.config.network_retry_delay_seconds)
+                    continue
+                raise
+        raise PipelineError(f"storyboard analysis failed: {last_error}")
+
     def generate_image(self, model: str, prompt: str, aspect_ratio: str, refs: List[str], action: str) -> tuple[Dict[str, Any], int]:
         ar = _normalize_aspect_ratio_for_comfly(aspect_ratio)
-        # Comfly 文档：POST /v1/images/generations — model、prompt 必需；aspect_ratio、response_format、image[] 可选；勿传文档未列的 n（OpenAI 字段）
-        body: Dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "aspect_ratio": ar,
-            "response_format": "url",
-        }
-        if refs:
-            body["image"] = refs
-        isz = (self.config.image_size or "").strip().upper()
-        if isz in ("1K", "2K", "4K") and _comfly_model_supports_image_size_field(model):
-            body["image_size"] = isz
+        if (self.config.image_request_style or "").strip().lower() == "openai_images":
+            body: Dict[str, Any] = {
+                "model": model,
+                "prompt": prompt,
+                "n": 1,
+                "size": _openai_image_size_for_aspect(ar),
+                "response_format": "url",
+            }
+            if refs:
+                body["image"] = refs
+        else:
+            # Comfly 文档：POST /v1/images/generations — model、prompt 必需；aspect_ratio、response_format、image[] 可选；勿传文档未列的 n（OpenAI 字段）
+            body = {
+                "model": model,
+                "prompt": prompt,
+                "aspect_ratio": ar,
+                "response_format": "url",
+            }
+            if refs:
+                body["image"] = refs
+            isz = (self.config.image_size or "").strip().upper()
+            if isz in ("1K", "2K", "4K") and _comfly_model_supports_image_size_field(model):
+                body["image_size"] = isz
 
         def call() -> Dict[str, Any]:
             img_url = f"{self.base_url}/v1/images/generations"
@@ -485,9 +673,40 @@ class ComflyClient:
 
         return _retry(action, self.config.image_generation_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
+    def generate_image_with_fallback(self, prompt: str, aspect_ratio: str, refs: List[str], action: str) -> tuple[Dict[str, Any], int, str, bool]:
+        primary = (self.config.image_model or "").strip() or "gpt-image-2"
+        fallback = (self.config.image_model_fallback or "").strip()
+        tried: List[str] = []
+        last_error = ""
+        total_attempts = 0
+        for model in [primary, fallback]:
+            model = (model or "").strip()
+            if not model or model in tried:
+                continue
+            tried.append(model)
+            try:
+                result, attempts = self.generate_image(model, prompt, aspect_ratio, refs, action if model == primary else f"{action}_fallback")
+                total_attempts += attempts
+                result["model"] = model
+                result["used_fallback"] = model != primary
+                if model != primary:
+                    result["primary_error"] = last_error
+                return result, total_attempts, model, model != primary
+            except Exception as exc:
+                total_attempts += max(1, self.config.image_generation_retries)
+                last_error = str(exc)
+                self.logger.error(action, f"image model {model} failed: {last_error}")
+                if model == primary and fallback:
+                    time.sleep(self.config.network_retry_delay_seconds)
+                    continue
+                raise
+        raise PipelineError(f"{action} image generation failed: {last_error}")
+
     def submit_video(self, prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool, watermark: bool, action: str) -> tuple[Dict[str, Any], int]:
         ar = _normalize_aspect_ratio_for_comfly(aspect_ratio)
-        if model.strip().lower() == "grok-video-3":
+        if self.video_channel == "yunwu":
+            body = _yunwu_video_create_body(prompt, model, images, ar, enhance_prompt)
+        elif model.strip().lower() == "grok-video-3":
             body: Dict[str, Any] = {
                 "prompt": prompt,
                 "model": model,
@@ -503,15 +722,16 @@ class ComflyClient:
                 body["enhance_prompt"] = True
 
         def call() -> Dict[str, Any]:
-            vid_url = f"{self.base_url}/v2/videos/generations"
+            vid_url = f"{self.video_base_url}/v1/video/create" if self.video_channel == "yunwu" else f"{self.video_base_url}/v2/videos/generations"
             ex = {"Content-Type": "application/json"}
             self._trace_request("videos_generations_submit", vid_url, ex, body)
             r = self.session.post(vid_url, headers=ex, json=body, timeout=120)
             payload = self._check(r)
-            task_id = payload.get("task_id")
-            if not isinstance(task_id, str) or not task_id:
+            task_id = str(payload.get("id") or "").strip() if self.video_channel == "yunwu" else _task_id_from_video_submit_payload(payload)
+            if not task_id:
                 raise PipelineError(f"Video submit returned no task_id: {payload}")
             payload["_request"] = body
+            payload["task_id"] = task_id
             return payload
 
         return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call)
@@ -521,20 +741,25 @@ class ComflyClient:
         for attempt in range(1, max_polls + 1):
             _ensure_before_deadline(deadline_monotonic, "video polling")
             def call() -> Dict[str, Any]:
-                poll_url = f"{self.base_url}/v2/videos/generations/{task_id}"
+                if self.video_channel == "yunwu":
+                    poll_url = f"{self.video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
+                else:
+                    poll_url = f"{self.video_base_url}/v2/videos/generations/{task_id}"
                 self._trace_request("videos_generations_poll", poll_url, None, None)
                 r = self.session.get(poll_url, timeout=60)
                 return self._check(r)
 
             payload, request_attempts = _retry(f"poll_{task_id}", 3, self.config.network_retry_delay_seconds, self.logger, call)
-            status = payload.get("status", "")
-            progress = payload.get("progress", "")
-            fail_reason = payload.get("fail_reason", "")
-            mp4url = payload.get("data", {}).get("output", "") if isinstance(payload.get("data"), dict) else ""
+            fields = _video_poll_fields(payload)
+            status = fields["status"]
+            status_key = status.strip().upper()
+            progress = fields["progress"]
+            fail_reason = fields["fail_reason"]
+            mp4url = fields["mp4url"]
             history.append({"attempt": attempt, "request_attempts": request_attempts, "status": status, "progress": progress, "fail_reason": fail_reason, "mp4url": mp4url})
-            if status == "SUCCESS" and mp4url:
+            if status_key in {"SUCCESS", "SUCCEEDED", "COMPLETED", "COMPLETE", "DONE"} and mp4url:
                 return {"task_id": task_id, "status": status, "progress": progress, "mp4url": mp4url, "raw": payload, "history": history}
-            if status == "FAILURE":
+            if status_key in {"FAILURE", "FAILED", "ERROR", "CANCELED", "CANCELLED"}:
                 raise PipelineError(f"Video task failed: {fail_reason or payload}")
             remaining = _seconds_until_deadline(deadline_monotonic)
             if remaining is not None and remaining <= 0:
@@ -585,9 +810,12 @@ def _build_config(data: Input) -> PipelineConfig:
     elif raw_irs in ("comfly", "legacy"):
         irs = "comfly"
     else:
-        irs = "comfly"
+        irs = "openai_images"
     _raw_imsz = str(data.get("image_size") or "1K").strip().upper()
     _imsz = _raw_imsz if _raw_imsz in ("1K", "2K", "4K") else "1K"
+    video_channel = _normalize_video_channel(str(data.get("video_channel") or data.get("channel") or "comfly"))
+    video_base_default = "https://yunwu.ai" if video_channel == "yunwu" else str(data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.org")))
+    video_model_default = "veo3.1" if video_channel == "yunwu" else "veo3.1-fast"
     return PipelineConfig(
         base_url=data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.org")),
         api_key=api_key,
@@ -596,10 +824,14 @@ def _build_config(data: Input) -> PipelineConfig:
         country=locale_inputs["country"],
         language=locale_inputs["language"],
         target_market=data.get("target_market", ""),
-        analysis_model=data.get("analysis_model", "gemini-2.5-pro"),
-        image_model=data.get("image_model", "nano-banana-2"),
+        analysis_model=(data.get("analysis_model") or "gpt-5.4"),
+        analysis_model_fallback=(data.get("analysis_model_fallback") or "gemini-2.5-pro"),
+        image_model=(data.get("image_model") or data.get("storyboard_image_model") or "gpt-image-2"),
+        image_model_fallback=(data.get("image_model_fallback") or data.get("storyboard_image_model_fallback") or "nano-banana-2"),
         image_size=_imsz,
-        video_model=data.get("video_model", "grok-video-3"),
+        video_model=(data.get("video_model") or video_model_default),
+        video_channel=video_channel,
+        video_base_url=_normalize_api_base_url(str(data.get("video_base_url") or ""), video_base_default),
         aspect_ratio=_normalize_aspect_ratio_for_comfly(str(data.get("aspect_ratio") or "9:16")),
         enhance_prompt=bool(data.get("enhance_prompt", False)),
         watermark=bool(data.get("watermark", False)),
@@ -619,7 +851,7 @@ def _build_config(data: Input) -> PipelineConfig:
         clip_download_retries=int(data.get("clip_download_retries", 2)),
         clip_download_timeout_seconds=int(data.get("clip_download_timeout_seconds", 180)),
         shot_refill_retries=int(data.get("shot_refill_retries", 2)),
-        generation_time_limit_seconds=max(60, int(data.get("generation_time_limit_seconds", 1200))),
+        generation_time_limit_seconds=max(60, int(data.get("generation_time_limit_seconds", 600))),
         image_request_style=irs,
     )
 
@@ -1440,13 +1672,14 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
         },
     )
     _ensure_before_deadline(deadline_monotonic, "shot image generation")
-    image_result, image_attempts = client.generate_image(config.image_model, image_prompt, config.aspect_ratio, [product_image_url, character_image_url], f"shot_{index:02d}_image_{round_tag}")
+    image_result, image_attempts, image_model_used, image_used_fallback = client.generate_image_with_fallback(image_prompt, config.aspect_ratio, [product_image_url, character_image_url], f"shot_{index:02d}_image_{round_tag}")
     logger.shot(index, f"image_{round_tag}", "success", attempts=image_attempts, payload=image_result)
     logger.record_usage(
         "image",
-        config.image_model,
+        image_model_used,
         f"shot_{index:02d}_storyboard_image_{round_tag}",
-        payload={"index": index, "round_index": round_index, "url": image_result.get("url")},
+        units=_image_model_unit_cost(image_model_used),
+        payload={"index": index, "round_index": round_index, "url": image_result.get("url"), "used_fallback": image_used_fallback},
     )
     last_error = ""
     for video_attempt in range(1, config.video_generation_retries + 1):
@@ -1503,12 +1736,17 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         client = ComflyClient(config, logger)
         product_image_url, upload_attempts = client.upload(product_image)
         logger.step("01_product_upload", "success", attempts=upload_attempts, payload={"product_image": product_image, "product_image_url": product_image_url})
-        storyboard_plan, analysis_attempts = client.analyze(config.analysis_model, _storyboard_prompt(config), [product_image_url])
+        storyboard_plan, analysis_attempts, analysis_model_used, analysis_used_fallback = client.analyze_with_fallback(_storyboard_prompt(config), [product_image_url])
         _coerce_plan_character_and_product_summary(storyboard_plan)
         raw_storyboards = storyboard_plan.get("storyboards", [])
         storyboard_plan["storyboards"] = [_sanitize_storyboard_fields(sb) for sb in raw_storyboards if isinstance(sb, dict)]
         logger.step("02_storyboard_plan", "success", attempts=analysis_attempts, payload=storyboard_plan)
-        logger.record_usage("analysis", config.analysis_model, "storyboard_plan_analysis", payload={"attempts": analysis_attempts})
+        logger.record_usage(
+            "analysis",
+            analysis_model_used,
+            "storyboard_plan_analysis",
+            payload={"attempts": analysis_attempts, "used_fallback": analysis_used_fallback},
+        )
         product_summary = storyboard_plan.get("product_summary", {})
         character = storyboard_plan.get("character", {})
         storyboards = storyboard_plan.get("storyboards", [])
@@ -1524,10 +1762,16 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         if not character_prompt.strip():
             raise PipelineError(f"Missing character image prompt after fallback synthesis: {storyboard_plan}")
         char_image_prompt = f"{character_prompt}. Keep the person suitable for repeated consistency across all storyboard scenes."
-        char_result, char_attempts = client.generate_image(config.image_model, char_image_prompt, config.aspect_ratio, [product_image_url], "03_character_image")
+        char_result, char_attempts, char_model_used, char_used_fallback = client.generate_image_with_fallback(char_image_prompt, config.aspect_ratio, [product_image_url], "03_character_image")
         character_image_url = char_result["url"]
         logger.step("03_character_image", "success", attempts=char_attempts, payload={"character": character, "character_prompt": char_image_prompt, "character_image": char_result})
-        logger.record_usage("image", config.image_model, "character_reference_image", payload={"url": character_image_url})
+        logger.record_usage(
+            "image",
+            char_model_used,
+            "character_reference_image",
+            units=_image_model_unit_cost(char_model_used),
+            payload={"url": character_image_url, "used_fallback": char_used_fallback},
+        )
         results_map: Dict[int, Dict[str, Any]] = {}
         failure_map: Dict[int, Dict[str, Any]] = {}
         merge_result: Dict[str, Any] | None = None
@@ -1625,7 +1869,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                     pending_storyboards = []
                     break
             finally:
-                ex.shutdown(wait=not deadline_hit, cancel_futures=deadline_hit)
+                ex.shutdown(wait=False if deadline_hit else True, cancel_futures=deadline_hit)
             round_failure_indexes = {item["index"] for item in round_failures}
             rerun_storyboards = [
                 sb
@@ -1685,8 +1929,12 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             "usage": logger.usage_snapshot(),
             "config": {
                 "video_model": config.video_model,
+                "video_channel": config.video_channel,
+                "video_base_url": config.video_base_url,
                 "image_model": config.image_model,
+                "image_model_fallback": config.image_model_fallback,
                 "analysis_model": config.analysis_model,
+                "analysis_model_fallback": config.analysis_model_fallback,
                 "aspect_ratio": config.aspect_ratio,
                 "enhance_prompt": config.enhance_prompt,
                 "watermark": config.watermark,
