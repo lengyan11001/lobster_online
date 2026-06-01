@@ -20,7 +20,8 @@
   });
 
   window.registerLobsterView('assets', {
-    html: '/static/views/assets.html'
+    html: '/static/views/assets.html?v=20260601-asset-doc-card',
+    cache: 'reload'
   });
 
   window.registerLobsterView('scheduled-tasks', {

@@ -75,10 +75,11 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "create.video.pipeline": ("/api/create-video/pipeline/run", 7200.0),
     "hifly.video.create_by_tts": ("/api/hifly/video/create-by-tts", 120.0),
     "ecommerce.publish": ("/api/ecommerce-publish/open-product-form", 120.0),
+    "ppt.create": ("/api/create-ppt/run", 600.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish", "ppt.create"})
 
 _LOCAL_PIPELINE_JOB_LOOKUP_SPECS: tuple[tuple[str, str, str], ...] = (
     ("comfly.daihuo.pipeline", "/api/comfly-daihuo/pipeline/jobs/{job_id}", "local_comfly_daihuo_job"),
@@ -166,6 +167,45 @@ def _normalize_invoke_comfly_veo_args(args: Dict[str, Any]) -> Dict[str, Any]:
         ):
             if k in args and args[k] is not None:
                 pl.setdefault(k, args[k])
+    out = dict(args)
+    out["payload"] = pl
+    return out
+
+
+def _normalize_invoke_ppt_create_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(args, dict):
+        return args
+    if str(args.get("capability_id") or "").strip() != "ppt.create":
+        return args
+    raw_pl = args.get("payload")
+    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    nested = pl.get("payload")
+    if isinstance(nested, dict):
+        base = {k: v for k, v in pl.items() if k != "payload"}
+        pl = {**base, **nested}
+    for key in (
+        "mode",
+        "topic",
+        "outline_markdown",
+        "slide_count",
+        "theme",
+        "language",
+        "instructions",
+        "model",
+        "base_url",
+        "filename",
+        "slide_prompts",
+        "image_model",
+        "image_quality",
+        "image_background",
+        "aspect_ratio",
+    ):
+        if key in args and args[key] is not None and key not in pl:
+            pl[key] = args[key]
+    if not str(pl.get("mode") or "").strip() and str(pl.get("topic") or pl.get("outline_markdown") or "").strip():
+        pl["mode"] = "ai" if str(pl.get("topic") or "").strip() else "outline"
+    if "slide_count" not in pl and str(pl.get("mode") or "").strip().lower() == "ai":
+        pl["slide_count"] = 10
     out = dict(args)
     out["payload"] = pl
     return out
@@ -1059,6 +1099,12 @@ def _backend_headers(token: Optional[str], request: Optional[Request] = None) ->
         if pipeline_cap:
             h["X-Lobster-Pipeline-Capability"] = pipeline_cap[:128]
     bk = (os.environ.get("LOBSTER_MCP_BILLING_INTERNAL_KEY") or "").strip()
+    if not bk and request is not None:
+        bk = (
+            request.headers.get("X-Lobster-Mcp-Billing")
+            or request.headers.get("x-lobster-mcp-billing")
+            or ""
+        ).strip()
     if bk:
         h["X-Lobster-Mcp-Billing"] = bk
     return h
@@ -4439,6 +4485,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 )
                 args["capability_id"] = _new_cid
             args = _normalize_invoke_task_get_result_args(args)
+            args = _normalize_invoke_ppt_create_args(args)
             args = _normalize_invoke_comfly_veo_args(args)
             args = _normalize_invoke_daihuo_pipeline_args(args)
             args = _normalize_invoke_seedance_tvc_pipeline_args(args)
@@ -5002,6 +5049,16 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         ec_action,
                         _p.get("platform"),
                         _p.get("account_nickname"),
+                        BASE_URL,
+                    )
+                elif capability_id == "ppt.create":
+                    timeout_s = 600.0
+                    req_json = dict(_p)
+                    logger.info(
+                        "[MCP ppt.create] invoke has_token=%s mode=%s topic_len=%s base_url=%s",
+                        bool(token),
+                        _p.get("mode"),
+                        len(str(_p.get("topic") or "")),
                         BASE_URL,
                     )
                 else:

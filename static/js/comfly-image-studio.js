@@ -338,6 +338,11 @@
 
   function resultCardsHtml() {
     var cards = [];
+    var activeResultAssetIds = {};
+    state.results.forEach(function(item) {
+      var aid = String((item && item.assetId) || '').trim();
+      if (aid) activeResultAssetIds[aid] = true;
+    });
     if (state.currentJobId && state.currentJobStatus === 'running') {
       cards.push({
         type: 'job',
@@ -358,8 +363,10 @@
     });
     state.recentJobs.forEach(function(job) {
       if (!job || !job.jobId) return;
-      if (job.jobId === state.currentJobId && state.currentJobStatus === 'running') return;
+      if (job.jobId === state.currentJobId && (state.currentJobStatus === 'running' || state.results.length)) return;
       if (job.status === 'completed' && !job.image && !job.resultCount) return;
+      var jobAssetId = String(job.assetId || job.asset_id || '').trim();
+      if (job.status === 'completed' && jobAssetId && activeResultAssetIds[jobAssetId]) return;
       var displayStatus = job.status || 'running';
       if (displayStatus === 'running') displayStatus = 'stale';
       cards.push({
@@ -674,7 +681,8 @@
             status: 'completed',
             title: '图片任务',
             resultCount: state.results.length,
-            image: resultPreviewUrl(first)
+            image: resultPreviewUrl(first),
+            assetId: first.assetId || ''
           });
           showMessage(savedCount ? '图片任务已完成，并已保存到素材库。' : '图片任务已完成，素材库保存失败时会记录到日志。', false);
         } else if (status === 'failed') {

@@ -174,6 +174,7 @@ async def _generate_image_studio_core(
     quality: str,
     background: str,
     upload_payloads: List[Dict[str, Any]],
+    auto_save: bool = True,
 ) -> Dict[str, Any]:
     prompt = (prompt or "").strip()
     if not prompt:
@@ -253,13 +254,15 @@ async def _generate_image_studio_core(
     if not previews:
         raise HTTPException(status_code=502, detail="图片生成成功，但结果暂时不可预览")
 
-    saved_assets = await _save_image_studio_results(
-        previews=previews,
-        request=request,
-        current_user=current_user,
-        prompt=prompt,
-        model=model_id,
-    )
+    saved_assets = []
+    if auto_save:
+        saved_assets = await _save_image_studio_results(
+            previews=previews,
+            request=request,
+            current_user=current_user,
+            prompt=prompt,
+            model=model_id,
+        )
 
     return {
         "ok": True,

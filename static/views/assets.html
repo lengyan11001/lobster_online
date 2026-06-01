@@ -12,6 +12,7 @@
                   <option value="">全部类型</option>
                   <option value="image">图片</option>
                   <option value="video">视频</option>
+                  <option value="document">文档</option>
                 </select>
                 <select id="assetCreativeGroupFilter" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                   <option value="">全部备选组</option>
@@ -23,7 +24,7 @@
               <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.3rem 0 0.5rem 0;">
                 <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;">
                   上传本地文件
-                  <input type="file" id="assetUploadFile" accept="image/*,video/*" multiple style="display:none;">
+                  <input type="file" id="assetUploadFile" accept="image/*,video/*,.ppt,.pptx,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md" multiple style="display:none;">
                 </label>
                 <input type="text" id="assetUrlInput" placeholder="网络素材URL（图片/视频链接）" style="flex:1;min-width:160px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <button type="button" id="assetSaveUrlBtn" class="btn btn-ghost btn-sm">保存URL素材</button>

@@ -937,5 +937,89 @@
         }
       }
     }
+  },
+  "ppt.create": {
+    "description": "Create a PowerPoint PPTX. Use ai for AI image-composited full-slide PPT pages, outline/markdown for text-outline rendering, and image_fullpage when per-slide image prompts are already provided.",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "outline",
+            "markdown",
+            "ai",
+            "image_fullpage"
+          ],
+          "description": "Generation mode. Use ai by default for AI image-composited full-slide PPT pages from a topic; use outline or markdown only when the user explicitly provides a text outline; use image_fullpage when per-slide image prompts are already provided."
+        },
+        "topic": {
+          "type": "string",
+          "description": "Specific PPT topic/title from the user. Required for ai and image_fullpage modes."
+        },
+        "outline_markdown": {
+          "type": "string",
+          "description": "Markdown outline for slides. Use when the user provides a slide outline."
+        },
+        "slide_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 80,
+          "description": "Number of slides to create. Default 10 for ai mode."
+        },
+        "theme": {
+          "type": "string",
+          "description": "Visual theme, for example business, default, or dark."
+        },
+        "language": {
+          "type": "string",
+          "description": "Deck language, for example zh-CN."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "Additional user requirements, style, audience, or structure notes."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional OpenAI-compatible text model for AI outline generation."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "Optional OpenAI-compatible base URL for AI outline generation."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Optional output PPTX filename."
+        },
+        "slide_prompts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Per-slide prompts for image_fullpage mode."
+        },
+        "image_model": {
+          "type": "string",
+          "description": "Image model for image_fullpage mode, for example gpt-image-2."
+        },
+        "image_quality": {
+          "type": "string",
+          "description": "Image quality for image_fullpage mode."
+        },
+        "image_background": {
+          "type": "string",
+          "description": "Image background mode for image_fullpage mode."
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "description": "Image aspect ratio for image_fullpage mode, normally 16:9."
+        }
+      }
+    }
   }
 }

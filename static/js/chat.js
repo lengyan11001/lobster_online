@@ -1373,6 +1373,9 @@ function _renderChatSuggestionChip(el, title, prompt) {
   if (safeTitle === '图片生成') {
     meta.desc = '文生图 / 参考图合成';
   }
+  if (safeTitle === 'PPT\u5236\u4f5c') {
+    meta = { tone: 'plan', icon: 'P', desc: '\u751f\u6210\u6f14\u793a\u6587\u7a3f' };
+  }
   el.style.display = '';
   el.setAttribute('data-chip-tone', meta.tone || 'plan');
   _clearChatSuggestionActionAttrs(el);
@@ -1645,10 +1648,21 @@ function updateChatModeUi(mode) {
   var chip6 = document.getElementById('chatSuggestionChip6');
   var chip7 = document.getElementById('chatSuggestionChip7');
   var chip8 = document.getElementById('chatSuggestionChip8');
+  var chipPpt = document.getElementById('chatSuggestionChipPpt');
   var shortcut1 = document.getElementById('chatShortcutLink1');
   var shortcut2 = document.getElementById('chatShortcutLink2');
   var shortcut3 = document.getElementById('chatShortcutLink3');
   var categoryTabs = document.getElementById('workspaceCategoryTabs');
+  if (!chipPpt) {
+    var pptGrid = document.querySelector('.chat-suggestion-grid');
+    if (pptGrid) {
+      chipPpt = document.createElement('button');
+      chipPpt.type = 'button';
+      chipPpt.className = 'chat-suggestion-chip';
+      chipPpt.id = 'chatSuggestionChipPpt';
+      pptGrid.insertBefore(chipPpt, document.getElementById('chatSuggestionChip9') || chip7 || null);
+    }
+  }
   if (eyebrow) eyebrow.classList.toggle('is-active', normalized !== CHAT_MODE_WORKSPACE);
   if (homeWorkspacePill) homeWorkspacePill.classList.toggle('is-active', normalized === CHAT_MODE_WORKSPACE);
   if (eyebrow) eyebrow.textContent = '智能对话';
@@ -1697,6 +1711,9 @@ function updateChatModeUi(mode) {
     if (chip6) {
       _renderChatSuggestionChip(chip6, '创意分镜头视频');
       _setChatSuggestionAction(chip6, 'data-open-hidden-view', 'seedance-tvc-studio');
+    }
+    if (chipPpt) {
+      _renderChatSuggestionChip(chipPpt, 'PPT\u5236\u4f5c', '\u7528 AI \u6a21\u5f0f\u5e2e\u6211\u505a\u4e00\u4e2a PPT\uff0c\u4e3b\u9898\u662f\uff1a');
     }
     if (chip7) {
       _renderChatSuggestionChip(chip7, '发布中心');
@@ -2377,6 +2394,7 @@ function appendSavedAssetDom(parent, a, opts) {
 
   var maxH = compact ? '140px' : '200px';
   var maxHVid = compact ? '160px' : '220px';
+  var isDocument = mediaType === 'document' || /\.(pptx?|pdf|docx?|xlsx?|csv|txt|md)(\?|$)/i.test(savedAssetFilename(a) || savedAssetPrimaryHttpUrl(a) || '');
 
   function removeLoading() {
     if (loadingEl.parentNode) loadingEl.parentNode.removeChild(loadingEl);
@@ -2384,6 +2402,10 @@ function appendSavedAssetDom(parent, a, opts) {
 
   function appendBlobPreview(blob) {
     removeLoading();
+    if (isDocument) {
+      appendDocumentPreview(savedAssetPrimaryHttpUrl(a) || URL.createObjectURL(blob));
+      return;
+    }
     var t = (blob.type || '').toLowerCase();
     var asVideo = (mediaType === 'video') || /^video\//.test(t) || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(savedAssetPrimaryHttpUrl(a) || '');
     var u = URL.createObjectURL(blob);
@@ -2538,6 +2560,10 @@ function appendSavedAssetDom(parent, a, opts) {
   function appendHttpPreview(url) {
     removeLoading();
     var u = url;
+    if (isDocument) {
+      appendDocumentPreview(u);
+      return;
+    }
     var looksVideo = (mediaType === 'video') || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(u);
     if (looksVideo) {
       var v = document.createElement('video');
@@ -2561,6 +2587,30 @@ function appendSavedAssetDom(parent, a, opts) {
       link.appendChild(img);
       mediaWrap.appendChild(link);
     }
+    scrollChatMessagesToBottom();
+  }
+
+  function appendDocumentPreview(url) {
+    removeLoading();
+    var card = document.createElement('div');
+    card.className = 'chat-generated-asset-file';
+    card.style.cssText = 'display:flex;align-items:center;gap:0.6rem;padding:0.75rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-muted,rgba(148,163,184,0.08));';
+    var icon = document.createElement('div');
+    icon.textContent = 'PPT';
+    icon.style.cssText = 'min-width:2.5rem;height:2.5rem;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;background:#fff;color:#c2410c;border:1px solid rgba(194,65,12,0.25);';
+    var copy = document.createElement('div');
+    copy.style.cssText = 'min-width:0;flex:1;';
+    var name = document.createElement('div');
+    name.textContent = savedAssetFilename(a) || 'PPT 文件';
+    name.style.cssText = 'font-size:0.86rem;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    var sub = document.createElement('div');
+    sub.textContent = '已保存到素材库，可打开或另存';
+    sub.style.cssText = 'font-size:0.76rem;color:var(--text-muted);margin-top:0.15rem;';
+    copy.appendChild(name);
+    copy.appendChild(sub);
+    card.appendChild(icon);
+    card.appendChild(copy);
+    mediaWrap.appendChild(card);
     scrollChatMessagesToBottom();
   }
 

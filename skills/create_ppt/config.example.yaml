@@ -1,0 +1,41 @@
+# PPT 创建工具配置文件
+
+# 输出设置
+output:
+  default_filename: "output.pptx"
+  slide_size: "16:9"           # "16:9" | "4:3"
+
+# 主题设置
+theme:
+  name: "default"              # 内置主题名
+  template_path: null          # 外部模板路径 (优先于 name)
+
+# CJK 设置
+cjk:
+  default_font: "微软雅黑"
+  latin_font: "Calibri"
+  line_spacing: 1.4
+
+# AI 设置
+ai:
+  provider: "haoduomi"        # haoduomi | openai | deepseek | moonshot | ollama
+  model: "gpt-5.4"
+  api_key_env: "HAODUOMI_API_KEY"
+  base_url: null
+  temperature: 0.7
+  max_tokens: 4096
+
+# 文本溢出策略
+text_overflow:
+  strategy: "shrink"           # shrink | truncate | overflow
+  min_font_size: 12
+  max_shrink_pt: 4
+  truncate_suffix: "..."
+
+# 外部模板布局映射 (仅当使用外部模板时需要)
+template_layout_map: null
+# template_layout_map:
+#   title: 0
+#   section: 1
+#   content: 2
+#   two_column: 3
