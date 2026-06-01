@@ -81,6 +81,9 @@ class ComflyDaihuoPipelinePayload(BaseModel):
     video_channel: Optional[str] = Field(None, description="Video provider channel: comfly or yunwu. Default comfly.")
     video_base_url: Optional[str] = Field(None, description="Optional video provider base URL. Yunwu uses https://yunwu.ai.")
     video_model: Optional[str] = Field(None, description="Video generation model. Comfly default veo3.1-fast; Yunwu can use veo3.1.")
+    video_fallback_channel: Optional[str] = Field(None, description="Video fallback provider channel. Default comfly when primary is Yunwu.")
+    video_fallback_base_url: Optional[str] = Field(None, description="Optional fallback video provider base URL.")
+    video_fallback_model: Optional[str] = Field(None, description="Fallback video generation model. Default veo3.1-fast for Comfly.")
     generation_time_limit_seconds: Optional[int] = Field(None, ge=60, le=7200, description="整包生成等待上限；到时用已成功视频片段合成，默认 600 秒")
     enhance_prompt: bool = Field(False, description="Veo prompt enhancement switch; default off to avoid accidental subtitles or on-screen text")
     watermark: bool = Field(False, description="Veo watermark switch; default off")
@@ -127,12 +130,18 @@ async def _prepare_pipeline_input(
     video_channel = (pl.video_channel or configured_video_channel or "").strip()
     video_base_url = (pl.video_base_url or "").strip()
     video_model = (pl.video_model or "").strip()
+    video_fallback_channel = (pl.video_fallback_channel or "").strip()
+    video_fallback_base_url = (pl.video_fallback_base_url or "").strip()
+    video_fallback_model = (pl.video_fallback_model or "").strip()
     if video_channel in {"yunwu", "云雾", "雲霧"}:
         video_channel = "yunwu"
         video_base_url = video_base_url or pipe_base
         video_model = video_model or (getattr(settings, "comfly_daihuo_yunwu_video_model", None) or "veo3.1")
+        video_fallback_channel = video_fallback_channel or "comfly"
+        video_fallback_base_url = video_fallback_base_url or pipe_base
+        video_fallback_model = video_fallback_model or "veo3.1-fast"
     logger.info(
-        "[comfly.daihuo.pipeline] credentials user_id=%s key_len=%s api_base=%s pipeline_base=%s video_channel=%s video_base=%s video_model=%s",
+        "[comfly.daihuo.pipeline] credentials user_id=%s key_len=%s api_base=%s pipeline_base=%s video_channel=%s video_base=%s video_model=%s fallback_channel=%s fallback_model=%s",
         current_user.id,
         len((api_key or "").strip()),
         (api_base or "")[:120],
@@ -140,6 +149,8 @@ async def _prepare_pipeline_input(
         video_channel or "comfly",
         (video_base_url or "")[:120],
         video_model or "",
+        video_fallback_channel or "",
+        video_fallback_model or "",
     )
     return build_pipeline_input(
         product_image=product_image,
@@ -160,6 +171,9 @@ async def _prepare_pipeline_input(
         video_channel=video_channel,
         video_base_url=video_base_url,
         video_model=video_model,
+        video_fallback_channel=video_fallback_channel,
+        video_fallback_base_url=video_fallback_base_url,
+        video_fallback_model=video_fallback_model,
         generation_time_limit_seconds=pl.generation_time_limit_seconds,
         enhance_prompt=pl.enhance_prompt,
         watermark=pl.watermark,

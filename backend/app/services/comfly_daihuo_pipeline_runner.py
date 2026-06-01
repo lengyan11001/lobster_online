@@ -117,6 +117,9 @@ def build_pipeline_input(
     video_channel: Optional[str] = None,
     video_base_url: Optional[str] = None,
     video_model: Optional[str] = None,
+    video_fallback_channel: Optional[str] = None,
+    video_fallback_base_url: Optional[str] = None,
+    video_fallback_model: Optional[str] = None,
     generation_time_limit_seconds: Optional[int] = None,
     enhance_prompt: bool = False,
     watermark: bool = False,
@@ -156,6 +159,12 @@ def build_pipeline_input(
         inp["video_base_url"] = _api_base_for_pipeline(video_base_url)
     if (video_model or "").strip():
         inp["video_model"] = video_model.strip()
+    if (video_fallback_channel or "").strip():
+        inp["video_fallback_channel"] = video_fallback_channel.strip()
+    if (video_fallback_base_url or "").strip():
+        inp["video_fallback_base_url"] = _api_base_for_pipeline(video_fallback_base_url)
+    if (video_fallback_model or "").strip():
+        inp["video_fallback_model"] = video_fallback_model.strip()
     if generation_time_limit_seconds is not None:
         inp["generation_time_limit_seconds"] = int(generation_time_limit_seconds)
     ff = _bundled_ffmpeg_exe()

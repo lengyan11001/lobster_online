@@ -46,6 +46,9 @@ class Input(TypedDict, total=False):
     video_model: str
     video_channel: str
     video_base_url: str
+    video_fallback_channel: str
+    video_fallback_base_url: str
+    video_fallback_model: str
     aspect_ratio: str
     enhance_prompt: bool
     watermark: bool
@@ -94,6 +97,9 @@ class PipelineConfig:
     video_model: str = "veo3.1-fast"
     video_channel: str = "comfly"
     video_base_url: str = ""
+    video_fallback_channel: str = "comfly"
+    video_fallback_base_url: str = ""
+    video_fallback_model: str = "veo3.1-fast"
     aspect_ratio: str = "9:16"
     enhance_prompt: bool = False
     watermark: bool = False
@@ -182,6 +188,9 @@ class RunLogger:
                 "video_model": config.video_model,
                 "video_channel": config.video_channel,
                 "video_base_url": config.video_base_url,
+                "video_fallback_channel": config.video_fallback_channel,
+                "video_fallback_base_url": config.video_fallback_base_url,
+                "video_fallback_model": config.video_fallback_model,
                 "aspect_ratio": config.aspect_ratio,
                 "enhance_prompt": config.enhance_prompt,
                 "watermark": config.watermark,
@@ -343,6 +352,18 @@ def _normalize_api_base_url(raw: str, default: str) -> str:
     return base
 
 
+def _default_video_base_url(channel: str, api_base: str) -> str:
+    return "https://yunwu.ai" if _normalize_video_channel(channel) == "yunwu" else api_base
+
+
+def _default_video_model(channel: str) -> str:
+    return "veo3.1" if _normalize_video_channel(channel) == "yunwu" else "veo3.1-fast"
+
+
+def _video_provider_label(channel: str, model: str) -> str:
+    return f"{_normalize_video_channel(channel)}:{(model or '').strip()}"
+
+
 def _yunwu_video_create_body(prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool) -> Dict[str, Any]:
     return {
         "enable_upsample": True,
@@ -502,8 +523,11 @@ class ComflyClient:
         self.logger = logger
         self.base_url = _normalize_api_base_url(config.base_url, "https://ai.comfly.org")
         self.video_channel = _normalize_video_channel(config.video_channel)
-        default_video_base = "https://yunwu.ai" if self.video_channel == "yunwu" else self.base_url
+        default_video_base = _default_video_base_url(self.video_channel, self.base_url)
         self.video_base_url = _normalize_api_base_url(config.video_base_url, default_video_base)
+        self.video_fallback_channel = _normalize_video_channel(config.video_fallback_channel)
+        fallback_default_base = _default_video_base_url(self.video_fallback_channel, self.base_url)
+        self.video_fallback_base_url = _normalize_api_base_url(config.video_fallback_base_url, fallback_default_base)
         self.session = requests.Session()
         self.session.headers.update(
             {"Authorization": f"Bearer {_normalize_comfly_api_key(config.api_key)}", "Accept": "application/json"}
@@ -512,7 +536,12 @@ class ComflyClient:
             "session_init",
             self.base_url,
             None,
-            {"video_channel": self.video_channel, "video_base_url": self.video_base_url},
+            {
+                "video_channel": self.video_channel,
+                "video_base_url": self.video_base_url,
+                "video_fallback_channel": self.video_fallback_channel,
+                "video_fallback_base_url": self.video_fallback_base_url,
+            },
         )
 
     def _effective_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -702,9 +731,23 @@ class ComflyClient:
                 raise
         raise PipelineError(f"{action} image generation failed: {last_error}")
 
-    def submit_video(self, prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool, watermark: bool, action: str) -> tuple[Dict[str, Any], int]:
+    def submit_video(
+        self,
+        prompt: str,
+        model: str,
+        images: List[str],
+        aspect_ratio: str,
+        enhance_prompt: bool,
+        watermark: bool,
+        action: str,
+        *,
+        channel: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> tuple[Dict[str, Any], int]:
         ar = _normalize_aspect_ratio_for_comfly(aspect_ratio)
-        if self.video_channel == "yunwu":
+        video_channel = _normalize_video_channel(channel or self.video_channel)
+        video_base_url = _normalize_api_base_url(base_url or "", _default_video_base_url(video_channel, self.base_url))
+        if video_channel == "yunwu":
             body = _yunwu_video_create_body(prompt, model, images, ar, enhance_prompt)
         elif model.strip().lower() == "grok-video-3":
             body: Dict[str, Any] = {
@@ -722,29 +765,43 @@ class ComflyClient:
                 body["enhance_prompt"] = True
 
         def call() -> Dict[str, Any]:
-            vid_url = f"{self.video_base_url}/v1/video/create" if self.video_channel == "yunwu" else f"{self.video_base_url}/v2/videos/generations"
+            vid_url = f"{video_base_url}/v1/video/create" if video_channel == "yunwu" else f"{video_base_url}/v2/videos/generations"
             ex = {"Content-Type": "application/json"}
             self._trace_request("videos_generations_submit", vid_url, ex, body)
             r = self.session.post(vid_url, headers=ex, json=body, timeout=120)
             payload = self._check(r)
-            task_id = str(payload.get("id") or "").strip() if self.video_channel == "yunwu" else _task_id_from_video_submit_payload(payload)
+            task_id = str(payload.get("id") or "").strip() if video_channel == "yunwu" else _task_id_from_video_submit_payload(payload)
             if not task_id:
                 raise PipelineError(f"Video submit returned no task_id: {payload}")
             payload["_request"] = body
             payload["task_id"] = task_id
+            payload["video_channel"] = video_channel
+            payload["video_base_url"] = video_base_url
+            payload["video_model"] = model
             return payload
 
         return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
-    def poll_video(self, task_id: str, poll_interval_seconds: int, max_polls: int, deadline_monotonic: float | None = None) -> Dict[str, Any]:
+    def poll_video(
+        self,
+        task_id: str,
+        poll_interval_seconds: int,
+        max_polls: int,
+        deadline_monotonic: float | None = None,
+        *,
+        channel: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        video_channel = _normalize_video_channel(channel or self.video_channel)
+        video_base_url = _normalize_api_base_url(base_url or "", _default_video_base_url(video_channel, self.base_url))
         history: List[Dict[str, Any]] = []
         for attempt in range(1, max_polls + 1):
             _ensure_before_deadline(deadline_monotonic, "video polling")
             def call() -> Dict[str, Any]:
-                if self.video_channel == "yunwu":
-                    poll_url = f"{self.video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
+                if video_channel == "yunwu":
+                    poll_url = f"{video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
                 else:
-                    poll_url = f"{self.video_base_url}/v2/videos/generations/{task_id}"
+                    poll_url = f"{video_base_url}/v2/videos/generations/{task_id}"
                 self._trace_request("videos_generations_poll", poll_url, None, None)
                 r = self.session.get(poll_url, timeout=60)
                 return self._check(r)
@@ -758,7 +815,16 @@ class ComflyClient:
             mp4url = fields["mp4url"]
             history.append({"attempt": attempt, "request_attempts": request_attempts, "status": status, "progress": progress, "fail_reason": fail_reason, "mp4url": mp4url})
             if status_key in {"SUCCESS", "SUCCEEDED", "COMPLETED", "COMPLETE", "DONE"} and mp4url:
-                return {"task_id": task_id, "status": status, "progress": progress, "mp4url": mp4url, "raw": payload, "history": history}
+                return {
+                    "task_id": task_id,
+                    "status": status,
+                    "progress": progress,
+                    "mp4url": mp4url,
+                    "raw": payload,
+                    "history": history,
+                    "video_channel": video_channel,
+                    "video_base_url": video_base_url,
+                }
             if status_key in {"FAILURE", "FAILED", "ERROR", "CANCELED", "CANCELLED"}:
                 raise PipelineError(f"Video task failed: {fail_reason or payload}")
             remaining = _seconds_until_deadline(deadline_monotonic)
@@ -814,10 +880,15 @@ def _build_config(data: Input) -> PipelineConfig:
     _raw_imsz = str(data.get("image_size") or "1K").strip().upper()
     _imsz = _raw_imsz if _raw_imsz in ("1K", "2K", "4K") else "1K"
     video_channel = _normalize_video_channel(str(data.get("video_channel") or data.get("channel") or "comfly"))
-    video_base_default = "https://yunwu.ai" if video_channel == "yunwu" else str(data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.org")))
-    video_model_default = "veo3.1" if video_channel == "yunwu" else "veo3.1-fast"
+    base_url = str(data.get("base_url") or os.getenv("COMFLY_API_BASE", "https://ai.comfly.org"))
+    video_base_default = _default_video_base_url(video_channel, base_url)
+    video_model_default = _default_video_model(video_channel)
+    fallback_channel_raw = str(data.get("video_fallback_channel") or data.get("fallback_video_channel") or "comfly")
+    video_fallback_channel = _normalize_video_channel(fallback_channel_raw)
+    fallback_base_default = _default_video_base_url(video_fallback_channel, base_url)
+    video_fallback_model_default = _default_video_model(video_fallback_channel)
     return PipelineConfig(
-        base_url=data.get("base_url", os.getenv("COMFLY_API_BASE", "https://ai.comfly.org")),
+        base_url=base_url,
         api_key=api_key,
         task_text=locale_inputs["task_text"],
         platform=locale_inputs["platform"],
@@ -832,6 +903,9 @@ def _build_config(data: Input) -> PipelineConfig:
         video_model=(data.get("video_model") or video_model_default),
         video_channel=video_channel,
         video_base_url=_normalize_api_base_url(str(data.get("video_base_url") or ""), video_base_default),
+        video_fallback_channel=video_fallback_channel,
+        video_fallback_base_url=_normalize_api_base_url(str(data.get("video_fallback_base_url") or data.get("fallback_video_base_url") or ""), fallback_base_default),
+        video_fallback_model=(data.get("video_fallback_model") or data.get("fallback_video_model") or video_fallback_model_default),
         aspect_ratio=_normalize_aspect_ratio_for_comfly(str(data.get("aspect_ratio") or "9:16")),
         enhance_prompt=bool(data.get("enhance_prompt", False)),
         watermark=bool(data.get("watermark", False)),
@@ -1682,45 +1756,118 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
         payload={"index": index, "round_index": round_index, "url": image_result.get("url"), "used_fallback": image_used_fallback},
     )
     last_error = ""
-    for video_attempt in range(1, config.video_generation_retries + 1):
-        _ensure_before_deadline(deadline_monotonic, "shot video generation")
-        try:
-            submit_result, submit_attempts = client.submit_video(video_prompt, config.video_model, [image_result["url"]], config.aspect_ratio, config.enhance_prompt, config.watermark, f"shot_{index:02d}_submit_{round_tag}_{video_attempt}")
-            logger.shot(index, f"submit_{round_tag}_{video_attempt}", "success", attempts=submit_attempts, payload=submit_result)
-            poll_result = client.poll_video(submit_result["task_id"], config.poll_interval_seconds, config.max_polls, deadline_monotonic=deadline_monotonic)
-            logger.shot(index, f"poll_{round_tag}_{video_attempt}", "success", attempts=len(poll_result.get("history", [])), payload=poll_result)
-            logger.record_usage(
-                "video",
-                config.video_model,
-                f"shot_{index:02d}_video_{round_tag}",
-                payload={"index": index, "round_index": round_index, "task_id": submit_result["task_id"], "mp4url": poll_result.get("mp4url")},
-            )
-            return {
-                "index": index,
-                "round_index": round_index,
-                "title_cn": storyboard.get("title_cn"),
-                "goal_cn": storyboard.get("goal_cn"),
-                "scene_cn": storyboard.get("scene_cn"),
-                "hook_line_cn": storyboard.get("hook_line_cn"),
-                "selling_point_cn": storyboard.get("selling_point_cn"),
-                "cta_cn": storyboard.get("cta_cn"),
-                "storyboard_image_prompt_en": storyboard.get("storyboard_image_prompt_en"),
-                "video_prompt_en": storyboard.get("video_prompt_en"),
-                "submitted_video_prompt_en": video_prompt,
-                "storyboard_image_url": image_result["url"],
-                "storyboard_image_revised_prompt": image_result.get("revised_prompt"),
-                "video_task_id": submit_result["task_id"],
-                "video_status": poll_result["status"],
-                "video_progress": poll_result["progress"],
-                "mp4url": poll_result["mp4url"],
-                "video_raw": poll_result["raw"],
-                "video_generation_attempt": video_attempt,
+    providers: List[Dict[str, str]] = [
+        {
+            "role": "primary",
+            "channel": _normalize_video_channel(config.video_channel),
+            "base_url": config.video_base_url,
+            "model": (config.video_model or "").strip() or _default_video_model(config.video_channel),
+        }
+    ]
+    fallback_channel = _normalize_video_channel(config.video_fallback_channel)
+    fallback_model = (config.video_fallback_model or "").strip() or _default_video_model(fallback_channel)
+    if _video_provider_label(fallback_channel, fallback_model) != _video_provider_label(providers[0]["channel"], providers[0]["model"]):
+        providers.append(
+            {
+                "role": "fallback",
+                "channel": fallback_channel,
+                "base_url": config.video_fallback_base_url,
+                "model": fallback_model,
             }
-        except Exception as exc:
-            last_error = str(exc)
-            logger.shot(index, f"video_attempt_{round_tag}_{video_attempt}", "failed", attempts=video_attempt, error=last_error)
-            if video_attempt < config.video_generation_retries:
-                time.sleep(config.network_retry_delay_seconds * video_attempt)
+        )
+    for provider_index, provider in enumerate(providers, start=1):
+        provider_role = provider["role"]
+        provider_channel = _normalize_video_channel(provider["channel"])
+        provider_model = provider["model"]
+        provider_base_url = provider["base_url"]
+        if provider_role == "fallback":
+            logger.shot(
+                index,
+                f"video_fallback_{round_tag}",
+                "running",
+                payload={
+                    "from_channel": providers[0]["channel"],
+                    "from_model": providers[0]["model"],
+                    "to_channel": provider_channel,
+                    "to_model": provider_model,
+                    "previous_error": last_error,
+                },
+            )
+        for video_attempt in range(1, config.video_generation_retries + 1):
+            _ensure_before_deadline(deadline_monotonic, "shot video generation")
+            action_suffix = f"{round_tag}_{provider_role}_{video_attempt}"
+            try:
+                submit_result, submit_attempts = client.submit_video(
+                    video_prompt,
+                    provider_model,
+                    [image_result["url"]],
+                    config.aspect_ratio,
+                    config.enhance_prompt,
+                    config.watermark,
+                    f"shot_{index:02d}_submit_{action_suffix}",
+                    channel=provider_channel,
+                    base_url=provider_base_url,
+                )
+                logger.shot(index, f"submit_{action_suffix}", "success", attempts=submit_attempts, payload=submit_result)
+                poll_result = client.poll_video(
+                    submit_result["task_id"],
+                    config.poll_interval_seconds,
+                    config.max_polls,
+                    deadline_monotonic=deadline_monotonic,
+                    channel=provider_channel,
+                    base_url=provider_base_url,
+                )
+                logger.shot(index, f"poll_{action_suffix}", "success", attempts=len(poll_result.get("history", [])), payload=poll_result)
+                logger.record_usage(
+                    "video",
+                    provider_model,
+                    f"shot_{index:02d}_video_{round_tag}",
+                    payload={
+                        "index": index,
+                        "round_index": round_index,
+                        "task_id": submit_result["task_id"],
+                        "mp4url": poll_result.get("mp4url"),
+                        "video_channel": provider_channel,
+                        "provider_role": provider_role,
+                    },
+                )
+                return {
+                    "index": index,
+                    "round_index": round_index,
+                    "title_cn": storyboard.get("title_cn"),
+                    "goal_cn": storyboard.get("goal_cn"),
+                    "scene_cn": storyboard.get("scene_cn"),
+                    "hook_line_cn": storyboard.get("hook_line_cn"),
+                    "selling_point_cn": storyboard.get("selling_point_cn"),
+                    "cta_cn": storyboard.get("cta_cn"),
+                    "storyboard_image_prompt_en": storyboard.get("storyboard_image_prompt_en"),
+                    "video_prompt_en": storyboard.get("video_prompt_en"),
+                    "submitted_video_prompt_en": video_prompt,
+                    "storyboard_image_url": image_result["url"],
+                    "storyboard_image_revised_prompt": image_result.get("revised_prompt"),
+                    "video_task_id": submit_result["task_id"],
+                    "video_status": poll_result["status"],
+                    "video_progress": poll_result["progress"],
+                    "mp4url": poll_result["mp4url"],
+                    "video_raw": poll_result["raw"],
+                    "video_generation_attempt": video_attempt,
+                    "video_provider_attempt": provider_index,
+                    "video_provider_role": provider_role,
+                    "video_channel": provider_channel,
+                    "video_model": provider_model,
+                }
+            except Exception as exc:
+                last_error = str(exc)
+                logger.shot(
+                    index,
+                    f"video_attempt_{action_suffix}",
+                    "failed",
+                    attempts=video_attempt,
+                    error=last_error,
+                    payload={"video_channel": provider_channel, "video_model": provider_model, "provider_role": provider_role},
+                )
+                if video_attempt < config.video_generation_retries:
+                    time.sleep(config.network_retry_delay_seconds * video_attempt)
     raise PipelineError(f"shot {index} video generation failed: {last_error}")
 
 
@@ -1931,6 +2078,9 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "video_model": config.video_model,
                 "video_channel": config.video_channel,
                 "video_base_url": config.video_base_url,
+                "video_fallback_channel": config.video_fallback_channel,
+                "video_fallback_base_url": config.video_fallback_base_url,
+                "video_fallback_model": config.video_fallback_model,
                 "image_model": config.image_model,
                 "image_model_fallback": config.image_model_fallback,
                 "analysis_model": config.analysis_model,

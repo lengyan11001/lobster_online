@@ -31,6 +31,7 @@ The packaged pipeline can route only the video generation step through Yunwu whi
 - Poll with `GET /v1/video/query?id=<task_id>`.
 - A successful create response returns fields such as `id`, `status`, and `status_update_time`.
 - A completed poll response returns `status=completed` and `video_url`.
+- If Yunwu fails for a shot after its configured retries, the pipeline falls back for that shot to the Comfly video channel, defaulting to `veo3.1-fast`.
 
 ## Confirmed request model values from the current docs
 
