@@ -1,0 +1,35 @@
+name: business
+display_name: "商务蓝"
+
+color_scheme:
+  primary: "#003366"
+  secondary: "#336699"
+  accent: "#CC6600"
+  background: "#F5F5F5"
+  text_dark: "#333333"
+  text_light: "#FFFFFF"
+  text_secondary: "#666666"
+  divider: "#CCCCCC"
+
+font_scheme:
+  title_font: "微软雅黑"
+  title_font_latin: "Calibri"
+  title_size: 34
+  subtitle_font: "微软雅黑"
+  subtitle_font_latin: "Calibri"
+  subtitle_size: 22
+  body_font: "微软雅黑"
+  body_font_latin: "Calibri"
+  body_size: 18
+  caption_font: "微软雅黑"
+  caption_font_latin: "Calibri"
+  caption_size: 14
+
+spacing_scheme:
+  title_line_spacing: 1.3
+  body_line_spacing: 1.4
+  paragraph_spacing: 0.5
+  slide_margin_top: 0.08
+  slide_margin_bottom: 0.08
+  slide_margin_left: 0.06
+  slide_margin_right: 0.06

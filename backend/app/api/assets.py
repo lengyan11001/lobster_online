@@ -442,6 +442,11 @@ def _content_type_for_asset_filename(filename: str) -> str:
         ".mp4": "video/mp4",
         ".webm": "video/webm",
         ".mov": "video/quicktime",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }.get(ext, "application/octet-stream")
 
 
@@ -1514,9 +1519,9 @@ def list_assets(
         mt = (r.media_type or "").lower()
         preview_url = None
         open_url = None
-        if mt in ("image", "video"):
+        if mt in ("image", "video", "document"):
             su = (r.source_url or "").strip()
-            if _asset_local_path(r):
+            if mt in ("image", "video") and _asset_local_path(r):
                 preview_url = build_asset_file_url(
                     request,
                     r.asset_id,
@@ -1736,12 +1741,13 @@ def serve_asset_file(
         raise HTTPException(404, detail="文件不存在")
     media_type = a.media_type or "application/octet-stream"
     mt_map = {"image": "image/jpeg", "video": "video/mp4", "audio": "audio/mpeg"}
-    ct = mt_map.get(media_type, "application/octet-stream")
+    ct = mt_map.get(media_type, _content_type_for_asset_filename(a.filename))
+    disposition = "attachment" if media_type == "document" else "inline"
     return FileResponse(
         path,
         media_type=ct,
         filename=a.filename,
-        content_disposition_type="inline",
+        content_disposition_type=disposition,
     )
 
 

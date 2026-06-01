@@ -1024,6 +1024,7 @@ async def openclaw_skill_chat(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {oc_token}",
         "x-openclaw-agent-id": agent_id,
+        "x-openclaw-model": _SKILL_WORKSPACE_MODEL,
     }
     if user_token and not installation_id.lower().startswith("lobster-internal-"):
         headers["x-user-authorization"] = f"Bearer {user_token}"

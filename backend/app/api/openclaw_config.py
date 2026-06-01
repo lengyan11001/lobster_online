@@ -189,6 +189,21 @@ def _write_oc_config(config: dict):
     _OC_CONFIG.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _configured_gateway_token(config: Optional[dict] = None) -> str:
+    token = (settings.openclaw_gateway_token or os.environ.get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
+    if token and token != _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER:
+        return token
+    try:
+        cfg = config if isinstance(config, dict) else _read_oc_config()
+        auth = ((cfg.get("gateway") or {}).get("auth") or {}) if isinstance(cfg, dict) else {}
+        cfg_token = str(auth.get("token") or "").strip()
+        if cfg_token and cfg_token != _OPENCLAW_GATEWAY_TOKEN_PLACEHOLDER:
+            return cfg_token
+    except Exception:
+        pass
+    return ""
+
+
 def _new_openclaw_local_launch_config() -> dict[str, Any]:
     """Build the minimum runtime config OpenClaw needs for local Gateway launch."""
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -903,7 +918,7 @@ def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_M
             auth = {}
             gateway["auth"] = auth
             changed = True
-        env_gateway_token = (settings.openclaw_gateway_token or os.environ.get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
+        env_gateway_token = _configured_gateway_token(cfg)
         cfg_gateway_token = str(auth.get("token") or "").strip()
         if (
             env_gateway_token
@@ -911,6 +926,9 @@ def _ensure_openclaw_json_for_local_launch(plugin_mode: str = _OPENCLAW_PLUGIN_M
             and cfg_gateway_token != env_gateway_token
         ):
             auth["token"] = env_gateway_token
+            changed = True
+        if env_gateway_token and auth.get("mode") != "token":
+            auth["mode"] = "token"
             changed = True
         discovery = cfg.get("discovery")
         if not isinstance(discovery, dict):
@@ -2727,6 +2745,12 @@ def _build_openclaw_env() -> dict:
     env = dict(os.environ)
     oc_env = _read_oc_env()
     env.update(oc_env)
+    gateway_url = (settings.openclaw_gateway_url or env.get("OPENCLAW_GATEWAY_URL") or "http://127.0.0.1:18789").strip()
+    if gateway_url:
+        env["OPENCLAW_GATEWAY_URL"] = gateway_url
+    gateway_token = _configured_gateway_token()
+    if gateway_token:
+        env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
     env["OPENCLAW_CONFIG_PATH"] = str(_OC_CONFIG)
     env["OPENCLAW_STATE_DIR"] = str(_OC_DIR)
     env["OPENCLAW_DISABLE_BONJOUR"] = "1"

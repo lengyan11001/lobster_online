@@ -4,6 +4,14 @@
   'use strict';
 
   var CAPABILITIES = {
+    'create.video.pipeline': {
+      label: 'gtp创意成片',
+      description: '按脚本、分镜图、视频提示词三段规划，先用 gpt-image-2 生成首帧，再生成视频并入素材库。'
+    },
+    'create.ppt.pipeline': {
+      label: '智能PPT',
+      description: '根据记忆或自定义主题生成可编辑 PPTX，并保存到素材库。'
+    },
     'goal.video.pipeline': {
       label: '创意成片',
       description: '根据记忆或自定义提示词生成文案，可从备选素材组随机取图，或先 AI 生成首帧再生成视频。'
@@ -190,10 +198,13 @@
     var raw = [];
     if (Array.isArray(payload.media_urls)) raw = raw.concat(payload.media_urls);
     if (Array.isArray(refs.urls)) raw = raw.concat(refs.urls);
-    if (rowCapabilityId(row) === 'goal.video.pipeline') {
-      raw = raw.filter(function (u) {
+    if (rowCapabilityId(row) === 'goal.video.pipeline' || rowCapabilityId(row) === 'create.video.pipeline') {
+      var videos = raw.filter(function (u) {
         return /\.(mp4|webm|mov|m4v|avi)(\?|#|$)/i.test(String(u || ''));
       }).slice(0, 1);
+      raw = videos.length ? videos : raw.filter(function (u) {
+        return /\.(png|jpe?g|webp|gif)(\?|#|$)/i.test(String(u || ''));
+      }).slice(0, 4);
     }
     var seen = {};
     return raw.map(function (u) { return String(u || '').trim(); }).filter(function (u) {
@@ -237,6 +248,14 @@
           + downloadAnchor(u, '下载图片', 'lobster-image.png')
           + '</div>';
       }
+      if (/\.(pptx?|pdf|docx?|xlsx?)(\?|#|$)/.test(low)) {
+        var fallback = /\.(pptx?)(\?|#|$)/.test(low) ? 'lobster-presentation.pptx' : 'lobster-document';
+        var label = /\.(pptx?)(\?|#|$)/.test(low) ? '下载PPT' : '下载文件';
+        return '<div style="display:flex;align-items:center;gap:0.5rem;min-height:2rem;">'
+          + '<span class="meta">文件</span>'
+          + downloadAnchor(u, label, fallback)
+          + '</div>';
+      }
       return '<a href="' + html(u) + '" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;min-height:2rem;">打开预览</a>';
     }).join('') + '</div>';
   }
@@ -262,6 +281,11 @@
   function runActionHtml(run) {
     var parts = [];
     var draft = publishDraft(run);
+    if (canResumeVideoRun(run)) {
+      parts.push('<button type="button" class="btn btn-primary btn-sm scheduled-run-resume-video-btn" data-run-id="'
+        + html(run && run.id)
+        + '">补发视频</button>');
+    }
     if (draft) {
       var status = String(draft.status || 'ready').toLowerCase();
       if (status !== 'published') {
@@ -279,6 +303,20 @@
       + html(run && run.id)
       + '">删除</button>');
     return parts.join(' ');
+  }
+
+  function canResumeVideoRun(run) {
+    var cid = rowCapabilityId(run);
+    if (cid !== 'goal.video.pipeline' && cid !== 'create.video.pipeline') return false;
+    if (runIsRunning(run)) return false;
+    var payload = resultPayload(run);
+    if (payload.resume_available) return true;
+    var result = payload.mcp_result && typeof payload.mcp_result === 'object' ? payload.mcp_result : {};
+    if (result.resume_available || String(result.status || '').toLowerCase() === 'partial_image') return true;
+    var urls = collectMediaUrls(run);
+    var hasImage = urls.some(function (u) { return /\.(png|jpe?g|webp|gif)(\?|#|$)/i.test(String(u || '')); });
+    var hasVideo = urls.some(function (u) { return /\.(mp4|webm|mov|m4v|avi)(\?|#|$)/i.test(String(u || '')); });
+    return hasImage && !hasVideo;
   }
 
   function rowCapabilityId(row) {
@@ -468,6 +506,14 @@
     return '<textarea id="' + html(id) + '" rows="' + html(rows || 3) + '" placeholder="' + html(placeholder || '') + '" style="width:100%;box-sizing:border-box;"></textarea>';
   }
 
+  function numberVal(id, fallback, min, max) {
+    var n = parseInt(val(id) || String(fallback), 10);
+    if (isNaN(n)) n = fallback;
+    if (typeof min === 'number') n = Math.max(min, n);
+    if (typeof max === 'number') n = Math.min(max, n);
+    return n;
+  }
+
   function platformDisplayName(platform) {
     var p = String(platform || '').trim();
     var names = {
@@ -590,6 +636,58 @@
     updateGoalVideoSourceMode();
     fillCandidateGroupSelect();
     loadCandidateGroups();
+  }
+
+  function renderCreateVideoFields(host) {
+    host.innerHTML = compactGrid(
+      fieldHtml(
+        '核心主题/传达信息',
+        textareaHtml('scheduledTaskCreateVideoPrompt', 4, '例如：一款高端白酒，画面高级、真实商业广告质感，适合品牌宣传')
+        + '<p class="meta" style="margin:0.35rem 0 0;">留空时根据记忆资料自动生成本次 brief。</p>',
+        true
+      )
+      + fieldHtml('视频类型', inputHtml('scheduledTaskCreateVideoType', 'text', 'value="brand_promo" placeholder="brand_promo / 宣传 / 种草 / 剧情"'))
+      + fieldHtml('目标受众', inputHtml('scheduledTaskCreateVideoAudience', 'text', 'value="general_audience" placeholder="例如：高净值商务人群"'))
+      + fieldHtml('画面比例', selectHtml('scheduledTaskCreateVideoRatio',
+        optionHtml('9:16', '9:16 竖屏')
+        + optionHtml('16:9', '16:9 横屏')
+        + optionHtml('1:1', '1:1 方图')
+      ))
+      + fieldHtml('总时长（秒）', inputHtml('scheduledTaskCreateVideoDuration', 'number', 'min="3" max="60" value="8"'))
+      + fieldHtml('镜头数', inputHtml('scheduledTaskCreateVideoSceneCount', 'number', 'min="1" max="6" value="1"'))
+      + fieldHtml(
+        '风格偏好',
+        textareaHtml('scheduledTaskCreateVideoStyle', 3, 'premium commercial, realistic, cinematic lighting')
+        + '<p class="meta" style="margin:0.35rem 0 0;">生成视频时会自动追加避免文字、字母、数字、logo、水印的限制。</p>',
+        true
+      )
+      + fieldHtml('规划模型', inputHtml('scheduledTaskCreateVideoPlanningModel', 'text', 'value="gpt-5.4"'))
+      + fieldHtml('首帧模型', inputHtml('scheduledTaskCreateVideoImageModel', 'text', 'value="openai/gpt-image-2"'))
+      + fieldHtml('视频模型', inputHtml('scheduledTaskCreateVideoVideoModel', 'text', 'value="fal-ai/veo3.1/image-to-video"'))
+    );
+  }
+
+  function renderCreatePptFields(host) {
+    host.innerHTML = compactGrid(
+      fieldHtml(
+        'PPT主题/汇报需求',
+        textareaHtml('scheduledTaskCreatePptPrompt', 4, '例如：为高端白酒品牌生成一份招商路演PPT，突出品牌定位、产品卖点和合作价值')
+        + '<p class="meta" style="margin:0.35rem 0 0;">留空时根据记忆资料自动生成本次汇报 brief。</p>',
+        true
+      )
+      + fieldHtml('页数', inputHtml('scheduledTaskCreatePptSlideCount', 'number', 'min="3" max="30" value="10"'))
+      + fieldHtml('主题样式', selectHtml('scheduledTaskCreatePptTheme',
+        optionHtml('business', '商务蓝')
+        + optionHtml('default', '简洁白')
+        + optionHtml('dark', '深色科技')
+      ))
+      + fieldHtml('目标受众', inputHtml('scheduledTaskCreatePptAudience', 'text', 'value="business" placeholder="例如：代理商 / 投资人 / 企业客户"'))
+      + fieldHtml(
+        '风格偏好',
+        textareaHtml('scheduledTaskCreatePptStyle', 3, '专业、清晰、商务、适合汇报和路演')
+      )
+      + fieldHtml('规划模型', inputHtml('scheduledTaskCreatePptPlanningModel', 'text', 'value="gpt-5.4"'))
+    );
   }
 
   function fillCandidateGroupSelect() {
@@ -758,6 +856,8 @@
     if (!host) return;
     var capabilityId = val('scheduledTaskCapability') || 'goal.video.pipeline';
     if (capabilityId === 'hifly.video.create_by_tts') renderHiflyFields(host);
+    else if (capabilityId === 'create.video.pipeline') renderCreateVideoFields(host);
+    else if (capabilityId === 'create.ppt.pipeline') renderCreatePptFields(host);
     else if (capabilityId === 'goal.image.pipeline') renderImageFields(host);
     else renderGoalFields(host);
   }
@@ -767,6 +867,8 @@
     if (!sel) return Promise.resolve();
     var current = sel.value;
     sel.innerHTML = optionHtml('goal.video.pipeline', '创意成片')
+      + optionHtml('create.video.pipeline', 'gtp创意成片')
+      + optionHtml('create.ppt.pipeline', '智能PPT')
       + optionHtml('goal.image.pipeline', '文案+创意图片')
       + optionHtml('hifly.video.create_by_tts', '必火数字人');
     sel.value = CAPABILITIES[current] ? current : 'goal.video.pipeline';
@@ -815,6 +917,35 @@
         source_mode: sourceMode,
         candidate_group: sourceMode === 'ai_image' ? '' : group,
         prompt: prompt
+      };
+    }
+    if (capabilityId === 'create.video.pipeline') {
+      var cvPrompt = val('scheduledTaskCreateVideoPrompt');
+      return {
+        action: 'start_pipeline',
+        prompt: cvPrompt,
+        video_type: val('scheduledTaskCreateVideoType') || 'brand_promo',
+        target_audience: val('scheduledTaskCreateVideoAudience') || 'general_audience',
+        style: val('scheduledTaskCreateVideoStyle') || 'premium commercial, realistic, cinematic lighting',
+        duration: numberVal('scheduledTaskCreateVideoDuration', 8, 3, 60),
+        scene_count: numberVal('scheduledTaskCreateVideoSceneCount', 1, 1, 6),
+        aspect_ratio: val('scheduledTaskCreateVideoRatio') || '9:16',
+        language: 'Chinese',
+        planning_model: val('scheduledTaskCreateVideoPlanningModel') || 'gpt-5.4',
+        image_model: val('scheduledTaskCreateVideoImageModel') || 'openai/gpt-image-2',
+        video_model: val('scheduledTaskCreateVideoVideoModel') || 'fal-ai/veo3.1/image-to-video'
+      };
+    }
+    if (capabilityId === 'create.ppt.pipeline') {
+      return {
+        action: 'run_pipeline',
+        prompt: val('scheduledTaskCreatePptPrompt'),
+        slide_count: numberVal('scheduledTaskCreatePptSlideCount', 10, 3, 30),
+        theme: val('scheduledTaskCreatePptTheme') || 'business',
+        language: 'zh-CN',
+        audience: val('scheduledTaskCreatePptAudience') || 'business',
+        style: val('scheduledTaskCreatePptStyle') || '专业、清晰、商务、适合汇报和路演',
+        planning_model: val('scheduledTaskCreatePptPlanningModel') || 'gpt-5.4'
       };
     }
     if (capabilityId === 'goal.image.pipeline') {
@@ -1020,6 +1151,27 @@
     });
   }
 
+  function resumeVideoRun(runId, btn) {
+    if (!runId) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '补发中...';
+    }
+    api('/api/scheduled-tasks/runs/' + encodeURIComponent(runId) + '/resume-video', {
+      method: 'POST',
+      body: JSON.stringify({})
+    }).then(function () {
+      showMsg('scheduledTaskMsg', '已重新排队，将跳过生图步骤补发视频', false);
+      loadRuns();
+    }).catch(function (e) {
+      showMsg('scheduledTaskMsg', e.message || '补发视频失败', true);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '补发视频';
+      }
+    });
+  }
+
   function renderRunsByStatus(rows) {
     rows = Array.isArray(rows) ? rows : [];
     var running = rows.filter(runIsRunning);
@@ -1128,6 +1280,11 @@
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-publish-btn') : null;
       if (!btn) return;
       requestPublishRun(btn.getAttribute('data-run-id'), btn);
+    });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-resume-video-btn') : null;
+      if (!btn) return;
+      resumeVideoRun(btn.getAttribute('data-run-id'), btn);
     });
     var kind = document.getElementById('scheduledTaskKind');
     if (kind) kind.value = 'capability';

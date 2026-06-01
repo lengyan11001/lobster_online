@@ -154,6 +154,63 @@
       ]
     }
   },
+  "create.video.pipeline": {
+    "description": "gtp创意成片：先生成结构化脚本、分镜和视频提示词，再用 gpt-image-2 生成首帧图，并调用图生视频模型生成成片。支持 reference_asset_ids/reference_image_urls 跳过生图直接补发视频。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "run_pipeline",
+            "start_pipeline",
+            "poll_pipeline"
+          ],
+          "default": "start_pipeline"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "创意成片主题或需求"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "poll_pipeline 时传入 start_pipeline 返回的 job_id"
+        },
+        "duration": {
+          "type": "integer",
+          "default": 8
+        },
+        "scene_count": {
+          "type": "integer",
+          "default": 1
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "default": "9:16"
+        },
+        "reference_asset_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reference_image_urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "prompt"
+      ]
+    }
+  },
   "hifly.video.create_by_tts": {
     "description": "必火数字人：使用已选数字人和声音生成数字人口播视频，口播文案由调用方根据记忆生成。本能力内部负责 HiFly 创建、轮询和计费结算。",
     "upstream": "local",

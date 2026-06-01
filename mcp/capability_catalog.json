@@ -22,7 +22,7 @@
         },
         "image_size": {
           "type": "string",
-          "description": "可选，如 square_hd, landscape_16_9"
+          "description": "可选，速推比例枚举：1:1、4:3、3:4、16:9、9:16、3:2、2:3；默认可省略"
         }
       },
       "required": [

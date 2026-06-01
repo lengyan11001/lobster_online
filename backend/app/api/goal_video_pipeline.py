@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
@@ -31,6 +32,7 @@ def _local_mcp_url() -> str:
     return f"http://127.0.0.1:{port}/mcp"
 TERMINAL_SUCCESS = {"completed", "complete", "success", "succeeded", "finished", "done"}
 TERMINAL_FAILURE = {"failed", "error", "cancelled", "canceled", "timeout", "rejected"}
+PIPELINE_PRECHARGED_CONTEXT_KEY = "_lobster_pipeline_precharged"
 VIDEO_NO_TEXT_CONSTRAINT = (
     "画面中不要出现任何可读文字、字母、数字、字幕、标题、商标标识、水印、招牌、界面元素、标签、"
     "英文、拼音、随机乱码字符或伪文字；只用真实画面、构图、光影和人物/产品动作表达。"
@@ -49,6 +51,7 @@ class GoalVideoPipelinePayload(BaseModel):
     planning_model: Optional[str] = None
     image_model: Optional[str] = None
     video_model: Optional[str] = None
+    precomputed_plan: Dict[str, Any] = Field(default_factory=dict)
     reference_asset_ids: List[str] = Field(default_factory=list)
     reference_image_urls: List[str] = Field(default_factory=list)
     image_retry_count: int = Field(2, ge=0, le=5)
@@ -60,6 +63,12 @@ class GoalVideoPipelinePayload(BaseModel):
 
 class GoalVideoPipelineBody(BaseModel):
     payload: GoalVideoPipelinePayload
+
+
+class PipelinePartialResultError(RuntimeError):
+    def __init__(self, message: str, partial_result: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.partial_result = partial_result or {}
 
 
 def _raw_token_from_request(request: Request) -> str:
@@ -288,12 +297,151 @@ def _has_failure_marker(obj: Any, _depth: int = 0) -> bool:
     return False
 
 
+def _is_non_retryable_generation_error(exc: BaseException) -> bool:
+    text = str(exc or "")
+    low = text.lower()
+    return (
+        "http 400" in low
+        or "上游 rest http 400" in low
+        or "bad request" in low
+        or "image_size 必须" in text
+        or "aspect_ratio 必须" in text
+        or "invalid parameter" in low
+        or "invalid request" in low
+        or "http 402" in low
+        or "payment required" in low
+        or "insufficient balance" in low
+        or "算力不足" in text
+        or "余额不足" in text
+        or "预扣需" in text
+    )
+
+
 def _mcp_headers(token: str, installation_id: str) -> Dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if installation_id:
         headers["X-Installation-Id"] = installation_id
+    return headers
+
+
+def _billing_base() -> str:
+    return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+
+
+def _billing_headers(token: str, installation_id: str) -> Dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
+    if billing_key:
+        headers["X-Lobster-Mcp-Billing"] = billing_key
+    return headers
+
+
+async def _pre_deduct_pipeline_total(
+    *,
+    capability_id: str,
+    payload: Dict[str, Any],
+    token: str,
+    installation_id: str,
+) -> Dict[str, Any]:
+    base = _billing_base()
+    if not base or not token:
+        raise RuntimeError("pipeline pre-deduct unavailable: missing auth server or user token")
+    body = {"capability_id": capability_id, "params": payload}
+    headers = _billing_headers(token, installation_id)
+    headers["X-Billing-Idempotency-Key"] = f"pipeline:{capability_id}:{uuid.uuid4().hex}"
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+        resp = await client.post(f"{base}/capabilities/pre-deduct", json=body, headers=headers)
+    data = resp.json() if resp.content else {}
+    if resp.status_code == 402:
+        detail = data.get("detail") if isinstance(data, dict) else ""
+        raise RuntimeError(str(detail or "算力不足，请先充值"))
+    if resp.status_code >= 400:
+        detail = data.get("detail") if isinstance(data, dict) else ""
+        raise RuntimeError(str(detail or resp.text or f"pipeline pre-deduct HTTP {resp.status_code}")[:1000])
+    return data if isinstance(data, dict) else {"credits_charged": 0}
+
+
+async def _refund_pipeline_total(
+    *,
+    capability_id: str,
+    credits: Any,
+    token: str,
+    installation_id: str,
+) -> None:
+    try:
+        amount = float(credits or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    if amount <= 0 or not token:
+        return
+    base = _billing_base()
+    if not base:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+            await client.post(
+                f"{base}/capabilities/refund",
+                json={"capability_id": capability_id, "credits": amount},
+                headers=_billing_headers(token, installation_id),
+            )
+    except Exception as exc:
+        logger.warning("[pipeline.billing] refund failed capability_id=%s credits=%s: %s", capability_id, amount, exc)
+
+
+async def _record_pipeline_total(
+    *,
+    capability_id: str,
+    payload: Dict[str, Any],
+    result: Optional[Dict[str, Any]],
+    token: str,
+    installation_id: str,
+    credits_charged: Any,
+    success: bool,
+    error_message: str = "",
+) -> None:
+    if not token:
+        return
+    base = _billing_base()
+    if not base:
+        return
+    try:
+        amount = float(credits_charged or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    body = {
+        "capability_id": capability_id,
+        "success": success,
+        "request_payload": payload,
+        "response_payload": result or {},
+        "error_message": (error_message or "")[:1000] or None,
+        "source": "pipeline_total",
+        "credits_charged": amount,
+        "pre_deduct_applied": amount > 0,
+        "credits_pre_deducted": amount if amount > 0 else None,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+            await client.post(f"{base}/capabilities/record-call", json=body, headers=_billing_headers(token, installation_id))
+    except Exception as exc:
+        logger.warning("[pipeline.billing] record failed capability_id=%s: %s", capability_id, exc)
+
+
+def _pipeline_context_headers(context: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    if not isinstance(context, dict) or not context.get("precharged"):
+        return {}
+    headers = {"X-Lobster-Pipeline-Precharged": "1"}
+    pipeline_id = str(context.get("pipeline_id") or "").strip()
+    capability_id = str(context.get("capability_id") or "").strip()
+    if pipeline_id:
+        headers["X-Lobster-Pipeline-Id"] = pipeline_id[:128]
+    if capability_id:
+        headers["X-Lobster-Pipeline-Capability"] = capability_id[:128]
     return headers
 
 
@@ -327,6 +475,7 @@ async def _invoke_capability(
     token: str,
     installation_id: str,
     timeout: float,
+    pipeline_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     body = {
         "jsonrpc": "2.0",
@@ -341,7 +490,9 @@ async def _invoke_capability(
         },
     }
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        r = await client.post(_local_mcp_url(), json=body, headers=_mcp_headers(token, installation_id))
+        headers = _mcp_headers(token, installation_id)
+        headers.update(_pipeline_context_headers(pipeline_context))
+        r = await client.post(_local_mcp_url(), json=body, headers=headers)
     try:
         data = r.json() if r.content else {}
     except Exception as e:
@@ -372,6 +523,8 @@ async def _retry_async(
         except Exception as e:
             last = e
             logger.warning("[goal.video.pipeline] %s attempt %s/%s failed: %s", label, idx, total, e)
+            if _is_non_retryable_generation_error(e):
+                raise RuntimeError(f"{label} failed: {e}") from e
             if idx < total:
                 await asyncio.sleep(min(8.0, 1.5 * idx))
     raise RuntimeError(f"{label} failed after {total} attempts: {last}") from last
@@ -463,6 +616,7 @@ async def _submit_and_wait_generation(
     timeout_seconds: int,
     interval_seconds: int,
     progress: Callable[[str, str, Optional[Dict[str, Any]]], None],
+    pipeline_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     capability_id = "image.generate" if kind == "image" else "video.generate"
     progress(f"{kind}_submit", f"submit {capability_id}", None)
@@ -472,6 +626,7 @@ async def _submit_and_wait_generation(
         token=token,
         installation_id=installation_id,
         timeout=180.0,
+        pipeline_context=pipeline_context,
     )
     task_ids = _collect_task_ids(submit)
     task_id = task_ids[0] if task_ids else ""
@@ -544,6 +699,7 @@ async def run_goal_video_pipeline(
     token: str,
     installation_id: str,
     progress: Optional[Callable[[str, str, Optional[Dict[str, Any]]], None]] = None,
+    billing_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not (pl.goal or "").strip():
         raise HTTPException(status_code=400, detail="goal is required")
@@ -552,13 +708,15 @@ async def run_goal_video_pipeline(
         if progress:
             progress(stage, message, extra)
 
-    plan = await _retry_async(
-        "plan",
-        2,
-        lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
-        emit,
-    )
-    emit("plan_done", "plan generated", {"title": plan.get("title")})
+    plan = dict(pl.precomputed_plan or {}) if isinstance(pl.precomputed_plan, dict) else {}
+    if not plan:
+        plan = await _retry_async(
+            "plan",
+            2,
+            lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
+            emit,
+        )
+    emit("plan_done", "plan generated", {"title": plan.get("title"), "partial_plan": plan})
     plan["image_prompt"] = _with_video_no_text_constraint(plan.get("image_prompt"), 2500)
 
     image_payload: Dict[str, Any] = {
@@ -585,11 +743,22 @@ async def run_goal_video_pipeline(
             timeout_seconds=pl.image_poll_timeout_seconds,
             interval_seconds=pl.poll_interval_seconds,
             progress=emit,
+            pipeline_context=billing_context,
         ),
         emit,
     )
     image_asset_id = _first_asset_id(image_result, "image")
     image_urls = _collect_urls(image_result, want="image")
+    emit(
+        "image_done",
+        "image generated",
+        {
+            "image_asset_id": image_asset_id,
+            "image_url": image_urls[0] if image_urls else "",
+            "partial_image": image_result,
+            "partial_plan": plan,
+        },
+    )
 
     video_payload: Dict[str, Any] = {
         "prompt": plan["video_prompt"],
@@ -617,6 +786,7 @@ async def run_goal_video_pipeline(
             timeout_seconds=pl.video_poll_timeout_seconds,
             interval_seconds=pl.poll_interval_seconds,
             progress=emit,
+            pipeline_context=billing_context,
         ),
         emit,
     )
@@ -651,6 +821,7 @@ async def run_goal_image_pipeline(
     token: str,
     installation_id: str,
     progress: Optional[Callable[[str, str, Optional[Dict[str, Any]]], None]] = None,
+    billing_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """创意成片的前半段：根据目标/记忆规划文案和图片提示词，只生成图片后结束。"""
     if not (pl.goal or "").strip():
@@ -660,12 +831,14 @@ async def run_goal_image_pipeline(
         if progress:
             progress(stage, message, extra)
 
-    plan = await _retry_async(
-        "plan",
-        2,
-        lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
-        emit,
-    )
+    plan = dict(pl.precomputed_plan or {}) if isinstance(pl.precomputed_plan, dict) else {}
+    if not plan:
+        plan = await _retry_async(
+            "plan",
+            2,
+            lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
+            emit,
+        )
     emit("plan_done", "plan generated", {"title": plan.get("title")})
 
     image_payload: Dict[str, Any] = {
@@ -692,6 +865,7 @@ async def run_goal_image_pipeline(
             timeout_seconds=pl.image_poll_timeout_seconds,
             interval_seconds=pl.poll_interval_seconds,
             progress=emit,
+            pipeline_context=billing_context,
         ),
         emit,
     )
@@ -722,6 +896,7 @@ async def run_goal_video_from_reference_pipeline(
     reference_asset_id: str = "",
     reference_image_url: str = "",
     progress: Optional[Callable[[str, str, Optional[Dict[str, Any]]], None]] = None,
+    billing_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """根据目标/记忆规划文案和视频提示词，跳过图片生成，直接用指定参考图生成视频。"""
     if not (pl.goal or "").strip():
@@ -735,12 +910,14 @@ async def run_goal_video_from_reference_pipeline(
         if progress:
             progress(stage, message, extra)
 
-    plan = await _retry_async(
-        "plan",
-        2,
-        lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
-        emit,
-    )
+    plan = dict(pl.precomputed_plan or {}) if isinstance(pl.precomputed_plan, dict) else {}
+    if not plan:
+        plan = await _retry_async(
+            "plan",
+            2,
+            lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
+            emit,
+        )
     emit("plan_done", "plan generated", {"title": plan.get("title")})
 
     video_payload: Dict[str, Any] = {
@@ -767,6 +944,7 @@ async def run_goal_video_from_reference_pipeline(
             timeout_seconds=pl.video_poll_timeout_seconds,
             interval_seconds=pl.poll_interval_seconds,
             progress=emit,
+            pipeline_context=billing_context,
         ),
         emit,
     )
@@ -791,12 +969,175 @@ async def run_goal_video_from_reference_pipeline(
     }
 
 
+def _goal_pipeline_billing_payload(pl: GoalVideoPipelinePayload, *, source_mode: str = "ai_image") -> Dict[str, Any]:
+    payload = pl.model_dump()
+    payload["source_mode"] = source_mode
+    if source_mode != "ai_image":
+        payload["reference_asset_ids"] = list(pl.reference_asset_ids or [])
+        payload["reference_image_urls"] = list(pl.reference_image_urls or [])
+    return payload
+
+
+def _goal_video_partial_from_image(
+    *,
+    pl: GoalVideoPipelinePayload,
+    plan: Optional[Dict[str, Any]],
+    image_result: Optional[Dict[str, Any]],
+    error_message: str,
+) -> Dict[str, Any]:
+    image_result = image_result or {}
+    image_asset_id = _first_asset_id(image_result, "image") or _first_asset_id(image_result)
+    image_urls = _collect_urls(image_result, want="image")
+    if not image_asset_id and pl.reference_asset_ids:
+        image_asset_id = str(pl.reference_asset_ids[0] or "").strip()
+    if not image_urls and pl.reference_image_urls:
+        image_urls = [str(x).strip() for x in pl.reference_image_urls if str(x).strip()]
+    return {
+        "ok": False,
+        "pipeline": "goal_video_pipeline",
+        "status": "partial_image",
+        "resume_available": bool(image_asset_id or image_urls),
+        "error": error_message[:2000],
+        "plan": plan or {},
+        "image": image_result,
+        "saved_assets": _collect_saved_assets({"saved_assets": image_result.get("saved_assets") or []}),
+        "image_asset_id": image_asset_id,
+        "final_asset_id": image_asset_id,
+        "media_urls": {"image": image_urls, "video": []},
+        "resume_payload": {
+            "capability_id": "goal.video.pipeline",
+            "source_mode": "reference_image",
+            "goal": pl.goal,
+            "platform": pl.platform,
+            "duration": pl.duration,
+            "aspect_ratio": pl.aspect_ratio,
+            "language": pl.language,
+            "memory_scope": "none",
+            "planning_model": pl.planning_model,
+            "video_model": pl.video_model,
+            "precomputed_plan": plan or {},
+            "reference_asset_ids": [image_asset_id] if image_asset_id else [],
+            "reference_image_urls": image_urls[:1],
+        },
+    }
+
+
+async def run_goal_video_pipeline_with_total_billing(
+    *,
+    pl: GoalVideoPipelinePayload,
+    token: str,
+    installation_id: str,
+    source_mode: str = "ai_image",
+    progress: Optional[Callable[[str, str, Optional[Dict[str, Any]]], None]] = None,
+) -> Dict[str, Any]:
+    pre_payload = _goal_pipeline_billing_payload(pl, source_mode=source_mode)
+    pre = await _pre_deduct_pipeline_total(
+        capability_id="goal.video.pipeline",
+        payload=pre_payload,
+        token=token,
+        installation_id=installation_id,
+    )
+    credits = pre.get("credits_charged") if isinstance(pre, dict) else 0
+    billing_context = {
+        "precharged": True,
+        "pipeline_id": uuid.uuid4().hex,
+        "capability_id": "goal.video.pipeline",
+    }
+    captured: Dict[str, Any] = {"plan": None, "image_result": None}
+
+    def wrapped_progress(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        if isinstance(extra, dict):
+            if stage == "plan_done":
+                captured["plan"] = {"title": extra.get("title")}
+            if extra.get("partial_plan") and isinstance(extra.get("partial_plan"), dict):
+                captured["plan"] = extra.get("partial_plan")
+            if extra.get("partial_image") and isinstance(extra.get("partial_image"), dict):
+                captured["image_result"] = extra.get("partial_image")
+        if progress:
+            progress(stage, message, extra)
+
+    try:
+        if source_mode != "ai_image":
+            ref_asset = (pl.reference_asset_ids or [""])[0] if pl.reference_asset_ids else ""
+            ref_url = (pl.reference_image_urls or [""])[0] if pl.reference_image_urls else ""
+            result = await run_goal_video_from_reference_pipeline(
+                pl=pl,
+                token=token,
+                installation_id=installation_id,
+                reference_asset_id=ref_asset,
+                reference_image_url=ref_url,
+                progress=wrapped_progress,
+                billing_context=billing_context,
+            )
+        else:
+            result = await run_goal_video_pipeline(
+                pl=pl,
+                token=token,
+                installation_id=installation_id,
+                progress=wrapped_progress,
+                billing_context=billing_context,
+            )
+    except Exception as exc:
+        await _refund_pipeline_total(
+            capability_id="goal.video.pipeline",
+            credits=credits,
+            token=token,
+            installation_id=installation_id,
+        )
+        await _record_pipeline_total(
+            capability_id="goal.video.pipeline",
+            payload=pre_payload,
+            result=None,
+            token=token,
+            installation_id=installation_id,
+            credits_charged=0,
+            success=False,
+            error_message=str(exc),
+        )
+        partial = {}
+        if captured.get("image_result") or pl.reference_asset_ids or pl.reference_image_urls:
+            partial = _goal_video_partial_from_image(
+                pl=pl,
+                plan=captured.get("plan") if isinstance(captured.get("plan"), dict) else None,
+                image_result=captured.get("image_result") if isinstance(captured.get("image_result"), dict) else None,
+                error_message=str(exc),
+            )
+            partial["pipeline_billing"] = {
+                "pre_deduct_applied": bool(credits),
+                "credits_charged": credits or 0,
+                "refunded": True,
+            }
+            raise PipelinePartialResultError(str(exc), partial) from exc
+        raise
+    result["pipeline_billing"] = {
+        "pre_deduct_applied": bool(credits),
+        "credits_charged": credits or 0,
+        "billing_rule": pre.get("billing_rule") if isinstance(pre, dict) else "",
+        "breakdown": pre.get("breakdown") if isinstance(pre, dict) else {},
+    }
+    await _record_pipeline_total(
+        capability_id="goal.video.pipeline",
+        payload=pre_payload,
+        result=result,
+        token=token,
+        installation_id=installation_id,
+        credits_charged=credits,
+        success=True,
+    )
+    return result
+
+
 async def _background_runner(job_id: str, pl: GoalVideoPipelinePayload, token: str, installation_id: str) -> None:
     def progress(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
         append_goal_video_progress(job_id, stage=stage, message=message, extra=extra)
 
     try:
-        result = await run_goal_video_pipeline(pl=pl, token=token, installation_id=installation_id, progress=progress)
+        result = await run_goal_video_pipeline_with_total_billing(
+            pl=pl,
+            token=token,
+            installation_id=installation_id,
+            progress=progress,
+        )
     except Exception as e:
         logger.exception("[goal.video.pipeline] background job failed job_id=%s", job_id)
         update_goal_video_job(job_id, status="failed", stage="failed", error=str(e)[:2000])
@@ -814,7 +1155,11 @@ async def goal_video_pipeline_run(
     token = _raw_token_from_request(request)
     installation_id = _installation_id_from_request(request, current_user.id)
     try:
-        return await run_goal_video_pipeline(pl=pl, token=token, installation_id=installation_id)
+        return await run_goal_video_pipeline_with_total_billing(
+            pl=pl,
+            token=token,
+            installation_id=installation_id,
+        )
     except HTTPException:
         raise
     except Exception as e:

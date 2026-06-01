@@ -195,6 +195,32 @@
       color: var(--text);
       background: rgba(255, 255, 255, 0.08);
     }
+    .auth-login-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.35rem;
+      margin-bottom: 1.35rem;
+      padding: 0.25rem;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+    }
+    .auth-login-tabs button {
+      min-height: 2.25rem;
+      border: 0;
+      border-radius: calc(var(--radius-sm) - 2px);
+      color: var(--text-muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .auth-login-tabs button.active {
+      color: var(--text);
+      background: var(--bg-card);
+      box-shadow: 0 8px 18px rgba(34,49,78,0.08);
+    }
+    .auth-tab-panel[hidden] { display: none !important; }
 
     /* store/pub/sys tab styles are in index.html <style> */
     .auth-card form { display: none; }
@@ -932,6 +958,93 @@
     .sch-task-st-success { color: #4ade80; }
     .sch-task-st-failed { color: #f87171; }
     .sch-task-st-partial { color: #fbbf24; }
+    #sutuiBalanceWrap.credit-balance-action {
+      cursor: pointer;
+      border: 1px solid rgba(100, 116, 139, 0.22);
+      border-radius: 8px;
+      padding: 0.25rem 0.45rem;
+      background: rgba(255,255,255,0.56);
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    #sutuiBalanceWrap.credit-balance-action:hover {
+      border-color: rgba(37,99,235,0.35);
+      background: rgba(239,246,255,0.86);
+    }
+    .credit-limit-modal {
+      max-width: 520px;
+    }
+    .credit-limit-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .credit-limit-head h4 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+    .credit-limit-head p {
+      margin: 0.35rem 0 0;
+      color: var(--text-muted);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+    .credit-limit-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.6rem;
+      margin-bottom: 1rem;
+    }
+    .credit-limit-grid > div {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.7rem;
+      background: rgba(37,99,235,0.05);
+      min-width: 0;
+    }
+    .credit-limit-grid span {
+      display: block;
+      color: var(--text-muted);
+      font-size: 0.76rem;
+      margin-bottom: 0.35rem;
+    }
+    .credit-limit-grid strong {
+      display: block;
+      color: var(--text);
+      font-size: 1rem;
+      overflow-wrap: anywhere;
+    }
+    .credit-limit-field {
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+    .credit-limit-field span {
+      display: block;
+      margin-bottom: 0.35rem;
+      font-size: 0.86rem;
+      color: var(--text);
+    }
+    .modal .credit-limit-field input {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .credit-limit-hint,
+    .credit-limit-msg {
+      margin: 0.45rem 0 0;
+      font-size: 0.78rem;
+      line-height: 1.55;
+      color: var(--text-muted);
+    }
+    .credit-limit-msg.err {
+      color: #dc2626;
+    }
+    .credit-limit-msg.ok {
+      color: #16a34a;
+    }
+    .credit-limit-actions {
+      justify-content: flex-end;
+    }
     /* 通用「?」说明按钮与弹层 */
     .help-q {
       display: inline-flex;

@@ -115,6 +115,48 @@ function saveChatRouteMode() {
     .finally(function() { if (btn) btn.disabled = false; });
 }
 
+function saveAccountPassword() {
+  var pwdEl = document.getElementById('accountPasswordInput');
+  var confirmEl = document.getElementById('accountPasswordConfirmInput');
+  var btn = document.getElementById('saveAccountPasswordBtn');
+  var msgEl = document.getElementById('accountPasswordMsg');
+  if (!pwdEl || !confirmEl) return;
+  var password = pwdEl.value || '';
+  var confirm = confirmEl.value || '';
+  if (password.length < 6) {
+    showMsg(msgEl, '密码至少 6 位', true);
+    return;
+  }
+  if (password.length > 128) {
+    showMsg(msgEl, '密码不能超过 128 位', true);
+    return;
+  }
+  if (password !== confirm) {
+    showMsg(msgEl, '两次输入的密码不一致', true);
+    return;
+  }
+  if (btn) btn.disabled = true;
+  showMsg(msgEl, '正在保存...', false);
+  fetch(API_BASE + '/auth/set-password', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ password: password })
+  })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(x) {
+      if (x.ok && x.data && x.data.ok) {
+        pwdEl.value = '';
+        confirmEl.value = '';
+        showMsg(msgEl, '登录密码已保存', false);
+      } else {
+        var detail = x.data && (x.data.detail || x.data.message);
+        showMsg(msgEl, typeof detail === 'string' ? detail : '保存失败', true);
+      }
+    })
+    .catch(function() { showMsg(msgEl, '网络错误', true); })
+    .finally(function() { if (btn) btn.disabled = false; });
+}
+
 function loadSutuiConfig() {
   var input = document.getElementById('sutuiTokenInput');
   if (!input) return;
@@ -343,6 +385,8 @@ var saveOcBtn = document.getElementById('saveOcConfigBtn');
 if (saveOcBtn) saveOcBtn.addEventListener('click', saveOcConfig);
 var saveSutuiTokenBtn = document.getElementById('saveSutuiTokenBtn');
 if (saveSutuiTokenBtn) saveSutuiTokenBtn.addEventListener('click', saveSutuiToken);
+var saveAccountPasswordBtn = document.getElementById('saveAccountPasswordBtn');
+if (saveAccountPasswordBtn) saveAccountPasswordBtn.addEventListener('click', saveAccountPassword);
 document.addEventListener('click', function(e) {
   var target = e.target && e.target.closest ? e.target.closest('#saveChatRouteModeBtn') : null;
   if (!target) return;

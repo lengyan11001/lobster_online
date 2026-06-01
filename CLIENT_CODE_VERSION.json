@@ -1,6 +1,6 @@
 {
-  "version": "1.0.55",
-  "build": 88,
-  "applied_at": "2026-05-29T10:23:56+08:00",
-  "note": "Merge online view split and Douyin workbench updates"
+  "version": "1.0.56",
+  "build": 89,
+  "applied_at": "2026-05-31T16:12:00+08:00",
+  "note": "Scheduled task claim fix and PPT runtime OTA dependencies"
 }

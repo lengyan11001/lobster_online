@@ -148,7 +148,8 @@ def _get_default_image_generate_model() -> str:
     """Server-controlled default image model with local fallback for offline/old servers."""
     _refresh_remote_generation_config()
     local_fallback = (getattr(settings, "lobster_default_image_generate_model", None) or "").strip()
-    return _remote_image_generate_default_model_cache or local_fallback or _DEFAULT_IMAGE_GENERATE_MODEL
+    raw = _remote_image_generate_default_model_cache or local_fallback or _DEFAULT_IMAGE_GENERATE_MODEL
+    return _IMAGE_MODEL_ALIASES.get(raw.strip().lower(), raw.strip()) or _DEFAULT_IMAGE_GENERATE_MODEL
 
 
 def _get_default_video_generate_model(_has_image: bool = False) -> str:
@@ -2239,6 +2240,9 @@ _DEFAULT_VIDEO_GENERATE_MODEL_T2V = "xai/grok-imagine-video/text-to-video"
 _DEFAULT_VIDEO_GENERATE_MODEL_I2V = "xai/grok-imagine-video/image-to-video"
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
+    "openai/gpt-image": "openai/gpt-image-2",
+    "openai/gpt-image2": "openai/gpt-image-2",
+    "openai/gptimage2": "openai/gpt-image-2",
     "gpt-image": "openai/gpt-image-2",
     "gpt-image2": "openai/gpt-image-2",
     "gpt-image-2": "openai/gpt-image-2",

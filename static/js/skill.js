@@ -1594,13 +1594,14 @@ function _renderOpenclawSkillWorkspaceCard(pkg, opts) {
   opts = opts || {};
   var skillId = String(opts.skillId || pkg.id || '').trim();
   var title = (pkg.name && String(pkg.name).trim()) || opts.title || skillId;
-  var desc = (pkg.description && String(pkg.description).trim()) || opts.desc || '';
+  var desc = (opts.desc && String(opts.desc).trim()) || (pkg.description && String(pkg.description).trim()) || '';
   var tags = (pkg.tags || opts.tags || ['OpenClaw']).map(function(t) {
     return '<span class="tag">' + escapeHtml(t) + '</span>';
   }).join('');
   var accent = opts.accent || '99,102,241';
+  var badge = (opts.badge && String(opts.badge).trim()) || '已授权';
   return '<div class="skill-store-card openclaw-skill-workspace-card" data-openclaw-skill-id="' + escapeAttr(skillId) + '" data-openclaw-skill-title="' + escapeAttr(title) + '" style="cursor:pointer;border-color:rgba(' + accent + ',0.35);background:linear-gradient(135deg,rgba(' + accent + ',0.08),transparent);">' +
-    '<div class="card-label">OpenClaw <span class="badge-installed">管理员可用</span></div>' +
+    '<div class="card-label">OpenClaw <span class="badge-installed">' + escapeHtml(badge) + '</span></div>' +
     '<div class="card-value">' + escapeHtml(title) + '</div>' +
     '<div class="card-desc">' + escapeHtml(desc) + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
@@ -2040,7 +2041,7 @@ function loadSkillStore() {
         html += _renderShanjianSmartClipCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
-        if (isSkillAdmin && browserUsePkg) {
+        if (browserUsePkg) {
           html += _renderOpenclawSkillWorkspaceCard(browserUsePkg, {
             skillId: 'browser_use_skill',
             title: 'Browser Use',
@@ -2049,7 +2050,7 @@ function loadSkillStore() {
             desc: '独立 OpenClaw 浏览器工作台'
           });
         }
-        if (isSkillAdmin && computerUsePkg) {
+        if (computerUsePkg) {
           html += _renderOpenclawSkillWorkspaceCard(computerUsePkg, {
             skillId: 'computer_use_skill',
             title: 'Computer Use',

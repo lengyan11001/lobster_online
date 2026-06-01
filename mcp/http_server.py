@@ -72,17 +72,19 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "comfly.seedance.tvc.pipeline": ("/api/comfly-seedance-tvc/pipeline/run", 7200.0),
     "comfly.ecommerce.detail_pipeline": ("/api/comfly-ecommerce-detail/pipeline/run", 7200.0),
     "goal.video.pipeline": ("/api/goal-video/pipeline/run", 7200.0),
+    "create.video.pipeline": ("/api/create-video/pipeline/run", 7200.0),
     "hifly.video.create_by_tts": ("/api/hifly/video/create-by-tts", 120.0),
     "ecommerce.publish": ("/api/ecommerce-publish/open-product-form", 120.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish"})
 
 _LOCAL_PIPELINE_JOB_LOOKUP_SPECS: tuple[tuple[str, str, str], ...] = (
     ("comfly.daihuo.pipeline", "/api/comfly-daihuo/pipeline/jobs/{job_id}", "local_comfly_daihuo_job"),
     ("comfly.seedance.tvc.pipeline", "/api/comfly-seedance-tvc/pipeline/jobs/{job_id}", "local_seedance_tvc_job"),
     ("goal.video.pipeline", "/api/goal-video/pipeline/jobs/{job_id}", "local_goal_video_job"),
+    ("create.video.pipeline", "/api/create-video/pipeline/jobs/{job_id}", "local_create_video_job"),
     ("comfly.ecommerce.detail_pipeline", "/api/comfly-ecommerce-detail/pipeline/jobs/{job_id}", "local_ecommerce_detail_job"),
 )
 _LOCAL_PIPELINE_JOB_LOOKUP_BY_CAPABILITY = {
@@ -1035,6 +1037,27 @@ def _backend_headers(token: Optional[str], request: Optional[Request] = None) ->
             h["X-Lobster-Chat-Turn-Id"] = turn_id[:128]
         if turn_mode:
             h["X-Lobster-LLM-Billing-Mode"] = turn_mode
+        pipeline_charged = (
+            request.headers.get("X-Lobster-Pipeline-Precharged")
+            or request.headers.get("x-lobster-pipeline-precharged")
+            or ""
+        ).strip()
+        pipeline_id = (
+            request.headers.get("X-Lobster-Pipeline-Id")
+            or request.headers.get("x-lobster-pipeline-id")
+            or ""
+        ).strip()
+        pipeline_cap = (
+            request.headers.get("X-Lobster-Pipeline-Capability")
+            or request.headers.get("x-lobster-pipeline-capability")
+            or ""
+        ).strip()
+        if pipeline_charged:
+            h["X-Lobster-Pipeline-Precharged"] = pipeline_charged
+        if pipeline_id:
+            h["X-Lobster-Pipeline-Id"] = pipeline_id[:128]
+        if pipeline_cap:
+            h["X-Lobster-Pipeline-Capability"] = pipeline_cap[:128]
     bk = (os.environ.get("LOBSTER_MCP_BILLING_INTERNAL_KEY") or "").strip()
     if bk:
         h["X-Lobster-Mcp-Billing"] = bk
@@ -1532,6 +1555,7 @@ async def _mcp_poll_goal_video_pipeline_until_done(
     job_id: str,
     request: Optional[Request],
     max_wait_sec: Optional[float] = None,
+    job_path: str = "/api/goal-video/pipeline/jobs",
 ) -> Dict[str, Any]:
     jid = (job_id or "").strip().lower()
     if not jid:
@@ -1543,11 +1567,12 @@ async def _mcp_poll_goal_video_pipeline_until_done(
     first_poll = True
     while first_poll or waited < max_wait:
         first_poll = False
+        poll_path = (job_path or "/api/goal-video/pipeline/jobs").rstrip("/")
         logger.info("[MCP goal.video.pipeline] poll job waited=%ss job_id=%s", int(waited), jid[:16])
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 pr = await client.get(
-                    f"{bu}/api/goal-video/pipeline/jobs/{jid}",
+                    f"{bu}{poll_path}/{jid}",
                     headers=_backend_headers(token, request),
                 )
         except Exception as e:
@@ -2645,9 +2670,36 @@ def _normalize_image_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         payload["prompt"] = prompt
     image_url = (payload.get("image_url") or "").strip()
     image_size = (payload.get("image_size") or "").strip()
+    image_ratio_aliases = {
+        "portrait_9_16": "9:16",
+        "landscape_16_9": "16:9",
+        "square_hd": "1:1",
+        "square": "1:1",
+        "vertical": "9:16",
+        "portrait": "9:16",
+        "horizontal": "16:9",
+        "landscape": "16:9",
+    }
+    image_ratio_values = {"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"}
+    normalized_image_size = image_ratio_aliases.get(image_size.lower(), image_size)
     num_images = payload.get("num_images", payload.get("n", 1))
     if isinstance(num_images, (int, float)):
         num_images = max(1, int(num_images))
+
+    # openai/gpt-image-2 在速推侧的 image_size 是比例枚举，不接受旧的
+    # portrait_9_16 / landscape_16_9 / square_hd 字符串。
+    if "gpt-image-2" in model or "gpt-image2" in model or "gptimage2" in model:
+        ratio = str(payload.get("aspect_ratio") or payload.get("ratio") or normalized_image_size or "1:1").strip()
+        ratio = image_ratio_aliases.get(ratio.lower(), ratio)
+        if ratio not in image_ratio_values:
+            ratio = "1:1"
+        out = {"model": model, "prompt": prompt, "image_size": ratio, "num_images": num_images}
+        if image_url:
+            out["image_url"] = image_url
+        image_urls = payload.get("image_urls")
+        if image_urls:
+            out["image_urls"] = image_urls
+        return out
 
     # jimeng-4.0 / jimeng-4.5：prompt 必填，image_url 可选，n
     if "jimeng-" in model:
@@ -3231,6 +3283,7 @@ async def _call_upstream_mcp_tool(
     user_authorization: Optional[str] = None,
     x_installation_id: Optional[str] = None,
     lobster_capability_id: str = "",
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     auth_headers: Dict[str, str] = {
         "Accept": "application/json, text/event-stream",
@@ -3251,6 +3304,9 @@ async def _call_upstream_mcp_tool(
             xi = (x_installation_id or "").strip()
             if xi:
                 auth_headers["X-Installation-Id"] = xi
+            for hk, hv in (extra_headers or {}).items():
+                if hk and hv:
+                    auth_headers[hk] = hv
         else:
             token = (sutui_token or "").strip() or _load_sutui_token()
             if token:
@@ -4882,6 +4938,44 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         (_p.get("job_id") or "")[:16],
                         BASE_URL,
                     )
+                elif capability_id == "create.video.pipeline":
+                    cv_act = (_p.get("action") or "").strip() or "run_pipeline"
+                    if cv_act == "start_pipeline":
+                        req_path = "/api/create-video/pipeline/start"
+                        timeout_s = 120.0
+                    elif cv_act == "poll_pipeline":
+                        jid = (_p.get("job_id") or "").strip().lower()
+                        if (
+                            not jid
+                            or len(jid) != 32
+                            or any(c not in "0123456789abcdef" for c in jid)
+                        ):
+                            return [
+                                {
+                                    "type": "text",
+                                    "text": _json_dumps_mcp_payload(
+                                        {
+                                            "capability_id": capability_id,
+                                            "error": "poll_pipeline requires valid 32-char hex payload.job_id",
+                                        }
+                                    ),
+                                }
+                            ], True
+                        req_path = f"/api/create-video/pipeline/jobs/{jid}"
+                        req_method = "GET"
+                        req_json = None
+                        timeout_s = 120.0
+                    else:
+                        req_path = "/api/create-video/pipeline/run"
+                        timeout_s = 7200.0
+                    logger.info(
+                        "[MCP create.video.pipeline] invoke has_token=%s action=%s prompt_len=%s job_id=%s base_url=%s",
+                        bool(token),
+                        cv_act,
+                        len(str(_p.get("prompt") or _p.get("topic") or "")),
+                        (_p.get("job_id") or "")[:16],
+                        BASE_URL,
+                    )
                 elif capability_id == "hifly.video.create_by_tts":
                     timeout_s = 120.0
                     req_json = dict(_p)
@@ -5086,7 +5180,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                                         "poll_error": polled,
                                     }
                     if (
-                        capability_id == "goal.video.pipeline"
+                        capability_id in ("goal.video.pipeline", "create.video.pipeline")
                         and isinstance(data, dict)
                         and data.get("ok", True)
                     ):
@@ -5107,6 +5201,11 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                                         _GOAL_VIDEO_OPENCLAW_FOREGROUND_POLL_MAX_SEC
                                         if _openclaw_scope_intent(request)
                                         else None
+                                    ),
+                                    job_path=(
+                                        "/api/create-video/pipeline/jobs"
+                                        if capability_id == "create.video.pipeline"
+                                        else "/api/goal-video/pipeline/jobs"
                                     ),
                                 )
                                 if isinstance(polled, dict) and (polled.get("status") or "").strip():
@@ -5232,6 +5331,16 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 xi_for_upstream = (
                     request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or ""
                 ).strip()
+            pipeline_forward_headers: Dict[str, str] = {}
+            if request:
+                for hk in (
+                    "X-Lobster-Pipeline-Precharged",
+                    "X-Lobster-Pipeline-Id",
+                    "X-Lobster-Pipeline-Capability",
+                ):
+                    hv = (request.headers.get(hk) or request.headers.get(hk.lower()) or "").strip()
+                    if hv:
+                        pipeline_forward_headers[hk] = hv[:128] if hk != "X-Lobster-Pipeline-Precharged" else hv
             t0 = time.perf_counter()
             logger.info("[MCP] invoke_capability capability_id=%s upstream=%s", capability_id, upstream_name)
             upstream_resp: Any = {}
@@ -5265,6 +5374,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         user_authorization=user_auth,
                         x_installation_id=xi_for_upstream or None,
                         lobster_capability_id=capability_id,
+                        extra_headers=pipeline_forward_headers,
                     )
                     return _unwrap_lobster_server_gateway_response(
                         upstream_raw if isinstance(upstream_raw, dict) else {}
@@ -5278,6 +5388,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                     user_authorization=user_auth,
                     x_installation_id=xi_for_upstream or None,
                     lobster_capability_id=capability_id,
+                    extra_headers=pipeline_forward_headers,
                 )
 
             if not transfer_url_from_cache:

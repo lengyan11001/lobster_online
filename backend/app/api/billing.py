@@ -162,6 +162,58 @@ async def proxy_credit_history_from_auth_server(
         raise HTTPException(status_code=502, detail="认证中心响应非 JSON")
 
 
+async def _proxy_daily_limit_to_auth_server(
+    request: Request,
+    *,
+    method: str,
+    json_body: Optional[dict[str, Any]] = None,
+):
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="未配置 AUTH_SERVER_BASE，无法访问每日算力上限")
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not auth.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="需要登录")
+    fwd_headers: dict[str, str] = {"Authorization": auth}
+    xi = (request.headers.get("X-Installation-Id") or "").strip()
+    if xi:
+        fwd_headers["X-Installation-Id"] = xi
+    try:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            if method.upper() == "PUT":
+                r = await client.put(f"{base}/api/billing/daily-limit", headers=fwd_headers, json=json_body or {})
+            else:
+                r = await client.get(f"{base}/api/billing/daily-limit", headers=fwd_headers)
+    except httpx.RequestError as e:
+        logger.warning("[billing-proxy] daily-limit 认证中心不可达: %s", e)
+        raise HTTPException(status_code=503, detail=f"认证中心不可达，无法访问每日算力上限: {e!s}") from e
+    if r.status_code != 200:
+        detail = (r.text or "")[:800] if r.text else r.reason_phrase
+        raise HTTPException(status_code=r.status_code, detail=detail or "认证中心返回错误")
+    try:
+        return r.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="认证中心响应非 JSON")
+
+
+@router.get("/api/billing/daily-limit", summary="每日算力消耗上限（转发认证中心）")
+async def proxy_get_daily_limit(request: Request):
+    return await _proxy_daily_limit_to_auth_server(request, method="GET")
+
+
+class DailyCreditLimitBody(BaseModel):
+    daily_limit: Optional[float] = None
+
+
+@router.put("/api/billing/daily-limit", summary="设置每日算力消耗上限（转发认证中心）")
+async def proxy_update_daily_limit(body: DailyCreditLimitBody, request: Request):
+    return await _proxy_daily_limit_to_auth_server(
+        request,
+        method="PUT",
+        json_body={"daily_limit": body.daily_limit},
+    )
+
+
 @router.get("/api/billing/pricing", summary="算力套餐（技能解锁价格 + 充值档位）")
 def get_billing_pricing(current_user: User = Depends(get_current_user)):
     """返回技能解锁价格区间与算力套餐列表，供前端展示。可在 custom_configs.json 的 configs.BILLING_PRICING 中覆盖。"""

@@ -103,6 +103,15 @@ class RegisterPhoneBody(BaseModel):
     parent_account: Optional[str] = None
 
 
+class PhonePasswordLoginBody(BaseModel):
+    phone: str
+    password: str
+
+
+class SetPasswordBody(BaseModel):
+    password: str
+
+
 def _normalize_cn_mobile(raw: str) -> str:
     d = re.sub(r"\D", "", (raw or "").strip())
     if not _CN_MOBILE_RE.match(d):
@@ -112,6 +121,15 @@ def _normalize_cn_mobile(raw: str) -> str:
 
 def _phone_account_email(mobile: str) -> str:
     return f"{mobile}{PHONE_EMAIL_SUFFIX}"
+
+
+def _normalize_new_password(raw: str) -> str:
+    password = raw or ""
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少 6 位")
+    if len(password) > 128:
+        raise HTTPException(status_code=400, detail="密码不能超过 128 位")
+    return password
 
 
 def _login_account_key(username: str) -> str:
@@ -189,9 +207,9 @@ async def _proxy_auth_form(path: str, form: Dict[str, str], request: Request) ->
     return resp.json()
 
 
-async def _proxy_auth_json(path: str, payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+async def _proxy_auth_json(path: str, payload: Dict[str, Any], request: Request, *, include_auth: bool = False) -> Dict[str, Any]:
     base = _auth_server_base_required()
-    headers = _forward_headers_to_auth_server(request)
+    headers = _forward_headers_to_auth_server(request, include_auth=include_auth)
     async with httpx.AsyncClient(timeout=20.0) as client:
         try:
             resp = await client.post(f"{base}{path}", json=payload, headers=headers)
@@ -535,6 +553,45 @@ async def login(request: Request, db: Session = Depends(get_db)):
         jwt_token=access_token, request=request, user_id=user.id, db=db
     )
     return Token(access_token=access_token)
+
+
+@router.post("/login-phone-password", response_model=Token, summary="手机号密码登录")
+async def login_phone_password(request: Request, body: PhonePasswordLoginBody, db: Session = Depends(get_db)):
+    if _auth_server_base_or_none():
+        data = await _proxy_auth_json("/auth/login-phone-password", body.model_dump(), request)
+        access_token = str(data.get("access_token") or "").strip()
+        if access_token:
+            _persist_remote_token_for_openclaw(access_token, request)
+        return data
+    mobile = _normalize_cn_mobile(body.phone)
+    password = body.password or ""
+    if not password:
+        raise HTTPException(status_code=400, detail="请输入密码")
+    user = db.query(User).filter(User.email == _phone_account_email(mobile)).first()
+    if not user or not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="手机号或密码错误")
+    access_token = create_access_token(data={"sub": str(user.id)})
+    persist_channel_fallback_for_login(
+        jwt_token=access_token, request=request, user_id=user.id, db=db
+    )
+    return Token(access_token=access_token)
+
+
+@router.post("/set-password", summary="当前登录用户设置手机号密码")
+async def set_password(
+    body: SetPasswordBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme),
+):
+    if _auth_server_base_or_none():
+        return await _proxy_auth_json("/auth/set-password", body.model_dump(), request, include_auth=True)
+    current_user = await get_current_user(token=token, db=db)
+    password = _normalize_new_password(body.password)
+    current_user.hashed_password = get_password_hash(password)
+    db.add(current_user)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/register", response_model=Token, summary="（已关闭）原字母账号注册，请用 /auth/register-phone")

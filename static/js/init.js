@@ -362,25 +362,51 @@ window.addEventListener('message', function(e) {
   }
 });
 
+function validateCnPhone(raw) {
+  var d = String(raw || '').replace(/\D/g, '');
+  if (!d) return null;
+  return /^1[3-9]\d{9}$/.test(d) ? d : null;
+}
+
+function setAuthLoginTab(tabName) {
+  var name = tabName === 'password' ? 'password' : 'sms';
+  document.querySelectorAll('[data-auth-tab]').forEach(function(btn) {
+    var active = btn.getAttribute('data-auth-tab') === name;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-auth-panel]').forEach(function(panel) {
+    panel.hidden = panel.getAttribute('data-auth-panel') !== name;
+  });
+}
+
+(function bindAuthLoginTabs() {
+  document.querySelectorAll('[data-auth-tab]').forEach(function(btn) {
+    if (btn._authTabBound) return;
+    btn._authTabBound = true;
+    btn.addEventListener('click', function() {
+      setAuthLoginTab(btn.getAttribute('data-auth-tab'));
+    });
+  });
+  setAuthLoginTab('sms');
+})();
+
 var loginForm = document.getElementById('loginForm');
 if (loginForm) {
   loginForm.addEventListener('submit', function(e) {
     e.preventDefault();
-    var fd = new FormData(this);
-    var body = new URLSearchParams({
-      username: fd.get('username'),
-      password: fd.get('password'),
-      captcha_id: fd.get('captcha_id') || '',
-      captcha_answer: fd.get('captcha_answer') || ''
-    });
+    var phone = validateCnPhone((document.getElementById('loginPhone') || {}).value);
+    var password = ((document.getElementById('loginPassword') || {}).value || '');
     var msgEl = document.getElementById('loginMsg');
-    fetch(API_BASE + '/auth/login', {
+    if (!phone) { showMsg(msgEl, '请输入有效的 11 位手机号', true); return; }
+    if (!password) { showMsg(msgEl, '请输入密码', true); return; }
+    fetch(API_BASE + '/auth/login-phone-password', {
       method: 'POST',
-      body: body,
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
         'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : ''
-      }
+      },
+      body: JSON.stringify({ phone: phone, password: password })
     })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(x) {
@@ -392,16 +418,10 @@ if (loginForm) {
           loadDashboard();
         } else {
           showMsg(msgEl, normalizeAuthErrorDetail(x.data.detail) || '登录失败', true);
-          if (typeof loadLoginCaptcha === 'function') loadLoginCaptcha();
         }
       })
-      .catch(function() { showMsg(msgEl, '网络错误', true); if (typeof loadLoginCaptcha === 'function') loadLoginCaptcha(); });
+      .catch(function() { showMsg(msgEl, '网络错误', true); });
   });
-}
-function validateCnPhone(raw) {
-  var d = String(raw || '').replace(/\D/g, '');
-  if (!d) return null;
-  return /^1[3-9]\d{9}$/.test(d) ? d : null;
 }
 
 var _registerSmsCooldownTimer = null;
@@ -1140,6 +1160,8 @@ function loadSutuiBalance() {
   var rechargeBtn = document.getElementById('sutuiRechargeBtn');
   if (!wrap || !textEl) return;
   wrap.style.display = 'flex';
+  wrap.classList.add('credit-balance-action');
+  wrap.setAttribute('title', '查看算力消耗与每日上限');
   if (USE_INDEPENDENT_AUTH) {
     textEl.textContent = '算力：加载中…';
     if (rechargeBtn) { rechargeBtn.style.display = ''; rechargeBtn.href = '#'; rechargeBtn.textContent = '充值'; }
@@ -1167,6 +1189,149 @@ function loadSutuiBalance() {
     })
     .catch(function() { textEl.textContent = '余额：--'; });
 }
+
+function _creditLocalApiBase() {
+  var b = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+  return b || ((typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '');
+}
+
+function _creditFmt(v) {
+  var n = Number(v);
+  if (!isFinite(n)) return '--';
+  if (Math.abs(n - Math.round(n)) < 0.0001) return String(Math.round(n));
+  return String(Math.round(n * 10000) / 10000);
+}
+
+function _setCreditLimitMsg(text, isErr) {
+  var el = document.getElementById('creditLimitMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'credit-limit-msg' + (text ? (isErr ? ' err' : ' ok') : '');
+}
+
+function _renderCreditLimitStatus(status) {
+  status = status || {};
+  var balEl = document.getElementById('creditLimitBalance');
+  var usedEl = document.getElementById('creditLimitUsed');
+  var remEl = document.getElementById('creditLimitRemaining');
+  var input = document.getElementById('creditLimitInput');
+  if (balEl) {
+    if (window._lobsterMe && window._lobsterMe.credits != null) balEl.textContent = _creditFmt(window._lobsterMe.credits);
+    else balEl.textContent = '--';
+  }
+  if (usedEl) usedEl.textContent = _creditFmt(status.used_today);
+  if (remEl) remEl.textContent = status.enabled ? _creditFmt(status.remaining_today) : '不限制';
+  if (input) input.value = status.enabled ? _creditFmt(status.daily_limit) : '';
+}
+
+function loadCreditLimitStatus() {
+  var base = _creditLocalApiBase();
+  if (!base || !token) return Promise.reject(new Error('未登录'));
+  return fetch(base + '/api/billing/daily-limit', { headers: authHeaders() })
+    .then(function(r) {
+      return r.json().catch(function() { return {}; }).then(function(d) {
+        if (!r.ok) throw new Error((d && (d.detail || d.message)) || ('HTTP ' + r.status));
+        return d;
+      });
+    })
+    .then(function(d) {
+      window._lobsterCreditLimitStatus = d;
+      _renderCreditLimitStatus(d);
+      return d;
+    });
+}
+
+function saveCreditLimitValue(value) {
+  var base = _creditLocalApiBase();
+  if (!base || !token) return Promise.reject(new Error('未登录'));
+  return fetch(base + '/api/billing/daily-limit', {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify({ daily_limit: value })
+  }).then(function(r) {
+    return r.json().catch(function() { return {}; }).then(function(d) {
+      if (!r.ok) throw new Error((d && (d.detail || d.message)) || ('HTTP ' + r.status));
+      return d;
+    });
+  }).then(function(d) {
+    window._lobsterCreditLimitStatus = d;
+    _renderCreditLimitStatus(d);
+    return d;
+  });
+}
+
+function openCreditLimitModal() {
+  var modal = document.getElementById('creditLimitModal');
+  if (!modal) return;
+  _setCreditLimitMsg('加载中...', false);
+  modal.classList.add('visible');
+  loadCreditLimitStatus()
+    .then(function() { _setCreditLimitMsg('', false); })
+    .catch(function(e) { _setCreditLimitMsg('加载失败：' + (e && e.message ? e.message : e), true); });
+}
+
+(function bindCreditLimitModal() {
+  function bind() {
+    var wrap = document.getElementById('sutuiBalanceWrap');
+    var modal = document.getElementById('creditLimitModal');
+    var closeBtn = document.getElementById('creditLimitClose');
+    var saveBtn = document.getElementById('creditLimitSave');
+    var disableBtn = document.getElementById('creditLimitDisable');
+    var input = document.getElementById('creditLimitInput');
+    if (wrap && !wrap.dataset.creditLimitBound) {
+      wrap.dataset.creditLimitBound = '1';
+      wrap.addEventListener('click', function(e) {
+        if (e.target && e.target.id === 'sutuiRechargeBtn') return;
+        e.preventDefault();
+        openCreditLimitModal();
+      });
+    }
+    function close() {
+      if (modal) modal.classList.remove('visible');
+    }
+    if (closeBtn && !closeBtn.dataset.bound) {
+      closeBtn.dataset.bound = '1';
+      closeBtn.addEventListener('click', close);
+    }
+    if (modal && !modal.dataset.bound) {
+      modal.dataset.bound = '1';
+      modal.addEventListener('click', function(e) {
+        if (e.target === modal) close();
+      });
+    }
+    if (saveBtn && !saveBtn.dataset.bound) {
+      saveBtn.dataset.bound = '1';
+      saveBtn.addEventListener('click', function() {
+        var raw = input ? String(input.value || '').trim() : '';
+        var value = raw === '' ? 0 : Number(raw);
+        if (!isFinite(value) || value < 0) {
+          _setCreditLimitMsg('每日上限必须是大于等于 0 的数字。', true);
+          return;
+        }
+        saveBtn.disabled = true;
+        _setCreditLimitMsg('保存中...', false);
+        saveCreditLimitValue(value)
+          .then(function() { _setCreditLimitMsg('已保存。', false); })
+          .catch(function(e) { _setCreditLimitMsg('保存失败：' + (e && e.message ? e.message : e), true); })
+          .finally(function() { saveBtn.disabled = false; });
+      });
+    }
+    if (disableBtn && !disableBtn.dataset.bound) {
+      disableBtn.dataset.bound = '1';
+      disableBtn.addEventListener('click', function() {
+        if (input) input.value = '';
+        disableBtn.disabled = true;
+        _setCreditLimitMsg('保存中...', false);
+        saveCreditLimitValue(0)
+          .then(function() { _setCreditLimitMsg('已取消每日上限。', false); })
+          .catch(function(e) { _setCreditLimitMsg('保存失败：' + (e && e.message ? e.message : e), true); })
+          .finally(function() { disableBtn.disabled = false; });
+      });
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
 
 (function initWecomConfigHash() {
   function applyHash() {

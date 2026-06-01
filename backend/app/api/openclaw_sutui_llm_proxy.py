@@ -7,6 +7,7 @@ Authorization 常为 lobster-sutui 的 apiKey（OPENCLAW_SUTUI_PROXY_KEY），�
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -42,6 +43,8 @@ CHAT_TURN_CHARGED_HEADER = "X-Lobster-Chat-Turn-Charged"
 CHAT_TURN_ID_HEADER = "X-Lobster-Chat-Turn-Id"
 _OPENCLAW_SKILL_AGENT_IDS = {"lobster-browser-use", "lobster-computer-use"}
 _OPENCLAW_SKILL_SERVER_MODEL_ALIAS = "openclaw-skill-chat"
+_TRANSIENT_LIMIT_MAX_ATTEMPTS = 3
+_TRANSIENT_LIMIT_BACKOFF_SECONDS = (1.5, 3.0)
 
 _FAKE_TOOL_CALL_RE = __import__("re").compile(
     r"tool_call|tool\u2581call|function_calls|<\|tool|<\s*[\|｜]\s*DSML\s*[\|｜]|```json\s*\{[^}]*capability",
@@ -55,6 +58,16 @@ _DSML_TAG_RE = __import__("re").compile(
     r"<\s*/?\s*[\|｜]\s*DSML\s*[\|｜][^>]*>",
     __import__("re").IGNORECASE,
 )
+
+
+_UPSTREAM_CONCURRENCY_LIMIT_RE = __import__("re").compile(
+    r"concurrent_requests_limit|Reached concurrent requests limit",
+    __import__("re").IGNORECASE,
+)
+
+
+class _UpstreamConcurrentLimit(Exception):
+    pass
 
 
 def _upstream_resp_summary(data: Any) -> str:
@@ -98,6 +111,32 @@ def _message_from_error_payload(data: Any) -> str:
     return ""
 
 
+def _looks_like_concurrent_limit_text(text: str) -> bool:
+    return bool(text and _UPSTREAM_CONCURRENCY_LIMIT_RE.search(text))
+
+
+def _response_looks_like_concurrent_limit(content: bytes) -> bool:
+    raw = (content or b"").decode("utf-8", "replace").strip()
+    if not raw:
+        return False
+    if _looks_like_concurrent_limit_text(raw):
+        return True
+    try:
+        msg = _message_from_error_payload(json.loads(raw))
+    except Exception:
+        msg = ""
+    return _looks_like_concurrent_limit_text(msg)
+
+
+def _transient_limit_backoff(attempt: int) -> float:
+    idx = max(0, min(attempt - 1, len(_TRANSIENT_LIMIT_BACKOFF_SECONDS) - 1))
+    return _TRANSIENT_LIMIT_BACKOFF_SECONDS[idx]
+
+
+def _upstream_concurrent_limit_message() -> str:
+    return "上游模型当前并发已满，已自动重试但仍未拿到可用回复。请稍后再试。"
+
+
 def _upstream_error_message(status_code: int, content: bytes, min_charge: str = "") -> str:
     raw = (content or b"").decode("utf-8", "replace").strip()
     msg = ""
@@ -113,6 +152,25 @@ def _upstream_error_message(status_code: int, content: bytes, min_charge: str = 
         need_text = f"单次最低需 {need} 算力" if need else "算力不足"
         msg = f"积分不足：LLM 对话{need_text}，请先充值后再试。"
     return msg[:1200]
+
+
+def _openai_json_text_response(text: str, *, model: str) -> bytes:
+    completion_id = f"chatcmpl_lobster_error_{uuid.uuid4().hex[:12]}"
+    payload = {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model or "deepseek-chat",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+    return json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
 
 
 def _openai_stream_text_event(text: str, *, model: str) -> bytes:
@@ -371,7 +429,28 @@ async def openclaw_sutui_chat_completions(request: Request):
     if not stream:
         try:
             async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
-                r = await client.post(url, json=body, headers=headers)
+                max_attempts = _TRANSIENT_LIMIT_MAX_ATTEMPTS if is_openclaw_skill_request else 1
+                for attempt in range(1, max_attempts + 1):
+                    if attempt > 1:
+                        await asyncio.sleep(_transient_limit_backoff(attempt - 1))
+                    r = await client.post(url, json=body, headers=headers)
+                    if not _response_looks_like_concurrent_limit(r.content):
+                        break
+                    logger.warning(
+                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy upstream_concurrent_limit "
+                        "attempt=%s/%s http=%s",
+                        trace_id,
+                        attempt,
+                        max_attempts,
+                        r.status_code,
+                    )
+                if _response_looks_like_concurrent_limit(r.content):
+                    out_h = {TRACE_HEADER: trace_id, "content-type": "application/json"}
+                    return Response(
+                        content=_openai_json_text_response(_upstream_concurrent_limit_message(), model=model_forward),
+                        status_code=200,
+                        headers=out_h,
+                    )
         except httpx.RequestError as e:
             logger.exception("[openclaw-sutui-proxy] 转发失败: %s", e)
             raise HTTPException(status_code=502, detail=f"认证中心不可达: {e!s}") from e
@@ -445,29 +524,68 @@ async def openclaw_sutui_chat_completions(request: Request):
             out_h["content-type"] = ct
         return Response(content=response_content, status_code=r.status_code, headers=out_h)
 
+    async def stream_once(client: httpx.AsyncClient, attempt: int) -> AsyncIterator[bytes]:
+        async with client.stream("POST", url, json=body, headers=headers) as r:
+            logger.info(
+                "[chat_trace] trace_id=%s path=openclaw_sutui_proxy auth_center_stream_first_byte http=%s attempt=%s",
+                trace_id,
+                r.status_code,
+                attempt,
+            )
+            if r.status_code >= 400:
+                content = await r.aread()
+                if _response_looks_like_concurrent_limit(content):
+                    raise _UpstreamConcurrentLimit(content.decode("utf-8", "replace")[:800])
+                min_charge = (r.headers.get("X-Lobster-Min-Charge-Credits") or "").strip()
+                msg = _upstream_error_message(r.status_code, content, min_charge=min_charge)
+                logger.warning(
+                    "[openclaw-sutui-proxy] 认证中心 sutui-chat HTTP %s（流式）url=%s",
+                    r.status_code,
+                    url,
+                )
+                yield _openai_stream_text_event(msg, model=model_forward)
+                return
+
+            buffered: list[bytes] = []
+            buffered_size = 0
+            async for chunk in r.aiter_bytes():
+                buffered.append(chunk)
+                buffered_size += len(chunk)
+                text = b"".join(buffered).decode("utf-8", "replace")
+                if _looks_like_concurrent_limit_text(text):
+                    raise _UpstreamConcurrentLimit(text[:800])
+                if buffered_size >= 4096 or b"\n\n" in b"".join(buffered):
+                    for item in buffered:
+                        yield item
+                    async for rest in r.aiter_bytes():
+                        yield rest
+                    return
+            for item in buffered:
+                yield item
+
     async def gen() -> AsyncIterator[bytes]:
+        max_attempts = _TRANSIENT_LIMIT_MAX_ATTEMPTS if is_openclaw_skill_request else 1
         try:
-            async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
-                async with client.stream("POST", url, json=body, headers=headers) as r:
-                    logger.info(
-                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy auth_center_stream_first_byte http=%s",
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if attempt > 1:
+                        await asyncio.sleep(_transient_limit_backoff(attempt - 1))
+                    async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
+                        async for chunk in stream_once(client, attempt):
+                            yield chunk
+                    return
+                except _UpstreamConcurrentLimit as e:
+                    logger.warning(
+                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy upstream_concurrent_limit "
+                        "attempt=%s/%s detail=%s",
                         trace_id,
-                        r.status_code,
+                        attempt,
+                        max_attempts,
+                        str(e).replace("\n", " ")[:500],
                     )
-                    if r.status_code >= 400:
-                        content = await r.aread()
-                        min_charge = (r.headers.get("X-Lobster-Min-Charge-Credits") or "").strip()
-                        msg = _upstream_error_message(r.status_code, content, min_charge=min_charge)
-                        preview = (content or b"").decode("utf-8", "replace").replace("\n", " ")[:800]
-                        logger.warning(
-                            "[openclaw-sutui-proxy] 认证中心 sutui-chat HTTP %s（流式）url=%s",
-                            r.status_code,
-                            url,
-                        )
-                        yield _openai_stream_text_event(msg, model=model_forward)
+                    if attempt >= max_attempts:
+                        yield _openai_stream_text_event(_upstream_concurrent_limit_message(), model=model_forward)
                         return
-                    async for chunk in r.aiter_bytes():
-                        yield chunk
         except httpx.RequestError as e:
             logger.exception("[openclaw-sutui-proxy] 流式转发失败: %s", e)
             err = f"data: {json.dumps({'error': {'message': str(e)}}, ensure_ascii=False)}\n\n"

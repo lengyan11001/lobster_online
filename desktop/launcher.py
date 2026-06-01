@@ -25,6 +25,8 @@ else:
 
 
 APP_NAME = "必火智能AI"
+DEFAULT_WINDOW_TITLE = "必火AI员工"
+SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
 LOADING_HTML = """<!doctype html>
@@ -436,6 +438,19 @@ def process_looks_lobster(pid: int) -> bool:
     return any(m in cmd for m in markers)
 
 
+def process_looks_this_root_backend(pid: int) -> bool:
+    cmd = process_command_line(pid)
+    if not cmd:
+        return False
+    normalized_cmd = os.path.normcase(cmd).replace("/", "\\")
+    try:
+        normalized_root = os.path.normcase(str(ROOT.resolve())).replace("/", "\\")
+    except Exception:
+        normalized_root = os.path.normcase(str(ROOT)).replace("/", "\\")
+    backend_markers = ("backend\\run.py", "run_backend.bat")
+    return normalized_root in normalized_cmd and any(marker in normalized_cmd.lower() for marker in backend_markers)
+
+
 def wait_port_closed(port: int, seconds: float = 6.0) -> bool:
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -628,19 +643,21 @@ def choose_backend_port(preferred: int) -> int:
     if not port_open("127.0.0.1", preferred):
         return preferred
     if wait_for_own_backend(preferred, 4):
-        log(f"Backend: port {preferred} became ready during startup grace period")
+        log(f"Backend: port {preferred} is occupied by previous backend from this root; restarting it")
+        stop_port_processes(preferred, "Backend")
         return preferred
     pids = netstat_listening_pids(preferred)
+    this_root_backend_pids = sorted(pid for pid in pids if process_looks_this_root_backend(pid))
+    if this_root_backend_pids:
+        log(f"Backend: port {preferred} is occupied by this-root backend process {this_root_backend_pids}; restarting it")
+        stop_port_processes(preferred, "Backend")
+        return preferred
     lobster_pids = sorted(pid for pid in pids if process_looks_lobster(pid))
     if lobster_pids:
         log(
             f"Backend: port {preferred} is occupied by lobster process {lobster_pids}; "
-            "waiting for it to finish startup"
+            "restarting it to keep the default port"
         )
-        if wait_for_own_backend(preferred, 6):
-            log(f"Backend: port {preferred} existing lobster process is ready")
-            return preferred
-        log(f"Backend: existing lobster process on port {preferred} did not become ready; restarting it")
         stop_port_processes(preferred, "Backend")
         return preferred
     if port_owned_by_this_root(preferred):
@@ -910,7 +927,7 @@ class NativeLoadingWindow:
             self._font_title = gdi32.CreateFontW(32, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, "Microsoft YaHei")
             self._font_text = gdi32.CreateFontW(20, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Microsoft YaHei")
             hicon = None
-            if APP_ICON_PATH.is_file():
+            if SHOW_WINDOW_TITLEBAR_ICON and APP_ICON_PATH.is_file():
                 hicon = user32.LoadImageW(None, str(APP_ICON_PATH), IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
             mark_icon = None
             if LOADING_MARK_PATH.is_file():
@@ -1194,7 +1211,7 @@ def main() -> int:
         log(".env not found; launcher will continue with built-in/default environment values")
     port = args.port or int(read_env_value("PORT", str(DEFAULT_PORT)) or DEFAULT_PORT)
     mcp_port = int(read_env_value("MCP_PORT", str(DEFAULT_MCP_PORT)) or DEFAULT_MCP_PORT)
-    title = args.title or read_env_value("LOBSTER_DESKTOP_TITLE", APP_NAME)
+    title = args.title or read_env_value("LOBSTER_DESKTOP_TITLE", DEFAULT_WINDOW_TITLE)
     url = f"http://127.0.0.1:{port}/?desktop=1&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
     env = build_env()
     env["PORT"] = str(port)

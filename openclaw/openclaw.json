@@ -29,7 +29,8 @@
   "gateway": {
     "mode": "local",
     "auth": {
-      "token": "5917d6976fb8f5f8ae74e8bf7d19df913157d19b31ff3f5d47b4701715ca1cba"
+      "token": "5917d6976fb8f5f8ae74e8bf7d19df913157d19b31ff3f5d47b4701715ca1cba",
+      "mode": "token"
     },
     "http": {
       "endpoints": {
