@@ -37,8 +37,8 @@
     }
   };
 
-  var HIFLY_TEMPLATE_VERSION = '20260526-hifly-voice-delete-preview';
-  var HIFLY_STYLE_VERSION = '20260526-hifly-voice-delete-preview';
+  var HIFLY_TEMPLATE_VERSION = '20260602-minimax-demo-first';
+  var HIFLY_STYLE_VERSION = '20260602-minimax-demo-first';
   var HIFLY_AVATAR_COVER_MANIFEST = '/static/data/hifly-public-avatar-covers.json?v=20260512';
   var HIFLY_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
   var HIFLY_VOICE_RECORD_PROMPTS = {
@@ -53,6 +53,15 @@
       'Please read this paragraph out loud as if you were speaking normally. Do not rush, and try to keep your pronunciation clear and consistent. This short recording will be used to create your new voice.'
     ]
   };
+  var MINIMAX_EMOTION_OPTIONS = [
+    { value: 'happy', label: '生动' },
+    { value: 'neutral', label: '自然' },
+    { value: 'sad', label: '难过' },
+    { value: 'angry', label: '愤怒' },
+    { value: 'fearful', label: '害怕' },
+    { value: 'disgusted', label: '厌恶' },
+    { value: 'surprised', label: '惊讶' }
+  ];
   var avatarCoverManifest = { by_basename: {} };
   var avatarCoverManifestPromise = null;
 
@@ -144,7 +153,8 @@
   function playVoicePreviewWithParams(url, params, btn) {
     voicePreviewRunId += 1;
     var runId = voicePreviewRunId;
-    var pitchRate = numericParam(params.pitch, 1, 0.1, 2);
+    var provider = btn && btn.getAttribute ? (btn.getAttribute('data-preview-provider') || '') : '';
+    var pitchRate = provider === 'minimax' ? 1 : numericParam(params.pitch, 1, 0.1, 2);
     return ensureVoicePreviewAudioContext()
       .then(function(audioContext) {
         if (!audioContext) return playVoicePreviewFallback(url, params, btn, runId);
@@ -181,15 +191,19 @@
       });
   }
 
-  function voicePreviewButtonHtml(url, params) {
+  function voicePreviewButtonHtml(url, params, meta) {
     url = normalizeAssetUrl(url);
-    if (!url) return '';
+    meta = meta || {};
+    if (!url && meta.provider !== 'minimax') return '';
     params = params || {};
     return ''
       + '<button type="button" class="hifly-preview-play-btn" data-preview-url="' + escapeHtml(url) + '"'
       + ' data-preview-rate="' + escapeHtml(params.rate || '1') + '"'
       + ' data-preview-volume="' + escapeHtml(params.volume || '1') + '"'
-      + ' data-preview-pitch="' + escapeHtml(params.pitch || '1') + '">'
+      + ' data-preview-pitch="' + escapeHtml(params.pitch != null && params.pitch !== '' ? params.pitch : '1') + '"'
+      + ' data-preview-emotion="' + escapeHtml(params.emotion || '') + '"'
+      + ' data-preview-provider="' + escapeHtml(meta.provider || '') + '"'
+      + ' data-preview-voice="' + escapeHtml(meta.voice || '') + '">'
       + '<span class="hifly-preview-play-icon">▶</span><span>试听</span>'
       + '</button>';
   }
@@ -201,24 +215,74 @@
     return Number(num.toFixed(2));
   }
 
+  function intParam(value, fallback, min, max) {
+    var num = Number(value);
+    if (!isFinite(num)) num = Number(fallback);
+    num = Math.round(Math.min(max, Math.max(min, num)));
+    return num;
+  }
+
   function formatParamValue(value) {
     return String(Number(value).toFixed(2)).replace(/\.?0+$/, '');
   }
 
+  function optionLabel(options, value, fallback) {
+    var raw = String(value || '').trim();
+    var item = (options || []).find(function(option) { return option.value === raw; });
+    return item ? item.label : (fallback || raw || '');
+  }
+
+  function optionHtml(options, value) {
+    var raw = String(value || '').trim();
+    return (options || []).map(function(option) {
+      return '<option value="' + escapeHtml(option.value) + '"' + (option.value === raw ? ' selected' : '') + '>' + escapeHtml(option.label) + '</option>';
+    }).join('');
+  }
+
+  function voiceParamSummary(params, isMinimax) {
+    params = params || {};
+    var base = '语速 ' + (params.rate || '1.0') + ' / 音量 ' + (params.volume || '1.0') + ' / 语调 ' + (params.pitch || (isMinimax ? '0' : '1.0'));
+    if (!isMinimax) return base;
+    return base
+      + ' / 情绪 ' + optionLabel(MINIMAX_EMOTION_OPTIONS, params.emotion || 'happy', '生动');
+  }
+
   function readVoiceParamsFromScope(el) {
     var scope = el && el.closest ? el.closest('.hifly-voice-card,.hifly-selected-voice') : null;
+    var provider = el && el.getAttribute ? (el.getAttribute('data-preview-provider') || '') : '';
+    var isMinimax = provider === 'minimax';
     var rate = numericParam(el && el.getAttribute ? el.getAttribute('data-preview-rate') : 1, 1, 0.5, 2);
     var volume = numericParam(el && el.getAttribute ? el.getAttribute('data-preview-volume') : 1, 1, 0.1, 2);
-    var pitch = numericParam(el && el.getAttribute ? el.getAttribute('data-preview-pitch') : 1, 1, 0.1, 2);
+    var pitch = numericParam(el && el.getAttribute ? el.getAttribute('data-preview-pitch') : (isMinimax ? 0 : 1), isMinimax ? 0 : 1, isMinimax ? -12 : 0.1, isMinimax ? 12 : 2);
+    var emotion = el && el.getAttribute ? (el.getAttribute('data-preview-emotion') || (isMinimax ? 'happy' : '')) : (isMinimax ? 'happy' : '');
     if (scope) {
       var rateInput = scope.querySelector('.hifly-voice-param-input[data-param="rate"]');
       var volumeInput = scope.querySelector('.hifly-voice-param-input[data-param="volume"]');
       var pitchInput = scope.querySelector('.hifly-voice-param-input[data-param="pitch"]');
+      var emotionInput = scope.querySelector('[data-param="emotion"]');
       if (rateInput) rate = numericParam(rateInput.value, rate, 0.5, 2);
       if (volumeInput) volume = numericParam(volumeInput.value, volume, 0.1, 2);
-      if (pitchInput) pitch = numericParam(pitchInput.value, pitch, 0.1, 2);
+      if (pitchInput) pitch = numericParam(pitchInput.value, pitch, isMinimax ? -12 : 0.1, isMinimax ? 12 : 2);
+      if (emotionInput) emotion = emotionInput.value || emotion;
     }
-    return { rate: rate, volume: volume, pitch: pitch };
+    return { rate: rate, volume: volume, pitch: pitch, emotion: emotion };
+  }
+
+  function findVoiceGroupByVoiceIdLoose(voiceId) {
+    if (!voiceId) return null;
+    var all = (state.voiceLibrary.mine || []).concat(state.voiceLibrary.public || []);
+    for (var i = 0; i < all.length; i += 1) {
+      var item = all[i];
+      if (!item) continue;
+      if (item.voice === voiceId || item.hifly_voice_id === voiceId) {
+        return { group: item, style: getSelectedStyleForVoiceItem(item) || { voice: voiceId } };
+      }
+      var styles = voiceStyles(item);
+      for (var j = 0; j < styles.length; j += 1) {
+        if (styles[j] && styles[j].voice === voiceId) return { group: item, style: styles[j] };
+      }
+    }
+    return null;
   }
 
   function normalizeAssetUrl(url) {
@@ -294,7 +358,6 @@
       btn.onclick = function(ev) {
         if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
         var url = btn.getAttribute('data-preview-url') || '';
-        if (!url) return;
         if (voicePreviewButton === btn && voicePreviewPlaying) {
           stopVoicePreview();
           return;
@@ -303,10 +366,45 @@
         var params = readVoiceParamsFromScope(btn);
         voicePreviewButton = btn;
         btn.classList.add('is-playing');
-        btn.innerHTML = '<span class="hifly-preview-play-icon">■</span><span>停止</span>';
-        playVoicePreviewWithParams(url, params, btn).catch(function() {
+        btn.innerHTML = '<span class="hifly-preview-play-icon">■</span><span>生成中</span>';
+        var scope = btn.closest ? btn.closest('.hifly-voice-card,.hifly-selected-voice') : null;
+        var voiceId = btn.getAttribute('data-preview-voice') || '';
+        if (scope && scope.querySelector) {
+          var paramPanel = scope.querySelector('.hifly-voice-param-panel');
+          if (!voiceId) voiceId = paramPanel && paramPanel.getAttribute ? (paramPanel.getAttribute('data-voice-id') || '') : '';
+        }
+        var foundVoice = findVoiceGroupByVoiceIdLoose(voiceId);
+        var provider = btn.getAttribute('data-preview-provider')
+          || (foundVoice && foundVoice.group ? foundVoice.group.provider : '')
+          || (state.selectedVoice && state.selectedVoice.voice === voiceId ? state.selectedVoice.provider : '');
+        if (!provider && voiceId && !url && foundVoice && foundVoice.group && foundVoice.group.is_mine) provider = 'minimax';
+        if (provider === 'minimax') btn.setAttribute('data-preview-provider', 'minimax');
+        var previewPromise;
+        if (url) {
+          previewPromise = Promise.resolve(url);
+        } else if (provider === 'minimax' && voiceId) {
+          var sampleText = (($('hiflyScriptInput') || {}).value || '').trim();
+          if (sampleText.length > 180) sampleText = sampleText.slice(0, 180);
+          previewPromise = requestCloud('/api/hifly/my/voice/preview-tts', {
+            voice: voiceId,
+            text: sampleText || '你好，这是 MiniMax 声音试听。当前语速、音量和语调参数会参与重新合成。',
+            rate: params.rate,
+            volume: params.volume,
+            pitch: params.pitch,
+            emotion: params.emotion
+          }).then(function(data) {
+            return data.audio_url || '';
+          });
+        } else {
+          previewPromise = Promise.resolve('');
+        }
+        previewPromise.then(function(playUrl) {
+          if (!playUrl) throw new Error('当前声音没有试听音频。');
+          if (voicePreviewButton === btn) btn.innerHTML = '<span class="hifly-preview-play-icon">■</span><span>停止</span>';
+          return playVoicePreviewWithParams(playUrl, params, btn);
+        }).catch(function(err) {
           stopVoicePreview();
-          showMessage('试听音频播放失败，请刷新后重试', true);
+          showMessage(err && err.message ? err.message : '试听音频播放失败，请刷新后重试', true);
         });
       };
     });
@@ -720,6 +818,180 @@
     }
   }
 
+  function ensureVoiceParamModal() {
+    var modal = $('hiflyVoiceParamModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'hiflyVoiceParamModal';
+    modal.className = 'hifly-modal hifly-voice-param-modal';
+    modal.style.display = 'none';
+    modal.innerHTML = ''
+      + '<div class="hifly-modal-backdrop" data-voice-param-action="cancel"></div>'
+      + '<div class="hifly-modal-card hifly-voice-param-card" role="dialog" aria-modal="true" aria-labelledby="hiflyVoiceParamTitle">'
+      + '<div class="hifly-modal-head">'
+      + '<div><h4 id="hiflyVoiceParamTitle" class="hifly-modal-title">声音参数设置</h4><p id="hiflyVoiceParamSubtitle" class="hifly-modal-subtitle"></p></div>'
+      + '<button type="button" class="hifly-modal-close" data-voice-param-action="cancel" aria-label="关闭">×</button>'
+      + '</div>'
+      + '<div class="hifly-modal-body hifly-voice-param-modal-body">'
+      + '<div class="hifly-voice-param-form" data-provider="minimax">'
+      + '<label class="hifly-voice-param-row"><span>语速</span><input class="hifly-voice-param-modal-range" data-param="rate" type="range" min="0.5" max="2" step="0.1"><strong data-param-value="rate"></strong></label>'
+      + '<label class="hifly-voice-param-row"><span>音量</span><input class="hifly-voice-param-modal-range" data-param="volume" type="range" min="0.1" max="2" step="0.1"><strong data-param-value="volume"></strong></label>'
+      + '<label class="hifly-voice-param-row"><span>语调</span><input class="hifly-voice-param-modal-range" data-param="pitch" type="range" min="-12" max="12" step="1"><strong data-param-value="pitch"></strong></label>'
+      + '<label class="hifly-voice-param-select-row"><span>情绪</span><select data-param="emotion">' + optionHtml(MINIMAX_EMOTION_OPTIONS, 'happy') + '</select></label>'
+      + '</div>'
+      + '<p class="hifly-voice-param-note">停顿和换气可以直接写在文案中，例如 &lt;#0.25#&gt;、(breath)。</p>'
+      + '</div>'
+      + '<div class="hifly-modal-foot hifly-voice-param-foot">'
+      + '<button type="button" class="btn btn-ghost" data-voice-param-action="reset">恢复默认</button>'
+      + '<button type="button" class="btn btn-ghost hifly-voice-param-preview" data-voice-param-action="preview">试听</button>'
+      + '<button type="button" class="btn btn-primary hifly-voice-param-submit" data-voice-param-action="save">保存</button>'
+      + '</div>'
+      + '</div>';
+    var host = $('content-hifly-digital-human') || document.body;
+    host.appendChild(modal);
+    Array.prototype.forEach.call(modal.querySelectorAll('.hifly-voice-param-modal-range'), function(input) {
+      input.oninput = function() {
+        var valueEl = modal.querySelector('[data-param-value="' + input.getAttribute('data-param') + '"]');
+        if (valueEl) valueEl.textContent = formatParamValue(input.value);
+      };
+    });
+    return modal;
+  }
+
+  function readVoiceParamModalValues(modal) {
+    modal = modal || ensureVoiceParamModal();
+    var values = {};
+    Array.prototype.forEach.call(modal.querySelectorAll('[data-param]'), function(input) {
+      values[input.getAttribute('data-param')] = input.value;
+    });
+    values.rate = String(numericParam(values.rate, 1, 0.5, 2));
+    values.volume = String(numericParam(values.volume, 1, 0.1, 2));
+    values.pitch = String(intParam(values.pitch, 0, -12, 12));
+    values.emotion = values.emotion || 'happy';
+    return values;
+  }
+
+  function setVoiceParamModalValues(modal, params) {
+    params = params || {};
+    var normalized = {
+      rate: String(numericParam(params.rate, 1, 0.5, 2)),
+      volume: String(numericParam(params.volume, 1, 0.1, 2)),
+      pitch: String(intParam(params.pitch, 0, -12, 12)),
+      emotion: params.emotion || 'happy'
+    };
+    Object.keys(normalized).forEach(function(key) {
+      var input = modal.querySelector('[data-param="' + key + '"]');
+      if (input) input.value = normalized[key];
+      var valueEl = modal.querySelector('[data-param-value="' + key + '"]');
+      if (valueEl) valueEl.textContent = formatParamValue(normalized[key]);
+    });
+  }
+
+  function updateVoiceItemWithSavedParams(updated) {
+    if (!updated) return;
+    updated.is_mine = true;
+    state.voiceLibrary.mine = (state.voiceLibrary.mine || []).map(function(item) {
+      if (String(item.id) === String(updated.id) || item.voice === updated.voice) {
+        return Object.assign({}, item, updated, { is_mine: true });
+      }
+      return item;
+    });
+    if (state.selectedVoice && state.selectedVoice.voice === updated.voice) {
+      var found = findVoiceGroupByVoiceId(updated.voice);
+      if (found) state.selectedVoice = buildSelectedVoice(found.group, found.style);
+      renderSelectedVoice();
+    }
+    renderVoiceLibrary();
+  }
+
+  function saveVoiceParams(voiceId, params) {
+    return requestCloud('/api/hifly/my/voice/edit', Object.assign({ voice: voiceId }, params));
+  }
+
+  function previewMinimaxVoiceParams(voiceId, params, btn) {
+    stopVoicePreview(btn);
+    voicePreviewButton = btn;
+    if (btn) {
+      btn.setAttribute('data-preview-provider', 'minimax');
+      btn.disabled = true;
+      btn.classList.add('is-playing');
+      btn.textContent = '生成中...';
+    }
+    var sampleText = (($('hiflyScriptInput') || {}).value || '').trim();
+    if (sampleText.length > 180) sampleText = sampleText.slice(0, 180);
+    return requestCloud('/api/hifly/my/voice/preview-tts', Object.assign({
+      voice: voiceId,
+      text: sampleText || '你好，这是 MiniMax 声音试听。当前语速、音量、语调和情绪参数会参与重新合成。'
+    }, params)).then(function(data) {
+      if (!data.audio_url) throw new Error('MiniMax 未返回试听音频。');
+      if (btn) btn.setAttribute('data-preview-provider', 'minimax');
+      return playVoicePreviewWithParams(data.audio_url, params, btn);
+    }).catch(function(err) {
+      stopVoicePreview();
+      showMessage(err && err.message ? err.message : '试听失败', true);
+    }).finally(function() {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('is-playing');
+        btn.textContent = '试听';
+      }
+    });
+  }
+
+  function openVoiceParamModal(item, activeStyle) {
+    var modal = ensureVoiceParamModal();
+    var voiceId = activeStyle && activeStyle.voice ? activeStyle.voice : item && item.voice ? item.voice : '';
+    if (!voiceId) return showMessage('无法打开声音参数，请刷新声音列表后重试。', true);
+    modal._voiceId = voiceId;
+    modal._voiceItem = item;
+    var title = modal.querySelector('#hiflyVoiceParamTitle');
+    var subtitle = modal.querySelector('#hiflyVoiceParamSubtitle');
+    if (title) title.textContent = '声音参数设置';
+    if (subtitle) subtitle.textContent = item && item.title ? String(item.title) : '';
+    setVoiceParamModalValues(modal, voiceParams(item));
+    Array.prototype.forEach.call(modal.querySelectorAll('[data-voice-param-action]'), function(btn) {
+      btn.onclick = function(ev) {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        var action = btn.getAttribute('data-voice-param-action');
+        if (action === 'cancel') {
+          modal.style.display = 'none';
+          document.body.classList.remove('hifly-modal-open');
+          return;
+        }
+        if (action === 'reset') {
+          setVoiceParamModalValues(modal, { rate: '1.0', volume: '1.0', pitch: '0', emotion: 'happy' });
+          return;
+        }
+        var params = readVoiceParamModalValues(modal);
+        if (action === 'preview') {
+          previewMinimaxVoiceParams(modal._voiceId, params, btn);
+          return;
+        }
+        if (action === 'save') {
+          var oldText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '保存中...';
+          saveVoiceParams(modal._voiceId, params)
+            .then(function(data) {
+              updateVoiceItemWithSavedParams(data && data.item ? data.item : null);
+              showMessage('声音参数已保存。试听和生成视频都会使用这组设置。', false);
+              modal.style.display = 'none';
+              document.body.classList.remove('hifly-modal-open');
+            })
+            .catch(function(err) {
+              showMessage(err && err.message ? err.message : '保存声音参数失败', true);
+            })
+            .finally(function() {
+              btn.disabled = false;
+              btn.textContent = oldText;
+            });
+        }
+      };
+    });
+    modal.style.display = 'flex';
+    document.body.classList.add('hifly-modal-open');
+  }
+
   function uniqueStrings(values) {
     var seen = {};
     return (values || []).filter(function(value) {
@@ -774,10 +1046,12 @@
   function voiceParams(item) {
     var params = item && item.voice_params && typeof item.voice_params === 'object' ? item.voice_params : {};
     var style = getSelectedStyleForVoiceItem(item) || {};
+    var isMinimax = item && item.provider === 'minimax';
     return {
       rate: String(params.rate || item && item.rate || style.rate || '1.0'),
       volume: String(params.volume || item && item.volume || style.volume || '1.0'),
-      pitch: String(params.pitch || item && item.pitch || style.pitch || '1.0')
+      pitch: String(params.pitch || item && item.pitch || style.pitch || (isMinimax ? '0' : '1.0')),
+      emotion: String(params.emotion || (isMinimax ? 'happy' : ''))
     };
   }
 
@@ -852,6 +1126,7 @@
       demo_url: overrideDemoUrl || pickedStyle.demo_url || group.demo_url || '',
       section: group.section || '',
       section_label: group.section_label || '声音',
+      provider: group.provider || '',
       is_mine: group.is_mine === true,
       voice_params: voiceParams(group),
       tags: tags,
@@ -1080,7 +1355,7 @@
     var tags = (item.tags || []).slice(0, 4).map(function(tag) {
       return '<span class="hifly-mini-tag">' + escapeHtml(tag) + '</span>';
     }).join('');
-    var audio = voicePreviewButtonHtml(item.demo_url, voiceParams(item));
+    var audio = voicePreviewButtonHtml(item.demo_url, voiceParams(item), { provider: item.provider || '', voice: item.voice || '' });
 
     el.className = 'hifly-selected-voice';
     el.innerHTML = ''
@@ -1149,11 +1424,21 @@
         + '<span class="hifly-voice-style-state">' + escapeHtml(preview ? '可试听' : '选择') + '</span>'
         + '</button>';
     }).join('');
-    var audio = voicePreviewButtonHtml(activeStyle && activeStyle.demo_url ? activeStyle.demo_url : '', voiceParams(item));
+    var audio = voicePreviewButtonHtml(activeStyle && activeStyle.demo_url ? activeStyle.demo_url : '', voiceParams(item), { provider: item.provider || '', voice: activeStyle && activeStyle.voice ? activeStyle.voice : item.voice });
     var canEdit = !!(item && item.is_mine === true && activeStyle && activeStyle.voice);
     var canDelete = !!(item && item.is_mine === true && item.id != null);
     var params = voiceParams(item);
-    var editPanel = canEdit ? ''
+    var isMinimax = item && item.provider === 'minimax';
+    var pitchMin = isMinimax ? '-12' : '0.1';
+    var pitchMax = isMinimax ? '12' : '2';
+    var pitchStep = isMinimax ? '1' : '0.1';
+    var editPanel = canEdit && isMinimax ? ''
+      + '<div class="hifly-voice-param-panel" data-voice-id="' + escapeHtml(activeStyle.voice) + '" data-voice-asset-id="' + escapeHtml(item.id || '') + '">'
+      + '<div class="hifly-voice-param-head">'
+      + '<div class="hifly-voice-param-title"><strong>声音参数</strong><span>' + escapeHtml(voiceParamSummary(params, true)) + '</span></div>'
+      + '<button type="button" class="btn btn-sm hifly-voice-param-open" data-voice-id="' + escapeHtml(activeStyle.voice) + '">参数设置</button>'
+      + '</div>'
+      + '</div>' : (canEdit ? ''
       + '<div class="hifly-voice-param-panel" data-voice-id="' + escapeHtml(activeStyle.voice) + '" data-voice-asset-id="' + escapeHtml(item.id || '') + '">'
       + '<div class="hifly-voice-param-head">'
       + '<div class="hifly-voice-param-title"><strong>声音参数</strong><span>语速/音量会即时影响试听，语调在生成视频时生效</span></div>'
@@ -1162,9 +1447,9 @@
       + '<div class="hifly-voice-param-grid">'
       + '<label><span>语速</span><input class="hifly-voice-param-input" data-param="rate" data-min="0.5" data-max="2" data-step="0.1" type="text" readonly value="' + escapeHtml(params.rate) + '"></label>'
       + '<label><span>音量</span><input class="hifly-voice-param-input" data-param="volume" data-min="0.1" data-max="2" data-step="0.1" type="text" readonly value="' + escapeHtml(params.volume) + '"></label>'
-      + '<label><span>语调</span><input class="hifly-voice-param-input" data-param="pitch" data-min="0.1" data-max="2" data-step="0.1" type="text" readonly value="' + escapeHtml(params.pitch) + '"></label>'
+      + '<label><span>语调</span><input class="hifly-voice-param-input" data-param="pitch" data-min="' + pitchMin + '" data-max="' + pitchMax + '" data-step="' + pitchStep + '" type="text" readonly value="' + escapeHtml(params.pitch) + '"></label>'
       + '</div>'
-      + '</div>' : '';
+      + '</div>' : '');
     return ''
       + '<article class="hifly-voice-card' + (selected ? ' is-selected' : '') + '">'
       + '<div class="hifly-voice-card-top">'
@@ -1458,6 +1743,15 @@
   }
 
   function bindVoiceCardEvents() {
+    Array.prototype.forEach.call(document.querySelectorAll('.hifly-voice-param-open'), function(btn) {
+      btn.onclick = function(ev) {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        var voiceId = btn.getAttribute('data-voice-id') || '';
+        var found = findVoiceGroupByVoiceId(voiceId);
+        if (!found) return showMessage('无法打开声音参数，请刷新声音列表后重试。', true);
+        openVoiceParamModal(found.group, found.style);
+      };
+    });
     Array.prototype.forEach.call(document.querySelectorAll('.hifly-voice-param-input'), function(input) {
       input.onclick = function(ev) {
         if (ev && ev.stopPropagation) ev.stopPropagation();
@@ -1484,23 +1778,12 @@
         requestCloud('/api/hifly/my/voice/edit', payload)
           .then(function(data) {
             var updated = data && data.item ? data.item : null;
-            if (updated) {
-              updated.is_mine = true;
-              state.voiceLibrary.mine = (state.voiceLibrary.mine || []).map(function(item) {
-                if (String(item.id) === String(updated.id) || item.voice === updated.voice) {
-                  return Object.assign({}, item, updated, { is_mine: true });
-                }
-                return item;
-              });
-              if (state.selectedVoice && state.selectedVoice.voice === updated.voice) {
-                var found = findVoiceGroupByVoiceId(updated.voice);
-                if (found) state.selectedVoice = buildSelectedVoice(found.group, found.style);
-                renderSelectedVoice();
-              }
-              renderVoiceLibrary();
-            }
+            updateVoiceItemWithSavedParams(updated);
+            var isMinimax = updated && updated.provider === 'minimax';
             if (data && data.synced === false && data.sync_error) {
               showMessage('声音参数已保存到本地。' + data.sync_error, false);
+            } else if (isMinimax) {
+              showMessage('声音参数已保存。语速、音量、语调都会参与试听和生成视频。', false);
             } else {
               showMessage('声音参数已保存。语速/音量会影响试听，语调会在生成视频时生效。', false);
             }
@@ -2445,6 +2728,7 @@
       rate: state.selectedVoice && state.selectedVoice.voice_params ? state.selectedVoice.voice_params.rate : undefined,
       volume: state.selectedVoice && state.selectedVoice.voice_params ? state.selectedVoice.voice_params.volume : undefined,
       pitch: state.selectedVoice && state.selectedVoice.voice_params ? state.selectedVoice.voice_params.pitch : undefined,
+      emotion: state.selectedVoice && state.selectedVoice.voice_params ? state.selectedVoice.voice_params.emotion : undefined,
       st_show: (($('hiflySubtitleCheck') || {}).checked ? 1 : 0),
       aigc_flag: Number((($('hiflyAigcFlagSelect') || {}).value || 0)),
       token: tokenValue()
@@ -2870,8 +3154,8 @@
       + '#content-hifly-digital-human .hifly-voice-param-title{display:flex;flex-direction:column;gap:0.14rem;min-width:0;line-height:1.25;}'
       + '#content-hifly-digital-human .hifly-voice-param-title strong{font-size:0.82rem;color:#27324a;white-space:nowrap;}'
       + '#content-hifly-digital-human .hifly-voice-param-title span{font-size:0.68rem;color:#8a94a8;white-space:normal;overflow-wrap:anywhere;}'
-      + '#content-hifly-digital-human .hifly-voice-param-save{margin:0;min-width:56px;min-height:32px;padding:0.38rem 0.62rem;border:none;border-radius:11px;background:linear-gradient(135deg,#7c5eff,#5b6cff);color:#fff;font-weight:800;box-shadow:0 8px 18px rgba(92,87,216,0.22);white-space:nowrap;}'
-      + '#content-hifly-digital-human .hifly-voice-param-save:hover{background:linear-gradient(135deg,#6d55ef,#4f5df1);box-shadow:0 10px 22px rgba(92,87,216,0.28);}'
+      + '#content-hifly-digital-human .hifly-voice-param-save,#content-hifly-digital-human .hifly-voice-param-open{margin:0;min-width:56px;min-height:32px;padding:0.38rem 0.62rem;border:none;border-radius:11px;background:linear-gradient(135deg,#7c5eff,#5b6cff);color:#fff;font-weight:800;box-shadow:0 8px 18px rgba(92,87,216,0.22);white-space:nowrap;}'
+      + '#content-hifly-digital-human .hifly-voice-param-save:hover,#content-hifly-digital-human .hifly-voice-param-open:hover{background:linear-gradient(135deg,#6d55ef,#4f5df1);box-shadow:0 10px 22px rgba(92,87,216,0.28);}'
       + '#content-hifly-digital-human .hifly-voice-param-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0.42rem;}'
       + '#content-hifly-digital-human .hifly-voice-param-grid label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:0.34rem;padding:0.32rem 0.42rem;border-radius:12px;background:#fff;border:1px solid rgba(15,23,42,0.07);}'
       + '#content-hifly-digital-human .hifly-voice-param-grid label span{font-size:0.7rem;font-weight:700;color:#748096;white-space:nowrap;}'
@@ -2885,6 +3169,20 @@
       + '.hifly-param-popover-head span{min-width:2.6rem;text-align:center;padding:0.22rem 0.42rem;border-radius:999px;background:rgba(124,94,255,0.10);color:#5d4cdc;font-size:0.82rem;font-weight:800;}'
       + '.hifly-param-slider{width:100%;accent-color:#7c5eff;}'
       + '.hifly-param-slider-scale{display:flex;justify-content:space-between;margin-top:0.32rem;color:#8a94a8;font-size:0.72rem;font-weight:700;}'
+      + '#content-hifly-digital-human .hifly-voice-param-modal{display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;}'
+      + '#content-hifly-digital-human .hifly-voice-param-modal .hifly-modal-backdrop{z-index:0;}'
+      + '#content-hifly-digital-human .hifly-voice-param-card{z-index:1;width:min(92vw,620px);max-height:min(84vh,720px);margin:0;display:flex;flex-direction:column;overflow:hidden;}'
+      + '#content-hifly-digital-human .hifly-modal-subtitle{margin:0.24rem 0 0;color:#7b8498;font-size:0.82rem;}'
+      + '#content-hifly-digital-human .hifly-voice-param-modal-body{gap:0.85rem;overflow:auto;}'
+      + '#content-hifly-digital-human .hifly-voice-param-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.82rem;}'
+      + '#content-hifly-digital-human .hifly-voice-param-row,#content-hifly-digital-human .hifly-voice-param-select-row{display:grid;gap:0.45rem;padding:0.78rem 0.85rem;border-radius:16px;background:rgba(248,250,255,0.95);border:1px solid rgba(124,94,255,0.10);}'
+      + '#content-hifly-digital-human .hifly-voice-param-row span,#content-hifly-digital-human .hifly-voice-param-select-row span{font-size:0.78rem;font-weight:800;color:#536079;}'
+      + '#content-hifly-digital-human .hifly-voice-param-row strong{justify-self:end;padding:0.22rem 0.48rem;border-radius:999px;background:rgba(124,94,255,0.10);color:#5d4cdc;font-size:0.8rem;line-height:1;}'
+      + '#content-hifly-digital-human .hifly-voice-param-modal-range{width:100%;accent-color:#7c5eff;}'
+      + '#content-hifly-digital-human .hifly-voice-param-select-row select{width:100%;min-width:0;border:1px solid rgba(124,94,255,0.14);border-radius:12px;background:#fff;padding:0.62rem 0.68rem;color:#26334d;font-weight:700;}'
+      + '#content-hifly-digital-human .hifly-voice-param-note{margin:0;padding:0.76rem 0.86rem;border-radius:14px;background:rgba(19,191,159,0.08);color:#277066;font-size:0.8rem;line-height:1.65;}'
+      + '#content-hifly-digital-human .hifly-voice-param-foot{justify-content:space-between;flex-wrap:wrap;}'
+      + '@media (max-width:720px){#content-hifly-digital-human .hifly-voice-param-modal{padding:14px;}#content-hifly-digital-human .hifly-voice-param-card{width:100%;max-height:88vh;}#content-hifly-digital-human .hifly-voice-param-form{grid-template-columns:minmax(0,1fr);}#content-hifly-digital-human .hifly-voice-param-foot{justify-content:flex-end;}}'
       + '#content-hifly-digital-human .hifly-section-empty{display:none;padding:1rem 1.05rem;border-radius:18px;border:1px dashed rgba(124,94,255,0.20);background:rgba(249,247,255,0.82);color:#68748f;font-size:0.84rem;line-height:1.7;}'
       + '#content-hifly-digital-human .hifly-more-row{margin-top:0.92rem;display:flex;justify-content:center;}'
       + '#content-hifly-digital-human .hifly-result-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:0.85rem;}'
