@@ -40,6 +40,8 @@
     pollTimer: null,
     recentJobs: []
   };
+  var imglabTaskToastTimer = null;
+  var imglabTaskNotifiedJobs = {};
 
   var JOB_RESTORE_WINDOW_MS = 6 * 60 * 60 * 1000;
   var JOB_HISTORY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
@@ -198,6 +200,91 @@
     el.style.display = 'block';
     el.textContent = text;
     el.className = 'msg ' + (isError ? 'err' : 'ok');
+  }
+
+  function openImageResultView() {
+    if (typeof window._openImageComposerStudioView === 'function') {
+      window._openImageComposerStudioView();
+    } else if (typeof window._openHiddenWorkspaceView === 'function') {
+      window._openHiddenWorkspaceView('image-composer-studio');
+    } else if (typeof _switchToHiddenView === 'function') {
+      _switchToHiddenView('image-composer-studio');
+    } else {
+      try { location.hash = 'image-composer-studio'; } catch (err) {}
+    }
+    setRightView('result');
+    renderWorkspace();
+  }
+
+  function ensureTaskToast() {
+    var toast = $('imglabTaskToast');
+    if (toast) return toast;
+    toast = document.createElement('div');
+    toast.id = 'imglabTaskToast';
+    toast.className = 'seedance-task-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.innerHTML = [
+      '<div class="seedance-task-toast-main">',
+      '<strong class="seedance-task-toast-title"></strong>',
+      '<p class="seedance-task-toast-body"></p>',
+      '</div>',
+      '<button type="button" class="seedance-task-toast-action">查看</button>'
+    ].join('');
+    var action = toast.querySelector('.seedance-task-toast-action');
+    if (action) {
+      action.addEventListener('click', function() {
+        openImageResultView();
+        hideTaskToast();
+      });
+    }
+    document.body.appendChild(toast);
+    return toast;
+  }
+
+  function hideTaskToast() {
+    var toast = $('imglabTaskToast');
+    if (!toast) return;
+    toast.classList.remove('is-visible');
+  }
+
+  function showTaskToast(kind, title, body, actionText) {
+    var toast = ensureTaskToast();
+    toast.classList.toggle('is-error', kind === 'error');
+    toast.classList.toggle('is-success', kind !== 'error');
+    var titleEl = toast.querySelector('.seedance-task-toast-title');
+    var bodyEl = toast.querySelector('.seedance-task-toast-body');
+    var actionEl = toast.querySelector('.seedance-task-toast-action');
+    if (titleEl) titleEl.textContent = title || '';
+    if (bodyEl) bodyEl.textContent = body || '';
+    if (actionEl) actionEl.textContent = actionText || '查看';
+    window.clearTimeout(imglabTaskToastTimer);
+    window.requestAnimationFrame(function() {
+      toast.classList.add('is-visible');
+    });
+    imglabTaskToastTimer = window.setTimeout(hideTaskToast, 9000);
+  }
+
+  function notifyTaskOnce(status, message) {
+    if (!state.currentJobId || !status) return;
+    var key = state.currentJobId + ':' + status;
+    if (imglabTaskNotifiedJobs[key]) return;
+    imglabTaskNotifiedJobs[key] = true;
+    if (status === 'completed') {
+      showTaskToast(
+        'success',
+        '图片已生成',
+        '任务已完成，结果已同步到图片创作页面，可以回来查看或打开原图。',
+        '查看结果'
+      );
+    } else if (status === 'failed') {
+      showTaskToast(
+        'error',
+        '图片生成失败',
+        message || '任务执行失败，请查看结果页原因后重新提交。',
+        '查看原因'
+      );
+    }
   }
 
   function readFiles(fileList) {
@@ -412,7 +499,7 @@
       surface.innerHTML = [
         '<div class="imglab-result-placeholder">',
         '<strong>图片正在生成中</strong>',
-        '<span>任务已提交，您可以切换页面或继续提交新任务；完成后回到这里会继续展示结果。</span>',
+        '<span>高质量模型生成通常需要 5-10 分钟。你可以继续提交新任务，或先去使用其他功能；任务完成后会在右下角提醒你。</span>',
         '</div>'
       ].join('');
       meta.innerHTML = '<div class="imglab-result-pills"><span class="imglab-result-pill">任务 ' + escapeHtml(state.currentJobId ? state.currentJobId.slice(0, 8) : '') + '</span><span class="imglab-result-pill">生成中</span></div>';
@@ -685,10 +772,13 @@
             assetId: first.assetId || ''
           });
           showMessage(savedCount ? '图片任务已完成，并已保存到素材库。' : '图片任务已完成，素材库保存失败时会记录到日志。', false);
+          notifyTaskOnce('completed');
         } else if (status === 'failed') {
           renderResultSurface();
           updateRememberedJob(state.currentJobId, { status: 'failed' });
-          showMessage(imageTaskFailureMessage(result.data), true);
+          var failMessage = imageTaskFailureMessage(result.data);
+          showMessage(failMessage, true);
+          notifyTaskOnce('failed', failMessage);
         } else if (showToast) {
           showMessage('任务状态已刷新。', false);
         }
@@ -699,7 +789,9 @@
         state.currentJobStatus = 'failed';
         updateRememberedJob(state.currentJobId, { status: 'failed' });
         renderResultSurface();
-        showMessage(imageTaskFailureMessage({ error: err && err.message }), true);
+        var failMessage = imageTaskFailureMessage({ error: err && err.message });
+        showMessage(failMessage, true);
+        notifyTaskOnce('failed', failMessage);
       });
   }
 

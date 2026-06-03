@@ -765,6 +765,69 @@
       border:3px solid rgba(91,124,255,0.18); border-top-color:#4f63d7;
       animation:tvc-spin 0.8s linear infinite;
     }
+    .seedance-task-toast {
+      position:fixed;
+      right:20px;
+      bottom:22px;
+      z-index:5000;
+      display:flex;
+      align-items:center;
+      gap:0.85rem;
+      width:min(380px, calc(100vw - 32px));
+      padding:0.9rem 0.95rem 0.9rem 1rem;
+      border-radius:14px;
+      background:rgba(255,255,255,0.98);
+      border:1px solid rgba(83,102,138,0.18);
+      box-shadow:0 18px 42px rgba(32,49,77,0.18), 0 4px 12px rgba(32,49,77,0.08);
+      color:#20314d;
+      opacity:0;
+      transform:translateY(14px);
+      pointer-events:none;
+      transition:opacity 0.2s ease, transform 0.2s ease;
+    }
+    .seedance-task-toast.is-visible {
+      opacity:1;
+      transform:translateY(0);
+      pointer-events:auto;
+    }
+    .seedance-task-toast.is-success {
+      border-color:rgba(42,157,107,0.24);
+    }
+    .seedance-task-toast.is-error {
+      border-color:rgba(218,70,70,0.28);
+    }
+    .seedance-task-toast-main {
+      min-width:0;
+      flex:1;
+    }
+    .seedance-task-toast-title {
+      display:block;
+      font-size:0.92rem;
+      line-height:1.35;
+      color:#20314d;
+    }
+    .seedance-task-toast-body {
+      margin:0.26rem 0 0;
+      font-size:0.78rem;
+      line-height:1.55;
+      color:#61718a;
+    }
+    .seedance-task-toast-action {
+      flex:0 0 auto;
+      min-height:34px;
+      padding:0 0.78rem;
+      border-radius:999px;
+      border:1px solid rgba(74,103,220,0.18);
+      background:#eef3ff;
+      color:#3657d8;
+      font-size:0.78rem;
+      font-weight:700;
+      cursor:pointer;
+    }
+    .seedance-task-toast-action:hover {
+      background:#e3ebff;
+      border-color:rgba(74,103,220,0.28);
+    }
     .tvc-video-meta { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:0.65rem; padding:0.9rem 1rem 1rem; }
     .tvc-meta-card {
       padding:0.72rem 0.8rem; border-radius:16px; background:rgba(246,249,254,0.96);

@@ -1,11 +1,12 @@
 (function() {
   var ANALYSIS_MODEL = 'gpt-4.1-mini';
-  var DEFAULT_IMAGE_MODEL_PRESET = 'stable_default';
+  var DEFAULT_IMAGE_MODEL_PRESET = 'gpt_image2_direct';
   var IMAGE_MODEL_PRESETS = {
     stable_default: {
       imageModel: 'nano-banana-2',
       detailRenderMode: 'composited',
-      label: 'Nano Banana 2'
+      label: 'Nano Banana 2',
+      hidden: true
     },
     gpt_image2_direct: {
       imageModel: 'gpt-image-2',
@@ -75,6 +76,8 @@
     taskDrawerOpen: false,
     showcaseEditBusy: false
   };
+  var ecomTaskToastTimer = null;
+  var ecomTaskNotifiedJobs = {};
 
   function byId(id) {
     return document.getElementById(id);
@@ -109,6 +112,91 @@
     el.textContent = text;
     el.className = 'msg ' + (isErr ? 'err' : 'ok');
     el.style.display = 'block';
+  }
+
+  function _openEcomResultView() {
+    if (typeof window._openEcommerceDetailStudioView === 'function') {
+      window._openEcommerceDetailStudioView();
+    } else if (typeof window._openHiddenWorkspaceView === 'function') {
+      window._openHiddenWorkspaceView('ecommerce-detail-studio');
+    } else if (typeof _switchToHiddenView === 'function') {
+      _switchToHiddenView('ecommerce-detail-studio');
+    } else {
+      try { location.hash = 'ecommerce-detail-studio'; } catch (err) {}
+    }
+    _setWorkspaceTab('workspace');
+    _renderStatus(state.latestResponse || null);
+  }
+
+  function _ensureTaskToast() {
+    var toast = byId('ecomTaskToast');
+    if (toast) return toast;
+    toast = document.createElement('div');
+    toast.id = 'ecomTaskToast';
+    toast.className = 'seedance-task-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.innerHTML = [
+      '<div class="seedance-task-toast-main">',
+      '<strong class="seedance-task-toast-title"></strong>',
+      '<p class="seedance-task-toast-body"></p>',
+      '</div>',
+      '<button type="button" class="seedance-task-toast-action">查看</button>'
+    ].join('');
+    var action = toast.querySelector('.seedance-task-toast-action');
+    if (action) {
+      action.addEventListener('click', function() {
+        _openEcomResultView();
+        _hideTaskToast();
+      });
+    }
+    document.body.appendChild(toast);
+    return toast;
+  }
+
+  function _hideTaskToast() {
+    var toast = byId('ecomTaskToast');
+    if (!toast) return;
+    toast.classList.remove('is-visible');
+  }
+
+  function _showTaskToast(kind, title, body, actionText) {
+    var toast = _ensureTaskToast();
+    toast.classList.toggle('is-error', kind === 'error');
+    toast.classList.toggle('is-success', kind !== 'error');
+    var titleEl = toast.querySelector('.seedance-task-toast-title');
+    var bodyEl = toast.querySelector('.seedance-task-toast-body');
+    var actionEl = toast.querySelector('.seedance-task-toast-action');
+    if (titleEl) titleEl.textContent = title || '';
+    if (bodyEl) bodyEl.textContent = body || '';
+    if (actionEl) actionEl.textContent = actionText || '查看';
+    window.clearTimeout(ecomTaskToastTimer);
+    window.requestAnimationFrame(function() {
+      toast.classList.add('is-visible');
+    });
+    ecomTaskToastTimer = window.setTimeout(_hideTaskToast, 9000);
+  }
+
+  function _notifyTaskOnce(status, resp) {
+    if (!state.currentJobId || !status) return;
+    var key = state.currentJobId + ':' + status;
+    if (ecomTaskNotifiedJobs[key]) return;
+    ecomTaskNotifiedJobs[key] = true;
+    if (status === 'completed') {
+      _showTaskToast(
+        'success',
+        '电商详情图已生成',
+        '任务已完成，主图、详情图等结果已同步到电商详情页面。',
+        '查看结果'
+      );
+    } else if (status === 'failed') {
+      _showTaskToast(
+        'error',
+        '电商详情图生成失败',
+        _pickResponseMessage(resp, '任务执行失败，请查看结果页原因后重新提交。'),
+        '查看原因'
+      );
+    }
   }
 
   function _normalizeApiErrorText(detail, fallback) {
@@ -857,17 +945,28 @@
     };
   }
 
+  function _visibleImageModelPreset(key) {
+    var preset = IMAGE_MODEL_PRESETS[key];
+    return preset && !preset.hidden ? preset : null;
+  }
+
   function _selectedImageModelPreset() {
     var key = ((byId('ecomImageModelPresetSelect') && byId('ecomImageModelPresetSelect').value) || DEFAULT_IMAGE_MODEL_PRESET || '').trim();
-    return IMAGE_MODEL_PRESETS[key] || IMAGE_MODEL_PRESETS[DEFAULT_IMAGE_MODEL_PRESET];
+    return _visibleImageModelPreset(key) || _visibleImageModelPreset(DEFAULT_IMAGE_MODEL_PRESET) || IMAGE_MODEL_PRESETS.gpt_image2_direct;
   }
 
   function _setImageModelPreset(key) {
     var nextKey = String(key || '').trim();
-    if (!IMAGE_MODEL_PRESETS[nextKey]) nextKey = DEFAULT_IMAGE_MODEL_PRESET;
+    if (!_visibleImageModelPreset(nextKey)) nextKey = DEFAULT_IMAGE_MODEL_PRESET;
     if (byId('ecomImageModelPresetSelect')) byId('ecomImageModelPresetSelect').value = nextKey;
     document.querySelectorAll('[data-image-preset]').forEach(function(btn) {
-      var active = btn.getAttribute('data-image-preset') === nextKey;
+      var presetKey = btn.getAttribute('data-image-preset');
+      var preset = IMAGE_MODEL_PRESETS[presetKey];
+      if (preset && preset.hidden) {
+        btn.hidden = true;
+        btn.setAttribute('aria-hidden', 'true');
+      }
+      var active = presetKey === nextKey && !(preset && preset.hidden);
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
@@ -1346,14 +1445,14 @@
     var skuImageCount = parseInt(byId('ecomSkuImageCountInput').value) || 3;
     var showcaseCount = parseInt(byId('ecomShowcaseCountInput').value) || 0;
     var materialImageCount = parseInt(byId('ecomMaterialImageCountInput').value) || 3;
-    var imageModel = built.payload.image_model || 'nano-banana-2';
+    var imageModel = built.payload.image_model || 'gpt-image-2';
 
     // 计算所需积分
     var modelPrices = {
       'nano-banana-2': 42,
       'gpt-image-2': 20
     };
-    var pricePerImage = modelPrices[imageModel] || 42;
+    var pricePerImage = modelPrices[imageModel] || modelPrices['gpt-image-2'];
     var totalImages = pageCount + mainImageCount + skuImageCount + showcaseCount + materialImageCount + 2;
     var analysisCredits = 35;
     var requiredCredits = (pricePerImage * totalImages + analysisCredits) * 2;
@@ -2050,7 +2149,7 @@
     if (summaryEl) {
       if (status === 'completed') summaryEl.textContent = '生成完成，可以切换不同分类查看图片。';
       else if (status === 'failed') summaryEl.textContent = _pickResponseMessage(resp, '当前任务生成失败，可以刷新状态或重新提交。');
-      else if (status === 'running') summaryEl.textContent = '正在生成中，页面会自动刷新最新进度。';
+      else if (status === 'running') summaryEl.textContent = '高质量模型生成通常需要 5-10 分钟。你可以继续提交新任务，或先去使用其他功能；任务完成后会在右下角提醒你。';
       else summaryEl.textContent = '提交任务后，这里会显示生成进度和结果。';
     }
     var publishBtn = byId('ecomPublishToShopBtn');
@@ -2145,6 +2244,9 @@
           _schedulePoll(4000);
         } else {
           _stopPolling();
+          if (res.data.status === 'completed' || res.data.status === 'failed') {
+            _notifyTaskOnce(res.data.status, res.data);
+          }
           if (showToast) {
             _setMsg(
               res.data.status === 'completed'
@@ -2157,7 +2259,9 @@
       })
       .catch(function(err) {
         _stopPolling();
-        _setMsg('刷新状态失败：' + (err && err.message ? err.message : '未知错误'), true);
+        var failMessage = '刷新状态失败：' + (err && err.message ? err.message : '未知错误');
+        _setMsg(failMessage, true);
+        _notifyTaskOnce('failed', { status: 'failed', error: failMessage });
       });
   }
 

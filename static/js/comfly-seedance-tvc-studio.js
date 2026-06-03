@@ -2,7 +2,7 @@
   var state = {
     mode: 'image_auto',
     mainView: 'storyboard',
-    duration: 20,
+    duration: 10,
     activeBoardIndex: 0,
     images: [],
     examplesOpen: true,
@@ -25,6 +25,8 @@
     pollTimer: null,
     recentJobs: []
   };
+  var seedanceTaskToastTimer = null;
+  var seedanceTaskNotifiedJobs = {};
 
   var defaults = {
     aspectRatio: '9:16',
@@ -48,17 +50,17 @@
   var modeMeta = {
     image_auto: {
       name: '参考图自动分析',
-      hint: '当前模式会优先使用参考图统一主体和画面风格，再按每 10 秒生成一张分镜图。',
+      hint: '当前模式会优先使用参考图统一主体和画面风格；未上传图片时，会按提示词直接规划分镜。',
       emphasis: '主体统一'
     },
     image_prompt: {
       name: '图片 + 提示词共创',
-      hint: '当前模式会同时参考图片主体和提示词描述，适合想自己控制视频方向时使用。',
+      hint: '当前模式会同时参考图片主体和提示词描述；未上传图片时，会按提示词直接规划分镜。',
       emphasis: '图文共同控制'
     },
     prompt_only: {
       name: '纯提示词规划',
-      hint: '当前模式只用提示词规划分镜，右侧先展示草案；真正提交还需要后端支持纯文生视频。',
+      hint: '当前模式只用提示词规划分镜并生成视频。',
       emphasis: '脚本主导'
     }
   };
@@ -810,13 +812,15 @@
     }
 
     if (state.currentJobStatus === 'running') {
+      var runningHint = '高质量模型生成通常需要 5-10 分钟。你可以继续提交新任务，或先去使用其他功能；任务完成后会在右下角提醒你。';
+      var runningText = detailText ? (detailText + '。' + runningHint) : runningHint;
       return [
         '<div class="tvc-video-placeholder is-busy">',
         '<div class="tvc-status-head">',
         '<span class="tvc-status-spinner" aria-hidden="true"></span>',
         '<div>',
         '<strong>视频正在生成中</strong>',
-        '<span>' + escapeHtml(detailText || '任务已提交，正在分析分镜、生成片段并合成最终视频，完成后这里会自动切换到成片结果。') + '</span>',
+        '<span>' + escapeHtml(runningText) + '</span>',
         '</div>',
         '</div>',
         '</div>'
@@ -967,6 +971,80 @@
     el.style.display = text ? 'block' : 'none';
   }
 
+  function ensureTaskToast() {
+    var toast = $('seedanceTaskToast');
+    if (toast) return toast;
+    toast = document.createElement('div');
+    toast.id = 'seedanceTaskToast';
+    toast.className = 'seedance-task-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.innerHTML = [
+      '<div class="seedance-task-toast-main">',
+      '<strong class="seedance-task-toast-title"></strong>',
+      '<p class="seedance-task-toast-body"></p>',
+      '</div>',
+      '<button type="button" class="seedance-task-toast-action">查看</button>'
+    ].join('');
+    var action = toast.querySelector('.seedance-task-toast-action');
+    if (action) {
+      action.addEventListener('click', function() {
+        state.mainView = 'result';
+        state.examplesOpen = false;
+        renderWorkspace();
+        hideTaskToast();
+      });
+    }
+    document.body.appendChild(toast);
+    return toast;
+  }
+
+  function hideTaskToast() {
+    var toast = $('seedanceTaskToast');
+    if (!toast) return;
+    toast.classList.remove('is-visible');
+  }
+
+  function showTaskToast(kind, title, body, actionText) {
+    var toast = ensureTaskToast();
+    toast.classList.toggle('is-error', kind === 'error');
+    toast.classList.toggle('is-success', kind !== 'error');
+    var titleEl = toast.querySelector('.seedance-task-toast-title');
+    var bodyEl = toast.querySelector('.seedance-task-toast-body');
+    var actionEl = toast.querySelector('.seedance-task-toast-action');
+    if (titleEl) titleEl.textContent = title || '';
+    if (bodyEl) bodyEl.textContent = body || '';
+    if (actionEl) actionEl.textContent = actionText || '查看';
+    window.clearTimeout(seedanceTaskToastTimer);
+    window.requestAnimationFrame(function() {
+      toast.classList.add('is-visible');
+    });
+    seedanceTaskToastTimer = window.setTimeout(hideTaskToast, 9000);
+  }
+
+  function notifyTaskOnce(status) {
+    if (!state.currentJobId || !status) return;
+    var key = state.currentJobId + ':' + status;
+    if (seedanceTaskNotifiedJobs[key]) return;
+    seedanceTaskNotifiedJobs[key] = true;
+
+    if (status === 'completed') {
+      showTaskToast(
+        'success',
+        '创意视频已生成',
+        state.currentResultVideoUrl ? '任务已完成，可以回来查看或下载最终视频。' : '任务已完成，正在同步最终视频地址，可以到结果页查看。',
+        '查看结果'
+      );
+    } else if (status === 'failed') {
+      showTaskToast(
+        'error',
+        '创意视频生成失败',
+        state.currentJobError || progressSummary(state.currentJobProgress) || '任务执行失败，请查看结果页原因后重新提交。',
+        '查看原因'
+      );
+    }
+  }
+
   function updateStartButtonState() {
     var btn = $('seedanceStartBtn');
     if (!btn) return;
@@ -1055,6 +1133,7 @@
       auto_save: true,
       analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
       image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
+      image_model_channel_fallbacks: ['gpt-image-2-yunwu', 'nano-banana-2', 'nano-banana-2-yunwu'],
       video_model: values.model,
       aspect_ratio: values.aspectRatio,
       generate_audio: !!values.needAudio,
@@ -1070,7 +1149,11 @@
     }
 
     if (!uploaded.length || !uploaded[0].asset_id) {
-      return { error: '请先上传至少 1 张参考图后再开始生成。' };
+      if (values.prompt) {
+        basePayload.task_text = values.prompt;
+        return { payload: basePayload, effectiveMode: 'prompt_only' };
+      }
+      return { error: '请先上传至少 1 张参考图，或输入创意提示词后再开始生成。' };
     }
 
     return {
@@ -1254,6 +1337,7 @@
     });
     renderWorkspace();
     showMessage('任务失败：' + state.currentJobError);
+    notifyTaskOnce('failed');
   }
 
   function refreshJobStatus(showToast) {
@@ -1283,9 +1367,11 @@
                 if (cloudJob.status === 'completed' && cloudJob.videoUrl) {
                   stopPolling();
                   showMessage('本地任务已恢复，已从服务器历史加载视频结果。');
+                  notifyTaskOnce('completed');
                 } else if (cloudJob.status === 'failed') {
                   stopPolling();
                   showMessage('任务失败：' + (cloudJob.error || '服务器历史记录显示失败。'));
+                  notifyTaskOnce('failed');
                 } else {
                   markCurrentJobInterrupted('本地生成任务已中断，服务器仍未返回最终视频结果。');
                 }
@@ -1322,8 +1408,10 @@
           } else {
             showMessage('任务已完成，但未拿到可播放的视频地址，请刷新任务状态或到素材库查看。');
           }
+          notifyTaskOnce('completed');
         } else if (state.currentJobStatus === 'failed') {
           showMessage('任务失败：' + (state.currentJobError || progressSummary(state.currentJobProgress) || '未知错误'));
+          notifyTaskOnce('failed');
         } else if (showToast) {
           showMessage('任务状态已刷新。');
         }
@@ -1343,6 +1431,7 @@
         });
         renderWorkspace();
         showMessage('任务失败：' + state.currentJobError);
+        notifyTaskOnce('failed');
       });
   }
 
@@ -1377,7 +1466,11 @@
         }
 
         setSubmitBusy(true, '提交中...');
-        showMessage(state.mode === 'prompt_only' ? '正在提交纯提示词视频任务，请稍候...' : '正在上传参考素材并提交视频任务，请稍候...');
+        showMessage(
+          (state.mode === 'prompt_only' || !state.images.length)
+            ? '正在提交纯提示词视频任务，请稍候...'
+            : '正在上传参考素材并提交视频任务，请稍候...'
+        );
 
         return ensureImageAssetsUploaded();
       })
@@ -1627,10 +1720,10 @@
         item.classList.toggle('active', item.getAttribute('data-seedance-category') === 'all');
       });
       setMode('image_auto');
-      setDuration(20);
+      setDuration(10);
       resetFormFields();
       renderWorkspace();
-      showMessage('界面已重置，回到默认 20 秒分镜状态。');
+      showMessage('界面已重置，回到默认 10 秒分镜状态。');
     });
   }
 
