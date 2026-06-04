@@ -1351,7 +1351,7 @@ function _renderXSkillCard() {
     ? '<span class="btn btn-ghost btn-sm" style="cursor:default;color:var(--text-muted);">已安装</span>'
     : '<button type="button" class="btn btn-primary btn-sm" id="xskillConfigBtn">' + (configured ? '修改 Token' : '配置 Token') + '</button>';
   if (EDITION === 'online') guide = '';
-  return '<div class="skill-store-card" style="border-color:rgba(6,182,212,0.25);background:linear-gradient(135deg,rgba(6,182,212,0.06),transparent);">' +
+  return '<div class="skill-store-card" data-skill-package-id="sutui_mcp" style="border-color:rgba(6,182,212,0.25);background:linear-gradient(135deg,rgba(6,182,212,0.06),transparent);">' +
     '<div class="card-label">MCP · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">AI 模型能力</div>' +
     '<div class="card-desc">图片生成、视频生成、视频解析、语音合成、音色克隆等 50+ AI 模型能力</div>' +
@@ -1400,7 +1400,7 @@ function _renderComflyCard() {
       + '只需在 <strong>Comfly</strong> 控制台复制 <strong>API Key</strong> 即可，接口地址走系统内置配置，无需用户单独填写。'
       + '用户对话可说「用<strong>爆款TVC</strong>和这个素材做视频」；技能会自动跑分镜、多段成片与入库，无需在卡片里配分镜参数。'
       + ' 点击下方「配置」仅保存到本机，不会写入聊天记录，也不会在保存时请求 Comfly 校验凭据。</div>';
-  return '<div class="skill-store-card comfly-veo-card" style="border-color:rgba(245,158,11,0.38);background:linear-gradient(135deg,rgba(245,158,11,0.07),transparent);">' +
+  return '<div class="skill-store-card comfly-veo-card" data-skill-package-id="comfly_veo_skill" style="border-color:rgba(245,158,11,0.38);background:linear-gradient(135deg,rgba(245,158,11,0.07),transparent);">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">爆款TVC</div>' +
     '<div class="card-desc">整包成片走 <code>comfly.daihuo.pipeline</code>（start_pipeline + 素材）；单段调试可走 <code>comfly.daihuo</code>。</div>' +
@@ -1424,7 +1424,7 @@ function _renderEcommerceDetailCard(opts) {
   var sub = ok
     ? '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">直接进入工作台，按结构化参数控制本次套图生成内容。</div>'
     : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先在本机保存 <strong>Comfly API Key</strong>，接口地址走内置配置，然后再进入产品套图工作台。这个界面是专门用于批量生成电商上架素材的，不是聊天入口。</div>';
-  return '<div class="skill-store-card ecommerce-detail-card" style="cursor:pointer;border-color:rgba(236,72,153,0.34);background:linear-gradient(135deg,rgba(236,72,153,0.08),rgba(245,158,11,0.05));">' +
+  return '<div class="skill-store-card ecommerce-detail-card" data-skill-package-id="comfly_ecommerce_detail_skill" style="cursor:pointer;border-color:rgba(236,72,153,0.34);background:linear-gradient(135deg,rgba(236,72,153,0.08),rgba(245,158,11,0.05));">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">' + escapeHtml(title) + '</div>' +
     '<div class="card-desc">' + escapeHtml(desc) + '</div>' +
@@ -1444,7 +1444,7 @@ function _renderSeedanceTvcStudioCard() {
   var sub = ok
     ? '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">进入工作台后可先切换输入方式，再组织参考图、参考视频、提示词、时长和分镜节奏。</div>'
     : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先在本机保存 <strong>Comfly API Key</strong>，再进入这个视频工作台。当前先提供结构化 UI，方便把图片参考、参考视频、自动分镜和手动提示词放在一个界面里。</div>';
-  return '<div class="skill-store-card seedance-tvc-card" style="cursor:pointer;border-color:rgba(91,124,255,0.28);background:linear-gradient(135deg,rgba(91,124,255,0.09),rgba(14,165,233,0.05));">' +
+  return '<div class="skill-store-card seedance-tvc-card" data-skill-package-id="seedance_tvc_studio" style="cursor:pointer;border-color:rgba(91,124,255,0.28);background:linear-gradient(135deg,rgba(91,124,255,0.09),rgba(14,165,233,0.05));">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">创意分镜头视频</div>' +
     '<div class="card-desc">面向参考图、参考视频和纯提示词的统一视频创作界面。左侧管参数与输入方式，右侧同时看创意分镜预览和最终成片位。</div>' +
@@ -1460,7 +1460,7 @@ function _renderViralVideoRemixCard() {
   var statusBadge = '<span class="badge-installed">平台计费</span>';
   var sub = '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">已接入平台统一算力计费，提交前会按原视频时长预估并弹窗确认，无需单独配置 Comfly。</div>';
 
-  return '<div class="skill-store-card viral-video-remix-card" style="cursor:pointer;border-color:rgba(20,184,166,0.34);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(245,158,11,0.05));">' +
+  return '<div class="skill-store-card viral-video-remix-card" data-skill-package-id="viral_video_remix_skill" style="cursor:pointer;border-color:rgba(20,184,166,0.34);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(245,158,11,0.05));">' +
     '<div class="card-label">生成 · 内测 ' + statusBadge + '</div>' +
     '<div class="card-value">爆款视频复刻</div>' +
     '<div class="card-desc">上传原爆款视频、人物四视图和产品图，用 Seedance 2.0 全能参考复刻动作、运镜和节奏。</div>' +
@@ -1477,7 +1477,7 @@ function _renderHiflyDigitalHumanCard(pkg) {
   var desc = escapeHtml(pkg.description || '选择数字人和声音，输入口播文案后生成必火数字人视频。');
   var rawTags = Array.isArray(pkg.tags) && pkg.tags.length ? pkg.tags : ['数字人', '口播', 'TTS', '必火'];
   var tags = rawTags.map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
-  return '<div class="skill-store-card hifly-digital-human-card" style="cursor:pointer;border-color:rgba(14,165,233,0.35);background:linear-gradient(135deg,rgba(14,165,233,0.09),rgba(20,184,166,0.06));">' +
+  return '<div class="skill-store-card hifly-digital-human-card" data-skill-package-id="hifly_digital_human_skill" style="cursor:pointer;border-color:rgba(14,165,233,0.35);background:linear-gradient(135deg,rgba(14,165,233,0.09),rgba(20,184,166,0.06));">' +
     '<div class="card-label">数字人 &middot; 必火 <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
     '<div class="card-value">' + title + '</div>' +
     '<div class="card-desc">' + desc + '</div>' +
@@ -1488,7 +1488,7 @@ function _renderHiflyDigitalHumanCard(pkg) {
 }
 
 function _renderShanjianSmartClipCard() {
-  return '<div class="skill-store-card shanjian-smart-clip-card" style="cursor:pointer;border-color:rgba(37,99,235,0.35);background:linear-gradient(135deg,rgba(37,99,235,0.08),rgba(20,184,166,0.05));">' +
+  return '<div class="skill-store-card shanjian-smart-clip-card" data-skill-package-id="shanjian_smart_clip" style="cursor:pointer;border-color:rgba(37,99,235,0.35);background:linear-gradient(135deg,rgba(37,99,235,0.08),rgba(20,184,166,0.05));">' +
     '<div class="card-label">视频合成 &middot; 山涧 <span class="badge-installed">新页面</span></div>' +
     '<div class="card-value">智能剪辑</div>' +
     '<div class="card-desc">拉取山涧模板、公共数字人和公共声音，选择模板后提交数字人口播混剪任务。</div>' +
@@ -2011,6 +2011,235 @@ function _loadYoutubePublishStatus(cb) {
     });
 }
 
+var _SKILL_STORE_CARD_ART_BY_CLASS = {
+  'comfly-veo-card': '/static/skill-cards/comfly-tvc.png',
+  'seedance-tvc-card': '/static/skill-cards/seedance-tvc.png',
+  'viral-video-remix-card': '/static/skill-cards/viral-remix.png',
+  'shanjian-smart-clip-card': '/static/skill-cards/smart-clip.png',
+  'ecommerce-detail-card': '/static/skill-cards/ecommerce-detail.png',
+  'hifly-digital-human-card': '/static/skill-cards/digital-human.png',
+  'openclaw-weixin-card': '/static/skill-cards/wechat-assistant.png',
+  'openclaw-memory-card': '/static/skill-cards/memory.png',
+  'youtube-publish-card': '/static/skill-cards/youtube.png',
+  'meta-social-card': '/static/skill-cards/meta-social.png',
+  'twilio-whatsapp-card': '/static/skill-cards/twilio-whatsapp.png',
+  'messenger-reply-card': '/static/skill-cards/messenger.png',
+  'wecom-reply-card': '/static/skill-cards/wecom.png',
+  'ecommerce-publish-card': '/static/skill-cards/ecommerce-publish.png',
+  'goal-video-pipeline-card': '/static/skill-cards/goal-video.png'
+};
+var _SKILL_STORE_CARD_ART_BY_OPENCLAW_ID = {
+  'browser_use_skill': '/static/skill-cards/browser-use.png',
+  'computer_use_skill': '/static/skill-cards/computer-use.png'
+};
+var _SKILL_STORE_CARD_ART_BY_PACKAGE_ID = {
+  'sutui_mcp': '/static/skill-cards/ai-models.png',
+  'comfly_veo_skill': '/static/skill-cards/comfly-tvc.png',
+  'comfly_seedance_tvc_skill': '/static/skill-cards/seedance-tvc.png',
+  'comfly_ecommerce_detail_skill': '/static/skill-cards/ecommerce-detail.png',
+  'seedance_tvc_studio': '/static/skill-cards/seedance-tvc.png',
+  'viral_video_remix_skill': '/static/skill-cards/viral-remix.png',
+  'shanjian_smart_clip': '/static/skill-cards/smart-clip.png',
+  'hifly_digital_human_skill': '/static/skill-cards/digital-human.png',
+  'openclaw_weixin_channel': '/static/skill-cards/wechat-assistant.png',
+  'openclaw_memory_skill': '/static/skill-cards/memory.png',
+  'browser_use_skill': '/static/skill-cards/browser-use.png',
+  'computer_use_skill': '/static/skill-cards/computer-use.png',
+  'youtube_publish': '/static/skill-cards/youtube.png',
+  'twilio_whatsapp': '/static/skill-cards/twilio-whatsapp.png',
+  'messenger_reply': '/static/skill-cards/messenger.png',
+  'wecom_reply': '/static/skill-cards/wecom.png',
+  'ecommerce_publish_skill': '/static/skill-cards/ecommerce-publish.png',
+  'goal_video_pipeline_skill': '/static/skill-cards/goal-video.png',
+  'create_video_pipeline_skill': '/static/skill-cards/goal-video.png'
+};
+var _SKILL_STORE_CARD_ART_BY_TITLE = {
+  'AI 模型能力': '/static/skill-cards/ai-models.png',
+  '爆款TVC': '/static/skill-cards/comfly-tvc.png',
+  '创意分镜头视频': '/static/skill-cards/seedance-tvc.png',
+  '爆款视频复刻': '/static/skill-cards/viral-remix.png',
+  '智能剪辑': '/static/skill-cards/smart-clip.png',
+  '电商上架套图': '/static/skill-cards/ecommerce-detail.png',
+  '必火数字人': '/static/skill-cards/digital-human.png',
+  '微信助手 (OpenClaw)': '/static/skill-cards/wechat-assistant.png',
+  '微信助手': '/static/skill-cards/wechat-assistant.png',
+  '个人记忆': '/static/skill-cards/memory.png',
+  'Browser Use': '/static/skill-cards/browser-use.png',
+  'Computer Use': '/static/skill-cards/computer-use.png',
+  'YouTube 上传': '/static/skill-cards/youtube.png',
+  'Instagram / Facebook': '/static/skill-cards/meta-social.png',
+  'Twilio WhatsApp': '/static/skill-cards/twilio-whatsapp.png',
+  'Messenger 自动回复': '/static/skill-cards/messenger.png',
+  '企业微信自动回复': '/static/skill-cards/wecom.png',
+  '电商发布账号': '/static/skill-cards/ecommerce-publish.png',
+  '创意成片': '/static/skill-cards/goal-video.png'
+};
+var _SKILL_STORE_CARD_ART_TITLE_PATTERNS = [
+  [/AI\s*模型|模型能力|sutui|速推/i, '/static/skill-cards/ai-models.png'],
+  [/爆款\s*TVC|comfly.*veo|带货/i, '/static/skill-cards/comfly-tvc.png'],
+  [/创意分镜|seedance|分镜头/i, '/static/skill-cards/seedance-tvc.png'],
+  [/爆款视频复刻|复刻/i, '/static/skill-cards/viral-remix.png'],
+  [/智能剪辑|山涧/i, '/static/skill-cards/smart-clip.png'],
+  [/电商上架|上架套图|详情图|SKU/i, '/static/skill-cards/ecommerce-detail.png'],
+  [/必火数字人|数字人/i, '/static/skill-cards/digital-human.png'],
+  [/微信助手|openclaw.*微信|weixin/i, '/static/skill-cards/wechat-assistant.png'],
+  [/个人记忆|memory/i, '/static/skill-cards/memory.png'],
+  [/browser\s*use/i, '/static/skill-cards/browser-use.png'],
+  [/computer\s*use/i, '/static/skill-cards/computer-use.png'],
+  [/youtube/i, '/static/skill-cards/youtube.png'],
+  [/instagram|facebook|meta/i, '/static/skill-cards/meta-social.png'],
+  [/twilio|whatsapp/i, '/static/skill-cards/twilio-whatsapp.png'],
+  [/messenger/i, '/static/skill-cards/messenger.png'],
+  [/企业微信|企微|wecom/i, '/static/skill-cards/wecom.png'],
+  [/电商发布|店铺账号|publish/i, '/static/skill-cards/ecommerce-publish.png'],
+  [/创意成片|目标成片|速推视频制作|goal.*video|create.*video/i, '/static/skill-cards/goal-video.png']
+];
+var _SKILL_STORE_IMAGE_CARD_CATALOG = [
+  { id: 'sutui_mcp', title: 'AI 模型能力', art: '/static/skill-cards/ai-models.png', className: 'skill-card-ai-models' },
+  { id: 'comfly_veo_skill', title: '爆款TVC', art: '/static/skill-cards/comfly-tvc.png', className: 'comfly-veo-card' },
+  { id: 'comfly_seedance_tvc_skill', aliases: ['seedance_tvc_studio'], title: '创意分镜头视频', art: '/static/skill-cards/seedance-tvc.png', className: 'seedance-tvc-card' },
+  { id: 'viral_video_remix_skill', title: '爆款视频复刻', art: '/static/skill-cards/viral-remix.png', className: 'viral-video-remix-card' },
+  { id: 'shanjian_smart_clip', title: '智能剪辑', art: '/static/skill-cards/smart-clip.png', className: 'shanjian-smart-clip-card' },
+  { id: 'comfly_ecommerce_detail_skill', title: '电商上架套图', art: '/static/skill-cards/ecommerce-detail.png', className: 'ecommerce-detail-card' },
+  { id: 'hifly_digital_human_skill', title: '必火数字人', art: '/static/skill-cards/digital-human.png', className: 'hifly-digital-human-card' },
+  { id: 'openclaw_weixin_channel', title: '微信助手', art: '/static/skill-cards/wechat-assistant.png', className: 'openclaw-weixin-card' },
+  { id: 'openclaw_memory_skill', title: '个人记忆', art: '/static/skill-cards/memory.png', className: 'openclaw-memory-card' },
+  { id: 'browser_use_skill', title: 'Browser Use', art: '/static/skill-cards/browser-use.png', className: 'openclaw-skill-workspace-card', skillId: 'browser_use_skill' },
+  { id: 'computer_use_skill', title: 'Computer Use', art: '/static/skill-cards/computer-use.png', className: 'openclaw-skill-workspace-card', skillId: 'computer_use_skill' },
+  { id: 'youtube_publish', title: 'YouTube 上传', art: '/static/skill-cards/youtube.png', className: 'youtube-publish-card' },
+  { id: 'meta_social', title: 'Instagram / Facebook', art: '/static/skill-cards/meta-social.png', className: 'meta-social-card' },
+  { id: 'twilio_whatsapp', title: 'Twilio WhatsApp', art: '/static/skill-cards/twilio-whatsapp.png', className: 'twilio-whatsapp-card' },
+  { id: 'messenger_reply', title: 'Facebook Messenger 客服', art: '/static/skill-cards/messenger.png', className: 'messenger-reply-card' },
+  { id: 'wecom_reply', title: '企业微信自动回复', art: '/static/skill-cards/wecom.png', className: 'wecom-reply-card' },
+  { id: 'ecommerce_publish_skill', title: '商品发布', art: '/static/skill-cards/ecommerce-publish.png', className: 'ecommerce-publish-card' },
+  { id: 'create_video_pipeline_skill', aliases: ['goal_video_pipeline_skill'], title: '目标成片', art: '/static/skill-cards/goal-video.png', className: 'goal-video-pipeline-card' }
+];
+
+function _skillStoreCatalogItemForId(id) {
+  id = String(id || '').trim();
+  if (!id) return null;
+  for (var i = 0; i < _SKILL_STORE_IMAGE_CARD_CATALOG.length; i += 1) {
+    var item = _SKILL_STORE_IMAGE_CARD_CATALOG[i];
+    if (item.id === id) return item;
+    if (item.aliases && item.aliases.indexOf(id) >= 0) return item;
+  }
+  return null;
+}
+
+function _skillStoreCardArtFor(card) {
+  if (!card) return '';
+  var skillId = card.getAttribute('data-openclaw-skill-id') || '';
+  if (skillId && _SKILL_STORE_CARD_ART_BY_OPENCLAW_ID[skillId]) {
+    return _SKILL_STORE_CARD_ART_BY_OPENCLAW_ID[skillId];
+  }
+  var packageId = card.getAttribute('data-skill-package-id') || '';
+  if (packageId && _SKILL_STORE_CARD_ART_BY_PACKAGE_ID[packageId]) {
+    return _SKILL_STORE_CARD_ART_BY_PACKAGE_ID[packageId];
+  }
+  for (var cls in _SKILL_STORE_CARD_ART_BY_CLASS) {
+    if (Object.prototype.hasOwnProperty.call(_SKILL_STORE_CARD_ART_BY_CLASS, cls) && card.classList.contains(cls)) {
+      return _SKILL_STORE_CARD_ART_BY_CLASS[cls];
+    }
+  }
+  var titleEl = card.querySelector('.card-value');
+  var title = titleEl ? (titleEl.textContent || '').trim() : '';
+  if (title && _SKILL_STORE_CARD_ART_BY_TITLE[title]) {
+    return _SKILL_STORE_CARD_ART_BY_TITLE[title];
+  }
+  if (title) {
+    for (var i = 0; i < _SKILL_STORE_CARD_ART_TITLE_PATTERNS.length; i += 1) {
+      if (_SKILL_STORE_CARD_ART_TITLE_PATTERNS[i][0].test(title)) {
+        return _SKILL_STORE_CARD_ART_TITLE_PATTERNS[i][1];
+      }
+    }
+  }
+  return '';
+}
+
+function _renderImageOnlySkillCard(item) {
+  if (!item) return '';
+  var cls = item.className || '';
+  var skillAttrs = item.skillId
+    ? ' data-openclaw-skill-id="' + escapeAttr(item.skillId) + '" data-openclaw-skill-title="' + escapeAttr(item.title || item.id) + '"'
+    : '';
+  return '<div class="skill-store-card skill-store-fallback-card ' + escapeAttr(cls) + '" data-skill-package-id="' + escapeAttr(item.id || '') + '" data-skill-card-art="' + escapeAttr(item.art || '') + '"' + skillAttrs + ' style="cursor:pointer;">' +
+    '<div class="card-label">技能</div>' +
+    '<div class="card-value">' + escapeHtml(item.title || item.id || '技能') + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm" data-image-skill-placeholder="' + escapeAttr(item.id || '') + '">打开</button></div>' +
+    '</div>';
+}
+
+function _appendMissingSkillImageCards(el) {
+  if (!el) return;
+  var rendered = {};
+  el.querySelectorAll('.skill-store-card').forEach(function(card) {
+    var pkgId = card.getAttribute('data-skill-package-id') || '';
+    var skillId = card.getAttribute('data-openclaw-skill-id') || '';
+    var item = _skillStoreCatalogItemForId(pkgId) || _skillStoreCatalogItemForId(skillId);
+    if (item) rendered[item.id] = true;
+  });
+  var html = '';
+  _SKILL_STORE_IMAGE_CARD_CATALOG.forEach(function(item) {
+    if (rendered[item.id]) return;
+    html += _renderImageOnlySkillCard(item);
+  });
+  if (html) el.insertAdjacentHTML('beforeend', html);
+}
+
+function _decorateSkillImageCards(el) {
+  if (!el) return;
+  var cardClickableClasses = [
+    'youtube-publish-card',
+    'meta-social-card',
+    'twilio-whatsapp-card',
+    'messenger-reply-card',
+    'wecom-reply-card',
+    'ecommerce-publish-card',
+    'ecommerce-detail-card',
+    'seedance-tvc-card',
+    'viral-video-remix-card',
+    'hifly-digital-human-card',
+    'shanjian-smart-clip-card',
+    'goal-video-pipeline-card',
+    'openclaw-skill-workspace-card',
+    'openclaw-memory-card'
+  ];
+  el.querySelectorAll('.skill-store-card').forEach(function(card) {
+    var artSrc = _skillStoreCardArtFor(card);
+    var explicitArt = card.getAttribute('data-skill-card-art') || '';
+    if (explicitArt) artSrc = explicitArt;
+    if (!artSrc) return;
+    if (!card.classList.contains('is-image-skill-card')) {
+      var title = '';
+      var titleEl = card.querySelector('.card-value');
+      if (titleEl) title = (titleEl.textContent || '').trim();
+      var img = document.createElement('img');
+      img.className = 'skill-card-art';
+      img.src = artSrc + (artSrc.indexOf('?') >= 0 ? '&' : '?') + 'v=20260604-skill-card-batch';
+      img.alt = title ? (title + ' 技能卡片') : '技能卡片';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      card.insertBefore(img, card.firstChild);
+      card.classList.add('is-image-skill-card');
+    }
+
+    var hasCardClick = cardClickableClasses.some(function(cls) { return card.classList.contains(cls); });
+    if (hasCardClick || card.dataset.imageCardProxyBound === '1') return;
+    var primaryAction = card.querySelector(
+      '[data-unlock-credits], [data-install], ' +
+      '.js-openclaw-weixin-auth, #xskillModelsBtn, #xskillConfigBtn, #comflyConfigBtn, .js-comfly-config-btn'
+    );
+    if (!primaryAction) return;
+    card.dataset.imageCardProxyBound = '1';
+    card.addEventListener('click', function(e) {
+      if (e.defaultPrevented) return;
+      if (e.target && e.target.closest && e.target.closest('.card-actions')) return;
+      e.preventDefault();
+      primaryAction.click();
+    });
+  });
+}
+
 function loadSkillStore() {
   var el = document.getElementById('skillStoreList');
   if (!el) return;
@@ -2077,11 +2306,16 @@ function loadSkillStore() {
           if (pkg.id === 'sutui_mcp') return '';
           /* 爆款TVC 仅由上方 _renderComflyCard() 展示，避免与 skill_registry 的 comfly_veo_skill 重复成两张卡 */
           if (pkg.id === 'comfly_veo_skill') return '';
+          if (pkg.id === 'comfly_seedance_tvc_skill') return '';
           if (pkg.id === 'comfly_ecommerce_detail_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
+          if (pkg.id === 'douyin_publish') return '';
+          if (pkg.id === 'xiaohongshu_publish') return '';
+          if (pkg.id === 'toutiao_publish') return '';
+          if (pkg.id === 'media_edit_skill') return '';
           if (pkg.id === 'hifly_digital_human_skill') return _renderHiflyDigitalHumanCard(pkg);
           if (pkg.id === 'youtube_publish') {
             if (typeof EDITION === 'undefined' || EDITION !== 'online') return '';
@@ -2155,7 +2389,7 @@ function loadSkillStore() {
         }
         var tags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
           var capCount = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
-        return '<div class="skill-store-card">' +
+        return '<div class="skill-store-card" data-skill-package-id="' + escapeAttr(pkg.id || '') + '">' +
           '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' ' + statusBadge + '</div>' +
           '<div class="card-value">' + escapeHtml(pkg.name || pkg.id) + '</div>' +
             '<div class="card-desc">' + escapeHtml(pkg.description || '') + capCount + '</div>' +
@@ -2163,6 +2397,7 @@ function loadSkillStore() {
           '<div class="card-actions">' + actionBtn + '</div></div>';
       }).join('');
         el.innerHTML = html;
+        _appendMissingSkillImageCards(el);
         _bindWecomConfigEntry();
         _bindMessengerCardEntry();
         _bindTwilioWhatsappCardEntry();
@@ -2180,6 +2415,7 @@ function loadSkillStore() {
         _bindInstallUninstall(el);
         _bindXSkillConfigBtn();
         _bindComflyConfigBtn();
+        _decorateSkillImageCards(el);
       }
 
       function finishRender() {

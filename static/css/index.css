@@ -42,139 +42,105 @@
     .skill-store-card .card-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.5rem; }
     .skill-store-card .tag { font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: rgba(6,182,212,0.12); color: var(--accent); }
     .skill-store-card .card-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; }
+    #content-skill-store.content-block.has-page-shell {
+      background: linear-gradient(180deg, #fbfaf7 0%, #f4f1ea 100%);
+    }
+    #content-skill-store .skill-store-hero {
+      border: 1px solid rgba(121, 107, 83, 0.12);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: 0 18px 42px rgba(75, 66, 51, 0.08);
+      backdrop-filter: blur(12px);
+    }
+    #content-skill-store .store-tabs {
+      width: fit-content;
+      gap: 0.35rem;
+      padding: 0.28rem;
+      border: 1px solid rgba(121, 107, 83, 0.11);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.66);
+    }
+    #content-skill-store .store-tab {
+      min-height: 34px;
+      padding: 0.42rem 0.95rem;
+      border: 0;
+      border-radius: 999px;
+      color: #667084;
+      font-weight: 700;
+    }
+    #content-skill-store .store-tab.active {
+      color: #31405a;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 0 8px 18px rgba(116,101,78,0.09), inset 0 0 0 1px rgba(121,107,83,0.08);
+    }
     #skillStoreList.skill-store-grid,
     #mcpRegistryResults.skill-store-grid {
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      gap: 0.72rem;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+      align-items: start;
     }
-    #skillStoreList .skill-store-card,
-    #mcpRegistryResults .skill-store-card {
+    #skillStoreList .skill-store-card.is-image-skill-card,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card {
       position: relative;
-      min-height: 126px;
-      padding: 0.95rem 0.8rem;
-      border-radius: 8px;
-      display: grid;
-      grid-template-rows: 42px minmax(2.6em, auto) auto;
-      align-content: start;
-      align-items: center;
-      justify-items: center;
-      text-align: center;
-      gap: 0.5rem;
+      min-height: 0;
+      aspect-ratio: 2 / 3;
+      padding: 0;
+      border: 0 !important;
+      border-radius: 22px;
+      display: block;
+      background: transparent !important;
+      box-shadow: 0 22px 42px rgba(75, 66, 51, 0.14), 0 8px 18px rgba(34, 49, 78, 0.06) !important;
+      overflow: hidden;
       cursor: pointer;
-      overflow: hidden;
+      transform: translateZ(0);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
-    #skillStoreList .skill-store-card::before,
-    #mcpRegistryResults .skill-store-card::before {
-      content: "";
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l1.8 4.8L19 9.6l-4.8 1.8L12 17l-1.8-5.6L5 9.6l5.2-1.8L12 3z'/%3E%3Cpath d='M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #4262df 0%, #14b8a6 100%);
-      width: 42px;
-      height: 42px;
-      border-radius: 8px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      background-image: var(--skill-icon), var(--skill-icon-bg);
-      background-position: center, center;
-      background-repeat: no-repeat, no-repeat;
-      background-size: 22px 22px, cover;
-      box-shadow: 0 10px 22px rgba(66,98,223,0.16);
-      flex: 0 0 auto;
-      grid-row: 1;
-      align-self: start;
-      justify-self: center;
+    #skillStoreList .skill-store-card.is-image-skill-card:hover,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 28px 52px rgba(75, 66, 51, 0.18), 0 12px 24px rgba(34, 49, 78, 0.08) !important;
     }
-    #skillStoreList .comfly-veo-card::before,
-    #skillStoreList .seedance-tvc-card::before,
-    #skillStoreList .viral-video-remix-card::before,
-    #skillStoreList .goal-video-pipeline-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M7 4.8v14.4c0 .8.9 1.3 1.6.9l11.2-7.2c.6-.4.6-1.4 0-1.8L8.6 3.9C7.9 3.5 7 4 7 4.8z'/%3E%3C/svg%3E");
-    }
-    #skillStoreList .comfly-veo-card::before { --skill-icon-bg: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%); }
-    #skillStoreList .seedance-tvc-card::before { --skill-icon-bg: linear-gradient(135deg, #5b7cff 0%, #06b6d4 100%); }
-    #skillStoreList .viral-video-remix-card::before { --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #f59e0b 100%); }
-    #skillStoreList .hifly-digital-human-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M4.5 20c1.7-3.2 4.2-4.8 7.5-4.8s5.8 1.6 7.5 4.8'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%);
-    }
-    #skillStoreList .goal-video-pipeline-card::before { --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #5b7cff 100%); }
-    #skillStoreList .ecommerce-detail-card::before,
-    #skillStoreList .ecommerce-publish-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 7h12l-1 13H7L6 7z'/%3E%3Cpath d='M9 7a3 3 0 0 1 6 0'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #ec4899 0%, #f59e0b 100%);
-    }
-    #skillStoreList .messenger-reply-card::before,
-    #skillStoreList .twilio-whatsapp-card::before,
-    #skillStoreList .wecom-reply-card::before,
-    #skillStoreList .openclaw-weixin-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5.5h16v10H8l-4 3v-13z'/%3E%3Cpath d='M8 9h8M8 12h5'/%3E%3C/svg%3E");
-    }
-    #skillStoreList .messenger-reply-card::before { --skill-icon-bg: linear-gradient(135deg, #6366f1 0%, #22c55e 100%); }
-    #skillStoreList .twilio-whatsapp-card::before { --skill-icon-bg: linear-gradient(135deg, #25d366 0%, #128c7e 100%); }
-    #skillStoreList .wecom-reply-card::before,
-    #skillStoreList .openclaw-weixin-card::before { --skill-icon-bg: linear-gradient(135deg, #07c160 0%, #4262df 100%); }
-    #skillStoreList .openclaw-memory-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 4h9l3 3v13H6V4z'/%3E%3Cpath d='M14 4v4h4M8.5 12h7M8.5 15h7'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #334155 100%);
-    }
-    #skillStoreList .openclaw-skill-workspace-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='5' width='16' height='11' rx='2'/%3E%3Cpath d='M9 20h6M12 16v4'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #6366f1 0%, #0ea5e9 100%);
-    }
-    #skillStoreList .youtube-publish-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 16V5M7 10l5-5 5 5'/%3E%3Cpath d='M5 18h14'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #ff0000 0%, #f97316 100%);
-    }
-    #skillStoreList .meta-social-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='5' width='14' height='14' rx='4'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Cpath d='M16.5 8h.01'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #1877f2 0%, #e1306c 100%);
-    }
-    #skillStoreList .skill-store-card .card-label,
-    #skillStoreList .skill-store-card .card-desc,
-    #skillStoreList .skill-store-card .card-tags,
-    #mcpRegistryResults .skill-store-card .card-label,
-    #mcpRegistryResults .skill-store-card .card-desc,
-    #mcpRegistryResults .skill-store-card .card-tags {
-      display: none !important;
-    }
-    #skillStoreList .skill-store-card > :not(.card-value):not(.card-actions),
-    #mcpRegistryResults .skill-store-card > :not(.card-value):not(.card-actions) {
-      display: none !important;
-    }
-    #skillStoreList .skill-store-card .card-value,
-    #mcpRegistryResults .skill-store-card .card-value {
-      font-size: 0.95rem;
-      font-weight: 750;
-      line-height: 1.32;
-      max-width: 100%;
-      min-height: 2.6em;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow-wrap: anywhere;
-      overflow: hidden;
-      align-self: center;
-      justify-self: center;
-    }
-    #skillStoreList .skill-store-card .card-actions,
-    #mcpRegistryResults .skill-store-card .card-actions {
-      margin-top: 0;
-      justify-content: center;
-      flex-wrap: wrap;
-      gap: 0.35rem;
-      align-self: end;
-      justify-self: center;
-    }
-    #skillStoreList .skill-store-card .card-actions:empty,
-    #mcpRegistryResults .skill-store-card .card-actions:empty {
+    #skillStoreList .skill-store-card.is-image-skill-card::before,
+    #skillStoreList .skill-store-card.is-image-skill-card::after,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card::before,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card::after {
+      content: none;
       display: none;
     }
-    #skillStoreList .skill-store-card .card-actions .btn,
-    #mcpRegistryResults .skill-store-card .card-actions .btn {
-      min-height: 30px;
-      padding: 0.28rem 0.58rem;
-      font-size: 0.74rem;
-      border-radius: 8px;
+    #skillStoreList .skill-store-card.is-image-skill-card .skill-card-art,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .skill-card-art {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      user-select: none;
+      pointer-events: none;
+    }
+    #skillStoreList .skill-store-card.is-image-skill-card > :not(.skill-card-art),
+    #mcpRegistryResults .skill-store-card.is-image-skill-card > :not(.skill-card-art) {
+      position: absolute !important;
+      width: 1px !important;
+      height: 1px !important;
+      padding: 0 !important;
+      margin: -1px !important;
+      overflow: hidden !important;
+      clip: rect(0 0 0 0) !important;
+      white-space: nowrap !important;
+      border: 0 !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    @media (max-width: 720px) {
+      #skillStoreList.skill-store-grid,
+      #mcpRegistryResults.skill-store-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+      #skillStoreList .skill-store-card.is-image-skill-card,
+      #mcpRegistryResults .skill-store-card.is-image-skill-card {
+        border-radius: 18px;
+      }
     }
     .badge-installed { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: rgba(16,185,129,0.15); color: #6ee7b7; }
     .badge-coming { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: rgba(255,255,255,0.08); color: var(--text-muted); }
