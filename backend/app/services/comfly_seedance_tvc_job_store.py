@@ -92,9 +92,20 @@ def read_manifest_progress(job_output_dir: str) -> Optional[Dict[str, Any]]:
         return None
     steps = data.get("steps") if isinstance(data.get("steps"), dict) else {}
     shots = data.get("shots") if isinstance(data.get("shots"), dict) else {}
-    items = sorted(steps.items(), key=lambda kv: str((kv[1] or {}).get("updated_at") or ""))
+    segments = data.get("segments") if isinstance(data.get("segments"), dict) else {}
+    items: List[tuple[str, Dict[str, Any]]] = []
+    for name, meta in steps.items():
+        if isinstance(meta, dict):
+            items.append((name, meta))
+    for seg_idx, stages in segments.items():
+        if not isinstance(stages, dict):
+            continue
+        for stage_name, meta in stages.items():
+            if isinstance(meta, dict):
+                items.append((f"segment_{seg_idx}_{stage_name}", meta))
+    items = sorted(items, key=lambda kv: str((kv[1] or {}).get("updated_at") or ""))
     last_steps: List[Dict[str, Any]] = []
-    for name, meta in items[-12:]:
+    for name, meta in items[-16:]:
         if isinstance(meta, dict):
             last_steps.append(
                 {
@@ -111,6 +122,7 @@ def read_manifest_progress(job_output_dir: str) -> Optional[Dict[str, Any]]:
         "run_dir": data.get("run_dir"),
         "step_count": len(steps),
         "shot_indexes": sorted(shots.keys(), key=lambda x: int(x) if str(x).isdigit() else 0),
+        "segment_indexes": sorted(segments.keys(), key=lambda x: int(x) if str(x).isdigit() else 0),
         "last_steps": last_steps,
         "errors": (data.get("errors") or [])[-5:] if isinstance(data.get("errors"), list) else [],
     }

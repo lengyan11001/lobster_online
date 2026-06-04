@@ -18,6 +18,7 @@
     currentJobStatus: '',
     currentResultVideoUrl: '',
     currentJobTitle: '',
+    currentJobPrompt: '',
     currentJobError: '',
     currentJobProgress: null,
     submitBusy: false,
@@ -27,16 +28,40 @@
   };
   var seedanceTaskToastTimer = null;
   var seedanceTaskNotifiedJobs = {};
+  var lastSeedanceModel = '';
 
   var defaults = {
     aspectRatio: '9:16',
     visualTone: 'clean_bright',
     rhythm: 'smooth',
-    model: 'doubao-seedance-2-0-260128',
+    model: 'yunwu-veo3.1-plus',
     needAudio: true,
     needMerge: true,
     prompt: ''
   };
+
+  function isYunwuVeoModel(model) {
+    var value = String(model || '').toLowerCase().replace(/\s+/g, '');
+    return value === 'yunwu-veo3.1-plus' || value === 'veo3.1-plus' || value === 'veo3.1';
+  }
+
+  function getCurrentSegmentSeconds(model) {
+    return isYunwuVeoModel(model || (($('seedanceModelSelect') || {}).value)) ? 8 : 10;
+  }
+
+  function getDurationSegmentCount(duration, model) {
+    var segmentSeconds = getCurrentSegmentSeconds(model);
+    return Math.max(1, Math.round((Number(duration) || segmentSeconds) / segmentSeconds));
+  }
+
+  function updateDurationChipsForModel(model) {
+    var segmentSeconds = getCurrentSegmentSeconds(model);
+    document.querySelectorAll('#seedanceDurationGrid .tvc-duration-chip').forEach(function(chip, index) {
+      var duration = (index + 1) * segmentSeconds;
+      chip.setAttribute('data-duration', String(duration));
+      chip.textContent = duration + 's';
+    });
+  }
 
   var narrativeSeeds = [
     { title: '开场定调', copy: '先把主体和整体气质立住，让后面的镜头都围绕同一条内容展开。' },
@@ -122,7 +147,8 @@
   }
 
   function normalizeApiErrorText(detail, fallback) {
-    if (detail === null || detail === undefined || detail === '') return fallback || '未知错误';
+    var defaultText = arguments.length >= 2 ? String(fallback || '') : '未知错误';
+    if (detail === null || detail === undefined || detail === '') return defaultText;
     if (typeof detail === 'string') return detail;
     if (Array.isArray(detail)) {
       var rows = detail.map(function(item) {
@@ -137,7 +163,7 @@
         }
         return String(item);
       }).filter(Boolean);
-      return rows.join('；') || (fallback || '未知错误');
+      return rows.join('；') || defaultText;
     }
     if (typeof detail === 'object') {
       if (typeof detail.detail === 'string' && detail.detail) return detail.detail;
@@ -153,26 +179,91 @@
     return normalizeApiErrorText(data && (data.detail || data.message || data.error || data), fallback);
   }
 
+  function progressStepStatusText(status) {
+    var key = String(status || '').trim().toLowerCase();
+    var labels = {
+      success: '成功',
+      ready: '已就绪',
+      running: '进行中',
+      pending: '等待中',
+      queued: '排队中',
+      failed: '失败',
+      error: '失败',
+      partial_failure: '部分完成',
+      completed: '完成',
+      complete: '完成',
+      done: '完成',
+    };
+    return labels[key] || String(status || '').trim();
+  }
+
+  function progressStepNameText(name) {
+    var raw = String(name || '').trim();
+    if (!raw) return '处理中';
+    var key = raw
+      .toLowerCase()
+      .replace(/^\d+_/, '')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_');
+    var segmentMatch = key.match(/^segment_(\d+)_([a-z0-9_]+)$/);
+    var segmentLabel = '';
+    var stageKey = key;
+    if (segmentMatch) {
+      segmentLabel = '第 ' + parseInt(segmentMatch[1], 10) + ' 段';
+      stageKey = segmentMatch[2];
+    }
+    var labels = {
+      reference_upload_01: '参考图上传',
+      reference_upload: '参考图上传',
+      direct_video_plan: '直接视频任务准备',
+      storyboard_plan: '分镜规划',
+      plan: '分镜规划',
+      board_image: '分镜图生成',
+      segment_reference_image: '视频参考图生成',
+      submit_primary: '视频提交',
+      video_fallback: '切换备用视频通道',
+      submit_fallback: '备用通道提交',
+      poll: '视频生成查询',
+      video_poll: '视频生成查询',
+      download_video: '视频下载',
+      merge_clips: '视频合并',
+      merge_download: '视频下载',
+      final: '成片整理',
+      audio: '音频生成',
+      narration: '旁白生成',
+    };
+    var label = labels[stageKey] || labels[key];
+    if (label) return segmentLabel ? (segmentLabel + label) : label;
+    return raw.replace(/^\d+_/, '').replace(/_/g, ' ');
+  }
+
   function progressSummary(progress) {
     if (!progress || typeof progress !== 'object') return '';
+    var manifestStatus = String(progress.manifest_status || '').trim().toLowerCase();
     var errors = Array.isArray(progress.errors) ? progress.errors : [];
-    for (var i = errors.length - 1; i >= 0; i -= 1) {
-      var err = errors[i];
-      var text = '';
-      if (typeof err === 'string') text = err;
-      else if (err && typeof err === 'object') text = err.error || err.message || err.detail || '';
-      text = normalizeApiErrorText(text, '').trim();
-      if (text) return text;
-    }
     var steps = Array.isArray(progress.last_steps) ? progress.last_steps : [];
-    for (var j = steps.length - 1; j >= 0; j -= 1) {
-      var step = steps[j] || {};
-      if (step.error) return normalizeApiErrorText(step.error, '').trim();
+    if (manifestStatus === 'partial_failure' || manifestStatus === 'failed') {
+      for (var i = errors.length - 1; i >= 0; i -= 1) {
+        var err = errors[i];
+        var text = '';
+        if (typeof err === 'string') text = err;
+        else if (err && typeof err === 'object') text = err.error || err.message || err.detail || '';
+        text = normalizeApiErrorText(text, '').trim();
+        if (text) return text;
+      }
+      for (var j = steps.length - 1; j >= 0; j -= 1) {
+        var failedStep = steps[j] || {};
+        if (failedStep.error) return normalizeApiErrorText(failedStep.error, '').trim();
+      }
+      return '视频生成失败，未产出可播放的视频，请查看任务日志后重试。';
     }
     if (steps.length) {
       var last = steps[steps.length - 1] || {};
-      var name = String(last.name || '').replace(/^0\d_/, '').replace(/_/g, ' ');
-      var status = String(last.status || '').trim();
+      var name = progressStepNameText(last.name);
+      var status = progressStepStatusText(last.status);
+      if (last.error && String(last.status || '').trim().toLowerCase() === 'failed') {
+        return normalizeApiErrorText(last.error, '').trim() || (name + '失败');
+      }
       if (name || status) return (name || '处理中') + (status ? ' · ' + status : '');
     }
     if (progress.step_count) return '已执行 ' + progress.step_count + ' 个步骤';
@@ -192,11 +283,51 @@
     return '正在合成视频，完成后会自动切换到成片结果。';
   }
 
+  function jobPromptText(job) {
+    if (!job) return '';
+    var candidates = [
+      job.prompt,
+      job.taskText,
+      job.task_text,
+      job.description,
+      job.detail,
+      job.title
+    ];
+    for (var i = 0; i < candidates.length; i += 1) {
+      var text = String(candidates[i] || '').trim();
+      if (text && text !== '创意视频任务') return text;
+    }
+    return '';
+  }
+
+  function formatJobTime(job) {
+    var ts = Number(job && (job.createdAt || job.updatedAt) || 0);
+    if (!ts) return '';
+    var d = new Date(ts);
+    if (!isFinite(d.getTime())) return '';
+    var now = new Date();
+    var sameDay = d.getFullYear() === now.getFullYear()
+      && d.getMonth() === now.getMonth()
+      && d.getDate() === now.getDate();
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    if (sameDay) return hh + ':' + mm;
+    return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + hh + ':' + mm;
+  }
+
   function jobMediaHtml(job) {
     var status = String((job && job.status) || 'running');
-    if (status === 'completed') return '<span>完成</span>';
-    if (status === 'failed') return '<span>失败</span>';
-    return '<span class="tvc-status-spinner" aria-hidden="true"></span>';
+    var videoUrl = String((job && job.videoUrl) || '').trim();
+    if (videoUrl && status === 'completed') {
+      return '<video src="' + escapeHtml(videoUrl) + '" controls playsinline preload="metadata"></video>';
+    }
+    if (status === 'completed') {
+      return '<span class="seedance-business-job-placeholder">视频同步中</span>';
+    }
+    if (status === 'failed') {
+      return '<span class="seedance-business-job-placeholder is-failed">生成失败</span>';
+    }
+    return '<span class="seedance-business-job-placeholder is-running"><span class="tvc-status-spinner" aria-hidden="true"></span><span>生成中</span></span>';
   }
 
   function jobDetailText(job) {
@@ -475,6 +606,7 @@
     $('seedanceVisualToneSelect').value = defaults.visualTone;
     $('seedanceRhythmSelect').value = defaults.rhythm;
     $('seedanceModelSelect').value = defaults.model;
+    lastSeedanceModel = defaults.model;
     $('seedanceNeedAudioCheck').checked = defaults.needAudio;
     $('seedanceNeedMergeCheck').checked = defaults.needMerge;
     $('seedanceTaskPromptInput').value = defaults.prompt;
@@ -487,6 +619,11 @@
     state.mode = mode;
     var modeSelect = $('seedanceInputModeSelect');
     if (modeSelect) modeSelect.value = mode;
+    document.querySelectorAll('[data-seedance-input-mode]').forEach(function(tab) {
+      var active = tab.getAttribute('data-seedance-input-mode') === mode;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-checked', active ? 'true' : 'false');
+    });
     if ($('seedanceImageField')) {
       $('seedanceImageField').style.display = mode === 'prompt_only' ? 'none' : '';
     }
@@ -496,9 +633,11 @@
   }
 
   function setDuration(duration) {
-    state.duration = duration;
+    var segmentSeconds = getCurrentSegmentSeconds();
+    var normalized = Math.max(1, Math.round((Number(duration) || segmentSeconds) / segmentSeconds)) * segmentSeconds;
+    state.duration = normalized;
     document.querySelectorAll('#seedanceDurationGrid .tvc-duration-chip').forEach(function(chip) {
-      chip.classList.toggle('is-active', Number(chip.getAttribute('data-duration')) === duration);
+      chip.classList.toggle('is-active', Number(chip.getAttribute('data-duration')) === normalized);
     });
   }
 
@@ -719,7 +858,8 @@
 
   function buildBoards() {
     var values = getFormValues();
-    var count = Math.max(1, Math.floor(state.duration / 10));
+    var segmentSeconds = getCurrentSegmentSeconds(values.model);
+    var count = getDurationSegmentCount(state.duration, values.model);
     var promptSnippet = shortenText(values.prompt, 42);
     var boards = [];
 
@@ -732,8 +872,8 @@
       }
       boards.push({
         index: i,
-        start: i * 10,
-        end: (i + 1) * 10,
+        start: i * segmentSeconds,
+        end: (i + 1) * segmentSeconds,
         title: seed.title,
         copy: copy,
         media: media
@@ -751,7 +891,7 @@
       $('seedanceBoardsCounter').textContent = boards.length + ' 张分镜';
     }
     if ($('seedanceBoardsHint')) {
-      $('seedanceBoardsHint').textContent = '下面按每 10 秒展示一张分镜图。';
+      $('seedanceBoardsHint').textContent = '下面按所选模型时长展示分镜图。';
     }
     if (!$('seedanceStoryboardStrip')) return;
 
@@ -857,17 +997,22 @@
   }
 
   function bindRecentJobButtons() {
-    document.querySelectorAll('[data-seedance-job]').forEach(function(btn) {
-      if (btn.dataset.bound) return;
-      btn.dataset.bound = '1';
-      btn.addEventListener('click', function() {
-        var jobId = btn.getAttribute('data-seedance-job') || '';
+    document.querySelectorAll('[data-seedance-job]').forEach(function(card) {
+      if (card.dataset.bound) return;
+      card.dataset.bound = '1';
+      function openCard(event) {
+        var interactive = event.target && event.target.closest
+          ? event.target.closest('video,button,a,[data-seedance-video-download],[data-seedance-video-open]')
+          : null;
+        if (interactive) return;
+        var jobId = card.getAttribute('data-seedance-job') || '';
         if (!jobId) return;
         state.currentJobId = jobId;
         var hit = state.recentJobs.find(function(item) { return item && item.jobId === jobId; });
         state.currentJobStatus = (hit && hit.status) || 'running';
         state.currentResultVideoUrl = (hit && hit.videoUrl) || '';
         state.currentJobTitle = (hit && hit.title) || '创意视频任务';
+        state.currentJobPrompt = (hit && hit.prompt) || '';
         state.currentJobError = (hit && hit.error) || '';
         state.currentJobProgress = (hit && hit.progress) || null;
         state.examplesOpen = false;
@@ -878,6 +1023,12 @@
           return;
         }
         refreshJobStatus(true);
+      }
+      card.addEventListener('click', openCard);
+      card.addEventListener('keydown', function(event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openCard(event);
       });
     });
   }
@@ -925,18 +1076,33 @@
       list.innerHTML = state.recentJobs.map(function(job) {
         var selected = job.jobId === state.currentJobId ? ' is-active' : '';
         var stageText = jobStageText(job);
+        var promptText = jobPromptText(job) || stageText;
+        var timeText = formatJobTime(job);
+        var videoUrl = String((job && job.videoUrl) || '').trim();
+        var actionHtml = videoUrl && job.status === 'completed'
+          ? [
+              '<span class="seedance-business-job-actions">',
+              '<button type="button" class="btn btn-primary btn-sm" data-seedance-video-download="' + escapeHtml(videoUrl) + '" data-download-filename="creative-video.mp4">下载</button>',
+              '<button type="button" class="btn btn-ghost btn-sm" data-seedance-video-open="' + escapeHtml(videoUrl) + '">打开</button>',
+              '</span>'
+            ].join('')
+          : '';
         return [
-          '<button type="button" class="seedance-business-job' + selected + '" data-seedance-job="' + escapeHtml(job.jobId) + '">',
-          '<span class="seedance-business-job-media" data-status="' + escapeHtml(job.status || 'running') + '">' + jobMediaHtml(job) + '</span>',
-          '<span class="seedance-business-job-body">',
-          '<span class="seedance-business-job-title">' + escapeHtml(job.title || '创意视频任务') + '</span>',
-          '<span class="seedance-business-job-meta">' + escapeHtml(statusLabel(job.status)) + ' · ' + escapeHtml((job.jobId || '').slice(0, 8)) + '</span>',
-          '<span class="seedance-business-job-detail">' + escapeHtml(stageText) + '</span>',
+          '<article class="seedance-business-job' + selected + '" data-seedance-job="' + escapeHtml(job.jobId) + '" tabindex="0" role="button">',
+          '<span class="seedance-business-job-head">',
+          '<span class="seedance-business-job-prompt" title="' + escapeHtml(promptText || '创意视频任务') + '">' + escapeHtml(promptText || '创意视频任务') + '</span>',
+          '<span class="seedance-business-job-time">' + escapeHtml(timeText || '') + '</span>',
           '</span>',
-          '</button>'
+          '<span class="seedance-business-job-media" data-status="' + escapeHtml(job.status || 'running') + '">' + jobMediaHtml(job) + '</span>',
+          '<span class="seedance-business-job-foot">',
+          '<span class="seedance-result-pill" data-tone="' + escapeHtml(statusTone(job.status)) + '">' + escapeHtml(statusLabel(job.status)) + '</span>',
+          actionHtml,
+          '</span>',
+          '</article>'
         ].join('');
       }).join('');
       bindRecentJobButtons();
+      bindResultVideoActions();
     }
     if (empty) empty.style.display = state.recentJobs.length ? 'none' : 'block';
   }
@@ -1020,6 +1186,41 @@
       toast.classList.add('is-visible');
     });
     seedanceTaskToastTimer = window.setTimeout(hideTaskToast, 9000);
+  }
+
+  function showCreditWarning(requiredCredits, balanceCredits) {
+    var required = Math.ceil(Number(requiredCredits || 0));
+    var balance = Number(balanceCredits || 0);
+    var balanceText = isFinite(balance) ? balance.toFixed(2).replace(/\.?0+$/, '') : '--';
+    var body = '本次生成预计需要 ' + required + ' 算力，当前余额 ' + balanceText + ' 算力。请充值后再提交。';
+    showMessage('提交失败：' + body);
+    var modal = $('seedanceCreditModal');
+    var bodyEl = $('seedanceCreditModalBody');
+    if (bodyEl) bodyEl.textContent = body;
+    if (modal) modal.classList.add('visible');
+    else window.alert(body);
+  }
+
+  function closeCreditWarning() {
+    var modal = $('seedanceCreditModal');
+    if (modal) modal.classList.remove('visible');
+  }
+
+  function openRechargeFromCreditWarning() {
+    closeCreditWarning();
+    var rechargeUrl = (typeof RECHARGE_URL !== 'undefined' && RECHARGE_URL) ? String(RECHARGE_URL) : '';
+    if (rechargeUrl && rechargeUrl !== '#') {
+      try {
+        window.open(rechargeUrl, '_blank', 'noopener');
+        return;
+      } catch (e) {}
+    }
+    if (typeof window.showAppView === 'function') {
+      window.showAppView('billing');
+      return;
+    }
+    var billingBtn = document.querySelector('.nav-left-item[data-view="billing"]');
+    if (billingBtn) billingBtn.click();
   }
 
   function notifyTaskOnce(status) {
@@ -1125,16 +1326,25 @@
   function buildRunPayload(uploadedImages) {
     var values = getFormValues();
     var uploaded = uploadedImages || [];
+    var segmentSeconds = getCurrentSegmentSeconds(values.model);
+    var segmentCount = getDurationSegmentCount(state.duration, values.model);
+    var useDirectVideo = state.mode !== 'prompt_only'
+      && uploaded.length === 1
+      && !!(uploaded[0] && uploaded[0].asset_id)
+      && segmentCount === 1
+      && !!values.prompt;
     var basePayload = {
-      total_duration_seconds: state.duration,
-      segment_count: Math.max(1, Math.floor(state.duration / 10)),
-      segment_duration_seconds: 10,
+      total_duration_seconds: segmentCount * segmentSeconds,
+      segment_count: segmentCount,
+      segment_duration_seconds: segmentSeconds,
+      workflow_mode: useDirectVideo ? 'direct_video' : 'storyboard',
       merge_clips: !!values.needMerge,
       auto_save: true,
       analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
       image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
       image_model_channel_fallbacks: ['gpt-image-2-yunwu', 'nano-banana-2', 'nano-banana-2-yunwu'],
-      video_model: values.model,
+      video_model: isYunwuVeoModel(values.model) ? 'veo3.1' : values.model,
+      video_channel: isYunwuVeoModel(values.model) ? 'yunwu' : '',
       aspect_ratio: values.aspectRatio,
       generate_audio: !!values.needAudio,
       watermark: false
@@ -1162,7 +1372,7 @@
         reference_asset_ids: uploaded.slice(1).map(function(item) {
           return item.asset_id;
         }).filter(Boolean),
-        task_text: buildPromptWithReferenceHints(values.prompt || '', uploaded)
+        task_text: useDirectVideo ? values.prompt : buildPromptWithReferenceHints(values.prompt || '', uploaded)
       })
     };
   }
@@ -1244,13 +1454,19 @@
 
   function normalizeCloudJob(job) {
     if (!job || !job.job_id) return null;
+    var req = job.request_payload || {};
+    var reqPayload = (req && req.payload) || {};
+    var reqInp = (req && req.inp) || {};
+    var promptText = String(job.prompt || reqPayload.task_text || reqInp.task_text || '').trim();
     return {
       jobId: String(job.job_id || ''),
       status: String(job.status || 'running'),
       title: job.title || '创意视频任务',
+      prompt: promptText,
       videoUrl: cloudVideoUrlFromJob(job),
       error: String(job.error || '').trim(),
       progress: null,
+      createdAt: Date.parse(job.created_at || job.createdAt || '') || 0,
       updatedAt: Date.parse(job.updated_at || job.completed_at || job.created_at || '') || Date.now(),
       cloud: true,
       cloudJob: job
@@ -1310,14 +1526,17 @@
     state.currentJobStatus = status;
     state.currentResultVideoUrl = job.videoUrl || state.currentResultVideoUrl || '';
     state.currentJobTitle = job.title || state.currentJobTitle || '创意视频任务';
+    state.currentJobPrompt = job.prompt || state.currentJobPrompt || '';
     state.currentJobError = job.error || '';
     state.currentJobProgress = job.progress || null;
     updateRememberedJob(job.jobId, {
       status: status,
       title: state.currentJobTitle,
+      prompt: state.currentJobPrompt || job.prompt || '',
       videoUrl: state.currentResultVideoUrl || '',
       error: state.currentJobError,
       progress: state.currentJobProgress,
+      createdAt: job.createdAt || 0,
       cloud: !!job.cloud
     });
     return true;
@@ -1390,6 +1609,7 @@
         state.currentJobProgress = result.data.progress || null;
         updateRememberedJob(state.currentJobId, {
           status: state.currentJobStatus,
+          prompt: state.currentJobPrompt || '',
           videoUrl: state.currentResultVideoUrl || '',
           error: state.currentJobError,
           progress: state.currentJobProgress
@@ -1443,13 +1663,11 @@
       return;
     }
 
-    // 积分预检查
-    var duration = state.duration || 20;
-    var segmentCount = Math.max(1, duration / 10);
-    // 每个分镜：图片生成(20积分) + 视频生成(20积分veo3.1-fast) = 约40积分采购价
+    var values = getFormValues();
+    var duration = state.duration || getCurrentSegmentSeconds(values.model);
+    var segmentCount = getDurationSegmentCount(duration, values.model);
     var estimatedCreditsPerSegment = 40;
-    var totalEstimatedCredits = estimatedCreditsPerSegment * segmentCount;
-    var userCredits = totalEstimatedCredits * 2; // 用户消耗 = 采购价 × 2倍
+    var userCredits = estimatedCreditsPerSegment * segmentCount * 2;
 
     setSubmitBusy(true, '检查算力...');
     state.examplesOpen = false;
@@ -1458,11 +1676,18 @@
     fetch((typeof API_BASE !== 'undefined' ? API_BASE : '') + '/auth/me', {
       headers: (typeof authHeaders === 'function' ? authHeaders() : {})
     })
-      .then(function(r) { return r.json(); })
+      .then(function(r) {
+        if (!r.ok) return {};
+        return r.json().catch(function() { return {}; });
+      })
       .then(function(meData) {
         var balance = meData.credits != null ? meData.credits : null;
         if (balance !== null && balance < userCredits) {
-          throw new Error('算力不足：生成 ' + duration + ' 秒视频（' + segmentCount + ' 个分镜）需要约 ' + userCredits + ' 算力（采购价 ' + totalEstimatedCredits + ' 算力 × 2倍），当前余额 ' + balance + ' 算力。请先充值。');
+          var creditError = new Error('算力不足');
+          creditError.code = 'INSUFFICIENT_CREDITS';
+          creditError.requiredCredits = userCredits;
+          creditError.balanceCredits = balance;
+          throw creditError;
         }
 
         setSubmitBusy(true, '提交中...');
@@ -1475,19 +1700,43 @@
         return ensureImageAssetsUploaded();
       })
       .catch(function(err) {
-        // 算力检查失败，显示错误但不继续
-        showMessage(normalizeApiErrorText(err && (err.message || err), '算力检查失败'));
-        setSubmitBusy(false);
-        throw err;
+        if (err && err.code === 'INSUFFICIENT_CREDITS') {
+          showCreditWarning(err.requiredCredits, err.balanceCredits);
+          setSubmitBusy(false);
+          throw err;
+        }
+        showMessage('算力检查暂时不可用，继续提交任务...');
+        setSubmitBusy(true, '提交中...');
+        return ensureImageAssetsUploaded();
       })
       .then(function(uploadedImages) {
         var built = buildRunPayload(uploadedImages);
         if (built.error) throw new Error(built.error);
 
-        return fetch(base + '/api/comfly-seedance-tvc/pipeline/start', {
-          method: 'POST',
-          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
-          body: JSON.stringify({ payload: built.payload })
+        function submitPayload(payload) {
+          return fetch(base + '/api/comfly-seedance-tvc/pipeline/start', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+            body: JSON.stringify({ payload: payload })
+          });
+        }
+
+        return submitPayload(built.payload).then(function(response) {
+          if (response.ok) return response;
+          return response.json().catch(function() { return {}; }).then(function(data) {
+            var message = responseErrorText(data, '');
+            var looksLikeOldDurationApi = /segment_duration_seconds|total_duration_seconds|固定为 10|仅支持 10\/20\/30\/40\/50\/60/.test(message);
+            if (!looksLikeOldDurationApi) {
+              return new Response(JSON.stringify(data || {}), { status: response.status, statusText: response.statusText, headers: { 'Content-Type': 'application/json' } });
+            }
+            var fallbackPayload = Object.assign({}, built.payload, {
+              segment_duration_seconds: 10,
+              total_duration_seconds: Math.max(1, Number(built.payload.segment_count || 1)) * 10,
+              workflow_mode: 'storyboard'
+            });
+            showMessage('本地服务仍是旧版参数，已自动按兼容模式重新提交...');
+            return submitPayload(fallbackPayload);
+          });
         });
       })
       .then(function(response) {
@@ -1504,6 +1753,7 @@
       state.currentJobStatus = 'running';
       state.currentResultVideoUrl = '';
       state.currentJobTitle = ($('seedanceTaskPromptInput').value || '创意视频').trim().slice(0, 18) || '创意视频任务';
+      state.currentJobPrompt = ($('seedanceTaskPromptInput').value || '').trim();
       state.currentJobError = '';
       state.currentJobProgress = null;
       state.examplesOpen = false;
@@ -1512,8 +1762,10 @@
         jobId: state.currentJobId,
         status: 'running',
         title: state.currentJobTitle,
+        prompt: state.currentJobPrompt,
         error: '',
-        progress: null
+        progress: null,
+        createdAt: Date.now()
       });
       setSubmitBusy(false);
       renderWorkspace();
@@ -1522,6 +1774,7 @@
       })
       .catch(function(err) {
         setSubmitBusy(false);
+        if (err && err.code === 'INSUFFICIENT_CREDITS') return;
         showMessage('提交失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
       })
       .finally(function() {
@@ -1530,6 +1783,19 @@
   }
 
   function bindEvents() {
+    ['seedanceCreditModalClose', 'seedanceCreditModalCancel'].forEach(function(id) {
+      var btn = $(id);
+      if (btn) btn.addEventListener('click', closeCreditWarning);
+    });
+    var creditRechargeBtn = $('seedanceCreditModalRecharge');
+    if (creditRechargeBtn) creditRechargeBtn.addEventListener('click', openRechargeFromCreditWarning);
+    var creditModal = $('seedanceCreditModal');
+    if (creditModal) {
+      creditModal.addEventListener('click', function(event) {
+        if (event.target === creditModal) closeCreditWarning();
+      });
+    }
+
     $('seedanceTvcStudioBackBtn').addEventListener('click', function() {
       if (typeof window._ensureSkillStoreVisible === 'function') window._ensureSkillStoreVisible();
       try {
@@ -1537,11 +1803,23 @@
       } catch (err) {}
     });
 
-    $('seedanceInputModeSelect').addEventListener('change', function(event) {
-      setMode(event.target.value || 'image_auto');
-      state.activeBoardIndex = 0;
-      renderWorkspace();
-      showMessage('');
+    var modeSelect = $('seedanceInputModeSelect');
+    if (modeSelect) {
+      modeSelect.addEventListener('change', function(event) {
+        setMode(event.target.value || 'image_auto');
+        state.activeBoardIndex = 0;
+        renderWorkspace();
+        showMessage('');
+      });
+    }
+
+    document.querySelectorAll('[data-seedance-input-mode]').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        setMode(tab.getAttribute('data-seedance-input-mode') || 'image_auto');
+        state.activeBoardIndex = 0;
+        renderWorkspace();
+        showMessage('');
+      });
     });
 
     document.querySelectorAll('#seedanceDurationGrid .tvc-duration-chip').forEach(function(chip) {
@@ -1687,10 +1965,22 @@
       el.addEventListener(eventName, renderWorkspace);
     });
 
+    if ($('seedanceModelSelect')) {
+      $('seedanceModelSelect').addEventListener('change', function() {
+        var nextModel = $('seedanceModelSelect').value;
+        var oldSegments = getDurationSegmentCount(state.duration, lastSeedanceModel || nextModel);
+        updateDurationChipsForModel(nextModel);
+        setDuration(oldSegments * getCurrentSegmentSeconds(nextModel));
+        lastSeedanceModel = nextModel;
+        state.activeBoardIndex = 0;
+        renderWorkspace();
+      });
+    }
+
     $('seedancePreviewRefreshBtn').addEventListener('click', function() {
       state.activeBoardIndex = 0;
       renderWorkspace();
-      showMessage('已按 ' + state.duration + ' 秒生成 ' + Math.max(1, state.duration / 10) + ' 张分镜预览。');
+      showMessage('已按 ' + state.duration + ' 秒生成 ' + getDurationSegmentCount(state.duration) + ' 张分镜预览。');
     });
 
     $('seedanceStartBtn').addEventListener('click', function() {
@@ -1720,10 +2010,11 @@
         item.classList.toggle('active', item.getAttribute('data-seedance-category') === 'all');
       });
       setMode('image_auto');
-      setDuration(10);
       resetFormFields();
+      updateDurationChipsForModel(defaults.model);
+      setDuration(getCurrentSegmentSeconds(defaults.model));
       renderWorkspace();
-      showMessage('界面已重置，回到默认 10 秒分镜状态。');
+      showMessage('界面已重置，回到默认分镜状态。');
     });
   }
 
@@ -1736,7 +2027,8 @@
       bindEvents();
       resetFormFields();
       setMode(state.mode);
-      setDuration(state.duration);
+      updateDurationChipsForModel(defaults.model);
+      setDuration(getCurrentSegmentSeconds(defaults.model));
       loadRecentJobs();
       loadCloudJobHistory();
       var active = state.recentJobs.find(function(item) { return item && item.status === 'running' && item.jobId; });

@@ -50,10 +50,11 @@ class ComflySeedancePipelinePayload(BaseModel):
     reference_asset_ids: List[str] = Field(default_factory=list, description="额外参考图素材 ID 列表")
     reference_image_urls: List[str] = Field(default_factory=list, description="额外参考图公网 URL 列表")
     merge_clips: bool = Field(True, description="最终始终会合并所有视频段；该字段保留仅为兼容旧调用")
-    storyboard_count: Optional[int] = Field(None, ge=1, le=6, description="兼容旧字段；若传入，将按 storyboard_count * 10 秒推导总时长")
-    segment_count: Optional[int] = Field(None, ge=1, le=6, description="兼容旧字段；若传入，必须与 total_duration_seconds / 10 一致")
-    segment_duration_seconds: Optional[int] = Field(None, description="每段时长固定为 10 秒；该字段若传入必须是 10")
-    total_duration_seconds: Optional[int] = Field(None, description="总时长仅支持 10/20/30/40/50/60 秒，默认 20 秒")
+    storyboard_count: Optional[int] = Field(None, ge=1, le=6, description="兼容旧字段；若传入，将按当前模型单段时长推导总时长")
+    segment_count: Optional[int] = Field(None, ge=1, le=6, description="兼容旧字段；若传入，必须与 total_duration_seconds / 单段时长一致")
+    segment_duration_seconds: Optional[int] = Field(None, description="每段时长：Seedance 为 10 秒，云雾 Veo 为 8 秒")
+    total_duration_seconds: Optional[int] = Field(None, description="总时长按模型支持的单段时长计算，最多 6 段")
+    workflow_mode: str = Field("storyboard", description="storyboard=完整分镜流程；direct_video=上传图+提示词直接图生视频")
     auto_save: bool = Field(True, description="完成后自动入库")
     task_text: str = Field("", description="补充任务说明")
     platform: str = ""
@@ -65,6 +66,8 @@ class ComflySeedancePipelinePayload(BaseModel):
     image_model: Optional[str] = None
     image_model_fallback: Optional[str] = None
     video_model: Optional[str] = None
+    video_channel: Optional[str] = None
+    video_base_url: Optional[str] = None
     aspect_ratio: str = "9:16"
     generate_audio: bool = True
     watermark: bool = False
@@ -89,18 +92,24 @@ def _validate_payload(pl: ComflySeedancePipelinePayload) -> None:
     )
     if not has_reference and not (pl.task_text or "").strip():
         raise HTTPException(status_code=400, detail="请提供参考图或创意提示词")
-    if pl.segment_duration_seconds is not None and int(pl.segment_duration_seconds) != 10:
-        raise HTTPException(status_code=400, detail="segment_duration_seconds 目前固定为 10 秒")
+    channel_hint = (pl.video_channel or "").strip().lower()
+    model_hint = (pl.video_model or "").strip().lower().replace(" ", "")
+    uses_yunwu_veo = channel_hint in {"yunwu", "云雾", "雲霧"} or model_hint in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"}
+    segment_seconds = 8 if uses_yunwu_veo else 10
+    if pl.segment_duration_seconds is not None and int(pl.segment_duration_seconds) != segment_seconds:
+        raise HTTPException(status_code=400, detail=f"segment_duration_seconds 当前模型固定为 {segment_seconds} 秒")
 
     requested_count = pl.segment_count if pl.segment_count is not None else pl.storyboard_count
     requested_total = pl.total_duration_seconds
     if requested_total is None and requested_count is not None:
-        requested_total = int(requested_count) * 10
+        requested_total = int(requested_count) * segment_seconds
 
-    if requested_total is not None and int(requested_total) not in {10, 20, 30, 40, 50, 60}:
-        raise HTTPException(status_code=400, detail="total_duration_seconds 仅支持 10/20/30/40/50/60 秒")
-    if requested_count is not None and int(requested_count) * 10 != int(requested_total or 20):
-        raise HTTPException(status_code=400, detail="segment_count/storyboard_count 必须与 total_duration_seconds / 10 一致")
+    allowed_totals = {segment_seconds * i for i in range(1, 7)}
+    if requested_total is not None and int(requested_total) not in allowed_totals:
+        allowed_text = "/".join(str(x) for x in sorted(allowed_totals))
+        raise HTTPException(status_code=400, detail=f"total_duration_seconds 仅支持 {allowed_text} 秒")
+    if requested_count is not None and int(requested_count) * segment_seconds != int(requested_total or segment_seconds * 2):
+        raise HTTPException(status_code=400, detail=f"segment_count/storyboard_count 必须与 total_duration_seconds / {segment_seconds} 一致")
 
 
 async def _prepare_pipeline_input(
@@ -121,7 +130,31 @@ async def _prepare_pipeline_input(
         reference_image_urls=pl.reference_image_urls,
     )
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
-    _ = _api_base_for_pipeline(api_base)
+    pipe_base = _api_base_for_pipeline(api_base)
+    video_channel = (pl.video_channel or "").strip().lower()
+    video_base_url = (pl.video_base_url or "").strip()
+    video_model = (pl.video_model or "").strip()
+    if video_model.lower().replace(" ", "") in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"}:
+        video_channel = "yunwu"
+        video_model = "veo3.1"
+    if video_channel in {"yunwu", "云雾", "雲霧"}:
+        video_channel = "yunwu"
+        video_base_url = video_base_url or pipe_base
+        video_model = video_model or "veo3.1"
+    requested_count = pl.segment_count if pl.segment_count is not None else pl.storyboard_count
+    if requested_count is None and pl.total_duration_seconds is not None:
+        channel_hint = video_channel or (pl.video_channel or "").strip().lower()
+        model_hint = (video_model or pl.video_model or "").strip().lower().replace(" ", "")
+        uses_yunwu_veo = channel_hint in {"yunwu", "云雾", "雲霧"} or model_hint in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"}
+        requested_count = int(pl.total_duration_seconds) // (8 if uses_yunwu_veo else 10)
+    workflow_mode = (pl.workflow_mode or "storyboard").strip().lower().replace("-", "_") or "storyboard"
+    if (
+        workflow_mode == "storyboard"
+        and len(reference_images) == 1
+        and (pl.task_text or "").strip()
+        and int(requested_count or 1) == 1
+    ):
+        workflow_mode = "direct_video"
     return build_pipeline_input(
         reference_image=reference_images[0] if reference_images else "",
         reference_images=reference_images,
@@ -132,6 +165,7 @@ async def _prepare_pipeline_input(
         segment_count=pl.segment_count,
         segment_duration_seconds=pl.segment_duration_seconds,
         total_duration_seconds=pl.total_duration_seconds,
+        workflow_mode=workflow_mode,
         output_dir=effective_output_dir,
         platform=pl.platform,
         country=pl.country,
@@ -140,7 +174,9 @@ async def _prepare_pipeline_input(
         analysis_model=pl.analysis_model,
         image_model=pl.image_model,
         image_model_fallback=pl.image_model_fallback,
-        video_model=pl.video_model,
+        video_model=video_model or pl.video_model,
+        video_channel=video_channel,
+        video_base_url=video_base_url,
         aspect_ratio=pl.aspect_ratio,
         generate_audio=pl.generate_audio,
         watermark=pl.watermark,
@@ -274,6 +310,38 @@ def _video_model_from_result(result: Dict[str, Any]) -> str:
     return str(cfg.get("video_model") or "") if isinstance(cfg, dict) else ""
 
 
+def _pipeline_result_video_url(result: Dict[str, Any]) -> str:
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    return str(final_video.get("url") or final_video.get("path") or "").strip()
+
+
+def _pipeline_result_failure_error(result: Dict[str, Any]) -> str:
+    failed = result.get("failed_segments")
+    if not isinstance(failed, list) or not failed:
+        failed = result.get("failed_shots")
+    if isinstance(failed, list):
+        for item in reversed(failed):
+            if not isinstance(item, dict):
+                continue
+            err = str(item.get("error") or "").strip()
+            if err:
+                return err[:2000]
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    hint = str(final_video.get("hint") or "").strip()
+    if hint:
+        return hint[:2000]
+    return "视频生成失败，未产出可播放的视频。"
+
+
+def _pipeline_result_should_fail(result: Dict[str, Any]) -> bool:
+    if _pipeline_result_video_url(result):
+        return False
+    failed = result.get("failed_segments")
+    if not isinstance(failed, list):
+        failed = result.get("failed_shots")
+    return bool(failed)
+
+
 def _seedance_task_text(inp: Dict[str, Any]) -> str:
     task = inp.get("task") if isinstance(inp.get("task"), dict) else {}
     return str(task.get("text") or inp.get("task_text") or "").strip()
@@ -319,6 +387,26 @@ async def _seedance_job_runner(job_id: str) -> None:
             prompt=task_text,
             request_payload=request_payload,
             error=error,
+        )
+        return
+
+    if _pipeline_result_should_fail(result):
+        error = _pipeline_result_failure_error(result)
+        update_job(job_id, status="failed", error=error, result=result, saved_assets=[])
+        await sync_creative_job_to_cloud(
+            auth_header=auth_header,
+            installation_id=installation_id,
+            job_id=job_id,
+            feature_type="seedance_tvc",
+            provider="comfly_seedance",
+            status="failed",
+            stage="failed",
+            title="创意视频任务",
+            prompt=task_text,
+            request_payload=request_payload,
+            result_payload=result,
+            error=error,
+            meta={"auto_save": auto_save},
         )
         return
 

@@ -695,7 +695,7 @@
     }
   },
   "comfly.seedance.tvc.pipeline": {
-  "description": "一体化 Seedance TVC 成片流水线：基于一个或多个产品参考图，按 10 秒一段规划同一条广告片的连续分镜板，先统一生成全部分镜图，再统一提交全部 10 秒视频任务，最后自动合成为 1 条完整视频。总时长仅支持 10/20/30/40/50/60 秒。action 可选 run_pipeline（同步）、start_pipeline（异步）、poll_pipeline（轮询）。",
+    "description": "一体化创意分镜视频成片流水线：基于提示词和参考图生成广告视频。支持 Veo3.1 Plus 云雾通道（video_channel=yunwu，video_model=veo3.1，按 8 秒分段，支持 8/16/24/32/40/48 秒）和 Seedance 2.0 通道（按 10 秒分段，支持 10/20/30/40/50/60 秒）。action 可选 run_pipeline（同步）、start_pipeline（异步）、poll_pipeline（轮询）。上传 1 张参考图并给出提示词时，可使用 workflow_mode=direct_video 直接图生视频，避免额外生成分镜图。",
     "upstream": "local",
     "upstream_tool": "invoke",
     "enabled": true,
@@ -737,34 +737,39 @@
           },
           "description": "额外参考图公网 URL 列表，可与主图共同决定产品一致性、场景、包装和质感"
         },
-      "merge_clips": {
-        "type": "boolean",
-        "description": "保留兼容字段；该流水线最终始终会合并所有分段视频"
-      },
-      "storyboard_count": {
-        "type": "integer",
-        "description": "兼容旧参数；若传入将按 storyboard_count * 10 秒推导总时长"
-      },
-      "segment_count": {
-        "type": "integer",
-        "description": "兼容旧参数；若传入必须与 total_duration_seconds / 10 一致"
-      },
-      "segment_duration_seconds": {
-        "type": "integer",
-        "description": "固定为 10 秒；若传入必须是 10"
-      },
-      "total_duration_seconds": {
-        "type": "integer",
-        "enum": [
-          10,
-          20,
-          30,
-          40,
-          50,
-          60
-        ],
-        "description": "总时长，仅支持 10/20/30/40/50/60 秒"
-      },
+        "merge_clips": {
+          "type": "boolean",
+          "description": "保留兼容字段；该流水线最终始终会合并所有分段视频"
+        },
+        "storyboard_count": {
+          "type": "integer",
+          "description": "兼容旧参数；若传入将按当前模型分段时长推导总时长"
+        },
+        "segment_count": {
+          "type": "integer",
+          "description": "分镜数量；Veo3.1 Plus 每段 8 秒，Seedance 每段 10 秒"
+        },
+        "segment_duration_seconds": {
+          "type": "integer",
+          "description": "分段时长；Veo3.1 Plus 为 8 秒，Seedance 为 10 秒"
+        },
+        "total_duration_seconds": {
+          "type": "integer",
+          "enum": [
+            8,
+            10,
+            16,
+            20,
+            24,
+            30,
+            32,
+            40,
+            48,
+            50,
+            60
+          ],
+          "description": "总时长；Veo3.1 Plus 支持 8/16/24/32/40/48 秒，Seedance 支持 10/20/30/40/50/60 秒"
+        },
         "auto_save": {
           "type": "boolean",
           "description": "完成后是否将视频素材入库，默认 true"
@@ -785,17 +790,17 @@
           "type": "string",
           "description": "目标语言"
         },
-      "analysis_model": {
-        "type": "string",
-        "description": "分析参考图并生成整条广告连续分镜结构所用模型，默认 gpt-4.1-mini"
-      },
-      "image_model": {
-        "type": "string",
-        "description": "分镜设计图生成模型，默认 gpt-image-2"
-      },
+        "analysis_model": {
+          "type": "string",
+          "description": "分析参考图并生成整条广告连续分镜结构所用模型，默认 gpt-4.1-mini"
+        },
+        "image_model": {
+          "type": "string",
+          "description": "分镜设计图生成模型，默认 gpt-image-2"
+        },
         "video_model": {
           "type": "string",
-          "description": "Seedance 视频模型；测试阶段默认 doubao-seedance-2-0-fast-260128"
+          "description": "视频模型；Veo3.1 Plus 使用 veo3.1，Seedance 可用 doubao-seedance-2-0-260128 或 doubao-seedance-2-0-fast-260128"
         },
         "output_dir": {
           "type": "string",
@@ -804,6 +809,14 @@
         "isolate_job_dir": {
           "type": "boolean",
           "description": "异步任务是否隔离到独立 job 目录，默认 true"
+        },
+        "video_channel": {
+          "type": "string",
+          "description": "视频通道；Veo3.1 Plus 使用 yunwu，Seedance 默认使用 seedance"
+        },
+        "video_base_url": {
+          "type": "string",
+          "description": "可选的视频接口 Base URL；不传则使用服务端默认配置"
         }
       }
     }
@@ -901,12 +914,21 @@
       "properties": {
         "action": {
           "type": "string",
-          "enum": ["open_product_form", "list_shop_accounts"],
+          "enum": [
+            "open_product_form",
+            "list_shop_accounts"
+          ],
           "description": "操作类型。open_product_form 打开商品创建页并自动填充；list_shop_accounts 列出已登录的店铺账号。"
         },
         "platform": {
           "type": "string",
-          "enum": ["douyin_shop", "xiaohongshu_shop", "alibaba1688", "taobao", "pinduoduo"],
+          "enum": [
+            "douyin_shop",
+            "xiaohongshu_shop",
+            "alibaba1688",
+            "taobao",
+            "pinduoduo"
+          ],
           "description": "电商平台 ID"
         },
         "account_nickname": {
@@ -919,12 +941,16 @@
         },
         "main_image_asset_ids": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "主图素材 ID 列表（来自素材库的 asset_id），自动上传到主图区域"
         },
         "detail_image_asset_ids": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "description": "详情图素材 ID 列表，自动上传到详情图区域"
         },
         "price": {

@@ -7,7 +7,7 @@
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
   <link rel="stylesheet" href="/static/css/common.css?v=20260522-hero-vision-indent">
-  <link rel="stylesheet" href="/static/css/index.css?v=20260604-skill-image-card-task-toast">
+  <link rel="stylesheet" href="/static/css/index.css?v=20260604-skill-card-seedance-tabs">
 </head>
 <body>
   <div class="page">
@@ -966,8 +966,8 @@
               <div class="tvc-studio-hero">
                 <div>
                   <h3>创意分镜头视频工作台</h3>
-                  <p>上传参考图或直接写提示词，按每 10 秒一镜生成统一分镜，并在右侧展示最终合成视频。</p>
-                  <div class="tvc-hero-meta">支持单图 / 多图参考、纯提示词规划、10 秒一镜、最终合成一条视频。</div>
+                  <p>上传参考图或直接写提示词，按所选模型自动生成统一分镜，并在右侧展示最终合成视频。</p>
+                  <div class="tvc-hero-meta">支持单图 / 多图参考、纯提示词规划、自动分镜、最终合成一条视频。</div>
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
                   <button type="button" id="seedanceTvcStudioBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
@@ -982,11 +982,25 @@
 
                     <div class="tvc-field">
                       <label for="seedanceInputModeSelect">输入方式</label>
-                      <select id="seedanceInputModeSelect">
+                      <select id="seedanceInputModeSelect" class="seedance-input-mode-select" aria-hidden="true" tabindex="-1">
                         <option value="image_auto" selected>上传图片，AI 自动分析分镜</option>
                         <option value="image_prompt">上传图片 + 提示词共创</option>
                         <option value="prompt_only">只写提示词，不上传素材</option>
                       </select>
+                      <div class="seedance-input-mode-tabs" role="radiogroup" aria-label="输入方式">
+                        <button type="button" class="seedance-input-mode-tab is-active" role="radio" aria-checked="true" data-seedance-input-mode="image_auto">
+                          <span>上传图片</span>
+                          <small>AI 自动分析分镜</small>
+                        </button>
+                        <button type="button" class="seedance-input-mode-tab" role="radio" aria-checked="false" data-seedance-input-mode="image_prompt">
+                          <span>图片 + 提示词</span>
+                          <small>图文共同控制</small>
+                        </button>
+                        <button type="button" class="seedance-input-mode-tab" role="radio" aria-checked="false" data-seedance-input-mode="prompt_only">
+                          <span>只写提示词</span>
+                          <small>不上传素材</small>
+                        </button>
+                      </div>
                     </div>
 
                     <div id="seedanceImageField" class="tvc-field">
@@ -1010,7 +1024,7 @@
                     </div>
 
                     <div class="tvc-helper-note" id="seedanceInputModeHint">
-                      当前模式会优先使用参考图来统一主体与画面风格，再按 10 秒一个分镜进行编排。
+                      当前模式会优先使用参考图来统一主体与画面风格，再按所选模型时长进行分镜编排。
                     </div>
                     <div id="seedanceStudioMsg" class="msg" style="display:none;margin-top:0.8rem;"></div>
                   </div>
@@ -1070,7 +1084,8 @@
                       <div class="tvc-field">
                         <label for="seedanceModelSelect">生成模型</label>
                         <select id="seedanceModelSelect">
-                          <option value="doubao-seedance-2-0-260128" selected>Seedance 2.0 Pro</option>
+                          <option value="yunwu-veo3.1-plus" selected>Veo3.1 Plus（更快，8秒一镜）</option>
+                          <option value="doubao-seedance-2-0-260128">Seedance 2.0 Pro</option>
                           <option value="doubao-seedance-2-0-fast-260128">Seedance 2.0 Fast</option>
                         </select>
                       </div>
@@ -1120,7 +1135,7 @@
                     <div class="tvc-toolbar" style="margin:0.95rem 0 0.78rem;">
                       <div>
                         <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">分镜预览</h4>
-                        <p id="seedanceBoardsHint" class="tvc-panel-hint" style="margin:0;">这里按每 10 秒生成一张分镜草案，用来检查画面是否前后连贯。</p>
+                        <p id="seedanceBoardsHint" class="tvc-panel-hint" style="margin:0;">这里按所选模型时长生成分镜草案，用来检查画面是否前后连贯。</p>
                       </div>
                       <span id="seedanceBoardsCounter" class="tvc-summary-pill">2 张分镜</span>
                     </div>
@@ -1690,6 +1705,22 @@
       <div class="btns credit-limit-actions">
         <button type="button" class="btn btn-ghost" id="creditLimitDisable">不限制</button>
         <button type="button" class="btn btn-primary" id="creditLimitSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="seedanceCreditModal" class="modal-mask">
+    <div class="modal seedance-credit-modal" role="dialog" aria-modal="true" aria-labelledby="seedanceCreditModalTitle">
+      <div class="seedance-credit-modal-head">
+        <div>
+          <h4 id="seedanceCreditModalTitle">算力不足</h4>
+          <p id="seedanceCreditModalBody">当前算力不足，请充值后再提交。</p>
+        </div>
+        <button type="button" id="seedanceCreditModalClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
+      </div>
+      <div class="btns seedance-credit-modal-actions">
+        <button type="button" class="btn btn-ghost" id="seedanceCreditModalCancel">关闭</button>
+        <button type="button" class="btn btn-primary" id="seedanceCreditModalRecharge">去充值</button>
       </div>
     </div>
   </div>
@@ -2288,7 +2319,7 @@
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260603-task-toast"></script>
   <script src="/static/js/comfly-image-studio.js?v=20260603-task-toast"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260603-task-toast"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260604-seedance-mode-tabs"></script>
   <script src="/static/js/viral-video-remix.js?v=20260513-taskgroup-error-balance-guard"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>

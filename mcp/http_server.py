@@ -285,6 +285,7 @@ def _normalize_invoke_seedance_tvc_pipeline_args(args: Dict[str, Any]) -> Dict[s
         "segment_count",
         "segment_duration_seconds",
         "total_duration_seconds",
+        "workflow_mode",
         "auto_save",
         "task_text",
         "platform",
@@ -295,6 +296,8 @@ def _normalize_invoke_seedance_tvc_pipeline_args(args: Dict[str, Any]) -> Dict[s
         "analysis_model",
         "image_model",
         "video_model",
+        "video_channel",
+        "video_base_url",
     ):
         if k in args and args[k] is not None:
             pl.setdefault(k, args[k])

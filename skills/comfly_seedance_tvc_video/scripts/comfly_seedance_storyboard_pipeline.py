@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TypedDict
+from urllib.parse import urlencode
 
 import requests
 
@@ -39,6 +40,12 @@ class Input(TypedDict, total=False):
     image_model: str
     image_model_fallback: str
     video_model: str
+    video_channel: str
+    video_base_url: str
+    video_fallback_model: str
+    video_fallback_channel: str
+    video_fallback_base_url: str
+    workflow_mode: str
     aspect_ratio: str
     storyboard_count: int
     segment_count: int
@@ -74,6 +81,12 @@ class PipelineConfig:
     image_model: str = "gpt-image-2"
     image_model_fallback: str = "nano-banana-2"
     video_model: str = "doubao-seedance-2-0-fast-260128"
+    video_channel: str = "seedance"
+    video_base_url: str = ""
+    video_fallback_model: str = "veo3.1-fast"
+    video_fallback_channel: str = "comfly"
+    video_fallback_base_url: str = ""
+    workflow_mode: str = "storyboard"
     aspect_ratio: str = "9:16"
     segment_count: int = 2
     segment_duration_seconds: int = 10
@@ -97,7 +110,9 @@ class PipelineConfig:
 
 
 ALLOWED_TOTAL_DURATIONS = (10, 20, 30, 40, 50, 60)
+ALLOWED_YUNWU_TOTAL_DURATIONS = (8, 16, 24, 32, 40, 48)
 FIXED_SEGMENT_DURATION_SECONDS = 10
+YUNWU_SEGMENT_DURATION_SECONDS = 8
 _SEEDANCE_MODEL_ALIASES = {
     "seedance-2-0-pro-250528": "doubao-seedance-2-0-260128",
     "seedance-2-0-lite-250428": "doubao-seedance-2-0-fast-260128",
@@ -132,6 +147,12 @@ class RunLogger:
                 "image_model": config.image_model,
                 "image_model_fallback": config.image_model_fallback,
                 "video_model": config.video_model,
+                "video_channel": config.video_channel,
+                "video_base_url": config.video_base_url,
+                "video_fallback_model": config.video_fallback_model,
+                "video_fallback_channel": config.video_fallback_channel,
+                "video_fallback_base_url": config.video_fallback_base_url,
+                "workflow_mode": config.workflow_mode,
                 "aspect_ratio": config.aspect_ratio,
                 "segment_count": config.segment_count,
                 "segment_duration_seconds": config.segment_duration_seconds,
@@ -216,6 +237,51 @@ def _normalize_aspect_ratio(raw: str, default: str = "9:16") -> str:
 def _normalize_seedance_model(raw: str) -> str:
     model = (raw or "").strip()
     return _SEEDANCE_MODEL_ALIASES.get(model, model)
+
+
+def _normalize_video_channel(raw: str) -> str:
+    s = (raw or "").strip().lower()
+    if s in {"yunwu", "yw", "cloudmist", "cloud-mist", "云雾", "雲霧"}:
+        return "yunwu"
+    if s in {"comfly", "veo", "veo3", "veo3.1", "veo31"}:
+        return "comfly"
+    return "seedance"
+
+
+def _normalize_api_base_url(raw: str, default: str) -> str:
+    base = (raw or default or "").strip().rstrip("/")
+    if base.lower().endswith("/v1") or base.lower().endswith("/v2"):
+        base = base[:-3].rstrip("/")
+    return base
+
+
+def _normalize_video_base_url_for_channel(channel: str, raw: str, default: str) -> str:
+    return _normalize_api_base_url(raw, default)
+
+
+def _default_video_base_url(channel: str, api_base: str) -> str:
+    return api_base
+
+
+def _default_video_model(channel: str) -> str:
+    normalized = _normalize_video_channel(channel)
+    if normalized == "yunwu":
+        return "veo3.1"
+    if normalized == "comfly":
+        return "veo3.1-fast"
+    return "doubao-seedance-2-0-fast-260128"
+
+
+def _video_provider_label(channel: str, model: str) -> str:
+    return f"{_normalize_video_channel(channel)}:{(model or '').strip()}"
+
+
+def _segment_seconds_for_channel(channel: str) -> int:
+    return YUNWU_SEGMENT_DURATION_SECONDS if _normalize_video_channel(channel) == "yunwu" else FIXED_SEGMENT_DURATION_SECONDS
+
+
+def _allowed_total_durations_for_channel(channel: str) -> tuple[int, ...]:
+    return ALLOWED_YUNWU_TOTAL_DURATIONS if _normalize_video_channel(channel) == "yunwu" else ALLOWED_TOTAL_DURATIONS
 
 
 def _normalize_seedance_duration(raw: int) -> int:
@@ -402,7 +468,7 @@ def _analysis_prompt(config: PipelineConfig) -> str:
         "The user may upload one or more reference images, or may provide only a text task brief. If reference images are present, the first image can be a storyboard board example, and other images may be product references, packaging references, scene references, or style references. If no reference image is present, infer the product, scene, and style from the text task brief.\n"
         "Your task is to plan one coherent commercial film with a single visual identity, a single campaign arc, and smooth transitions between segments.\n"
         f"The final film must be exactly {config.total_duration_seconds} seconds, split into exactly {config.segment_count} storyboard boards.\n"
-        f"Each storyboard board must represent exactly {FIXED_SEGMENT_DURATION_SECONDS} seconds of the same film.\n"
+        f"Each storyboard board must represent exactly {config.segment_duration_seconds} seconds of the same film.\n"
         "Return strict JSON with top-level keys: product_summary, global_style, campaign_context, storyboard_boards.\n"
         "product_summary must contain: brand_name, product_name, product_form, consistency_rules.\n"
         "global_style must contain: palette_cn, tone_cn, keywords_en.\n"
@@ -412,9 +478,9 @@ def _analysis_prompt(config: PipelineConfig) -> str:
         "Each item must contain these keys:\n"
         "index, time_range_cn, duration_seconds, board_title_cn, board_goal_cn, narrative_stage_cn, continuity_anchor_cn, transition_in_cn, transition_out_cn, subshots_cn, voiceover_cn, board_copy_cn, visual_focus_cn, composition_notes_cn, storyboard_image_prompt_en, seedance_prompt_en.\n"
         "Rules:\n"
-        f"1. This is not per-shot output. Each item is one complete {FIXED_SEGMENT_DURATION_SECONDS}-second storyboard board image for one segment of the same final film.\n"
-        f"2. Every board must have duration_seconds={FIXED_SEGMENT_DURATION_SECONDS}, and the boards together must cover {config.total_duration_seconds} seconds continuously with no overlap and no gaps.\n"
-        f"3. Each board must internally describe 3-5 micro-shots or scenes inside the same {FIXED_SEGMENT_DURATION_SECONDS}-second segment.\n"
+        f"1. This is not per-shot output. Each item is one complete {config.segment_duration_seconds}-second storyboard board image for one segment of the same final film.\n"
+        f"2. Every board must have duration_seconds={config.segment_duration_seconds}, and the boards together must cover {config.total_duration_seconds} seconds continuously with no overlap and no gaps.\n"
+        f"3. Each board must internally describe 3-5 micro-shots or scenes inside the same {config.segment_duration_seconds}-second segment.\n"
         "4. The full set of boards must feel like one integrated commercial, not disconnected mini videos. The story should progress naturally from opening, to product proof, to payoff, to brand close.\n"
         "5. continuity_anchor_cn must describe what must visually stay continuous from the previous segment into this one.\n"
         "6. transition_in_cn and transition_out_cn must describe how the current segment connects to its neighbors in camera motion, lighting, props, subject behavior, or composition rhythm.\n"
@@ -456,15 +522,15 @@ def _coerce_plan(plan: Dict[str, Any], config: PipelineConfig) -> None:
             continue
         one = dict(item)
         one["index"] = i
-        one["duration_seconds"] = FIXED_SEGMENT_DURATION_SECONDS
-        one["time_range_cn"] = f"{start_second}-{start_second + FIXED_SEGMENT_DURATION_SECONDS}秒"
+        one["duration_seconds"] = config.segment_duration_seconds
+        one["time_range_cn"] = f"{start_second}-{start_second + config.segment_duration_seconds}秒"
         one["narrative_stage_cn"] = _first_text(one, "narrative_stage_cn") or (
             "开场引入" if i == 1 else ("品牌收束" if i == config.segment_count else "中段推进")
         )
         one["continuity_anchor_cn"] = _first_text(one, "continuity_anchor_cn", "must_keep_cn")
         one["transition_in_cn"] = _first_text(one, "transition_in_cn") or ("从上一段自然承接同一品牌氛围与主体动作" if i > 1 else "从品牌主视觉开场")
         one["transition_out_cn"] = _first_text(one, "transition_out_cn") or ("自然引出下一段的主体动作与卖点" if i < config.segment_count else "收束到品牌结尾与购买记忆点")
-        start_second += FIXED_SEGMENT_DURATION_SECONDS
+        start_second += config.segment_duration_seconds
         cleaned.append(one)
     plan["storyboard_boards"] = cleaned
 
@@ -598,7 +664,19 @@ class ComflySeedanceClient:
     def __init__(self, config: PipelineConfig, logger_obj: RunLogger) -> None:
         self.config = config
         self.logger = logger_obj
-        self.base_url = config.base_url.rstrip("/")
+        self.base_url = _normalize_api_base_url(config.base_url, "https://ai.comfly.org")
+        self.video_channel = _normalize_video_channel(config.video_channel)
+        self.video_base_url = _normalize_video_base_url_for_channel(
+            self.video_channel,
+            config.video_base_url,
+            _default_video_base_url(self.video_channel, self.base_url),
+        )
+        self.video_fallback_channel = _normalize_video_channel(config.video_fallback_channel)
+        self.video_fallback_base_url = _normalize_video_base_url_for_channel(
+            self.video_fallback_channel,
+            config.video_fallback_base_url,
+            _default_video_base_url(self.video_fallback_channel, self.base_url),
+        )
         self.session = requests.Session()
         self.session.headers.update({"Authorization": f"Bearer {config.api_key.strip()}", "Accept": "application/json"})
 
@@ -725,7 +803,72 @@ class ComflySeedanceClient:
         reference_urls: List[str],
         duration_seconds: int,
         action: str,
+        *,
+        channel: str = "",
+        model: str = "",
+        base_url: str = "",
     ) -> tuple[Dict[str, Any], int]:
+        video_channel = _normalize_video_channel(channel or self.video_channel)
+        video_model = (model or self.config.video_model or _default_video_model(video_channel)).strip() or _default_video_model(video_channel)
+        video_base_url = _normalize_video_base_url_for_channel(video_channel, base_url or "", _default_video_base_url(video_channel, self.base_url))
+        if video_channel == "yunwu":
+            images = [segment_reference_url] if segment_reference_url else []
+            body = {
+                "enable_upsample": True,
+                "enhance_prompt": False,
+                "images": images,
+                "model": video_model,
+                "prompt": prompt,
+                "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+            }
+
+            def call_yunwu() -> Dict[str, Any]:
+                vid_url = f"{video_base_url}/v1/video/create"
+                self._trace_request("yunwu_video_submit", vid_url, body)
+                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                payload = self._check(r)
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                task_id = str(payload.get("id") or payload.get("task_id") or data.get("id") or data.get("task_id") or "").strip()
+                if not task_id:
+                    raise PipelineError(f"Yunwu submit returned no task id: {payload}")
+                payload["_request"] = body
+                payload["task_id"] = task_id
+                payload["video_channel"] = "yunwu"
+                payload["video_base_url"] = video_base_url
+                payload["video_model"] = video_model
+                return payload
+
+            return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call_yunwu)
+
+        if video_channel == "comfly":
+            images = [segment_reference_url] if segment_reference_url else []
+            body = {
+                "prompt": prompt,
+                "model": video_model,
+                "images": images,
+                "watermark": bool(self.config.watermark),
+                "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+            }
+
+            def call_comfly_veo() -> Dict[str, Any]:
+                vid_url = f"{video_base_url}/v2/videos/generations"
+                self._trace_request("comfly_video_submit", vid_url, body)
+                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                payload = self._check(r)
+                task_id = str(payload.get("id") or payload.get("task_id") or payload.get("video_id") or "").strip()
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                task_id = task_id or str(data.get("id") or data.get("task_id") or "").strip()
+                if not task_id:
+                    raise PipelineError(f"Comfly Veo submit returned no task id: {payload}")
+                payload["_request"] = body
+                payload["task_id"] = task_id
+                payload["video_channel"] = "comfly"
+                payload["video_base_url"] = video_base_url
+                payload["video_model"] = video_model
+                return payload
+
+            return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call_comfly_veo)
+
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         if segment_reference_url:
             content.append({"type": "image_url", "image_url": {"url": segment_reference_url}, "role": "reference_image"})
@@ -733,7 +876,7 @@ class ComflySeedanceClient:
             if ref_url and ref_url != segment_reference_url:
                 content.append({"type": "image_url", "image_url": {"url": ref_url}, "role": "reference_image"})
         body: Dict[str, Any] = {
-            "model": _normalize_seedance_model(self.config.video_model),
+            "model": _normalize_seedance_model(video_model),
             "content": content,
             "ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
             "duration": _normalize_seedance_duration(duration_seconds),
@@ -756,26 +899,53 @@ class ComflySeedanceClient:
 
         return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
-    def poll_seedance_video(self, task_id: str) -> Dict[str, Any]:
+    def poll_seedance_video(self, task_id: str, *, channel: str = "", base_url: str = "") -> Dict[str, Any]:
+        video_channel = _normalize_video_channel(channel or self.video_channel)
+        video_base_url = _normalize_video_base_url_for_channel(video_channel, base_url or "", _default_video_base_url(video_channel, self.base_url))
         history: List[Dict[str, Any]] = []
         for attempt in range(1, self.config.max_polls + 1):
             def call() -> Dict[str, Any]:
-                poll_url = f"{self.base_url}/seedance/v3/contents/generations/tasks/{task_id}"
-                self._trace_request("seedance_poll", poll_url, None)
+                if video_channel == "yunwu":
+                    poll_url = f"{video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
+                    phase = "yunwu_video_poll"
+                elif video_channel == "comfly":
+                    poll_url = f"{video_base_url}/v2/videos/generations/{task_id}"
+                    phase = "comfly_video_poll"
+                else:
+                    poll_url = f"{self.base_url}/seedance/v3/contents/generations/tasks/{task_id}"
+                    phase = "seedance_poll"
+                self._trace_request(phase, poll_url, None)
                 r = self.session.get(poll_url, timeout=60)
                 return self._check(r)
 
             payload, request_attempts = _retry(f"poll_{task_id}", 3, self.config.network_retry_delay_seconds, self.logger, call)
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
             result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-            status = str(payload.get("status") or data.get("status") or result.get("status") or "").strip().lower()
+            status = str(
+                payload.get("status")
+                or payload.get("state")
+                or payload.get("task_status")
+                or data.get("status")
+                or data.get("state")
+                or data.get("task_status")
+                or result.get("status")
+                or ""
+            ).strip().lower()
             content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
             video_url = str(
                 (content.get("video_url") if isinstance(content, dict) else "")
                 or data.get("video_url")
                 or data.get("output")
+                or data.get("url")
+                or data.get("mp4url")
+                or data.get("mp4_url")
                 or result.get("video_url")
                 or result.get("output")
+                or result.get("url")
+                or payload.get("video_url")
+                or payload.get("output")
+                or payload.get("url")
+                or payload.get("mp4url")
                 or ""
             ).strip()
             outputs = data.get("outputs") if isinstance(data, dict) else None
@@ -789,7 +959,7 @@ class ComflySeedanceClient:
                         if video_url:
                             break
             history.append({"attempt": attempt, "request_attempts": request_attempts, "status": status, "video_url": video_url})
-            if status in {"succeeded", "success", "completed", "done"} and video_url:
+            if status in {"succeeded", "success", "completed", "complete", "done"} and video_url:
                 return {"task_id": task_id, "status": status, "mp4url": video_url, "raw": payload, "history": history}
             if status in {"failed", "failure", "error", "cancelled", "canceled", "expired"}:
                 err = payload.get("error") if isinstance(payload.get("error"), dict) else {}
@@ -806,7 +976,7 @@ def _build_segment_plan(
     campaign_context: Dict[str, Any],
 ) -> Dict[str, Any]:
     index = int(board.get("index", 0))
-    duration_seconds = FIXED_SEGMENT_DURATION_SECONDS
+    duration_seconds = config.segment_duration_seconds
     board_image_prompt = _compose_board_image_prompt(
         board,
         product_summary,
@@ -877,18 +1047,76 @@ def _submit_segment_video(
 ) -> Dict[str, Any]:
     index = int(segment_plan["index"])
     segment_reference_result = segment_plan["segment_reference_result"]
-    submit_result, submit_attempts = client.submit_seedance_video(
-        segment_plan["video_prompt"],
-        segment_reference_result["url"],
-        reference_image_urls,
-        int(segment_plan["duration_seconds"]),
-        f"segment_{index:02d}_submit",
-    )
-    logger_obj.segment(index, "submit", "success", attempts=submit_attempts, payload=submit_result)
-    out = dict(segment_plan)
-    out["submit_result"] = submit_result
-    out["video_task_id"] = str(submit_result.get("id") or submit_result.get("task_id") or "").strip()
-    return out
+    providers = [
+        {
+            "role": "primary",
+            "channel": client.video_channel,
+            "base_url": client.video_base_url,
+            "model": (client.config.video_model or "").strip() or _default_video_model(client.video_channel),
+        }
+    ]
+    fallback_channel = _normalize_video_channel(client.config.video_fallback_channel)
+    fallback_model = (client.config.video_fallback_model or "").strip() or _default_video_model(fallback_channel)
+    if _video_provider_label(fallback_channel, fallback_model) != _video_provider_label(providers[0]["channel"], providers[0]["model"]):
+        providers.append(
+            {
+                "role": "fallback",
+                "channel": fallback_channel,
+                "base_url": client.video_fallback_base_url,
+                "model": fallback_model,
+            }
+        )
+
+    last_error = ""
+    for provider_index, provider in enumerate(providers, start=1):
+        provider_role = provider["role"]
+        provider_channel = _normalize_video_channel(provider["channel"])
+        provider_model = provider["model"]
+        provider_base_url = provider["base_url"]
+        if provider_role == "fallback":
+            logger_obj.segment(
+                index,
+                "video_fallback",
+                "running",
+                payload={
+                    "from_channel": providers[0]["channel"],
+                    "from_model": providers[0]["model"],
+                    "to_channel": provider_channel,
+                    "to_model": provider_model,
+                    "previous_error": last_error,
+                },
+            )
+        try:
+            submit_result, submit_attempts = client.submit_seedance_video(
+                segment_plan["video_prompt"],
+                segment_reference_result["url"],
+                reference_image_urls,
+                int(segment_plan["duration_seconds"]),
+                f"segment_{index:02d}_submit_{provider_role}",
+                channel=provider_channel,
+                model=provider_model,
+                base_url=provider_base_url,
+            )
+            logger_obj.segment(index, f"submit_{provider_role}", "success", attempts=submit_attempts, payload=submit_result)
+            out = dict(segment_plan)
+            out["submit_result"] = submit_result
+            out["video_task_id"] = str(submit_result.get("id") or submit_result.get("task_id") or "").strip()
+            out["video_channel"] = provider_channel
+            out["video_base_url"] = provider_base_url
+            out["video_model"] = provider_model
+            out["video_provider_role"] = provider_role
+            out["video_provider_attempt"] = provider_index
+            return out
+        except Exception as exc:
+            last_error = str(exc)
+            logger_obj.segment(
+                index,
+                f"submit_{provider_role}",
+                "failed",
+                error=last_error,
+                payload={"video_channel": provider_channel, "video_model": provider_model, "provider_role": provider_role},
+            )
+    raise PipelineError(f"segment {index:02d} video submit failed: {last_error}")
 
 
 def _poll_segment_video(
@@ -897,10 +1125,14 @@ def _poll_segment_video(
     segment_plan: Dict[str, Any],
 ) -> Dict[str, Any]:
     index = int(segment_plan["index"])
-    poll_result = client.poll_seedance_video(segment_plan["video_task_id"])
+    poll_result = client.poll_seedance_video(
+        segment_plan["video_task_id"],
+        channel=str(segment_plan.get("video_channel") or ""),
+        base_url=str(segment_plan.get("video_base_url") or ""),
+    )
     logger_obj.segment(index, "poll", "success", attempts=len(poll_result.get("history", [])), payload=poll_result)
     board = segment_plan["board"]
-    board_image_result = segment_plan["board_image_result"]
+    board_image_result = segment_plan.get("board_image_result") or {}
     segment_reference_result = segment_plan["segment_reference_result"]
     return {
         "index": index,
@@ -922,7 +1154,7 @@ def _poll_segment_video(
         "segment_reference_prompt_en": segment_plan["segment_reference_prompt"],
         "first_frame_prompt_en": segment_plan["segment_reference_prompt"],
         "submitted_video_prompt_en": segment_plan["video_prompt"],
-        "storyboard_board_image_url": board_image_result["url"],
+        "storyboard_board_image_url": board_image_result.get("url") or segment_reference_result["url"],
         "storyboard_image_revised_prompt": board_image_result.get("revised_prompt"),
         "segment_reference_image_url": segment_reference_result["url"],
         "segment_reference_revised_prompt": segment_reference_result.get("revised_prompt"),
@@ -933,7 +1165,120 @@ def _poll_segment_video(
         "video_status": poll_result["status"],
         "mp4url": poll_result["mp4url"],
         "video_raw": poll_result["raw"],
+        "video_channel": segment_plan.get("video_channel") or client.video_channel,
+        "video_model": segment_plan.get("video_model") or client.config.video_model,
+        "video_provider_role": segment_plan.get("video_provider_role") or "primary",
+        "workflow_mode": segment_plan.get("workflow_mode") or client.config.workflow_mode,
     }
+
+
+def _direct_video_prompt(config: PipelineConfig) -> str:
+    prompt = (config.task_text or "").strip()
+    if prompt:
+        return prompt
+    return "基于上传参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
+
+
+def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str]) -> Dict[str, Any]:
+    if not reference_image_urls:
+        raise PipelineError("direct_video requires at least one reference image")
+    video_prompt = _direct_video_prompt(config)
+    board = {
+        "index": 1,
+        "time_range_cn": f"0-{config.segment_duration_seconds}秒",
+        "board_title_cn": "直接图生视频",
+        "board_goal_cn": "使用用户上传图片和提示词直接生成视频",
+        "narrative_stage_cn": "direct_video",
+        "visual_focus_cn": "用户上传参考图",
+        "seedance_prompt_en": video_prompt,
+        "storyboard_image_prompt_en": "",
+    }
+    return {
+        "index": 1,
+        "board": board,
+        "duration_seconds": config.segment_duration_seconds,
+        "board_image_prompt": "",
+        "segment_reference_prompt": video_prompt,
+        "video_prompt": video_prompt,
+        "segment_reference_result": {
+            "url": reference_image_urls[0],
+            "source": "uploaded_reference_image",
+        },
+        "board_image_result": {
+            "url": reference_image_urls[0],
+            "source": "uploaded_reference_image",
+        },
+        "workflow_mode": "direct_video",
+    }
+
+
+def _should_use_direct_video(config: PipelineConfig, reference_image_urls: List[str]) -> bool:
+    mode = (config.workflow_mode or "").strip().lower().replace("-", "_")
+    if mode not in {"direct", "direct_video", "image_to_video", "i2v"}:
+        return False
+    return bool(reference_image_urls) and config.segment_count == 1
+
+
+def _finish_segments(
+    config: PipelineConfig,
+    logger_obj: RunLogger,
+    reference_image_urls: List[str],
+    results_map: Dict[int, Dict[str, Any]],
+    failure_map: Dict[int, Dict[str, Any]],
+    *,
+    product_summary: Optional[Dict[str, Any]] = None,
+    global_style: Optional[Dict[str, Any]] = None,
+    campaign_context: Optional[Dict[str, Any]] = None,
+    boards: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    results = [results_map[idx] for idx in sorted(results_map.keys())]
+    errors = [failure_map[idx] for idx in sorted(failure_map.keys())]
+    merge_result: Optional[Dict[str, Any]] = None
+    if results and config.merge_clips:
+        try:
+            merge_result = _merge_completed_segments(config, logger_obj, results)
+            logger_obj.step("90_merge_clips", "success", attempts=1, payload=merge_result)
+        except Exception as exc:
+            merge_result = {"status": "failed", "error": str(exc)}
+            logger_obj.step("90_merge_clips", "failed", attempts=1, error=str(exc), payload=merge_result)
+
+    final_video = _final_video_deliverable(config.merge_clips, merge_result, results)
+    output = {
+        "run_dir": str(logger_obj.run_dir),
+        "final_video": final_video,
+        "reference_image_urls": reference_image_urls,
+        "product_summary": product_summary or {},
+        "global_style": global_style or {},
+        "campaign_context": campaign_context or {},
+        "storyboard_boards": boards or [],
+        "completed_segments": results,
+        "completed_shots": results,
+        "failed_segments": errors,
+        "failed_shots": errors,
+        "merge_result": merge_result,
+        "workflow_mode": config.workflow_mode,
+        "config": {
+            "analysis_model": config.analysis_model,
+            "image_model": config.image_model,
+            "image_model_fallback": config.image_model_fallback,
+            "video_model": config.video_model,
+            "video_channel": config.video_channel,
+            "video_base_url": config.video_base_url,
+            "video_fallback_model": config.video_fallback_model,
+            "video_fallback_channel": config.video_fallback_channel,
+            "video_fallback_base_url": config.video_fallback_base_url,
+            "workflow_mode": config.workflow_mode,
+            "aspect_ratio": config.aspect_ratio,
+            "segment_count": config.segment_count,
+            "segment_duration_seconds": config.segment_duration_seconds,
+            "total_duration_seconds": config.total_duration_seconds,
+            "shot_concurrency": config.shot_concurrency,
+            "generate_audio": config.generate_audio,
+            "watermark": config.watermark,
+        },
+    }
+    logger_obj.finish("partial_failure" if errors else "success", output)
+    return output
 
 
 def _final_video_deliverable(merge_clips: bool, merge_result: Optional[Dict[str, Any]], segments: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -958,23 +1303,37 @@ def _build_config(data: Input) -> PipelineConfig:
     api_key = (data.get("apikey") or "").strip()
     if not api_key:
         raise PipelineError("Missing apikey")
+    raw_video_model = str(data.get("video_model") or "").strip()
+    model_hint = raw_video_model.lower().replace(" ", "")
+    inferred_channel = "yunwu" if model_hint in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"} else "seedance"
+    video_channel = _normalize_video_channel(str(data.get("video_channel") or data.get("channel") or inferred_channel))
+    if model_hint in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"}:
+        raw_video_model = "veo3.1"
+    segment_seconds = _segment_seconds_for_channel(video_channel)
+    allowed_totals = _allowed_total_durations_for_channel(video_channel)
     requested_segment_count = data.get("segment_count", data.get("storyboard_count"))
     if data.get("total_duration_seconds") is None and requested_segment_count is not None:
-        raw_total = int(requested_segment_count) * FIXED_SEGMENT_DURATION_SECONDS
+        raw_total = int(requested_segment_count) * segment_seconds
     else:
         raw_total = int(data.get("total_duration_seconds", 20))
-    if raw_total not in ALLOWED_TOTAL_DURATIONS:
-        raise PipelineError(f"total_duration_seconds must be one of {list(ALLOWED_TOTAL_DURATIONS)}")
-    raw_segment_duration = int(data.get("segment_duration_seconds", FIXED_SEGMENT_DURATION_SECONDS))
-    if raw_segment_duration != FIXED_SEGMENT_DURATION_SECONDS:
-        raise PipelineError(f"segment_duration_seconds must be exactly {FIXED_SEGMENT_DURATION_SECONDS}")
-    segment_count = raw_total // FIXED_SEGMENT_DURATION_SECONDS
+    if raw_total not in allowed_totals:
+        raise PipelineError(f"total_duration_seconds must be one of {list(allowed_totals)}")
+    raw_segment_duration = int(data.get("segment_duration_seconds", segment_seconds))
+    if raw_segment_duration != segment_seconds:
+        raise PipelineError(f"segment_duration_seconds must be exactly {segment_seconds}")
+    segment_count = raw_total // segment_seconds
     if requested_segment_count is not None and int(requested_segment_count) != segment_count:
         raise PipelineError(
-            f"segment_count/storyboard_count must match total_duration_seconds / {FIXED_SEGMENT_DURATION_SECONDS}"
+            f"segment_count/storyboard_count must match total_duration_seconds / {segment_seconds}"
         )
+    base_url = (data.get("base_url") or "https://ai.comfly.org").rstrip("/")
+    video_base_default = _default_video_base_url(video_channel, base_url)
+    video_model_default = _default_video_model(video_channel)
+    fallback_channel = _normalize_video_channel(str(data.get("video_fallback_channel") or data.get("fallback_video_channel") or "comfly"))
+    fallback_base_default = _default_video_base_url(fallback_channel, base_url)
+    fallback_model_default = _default_video_model(fallback_channel)
     return PipelineConfig(
-        base_url=(data.get("base_url") or "https://ai.comfly.org").rstrip("/"),
+        base_url=base_url,
         api_key=api_key,
         task_text=(data.get("task_text") or "").strip(),
         platform=(data.get("platform") or "brand_tvc").strip() or "brand_tvc",
@@ -983,10 +1342,16 @@ def _build_config(data: Input) -> PipelineConfig:
         analysis_model=(data.get("analysis_model") or "gpt-4.1-mini").strip() or "gpt-4.1-mini",
         image_model=(data.get("image_model") or "gpt-image-2").strip() or "gpt-image-2",
         image_model_fallback=(data.get("image_model_fallback") or "nano-banana-2").strip() or "nano-banana-2",
-        video_model=(data.get("video_model") or "doubao-seedance-2-0-fast-260128").strip() or "doubao-seedance-2-0-fast-260128",
+        video_model=(raw_video_model or video_model_default).strip() or video_model_default,
+        video_channel=video_channel,
+        video_base_url=_normalize_video_base_url_for_channel(video_channel, str(data.get("video_base_url") or ""), video_base_default),
+        video_fallback_model=(str(data.get("video_fallback_model") or data.get("fallback_video_model") or fallback_model_default).strip() or fallback_model_default),
+        video_fallback_channel=fallback_channel,
+        video_fallback_base_url=_normalize_video_base_url_for_channel(fallback_channel, str(data.get("video_fallback_base_url") or data.get("fallback_video_base_url") or ""), fallback_base_default),
+        workflow_mode=(str(data.get("workflow_mode") or "storyboard").strip().lower().replace("-", "_") or "storyboard"),
         aspect_ratio=_normalize_aspect_ratio(str(data.get("aspect_ratio") or "9:16"), "9:16"),
         segment_count=segment_count,
-        segment_duration_seconds=FIXED_SEGMENT_DURATION_SECONDS,
+        segment_duration_seconds=segment_seconds,
         total_duration_seconds=raw_total,
         shot_concurrency=max(1, int(data.get("shot_concurrency", 2))),
         poll_interval_seconds=max(5, int(data.get("poll_interval_seconds", 10))),
@@ -1027,6 +1392,52 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "success",
                 attempts=upload_attempts,
                 payload={"reference_image": ref, "reference_image_url": ref_url},
+            )
+
+        if _should_use_direct_video(config, reference_image_urls):
+            segment_plan = _build_direct_segment_plan(config, reference_image_urls)
+            logger_obj.step(
+                "02_direct_video_plan",
+                "success",
+                attempts=0,
+                payload={
+                    "workflow_mode": "direct_video",
+                    "reference_image_url": reference_image_urls[0],
+                    "submitted_video_prompt": segment_plan["video_prompt"],
+                    "segment_duration_seconds": segment_plan["duration_seconds"],
+                },
+            )
+            logger_obj.segment(
+                1,
+                "plan",
+                "ready",
+                payload={
+                    "board": segment_plan["board"],
+                    "first_frame_image_url": reference_image_urls[0],
+                    "submitted_video_prompt": segment_plan["video_prompt"],
+                    "workflow_mode": "direct_video",
+                },
+            )
+            results_map: Dict[int, Dict[str, Any]] = {}
+            failure_map: Dict[int, Dict[str, Any]] = {}
+            try:
+                submitted = _submit_segment_video(client, logger_obj, segment_plan, reference_image_urls)
+                result = _poll_segment_video(client, logger_obj, submitted)
+                results_map[1] = result
+                logger_obj.segment(1, "final", "success", payload=result)
+            except Exception as exc:
+                payload = {"index": 1, "error": str(exc), "traceback": traceback.format_exc()}
+                failure_map[1] = payload
+                logger_obj.segment(1, "final", "failed", error=str(exc), payload=payload)
+            return _finish_segments(
+                config,
+                logger_obj,
+                reference_image_urls,
+                results_map,
+                failure_map,
+                boards=[segment_plan["board"]],
+                product_summary={"mode": "direct_video"},
+                campaign_context={"task_text": config.task_text},
             )
 
         storyboard_plan, analysis_attempts = client.analyze(reference_image_urls)
@@ -1133,47 +1544,17 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                     failure_map[idx] = payload
                     logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
 
-        results = [results_map[idx] for idx in sorted(results_map.keys())]
-        errors = [failure_map[idx] for idx in sorted(failure_map.keys())]
-        merge_result: Optional[Dict[str, Any]] = None
-        if results and config.merge_clips:
-            try:
-                merge_result = _merge_completed_segments(config, logger_obj, results)
-                logger_obj.step("90_merge_clips", "success", attempts=1, payload=merge_result)
-            except Exception as exc:
-                merge_result = {"status": "failed", "error": str(exc)}
-                logger_obj.step("90_merge_clips", "failed", attempts=1, error=str(exc), payload=merge_result)
-
-        final_video = _final_video_deliverable(config.merge_clips, merge_result, results)
-        output = {
-            "run_dir": str(logger_obj.run_dir),
-            "final_video": final_video,
-            "reference_image_urls": reference_image_urls,
-            "product_summary": product_summary,
-            "global_style": global_style,
-            "campaign_context": campaign_context,
-            "storyboard_boards": boards,
-            "completed_segments": results,
-            "completed_shots": results,
-            "failed_segments": errors,
-            "failed_shots": errors,
-            "merge_result": merge_result,
-            "config": {
-                "analysis_model": config.analysis_model,
-                "image_model": config.image_model,
-                "image_model_fallback": config.image_model_fallback,
-                "video_model": config.video_model,
-                "aspect_ratio": config.aspect_ratio,
-                "segment_count": config.segment_count,
-                "segment_duration_seconds": config.segment_duration_seconds,
-                "total_duration_seconds": config.total_duration_seconds,
-                "shot_concurrency": config.shot_concurrency,
-                "generate_audio": config.generate_audio,
-                "watermark": config.watermark,
-            },
-        }
-        logger_obj.finish("partial_failure" if errors else "success", output)
-        return output
+        return _finish_segments(
+            config,
+            logger_obj,
+            reference_image_urls,
+            results_map,
+            failure_map,
+            product_summary=product_summary if isinstance(product_summary, dict) else {},
+            global_style=global_style if isinstance(global_style, dict) else {},
+            campaign_context=campaign_context if isinstance(campaign_context, dict) else {},
+            boards=boards if isinstance(boards, list) else [],
+        )
     except Exception:
         logger_obj.finish("failed", {"error": traceback.format_exc()})
         raise

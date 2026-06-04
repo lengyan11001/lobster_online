@@ -151,6 +151,9 @@ def build_pipeline_input(
     image_model: Optional[str] = None,
     image_model_fallback: Optional[str] = None,
     video_model: Optional[str] = None,
+    video_channel: Optional[str] = None,
+    video_base_url: Optional[str] = None,
+    workflow_mode: Optional[str] = None,
     aspect_ratio: Optional[str] = None,
     generate_audio: Optional[bool] = None,
     watermark: Optional[bool] = None,
@@ -179,6 +182,8 @@ def build_pipeline_input(
         inp["segment_duration_seconds"] = int(segment_duration_seconds)
     if effective_total_duration is not None:
         inp["total_duration_seconds"] = int(effective_total_duration)
+    if (workflow_mode or "").strip():
+        inp["workflow_mode"] = workflow_mode.strip()
     if output_dir:
         inp["output_dir"] = output_dir
     if (platform or "").strip():
@@ -197,6 +202,10 @@ def build_pipeline_input(
         inp["image_model_fallback"] = image_model_fallback.strip()
     if (video_model or "").strip():
         inp["video_model"] = video_model.strip()
+    if (video_channel or "").strip():
+        inp["video_channel"] = video_channel.strip()
+    if (video_base_url or "").strip():
+        inp["video_base_url"] = _api_base_for_pipeline(video_base_url)
     if (aspect_ratio or "").strip():
         inp["aspect_ratio"] = aspect_ratio.strip()
     if generate_audio is not None:
