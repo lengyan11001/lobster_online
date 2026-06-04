@@ -42,6 +42,12 @@
   };
   var imglabTaskToastTimer = null;
   var imglabTaskNotifiedJobs = {};
+  var assetPickerState = {
+    loading: false,
+    items: [],
+    selected: {},
+    query: ''
+  };
 
   var JOB_RESTORE_WINDOW_MS = 6 * 60 * 60 * 1000;
   var JOB_HISTORY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
@@ -300,6 +306,63 @@
     });
   }
 
+  function cleanRemoteUrl(url) {
+    return String(url || '').trim().replace(/[\\\/]+$/, '');
+  }
+
+  function resolveAssetMediaUrl(asset) {
+    if (!asset) return '';
+    return cleanRemoteUrl(asset.preview_url || asset.open_url || asset.source_url || '');
+  }
+
+  function existingReferenceAssetIds() {
+    var map = {};
+    (state.references || []).forEach(function(item) {
+      var aid = String((item && item.asset_id) || '').trim();
+      if (aid) map[aid] = true;
+    });
+    return map;
+  }
+
+  function normalizeAssetPickerItem(asset) {
+    var aid = String((asset && asset.asset_id) || '').trim();
+    if (!aid) return null;
+    var mediaType = String((asset && asset.media_type) || '').toLowerCase();
+    if (mediaType && mediaType !== 'image') return null;
+    return {
+      asset_id: aid,
+      name: String((asset && asset.filename) || aid).trim() || aid,
+      size: Number((asset && asset.file_size) || 0),
+      objectUrl: resolveAssetMediaUrl(asset),
+      source_url: String((asset && (asset.open_url || asset.source_url || asset.preview_url)) || '').trim(),
+      prompt: String((asset && asset.prompt) || '').trim(),
+      purpose: (($('imglabReferencePurposeSelect') || {}).value || 'auto').trim() || 'auto'
+    };
+  }
+
+  function selectedAssetPickerItems() {
+    var selected = assetPickerState.selected || {};
+    return (assetPickerState.items || []).filter(function(item) {
+      return item && selected[item.asset_id];
+    });
+  }
+
+  function appendReferenceItems(existing, incoming) {
+    var next = (existing || []).slice();
+    var existingAssets = {};
+    next.forEach(function(item) {
+      var aid = String((item && item.asset_id) || '').trim();
+      if (aid) existingAssets[aid] = true;
+    });
+    (incoming || []).forEach(function(item) {
+      var aid = String((item && item.asset_id) || '').trim();
+      if (aid && existingAssets[aid]) return;
+      if (aid) existingAssets[aid] = true;
+      next.push(item);
+    });
+    return next;
+  }
+
   function renderReferenceList() {
     var el = $('imglabReferenceList');
     if (!el) return;
@@ -324,6 +387,214 @@
         '</div>'
       ].join('');
     }).join('');
+  }
+
+  function ensureAssetPickerModal() {
+    var modal = $('imglabAssetPickerModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'imglabAssetPickerModal';
+    modal.className = 'imglab-asset-picker-modal';
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML = [
+      '<div class="imglab-asset-picker-card" role="dialog" aria-modal="true" aria-labelledby="imglabAssetPickerTitle">',
+      '<div class="imglab-asset-picker-head">',
+      '<div>',
+      '<h4 id="imglabAssetPickerTitle">选择素材库图片</h4>',
+      '<p>可以选择一张或多张图片，确认后直接作为参考图使用。</p>',
+      '</div>',
+      '<button type="button" class="imglab-asset-picker-close" aria-label="关闭">×</button>',
+      '</div>',
+      '<div class="imglab-asset-picker-tools">',
+      '<input type="search" id="imglabAssetPickerSearch" placeholder="搜索文件名、提示词或标签">',
+      '<button type="button" class="btn btn-ghost btn-sm" id="imglabAssetPickerReload">刷新</button>',
+      '</div>',
+      '<div id="imglabAssetPickerStatus" class="imglab-asset-picker-status"></div>',
+      '<div id="imglabAssetPickerGrid" class="imglab-asset-picker-grid"></div>',
+      '<div class="imglab-asset-picker-foot">',
+      '<span id="imglabAssetPickerCount">已选择 0 张</span>',
+      '<div class="imglab-asset-picker-actions">',
+      '<button type="button" class="btn btn-ghost" id="imglabAssetPickerCancel">取消</button>',
+      '<button type="button" class="btn btn-primary" id="imglabAssetPickerConfirm">确认使用</button>',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', function(event) {
+      if (event.target === modal) closeAssetPicker();
+      var closeBtn = event.target && event.target.closest ? event.target.closest('.imglab-asset-picker-close, #imglabAssetPickerCancel') : null;
+      if (closeBtn) {
+        event.preventDefault();
+        closeAssetPicker();
+      }
+      var card = event.target && event.target.closest ? event.target.closest('[data-imglab-asset-id]') : null;
+      if (card) {
+        event.preventDefault();
+        toggleAssetPickerSelection(card.getAttribute('data-imglab-asset-id'));
+      }
+    });
+
+    var search = modal.querySelector('#imglabAssetPickerSearch');
+    if (search) {
+      search.addEventListener('input', function(event) {
+        assetPickerState.query = event.target.value || '';
+        renderAssetPicker();
+      });
+    }
+    var reload = modal.querySelector('#imglabAssetPickerReload');
+    if (reload) reload.addEventListener('click', function() { loadAssetPickerItems(true); });
+    var confirm = modal.querySelector('#imglabAssetPickerConfirm');
+    if (confirm) confirm.addEventListener('click', confirmAssetPicker);
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && modal.classList.contains('is-visible')) closeAssetPicker();
+    });
+    return modal;
+  }
+
+  function filteredAssetPickerItems() {
+    var query = String(assetPickerState.query || '').trim().toLowerCase();
+    if (!query) return assetPickerState.items || [];
+    return (assetPickerState.items || []).filter(function(item) {
+      var haystack = [item.name || '', item.asset_id || '', item.prompt || ''].join(' ').toLowerCase();
+      return haystack.indexOf(query) >= 0;
+    });
+  }
+
+  function renderAssetPicker() {
+    var modal = ensureAssetPickerModal();
+    var grid = modal.querySelector('#imglabAssetPickerGrid');
+    var status = modal.querySelector('#imglabAssetPickerStatus');
+    var count = modal.querySelector('#imglabAssetPickerCount');
+    var confirm = modal.querySelector('#imglabAssetPickerConfirm');
+    if (!grid || !status) return;
+    var selected = selectedAssetPickerItems();
+    if (count) count.textContent = '已选择 ' + selected.length + ' 张';
+    if (confirm) confirm.disabled = selected.length < 1;
+
+    if (assetPickerState.loading) {
+      status.textContent = '正在加载素材库图片...';
+      grid.innerHTML = '<div class="imglab-asset-picker-empty">正在加载...</div>';
+      return;
+    }
+    var items = filteredAssetPickerItems();
+    if (!assetPickerState.items.length) {
+      status.textContent = '素材库暂无图片';
+      grid.innerHTML = '<div class="imglab-asset-picker-empty">暂无图片素材。你也可以继续使用“上传图片”。</div>';
+      return;
+    }
+    if (!items.length) {
+      status.textContent = '没有匹配的图片';
+      grid.innerHTML = '<div class="imglab-asset-picker-empty">换个关键词试试。</div>';
+      return;
+    }
+    status.textContent = '共 ' + assetPickerState.items.length + ' 张图片，当前显示 ' + items.length + ' 张';
+    var existing = existingReferenceAssetIds();
+    grid.innerHTML = items.map(function(item) {
+      var selectedClass = assetPickerState.selected[item.asset_id] ? ' is-selected' : '';
+      var already = existing[item.asset_id] ? ' is-existing' : '';
+      var thumb = item.objectUrl
+        ? '<img src="' + escapeHtml(item.objectUrl) + '" alt="' + escapeHtml(item.name) + '">'
+        : '<div class="imglab-asset-picker-no-thumb">无预览</div>';
+      return [
+        '<button type="button" class="imglab-asset-picker-item' + selectedClass + already + '" data-imglab-asset-id="' + escapeHtml(item.asset_id) + '">',
+        '<span class="imglab-asset-picker-thumb">' + thumb + '</span>',
+        '<span class="imglab-asset-picker-name" title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</span>',
+        '<span class="imglab-asset-picker-meta">' + escapeHtml(formatFileSize(item.size)) + (already ? ' · 已添加' : '') + '</span>',
+        '<span class="imglab-asset-picker-check">✓</span>',
+        '</button>'
+      ].join('');
+    }).join('');
+  }
+
+  function toggleAssetPickerSelection(assetId) {
+    assetId = String(assetId || '').trim();
+    if (!assetId) return;
+    if (assetPickerState.selected[assetId]) delete assetPickerState.selected[assetId];
+    else assetPickerState.selected[assetId] = true;
+    renderAssetPicker();
+  }
+
+  function loadAssetPickerItems(force) {
+    var modal = ensureAssetPickerModal();
+    if (!force && assetPickerState.items.length) {
+      renderAssetPicker();
+      return Promise.resolve(assetPickerState.items);
+    }
+    var base = localBase();
+    if (!base) {
+      assetPickerState.items = [];
+      renderAssetPicker();
+      return Promise.reject(new Error('当前未检测到可用的后端地址，无法读取素材库'));
+    }
+    assetPickerState.loading = true;
+    renderAssetPicker();
+    return fetch(base + '/api/assets?media_type=image&limit=100', { headers: authHeadersSafe() })
+      .then(function(response) {
+        return response.json().then(function(data) {
+          return { ok: response.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error(responseErrorText(result.data, '素材库图片加载失败'));
+        var rows = Array.isArray(result.data.assets) ? result.data.assets : [];
+        assetPickerState.items = rows.map(normalizeAssetPickerItem).filter(Boolean);
+        assetPickerState.loading = false;
+        renderAssetPicker();
+        return assetPickerState.items;
+      })
+      .catch(function(err) {
+        assetPickerState.loading = false;
+        var status = modal.querySelector('#imglabAssetPickerStatus');
+        if (status) status.textContent = (err && err.message) || '素材库图片加载失败';
+        renderAssetPicker();
+        throw err;
+      });
+  }
+
+  function openAssetPicker() {
+    var modal = ensureAssetPickerModal();
+    assetPickerState.selected = {};
+    assetPickerState.query = '';
+    var search = modal.querySelector('#imglabAssetPickerSearch');
+    if (search) search.value = '';
+    modal.classList.add('is-visible');
+    modal.setAttribute('aria-hidden', 'false');
+    loadAssetPickerItems(false).catch(function(err) {
+      showMessage((err && err.message) || '素材库图片加载失败', true);
+    });
+  }
+
+  function closeAssetPicker() {
+    var modal = $('imglabAssetPickerModal');
+    if (!modal) return;
+    modal.classList.remove('is-visible');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  function confirmAssetPicker() {
+    var items = selectedAssetPickerItems();
+    if (!items.length) return;
+    var purpose = (($('imglabReferencePurposeSelect') || {}).value || 'auto').trim() || 'auto';
+    var incoming = items.map(function(item) {
+      return {
+        name: item.name,
+        size: item.size,
+        purpose: purpose,
+        objectUrl: item.objectUrl || item.source_url,
+        source_url: item.source_url || item.objectUrl,
+        asset_id: item.asset_id
+      };
+    }).filter(function(item) {
+      return item.asset_id && item.objectUrl;
+    });
+    var before = state.references.length;
+    state.references = appendReferenceItems(state.references, incoming);
+    closeAssetPicker();
+    renderReferenceList();
+    var added = state.references.length - before;
+    showMessage(added > 0 ? ('已从素材库添加 ' + added + ' 张参考图。') : '选择的图片已在参考图列表中。', false);
   }
 
   function currentResult() {
@@ -955,9 +1226,12 @@
     form.append('aspect_ratio', $('imglabAspectRatioSelect').value);
     form.append('quality', $('imglabQualitySelect').value);
     form.append('background', $('imglabBackgroundSelect').value);
+    var referenceImageUrls = [];
     state.references.forEach(function(item) {
       if (item && item.file) form.append('images', item.file);
+      else if (item && (item.source_url || item.objectUrl)) referenceImageUrls.push(item.source_url || item.objectUrl);
     });
+    if (referenceImageUrls.length) form.append('reference_image_urls', referenceImageUrls.join(','));
 
     try {
       var resp = await fetch(localBase() + '/api/comfly-image-studio/generate/start', {
@@ -1009,6 +1283,7 @@
 
   function bindEvents() {
     var uploadBtn = $('imglabReferenceUploadBtn');
+    var assetPickBtn = $('imglabAssetPickBtn');
     var input = $('imglabReferenceInput');
     var list = $('imglabReferenceList');
     var gallery = $('imglabResultGallery');
@@ -1027,11 +1302,17 @@
         input.click();
       });
     }
+    if (assetPickBtn && !assetPickBtn.dataset.bound) {
+      assetPickBtn.dataset.bound = '1';
+      assetPickBtn.addEventListener('click', function() {
+        openAssetPicker();
+      });
+    }
     if (input && !input.dataset.bound) {
       input.dataset.bound = '1';
       input.addEventListener('change', function(event) {
         var files = readFiles(event.target.files);
-        state.references = state.references.concat(files);
+        state.references = appendReferenceItems(state.references, files);
         input.value = '';
         renderReferenceList();
       });

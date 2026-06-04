@@ -66,6 +66,13 @@
     mainAsset: null,
     productRefs: [],
     styleRefs: [],
+    assetPicker: {
+      items: [],
+      selected: {},
+      query: '',
+      loading: false,
+      target: 'main'
+    },
     recentJobs: [],
     currentJobId: '',
     activeResultTab: 'main_images',
@@ -246,6 +253,11 @@
     return src;
   }
 
+  function _resolveAssetPublicUrl(asset) {
+    if (!asset) return '';
+    return String(asset.source_url || asset.open_url || asset.preview_url || asset.file_url || asset.local_preview_url || '').trim();
+  }
+
   function _firstImageUrl() {
     var keys = ['local_preview_url', 'preview_url', 'open_url', 'file_url', 'source_url', 'generated_image_url'];
     for (var i = 0; i < arguments.length; i += 1) {
@@ -290,6 +302,14 @@
       hour: '2-digit',
       minute: '2-digit'
     });
+  }
+
+  function _formatAssetSize(bytes) {
+    var value = Number(bytes || 0);
+    if (!value || value < 0) return '';
+    if (value < 1024) return value + ' B';
+    if (value < 1024 * 1024) return (value / 1024).toFixed(1).replace(/\.0$/, '') + ' KB';
+    return (value / (1024 * 1024)).toFixed(1).replace(/\.0$/, '') + ' MB';
   }
 
   function _safeLocalStorageGet(key) {
@@ -614,10 +634,9 @@
       : status === 'failed'
         ? '上传失败'
         : isReady
-          ? (fileRow.asset_id ? '已上传' : '本地已就绪')
+          ? (fileRow.source === 'asset_library' ? '已选择' : (fileRow.asset_id ? '已上传' : '本地已就绪'))
           : '本地预览';
     var statusClass = status === 'failed' ? ' failed' : (status === 'uploading' ? '' : ' ready');
-    var assetId = String(fileRow.asset_id || '').trim();
     var errorMessage = String(fileRow.error_message || '').trim();
     return (
       '<div class="ecom-upload-item">' +
@@ -628,7 +647,6 @@
         '<div class="ecom-upload-name">' + escapeHtml(filename) + '</div>' +
         '<div class="ecom-upload-status' + statusClass + '">' + escapeHtml(statusText) + '</div>' +
         (errorMessage ? '<div class="ecom-upload-error">' + escapeHtml(errorMessage) + '</div>' : '') +
-        (assetId ? '<div class="ecom-upload-asset-id">素材ID：' + escapeHtml(assetId) + '</div>' : '') +
       '</div>'
     );
   }
@@ -715,6 +733,284 @@
   function _renderReferenceAssets() {
     _renderUploadList('ecomProductRefsList', state.productRefs);
     _renderUploadList('ecomStyleRefsList', state.styleRefs);
+  }
+
+  function _normalizeAssetPickerItem(asset) {
+    var aid = String((asset && asset.asset_id) || '').trim();
+    if (!aid) return null;
+    var mediaType = String((asset && asset.media_type) || '').toLowerCase();
+    if (mediaType && mediaType !== 'image') return null;
+    var url = _resolveAssetPublicUrl(asset);
+    var preview = _resolveAssetPreview(asset) || url;
+    return {
+      uid: 'asset_' + aid,
+      kind: 'main',
+      asset_id: aid,
+      filename: String((asset && asset.filename) || aid).trim() || aid,
+      file_size: Number((asset && asset.file_size) || 0),
+      local_preview_url: preview,
+      preview_url: preview,
+      open_url: String((asset && asset.open_url) || '').trim(),
+      source_url: String((asset && asset.source_url) || url).trim(),
+      source: 'asset_library',
+      upload_status: 'ready',
+      prompt: String((asset && asset.prompt) || '').trim()
+    };
+  }
+
+  function _appendExistingAssetRows(existing, incoming, kind) {
+    var next = (existing || []).slice();
+    var seen = {};
+    next.forEach(function(item) {
+      var aid = String((item && item.asset_id) || '').trim();
+      if (aid) seen[aid] = true;
+    });
+    (incoming || []).forEach(function(item) {
+      var aid = String((item && item.asset_id) || '').trim();
+      if (!aid || seen[aid]) return;
+      seen[aid] = true;
+      next.push(Object.assign({}, item, {
+        uid: 'asset_' + kind + '_' + aid,
+        kind: kind,
+        upload_status: 'ready'
+      }));
+    });
+    return next;
+  }
+
+  function _selectedAssetPickerItems() {
+    var selected = state.assetPicker.selected || {};
+    return (state.assetPicker.items || []).filter(function(item) {
+      return item && selected[item.asset_id];
+    });
+  }
+
+  function _filteredAssetPickerItems() {
+    var query = String(state.assetPicker.query || '').trim().toLowerCase();
+    if (!query) return state.assetPicker.items || [];
+    return (state.assetPicker.items || []).filter(function(item) {
+      var haystack = [item.filename || '', item.asset_id || '', item.prompt || ''].join(' ').toLowerCase();
+      return haystack.indexOf(query) >= 0;
+    });
+  }
+
+  function _ensureAssetPickerModal() {
+    var modal = byId('ecomAssetPickerModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'ecomAssetPickerModal';
+    modal.className = 'ecom-asset-picker-modal';
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML = [
+      '<div class="ecom-asset-picker-card" role="dialog" aria-modal="true" aria-labelledby="ecomAssetPickerTitle">',
+      '<div class="ecom-asset-picker-head">',
+      '<div>',
+      '<h4 id="ecomAssetPickerTitle">选择素材库图片</h4>',
+      '<p id="ecomAssetPickerDesc">从素材库选择商品图片，确认后会直接用于本次生成。</p>',
+      '</div>',
+      '<button type="button" class="ecom-asset-picker-close" aria-label="关闭">×</button>',
+      '</div>',
+      '<div class="ecom-asset-picker-tools">',
+      '<input type="search" id="ecomAssetPickerSearch" placeholder="搜索文件名、提示词或素材">',
+      '<button type="button" class="btn btn-ghost btn-sm" id="ecomAssetPickerReload">刷新</button>',
+      '</div>',
+      '<div id="ecomAssetPickerStatus" class="ecom-asset-picker-status"></div>',
+      '<div id="ecomAssetPickerGrid" class="ecom-asset-picker-grid"></div>',
+      '<div class="ecom-asset-picker-foot">',
+      '<span id="ecomAssetPickerCount">已选择 0 张</span>',
+      '<div class="ecom-asset-picker-actions">',
+      '<button type="button" class="btn btn-ghost" id="ecomAssetPickerCancel">取消</button>',
+      '<button type="button" class="btn btn-primary" id="ecomAssetPickerConfirm">确认使用</button>',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', function(event) {
+      if (event.target === modal) _closeAssetPicker();
+      var closeBtn = event.target && event.target.closest ? event.target.closest('.ecom-asset-picker-close, #ecomAssetPickerCancel') : null;
+      if (closeBtn) {
+        event.preventDefault();
+        _closeAssetPicker();
+        return;
+      }
+      var card = event.target && event.target.closest ? event.target.closest('[data-ecom-asset-id]') : null;
+      if (card) {
+        event.preventDefault();
+        _toggleAssetPickerSelection(card.getAttribute('data-ecom-asset-id'));
+      }
+    });
+
+    var search = modal.querySelector('#ecomAssetPickerSearch');
+    if (search) {
+      search.addEventListener('input', function(event) {
+        state.assetPicker.query = event.target.value || '';
+        _renderAssetPicker();
+      });
+    }
+    var reload = modal.querySelector('#ecomAssetPickerReload');
+    if (reload) reload.addEventListener('click', function() { _loadAssetPickerItems(true); });
+    var confirm = modal.querySelector('#ecomAssetPickerConfirm');
+    if (confirm) confirm.addEventListener('click', _confirmAssetPicker);
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && modal.classList.contains('is-visible')) _closeAssetPicker();
+    });
+    return modal;
+  }
+
+  function _renderAssetPicker() {
+    var modal = _ensureAssetPickerModal();
+    var grid = modal.querySelector('#ecomAssetPickerGrid');
+    var status = modal.querySelector('#ecomAssetPickerStatus');
+    var count = modal.querySelector('#ecomAssetPickerCount');
+    var confirm = modal.querySelector('#ecomAssetPickerConfirm');
+    var desc = modal.querySelector('#ecomAssetPickerDesc');
+    if (!grid || !status) return;
+    var selected = _selectedAssetPickerItems();
+    var isMain = state.assetPicker.target === 'main';
+    if (desc) {
+      desc.textContent = isMain
+        ? '从素材库选择 1 张主商品图，确认后会直接用于本次生成。'
+        : '从素材库选择一张或多张参考图，确认后会直接用于本次生成。';
+    }
+    if (count) count.textContent = '已选择 ' + selected.length + ' 张' + (isMain ? '，主图只能选 1 张' : '');
+    if (confirm) confirm.disabled = isMain ? selected.length !== 1 : selected.length < 1;
+
+    if (state.assetPicker.loading) {
+      status.textContent = '正在加载素材库图片...';
+      grid.innerHTML = '<div class="ecom-asset-picker-empty">正在加载...</div>';
+      return;
+    }
+    var items = _filteredAssetPickerItems();
+    if (!state.assetPicker.items.length) {
+      status.textContent = '素材库暂无图片';
+      grid.innerHTML = '<div class="ecom-asset-picker-empty">暂无图片素材，也可以继续上传本地图片。</div>';
+      return;
+    }
+    if (!items.length) {
+      status.textContent = '没有匹配的图片';
+      grid.innerHTML = '<div class="ecom-asset-picker-empty">换个关键词试试。</div>';
+      return;
+    }
+    status.textContent = '共 ' + state.assetPicker.items.length + ' 张图片，当前显示 ' + items.length + ' 张';
+    grid.innerHTML = items.map(function(item) {
+      var selectedClass = state.assetPicker.selected[item.asset_id] ? ' is-selected' : '';
+      var thumb = _resolveAssetPreview(item)
+        ? '<img src="' + escapeAttr(_resolveAssetPreview(item)) + '" alt="' + escapeAttr(item.filename) + '">'
+        : '<div class="ecom-asset-picker-no-thumb">无预览</div>';
+      return [
+        '<button type="button" class="ecom-asset-picker-item' + selectedClass + '" data-ecom-asset-id="' + escapeAttr(item.asset_id) + '">',
+        '<span class="ecom-asset-picker-thumb">' + thumb + '</span>',
+        '<span class="ecom-asset-picker-name" title="' + escapeAttr(item.filename) + '">' + escapeHtml(item.filename) + '</span>',
+        '<span class="ecom-asset-picker-meta">' + escapeHtml(_formatAssetSize(item.file_size || 0)) + '</span>',
+        '<span class="ecom-asset-picker-check">✓</span>',
+        '</button>'
+      ].join('');
+    }).join('');
+  }
+
+  function _toggleAssetPickerSelection(assetId) {
+    assetId = String(assetId || '').trim();
+    if (!assetId) return;
+    if (state.assetPicker.target === 'main') {
+      state.assetPicker.selected = {};
+      state.assetPicker.selected[assetId] = true;
+    } else if (state.assetPicker.selected[assetId]) {
+      delete state.assetPicker.selected[assetId];
+    } else {
+      state.assetPicker.selected[assetId] = true;
+    }
+    _renderAssetPicker();
+  }
+
+  function _loadAssetPickerItems(force) {
+    var modal = _ensureAssetPickerModal();
+    if (!force && state.assetPicker.items.length) {
+      _renderAssetPicker();
+      return Promise.resolve(state.assetPicker.items);
+    }
+    var base = _localBase();
+    if (!base) {
+      state.assetPicker.items = [];
+      _renderAssetPicker();
+      return Promise.reject(new Error('当前未检测到可用的后端地址，无法读取素材库'));
+    }
+    state.assetPicker.loading = true;
+    _renderAssetPicker();
+    return fetch(base + '/api/assets?media_type=image&limit=100', { headers: authHeaders() })
+      .then(function(response) {
+        return response.json().then(function(data) {
+          return { ok: response.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error(_normalizeApiErrorText(result.data && (result.data.detail || result.data.message || result.data), '素材库图片加载失败'));
+        var rows = Array.isArray(result.data.assets) ? result.data.assets : [];
+        state.assetPicker.items = rows.map(_normalizeAssetPickerItem).filter(Boolean);
+        state.assetPicker.loading = false;
+        _renderAssetPicker();
+        return state.assetPicker.items;
+      })
+      .catch(function(err) {
+        state.assetPicker.loading = false;
+        var status = modal.querySelector('#ecomAssetPickerStatus');
+        if (status) status.textContent = (err && err.message) || '素材库图片加载失败';
+        _renderAssetPicker();
+        throw err;
+      });
+  }
+
+  function _openAssetPicker(target) {
+    var modal = _ensureAssetPickerModal();
+    state.assetPicker.target = target || 'main';
+    state.assetPicker.selected = {};
+    state.assetPicker.query = '';
+    var search = modal.querySelector('#ecomAssetPickerSearch');
+    if (search) search.value = '';
+    modal.classList.add('is-visible');
+    modal.setAttribute('aria-hidden', 'false');
+    _loadAssetPickerItems(false).catch(function(err) {
+      _setMsg((err && err.message) || '素材库图片加载失败', true);
+    });
+  }
+
+  function _closeAssetPicker() {
+    var modal = byId('ecomAssetPickerModal');
+    if (!modal) return;
+    modal.classList.remove('is-visible');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  function _confirmAssetPicker() {
+    var items = _selectedAssetPickerItems();
+    if (!items.length) return;
+    if (state.assetPicker.target === 'main') {
+      _revokeLocalPreviewUrl(state.mainAsset);
+      var row = Object.assign({}, items[0], { kind: 'main', upload_status: 'ready' });
+      state.mainAsset = row;
+      var input = byId('ecomMainAssetIdInput');
+      if (input) input.value = row.asset_id || '';
+      _renderMainAsset();
+      _setMsg('已选择素材库图片，可直接开始生成。', false);
+      _closeAssetPicker();
+      return;
+    }
+    if (state.assetPicker.target === 'product_ref') {
+      state.productRefs = _appendExistingAssetRows(state.productRefs, items, 'product_ref');
+      _renderReferenceAssets();
+      _setMsg('已添加素材库补充角度图。', false);
+      _closeAssetPicker();
+      return;
+    }
+    if (state.assetPicker.target === 'style_ref') {
+      state.styleRefs = _appendExistingAssetRows(state.styleRefs, items, 'style_ref');
+      _renderReferenceAssets();
+      _setMsg('已添加素材库风格参考图。', false);
+      _closeAssetPicker();
+      return;
+    }
+    _closeAssetPicker();
   }
 
   function _makeUid(prefix) {
@@ -975,13 +1271,14 @@
   function _buildPayload() {
     var mainAssetId = (byId('ecomMainAssetIdInput').value || '').trim() || (state.mainAsset && state.mainAsset.asset_id) || '';
     var mainLocalPath = (state.mainAsset && state.mainAsset.local_path) || '';
-    if (state.mainAsset && state.mainAsset.upload_status === 'uploading' && !mainAssetId && !mainLocalPath) {
+    var mainImageUrl = _resolveAssetPublicUrl(state.mainAsset);
+    if (state.mainAsset && state.mainAsset.upload_status === 'uploading' && !mainAssetId && !mainLocalPath && !mainImageUrl) {
       return { error: '主商品图还在保存，请等状态变成“本地已就绪”后再开始生成。' };
     }
-    if (state.mainAsset && state.mainAsset.upload_status === 'failed' && !mainAssetId && !mainLocalPath) {
-      return { error: '主商品图保存失败，请重新选择本地图片，或直接填写可用的素材库 ID。' };
+    if (state.mainAsset && state.mainAsset.upload_status === 'failed' && !mainAssetId && !mainLocalPath && !mainImageUrl) {
+      return { error: '主商品图保存失败，请重新上传，或从素材库选择已有图片。' };
     }
-    if (!mainAssetId && !mainLocalPath) return { error: '请先选择主商品图，或填写可用的素材库 ID。' };
+    if (!mainAssetId && !mainLocalPath && !mainImageUrl) return { error: '请先上传主商品图，或从素材库选择已有图片。' };
     var imagePreset = _selectedImageModelPreset();
     var categoryText = (byId('ecomProductDirectionInput').value || '').trim();
     var generationPrompt = (byId('ecomMainGenerationPromptInput') && byId('ecomMainGenerationPromptInput').value || '').trim();
@@ -1011,7 +1308,11 @@
       detail_render_mode: imagePreset.detailRenderMode,
       output_targets: _outputTargetsFromForm(),
       scene_preferences: _scenePreferencesFromForm(),
-      style_reference_asset_ids: state.styleRefs.map(function(item) { return item.asset_id; }).filter(Boolean),
+      style_reference_asset_ids: state.styleRefs
+        .filter(function(item) { return item && !_resolveAssetPublicUrl(item); })
+        .map(function(item) { return item.asset_id; })
+        .filter(Boolean),
+      style_reference_image_urls: state.styleRefs.map(function(item) { return _resolveAssetPublicUrl(item); }).filter(Boolean),
       style_reference_local_paths: state.styleRefs.map(function(item) { return item.local_path; }).filter(Boolean),
       compliance_notes: _parseLines('ecomComplianceNotesInput'),
       platform: 'ecommerce',
@@ -1020,11 +1321,13 @@
     };
     var frontImage = { role: 'front' };
     if (mainLocalPath) frontImage.local_path = mainLocalPath;
+    else if (mainImageUrl) frontImage.image_url = mainImageUrl;
     else frontImage.asset_id = mainAssetId;
     var productImages = [frontImage];
-    state.productRefs.filter(function(item) { return item && (item.local_path || item.asset_id); }).forEach(function(item, idx) {
+    state.productRefs.filter(function(item) { return item && (item.local_path || item.asset_id || _resolveAssetPublicUrl(item)); }).forEach(function(item, idx) {
       var refImage = { role: idx === 0 ? 'side' : 'detail' };
       if (item.local_path) refImage.local_path = item.local_path;
+      else if (_resolveAssetPublicUrl(item)) refImage.image_url = _resolveAssetPublicUrl(item);
       else refImage.asset_id = item.asset_id;
       productImages.push(refImage);
     });
@@ -1032,6 +1335,8 @@
       payload.product_images = productImages;
     } else if (mainLocalPath) {
       payload.local_path = mainLocalPath;
+    } else if (mainImageUrl) {
+      payload.image_url = mainImageUrl;
     } else {
       payload.asset_id = mainAssetId;
     }
@@ -1423,16 +1728,6 @@
       _setMsg('当前未检测到本机 LOCAL_API_BASE，无法提交套图任务。', true);
       return;
     }
-    var mainAssetId = (byId('ecomMainAssetIdInput').value || '').trim();
-    if (!state.mainAsset && mainAssetId) {
-      _fetchAssetById(mainAssetId, function(err, row) {
-        if (!err && row) {
-          row.kind = 'main';
-          state.mainAsset = row;
-          _renderMainAsset();
-        }
-      });
-    }
     var built = _buildPayload();
     if (built.error) {
       _setMsg(built.error, true);
@@ -1652,6 +1947,12 @@
     });
     var startBtn = byId('ecomStartBtn');
     if (startBtn) startBtn.addEventListener('click', _startRun);
+    var pickMainAssetBtn = byId('ecomPickMainAssetBtn');
+    if (pickMainAssetBtn) pickMainAssetBtn.addEventListener('click', function() { _openAssetPicker('main'); });
+    var pickProductRefsBtn = byId('ecomPickProductRefsBtn');
+    if (pickProductRefsBtn) pickProductRefsBtn.addEventListener('click', function() { _openAssetPicker('product_ref'); });
+    var pickStyleRefsBtn = byId('ecomPickStyleRefsBtn');
+    if (pickStyleRefsBtn) pickStyleRefsBtn.addEventListener('click', function() { _openAssetPicker('style_ref'); });
     var resetBtn = byId('ecomResetBtn');
     if (resetBtn) resetBtn.addEventListener('click', _resetForm);
     var refreshBtn = byId('ecomRefreshBtn');
@@ -1669,7 +1970,7 @@
         }
         _fetchAssetById(aid, function(err, row) {
           if (err || !row) {
-            _setMsg('未找到这个素材库 ID 对应的素材，请确认后重试。', true);
+            _setMsg('未找到这张素材库图片，请刷新素材库后重试。', true);
             return;
           }
           row.kind = 'main';

@@ -29,6 +29,12 @@
   var seedanceTaskToastTimer = null;
   var seedanceTaskNotifiedJobs = {};
   var lastSeedanceModel = '';
+  var assetPickerState = {
+    loading: false,
+    items: [],
+    selected: {},
+    query: ''
+  };
 
   var defaults = {
     aspectRatio: '9:16',
@@ -665,10 +671,55 @@
     });
   }
 
+  function resolveAssetMediaUrl(asset) {
+    if (!asset) return '';
+    return cleanRemoteUrl(asset.preview_url || asset.open_url || asset.source_url || '');
+  }
+
+  function existingImageAssetIds() {
+    var map = {};
+    (state.images || []).forEach(function(item) {
+      var aid = String((item && item.asset_id) || '').trim();
+      if (aid) map[aid] = true;
+    });
+    return map;
+  }
+
+  function normalizeAssetPickerItem(asset) {
+    var aid = String((asset && asset.asset_id) || '').trim();
+    if (!aid) return null;
+    var mediaType = String((asset && asset.media_type) || '').toLowerCase();
+    if (mediaType && mediaType !== 'image') return null;
+    return {
+      asset_id: aid,
+      name: String((asset && asset.filename) || aid).trim() || aid,
+      size: Number((asset && asset.file_size) || 0),
+      url: resolveAssetMediaUrl(asset),
+      source_url: String((asset && (asset.open_url || asset.source_url || asset.preview_url)) || '').trim(),
+      prompt: String((asset && asset.prompt) || '').trim(),
+      purpose: (($('seedanceReferencePurposeSelect') || {}).value || 'storyboard').trim() || 'storyboard'
+    };
+  }
+
+  function selectedAssetPickerItems() {
+    var selected = assetPickerState.selected || {};
+    return (assetPickerState.items || []).filter(function(item) {
+      return item && selected[item.asset_id];
+    });
+  }
+
   function appendMediaItems(existing, incoming, maxCount) {
     var next = (existing || []).slice();
+    var existingAssets = {};
+    next.forEach(function(item) {
+      var aid = String((item && item.asset_id) || '').trim();
+      if (aid) existingAssets[aid] = true;
+    });
     (incoming || []).forEach(function(item) {
       if (typeof maxCount === 'number' && next.length >= maxCount) return;
+      var aid = String((item && item.asset_id) || '').trim();
+      if (aid && existingAssets[aid]) return;
+      if (aid) existingAssets[aid] = true;
       next.push(item);
     });
     return next;
@@ -699,6 +750,221 @@
         '</div>'
       ].join('');
     }).join('');
+  }
+
+  function ensureAssetPickerModal() {
+    var modal = $('seedanceAssetPickerModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'seedanceAssetPickerModal';
+    modal.className = 'seedance-asset-picker-modal';
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML = [
+      '<div class="seedance-asset-picker-card" role="dialog" aria-modal="true" aria-labelledby="seedanceAssetPickerTitle">',
+      '<div class="seedance-asset-picker-head">',
+      '<div>',
+      '<h4 id="seedanceAssetPickerTitle">选择素材库图片</h4>',
+      '<p>可以选择一张或多张图片，确认后直接作为参考图使用。</p>',
+      '</div>',
+      '<button type="button" class="seedance-asset-picker-close" aria-label="关闭">X</button>',
+      '</div>',
+      '<div class="seedance-asset-picker-tools">',
+      '<input type="search" id="seedanceAssetPickerSearch" placeholder="搜索文件名、提示词或标签">',
+      '<button type="button" class="btn btn-ghost btn-sm" id="seedanceAssetPickerReload">刷新</button>',
+      '</div>',
+      '<div id="seedanceAssetPickerStatus" class="seedance-asset-picker-status"></div>',
+      '<div id="seedanceAssetPickerGrid" class="seedance-asset-picker-grid"></div>',
+      '<div class="seedance-asset-picker-foot">',
+      '<span id="seedanceAssetPickerCount">已选择 0 张</span>',
+      '<div class="seedance-asset-picker-actions">',
+      '<button type="button" class="btn btn-ghost" id="seedanceAssetPickerCancel">取消</button>',
+      '<button type="button" class="btn btn-primary" id="seedanceAssetPickerConfirm">确认使用</button>',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', function(event) {
+      if (event.target === modal) closeAssetPicker();
+      var closeBtn = event.target && event.target.closest ? event.target.closest('.seedance-asset-picker-close, #seedanceAssetPickerCancel') : null;
+      if (closeBtn) {
+        event.preventDefault();
+        closeAssetPicker();
+      }
+      var card = event.target && event.target.closest ? event.target.closest('[data-seedance-asset-id]') : null;
+      if (card) {
+        event.preventDefault();
+        toggleAssetPickerSelection(card.getAttribute('data-seedance-asset-id'));
+      }
+    });
+
+    var search = modal.querySelector('#seedanceAssetPickerSearch');
+    if (search) {
+      search.addEventListener('input', function(event) {
+        assetPickerState.query = event.target.value || '';
+        renderAssetPicker();
+      });
+    }
+    var reload = modal.querySelector('#seedanceAssetPickerReload');
+    if (reload) {
+      reload.addEventListener('click', function() {
+        loadAssetPickerItems(true);
+      });
+    }
+    var confirm = modal.querySelector('#seedanceAssetPickerConfirm');
+    if (confirm) {
+      confirm.addEventListener('click', confirmAssetPicker);
+    }
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && modal.classList.contains('is-visible')) closeAssetPicker();
+    });
+    return modal;
+  }
+
+  function filteredAssetPickerItems() {
+    var query = String(assetPickerState.query || '').trim().toLowerCase();
+    if (!query) return assetPickerState.items || [];
+    return (assetPickerState.items || []).filter(function(item) {
+      var haystack = [item.name || '', item.asset_id || '', item.prompt || ''].join(' ').toLowerCase();
+      return haystack.indexOf(query) >= 0;
+    });
+  }
+
+  function renderAssetPicker() {
+    var modal = ensureAssetPickerModal();
+    var grid = modal.querySelector('#seedanceAssetPickerGrid');
+    var status = modal.querySelector('#seedanceAssetPickerStatus');
+    var count = modal.querySelector('#seedanceAssetPickerCount');
+    var confirm = modal.querySelector('#seedanceAssetPickerConfirm');
+    if (!grid || !status) return;
+    var selected = selectedAssetPickerItems();
+    if (count) count.textContent = '已选择 ' + selected.length + ' 张';
+    if (confirm) confirm.disabled = selected.length < 1;
+
+    if (assetPickerState.loading) {
+      status.textContent = '正在加载素材库图片...';
+      grid.innerHTML = '<div class="seedance-asset-picker-empty">正在加载...</div>';
+      return;
+    }
+    var items = filteredAssetPickerItems();
+    if (!assetPickerState.items.length) {
+      status.textContent = '素材库暂无图片';
+      grid.innerHTML = '<div class="seedance-asset-picker-empty">暂无图片素材。你也可以继续使用“上传图片”。</div>';
+      return;
+    }
+    if (!items.length) {
+      status.textContent = '没有匹配的图片';
+      grid.innerHTML = '<div class="seedance-asset-picker-empty">换个关键词试试。</div>';
+      return;
+    }
+    status.textContent = '共 ' + assetPickerState.items.length + ' 张图片，当前显示 ' + items.length + ' 张';
+    var existing = existingImageAssetIds();
+    grid.innerHTML = items.map(function(item) {
+      var selectedClass = assetPickerState.selected[item.asset_id] ? ' is-selected' : '';
+      var already = existing[item.asset_id] ? ' is-existing' : '';
+      var thumb = item.url
+        ? '<img src="' + escapeHtml(item.url) + '" alt="' + escapeHtml(item.name) + '">'
+        : '<div class="seedance-asset-picker-no-thumb">无预览</div>';
+      return [
+        '<button type="button" class="seedance-asset-picker-item' + selectedClass + already + '" data-seedance-asset-id="' + escapeHtml(item.asset_id) + '">',
+        '<span class="seedance-asset-picker-thumb">' + thumb + '</span>',
+        '<span class="seedance-asset-picker-name" title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</span>',
+        '<span class="seedance-asset-picker-meta">' + escapeHtml(formatFileSize(item.size)) + (already ? ' · 已添加' : '') + '</span>',
+        '<span class="seedance-asset-picker-check">✓</span>',
+        '</button>'
+      ].join('');
+    }).join('');
+  }
+
+  function toggleAssetPickerSelection(assetId) {
+    assetId = String(assetId || '').trim();
+    if (!assetId) return;
+    if (assetPickerState.selected[assetId]) delete assetPickerState.selected[assetId];
+    else assetPickerState.selected[assetId] = true;
+    renderAssetPicker();
+  }
+
+  function loadAssetPickerItems(force) {
+    var modal = ensureAssetPickerModal();
+    if (!force && assetPickerState.items.length) {
+      renderAssetPicker();
+      return Promise.resolve(assetPickerState.items);
+    }
+    var base = pipelineBase();
+    if (!base) {
+      assetPickerState.items = [];
+      renderAssetPicker();
+      return Promise.reject(new Error('当前未检测到可用的后端地址，无法读取素材库'));
+    }
+    assetPickerState.loading = true;
+    renderAssetPicker();
+    return fetch(base + '/api/assets?media_type=image&limit=100', { headers: authHeadersSafe() })
+      .then(function(response) {
+        return response.json().then(function(data) {
+          return { ok: response.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error(responseErrorText(result.data, '素材库图片加载失败'));
+        var rows = Array.isArray(result.data.assets) ? result.data.assets : [];
+        assetPickerState.items = rows.map(normalizeAssetPickerItem).filter(Boolean);
+        assetPickerState.loading = false;
+        renderAssetPicker();
+        return assetPickerState.items;
+      })
+      .catch(function(err) {
+        assetPickerState.loading = false;
+        var status = modal.querySelector('#seedanceAssetPickerStatus');
+        if (status) status.textContent = (err && err.message) || '素材库图片加载失败';
+        renderAssetPicker();
+        throw err;
+      });
+  }
+
+  function openAssetPicker() {
+    var modal = ensureAssetPickerModal();
+    assetPickerState.selected = {};
+    assetPickerState.query = '';
+    var search = modal.querySelector('#seedanceAssetPickerSearch');
+    if (search) search.value = '';
+    modal.classList.add('is-visible');
+    modal.setAttribute('aria-hidden', 'false');
+    loadAssetPickerItems(false).catch(function(err) {
+      showMessage((err && err.message) || '素材库图片加载失败');
+    });
+  }
+
+  function closeAssetPicker() {
+    var modal = $('seedanceAssetPickerModal');
+    if (!modal) return;
+    modal.classList.remove('is-visible');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  function confirmAssetPicker() {
+    var items = selectedAssetPickerItems();
+    if (!items.length) return;
+    var incoming = items.map(function(item) {
+      return {
+        name: item.name,
+        size: item.size,
+        type: 'image',
+        url: item.url || item.source_url,
+        source_url: item.source_url || item.url,
+        asset_id: item.asset_id,
+        purpose: (($('seedanceReferencePurposeSelect') || {}).value || item.purpose || 'storyboard').trim() || 'storyboard'
+      };
+    }).filter(function(item) {
+      return item.asset_id && item.url;
+    });
+    var before = state.images.length;
+    state.images = appendMediaItems(state.images, incoming);
+    state.activeBoardIndex = 0;
+    closeAssetPicker();
+    renderWorkspace();
+    var added = state.images.length - before;
+    showMessage(added > 0 ? ('已从素材库添加 ' + added + ' 张参考图。') : '选择的图片已在参考图列表中。');
   }
 
   function updateReferencePurpose(index, purpose) {
@@ -1329,7 +1595,7 @@
     var segmentSeconds = getCurrentSegmentSeconds(values.model);
     var segmentCount = getDurationSegmentCount(state.duration, values.model);
     var useDirectVideo = state.mode !== 'prompt_only'
-      && uploaded.length === 1
+      && uploaded.length >= 1
       && !!(uploaded[0] && uploaded[0].asset_id)
       && segmentCount === 1
       && !!values.prompt;
@@ -1342,7 +1608,7 @@
       auto_save: true,
       analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
       image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
-      image_model_channel_fallbacks: ['gpt-image-2-yunwu', 'nano-banana-2', 'nano-banana-2-yunwu'],
+      image_model_fallback: 'none',
       video_model: isYunwuVeoModel(values.model) ? 'veo3.1' : values.model,
       video_channel: isYunwuVeoModel(values.model) ? 'yunwu' : '',
       aspect_ratio: values.aspectRatio,
@@ -1833,6 +2099,12 @@
     $('seedanceImageUploadBtn').addEventListener('click', function() {
       $('seedanceImageFileInput').click();
     });
+
+    if ($('seedanceAssetPickBtn')) {
+      $('seedanceAssetPickBtn').addEventListener('click', function() {
+        openAssetPicker();
+      });
+    }
 
     $('seedanceImageFileInput').addEventListener('change', function(event) {
       state.images = appendMediaItems(state.images, readFiles(event.target.files));

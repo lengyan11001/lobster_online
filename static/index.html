@@ -7,7 +7,7 @@
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
   <link rel="stylesheet" href="/static/css/common.css?v=20260522-hero-vision-indent">
-  <link rel="stylesheet" href="/static/css/index.css?v=20260604-skill-card-seedance-tabs">
+  <link rel="stylesheet" href="/static/css/index.css?v=20260604-ecom-asset-picker">
 </head>
 <body>
   <div class="page">
@@ -377,8 +377,9 @@
                       <div class="ecom-upload-box">
                         <div class="actions">
                           <button type="button" id="ecomUploadMainBtn" class="btn btn-primary btn-sm">上传主图</button>
+                          <button type="button" id="ecomPickMainAssetBtn" class="btn btn-primary btn-sm">选择已有图片</button>
                           <input type="file" id="ecomMainFileInput" accept="image/*" style="display:none;">
-                          <input type="text" id="ecomMainAssetIdInput" placeholder="高级：粘贴素材库 ID">
+                          <input type="hidden" id="ecomMainAssetIdInput">
                         </div>
                         <div id="ecomMainUploadList" class="ecom-upload-list"></div>
                       </div>
@@ -394,6 +395,7 @@
                       <div class="ecom-upload-box">
                         <div class="actions">
                           <button type="button" id="ecomUploadProductRefsBtn" class="btn btn-ghost btn-sm">上传补充角度图</button>
+                          <button type="button" id="ecomPickProductRefsBtn" class="btn btn-ghost btn-sm">选择已有图片</button>
                           <input type="file" id="ecomProductRefsFileInput" accept="image/*" multiple style="display:none;">
                         </div>
                         <div id="ecomProductRefsList" class="ecom-upload-list"></div>
@@ -405,6 +407,7 @@
                       <div class="ecom-upload-box">
                         <div class="actions">
                           <button type="button" id="ecomUploadStyleRefsBtn" class="btn btn-ghost btn-sm">上传风格参考</button>
+                          <button type="button" id="ecomPickStyleRefsBtn" class="btn btn-ghost btn-sm">选择已有图片</button>
                           <input type="file" id="ecomStyleRefsFileInput" accept="image/*" multiple style="display:none;">
                         </div>
                         <div id="ecomStyleRefsList" class="ecom-upload-list"></div>
@@ -731,6 +734,7 @@
                       <div class="imglab-upload-box">
                         <div class="imglab-upload-actions">
                           <button type="button" id="imglabReferenceUploadBtn" class="btn btn-primary btn-sm">上传图片</button>
+                          <button type="button" id="imglabAssetPickBtn" class="btn btn-primary btn-sm">选择已有图片</button>
                           <input type="file" id="imglabReferenceInput" accept="image/*" multiple style="display:none;">
                           <select id="imglabReferencePurposeSelect" style="max-width:160px;">
                             <option value="auto" selected>普通参考</option>
@@ -1008,6 +1012,7 @@
                       <div class="tvc-upload-box">
                         <div class="tvc-upload-actions">
                           <button type="button" id="seedanceImageUploadBtn" class="btn btn-primary btn-sm">上传图片</button>
+                          <button type="button" id="seedanceAssetPickBtn" class="btn btn-ghost btn-sm">选择已有图片</button>
                           <input type="file" id="seedanceImageFileInput" accept="image/*" multiple style="display:none;">
                           <select id="seedanceReferencePurposeSelect" style="max-width:160px;">
                             <option value="storyboard" selected>分镜参考</option>
@@ -2317,9 +2322,9 @@
   <script src="/static/js/wecom-config.js"></script>
   <script src="/static/js/wecom-detail.js?v=20260416e"></script>
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
-  <script src="/static/js/comfly-ecommerce-detail.js?v=20260603-task-toast"></script>
-  <script src="/static/js/comfly-image-studio.js?v=20260603-task-toast"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260604-seedance-mode-tabs"></script>
+  <script src="/static/js/comfly-ecommerce-detail.js?v=20260604-asset-picker"></script>
+  <script src="/static/js/comfly-image-studio.js?v=20260604-asset-picker"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260604-seedance-asset-picker"></script>
   <script src="/static/js/viral-video-remix.js?v=20260513-taskgroup-error-balance-guard"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>

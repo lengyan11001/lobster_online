@@ -174,6 +174,7 @@ async def _generate_image_studio_core(
     quality: str,
     background: str,
     upload_payloads: List[Dict[str, Any]],
+    reference_image_urls: List[str] | None = None,
     auto_save: bool = True,
 ) -> Dict[str, Any]:
     prompt = (prompt or "").strip()
@@ -195,6 +196,13 @@ async def _generate_image_studio_core(
     }
     if background and background != "auto":
         body["background"] = background
+    refs = [
+        str(url or "").strip()
+        for url in (reference_image_urls or [])
+        if str(url or "").strip().startswith(("http://", "https://"))
+    ][:12]
+    if refs:
+        body["image"] = refs
 
     files: List[tuple[str, tuple[str, bytes, str]]] = []
     for upload in upload_payloads:
@@ -218,6 +226,8 @@ async def _generate_image_studio_core(
             if files:
                 url = _comfly_endpoint(api_base, "/v1/images/edits")
                 data = {k: str(v) for k, v in body.items() if k != "response_format"}
+                if refs:
+                    data["image"] = json.dumps(refs, ensure_ascii=False)
                 resp = await client.post(url, headers=headers, data=data, files=files)
             else:
                 url = _comfly_endpoint(api_base, "/v1/images/generations")
@@ -273,7 +283,8 @@ async def _generate_image_studio_core(
             "aspect_ratio": aspect_ratio,
             "size": size,
             "quality": quality_id,
-            "reference_count": len(files),
+            "reference_count": len(files) + len(refs),
+            "reference_url_count": len(refs),
         },
     }
 
@@ -330,6 +341,7 @@ async def _run_image_studio_job(
             quality=str(payload.get("quality") or "high"),
             background=str(payload.get("background") or "auto"),
             upload_payloads=upload_payloads,
+            reference_image_urls=list(payload.get("reference_image_urls") or []),
         )
         update_job(
             job_id,
@@ -407,6 +419,15 @@ async def _upload_files_to_payloads(images: List[UploadFile]) -> List[Dict[str, 
     return uploads
 
 
+def _parse_reference_image_urls(raw: str) -> List[str]:
+    urls: List[str] = []
+    for part in str(raw or "").replace("\n", ",").split(","):
+        url = part.strip()
+        if url.startswith(("http://", "https://")) and url not in urls:
+            urls.append(url)
+    return urls[:12]
+
+
 async def _save_image_studio_results(
     *,
     previews: List[Dict[str, str]],
@@ -472,10 +493,12 @@ async def comfly_image_studio_generate(
     aspect_ratio: str = Form("1:1"),
     quality: str = Form("high"),
     background: str = Form("auto"),
+    reference_image_urls: str = Form(""),
     images: List[UploadFile] = File(None),
     current_user: _ServerUser = Depends(get_current_user_media_edit),
     db: Session = Depends(get_db),
 ):
+    upload_payloads = await _upload_files_to_payloads(images or [])
     return await _generate_image_studio_core(
         request=request,
         current_user=current_user,
@@ -485,7 +508,8 @@ async def comfly_image_studio_generate(
         aspect_ratio=aspect_ratio,
         quality=quality,
         background=background,
-        upload_payloads=await _upload_files_to_payloads(images or []),
+        upload_payloads=upload_payloads,
+        reference_image_urls=_parse_reference_image_urls(reference_image_urls),
     )
 
 
@@ -497,15 +521,18 @@ async def comfly_image_studio_generate_start(
     aspect_ratio: str = Form("1:1"),
     quality: str = Form("high"),
     background: str = Form("auto"),
+    reference_image_urls: str = Form(""),
     images: List[UploadFile] = File(None),
     current_user: _ServerUser = Depends(get_current_user_media_edit),
 ):
+    reference_urls = _parse_reference_image_urls(reference_image_urls)
     payload = {
         "prompt": (prompt or "").strip(),
         "model": (model or "gpt-image-2").strip() or "gpt-image-2",
         "aspect_ratio": (aspect_ratio or "1:1").strip() or "1:1",
         "quality": (quality or "high").strip() or "high",
         "background": (background or "auto").strip() or "auto",
+        "reference_image_urls": reference_urls,
     }
     if not payload["prompt"]:
         raise HTTPException(status_code=400, detail="请输入图片提示词")
