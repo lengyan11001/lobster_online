@@ -1047,5 +1047,153 @@
         }
       }
     }
+  },
+  "wewrite.article.pipeline": {
+    "description": "公众号文章整包流水线：用户只输入主题/想法，一次完成 AI 写文章、生成 3 张 16:9 横屏配图、公众号排版，并推送到微信公众号草稿箱。对话里写公众号文章并推草稿箱时优先使用本能力。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "idea": {
+          "type": "string",
+          "description": "用户输入的公众号文章主题、想法或素材"
+        },
+        "topic": {
+          "type": "string",
+          "description": "idea 的别名；模型不确定时可传 topic"
+        },
+        "audience": {
+          "type": "string",
+          "description": "目标读者，可选"
+        },
+        "style": {
+          "type": "string",
+          "description": "写作风格，可选"
+        },
+        "theme": {
+          "type": "string",
+          "description": "排版主题：professional-clean、minimal-gold、warm-editorial"
+        },
+        "include_images": {
+          "type": "boolean",
+          "description": "是否自动生成并插入配图，默认 true"
+        },
+        "image_model": {
+          "type": "string",
+          "description": "图片模型，默认 gpt-image-2"
+        },
+        "image_count": {
+          "type": "integer",
+          "description": "自动配图数量，默认 3"
+        },
+        "image_aspect_ratio": {
+          "type": "string",
+          "description": "自动配图比例，默认横屏 16:9"
+        }
+      },
+      "required": [
+        "idea"
+      ]
+    }
+  },
+  "wewrite.article.draft": {
+    "description": "内部兼容能力：仅在已有完整 Markdown 时使用。对话里用户要写公众号文章、配图、排版并推草稿箱时必须使用 wewrite.article.pipeline。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": false,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "文章标题；省略时从 Markdown 一级标题提取"
+        },
+        "markdown": {
+          "type": "string",
+          "description": "公众号文章 Markdown 正文，建议包含清晰小标题、段落和配图"
+        },
+        "theme": {
+          "type": "string",
+          "description": "排版主题：professional-clean、minimal-gold、warm-editorial"
+        },
+        "author": {
+          "type": "string",
+          "description": "作者名；省略时使用公众号配置"
+        },
+        "digest": {
+          "type": "string",
+          "description": "摘要，≤120 字；省略时自动从正文提取"
+        },
+        "cover_asset_id": {
+          "type": "string",
+          "description": "素材库图片 asset_id，用作公众号封面"
+        },
+        "cover_image_url": {
+          "type": "string",
+          "description": "公网图片 URL，用作公众号封面"
+        },
+        "upload_article_images": {
+          "type": "boolean",
+          "description": "是否把正文图片上传到公众号并替换 URL，默认 true"
+        }
+      },
+      "required": [
+        "markdown"
+      ]
+    }
+  },
+  "wewrite.article.generate": {
+    "description": "内部兼容能力：只生成公众号文章内容，不推草稿箱。对话里用户要写公众号文章、配图、排版并推草稿箱时必须使用 wewrite.article.pipeline。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": false,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "idea": {
+          "type": "string",
+          "description": "用户输入的文章主题、想法或素材"
+        },
+        "audience": {
+          "type": "string",
+          "description": "目标读者，可选"
+        },
+        "style": {
+          "type": "string",
+          "description": "写作风格，可选"
+        },
+        "theme": {
+          "type": "string",
+          "description": "排版主题：professional-clean、minimal-gold、warm-editorial"
+        },
+        "include_images": {
+          "type": "boolean",
+          "description": "是否自动生成并插入配图"
+        },
+        "image_model": {
+          "type": "string",
+          "description": "图片模型，默认 gpt-image-2"
+        },
+        "image_count": {
+          "type": "integer",
+          "description": "自动配图数量，默认 3，公众号文章推荐 3"
+        },
+        "image_aspect_ratio": {
+          "type": "string",
+          "description": "自动配图比例，公众号文章默认横屏 16:9"
+        }
+      },
+      "required": [
+        "idea"
+      ]
+    }
   }
 }

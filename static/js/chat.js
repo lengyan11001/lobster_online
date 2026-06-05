@@ -1390,6 +1390,47 @@ function _renderChatSuggestionChip(el, title, prompt) {
 
 var CHAT_DEFAULT_PLACEHOLDER = '发送消息或输入 / 选择技能';
 var CHAT_DEFAULT_COMPOSER_LEAD = '告诉我您想做什么？我会先帮您理清任务，再继续生成和执行~';
+var WECHAT_ARTICLE_CHAT_PROMPT = '帮我写个公众号文章(已配置)，自动生成3张16:9横屏配图，完成公众号排版，并推送到草稿箱。主题是：';
+
+function fillChatPromptInput(prompt) {
+  var input = document.getElementById('chatInput');
+  if (!input) return false;
+  input.value = prompt || '';
+  input.focus();
+  if (typeof input.setSelectionRange === 'function') {
+    var cursor = input.value.length;
+    input.setSelectionRange(cursor, cursor);
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
+
+function openWechatArticlePage() {
+  if (typeof window._openWechatArticleView === 'function') {
+    window._openWechatArticleView();
+    return;
+  }
+  if (typeof window.showAppView === 'function') {
+    window.showAppView('wechat-article');
+    return;
+  }
+  openHiddenWorkspaceFallback('wechat-article');
+}
+
+function syncWechatArticleChatEntry() {
+  var chip = document.getElementById('chatSuggestionChipWechatArticle');
+  if (!chip) return;
+  chip.setAttribute('data-chip-tone', 'content');
+  chip.setAttribute('data-chat-prompt', WECHAT_ARTICLE_CHAT_PROMPT);
+  chip.removeAttribute('data-open-hidden-view');
+  chip.title = '单击在对话中生成；双击打开公众号文章页面';
+  var desc = chip.querySelector('.chat-suggestion-chip-desc');
+  if (desc) desc.textContent = '输入主题后推草稿';
+}
+window.WECHAT_ARTICLE_CHAT_PROMPT = WECHAT_ARTICLE_CHAT_PROMPT;
+window.fillChatPromptInput = fillChatPromptInput;
+window.openWechatArticlePage = openWechatArticlePage;
+window.syncWechatArticleChatEntry = syncWechatArticleChatEntry;
 var CHAT_QUICK_MODE_CONFIG = {
   video: {
     badge: '视频合成',
@@ -1648,6 +1689,7 @@ function updateChatModeUi(mode) {
   var chip6 = document.getElementById('chatSuggestionChip6');
   var chip7 = document.getElementById('chatSuggestionChip7');
   var chip8 = document.getElementById('chatSuggestionChip8');
+  var chipWechatArticle = document.getElementById('chatSuggestionChipWechatArticle');
   var chipPpt = document.getElementById('chatSuggestionChipPpt');
   var shortcut1 = document.getElementById('chatShortcutLink1');
   var shortcut2 = document.getElementById('chatShortcutLink2');
@@ -1708,6 +1750,7 @@ function updateChatModeUi(mode) {
     if (chip5) {
       _renderChatSuggestionChip(chip5, '爆款TVC', '用爆款tvc帮我生成一个视频。');
     }
+    syncWechatArticleChatEntry();
     if (chip6) {
       _renderChatSuggestionChip(chip6, '创意分镜头视频');
       _setChatSuggestionAction(chip6, 'data-open-hidden-view', 'seedance-tvc-studio');
@@ -1741,6 +1784,7 @@ function updateChatModeUi(mode) {
     if (attachBtn) attachBtn.style.display = '';
     if (directChip) directChip.style.display = '';
   }
+  if (chipWechatArticle) syncWechatArticleChatEntry();
   renderChatQuickModeUi(normalized === CHAT_MODE_WORKSPACE ? '' : _getSessionQuickMode(getSessionById(currentSessionId)));
   renderChatMemoryScopeUi();
   if (homeWorkspacePill) homeWorkspacePill.textContent = '云端工作台';
@@ -3905,10 +3949,21 @@ function bindChatHomeActions() {
       openH5ChatMirrorSession();
       return;
     }
+    var wechatArticleChatBtn = e.target.closest('#chatSuggestionChipWechatArticle');
+    if (wechatArticleChatBtn) {
+      if (typeof _isH5MirrorSession === 'function' && _isH5MirrorSession(getSessionById(currentSessionId)) && typeof openDefaultChatSession === 'function') {
+        openDefaultChatSession();
+      }
+      syncWechatArticleChatEntry();
+      fillChatPromptInput(WECHAT_ARTICLE_CHAT_PROMPT);
+      return;
+    }
     var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
     if (hiddenViewBtn) {
       var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
-      if (hiddenView === 'hifly-digital-human') {
+      if (hiddenView === 'wechat-article' && typeof window.showAppView === 'function') {
+        window.showAppView('wechat-article');
+      } else if (hiddenView === 'hifly-digital-human') {
         openHiddenWorkspaceFallback(hiddenView);
       } else if (typeof window._openHiddenWorkspaceView === 'function') {
         window._openHiddenWorkspaceView(hiddenView);
@@ -3929,16 +3984,15 @@ function bindChatHomeActions() {
       if (typeof _isH5MirrorSession === 'function' && _isH5MirrorSession(getSessionById(currentSessionId)) && typeof openDefaultChatSession === 'function') {
         openDefaultChatSession();
       }
-      var input = document.getElementById('chatInput');
-      if (!input) return;
-      input.value = promptBtn.getAttribute('data-chat-prompt') || '';
-      input.focus();
-      if (typeof input.setSelectionRange === 'function') {
-        var cursor = input.value.length;
-        input.setSelectionRange(cursor, cursor);
-      }
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      fillChatPromptInput(promptBtn.getAttribute('data-chat-prompt') || '');
     }
+  });
+  document.addEventListener('dblclick', function(e) {
+    var wechatArticleChatBtn = e.target.closest('#chatSuggestionChipWechatArticle');
+    if (!wechatArticleChatBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openWechatArticlePage();
   });
 }
 
@@ -3985,6 +4039,8 @@ function openHiddenWorkspaceFallback(view) {
     window.initImageComposerStudioView();
   } else if (target === 'ecommerce-detail-studio' && typeof window.initEcommerceDetailStudioView === 'function') {
     window.initEcommerceDetailStudioView();
+  } else if (target === 'wechat-article' && typeof window.loadWechatArticlePage === 'function') {
+    window.loadWechatArticlePage();
   }
 }
 

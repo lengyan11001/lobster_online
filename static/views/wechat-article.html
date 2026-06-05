@@ -1,0 +1,167 @@
+<div id="content-wechat-article" class="content-block">
+  <div class="card wechat-article-shell">
+    <div class="block-header" style="align-items:flex-start;gap:0.75rem;">
+      <div>
+        <h3 style="margin:0;">公众号文章</h3>
+        <p class="meta" style="margin:0.35rem 0 0;">输入主题或想法，AI 自动写作、排版，并可推送到公众号草稿箱。</p>
+      </div>
+      <div class="btns" style="margin-left:auto;">
+        <button type="button" id="wechatArticleBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+        <button type="button" id="wechatArticleReloadBtn" class="btn btn-ghost btn-sm">刷新草稿</button>
+      </div>
+    </div>
+
+    <div class="wechat-article-tabs" role="tablist" aria-label="公众号文章">
+      <button type="button" class="wechat-article-tab active" data-wechat-article-tab="compose">AI 创作</button>
+      <button type="button" class="wechat-article-tab" data-wechat-article-tab="drafts">草稿记录</button>
+      <button type="button" class="wechat-article-tab" data-wechat-article-tab="settings">公众号配置</button>
+    </div>
+
+    <div id="wechatArticleMsg" class="msg" style="display:none;margin-top:0.75rem;"></div>
+
+    <div id="wechatArticlePanelCompose" class="wechat-article-panel">
+      <div class="wechat-article-compose-grid">
+        <div class="wechat-article-editor">
+          <div class="form-row">
+            <label>主题或想法</label>
+            <textarea id="wechatArticleIdea" rows="9" placeholder="例如：写一篇给餐饮老板看的文章，讲为什么夏季小龙虾门店需要提前做短视频内容和私域承接。"></textarea>
+          </div>
+          <div class="wechat-article-inline">
+            <div class="form-row">
+              <label>目标读者</label>
+              <input type="text" id="wechatArticleAudience" placeholder="例如：餐饮老板、门店运营、新媒体负责人" autocomplete="off">
+            </div>
+            <div class="form-row">
+              <label>写作风格</label>
+              <select id="wechatArticleStyle">
+                <option value="专业、有观点、适合公众号阅读">专业观点</option>
+                <option value="简洁大气、商业分析、少废话">简洁商业</option>
+                <option value="亲切、有案例、有行动建议">亲切实用</option>
+                <option value="爆款标题感、节奏快、转化导向">转化导向</option>
+              </select>
+            </div>
+          </div>
+          <div class="wechat-article-inline">
+            <div class="form-row">
+              <label>排版主题</label>
+              <select id="wechatArticleTheme">
+                <option value="professional-clean">专业清爽</option>
+                <option value="minimal-gold">极简金色</option>
+                <option value="warm-editorial">暖色杂志</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>自动配图</label>
+              <label class="wechat-article-switch">
+                <input type="checkbox" id="wechatArticleIncludeImages" checked>
+                <span>生成并插入文章配图</span>
+              </label>
+            </div>
+          </div>
+          <div class="wechat-article-inline">
+            <div class="form-row">
+              <label>配图比例</label>
+              <select id="wechatArticleImageRatio">
+                <option value="3:2">横图 3:2</option>
+                <option value="16:9">宽横图 16:9</option>
+                <option value="1:1">方图 1:1</option>
+                <option value="9:16">竖图 9:16</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>配图数量</label>
+              <select id="wechatArticleImageCount">
+                <option value="3">3 张</option>
+                <option value="2">2 张</option>
+                <option value="1">1 张</option>
+                <option value="5">5 张</option>
+              </select>
+            </div>
+          </div>
+          <div class="wechat-article-inline">
+            <div class="form-row">
+              <label>编辑模式</label>
+              <label class="wechat-article-switch">
+                <input type="checkbox" id="wechatArticleEditToggle" disabled>
+                <span>修改生成后的正文</span>
+              </label>
+            </div>
+          </div>
+          <div class="form-row wechat-article-manual-images">
+            <label>手动配图</label>
+            <div class="btns">
+              <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0;">
+                上传图片
+                <input type="file" id="wechatArticleImageUpload" accept="image/*" multiple style="display:none;">
+              </label>
+              <button type="button" id="wechatArticleAssetPickerBtn" class="btn btn-ghost btn-sm">从素材库选择</button>
+            </div>
+            <div id="wechatArticleSelectedImages" class="wechat-article-selected-images">
+              <p class="meta">可上传图片或选择素材库图片，生成文章时会插入正文。</p>
+            </div>
+          </div>
+          <div id="wechatArticleEditBox" class="form-row wechat-article-edit-box" style="display:none;">
+            <label>正文编辑</label>
+            <textarea id="wechatArticleMarkdownEdit" rows="14" placeholder="AI 生成后可在这里修改正文，右侧会实时刷新公众号预览。"></textarea>
+          </div>
+          <div class="btns wechat-article-primary-actions">
+            <button type="button" id="wechatArticleGenerateBtn" class="btn btn-primary">AI 生成文章</button>
+            <button type="button" id="wechatArticleRefreshPreviewBtn" class="btn btn-ghost" disabled>刷新预览</button>
+            <button type="button" id="wechatArticleDraftBtn" class="btn btn-ghost" disabled>推送草稿箱</button>
+          </div>
+          <div id="wechatArticleGeneratedMeta" class="wechat-article-generated-meta">
+            <p class="meta">生成后会在右侧显示公众号效果，确认后再推送草稿箱。</p>
+          </div>
+        </div>
+
+        <div class="wechat-article-preview-wrap">
+          <div class="wechat-article-preview-head">
+            <strong id="wechatArticlePreviewTitle">公众号预览</strong>
+            <span id="wechatArticlePreviewMeta" class="meta"></span>
+          </div>
+          <div id="wechatArticlePreview" class="wechat-article-preview">
+            <div class="wechat-article-empty-preview">
+              <strong>等待生成</strong>
+              <p>左侧输入主题或想法后，AI 会自动生成文章并完成公众号排版。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="wechatArticlePanelDrafts" class="wechat-article-panel" style="display:none;">
+      <div id="wechatArticleDraftList" class="wechat-article-drafts">
+        <p class="meta">加载中…</p>
+      </div>
+    </div>
+
+    <div id="wechatArticlePanelSettings" class="wechat-article-panel" style="display:none;">
+      <div class="wechat-article-settings-grid">
+        <div class="form-row">
+          <label>微信公众号 AppID</label>
+          <input type="text" id="wechatArticleAppid" autocomplete="off" placeholder="wx...">
+        </div>
+        <div class="form-row">
+          <label>AppSecret</label>
+          <input type="password" id="wechatArticleSecret" autocomplete="new-password" placeholder="留空则不修改已保存密钥">
+          <p id="wechatArticleSecretHint" class="meta" style="margin:0.35rem 0 0;"></p>
+        </div>
+        <div class="form-row">
+          <label>默认作者</label>
+          <input type="text" id="wechatArticleAuthor" autocomplete="off" placeholder="可选">
+        </div>
+        <div class="form-row">
+          <label>默认主题</label>
+          <select id="wechatArticleDefaultTheme">
+            <option value="professional-clean">专业清爽</option>
+            <option value="minimal-gold">极简金色</option>
+            <option value="warm-editorial">暖色杂志</option>
+          </select>
+        </div>
+      </div>
+      <div class="btns">
+        <button type="button" id="wechatArticleSaveConfigBtn" class="btn btn-primary">保存配置</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -75,11 +75,14 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "create.video.pipeline": ("/api/create-video/pipeline/run", 7200.0),
     "hifly.video.create_by_tts": ("/api/hifly/video/create-by-tts", 120.0),
     "ecommerce.publish": ("/api/ecommerce-publish/open-product-form", 120.0),
+    "wewrite.article.pipeline": ("/api/wechat-article/pipeline", 420.0),
+    "wewrite.article.generate": ("/api/wechat-article/generate", 300.0),
+    "wewrite.article.draft": ("/api/wechat-article/drafts", 120.0),
     "ppt.create": ("/api/create-ppt/run", 600.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish", "ppt.create"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish", "wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft", "ppt.create"})
 
 _LOCAL_PIPELINE_JOB_LOOKUP_SPECS: tuple[tuple[str, str, str], ...] = (
     ("comfly.daihuo.pipeline", "/api/comfly-daihuo/pipeline/jobs/{job_id}", "local_comfly_daihuo_job"),
@@ -93,16 +96,28 @@ _LOCAL_PIPELINE_JOB_LOOKUP_BY_CAPABILITY = {
 }
 
 
+def _dict_payload_from_any(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    return dict(parsed)
+            except Exception:
+                return {}
+    return {}
+
+
 def _normalize_invoke_task_get_result_args(args: Dict[str, Any]) -> Dict[str, Any]:
     """task.get_result：上游只认 payload.task_id；模型常误写 taskid/taskId 或把 task_id 放在 arguments 顶层。"""
     if not isinstance(args, dict):
         return args
     if str(args.get("capability_id") or "").strip() != "task.get_result":
         return args
-    payload = args.get("payload")
-    if not isinstance(payload, dict):
-        payload = {}
-    pl = dict(payload)
+    pl = _dict_payload_from_any(args.get("payload"))
     tid = str(pl.get("task_id") or "").strip()
     if not tid:
         for k in ("taskId", "taskid", "TaskId"):
@@ -142,8 +157,7 @@ def _normalize_invoke_comfly_veo_args(args: Dict[str, Any]) -> Dict[str, Any]:
         return args
     if str(args.get("capability_id") or "").strip() != "comfly.daihuo":
         return args
-    raw_pl = args.get("payload")
-    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    pl = _dict_payload_from_any(args.get("payload"))
     nested = pl.get("payload")
     if isinstance(nested, dict) and (nested.get("action") or "").strip():
         base = {k: v for k, v in pl.items() if k != "payload"}
@@ -177,8 +191,7 @@ def _normalize_invoke_ppt_create_args(args: Dict[str, Any]) -> Dict[str, Any]:
         return args
     if str(args.get("capability_id") or "").strip() != "ppt.create":
         return args
-    raw_pl = args.get("payload")
-    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    pl = _dict_payload_from_any(args.get("payload"))
     nested = pl.get("payload")
     if isinstance(nested, dict):
         base = {k: v for k, v in pl.items() if k != "payload"}
@@ -217,8 +230,7 @@ def _normalize_invoke_daihuo_pipeline_args(args: Dict[str, Any]) -> Dict[str, An
         return args
     if str(args.get("capability_id") or "").strip() != "comfly.daihuo.pipeline":
         return args
-    raw_pl = args.get("payload")
-    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    pl = _dict_payload_from_any(args.get("payload"))
     nested = pl.get("payload")
     if isinstance(nested, dict) and (
         (nested.get("action") or "").strip()
@@ -260,8 +272,7 @@ def _normalize_invoke_seedance_tvc_pipeline_args(args: Dict[str, Any]) -> Dict[s
         return args
     if str(args.get("capability_id") or "").strip() != "comfly.seedance.tvc.pipeline":
         return args
-    raw_pl = args.get("payload")
-    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    pl = _dict_payload_from_any(args.get("payload"))
     nested = pl.get("payload")
     if isinstance(nested, dict) and (
         (nested.get("action") or "").strip()
@@ -311,8 +322,7 @@ def _normalize_invoke_ecommerce_detail_pipeline_args(args: Dict[str, Any]) -> Di
         return args
     if str(args.get("capability_id") or "").strip() != "comfly.ecommerce.detail_pipeline":
         return args
-    raw_pl = args.get("payload")
-    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    pl = _dict_payload_from_any(args.get("payload"))
     nested = pl.get("payload")
     if isinstance(nested, dict) and (
         (nested.get("action") or "").strip()
@@ -355,8 +365,7 @@ def _normalize_invoke_goal_video_pipeline_args(args: Dict[str, Any]) -> Dict[str
         return args
     if str(args.get("capability_id") or "").strip() != "goal.video.pipeline":
         return args
-    raw_pl = args.get("payload")
-    pl: Dict[str, Any] = dict(raw_pl) if isinstance(raw_pl, dict) else {}
+    pl = _dict_payload_from_any(args.get("payload"))
     nested = pl.get("payload")
     if isinstance(nested, dict) and (
         (nested.get("action") or "").strip()
@@ -389,6 +398,90 @@ def _normalize_invoke_goal_video_pipeline_args(args: Dict[str, Any]) -> Dict[str
             pl.setdefault(k, args[k])
     out = dict(args)
     out["payload"] = pl
+    return out
+
+
+def _normalize_invoke_wewrite_article_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(args, dict):
+        return args
+    capability_id = str(args.get("capability_id") or "").strip()
+    if capability_id not in ("wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft"):
+        return args
+    pl = _dict_payload_from_any(args.get("payload"))
+    nested = pl.get("payload")
+    if isinstance(nested, (dict, str)):
+        nested_pl = _dict_payload_from_any(nested)
+        if nested_pl:
+            base = {k: v for k, v in pl.items() if k != "payload"}
+            pl = {**base, **nested_pl}
+    for key in (
+        "idea",
+        "topic",
+        "prompt",
+        "query",
+        "subject",
+        "content",
+        "title",
+        "markdown",
+        "digest",
+        "theme",
+        "audience",
+        "style",
+        "include_images",
+        "image_model",
+        "image_count",
+        "image_aspect_ratio",
+        "cover_image_url",
+        "cover_asset_id",
+        "upload_article_images",
+    ):
+        if key in args and args[key] is not None and key not in pl:
+            pl[key] = args[key]
+    if capability_id in ("wewrite.article.pipeline", "wewrite.article.generate"):
+        if not str(pl.get("idea") or "").strip():
+            for alias in ("topic", "prompt", "query", "subject", "content", "title"):
+                value = str(pl.get(alias) or "").strip()
+                if value:
+                    pl["idea"] = value
+                    break
+        pl.setdefault("include_images", True)
+        pl.setdefault("image_model", "gpt-image-2")
+        pl.setdefault("image_count", 3)
+        pl.setdefault("image_aspect_ratio", "16:9")
+        pl.setdefault("theme", "professional-clean")
+    elif capability_id == "wewrite.article.draft":
+        raw_payload = args.get("payload")
+        if not str(pl.get("markdown") or "").strip() and isinstance(raw_payload, str) and not raw_payload.strip().startswith("{"):
+            pl["markdown"] = raw_payload.strip()
+        if not str(pl.get("idea") or "").strip():
+            for alias in ("topic", "prompt", "query", "subject", "content", "title"):
+                value = str(pl.get(alias) or "").strip()
+                if value:
+                    pl["idea"] = value
+                    break
+        pl.setdefault("theme", "professional-clean")
+        pl.setdefault("upload_article_images", True)
+    out = dict(args)
+    out["payload"] = pl
+    if capability_id in ("wewrite.article.generate", "wewrite.article.draft"):
+        wants_full_article_flow = (
+            bool(str(pl.get("idea") or "").strip())
+            and (
+                capability_id == "wewrite.article.generate"
+                or not str(pl.get("markdown") or "").strip()
+                or bool(pl.get("include_images"))
+                or bool(pl.get("push_to_draft"))
+                or bool(pl.get("draft"))
+            )
+        )
+        if wants_full_article_flow:
+            logger.info("[MCP wewrite.article] redirect %s -> wewrite.article.pipeline", capability_id)
+            out["capability_id"] = "wewrite.article.pipeline"
+            pl.setdefault("include_images", True)
+            pl.setdefault("image_model", "gpt-image-2")
+            pl.setdefault("image_count", 3)
+            pl.setdefault("image_aspect_ratio", "16:9")
+            pl.setdefault("theme", "professional-clean")
     return out
 
 
@@ -1828,6 +1921,7 @@ def _tool_definitions(
     capability_list = sorted(
         cid
         for cid in catalog.keys()
+        if catalog[cid].get("enabled") is not False
         if not (_capability_id_is_debug_only_in_registry(cid) and not is_skill_store_admin)
         and (allowed_capability_ids is None or cid in allowed_capability_ids)
     )
@@ -4494,6 +4588,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
             args = _normalize_invoke_seedance_tvc_pipeline_args(args)
             args = _normalize_invoke_ecommerce_detail_pipeline_args(args)
             args = _normalize_invoke_goal_video_pipeline_args(args)
+            args = _normalize_invoke_wewrite_article_args(args)
             capability_id = str(args.get("capability_id") or "").strip()
             payload = args.get("payload") or {}
             if not isinstance(payload, dict):
@@ -5054,6 +5149,17 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         _p.get("account_nickname"),
                         BASE_URL,
                     )
+                elif capability_id in ("wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft"):
+                    timeout_s = 420.0 if capability_id == "wewrite.article.pipeline" else (300.0 if capability_id == "wewrite.article.generate" else 120.0)
+                    req_json = dict(_p)
+                    logger.info(
+                        "[MCP %s] invoke has_token=%s idea_len=%s markdown_len=%s base_url=%s",
+                        capability_id,
+                        bool(token),
+                        len(str(_p.get("idea") or _p.get("topic") or _p.get("title") or "")),
+                        len(str(_p.get("markdown") or "")),
+                        BASE_URL,
+                    )
                 elif capability_id == "ppt.create":
                     timeout_s = 600.0
                     req_json = dict(_p)
@@ -5377,6 +5483,10 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         fail_msg = "必火数字人口播后端调用失败"
                     elif capability_id == "ecommerce.publish":
                         fail_msg = "电商商品发布后端调用失败"
+                    elif capability_id == "wewrite.article.generate":
+                        fail_msg = "公众号文章生成后端调用失败"
+                    elif capability_id == "wewrite.article.draft":
+                        fail_msg = "公众号文章草稿后端调用失败"
                     else:
                         fail_msg = "comfly.daihuo 后端调用失败"
                     return [{"type": "text", "text": f"{fail_msg}: {e}"}], True

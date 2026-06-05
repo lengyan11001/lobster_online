@@ -2019,6 +2019,7 @@ var _SKILL_STORE_CARD_ART_BY_CLASS = {
   'ecommerce-detail-card': '/static/skill-cards/ecommerce-detail.png',
   'hifly-digital-human-card': '/static/skill-cards/digital-human.png',
   'openclaw-weixin-card': '/static/skill-cards/wechat-assistant.png',
+  'wechat-article-card': '/static/skill-cards/wechat-article.png',
   'openclaw-memory-card': '/static/skill-cards/memory.png',
   'youtube-publish-card': '/static/skill-cards/youtube.png',
   'meta-social-card': '/static/skill-cards/meta-social.png',
@@ -2042,6 +2043,7 @@ var _SKILL_STORE_CARD_ART_BY_PACKAGE_ID = {
   'shanjian_smart_clip': '/static/skill-cards/smart-clip.png',
   'hifly_digital_human_skill': '/static/skill-cards/digital-human.png',
   'openclaw_weixin_channel': '/static/skill-cards/wechat-assistant.png',
+  'wewrite_official_account_skill': '/static/skill-cards/wechat-article.png',
   'openclaw_memory_skill': '/static/skill-cards/memory.png',
   'browser_use_skill': '/static/skill-cards/browser-use.png',
   'computer_use_skill': '/static/skill-cards/computer-use.png',
@@ -2063,6 +2065,7 @@ var _SKILL_STORE_CARD_ART_BY_TITLE = {
   '必火数字人': '/static/skill-cards/digital-human.png',
   '微信助手 (OpenClaw)': '/static/skill-cards/wechat-assistant.png',
   '微信助手': '/static/skill-cards/wechat-assistant.png',
+  '公众号文章': '/static/skill-cards/wechat-article.png',
   '个人记忆': '/static/skill-cards/memory.png',
   'Browser Use': '/static/skill-cards/browser-use.png',
   'Computer Use': '/static/skill-cards/computer-use.png',
@@ -2083,6 +2086,7 @@ var _SKILL_STORE_CARD_ART_TITLE_PATTERNS = [
   [/电商上架|上架套图|详情图|SKU/i, '/static/skill-cards/ecommerce-detail.png'],
   [/必火数字人|数字人/i, '/static/skill-cards/digital-human.png'],
   [/微信助手|openclaw.*微信|weixin/i, '/static/skill-cards/wechat-assistant.png'],
+  [/公众号|微信文章|微信推文|wewrite/i, '/static/skill-cards/wechat-article.png'],
   [/个人记忆|memory/i, '/static/skill-cards/memory.png'],
   [/browser\s*use/i, '/static/skill-cards/browser-use.png'],
   [/computer\s*use/i, '/static/skill-cards/computer-use.png'],
@@ -2103,6 +2107,7 @@ var _SKILL_STORE_IMAGE_CARD_CATALOG = [
   { id: 'comfly_ecommerce_detail_skill', title: '电商上架套图', art: '/static/skill-cards/ecommerce-detail.png', className: 'ecommerce-detail-card' },
   { id: 'hifly_digital_human_skill', title: '必火数字人', art: '/static/skill-cards/digital-human.png', className: 'hifly-digital-human-card' },
   { id: 'openclaw_weixin_channel', title: '微信助手', art: '/static/skill-cards/wechat-assistant.png', className: 'openclaw-weixin-card' },
+  { id: 'wewrite_official_account_skill', title: '公众号文章', art: '/static/skill-cards/wechat-article.png', className: 'wechat-article-card' },
   { id: 'openclaw_memory_skill', title: '个人记忆', art: '/static/skill-cards/memory.png', className: 'openclaw-memory-card' },
   { id: 'browser_use_skill', title: 'Browser Use', art: '/static/skill-cards/browser-use.png', className: 'openclaw-skill-workspace-card', skillId: 'browser_use_skill' },
   { id: 'computer_use_skill', title: 'Computer Use', art: '/static/skill-cards/computer-use.png', className: 'openclaw-skill-workspace-card', skillId: 'computer_use_skill' },
@@ -2201,6 +2206,7 @@ function _decorateSkillImageCards(el) {
     'hifly-digital-human-card',
     'shanjian-smart-clip-card',
     'goal-video-pipeline-card',
+    'wechat-article-card',
     'openclaw-skill-workspace-card',
     'openclaw-memory-card'
   ];
@@ -2215,10 +2221,14 @@ function _decorateSkillImageCards(el) {
       if (titleEl) title = (titleEl.textContent || '').trim();
       var img = document.createElement('img');
       img.className = 'skill-card-art';
-      img.src = artSrc + (artSrc.indexOf('?') >= 0 ? '&' : '?') + 'v=20260604-skill-card-batch';
+      img.src = artSrc + (artSrc.indexOf('?') >= 0 ? '&' : '?') + 'v=20260605-wechat-article-porcelain-card';
       img.alt = title ? (title + ' 技能卡片') : '技能卡片';
       img.loading = 'lazy';
       img.decoding = 'async';
+      img.onerror = function() {
+        card.classList.remove('is-image-skill-card');
+        if (img.parentNode) img.parentNode.removeChild(img);
+      };
       card.insertBefore(img, card.firstChild);
       card.classList.add('is-image-skill-card');
     }
@@ -2246,12 +2256,31 @@ function loadSkillStore() {
   el.innerHTML = '<p class="meta">加载中…</p>';
 
   var remoteBase = (typeof API_BASE !== 'undefined' ? API_BASE : '') || '';
+  var localBase = (typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') || '';
   var remoteReq = _fetchSkillStoreFrom(remoteBase).catch(function() { return { packages: [] }; });
+  var localReq = (localBase && String(localBase).replace(/\/$/, '') !== String(remoteBase || '').replace(/\/$/, ''))
+    ? _fetchSkillStoreFrom(localBase).catch(function() { return { packages: [] }; })
+    : Promise.resolve({ packages: [] });
 
-  Promise.all([remoteReq])
+  Promise.all([remoteReq, localReq])
     .then(function(results) {
       var d = results[0] || { packages: [] };
-      var packages = (d && Array.isArray(d.packages)) ? d.packages : [];
+      var localD = results[1] || { packages: [] };
+      var packageMap = {};
+      var packages = [];
+      function addPackages(list) {
+        (Array.isArray(list) ? list : []).forEach(function(pkg) {
+          if (!pkg || !pkg.id) return;
+          if (packageMap[pkg.id]) {
+            packageMap[pkg.id] = Object.assign({}, packageMap[pkg.id], pkg);
+            return;
+          }
+          packageMap[pkg.id] = pkg;
+          packages.push(pkg);
+        });
+      }
+      addPackages((d && d.packages) || []);
+      addPackages((localD && localD.packages) || []);
       var isSkillAdmin = !!(d && d.is_skill_store_admin);
       var needYoutube = packages.some(function(p) { return p.id === 'youtube_publish'; });
       var ecommercePkg = packages.filter(function(p) { return p.id === 'comfly_ecommerce_detail_skill'; })[0] || null;
@@ -2374,6 +2403,16 @@ function loadSkillStore() {
             '<div class="card-tags">' + goalTags + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm goal-video-chat-entry-btn">去对话生成</button></div></div>';
         }
+        if (pkg.id === 'wewrite_official_account_skill') {
+          var waTags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+          var waCap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+          return '<div class="skill-store-card wechat-article-card" data-skill-package-id="' + escapeAttr(pkg.id || '') + '" style="cursor:pointer;">' +
+            '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可配置</span></div>' +
+            '<div class="card-value">' + escapeHtml(pkg.name || '公众号文章') + '</div>' +
+            '<div class="card-desc">' + escapeHtml(pkg.description || '') + waCap + '</div>' +
+            '<div class="card-tags">' + waTags + '</div>' +
+            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">去对话生成</button></div></div>';
+        }
         var statusBadge = '';
         var actionBtn = '';
         if (pkg.status === 'installed') {
@@ -2408,6 +2447,7 @@ function loadSkillStore() {
         _bindHiflyDigitalHumanCardEntry();
         _bindShanjianSmartClipCardEntry();
         _bindGoalVideoPipelineCardEntry();
+        _bindWechatArticleCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
         _bindOpenclawSkillWorkspaceCardEntry();
@@ -2589,6 +2629,43 @@ function _bindEcommercePublishCardEntry() {
       _navigateToEcommerceAccounts();
     });
   });
+}
+
+function _bindWechatArticleCardEntry() {
+  document.querySelectorAll('.wechat-article-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      _openWechatArticleChatFlow();
+    });
+  });
+  document.querySelectorAll('.wechat-article-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      _openWechatArticleChatFlow();
+    });
+  });
+}
+
+function _openWechatArticleChatFlow() {
+  var prompt = window.WECHAT_ARTICLE_CHAT_PROMPT || '帮我写个公众号文章(已配置)，自动生成3张16:9横屏配图，完成公众号排版，并推送到草稿箱。主题是：';
+  if (typeof window.showAppView === 'function') {
+    window.showAppView('chat');
+  } else {
+    var chatNav = document.querySelector('.nav-left-item[data-view="chat"]');
+    if (chatNav) chatNav.click();
+  }
+  setTimeout(function() {
+    if (typeof window.fillChatPromptInput === 'function') {
+      window.fillChatPromptInput(prompt);
+      return;
+    }
+    var input = document.getElementById('chatInput');
+    if (!input) return;
+    input.value = prompt;
+    input.focus();
+    if (typeof input.setSelectionRange === 'function') input.setSelectionRange(prompt.length, prompt.length);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, 0);
 }
 
 function _navigateToEcommerceAccounts() {

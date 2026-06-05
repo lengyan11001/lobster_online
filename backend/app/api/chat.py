@@ -3640,6 +3640,175 @@ def _normalize_invoke_daihuo_pipeline_args_for_chat(args: Dict[str, Any]) -> Dic
     return out
 
 
+def _chat_dict_payload_from_any(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    return dict(parsed)
+            except Exception:
+                return {}
+    return {}
+
+
+def _normalize_wewrite_article_pipeline_args_for_chat(args: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(args, dict):
+        return args
+    capability_id = (args.get("capability_id") or "").strip()
+    if capability_id not in ("wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft"):
+        return args
+    pl = _chat_dict_payload_from_any(args.get("payload"))
+    nested = pl.get("payload")
+    if isinstance(nested, (dict, str)):
+        nested_pl = _chat_dict_payload_from_any(nested)
+        if nested_pl:
+            pl = {**{k: v for k, v in pl.items() if k != "payload"}, **nested_pl}
+    for key in (
+        "idea",
+        "topic",
+        "prompt",
+        "query",
+        "subject",
+        "content",
+        "title",
+        "markdown",
+        "theme",
+        "audience",
+        "style",
+        "include_images",
+        "image_model",
+        "image_count",
+        "image_aspect_ratio",
+        "upload_article_images",
+    ):
+        if key in args and args[key] is not None and key not in pl:
+            pl[key] = args[key]
+    if not (pl.get("idea") or "").strip():
+        for alias in ("topic", "prompt", "query", "subject", "content", "title"):
+            value = str(pl.get(alias) or "").strip()
+            if value:
+                pl["idea"] = value
+                break
+    out = dict(args)
+    if capability_id in ("wewrite.article.generate", "wewrite.article.draft") and str(pl.get("idea") or "").strip():
+        logger.info("[CHAT] wewrite.article redirect %s -> wewrite.article.pipeline", capability_id)
+        out["capability_id"] = "wewrite.article.pipeline"
+    pl.setdefault("include_images", True)
+    pl.setdefault("image_model", "gpt-image-2")
+    pl.setdefault("image_count", 3)
+    pl.setdefault("image_aspect_ratio", "16:9")
+    pl.setdefault("theme", "professional-clean")
+    pl.setdefault("upload_article_images", True)
+    out["payload"] = pl
+    return out
+
+
+def _wechat_article_idea_from_user_text(text: str) -> str:
+    raw = _strip_lobster_attachment_block(text or "").strip()
+    if not raw:
+        return ""
+    for marker in ("主题是：", "主题是:", "主题：", "主题:", "想法是：", "想法是:", "内容是：", "内容是:"):
+        if marker in raw:
+            idea = raw.split(marker, 1)[1].strip()
+            idea = re.split(r"[\r\n]+", idea, maxsplit=1)[0].strip()
+            if idea:
+                return idea
+    cleaned = re.sub(
+        r"帮我写个?公众号文章|公众号文章|微信文章|微信推文|推文|已配置|自动生成|完成|并推送到草稿箱|草稿箱|排版|配图|16:9|横屏|3张|三张|主题是|主题|[:：,，。]",
+        " ",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or raw
+
+
+def _wechat_article_pipeline_args_from_user_text(text: str) -> Dict[str, Any]:
+    return {
+        "capability_id": "wewrite.article.pipeline",
+        "payload": {
+            "idea": _wechat_article_idea_from_user_text(text),
+            "include_images": True,
+            "image_model": "gpt-image-2",
+            "image_count": 3,
+            "image_aspect_ratio": "16:9",
+            "theme": "professional-clean",
+            "upload_article_images": True,
+        },
+    }
+
+
+def _wechat_article_pipeline_reply(result_text: str) -> str:
+    try:
+        outer = json.loads(result_text or "{}")
+    except Exception:
+        outer = {}
+    data = outer.get("result") if isinstance(outer, dict) else {}
+    if not isinstance(data, dict):
+        data = {}
+    draft = data.get("draft") if isinstance(data.get("draft"), dict) else {}
+    image = data.get("image") if isinstance(data.get("image"), dict) else {}
+    title = str(data.get("title") or draft.get("title") or "").strip()
+    media_id = str(draft.get("media_id") or "").strip()
+    pushed = bool(data.get("pushed"))
+    push_status = str(data.get("push_status") or draft.get("push_status") or "").strip()
+    generated_count = image.get("generated_count")
+    try:
+        generated_count_s = str(int(generated_count))
+    except Exception:
+        urls = image.get("urls") if isinstance(image.get("urls"), list) else []
+        generated_count_s = str(len(urls)) if urls else ""
+    if pushed or media_id:
+        parts = ["公众号文章已生成并推送到草稿箱。"]
+    elif push_status == "local_saved" or draft:
+        parts = ["公众号文章已生成，已保存到公众号文章页面。"]
+    else:
+        parts = ["公众号文章已生成。"]
+    if title:
+        parts.append(f"标题：{title}")
+    if generated_count_s:
+        parts.append(f"配图：已插入 {generated_count_s}/3 张横屏图。")
+    if media_id:
+        parts.append(f"草稿 media_id：{media_id}")
+    elif push_status == "local_saved" or draft:
+        parts.append("公众号推送未完成，可到「公众号文章」页面查看并再次推送。")
+    return "\n".join(parts)
+
+
+def _wechat_article_pipeline_is_ok(result_text: str) -> bool:
+    try:
+        outer = json.loads(result_text or "{}")
+    except Exception:
+        return False
+    if not isinstance(outer, dict):
+        return False
+    if isinstance(outer.get("error"), dict) or isinstance(outer.get("error"), str):
+        return False
+    data = outer.get("result")
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("ok")) or bool(data.get("draft")) or str(data.get("push_status") or "").strip() == "local_saved"
+
+
+def _wechat_article_pipeline_error_reply(result_text: str) -> str:
+    reason = _extract_generation_failure_reason(result_text) or (result_text or "").strip()
+    reason = reason[:500]
+    if "local_saved" in reason or "文章已保存" in reason:
+        return "公众号文章已生成，已保存到公众号文章页面。公众号推送未完成，可到「公众号文章」页面查看并再次推送。"
+    ip_match = re.search(r"invalid ip\s+([0-9a-fA-F:.]+).*?not in whitelist", reason, re.IGNORECASE)
+    if ip_match:
+        return "公众号文章已生成，已保存到公众号文章页面。公众号推送未完成，可检查公众号配置后在页面里重新推送。"
+    if "请输入公众号文章主题或想法" in reason:
+        return "公众号文章生成失败：没有识别到文章主题。请按「主题是：xxx」重新发送。"
+    if reason:
+        return f"公众号文章生成或推送失败：{reason}"
+    return "公众号文章生成或推送失败，请稍后重试。"
+
+
 def _daihuo_start_payload_from_pl(pl: Dict[str, Any]) -> Dict[str, Any]:
     keys = (
         "asset_id",
@@ -4091,6 +4260,10 @@ async def _exec_tool(
     capability_id = (args.get("capability_id") or "").strip() if name == "invoke_capability" else None
     if name == "invoke_capability" and capability_id == "comfly.daihuo.pipeline":
         args = _normalize_invoke_daihuo_pipeline_args_for_chat(dict(args))
+        capability_id = (args.get("capability_id") or "").strip()
+    if name == "invoke_capability" and capability_id in ("wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft"):
+        args = _normalize_wewrite_article_pipeline_args_for_chat(dict(args))
+        capability_id = (args.get("capability_id") or "").strip()
     phase = None
     if capability_id == "video.generate":
         phase = "video_submit"
@@ -4244,6 +4417,8 @@ async def _exec_tool(
         timeout = 40 * 60.0
     elif name == "invoke_capability" and (args.get("capability_id") or "").strip() == "image.generate":
         timeout = 25 * 60.0
+    elif name == "invoke_capability" and (args.get("capability_id") or "").strip() == "wewrite.article.pipeline":
+        timeout = 7 * 60.0
     elif name in ("publish_content", "publish_youtube_video"):
         timeout = 300.0  # Playwright 浏览器自动化发布可能超过 120s
     elif name == "sync_creator_publish_data":
@@ -6115,6 +6290,20 @@ _TASK_STATUS_DIRECT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_WECHAT_ARTICLE_INTENT_RE = re.compile(
+    r"(公众号|微信\s*公众号|微信文章|微信推文|推文|wewrite).{0,80}"
+    r"(文章|写|生成|排版|配图|草稿|草稿箱|推送|主题)"
+    r"|帮我写个公众号文章|公众号文章",
+    re.IGNORECASE,
+)
+
+
+def _is_wechat_article_turn(text: str) -> bool:
+    raw = _strip_lobster_attachment_block(text or "").strip()
+    if not raw:
+        return False
+    return bool(_WECHAT_ARTICLE_INTENT_RE.search(raw))
+
 
 def _task_status_lookup_candidate_from_payload(payload: ChatRequest) -> Tuple[bool, str]:
     messages = _task_status_lookup_messages_from_payload(payload)
@@ -6125,6 +6314,8 @@ def _task_status_lookup_candidate_from_payload(payload: ChatRequest) -> Tuple[bo
         if msg.get("role") == "user":
             current = _strip_lobster_attachment_block(msg.get("content") or "").strip()
             break
+    if _is_wechat_article_turn(current):
+        return False, ""
     tid = _recent_task_id_from_messages(messages)
     direct_lookup = bool(current and _TASK_STATUS_DIRECT_RE.search(current))
     if direct_lookup:
@@ -7186,6 +7377,10 @@ async def _chat_openai(
                 except Exception:
                     a = {}
                 _mismatch_err = None
+                if fn.get("name") == "manage_skills" and _is_wechat_article_turn(last_user_content):
+                    logger.info("[CHAT] wechat article: redirect manage_skills -> wewrite.article.pipeline")
+                    fn["name"] = "invoke_capability"
+                    a = _wechat_article_pipeline_args_from_user_text(last_user_content)
                 if fn.get("name") == "invoke_capability":
                     a = _correct_generation_to_understand_if_user_asked(a, last_user_content, attachment_urls)
                     a = _correct_video_to_image_if_user_asked_image(a, last_user_content)
@@ -7211,6 +7406,7 @@ async def _chat_openai(
                         _inject_image_media_urls(a, attachment_urls, last_user_content)
                         _ensure_image_generate_prompt_and_aspect(a, last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(a, attachment_asset_ids, attachment_urls, last_user_content)
+                        a = _normalize_wewrite_article_pipeline_args_for_chat(a)
                         a, _status_lookup_guard_res = _guard_generation_submit_for_status_lookup(a, cur)
                 logger.info("[CHAT] tool_call: %s(%s)", fn.get("name"), list(a.keys()))
                 if fn.get("name") == "publish_content" and _publish_fail_count >= 1:
@@ -7265,6 +7461,10 @@ async def _chat_openai(
                         "sutui.guide",
                     ) and res and '"error"' not in res:
                         _generate_cap_done.add(_cap_id)
+                if fn.get("name") == "invoke_capability" and _cap_id == "wewrite.article.pipeline":
+                    if _wechat_article_pipeline_is_ok(res):
+                        return _wechat_article_pipeline_reply(res)
+                    return _wechat_article_pipeline_error_reply(res)
                 if fn.get("name") == "invoke_capability" and (a.get("capability_id") or "").strip() == "media.edit":
                     logger.info(
                         "[CHAT] media.edit result preview=%s",
@@ -7425,6 +7625,27 @@ async def _chat_openai(
 
         content = (msg.get("content") or "").strip()
         logger.info("[CHAT] rnd=%d no tool_calls, content_len=%d", rnd, len(content))
+        if (
+            rnd < _max_rounds - 1
+            and _is_wechat_article_turn(_last_user_content(cur))
+            and re.search(r"(没有|未).{0,12}(安装|找到).{0,20}(公众号|微信|wewrite|技能|工具)|公众号.{0,24}(没有|未安装|不可用)", content, re.IGNORECASE)
+        ):
+            last_user_content = _last_user_content(cur)
+            logger.info("[CHAT] wechat article: assistant claimed missing skill; force pipeline")
+            a = _wechat_article_pipeline_args_from_user_text(last_user_content)
+            res = await _exec_tool(
+                "invoke_capability",
+                a,
+                token,
+                sutui_token,
+                progress_cb=progress_cb,
+                request=request,
+                db=db,
+                user_id=user_id,
+            )
+            if _wechat_article_pipeline_is_ok(res):
+                return _wechat_article_pipeline_reply(res)
+            return _wechat_article_pipeline_error_reply(res)
 
         text_calls = _parse_text_tool_calls(content) if content else []
         if text_calls and rnd < _max_rounds - 1:
@@ -7442,6 +7663,10 @@ async def _chat_openai(
                 if not isinstance(tc_info.get("arguments"), dict):
                     tc_info["arguments"] = {}
                 _mismatch_err_tc = None
+                if tc_info["name"] == "manage_skills" and _is_wechat_article_turn(last_user_content):
+                    logger.info("[CHAT] text wechat article: redirect manage_skills -> wewrite.article.pipeline")
+                    tc_info["name"] = "invoke_capability"
+                    tc_info["arguments"] = _wechat_article_pipeline_args_from_user_text(last_user_content)
                 if tc_info["name"] == "invoke_capability":
                     tc_info["arguments"] = _correct_generation_to_understand_if_user_asked(tc_info["arguments"], last_user_content, attachment_urls)
                     tc_info["arguments"] = _correct_video_to_image_if_user_asked_image(tc_info["arguments"], last_user_content)
@@ -7467,6 +7692,7 @@ async def _chat_openai(
                         _inject_image_media_urls(tc_info["arguments"], attachment_urls, last_user_content)
                         _ensure_image_generate_prompt_and_aspect(tc_info["arguments"], last_user_content)
                         _ensure_daihuo_pipeline_asset_or_url(tc_info["arguments"], attachment_asset_ids, attachment_urls, last_user_content)
+                        tc_info["arguments"] = _normalize_wewrite_article_pipeline_args_for_chat(tc_info["arguments"])
                         tc_info["arguments"], _status_lookup_guard_res_tc = _guard_generation_submit_for_status_lookup(tc_info["arguments"], cur)
                 logger.info("[CHAT] text_tool_call: %s(%s)", tc_info["name"], list(tc_info["arguments"].keys()))
                 ta = tc_info["arguments"]
@@ -7518,6 +7744,10 @@ async def _chat_openai(
                     )
                     if _tc_cap in ("image.generate", "video.generate", "image.understand", "video.understand") and res and '"error"' not in res:
                         _generate_cap_done.add(_tc_cap)
+                if tc_info["name"] == "invoke_capability" and _tc_cap == "wewrite.article.pipeline":
+                    if _wechat_article_pipeline_is_ok(res):
+                        return _wechat_article_pipeline_reply(res)
+                    return _wechat_article_pipeline_error_reply(res)
                 if tc_info["name"] == "invoke_capability" and (ta.get("capability_id") or "").strip() == "media.edit":
                     logger.info(
                         "[CHAT] media.edit result preview=%s",
