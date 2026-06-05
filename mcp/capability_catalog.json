@@ -965,7 +965,7 @@
     }
   },
   "ppt.create": {
-    "description": "Create a PowerPoint PPTX. Use ai for AI image-composited full-slide PPT pages, outline/markdown for text-outline rendering, and image_fullpage when per-slide image prompts are already provided.",
+    "description": "Create an editable PowerPoint PPTX from a topic, outline, or per-slide prompts. Use ai mode by default; it uses the PPT Master SVG-to-PPTX engine and uploads the final PPTX to the asset library. Use image_fullpage only when the user specifically wants image-only full-slide pages.",
     "upstream": "local",
     "upstream_tool": "invoke",
     "enabled": true,
@@ -982,7 +982,7 @@
             "ai",
             "image_fullpage"
           ],
-          "description": "Generation mode. Use ai by default for AI image-composited full-slide PPT pages from a topic; use outline or markdown only when the user explicitly provides a text outline; use image_fullpage when per-slide image prompts are already provided."
+          "description": "Generation mode. Use ai by default for an editable PPTX from a topic; use outline/markdown only when the user explicitly provides a text outline; use image_fullpage only when per-slide image prompts should become image-only full-page slides."
         },
         "topic": {
           "type": "string",
@@ -1044,6 +1044,19 @@
         "aspect_ratio": {
           "type": "string",
           "description": "Image aspect ratio for image_fullpage mode, normally 16:9."
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "ppt_master",
+            "image_fullpage",
+            "legacy"
+          ],
+          "description": "PPT generation engine. Default ppt_master creates editable PPTX through SVG-to-PPTX. Use image_fullpage/legacy only as fallback or when explicitly requested."
+        },
+        "generate_images": {
+          "type": "boolean",
+          "description": "Whether ai mode may generate supporting slide images through the existing image service. Default true."
         }
       }
     }

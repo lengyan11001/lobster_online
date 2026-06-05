@@ -1406,6 +1406,7 @@ def _ensure_ppt_create_payload_from_current_turn(args: Dict, last_user_content: 
         payload = {**base, **nested}
     for key in (
         "mode",
+        "engine",
         "topic",
         "outline_markdown",
         "slide_count",
@@ -1418,6 +1419,7 @@ def _ensure_ppt_create_payload_from_current_turn(args: Dict, last_user_content: 
         "image_quality",
         "image_background",
         "aspect_ratio",
+        "generate_images",
     ):
         if key in fixed and fixed[key] is not None and key not in payload:
             payload[key] = fixed[key]
@@ -1433,6 +1435,8 @@ def _ensure_ppt_create_payload_from_current_turn(args: Dict, last_user_content: 
             logger.info("[CHAT] ppt.create topic inferred from current turn: %s", inferred[:80])
     if not str(payload.get("mode") or "").strip():
         payload["mode"] = "outline" if outline else "ai"
+    if str(payload.get("mode") or "").strip().lower() == "ai" and not str(payload.get("engine") or "").strip():
+        payload["engine"] = "ppt_master"
     if "slide_count" not in payload and str(payload.get("mode") or "").strip().lower() == "ai":
         payload["slide_count"] = 10
     fixed["payload"] = payload
@@ -4419,6 +4423,8 @@ async def _exec_tool(
         timeout = 25 * 60.0
     elif name == "invoke_capability" and (args.get("capability_id") or "").strip() == "wewrite.article.pipeline":
         timeout = 7 * 60.0
+    elif name == "invoke_capability" and (args.get("capability_id") or "").strip() == "ppt.create":
+        timeout = 20 * 60.0
     elif name in ("publish_content", "publish_youtube_video"):
         timeout = 300.0  # Playwright 浏览器自动化发布可能超过 120s
     elif name == "sync_creator_publish_data":
@@ -4441,6 +4447,11 @@ async def _exec_tool(
         if isinstance(err, httpx.RemoteProtocolError):
             return _REMOTE_DISCONNECT_USER_MSG
         if isinstance(err, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+            if capability_id == "ppt.create":
+                return (
+                    "PPT 生成等待超时：PPT 能力已注册，但本次生成耗时过长。"
+                    "请稍后查看生成目录或素材库；若仍未出现，请重新提交。"
+                )
             return (
                 "请求超时：本机对话等 MCP 返回时间过长（常见于爆款TVC 整包在 MCP 内长时间轮询）。"
                 "已放宽该能力超时；若仍出现，请查看 logs/app.log 与 mcp.log。"
@@ -5176,11 +5187,17 @@ def _user_visible_ppt_create_json_reply(raw: str) -> str:
         err = str(d.get("error") or "").strip()
         return ("PPT 生成失败。" + (f" 说明：{_sanitize_user_visible_hint(err)}" if err else ""))[:500]
     result = d.get("result") if isinstance(d.get("result"), dict) else {}
+    if isinstance(result.get("result"), dict):
+        result = result["result"]
     topic = str(result.get("topic") or "").strip()
     filename = str(result.get("filename") or "").strip()
     pptx_path = str(result.get("pptx_path") or "").strip()
     download_url = str(result.get("download_url") or "").strip()
     saved = result.get("saved_assets") if isinstance(result.get("saved_assets"), list) else []
+    if not saved and isinstance(result.get("asset"), dict):
+        saved = [result["asset"]]
+    if not saved and isinstance(d.get("saved_assets"), list):
+        saved = d.get("saved_assets") or []
     asset_id = ""
     source_url = ""
     if saved:
@@ -5204,7 +5221,31 @@ def _user_visible_ppt_create_json_reply(raw: str) -> str:
         lines.append(f"素材库链接：{source_url}")
     elif download_url:
         lines.append(f"下载链接：{download_url}")
+    if not pptx_path and not source_url and not download_url and not asset_id:
+        lines.append("未解析到文件路径或素材库链接，请到素材库的文档/PPT 分类中查看，或重新生成一次。")
     return "\n".join(lines).strip()
+
+
+def _ppt_create_terminal_failure_reply(raw: str) -> str:
+    reply = _user_visible_ppt_create_json_reply(raw)
+    if reply:
+        return reply
+    t = (raw or "").strip()
+    if not t.startswith("{") or "ppt.create" not in t:
+        return ""
+    try:
+        d = json.loads(t)
+    except Exception:
+        return ""
+    if not isinstance(d, dict) or (d.get("capability_id") or "").strip() != "ppt.create":
+        return ""
+    err = str(d.get("error") or d.get("detail") or "").strip()
+    result = d.get("result")
+    if isinstance(result, dict):
+        err = err or str(result.get("error") or result.get("detail") or "").strip()
+    if not err:
+        return ""
+    return ("PPT 生成失败。" + f" 说明：{_sanitize_user_visible_hint(err)}")[:500]
 
 
 def _reply_for_user(reply: str) -> str:
@@ -5260,10 +5301,17 @@ def _extract_saved_assets_from_task_result(result_text: str) -> List[Dict[str, A
     raw = (result_text or "").strip()
     try:
         d = json.loads(raw) if raw.startswith("{") else {}
-        saved = d.get("saved_assets") or (d.get("result") or {}).get("saved_assets")
+        result_obj = d.get("result") if isinstance(d.get("result"), dict) else {}
+        inner_result_obj = result_obj.get("result") if isinstance(result_obj.get("result"), dict) else {}
+        saved = (
+            d.get("saved_assets")
+            or result_obj.get("saved_assets")
+            or inner_result_obj.get("saved_assets")
+            or ([inner_result_obj.get("asset")] if isinstance(inner_result_obj.get("asset"), dict) else None)
+        )
         if isinstance(saved, list) and saved:
             return [x for x in saved if isinstance(x, dict)]
-        upstream = d.get("result")
+        upstream = result_obj
         if isinstance(upstream, dict):
             inner_result = upstream.get("result")
             if isinstance(inner_result, dict):
@@ -7561,6 +7609,12 @@ async def _chat_openai(
                     if sse_saved:
                         terminal_saved_after_gen = sse_saved
                         gen_cap_for_reply = "ppt.create"
+                if fn.get("name") == "invoke_capability" and _cap_id == "ppt.create" and res:
+                    _ppt_failed_reply = _ppt_create_terminal_failure_reply(res)
+                    if _ppt_failed_reply:
+                        generation_failed_reply = _ppt_failed_reply
+                        _generate_cap_done.add(_cap_id)
+                        logger.info("[CHAT] ppt.create failed terminal, skip follow-up LLM")
             # ── publish_content 成功后提前结束（避免再调 LLM 导致 ReadTimeout） ──
             if generation_failed_reply:
                 return generation_failed_reply
@@ -7840,6 +7894,12 @@ async def _chat_openai(
                     if sse_saved_tc:
                         terminal_saved_after_gen_tc = sse_saved_tc
                         gen_cap_for_reply_tc = "ppt.create"
+                if tc_info["name"] == "invoke_capability" and _tc_cap == "ppt.create" and res:
+                    _ppt_failed_reply_tc = _ppt_create_terminal_failure_reply(res)
+                    if _ppt_failed_reply_tc:
+                        generation_failed_reply_tc = _ppt_failed_reply_tc
+                        _generate_cap_done.add(_tc_cap)
+                        logger.info("[CHAT] text ppt.create failed terminal, skip follow-up LLM")
                 if tc_info["name"] == "publish_content" and res and "执行失败" in res:
                     _publish_fail_count += 1
                     logger.info("[CHAT] text_calls publish_content 失败计数: %d", _publish_fail_count)

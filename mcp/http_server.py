@@ -78,7 +78,7 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "wewrite.article.pipeline": ("/api/wechat-article/pipeline", 420.0),
     "wewrite.article.generate": ("/api/wechat-article/generate", 300.0),
     "wewrite.article.draft": ("/api/wechat-article/drafts", 120.0),
-    "ppt.create": ("/api/create-ppt/run", 600.0),
+    "ppt.create": ("/api/create-ppt/run", 1800.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
@@ -198,6 +198,7 @@ def _normalize_invoke_ppt_create_args(args: Dict[str, Any]) -> Dict[str, Any]:
         pl = {**base, **nested}
     for key in (
         "mode",
+        "engine",
         "topic",
         "outline_markdown",
         "slide_count",
@@ -212,11 +213,14 @@ def _normalize_invoke_ppt_create_args(args: Dict[str, Any]) -> Dict[str, Any]:
         "image_quality",
         "image_background",
         "aspect_ratio",
+        "generate_images",
     ):
         if key in args and args[key] is not None and key not in pl:
             pl[key] = args[key]
     if not str(pl.get("mode") or "").strip() and str(pl.get("topic") or pl.get("outline_markdown") or "").strip():
         pl["mode"] = "ai" if str(pl.get("topic") or "").strip() else "outline"
+    if str(pl.get("mode") or "").strip().lower() == "ai" and not str(pl.get("engine") or "").strip():
+        pl["engine"] = "ppt_master"
     if "slide_count" not in pl and str(pl.get("mode") or "").strip().lower() == "ai":
         pl["slide_count"] = 10
     out = dict(args)
