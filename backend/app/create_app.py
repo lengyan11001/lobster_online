@@ -40,6 +40,8 @@ try:
 except Exception:
     wecom_kf_router = None
 from .api.assets import router as assets_router
+from .api.cutcli_audio import router as cutcli_audio_router
+from .api.cutcli_templates_local import router as cutcli_templates_local_router
 from .api.media_edit import router as media_edit_router
 from .api.comfly_veo import router as comfly_veo_router
 from .api.comfly_daihuo import router as comfly_daihuo_router
@@ -930,6 +932,8 @@ def create_app() -> FastAPI:
     app.include_router(consumption_accounts_router, prefix="")
     app.include_router(mcp_registry_router, prefix="")
     app.include_router(assets_router, prefix="")
+    app.include_router(cutcli_audio_router, prefix="")
+    app.include_router(cutcli_templates_local_router, prefix="")
     app.include_router(media_edit_router, prefix="")
     app.include_router(comfly_veo_router, prefix="")
     app.include_router(comfly_daihuo_router, prefix="")

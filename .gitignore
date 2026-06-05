@@ -44,6 +44,7 @@ openclaw/agents/*/sessions/
 openclaw/agents/*/agent/auth-profiles.json
 openclaw/.weixin_login_last.json
 openclaw/.channel_fallback.json
+openclaw/.lobster_plugin_state_backup.json
 openclaw/identity/
 openclaw/devices/
 openclaw/update-check.json
@@ -65,6 +66,8 @@ _pack_exe_test/
 
 # ── 临时 / 调试 ──
 _tmp_*
+tmp_templates/
+chat_storage/
 tmp_responsive_check/
 192.168.1.64/
 D_/

@@ -472,7 +472,28 @@ var h5MirrorSyncTimer = null;
 var h5MirrorSyncInFlight = false;
 
 function _isH5MirrorSession(session) {
-  return !!(session && session.kind === 'h5_remote_mirror');
+  return !!(session && (session.kind === 'h5_remote_mirror' || String(session.id || '') === H5_MIRROR_SESSION_ID));
+}
+
+function _isPinnedChatSession(session) {
+  return _isH5MirrorSession(session);
+}
+
+function _isProtectedChatSession(session) {
+  return _isH5MirrorSession(session);
+}
+
+function _sortChatSessionsForList(sessions) {
+  return (Array.isArray(sessions) ? sessions : []).map(function(session, index) {
+    return { session: session, index: index };
+  }).sort(function(a, b) {
+    var ap = _isPinnedChatSession(a.session) ? 1 : 0;
+    var bp = _isPinnedChatSession(b.session) ? 1 : 0;
+    if (ap !== bp) return bp - ap;
+    return a.index - b.index;
+  }).map(function(item) {
+    return item.session;
+  });
 }
 
 function _h5MirrorTitle() {
@@ -576,6 +597,7 @@ function getOrCreateH5MirrorSession() {
     session.title = _h5MirrorTitle();
     session.mode = CHAT_MODE_DEFAULT;
     session.pending = false;
+    session.readonly = true;
     return session;
   }
   session = {
@@ -1865,6 +1887,9 @@ function deleteChatSession(id, ev) {
   var sid = String(id || '');
   var session = getSessionById(sid);
   if (!sid || !session) return;
+  if (_isProtectedChatSession(session)) {
+    return;
+  }
   var isCurrent = String(currentSessionId || '') === sid;
   var deletedMode = _getSessionMode(session);
   var title = getSessionTitle(session);
@@ -1915,6 +1940,7 @@ function renderChatSessionList() {
         return title.toLowerCase().indexOf(searchVal) >= 0 || preview.toLowerCase().indexOf(searchVal) >= 0;
       })
     : chatSessions.slice();
+  filtered = _sortChatSessionsForList(filtered);
   if (filtered.length === 0) {
     listEl.innerHTML = '<div class="chat-session-empty">还没有历史对话</div>';
     return;
@@ -1923,7 +1949,9 @@ function renderChatSessionList() {
     var title = getSessionTitle(s);
     var preview = getSessionPreview(s);
     var time = formatSessionTime(s.updatedAt);
+    var isProtected = _isProtectedChatSession(s);
     var active = s.id === currentSessionId ? ' active' : '';
+    var fixedClass = _isPinnedChatSession(s) ? ' is-pinned' : '';
     var memoryBadgeText = (!_isH5MirrorSession(s) && !_isWorkspaceSession(s)) ? _getSessionMemoryBadge(s) : '';
     var modeBadge = _isH5MirrorSession(s)
       ? '<span class="session-mode-badge">手机</span>'
@@ -1933,14 +1961,17 @@ function renderChatSessionList() {
     var pendingDot = isSessionPending(s.id)
       ? '<span class="session-pending-dot" title="任务进行中"></span>'
       : '<span class="session-bubble-icon">◌</span>';
-    return '<div class="chat-session-item' + active + '" data-session-id="' + escapeAttr(s.id) + '">' +
+    var deleteButton = isProtected
+      ? ''
+      : '<button type="button" class="session-delete-btn" title="删除会话" aria-label="删除会话" data-delete-session-id="' + escapeAttr(s.id) + '">×</button>';
+    return '<div class="chat-session-item' + active + fixedClass + '" data-session-id="' + escapeAttr(s.id) + '">' +
       '<div class="session-row">' +
         '<div class="session-leading">' + pendingDot + '</div>' +
         '<div class="session-copy">' +
           '<div class="session-title"><div class="session-title-row"><span>' + escapeHtml(title) + '</span>' + modeBadge + '</div></div>' +
           '<div class="session-preview">' + escapeHtml(preview) + '</div>' +
         '</div>' +
-        '<button type="button" class="session-delete-btn" title="删除会话" aria-label="删除会话" data-delete-session-id="' + escapeAttr(s.id) + '">×</button>' +
+        deleteButton +
       '</div>' +
       '<div class="session-time">' + escapeHtml(time) + '</div></div>';
   }).join('');
@@ -3814,6 +3845,40 @@ var chatFileInput = document.getElementById('chatFileInput');
 var chatOpenClawStatusTimer = null;
 var chatOpenClawStatusInFlight = false;
 
+function bindChatComposerFocus() {
+  var input = document.getElementById('chatInput');
+  var body = document.querySelector('.chat-composer-body');
+  var lead = document.getElementById('chatComposerLead');
+  if (!input) return;
+  function focusInput() {
+    input.focus();
+    try {
+      var len = (input.value || '').length;
+      input.setSelectionRange(len, len);
+    } catch (e) {}
+  }
+  if (lead && lead.dataset.focusBound !== '1') {
+    lead.dataset.focusBound = '1';
+    lead.setAttribute('role', 'button');
+    lead.setAttribute('tabindex', '0');
+    lead.addEventListener('click', focusInput);
+    lead.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        focusInput();
+      }
+    });
+  }
+  if (body && body.dataset.focusBound !== '1') {
+    body.dataset.focusBound = '1';
+    body.addEventListener('click', function(e) {
+      var target = e.target;
+      if (target && target.closest && target.closest('textarea, input, button, a, label, select, #chatAttachments, [contenteditable="true"]')) return;
+      focusInput();
+    });
+  }
+}
+
 function setChatOpenClawStatus(ready) {
   var wrap = document.getElementById('chatOpenClawStatus');
   var text = document.getElementById('chatOpenClawStatusText');
@@ -3865,6 +3930,7 @@ function startChatOpenClawStatusWatcher() {
 }
 
 startChatOpenClawStatusWatcher();
+bindChatComposerFocus();
 
 if (chatSendBtn) chatSendBtn.addEventListener('click', sendChatMessage);
 var chatCancelBtn = document.getElementById('chatCancelBtn');
@@ -4025,6 +4091,11 @@ function openHiddenWorkspaceFallback(view) {
   var target = String(view || '').trim();
   if (!target) return;
   try { location.hash = target; } catch (e) {}
+  if (typeof window._rememberLobsterView === 'function') {
+    window._rememberLobsterView(target, { skipHash: true });
+  } else {
+    try { localStorage.setItem('lobster_online_last_view', target.replace(/^#/, '').split(':')[0]); } catch (e0) {}
+  }
   document.querySelectorAll('.nav-left-item').forEach(function(b) { b.classList.remove('active'); });
   document.querySelectorAll('.content-block').forEach(function(p) { p.classList.remove('visible'); });
   var contentEl = document.getElementById('content-' + target);

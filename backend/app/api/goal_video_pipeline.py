@@ -839,7 +839,7 @@ async def run_goal_image_pipeline(
             lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
             emit,
         )
-    emit("plan_done", "plan generated", {"title": plan.get("title")})
+    emit("plan_done", "plan generated", {"title": plan.get("title"), "partial_plan": plan})
 
     image_payload: Dict[str, Any] = {
         "prompt": plan["image_prompt"],
@@ -918,7 +918,7 @@ async def run_goal_video_from_reference_pipeline(
             lambda: _call_planning_llm(pl=pl, token=token, installation_id=installation_id),
             emit,
         )
-    emit("plan_done", "plan generated", {"title": plan.get("title")})
+    emit("plan_done", "plan generated", {"title": plan.get("title"), "partial_plan": plan})
 
     video_payload: Dict[str, Any] = {
         "prompt": plan["video_prompt"],

@@ -10,10 +10,18 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from publisher.browser_pool import (
-    browser_options_from_publish_meta,
-    douyin_workbench_browser_options_from_publish_meta,
-)
+from publisher.browser_pool import browser_options_from_publish_meta
+
+try:
+    from publisher.browser_pool import douyin_workbench_browser_options_from_publish_meta
+except ImportError:
+    # Keep backend bootable if an older OTA only partially updated publisher/.
+    def douyin_workbench_browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
+        opts = browser_options_from_publish_meta(meta)
+        opts = {**opts, "douyin_cdp": True}
+        if not opts.get("viewport"):
+            opts = {**opts, "viewport": {"width": 1440, "height": 960}}
+        return opts
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import OperationalError

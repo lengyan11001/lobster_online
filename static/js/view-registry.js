@@ -10,6 +10,11 @@
     html: '/static/views/skill-store.html'
   });
 
+  window.registerLobsterView('openclaw-memory', {
+    html: '/static/views/openclaw-memory.html?v=20260601-memory-manager',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('production', {
     html: '/static/views/production.html',
     scripts: '/static/js/views/production.js?v=20260528-view-split'
@@ -25,7 +30,7 @@
   });
 
   window.registerLobsterView('assets', {
-    html: '/static/views/assets.html?v=20260601-asset-doc-card',
+    html: '/static/views/assets.html?v=20260603-copy-clean',
     cache: 'reload'
   });
 

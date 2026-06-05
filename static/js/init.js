@@ -1,6 +1,24 @@
 /** 在线版：独立认证时显示手机号验证码注册和登录；/api/edition 可覆盖。 */
 var USE_INDEPENDENT_AUTH = true;
 
+(function bindBihuoCloseGuard() {
+  if (window.__bihuoCloseGuardInstalled) return;
+  window.__bihuoCloseGuardInstalled = true;
+  window.__bihuoAllowClose = false;
+  function isDesktopWindow() {
+    try {
+      if (window.pywebview && window.pywebview.api) return true;
+      return new URLSearchParams(window.location.search || '').get('desktop') === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+  window.__bihuoConfirmAppClose = function() {
+    if (window.__bihuoAllowClose) return true;
+    return window.confirm('\u786e\u5b9a\u8981\u5173\u95ed\u5fc5\u706b\u667a\u80fd\u5417\uff1f\n\n\u5982\u679c\u6b63\u5728\u5168\u5c4f\u9884\u89c8\u89c6\u9891\uff0c\u53ef\u4ee5\u5148\u70b9\u51fb\u300c\u9000\u51fa\u5168\u5c4f\u300d\u6216\u6309 Esc\u3002');
+  };
+})();
+
 (function bindDesktopHardRefresh() {
   function isDesktopWindow() {
     try {
@@ -29,6 +47,7 @@ var USE_INDEPENDENT_AUTH = true;
     }
     btn.style.display = '';
     btn.onclick = function() {
+      window.__bihuoAllowClose = true;
       btn.disabled = true;
       btn.textContent = '刷新中...';
       window.location.replace(nextDesktopUrl());
@@ -395,10 +414,10 @@ var loginForm = document.getElementById('loginForm');
 if (loginForm) {
   loginForm.addEventListener('submit', function(e) {
     e.preventDefault();
-    var phone = validateCnPhone((document.getElementById('loginPhone') || {}).value);
+    var account = (((document.getElementById('loginAccount') || {}).value) || '').trim();
     var password = ((document.getElementById('loginPassword') || {}).value || '');
     var msgEl = document.getElementById('loginMsg');
-    if (!phone) { showMsg(msgEl, '请输入有效的 11 位手机号', true); return; }
+    if (!account) { showMsg(msgEl, '请输入账号或手机号', true); return; }
     if (!password) { showMsg(msgEl, '请输入密码', true); return; }
     fetch(API_BASE + '/auth/login-phone-password', {
       method: 'POST',
@@ -406,7 +425,7 @@ if (loginForm) {
         'Content-Type': 'application/json',
         'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : ''
       },
-      body: JSON.stringify({ phone: phone, password: password })
+      body: JSON.stringify({ account: account, password: password })
     })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(x) {
@@ -453,7 +472,21 @@ function setRegisterSmsButtonCooldown(sec) {
   _registerSmsCooldownTimer = setInterval(tick, 1000);
 }
 function normalizeAuthErrorDetail(detail) {
-  return detail;
+  if (detail == null) return '';
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    var parts = detail.map(function(item) {
+      if (item == null) return '';
+      if (typeof item === 'string') return item;
+      if (typeof item === 'object') return item.msg || item.message || item.detail || JSON.stringify(item);
+      return String(item);
+    }).filter(Boolean);
+    return parts.join('；');
+  }
+  if (typeof detail === 'object') {
+    return detail.msg || detail.message || detail.detail || JSON.stringify(detail);
+  }
+  return String(detail);
 }
 (function bindRegisterSmsButton() {
   var btn = document.getElementById('registerSendSmsBtn');
@@ -578,6 +611,119 @@ function setAuthenticatedChrome(isAuthenticated) {
   if (actions) actions.style.display = isAuthenticated ? 'flex' : 'none';
 }
 
+var LOBSTER_LAST_VIEW_KEY = 'lobster_online_last_view';
+var LOBSTER_MAIN_VIEWS = {
+  chat: true,
+  'skill-store': true,
+  publish: true,
+  assets: true,
+  'scheduled-tasks': true,
+  production: true,
+  billing: true,
+  'sys-config': true,
+  logs: true,
+  agent: true,
+  'openclaw-memory': true
+};
+var LOBSTER_HIDDEN_VIEWS = {
+  'wecom-config': true,
+  'wecom-detail': true,
+  'messenger-config': true,
+  'twilio-whatsapp-config': true,
+  'twilio-whatsapp-detail': true,
+  'youtube-accounts': true,
+  'meta-social': true,
+  'ecommerce-detail-studio': true,
+  'image-composer-studio': true,
+  'seedance-tvc-studio': true,
+  'viral-video-remix': true,
+  'cutcli-template-studio': true,
+  'hifly-digital-human': true,
+  'douyin-workbench': true,
+  'shanjian-smart-clip': true,
+  'openclaw-skill-chat': true
+};
+var _restoringDashboardView = false;
+var _suppressNextHashApply = false;
+
+function _hashRoute(value) {
+  return String(value || '').replace(/^#/, '').trim();
+}
+
+function _baseHashView(value) {
+  return _hashRoute(value).split(':')[0].trim();
+}
+
+function _isRestorableView(view) {
+  view = _baseHashView(view);
+  return !!(view && (LOBSTER_MAIN_VIEWS[view] || LOBSTER_HIDDEN_VIEWS[view]));
+}
+
+function _saveLastView(view) {
+  view = _baseHashView(view);
+  if (!view || !_isRestorableView(view)) return;
+  try { localStorage.setItem(LOBSTER_LAST_VIEW_KEY, view); } catch (e) {}
+}
+
+function _replaceHashView(view) {
+  var route = _hashRoute(view);
+  view = _baseHashView(route);
+  if (!route || !view || !_isRestorableView(view)) return;
+  var current = _baseHashView(location.hash || '');
+  if (_hashRoute(location.hash || '') === route) return;
+  _suppressNextHashApply = true;
+  try {
+    history.replaceState(null, document.title, window.location.pathname + window.location.search + '#' + route);
+  } catch (e) {
+    try { location.hash = route; } catch (e2) {}
+  }
+  setTimeout(function() { _suppressNextHashApply = false; }, 0);
+}
+
+function _rememberView(view, opts) {
+  opts = opts || {};
+  var route = _hashRoute(view);
+  var baseView = _baseHashView(route);
+  if (!route || !baseView || !_isRestorableView(baseView)) return;
+  _saveLastView(baseView);
+  if (!opts.skipHash) _replaceHashView(route);
+}
+window._rememberLobsterView = _rememberView;
+
+function _preferredInitialView() {
+  var hashRoute = _hashRoute(location.hash || '');
+  if (_isRestorableView(hashRoute)) return hashRoute;
+  try {
+    var stored = _baseHashView(localStorage.getItem(LOBSTER_LAST_VIEW_KEY) || '');
+    if (_isRestorableView(stored)) return stored;
+  } catch (e) {}
+  return 'chat';
+}
+
+function restoreDashboardViewAfterLogin() {
+  if (window.__lobsterDashboardViewRestored) return;
+  window.__lobsterDashboardViewRestored = true;
+  var route = _preferredInitialView();
+  var view = _baseHashView(route);
+  _rememberView(route);
+  if (view === 'chat') {
+    if (typeof showAppView === 'function') showAppView('chat').catch(function() {});
+    return;
+  }
+  _restoringDashboardView = true;
+  try {
+    if (LOBSTER_MAIN_VIEWS[view] && typeof showAppView === 'function') {
+      showAppView(view, document.querySelector('.nav-left-item[data-view="' + view + '"]')).catch(function() {});
+    } else if (typeof window._applyWecomConfigHash === 'function') {
+      window._applyWecomConfigHash(true);
+    } else if (typeof window._openHiddenWorkspaceView === 'function') {
+      window._openHiddenWorkspaceView(view);
+    }
+  } finally {
+    setTimeout(function() { _restoringDashboardView = false; }, 0);
+  }
+}
+
 function loadDashboard() {
   if (!token) {
     if (typeof window.resetChatSessionsForLogout === 'function') window.resetChatSessionsForLogout();
@@ -615,6 +761,7 @@ function loadDashboard() {
       if (heroEl) heroEl.style.display = 'none';
       loadModelSelector(d.preferred_model);
       initChatSessions();
+      setTimeout(restoreDashboardViewAfterLogin, 0);
       syncTosFromServerIfOnline();
       syncOpenclawMemoryFromServerIfOnline();
       if (EDITION === 'online') {
@@ -630,20 +777,6 @@ function loadDashboard() {
       var navAgent = document.getElementById('navAgent');
       if (navAgent) navAgent.style.display = 'none';
       window.__currentUserIsAgent = !!d.is_agent;
-      if (typeof window._applyWecomConfigHash === 'function' && location.hash) {
-        var hiddenHash = String(location.hash || '');
-        if (
-          hiddenHash.indexOf('wecom') !== -1 ||
-          hiddenHash.indexOf('messenger') !== -1 ||
-          hiddenHash.indexOf('twilio-whatsapp') !== -1 ||
-          hiddenHash.indexOf('youtube-accounts') !== -1 ||
-          hiddenHash.indexOf('meta-social') !== -1 ||
-          hiddenHash.indexOf('ecommerce-detail-studio') !== -1 ||
-          hiddenHash.indexOf('seedance-tvc-studio') !== -1
-        ) {
-          window._applyWecomConfigHash();
-        }
-      }
     });
 }
 
@@ -853,9 +986,7 @@ function decorateWorkspacePages() {
   var configs = [
     {
       id: 'content-skill-store',
-      kicker: '能力中心',
       title: '技能商店',
-      desc: '安装可用技能、浏览常用能力，并把生成、运营、发布等工作流逐步接进您的 AI 员工工作台。',
       actions: [
         { label: '添加 MCP', clickId: 'openAddMcpModal', primary: true },
         { label: '刷新商店', clickId: 'refreshStoreBtn' }
@@ -863,9 +994,7 @@ function decorateWorkspacePages() {
     },
     {
       id: 'content-publish',
-      kicker: '发布与运营',
       title: '发布中心',
-      desc: '统一管理发布账号和发布记录，让生成结果能够顺手进入分发和运营阶段。',
       actions: [
         { label: '刷新内容', clickId: 'refreshPublishBtn', primary: true },
         { label: '账号列表', jumpView: 'publish' }
@@ -873,27 +1002,21 @@ function decorateWorkspacePages() {
     },
     {
       id: 'content-assets',
-      kicker: '素材管理',
       title: '素材库',
-      desc: '管理图片、视频和创意成片备选素材组，让生成任务能直接复用本机素材。',
       actions: [
         { label: '刷新素材', clickId: 'assetTopRefreshBtn', primary: true }
       ]
     },
     {
       id: 'content-billing',
-      kicker: '账户与消耗',
       title: '消费记录',
-      desc: '查看算力余额、充值记录和消耗明细，清楚知道每一步生成任务都花在哪里。',
       actions: [
         { label: '立即刷新', clickId: 'billingRefreshBtn', primary: true }
       ]
     },
     {
       id: 'content-sys-config',
-      kicker: '系统控制台',
       title: '系统配置',
-      desc: '在这里集中管理模型、连接状态和自定义配置，让复杂设置藏在后面，但仍然清晰可达。',
       actions: [
         { label: '查看技能商店', jumpView: 'skill-store' },
         { label: '回到首页', jumpView: 'chat', primary: true }
@@ -901,9 +1024,7 @@ function decorateWorkspacePages() {
     },
     {
       id: 'content-logs',
-      kicker: '运行诊断',
       title: '日志与排查',
-      desc: '查看运行日志、调试信息和任务线索，方便在出现问题时快速定位和恢复。',
       actions: [
         { label: '刷新日志', clickId: 'logsRefreshBtn', primary: true },
         { label: '上传诊断', clickId: 'logsUploadDiagnosticBtn' }
@@ -1034,29 +1155,19 @@ function decorateWorkspaceSubsections() {
   }
 
   addSectionChrome(document.getElementById('storeTabPopular'), {
-    kicker: 'Workspace',
-    title: readLabel('.store-tab[data-store-tab="popular"]', 'Popular'),
-    desc: 'Keep your most-used skills close, and bring common generation and operations flows into one place.'
+    title: readLabel('.store-tab[data-store-tab="popular"]', '热门')
   });
   addSectionChrome(document.getElementById('storeTabOfficial'), {
-    kicker: 'Registry',
-    title: readLabel('.store-tab[data-store-tab="official"]', 'Registry'),
-    desc: 'Search cached MCP capabilities, browse references, and add what you need without leaving the workspace.'
+    title: readLabel('.store-tab[data-store-tab="official"]', '能力列表')
   });
   addSectionChrome(document.getElementById('pubTabAccounts'), {
-    kicker: 'Operations',
-    title: readLabel('.pub-tab[data-pub-tab="accounts"]', 'Accounts'),
-    desc: 'Manage connected accounts, open their workspaces, and continue into review or publishing when you are ready.'
+    title: readLabel('.pub-tab[data-pub-tab="accounts"]', '发布账号')
   });
   addSectionChrome(document.getElementById('pubTabAssets'), {
-    kicker: 'Library',
-    title: '素材列表',
-    desc: 'Collect generated media in one place so it can flow naturally into chat, editing, and publishing.'
+    title: '素材列表'
   });
   addSectionChrome(document.getElementById('pubTabTasks'), {
-    kicker: 'Records',
-    title: readLabel('.pub-tab[data-pub-tab="tasks"]', 'Tasks'),
-    desc: 'Review recent publish activity, inspect results, and follow each run without digging through logs.'
+    title: readLabel('.pub-tab[data-pub-tab="tasks"]', '发布记录')
   });
 
   markToolbars('pubTabAccounts', [
@@ -1100,6 +1211,7 @@ function runAppViewInit(view) {
   if (view === 'billing') { if (typeof loadBillingView === 'function') loadBillingView(); }
   if (view === 'sys-config') { loadOpenClawConfig(); }
   if (view === 'logs') { if (typeof ensureLogsBindings === 'function') ensureLogsBindings(); }
+  if (view === 'openclaw-memory' && typeof window.initOpenclawMemoryManager === 'function') window.initOpenclawMemoryManager();
   if (view === 'messenger-config' && typeof loadMessengerConfigPage === 'function') loadMessengerConfigPage();
   if (view === 'youtube-accounts' && typeof loadYoutubeAccountsPage === 'function') loadYoutubeAccountsPage();
   if (view === 'meta-social' && typeof loadMetaSocialPage === 'function') loadMetaSocialPage();
@@ -1113,6 +1225,7 @@ function showAppView(view, sourceEl) {
   var chatTips = document.getElementById('chatTipsModal');
   if (chatTips) chatTips.classList.remove('visible');
   if (!view) return Promise.resolve(null);
+  _rememberView(view);
   if (currentView === 'chat' && view !== 'chat' && typeof saveCurrentSessionToStore === 'function') saveCurrentSessionToStore();
   document.querySelectorAll('.nav-left-item').forEach(function(b) { b.classList.remove('active'); });
   var navEl = document.querySelector('.nav-left-item[data-view="' + view + '"]');
@@ -1334,8 +1447,14 @@ function openCreditLimitModal() {
 })();
 
 (function initWecomConfigHash() {
-  function applyHash() {
+  function applyHash(force) {
+    if (!force && (_suppressNextHashApply || _restoringDashboardView)) return;
     var hash = (location.hash || '').replace(/^#/, '');
+    var hashView = _baseHashView(hash);
+    if (hashView && LOBSTER_MAIN_VIEWS[hashView] && typeof showAppView === 'function') {
+      showAppView(hashView, document.querySelector('.nav-left-item[data-view="' + hashView + '"]')).catch(function() {});
+      return;
+    }
     if (hash === 'wecom-config' && typeof showWecomConfigView === 'function') showWecomConfigView();
     if (hash.indexOf('wecom-detail') === 0 && typeof showWecomDetailView === 'function') {
       var parts = hash.split(':');
@@ -1368,8 +1487,23 @@ function openCreditLimitModal() {
     if (hash === 'viral-video-remix' && typeof window._openViralVideoRemixView === 'function') {
       window._openViralVideoRemixView();
     }
+    if (hash === 'cutcli-template-studio' && typeof window._openCutcliTemplateStudioView === 'function') {
+      window._openCutcliTemplateStudioView();
+    }
+    if (hash === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
+      window._openHiflyDigitalHumanView();
+    }
+    if (hash === 'douyin-workbench' && typeof window._openDouyinWorkbenchView === 'function') {
+      window._openDouyinWorkbenchView();
+    }
+    if (hash === 'shanjian-smart-clip' && typeof window._openShanjianSmartClipView === 'function') {
+      window._openShanjianSmartClipView();
+    }
+    if (hash === 'openclaw-skill-chat' && typeof window.openOpenclawSkillChat === 'function') {
+      window.openOpenclawSkillChat();
+    }
   }
-  window.addEventListener('hashchange', applyHash);
+  window.addEventListener('hashchange', function() { applyHash(false); });
   window._applyWecomConfigHash = applyHash;
   if (location.hash && (
     location.hash.indexOf('wecom') !== -1 ||
@@ -1380,7 +1514,12 @@ function openCreditLimitModal() {
     location.hash.indexOf('ecommerce-detail-studio') !== -1 ||
     location.hash.indexOf('image-composer-studio') !== -1 ||
     location.hash.indexOf('seedance-tvc-studio') !== -1 ||
-    location.hash.indexOf('viral-video-remix') !== -1
+    location.hash.indexOf('viral-video-remix') !== -1 ||
+    location.hash.indexOf('cutcli-template-studio') !== -1 ||
+    location.hash.indexOf('hifly-digital-human') !== -1 ||
+    location.hash.indexOf('douyin-workbench') !== -1 ||
+    location.hash.indexOf('shanjian-smart-clip') !== -1 ||
+    location.hash.indexOf('openclaw-skill-chat') !== -1
   )) applyHash();
 })();
 

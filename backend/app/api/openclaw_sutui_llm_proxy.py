@@ -196,6 +196,114 @@ def _openai_stream_text_event(text: str, *, model: str) -> bytes:
     return body.encode("utf-8")
 
 
+def _openai_stream_from_completion_response(data: Any, *, model: str) -> bytes:
+    """Convert a non-stream OpenAI chat completion into standard SSE chunks."""
+    if not isinstance(data, dict):
+        return _openai_stream_text_event("LLM upstream returned an invalid response.", model=model)
+    if isinstance(data.get("error"), dict):
+        msg = _message_from_error_payload(data) or "LLM upstream returned an error."
+        return _openai_stream_text_event(msg, model=model)
+
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        msg = _message_from_error_payload(data) or "LLM upstream returned an empty response."
+        return _openai_stream_text_event(msg, model=model)
+
+    choice = choices[0]
+    msg = choice.get("message")
+    if not isinstance(msg, dict):
+        msg = {}
+
+    completion_id = str(data.get("id") or f"chatcmpl_lobster_bridge_{uuid.uuid4().hex[:12]}")
+    created = int(data.get("created") or time.time())
+    out_model = str(data.get("model") or model or "deepseek-chat")
+    chunks: list[str] = []
+
+    def _chunk(delta: Dict[str, Any], finish_reason: Optional[str] = None, *, usage: Any = None) -> None:
+        payload: Dict[str, Any] = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": out_model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        if usage is not None:
+            payload["usage"] = usage
+        chunks.append(f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n")
+
+    _chunk({"role": "assistant"})
+
+    content = msg.get("content")
+    if isinstance(content, str) and content:
+        _chunk({"content": content})
+
+    tool_calls = msg.get("tool_calls")
+    if isinstance(tool_calls, list):
+        normalized_calls: list[Dict[str, Any]] = []
+        for idx, call in enumerate(tool_calls):
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function")
+            fn = fn if isinstance(fn, dict) else {}
+            args = fn.get("arguments")
+            if not isinstance(args, str):
+                args = json.dumps(args if args is not None else {}, ensure_ascii=False, default=str)
+            normalized_calls.append(
+                {
+                    "index": idx,
+                    "id": str(call.get("id") or f"call_{uuid.uuid4().hex[:12]}"),
+                    "type": str(call.get("type") or "function"),
+                    "function": {
+                        "name": str(fn.get("name") or ""),
+                        "arguments": args,
+                    },
+                }
+            )
+        if normalized_calls:
+            _chunk({"tool_calls": normalized_calls})
+
+    function_call = msg.get("function_call")
+    if isinstance(function_call, dict) and not isinstance(tool_calls, list):
+        args = function_call.get("arguments")
+        if not isinstance(args, str):
+            args = json.dumps(args if args is not None else {}, ensure_ascii=False, default=str)
+        _chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": f"call_{uuid.uuid4().hex[:12]}",
+                        "type": "function",
+                        "function": {
+                            "name": str(function_call.get("name") or ""),
+                            "arguments": args,
+                        },
+                    }
+                ]
+            }
+        )
+
+    finish_reason = choice.get("finish_reason")
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason = "tool_calls" if isinstance(tool_calls, list) and tool_calls else "stop"
+    _chunk({}, finish_reason)
+
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        usage_payload = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": out_model,
+            "choices": [],
+            "usage": usage,
+        }
+        chunks.append(f"data: {json.dumps(usage_payload, ensure_ascii=False, default=str)}\n\n")
+
+    chunks.append("data: [DONE]\n\n")
+    return "".join(chunks).encode("utf-8")
+
+
 def _response_has_fake_tool_text(data: Any) -> bool:
     """Detect text-embedded fake tool calls that OpenClaw may show to WeChat users."""
     if not isinstance(data, dict):
@@ -523,6 +631,91 @@ async def openclaw_sutui_chat_completions(request: Request):
         if ct:
             out_h["content-type"] = ct
         return Response(content=response_content, status_code=r.status_code, headers=out_h)
+
+    async def gen_nonstream_bridge() -> AsyncIterator[bytes]:
+        bridge_body = dict(body)
+        bridge_body["stream"] = False
+        max_attempts = _TRANSIENT_LIMIT_MAX_ATTEMPTS if is_openclaw_skill_request else 1
+        try:
+            async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
+                r: Optional[httpx.Response] = None
+                for attempt in range(1, max_attempts + 1):
+                    if attempt > 1:
+                        await asyncio.sleep(_transient_limit_backoff(attempt - 1))
+                    r = await client.post(url, json=bridge_body, headers=headers)
+                    if not _response_looks_like_concurrent_limit(r.content):
+                        break
+                    logger.warning(
+                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_upstream_concurrent_limit "
+                        "attempt=%s/%s http=%s",
+                        trace_id,
+                        attempt,
+                        max_attempts,
+                        r.status_code,
+                    )
+                if r is None:
+                    yield _openai_stream_text_event("LLM upstream returned no response.", model=model_forward)
+                    return
+                if _response_looks_like_concurrent_limit(r.content):
+                    yield _openai_stream_text_event(_upstream_concurrent_limit_message(), model=model_forward)
+                    return
+                if r.status_code >= 400:
+                    min_charge = (r.headers.get("X-Lobster-Min-Charge-Credits") or "").strip()
+                    yield _openai_stream_text_event(
+                        _upstream_error_message(r.status_code, r.content, min_charge=min_charge),
+                        model=model_forward,
+                    )
+                    return
+
+                try:
+                    json_data = r.json()
+                except Exception:
+                    logger.warning(
+                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_invalid_json http=%s bytes=%s",
+                        trace_id,
+                        r.status_code,
+                        len(r.content or b""),
+                    )
+                    yield _openai_stream_text_event("LLM upstream returned invalid JSON.", model=model_forward)
+                    return
+
+                if isinstance(json_data, dict) and _should_retry_fake_tool_call(json_data, bridge_body):
+                    retry_body = dict(bridge_body)
+                    retry_body["tool_choice"] = "required"
+                    try:
+                        r2 = await client.post(url, json=retry_body, headers=headers)
+                        jd2 = r2.json() if r2.status_code == 200 else None
+                    except Exception as e:
+                        logger.warning(
+                            "[chat_trace] trace_id=%s openclaw_sutui_proxy nonstream_bridge fake_tool_text retry failed: %s",
+                            trace_id,
+                            e,
+                        )
+                        jd2 = None
+                    if isinstance(jd2, dict) and not _response_has_fake_tool_text(jd2):
+                        json_data = jd2
+                        logger.info(
+                            "[chat_trace] trace_id=%s openclaw_sutui_proxy nonstream_bridge fake_tool_text retry succeeded",
+                            trace_id,
+                        )
+                if isinstance(json_data, dict):
+                    _strip_fake_tool_text_from_response(json_data)
+                logger.info(
+                    "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_response http=%s summary=%s",
+                    trace_id,
+                    r.status_code,
+                    _upstream_resp_summary(json_data if isinstance(json_data, dict) else None),
+                )
+                yield _openai_stream_from_completion_response(json_data, model=model_forward)
+        except httpx.RequestError as e:
+            logger.exception("[openclaw-sutui-proxy] nonstream bridge forward failed: %s", e)
+            yield _openai_stream_text_event(f"认证中心不可达：{e!s}", model=model_forward)
+
+    return StreamingResponse(
+        gen_nonstream_bridge(),
+        media_type="text/event-stream",
+        headers={TRACE_HEADER: trace_id, "X-Lobster-OpenClaw-Stream-Bridge": "nonstream"},
+    )
 
     async def stream_once(client: httpx.AsyncClient, attempt: int) -> AsyncIterator[bytes]:
         async with client.stream("POST", url, json=body, headers=headers) as r:

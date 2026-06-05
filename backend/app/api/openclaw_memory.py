@@ -23,12 +23,18 @@ from xml.etree import ElementTree as ET
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 
 from .auth import _ServerUser, get_current_user_for_local
 from ..core.config import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class OpenClawMemoryUpdateBody(BaseModel):
+    title: str = ""
+    notes: str = ""
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 _OPENCLAW_DIR = _BASE_DIR / "openclaw"
@@ -920,6 +926,66 @@ async def clear_openclaw_memory(
 
     _save_index(current_user.id, [])
     return {"ok": True, "deleted_count": len(docs), "removed_workspace_paths": sorted(set(removed))}
+
+
+@router.patch("/api/openclaw/memory/{doc_id}", summary="Update a user OpenClaw memory doc")
+async def update_openclaw_memory(
+    request: Request,
+    doc_id: str,
+    body: OpenClawMemoryUpdateBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    clean_id = re.sub(r"[^a-f0-9]", "", (doc_id or "").lower())[:32]
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="document_id 无效")
+
+    docs = _load_index(current_user.id)
+    found: dict[str, Any] | None = None
+    for doc in docs:
+        if doc.get("id") == clean_id:
+            found = doc
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="资料不存在")
+
+    source = str(found.get("source") or "local_user")
+    layer = str(found.get("memory_layer") or "").strip()
+    if layer == "agent" or str(found.get("origin") or "") == "agent_memory":
+        raise HTTPException(status_code=403, detail="代理商记忆不能在本机编辑")
+    if source.startswith("cloud_"):
+        raise HTTPException(status_code=403, detail="云端同步资料需要在下发端编辑")
+
+    old_title = str(found.get("title") or found.get("filename") or "用户资料")
+    title = _short_title(body.title, old_title)
+    notes = (body.notes or "").strip()[:500]
+
+    text = _read_canonical_memory_content(found, max_chars=_MAX_EXTRACTED_CHARS)
+    if not text:
+        raise HTTPException(status_code=500, detail="资料内容读取失败，无法更新")
+
+    found["title"] = title
+    found["notes"] = notes
+    found["updated_at"] = _utc_now_iso()
+
+    canon = _BASE_DIR / str(found.get("canonical_path") or "")
+    try:
+        if not canon.is_file() or _USER_MEMORY_DIR.resolve() not in canon.resolve().parents:
+            raise RuntimeError("canonical memory path invalid")
+        canon.write_text(_memory_markdown(found, text), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("[openclaw-memory] update canonical failed doc_id=%s: %s", clean_id, exc)
+        raise HTTPException(status_code=500, detail="更新个人记忆文件失败")
+
+    found["workspace_paths"] = _write_workspace_memory(found, text)
+    found["cloud_mirror"] = await _mirror_local_memory_to_server(request, found, text)
+    _save_index(current_user.id, docs)
+    logger.info(
+        "[openclaw-memory] updated user_id=%s doc_id=%s mirrors=%s",
+        current_user.id,
+        clean_id,
+        len(found.get("workspace_paths") or []),
+    )
+    return {"ok": True, "document": found}
 
 
 @router.delete("/api/openclaw/memory/{doc_id}", summary="Delete a user OpenClaw memory doc")

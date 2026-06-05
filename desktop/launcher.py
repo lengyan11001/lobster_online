@@ -17,6 +17,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from ctypes import wintypes
+from html import escape
 
 if os.name == "nt":
     import winreg
@@ -24,17 +25,23 @@ else:
     winreg = None
 
 
-APP_NAME = "必火智能AI"
-DEFAULT_WINDOW_TITLE = "必火AI员工"
+APP_NAME = "必火智能"
+DEFAULT_WINDOW_TITLE = "必火智能"
 SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
+CONFIRM_CLOSE_TITLE = "\u5fc5\u706b\u667a\u80fd"
+CONFIRM_CLOSE_BODY = (
+    "\u786e\u5b9a\u8981\u5173\u95ed\u5fc5\u706b\u667a\u80fd\u5417\uff1f\n\n"
+    "\u5982\u679c\u6b63\u5728\u5168\u5c4f\u9884\u89c8\u89c6\u9891\uff0c"
+    "\u53ef\u4ee5\u5148\u70b9\u51fb\u300c\u9000\u51fa\u5168\u5c4f\u300d\u6216\u6309 Esc\u3002"
+)
 LOADING_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>必火智能AI</title>
+  <title>必火智能</title>
   <style>
     html, body {
       margin: 0;
@@ -77,6 +84,49 @@ LOADING_HTML = """<!doctype html>
       line-height: 1.7;
       color: #526173;
     }
+    .progress {
+      margin-top: 22px;
+      height: 8px;
+      border-radius: 999px;
+      background: #e9eef7;
+      overflow: hidden;
+    }
+    .progress span {
+      display: block;
+      height: 100%;
+      width: 4%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #2f6df6, #10b6c9);
+      transition: width .28s ease;
+    }
+    .stage {
+      margin-top: 14px;
+      font-size: 14px;
+      color: #23324a;
+      font-weight: 700;
+    }
+    .detail {
+      margin-top: 6px;
+      min-height: 22px;
+      font-size: 13px;
+      line-height: 1.55;
+      color: #6b7890;
+      word-break: break-all;
+    }
+    .logs {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #edf1f7;
+      display: grid;
+      gap: 5px;
+      font-size: 12px;
+      color: #7c8799;
+    }
+    .log-line {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -84,11 +134,43 @@ LOADING_HTML = """<!doctype html>
     <div class="panel">
       <div class="brand">
         <img src="__LOADING_MARK__" alt="">
-        <span>必火AI员工</span>
+        <span>必火智能</span>
       </div>
       <div class="text">正在打开客户端，请稍候...</div>
+      <div class="progress"><span id="progressFill"></span></div>
+      <div class="stage" id="startupStage">正在启动...</div>
+      <div class="detail" id="startupDetail">准备检查更新和启动本地服务。</div>
+      <div class="logs" id="startupLogs"></div>
     </div>
   </div>
+  <script>
+    (function(){
+      function text(v){ return v == null ? '' : String(v); }
+      function esc(v){ return text(v).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+      function render(s){
+        if (!s) return;
+        var pct = Number(s.percent || 0);
+        if (!isFinite(pct)) pct = 0;
+        pct = Math.max(3, Math.min(100, pct));
+        document.getElementById('progressFill').style.width = pct + '%';
+        document.getElementById('startupStage').textContent = text(s.message || '正在启动...');
+        document.getElementById('startupDetail').textContent = text(s.detail || '');
+        var logs = Array.isArray(s.logs) ? s.logs : [];
+        document.getElementById('startupLogs').innerHTML = logs.slice(-5).map(function(item){
+          return '<div class="log-line">' + esc(item.time) + ' · ' + esc(item.message) + '</div>';
+        }).join('');
+      }
+      async function poll(){
+        try {
+          if (window.pywebview && window.pywebview.api && window.pywebview.api.startup_status) {
+            render(await window.pywebview.api.startup_status());
+          }
+        } catch (e) {}
+      }
+      poll();
+      setInterval(poll, 650);
+    })();
+  </script>
 </body>
 </html>"""
 
@@ -111,6 +193,38 @@ ROOT = resolve_root()
 LOG_PATH = ROOT / "desktop_launcher.log"
 APP_ICON_PATH = ROOT / "static" / "bihu_box.ico"
 LOADING_MARK_PATH = ROOT / "static" / "bihu_64.png"
+_STARTUP_STATUS_LOCK = threading.Lock()
+_STARTUP_STATUS: dict[str, object] = {
+    "stage": "prepare",
+    "message": "正在准备启动...",
+    "detail": "",
+    "percent": 3,
+    "logs": [],
+}
+
+
+def set_startup_status(stage: str, message: str, *, detail: str = "", percent: int | None = None) -> None:
+    item = {
+        "time": time.strftime("%H:%M:%S"),
+        "stage": str(stage or "startup"),
+        "message": str(message or ""),
+        "detail": str(detail or ""),
+        "percent": max(0, min(100, int(percent))) if percent is not None else None,
+    }
+    with _STARTUP_STATUS_LOCK:
+        logs = list(_STARTUP_STATUS.get("logs") or [])
+        logs.append(item)
+        del logs[:-6]
+        _STARTUP_STATUS.update(item)
+        _STARTUP_STATUS["logs"] = logs
+    log(f"StartupStatus[{item['stage']}]: {item['message']} {item['detail']}".rstrip())
+
+
+def get_startup_status_snapshot() -> dict[str, object]:
+    with _STARTUP_STATUS_LOCK:
+        data = dict(_STARTUP_STATUS)
+        data["logs"] = list(_STARTUP_STATUS.get("logs") or [])
+        return data
 
 
 def log(message: str) -> None:
@@ -129,6 +243,17 @@ def message_box(title: str, body: str) -> None:
         ctypes.windll.user32.MessageBoxW(None, body, title, 0x40)
     except Exception:
         log(f"{title}: {body}")
+
+
+def confirm_box(title: str, body: str) -> bool:
+    try:
+        if os.name != "nt":
+            return True
+        flags = 0x00000004 | 0x00000020 | 0x00000100 | 0x00040000
+        return ctypes.windll.user32.MessageBoxW(None, body, title, flags) == 6
+    except Exception as exc:
+        log(f"close confirmation failed; allowing close: {exc}")
+        return True
 
 
 def screen_work_area() -> tuple[int, int]:
@@ -520,6 +645,35 @@ def bundled_python() -> str:
     return sys.executable
 
 
+def update_startup_status_from_code_line(line: str) -> None:
+    text = str(line or "").strip()
+    if not text:
+        return
+    lower = text.lower()
+    if "found_update" in lower or "发现新版本" in text:
+        set_startup_status("update_found", "发现新版本，准备下载", detail=text, percent=12)
+    elif "download_start" in lower or "正在下载" in text:
+        set_startup_status("update_download", "正在下载更新包", detail=text, percent=18)
+    elif "download_done" in lower or "sha256" in lower or "校验" in text:
+        set_startup_status("update_verify", "正在校验更新包", detail=text, percent=42)
+    elif "stop_services_start" in lower:
+        set_startup_status("update_stop", "正在停止旧服务", detail=text, percent=52)
+    elif "stop_services_done" in lower:
+        set_startup_status("update_stop_done", "旧服务已停止", detail=text, percent=56)
+    elif "apply_start" in lower or "覆盖" in text or "解压" in text:
+        set_startup_status("update_apply", "正在安装更新", detail=text, percent=62)
+    elif "apply_done" in lower or "已覆盖更新" in text:
+        set_startup_status("update_done", "更新安装完成", detail=text, percent=78)
+    elif "already_latest" in lower or "已是最新" in text:
+        set_startup_status("update_latest", "客户端已是最新版本", detail=text, percent=28)
+    elif "[err]" in lower or "失败" in text:
+        set_startup_status("update_warn", "更新遇到问题，继续启动", detail=text, percent=30)
+    elif "[warn]" in lower:
+        set_startup_status("update_warn", "更新提示", detail=text, percent=30)
+    elif text.startswith("[code]"):
+        set_startup_status("update", "正在检查更新", detail=text, percent=20)
+
+
 def run_client_code_update(env: dict[str, str]) -> None:
     script = ROOT / "scripts" / "check_client_code_update.py"
     if not script.is_file():
@@ -528,9 +682,10 @@ def run_client_code_update(env: dict[str, str]) -> None:
     if not py:
         log("CodeUpdate: skipped because no bundled python is available in frozen launcher")
         return
-    log("CodeUpdate: checking client code pack update")
+    timeout_seconds = max(300, int(env.get("CLIENT_CODE_UPDATE_TIMEOUT_SECONDS") or 1800))
+    set_startup_status("update_check", "检查客户端更新", detail="正在连接更新服务器...", percent=8)
     try:
-        cp = subprocess.run(
+        proc = subprocess.Popen(
             [py, str(script)],
             cwd=str(ROOT),
             env=env,
@@ -539,18 +694,38 @@ def run_client_code_update(env: dict[str, str]) -> None:
             stderr=subprocess.STDOUT,
             text=True,
             errors="replace",
-            timeout=180,
             creationflags=creation_flags(),
         )
-        tail = "\n".join((cp.stdout or "").splitlines()[-20:])
+        lines: list[str] = []
+        started = time.time()
+        assert proc.stdout is not None
+        while True:
+            line = proc.stdout.readline()
+            if line:
+                line = line.rstrip()
+                lines.append(line)
+                update_startup_status_from_code_line(line)
+            elif proc.poll() is not None:
+                break
+            if time.time() - started > timeout_seconds:
+                proc.kill()
+                raise subprocess.TimeoutExpired([py, str(script)], timeout_seconds)
+            time.sleep(0.03)
+        cp_returncode = proc.wait(timeout=5)
+        tail = "\n".join(lines[-120:])
         if tail:
             log("CodeUpdate output:\n" + tail)
-        if cp.returncode:
-            log(f"CodeUpdate: exited with code {cp.returncode}; continuing startup")
+        if cp_returncode:
+            log(f"CodeUpdate: exited with code {cp_returncode}; continuing startup")
+            set_startup_status("update_warn", "更新检查未完成，继续启动", detail=f"退出码 {cp_returncode}", percent=30)
+        else:
+            set_startup_status("update_done", "客户端更新检查完成", percent=34)
     except subprocess.TimeoutExpired:
-        log("CodeUpdate: timeout after 180s; continuing startup")
+        log(f"CodeUpdate: timeout after {timeout_seconds}s; continuing startup")
+        set_startup_status("update_timeout", "更新检查超时，继续启动", detail="本次先使用本地代码。", percent=30)
     except Exception as exc:
         log(f"CodeUpdate: failed: {exc}; continuing startup")
+        set_startup_status("update_warn", "更新检查失败，继续启动", detail=str(exc), percent=30)
 
 
 def ensure_desktop_runtime(env: dict[str, str]) -> bool:
@@ -561,6 +736,7 @@ def ensure_desktop_runtime(env: dict[str, str]) -> bool:
     except Exception as exc:
         log(f"DesktopRuntime: pywebview unavailable before install: {exc}")
 
+    set_startup_status("runtime", "正在准备桌面窗口组件", detail="首次启动可能需要安装本地依赖。", percent=36)
     req = ROOT / "desktop" / "requirements-desktop.txt"
     if not req.is_file():
         log(f"DesktopRuntime: missing {req}")
@@ -591,12 +767,15 @@ def ensure_desktop_runtime(env: dict[str, str]) -> bool:
             log("DesktopRuntime output:\n" + tail)
         if cp.returncode:
             log(f"DesktopRuntime: pip exited with code {cp.returncode}")
+            set_startup_status("runtime_warn", "桌面窗口组件安装失败", detail=f"退出码 {cp.returncode}", percent=44)
             return False
     except subprocess.TimeoutExpired:
         log("DesktopRuntime: pip install timeout after 300s")
+        set_startup_status("runtime_warn", "桌面窗口组件安装超时", percent=44)
         return False
     except Exception as exc:
         log(f"DesktopRuntime: pip install failed: {exc}")
+        set_startup_status("runtime_warn", "桌面窗口组件安装失败", detail=str(exc), percent=44)
         return False
 
     try:
@@ -606,9 +785,11 @@ def ensure_desktop_runtime(env: dict[str, str]) -> bool:
         import webview  # noqa: F401
 
         log("DesktopRuntime: pywebview ready after install")
+        set_startup_status("runtime_done", "桌面窗口组件已就绪", percent=45)
         return True
     except Exception as exc:
         log(f"DesktopRuntime: pywebview still unavailable after install: {exc}")
+        set_startup_status("runtime_warn", "桌面窗口组件不可用", detail=str(exc), percent=44)
         return False
 
 
@@ -704,6 +885,7 @@ def start_services_blocking(
     wait_seconds: int,
     ensure_runtime: bool = True,
 ) -> tuple[bool, str, subprocess.Popen | None, subprocess.Popen | None, str]:
+    set_startup_status("ports", "检查本地端口", detail=f"Backend {port} / MCP {mcp_port}", percent=4)
     port = choose_backend_port(port)
     mcp_port = choose_mcp_port(mcp_port, port)
     env["PORT"] = str(port)
@@ -713,14 +895,22 @@ def start_services_blocking(
     run_client_code_update(env)
     if ensure_runtime:
         ensure_desktop_runtime(env)
+    set_startup_status("mcp", "正在启动能力服务", detail=f"端口 {mcp_port}", percent=46)
     mcp_proc = start_bat("MCP", "run_mcp.bat", env)
     time.sleep(1.2)
     backend_proc = None
     if not wait_for_own_backend(port, 2):
+        set_startup_status("backend", "正在启动本地服务", detail=f"端口 {port}", percent=58)
         backend_proc = start_bat("Backend", "run_backend.bat", env)
     else:
         log(f"Backend: port {port} already ready")
+        set_startup_status("backend_ready", "本地服务已在运行", percent=82)
+    set_startup_status("backend_wait", "等待本地服务就绪", detail="正在检测健康状态...", percent=72)
     ok = wait_for_own_backend(port, wait_seconds)
+    if ok:
+        set_startup_status("ready", "启动完成，正在进入工作台", percent=100)
+    else:
+        set_startup_status("failed", "本地服务启动失败", detail="请复制诊断日志发给客服。", percent=100)
     return ok, ready_url, backend_proc, mcp_proc, (
         "" if ok else f"本机服务启动失败，请查看：{ROOT / 'backend.log'} / {ROOT / 'mcp.log'} / {LOG_PATH}"
     )
@@ -744,6 +934,9 @@ def stop_process(proc: subprocess.Popen | None, name: str) -> None:
 
 
 class DesktopApi:
+    def startup_status(self) -> dict:
+        return get_startup_status_snapshot()
+
     def save_asset_as(self, asset_id: str, suggested_name: str = "") -> dict:
         source = asset_file_for_id(asset_id)
         if not source:
@@ -952,7 +1145,7 @@ class NativeLoadingWindow:
                 if self._font_title:
                     old_font = gdi32.SelectObject(hdc, self._font_title)
                     gdi32.SetTextColor(hdc, 0x00102033)
-                    user32.DrawTextW(hdc, "必火AI员工", -1, ctypes.byref(title_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
+                    user32.DrawTextW(hdc, "必火智能", -1, ctypes.byref(title_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
                     gdi32.SelectObject(hdc, old_font)
                 if self._font_text:
                     old_font = gdi32.SelectObject(hdc, self._font_text)
@@ -1178,6 +1371,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             text_select=True,
             js_api=DesktopApi(),
         )
+
+        def confirm_window_close() -> bool | None:
+            return None if confirm_box(CONFIRM_CLOSE_TITLE, CONFIRM_CLOSE_BODY) else False
+
+        window.events.closing += confirm_window_close
         webview.start(
             start_services_then_load,
             [window],

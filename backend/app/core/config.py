@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     sutui_oauth_login_url: Optional[str] = None
     """速推 API 根地址，用于 apikeys/list、balance 等（仅 online 使用）"""
     sutui_api_base: str = "https://api.xskill.ai"
+    """服务端统一速推/xSkill Token；online 服务端任务优先使用它，不读本机 sutui_config.json。"""
+    sutui_server_token: Optional[str] = None
     """GET /api/v3/models/{id}/docs 的 lang 参数（与 model-pricing-guide 一致），用于对话内按模型估算算力。"""
     xskill_model_docs_lang: str = "zh"
     """模型定价文档内存缓存秒数（减轻 xSkill 文档接口压力）。"""

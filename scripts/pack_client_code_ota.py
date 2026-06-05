@@ -23,12 +23,11 @@ from pathlib import Path
 
 # 与 check_client_code_update.DEFAULT_PATHS 保持一致
 OTA_PATHS: tuple[str, ...] = (
-    "CLIENT_CODE_VERSION.json",
+    "scripts",
     "backend",
     "desktop",
     "mcp",
     "static",
-    "scripts",
     "publisher",
     "skills",
     "skill_registry.json",
@@ -48,6 +47,8 @@ OTA_PATHS: tuple[str, ...] = (
     "nodejs/run-npm.mjs",
     "nodejs/.gitignore",
     "nodejs/node_modules/@tencent-weixin/openclaw-weixin",
+    # Keep version last so partial OTA failures do not mark the client updated.
+    "CLIENT_CODE_VERSION.json",
 )
 
 # 与 check_client_code_update.DEFAULT_PATHS_WITH_NODEJS_DEPS 一致（仅在对等清单外加整树时用）
@@ -102,6 +103,8 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     ".updates",
     "scripts/_probe",
     "static/uploads",
+    "tmp_templates",
+    "chat_storage",
 )
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}

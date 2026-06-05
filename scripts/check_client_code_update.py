@@ -24,8 +24,11 @@ import json
 import os
 import shutil
 import ssl
+import subprocess
 import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -63,12 +66,11 @@ DEFAULT_CLIENT_SEMVER = "1.0.0"
 
 # 与 pack_code.sh 思路一致：仅代码与脚本，无嵌入式运行时与 wheel
 DEFAULT_PATHS: tuple[str, ...] = (
-    "CLIENT_CODE_VERSION.json",
+    "scripts",
     "backend",
     "desktop",
     "mcp",
     "static",
-    "scripts",
     "publisher",
     "skills",
     "skill_registry.json",
@@ -87,6 +89,9 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "nodejs/ensure-npm-cli.mjs",
     "nodejs/run-npm.mjs",
     "nodejs/.gitignore",
+    # Version must be applied last. If a large path such as skills/ fails or
+    # times out, writing this first makes the next launch skip the unfinished OTA.
+    "CLIENT_CODE_VERSION.json",
 )
 
 # 可选：整包 node 依赖（体积大）；一般发 OTA 仅用 DEFAULT_PATHS，目标机点授权在线安装即可
@@ -139,6 +144,7 @@ _DESKTOP_EXE_NAME = "必火智能AI.exe"
 _DESKTOP_EXE_NAMES = (_DESKTOP_EXE_NAME, "必火AI员工.exe")
 _PENDING_UPDATE_DIR = ROOT / ".updates"
 _PENDING_EXE_MARKER = _PENDING_UPDATE_DIR / "pending_exe_replace.json"
+_STOP_CLIENT_SERVICES_DONE = False
 
 
 def _load_dotenv_simple(path: Path) -> dict[str, str]:
@@ -416,6 +422,193 @@ def _as_int(v, default: int = 0) -> int:
         return default
 
 
+def _creation_flags() -> int:
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _netstat_listening_pids(port: int) -> set[int]:
+    if os.name != "nt":
+        return set()
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano"],
+            text=True,
+            errors="ignore",
+            creationflags=_creation_flags(),
+            timeout=8,
+        )
+    except Exception as exc:
+        print(f"[code] [WARN] netstat 检查端口 {port} 失败: {exc}", flush=True)
+        return set()
+    pids: set[int] = set()
+    markers = (f":{int(port)} ", f":{int(port)}\t")
+    for raw in out.splitlines():
+        line = raw.strip()
+        if "LISTENING" not in line.upper():
+            continue
+        if not any(marker in line for marker in markers):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            pids.add(int(parts[-1]))
+        except Exception:
+            pass
+    return pids
+
+
+def _process_command_line(pid: int) -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        out = subprocess.check_output(
+            ["wmic", "process", "where", f"ProcessId={int(pid)}", "get", "CommandLine", "/value"],
+            text=True,
+            errors="ignore",
+            creationflags=_creation_flags(),
+            timeout=5,
+        )
+        for raw in out.splitlines():
+            line = raw.strip()
+            if line.lower().startswith("commandline="):
+                return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {int(pid)}\").CommandLine",
+            ],
+            text=True,
+            errors="ignore",
+            creationflags=_creation_flags(),
+            timeout=6,
+        )
+        return out.strip()
+    except Exception:
+        return ""
+
+
+def _process_belongs_to_this_client(pid: int) -> bool:
+    cmd = _process_command_line(pid)
+    if not cmd:
+        return False
+    normalized = os.path.normcase(cmd).replace("/", "\\")
+    try:
+        normalized_root = os.path.normcase(str(ROOT.resolve())).replace("/", "\\")
+    except Exception:
+        normalized_root = os.path.normcase(str(ROOT)).replace("/", "\\")
+    if normalized_root and normalized_root in normalized:
+        return True
+    markers = (
+        "lobster_online",
+        "必火",
+        "run_backend.bat",
+        "run_mcp.bat",
+        "backend\\run.py",
+        "run_module('mcp'",
+        'run_module("mcp"',
+        "openclaw.mjs",
+    )
+    return any(marker.lower() in normalized for marker in markers)
+
+
+def _taskkill_pid_tree(pid: int, label: str) -> None:
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                cwd=str(ROOT),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_creation_flags(),
+                timeout=10,
+            )
+            print(f"[code] 已停止旧 {label} 进程 PID={pid}", flush=True)
+            return
+        except Exception as exc:
+            print(f"[code] [WARN] 停止旧 {label} 进程 PID={pid} 失败: {exc}", flush=True)
+    try:
+        os.kill(int(pid), 15)
+    except Exception:
+        pass
+
+
+def _wait_ports_closed(ports: list[int], seconds: float = 8.0) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if all(not _netstat_listening_pids(port) for port in ports):
+            return
+        time.sleep(0.35)
+
+
+def _client_service_ports() -> list[tuple[int, str]]:
+    env = _load_dotenv_simple(ROOT / ".env")
+    env.update({k: v for k, v in os.environ.items() if k in {"PORT", "MCP_PORT", "OPENCLAW_GATEWAY_URL"}})
+    ports: list[tuple[int, str]] = []
+    ports.append((_as_int(env.get("PORT"), 8000), "Backend"))
+    ports.append((_as_int(env.get("MCP_PORT"), 8001), "MCP"))
+    gateway_url = str(env.get("OPENCLAW_GATEWAY_URL") or "http://127.0.0.1:18789").strip()
+    gateway_port = 18789
+    try:
+        parsed = urllib.parse.urlparse(gateway_url)
+        if parsed.port:
+            gateway_port = int(parsed.port)
+    except Exception:
+        pass
+    ports.append((gateway_port, "OpenClaw Gateway"))
+
+    seen: set[int] = set()
+    deduped: list[tuple[int, str]] = []
+    for port, label in ports:
+        if port <= 0 or port in seen:
+            continue
+        seen.add(port)
+        deduped.append((port, label))
+    return deduped
+
+
+def _stop_client_services_before_update() -> None:
+    global _STOP_CLIENT_SERVICES_DONE
+    if _STOP_CLIENT_SERVICES_DONE:
+        return
+    _STOP_CLIENT_SERVICES_DONE = True
+    if str(os.environ.get("CLIENT_CODE_UPDATE_STOP_SERVICES") or "1").strip().lower() in {"0", "false", "no", "off"}:
+        print("[code] 已按配置跳过更新前停止本地服务。", flush=True)
+        return
+
+    services = _client_service_ports()
+    print(
+        "[code-progress] stop_services_start "
+        + " ".join(f"{label}={port}" for port, label in services),
+        flush=True,
+    )
+    killed_ports: list[int] = []
+    for port, label in services:
+        pids = _netstat_listening_pids(port)
+        if not pids:
+            continue
+        for pid in sorted(pids):
+            if pid == os.getpid():
+                continue
+            if not _process_belongs_to_this_client(pid):
+                print(f"[code] [WARN] 端口 {port} 被非本客户端进程占用，未停止 PID={pid}", flush=True)
+                continue
+            _taskkill_pid_tree(pid, label)
+            killed_ports.append(port)
+    if killed_ports:
+        _wait_ports_closed(sorted(set(killed_ports)), 8.0)
+    print("[code-progress] stop_services_done", flush=True)
+
+
 def _valid_sha256(value: str) -> bool:
     s = (value or "").strip().lower()
     return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
@@ -433,7 +626,11 @@ def _artifact_paths(item: dict[str, Any], default_paths: tuple[str, ...] | list[
     paths = item.get("paths")
     if not isinstance(paths, list) or not paths:
         paths = list(default_paths)
-    return [_norm_rel(str(p)) for p in paths if _norm_rel(str(p))]
+    normalized = [_norm_rel(str(p)) for p in paths if _norm_rel(str(p))]
+    version_paths = {"CLIENT_CODE_VERSION.json", "static/client_version.json"}
+    head = [p for p in normalized if p not in version_paths]
+    tail = [p for p in normalized if p in version_paths]
+    return head + tail
 
 
 def _validate_paths(paths: list[str]) -> bool:
@@ -638,11 +835,14 @@ def _download_verified(url: str, expect_sha: str, dest: Path, *, label: str) -> 
     if not _valid_sha256(expect_sha):
         print(f"[code] [ERR] {label}.sha256 无效。", flush=True)
         return False
+    print(f"[code-progress] download_start label={label} url={url}", flush=True)
     try:
         _download_file(url, dest)
     except Exception as e:
         print(f"[code] [WARN] {label} 下载失败: {e}", flush=True)
         return False
+    print(f"[code-progress] download_done label={label} bytes={dest.stat().st_size if dest.exists() else 0}", flush=True)
+    print(f"[code-progress] verify_start label={label}", flush=True)
     got = _sha256_file(dest)
     if got.lower() != expect_sha:
         print(
@@ -650,21 +850,27 @@ def _download_verified(url: str, expect_sha: str, dest: Path, *, label: str) -> 
             flush=True,
         )
         return False
+    print(f"[code-progress] verify_done label={label}", flush=True)
     return True
 
 
 def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
+    print(f"[code-progress] extract_start file={zpath.name}", flush=True)
     extract_root = tdir / ("extracted_" + hashlib.sha1(str(zpath).encode("utf-8")).hexdigest()[:8])
     inner = _extract_zip_to(zpath, extract_root)
+    print(f"[code-progress] extract_done file={zpath.name}", flush=True)
     applied: list[str] = []
-    for rel in paths:
+    total = max(1, len(paths))
+    for idx, rel in enumerate(paths, 1):
         src = inner / rel.replace("/", os.sep)
         if not src.exists():
             print(f"[code] [WARN] 包内无路径 {rel}，跳过。", flush=True)
             continue
+        print(f"[code-progress] apply_path {idx}/{total} {rel}", flush=True)
         dst = ROOT / rel.replace("/", os.sep)
         _apply_path(src, dst)
         applied.append(rel)
+    print(f"[code-progress] apply_done count={len(applied)}", flush=True)
     return applied
 
 
@@ -785,6 +991,7 @@ def _apply_update_artifact(artifact: dict[str, Any], tdir: Path, *, label: str) 
     zpath = tdir / f"{label}.zip"
     if not _download_verified(url, sha, zpath, label=label):
         return None
+    _stop_client_services_before_update()
     try:
         applied = _apply_bundle_zip(zpath, paths, tdir)
     except Exception as e:
@@ -837,8 +1044,10 @@ def main() -> int:
         return 0
 
     if remote_build > local:
+        print(f"[code-progress] found_update remote_build={remote_build} local_build={local}", flush=True)
         print(f"[code] 发现新版本 build={remote_build}（本地 build={local}），正在下载…", flush=True)
     else:
+        print(f"[code-progress] found_update remote_version={remote_ver} local_version={local_ver}", flush=True)
         print(
             f"[code] 发现新版本 version={remote_ver}（本地 {local_ver}，build 均为 {local}），正在下载…",
             flush=True,

@@ -1,0 +1,26 @@
+<div id="content-openclaw-memory" class="content-block openclaw-memory-manager">
+  <div class="openclaw-memory-page">
+    <div class="openclaw-memory-head">
+      <div class="openclaw-memory-copy">
+        <div class="page-section-kicker">OpenClaw</div>
+        <h3 class="page-section-title">个人记忆资料</h3>
+        <p class="page-section-desc">管理上传到本机的资料文件。资料会写入 OpenClaw 个人记忆，智能对话按会话记忆范围读取。</p>
+      </div>
+      <div class="openclaw-memory-actions">
+        <button type="button" id="openclawMemoryBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+        <button type="button" id="openclawMemorySyncBtn" class="btn btn-ghost btn-sm">同步云端个人记忆</button>
+        <button type="button" id="openclawMemoryRefreshBtn" class="btn btn-ghost btn-sm">刷新列表</button>
+        <button type="button" id="openclawMemoryAddBtn" class="btn btn-primary btn-sm">添加资料</button>
+      </div>
+    </div>
+
+    <div id="openclawMemoryPageMsg" class="msg" style="display:none;"></div>
+
+    <div class="openclaw-memory-toolbar">
+      <input type="search" id="openclawMemorySearchInput" placeholder="搜索标题、文件名或备注">
+      <span id="openclawMemoryCount" class="openclaw-memory-count">0 份资料</span>
+    </div>
+
+    <div id="openclawMemoryList" class="openclaw-memory-list"></div>
+  </div>
+</div>

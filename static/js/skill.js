@@ -55,6 +55,30 @@ var _SKILL_STORE_FETCH_TTL_MS = 60000;
 var _SKILL_STORE_FETCH_TIMEOUT_MS = 8000;
 var _SKILL_STORE_STATUS_TIMEOUT_MS = 3500;
 
+function _skillStoreBrandSafeText(value) {
+  var text = String(value == null ? '' : value);
+  if (!text) return '';
+  return text
+    .replace(/速推视频制作/g, '必火视频制作')
+    .replace(/速推\s*MCP/gi, 'AI 模型能力')
+    .replace(/Sutui/gi, 'AI')
+    .replace(/xSkill/gi, 'AI')
+    .replace(/51aigc\.cc/gi, '必火平台')
+    .replace(/速推/g, 'AI')
+    .replace(/Comfly/gi, '视频引擎')
+    .replace(/Seedance\s*2\.0/gi, '智能视频模型')
+    .replace(/Seedance/gi, '智能视频模型')
+    .replace(/CapCut/gi, '视频模板')
+    .replace(/剪映/g, '视频模板')
+    .replace(/山涧/g, '智能剪辑');
+}
+
+function _skillStoreTagHtml(tags) {
+  return (tags || []).map(function(t) {
+    return '<span class="tag">' + escapeHtml(_skillStoreBrandSafeText(t)) + '</span>';
+  }).join('');
+}
+
 /** OpenClaw 微信插件本机扫码授权（/api/openclaw/weixin-login/*） */
 var _openclawWeixinLast = { last_ok: false, at: null, detail: '' };
 var _openclawWeixinPollTimer = null;
@@ -62,6 +86,11 @@ var _openclawWeixinPollTimer = null;
 function _switchToHiddenView(view) {
   if (!view) return;
   location.hash = view;
+  if (typeof window._rememberLobsterView === 'function') {
+    window._rememberLobsterView(view, { skipHash: true });
+  } else {
+    try { localStorage.setItem('lobster_online_last_view', String(view || '').replace(/^#/, '').split(':')[0]); } catch (e0) {}
+  }
   if (typeof currentView !== 'undefined' && currentView === 'chat' && typeof saveCurrentSessionToStore === 'function') {
     saveCurrentSessionToStore();
   }
@@ -1262,9 +1291,9 @@ function _renderYoutubePublishCard(opts) {
   var debugBadge = showDebug
     ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
     : '';
-  var title = (pkg.name && String(pkg.name).trim()) || 'YouTube 上传';
-  var desc = (pkg.description && String(pkg.description).trim()) ||
-    '多账号管理：每个账号独立 OAuth 与代理；授权成功后即可在对话中指定素材与 YouTube 账号 ID。';
+  var title = _skillStoreBrandSafeText((pkg.name && String(pkg.name).trim()) || 'YouTube 上传');
+  var desc = _skillStoreBrandSafeText((pkg.description && String(pkg.description).trim()) ||
+    '多账号管理：每个账号独立 OAuth 与代理；授权成功后即可在对话中指定素材与 YouTube 账号 ID。');
   var configured = _youtubePublishStatus.has_ready;
   var cnt = _youtubePublishStatus.accounts_count || 0;
   var statusBadge = configured
@@ -1323,9 +1352,9 @@ function _renderTwilioWhatsappCard(opts) {
   var debugBadge = showDebug
     ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
     : '';
-  var title = (pkg.name && String(pkg.name).trim()) || 'Twilio WhatsApp';
-  var desc = (pkg.description && String(pkg.description).trim()) ||
-    '云端入站 + 本机轮询 AI 回复；点卡片查看消息与公司列表，点「配置」填写 Twilio';
+  var title = _skillStoreBrandSafeText((pkg.name && String(pkg.name).trim()) || 'Twilio WhatsApp');
+  var desc = _skillStoreBrandSafeText((pkg.description && String(pkg.description).trim()) ||
+    '云端入站 + 本机轮询 AI 回复；点卡片查看消息与公司列表，点「配置」填写 Twilio');
   return '<div class="skill-store-card twilio-whatsapp-card" style="cursor:pointer;border-color:rgba(37,211,102,0.45);background:linear-gradient(135deg,rgba(37,211,102,0.08),transparent);">' +
     '<div class="card-label">' + debugBadge + '通道 <span class="badge-installed">可配置</span></div>' +
     '<div class="card-value">' + escapeHtml(title) + '</div>' +
@@ -1343,8 +1372,8 @@ function _renderXSkillCard() {
   var guide = configured ? '' :
     '<div style="margin-top:0.6rem;padding:0.6rem 0.75rem;background:rgba(251,146,60,0.06);border:1px solid rgba(251,146,60,0.18);border-radius:8px;font-size:0.8rem;color:var(--text-muted);line-height:1.6;">' +
       '<div style="font-weight:600;color:#fb923c;margin-bottom:0.3rem;">获取 Token 步骤：</div>' +
-      '<div>1. 打开 <a href="https://www.51aigc.cc" target="_blank" style="color:var(--primary);">51aigc.cc</a> ，微信扫码 或 手机号登录</div>' +
-      '<div>2. 登录后点击 <a href="https://www.51aigc.cc/#/userInfo" target="_blank" style="color:var(--primary);">个人中心</a> 复制 API Token</div>' +
+      '<div>1. 打开平台入口，微信扫码 或 手机号登录</div>' +
+      '<div>2. 登录后进入个人中心复制 API Token</div>' +
       '<div>3. 回到这里点击「配置 Token」粘贴即可</div>' +
     '</div>';
   var configBtn = (EDITION === 'online')
@@ -1397,15 +1426,15 @@ function _renderComflyCard() {
   var sub = ok
     ? ''
     : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">'
-      + '只需在 <strong>Comfly</strong> 控制台复制 <strong>API Key</strong> 即可，接口地址走系统内置配置，无需用户单独填写。'
+      + '只需在视频引擎控制台复制 <strong>API Key</strong> 即可，接口地址走系统内置配置，无需用户单独填写。'
       + '用户对话可说「用<strong>爆款TVC</strong>和这个素材做视频」；技能会自动跑分镜、多段成片与入库，无需在卡片里配分镜参数。'
-      + ' 点击下方「配置」仅保存到本机，不会写入聊天记录，也不会在保存时请求 Comfly 校验凭据。</div>';
+      + ' \u70b9\u51fb\u4e0b\u65b9\u300c\u914d\u7f6e\u300d\u4ec5\u4fdd\u5b58\u5230\u672c\u673a\uff0c\u4e0d\u4f1a\u5199\u5165\u804a\u5929\u8bb0\u5f55\uff0c\u4e5f\u4e0d\u4f1a\u5728\u4fdd\u5b58\u65f6\u8bf7\u6c42\u4e0a\u6e38\u6821\u9a8c\u51ed\u636e\u3002</div>';
   return '<div class="skill-store-card comfly-veo-card" data-skill-package-id="comfly_veo_skill" style="border-color:rgba(245,158,11,0.38);background:linear-gradient(135deg,rgba(245,158,11,0.07),transparent);">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">爆款TVC</div>' +
     '<div class="card-desc">整包成片走 <code>comfly.daihuo.pipeline</code>（start_pipeline + 素材）；单段调试可走 <code>comfly.daihuo</code>。</div>' +
     sub +
-    '<div class="card-tags"><span class="tag">爆款TVC</span><span class="tag">TVC</span><span class="tag">Veo</span><span class="tag">Comfly</span></div>' +
+    '<div class="card-tags"><span class="tag">爆款TVC</span><span class="tag">TVC</span><span class="tag">视频生成</span><span class="tag">AI成片</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm" id="comflyConfigBtn">配置</button></div></div>';
 }
 
@@ -1415,24 +1444,24 @@ function _renderEcommerceDetailCard(opts) {
   var ok = _comflyStatus.effective_ready;
   var rawTitle = (pkg.name && String(pkg.name).trim()) || '';
   var rawDesc = (pkg.description && String(pkg.description).trim()) || '';
-  var title = rawTitle && !/^\?+$/.test(rawTitle) ? rawTitle : '电商上架套图';
-  var desc = rawDesc && !/^\?+$/.test(rawDesc) ? rawDesc :
-    '把商品图、卖点、风格和模板组织成一次完整的上架视觉资产生产流程，覆盖主图、SKU 图、透明/白底、详情图、素材图与橱窗图。';
+  var title = _skillStoreBrandSafeText(rawTitle && !/^\?+$/.test(rawTitle) ? rawTitle : '电商上架套图');
+  var desc = _skillStoreBrandSafeText(rawDesc && !/^\?+$/.test(rawDesc) ? rawDesc :
+    '把商品图、卖点、风格和模板组织成一次完整的上架视觉资产生产流程，覆盖主图、SKU 图、透明/白底、详情图、素材图与橱窗图。');
   var statusBadge = ok
     ? '<span class="badge-installed">已就绪</span>'
     : '<span class="badge-coming" style="background:rgba(251,146,60,0.15);color:#fb923c;border-color:rgba(251,146,60,0.3);">待配置</span>';
   var sub = ok
     ? '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">直接进入工作台，按结构化参数控制本次套图生成内容。</div>'
-    : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先在本机保存 <strong>Comfly API Key</strong>，接口地址走内置配置，然后再进入产品套图工作台。这个界面是专门用于批量生成电商上架素材的，不是聊天入口。</div>';
+    : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">\u5148\u5728\u672c\u673a\u4fdd\u5b58\u89c6\u9891\u5f15\u64ce API Key\uff0c\u63a5\u53e3\u5730\u5740\u8d70\u5185\u7f6e\u914d\u7f6e\uff0c\u7136\u540e\u518d\u8fdb\u5165\u4ea7\u54c1\u5957\u56fe\u5de5\u4f5c\u53f0\u3002\u8fd9\u4e2a\u754c\u9762\u662f\u4e13\u95e8\u7528\u4e8e\u6279\u91cf\u751f\u6210\u7535\u5546\u4e0a\u67b6\u7d20\u6750\u7684\uff0c\u4e0d\u662f\u804a\u5929\u5165\u53e3\u3002</div>';
   return '<div class="skill-store-card ecommerce-detail-card" data-skill-package-id="comfly_ecommerce_detail_skill" style="cursor:pointer;border-color:rgba(236,72,153,0.34);background:linear-gradient(135deg,rgba(236,72,153,0.08),rgba(245,158,11,0.05));">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">' + escapeHtml(title) + '</div>' +
     '<div class="card-desc">' + escapeHtml(desc) + '</div>' +
     sub +
-    '<div class="card-tags"><span class="tag">上架套图</span><span class="tag">SKU</span><span class="tag">详情图</span><span class="tag">Comfly</span></div>' +
+    '<div class="card-tags"><span class="tag">上架套图</span><span class="tag">SKU</span><span class="tag">详情图</span><span class="tag">商品视觉</span></div>' +
     '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
       '<button type="button" class="btn btn-primary btn-sm ecommerce-detail-entry-btn">进入工作台</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置 Comfly</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置引擎</button>' +
     '</div></div>';
 }
 
@@ -1443,29 +1472,29 @@ function _renderSeedanceTvcStudioCard() {
     : '<span class="badge-coming" style="background:rgba(251,146,60,0.15);color:#fb923c;border-color:rgba(251,146,60,0.3);">待配置</span>';
   var sub = ok
     ? '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">进入工作台后可先切换输入方式，再组织参考图、参考视频、提示词、时长和分镜节奏。</div>'
-    : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">先在本机保存 <strong>Comfly API Key</strong>，再进入这个视频工作台。当前先提供结构化 UI，方便把图片参考、参考视频、自动分镜和手动提示词放在一个界面里。</div>';
+    : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">\u5148\u5728\u672c\u673a\u4fdd\u5b58\u89c6\u9891\u5f15\u64ce API Key\uff0c\u518d\u8fdb\u5165\u8fd9\u4e2a\u89c6\u9891\u5de5\u4f5c\u53f0\u3002\u5f53\u524d\u5148\u63d0\u4f9b\u7ed3\u6784\u5316 UI\uff0c\u65b9\u4fbf\u628a\u56fe\u7247\u53c2\u8003\u3001\u53c2\u8003\u89c6\u9891\u3001\u81ea\u52a8\u5206\u955c\u548c\u624b\u52a8\u63d0\u793a\u8bcd\u653e\u5728\u4e00\u4e2a\u754c\u9762\u91cc\u3002</div>';
   return '<div class="skill-store-card seedance-tvc-card" data-skill-package-id="seedance_tvc_studio" style="cursor:pointer;border-color:rgba(91,124,255,0.28);background:linear-gradient(135deg,rgba(91,124,255,0.09),rgba(14,165,233,0.05));">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
     '<div class="card-value">创意分镜头视频</div>' +
     '<div class="card-desc">面向参考图、参考视频和纯提示词的统一视频创作界面。左侧管参数与输入方式，右侧同时看创意分镜预览和最终成片位。</div>' +
     sub +
-    '<div class="card-tags"><span class="tag">TVC</span><span class="tag">Seedance</span><span class="tag">分镜</span><span class="tag">Comfly</span></div>' +
+    '<div class="card-tags"><span class="tag">TVC</span><span class="tag">智能视频模型</span><span class="tag">分镜</span><span class="tag">AI成片</span></div>' +
     '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
       '<button type="button" class="btn btn-primary btn-sm seedance-tvc-entry-btn">进入工作台</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置 Comfly</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm js-comfly-config-btn">配置引擎</button>' +
     '</div></div>';
 }
 
 function _renderViralVideoRemixCard() {
   var statusBadge = '<span class="badge-installed">平台计费</span>';
-  var sub = '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">已接入平台统一算力计费，提交前会按原视频时长预估并弹窗确认，无需单独配置 Comfly。</div>';
+  var sub = '<div style="margin-top:0.45rem;font-size:0.78rem;color:var(--text-muted);">已接入平台统一算力计费，提交前会按原视频时长预估并弹窗确认，无需单独配置上游引擎。</div>';
 
   return '<div class="skill-store-card viral-video-remix-card" data-skill-package-id="viral_video_remix_skill" style="cursor:pointer;border-color:rgba(20,184,166,0.34);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(245,158,11,0.05));">' +
     '<div class="card-label">生成 · 内测 ' + statusBadge + '</div>' +
     '<div class="card-value">爆款视频复刻</div>' +
-    '<div class="card-desc">上传原爆款视频、人物四视图和产品图，用 Seedance 2.0 全能参考复刻动作、运镜和节奏。</div>' +
+    '<div class="card-desc">上传原爆款视频、人物四视图和产品图，用智能视频模型复刻动作、运镜和节奏。</div>' +
     sub +
-    '<div class="card-tags"><span class="tag">复刻</span><span class="tag">Seedance 2.0</span><span class="tag">人物四视图</span><span class="tag">产品替换</span></div>' +
+    '<div class="card-tags"><span class="tag">复刻</span><span class="tag">智能视频模型</span><span class="tag">人物四视图</span><span class="tag">产品替换</span></div>' +
     '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
       '<button type="button" class="btn btn-primary btn-sm viral-video-remix-entry-btn">进入工作台</button>' +
     '</div></div>';
@@ -1473,10 +1502,10 @@ function _renderViralVideoRemixCard() {
 
 function _renderHiflyDigitalHumanCard(pkg) {
   pkg = pkg || {};
-  var title = escapeHtml(pkg.name || '必火数字人');
-  var desc = escapeHtml(pkg.description || '选择数字人和声音，输入口播文案后生成必火数字人视频。');
+  var title = escapeHtml(_skillStoreBrandSafeText(pkg.name || '必火数字人'));
+  var desc = escapeHtml(_skillStoreBrandSafeText(pkg.description || '选择数字人和声音，输入口播文案后生成必火数字人视频。'));
   var rawTags = Array.isArray(pkg.tags) && pkg.tags.length ? pkg.tags : ['数字人', '口播', 'TTS', '必火'];
-  var tags = rawTags.map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+  var tags = _skillStoreTagHtml(rawTags);
   return '<div class="skill-store-card hifly-digital-human-card" data-skill-package-id="hifly_digital_human_skill" style="cursor:pointer;border-color:rgba(14,165,233,0.35);background:linear-gradient(135deg,rgba(14,165,233,0.09),rgba(20,184,166,0.06));">' +
     '<div class="card-label">数字人 &middot; 必火 <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
     '<div class="card-value">' + title + '</div>' +
@@ -1489,13 +1518,23 @@ function _renderHiflyDigitalHumanCard(pkg) {
 
 function _renderShanjianSmartClipCard() {
   return '<div class="skill-store-card shanjian-smart-clip-card" data-skill-package-id="shanjian_smart_clip" style="cursor:pointer;border-color:rgba(37,99,235,0.35);background:linear-gradient(135deg,rgba(37,99,235,0.08),rgba(20,184,166,0.05));">' +
-    '<div class="card-label">视频合成 &middot; 山涧 <span class="badge-installed">新页面</span></div>' +
+    '<div class="card-label">\u89c6\u9891\u5408\u6210 &middot; \u5fc5\u706b <span class="badge-installed">\u65b0\u9875\u9762</span></div>' +
     '<div class="card-value">智能剪辑</div>' +
-    '<div class="card-desc">拉取山涧模板、公共数字人和公共声音，选择模板后提交数字人口播混剪任务。</div>' +
+    '<div class="card-desc">拉取内置模板、公共数字人和公共声音，选择模板后提交数字人口播混剪任务。</div>' +
     '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(37,99,235,0.06);border:1px solid rgba(37,99,235,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">数字人口播混剪约 1 算力/秒，1 分钟约 60 算力。</div>' +
-    '<div class="card-tags"><span class="tag">智能剪辑</span><span class="tag">模板</span><span class="tag">数字人</span><span class="tag">山涧</span></div>' +
+    '<div class="card-tags"><span class="tag">智能剪辑</span><span class="tag">模板</span><span class="tag">数字人</span><span class="tag">必火</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm shanjian-smart-clip-entry-btn">进入智能剪辑</button></div>' +
-    '</div>';
+  '</div>';
+}
+
+function _renderCutcliTemplateCard() {
+  return '<div class="skill-store-card cutcli-template-card" style="cursor:pointer;border-color:rgba(15,23,42,0.32);background:linear-gradient(135deg,rgba(15,23,42,0.08),rgba(224,176,92,0.08));">' +
+    '<div class="card-label">视频包装 &middot; 必火 <span class="badge-installed">模板</span></div>' +
+    '<div class="card-value">模板定制</div>' +
+    '<div class="card-desc">选择模板预览样片，上传视频或填写素材 ID，由服务端保留原片比例和时长生成同款。</div>' +
+    '<div class="card-tags"><span class="tag">模板库</span><span class="tag">生成记录</span><span class="tag">视频入库</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm cutcli-template-entry-btn">进入模板</button></div>' +
+  '</div>';
 }
 
 function _openclawWeixinResolveBase() {
@@ -1593,11 +1632,9 @@ function _renderOpenclawSkillWorkspaceCard(pkg, opts) {
   pkg = pkg || {};
   opts = opts || {};
   var skillId = String(opts.skillId || pkg.id || '').trim();
-  var title = (pkg.name && String(pkg.name).trim()) || opts.title || skillId;
-  var desc = (opts.desc && String(opts.desc).trim()) || (pkg.description && String(pkg.description).trim()) || '';
-  var tags = (pkg.tags || opts.tags || ['OpenClaw']).map(function(t) {
-    return '<span class="tag">' + escapeHtml(t) + '</span>';
-  }).join('');
+  var title = _skillStoreBrandSafeText((pkg.name && String(pkg.name).trim()) || opts.title || skillId);
+  var desc = _skillStoreBrandSafeText((opts.desc && String(opts.desc).trim()) || (pkg.description && String(pkg.description).trim()) || '');
+  var tags = _skillStoreTagHtml(pkg.tags || opts.tags || ['OpenClaw']);
   var accent = opts.accent || '99,102,241';
   var badge = (opts.badge && String(opts.badge).trim()) || '已授权';
   return '<div class="skill-store-card openclaw-skill-workspace-card" data-openclaw-skill-id="' + escapeAttr(skillId) + '" data-openclaw-skill-title="' + escapeAttr(title) + '" style="cursor:pointer;border-color:rgba(' + accent + ',0.35);background:linear-gradient(135deg,rgba(' + accent + ',0.08),transparent);">' +
@@ -1657,38 +1694,35 @@ function _bindOpenclawSkillWorkspaceCardEntry() {
 
 function _renderOpenclawMemoryCard(pkg) {
   pkg = pkg || {};
-  var tags = (pkg.tags || ['个人记忆', '资料']).map(function(t) {
-    return '<span class="tag">' + escapeHtml(t) + '</span>';
-  }).join('');
+  var tags = _skillStoreTagHtml(pkg.tags || ['个人记忆', '资料']);
   return '<div class="skill-store-card openclaw-memory-card" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.09),transparent);">' +
     '<div class="card-label">OpenClaw <span class="badge-installed">个人记忆</span></div>' +
-    '<div class="card-value">' + escapeHtml(pkg.name || '个人记忆') + '</div>' +
-    '<div class="card-desc">' + escapeHtml(pkg.description || '上传或同步到本设备的 Word/PDF/Excel/txt/md/csv/json 等资料，智能对话可按会话选择是否使用。') + '</div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '个人记忆')) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '上传或同步到本设备的 Word/PDF/Excel/txt/md/csv/json 等资料，智能对话可按会话选择是否使用。')) + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
-    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm openclaw-memory-entry-btn">上传资料</button></div></div>';
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm openclaw-memory-entry-btn">管理资料</button></div></div>';
 }
 
-function _openOpenclawMemoryModal() {
-  var modal = document.getElementById('openclawMemoryModal');
-  if (!modal) return;
-  modal.classList.add('visible');
-  _showOpenclawMemoryMsg('', false);
-  _syncOpenclawMemoryFromCloud({ silent: true, reload: false }).then(function() {
-    _loadOpenclawMemoryList();
-  });
+function _openOpenclawMemoryPage() {
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('openclaw-memory', document.querySelector('.nav-left-item[data-view="skill-store"]')).catch(function() {});
+    return;
+  }
+  var nav = document.querySelector('.nav-left-item[data-view="skill-store"]');
+  if (nav) nav.click();
 }
 
 function _bindOpenclawMemoryCardEntry() {
   document.querySelectorAll('.openclaw-memory-card').forEach(function(card) {
     card.addEventListener('click', function(e) {
       if (e.target.closest('.card-actions')) return;
-      _openOpenclawMemoryModal();
+      _openOpenclawMemoryPage();
     });
   });
   document.querySelectorAll('.openclaw-memory-entry-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
-      _openOpenclawMemoryModal();
+      _openOpenclawMemoryPage();
     });
   });
 }
@@ -1701,14 +1735,28 @@ function _showOpenclawMemoryMsg(text, isErr) {
   el.style.display = text ? 'block' : 'none';
 }
 
+function _showOpenclawMemoryPageMsg(text, isErr) {
+  var el = document.getElementById('openclawMemoryPageMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'msg' + (isErr ? ' err' : '');
+  el.style.display = text ? 'block' : 'none';
+}
+
 function _syncOpenclawMemoryFromCloud(opts) {
   opts = opts || {};
   var base = _openclawMemoryApiBase();
   if (!base) {
-    if (!opts.silent) _showOpenclawMemoryMsg('未找到本机后端地址，无法同步云端资料。', true);
+    if (!opts.silent) {
+      _showOpenclawMemoryMsg('未找到本机后端地址，无法同步云端资料。', true);
+      _showOpenclawMemoryPageMsg('未找到本机后端地址，无法同步云端资料。', true);
+    }
     return Promise.resolve({ ok: false });
   }
-    if (!opts.silent) _showOpenclawMemoryMsg('正在同步云端个人记忆…', false);
+    if (!opts.silent) {
+      _showOpenclawMemoryMsg('正在同步云端个人记忆…', false);
+      _showOpenclawMemoryPageMsg('正在同步云端个人记忆…', false);
+    }
   return fetch(base + '/api/openclaw/memory/sync-cloud', {
     method: 'POST',
     headers: typeof authHeaders === 'function' ? authHeaders() : {}
@@ -1716,17 +1764,26 @@ function _syncOpenclawMemoryFromCloud(opts) {
     return r.json().then(function(d) { return { ok: r.ok, data: d }; });
   }).then(function(x) {
     if (!x.ok) {
-      if (!opts.silent) _showOpenclawMemoryMsg((x.data && x.data.detail) || '同步失败', true);
+      if (!opts.silent) {
+        var errMsg = (x.data && x.data.detail) || '同步失败';
+        _showOpenclawMemoryMsg(errMsg, true);
+        _showOpenclawMemoryPageMsg(errMsg, true);
+      }
       return x;
     }
     var d = x.data || {};
     if (!opts.silent) {
-        _showOpenclawMemoryMsg('同步完成：新增/更新 ' + (d.applied_count || 0) + ' 份，删除 ' + (d.deleted_count || 0) + ' 份。', false);
+      var msg = '同步完成：新增/更新 ' + (d.applied_count || 0) + ' 份，删除 ' + (d.deleted_count || 0) + ' 份。';
+      _showOpenclawMemoryMsg(msg, false);
+      _showOpenclawMemoryPageMsg(msg, false);
     }
     if (opts.reload !== false) _loadOpenclawMemoryList();
     return x;
   }).catch(function(err) {
-    if (!opts.silent) _showOpenclawMemoryMsg('无法连接本机 OpenClaw 资料同步接口', true);
+    if (!opts.silent) {
+      _showOpenclawMemoryMsg('无法连接本机 OpenClaw 资料同步接口', true);
+      _showOpenclawMemoryPageMsg('无法连接本机 OpenClaw 资料同步接口', true);
+    }
     return { ok: false, error: err };
   });
 }
@@ -1809,6 +1866,174 @@ if (document.readyState === 'loading') {
   _bindChatMemorySyncButton();
 }
 
+var _openclawMemoryDocs = [];
+var _openclawMemorySearch = '';
+
+function _formatOpenclawMemorySize(size) {
+  var n = Number(size || 0);
+  if (!n || n < 0) return '';
+  if (n < 1024) return n + 'B';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + 'KB';
+  return (n / 1024 / 1024).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1) + 'MB';
+}
+
+function _formatOpenclawMemoryDate(value) {
+  if (!value) return '';
+  var d = new Date(value);
+  if (isNaN(d.getTime())) return String(value).slice(0, 19).replace('T', ' ');
+  var pad = function(n) { return n < 10 ? '0' + n : String(n); };
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function _isOpenclawMemoryEditable(doc) {
+  if (!doc) return false;
+  var src = String(doc.source || 'local_user');
+  var layer = String(doc.memory_layer || '').trim();
+  return !(layer === 'agent' || String(doc.origin || '') === 'agent_memory' || src.indexOf('cloud_') === 0);
+}
+
+function _renderOpenclawMemoryList(docs) {
+  var list = document.getElementById('openclawMemoryList');
+  if (!list) return;
+  var count = document.getElementById('openclawMemoryCount');
+  var query = (_openclawMemorySearch || '').trim().toLowerCase();
+  var filtered = (Array.isArray(docs) ? docs : []).filter(function(doc) {
+    if (!query) return true;
+    var haystack = [
+      doc.title || '',
+      doc.filename || '',
+      doc.notes || '',
+      doc.id || ''
+    ].join(' ').toLowerCase();
+    return haystack.indexOf(query) >= 0;
+  });
+  if (count) {
+    count.textContent = filtered.length + ' / ' + (Array.isArray(docs) ? docs.length : 0) + ' 份资料';
+  }
+  if (!filtered.length) {
+    list.innerHTML = '<div class="openclaw-memory-empty">' + (query ? '没有匹配的资料。' : '还没有个人记忆。点击右上角“添加资料”上传，或同步云端个人记忆。') + '</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(function(doc) {
+    var title = doc.title || doc.filename || doc.id;
+    var filename = doc.filename || '';
+    var notes = String(doc.notes || '').trim();
+    var src = String(doc.source || 'local_user');
+    var layer = String(doc.memory_layer || '').trim();
+    var isAgentMemory = layer === 'agent' || String(doc.origin || '') === 'agent_memory';
+    var sourceLabel = isAgentMemory ? '代理商记忆' : (src.indexOf('cloud_') === 0 ? '云端同步' : '个人记忆');
+    var sourceClass = src.indexOf('cloud_') === 0 ? 'badge-coming' : 'badge-installed';
+    var editable = _isOpenclawMemoryEditable(doc);
+    var meta = [
+      filename,
+      _formatOpenclawMemorySize(doc.size),
+      _formatOpenclawMemoryDate(doc.updated_at || doc.created_at)
+    ].filter(Boolean).join(' · ');
+    var actionHtml = editable
+      ? '<button type="button" class="btn btn-ghost btn-sm openclaw-memory-edit" data-doc-id="' + escapeAttr(doc.id || '') + '">编辑</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm openclaw-memory-delete" data-doc-id="' + escapeAttr(doc.id || '') + '">删除</button>'
+      : '<span class="meta">' + escapeHtml(isAgentMemory ? '由代理商配置' : '云端同步资料，需在下发端维护') + '</span>';
+    return '<div class="openclaw-memory-item" data-doc-id="' + escapeAttr(doc.id || '') + '">' +
+      '<div class="openclaw-memory-item-main">' +
+        '<div class="openclaw-memory-item-label"><span class="' + sourceClass + '">' + escapeHtml(sourceLabel) + '</span></div>' +
+        '<div class="openclaw-memory-item-title">' + escapeHtml(title) + '</div>' +
+        '<div class="openclaw-memory-item-meta">' + escapeHtml(meta || doc.id || '') + '</div>' +
+        (notes ? '<div class="openclaw-memory-item-notes">' + escapeHtml(notes) + '</div>' : '') +
+      '</div>' +
+      '<div class="openclaw-memory-item-actions">' + actionHtml + '</div>' +
+    '</div>';
+  }).join('');
+  _bindOpenclawMemoryListActions();
+}
+
+function _findOpenclawMemoryDoc(docId) {
+  docId = String(docId || '');
+  for (var i = 0; i < _openclawMemoryDocs.length; i += 1) {
+    if (String(_openclawMemoryDocs[i].id || '') === docId) return _openclawMemoryDocs[i];
+  }
+  return null;
+}
+
+function _resetOpenclawMemoryForm() {
+  var editId = document.getElementById('openclawMemoryEditId');
+  var title = document.getElementById('openclawMemoryTitle');
+  var notes = document.getElementById('openclawMemoryNotes');
+  var file = document.getElementById('openclawMemoryFile');
+  if (editId) editId.value = '';
+  if (title) title.value = '';
+  if (notes) notes.value = '';
+  if (file) file.value = '';
+}
+
+function _openOpenclawMemoryUploadModal(doc) {
+  var modal = document.getElementById('openclawMemoryModal');
+  if (!modal) return;
+  var isEdit = !!(doc && doc.id);
+  var titleEl = document.getElementById('openclawMemoryModalTitle');
+  var editId = document.getElementById('openclawMemoryEditId');
+  var fileWrap = document.getElementById('openclawMemoryFile');
+  var title = document.getElementById('openclawMemoryTitle');
+  var notes = document.getElementById('openclawMemoryNotes');
+  var submit = document.getElementById('openclawMemoryUploadBtn');
+  _showOpenclawMemoryMsg('', false);
+  if (titleEl) titleEl.textContent = isEdit ? '编辑个人记忆' : '添加个人记忆';
+  if (editId) editId.value = isEdit ? String(doc.id || '') : '';
+  if (fileWrap) {
+    fileWrap.value = '';
+    fileWrap.disabled = isEdit;
+    var field = fileWrap.closest('.modal-field');
+    if (field) field.style.display = isEdit ? 'none' : '';
+  }
+  if (title) title.value = isEdit ? (doc.title || '') : '';
+  if (notes) notes.value = isEdit ? (doc.notes || '') : '';
+  if (submit) submit.textContent = isEdit ? '保存修改' : '上传并写入记忆';
+  modal.classList.add('visible');
+}
+
+function _bindOpenclawMemoryListActions() {
+  var list = document.getElementById('openclawMemoryList');
+  if (!list) return;
+  var base = _openclawMemoryApiBase();
+  list.querySelectorAll('.openclaw-memory-edit').forEach(function(btn) {
+    if (btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', function() {
+      var doc = _findOpenclawMemoryDoc(btn.getAttribute('data-doc-id') || '');
+      if (doc) _openOpenclawMemoryUploadModal(doc);
+    });
+  });
+  list.querySelectorAll('.openclaw-memory-delete').forEach(function(btn) {
+    if (btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', function() {
+      var docId = btn.getAttribute('data-doc-id') || '';
+      if (!base) {
+        _showOpenclawMemoryPageMsg('未找到本机后端地址，请用本机页面打开或设置 local_api。', true);
+        return;
+      }
+      if (!docId || !confirm('确定删除这份个人记忆资料？')) return;
+      btn.disabled = true;
+      fetch(base + '/api/openclaw/memory/' + encodeURIComponent(docId), {
+        method: 'DELETE',
+        headers: authHeaders()
+      }).then(function(r) {
+        return r.json().then(function(d) { return { ok: r.ok, data: d }; });
+      }).then(function(y) {
+        if (!y.ok) {
+          _showOpenclawMemoryPageMsg((y.data && y.data.detail) || '删除失败', true);
+          btn.disabled = false;
+          return;
+        }
+        _showOpenclawMemoryPageMsg('已删除', false);
+        _loadOpenclawMemoryList();
+      }).catch(function() {
+        _showOpenclawMemoryPageMsg('网络错误，删除失败', true);
+        btn.disabled = false;
+      });
+    });
+  });
+}
+
 function _loadOpenclawMemoryList() {
   var list = document.getElementById('openclawMemoryList');
   if (!list) return;
@@ -1826,59 +2051,61 @@ function _loadOpenclawMemoryList() {
         return;
       }
       var docs = (x.data && Array.isArray(x.data.documents)) ? x.data.documents : [];
-      if (!docs.length) {
-        list.innerHTML = '<p class="meta">还没有个人记忆。上传或同步后会写入本机记忆目录。</p>';
-        return;
-      }
-      list.innerHTML = docs.map(function(doc) {
-        var title = doc.title || doc.filename || doc.id;
-        var meta = (doc.filename || '') + (doc.size ? (' · ' + Math.round(doc.size / 1024) + 'KB') : '');
-        var src = String(doc.source || 'local_user');
-        var layer = String(doc.memory_layer || '').trim();
-        var isAgentMemory = layer === 'agent' || String(doc.origin || '') === 'agent_memory';
-        var sourceLabel = isAgentMemory ? '代理商记忆' : '个人记忆';
-        var sourceClass = src.indexOf('cloud_') === 0 ? 'badge-coming' : 'badge-installed';
-        var deleteHtml = isAgentMemory
-          ? '<span class="meta">由代理商配置</span>'
-          : (src.indexOf('cloud_') === 0
-            ? '<span class="meta">云端同步资料，需在下发端删除</span>'
-            : '<button type="button" class="btn btn-ghost btn-sm openclaw-memory-delete" data-doc-id="' + escapeAttr(doc.id || '') + '">删除</button>');
-        return '<div class="skill-store-card" style="padding:0.85rem;margin-bottom:0.55rem;">' +
-          '<div class="card-label"><span class="' + sourceClass + '">' + sourceLabel + '</span></div>' +
-          '<div class="card-value" style="font-size:0.98rem;">' + escapeHtml(title) + '</div>' +
-          '<div class="card-desc">' + escapeHtml(meta) + '</div>' +
-          '<div class="card-actions">' + deleteHtml + '</div>' +
-          '</div>';
-      }).join('');
-      list.querySelectorAll('.openclaw-memory-delete').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var docId = btn.getAttribute('data-doc-id') || '';
-          if (!docId || !confirm('确定删除这份个人记忆资料？')) return;
-          btn.disabled = true;
-          fetch(base + '/api/openclaw/memory/' + encodeURIComponent(docId), {
-            method: 'DELETE',
-            headers: authHeaders()
-          }).then(function(r) {
-            return r.json().then(function(d) { return { ok: r.ok, data: d }; });
-          }).then(function(y) {
-            if (!y.ok) {
-              _showOpenclawMemoryMsg((y.data && y.data.detail) || '删除失败', true);
-              btn.disabled = false;
-              return;
-            }
-            _showOpenclawMemoryMsg('已删除', false);
-            _loadOpenclawMemoryList();
-          }).catch(function() {
-            _showOpenclawMemoryMsg('网络错误，删除失败', true);
-            btn.disabled = false;
-          });
-        });
-      });
+      _openclawMemoryDocs = docs;
+      _renderOpenclawMemoryList(docs);
     })
     .catch(function() {
       list.innerHTML = '<p class="msg err">无法连接本机 OpenClaw 记忆接口</p>';
     });
 }
+
+function initOpenclawMemoryManager() {
+  var addBtn = document.getElementById('openclawMemoryAddBtn');
+  var refreshBtn = document.getElementById('openclawMemoryRefreshBtn');
+  var syncBtn = document.getElementById('openclawMemorySyncBtn');
+  var backBtn = document.getElementById('openclawMemoryBackBtn');
+  var search = document.getElementById('openclawMemorySearchInput');
+  if (addBtn && addBtn.dataset.bound !== '1') {
+    addBtn.dataset.bound = '1';
+    addBtn.addEventListener('click', function() {
+      _resetOpenclawMemoryForm();
+      _openOpenclawMemoryUploadModal(null);
+    });
+  }
+  if (refreshBtn && refreshBtn.dataset.bound !== '1') {
+    refreshBtn.dataset.bound = '1';
+    refreshBtn.addEventListener('click', _loadOpenclawMemoryList);
+  }
+  if (syncBtn && syncBtn.dataset.bound !== '1') {
+    syncBtn.dataset.bound = '1';
+    syncBtn.addEventListener('click', function() {
+      syncBtn.disabled = true;
+      _syncOpenclawMemoryFromCloud({ silent: false }).finally(function() {
+        syncBtn.disabled = false;
+      });
+    });
+  }
+  if (backBtn && backBtn.dataset.bound !== '1') {
+    backBtn.dataset.bound = '1';
+    backBtn.addEventListener('click', function() {
+      var nav = document.querySelector('.nav-left-item[data-view="skill-store"]');
+      if (nav) nav.click();
+      else if (typeof window.showLobsterView === 'function') window.showLobsterView('skill-store');
+    });
+  }
+  if (search && search.dataset.bound !== '1') {
+    search.dataset.bound = '1';
+    search.addEventListener('input', function() {
+      _openclawMemorySearch = search.value || '';
+      _renderOpenclawMemoryList(_openclawMemoryDocs);
+    });
+  }
+  _showOpenclawMemoryPageMsg('', false);
+  _syncOpenclawMemoryFromCloud({ silent: true, reload: false }).then(function() {
+    _loadOpenclawMemoryList();
+  });
+}
+window.initOpenclawMemoryManager = initOpenclawMemoryManager;
 
 (function _initOpenclawMemoryModal() {
   var modal = document.getElementById('openclawMemoryModal');
@@ -1886,63 +2113,65 @@ function _loadOpenclawMemoryList() {
   var closeBtn = document.getElementById('openclawMemoryClose');
   var cancelBtn = document.getElementById('openclawMemoryCancel');
   var uploadBtn = document.getElementById('openclawMemoryUploadBtn');
-  var refreshBtn = document.getElementById('openclawMemoryRefreshBtn');
-  var syncBtn = document.getElementById('openclawMemorySyncBtn');
   function closeModal() {
     modal.classList.remove('visible');
+    _resetOpenclawMemoryForm();
   }
   if (closeBtn) closeBtn.addEventListener('click', closeModal);
   if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
-  if (refreshBtn) refreshBtn.addEventListener('click', _loadOpenclawMemoryList);
-  if (syncBtn) syncBtn.addEventListener('click', function() {
-    syncBtn.disabled = true;
-    _syncOpenclawMemoryFromCloud({ silent: false }).finally(function() {
-      syncBtn.disabled = false;
-    });
-  });
   if (uploadBtn) uploadBtn.addEventListener('click', function() {
     var base = _openclawMemoryApiBase();
+    var editIdInput = document.getElementById('openclawMemoryEditId');
     var fileInput = document.getElementById('openclawMemoryFile');
     var titleInput = document.getElementById('openclawMemoryTitle');
     var notesInput = document.getElementById('openclawMemoryNotes');
+    var editId = editIdInput ? String(editIdInput.value || '').trim() : '';
     if (!base) {
       _showOpenclawMemoryMsg('未找到本机后端地址，请用本机页面打开或设置 local_api。', true);
       return;
     }
-    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+    if (!editId && (!fileInput || !fileInput.files || !fileInput.files[0])) {
       _showOpenclawMemoryMsg('请选择要上传的资料文件', true);
       return;
     }
-    var fd = new FormData();
-    fd.append('file', fileInput.files[0]);
-    fd.append('title', titleInput ? titleInput.value : '');
-    fd.append('notes', notesInput ? notesInput.value : '');
     var headers = typeof authHeaders === 'function' ? authHeaders() : {};
-    delete headers['Content-Type'];
     uploadBtn.disabled = true;
-    uploadBtn.textContent = '上传中…';
-    _showOpenclawMemoryMsg('正在写入个人记忆…', false);
-    fetch(base + '/api/openclaw/memory/upload', {
-      method: 'POST',
-      headers: headers,
-      body: fd
-    }).then(function(r) {
+    uploadBtn.textContent = editId ? '保存中…' : '上传中…';
+    _showOpenclawMemoryMsg(editId ? '正在保存个人记忆…' : '正在写入个人记忆…', false);
+    var reqUrl = base + '/api/openclaw/memory/upload';
+    var reqOptions = { method: 'POST', headers: headers };
+    if (editId) {
+      headers['Content-Type'] = 'application/json';
+      reqUrl = base + '/api/openclaw/memory/' + encodeURIComponent(editId);
+      reqOptions.method = 'PATCH';
+      reqOptions.body = JSON.stringify({
+        title: titleInput ? titleInput.value : '',
+        notes: notesInput ? notesInput.value : ''
+      });
+    } else {
+      var fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      fd.append('title', titleInput ? titleInput.value : '');
+      fd.append('notes', notesInput ? notesInput.value : '');
+      delete headers['Content-Type'];
+      reqOptions.body = fd;
+    }
+    fetch(reqUrl, reqOptions).then(function(r) {
       return r.json().then(function(d) { return { ok: r.ok, data: d }; });
     }).then(function(x) {
       if (!x.ok) {
-        _showOpenclawMemoryMsg((x.data && x.data.detail) || '上传失败', true);
+        _showOpenclawMemoryMsg((x.data && x.data.detail) || (editId ? '保存失败' : '上传失败'), true);
         return;
       }
-      if (fileInput) fileInput.value = '';
-      if (titleInput) titleInput.value = '';
-      if (notesInput) notesInput.value = '';
-      _showOpenclawMemoryMsg('已写入个人记忆。之后智能对话可按会话设置参考这份资料。', false);
+      _showOpenclawMemoryMsg(editId ? '已保存修改。' : '已写入个人记忆。之后智能对话可按会话设置参考这份资料。', false);
+      _showOpenclawMemoryPageMsg(editId ? '已保存修改' : '已写入个人记忆', false);
+      closeModal();
       _loadOpenclawMemoryList();
     }).catch(function() {
-      _showOpenclawMemoryMsg('网络错误，上传失败', true);
+      _showOpenclawMemoryMsg(editId ? '网络错误，保存失败' : '网络错误，上传失败', true);
     }).finally(function() {
       uploadBtn.disabled = false;
-      uploadBtn.textContent = '上传并写入记忆';
+      uploadBtn.textContent = editId ? '保存修改' : '上传并写入记忆';
     });
   });
 })();
@@ -2296,6 +2525,7 @@ function loadSkillStore() {
         if (hasComflyPkg || isSkillAdmin) html += _renderComflyCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderSeedanceTvcStudioCard();
         if (hasComflyPkg || isSkillAdmin) html += _renderViralVideoRemixCard();
+        html += _renderCutcliTemplateCard();
         html += _renderShanjianSmartClipCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (isSkillAdmin) html += _renderMetaSocialCard();
@@ -2363,55 +2593,46 @@ function loadSkillStore() {
           }
         if (pkg.id === 'messenger_reply') {
           if (typeof EDITION === 'undefined' || EDITION !== 'online') return '';
-          var tagsM = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+          var tagsM = _skillStoreTagHtml(pkg.tags || []);
           var capM = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
           return '<div class="skill-store-card messenger-reply-card" style="cursor:pointer;border-color:rgba(99,102,241,0.35);background:linear-gradient(135deg,rgba(99,102,241,0.08),transparent);">' +
             '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可配置</span></div>' +
-            '<div class="card-value">' + escapeHtml(pkg.name || pkg.id) + '</div>' +
-            '<div class="card-desc">' + escapeHtml(pkg.description || '') + capM + '</div>' +
+            '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || pkg.id)) + '</div>' +
+            '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + capM + '</div>' +
             '<div class="card-tags">' + tagsM + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm messenger-config-entry-btn">进入配置</button></div></div>';
         }
         if (pkg.id === 'ecommerce_publish_skill') {
-          var tagsE = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+          var tagsE = _skillStoreTagHtml(pkg.tags || []);
           var capE = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
           return '<div class="skill-store-card ecommerce-publish-card" style="cursor:pointer;border-color:rgba(251,146,60,0.35);background:linear-gradient(135deg,rgba(251,146,60,0.08),transparent);">' +
             '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可配置</span></div>' +
-            '<div class="card-value">' + escapeHtml(pkg.name || pkg.id) + '</div>' +
-            '<div class="card-desc">' + escapeHtml(pkg.description || '') + capE + '</div>' +
+            '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || pkg.id)) + '</div>' +
+            '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + capE + '</div>' +
             '<div class="card-tags">' + tagsE + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ecommerce-publish-entry-btn">管理店铺账号</button></div></div>';
         }
         if (pkg.id === 'wecom_reply') {
-          var tags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+          var tags = _skillStoreTagHtml(pkg.tags || []);
           var capCount = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
           // 与 lobster 商店展示一致：仅「可配置」+ 配置按钮；算力解锁在点击时由服务器 wecom-config-eligible 判定
           return '<div class="skill-store-card wecom-reply-card" style="cursor:pointer;">' +
             '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可配置</span></div>' +
-            '<div class="card-value">' + escapeHtml(pkg.name || pkg.id) + '</div>' +
-            '<div class="card-desc">' + escapeHtml(pkg.description || '') + capCount + '</div>' +
+            '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || pkg.id)) + '</div>' +
+            '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + capCount + '</div>' +
             '<div class="card-tags">' + tags + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wecom-config-entry-btn">配置</button></div></div>';
         }
-        if (pkg.id === 'goal_video_pipeline_skill') {
-          var goalTags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
-          var goalCap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
-          return '<div class="skill-store-card goal-video-pipeline-card" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(91,124,255,0.05));">' +
-            '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">对话可用</span></div>' +
-            '<div class="card-value">' + escapeHtml(pkg.name || '创意成片') + '</div>' +
-            '<div class="card-desc">' + escapeHtml(pkg.description || '') + goalCap + '</div>' +
-            '<div class="card-tags">' + goalTags + '</div>' +
-            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm goal-video-chat-entry-btn">去对话生成</button></div></div>';
-        }
+        if (pkg.id === 'goal_video_pipeline_skill') return '';
         if (pkg.id === 'wewrite_official_account_skill') {
-          var waTags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
-          var waCap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+          var waTags = _skillStoreTagHtml(pkg.tags || []);
+          var waCap = pkg.capabilities_count ? ' \u00b7 ' + pkg.capabilities_count + ' \u4e2a\u80fd\u529b' : '';
           return '<div class="skill-store-card wechat-article-card" data-skill-package-id="' + escapeAttr(pkg.id || '') + '" style="cursor:pointer;">' +
-            '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可配置</span></div>' +
-            '<div class="card-value">' + escapeHtml(pkg.name || '公众号文章') + '</div>' +
-            '<div class="card-desc">' + escapeHtml(pkg.description || '') + waCap + '</div>' +
+            '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">\u53ef\u914d\u7f6e</span></div>' +
+            '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '\u516c\u4f17\u53f7\u6587\u7ae0')) + '</div>' +
+            '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + waCap + '</div>' +
             '<div class="card-tags">' + waTags + '</div>' +
-            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">去对话生成</button></div></div>';
+            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">\u53bb\u5bf9\u8bdd\u751f\u6210</button></div></div>';
         }
         var statusBadge = '';
         var actionBtn = '';
@@ -2426,12 +2647,12 @@ function loadSkillStore() {
             actionBtn = '<button type="button" class="btn btn-primary btn-sm" data-unlock-credits="' + escapeAttr(pkg.id) + '">算力解锁（' + (pkg.unlock_price_credits || 0) + '）</button> ' + actionBtn;
           }
         }
-        var tags = (pkg.tags || []).map(function(t) { return '<span class="tag">' + escapeHtml(t) + '</span>'; }).join('');
+        var tags = _skillStoreTagHtml(pkg.tags || []);
           var capCount = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
         return '<div class="skill-store-card" data-skill-package-id="' + escapeAttr(pkg.id || '') + '">' +
           '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' ' + statusBadge + '</div>' +
-          '<div class="card-value">' + escapeHtml(pkg.name || pkg.id) + '</div>' +
-            '<div class="card-desc">' + escapeHtml(pkg.description || '') + capCount + '</div>' +
+          '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || pkg.id)) + '</div>' +
+            '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + capCount + '</div>' +
           '<div class="card-tags">' + tags + '</div>' +
           '<div class="card-actions">' + actionBtn + '</div></div>';
       }).join('');
@@ -2444,6 +2665,7 @@ function loadSkillStore() {
         _bindMetaSocialCardEntry();
         _bindSeedanceTvcCardEntry();
         _bindViralVideoRemixCardEntry();
+        _bindCutcliTemplateCardEntry();
         _bindHiflyDigitalHumanCardEntry();
         _bindShanjianSmartClipCardEntry();
         _bindGoalVideoPipelineCardEntry();
@@ -2757,6 +2979,21 @@ function _bindShanjianSmartClipCardEntry() {
   });
 }
 
+function _bindCutcliTemplateCardEntry() {
+  document.querySelectorAll('.cutcli-template-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openCutcliTemplateStudioView === 'function') window._openCutcliTemplateStudioView();
+    });
+  });
+  document.querySelectorAll('.cutcli-template-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openCutcliTemplateStudioView === 'function') window._openCutcliTemplateStudioView();
+    });
+  });
+}
+
 function _bindGoalVideoPipelineCardEntry() {
   document.querySelectorAll('.goal-video-pipeline-card').forEach(function(card) {
     card.addEventListener('click', function(e) {
@@ -2783,7 +3020,7 @@ function _bindComflyConfigBtn__legacy_unused() {
         keyInput.value = '';
         keyInput.placeholder = _comflyStatus.has_user_key
           ? '已保存(' + (_comflyStatus.masked_user_key || '……') + ')，输入新 Key 可覆盖'
-          : '粘贴 Comfly API Key';
+          : '粘贴视频引擎 API Key';
       }
       if (baseInput) {
         baseInput.value = _comflyStatus.user_api_base || '';
@@ -2805,7 +3042,7 @@ function _bindComflyConfigBtn__legacy_unused() {
       keyInput.value = '';
       keyInput.placeholder = _comflyStatus.has_user_key
         ? '已保存 (' + (_comflyStatus.masked_user_key || '••••') + ')，输入新 Key 可覆盖'
-        : '粘贴 Comfly API Key';
+        : '粘贴视频引擎 API Key';
     }
     if (baseInput) {
       baseInput.value = _comflyStatus.user_api_base || '';
@@ -2845,7 +3082,7 @@ function _openComflyConfigModal() {
     keyInput.value = '';
     keyInput.placeholder = _comflyStatus.has_user_key
       ? '已保存 Key（' + (_comflyStatus.masked_user_key || '已脱敏') + '），输入新 Key 可覆盖'
-      : '粘贴 Comfly API Key';
+      : '粘贴视频引擎 API Key';
   }
   var msgEl = document.getElementById('comflyModalMsg');
   if (msgEl) {
@@ -3080,7 +3317,7 @@ function _bindComflyConfigBtn() {
     var body = {};
     if (k) body.api_key = k;
     else if (!_comflyStatus.has_user_key) {
-      if (msgEl) { msgEl.textContent = '请填写 Comfly API Key'; msgEl.className = 'msg err'; msgEl.style.display = ''; }
+      if (msgEl) { msgEl.textContent = '请填写视频引擎 API Key'; msgEl.className = 'msg err'; msgEl.style.display = ''; }
       return;
     }
     saveBtn.disabled = true; saveBtn.textContent = '保存中…';
@@ -3091,12 +3328,12 @@ function _bindComflyConfigBtn() {
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; }); })
       .then(function(x) {
         if (x.ok) {
-          if (msgEl) { msgEl.textContent = '已保存。当前用户的电商套图、图片工作台和爆款TVC 会优先共用这份 Comfly 配置；这里只做本机保存，不会在保存时校验 Comfly 凭据。'; msgEl.className = 'msg'; msgEl.style.display = ''; }
+          if (msgEl) { msgEl.textContent = '已保存。当前用户的电商套图、图片工作台和爆款TVC 会优先共用这份视频引擎配置；这里只做本机保存，不会在保存时校验上游凭据。'; msgEl.className = 'msg'; msgEl.style.display = ''; }
           setTimeout(function() { closeModal(); loadSkillStore(); }, 500);
         } else {
           var det = x.data && (x.data.detail || x.data.message);
           if (x.status === 401 && msgEl) {
-            msgEl.textContent = '当前软件登录态已失效，请重新登录后再保存。这不是 Comfly Key 校验失败。';
+            msgEl.textContent = '当前软件登录态已失效，请重新登录后再保存。这不是视频引擎 Key 校验失败。';
             msgEl.className = 'msg err';
             msgEl.style.display = '';
             return;

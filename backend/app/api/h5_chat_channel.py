@@ -33,6 +33,7 @@ from .create_video_pipeline import CreateVideoPipelinePayload, run_create_video_
 from .goal_video_pipeline import (
     GoalVideoPipelinePayload,
     PipelinePartialResultError,
+    _with_video_no_text_constraint,
     run_goal_image_pipeline,
     run_goal_video_pipeline_with_total_billing,
 )
@@ -373,6 +374,13 @@ def _normalize_goal_video_task_create_body(body: Dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     cap_payload["source_mode"] = source_mode
     cap_payload["candidate_group"] = candidate_group
+    custom_prompt = _scheduled_custom_prompt(cap_payload)
+    existing_plan = cap_payload.get("precomputed_plan")
+    if custom_prompt and not (isinstance(existing_plan, dict) and existing_plan.get("video_prompt")):
+        cap_payload["precomputed_plan"] = _scheduled_goal_video_direct_plan(
+            custom_prompt,
+            str(body.get("title") or ""),
+        )
 
 
 @router.post("/api/scheduled-tasks/tasks", summary="Proxy create scheduled task for local online UI")
@@ -1108,6 +1116,39 @@ def _generated_from_scheduled_prompt(capability_id: str, task_title: str, prompt
         "memory_context_used": False,
         "custom_prompt_used": True,
     }
+
+
+def _scheduled_goal_video_direct_plan(prompt: str, task_title: str) -> Dict[str, Any]:
+    raw = str(prompt or "").strip()
+    if not raw:
+        return {}
+    title = (task_title or "").strip()
+    if not title or title in {"能力定时任务", "目标成片", "创意成片"}:
+        title = "创意成片"
+    video_prompt = _with_video_no_text_constraint(raw, 2500)
+    return {
+        "title": title[:120],
+        "copy": raw[:2000],
+        "selling_points": [],
+        "image_prompt": video_prompt,
+        "video_prompt": video_prompt,
+        "user_prompt": raw[:2500],
+        "direct_user_prompt": True,
+    }
+
+
+def _scheduled_goal_video_precomputed_plan(
+    cap_payload: Dict[str, Any],
+    generated: Dict[str, Any],
+    task_title: str,
+) -> Dict[str, Any]:
+    existing = cap_payload.get("precomputed_plan") if isinstance(cap_payload, dict) else {}
+    if isinstance(existing, dict) and existing.get("video_prompt"):
+        return existing
+    if not generated.get("custom_prompt_used"):
+        return {}
+    prompt = str(generated.get("goal") or cap_payload.get("prompt") or cap_payload.get("goal") or "").strip()
+    return _scheduled_goal_video_direct_plan(prompt, task_title)
 
 
 def _normalize_goal_video_source_mode(value: Any) -> str:
@@ -2262,14 +2303,19 @@ async def _run_scheduled_capability(
                 )
             if capability_id == "goal.video.pipeline":
                 source_mode, candidate_group = _goal_video_source_config_from_payload(cap_payload)
+                goal = generated.get("goal") or _fallback_goal(task_title)
+                precomputed_plan = _scheduled_goal_video_precomputed_plan(original_cap_payload, generated, task_title)
                 cap_payload = {
                     "source_mode": source_mode,
                     "candidate_group": candidate_group,
-                    "goal": generated.get("goal") or _fallback_goal(task_title),
+                    "goal": goal,
+                    "prompt": goal,
                     "reference_asset_ids": original_cap_payload.get("reference_asset_ids") or [],
                     "reference_image_urls": original_cap_payload.get("reference_image_urls") or [],
                     "resume_from_image": bool(original_cap_payload.get("resume_from_image")),
                 }
+                if precomputed_plan:
+                    cap_payload["precomputed_plan"] = precomputed_plan
             elif capability_id == "create.video.pipeline":
                 cap_payload = dict(original_cap_payload or {})
                 cap_payload["prompt"] = generated.get("goal") or cap_payload.get("prompt") or _fallback_create_video_goal(task_title)
@@ -2397,7 +2443,8 @@ async def _run_scheduled_capability(
                 refs = _scheduled_refs_with_asset_urls(raw_refs, jwt_token)
             skill_prompt = str(cap_payload.get("text") or cap_payload.get("goal") or result.get("skill_prompt") or "").strip()
             if capability_id == "goal.video.pipeline":
-                skill_prompt = str((result.get("plan") or {}).get("video_prompt") or skill_prompt).strip()
+                plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
+                skill_prompt = str(plan.get("user_prompt") or plan.get("video_prompt") or skill_prompt).strip()
             elif capability_id == "create.video.pipeline":
                 skill_prompt = str((result.get("plan") or {}).get("summary") or cap_payload.get("prompt") or skill_prompt).strip()
             elif capability_id == "create.ppt.pipeline":
