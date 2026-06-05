@@ -2240,113 +2240,160 @@ function _loadYoutubePublishStatus(cb) {
     });
 }
 
-var _SKILL_STORE_CARD_ART_BY_CLASS = {
-  'comfly-veo-card': '/static/skill-cards/comfly-tvc.png',
-  'seedance-tvc-card': '/static/skill-cards/seedance-tvc.png',
-  'viral-video-remix-card': '/static/skill-cards/viral-remix.png',
-  'shanjian-smart-clip-card': '/static/skill-cards/smart-clip.png',
-  'ecommerce-detail-card': '/static/skill-cards/ecommerce-detail.png',
-  'hifly-digital-human-card': '/static/skill-cards/digital-human.png',
-  'openclaw-weixin-card': '/static/skill-cards/wechat-assistant.png',
-  'wechat-article-card': '/static/skill-cards/wechat-article.png',
-  'openclaw-memory-card': '/static/skill-cards/memory.png',
-  'youtube-publish-card': '/static/skill-cards/youtube.png',
-  'meta-social-card': '/static/skill-cards/meta-social.png',
-  'twilio-whatsapp-card': '/static/skill-cards/twilio-whatsapp.png',
-  'messenger-reply-card': '/static/skill-cards/messenger.png',
-  'wecom-reply-card': '/static/skill-cards/wecom.png',
-  'ecommerce-publish-card': '/static/skill-cards/ecommerce-publish.png',
-  'goal-video-pipeline-card': '/static/skill-cards/goal-video.png'
+var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
+  'sutui_mcp': { title: 'AI 模型能力', desc: '图片、视频、音频创作' },
+  'comfly_veo_skill': { title: '爆款TVC', desc: '一键生成爆款视频' },
+  'comfly_seedance_tvc_skill': { title: '创意分镜头视频', desc: '生成分镜视频' },
+  'seedance_tvc_studio': { title: '创意分镜头视频', desc: '生成分镜视频' },
+  'viral_video_remix_skill': { title: '爆款视频复刻', desc: '复刻视频风格' },
+  'shanjian_smart_clip': { title: '智能剪辑', desc: '数字人口播混剪' },
+  'comfly_ecommerce_detail_skill': { title: '电商详情页', desc: '生成商品套图' },
+  'hifly_digital_human_skill': { title: '必火数字人', desc: '生成数字人口播' },
+  'openclaw_weixin_channel': { title: '微信助手', desc: '微信通道授权' },
+  'wewrite_official_account_skill': { title: '公众号文章', desc: '写文、配图、推草稿' },
+  'openclaw_memory_skill': { title: '个人记忆', desc: '管理本机资料' },
+  'browser_use_skill': { title: 'Browser Use', desc: '浏览器自动操作' },
+  'computer_use_skill': { title: 'Computer Use', desc: '电脑自动操作' },
+  'youtube_publish': { title: 'YouTube 上传', desc: '管理视频发布' },
+  'meta_social': { title: 'Instagram / Facebook', desc: '管理社媒发布' },
+  'twilio_whatsapp': { title: 'Twilio WhatsApp', desc: 'WhatsApp 客服' },
+  'messenger_reply': { title: 'Facebook Messenger 客服', desc: 'Messenger 自动回复' },
+  'wecom_reply': { title: '企业微信自动回复', desc: '企微客服回复' },
+  'ecommerce_publish_skill': { title: '商品发布', desc: '管理店铺账号' },
+  'goal_video_pipeline_skill': { title: '创意成片', desc: '对话生成视频' },
+  'create_video_pipeline_skill': { title: '创意成片', desc: '对话生成视频' },
+  'create_ppt_skill': { title: 'PPT 生成', desc: '主题生成演示文稿' },
+  'mcp_agency_lona_trading': { title: 'Lona Trading', desc: '业务自动化工具' }
 };
-var _SKILL_STORE_CARD_ART_BY_OPENCLAW_ID = {
-  'browser_use_skill': '/static/skill-cards/browser-use.png',
-  'computer_use_skill': '/static/skill-cards/computer-use.png'
+var _SKILL_STORE_SIMPLE_COPY_BY_CLASS = {
+  'skill-card-ai-models': _SKILL_STORE_SIMPLE_COPY_BY_ID.sutui_mcp,
+  'comfly-veo-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_veo_skill,
+  'seedance-tvc-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.seedance_tvc_studio,
+  'viral-video-remix-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.viral_video_remix_skill,
+  'shanjian-smart-clip-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.shanjian_smart_clip,
+  'ecommerce-detail-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_ecommerce_detail_skill,
+  'hifly-digital-human-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.hifly_digital_human_skill,
+  'openclaw-weixin-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_weixin_channel,
+  'wechat-article-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.wewrite_official_account_skill,
+  'openclaw-memory-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_memory_skill,
+  'youtube-publish-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.youtube_publish,
+  'meta-social-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.meta_social,
+  'twilio-whatsapp-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.twilio_whatsapp,
+  'messenger-reply-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.messenger_reply,
+  'wecom-reply-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.wecom_reply,
+  'ecommerce-publish-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ecommerce_publish_skill,
+  'goal-video-pipeline-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.goal_video_pipeline_skill
 };
-var _SKILL_STORE_CARD_ART_BY_PACKAGE_ID = {
-  'sutui_mcp': '/static/skill-cards/ai-models.png',
-  'comfly_veo_skill': '/static/skill-cards/comfly-tvc.png',
-  'comfly_seedance_tvc_skill': '/static/skill-cards/seedance-tvc.png',
-  'comfly_ecommerce_detail_skill': '/static/skill-cards/ecommerce-detail.png',
-  'seedance_tvc_studio': '/static/skill-cards/seedance-tvc.png',
-  'viral_video_remix_skill': '/static/skill-cards/viral-remix.png',
-  'shanjian_smart_clip': '/static/skill-cards/smart-clip.png',
-  'hifly_digital_human_skill': '/static/skill-cards/digital-human.png',
-  'openclaw_weixin_channel': '/static/skill-cards/wechat-assistant.png',
-  'wewrite_official_account_skill': '/static/skill-cards/wechat-article.png',
-  'openclaw_memory_skill': '/static/skill-cards/memory.png',
-  'browser_use_skill': '/static/skill-cards/browser-use.png',
-  'computer_use_skill': '/static/skill-cards/computer-use.png',
-  'youtube_publish': '/static/skill-cards/youtube.png',
-  'twilio_whatsapp': '/static/skill-cards/twilio-whatsapp.png',
-  'messenger_reply': '/static/skill-cards/messenger.png',
-  'wecom_reply': '/static/skill-cards/wecom.png',
-  'ecommerce_publish_skill': '/static/skill-cards/ecommerce-publish.png',
-  'goal_video_pipeline_skill': '/static/skill-cards/goal-video.png',
-  'create_video_pipeline_skill': '/static/skill-cards/goal-video.png'
+var _SKILL_STORE_SIMPLE_COPY_PATTERNS = [
+  [/AI\s*模型|模型能力|sutui|速推/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.sutui_mcp],
+  [/爆款\s*TVC|comfly.*veo|带货/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_veo_skill],
+  [/创意分镜|seedance|分镜头/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.seedance_tvc_studio],
+  [/爆款视频复刻|复刻/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.viral_video_remix_skill],
+  [/智能剪辑|山涧/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.shanjian_smart_clip],
+  [/电商上架|电商详情|上架套图|详情图|SKU/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_ecommerce_detail_skill],
+  [/必火数字人|数字人/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.hifly_digital_human_skill],
+  [/微信助手|openclaw.*微信|weixin/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_weixin_channel],
+  [/公众号|微信文章|微信推文|wewrite/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.wewrite_official_account_skill],
+  [/个人记忆|memory/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_memory_skill],
+  [/browser\s*use/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.browser_use_skill],
+  [/computer\s*use/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.computer_use_skill],
+  [/youtube/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.youtube_publish],
+  [/instagram|facebook|meta/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.meta_social],
+  [/twilio|whatsapp/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.twilio_whatsapp],
+  [/messenger/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.messenger_reply],
+  [/企业微信|企微|wecom/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.wecom_reply],
+  [/商品发布|电商发布|店铺账号/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.ecommerce_publish_skill],
+  [/创意成片|目标成片|速推视频制作|goal.*video|create.*video/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.goal_video_pipeline_skill],
+  [/ppt|presentation|演示文稿/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.create_ppt_skill],
+  [/agency_lona|lona/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.mcp_agency_lona_trading]
+];
+var _SKILL_STORE_ICON_BY_ID = {
+  'sutui_mcp': { icon: 'sparkles', tone: 'aurora' },
+  'comfly_veo_skill': { icon: 'play', tone: 'sunset' },
+  'comfly_seedance_tvc_skill': { icon: 'storyboard', tone: 'sky' },
+  'seedance_tvc_studio': { icon: 'storyboard', tone: 'sky' },
+  'viral_video_remix_skill': { icon: 'refresh', tone: 'mint' },
+  'shanjian_smart_clip': { icon: 'scissors', tone: 'blue' },
+  'comfly_ecommerce_detail_skill': { icon: 'bag', tone: 'rose' },
+  'hifly_digital_human_skill': { icon: 'user', tone: 'violet' },
+  'openclaw_weixin_channel': { icon: 'message', tone: 'green' },
+  'wewrite_official_account_skill': { icon: 'file', tone: 'coral' },
+  'openclaw_memory_skill': { icon: 'database', tone: 'teal' },
+  'browser_use_skill': { icon: 'browser', tone: 'indigo' },
+  'computer_use_skill': { icon: 'monitor', tone: 'cyan' },
+  'youtube_publish': { icon: 'upload', tone: 'red' },
+  'meta_social': { icon: 'share', tone: 'pink' },
+  'twilio_whatsapp': { icon: 'message', tone: 'green' },
+  'messenger_reply': { icon: 'chat', tone: 'indigo' },
+  'wecom_reply': { icon: 'building', tone: 'cyan' },
+  'ecommerce_publish_skill': { icon: 'store', tone: 'orange' },
+  'goal_video_pipeline_skill': { icon: 'film', tone: 'blue' },
+  'create_video_pipeline_skill': { icon: 'film', tone: 'blue' },
+  'create_ppt_skill': { icon: 'presentation', tone: 'orange' },
+  'mcp_agency_lona_trading': { icon: 'plug', tone: 'slate' }
 };
-var _SKILL_STORE_CARD_ART_BY_TITLE = {
-  'AI 模型能力': '/static/skill-cards/ai-models.png',
-  '爆款TVC': '/static/skill-cards/comfly-tvc.png',
-  '创意分镜头视频': '/static/skill-cards/seedance-tvc.png',
-  '爆款视频复刻': '/static/skill-cards/viral-remix.png',
-  '智能剪辑': '/static/skill-cards/smart-clip.png',
-  '电商上架套图': '/static/skill-cards/ecommerce-detail.png',
-  '必火数字人': '/static/skill-cards/digital-human.png',
-  '微信助手 (OpenClaw)': '/static/skill-cards/wechat-assistant.png',
-  '微信助手': '/static/skill-cards/wechat-assistant.png',
-  '公众号文章': '/static/skill-cards/wechat-article.png',
-  '个人记忆': '/static/skill-cards/memory.png',
-  'Browser Use': '/static/skill-cards/browser-use.png',
-  'Computer Use': '/static/skill-cards/computer-use.png',
-  'YouTube 上传': '/static/skill-cards/youtube.png',
-  'Instagram / Facebook': '/static/skill-cards/meta-social.png',
-  'Twilio WhatsApp': '/static/skill-cards/twilio-whatsapp.png',
-  'Messenger 自动回复': '/static/skill-cards/messenger.png',
-  '企业微信自动回复': '/static/skill-cards/wecom.png',
-  '电商发布账号': '/static/skill-cards/ecommerce-publish.png',
-  '创意成片': '/static/skill-cards/goal-video.png'
+var _SKILL_STORE_ICON_BY_CLASS = {
+  'skill-card-ai-models': _SKILL_STORE_ICON_BY_ID.sutui_mcp,
+  'comfly-veo-card': _SKILL_STORE_ICON_BY_ID.comfly_veo_skill,
+  'seedance-tvc-card': _SKILL_STORE_ICON_BY_ID.seedance_tvc_studio,
+  'viral-video-remix-card': _SKILL_STORE_ICON_BY_ID.viral_video_remix_skill,
+  'shanjian-smart-clip-card': _SKILL_STORE_ICON_BY_ID.shanjian_smart_clip,
+  'ecommerce-detail-card': _SKILL_STORE_ICON_BY_ID.comfly_ecommerce_detail_skill,
+  'hifly-digital-human-card': _SKILL_STORE_ICON_BY_ID.hifly_digital_human_skill,
+  'openclaw-weixin-card': _SKILL_STORE_ICON_BY_ID.openclaw_weixin_channel,
+  'wechat-article-card': _SKILL_STORE_ICON_BY_ID.wewrite_official_account_skill,
+  'openclaw-memory-card': _SKILL_STORE_ICON_BY_ID.openclaw_memory_skill,
+  'youtube-publish-card': _SKILL_STORE_ICON_BY_ID.youtube_publish,
+  'meta-social-card': _SKILL_STORE_ICON_BY_ID.meta_social,
+  'twilio-whatsapp-card': _SKILL_STORE_ICON_BY_ID.twilio_whatsapp,
+  'messenger-reply-card': _SKILL_STORE_ICON_BY_ID.messenger_reply,
+  'wecom-reply-card': _SKILL_STORE_ICON_BY_ID.wecom_reply,
+  'ecommerce-publish-card': _SKILL_STORE_ICON_BY_ID.ecommerce_publish_skill,
+  'goal-video-pipeline-card': _SKILL_STORE_ICON_BY_ID.goal_video_pipeline_skill
 };
-var _SKILL_STORE_CARD_ART_TITLE_PATTERNS = [
-  [/AI\s*模型|模型能力|sutui|速推/i, '/static/skill-cards/ai-models.png'],
-  [/爆款\s*TVC|comfly.*veo|带货/i, '/static/skill-cards/comfly-tvc.png'],
-  [/创意分镜|seedance|分镜头/i, '/static/skill-cards/seedance-tvc.png'],
-  [/爆款视频复刻|复刻/i, '/static/skill-cards/viral-remix.png'],
-  [/智能剪辑|山涧/i, '/static/skill-cards/smart-clip.png'],
-  [/电商上架|上架套图|详情图|SKU/i, '/static/skill-cards/ecommerce-detail.png'],
-  [/必火数字人|数字人/i, '/static/skill-cards/digital-human.png'],
-  [/微信助手|openclaw.*微信|weixin/i, '/static/skill-cards/wechat-assistant.png'],
-  [/公众号|微信文章|微信推文|wewrite/i, '/static/skill-cards/wechat-article.png'],
-  [/个人记忆|memory/i, '/static/skill-cards/memory.png'],
-  [/browser\s*use/i, '/static/skill-cards/browser-use.png'],
-  [/computer\s*use/i, '/static/skill-cards/computer-use.png'],
-  [/youtube/i, '/static/skill-cards/youtube.png'],
-  [/instagram|facebook|meta/i, '/static/skill-cards/meta-social.png'],
-  [/twilio|whatsapp/i, '/static/skill-cards/twilio-whatsapp.png'],
-  [/messenger/i, '/static/skill-cards/messenger.png'],
-  [/企业微信|企微|wecom/i, '/static/skill-cards/wecom.png'],
-  [/电商发布|店铺账号|publish/i, '/static/skill-cards/ecommerce-publish.png'],
-  [/创意成片|目标成片|速推视频制作|goal.*video|create.*video/i, '/static/skill-cards/goal-video.png']
+var _SKILL_STORE_ICON_PATTERNS = [
+  [/AI\s*模型|模型能力|sutui|速推/i, _SKILL_STORE_ICON_BY_ID.sutui_mcp],
+  [/爆款\s*TVC|comfly.*veo|带货/i, _SKILL_STORE_ICON_BY_ID.comfly_veo_skill],
+  [/创意分镜|seedance|分镜头/i, _SKILL_STORE_ICON_BY_ID.seedance_tvc_studio],
+  [/爆款视频复刻|复刻/i, _SKILL_STORE_ICON_BY_ID.viral_video_remix_skill],
+  [/智能剪辑|山涧/i, _SKILL_STORE_ICON_BY_ID.shanjian_smart_clip],
+  [/电商上架|电商详情|上架套图|详情图|SKU/i, _SKILL_STORE_ICON_BY_ID.comfly_ecommerce_detail_skill],
+  [/必火数字人|数字人/i, _SKILL_STORE_ICON_BY_ID.hifly_digital_human_skill],
+  [/微信助手|openclaw.*微信|weixin/i, _SKILL_STORE_ICON_BY_ID.openclaw_weixin_channel],
+  [/公众号|微信文章|微信推文|wewrite/i, _SKILL_STORE_ICON_BY_ID.wewrite_official_account_skill],
+  [/个人记忆|memory/i, _SKILL_STORE_ICON_BY_ID.openclaw_memory_skill],
+  [/browser\s*use/i, _SKILL_STORE_ICON_BY_ID.browser_use_skill],
+  [/computer\s*use/i, _SKILL_STORE_ICON_BY_ID.computer_use_skill],
+  [/youtube/i, _SKILL_STORE_ICON_BY_ID.youtube_publish],
+  [/instagram|facebook|meta/i, _SKILL_STORE_ICON_BY_ID.meta_social],
+  [/twilio|whatsapp/i, _SKILL_STORE_ICON_BY_ID.twilio_whatsapp],
+  [/messenger/i, _SKILL_STORE_ICON_BY_ID.messenger_reply],
+  [/企业微信|企微|wecom/i, _SKILL_STORE_ICON_BY_ID.wecom_reply],
+  [/商品发布|电商发布|店铺账号/i, _SKILL_STORE_ICON_BY_ID.ecommerce_publish_skill],
+  [/创意成片|目标成片|速推视频制作|goal.*video|create.*video/i, _SKILL_STORE_ICON_BY_ID.goal_video_pipeline_skill],
+  [/ppt|presentation|演示文稿/i, _SKILL_STORE_ICON_BY_ID.create_ppt_skill],
+  [/agency_lona|lona|mcp/i, _SKILL_STORE_ICON_BY_ID.mcp_agency_lona_trading]
 ];
 var _SKILL_STORE_IMAGE_CARD_CATALOG = [
-  { id: 'sutui_mcp', title: 'AI 模型能力', art: '/static/skill-cards/ai-models.png', className: 'skill-card-ai-models' },
-  { id: 'comfly_veo_skill', title: '爆款TVC', art: '/static/skill-cards/comfly-tvc.png', className: 'comfly-veo-card' },
-  { id: 'comfly_seedance_tvc_skill', aliases: ['seedance_tvc_studio'], title: '创意分镜头视频', art: '/static/skill-cards/seedance-tvc.png', className: 'seedance-tvc-card' },
-  { id: 'viral_video_remix_skill', title: '爆款视频复刻', art: '/static/skill-cards/viral-remix.png', className: 'viral-video-remix-card' },
-  { id: 'shanjian_smart_clip', title: '智能剪辑', art: '/static/skill-cards/smart-clip.png', className: 'shanjian-smart-clip-card' },
-  { id: 'comfly_ecommerce_detail_skill', title: '电商上架套图', art: '/static/skill-cards/ecommerce-detail.png', className: 'ecommerce-detail-card' },
-  { id: 'hifly_digital_human_skill', title: '必火数字人', art: '/static/skill-cards/digital-human.png', className: 'hifly-digital-human-card' },
-  { id: 'openclaw_weixin_channel', title: '微信助手', art: '/static/skill-cards/wechat-assistant.png', className: 'openclaw-weixin-card' },
-  { id: 'wewrite_official_account_skill', title: '公众号文章', art: '/static/skill-cards/wechat-article.png', className: 'wechat-article-card' },
-  { id: 'openclaw_memory_skill', title: '个人记忆', art: '/static/skill-cards/memory.png', className: 'openclaw-memory-card' },
-  { id: 'browser_use_skill', title: 'Browser Use', art: '/static/skill-cards/browser-use.png', className: 'openclaw-skill-workspace-card', skillId: 'browser_use_skill' },
-  { id: 'computer_use_skill', title: 'Computer Use', art: '/static/skill-cards/computer-use.png', className: 'openclaw-skill-workspace-card', skillId: 'computer_use_skill' },
-  { id: 'youtube_publish', title: 'YouTube 上传', art: '/static/skill-cards/youtube.png', className: 'youtube-publish-card' },
-  { id: 'meta_social', title: 'Instagram / Facebook', art: '/static/skill-cards/meta-social.png', className: 'meta-social-card' },
-  { id: 'twilio_whatsapp', title: 'Twilio WhatsApp', art: '/static/skill-cards/twilio-whatsapp.png', className: 'twilio-whatsapp-card' },
-  { id: 'messenger_reply', title: 'Facebook Messenger 客服', art: '/static/skill-cards/messenger.png', className: 'messenger-reply-card' },
-  { id: 'wecom_reply', title: '企业微信自动回复', art: '/static/skill-cards/wecom.png', className: 'wecom-reply-card' },
-  { id: 'ecommerce_publish_skill', title: '商品发布', art: '/static/skill-cards/ecommerce-publish.png', className: 'ecommerce-publish-card' },
-  { id: 'create_video_pipeline_skill', aliases: ['goal_video_pipeline_skill'], title: '目标成片', art: '/static/skill-cards/goal-video.png', className: 'goal-video-pipeline-card' }
+  { id: 'sutui_mcp', title: 'AI 模型能力', className: 'skill-card-ai-models' },
+  { id: 'comfly_veo_skill', title: '爆款TVC', className: 'comfly-veo-card' },
+  { id: 'comfly_seedance_tvc_skill', aliases: ['seedance_tvc_studio'], title: '创意分镜头视频', className: 'seedance-tvc-card' },
+  { id: 'viral_video_remix_skill', title: '爆款视频复刻', className: 'viral-video-remix-card' },
+  { id: 'shanjian_smart_clip', title: '智能剪辑', className: 'shanjian-smart-clip-card' },
+  { id: 'comfly_ecommerce_detail_skill', title: '电商上架套图', className: 'ecommerce-detail-card' },
+  { id: 'hifly_digital_human_skill', title: '必火数字人', className: 'hifly-digital-human-card' },
+  { id: 'openclaw_weixin_channel', title: '微信助手', className: 'openclaw-weixin-card' },
+  { id: 'wewrite_official_account_skill', title: '公众号文章', className: 'wechat-article-card' },
+  { id: 'openclaw_memory_skill', title: '个人记忆', className: 'openclaw-memory-card' },
+  { id: 'browser_use_skill', title: 'Browser Use', className: 'openclaw-skill-workspace-card', skillId: 'browser_use_skill' },
+  { id: 'computer_use_skill', title: 'Computer Use', className: 'openclaw-skill-workspace-card', skillId: 'computer_use_skill' },
+  { id: 'youtube_publish', title: 'YouTube 上传', className: 'youtube-publish-card' },
+  { id: 'meta_social', title: 'Instagram / Facebook', className: 'meta-social-card' },
+  { id: 'twilio_whatsapp', title: 'Twilio WhatsApp', className: 'twilio-whatsapp-card' },
+  { id: 'messenger_reply', title: 'Facebook Messenger 客服', className: 'messenger-reply-card' },
+  { id: 'wecom_reply', title: '企业微信自动回复', className: 'wecom-reply-card' },
+  { id: 'ecommerce_publish_skill', title: '商品发布', className: 'ecommerce-publish-card' },
+  { id: 'create_video_pipeline_skill', aliases: ['goal_video_pipeline_skill'], title: '目标成片', className: 'goal-video-pipeline-card' }
 ];
 
 function _skillStoreCatalogItemForId(id) {
@@ -2360,34 +2407,118 @@ function _skillStoreCatalogItemForId(id) {
   return null;
 }
 
-function _skillStoreCardArtFor(card) {
-  if (!card) return '';
+function _skillStoreIconFor(card) {
+  if (!card) return { icon: 'sparkles', tone: 'default' };
   var skillId = card.getAttribute('data-openclaw-skill-id') || '';
-  if (skillId && _SKILL_STORE_CARD_ART_BY_OPENCLAW_ID[skillId]) {
-    return _SKILL_STORE_CARD_ART_BY_OPENCLAW_ID[skillId];
-  }
+  if (skillId && _SKILL_STORE_ICON_BY_ID[skillId]) return _SKILL_STORE_ICON_BY_ID[skillId];
   var packageId = card.getAttribute('data-skill-package-id') || '';
-  if (packageId && _SKILL_STORE_CARD_ART_BY_PACKAGE_ID[packageId]) {
-    return _SKILL_STORE_CARD_ART_BY_PACKAGE_ID[packageId];
-  }
-  for (var cls in _SKILL_STORE_CARD_ART_BY_CLASS) {
-    if (Object.prototype.hasOwnProperty.call(_SKILL_STORE_CARD_ART_BY_CLASS, cls) && card.classList.contains(cls)) {
-      return _SKILL_STORE_CARD_ART_BY_CLASS[cls];
+  if (packageId && _SKILL_STORE_ICON_BY_ID[packageId]) return _SKILL_STORE_ICON_BY_ID[packageId];
+  for (var cls in _SKILL_STORE_ICON_BY_CLASS) {
+    if (Object.prototype.hasOwnProperty.call(_SKILL_STORE_ICON_BY_CLASS, cls) && card.classList.contains(cls)) {
+      return _SKILL_STORE_ICON_BY_CLASS[cls];
     }
   }
   var titleEl = card.querySelector('.card-value');
   var title = titleEl ? (titleEl.textContent || '').trim() : '';
-  if (title && _SKILL_STORE_CARD_ART_BY_TITLE[title]) {
-    return _SKILL_STORE_CARD_ART_BY_TITLE[title];
+  var haystack = [packageId, skillId, title].join(' ');
+  for (var i = 0; i < _SKILL_STORE_ICON_PATTERNS.length; i += 1) {
+    if (_SKILL_STORE_ICON_PATTERNS[i][0].test(haystack)) return _SKILL_STORE_ICON_PATTERNS[i][1];
   }
-  if (title) {
-    for (var i = 0; i < _SKILL_STORE_CARD_ART_TITLE_PATTERNS.length; i += 1) {
-      if (_SKILL_STORE_CARD_ART_TITLE_PATTERNS[i][0].test(title)) {
-        return _SKILL_STORE_CARD_ART_TITLE_PATTERNS[i][1];
-      }
+  return { icon: 'sparkles', tone: 'default' };
+}
+
+function _skillStoreIconSvg(name) {
+  var icons = {
+    sparkles: '<path d="M12 3l1.3 4.1L17 8.5l-3.7 1.4L12 14l-1.3-4.1L7 8.5l3.7-1.4L12 3z"></path><path d="M5 14l.8 2.2L8 17l-2.2.8L5 20l-.8-2.2L2 17l2.2-.8L5 14z"></path><path d="M19 13l.7 1.8 1.8.7-1.8.7L19 18l-.7-1.8-1.8-.7 1.8-.7L19 13z"></path>',
+    play: '<path d="M8 5.5v13l11-6.5-11-6.5z"></path>',
+    storyboard: '<rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="M9 5v14"></path><path d="M15 5v14"></path><path d="M3 10h18"></path><path d="M3 15h18"></path>',
+    refresh: '<path d="M20 7v5h-5"></path><path d="M4 17v-5h5"></path><path d="M18 9a7 7 0 0 0-11.5-2.5L4 9"></path><path d="M6 15a7 7 0 0 0 11.5 2.5L20 15"></path>',
+    scissors: '<circle cx="6" cy="7" r="3"></circle><circle cx="6" cy="17" r="3"></circle><path d="M8.6 8.5L20 4"></path><path d="M8.6 15.5L20 20"></path><path d="M9 12h3"></path>',
+    bag: '<path d="M6 8h12l-1 12H7L6 8z"></path><path d="M9 8a3 3 0 0 1 6 0"></path>',
+    user: '<circle cx="12" cy="8" r="4"></circle><path d="M4.5 20a7.5 7.5 0 0 1 15 0"></path>',
+    message: '<path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path><path d="M8 11h8"></path><path d="M8 15h5"></path>',
+    file: '<path d="M7 3h7l5 5v13H7V3z"></path><path d="M14 3v6h5"></path><path d="M9.5 13h5"></path><path d="M9.5 17h5"></path>',
+    database: '<ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path>',
+    browser: '<rect x="4" y="5" width="16" height="14" rx="3"></rect><path d="M4 9h16"></path><path d="M8 7h.01"></path><path d="M11 7h.01"></path>',
+    monitor: '<rect x="4" y="5" width="16" height="12" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path>',
+    upload: '<path d="M12 19V6"></path><path d="M7 11l5-5 5 5"></path><path d="M5 19h14"></path>',
+    share: '<circle cx="7" cy="12" r="3"></circle><circle cx="17" cy="7" r="3"></circle><circle cx="17" cy="17" r="3"></circle><path d="M9.6 10.5l4.8-2.8"></path><path d="M9.6 13.5l4.8 2.8"></path>',
+    chat: '<path d="M4 6h16v10H9l-5 4V6z"></path><path d="M8 10h8"></path><path d="M8 14h5"></path>',
+    building: '<path d="M5 21V5l7-3 7 3v16"></path><path d="M9 21v-6h6v6"></path><path d="M9 7h.01"></path><path d="M15 7h.01"></path><path d="M9 11h.01"></path><path d="M15 11h.01"></path>',
+    store: '<path d="M4 10h16l-1.5-5h-13L4 10z"></path><path d="M6 10v10h12V10"></path><path d="M9 20v-5h6v5"></path><path d="M4 10c0 1.4 1.1 2.5 2.5 2.5S9 11.4 9 10"></path><path d="M9 10c0 1.4 1.1 2.5 2.5 2.5S14 11.4 14 10"></path><path d="M14 10c0 1.4 1.1 2.5 2.5 2.5S19 11.4 19 10"></path>',
+    film: '<rect x="4" y="5" width="16" height="14" rx="3"></rect><path d="M8 5v14"></path><path d="M16 5v14"></path><path d="M4 10h4"></path><path d="M16 10h4"></path><path d="M4 15h4"></path><path d="M16 15h4"></path>',
+    presentation: '<rect x="5" y="4" width="14" height="11" rx="2"></rect><path d="M12 15v5"></path><path d="M8 20h8"></path><path d="M9 9h6"></path><path d="M9 12h4"></path>',
+    plug: '<path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M7 7h10v5a5 5 0 0 1-10 0V7z"></path><path d="M12 17v4"></path>'
+  };
+  var paths = icons[name] || icons.sparkles;
+  return '<svg class="skill-card-art-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' + paths + '</svg>';
+}
+
+function _skillStoreSimpleCopyFor(card) {
+  if (!card) return null;
+  var skillId = card.getAttribute('data-openclaw-skill-id') || '';
+  if (skillId && _SKILL_STORE_SIMPLE_COPY_BY_ID[skillId]) return _SKILL_STORE_SIMPLE_COPY_BY_ID[skillId];
+  var packageId = card.getAttribute('data-skill-package-id') || '';
+  if (packageId && _SKILL_STORE_SIMPLE_COPY_BY_ID[packageId]) return _SKILL_STORE_SIMPLE_COPY_BY_ID[packageId];
+  for (var cls in _SKILL_STORE_SIMPLE_COPY_BY_CLASS) {
+    if (Object.prototype.hasOwnProperty.call(_SKILL_STORE_SIMPLE_COPY_BY_CLASS, cls) && card.classList.contains(cls)) {
+      return _SKILL_STORE_SIMPLE_COPY_BY_CLASS[cls];
     }
   }
-  return '';
+  var titleEl = card.querySelector('.card-value');
+  var title = titleEl ? (titleEl.textContent || '').trim() : '';
+  var haystack = [packageId, skillId, title].join(' ');
+  for (var i = 0; i < _SKILL_STORE_SIMPLE_COPY_PATTERNS.length; i += 1) {
+    if (_SKILL_STORE_SIMPLE_COPY_PATTERNS[i][0].test(haystack)) return _SKILL_STORE_SIMPLE_COPY_PATTERNS[i][1];
+  }
+  if (/^\?+$/.test(title) || /�/.test(title)) {
+    return { title: '技能工具', desc: '智能辅助功能' };
+  }
+  return { title: title || '技能工具', desc: '智能辅助功能' };
+}
+
+function _simplifySkillStoreCards(el) {
+  if (!el) return;
+  el.querySelectorAll('.skill-store-card').forEach(function(card) {
+    var copy = _skillStoreSimpleCopyFor(card) || {};
+    card.classList.add('is-simple-skill-card');
+    Array.prototype.slice.call(card.children || []).forEach(function(child) {
+      if (child.classList && (
+        child.classList.contains('skill-card-art-wrap') ||
+        child.classList.contains('skill-card-art') ||
+        child.classList.contains('card-label') ||
+        child.classList.contains('card-value') ||
+        child.classList.contains('card-desc') ||
+        child.classList.contains('card-tags') ||
+        child.classList.contains('card-actions')
+      )) return;
+      if (child.tagName === 'DIV') child.remove();
+    });
+    var labelEl = card.querySelector('.card-label');
+    if (labelEl) labelEl.textContent = '';
+    var titleEl = card.querySelector('.card-value');
+    if (titleEl) titleEl.textContent = copy.title || '技能工具';
+    var descEl = card.querySelector('.card-desc');
+    if (!descEl) {
+      descEl = document.createElement('div');
+      descEl.className = 'card-desc';
+      if (titleEl && titleEl.parentNode) titleEl.parentNode.insertBefore(descEl, titleEl.nextSibling);
+      else card.appendChild(descEl);
+    }
+    descEl.textContent = copy.desc || '智能辅助功能';
+    var tagsEl = card.querySelector('.card-tags');
+    if (tagsEl) tagsEl.textContent = '';
+    card.querySelectorAll('.card-actions .btn').forEach(function(btn, idx) {
+      if (idx > 0) {
+        btn.classList.add('skill-secondary-action');
+        return;
+      }
+      var text = (btn.textContent || '').trim();
+      if (/进入|打开|工作台|生成/.test(text)) btn.textContent = '打开';
+      else if (/配置|授权|账号|Token|Key|保存/.test(text)) btn.textContent = '配置';
+      else if (/安装|解锁/.test(text)) btn.textContent = text.replace(/（.*?）/g, '');
+    });
+  });
 }
 
 function _renderImageOnlySkillCard(item) {
@@ -2396,7 +2527,7 @@ function _renderImageOnlySkillCard(item) {
   var skillAttrs = item.skillId
     ? ' data-openclaw-skill-id="' + escapeAttr(item.skillId) + '" data-openclaw-skill-title="' + escapeAttr(item.title || item.id) + '"'
     : '';
-  return '<div class="skill-store-card skill-store-fallback-card ' + escapeAttr(cls) + '" data-skill-package-id="' + escapeAttr(item.id || '') + '" data-skill-card-art="' + escapeAttr(item.art || '') + '"' + skillAttrs + ' style="cursor:pointer;">' +
+  return '<div class="skill-store-card skill-store-fallback-card ' + escapeAttr(cls) + '" data-skill-package-id="' + escapeAttr(item.id || '') + '"' + skillAttrs + ' style="cursor:pointer;">' +
     '<div class="card-label">技能</div>' +
     '<div class="card-value">' + escapeHtml(item.title || item.id || '技能') + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm" data-image-skill-placeholder="' + escapeAttr(item.id || '') + '">打开</button></div>' +
@@ -2440,25 +2571,17 @@ function _decorateSkillImageCards(el) {
     'openclaw-memory-card'
   ];
   el.querySelectorAll('.skill-store-card').forEach(function(card) {
-    var artSrc = _skillStoreCardArtFor(card);
-    var explicitArt = card.getAttribute('data-skill-card-art') || '';
-    if (explicitArt) artSrc = explicitArt;
-    if (!artSrc) return;
     if (!card.classList.contains('is-image-skill-card')) {
       var title = '';
       var titleEl = card.querySelector('.card-value');
       if (titleEl) title = (titleEl.textContent || '').trim();
-      var img = document.createElement('img');
-      img.className = 'skill-card-art';
-      img.src = artSrc + (artSrc.indexOf('?') >= 0 ? '&' : '?') + 'v=20260605-wechat-article-porcelain-card';
-      img.alt = title ? (title + ' 技能卡片') : '技能卡片';
-      img.loading = 'lazy';
-      img.decoding = 'async';
-      img.onerror = function() {
-        card.classList.remove('is-image-skill-card');
-        if (img.parentNode) img.parentNode.removeChild(img);
-      };
-      card.insertBefore(img, card.firstChild);
+      var iconMeta = _skillStoreIconFor(card);
+      var artWrap = document.createElement('div');
+      artWrap.className = 'skill-card-art-wrap';
+      artWrap.setAttribute('data-skill-icon-tone', iconMeta.tone || 'default');
+      artWrap.setAttribute('aria-hidden', 'true');
+      artWrap.innerHTML = _skillStoreIconSvg(iconMeta.icon || 'sparkles');
+      card.insertBefore(artWrap, card.firstChild);
       card.classList.add('is-image-skill-card');
     }
 
@@ -2678,6 +2801,7 @@ function loadSkillStore() {
         _bindXSkillConfigBtn();
         _bindComflyConfigBtn();
         _decorateSkillImageCards(el);
+        _simplifySkillStoreCards(el);
       }
 
       function finishRender() {

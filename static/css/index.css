@@ -75,30 +75,35 @@
     }
     #skillStoreList.skill-store-grid,
     #mcpRegistryResults.skill-store-grid {
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 1rem;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 0.85rem;
       align-items: start;
     }
     #skillStoreList .skill-store-card.is-image-skill-card,
     #mcpRegistryResults .skill-store-card.is-image-skill-card {
       position: relative;
-      min-height: 0;
-      aspect-ratio: 2 / 3;
-      padding: 0;
-      border: 0 !important;
+      min-height: 156px;
+      padding: 1rem 1rem 0.95rem;
+      border: 1px solid rgba(34,49,78,0.08) !important;
       border-radius: 22px;
-      display: block;
-      background: transparent !important;
-      box-shadow: 0 22px 42px rgba(75, 66, 51, 0.14), 0 8px 18px rgba(34, 49, 78, 0.06) !important;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 0.45rem;
+      background: rgba(255, 255, 255, 0.96) !important;
+      box-shadow: 0 12px 26px rgba(36, 54, 88, 0.06) !important;
       overflow: hidden;
       cursor: pointer;
       transform: translateZ(0);
-      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
     }
     #skillStoreList .skill-store-card.is-image-skill-card:hover,
     #mcpRegistryResults .skill-store-card.is-image-skill-card:hover {
-      transform: translateY(-4px);
-      box-shadow: 0 28px 52px rgba(75, 66, 51, 0.18), 0 12px 24px rgba(34, 49, 78, 0.08) !important;
+      transform: translateY(-2px);
+      border-color: rgba(91,124,255,0.18) !important;
+      background: #ffffff !important;
+      box-shadow: 0 16px 30px rgba(36, 54, 88, 0.09) !important;
     }
     #skillStoreList .skill-store-card.is-image-skill-card::before,
     #skillStoreList .skill-store-card.is-image-skill-card::after,
@@ -107,42 +112,132 @@
       content: none;
       display: none;
     }
-    #skillStoreList .comfly-veo-card::before,
-    #skillStoreList .seedance-tvc-card::before,
-    #skillStoreList .viral-video-remix-card::before,
-    #skillStoreList .goal-video-pipeline-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M7 4.8v14.4c0 .8.9 1.3 1.6.9l11.2-7.2c.6-.4.6-1.4 0-1.8L8.6 3.9C7.9 3.5 7 4 7 4.8z'/%3E%3C/svg%3E");
+    #skillStoreList .skill-store-card.is-image-skill-card .skill-card-art-wrap,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .skill-card-art-wrap {
+      width: 58px;
+      height: 58px;
+      flex: 0 0 58px;
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      color: #fff;
+      background: linear-gradient(135deg, #7c8cff, #5cc8ff);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 12px 22px rgba(36,54,88,0.12);
+      margin-bottom: 0.18rem;
     }
-    #skillStoreList .comfly-veo-card::before { --skill-icon-bg: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%); }
-    #skillStoreList .seedance-tvc-card::before { --skill-icon-bg: linear-gradient(135deg, #5b7cff 0%, #06b6d4 100%); }
-    #skillStoreList .viral-video-remix-card::before { --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #f59e0b 100%); }
-    #skillStoreList .hifly-digital-human-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M4.5 20c1.7-3.2 4.2-4.8 7.5-4.8s5.8 1.6 7.5 4.8'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%);
+    #skillStoreList .skill-store-card.is-image-skill-card .skill-card-art-svg,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .skill-card-art-svg {
+      width: 29px;
+      height: 29px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      filter: drop-shadow(0 2px 5px rgba(15, 23, 42, 0.18));
     }
-    #skillStoreList .goal-video-pipeline-card::before { --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #5b7cff 100%); }
-    #skillStoreList .ecommerce-detail-card::before,
-    #skillStoreList .ecommerce-publish-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 7h12l-1 13H7L6 7z'/%3E%3Cpath d='M9 7a3 3 0 0 1 6 0'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #ec4899 0%, #f59e0b 100%);
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="aurora"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="aurora"] { background: linear-gradient(135deg, #6ee7f9, #7c3aed 54%, #f472b6); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="sunset"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="sunset"] { background: linear-gradient(135deg, #ffb86b, #ff6b6b 52%, #8b5cf6); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="sky"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="sky"] { background: linear-gradient(135deg, #38bdf8, #4f46e5); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="mint"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="mint"] { background: linear-gradient(135deg, #34d399, #14b8a6 48%, #3b82f6); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="blue"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="blue"] { background: linear-gradient(135deg, #60a5fa, #2563eb); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="rose"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="rose"] { background: linear-gradient(135deg, #fb7185, #ec4899 52%, #a855f7); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="violet"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="violet"] { background: linear-gradient(135deg, #a78bfa, #7c3aed); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="green"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="green"] { background: linear-gradient(135deg, #86efac, #22c55e 46%, #0f766e); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="coral"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="coral"] { background: linear-gradient(135deg, #fda4af, #fb7185 48%, #f97316); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="teal"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="teal"] { background: linear-gradient(135deg, #5eead4, #0891b2); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="indigo"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="indigo"] { background: linear-gradient(135deg, #818cf8, #4f46e5 50%, #312e81); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="cyan"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="cyan"] { background: linear-gradient(135deg, #67e8f9, #06b6d4 48%, #2563eb); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="red"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="red"] { background: linear-gradient(135deg, #fb7185, #ef4444 52%, #991b1b); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="pink"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="pink"] { background: linear-gradient(135deg, #f9a8d4, #ec4899 48%, #7c3aed); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="orange"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="orange"] { background: linear-gradient(135deg, #fdba74, #f97316 50%, #dc2626); }
+    #skillStoreList .skill-card-art-wrap[data-skill-icon-tone="slate"],
+    #mcpRegistryResults .skill-card-art-wrap[data-skill-icon-tone="slate"] { background: linear-gradient(135deg, #64748b, #334155 52%, #111827); }
+    #skillStoreList .skill-store-card.is-image-skill-card .card-label,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .card-label,
+    #skillStoreList .skill-store-card.is-simple-skill-card .card-label,
+    #mcpRegistryResults .skill-store-card.is-simple-skill-card .card-label {
+      display: none;
     }
-    #skillStoreList .messenger-reply-card::before,
-    #skillStoreList .twilio-whatsapp-card::before,
-    #skillStoreList .wecom-reply-card::before,
-    #skillStoreList .openclaw-weixin-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5.5h16v10H8l-4 3v-13z'/%3E%3Cpath d='M8 9h8M8 12h5'/%3E%3C/svg%3E");
+    #skillStoreList .skill-store-card.is-image-skill-card .card-value,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .card-value {
+      color: #253551;
+      font-size: 0.96rem;
+      line-height: 1.28;
+      font-weight: 740;
+      min-width: 0;
+      width: 100%;
+      overflow-wrap: anywhere;
     }
-    #skillStoreList .messenger-reply-card::before { --skill-icon-bg: linear-gradient(135deg, #6366f1 0%, #22c55e 100%); }
-    #skillStoreList .twilio-whatsapp-card::before { --skill-icon-bg: linear-gradient(135deg, #25d366 0%, #128c7e 100%); }
-    #skillStoreList .wecom-reply-card::before,
-    #skillStoreList .openclaw-weixin-card::before { --skill-icon-bg: linear-gradient(135deg, #07c160 0%, #4262df 100%); }
-    #skillStoreList .openclaw-memory-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 4h9l3 3v13H6V4z'/%3E%3Cpath d='M14 4v4h4M8.5 12h7M8.5 15h7'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #14b8a6 0%, #334155 100%);
+    #skillStoreList .skill-store-card.is-image-skill-card .card-desc,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .card-desc,
+    #skillStoreList .skill-store-card.is-simple-skill-card .card-desc,
+    #mcpRegistryResults .skill-store-card.is-simple-skill-card .card-desc {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      min-height: 2.8em;
+      margin: 0;
+      color: #8a96aa;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      font-weight: 500;
     }
-    #skillStoreList .openclaw-skill-workspace-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='5' width='16' height='11' rx='2'/%3E%3Cpath d='M9 20h6M12 16v4'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #6366f1 0%, #0ea5e9 100%);
+    #skillStoreList .skill-store-card.is-image-skill-card .card-tags,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .card-tags,
+    #skillStoreList .skill-store-card.is-simple-skill-card .card-tags,
+    #mcpRegistryResults .skill-store-card.is-simple-skill-card .card-tags {
+      display: none;
+    }
+    #skillStoreList .skill-store-card.is-image-skill-card .card-actions,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .card-actions {
+      margin-top: auto;
+      width: 100%;
+      flex-wrap: wrap;
+    }
+    #skillStoreList .skill-store-card.is-simple-skill-card .skill-secondary-action,
+    #mcpRegistryResults .skill-store-card.is-simple-skill-card .skill-secondary-action {
+      display: none;
+    }
+    #skillStoreList .skill-store-card.is-image-skill-card .card-value + .card-actions,
+    #mcpRegistryResults .skill-store-card.is-image-skill-card .card-value + .card-actions {
+      margin-top: auto;
+    }
+    @media (max-width: 720px) {
+      #skillStoreList.skill-store-grid,
+      #mcpRegistryResults.skill-store-grid {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+      }
+      #skillStoreList .skill-store-card.is-image-skill-card,
+      #mcpRegistryResults .skill-store-card.is-image-skill-card {
+        min-height: 148px;
+        border-radius: 18px;
+      }
+      #skillStoreList .skill-store-card.is-image-skill-card .skill-card-art-wrap,
+      #mcpRegistryResults .skill-store-card.is-image-skill-card .skill-card-art-wrap {
+        width: 54px;
+        height: 54px;
+        flex-basis: 54px;
+      }
     }
     .openclaw-memory-manager {
       padding-bottom: 1.5rem;
@@ -258,89 +353,6 @@
       .openclaw-memory-item-actions {
         width: 100%;
         justify-content: flex-start;
-      }
-    }
-    #skillStoreList .youtube-publish-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 16V5M7 10l5-5 5 5'/%3E%3Cpath d='M5 18h14'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #ff0000 0%, #f97316 100%);
-    }
-    #skillStoreList .meta-social-card::before {
-      --skill-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='5' width='14' height='14' rx='4'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Cpath d='M16.5 8h.01'/%3E%3C/svg%3E");
-      --skill-icon-bg: linear-gradient(135deg, #1877f2 0%, #e1306c 100%);
-    }
-    #skillStoreList .skill-store-card .card-label,
-    #skillStoreList .skill-store-card .card-desc,
-    #skillStoreList .skill-store-card .card-tags,
-    #mcpRegistryResults .skill-store-card .card-label,
-    #mcpRegistryResults .skill-store-card .card-desc,
-    #mcpRegistryResults .skill-store-card .card-tags {
-      display: none !important;
-    }
-    #skillStoreList .skill-store-card > :not(.card-value):not(.card-actions),
-    #mcpRegistryResults .skill-store-card > :not(.card-value):not(.card-actions) {
-      display: none !important;
-    }
-    #skillStoreList .skill-store-card .card-value,
-    #mcpRegistryResults .skill-store-card .card-value {
-      font-size: 0.95rem;
-      font-weight: 750;
-      line-height: 1.32;
-      max-width: 100%;
-      min-height: 2.6em;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow-wrap: anywhere;
-      overflow: hidden;
-      align-self: center;
-      justify-self: center;
-    }
-    #skillStoreList .skill-store-card .card-actions,
-    #mcpRegistryResults .skill-store-card .card-actions {
-      margin-top: 0;
-      justify-content: center;
-      flex-wrap: wrap;
-      gap: 0.35rem;
-      align-self: end;
-      justify-self: center;
-    }
-    #skillStoreList .skill-store-card .card-actions:empty,
-    #mcpRegistryResults .skill-store-card .card-actions:empty {
-      display: none;
-    }
-    #skillStoreList .skill-store-card.is-image-skill-card .skill-card-art,
-    #mcpRegistryResults .skill-store-card.is-image-skill-card .skill-card-art {
-      display: block;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: center;
-      user-select: none;
-      pointer-events: none;
-    }
-    #skillStoreList .skill-store-card.is-image-skill-card > :not(.skill-card-art),
-    #mcpRegistryResults .skill-store-card.is-image-skill-card > :not(.skill-card-art) {
-      position: absolute !important;
-      width: 1px !important;
-      height: 1px !important;
-      padding: 0 !important;
-      margin: -1px !important;
-      overflow: hidden !important;
-      clip: rect(0 0 0 0) !important;
-      white-space: nowrap !important;
-      border: 0 !important;
-      opacity: 0 !important;
-      pointer-events: none !important;
-    }
-    @media (max-width: 720px) {
-      #skillStoreList.skill-store-grid,
-      #mcpRegistryResults.skill-store-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.75rem;
-      }
-      #skillStoreList .skill-store-card.is-image-skill-card,
-      #mcpRegistryResults .skill-store-card.is-image-skill-card {
-        border-radius: 18px;
       }
     }
     .wechat-article-shell { max-width: 1280px; margin: 0 auto; background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,249,252,0.92)); color: #243044; border-color: rgba(34,49,78,0.1); }
