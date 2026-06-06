@@ -227,6 +227,129 @@ GET  ${OPENMIND_API_BASE}/v1/videos/{task_id}
 
 当前建议：生产先使用 `doubao-seedance-2-0-260128`，不要默认用 fast 版。
 
+## Grok / 影梦 1.5 Plus 视频
+
+前端展示建议：
+
+- `影梦 1.0 Plus`：沿用旧的 Veo3 / Veo3.1 逻辑，单段按 8 秒处理。
+- `影梦 1.5 Plus`：接 Grok 1.5 图生视频，单段按 10 秒处理，必须有参考图。
+- `影梦 2.0 Pro`：接 Seedance 2.0，单段按 10 秒处理。
+
+OpenMind 模型列表中可用：
+
+- `grok-imagine-video-1.5-preview`
+- `grok-imagine-1.0-video`
+
+当前生产建议使用 `grok-imagine-video-1.5-preview`。该模型只支持图生视频，不支持纯文本直接生成视频。  
+如果没有参考图，上游会返回：
+
+```text
+Model 'grok-imagine-video-1.5-preview' requires an input image; text-to-video is not supported
+```
+
+OpenMind Grok 参数注意点：
+
+- `seconds` / `duration` 必须传字符串，例如 `"10"`，不要传数字。
+- 参考图建议同时传 `image`、`image_url`、`images`，提高不同上游适配成功率。
+- 当前按 10 秒提交，尺寸跟随前端横竖屏选择。
+
+错误示例：
+
+```json
+{
+  "model": "grok-imagine-video-1.5-preview",
+  "prompt": "Create a product video.",
+  "seconds": 10
+}
+```
+
+会触发类似错误：
+
+```text
+json: cannot unmarshal number into Go struct field .Alias.seconds of type string
+```
+
+正确示例：
+
+```json
+{
+  "model": "grok-imagine-video-1.5-preview",
+  "prompt": "Animate this image into a 10-second vertical ecommerce product video. Keep the product clearly visible, add smooth camera movement, premium lighting, no text, no watermark.",
+  "image": "https://example.com/product.png",
+  "image_url": "https://example.com/product.png",
+  "images": ["https://example.com/product.png"],
+  "seconds": "10",
+  "duration": "10",
+  "size": "720x1280",
+  "aspect_ratio": "9:16",
+  "resolution": "720p"
+}
+```
+
+实测成功：
+
+- 模型：`grok-imagine-video-1.5-preview`
+- 任务 ID：`task_LLj8Ft3lkTmhLodhTeDlRhwVxSF0cEZm`
+- 总耗时：约 `63s`
+- 结果类型：`video/mp4`
+- 文件大小：约 `5.1 MB`
+- 视频 URL 示例：
+  `https://cngrok3.zhoushurencz1.top/v1/files/video?id=video_37ba5c70b46c4995ae8ee54b5dd57807`
+
+### Grok 多渠道兜底
+
+Grok / 影梦 1.5 Plus 建议走服务端统一策略，不在客户端写死单一渠道：
+
+```text
+OpenMind / grok-imagine-video-1.5-preview
+-> Yunwu / grok-video-3
+-> Comfly / grok-video-3
+```
+
+说明：
+
+- OpenMind 使用 `grok-imagine-video-1.5-preview`。
+- Yunwu 不使用 OpenMind 的模型名，使用 `grok-video-3`。
+- Comfly / ComfyUI 侧也使用 `grok-video-3`。
+- OpenMind Grok 提交超时建议控制在 60 秒；一次提交失败后直接切下一个渠道，不建议同渠道重试 3 次。
+
+Yunwu 实测注意：
+
+- `grok-imagine-video-1.5-preview`、`grok-imagine-1.0-video`、`xai/grok-imagine-video/image-to-video` 在 Yunwu 侧没有可用渠道。
+- `grok-video-3` 可提交成功。
+- 传 `seconds: "10"`、`duration: "10"` 或只传 `duration: 10` 都有成功案例。
+- 如果传了数字 `seconds`，可能触发和 OpenMind 类似的 `seconds` 类型错误。
+
+Comfly / ComfyUI 实测注意：
+
+- `grok-video-3` 通过 `POST /v2/videos/generations` 可提交成功。
+- 示例返回：`{"task_id":"task_Ep1gcDhpkFKtUqG3O7p2EwipXZoavAbq"}`。
+
+`grok-imagine-1.0-video` 暂不建议生产默认使用：
+
+- 它支持的 `video_length` 主要是 6 或 10 秒。
+- 4 秒会失败：`only supports video_length 6 or 10 seconds`。
+- 6 秒实测遇到上游 429：`Video upstream returned 429`。
+
+### Grok 计费
+
+当前服务端计费建议：
+
+```json
+{
+  "model": "grok-imagine-video-1.5-preview",
+  "price_per_unit": 80,
+  "unit": "video",
+  "user_multiplier": 2
+}
+```
+
+即：
+
+- 采购价按 `80` 算力/条。
+- 用户侧默认按 `2x` 收费。
+- 单次生成扣用户约 `160` 算力。
+
 ## 统一轮询逻辑
 
 提交后取任务 ID：
@@ -269,8 +392,10 @@ cancelled
 1. 图片生成可作为 `gpt-image-2` 备用或独立渠道。
 2. Veo3.1 可接 `veo31` / `veo31-fast`，竖屏传 `size=720x1280`、`aspect_ratio=9:16`。
 3. Seedance 2.0 建议接普通版 `doubao-seedance-2-0-260128`。
-4. Seedance 的 `duration` / `seconds` 必须是数字。
-5. 所有 OpenMind 请求都加浏览器 `User-Agent`，避免 Cloudflare 1010。
-6. 视频结果 URL 如果是 TOS 签名链接，应在后端拿到后立即下载到自己的素材库/CDN。
-7. 用户侧不要展示原始上游错误；失败时建议提示“生成失败，可稍后重试或切换模型”。
+4. Grok / 影梦 1.5 Plus 建议只开放图生视频；用户未上传或未选择参考图时，前端直接拦截并提示切换模型或补参考图。
+5. Seedance 的 `duration` / `seconds` 必须是数字。
+6. OpenMind Grok 的 `duration` / `seconds` 必须是字符串。
+7. 所有 OpenMind 请求都加浏览器 `User-Agent`，避免 Cloudflare 1010。
+8. 视频结果 URL 如果是 TOS 签名链接，应在后端拿到后立即下载到自己的素材库/CDN。
+9. 用户侧不要展示原始上游错误；失败时建议提示“生成失败，可稍后重试或切换模型”。
 
