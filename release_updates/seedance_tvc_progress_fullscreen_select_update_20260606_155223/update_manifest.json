@@ -1,0 +1,16 @@
+﻿{
+    "created_at":  "2026-06-06T15:52:23",
+    "files":  [
+                  "CLIENT_CODE_VERSION.json",
+                  "static/client_version.json",
+                  "static/index.html",
+                  "static/css/index.css",
+                  "static/js/comfly-seedance-tvc-studio.js",
+                  "backend/app/api/comfly_seedance_tvc.py",
+                  "backend/app/services/comfly_seedance_tvc_job_store.py",
+                  "skills/comfly_seedance_tvc_video/scripts/comfly_seedance_storyboard_pipeline.py"
+              ],
+    "name":  "seedance_tvc_progress_fullscreen_select_update_20260606_155223",
+    "version":  "1.0.65",
+    "build":  100
+}
