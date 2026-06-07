@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音群成员提取</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">数据大屏</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">排期中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-customers')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">客户仓库</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group is-open" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header active" onclick="toggleSidebarGroup('sidebar-group-nurture')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">养号仓库</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn active" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 5.5h10"></path>
+                                            <path d="M7 10.5h10"></path>
+                                            <path d="M7 15.5h6"></path>
+                                            <path d="M5 4.5h.01"></path>
+                                            <path d="M5 9.5h.01"></path>
+                                            <path d="M5 14.5h.01"></path>
+                                            <path d="M4.5 19.5h15"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">执行日志</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="12" cy="12" r="2.6"></circle>
+                                            <path d="M19.4 15a1.3 1.3 0 0 0 .26 1.43l.05.05a1.6 1.6 0 1 1-2.26 2.26l-.05-.05a1.3 1.3 0 0 0-1.43-.26 1.3 1.3 0 0 0-.79 1.18V20a1.6 1.6 0 1 1-3.2 0v-.08a1.3 1.3 0 0 0-.84-1.2 1.3 1.3 0 0 0-1.39.28l-.05.05a1.6 1.6 0 1 1-2.26-2.26l.05-.05a1.3 1.3 0 0 0 .28-1.39 1.3 1.3 0 0 0-1.2-.84H4a1.6 1.6 0 1 1 0-3.2h.08a1.3 1.3 0 0 0 1.2-.84 1.3 1.3 0 0 0-.28-1.39l-.05-.05a1.6 1.6 0 1 1 2.26-2.26l.05.05a1.3 1.3 0 0 0 1.39.28h.06a1.3 1.3 0 0 0 .78-1.19V4a1.6 1.6 0 1 1 3.2 0v.08a1.3 1.3 0 0 0 .84 1.2 1.3 1.3 0 0 0 1.39-.28l.05-.05a1.6 1.6 0 1 1 2.26 2.26l-.05.05a1.3 1.3 0 0 0-.26 1.43v.06a1.3 1.3 0 0 0 1.18.79H20a1.6 1.6 0 1 1 0 3.2h-.08a1.3 1.3 0 0 0-1.2.84Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">配置中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M6.8 5.5h9.6A1.6 1.6 0 0 1 18 7.1v9.8a1.6 1.6 0 0 1-1.6 1.6H7.6A1.6 1.6 0 0 1 6 16.9V6.3A.8.8 0 0 1 6.8 5.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h6"></path>
+                                            <path d="M9 15h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">使用说明</span></span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="groups-workspace-page" class="workspace-panel-page active">
+                    <div class="stack">
+                        <section class="card">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>第八步：提取群聊成员</h3>
+                                    <p class="subtle">进入抖音消息页识别群聊，打开群成员列表后持续滑动，优先直接提取主页链接；后续私信阶段再统一进入成员主页。</p>
+                                </div>
+                            </div>
+                            <div class="source">
+                                <strong>使用说明</strong>
+                                <p class="subtle">这一步会复用抖音账号管理里启动的可见浏览器。你的普通 Chrome 如果不是通过调试端口启动，系统无法直接附着；请先在本页面点“登录”打开抖音账号浏览器，再执行提取。</p>
+                            </div>
+                            <div class="row" style="margin-top:14px">
+                                <input type="text" id="douyin-group-keyword" class="input" placeholder="可选：群名关键词，例如 OpenClaw、交流群">
+                                <input type="number" id="douyin-group-max-groups" min="1" max="50" step="1" value="5" style="width:140px;min-width:140px" placeholder="最多群数">
+                                <input type="number" id="douyin-group-max-members" min="1" max="500" step="1" value="50" style="width:160px;min-width:160px" placeholder="每群成员数">
+                                <button type="button" class="btn" id="douyin-group-preview-btn" onclick="previewDouyinGroups()">识别群聊</button>
+                                <button type="button" class="btn btn-primary" id="douyin-group-start-btn" onclick="startDouyinGroupMembers()">开始提取</button>
+                                <button type="button" class="btn btn-warning" id="douyin-group-stop-btn" onclick="stopDouyinGroupMembers()" disabled>停止提取</button>
+                                <button type="button" class="btn btn-success" id="douyin-group-export-btn" onclick="exportDouyinGroupMembers()" disabled>导出成员结果</button>
+                            </div>
+                            <div class="table-tools" style="margin-top:14px">
+                                <div id="douyin-group-candidate-summary" class="subtle">尚未识别群聊列表。</div>
+                                <div class="tools">
+                                    <button type="button" class="btn" onclick="toggleAllDouyinGroupCandidates(true)">全选群聊</button>
+                                    <button type="button" class="btn" onclick="toggleAllDouyinGroupCandidates(false)">清空群聊</button>
+                                </div>
+                            </div>
+                            <div class="table-shell">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:72px">勾选</th>
+                                            <th style="width:240px">群名称</th>
+                                            <th>最近预览</th>
+                                            <th style="width:120px">结构信号</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="douyin-group-candidate-tbody">
+                                        <tr><td colspan="4" class="empty">暂无群聊识别结果。</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="interaction-runtime" style="margin-top:14px">
+                                <strong>执行状态</strong>
+                                <p id="douyin-group-status" class="subtle">尚未开始群成员提取任务。</p>
+                            </div>
+                            <div class="table-tools" style="margin-top:14px">
+                                <div id="douyin-group-summary" class="subtle">暂无群成员结果。</div>
+                                <div class="tools">
+                                    <button type="button" class="btn" onclick="toggleAllDouyinGroupMembers(true)">全选当前筛选</button>
+                                    <button type="button" class="btn" onclick="toggleAllDouyinGroupMembers(false)">清空当前筛选</button>
+                                    <button type="button" class="btn btn-danger" id="douyin-group-delete-selected-btn" onclick="deleteSelectedDouyinGroupMembers()" disabled>删除已选</button>
+                                    <button type="button" class="btn btn-info" id="douyin-group-add-interaction-btn" onclick="addSelectedGroupMembersToInteraction()" disabled>加入精准客户私信列表</button>
+                                    <select id="douyin-group-region-filter" style="width:auto;min-width:170px" onchange="changeDouyinGroupRegionFilter()">
+                                        <option value="all">全部地区</option>
+                                    </select>
+                                    <select id="douyin-group-page-size" style="width:auto;min-width:120px" onchange="changeDouyinGroupPageSize()">
+                                        <option value="10">10 / 页</option>
+                                        <option value="20">20 / 页</option>
+                                        <option value="50">50 / 页</option>
+                                        <option value="100">100 / 页</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="table-tools">
+                                <div></div>
+                                <div id="douyin-group-page-info" class="subtle">暂无群成员数据</div>
+                            </div>
+                            <div class="table-shell">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:72px">勾选</th>
+                                            <th style="width:220px">群名称</th>
+                                            <th style="width:160px">成员角色</th>
+                                            <th style="width:180px">成员昵称</th>
+                                            <th style="width:160px">抖音号</th>
+                                            <th style="width:120px">地区</th>
+                                            <th>主页链接</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="douyin-group-tbody">
+                                        <tr><td colspan="7" class="empty">暂无群成员结果。</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div id="douyin-group-pagination" class="table-tools" style="margin-top:12px"></div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div id="log-content" style="display:none"></div>
+
+    <div id="confirm-modal" class="overlay">
+        <div class="modal confirm-modal">
+            <div class="modal-head">
+                <div>
+                    <h2 id="confirm-modal-title">确认操作</h2>
+                    <p class="subtle">请再次确认后继续。</p>
+                </div>
+                <button type="button" class="modal-close" onclick="closeConfirmModal()">&times;</button>
+            </div>
+            <p id="confirm-modal-message" class="confirm-copy">确认继续吗？</p>
+            <div class="modal-actions">
+                <button type="button" class="btn" id="confirm-modal-cancel-btn" onclick="closeConfirmModal()">取消</button>
+                <button type="button" class="btn btn-danger" id="confirm-modal-confirm-btn" onclick="handleConfirmModalConfirm()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let douyinGroupMemberRunning = false;
+        let douyinGroupMemberState = {};
+        let douyinGroupMemberResults = [];
+        let douyinGroupCandidates = [];
+        let douyinGroupSelection = new Set();
+        let douyinGroupMemberSelection = new Set();
+        let douyinGroupCurrentPage = 1;
+        let douyinGroupRegionFilter = "all";
+        let douyinGroupMemberStateDigest = "";
+        let douyinGroupMemberResultsDigest = "";
+        let groupPollTimer = 0;
+        let groupPollInFlight = false;
+        let confirmModalState = {
+            title: "确认操作",
+            message: "确认继续吗？",
+            confirmText: "确认",
+            confirmClass: "btn-danger",
+            submitting: false,
+            onConfirm: null,
+        };
+
+        function normalize(value) {
+            return String(value ?? "").replace(/\u200b|\ufeff/g, "").replace(/\s+/g, " ").trim();
+        }
+
+        function esc(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function buildDigest(payload) {
+            return JSON.stringify(payload && typeof payload === "object" ? payload : payload ?? null);
+        }
+
+        function cut(value, size = 30) {
+            const text = String(value ?? "");
+            return text.length > size ? `${text.slice(0, size)}...` : text;
+        }
+
+        function setBtn(button, loading, idleText, loadingText) {
+            if (!button) return;
+            button.disabled = !!loading;
+            button.textContent = loading ? loadingText : idleText;
+        }
+
+        function addLog(message, level = "info") {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-level-${esc(level)}">${esc(message)}</span>`;
+            box.appendChild(entry);
+            while (box.children.length > 300) box.removeChild(box.firstChild);
+        }
+
+        function toggleSidebarGroup(id) {
+            const panel = document.getElementById(id);
+            if (!panel) return;
+            panel.parentElement?.classList.toggle("is-open");
+        }
+
+        function setOverlayVisibility(id, show) {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.classList.toggle("show", !!show);
+            document.body.classList.toggle("modal-open", !!document.querySelector(".overlay.show"));
+        }
+
+        function renderConfirmModal() {
+            const confirmBtn = document.getElementById("confirm-modal-confirm-btn");
+            const cancelBtn = document.getElementById("confirm-modal-cancel-btn");
+            document.getElementById("confirm-modal-title").textContent = confirmModalState.title || "确认操作";
+            document.getElementById("confirm-modal-message").textContent = confirmModalState.message || "确认继续吗？";
+            confirmBtn.textContent = confirmModalState.submitting ? "处理中..." : (confirmModalState.confirmText || "确认");
+            confirmBtn.className = `btn ${confirmModalState.confirmClass || "btn-danger"}`;
+            confirmBtn.disabled = confirmModalState.submitting;
+            cancelBtn.disabled = confirmModalState.submitting;
+        }
+
+        function openConfirmModal(options = {}) {
+            confirmModalState = {
+                title: options.title || "确认操作",
+                message: options.message || "确认继续吗？",
+                confirmText: options.confirmText || "确认",
+                confirmClass: options.confirmClass || "btn-danger",
+                submitting: false,
+                onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
+            };
+            renderConfirmModal();
+            setOverlayVisibility("confirm-modal", true);
+        }
+
+        function closeConfirmModal(force = false) {
+            if (confirmModalState.submitting && !force) return;
+            setOverlayVisibility("confirm-modal", false);
+            confirmModalState = {
+                title: "确认操作",
+                message: "确认继续吗？",
+                confirmText: "确认",
+                confirmClass: "btn-danger",
+                submitting: false,
+                onConfirm: null,
+            };
+        }
+
+        async function handleConfirmModalConfirm() {
+            if (confirmModalState.submitting || typeof confirmModalState.onConfirm !== "function") return;
+            confirmModalState.submitting = true;
+            renderConfirmModal();
+            try {
+                const shouldClose = await confirmModalState.onConfirm();
+                if (shouldClose !== false) closeConfirmModal(true);
+            } finally {
+                confirmModalState.submitting = false;
+                renderConfirmModal();
+            }
+        }
+
+        function renderGroupMemberRuntime() {
+            const box = document.getElementById("douyin-group-status");
+            const state = douyinGroupMemberState || {};
+            const totalGroups = Number(state.total_groups || 0);
+            const processedGroups = Number(state.processed_groups || 0);
+            const totalMembers = Number(state.total_members || 0);
+            const keyword = normalize(state.group_keyword || "");
+            const finishedAt = normalize(state.finished_at || "");
+            const selectedCount = Array.isArray(state.selected_groups) ? state.selected_groups.length : 0;
+            const scopeText = selectedCount ? `，指定群 ${selectedCount} 个` : (keyword ? `，群关键词 ${keyword}` : "");
+            if (!box) return;
+            if (douyinGroupMemberRunning) {
+                box.textContent = `群成员提取执行中：已完成 ${processedGroups}/${totalGroups} 个群，已提取 ${totalMembers} 位成员${scopeText}。`;
+                return;
+            }
+            if (totalGroups > 0 || finishedAt || totalMembers > 0) {
+                box.textContent = `最近一次群成员提取：共处理 ${processedGroups}/${totalGroups} 个群，提取 ${totalMembers} 位成员${scopeText}${finishedAt ? `，结束于 ${finishedAt}` : ""}。`;
+                return;
+            }
+            box.textContent = "尚未开始群成员提取任务。";
+        }
+
+        function renderDouyinGroupCandidates() {
+            const tbody = document.getElementById("douyin-group-candidate-tbody");
+            const summary = document.getElementById("douyin-group-candidate-summary");
+            const validNames = new Set(douyinGroupCandidates.map((item) => normalize(item.name || "")).filter(Boolean));
+            douyinGroupSelection = new Set([...douyinGroupSelection].filter((name) => validNames.has(name)));
+            if (!tbody || !summary) return;
+            if (!douyinGroupCandidates.length) {
+                tbody.innerHTML = `<tr><td colspan="4" class="empty">暂无群聊识别结果。</td></tr>`;
+                summary.textContent = "尚未识别群聊列表。";
+                return;
+            }
+            summary.textContent = `已识别 ${douyinGroupCandidates.length} 个群聊，当前勾选 ${douyinGroupSelection.size} 个。`;
+            tbody.innerHTML = douyinGroupCandidates.map((item) => {
+                const name = normalize(item.name || "");
+                const signals = [
+                    item.has_group_icon ? "群头像" : "",
+                    item.has_mute_icon ? "免打扰" : "",
+                    /^.+[：:]/.test(normalize(item.preview || "")) ? "成员发言" : "",
+                ].filter(Boolean).join(" / ");
+                return `<tr><td><input type="checkbox" ${douyinGroupSelection.has(name) ? "checked" : ""} onchange="toggleDouyinGroupCandidate('${esc(name)}', this.checked)"></td><td>${esc(item.name || "-")}</td><td title="${esc(item.preview || "")}">${esc(cut(item.preview || "-", 90))}</td><td>${esc(signals || "-")}</td></tr>`;
+            }).join("");
+        }
+
+        function getGroupMemberProfileUrl(item = {}) {
+            const profileUrl = normalize(item.profile_url || "");
+            if (profileUrl) return profileUrl;
+            const secUserId = normalize(item.sec_user_id || item.user_id || "");
+            return secUserId ? `https://www.douyin.com/user/${secUserId}` : "";
+        }
+
+        function groupMemberKey(item = {}) {
+            return [
+                normalize(item.group_name || ""),
+                normalize(item.username || ""),
+                normalize(getGroupMemberProfileUrl(item) || ""),
+                normalize(item.sec_user_id || ""),
+                normalize(item.douyin_id || ""),
+            ].join("|");
+        }
+
+        function groupMemberRoleText(item = {}) {
+            const role = normalize(item.role || "");
+            return role === "群主" || role === "管理员" ? role : "群员";
+        }
+
+        function groupMemberRegionText(item = {}) {
+            return normalize(item.region || "") || "未标注";
+        }
+
+        function renderDouyinGroupRegionFilter(rows = douyinGroupMemberResults) {
+            const select = document.getElementById("douyin-group-region-filter");
+            if (!select) return;
+            const hasUnknown = rows.some((item) => !normalize(item.region || ""));
+            const regions = [...new Set(rows.map((item) => normalize(item.region || "")).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+            const options = ['<option value="all">全部地区</option>'];
+            if (hasUnknown) options.push(`<option value="unknown" ${douyinGroupRegionFilter === "unknown" ? "selected" : ""}>未标注地区</option>`);
+            regions.forEach((region) => options.push(`<option value="${esc(region)}" ${douyinGroupRegionFilter === region ? "selected" : ""}>${esc(region)}</option>`));
+            select.innerHTML = options.join("");
+            if (douyinGroupRegionFilter === "unknown" && !hasUnknown) douyinGroupRegionFilter = "all";
+            if (douyinGroupRegionFilter !== "all" && douyinGroupRegionFilter !== "unknown" && !regions.includes(douyinGroupRegionFilter)) douyinGroupRegionFilter = "all";
+            select.value = douyinGroupRegionFilter;
+        }
+
+        function getFilteredDouyinGroupMembers(rows = douyinGroupMemberResults) {
+            if (douyinGroupRegionFilter === "all") return [...rows];
+            if (douyinGroupRegionFilter === "unknown") return rows.filter((item) => !normalize(item.region || ""));
+            return rows.filter((item) => normalize(item.region || "") === douyinGroupRegionFilter);
+        }
+
+        function refreshActionState() {
+            const previewBtn = document.getElementById("douyin-group-preview-btn");
+            const startBtn = document.getElementById("douyin-group-start-btn");
+            const stopBtn = document.getElementById("douyin-group-stop-btn");
+            const exportBtn = document.getElementById("douyin-group-export-btn");
+            const addBtn = document.getElementById("douyin-group-add-interaction-btn");
+            const deleteBtn = document.getElementById("douyin-group-delete-selected-btn");
+            if (previewBtn) previewBtn.disabled = douyinGroupMemberRunning;
+            if (startBtn) startBtn.disabled = douyinGroupMemberRunning;
+            if (stopBtn) stopBtn.disabled = !douyinGroupMemberRunning;
+            if (exportBtn) exportBtn.disabled = douyinGroupMemberRunning || douyinGroupMemberResults.length === 0;
+            if (addBtn) addBtn.disabled = douyinGroupMemberSelection.size === 0;
+            if (deleteBtn) deleteBtn.disabled = douyinGroupMemberSelection.size === 0;
+        }
+
+        function renderDouyinGroupMembers() {
+            const tbody = document.getElementById("douyin-group-tbody");
+            const summary = document.getElementById("douyin-group-summary");
+            const info = document.getElementById("douyin-group-page-info");
+            const pager = document.getElementById("douyin-group-pagination");
+            const validKeys = new Set(douyinGroupMemberResults.map(groupMemberKey).filter(Boolean));
+            douyinGroupMemberSelection = new Set([...douyinGroupMemberSelection].filter((key) => validKeys.has(key)));
+            renderDouyinGroupRegionFilter(douyinGroupMemberResults);
+            if (!tbody || !summary || !info || !pager) return;
+
+            if (!douyinGroupMemberResults.length) {
+                tbody.innerHTML = `<tr><td colspan="7" class="empty">暂无群成员结果。</td></tr>`;
+                summary.textContent = "暂无群成员结果。";
+                info.textContent = "暂无群成员数据";
+                pager.innerHTML = "";
+                refreshActionState();
+                return;
+            }
+
+            const filtered = getFilteredDouyinGroupMembers(douyinGroupMemberResults);
+            const groups = new Set(douyinGroupMemberResults.map((item) => normalize(item.group_name || "")).filter(Boolean)).size;
+            const withProfile = douyinGroupMemberResults.filter((item) => normalize(getGroupMemberProfileUrl(item) || "")).length;
+            const selectedWithProfile = douyinGroupMemberResults.filter((item) => douyinGroupMemberSelection.has(groupMemberKey(item)) && normalize(getGroupMemberProfileUrl(item) || "")).length;
+            summary.textContent = `当前共提取 ${douyinGroupMemberResults.length} 位群成员，覆盖 ${groups} 个群，可直接加入私信池 ${withProfile} 人，当前勾选 ${douyinGroupMemberSelection.size} 人，其中可私信 ${selectedWithProfile} 人；当前地区筛选命中 ${filtered.length} 人。`;
+
+            if (!filtered.length) {
+                tbody.innerHTML = `<tr><td colspan="7" class="empty">当前地区筛选下暂无群成员。</td></tr>`;
+                info.textContent = "当前地区筛选下暂无数据";
+                pager.innerHTML = "";
+                refreshActionState();
+                return;
+            }
+
+            const size = parseInt(document.getElementById("douyin-group-page-size")?.value, 10) || 10;
+            const total = Math.max(1, Math.ceil(filtered.length / size));
+            douyinGroupCurrentPage = Math.min(Math.max(douyinGroupCurrentPage, 1), total);
+            const start = (douyinGroupCurrentPage - 1) * size;
+            const page = filtered.slice(start, start + size);
+            info.textContent = `第 ${douyinGroupCurrentPage} / ${total} 页，共 ${filtered.length} 位成员`;
+            tbody.innerHTML = page.map((item) => {
+                const key = groupMemberKey(item);
+                const profileUrl = getGroupMemberProfileUrl(item);
+                return `<tr><td><input type="checkbox" ${douyinGroupMemberSelection.has(key) ? "checked" : ""} onchange='toggleDouyinGroupMemberSelection(${JSON.stringify(key)}, this.checked)'></td><td>${esc(item.group_name || "-")}</td><td>${esc(groupMemberRoleText(item))}</td><td>${esc(item.username || "-")}</td><td>${esc(item.douyin_id || "-")}</td><td>${esc(groupMemberRegionText(item))}</td><td>${profileUrl ? `<a href="${esc(profileUrl)}" target="_blank">${esc(cut(profileUrl, 64))}</a>` : "-"}</td></tr>`;
+            }).join("");
+            pager.innerHTML = total > 1
+                ? `<div class="subtle">群成员列表分页：每页 ${size} 条</div><div class="pager"><span>第 ${douyinGroupCurrentPage} / ${total} 页</span><button type="button" class="pager-btn" onclick="goToDouyinGroupPage(1)" ${douyinGroupCurrentPage === 1 ? "disabled" : ""}>首页</button><button type="button" class="pager-btn" onclick="goToDouyinGroupPage(${douyinGroupCurrentPage - 1})" ${douyinGroupCurrentPage === 1 ? "disabled" : ""}>上一页</button><button type="button" class="pager-btn" onclick="goToDouyinGroupPage(${douyinGroupCurrentPage + 1})" ${douyinGroupCurrentPage === total ? "disabled" : ""}>下一页</button><button type="button" class="pager-btn" onclick="goToDouyinGroupPage(${total})" ${douyinGroupCurrentPage === total ? "disabled" : ""}>末页</button></div>`
+                : `<div class="subtle">群成员列表分页：每页 ${size} 条</div>`;
+            refreshActionState();
+        }
+
+        function toggleDouyinGroupMemberSelection(key, checked) {
+            if (!key) return;
+            checked ? douyinGroupMemberSelection.add(key) : douyinGroupMemberSelection.delete(key);
+            renderDouyinGroupMembers();
+        }
+
+        function toggleAllDouyinGroupMembers(checked) {
+            const keys = getFilteredDouyinGroupMembers(douyinGroupMemberResults).map(groupMemberKey).filter(Boolean);
+            keys.forEach((key) => checked ? douyinGroupMemberSelection.add(key) : douyinGroupMemberSelection.delete(key));
+            renderDouyinGroupMembers();
+        }
+
+        function changeDouyinGroupRegionFilter() {
+            douyinGroupRegionFilter = document.getElementById("douyin-group-region-filter")?.value || "all";
+            douyinGroupCurrentPage = 1;
+            renderDouyinGroupMembers();
+        }
+
+        function changeDouyinGroupPageSize() {
+            douyinGroupCurrentPage = 1;
+            renderDouyinGroupMembers();
+        }
+
+        function goToDouyinGroupPage(page) {
+            douyinGroupCurrentPage = page;
+            renderDouyinGroupMembers();
+        }
+
+        function toggleDouyinGroupCandidate(name, checked) {
+            const key = normalize(name);
+            if (!key) return;
+            checked ? douyinGroupSelection.add(key) : douyinGroupSelection.delete(key);
+            renderDouyinGroupCandidates();
+            refreshActionState();
+        }
+
+        function toggleAllDouyinGroupCandidates(checked) {
+            const names = douyinGroupCandidates.map((item) => normalize(item.name || "")).filter(Boolean);
+            douyinGroupSelection = checked ? new Set(names) : new Set();
+            renderDouyinGroupCandidates();
+            refreshActionState();
+        }
+
+        async function updateDouyinGroupMemberStatus(silent = false) {
+            try {
+                const response = await fetch("/api/douyin/group-members/status");
+                const data = await response.json();
+                if (data.code === 200) {
+                    const nextState = data.state || {};
+                    const nextRunning = !!data.running;
+                    const nextResults = Array.isArray(data.results) ? data.results : [];
+                    const nextStateDigest = buildDigest({ running: nextRunning, state: nextState });
+                    const nextResultsDigest = buildDigest(nextResults);
+                    const shouldRender = nextStateDigest !== douyinGroupMemberStateDigest || nextResultsDigest !== douyinGroupMemberResultsDigest;
+                    douyinGroupMemberState = nextState;
+                    douyinGroupMemberRunning = nextRunning;
+                    douyinGroupMemberResults = nextResults;
+                    douyinGroupCandidates = Array.isArray(douyinGroupMemberState.available_groups) ? douyinGroupMemberState.available_groups : [];
+                    const selectedGroups = Array.isArray(douyinGroupMemberState.selected_groups) ? douyinGroupMemberState.selected_groups.map(normalize).filter(Boolean) : [];
+                    if (selectedGroups.length && !douyinGroupMemberRunning) douyinGroupSelection = new Set(selectedGroups);
+                    douyinGroupMemberStateDigest = nextStateDigest;
+                    douyinGroupMemberResultsDigest = nextResultsDigest;
+                    if (shouldRender) {
+                        renderGroupMemberRuntime();
+                        renderDouyinGroupCandidates();
+                        renderDouyinGroupMembers();
+                    }
+                    if (!silent && normalize(douyinGroupMemberState.message || "")) addLog(`群成员状态：${douyinGroupMemberState.message}`);
+                    return data;
+                }
+                if (!silent) addLog(data.msg || data.detail || "刷新群成员状态失败。", "error");
+                return data;
+            } catch (error) {
+                if (!silent) addLog(`刷新群成员状态失败：${error.message}`, "error");
+                return null;
+            }
+        }
+
+        async function previewDouyinGroups() {
+            const groupKeyword = normalize(document.getElementById("douyin-group-keyword")?.value || "");
+            const button = document.getElementById("douyin-group-preview-btn");
+            setBtn(button, true, "识别群聊", "识别中...");
+            try {
+                const response = await fetch("/api/douyin/group-members/preview", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ group_keyword: groupKeyword }),
+                });
+                const data = await response.json();
+                if (data.code === 200) {
+                    douyinGroupCandidates = Array.isArray(data.groups) ? data.groups : [];
+                    douyinGroupSelection = new Set(douyinGroupCandidates.map((item) => normalize(item.name || "")).filter(Boolean));
+                    renderDouyinGroupCandidates();
+                    refreshActionState();
+                    addLog(data.msg || `已识别 ${douyinGroupCandidates.length} 个群聊。`, "success");
+                } else {
+                    addLog(data.msg || data.detail || "识别群聊失败。", data.type === "no_online_account" ? "warning" : "error");
+                }
+            } catch (error) {
+                addLog(`识别群聊失败：${error.message}`, "error");
+            } finally {
+                setBtn(button, false, "识别群聊", "识别中...");
+                refreshActionState();
+            }
+        }
+
+        async function startDouyinGroupMembers() {
+            const groupKeyword = normalize(document.getElementById("douyin-group-keyword")?.value || "");
+            const selectedGroups = [...douyinGroupSelection].filter(Boolean);
+            const maxGroups = Math.max(1, Math.min(parseInt(document.getElementById("douyin-group-max-groups")?.value, 10) || 5, 50));
+            const maxMembersPerGroup = Math.max(1, Math.min(parseInt(document.getElementById("douyin-group-max-members")?.value, 10) || 50, 500));
+            const button = document.getElementById("douyin-group-start-btn");
+            setBtn(button, true, "开始提取", "启动中...");
+            try {
+                const response = await fetch("/api/douyin/group-members/start", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        group_keyword: groupKeyword,
+                        max_groups: selectedGroups.length ? Math.max(selectedGroups.length, maxGroups) : maxGroups,
+                        max_members_per_group: maxMembersPerGroup,
+                        selected_groups: selectedGroups,
+                    }),
+                });
+                const data = await response.json();
+                if (data.code === 200) {
+                    douyinGroupMemberRunning = true;
+                    addLog(data.msg || "群成员提取任务已启动。", "success");
+                    await updateDouyinGroupMemberStatus(true);
+                    scheduleGroupPolling(true);
+                } else {
+                    addLog(data.msg || data.detail || "启动群成员提取失败。", data.type === "no_online_account" ? "warning" : "error");
+                }
+            } catch (error) {
+                addLog(`启动群成员提取失败：${error.message}`, "error");
+            } finally {
+                setBtn(button, false, "开始提取", "启动中...");
+                refreshActionState();
+            }
+        }
+
+        async function stopDouyinGroupMembers() {
+            try {
+                const response = await fetch("/api/douyin/group-members/stop", { method: "POST" });
+                const data = await response.json();
+                if (data.code === 200) {
+                    addLog(data.msg || "已请求停止群成员提取任务。", "warning");
+                    await updateDouyinGroupMemberStatus(true);
+                    scheduleGroupPolling(true);
+                } else {
+                    addLog(data.msg || data.detail || "停止群成员提取失败。", "error");
+                }
+            } catch (error) {
+                addLog(`停止群成员提取失败：${error.message}`, "error");
+            } finally {
+                refreshActionState();
+            }
+        }
+
+        async function exportDouyinGroupMembers() {
+            try {
+                const response = await fetch("/api/douyin/group-members/export", { method: "POST" });
+                const data = await response.json();
+                if (data.code === 200) {
+                    addLog(data.msg || "群成员结果已导出。", "success");
+                    window.open(`/api/download?file=${encodeURIComponent(data.file)}`);
+                } else {
+                    addLog(data.msg || data.detail || "导出群成员结果失败。", "error");
+                }
+            } catch (error) {
+                addLog(`导出群成员结果失败：${error.message}`, "error");
+            }
+        }
+
+        async function addSelectedGroupMembersToInteraction() {
+            const rows = douyinGroupMemberResults.filter((item) => douyinGroupMemberSelection.has(groupMemberKey(item)));
+            if (!rows.length) return void addLog("请先勾选至少一个群成员。", "warning");
+            const rowsWithProfile = rows.map((item) => ({ ...item, profile_url: getGroupMemberProfileUrl(item) })).filter((item) => normalize(item.profile_url || ""));
+            const skipped = rows.length - rowsWithProfile.length;
+            addLog(`准备加入私信列表：已勾选 ${rows.length} 人，可加入 ${rowsWithProfile.length} 人。`);
+            if (!rowsWithProfile.length) return void addLog("已勾选成员里没有可用主页链接，暂时不能加入私信列表。请优先勾选表格里“主页链接”列有值的人。", "warning");
+            try {
+                const response = await fetch("/api/douyin/group-members/add-to-interaction", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ rows: rowsWithProfile }),
+                });
+                const data = await response.json();
+                if (data.code === 200) {
+                    addLog(data.msg || `已加入私信列表 ${data.imported || 0} 人。`, "success");
+                    if (skipped > 0) addLog(`有 ${skipped} 位群成员因缺少主页链接，未加入私信列表。`, "warning");
+                    await updateDouyinGroupMemberStatus(true);
+                } else {
+                    addLog(data.msg || data.detail || "加入私信列表失败。", "error");
+                }
+            } catch (error) {
+                addLog(`加入私信列表失败：${error.message}`, "error");
+            } finally {
+                refreshActionState();
+            }
+        }
+
+        async function deleteSelectedDouyinGroupMembers() {
+            const rows = douyinGroupMemberResults.filter((item) => douyinGroupMemberSelection.has(groupMemberKey(item)));
+            if (!rows.length) return void addLog("请先勾选要删除的群成员。", "warning");
+            openConfirmModal({
+                title: "删除已选群成员",
+                message: `本次将删除已勾选的 ${rows.length} 位群成员，删除后不会自动恢复。`,
+                confirmText: `删除 ${rows.length} 位`,
+                confirmClass: "btn-danger",
+                onConfirm: async () => {
+                    try {
+                        const response = await fetch("/api/douyin/group-members/delete", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ rows }),
+                        });
+                        const data = await response.json();
+                        if (data.code === 200) {
+                            addLog(data.msg || `已删除 ${rows.length} 位群成员。`, "success");
+                            await updateDouyinGroupMemberStatus(true);
+                            return true;
+                        }
+                        addLog(data.msg || data.detail || "删除群成员失败。", "error");
+                        return false;
+                    } catch (error) {
+                        addLog(`删除群成员失败：${error.message}`, "error");
+                        return false;
+                    }
+                },
+            });
+        }
+
+        function getGroupPollInterval() {
+            if (document.hidden) return 30000;
+            return douyinGroupMemberRunning ? 5000 : 15000;
+        }
+
+        async function pollGroupPageOnce() {
+            if (groupPollInFlight) return;
+            groupPollInFlight = true;
+            try {
+                await updateDouyinGroupMemberStatus(true);
+            } finally {
+                groupPollInFlight = false;
+            }
+        }
+
+        function scheduleGroupPolling(immediate = false) {
+            if (groupPollTimer) {
+                window.clearTimeout(groupPollTimer);
+                groupPollTimer = 0;
+            }
+            const delay = immediate ? 0 : getGroupPollInterval();
+            groupPollTimer = window.setTimeout(async () => {
+                await pollGroupPageOnce();
+                scheduleGroupPolling(false);
+            }, delay);
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            scheduleGroupPolling(true);
+        });
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            document.getElementById("confirm-modal")?.addEventListener("click", (event) => {
+                if (event.target.id === "confirm-modal") closeConfirmModal();
+            });
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape") closeConfirmModal();
+            });
+            renderGroupMemberRuntime();
+            renderDouyinGroupCandidates();
+            renderDouyinGroupMembers();
+            await updateDouyinGroupMemberStatus(true);
+            scheduleGroupPolling(false);
+        });
+    </script>
+</body>
+</html>

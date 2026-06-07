@@ -8315,3 +8315,18 @@
       #content-local-bestseller .lb-asset-item { height:190px; }
       #content-local-bestseller .lb-phone-frame { width:min(230px, 78%); }
     }
+
+    #content-douyin-leads.content-block.has-page-shell {
+      height: calc(100vh - 76px);
+      min-height: 720px;
+      padding: 0;
+      overflow: hidden;
+      background: #f5f8ff;
+    }
+    .douyin-origin-frame {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #f5f8ff;
+    }

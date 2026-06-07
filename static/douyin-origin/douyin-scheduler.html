@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音排期中心</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">数据大屏</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header active" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">排期中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group is-open" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('customer-group')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">客户仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="customer-group">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group is-open" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('ops-group')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">运营支持</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="ops-group">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-inbox.html">私信聚合</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-logs.html">执行日志</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-config.html">配置中心</a>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="scheduler-workspace-page" class="workspace-panel-page active">
+                    <div class="stack">
+                        <section class="card">
+                            <div class="scheduler-console-toolbar">
+                                <div>
+                                    <h3>抖音排期中心</h3>
+                                </div>
+                                <div class="scheduler-console-tools">
+                                    <button type="button" class="btn" onclick="focusDouyinSchedulerForm(true)">新建计划</button>
+                                    <button type="button" class="btn" onclick="loadSchedulerDashboard()">刷新状态</button>
+                                    <a class="btn" href="/douyin/workbench?target=scheduler">完整工作台打开</a>
+                                </div>
+                            </div>
+                            <div class="scheduler-kpi-grid">
+                                <div class="scheduler-kpi-card"><div class="scheduler-kpi-label">任务数</div><div class="scheduler-kpi-value" id="douyin-scheduler-total">0</div><div class="scheduler-kpi-hint">当前已保存的排期计划</div></div>
+                                <div class="scheduler-kpi-card"><div class="scheduler-kpi-label">运行中任务数</div><div class="scheduler-kpi-value" id="douyin-scheduler-running-total">0</div><div class="scheduler-kpi-hint">当前正在执行的排期链路</div></div>
+                                <div class="scheduler-kpi-card"><div class="scheduler-kpi-label">视频数</div><div class="scheduler-kpi-value" id="douyin-scheduler-video-total">0</div><div class="scheduler-kpi-hint">已沉淀的视频任务总数</div></div>
+                                <div class="scheduler-kpi-card"><div class="scheduler-kpi-label">采集客户数</div><div class="scheduler-kpi-value" id="douyin-scheduler-customer-total">0</div><div class="scheduler-kpi-hint">全部客户池当前人数</div></div>
+                                <div class="scheduler-kpi-card"><div class="scheduler-kpi-label">精准客户数</div><div class="scheduler-kpi-value" id="douyin-scheduler-precise-total">0</div><div class="scheduler-kpi-hint">精准客户池当前人数</div></div>
+                                <div class="scheduler-kpi-card"><div class="scheduler-kpi-label">互动客户数</div><div class="scheduler-kpi-value" id="douyin-scheduler-followed-total">0</div><div class="scheduler-kpi-hint">已完成精准互动的客户</div></div>
+                                <div class="scheduler-kpi-card"><div class="scheduler-kpi-label">私信客户数</div><div class="scheduler-kpi-value" id="douyin-scheduler-messaged-total">0</div><div class="scheduler-kpi-hint">已发送私信的精准客户</div></div>
+                            </div>
+                            <div class="scheduler-runtime-strip">
+                                <div class="scheduler-runtime-primary">
+                                    <div class="scheduler-runtime-eyebrow">调度状态</div>
+                                    <div id="douyin-scheduler-running" class="scheduler-runtime-value">待命</div>
+                                    <div id="douyin-scheduler-summary" class="scheduler-runtime-copy">排期中心正在准备中。</div>
+                                </div>
+                                <div class="scheduler-runtime-meta-grid">
+                                    <div class="scheduler-runtime-meta">
+                                        <div class="label">最近轮询</div>
+                                        <div id="douyin-scheduler-last-tick" class="value">-</div>
+                                        <p class="subtle">调度器最近一次检查时间</p>
+                                    </div>
+                                    <div class="scheduler-runtime-meta">
+                                        <div class="label">当前占用</div>
+                                        <div id="douyin-scheduler-busy-reason" class="value">无</div>
+                                        <p class="subtle">如果这里有占用，新的计划会继续排队等待</p>
+                                    </div>
+                                    <div class="scheduler-runtime-meta">
+                                        <div class="label">最早计划</div>
+                                        <div id="douyin-scheduler-next-plan" class="value">-</div>
+                                        <p id="douyin-scheduler-next-plan-time" class="subtle">任务表会按下次执行时间由近到远排序</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="table-shell scheduler-plan-table">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th style="min-width:280px">计划</th>
+                                            <th style="width:130px">状态</th>
+                                            <th style="min-width:320px">执行摘要</th>
+                                            <th style="width:210px">下次执行</th>
+                                            <th style="width:300px">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="douyin-scheduler-tbody">
+                                        <tr><td colspan="5" class="empty">正在加载排期计划...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+
+                        <section class="card" id="douyin-scheduler-form-card">
+                            <div class="panel-head scheduler-form-head">
+                                <div>
+                                    <h3 id="douyin-scheduler-form-title">新建排期计划</h3>
+                                    <p class="subtle">计划保存后会常驻轮询。电脑和软件都要保持运行，关闭软件后计划不会继续执行。</p>
+                                </div>
+                                <div class="tools">
+                                    <button type="button" class="btn" onclick="focusDouyinSchedulerForm(true)">新建空白</button>
+                                    <button type="button" class="btn btn-primary" onclick="saveSchedulerPlan()">保存计划</button>
+                                </div>
+                            </div>
+                            <div class="source video-comment-config" style="margin-top:0">
+                                <div class="scheduler-basic-grid">
+                                    <div class="scheduler-basic-top">
+                                        <div class="video-comment-field">
+                                            <label for="douyin-scheduler-name">计划名称</label>
+                                            <input type="text" id="douyin-scheduler-name" class="input" placeholder="例如：OpenClaw 晚间采集">
+                                        </div>
+                                        <div class="video-comment-field">
+                                            <label for="douyin-scheduler-type">计划类型</label>
+                                            <select id="douyin-scheduler-type" onchange="toggleSchedulerPlanTypeFields()">
+                                                <option value="collect_precise">采集视频精准客户</option>
+                                                <option value="follow_comment">精准互动</option>
+                                                <option value="interaction">精准私信</option>
+                                            </select>
+                                        </div>
+                                        <div class="video-comment-field">
+                                            <label for="douyin-scheduler-enabled">是否启用</label>
+                                            <select id="douyin-scheduler-enabled">
+                                                <option value="true">启用</option>
+                                                <option value="false">暂停</option>
+                                            </select>
+                                        </div>
+                                        <div class="scheduler-inline-field scheduler-interval-field">
+                                            <label for="douyin-scheduler-interval">执行间隔（分钟）</label>
+                                            <div class="scheduler-time-row">
+                                                <input type="number" id="douyin-scheduler-interval" min="5" max="10080" step="5" value="120">
+                                            </div>
+                                        </div>
+                                        <div class="scheduler-inline-field scheduler-time-field">
+                                            <label for="douyin-scheduler-window-start">开始时间</label>
+                                            <div class="scheduler-time-row">
+                                                <input type="time" id="douyin-scheduler-window-start" value="09:00">
+                                            </div>
+                                        </div>
+                                        <div class="scheduler-inline-field scheduler-time-field">
+                                            <label for="douyin-scheduler-window-end">结束时间</label>
+                                            <div class="scheduler-time-row">
+                                                <input type="time" id="douyin-scheduler-window-end" value="23:00">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="douyin-scheduler-collect-fields" class="source video-comment-config" style="margin-top:14px">
+                                <div>
+                                    <strong>采集精准客户配置</strong>
+                                    <p class="subtle">按关键词自动搜索抖音视频，生成评论采集任务，再进入精准客户筛选链路。</p>
+                                </div>
+                                <div class="scheduler-section-grid">
+                                    <div class="scheduler-section-stack">
+                                        <div class="scheduler-section-row row-collect">
+                                            <div class="video-comment-field field-keyword">
+                                                <label for="douyin-scheduler-keyword">搜索关键词</label>
+                                                <input type="text" id="douyin-scheduler-keyword" class="input" placeholder="例如：自动获客系统">
+                                            </div>
+                                            <div class="video-comment-field field-results">
+                                                <label for="douyin-scheduler-max-results">每次搜索返回条数</label>
+                                                <input type="number" id="douyin-scheduler-max-results" min="5" max="100" step="1" value="50">
+                                            </div>
+                                            <div class="video-comment-field field-videos">
+                                                <label for="douyin-scheduler-max-videos">每轮生成任务视频数</label>
+                                                <input type="number" id="douyin-scheduler-max-videos" min="1" max="50" step="1" value="50">
+                                            </div>
+                                            <div class="video-comment-field field-scroll-rounds">
+                                                <label for="douyin-scheduler-comment-scroll-rounds">评论滚动轮次</label>
+                                                <input type="number" id="douyin-scheduler-comment-scroll-rounds" min="20" max="300" step="10" value="300">
+                                            </div>
+                                            <div class="video-comment-field field-comment-limit">
+                                                <label for="douyin-scheduler-comment-max-comments">最多采集评论数</label>
+                                                <input type="number" id="douyin-scheduler-comment-max-comments" min="20" max="500" step="10" value="500">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="douyin-scheduler-follow-fields" class="source video-comment-config" style="margin-top:14px;display:none">
+                                <div>
+                                    <strong>精准互动配置</strong>
+                                    <p class="subtle">从精准客户池里挑待执行客户，自动进入主页关注，再尝试对首个作品评论。</p>
+                                </div>
+                                <div class="scheduler-section-grid">
+                                    <div class="scheduler-section-stack">
+                                        <div class="scheduler-section-row row-triple">
+                                            <div class="video-comment-field field-users">
+                                                <label for="douyin-scheduler-follow-max-users">每轮最大客户数</label>
+                                                <input type="number" id="douyin-scheduler-follow-max-users" min="1" max="200" step="1" value="30">
+                                            </div>
+                                            <div class="video-comment-field field-mode">
+                                                <label for="douyin-scheduler-comment-mode">互动方式</label>
+                                                <select id="douyin-scheduler-comment-mode" onchange="toggleSchedulerCommentOptions()">
+                                                    <option value="fixed">固定文案</option>
+                                                    <option value="ai">AI 自动生成</option>
+                                                    <option value="rewrite">AI 同方向改编</option>
+                                                </select>
+                                            </div>
+                                            <div class="video-comment-field field-interval">
+                                                <label for="douyin-scheduler-follow-interval-min">执行间隔（分钟）</label>
+                                                <div class="scheduler-interval-row">
+                                                    <input type="number" id="douyin-scheduler-follow-interval-min" min="0" max="1440" step="0.1" value="3" title="最小间隔（分钟）">
+                                                    <span class="scheduler-interval-sep">到</span>
+                                                    <input type="number" id="douyin-scheduler-follow-interval-max" min="0" max="1440" step="0.1" value="5" title="最大间隔（分钟）">
+                                                    <span class="scheduler-interval-sep">随机</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-comment-fixed-wrap" class="video-comment-panel active">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-comment-text">固定评论文案（直接发送你填写的统一评论文案）</label>
+                                        <textarea id="douyin-scheduler-comment-text" rows="3" placeholder="例如：看你主页这个方向挺清楚的，方便交流一下你现在最想解决的问题吗？"></textarea>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-comment-ai-wrap" class="video-comment-panel">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-comment-prompt">AI 评论方向（结合主页和首个作品场景生成新评论）</label>
+                                        <textarea id="douyin-scheduler-comment-prompt" rows="3" placeholder="例如：自然一点，不要太营销，先从对方评论切入。"></textarea>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-comment-rewrite-wrap" class="video-comment-panel">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-comment-seed">AI 改写基准文案（围绕基准文案做同方向改编）</label>
+                                        <textarea id="douyin-scheduler-comment-seed" rows="3" placeholder="例如：看你刚刚的评论挺有感觉的，方便交流一下吗？"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="douyin-scheduler-interaction-fields" class="source video-comment-config" style="margin-top:14px;display:none">
+                                <div>
+                                    <strong>精准私信配置</strong>
+                                    <p class="subtle">从精准客户池里挑待私信客户，支持固定文案、AI 生成和同方向改写。</p>
+                                </div>
+                                <div class="scheduler-section-grid">
+                                    <div class="scheduler-section-stack">
+                                        <div class="scheduler-section-row row-quad">
+                                            <div class="video-comment-field field-users">
+                                                <label for="douyin-scheduler-interaction-max-users">每轮最大客户数</label>
+                                                <input type="number" id="douyin-scheduler-interaction-max-users" min="1" max="200" step="1" value="30">
+                                            </div>
+                                            <div class="video-comment-field field-mode">
+                                                <label for="douyin-scheduler-message-mode">私信方式</label>
+                                                <select id="douyin-scheduler-message-mode" onchange="toggleSchedulerMessageOptions()">
+                                                    <option value="fixed">固定文案</option>
+                                                    <option value="ai">AI 自动生成</option>
+                                                    <option value="rewrite">AI 同方向改编</option>
+                                                </select>
+                                            </div>
+                                            <div class="video-comment-field field-interval">
+                                                <label for="douyin-scheduler-interaction-interval-min">执行间隔（分钟）</label>
+                                                <div class="scheduler-interval-row">
+                                                    <input type="number" id="douyin-scheduler-interaction-interval-min" min="0" max="1440" step="0.1" value="3" title="最小间隔（分钟）">
+                                                    <span class="scheduler-interval-sep">到</span>
+                                                    <input type="number" id="douyin-scheduler-interaction-interval-max" min="0" max="1440" step="0.1" value="5" title="最大间隔（分钟）">
+                                                    <span class="scheduler-interval-sep">随机</span>
+                                                </div>
+                                            </div>
+                                            <div class="video-comment-field field-require-follow">
+                                                <label for="douyin-scheduler-require-follow">仅对已完成互动客户私信</label>
+                                                <select id="douyin-scheduler-require-follow">
+                                                    <option value="false">否</option>
+                                                    <option value="true">是</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-message-fixed-wrap" class="video-comment-panel active">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-message-text">固定私信文案（直接发送你填写的统一私信，每行一条）</label>
+                                        <textarea id="douyin-scheduler-message-text" rows="3" placeholder="例如：你好，我看到你刚刚的评论了，方便交流一下你现在在关注什么问题吗？"></textarea>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-message-ai-wrap" class="video-comment-panel">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-message-prompt">AI 私信方向（结合评论、来源视频和作者场景生成）</label>
+                                        <textarea id="douyin-scheduler-message-prompt" rows="3" placeholder="例如：先从对方评论切入，语言自然一点，不要太像客服。"></textarea>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-message-rewrite-wrap" class="video-comment-panel">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-message-seed">AI 改写基准私信（围绕基准私信做同方向改编）</label>
+                                        <textarea id="douyin-scheduler-message-seed" rows="3" placeholder="例如：看你刚刚的评论挺有感觉的，方便聊聊你现在最想解决的问题吗？"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="card">
+                            <div class="log-head">
+                                <div>
+                                    <h3>执行日志</h3>
+                                    <p class="subtle">这里只记录排期中心页面内的刷新、保存、执行和删除动作。</p>
+                                </div>
+                                <button type="button" class="btn" onclick="clearLogs()">清空日志</button>
+                            </div>
+                            <div class="log" id="log-content">
+                                <div class="log-entry"><span class="log-time">00:00:00</span><span class="log-level-info">排期中心已就绪，等待数据回填。</span></div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div id="confirm-modal" class="overlay">
+        <div class="modal confirm-modal">
+            <div class="modal-head">
+                <div>
+                    <h2 id="confirm-modal-title">确认操作</h2>
+                    <p class="subtle">删除后不会自动恢复，请再次确认。</p>
+                </div>
+                <button type="button" class="modal-close" onclick="closeConfirmModal()">&times;</button>
+            </div>
+            <p id="confirm-modal-message" class="confirm-copy">确认继续吗？</p>
+            <div class="modal-actions">
+                <button type="button" class="btn" id="confirm-modal-cancel-btn" onclick="closeConfirmModal()">取消</button>
+                <button type="button" class="btn btn-danger" id="confirm-modal-confirm-btn" onclick="handleConfirmModalConfirm()">确认删除</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let douyinSchedulerPlans = [];
+        let douyinSchedulerRuntimeState = {};
+        let douyinSchedulerEditingId = "";
+        let douyinSchedulerFormTouched = false;
+        let douyinSchedulerFormSyncing = false;
+        let taskList = [];
+        let allCustomers = [];
+        let preciseCustomers = [];
+        let followUsers = [];
+        let interactionUsers = [];
+        let followRunning = false;
+        let interactionRunning = false;
+        let schedulerPollTimer = 0;
+        let schedulerPollInFlight = false;
+        let schedulerOverviewDigest = "";
+        let schedulerMetricsDigest = "";
+        let confirmModalState = {
+            title: "确认操作",
+            message: "确认继续吗？",
+            confirmText: "确认",
+            confirmClass: "btn-danger",
+            submitting: false,
+            onConfirm: null,
+        };
+
+        function normalize(value) {
+            return value == null ? "" : String(value).trim();
+        }
+
+        function esc(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function cut(value, size = 60) {
+            const text = normalize(value);
+            return text.length > size ? `${text.slice(0, size)}...` : text;
+        }
+
+        function buildDigest(payload) {
+            return JSON.stringify(payload && typeof payload === "object" ? payload : payload ?? null);
+        }
+
+        function setText(id, value) {
+            const element = document.getElementById(id);
+            if (element) element.textContent = String(value ?? "");
+        }
+
+        function addLog(message, level = "info") {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-level-${esc(level)}">${esc(message)}</span>`;
+            box.appendChild(entry);
+            while (box.children.length > 200) box.removeChild(box.firstChild);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function clearLogs() {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            box.innerHTML = "";
+            addLog("日志已清空。");
+        }
+
+        function toggleSidebarGroup(id) {
+            const panel = document.getElementById(id);
+            if (!panel) return;
+            const group = panel.parentElement;
+            group?.classList.toggle("is-open");
+        }
+
+        function setOverlayVisibility(id, show) {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.classList.toggle("show", !!show);
+            document.body.classList.toggle("modal-open", !!document.querySelector(".overlay.show"));
+        }
+
+        function renderConfirmModal() {
+            const confirmBtn = document.getElementById("confirm-modal-confirm-btn");
+            const cancelBtn = document.getElementById("confirm-modal-cancel-btn");
+            document.getElementById("confirm-modal-title").textContent = confirmModalState.title || "确认操作";
+            document.getElementById("confirm-modal-message").textContent = confirmModalState.message || "确认继续吗？";
+            confirmBtn.textContent = confirmModalState.submitting ? "处理中..." : (confirmModalState.confirmText || "确认");
+            confirmBtn.className = `btn ${confirmModalState.confirmClass || "btn-danger"}`;
+            confirmBtn.disabled = confirmModalState.submitting;
+            cancelBtn.disabled = confirmModalState.submitting;
+        }
+
+        function openConfirmModal(options = {}) {
+            confirmModalState = {
+                title: options.title || "确认操作",
+                message: options.message || "确认继续吗？",
+                confirmText: options.confirmText || "确认",
+                confirmClass: options.confirmClass || "btn-danger",
+                submitting: false,
+                onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
+            };
+            renderConfirmModal();
+            setOverlayVisibility("confirm-modal", true);
+        }
+
+        function closeConfirmModal(force = false) {
+            if (confirmModalState.submitting && !force) return;
+            setOverlayVisibility("confirm-modal", false);
+            confirmModalState = {
+                title: "确认操作",
+                message: "确认继续吗？",
+                confirmText: "确认",
+                confirmClass: "btn-danger",
+                submitting: false,
+                onConfirm: null,
+            };
+        }
+
+        async function handleConfirmModalConfirm() {
+            if (confirmModalState.submitting || typeof confirmModalState.onConfirm !== "function") return;
+            confirmModalState.submitting = true;
+            renderConfirmModal();
+            try {
+                const shouldClose = await confirmModalState.onConfirm();
+                if (shouldClose !== false) closeConfirmModal(true);
+            } finally {
+                confirmModalState.submitting = false;
+                renderConfirmModal();
+            }
+        }
+
+        function isAnyModalOpen() {
+            return !!document.querySelector(".overlay.show");
+        }
+
+        function douyinSchedulerTypeLabel(type = "") {
+            return ({ collect_precise: "采集精准客户", follow_comment: "精准互动", interaction: "精准私信" })[normalize(type)] || "未命名计划";
+        }
+
+        function getSchedulerStrategyLabel(mode = "") {
+            const key = normalize(mode).toLowerCase();
+            if (key === "ai") return "AI 自动生成";
+            if (key === "rewrite") return "AI 同方向改编";
+            return "固定文案";
+        }
+
+        function getSchedulerPlanConfigMeta(plan = {}) {
+            const type = normalize(plan.type);
+            if (type === "collect_precise") {
+                return `关键词 ${plan.keyword || "-"} · 搜索 ${plan.max_results || 50} 条 · 每轮视频 ${plan.max_videos_per_run || 50} 条 · 滚动 ${plan.comment_scroll_rounds || 300} 轮 · 最多评论 ${plan.comment_max_comments || 500} 条`;
+            }
+            if (type === "follow_comment") {
+                return `每轮客户 ${plan.max_users_per_run || 30} 人 · 互动方式 ${getSchedulerStrategyLabel(plan.comment_mode)} · 间隔 ${plan.follow_interval_minutes_min || 3}-${plan.follow_interval_minutes_max || 5} 分钟`;
+            }
+            if (type === "interaction") {
+                return `每轮客户 ${plan.max_users_per_run || 30} 人 · 私信方式 ${getSchedulerStrategyLabel(plan.message_mode)} · 间隔 ${plan.interaction_interval_minutes_min || 3}-${plan.interaction_interval_minutes_max || 5} 分钟${plan.require_follow_comment_completed ? " · 仅互动后私信" : ""}`;
+            }
+            return "";
+        }
+
+        function getDefaultSchedulerPlan() {
+            return {
+                id: "",
+                name: "",
+                type: "collect_precise",
+                enabled: true,
+                keyword: "",
+                interval_minutes: 120,
+                window_start: "09:00",
+                window_end: "23:00",
+                max_results: 50,
+                max_videos_per_run: 50,
+                comment_scroll_rounds: 300,
+                comment_max_comments: 500,
+                max_users_per_run: 30,
+                comment_mode: "fixed",
+                comment_text: "",
+                comment_prompt: "",
+                comment_seed_text: "",
+                message_mode: "fixed",
+                message: "",
+                message_prompt: "",
+                message_seed_text: "",
+                follow_interval_minutes_min: 3,
+                follow_interval_minutes_max: 5,
+                interaction_interval_minutes_min: 3,
+                interaction_interval_minutes_max: 5,
+                require_follow_comment_completed: false,
+            };
+        }
+
+        function setSchedulerFormTouched(touched = true) {
+            douyinSchedulerFormTouched = !!touched;
+        }
+
+        function focusDouyinSchedulerForm(reset = false) {
+            if (reset) resetSchedulerPlanForm();
+            const card = document.getElementById("douyin-scheduler-form-card");
+            const nameInput = document.getElementById("douyin-scheduler-name");
+            card?.scrollIntoView({ behavior: "smooth", block: "start" });
+            window.requestAnimationFrame(() => nameInput?.focus());
+        }
+
+        function getSchedulerCommentMode() {
+            const value = normalize(document.getElementById("douyin-scheduler-comment-mode")?.value || "fixed").toLowerCase();
+            return ["fixed", "ai", "rewrite"].includes(value) ? value : "fixed";
+        }
+
+        function toggleSchedulerCommentOptions() {
+            const mode = getSchedulerCommentMode();
+            document.getElementById("douyin-scheduler-comment-fixed-wrap")?.classList.toggle("active", mode === "fixed");
+            document.getElementById("douyin-scheduler-comment-ai-wrap")?.classList.toggle("active", mode === "ai");
+            document.getElementById("douyin-scheduler-comment-rewrite-wrap")?.classList.toggle("active", mode === "rewrite");
+        }
+
+        function getSchedulerMessageMode() {
+            const value = normalize(document.getElementById("douyin-scheduler-message-mode")?.value || "fixed").toLowerCase();
+            return ["fixed", "ai", "rewrite"].includes(value) ? value : "fixed";
+        }
+
+        function toggleSchedulerMessageOptions() {
+            const mode = getSchedulerMessageMode();
+            document.getElementById("douyin-scheduler-message-fixed-wrap")?.classList.toggle("active", mode === "fixed");
+            document.getElementById("douyin-scheduler-message-ai-wrap")?.classList.toggle("active", mode === "ai");
+            document.getElementById("douyin-scheduler-message-rewrite-wrap")?.classList.toggle("active", mode === "rewrite");
+        }
+
+        function toggleSchedulerPlanTypeFields() {
+            const type = normalize(document.getElementById("douyin-scheduler-type")?.value || "collect_precise");
+            document.getElementById("douyin-scheduler-collect-fields").style.display = type === "collect_precise" ? "block" : "none";
+            document.getElementById("douyin-scheduler-follow-fields").style.display = type === "follow_comment" ? "block" : "none";
+            document.getElementById("douyin-scheduler-interaction-fields").style.display = type === "interaction" ? "block" : "none";
+            if (type === "follow_comment") toggleSchedulerCommentOptions();
+            if (type === "interaction") toggleSchedulerMessageOptions();
+        }
+
+        function populateSchedulerPlanForm(plan = {}) {
+            const next = { ...getDefaultSchedulerPlan(), ...(plan || {}) };
+            douyinSchedulerFormSyncing = true;
+            douyinSchedulerEditingId = String(next.id || "");
+            document.getElementById("douyin-scheduler-form-title").textContent = douyinSchedulerEditingId ? `编辑计划：${next.name || douyinSchedulerTypeLabel(next.type)}` : "新建排期计划";
+            document.getElementById("douyin-scheduler-name").value = next.name || "";
+            document.getElementById("douyin-scheduler-type").value = next.type || "collect_precise";
+            document.getElementById("douyin-scheduler-enabled").value = String(next.enabled !== false);
+            document.getElementById("douyin-scheduler-interval").value = next.interval_minutes ?? 120;
+            document.getElementById("douyin-scheduler-window-start").value = next.window_start || "09:00";
+            document.getElementById("douyin-scheduler-window-end").value = next.window_end || "23:00";
+            document.getElementById("douyin-scheduler-keyword").value = next.keyword || "";
+            document.getElementById("douyin-scheduler-max-results").value = next.max_results ?? 50;
+            document.getElementById("douyin-scheduler-max-videos").value = next.max_videos_per_run ?? 50;
+            document.getElementById("douyin-scheduler-comment-scroll-rounds").value = next.comment_scroll_rounds ?? 300;
+            document.getElementById("douyin-scheduler-comment-max-comments").value = next.comment_max_comments ?? 500;
+            document.getElementById("douyin-scheduler-follow-max-users").value = next.max_users_per_run ?? 30;
+            document.getElementById("douyin-scheduler-comment-mode").value = next.comment_mode || "fixed";
+            document.getElementById("douyin-scheduler-follow-interval-min").value = next.follow_interval_minutes_min ?? 3;
+            document.getElementById("douyin-scheduler-follow-interval-max").value = next.follow_interval_minutes_max ?? 5;
+            document.getElementById("douyin-scheduler-comment-text").value = next.comment_text || "";
+            document.getElementById("douyin-scheduler-comment-prompt").value = next.comment_prompt || "";
+            document.getElementById("douyin-scheduler-comment-seed").value = next.comment_seed_text || "";
+            document.getElementById("douyin-scheduler-interaction-max-users").value = next.max_users_per_run ?? 30;
+            document.getElementById("douyin-scheduler-message-mode").value = next.message_mode || "fixed";
+            document.getElementById("douyin-scheduler-interaction-interval-min").value = next.interaction_interval_minutes_min ?? 3;
+            document.getElementById("douyin-scheduler-interaction-interval-max").value = next.interaction_interval_minutes_max ?? 5;
+            document.getElementById("douyin-scheduler-require-follow").value = String(!!next.require_follow_comment_completed);
+            document.getElementById("douyin-scheduler-message-text").value = next.message || "";
+            document.getElementById("douyin-scheduler-message-prompt").value = next.message_prompt || "";
+            document.getElementById("douyin-scheduler-message-seed").value = next.message_seed_text || "";
+            toggleSchedulerPlanTypeFields();
+            douyinSchedulerFormSyncing = false;
+            setSchedulerFormTouched(false);
+        }
+
+        function resetSchedulerPlanForm() {
+            populateSchedulerPlanForm(getDefaultSchedulerPlan());
+        }
+
+        function buildSchedulerPlanPayload() {
+            const type = normalize(document.getElementById("douyin-scheduler-type")?.value || "collect_precise");
+            const base = {
+                id: douyinSchedulerEditingId || "",
+                name: normalize(document.getElementById("douyin-scheduler-name")?.value || "") || douyinSchedulerTypeLabel(type),
+                type,
+                enabled: String(document.getElementById("douyin-scheduler-enabled")?.value || "true") === "true",
+                interval_minutes: Math.max(5, parseInt(document.getElementById("douyin-scheduler-interval")?.value, 10) || 120),
+                window_start: document.getElementById("douyin-scheduler-window-start")?.value || "09:00",
+                window_end: document.getElementById("douyin-scheduler-window-end")?.value || "23:00",
+            };
+            if (type === "collect_precise") {
+                return {
+                    ...base,
+                    keyword: normalize(document.getElementById("douyin-scheduler-keyword")?.value || ""),
+                    max_results: Math.max(5, parseInt(document.getElementById("douyin-scheduler-max-results")?.value, 10) || 50),
+                    max_videos_per_run: Math.max(1, parseInt(document.getElementById("douyin-scheduler-max-videos")?.value, 10) || 50),
+                    comment_scroll_rounds: Math.max(20, parseInt(document.getElementById("douyin-scheduler-comment-scroll-rounds")?.value, 10) || 300),
+                    comment_max_comments: Math.max(20, parseInt(document.getElementById("douyin-scheduler-comment-max-comments")?.value, 10) || 500),
+                };
+            }
+            if (type === "follow_comment") {
+                return {
+                    ...base,
+                    max_users_per_run: Math.max(1, parseInt(document.getElementById("douyin-scheduler-follow-max-users")?.value, 10) || 30),
+                    comment_mode: document.getElementById("douyin-scheduler-comment-mode")?.value || "fixed",
+                    comment_text: document.getElementById("douyin-scheduler-comment-text")?.value || "",
+                    comment_prompt: document.getElementById("douyin-scheduler-comment-prompt")?.value || "",
+                    comment_seed_text: document.getElementById("douyin-scheduler-comment-seed")?.value || "",
+                    follow_interval_minutes_min: Math.max(0, parseFloat(document.getElementById("douyin-scheduler-follow-interval-min")?.value) || 3),
+                    follow_interval_minutes_max: Math.max(0, parseFloat(document.getElementById("douyin-scheduler-follow-interval-max")?.value) || 5),
+                };
+            }
+            return {
+                ...base,
+                max_users_per_run: Math.max(1, parseInt(document.getElementById("douyin-scheduler-interaction-max-users")?.value, 10) || 30),
+                message_mode: document.getElementById("douyin-scheduler-message-mode")?.value || "fixed",
+                message: document.getElementById("douyin-scheduler-message-text")?.value || "",
+                message_prompt: document.getElementById("douyin-scheduler-message-prompt")?.value || "",
+                message_seed_text: document.getElementById("douyin-scheduler-message-seed")?.value || "",
+                interaction_interval_minutes_min: Math.max(0, parseFloat(document.getElementById("douyin-scheduler-interaction-interval-min")?.value) || 3),
+                interaction_interval_minutes_max: Math.max(0, parseFloat(document.getElementById("douyin-scheduler-interaction-interval-max")?.value) || 5),
+                require_follow_comment_completed: String(document.getElementById("douyin-scheduler-require-follow")?.value || "false") === "true",
+            };
+        }
+
+        function parseSchedulerTimestamp(value = "") {
+            const text = normalize(value);
+            if (!text) return 0;
+            const parsed = Date.parse(text.replace(/-/g, "/"));
+            return Number.isFinite(parsed) ? parsed : 0;
+        }
+
+        function getSortedSchedulerPlans(plans = []) {
+            return [...(Array.isArray(plans) ? plans : [])].sort((a, b) => {
+                const aEnabled = a?.enabled !== false;
+                const bEnabled = b?.enabled !== false;
+                if (aEnabled !== bEnabled) return aEnabled ? -1 : 1;
+                const aNext = parseSchedulerTimestamp(a?.next_run_at || "");
+                const bNext = parseSchedulerTimestamp(b?.next_run_at || "");
+                if (aNext !== bNext) {
+                    if (!aNext) return 1;
+                    if (!bNext) return -1;
+                    return aNext - bNext;
+                }
+                const aUpdated = parseSchedulerTimestamp(a?.updated_at || "");
+                const bUpdated = parseSchedulerTimestamp(b?.updated_at || "");
+                if (aUpdated !== bUpdated) return bUpdated - aUpdated;
+                return normalize(a?.name || "").localeCompare(normalize(b?.name || ""), "zh-CN");
+            });
+        }
+
+        function getSchedulerRunningCount(state = {}) {
+            const runtimeCount = [followRunning, interactionRunning].filter(Boolean).length;
+            return runtimeCount || (normalize(state?.active_phase || "") === "launching" ? 1 : 0);
+        }
+
+        function getSchedulerStats(plans = [], state = {}) {
+            const interacted = followUsers.filter((user) => normalize(user.follow_comment_status || "pending").toLowerCase() === "completed").length;
+            const messaged = interactionUsers.filter((user) => normalize(user.interaction_status || "pending").toLowerCase() === "sent").length;
+            return {
+                planTotal: plans.length,
+                runningTotal: getSchedulerRunningCount(state),
+                videoTotal: taskList.length,
+                customerTotal: allCustomers.length,
+                preciseTotal: preciseCustomers.length,
+                followedTotal: interacted,
+                messagedTotal: messaged,
+            };
+        }
+
+        function getSchedulerRuntimeLabel(state = {}) {
+            const phase = normalize(state?.active_phase || "");
+            if (phase === "launching") return "执行中";
+            if (normalize(state?.busy_reason || "")) return "占用中";
+            return "待命";
+        }
+
+        function getSchedulerNextPlan(plans = []) {
+            const sorted = getSortedSchedulerPlans(plans);
+            const withNext = sorted.find((plan) => plan?.enabled !== false && normalize(plan?.next_run_at || ""));
+            if (withNext) return withNext;
+            return sorted.find((plan) => plan?.enabled !== false) || null;
+        }
+
+        function getSchedulerPlanState(plan = {}, state = {}) {
+            const active = normalize(plan?.id || "") === normalize(state?.active_plan_id || "");
+            const phase = normalize(state?.active_phase || "");
+            if (active && phase === "launching") return { badge: "status-processing", title: "执行中", note: "当前调度" };
+            if (plan?.enabled === false) return { badge: "status-pending", title: "已暂停", note: "不参与自动执行" };
+            if (normalize(plan?.last_status || "") === "failed") return { badge: "status-failed", title: "待重试", note: "最近一次失败" };
+            if (normalize(plan?.last_status || "") === "success") return { badge: "status-completed", title: "已排期", note: "最近一次成功" };
+            return { badge: "status-processing", title: "待执行", note: "等待首次执行" };
+        }
+
+        function renderSchedulerOverview() {
+            const tbody = document.getElementById("douyin-scheduler-tbody");
+            const summary = document.getElementById("douyin-scheduler-summary");
+            const plans = getSortedSchedulerPlans(douyinSchedulerPlans);
+            const state = douyinSchedulerRuntimeState || {};
+            const stats = getSchedulerStats(plans, state);
+            const nextPlan = getSchedulerNextPlan(plans);
+            const runtimeLabel = getSchedulerRuntimeLabel(state);
+
+            setText("douyin-scheduler-total", stats.planTotal || 0);
+            setText("douyin-scheduler-running-total", stats.runningTotal || 0);
+            setText("douyin-scheduler-video-total", stats.videoTotal || 0);
+            setText("douyin-scheduler-customer-total", stats.customerTotal || 0);
+            setText("douyin-scheduler-precise-total", stats.preciseTotal || 0);
+            setText("douyin-scheduler-followed-total", stats.followedTotal || 0);
+            setText("douyin-scheduler-messaged-total", stats.messagedTotal || 0);
+            setText("douyin-scheduler-running", runtimeLabel);
+            setText("douyin-scheduler-last-tick", state.last_tick_at || "-");
+            setText("douyin-scheduler-busy-reason", normalize(state.busy_reason || "") || "无");
+            setText("douyin-scheduler-next-plan", nextPlan ? (nextPlan.name || douyinSchedulerTypeLabel(nextPlan.type) || "-") : "暂无待执行计划");
+            setText(
+                "douyin-scheduler-next-plan-time",
+                nextPlan && nextPlan.enabled !== false
+                    ? `${nextPlan.next_run_at || "待排期"} · ${douyinSchedulerTypeLabel(nextPlan.type)}`
+                    : (plans.length ? "当前没有启用中的计划" : "任务表会按下次执行时间由近到远排序"),
+            );
+
+            if (summary) {
+                summary.textContent = plans.length
+                    ? `${normalize(state.message || "") || "调度器已连接。"}${normalize(state.busy_reason || "") ? ` 当前占用：${state.busy_reason}。` : ""}${normalize(state.last_tick_at || "") ? ` 最近轮询 ${state.last_tick_at}。` : ""}`
+                    : "当前还没有排期计划，先新建一个采集、互动或私信计划。";
+            }
+
+            if (!plans.length) {
+                tbody.innerHTML = `<tr><td colspan="5" class="empty">还没有排期计划，先在下方表单里创建一个。</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = plans.map((plan, index) => {
+                const message = normalize(plan.last_message || plan.last_error || "") || "等待第一次执行";
+                const configMeta = getSchedulerPlanConfigMeta(plan);
+                const stateMeta = getSchedulerPlanState(plan, state);
+                const nextRunText = plan.enabled !== false ? (normalize(plan.next_run_at || "") || "待排期") : "已暂停";
+                const lastRunText = normalize(plan.last_run_at || "");
+                const isNextPlan = index === 0 && plan.enabled !== false;
+                return `<tr class="${isNextPlan ? "is-next-plan" : ""}">
+                    <td>
+                        <div class="scheduler-plan-cell">
+                            <div class="scheduler-plan-head">
+                                <span class="scheduler-plan-type">${esc(douyinSchedulerTypeLabel(plan.type))}</span>
+                                <div class="scheduler-plan-title">${esc(plan.name || "-")}</div>
+                            </div>
+                            <div class="scheduler-plan-meta">${esc(`时间窗 ${plan.window_start || "09:00"}-${plan.window_end || "23:00"} · 成功 ${plan.success_runs || 0} / 失败 ${plan.failure_runs || 0}`)}</div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="table-status-stack">
+                            <span class="badge ${stateMeta.badge}">${esc(stateMeta.title)}</span>
+                            <div class="subtle">${esc(stateMeta.note)}</div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="scheduler-plan-cell">
+                            <div class="scheduler-plan-meta">${esc(`执行间隔 每 ${plan.interval_minutes || 120} 分钟`)}</div>
+                            ${configMeta ? `<div class="scheduler-plan-meta">${esc(cut(configMeta, 110))}</div>` : ""}
+                            <div class="scheduler-plan-note" title="${esc(message)}">${esc(cut(message, 96))}</div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="scheduler-next-cell">
+                            <div class="scheduler-next-time">${esc(nextRunText)}</div>
+                            <div class="scheduler-next-meta">${esc(lastRunText ? `上次执行 ${lastRunText}` : "尚未执行")}</div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="table-action-row">
+                            <button type="button" class="btn btn-primary" onclick='runSchedulerPlanNow(${JSON.stringify(plan.id)})'>立即执行</button>
+                            <button type="button" class="btn" onclick='editSchedulerPlan(${JSON.stringify(plan.id)})'>编辑</button>
+                            <button type="button" class="btn ${plan.enabled !== false ? "btn-warning" : "btn-success"}" onclick='toggleSchedulerPlanEnabled(${JSON.stringify(plan.id)}, ${plan.enabled !== false ? "false" : "true"})'>${plan.enabled !== false ? "暂停" : "启用"}</button>
+                            <button type="button" class="btn btn-danger" onclick='deleteSchedulerPlan(${JSON.stringify(plan.id)})'>删除</button>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join("");
+        }
+
+        function editSchedulerPlan(planId) {
+            const plan = (douyinSchedulerPlans || []).find((item) => String(item.id || "") === String(planId || ""));
+            if (!plan) {
+                addLog("未找到对应排期计划。", "warning");
+                return;
+            }
+            populateSchedulerPlanForm(plan);
+            focusDouyinSchedulerForm(false);
+        }
+
+        async function loadSchedulerOverview(silent = false) {
+            const response = await fetch("/api/douyin/scheduler/overview");
+            const data = await response.json();
+            if (data.code !== 200) throw new Error(data.msg || data.detail || "刷新排期中心失败。");
+            const nextPlans = Array.isArray(data.plans) ? data.plans : [];
+            const nextState = data.state || {};
+            const nextDigest = buildDigest({ plans: nextPlans, state: nextState });
+            const changed = nextDigest !== schedulerOverviewDigest;
+            douyinSchedulerPlans = nextPlans;
+            douyinSchedulerRuntimeState = nextState;
+            schedulerOverviewDigest = nextDigest;
+            if (!douyinSchedulerEditingId && douyinSchedulerPlans.length === 0 && !douyinSchedulerFormTouched) resetSchedulerPlanForm();
+            if (!silent && normalize(data.state?.message || "")) addLog(`排期中心：${data.state.message}`);
+            return changed;
+        }
+
+        async function loadSchedulerMetrics() {
+            const [tasksRes, poolsRes, followRes, interactionRes] = await Promise.all([
+                fetch("/api/douyin/tasks"),
+                fetch("/api/douyin/customer-pools"),
+                fetch("/api/douyin/follow-comment/status"),
+                fetch("/api/douyin/interaction/status"),
+            ]);
+            const [tasksData, poolsData, followData, interactionData] = await Promise.all([
+                tasksRes.json(),
+                poolsRes.json(),
+                followRes.json(),
+                interactionRes.json(),
+            ]);
+            taskList = tasksData.code === 200 && Array.isArray(tasksData.tasks) ? tasksData.tasks : [];
+            allCustomers = poolsData.code === 200 && Array.isArray(poolsData.all_customers) ? poolsData.all_customers : [];
+            preciseCustomers = poolsData.code === 200 && Array.isArray(poolsData.precise_customers) ? poolsData.precise_customers : [];
+            followUsers = followData.code === 200 && Array.isArray(followData.users) ? followData.users : [];
+            interactionUsers = interactionData.code === 200 && Array.isArray(interactionData.users) ? interactionData.users : [];
+            followRunning = !!followData.running;
+            interactionRunning = !!interactionData.running;
+            const nextDigest = buildDigest({
+                tasks: taskList,
+                allCustomers,
+                preciseCustomers,
+                followUsers,
+                interactionUsers,
+                followRunning,
+                interactionRunning,
+            });
+            const changed = nextDigest !== schedulerMetricsDigest;
+            schedulerMetricsDigest = nextDigest;
+            return changed;
+        }
+
+        async function loadSchedulerDashboard(silent = false) {
+            if (schedulerPollInFlight) return;
+            schedulerPollInFlight = true;
+            try {
+                const [overviewChanged, metricsChanged] = await Promise.all([loadSchedulerOverview(silent), loadSchedulerMetrics()]);
+                if (overviewChanged || metricsChanged) renderSchedulerOverview();
+                if (!silent) addLog("排期中心数据已刷新。", "success");
+            } catch (error) {
+                if (!silent) addLog(`刷新排期中心失败：${error.message}`, "error");
+            } finally {
+                schedulerPollInFlight = false;
+            }
+        }
+
+        function getSchedulerPollInterval() {
+            if (document.hidden) return 30000;
+            const busy = normalize(douyinSchedulerRuntimeState.active_phase || "") === "launching" || followRunning || interactionRunning;
+            return busy ? 10000 : 15000;
+        }
+
+        async function pollSchedulerPageOnce() {
+            if (schedulerPollInFlight || isAnyModalOpen()) return;
+            await loadSchedulerDashboard(true);
+        }
+
+        function scheduleSchedulerPolling(immediate = false) {
+            if (schedulerPollTimer) {
+                window.clearTimeout(schedulerPollTimer);
+                schedulerPollTimer = 0;
+            }
+            const delay = immediate ? 0 : getSchedulerPollInterval();
+            schedulerPollTimer = window.setTimeout(async () => {
+                await pollSchedulerPageOnce();
+                scheduleSchedulerPolling(false);
+            }, delay);
+        }
+
+        async function saveSchedulerPlan() {
+            const plan = buildSchedulerPlanPayload();
+            if (plan.type === "collect_precise" && !normalize(plan.keyword || "")) {
+                addLog("采集精准客户计划必须填写关键词。", "warning");
+                return;
+            }
+            try {
+                const response = await fetch("/api/douyin/scheduler/plans", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ plan }),
+                });
+                const data = await response.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "保存排期计划失败。");
+                douyinSchedulerEditingId = String(data.plan?.id || plan.id || "");
+                douyinSchedulerPlans = Array.isArray(data.plans) ? data.plans : douyinSchedulerPlans;
+                populateSchedulerPlanForm(data.plan || plan);
+                renderSchedulerOverview();
+                addLog(data.msg || "排期计划已保存。", "success");
+                await loadSchedulerDashboard(true);
+            } catch (error) {
+                addLog(`保存排期计划失败：${error.message}`, "error");
+            }
+        }
+
+        async function toggleSchedulerPlanEnabled(planId, enabled) {
+            try {
+                const response = await fetch(`/api/douyin/scheduler/plans/${encodeURIComponent(planId)}/toggle`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ enabled }),
+                });
+                const data = await response.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "更新计划状态失败。");
+                addLog(data.msg || "计划状态已更新。", "success");
+                await loadSchedulerDashboard(true);
+            } catch (error) {
+                addLog(`更新计划状态失败：${error.message}`, "error");
+            }
+        }
+
+        async function runSchedulerPlanNow(planId) {
+            try {
+                const response = await fetch(`/api/douyin/scheduler/plans/${encodeURIComponent(planId)}/run`, { method: "POST" });
+                const data = await response.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "立即执行计划失败。");
+                addLog(data.msg || "排期计划已触发。", "success");
+                await loadSchedulerDashboard(true);
+            } catch (error) {
+                addLog(`立即执行计划失败：${error.message}`, "error");
+            }
+        }
+
+        function deleteSchedulerPlan(planId) {
+            openConfirmModal({
+                title: "删除排期计划",
+                message: "删除后这条计划不会再自动执行。",
+                confirmText: "确认删除",
+                confirmClass: "btn-danger",
+                onConfirm: async () => {
+                    try {
+                        const response = await fetch(`/api/douyin/scheduler/plans/${encodeURIComponent(planId)}/delete`, { method: "POST" });
+                        const data = await response.json();
+                        if (data.code !== 200) throw new Error(data.msg || data.detail || "删除排期计划失败。");
+                        if (String(douyinSchedulerEditingId || "") === String(planId || "")) resetSchedulerPlanForm();
+                        addLog(data.msg || "排期计划已删除。", "success");
+                        await loadSchedulerDashboard(true);
+                        return true;
+                    } catch (error) {
+                        addLog(`删除排期计划失败：${error.message}`, "error");
+                        return false;
+                    }
+                },
+            });
+        }
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            document.getElementById("douyin-scheduler-form-card")?.addEventListener("input", () => {
+                if (!douyinSchedulerFormSyncing) setSchedulerFormTouched(true);
+            });
+            document.getElementById("douyin-scheduler-form-card")?.addEventListener("change", () => {
+                if (!douyinSchedulerFormSyncing) setSchedulerFormTouched(true);
+            });
+            document.getElementById("confirm-modal")?.addEventListener("click", (event) => {
+                if (event.target.id === "confirm-modal") closeConfirmModal();
+            });
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape") closeConfirmModal();
+            });
+
+            resetSchedulerPlanForm();
+            renderSchedulerOverview();
+            await loadSchedulerDashboard(true);
+            addLog("排期中心独立页初始化完成。");
+            document.addEventListener("visibilitychange", () => {
+                scheduleSchedulerPolling(true);
+            });
+            scheduleSchedulerPolling(false);
+        });
+    </script>
+</body>
+</html>

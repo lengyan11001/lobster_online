@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音搜索采集</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <style>
+        .sidebar-group-header,
+        .sidebar-subbtn {
+            text-decoration: none;
+        }
+        .search-page-tools {
+            justify-content: flex-end;
+        }
+        .search-hidden-config {
+            display: none;
+        }
+        .search-page-log-sink {
+            display: none;
+        }
+        .search-capture-modal-card {
+            width: min(97vw, 1240px);
+            padding: 18px 20px;
+        }
+        .search-capture-modal-card .modal-head {
+            margin-bottom: 10px;
+        }
+        .search-capture-modal-card .capture-config-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px 16px;
+            margin-top: 0;
+        }
+        .search-capture-modal-card .capture-field.full {
+            grid-column: auto;
+        }
+        .search-capture-modal-card .capture-field.wide {
+            grid-column: span 2;
+        }
+        .search-capture-modal-card .capture-field .subtle {
+            min-height: 0;
+            line-height: 1.7;
+        }
+        .search-capture-modal-card .capture-preview {
+            margin-top: 0;
+            padding: 12px 14px;
+        }
+        .capture-alert {
+            display: grid;
+            gap: 8px;
+            margin: 8px 0 12px;
+            padding: 12px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(224, 173, 89, 0.34);
+            background: linear-gradient(180deg, rgba(255, 248, 236, 0.98), rgba(255, 253, 250, 0.96));
+            color: #6f4b13;
+            line-height: 1.55;
+        }
+        .capture-alert strong {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #49300b;
+            font-size: 14px;
+            font-weight: 900;
+        }
+        .capture-alert strong::before {
+            content: "!";
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 999px;
+            background: #e0ad59;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 900;
+        }
+        .capture-alert span {
+            color: #7d5f2c;
+            font-size: 13px;
+        }
+        .capture-field-note {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.65;
+        }
+        .capture-field-note strong {
+            color: var(--text);
+            font-weight: 900;
+        }
+        .capture-mode-note {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            min-height: 26px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(45, 165, 109, 0.1);
+            color: #1f7b50;
+            font-size: 12px;
+            font-weight: 800;
+        }
+        .capture-mode-note.is-warning {
+            background: rgba(224, 173, 89, 0.14);
+            color: #8b5d12;
+        }
+        .capture-preview {
+            display: grid;
+            gap: 8px;
+        }
+        .capture-preview-title {
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 900;
+        }
+        .capture-preview-copy {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .capture-preview-steps {
+            display: grid;
+            gap: 6px;
+            margin-top: 2px;
+        }
+        .capture-preview-step {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            color: #455984;
+            font-size: 13px;
+            line-height: 1.55;
+        }
+        .capture-preview-step b {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            background: rgba(90, 133, 255, 0.12);
+            color: #2d4cd0;
+            font-size: 12px;
+        }
+        #search-capture-region-help-text {
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(224, 173, 89, 0.26);
+            background: rgba(255, 248, 236, 0.74);
+            color: #80601f;
+            font-weight: 700;
+        }
+        .capture-save-rule {
+            padding: 8px 10px;
+            border-radius: 12px;
+            background: rgba(90, 133, 255, 0.08);
+            color: #405894;
+            font-size: 13px;
+            line-height: 1.55;
+        }
+        .capture-save-rule strong {
+            color: #253461;
+        }
+        @media (max-width: 720px) {
+            .search-page-tools {
+                justify-content: flex-start;
+            }
+            .search-capture-modal-card {
+                width: min(96vw, 760px);
+            }
+            .search-capture-modal-card .capture-config-grid {
+                grid-template-columns: 1fr;
+            }
+            .search-capture-modal-card .capture-field.wide {
+                grid-column: auto;
+            }
+        }
+    </style>
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-group="overview" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="overview" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">数据大屏</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="scheduler" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="scheduler" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">排期中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group is-active" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header active" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="customers" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-customers')"
+                                aria-expanded="false" aria-controls="sidebar-group-customers">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">客户仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" data-sidebar="all-customers" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" data-sidebar="intent" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-group="nurture" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-nurture')"
+                                aria-expanded="false" aria-controls="sidebar-group-nurture">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">养号仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" data-sidebar="nurture" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" data-sidebar="groups" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-group="logs" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="logs" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 5.5h10"></path>
+                                            <path d="M7 10.5h10"></path>
+                                            <path d="M7 15.5h6"></path>
+                                            <path d="M5 4.5h.01"></path>
+                                            <path d="M5 9.5h.01"></path>
+                                            <path d="M5 14.5h.01"></path>
+                                            <path d="M4.5 19.5h15"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">执行日志</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="config" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="config" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 8.2a3.8 3.8 0 1 1 0 7.6 3.8 3.8 0 0 1 0-7.6Z"></path>
+                                            <path d="M4.8 13.4v-2.8l2-.7.6-1.5-1-1.9 2-2 1.9 1 .1.1 1.5-.6.7-2h2.8l.7 2 1.5.6 1.9-1 2 2-1 1.9.6 1.5 2 .7v2.8l-2 .7-.6 1.5 1 1.9-2 2-1.9-1-.1-.1-1.5.6-.7 2h-2.8l-.7-2-1.5-.6-1.9 1-2-2 1-1.9-.6-1.5-2-.7Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">配置中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="guide" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="guide" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M6.5 5.5h9A2.5 2.5 0 0 1 18 8v10.5l-3.4-1.8-3.1 1.8-3.1-1.8L5 18.5V8a2.5 2.5 0 0 1 1.5-2.5Z"></path>
+                                            <path d="M8.5 9.5h6"></path>
+                                            <path d="M8.5 12.5h6"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">使用说明</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="console-page" class="page active">
+                    <div id="search-workspace-page" class="workspace-panel-page active">
+                        <div class="stack">
+                            <section class="card">
+                                <div class="panel-head">
+                                    <div>
+                                        <h3>搜索采集</h3>
+                                        <p class="subtle">每次搜索会沉淀成关键词卡片，点开后继续看这个关键词下的视频列表、全部客户和精准客户。</p>
+                                    </div>
+                                    <div class="tools search-page-tools">
+                                        <span class="tag">关键词卡片</span>
+                                        <span class="tag">历史重复识别</span>
+                                        <span class="tag">评论采集进度</span>
+                                    </div>
+                                </div>
+                                <div class="row" style="margin-bottom:14px">
+                                    <input type="text" id="douyin-search-keyword" class="input" placeholder="输入抖音关键词，例如：AI 获客">
+                                    <button type="button" class="btn btn-primary" id="douyin-search-btn" onclick="startDouyinSearch()">搜索并采集</button>
+                                    <button type="button" class="btn btn-info" id="douyin-ai-expand-search-btn" onclick="startDouyinAiExpandSearch()">AI拓词搜索</button>
+                                    <button type="button" class="btn" onclick="toggleSearchSelection(true)">全选当前页</button>
+                                    <button type="button" class="btn" onclick="toggleSearchSelection(false)">清空勾选</button>
+                                    <button type="button" class="btn btn-success" id="douyin-export-search-btn" onclick="exportDouyinSearchResults()" disabled>导出搜索结果</button>
+                                </div>
+                                <div id="douyin-search-status" class="subtle" style="margin-bottom:14px">请先确保有已登录的抖音账号，再开始搜索。</div>
+                                <div id="douyin-search-results" class="box"><div class="empty">抖音搜索结果会显示在这里。</div></div>
+                            </section>
+                        </div>
+                    </div>
+                </div>
+                <div id="config-page" class="page">
+                    <div class="search-hidden-config" aria-hidden="true">
+                        <select id="douyin-default-account-id"></select>
+                        <select id="douyin-message-show-browser"><option value="false">否</option><option value="true">是</option></select>
+                        <input type="text" id="model">
+                        <textarea id="comment-direction"></textarea>
+                        <select id="comment-filter-strategy"><option value="prompt">正向筛选</option><option value="reverse">反向筛选</option></select>
+                        <input type="number" id="search-min-likes" value="500">
+                        <input type="number" id="search-avg-multiplier" value="1.5">
+                        <select id="search-exclude-historical-duplicates"><option value="true">是</option><option value="false">否</option></select>
+                        <input type="number" id="comment-scroll-rounds" value="300">
+                        <input type="number" id="comment-max-comments" value="500">
+                        <div id="douyin-accounts-grid"></div>
+                        <div id="douyin-account-summary"></div>
+                        <div id="douyin-head-status"></div>
+                        <div id="stat-search-total"></div>
+                        <div id="stat-search-selected"></div>
+                        <div id="stat-task-total"></div>
+                        <div id="stat-high-intent"></div>
+                    </div>
+                </div>
+                <div class="search-page-log-sink" id="log-content"><div class="log-entry"><span class="log-time">00:00:00</span><span class="log-level-info">系统就绪，等待操作。</span></div></div>
+            </main>
+        </div>
+    </div>
+    <div id="task-user-modal" class="overlay">
+        <div class="modal">
+            <div class="modal-head"><div><h2 id="task-user-modal-title">视频用户筛选</h2><p class="subtle" id="task-user-modal-subtitle">勾选后会覆盖当前精准客户列表。</p></div><button type="button" class="modal-close" onclick="closeTaskUserModal()">&times;</button></div>
+            <div class="table-tools"><div id="task-user-modal-summary" class="subtle">已选 0 人</div><div class="tools"><select id="task-user-region-filter" style="width:auto;min-width:170px" onchange="changeTaskUserRegionFilter()"><option value="all">全部地区</option></select><select id="task-user-time-filter" style="width:auto;min-width:170px" onchange="changeTaskUserTimeFilter()"><option value="all">评论时间：无限制</option><option value="3">评论时间：3天内</option><option value="7">评论时间：7天内</option><option value="30">评论时间：30天内</option><option value="90">评论时间：90天内</option><option value="365">评论时间：1年内</option></select><button type="button" class="btn" onclick="toggleAllTaskUsers(true)">全选</button><button type="button" class="btn" onclick="toggleAllTaskUsers(false)">清空</button><button type="button" class="btn btn-primary" onclick="saveTaskUserSelection()">保存</button></div></div>
+            <div class="table-shell"><table class="table"><thead><tr><th style="width:72px">勾选</th><th style="width:260px">用户</th><th class="nowrap" style="width:110px">地区</th><th>评论内容</th><th class="nowrap" style="width:140px">评论时间</th><th style="width:110px">点赞数</th><th style="width:110px">回复数</th></tr></thead><tbody id="task-user-modal-tbody"><tr><td colspan="7" class="empty">暂无可选用户</td></tr></tbody></table></div>
+        </div>
+    </div>
+    <div id="search-capture-modal" class="overlay">
+        <div class="modal confirm-modal search-capture-modal-card">
+            <div class="modal-head"><div><h2>抓取客户设置</h2><p class="subtle">确认本次评论采集范围、采集方式和精准客户筛选规则。</p></div><button type="button" class="modal-close" onclick="closeSearchCaptureModal()">&times;</button></div>
+            <div class="capture-alert">
+                <strong>注意：协议模式不能按地区筛选</strong>
+                <span>协议模式会优先调用评论接口，速度更快，但接口当前不返回地区/IP 属地。保持协议模式时，“地区限制”会自动关闭，只按下面的提示词筛选客户。</span>
+            </div>
+            <div class="capture-config-grid">
+                <div class="capture-field">
+                    <label for="search-capture-account-select">执行账号</label>
+                    <select id="search-capture-account-select"></select>
+                    <div class="capture-field-note"><strong>不指定账号</strong>时系统会自动分配在线账号；指定账号后，本次抓取会优先使用该账号。</div>
+                </div>
+                <div class="capture-field">
+                    <label for="search-capture-modal-collection-mode">采集方式</label>
+                    <select id="search-capture-modal-collection-mode" onchange="changeDouyinCollectionMode(this.value)">
+                        <option value="protocol">协议模式</option>
+                        <option value="script">脚本模式</option>
+                    </select>
+                    <div class="capture-field-note"><span class="capture-mode-note">协议模式：更快</span> <span class="capture-mode-note is-warning">脚本模式：可走页面采集</span></div>
+                </div>
+                <div class="capture-field">
+                    <label>地区限制</label>
+                    <div class="capture-region-picker" id="search-capture-region-picker">
+                        <button type="button" class="capture-region-trigger" id="search-capture-region-trigger" onclick="toggleSearchCaptureRegionMenu()">
+                            <span class="capture-region-trigger-text" id="search-capture-region-trigger-text">全国</span>
+                            <span class="capture-region-trigger-arrow">▾</span>
+                        </button>
+                        <div class="capture-region-panel" id="search-capture-region-panel">
+                            <div class="capture-region-toolbar">
+                                <span class="subtle" id="search-capture-region-toolbar-note">默认选中“全国”，表示不做地区过滤。</span>
+                                <button type="button" class="btn" id="search-capture-region-reset-btn" style="min-height:34px;padding:0 12px" onclick="resetSearchCaptureRegions()">恢复全国</button>
+                            </div>
+                            <div class="capture-region-list" id="search-capture-region-list"></div>
+                        </div>
+                    </div>
+                    <div class="subtle" id="search-capture-region-help-text">默认选中“全国”，表示不做地区过滤。</div>
+                </div>
+                <div class="capture-field wide">
+                    <label>本次会做什么</label>
+                    <div class="capture-preview">
+                        <div class="capture-preview-title">执行范围</div>
+                        <div class="capture-preview-copy" id="search-capture-scope-preview">将针对当前关键词下已勾选的视频执行评论采集。</div>
+                        <div class="capture-preview-steps">
+                            <div class="capture-preview-step"><b>1</b><span>先把当前勾选的视频同步成评论采集任务。</span></div>
+                            <div class="capture-preview-step"><b>2</b><span>启动评论采集，并在搜索页显示采集进度。</span></div>
+                            <div class="capture-preview-step"><b>3</b><span>采集完成后，按下面的筛选策略和提示词识别精准客户。</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="capture-field">
+                    <label for="search-capture-filter-strategy">筛选策略</label>
+                    <select id="search-capture-filter-strategy">
+                        <option value="prompt">正向筛选：按提示词筛精准客户</option>
+                        <option value="reverse">反向筛选：排除无意义/攻击评论，其余尽量保留</option>
+                    </select>
+                    <div class="subtle" style="min-height:0">正向筛选会按提示词找精准客户；反向筛选会尽量保留有意义互动，只排除表情灌水、辱骂攻击和明显无意义评论。</div>
+                </div>
+                <div class="capture-field wide">
+                    <label for="search-capture-intent-prompt">精准客户筛选提示词</label>
+                    <textarea id="search-capture-intent-prompt" rows="5" placeholder="例如：只保留询价、收费、报价、怎么买、怎么报名、怎么合作、怎么联系、求联系方式、想私信、想咨询、想了解方案、明确表达需求并准备购买或合作；排除普通夸赞、泛提问、礼貌互动和没有下一步动作的问题。"></textarea>
+                    <div class="capture-save-rule"><strong>会保存成规则：</strong>这里改完后，会作为抖音精准客户筛选规则保存，后续评论采集和同行监控筛选都会沿用这份提示词。</div>
+                </div>
+            </div>
+            <div class="modal-actions"><button type="button" class="btn" onclick="closeSearchCaptureModal()">取消</button><button type="button" class="btn" id="search-capture-save-prompt-btn" onclick="saveSearchCaptureIntentPrompt()">保存提示词</button><button type="button" class="btn btn-primary" id="search-capture-confirm-btn" onclick="confirmSearchCaptureStart()">开始抓取</button></div>
+        </div>
+    </div>
+    <div id="search-task-refilter-modal" class="overlay">
+        <div class="modal confirm-modal" style="width:min(92vw, 760px)">
+            <div class="modal-head"><div><h2>筛选客户</h2><p class="subtle" id="search-task-refilter-subtitle">确认当前提示词后，会对这条视频已采集评论重新筛选精准客户。</p></div><button type="button" class="modal-close" onclick="closeSearchTaskRefilterModal()">&times;</button></div>
+            <div class="capture-config-grid">
+                <div class="capture-field full">
+                    <label for="search-task-refilter-strategy">筛选策略</label>
+                    <select id="search-task-refilter-strategy">
+                        <option value="prompt">正向筛选：按提示词筛精准客户</option>
+                        <option value="reverse">反向筛选：排除无意义/攻击评论，其余尽量保留</option>
+                    </select>
+                    <div class="subtle" style="min-height:0">这里选的策略会直接作用到当前视频这次重新筛选。</div>
+                </div>
+                <div class="capture-field full">
+                    <label for="search-task-refilter-prompt">精准客户筛选提示词</label>
+                    <textarea id="search-task-refilter-prompt" rows="6" placeholder="例如：只保留询价、收费、报价、怎么买、怎么报名、怎么合作、怎么联系、求联系方式、想私信、想咨询、想了解方案、明确表达需求并准备购买或合作；排除普通夸赞、泛提问、礼貌互动和没有下一步动作的问题。"></textarea>
+                    <div class="subtle" style="min-height:0">确认后会按这份提示词重筛当前视频已有评论，并直接刷新全部客户和精准客户结果。</div>
+                </div>
+            </div>
+            <div class="modal-actions"><button type="button" class="btn" onclick="closeSearchTaskRefilterModal()">取消</button><button type="button" class="btn btn-primary" id="search-task-refilter-confirm-btn" onclick="confirmSearchTaskRefilter()">开始筛选</button></div>
+        </div>
+    </div>
+    <div id="confirm-modal" class="overlay">
+        <div class="modal confirm-modal">
+            <div class="modal-head"><div><h2 id="confirm-modal-title">确认操作</h2><p class="subtle">删除后不会自动恢复，请再次确认。</p></div><button type="button" class="modal-close" onclick="closeConfirmModal()">&times;</button></div>
+            <p id="confirm-modal-message" class="confirm-copy">确认继续吗？</p>
+            <div class="modal-actions"><button type="button" class="btn" id="confirm-modal-cancel-btn" onclick="closeConfirmModal()">取消</button><button type="button" class="btn btn-danger" id="confirm-modal-confirm-btn" onclick="handleConfirmModalConfirm()">确认删除</button></div>
+        </div>
+    </div>
+    <script src="/static/douyin-origin/douyin-search-page.js?v=20260520e"></script>
+</body>
+</html>

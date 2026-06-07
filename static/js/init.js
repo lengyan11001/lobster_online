@@ -615,6 +615,7 @@ var LOBSTER_LAST_VIEW_KEY = 'lobster_online_last_view';
 var LOBSTER_MAIN_VIEWS = {
   chat: true,
   'skill-store': true,
+  'douyin-leads': true,
   publish: true,
   assets: true,
   'scheduled-tasks': true,
@@ -1261,6 +1262,15 @@ document.querySelectorAll('.nav-left-item').forEach(function(el) {
     if (!view) return;
     showAppView(view, el).catch(function() {});
   });
+});
+
+document.addEventListener('click', function(event) {
+  var trigger = event.target.closest('[data-view]');
+  if (!trigger || trigger.classList.contains('nav-left-item') || trigger.classList.contains('header-menu-view')) return;
+  var view = trigger.getAttribute('data-view');
+  if (!view) return;
+  event.preventDefault();
+  showAppView(view, trigger).catch(function() {});
 });
 
 window.addEventListener('beforeunload', function() {

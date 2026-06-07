@@ -78,7 +78,12 @@ def _requirements_lines_no_tos() -> Path:
     lines = [
         ln
         for ln in REQUIREMENTS.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.strip().startswith("#") and "tos" not in ln.lower()
+        if (
+            ln.strip()
+            and not ln.strip().startswith("#")
+            and "tos" not in ln.lower()
+            and "pyexecjs" not in ln.lower()
+        )
     ]
     tf = tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
@@ -120,6 +125,22 @@ def _download_requirements_current(req_no_tos: Path) -> None:
             "download",
             "-r",
             str(req_no_tos),
+            "--dest",
+            str(WHEELS_DIR),
+        ]
+    )
+
+
+def _download_pyexecjs_sdist() -> None:
+    print("[3b/4] PyExecJS source distribution ...")
+    _run(
+        [
+            PYTHON,
+            "-m",
+            "pip",
+            "download",
+            "PyExecJS>=1.5.1",
+            "--no-deps",
             "--dest",
             str(WHEELS_DIR),
         ]
@@ -236,6 +257,8 @@ def main() -> None:
             _download_requirements_current(req_no_tos)
     finally:
         req_no_tos.unlink(missing_ok=True)
+
+    _download_pyexecjs_sdist()
 
     print("[4/4] tos（及传递依赖）...")
     if args.target == "windows":

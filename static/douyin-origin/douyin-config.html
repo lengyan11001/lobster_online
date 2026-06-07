@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音配置中心</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">数据大屏</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">排期中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-customers')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">客户仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-nurture')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">养号仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 5.5h10"></path>
+                                            <path d="M7 10.5h10"></path>
+                                            <path d="M7 15.5h6"></path>
+                                            <path d="M5 4.5h.01"></path>
+                                            <path d="M5 9.5h.01"></path>
+                                            <path d="M5 14.5h.01"></path>
+                                            <path d="M4.5 19.5h15"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">执行日志</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header active" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="12" cy="12" r="2.6"></circle>
+                                            <path d="M19.4 15a1.3 1.3 0 0 0 .26 1.43l.05.05a1.6 1.6 0 1 1-2.26 2.26l-.05-.05a1.3 1.3 0 0 0-1.43-.26 1.3 1.3 0 0 0-.79 1.18V20a1.6 1.6 0 1 1-3.2 0v-.08a1.3 1.3 0 0 0-.84-1.2 1.3 1.3 0 0 0-1.39.28l-.05.05a1.6 1.6 0 1 1-2.26-2.26l.05-.05a1.3 1.3 0 0 0 .28-1.39 1.3 1.3 0 0 0-1.2-.84H4a1.6 1.6 0 1 1 0-3.2h.08a1.3 1.3 0 0 0 1.2-.84 1.3 1.3 0 0 0-.28-1.39l-.05-.05a1.6 1.6 0 1 1 2.26-2.26l.05.05a1.3 1.3 0 0 0 1.39.28h.06a1.3 1.3 0 0 0 .78-1.19V4a1.6 1.6 0 1 1 3.2 0v.08a1.3 1.3 0 0 0 .84 1.2 1.3 1.3 0 0 0 1.39-.28l.05-.05a1.6 1.6 0 1 1 2.26 2.26l-.05.05a1.3 1.3 0 0 0-.26 1.43v.06a1.3 1.3 0 0 0 1.18.79H20a1.6 1.6 0 1 1 0 3.2h-.08a1.3 1.3 0 0 0-1.2.84Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">配置中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M6.8 5.5h9.6A1.6 1.6 0 0 1 18 7.1v9.8a1.6 1.6 0 0 1-1.6 1.6H7.6A1.6 1.6 0 0 1 6 16.9V6.3A.8.8 0 0 1 6.8 5.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h6"></path>
+                                            <path d="M9 15h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">使用说明</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="config-page" class="page active">
+                    <div class="stack">
+                        <section class="card">
+                            <div class="panel-head">
+                                <div>
+                                    <h2>抖音配置</h2>
+                                    <p class="subtle">独立管理抖音账号和评论采集参数。</p>
+                                </div>
+                                <div class="tools">
+                                    <span class="tag">独立账号</span>
+                                    <span class="tag">独立浏览器 Profile</span>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="card">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>账号管理</h3>
+                                    <p class="subtle">每个抖音账号都有独立浏览器 profile 和调试端口。</p>
+                                </div>
+                            </div>
+                            <div class="subtle" id="douyin-account-summary" style="margin-bottom:14px">正在加载抖音账号状态...</div>
+                            <div class="accounts" id="douyin-accounts-grid"></div>
+                            <div id="douyin-account-action-status" class="account-action-status" hidden aria-live="polite"></div>
+                        </section>
+                        <section class="config-grid">
+                            <div class="stack">
+                                <section class="card">
+                                    <div class="panel-head">
+                                        <div>
+                                            <h3>默认执行账号</h3>
+                                            <p class="subtle">搜索和评论采集优先使用这里指定的抖音账号。</p>
+                                        </div>
+                                    </div>
+                                    <label class="subtle" for="douyin-default-account-id">默认抖音账号</label>
+                                    <select id="douyin-default-account-id"></select>
+                                </section>
+                                <section class="card">
+                                    <div class="panel-head">
+                                        <div>
+                                            <h3>私信浏览器模式</h3>
+                                            <p class="subtle">控制精准客户私信和陌生人私信执行时是否显示浏览器。默认关闭更省内存；账号登录时仍会打开可见浏览器。</p>
+                                        </div>
+                                    </div>
+                                    <label class="subtle" for="douyin-message-show-browser">私信任务显示浏览器</label>
+                                    <select id="douyin-message-show-browser">
+                                        <option value="false">否，默认无头运行</option>
+                                        <option value="true">是，显示浏览器窗口</option>
+                                    </select>
+                                </section>
+                                <section class="card">
+                                    <div class="panel-head">
+                                        <div>
+                                            <h3>搜索筛选规则</h3>
+                                            <p class="subtle">只影响默认勾选，你仍可手动调整。</p>
+                                        </div>
+                                    </div>
+                                    <label class="subtle" for="search-min-likes">最低点赞数</label>
+                                    <input type="number" id="search-min-likes" min="0" max="1000000">
+                                    <label class="subtle" for="search-avg-multiplier" style="margin-top:12px">平均值倍数</label>
+                                    <input type="number" id="search-avg-multiplier" min="0" max="20" step="0.1">
+                                    <label class="subtle" for="search-exclude-historical-duplicates" style="margin-top:12px">历史重复默认取消勾选</label>
+                                    <select id="search-exclude-historical-duplicates">
+                                        <option value="true">是</option>
+                                        <option value="false">否</option>
+                                    </select>
+                                </section>
+                            </div>
+                            <div class="stack">
+                                <section class="card">
+                                    <div class="panel-head">
+                                        <div>
+                                            <h3>采集与 AI 配置</h3>
+                                            <p class="subtle">控制评论滚动轮数、单视频最大采集数、模型，以及抖音精准客户的筛选规则。</p>
+                                        </div>
+                                    </div>
+                                    <label class="subtle" for="comment-scroll-rounds">评论区最大滚动轮数</label>
+                                    <input type="number" id="comment-scroll-rounds" min="20" max="300" value="300">
+                                    <label class="subtle" for="comment-max-comments" style="margin-top:12px">单视频最大采集评论数</label>
+                                    <input type="number" id="comment-max-comments" min="20" max="500">
+                                    <p id="ai-proxy-status" class="subtle" style="margin-top:12px">AI 能力统一走服务器 Comfly 转发，按当前登录账号计费。</p>
+                                    <label class="subtle" for="model" style="margin-top:12px">模型名称</label>
+                                    <input type="text" id="model">
+                                    <label class="subtle" for="comment-filter-strategy" style="margin-top:12px">筛选策略</label>
+                                    <select id="comment-filter-strategy">
+                                        <option value="prompt">正向筛选：按提示词筛精准客户</option>
+                                        <option value="reverse">反向筛选：排除无意义/攻击评论，其余尽量保留</option>
+                                    </select>
+                                    <label class="subtle" for="comment-direction" style="margin-top:12px">精准客户筛选提示词</label>
+                                    <textarea id="comment-direction" placeholder="例如：只保留有真实需求、了解意愿、咨询意愿、联系意愿的评论；排除纯夸赞、无意义互动、攻击性发言。"></textarea>
+                                </section>
+                                <section class="card">
+                                    <div class="row">
+                                        <button type="button" class="btn btn-primary" onclick="saveDouyinConfig()">保存抖音配置</button>
+                                        <span class="subtle">保存后立即写入本地配置文件。</span>
+                                    </div>
+                                </section>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div id="log-content" class="log" hidden></div>
+
+    <script>
+        let douyinAccounts = [];
+        let activeDouyinAccountId = null;
+        let savedDouyinIntentPrompt = "";
+        let savedDouyinIntentStrategy = "prompt";
+
+        const accountStatusText = (status) => ({ online: "在线", waiting: "待扫码", offline: "离线" })[String(status || "").trim()] || "离线";
+
+        function normalize(value) {
+            return String(value ?? "").replace(/\u200b|\ufeff/g, "").replace(/\s+/g, " ").trim();
+        }
+
+        function esc(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function addLog(message, level = "info") {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-level-${esc(level)}">${esc(message)}</span>`;
+            box.appendChild(entry);
+            while (box.children.length > 200) box.removeChild(box.firstChild);
+        }
+
+        function setAccountActionStatus(message, level = "info") {
+            const box = document.getElementById("douyin-account-action-status");
+            if (!box) return;
+            box.hidden = !message;
+            box.className = `account-action-status ${level ? `is-${level}` : ""}`;
+            box.textContent = message || "";
+        }
+
+        function setActionButtonBusy(button, busy, loadingText = "处理中...") {
+            if (!button) return;
+            if (busy) {
+                button.dataset.idleText = button.textContent || "";
+                button.disabled = true;
+                button.textContent = loadingText;
+                return;
+            }
+            button.disabled = false;
+            if (button.dataset.idleText) button.textContent = button.dataset.idleText;
+            delete button.dataset.idleText;
+        }
+
+        function toggleSidebarGroup(id) {
+            const panel = document.getElementById(id);
+            if (!panel) return;
+            panel.parentElement?.classList.toggle("is-open");
+        }
+
+        function setValue(id, value) {
+            const element = document.getElementById(id);
+            if (element) element.value = value ?? "";
+        }
+
+        function getDefaultDouyinAccounts() {
+            return [1, 2, 3].map((id) => ({ id, status: "offline", port: 9331 + id }));
+        }
+
+        function normalizeDouyinIntentStrategy(value) {
+            const strategy = normalize(value || "prompt").toLowerCase();
+            return ["prompt", "reverse"].includes(strategy) ? strategy : "prompt";
+        }
+
+        function renderAccountOptions(accounts, preferredId) {
+            const select = document.getElementById("douyin-default-account-id");
+            if (!select) return;
+            const rows = Array.isArray(accounts) && accounts.length ? accounts : getDefaultDouyinAccounts();
+            select.innerHTML = rows
+                .map((account) => `<option value="${account.id}" ${Number(preferredId || 1) === Number(account.id) ? "selected" : ""}>账号 ${account.id} · 端口 ${account.port} · ${accountStatusText(account.status)}</option>`)
+                .join("");
+        }
+
+        function getActiveDouyinAccountIdFromAccounts(accounts, preferredId) {
+            const rows = Array.isArray(accounts) ? accounts : [];
+            const preferred = rows.find((account) => Number(account.id || 0) === Number(preferredId || 0) && normalize(account.status || "") === "online");
+            if (preferred) return Number(preferred.id || 0) || null;
+            const online = rows.find((account) => normalize(account.status || "") === "online");
+            return online ? Number(online.id || 0) || null : null;
+        }
+
+        function renderAccounts(accounts) {
+            const grid = document.getElementById("douyin-accounts-grid");
+            const summary = document.getElementById("douyin-account-summary");
+            const rows = Array.isArray(accounts) && accounts.length ? accounts : getDefaultDouyinAccounts();
+            if (!grid || !summary) return;
+            if (!rows.length) {
+                grid.innerHTML = '<div class="empty" style="grid-column:1/-1">暂无抖音账号配置。</div>';
+                summary.textContent = "暂无抖音账号信息。";
+                return;
+            }
+            const online = rows.filter((item) => item.status === "online").length;
+            const waiting = rows.filter((item) => item.status === "waiting").length;
+            summary.textContent = `已登录 ${online} 个，待扫码 ${waiting} 个。${activeDouyinAccountId ? `当前优先使用账号 ${activeDouyinAccountId}` : "当前没有可用的已登录账号"}。`;
+            grid.innerHTML = rows.map((account) => {
+                const isActive = Number(activeDouyinAccountId || 0) === Number(account.id || 0);
+                return `
+                    <div class="account ${esc(account.status || "offline")}">
+                        <div class="account-top">
+                            <div>
+                                <div class="account-id">账号 ${esc(account.id)}</div>
+                                <div class="subtle">${isActive ? "当前默认执行账号" : "独立抖音浏览器工作位"}</div>
+                            </div>
+                            <div class="pill">${esc(accountStatusText(account.status))}</div>
+                        </div>
+                        <div class="account-meta-list">
+                            <div class="account-meta-row"><span class="account-meta-label">调试端口</span><span class="account-meta-value">${esc(account.port || "-")}</span></div>
+                            <div class="account-meta-row"><span class="account-meta-label">浏览器环境</span><span class="account-meta-value">独立 Profile</span></div>
+                            <div class="account-meta-row"><span class="account-meta-label">优先级</span><span class="account-meta-value">${isActive ? "当前优先" : "可切换备用"}</span></div>
+                        </div>
+                        <div class="table-action-row">
+                            <button type="button" class="btn btn-primary" onclick="loginDouyinAccount(${Number(account.id || 0)}, this)">登录</button>
+                            <button type="button" class="btn" onclick="viewDouyinAccount(${Number(account.id || 0)}, this)">查看</button>
+                            <button type="button" class="btn btn-danger" onclick="logoutDouyinAccount(${Number(account.id || 0)}, this)">退出</button>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        function applyDouyinConfigForm(configData = {}) {
+            const aiProxyStatus = document.getElementById("ai-proxy-status");
+            if (aiProxyStatus) aiProxyStatus.textContent = configData.api_key_configured ? "AI 能力已接入服务器 Comfly 转发，按当前登录账号计费。" : "AI 能力需要登录后通过服务器 Comfly 转发调用。";
+            setValue("model", configData.model || "");
+            setValue("comment-direction", configData.comment_direction || "");
+            setValue("comment-filter-strategy", normalizeDouyinIntentStrategy(configData.comment_filter_strategy || "prompt"));
+            setValue("douyin-message-show-browser", String(!!configData.douyin_message_show_browser));
+            setValue("search-min-likes", configData.search_min_likes ?? 500);
+            setValue("search-avg-multiplier", configData.search_avg_multiplier ?? 1.5);
+            setValue("search-exclude-historical-duplicates", String(configData.search_exclude_historical_duplicates ?? true));
+            setValue("comment-scroll-rounds", configData.comment_scroll_rounds ?? 300);
+            setValue("comment-max-comments", configData.comment_max_comments ?? 500);
+            savedDouyinIntentPrompt = normalize(configData.comment_direction || "");
+            savedDouyinIntentStrategy = normalizeDouyinIntentStrategy(configData.comment_filter_strategy || "prompt");
+        }
+
+        function renderDouyinAccountSnapshot(accounts, preferredId) {
+            douyinAccounts = Array.isArray(accounts) && accounts.length ? accounts : getDefaultDouyinAccounts();
+            activeDouyinAccountId = getActiveDouyinAccountIdFromAccounts(douyinAccounts, preferredId) || Number(preferredId || 0) || null;
+            renderAccountOptions(douyinAccounts, preferredId);
+            renderAccounts(douyinAccounts);
+        }
+
+        async function fetchJsonWithTimeout(url, timeoutMs = 4000) {
+            let timer = null;
+            try {
+                return await Promise.race([
+                    fetch(url).then(async (response) => {
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                            throw new Error(data.msg || data.detail || `HTTP ${response.status}`);
+                        }
+                        return data;
+                    }),
+                    new Promise((_, reject) => {
+                        timer = window.setTimeout(() => reject(new Error(`请求超时：${url}`)), timeoutMs);
+                    }),
+                ]);
+            } finally {
+                if (timer) window.clearTimeout(timer);
+            }
+        }
+
+        async function loadDouyinConfig(silent = false) {
+            let configData = {};
+            try {
+                configData = await fetchJsonWithTimeout("/api/douyin/config", 4000);
+                if (configData.code !== 200) throw new Error(configData.msg || configData.detail || "配置接口返回异常");
+            } catch (error) {
+                configData = {
+                    code: 200,
+                    model: "",
+                    comment_direction: "",
+                    comment_filter_strategy: "prompt",
+                    douyin_message_show_browser: false,
+                    search_min_likes: 500,
+                    search_avg_multiplier: 1.5,
+                    search_exclude_historical_duplicates: true,
+                    comment_scroll_rounds: 300,
+                    comment_max_comments: 500,
+                    douyin_default_account_id: 1,
+                    douyin_accounts: getDefaultDouyinAccounts(),
+                };
+                if (!silent) addLog(`加载抖音配置失败，已使用默认配置兜底：${error.message}`, "warning");
+                setAccountActionStatus(`抖音后端接口暂时不可用：${error.message}。如果刚迁移或刚改完代码，请重启后端服务后再试。`, "error");
+            }
+            applyDouyinConfigForm(configData);
+            renderDouyinAccountSnapshot(configData.douyin_accounts, configData.douyin_default_account_id);
+            if (!silent) addLog("抖音配置已加载。", "success");
+        }
+
+        async function saveDouyinConfig() {
+            const payload = {
+                model: document.getElementById("model")?.value.trim() || "",
+                comment_direction: document.getElementById("comment-direction")?.value.trim() || "",
+                comment_filter_strategy: normalizeDouyinIntentStrategy(document.getElementById("comment-filter-strategy")?.value || "prompt"),
+                search_min_likes: parseInt(document.getElementById("search-min-likes")?.value, 10) || 0,
+                search_avg_multiplier: parseFloat(document.getElementById("search-avg-multiplier")?.value) || 0,
+                search_exclude_historical_duplicates: document.getElementById("search-exclude-historical-duplicates")?.value === "true",
+                comment_scroll_rounds: parseInt(document.getElementById("comment-scroll-rounds")?.value, 10) || 300,
+                comment_max_comments: parseInt(document.getElementById("comment-max-comments")?.value, 10) || 500,
+                douyin_default_account_id: parseInt(document.getElementById("douyin-default-account-id")?.value, 10) || 1,
+                douyin_message_show_browser: document.getElementById("douyin-message-show-browser")?.value === "true",
+            };
+            try {
+                const response = await fetch("/api/douyin/config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json();
+                if (data.code === 200) {
+                    savedDouyinIntentPrompt = normalize(payload.comment_direction || "");
+                    savedDouyinIntentStrategy = normalizeDouyinIntentStrategy(payload.comment_filter_strategy || "prompt");
+                    addLog(data.msg || "抖音配置已保存。", "success");
+                    await loadDouyinConfig(true);
+                    return;
+                }
+                addLog(data.msg || data.detail || "保存抖音配置失败。", "error");
+            } catch (error) {
+                addLog(`保存抖音配置失败：${error.message}`, "error");
+            }
+        }
+
+        async function loginDouyinAccount(id, button = null) {
+            setActionButtonBusy(button, true, "启动中...");
+            setAccountActionStatus(`正在为账号 ${id} 启动独立浏览器，首次启动可能需要十几秒。`, "info");
+            addLog(`正在为账号 ${id} 启动浏览器...`);
+            try {
+                const response = await fetch(`/api/douyin/account/${id}/login`, { method: "POST" });
+                const data = await response.json();
+                if (data.code === 200) {
+                    setAccountActionStatus(`账号 ${id} 浏览器已启动，请在打开的抖音窗口里扫码或确认登录。`, "success");
+                    addLog(`账号 ${id} 浏览器已启动，请在打开的窗口里完成登录；需要回到主页时直接点“查看”。`, "success");
+                    await loadDouyinConfig(true);
+                    return;
+                }
+                setAccountActionStatus(data.msg || `账号 ${id} 登录启动失败。`, "error");
+                setAccountActionStatus(data.msg || data.detail || `账号 ${id} 登录启动失败。`, "error");
+                addLog(data.msg || data.detail || `账号 ${id} 登录启动失败。`, "error");
+            } catch (error) {
+                setAccountActionStatus(`账号 ${id} 登录启动失败：${error.message}`, "error");
+                addLog(`账号 ${id} 登录启动失败：${error.message}`, "error");
+            } finally {
+                setActionButtonBusy(button, false);
+            }
+        }
+
+        async function viewDouyinAccount(id, button = null) {
+            setActionButtonBusy(button, true, "打开中...");
+            setAccountActionStatus(`正在打开账号 ${id} 的抖音主页，若浏览器已存在会直接复用。`, "info");
+            addLog(`正在打开账号 ${id} 的抖音主页...`);
+            try {
+                const response = await fetch(`/api/douyin/account/${id}/view`, { method: "POST" });
+                const data = await response.json();
+                if (data.code === 200) {
+                    setAccountActionStatus(data.msg || `账号 ${id} 的抖音主页已打开。`, "success");
+                    addLog(data.msg || `账号 ${id} 的抖音主页已打开。`, "success");
+                    await loadDouyinConfig(true);
+                    return data;
+                }
+                setAccountActionStatus(data.msg || data.detail || `打开账号 ${id} 主页失败。`, "error");
+                setAccountActionStatus(data.msg || data.detail || `打开账号 ${id} 主页失败。`, "error");
+                addLog(data.msg || data.detail || `打开账号 ${id} 主页失败。`, "error");
+                return data;
+            } catch (error) {
+                setAccountActionStatus(`打开账号 ${id} 主页失败：${error.message}`, "error");
+                addLog(`打开账号 ${id} 主页失败：${error.message}`, "error");
+                return null;
+            } finally {
+                setActionButtonBusy(button, false);
+            }
+        }
+
+        async function logoutDouyinAccount(id, button = null) {
+            setActionButtonBusy(button, true, "退出中...");
+            setAccountActionStatus(`正在关闭账号 ${id} 的浏览器。`, "warning");
+            try {
+                const response = await fetch(`/api/douyin/account/${id}/logout`, { method: "POST" });
+                const data = await response.json();
+                if (data.code === 200) {
+                    setAccountActionStatus(`账号 ${id} 已退出并关闭浏览器。`, "warning");
+                    addLog(`账号 ${id} 已退出。`, "warning");
+                    await loadDouyinConfig(true);
+                    return;
+                }
+                setAccountActionStatus(data.msg || data.detail || `退出账号 ${id} 失败。`, "error");
+                addLog(data.msg || data.detail || `退出账号 ${id} 失败。`, "error");
+            } catch (error) {
+                setAccountActionStatus(`退出账号 ${id} 失败：${error.message}`, "error");
+                addLog(`退出账号 ${id} 失败：${error.message}`, "error");
+            } finally {
+                setActionButtonBusy(button, false);
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            await loadDouyinConfig(true);
+        });
+    </script>
+</body>
+</html>

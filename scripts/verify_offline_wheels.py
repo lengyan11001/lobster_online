@@ -61,6 +61,7 @@ def _pip_offline_resolve_check() -> None:
                 "pip",
                 "install",
                 "--dry-run",
+                "--ignore-installed",
                 "--no-index",
                 "--find-links",
                 str(WHEELS),

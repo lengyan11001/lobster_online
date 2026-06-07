@@ -1,0 +1,1353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音私信聚合</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">数据大屏</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">排期中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group is-active" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header active" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-customers')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">客户仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-nurture')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">养号仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 5.5h10"></path>
+                                            <path d="M7 10.5h10"></path>
+                                            <path d="M7 15.5h6"></path>
+                                            <path d="M5 4.5h.01"></path>
+                                            <path d="M5 9.5h.01"></path>
+                                            <path d="M5 14.5h.01"></path>
+                                            <path d="M4.5 19.5h15"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">执行日志</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="12" cy="12" r="2.6"></circle>
+                                            <path d="M19.4 15a1.3 1.3 0 0 0 .26 1.43l.05.05a1.6 1.6 0 1 1-2.26 2.26l-.05-.05a1.3 1.3 0 0 0-1.43-.26 1.3 1.3 0 0 0-.79 1.18V20a1.6 1.6 0 1 1-3.2 0v-.08a1.3 1.3 0 0 0-.84-1.2 1.3 1.3 0 0 0-1.39.28l-.05.05a1.6 1.6 0 1 1-2.26-2.26l.05-.05a1.3 1.3 0 0 0 .28-1.39 1.3 1.3 0 0 0-1.2-.84H4a1.6 1.6 0 1 1 0-3.2h.08a1.3 1.3 0 0 0 1.2-.84 1.3 1.3 0 0 0-.28-1.39l-.05-.05a1.6 1.6 0 1 1 2.26-2.26l.05.05a1.3 1.3 0 0 0 1.39.28h.06a1.3 1.3 0 0 0 .78-1.19V4a1.6 1.6 0 1 1 3.2 0v.08a1.3 1.3 0 0 0 .84 1.2 1.3 1.3 0 0 0 1.39-.28l.05-.05a1.6 1.6 0 1 1 2.26 2.26l-.05.05a1.3 1.3 0 0 0-.26 1.43v.06a1.3 1.3 0 0 0 1.18.79H20a1.6 1.6 0 1 1 0 3.2h-.08a1.3 1.3 0 0 0-1.2.84Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">配置中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M6.8 5.5h9.6A1.6 1.6 0 0 1 18 7.1v9.8a1.6 1.6 0 0 1-1.6 1.6H7.6A1.6 1.6 0 0 1 6 16.9V6.3A.8.8 0 0 1 6.8 5.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h6"></path>
+                                            <path d="M9 15h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">使用说明</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="inbox-workspace-page" class="workspace-panel-page active">
+                    <div class="douyin-inbox-frame">
+                        <div class="douyin-inbox-page-head">
+                            <div class="douyin-inbox-page-copy">
+                                <h3>私信聚合</h3>
+                                <p>按抖音消息页的结构统一查看多个已登录账号的私信，会话上只额外标明来源账号。</p>
+                            </div>
+                            <button type="button" class="douyin-inbox-ghost-btn" onclick="refreshDouyinInboxWorkspace()">刷新会话</button>
+                        </div>
+                        <section class="douyin-inbox-shell">
+                            <div class="douyin-inbox-controlbar">
+                                <div class="douyin-inbox-control-main">
+                                    <div class="douyin-inbox-control-header">
+                                        <div class="douyin-inbox-control-copy">
+                                            <strong>消息控制台</strong>
+                                            <span id="douyin-inbox-control-note">正在整理当前账号和会话状态...</span>
+                                        </div>
+                                    </div>
+                                    <div class="douyin-inbox-control-actions-row">
+                                        <div id="douyin-inbox-top-account-filters" class="douyin-inbox-top-account-filters">
+                                            <div class="douyin-inbox-empty" style="min-height:34px">正在同步账号会话...</div>
+                                        </div>
+                                        <div class="douyin-inbox-control-actions">
+                                            <button type="button" class="douyin-inbox-ghost-btn" id="douyin-inbox-view-account-btn" onclick="viewDouyinInboxAccount()">查看账号</button>
+                                            <button type="button" class="btn" id="douyin-inbox-collect-btn" onclick="collectDouyinInboxMessages()">立即采集</button>
+                                            <button type="button" class="btn btn-primary" id="douyin-inbox-auto-collect-btn" onclick="toggleDouyinInboxAutoCollect()">开启自动采集</button>
+                                        </div>
+                                    </div>
+                                    <div class="douyin-inbox-control-status-row">
+                                        <div class="douyin-inbox-stat-chip">
+                                            <span class="douyin-inbox-stat-chip-label">当前视图</span>
+                                            <strong id="douyin-inbox-current-account" class="douyin-inbox-stat-chip-value">-</strong>
+                                        </div>
+                                        <div class="douyin-inbox-stat-chip">
+                                            <span class="douyin-inbox-stat-chip-label">采集状态</span>
+                                            <strong id="douyin-inbox-collect-status" class="douyin-inbox-stat-chip-value is-idle">未开启</strong>
+                                        </div>
+                                        <div class="douyin-inbox-stat-chip">
+                                            <span class="douyin-inbox-stat-chip-label">消息数量</span>
+                                            <strong id="douyin-inbox-message-count" class="douyin-inbox-stat-chip-value">0</strong>
+                                        </div>
+                                        <div class="douyin-inbox-stat-chip">
+                                            <span class="douyin-inbox-stat-chip-label">已回复数量</span>
+                                            <strong id="douyin-inbox-replied-count" class="douyin-inbox-stat-chip-value">0</strong>
+                                        </div>
+                                    </div>
+                                    <div id="douyin-inbox-reply-config" class="douyin-inbox-reply-config">
+                                        <div class="douyin-inbox-empty" style="min-height:82px">正在同步自动回复配置...</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <aside class="douyin-inbox-sidebar">
+                                <div class="douyin-inbox-toolbar">
+                                    <input type="text" id="douyin-inbox-search" class="input" placeholder="搜索" oninput="changeDouyinInboxSearch()">
+                                    <div class="douyin-inbox-filter-strip">
+                                        <div class="douyin-inbox-toolbar-meta">
+                                            <label class="douyin-inbox-unread-toggle" for="douyin-inbox-only-unread">
+                                                <input type="checkbox" id="douyin-inbox-only-unread" onchange="toggleDouyinInboxOnlyUnread()">
+                                                <span class="douyin-inbox-unread-box" aria-hidden="true"></span>
+                                                <span>仅看未读</span>
+                                            </label>
+                                            <div>
+                                                <strong id="douyin-inbox-total">0</strong>
+                                                <span> 个会话</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="douyin-inbox-conversation-list" class="douyin-inbox-conversation-list">
+                                    <div class="douyin-inbox-empty">
+                                        <strong>暂无会话</strong>
+                                        <div class="subtle">先采集陌生人私信后，这里会按账号聚合展示。</div>
+                                    </div>
+                                </div>
+                            </aside>
+                            <section class="douyin-inbox-chat-panel">
+                                <div id="douyin-inbox-chat-stage" class="douyin-inbox-chat-stage">
+                                    <div class="douyin-inbox-empty" style="height:100%">
+                                        <strong>等待选中会话</strong>
+                                        <div class="subtle">左边点开一个私信会话，右边就会显示聊天内容。</div>
+                                    </div>
+                                </div>
+                            </section>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <div id="log-content" style="display:none"></div>
+
+    <script>
+        let douyinAccounts = [];
+        let activeDouyinAccountId = null;
+        let douyinInboxRunning = false;
+        let douyinInboxState = {};
+        let douyinInboxResults = [];
+        let douyinInboxMonitorStates = {};
+        let douyinInboxReplyDrafts = {};
+        let douyinInboxConversationDetails = {};
+        let douyinInboxDetailLoadingKey = "";
+        let douyinInboxDetailFailureUntil = {};
+        let douyinInboxAccountFilter = "all";
+        let douyinInboxSearchKeyword = "";
+        let douyinInboxOnlyUnread = false;
+        let douyinInboxSelectedConversationKey = "";
+        let douyinInboxDraftMessage = "";
+        let inboxPollTimer = 0;
+        let inboxPollInFlight = false;
+        let inboxStatsRequestInFlight = null;
+        let inboxLastStatsRefreshAt = 0;
+
+        function normalize(value) {
+            return String(value ?? "").replace(/\u200b|\ufeff/g, "").replace(/\s+/g, " ").trim();
+        }
+
+        function esc(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function cut(value, size = 30) {
+            const text = String(value ?? "");
+            return text.length > size ? `${text.slice(0, size)}...` : text;
+        }
+
+        function setText(id, value) {
+            const element = document.getElementById(id);
+            if (element) element.textContent = String(value ?? "");
+        }
+
+        function setBtn(button, loading, idleText, loadingText) {
+            if (!button) return;
+            button.disabled = !!loading;
+            button.textContent = loading ? loadingText : idleText;
+        }
+
+        function accountStatusText(status) {
+            return ({ online: "在线", waiting: "待扫码", offline: "离线" })[normalize(status)] || "离线";
+        }
+
+        function createCommentTimestamp(year, month, day, hour = 0, minute = 0) {
+            const ts = new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+            return Number.isFinite(ts) ? ts : null;
+        }
+
+        function parseCommentTimestamp(rawValue) {
+            const text = normalize(rawValue);
+            if (!text) return null;
+            const now = new Date();
+            const nowTs = now.getTime();
+            const todayStartTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+            if (/^(刚刚|刚才)$/.test(text)) return nowTs;
+            let match = text.match(/^(\d+)\s*分钟[前内]?$/);
+            if (match) return nowTs - Number(match[1]) * 60 * 1000;
+            match = text.match(/^(\d+)\s*小时[前内]?$/);
+            if (match) return nowTs - Number(match[1]) * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*天前$/);
+            if (match) return nowTs - Number(match[1]) * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*周前$/);
+            if (match) return nowTs - Number(match[1]) * 7 * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*个?月前$/);
+            if (match) return nowTs - Number(match[1]) * 30 * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*年前$/);
+            if (match) return nowTs - Number(match[1]) * 365 * 24 * 60 * 60 * 1000;
+            if (text === "昨天") return todayStartTs - 24 * 60 * 60 * 1000;
+            if (text === "前天") return todayStartTs - 2 * 24 * 60 * 60 * 1000;
+            const normalizedText = text
+                .replace(/[年./]/g, "-")
+                .replace(/月/g, "-")
+                .replace(/日/g, "")
+                .replace(/\//g, "-")
+                .replace(/\s+/g, " ")
+                .trim();
+            match = normalizedText.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})(?::(\d{1,2}))?)?$/);
+            if (match) return createCommentTimestamp(Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4] || 0), Number(match[5] || 0));
+            match = normalizedText.match(/^(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})(?::(\d{1,2}))?)?$/);
+            if (match) {
+                let year = now.getFullYear();
+                let ts = createCommentTimestamp(year, Number(match[1]), Number(match[2]), Number(match[3] || 0), Number(match[4] || 0));
+                if (ts !== null && ts > nowTs + 24 * 60 * 60 * 1000) {
+                    ts = createCommentTimestamp(year - 1, Number(match[1]), Number(match[2]), Number(match[3] || 0), Number(match[4] || 0));
+                }
+                return ts;
+            }
+            const parsed = Date.parse(normalizedText);
+            return Number.isNaN(parsed) ? null : parsed;
+        }
+
+        function addLog(message, level = "info") {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-level-${esc(level)}">${esc(message)}</span>`;
+            box.appendChild(entry);
+            while (box.children.length > 200) box.removeChild(box.firstChild);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function clearLogs() {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            box.innerHTML = "";
+            addLog("日志已清空。");
+        }
+
+        function toggleSidebarGroup(id) {
+            const panel = document.getElementById(id);
+            if (!panel) return;
+            panel.parentElement?.classList.toggle("is-open");
+        }
+
+        function getStrangerMessageRowKey(row = {}) {
+            const conversationKey = normalize(row.conversation_key || row.conversation_id || "");
+            if (conversationKey) return `conversation:${conversationKey}`;
+            const profileUrl = normalize(row.profile_url || "");
+            if (profileUrl) return `profile:${profileUrl}`;
+            const secUserId = normalize(row.sec_user_id || "");
+            if (secUserId) return `sec:${secUserId}`;
+            const username = normalize(row.username || "");
+            const accountId = Number(row.account_id || 0) || 0;
+            return username && accountId ? `account:${accountId}|user:${username}` : username;
+        }
+
+        function getDouyinInboxConversationIdentity(row = {}) {
+            return `account:${Number(row.account_id || 0) || 0}|${getStrangerMessageRowKey(row)}`;
+        }
+
+        function getDouyinInboxAccountLabel(accountId = 0) {
+            const target = douyinAccounts.find((account) => Number(account.id || 0) === Number(accountId || 0));
+            if (target) return `账号 ${target.id}`;
+            return accountId ? `账号 ${accountId}` : "未归属账号";
+        }
+
+        function getDouyinInboxRowTimestamp(row = {}) {
+            return parseCommentTimestamp(normalize(row.reply_updated_at || row.reply_finished_at || row.reply_started_at || row.time_text || row.collected_at || "")) || 0;
+        }
+
+        function buildDouyinInboxConversations() {
+            const groups = new Map();
+            (douyinInboxResults || []).forEach((rawRow) => {
+                const row = rawRow || {};
+                const key = getDouyinInboxConversationIdentity(row);
+                if (!key) return;
+                if (!groups.has(key)) {
+                    groups.set(key, {
+                        key,
+                        account_id: Number(row.account_id || 0) || 0,
+                        username: normalize(row.username || "") || "未命名会话",
+                        avatar: String(row.avatar || row.avatar_url || ""),
+                        profile_url: normalize(row.profile_url || ""),
+                        reply_status: normalize(row.reply_status || "pending").toLowerCase() || "pending",
+                        unread_count: 0,
+                        is_unread: false,
+                        last_activity_at: "",
+                        last_activity_ts: 0,
+                        messages: [],
+                    });
+                }
+                const conversation = groups.get(key);
+                conversation.unread_count = Math.max(Number(conversation.unread_count || 0), Number(row.unread_count || 0) || 0);
+                conversation.is_unread = conversation.is_unread || !!row.is_unread || Number(row.unread_count || 0) > 0;
+                if (normalize(row.profile_url || "")) conversation.profile_url = normalize(row.profile_url || "");
+                if (normalize(row.avatar || row.avatar_url || "")) conversation.avatar = String(row.avatar || row.avatar_url || "");
+                if (normalize(row.username || "")) conversation.username = normalize(row.username || "");
+                if (normalize(row.reply_status || "")) conversation.reply_status = normalize(row.reply_status || "").toLowerCase();
+
+                const inboundText = normalize(row.incoming_message || row.preview_text || "");
+                const inboundTime = normalize(row.time_text || row.collected_at || "");
+                const inboundTs = parseCommentTimestamp(inboundTime) || 0;
+                if (inboundText) {
+                    conversation.messages.push({
+                        direction: "incoming",
+                        text: inboundText,
+                        time_text: inboundTime || "刚刚",
+                        ts: inboundTs,
+                        label: conversation.username || "对方",
+                        seq: conversation.messages.length,
+                    });
+                }
+
+                const outboundText = normalize(row.reply_message || "");
+                const outboundTime = normalize(row.reply_updated_at || row.reply_finished_at || row.reply_started_at || "");
+                const outboundTs = parseCommentTimestamp(outboundTime) || 0;
+                if (outboundText) {
+                    conversation.messages.push({
+                        direction: "outgoing",
+                        text: outboundText,
+                        time_text: outboundTime || "已回复",
+                        ts: outboundTs,
+                        label: getDouyinInboxAccountLabel(conversation.account_id),
+                        seq: conversation.messages.length,
+                    });
+                }
+
+                const lastTs = Math.max(inboundTs, outboundTs, getDouyinInboxRowTimestamp(row));
+                const lastText = outboundTs >= inboundTs && outboundText ? outboundText : (inboundText || outboundText || "暂无消息");
+                if (lastTs >= Number(conversation.last_activity_ts || 0)) {
+                    conversation.last_activity_ts = lastTs;
+                    conversation.last_activity_at = outboundTs >= inboundTs && outboundText
+                        ? (outboundTime || inboundTime || row.time_text || "")
+                        : (inboundTime || outboundTime || row.time_text || "");
+                    conversation.last_message_text = lastText;
+                }
+            });
+
+            return [...groups.values()].map((conversation) => {
+                conversation.account_label = getDouyinInboxAccountLabel(conversation.account_id);
+                const syncedRow = (douyinInboxResults || []).find((row) => getDouyinInboxConversationIdentity(row) === conversation.key) || {};
+                const rowMessages = Array.isArray(syncedRow.messages) ? syncedRow.messages : [];
+                const detail = douyinInboxConversationDetails[conversation.key];
+
+                if (rowMessages.length) {
+                    conversation.messages = rowMessages.map((message, index) => ({
+                        direction: normalize(message.direction || "incoming") === "outgoing" ? "outgoing" : "incoming",
+                        text: normalize(message.text || ""),
+                        time_text: normalize(message.time_text || ""),
+                        ts: parseCommentTimestamp(normalize(message.time_text || "")) || 0,
+                        label: normalize(message.label || "") || (normalize(message.direction || "incoming") === "outgoing" ? getDouyinInboxAccountLabel(conversation.account_id) : (conversation.username || "对方")),
+                        seq: index,
+                    })).filter((message) => message.text);
+                    const lastMessage = conversation.messages[conversation.messages.length - 1] || {};
+                    conversation.last_message_text = normalize(lastMessage.text || conversation.last_message_text || "") || "暂无消息";
+                    conversation.last_activity_at = normalize(lastMessage.time_text || conversation.last_activity_at || syncedRow.time_text || "");
+                    conversation.last_activity_ts = parseCommentTimestamp(conversation.last_activity_at) || Number(conversation.last_activity_ts || 0);
+                    conversation.detail_loaded = true;
+                } else if (detail && Array.isArray(detail.messages) && detail.messages.length) {
+                    if (normalize(detail.username || "")) conversation.username = normalize(detail.username || "");
+                    if (normalize(detail.avatar_url || "")) conversation.avatar = String(detail.avatar_url || "");
+                    if (normalize(detail.profile_url || "")) conversation.profile_url = normalize(detail.profile_url || "");
+                    conversation.messages = detail.messages.map((message, index) => ({
+                        direction: normalize(message.direction || "incoming") === "outgoing" ? "outgoing" : "incoming",
+                        text: normalize(message.text || ""),
+                        time_text: normalize(message.time_text || ""),
+                        ts: parseCommentTimestamp(normalize(message.time_text || "")) || 0,
+                        label: normalize(message.label || "") || (normalize(message.direction || "incoming") === "outgoing" ? getDouyinInboxAccountLabel(conversation.account_id) : (conversation.username || "对方")),
+                        seq: index,
+                    })).filter((message) => message.text);
+                    const lastMessage = conversation.messages[conversation.messages.length - 1] || {};
+                    conversation.last_message_text = normalize(lastMessage.text || conversation.last_message_text || "") || "暂无消息";
+                    conversation.last_activity_at = normalize(lastMessage.time_text || conversation.last_activity_at || "");
+                    conversation.last_activity_ts = parseCommentTimestamp(conversation.last_activity_at) || Number(conversation.last_activity_ts || 0);
+                    conversation.detail_loaded = true;
+                }
+
+                conversation.messages = conversation.messages
+                    .sort((a, b) => (a.ts || 0) - (b.ts || 0) || Number(a.seq || 0) - Number(b.seq || 0) || a.direction.localeCompare(b.direction));
+
+                if (!conversation.messages.length) {
+                    conversation.messages = [{
+                        direction: "incoming",
+                        text: "当前还没有可展示的消息内容。",
+                        time_text: conversation.last_activity_at || "刚刚",
+                        ts: conversation.last_activity_ts || 0,
+                        label: conversation.username || "对方",
+                    }];
+                }
+
+                if (!normalize(conversation.last_message_text || "")) {
+                    const lastMessage = conversation.messages[conversation.messages.length - 1] || {};
+                    conversation.last_message_text = normalize(lastMessage.text || "") || "暂无消息";
+                    conversation.last_activity_at = normalize(lastMessage.time_text || conversation.last_activity_at || "");
+                    conversation.last_activity_ts = Number(lastMessage.ts || conversation.last_activity_ts || 0);
+                }
+
+                return conversation;
+            }).sort((a, b) => (Number(b.last_activity_ts || 0) - Number(a.last_activity_ts || 0)) || normalize(a.username || "").localeCompare(normalize(b.username || ""), "zh-CN"));
+        }
+
+        function getFilteredDouyinInboxConversations() {
+            const keyword = normalize(douyinInboxSearchKeyword || "").toLowerCase();
+            return buildDouyinInboxConversations().filter((conversation) => {
+                const accountMatch = douyinInboxAccountFilter === "all" || String(conversation.account_id || 0) === String(douyinInboxAccountFilter || "");
+                if (!accountMatch) return false;
+                if (douyinInboxOnlyUnread && !conversation.is_unread && Number(conversation.unread_count || 0) <= 0) return false;
+                if (!keyword) return true;
+                const haystack = [conversation.username, conversation.account_label, conversation.last_message_text, ...(conversation.messages || []).map((message) => message.text || "")]
+                    .join(" ")
+                    .toLowerCase();
+                return haystack.includes(keyword);
+            });
+        }
+
+        function ensureDouyinInboxSelection(conversations = []) {
+            const available = new Set((conversations || []).map((item) => normalize(item.key || "")).filter(Boolean));
+            if (available.has(normalize(douyinInboxSelectedConversationKey || ""))) return normalize(douyinInboxSelectedConversationKey || "");
+            const nextKey = normalize(conversations[0]?.key || "");
+            douyinInboxSelectedConversationKey = nextKey;
+            return nextKey;
+        }
+
+        function getCurrentDouyinInboxConversation() {
+            const conversations = getFilteredDouyinInboxConversations();
+            const currentKey = ensureDouyinInboxSelection(conversations);
+            return conversations.find((item) => normalize(item.key || "") === currentKey) || null;
+        }
+
+        function getDouyinInboxConversationRow(conversationKey = "") {
+            const normalizedKey = normalize(conversationKey || "");
+            if (!normalizedKey) return null;
+            return (douyinInboxResults || []).find((row) => getDouyinInboxConversationIdentity(row) === normalizedKey) || null;
+        }
+
+        function getDouyinInboxFocusAccountId() {
+            if (douyinInboxAccountFilter !== "all") return Number(douyinInboxAccountFilter || 0) || 0;
+            const selectedConversation = getCurrentDouyinInboxConversation();
+            if (Number(selectedConversation?.account_id || 0)) return Number(selectedConversation.account_id || 0) || 0;
+            if (Number(activeDouyinAccountId || 0)) return Number(activeDouyinAccountId || 0) || 0;
+            const onlineAccount = douyinAccounts.find((account) => normalize(account.status || "") === "online");
+            return Number(onlineAccount?.id || 0) || 0;
+        }
+
+        function getDouyinInboxFocusRows(accountId = getDouyinInboxFocusAccountId()) {
+            return (douyinInboxResults || []).filter((row) => Number(row.account_id || 0) === Number(accountId || 0));
+        }
+
+        function syncDouyinInboxFocusAccount() {
+            return Number(getDouyinInboxFocusAccountId() || 0);
+        }
+
+        function normalizeDouyinInboxReplyMode(value = "fixed") {
+            const mode = normalize(value || "fixed").toLowerCase();
+            if (["fixed", "rewrite", "ai", "ai_auto"].includes(mode)) return mode === "ai_auto" ? "ai" : mode;
+            return "fixed";
+        }
+
+        function getDouyinInboxReplyModeLabel(mode = "fixed") {
+            return ({ fixed: "固定回复", rewrite: "AI 同方向回复", ai: "AI 自动回复" })[normalizeDouyinInboxReplyMode(mode)] || "固定回复";
+        }
+
+        function ensureDouyinInboxReplyDraft(accountId = getDouyinInboxFocusAccountId(), force = false) {
+            const key = String(Number(accountId || 0) || 0);
+            if (!key || key === "0") {
+                return { auto_reply_enabled: false, reply_mode: "fixed", reply_message: "", reply_prompt: "", contact_value: "", dirty: false };
+            }
+            const monitor = douyinInboxMonitorStates[key] || {};
+            const nextDraft = {
+                auto_reply_enabled: !!monitor.auto_reply_enabled,
+                reply_mode: normalizeDouyinInboxReplyMode(monitor.reply_mode || "fixed"),
+                reply_message: normalize(monitor.reply_message || ""),
+                reply_prompt: normalize(monitor.reply_prompt || ""),
+                contact_value: normalize(monitor.contact_value || ""),
+                dirty: false,
+            };
+            const existing = douyinInboxReplyDrafts[key];
+            if (force || !existing || !existing.dirty) douyinInboxReplyDrafts[key] = nextDraft;
+            return douyinInboxReplyDrafts[key] || nextDraft;
+        }
+
+        function syncAllDouyinInboxReplyDrafts() {
+            Object.keys(douyinInboxMonitorStates || {}).forEach((key) => ensureDouyinInboxReplyDraft(Number(key || 0), false));
+        }
+
+        function getDouyinInboxReplyDraft(accountId = getDouyinInboxFocusAccountId()) {
+            return ensureDouyinInboxReplyDraft(accountId, false);
+        }
+
+        function setDouyinInboxReplyDraftField(field, value) {
+            const accountId = Number(getDouyinInboxFocusAccountId() || 0);
+            const key = String(accountId || 0);
+            if (!accountId) return;
+            const draft = { ...getDouyinInboxReplyDraft(accountId), dirty: true };
+            if (field === "auto_reply_enabled") draft.auto_reply_enabled = !!value;
+            else if (field === "reply_mode") draft.reply_mode = normalizeDouyinInboxReplyMode(value || "fixed");
+            else if (["reply_message", "reply_prompt", "contact_value"].includes(field)) draft[field] = normalize(value || "");
+            douyinInboxReplyDrafts[key] = draft;
+            if (field === "auto_reply_enabled" || field === "reply_mode") renderDouyinInboxReplyConfig();
+            refreshActionState();
+        }
+
+        function getDouyinInboxReplyPayload(accountId = getDouyinInboxFocusAccountId()) {
+            const draft = getDouyinInboxReplyDraft(accountId);
+            return {
+                auto_reply_enabled: !!draft.auto_reply_enabled,
+                reply_mode: normalizeDouyinInboxReplyMode(draft.reply_mode || "fixed"),
+                message: normalize(draft.reply_message || ""),
+                reply_prompt: normalize(draft.reply_prompt || ""),
+                contact_value: normalize(draft.contact_value || ""),
+            };
+        }
+
+        function validateDouyinInboxReplyDraft(accountId = getDouyinInboxFocusAccountId()) {
+            const draft = getDouyinInboxReplyDraft(accountId);
+            const mode = normalizeDouyinInboxReplyMode(draft.reply_mode || "fixed");
+            if (!draft.auto_reply_enabled) return "";
+            if (mode === "fixed" && !normalize(draft.reply_message || "")) return "开启自动回复前，请先填写固定回复文案。";
+            if (mode === "rewrite" && !normalize(draft.reply_prompt || "")) return "开启 AI 同方向回复前，请先填写回复方向或基准文案。";
+            if (mode !== "fixed" && !normalize(draft.contact_value || "")) return "开启 AI 自动回复前，请先填写绿泡泡联系方式。";
+            return "";
+        }
+
+        function renderDouyinInboxReplyConfig() {
+            const container = document.getElementById("douyin-inbox-reply-config");
+            if (!container) return;
+            const accountId = Number(getDouyinInboxFocusAccountId() || 0);
+            const draft = getDouyinInboxReplyDraft(accountId);
+            const mode = normalizeDouyinInboxReplyMode(draft.reply_mode || "fixed");
+            const validationMessage = validateDouyinInboxReplyDraft(accountId);
+            const currentLabel = accountId ? `账号 ${accountId}` : "当前账号";
+            const hintText = mode === "fixed"
+                ? "固定文案直接回复，再补绿泡泡联系方式。"
+                : mode === "rewrite"
+                    ? "按你的方向生成简短同向回复，再引导加绿泡泡。"
+                    : "读取当前私信内容，自动生成简短回复，再引导加绿泡泡。";
+
+            container.innerHTML = `<div class="douyin-inbox-reply-head">
+                <div class="douyin-inbox-reply-copy">
+                    <strong>自动回复配置</strong>
+                    <span>${esc(currentLabel)} 的采集和自动采集都会读取这里的回复配置。${validationMessage ? " 当前缺少必填项。" : ""}</span>
+                </div>
+                <label class="douyin-inbox-reply-toggle" for="douyin-inbox-auto-reply-enabled">
+                    <input type="checkbox" id="douyin-inbox-auto-reply-enabled" ${draft.auto_reply_enabled ? "checked" : ""} onchange="setDouyinInboxReplyDraftField('auto_reply_enabled', this.checked)">
+                    <span class="douyin-inbox-reply-toggle-box" aria-hidden="true"></span>
+                    <span>开启自动回复</span>
+                </label>
+            </div>
+            <div class="douyin-inbox-reply-grid">
+                <div class="video-comment-field">
+                    <label for="douyin-inbox-reply-mode">回复方式</label>
+                    <select id="douyin-inbox-reply-mode" onchange="setDouyinInboxReplyDraftField('reply_mode', this.value)">
+                        <option value="fixed" ${mode === "fixed" ? "selected" : ""}>固定回复</option>
+                        <option value="rewrite" ${mode === "rewrite" ? "selected" : ""}>AI 同方向回复</option>
+                        <option value="ai" ${mode === "ai" ? "selected" : ""}>AI 自动回复</option>
+                    </select>
+                </div>
+                <div class="video-comment-field">
+                    <label for="douyin-inbox-contact-value">绿泡泡联系方式</label>
+                    <input id="douyin-inbox-contact-value" class="input" value="${esc(draft.contact_value || "")}" placeholder="例如：abc123 或手机号" oninput="setDouyinInboxReplyDraftField('contact_value', this.value)">
+                </div>
+                <div class="douyin-inbox-reply-hint"><strong>${esc(getDouyinInboxReplyModeLabel(mode))}</strong>：${esc(hintText)}${validationMessage ? `<br><span style="color:#ff9cae">${esc(validationMessage)}</span>` : ""}</div>
+            </div>
+            <div class="douyin-inbox-reply-panel ${mode === "fixed" ? "active" : ""}">
+                <div class="video-comment-field">
+                    <label for="douyin-inbox-reply-message">固定回复文案</label>
+                    <textarea id="douyin-inbox-reply-message" rows="2" placeholder="例如：你好呀，您现在是想先了解流程，还是先看案例？" oninput="setDouyinInboxReplyDraftField('reply_message', this.value)">${esc(draft.reply_message || "")}</textarea>
+                </div>
+            </div>
+            <div class="douyin-inbox-reply-panel ${mode !== "fixed" ? "active" : ""}">
+                <div class="video-comment-field">
+                    <label for="douyin-inbox-reply-prompt">${mode === "rewrite" ? "AI 同方向回复方向 / 基准文案" : "AI 自动回复补充方向"}</label>
+                    <textarea id="douyin-inbox-reply-prompt" rows="2" placeholder="${mode === "rewrite" ? "例如：先顺着对方问题回应，再自然引导去绿泡泡继续聊。" : "例如：先简短回答，再顺着引导加绿泡泡，不要太像客服。"}" oninput="setDouyinInboxReplyDraftField('reply_prompt', this.value)">${esc(draft.reply_prompt || "")}</textarea>
+                </div>
+            </div>`;
+        }
+
+        function renderDouyinInboxAvatar(conversation = {}) {
+            const avatar = normalize(conversation.avatar || "");
+            if (avatar) {
+                return `<span class="douyin-inbox-avatar"><img src="${esc(avatar)}" alt="${esc(conversation.username || "头像")}" loading="lazy" referrerpolicy="no-referrer"></span>`;
+            }
+            const label = cut(conversation.username || "?", 1).toUpperCase() || "?";
+            return `<span class="douyin-inbox-avatar">${esc(label)}</span>`;
+        }
+
+        function renderDouyinInboxControlBar(conversations = []) {
+            const accountId = Number(getDouyinInboxFocusAccountId() || 0);
+            const rows = getDouyinInboxFocusRows(accountId);
+            const monitor = douyinInboxMonitorStates[String(accountId)] || {};
+            const draft = getDouyinInboxReplyDraft(accountId);
+            const autoBtn = document.getElementById("douyin-inbox-auto-collect-btn");
+            const collectBtn = document.getElementById("douyin-inbox-collect-btn");
+            const viewBtn = document.getElementById("douyin-inbox-view-account-btn");
+            const statusEl = document.getElementById("douyin-inbox-collect-status");
+            const noteEl = document.getElementById("douyin-inbox-control-note");
+            const isAllAccountsView = douyinInboxAccountFilter === "all";
+            const selectedAccount = (douyinAccounts || []).find((account) => Number(account.id || 0) === accountId) || null;
+            const selectedAccountStatus = normalize(selectedAccount?.status || "offline");
+            const accountOnline = selectedAccountStatus === "online";
+            const scopedConversations = isAllAccountsView
+                ? (conversations || [])
+                : (conversations || []).filter((item) => String(item.account_id || 0) === String(douyinInboxAccountFilter || ""));
+            const messageCount = isAllAccountsView ? scopedConversations.length : rows.length;
+            const repliedCount = isAllAccountsView
+                ? scopedConversations.filter((item) => normalize(item.reply_status || "pending").toLowerCase() === "sent").length
+                : rows.filter((row) => normalize(row.reply_status || "pending").toLowerCase() === "sent").length;
+            const unreadCount = isAllAccountsView
+                ? scopedConversations.filter((item) => item.is_unread || Number(item.unread_count || 0) > 0).length
+                : rows.filter((row) => !!row.is_unread || Number(row.unread_count || 0) > 0).length;
+            const currentAccountLabel = isAllAccountsView ? "全部账号" : (accountId ? `账号 ${accountId}` : "未锁定账号");
+
+            let statusLabel = "未开启";
+            let statusClass = "is-idle";
+            if (!isAllAccountsView && !accountOnline) {
+                statusLabel = accountStatusText(selectedAccountStatus);
+            } else if (accountId && douyinInboxRunning && Number(douyinInboxState.account_id || 0) === accountId) {
+                statusLabel = "采集中";
+                statusClass = "is-active";
+            } else if (monitor.running) {
+                statusLabel = "自动采集中";
+                statusClass = "is-active";
+            } else if (monitor.enabled) {
+                statusLabel = "自动采集已开";
+                statusClass = "is-waiting";
+            }
+
+            setText("douyin-inbox-current-account", currentAccountLabel);
+            setText("douyin-inbox-collect-status", statusLabel);
+            setText("douyin-inbox-message-count", messageCount || 0);
+            setText("douyin-inbox-replied-count", repliedCount || 0);
+            if (statusEl) statusEl.className = `douyin-inbox-stat-chip-value ${statusClass}`;
+
+            if (noteEl) {
+                const noteParts = [currentAccountLabel];
+                if (!isAllAccountsView) noteParts.push(accountStatusText(selectedAccountStatus));
+                if (unreadCount) noteParts.push(`当前未读 ${unreadCount} 条`);
+                if (monitor.enabled && normalize(monitor.next_run_at || "")) noteParts.push(`下次自动采集 ${cut(monitor.next_run_at, 16)}`);
+                else if (normalize(douyinInboxState.finished_at || douyinInboxState.updated_at || "")) noteParts.push(`最近同步 ${cut(normalize(douyinInboxState.finished_at || douyinInboxState.updated_at || ""), 16)}`);
+                if (draft.auto_reply_enabled) noteParts.push(`自动回复 ${getDouyinInboxReplyModeLabel(draft.reply_mode || "fixed")}`);
+                if (Number(monitor.last_auto_reply_total || 0) > 0) noteParts.push(`上轮回复 ${Number(monitor.last_auto_reply_success || 0)}/${Number(monitor.last_auto_reply_total || 0)}`);
+                if (!isAllAccountsView && !accountOnline) noteParts.push("离线账号仅查看已采集消息，不能执行采集");
+                noteEl.textContent = noteParts.join(" · ");
+            }
+
+            if (autoBtn) {
+                autoBtn.textContent = monitor.enabled ? "关闭自动采集" : "开启自动采集";
+                autoBtn.disabled = !accountId || (!isAllAccountsView && !accountOnline);
+            }
+            if (collectBtn) collectBtn.disabled = !accountId || douyinInboxRunning || !!monitor.running || (!isAllAccountsView && !accountOnline);
+            if (viewBtn) viewBtn.disabled = !accountId;
+        }
+
+        function renderDouyinInboxAccountFilters(conversations = []) {
+            const container = document.getElementById("douyin-inbox-top-account-filters");
+            if (!container) return;
+            const accountCounts = new Map();
+            conversations.forEach((item) => {
+                const key = String(Number(item.account_id || 0) || 0);
+                accountCounts.set(key, (accountCounts.get(key) || 0) + 1);
+            });
+            const sourceAccounts = douyinAccounts.length
+                ? douyinAccounts
+                : [...new Set((conversations || []).map((item) => Number(item.account_id || 0) || 0).filter(Boolean))].map((id) => ({ id, status: "offline" }));
+            if (!sourceAccounts.length) {
+                container.innerHTML = `<div class="douyin-inbox-empty" style="min-height:52px">当前还没有可切换的账号。</div>`;
+                return;
+            }
+            const chips = sourceAccounts.map((account) => {
+                const accountId = String(Number(account.id || 0) || 0);
+                const count = Number(accountCounts.get(accountId) || 0);
+                const active = String(douyinInboxAccountFilter || "all") === accountId;
+                const status = normalize(account.status || "offline");
+                const statusLabel = accountStatusText(status);
+                return `<button type="button" class="douyin-inbox-account-chip ${active ? "active" : ""} ${status === "online" ? "" : "is-offline"}" onclick='setDouyinInboxAccountFilter(${JSON.stringify(accountId)})'><span class="douyin-inbox-account-chip-main"><span class="douyin-inbox-account-chip-label"><span>账号 ${esc(account.id)}</span><span class="douyin-inbox-account-chip-status ${esc(status || "offline")}">${esc(statusLabel)}</span></span><span class="douyin-inbox-account-chip-count">${esc(count)}</span></span></button>`;
+            });
+            container.innerHTML = chips.join("");
+        }
+
+        function renderDouyinInboxConversationList(conversations = []) {
+            const list = document.getElementById("douyin-inbox-conversation-list");
+            if (!list) return;
+            const currentKey = ensureDouyinInboxSelection(conversations);
+            if (!conversations.length) {
+                const accountId = Number(douyinInboxAccountFilter || 0) || 0;
+                const accountLabel = accountId ? `账号 ${accountId}` : "当前视图";
+                list.innerHTML = `<div class="douyin-inbox-empty"><strong>暂无会话</strong><div class="subtle">${accountId ? `${accountLabel} 当前还没有采集到消息。` : "当前没有可展示的会话。"} 可以先点击上方“立即采集”，从当前消息页同步会话列表。</div></div>`;
+                return;
+            }
+            list.innerHTML = conversations.map((conversation) => {
+                const active = normalize(conversation.key || "") === currentKey;
+                const unread = conversation.is_unread || Number(conversation.unread_count || 0) > 0;
+                const timeText = normalize(conversation.last_activity_at || "") || "刚刚";
+                return `<article class="douyin-inbox-conversation-card ${active ? "active" : ""}" role="button" tabindex="0" onclick='selectDouyinInboxConversation(${JSON.stringify(conversation.key)})' onkeydown='if(event.key==="Enter"||event.key===" "){event.preventDefault();selectDouyinInboxConversation(${JSON.stringify(conversation.key)})}'>
+                    <div class="douyin-inbox-conversation-top">
+                        ${renderDouyinInboxAvatar(conversation)}
+                        <div class="douyin-inbox-conversation-copy">
+                            <div class="douyin-inbox-conversation-name">${esc(cut(conversation.username || "-", 26))}</div>
+                            <div class="douyin-inbox-conversation-meta">
+                                <span class="douyin-inbox-account-badge">${esc(conversation.account_label || "-")}</span>
+                            </div>
+                        </div>
+                        <div class="douyin-inbox-conversation-time">${esc(cut(timeText, 16))}</div>
+                    </div>
+                    <div class="douyin-inbox-conversation-bottom">
+                        <div class="douyin-inbox-conversation-text">${esc(cut(conversation.last_message_text || "暂无消息", 54))}</div>
+                        <div class="douyin-inbox-list-meta-line">
+                            <span class="douyin-inbox-status-badge ${unread ? "is-unread" : "is-read"}">${esc(unread ? "未读" : "已读")}</span>
+                            ${Number(conversation.unread_count || 0) > 0 ? `<span class="douyin-inbox-unread-count">${esc(conversation.unread_count)}</span>` : ""}
+                        </div>
+                    </div>
+                </article>`;
+            }).join("");
+        }
+
+        function renderDouyinInboxChatStage(conversation = null) {
+            const container = document.getElementById("douyin-inbox-chat-stage");
+            if (!container) return;
+            if (!conversation) {
+                container.innerHTML = `<div class="douyin-inbox-empty" style="height:100%"><strong>等待选中会话</strong><div class="subtle">左边点开一个私信会话，右边就会按抖音消息页样式展示聊天内容。</div></div>`;
+                return;
+            }
+            const statusText = (conversation.is_unread || Number(conversation.unread_count || 0) > 0) ? "当前有未读" : "当前已读";
+            const isLoadingDetail = normalize(douyinInboxDetailLoadingKey || "") === normalize(conversation.key || "");
+            const messages = (conversation.messages || []).map((message, index) => {
+                const previous = (conversation.messages || [])[index - 1] || null;
+                const showDivider = !previous || cut(previous.time_text || "", 10) !== cut(message.time_text || "", 10);
+                const divider = showDivider ? `<div class="douyin-inbox-day-divider">${esc(cut(message.time_text || "最近", 10))}</div>` : "";
+                return `${divider}<div class="douyin-inbox-message ${message.direction === "outgoing" ? "outgoing" : "incoming"}"><div class="douyin-inbox-message-label">${esc(message.label || "-")}</div><div class="douyin-inbox-message-bubble">${esc(message.text || "")}</div><div class="douyin-inbox-message-meta">${esc(message.time_text || "刚刚")}</div></div>`;
+            }).join("");
+
+            container.innerHTML = `<div class="douyin-inbox-chat-head">
+                ${renderDouyinInboxAvatar(conversation)}
+                <div class="douyin-inbox-chat-copy">
+                    <h3>${esc(conversation.username || "-")}</h3>
+                    <p>${esc(conversation.account_label || "-")} · ${esc(statusText)}</p>
+                </div>
+                <div class="douyin-inbox-chat-actions">
+                    <span class="douyin-inbox-account-badge">${esc(conversation.account_label || "-")}</span>
+                    ${isLoadingDetail ? `<span class="douyin-inbox-account-badge">同步中...</span>` : ""}
+                    ${conversation.profile_url ? `<button type="button" class="btn" onclick='window.open(${JSON.stringify(conversation.profile_url)},"_blank")'>主页</button>` : ""}
+                </div>
+            </div>
+            <div class="douyin-inbox-chat-body">${messages || `<div class="douyin-inbox-empty"><strong>暂无消息</strong><div class="subtle">当前会话还没有可展示的聊天内容。</div></div>`}</div>
+            <div class="douyin-inbox-composer">
+                <div class="video-comment-field" style="margin:0">
+                    <textarea id="douyin-inbox-draft" class="input" placeholder="发送消息" oninput="updateDouyinInboxDraft()">${esc(douyinInboxDraftMessage || "")}</textarea>
+                    <div class="douyin-inbox-composer-note">当前会话归属 ${esc(conversation.account_label || "-")}，真实发送下一步直接接到对应账号。</div>
+                </div>
+                <button type="button" class="btn btn-primary" onclick='sendDouyinInboxDraft(${JSON.stringify(conversation.key)}, this)'>发送</button>
+            </div>`;
+        }
+
+        function renderDouyinInboxWorkspace() {
+            const allConversations = buildDouyinInboxConversations();
+            const availableAccountIds = [...new Set((douyinAccounts || []).map((account) => String(Number(account.id || 0) || 0)).filter((id) => id !== "0"))];
+            if ((!douyinInboxAccountFilter || douyinInboxAccountFilter === "all" || !availableAccountIds.includes(String(douyinInboxAccountFilter || ""))) && availableAccountIds.length) {
+                douyinInboxAccountFilter = availableAccountIds[0];
+                douyinInboxSelectedConversationKey = "";
+            }
+            ensureDouyinInboxReplyDraft(getDouyinInboxFocusAccountId(), false);
+            const filteredConversations = getFilteredDouyinInboxConversations();
+            const selectedConversation = getCurrentDouyinInboxConversation();
+            const onlineAccounts = douyinAccounts.filter((account) => normalize(account.status || "") === "online");
+            const lastSync = normalize(douyinInboxState.finished_at || douyinInboxState.updated_at || douyinInboxState.started_at || "") || "-";
+
+            renderDouyinInboxControlBar(allConversations);
+            const activeElement = document.activeElement;
+            if (!(activeElement && activeElement.closest && activeElement.closest("#douyin-inbox-reply-config"))) {
+                renderDouyinInboxReplyConfig();
+            }
+            renderDouyinInboxAccountFilters(allConversations);
+            renderDouyinInboxConversationList(filteredConversations);
+            renderDouyinInboxChatStage(selectedConversation);
+            setText("douyin-inbox-total", allConversations.length || 0);
+
+            const searchInput = document.getElementById("douyin-inbox-search");
+            const unreadCheckbox = document.getElementById("douyin-inbox-only-unread");
+            if (searchInput && searchInput.value !== douyinInboxSearchKeyword) searchInput.value = douyinInboxSearchKeyword || "";
+            if (unreadCheckbox) unreadCheckbox.checked = !!douyinInboxOnlyUnread;
+
+            const summary = document.getElementById("douyin-inbox-summary");
+            if (summary) {
+                summary.textContent = filteredConversations.length
+                    ? `在线 ${onlineAccounts.length} 个账号 · 未读 ${allConversations.filter((item) => item.is_unread || Number(item.unread_count || 0) > 0).length} 个 · 最近同步 ${lastSync === "-" ? "-" : cut(lastSync, 16)}`
+                    : "当前筛选下没有匹配会话。";
+            }
+        }
+
+        function refreshActionState() {
+            renderDouyinInboxControlBar(buildDouyinInboxConversations());
+        }
+
+        function setDouyinInboxAccountFilter(value = "all") {
+            douyinInboxAccountFilter = String(value || "all");
+            douyinInboxSelectedConversationKey = "";
+            renderDouyinInboxWorkspace();
+        }
+
+        function changeDouyinInboxSearch() {
+            douyinInboxSearchKeyword = normalize(document.getElementById("douyin-inbox-search")?.value || "");
+            douyinInboxSelectedConversationKey = "";
+            renderDouyinInboxWorkspace();
+        }
+
+        function toggleDouyinInboxOnlyUnread() {
+            douyinInboxOnlyUnread = !!document.getElementById("douyin-inbox-only-unread")?.checked;
+            douyinInboxSelectedConversationKey = "";
+            renderDouyinInboxWorkspace();
+        }
+
+        async function selectDouyinInboxConversation(key = "") {
+            const normalizedKey = normalize(key || "");
+            if (!normalizedKey) return;
+            douyinInboxSelectedConversationKey = normalizedKey;
+            douyinInboxDetailLoadingKey = "";
+            renderDouyinInboxWorkspace();
+        }
+
+        function updateDouyinInboxDraft() {
+            douyinInboxDraftMessage = document.getElementById("douyin-inbox-draft")?.value || "";
+        }
+
+        async function loadDouyinStats(force = false) {
+            const now = Date.now();
+            if (!force && inboxStatsRequestInFlight) return inboxStatsRequestInFlight;
+            if (!force && now - inboxLastStatsRefreshAt < 30000 && douyinAccounts.length) return null;
+
+            inboxStatsRequestInFlight = (async () => {
+                const response = await fetch("/api/douyin/stats");
+                const data = await response.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "刷新账号状态失败。");
+                douyinAccounts = Array.isArray(data.douyin_accounts) ? data.douyin_accounts : [];
+                activeDouyinAccountId = Number(data.active_account_id || 0) || null;
+                inboxLastStatsRefreshAt = Date.now();
+                renderDouyinInboxWorkspace();
+                return data;
+            })();
+
+            try {
+                return await inboxStatsRequestInFlight;
+            } finally {
+                inboxStatsRequestInFlight = null;
+            }
+        }
+
+        async function updateDouyinInboxStatus(silent = false) {
+            try {
+                const response = await fetch("/api/douyin/inbox/status");
+                const data = await response.json();
+                if (data.code === 200) {
+                    douyinInboxRunning = !!data.running;
+                    douyinInboxState = data.state || {};
+                    douyinInboxResults = Array.isArray(data.results) ? data.results : [];
+                    douyinInboxMonitorStates = Object.fromEntries((Array.isArray(data.monitors) ? data.monitors : []).map((item) => [String(Number(item.account_id || 0) || 0), item]));
+                    syncAllDouyinInboxReplyDrafts();
+                    renderDouyinInboxWorkspace();
+                    if (!silent && normalize(douyinInboxState.message || "")) addLog(`私信聚合状态：${douyinInboxState.message}`);
+                    return data;
+                }
+                if (!silent) addLog(data.msg || data.detail || "刷新私信聚合状态失败。", "error");
+                return data;
+            } catch (error) {
+                if (!silent) addLog(`刷新私信聚合状态失败：${error.message}`, "error");
+                return null;
+            } finally {
+                refreshActionState();
+            }
+        }
+
+        async function refreshDouyinInboxWorkspace() {
+            try {
+                await Promise.all([loadDouyinStats(true), updateDouyinInboxStatus(true)]);
+                renderDouyinInboxWorkspace();
+                addLog("私信聚合会话已刷新。", "success");
+            } catch (error) {
+                addLog(`刷新私信聚合会话失败：${error.message}`, "error");
+            }
+        }
+
+        async function viewDouyinAccount(id, options = {}) {
+            const silent = !!options.silent;
+            if (!silent) addLog(`正在打开账号 ${id} 的抖音主页...`);
+            try {
+                const response = await fetch(`/api/douyin/account/${id}/view`, { method: "POST" });
+                const data = await response.json();
+                if (data.code === 200) {
+                    if (!silent) addLog(data.msg || `账号 ${id} 的抖音主页已打开。`, "success");
+                    await loadDouyinStats(true);
+                    return data;
+                }
+                if (!silent) addLog(data.msg || data.detail || `打开账号 ${id} 主页失败。`, "error");
+                return data;
+            } catch (error) {
+                if (!silent) addLog(`打开账号 ${id} 主页失败：${error.message}`, "error");
+                return null;
+            }
+        }
+
+        async function viewDouyinInboxAccount() {
+            const accountId = syncDouyinInboxFocusAccount();
+            if (!accountId) {
+                addLog("请先锁定一个可用的抖音账号。", "warning");
+                return;
+            }
+            await viewDouyinAccount(accountId);
+        }
+
+        async function collectDouyinInboxMessages() {
+            const accountId = syncDouyinInboxFocusAccount();
+            const button = document.getElementById("douyin-inbox-collect-btn");
+            const replyPayload = getDouyinInboxReplyPayload(accountId);
+            const validationMessage = validateDouyinInboxReplyDraft(accountId);
+            if (!accountId) return void addLog("请先锁定一个可用的抖音账号。", "warning");
+            if (validationMessage) return void addLog(validationMessage, "warning");
+            setBtn(button, true, "立即采集", "采集中...");
+            try {
+                const response = await fetch("/api/douyin/inbox/collect", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ account_id: accountId, max_conversations: 100, ...replyPayload }),
+                });
+                const data = await response.json();
+                if (data.code === 200) {
+                    douyinInboxRunning = true;
+                    addLog(data.msg || "当前消息页会话采集已启动。", "success");
+                    await updateDouyinInboxStatus(true);
+                    scheduleInboxPolling(true);
+                } else {
+                    addLog(data.msg || data.detail || "采集当前消息页会话失败。", data.type === "no_online_account" || data.type === "account_waiting_login" ? "warning" : "error");
+                }
+            } catch (error) {
+                addLog(`采集当前消息页会话失败：${error.message}`, "error");
+            } finally {
+                setBtn(button, false, "立即采集", "采集中...");
+                refreshActionState();
+            }
+        }
+
+        async function toggleDouyinInboxAutoCollect() {
+            const accountId = syncDouyinInboxFocusAccount();
+            const monitor = douyinInboxMonitorStates[String(accountId)] || {};
+            const button = document.getElementById("douyin-inbox-auto-collect-btn");
+            const replyPayload = getDouyinInboxReplyPayload(accountId);
+            const validationMessage = validateDouyinInboxReplyDraft(accountId);
+            if (!accountId) return void addLog("请先锁定一个可用的抖音账号。", "warning");
+            if (!monitor.enabled && validationMessage) return void addLog(validationMessage, "warning");
+            setBtn(button, true, monitor.enabled ? "关闭自动采集" : "开启自动采集", "提交中...");
+            try {
+                const url = monitor.enabled ? "/api/douyin/inbox/monitor/stop" : "/api/douyin/inbox/monitor/start";
+                const payload = monitor.enabled
+                    ? { account_id: accountId }
+                    : { account_id: accountId, interval_minutes: 30, max_conversations: 100, ...replyPayload };
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json();
+                if (data.code === 200) {
+                    if (!monitor.enabled && douyinInboxReplyDrafts[String(accountId)]) douyinInboxReplyDrafts[String(accountId)].dirty = false;
+                    addLog(data.msg || "当前消息页自动采集状态已更新。", monitor.enabled ? "warning" : "success");
+                    await updateDouyinInboxStatus(true);
+                    scheduleInboxPolling(true);
+                } else {
+                    addLog(data.msg || data.detail || "更新当前消息页自动采集失败。", "error");
+                }
+            } catch (error) {
+                addLog(`更新当前消息页自动采集失败：${error.message}`, "error");
+            } finally {
+                setBtn(button, false, monitor.enabled ? "关闭自动采集" : "开启自动采集", "提交中...");
+                refreshActionState();
+            }
+        }
+
+        async function sendDouyinInboxDraft(conversationKey = "", button = null) {
+            const normalizedKey = normalize(conversationKey || "");
+            const conversation = getFilteredDouyinInboxConversations().find((item) => normalize(item.key || "") === normalizedKey) || getCurrentDouyinInboxConversation();
+            const draft = normalize(douyinInboxDraftMessage || "");
+            const sourceRow = getDouyinInboxConversationRow(normalizedKey);
+            if (!conversation) return void addLog("请先从左侧选择一个会话。", "warning");
+            if (!draft) return void addLog("先输入一条要发送的消息。", "warning");
+            if (!sourceRow) return void addLog("当前会话缺少发送标识，请先重新采集后再试。", "warning");
+
+            setBtn(button, true, "发送", "发送中...");
+            try {
+                const response = await fetch("/api/douyin/inbox/send", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        account_id: Number(sourceRow.account_id || conversation.account_id || 0) || 0,
+                        row: sourceRow,
+                        message: draft,
+                    }),
+                });
+                const data = await response.json();
+                if (data.code === 200) {
+                    if (data.detail && Array.isArray(data.detail.messages) && data.detail.messages.length) {
+                        douyinInboxConversationDetails[normalizedKey] = data.detail || {};
+                    }
+                    const sentAt = normalize(data.detail?.fetched_at || new Date().toISOString().slice(0, 19).replace("T", " "));
+                    douyinInboxResults = (douyinInboxResults || []).map((row) => (
+                        getDouyinInboxConversationIdentity(row) === normalizedKey
+                            ? {
+                                ...row,
+                                reply_status: "sent",
+                                reply_error: "",
+                                reply_message: draft,
+                                reply_account_id: String(Number(sourceRow.account_id || conversation.account_id || 0) || 0),
+                                reply_started_at: sentAt,
+                                reply_finished_at: sentAt,
+                                reply_updated_at: sentAt,
+                            }
+                            : row
+                    ));
+                    douyinInboxDraftMessage = "";
+                    renderDouyinInboxWorkspace();
+                    addLog(data.msg || `已向 ${conversation.username || "-"} 发送消息。`, "success");
+                } else {
+                    addLog(data.msg || data.detail || "发送消息失败。", "error");
+                }
+            } catch (error) {
+                addLog(`发送消息失败：${error.message}`, "error");
+            } finally {
+                setBtn(button, false, "发送", "发送中...");
+                refreshActionState();
+            }
+        }
+
+        function getInboxPollInterval() {
+            const monitorRunning = Object.values(douyinInboxMonitorStates || {}).some((item) => !!item.running);
+            const monitorEnabled = Object.values(douyinInboxMonitorStates || {}).some((item) => !!item.enabled);
+            if (document.hidden) return 30000;
+            if (douyinInboxRunning || monitorRunning) return 5000;
+            if (monitorEnabled) return 10000;
+            return 20000;
+        }
+
+        async function pollInboxPageOnce() {
+            if (inboxPollInFlight) return;
+            inboxPollInFlight = true;
+            try {
+                const shouldRefreshStats = !douyinAccounts.length || Date.now() - inboxLastStatsRefreshAt >= 60000;
+                await Promise.all([
+                    shouldRefreshStats ? loadDouyinStats(true) : Promise.resolve(),
+                    updateDouyinInboxStatus(true),
+                ]);
+            } finally {
+                inboxPollInFlight = false;
+            }
+        }
+
+        function scheduleInboxPolling(immediate = false) {
+            if (inboxPollTimer) {
+                window.clearTimeout(inboxPollTimer);
+                inboxPollTimer = 0;
+            }
+            const delay = immediate ? 0 : getInboxPollInterval();
+            inboxPollTimer = window.setTimeout(async () => {
+                await pollInboxPageOnce();
+                scheduleInboxPolling(false);
+            }, delay);
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            scheduleInboxPolling(true);
+        });
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            renderDouyinInboxWorkspace();
+            try {
+                await Promise.all([loadDouyinStats(true), updateDouyinInboxStatus(true)]);
+                renderDouyinInboxWorkspace();
+                addLog("私信聚合独立页初始化完成。");
+            } catch (error) {
+                addLog(`私信聚合独立页初始化失败：${error.message}`, "error");
+            }
+            scheduleInboxPolling(false);
+        });
+    </script>
+</body>
+</html>

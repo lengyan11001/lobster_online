@@ -1,0 +1,1746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音监控同行</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">数据大屏</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">排期中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group is-active" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header active" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-customers')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">客户仓库</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-nurture')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">养号仓库</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 5.5h10"></path>
+                                            <path d="M7 10.5h10"></path>
+                                            <path d="M7 15.5h6"></path>
+                                            <path d="M5 4.5h.01"></path>
+                                            <path d="M5 9.5h.01"></path>
+                                            <path d="M5 14.5h.01"></path>
+                                            <path d="M4.5 19.5h15"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">执行日志</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="12" cy="12" r="2.6"></circle>
+                                            <path d="M19.4 15a1.3 1.3 0 0 0 .26 1.43l.05.05a1.6 1.6 0 1 1-2.26 2.26l-.05-.05a1.3 1.3 0 0 0-1.43-.26 1.3 1.3 0 0 0-.79 1.18V20a1.6 1.6 0 1 1-3.2 0v-.08a1.3 1.3 0 0 0-.84-1.2 1.3 1.3 0 0 0-1.39.28l-.05.05a1.6 1.6 0 1 1-2.26-2.26l.05-.05a1.3 1.3 0 0 0 .28-1.39 1.3 1.3 0 0 0-1.2-.84H4a1.6 1.6 0 1 1 0-3.2h.08a1.3 1.3 0 0 0 1.2-.84 1.3 1.3 0 0 0-.28-1.39l-.05-.05a1.6 1.6 0 1 1 2.26-2.26l.05.05a1.3 1.3 0 0 0 1.39.28h.06a1.3 1.3 0 0 0 .78-1.19V4a1.6 1.6 0 1 1 3.2 0v.08a1.3 1.3 0 0 0 .84 1.2 1.3 1.3 0 0 0 1.39-.28l.05-.05a1.6 1.6 0 1 1 2.26 2.26l-.05.05a1.3 1.3 0 0 0-.26 1.43v.06a1.3 1.3 0 0 0 1.18.79H20a1.6 1.6 0 1 1 0 3.2h-.08a1.3 1.3 0 0 0-1.2.84Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">配置中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M6.8 5.5h9.6A1.6 1.6 0 0 1 18 7.1v9.8a1.6 1.6 0 0 1-1.6 1.6H7.6A1.6 1.6 0 0 1 6 16.9V6.3A.8.8 0 0 1 6.8 5.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h6"></path>
+                                            <path d="M9 15h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">使用说明</span></span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="monitor-workspace-page" class="workspace-panel-page active">
+                    <div class="stack">
+                        <section class="card">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>同行监控</h3>
+                                    <p class="subtle">左侧沉淀监控同行，右侧保留该同行最近 10 条视频。系统会在每天 00:00 和 18:30 自动同步最新视频，并优先用协议采集新视频或手动勾选视频下方的评论；评论少的视频也会采集，结果会按历史评论增量去重。</p>
+                                </div>
+                                <div class="tools">
+                                    <span class="tag">结构化落表</span>
+                                    <span class="tag">自动定时</span>
+                                    <span class="tag">评论增量去重</span>
+                                </div>
+                            </div>
+                            <div class="row" style="margin-top:14px">
+                                <input type="text" id="douyin-monitor-share-url" class="input" placeholder="可直接粘贴整段抖音分享文案，系统会自动提取里面的链接">
+                                <button type="button" class="btn btn-primary" id="douyin-monitor-add-btn" onclick="addDouyinMonitorTarget()">添加同行</button>
+                                <button type="button" class="btn" onclick="loadDouyinMonitorTargets()">刷新监控列表</button>
+                                <button type="button" class="btn btn-info" id="douyin-monitor-run-btn" onclick="runDouyinMonitorNow()">立即跑一轮</button>
+                            </div>
+                            <div class="row" style="margin-top:10px">
+                                <input type="text" id="douyin-monitor-ai-keyword" class="input" placeholder="输入种子关键词，AI 自动拓展 5 个词并低频搜索视频">
+                                <button type="button" class="btn btn-primary" id="douyin-monitor-ai-search-btn" onclick="runDouyinMonitorAiKeywordSearch()">AI拓词搜索</button>
+                                <button type="button" class="btn" onclick="location.href='/douyin/search'">查看搜索池</button>
+                            </div>
+                            <div id="douyin-monitor-ai-search-summary" class="subtle" style="margin-top:10px">拓词搜索会生成 5 个相关关键词，关键词之间随机等待 12-25 秒，结果会同步到搜索池。</div>
+                            <div id="douyin-monitor-status" class="subtle" style="margin-top:14px">请先添加要监控的同行主页，系统会自动同步该同行最近 10 条视频。</div>
+                            <div class="monitor-rules-banner">
+                                <div class="monitor-rules-title">
+                                    <strong>监控规则</strong>
+                                    <span>只有符合规则的视频才会进入客户采集，避免误以为“加了同行就全自动采所有视频”。</span>
+                                </div>
+                                <div class="monitor-rules-copy" id="douyin-monitor-rules-copy">系统会在每天固定时段自动跑监控；如果只是刷新主页/视频，不会去采评论和客户。</div>
+                                <div class="monitor-rules-pills">
+                                    <span class="monitor-rule-pill" id="douyin-monitor-rule-schedule">每天自动执行：00:00 / 18:30</span>
+                                    <span class="monitor-rule-pill" id="douyin-monitor-rule-selection">新视频自动追踪，手动勾选可补采；评论少也会采集</span>
+                                    <span class="monitor-rule-pill" id="douyin-monitor-rule-refresh">刷新主页/视频只更新视频列表，不采客户</span>
+                                </div>
+                            </div>
+                            <div class="search-session-layout intent-source-workspace collect-session-workspace" style="margin-top:14px">
+                                <aside class="search-session-sidebar">
+                                    <div class="search-session-sidebar-head collect-session-sidebar-head">
+                                        <h4>同行主页</h4>
+                                        <div id="douyin-monitor-target-summary" class="subtle">左侧展示已加入监控的同行列表，点卡片会直达同行主页，也可以用卡片按钮只切换右侧监控视图。</div>
+                                    </div>
+                                    <div id="douyin-monitor-target-list" class="search-session-list collect-session-list">
+                                        <div class="search-session-empty">
+                                            <strong>暂无同行</strong>
+                                            <div class="subtle">先在上方粘贴同行主页链接并添加到监控列表。</div>
+                                        </div>
+                                    </div>
+                                </aside>
+                                <div class="search-session-stage collect-session-stage">
+                                    <div class="table-tools" style="margin-bottom:14px">
+                                        <div id="douyin-monitor-video-summary" class="subtle">当前还没有可监控的视频列表。</div>
+                                        <div class="tools">
+                                            <button type="button" class="btn" id="douyin-monitor-refresh-btn" onclick="refreshCurrentMonitorTarget()">刷新主页/视频</button>
+                                            <button type="button" class="btn btn-primary" id="douyin-monitor-save-btn" onclick="saveDouyinMonitorVideoSelection()">保存视频勾选</button>
+                                        </div>
+                                    </div>
+                                    <div class="search-subtabs" id="douyin-monitor-subtabs" style="margin-top:2px">
+                                        <button type="button" class="search-subtab active" id="douyin-monitor-tab-videos" onclick="setDouyinMonitorExplorerTab('videos')">视频列表<span class="search-subtab-count" id="douyin-monitor-tab-videos-count">0</span></button>
+                                        <button type="button" class="search-subtab" id="douyin-monitor-tab-all" onclick="setDouyinMonitorExplorerTab('all')">全部客户<span class="search-subtab-count" id="douyin-monitor-tab-all-count">0</span></button>
+                                        <button type="button" class="search-subtab" id="douyin-monitor-tab-precise" onclick="setDouyinMonitorExplorerTab('precise')">精准客户<span class="search-subtab-count" id="douyin-monitor-tab-precise-count">0</span></button>
+                                    </div>
+                                    <div id="douyin-monitor-videos-panel">
+                                        <div class="table-shell douyin-monitor-video-shell">
+                                            <table class="table">
+                                                <thead>
+                                                    <tr>
+                                                        <th style="width:72px">勾选</th>
+                                                        <th>视频</th>
+                                                        <th style="width:140px">发布时间</th>
+                                                        <th style="width:120px">点赞</th>
+                                                        <th style="width:150px">状态</th>
+                                                        <th style="width:120px">最近采集</th>
+                                                        <th style="width:180px">客户视图</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="douyin-monitor-video-tbody"><tr><td colspan="7" class="empty">暂无同行视频数据。</td></tr></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                    <div id="douyin-monitor-customers-panel" style="display:none">
+                                        <div class="table-tools" style="margin-top:14px">
+                                            <div id="douyin-monitor-customer-summary" class="subtle">当前同行客户池会显示在这里。</div>
+                                            <div class="tools">
+                                                <button type="button" class="btn" id="douyin-monitor-select-visible-btn" onclick="toggleDouyinMonitorCustomerSelections(true)">全选当前筛选</button>
+                                                <button type="button" class="btn" id="douyin-monitor-clear-selection-btn" onclick="toggleDouyinMonitorCustomerSelections(false)">清空勾选</button>
+                                                <button type="button" class="btn btn-primary" id="douyin-monitor-add-precise-selected-btn" onclick="addSelectedDouyinMonitorCustomersToPrecise()" disabled>已选加入精准</button>
+                                                <select id="douyin-monitor-region-filter" style="width:auto;min-width:170px" onchange="changeDouyinMonitorRegionFilter()">
+                                                    <option value="all">全部地区</option>
+                                                </select>
+                                                <select id="douyin-monitor-time-filter" style="width:auto;min-width:170px" onchange="changeDouyinMonitorTimeFilter()">
+                                                    <option value="all">评论时间：无限制</option>
+                                                </select>
+                                                <input type="text" id="douyin-monitor-username-filter" class="input" placeholder="搜索昵称" style="width:180px;min-width:180px" oninput="changeDouyinMonitorUsernameFilter()">
+                                                <input type="text" id="douyin-monitor-source-filter" class="input" placeholder="搜索来源视频" style="width:220px;min-width:220px" oninput="changeDouyinMonitorSourceFilter()">
+                                                <select id="douyin-monitor-page-size" style="width:auto;min-width:120px" onchange="changeDouyinMonitorPageSize()">
+                                                    <option value="10">10 / 页</option>
+                                                    <option value="20">20 / 页</option>
+                                                    <option value="50">50 / 页</option>
+                                                    <option value="100">100 / 页</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="search-session-layout douyin-monitor-customer-workspace" style="margin-top:10px">
+                                            <aside class="search-session-sidebar">
+                                                <div class="search-session-sidebar-head">
+                                                    <h4>来源视频</h4>
+                                                    <div id="douyin-monitor-source-summary" class="subtle">左侧会按来源视频聚合当前同行客户，点击卡片后右侧只看该视频下的客户。</div>
+                                                </div>
+                                                <div id="douyin-monitor-source-list" class="search-session-list">
+                                                    <div class="search-session-empty">
+                                                        <strong>暂无来源视频</strong>
+                                                        <div class="subtle">当前同行客户出现后，这里会自动聚合来源视频卡片。</div>
+                                                    </div>
+                                                </div>
+                                            </aside>
+                                            <div class="search-session-stage">
+                                                <div class="table-tools"><div></div><div id="douyin-monitor-page-info" class="subtle">暂无同行客户数据</div></div>
+                                                <div class="metrics">
+                                                    <div class="stat"><div class="label" id="douyin-monitor-total-label">当前客户</div><div class="value" id="douyin-monitor-total">0</div><div class="hint">当前筛选命中的客户数量</div></div>
+                                                    <div class="stat"><div class="label">覆盖视频</div><div class="value" id="douyin-monitor-task-total">0</div><div class="hint">当前筛选后仍命中的来源视频数</div></div>
+                                                    <div class="stat"><div class="label">地区数</div><div class="value" id="douyin-monitor-region-total">0</div><div class="hint">当前列表识别出的地区标签数</div></div>
+                                                    <div class="stat"><div class="label">最近评论</div><div class="value" id="douyin-monitor-latest-date">-</div><div class="hint">当前列表里最新一条评论日期</div></div>
+                                                </div>
+                                                <div class="table-shell">
+                                                    <table class="table">
+                                                        <thead>
+                                                            <tr>
+                                                                <th style="width:72px">勾选</th>
+                                                                <th style="width:240px">客户</th>
+                                                                <th>评论内容</th>
+                                                                <th class="nowrap" style="width:120px">评论时间</th>
+                                                                <th class="nowrap" style="width:96px">属地</th>
+                                                                <th style="min-width:260px">来源视频</th>
+                                                                <th class="nowrap" style="width:96px">精准</th>
+                                                                <th class="nowrap" style="width:110px">用户主页</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody id="douyin-monitor-customer-tbody"><tr><td colspan="8" class="empty">暂无同行客户数据。</td></tr></tbody>
+                                                    </table>
+                                                </div>
+                                                <div id="douyin-monitor-pagination" class="table-tools" style="margin-top:12px"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div id="log-content" style="display:none"></div>
+
+    <div id="confirm-modal" class="overlay">
+        <div class="modal confirm-modal">
+            <div class="modal-head">
+                <div>
+                    <h2 id="confirm-modal-title">确认操作</h2>
+                    <p class="subtle">删除后不会自动恢复，请再次确认。</p>
+                </div>
+                <button type="button" class="modal-close" onclick="closeConfirmModal()">&times;</button>
+            </div>
+            <p id="confirm-modal-message" class="confirm-copy">确认继续吗？</p>
+            <div class="modal-actions">
+                <button type="button" class="btn" id="confirm-modal-cancel-btn" onclick="closeConfirmModal()">取消</button>
+                <button type="button" class="btn btn-danger" id="confirm-modal-confirm-btn" onclick="handleConfirmModalConfirm()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let douyinMonitorTargets = [];
+        let douyinMonitorCurrentTargetId = 0;
+        let douyinMonitorAllCustomers = [];
+        let douyinMonitorPreciseCustomers = [];
+        let douyinMonitorExplorerTab = "videos";
+        let douyinMonitorCustomerTab = "all";
+        let douyinMonitorCurrentPage = 1;
+        let douyinMonitorRegionFilter = "all";
+        let douyinMonitorTimeFilterDays = "all";
+        let douyinMonitorUsernameFilter = "";
+        let douyinMonitorSourceFilter = "";
+        let douyinMonitorSelectedSourceKey = "all";
+        let douyinMonitorRuntimeState = {};
+        let douyinMonitorSelectionDrafts = new Map();
+        let douyinMonitorSelectionSaveTimers = new Map();
+        let douyinMonitorCustomerSelectionKeys = new Set();
+        let douyinMonitorTargetsDigest = "";
+        let douyinMonitorCustomerPoolsDigest = "";
+        let monitorPollTimer = 0;
+        let monitorPollInFlight = false;
+        let monitorCustomerPoolRequestToken = 0;
+        let confirmModalState = {
+            title: "确认操作",
+            message: "确认继续吗？",
+            confirmText: "确认",
+            confirmClass: "btn-danger",
+            submitting: false,
+            onConfirm: null,
+        };
+
+        function normalize(value) {
+            return String(value ?? "").replace(/\u200b|\ufeff/g, "").replace(/\s+/g, " ").trim();
+        }
+
+        function esc(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function cut(value, size = 30) {
+            const text = String(value ?? "");
+            return text.length > size ? `${text.slice(0, size)}...` : text;
+        }
+
+        function buildDigest(payload) {
+            return JSON.stringify(payload && typeof payload === "object" ? payload : payload ?? null);
+        }
+
+        function addLog(message, level = "info") {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-level-${esc(level)}">${esc(message)}</span>`;
+            box.appendChild(entry);
+            while (box.children.length > 200) box.removeChild(box.firstChild);
+        }
+
+        function setText(id, value) {
+            const element = document.getElementById(id);
+            if (element) element.textContent = String(value ?? "");
+        }
+
+        function setBtn(button, disabled, idleText, busyText) {
+            if (!button) return;
+            button.disabled = !!disabled;
+            button.textContent = disabled ? busyText : idleText;
+        }
+
+        function toggleSidebarGroup(id) {
+            const panel = document.getElementById(id);
+            if (!panel) return;
+            panel.parentElement?.classList.toggle("is-open");
+        }
+
+        function setOverlayVisibility(id, show) {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.classList.toggle("show", !!show);
+            document.body.classList.toggle("modal-open", !!document.querySelector(".overlay.show"));
+        }
+
+        function renderConfirmModal() {
+            const confirmBtn = document.getElementById("confirm-modal-confirm-btn");
+            const cancelBtn = document.getElementById("confirm-modal-cancel-btn");
+            document.getElementById("confirm-modal-title").textContent = confirmModalState.title || "确认操作";
+            document.getElementById("confirm-modal-message").textContent = confirmModalState.message || "确认继续吗？";
+            confirmBtn.textContent = confirmModalState.submitting ? "处理中..." : (confirmModalState.confirmText || "确认");
+            confirmBtn.className = `btn ${confirmModalState.confirmClass || "btn-danger"}`;
+            confirmBtn.disabled = confirmModalState.submitting;
+            cancelBtn.disabled = confirmModalState.submitting;
+        }
+
+        function openConfirmModal(options = {}) {
+            confirmModalState = {
+                title: options.title || "确认操作",
+                message: options.message || "确认继续吗？",
+                confirmText: options.confirmText || "确认",
+                confirmClass: options.confirmClass || "btn-danger",
+                submitting: false,
+                onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
+            };
+            renderConfirmModal();
+            setOverlayVisibility("confirm-modal", true);
+        }
+
+        function closeConfirmModal(force = false) {
+            if (confirmModalState.submitting && !force) return;
+            setOverlayVisibility("confirm-modal", false);
+            confirmModalState = {
+                title: "确认操作",
+                message: "确认继续吗？",
+                confirmText: "确认",
+                confirmClass: "btn-danger",
+                submitting: false,
+                onConfirm: null,
+            };
+        }
+
+        async function handleConfirmModalConfirm() {
+            if (confirmModalState.submitting || typeof confirmModalState.onConfirm !== "function") return;
+            confirmModalState.submitting = true;
+            renderConfirmModal();
+            try {
+                const shouldClose = await confirmModalState.onConfirm();
+                if (shouldClose !== false) closeConfirmModal(true);
+            } catch (error) {
+                addLog(`确认操作执行失败：${error.message}`, "error");
+                confirmModalState.submitting = false;
+                renderConfirmModal();
+                return;
+            }
+            confirmModalState.submitting = false;
+            renderConfirmModal();
+        }
+
+        function getCommentTimeFilterOptions() {
+            return [
+                { value: "all", label: "评论时间：无限制" },
+                { value: "3", label: "评论时间：3天内" },
+                { value: "7", label: "评论时间：7天内" },
+                { value: "30", label: "评论时间：30天内" },
+                { value: "90", label: "评论时间：90天内" },
+                { value: "365", label: "评论时间：1年内" },
+            ];
+        }
+
+        function renderCommentTimeFilter(selectId, currentValue = "all") {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+            const options = getCommentTimeFilterOptions();
+            select.innerHTML = options.map((option) => `<option value="${option.value}" ${String(currentValue) === String(option.value) ? "selected" : ""}>${option.label}</option>`).join("");
+            select.value = options.some((option) => String(option.value) === String(currentValue)) ? String(currentValue) : "all";
+        }
+
+        function parseCommentMeta(row = {}) {
+            const explicitRegion = normalize(row.region || row.location || row.province || row.city || row.ip_location || "");
+            const rawCommentTime = normalize(row.comment_time || "");
+            const parts = rawCommentTime.split(/[·|｜]/).map(normalize).filter(Boolean);
+            const commentTime = parts.length ? parts[0] : rawCommentTime;
+            const derivedRegion = parts.length > 1 ? parts.slice(1).join(" · ") : "";
+            return { commentTime, region: explicitRegion || derivedRegion };
+        }
+
+        function createCommentTimestamp(year, month, day, hour = 0, minute = 0) {
+            const ts = new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+            return Number.isFinite(ts) ? ts : null;
+        }
+
+        function parseCommentTimestamp(rawValue) {
+            const text = normalize(rawValue);
+            if (!text) return null;
+            const now = new Date();
+            const nowTs = now.getTime();
+            const todayStartTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+            if (/^(刚刚|刚才)$/.test(text)) return nowTs;
+            let match = text.match(/^(\d+)\s*分钟[前内]?$/);
+            if (match) return nowTs - Number(match[1]) * 60 * 1000;
+            match = text.match(/^(\d+)\s*小时[前内]?$/);
+            if (match) return nowTs - Number(match[1]) * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*天前$/);
+            if (match) return nowTs - Number(match[1]) * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*周前$/);
+            if (match) return nowTs - Number(match[1]) * 7 * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*个月前$/);
+            if (match) return nowTs - Number(match[1]) * 30 * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*年前$/);
+            if (match) return nowTs - Number(match[1]) * 365 * 24 * 60 * 60 * 1000;
+            if (text === "昨天") return todayStartTs - 24 * 60 * 60 * 1000;
+            if (text === "前天") return todayStartTs - 2 * 24 * 60 * 60 * 1000;
+            const normalizedText = text.replace(/[年/.]/g, "-").replace(/月/g, "-").replace(/日/g, "").replace(/\//g, "-").replace(/\s+/g, " ").trim();
+            match = normalizedText.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})(?::(\d{1,2}))?)?$/);
+            if (match) return createCommentTimestamp(Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4] || 0), Number(match[5] || 0));
+            match = normalizedText.match(/^(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})(?::(\d{1,2}))?)?$/);
+            if (match) {
+                let year = now.getFullYear();
+                let ts = createCommentTimestamp(year, Number(match[1]), Number(match[2]), Number(match[3] || 0), Number(match[4] || 0));
+                if (ts !== null && ts > nowTs + 24 * 60 * 60 * 1000) ts = createCommentTimestamp(year - 1, Number(match[1]), Number(match[2]), Number(match[3] || 0), Number(match[4] || 0));
+                return ts;
+            }
+            const parsed = Date.parse(normalizedText);
+            return Number.isNaN(parsed) ? null : parsed;
+        }
+
+        function formatDateFromTimestamp(ts) {
+            if (!Number.isFinite(ts)) return "-";
+            const date = new Date(ts);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        }
+
+        function formatAbsoluteDate(rawValue) {
+            const ts = parseCommentTimestamp(rawValue);
+            if (!Number.isFinite(ts)) return normalize(rawValue) || "-";
+            return formatDateFromTimestamp(ts);
+        }
+
+        function getAvatarUrl(row = {}) {
+            return normalize(row.avatar || row.avatar_url || row.avatarUrl || "");
+        }
+
+        function formatCommentDateLabel(row = {}) {
+            const meta = parseCommentMeta(row);
+            return formatAbsoluteDate(meta.commentTime || normalize(row.comment_time || ""));
+        }
+
+        function getCommentRegionLabel(row = {}) {
+            const meta = parseCommentMeta(row);
+            return normalize(meta.region || row.region || row.location || row.province || row.city || row.ip_location || "");
+        }
+
+        function renderIntentAvatar(row = {}) {
+            const avatarUrl = getAvatarUrl(row);
+            const fallback = normalize(row.username || "").charAt(0) || "客";
+            return avatarUrl
+                ? `<span class="intent-avatar"><img src="${esc(avatarUrl)}" alt="${esc(row.username || "用户头像")}" loading="lazy" referrerpolicy="no-referrer"></span>`
+                : `<span class="intent-avatar intent-avatar-fallback">${esc(fallback)}</span>`;
+        }
+
+        function matchesCommentTimeFilter(rawValue, filterDays) {
+            if (String(filterDays || "all") === "all") return true;
+            const days = Number(filterDays);
+            if (!days) return true;
+            const ts = parseCommentTimestamp(rawValue);
+            if (!Number.isFinite(ts)) return false;
+            return ts >= Date.now() - days * 24 * 60 * 60 * 1000;
+        }
+
+        function matchesTextFilter(value, keyword) {
+            const source = normalize(value).toLowerCase();
+            const query = normalize(keyword).toLowerCase();
+            return !query || source.includes(query);
+        }
+
+        function userChoiceLooseKey(user = {}) {
+            return [normalize(user.user_id || user.userId || ""), normalize(user.username || ""), normalize(user.comment || user.content || "")].join("|");
+        }
+
+        function userChoiceKey(user = {}) {
+            const id = normalize(user.comment_id || "");
+            if (id) return `id:${id}`;
+            return [
+                normalize(user.user_id || user.userId || ""),
+                normalize(user.username || ""),
+                normalize(user.comment || user.content || ""),
+                normalize(user.comment_time || ""),
+            ].join("|");
+        }
+
+        function getDouyinMonitorCustomerSelectionKey(user = {}) {
+            const baseKey = userChoiceKey(user) || userChoiceLooseKey(user);
+            const targetId = Number(user.monitor_target_id || user.target_id || douyinMonitorCurrentTargetId || 0) || 0;
+            if (!baseKey || !targetId) return "";
+            return `${targetId}:${baseKey}`;
+        }
+
+        function buildMonitorCustomerPrecisePayloadRow(row = {}) {
+            return {
+                comment_index: row.comment_index || "",
+                username: row.username || "",
+                user_id: row.user_id || "",
+                sec_user_id: row.sec_user_id || "",
+                user_xsec_token: row.user_xsec_token || "",
+                comment_id: row.comment_id || "",
+                comment: row.comment || row.content || "",
+                content: row.comment || row.content || "",
+                comment_time: row.comment_time || "",
+                region: row.region || "",
+                location: row.region || row.location || "",
+                ip_location: row.region || row.ip_location || "",
+                avatar: row.avatar || row.avatar_url || "",
+                avatar_url: row.avatar_url || row.avatar || "",
+                like_count: row.like_count || "",
+                reply_count: row.reply_count || "",
+                profile_url: row.profile_url || "",
+                intent_level: row.intent_level || "manual",
+                reason: row.reason || "监控同行页面手动加入精准",
+                is_high_intent: !!row.is_high_intent,
+                source: row.source || "douyin_monitor",
+                task_id: row.task_id || 0,
+                target_id: row.target_id || row.monitor_target_id || douyinMonitorCurrentTargetId || 0,
+                monitor_target_id: row.monitor_target_id || row.target_id || douyinMonitorCurrentTargetId || 0,
+                monitor_target_username: row.monitor_target_username || row.target_username || "",
+                monitor_target_profile_url: row.monitor_target_profile_url || row.target_profile_url || "",
+                aweme_id: row.aweme_id || "",
+                comment_key: row.comment_key || "",
+                user_key: row.user_key || "",
+                latest_video_title: row.latest_video_title || row.task_title || "",
+                latest_video_url: row.latest_video_url || row.task_url || "",
+                task_title: row.task_title || row.latest_video_title || "",
+                task_url: row.task_url || row.latest_video_url || "",
+                task_author: row.task_author || row.monitor_target_username || row.target_username || "",
+            };
+        }
+
+        function isMonitorCustomerRow(user = {}) {
+            return normalize(user.source || "") === "douyin_monitor" || (Number(user.task_id || 0) <= 0 && Number(user.monitor_target_id || user.target_id || 0) > 0);
+        }
+
+        function getCustomerSourceTitle(row = {}) {
+            return String(row.task_title || row.title || row.latest_video_title || row.video_title || "").trim();
+        }
+
+        function getCustomerSourceUrl(row = {}) {
+            return String(row.task_url || row.url || row.latest_video_url || row.video_url || row.monitor_target_profile_url || row.target_profile_url || "").trim();
+        }
+
+        function getCustomerSourceAuthorName(row = {}) {
+            return String(row.task_author || row.author || row.monitor_target_username || row.target_username || "").trim();
+        }
+
+        function getTaskCoverImage(task = {}) {
+            return String(task.cover_image || "").trim();
+        }
+
+        function renderTaskPostHtml(task = {}) {
+            const cover = getTaskCoverImage(task);
+            const rawUrl = getCustomerSourceUrl(task) || "#";
+            const rawTitle = getCustomerSourceTitle(task) || "查看详情";
+            const author = getCustomerSourceAuthorName(task);
+            const publishText = normalize(task.comment_time_display || task.comment_time || task.latest_label || "");
+            const url = esc(rawUrl);
+            const title = esc(rawTitle);
+            const coverHtml = cover
+                ? `<a class="task-post-cover" href="${url}" target="_blank" rel="noopener noreferrer"><img src="${esc(cover)}" alt="${title}" loading="lazy" referrerpolicy="no-referrer"></a>`
+                : `<a class="task-post-cover is-empty" href="${url}" target="_blank" rel="noopener noreferrer">无封面</a>`;
+            return `<div class="task-post-cell">${coverHtml}<div class="task-post-meta"><a class="task-post-title" href="${url}" target="_blank" rel="noopener noreferrer" title="${title}">${title}</a>${author ? `<div class="task-post-subtle">${esc(isMonitorCustomerRow(task) ? `同行：${author}` : `作者：${author}`)}</div>` : ""}${publishText ? `<div class="task-post-subtle">${esc(cut(publishText, 30))}</div>` : ""}</div></div>`;
+        }
+
+        function renderPoolRegionFilter(selectId, currentValue, users, onMissing) {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+            const regions = [...new Set(users.map((user) => normalize(user.region || "")).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+            const options = ['<option value="all">全部地区</option>'];
+            if (users.some((user) => !normalize(user.region || ""))) options.push(`<option value="unknown" ${currentValue === "unknown" ? "selected" : ""}>未标注地区</option>`);
+            regions.forEach((region) => options.push(`<option value="${esc(region)}" ${currentValue === region ? "selected" : ""}>${esc(region)}</option>`));
+            select.innerHTML = options.join("");
+            if (currentValue !== "all" && currentValue !== "unknown" && !regions.includes(currentValue)) onMissing();
+            select.value = currentValue;
+        }
+
+        function renderIntentUserCell(user) {
+            const sourceLabel = normalize(getCustomerSourceAuthorName(user));
+            const subtle = sourceLabel ? (isMonitorCustomerRow(user) ? `来源同行：${sourceLabel}` : `来源作者：${sourceLabel}`) : "来自评论精准筛选";
+            return `<div class="intent-user-cell">${renderIntentAvatar(user)}<div class="intent-user-meta"><div class="intent-user-name">${esc(user.username || "-")}</div><div class="intent-user-subtle">${esc(cut(subtle, 34))}</div></div></div>`;
+        }
+
+        function getIntentSourceGroupKey(user = {}) {
+            const taskId = Number(user.task_id || 0);
+            if (taskId > 0) return `task:${taskId}`;
+            const taskUrl = normalize(getCustomerSourceUrl(user));
+            if (taskUrl) return `url:${taskUrl}`;
+            const title = normalize(getCustomerSourceTitle(user));
+            const author = normalize(getCustomerSourceAuthorName(user));
+            if (title || author) return `meta:${title}::${author}`;
+            const fallback = userChoiceLooseKey(user);
+            return fallback ? `row:${fallback}` : "";
+        }
+
+        function getIntentSourceGroups(users = []) {
+            const groups = [];
+            const map = new Map();
+            users.forEach((user) => {
+                const key = getIntentSourceGroupKey(user);
+                if (!key) return;
+                const parsedTime = parseCommentMeta(user).commentTime || user.comment_time || "";
+                const timestamp = parseCommentTimestamp(parsedTime) || 0;
+                const isMonitor = isMonitorCustomerRow(user);
+                let group = map.get(key);
+                if (!group) {
+                    group = {
+                        key,
+                        task_id: Number(user.task_id || 0) || "",
+                        task_title: getCustomerSourceTitle(user) || "未命名视频",
+                        task_url: getCustomerSourceUrl(user) || "",
+                        task_author: getCustomerSourceAuthorName(user) || "",
+                        cover_image: getTaskCoverImage(user),
+                        count: 0,
+                        latest_ts: timestamp,
+                        latest_label: user.comment_time_display || formatCommentDateLabel(user) || parsedTime || "-",
+                        source_type: isMonitor ? "douyin_monitor" : "douyin_task",
+                    };
+                    map.set(key, group);
+                    groups.push(group);
+                }
+                group.count += 1;
+                if (!group.task_title || group.task_title === "未命名视频") group.task_title = getCustomerSourceTitle(user) || group.task_title;
+                if (!group.task_author) group.task_author = getCustomerSourceAuthorName(user) || "";
+                if (!group.task_url) group.task_url = getCustomerSourceUrl(user) || "";
+                if (!group.cover_image) group.cover_image = getTaskCoverImage(user);
+                if (isMonitor) group.source_type = "douyin_monitor";
+                if (timestamp >= group.latest_ts) {
+                    group.latest_ts = timestamp;
+                    group.latest_label = user.comment_time_display || formatCommentDateLabel(user) || parsedTime || "-";
+                }
+            });
+            return groups.sort((a, b) => {
+                const countDiff = Number(b.count || 0) - Number(a.count || 0);
+                if (countDiff) return countDiff;
+                const timeDiff = Number(b.latest_ts || 0) - Number(a.latest_ts || 0);
+                if (timeDiff) return timeDiff;
+                return normalize(a.task_title || "").localeCompare(normalize(b.task_title || ""), "zh-CN");
+            });
+        }
+
+        function refreshActionState() {
+            const monitorBusy = !!douyinMonitorRuntimeState.running;
+            const hasMonitorTarget = !!douyinMonitorTargets.length;
+            const hasCurrentMonitorTarget = !!getCurrentDouyinMonitorTarget();
+            (document.getElementById("douyin-monitor-run-btn") || {}).disabled = monitorBusy || !hasMonitorTarget;
+            (document.getElementById("douyin-monitor-refresh-btn") || {}).disabled = monitorBusy || !hasCurrentMonitorTarget;
+            (document.getElementById("douyin-monitor-save-btn") || {}).disabled = monitorBusy || !hasCurrentMonitorTarget;
+        }
+
+        function getDouyinMonitorTargetById(targetId) {
+            return douyinMonitorTargets.find((item) => Number(item.target_id || 0) === Number(targetId || 0)) || null;
+        }
+
+        function getCurrentDouyinMonitorTarget() {
+            return getDouyinMonitorTargetById(douyinMonitorCurrentTargetId) || null;
+        }
+
+        function setCurrentDouyinMonitorTarget(targetId) {
+            douyinMonitorCurrentTargetId = Number(targetId || 0) || 0;
+            douyinMonitorExplorerTab = "videos";
+            douyinMonitorSelectedSourceKey = "all";
+            douyinMonitorCurrentPage = 1;
+            douyinMonitorAllCustomers = [];
+            douyinMonitorPreciseCustomers = [];
+            renderDouyinMonitorWorkspace();
+            refreshActionState();
+            void loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, true);
+        }
+
+        function getDouyinMonitorDraftKey(targetId) {
+            return String(Number(targetId || 0) || 0);
+        }
+
+        function getDouyinMonitorSelectedAwemeIds(target = null) {
+            return (target?.videos || []).filter((video) => video.is_selected).map((video) => String(video.aweme_id || "")).filter(Boolean);
+        }
+
+        function setDouyinMonitorSelectionDraft(targetId, awemeIds = []) {
+            const key = getDouyinMonitorDraftKey(targetId);
+            const normalized = new Set((awemeIds || []).map((item) => String(item || "")).filter(Boolean));
+            douyinMonitorSelectionDrafts.set(key, normalized);
+        }
+
+        function clearDouyinMonitorSelectionDraft(targetId, { keepTimer = false } = {}) {
+            const key = getDouyinMonitorDraftKey(targetId);
+            const timer = douyinMonitorSelectionSaveTimers.get(key);
+            if (timer && !keepTimer) {
+                clearTimeout(timer);
+                douyinMonitorSelectionSaveTimers.delete(key);
+            }
+            douyinMonitorSelectionDrafts.delete(key);
+        }
+
+        function applyDouyinMonitorSelectionDrafts(targets = []) {
+            return (targets || []).map((rawTarget) => {
+                if (!rawTarget || typeof rawTarget !== "object") return rawTarget;
+                const target = { ...rawTarget };
+                const draft = douyinMonitorSelectionDrafts.get(getDouyinMonitorDraftKey(target.target_id || 0));
+                if (!draft || !Array.isArray(target.videos)) return target;
+                target.videos = target.videos.map((video) => ({ ...video, is_selected: draft.has(String(video.aweme_id || "")) }));
+                target.selected_video_count = target.videos.filter((video) => video.is_selected).length;
+                return target;
+            });
+        }
+
+        function scheduleDouyinMonitorSelectionAutoSave(targetId, delay = 900) {
+            const numericId = Number(targetId || 0) || 0;
+            if (!numericId) return;
+            const key = getDouyinMonitorDraftKey(numericId);
+            const existingTimer = douyinMonitorSelectionSaveTimers.get(key);
+            if (existingTimer) clearTimeout(existingTimer);
+            const timer = setTimeout(() => {
+                douyinMonitorSelectionSaveTimers.delete(key);
+                void persistDouyinMonitorVideoSelection({ targetId: numericId, silent: true });
+            }, delay);
+            douyinMonitorSelectionSaveTimers.set(key, timer);
+        }
+
+        function openDouyinMonitorProfile(targetId) {
+            const target = getDouyinMonitorTargetById(targetId);
+            if (!target) return;
+            setCurrentDouyinMonitorTarget(targetId);
+            const profileUrl = normalize(target.profile_url || "");
+            if (!profileUrl) {
+                addLog("当前同行还没有可打开的主页链接。", "warning");
+                return;
+            }
+            window.open(profileUrl, "_blank", "noopener,noreferrer");
+        }
+
+        function confirmDeleteDouyinMonitorTarget(targetId) {
+            const target = getDouyinMonitorTargetById(targetId);
+            if (!target) return;
+            openConfirmModal({
+                title: "停止同行监控",
+                message: `将停止监控“${target.username || target.profile_url || targetId}”。历史视频列表和客户沉淀会保留，后续重新添加时可继续沿用。`,
+                confirmText: "确认停止",
+                confirmClass: "btn-danger",
+                onConfirm: async () => deleteDouyinMonitorTarget(targetId),
+            });
+        }
+
+        function formatDouyinMonitorMetric(value, rawText = "", allowBlank = false) {
+            const text = normalize(rawText || "");
+            if (text) return esc(text);
+            const numeric = Number(value || 0) || 0;
+            if (allowBlank && numeric <= 0) return `<span class="subtle">-</span>`;
+            return esc(numeric);
+        }
+
+        function normalizeDouyinMonitorCustomerRow(row = {}) {
+            return {
+                ...row,
+                task_title: row.latest_video_title || row.task_title || row.title || "",
+                task_url: row.latest_video_url || row.task_url || row.url || "",
+                cover_image: row.video_cover_image || row.cover_image || "",
+                comment_time_display: formatCommentDateLabel(row),
+                region: getCommentRegionLabel(row),
+            };
+        }
+
+        function getDouyinMonitorVideoSourceKey(video = {}) {
+            return getIntentSourceGroupKey({
+                task_url: video.url || "",
+                url: video.url || "",
+                task_title: video.title || "",
+                title: video.title || "",
+                task_author: video.author || "",
+                author: video.author || "",
+            });
+        }
+
+        function getDouyinMonitorVideoCustomerCounts(video = {}) {
+            const sourceKey = getDouyinMonitorVideoSourceKey(video);
+            if (!sourceKey) return { all: 0, precise: 0 };
+            const countRows = (rows) => (rows || []).map(normalizeDouyinMonitorCustomerRow).filter((row) => getIntentSourceGroupKey(row) === sourceKey).length;
+            return {
+                all: countRows(douyinMonitorAllCustomers),
+                precise: countRows(douyinMonitorPreciseCustomers),
+            };
+        }
+
+        function setDouyinMonitorExplorerTab(tab, sourceKey = "all") {
+            if (tab === "videos") {
+                douyinMonitorExplorerTab = "videos";
+                douyinMonitorSelectedSourceKey = "all";
+            } else {
+                douyinMonitorExplorerTab = "customers";
+                douyinMonitorCustomerTab = tab === "precise" ? "precise" : "all";
+                douyinMonitorSelectedSourceKey = sourceKey || "all";
+            }
+            douyinMonitorCurrentPage = 1;
+            renderDouyinMonitorWorkspace();
+        }
+
+        function renderDouyinMonitorWorkspace() {
+            const list = document.getElementById("douyin-monitor-target-list");
+            const summary = document.getElementById("douyin-monitor-target-summary");
+            const videoSummary = document.getElementById("douyin-monitor-video-summary");
+            const tbody = document.getElementById("douyin-monitor-video-tbody");
+            const status = document.getElementById("douyin-monitor-status");
+            const videosPanel = document.getElementById("douyin-monitor-videos-panel");
+            const customersPanel = document.getElementById("douyin-monitor-customers-panel");
+            const videosTab = document.getElementById("douyin-monitor-tab-videos");
+            const allTab = document.getElementById("douyin-monitor-tab-all");
+            const preciseTab = document.getElementById("douyin-monitor-tab-precise");
+            const scheduleRule = document.getElementById("douyin-monitor-rule-schedule");
+            const selectionRule = document.getElementById("douyin-monitor-rule-selection");
+            const refreshRule = document.getElementById("douyin-monitor-rule-refresh");
+            const rulesCopy = document.getElementById("douyin-monitor-rules-copy");
+            if (!list || !summary || !videoSummary || !tbody || !status || !videosPanel || !customersPanel || !videosTab || !allTab || !preciseTab || !scheduleRule || !selectionRule || !refreshRule || !rulesCopy) return;
+            const current = getCurrentDouyinMonitorTarget() || (douyinMonitorTargets[0] || null);
+            if (current && Number(douyinMonitorCurrentTargetId || 0) !== Number(current.target_id || 0)) douyinMonitorCurrentTargetId = Number(current.target_id || 0);
+            const stateMessage = normalize(douyinMonitorRuntimeState.message || "");
+            const nextRunAt = normalize(douyinMonitorRuntimeState.next_run_at || "");
+            status.textContent = stateMessage || `监控任务会在 ${nextRunAt || "下一时段"} 自动执行；新视频会自动进入采集，手动勾选可补采旧视频，评论少也会采集。`;
+            scheduleRule.textContent = `每天自动执行：00:00 / 18:30${nextRunAt ? ` · 下次 ${nextRunAt}` : ""}`;
+            refreshRule.textContent = "刷新主页/视频只更新视频列表，不采客户";
+            if (!douyinMonitorTargets.length) {
+                list.innerHTML = `<div class="search-session-empty"><strong>暂无同行</strong><div class="subtle">先在上方粘贴同行主页链接并添加到监控列表。</div></div>`;
+                summary.textContent = "左侧展示已加入监控的同行列表，点卡片会直达同行主页，也可以用按钮切换右侧监控视图。";
+                videoSummary.textContent = "当前还没有可监控的视频列表。";
+                rulesCopy.textContent = "系统会在每天固定时段自动跑监控，自动追踪同行新视频；如果只是刷新主页/视频，不会去采评论和客户。";
+                selectionRule.textContent = "新视频自动追踪，手动勾选可补采；评论少也会采集";
+                setText("douyin-monitor-tab-videos-count", 0);
+                setText("douyin-monitor-tab-all-count", 0);
+                setText("douyin-monitor-tab-precise-count", 0);
+                videosTab.classList.add("active");
+                allTab.classList.remove("active");
+                preciseTab.classList.remove("active");
+                videosPanel.style.display = "";
+                customersPanel.style.display = "none";
+                tbody.innerHTML = `<tr><td colspan="7" class="empty">暂无同行视频数据。</td></tr>`;
+                renderDouyinMonitorCustomers();
+                return;
+            }
+            list.innerHTML = douyinMonitorTargets.map((target) => {
+                const active = Number(target.target_id || 0) === Number(douyinMonitorCurrentTargetId || 0);
+                const avatar = normalize(target.avatar_url || "");
+                const selectedCount = Number(target.selected_video_count || 0) || 0;
+                const newCount = Number(target.new_video_count || 0) || 0;
+                const metaLine = [target.douyin_id ? `抖音号：${target.douyin_id}` : "", target.region ? `IP：${target.region}` : "", target.city || ""].filter(Boolean).join(" · ");
+                const stats = [target.follow_count_text ? `关注 ${target.follow_count_text}` : "", target.fans_count_text ? `粉丝 ${target.fans_count_text}` : "", target.liked_count_text ? `获赞 ${target.liked_count_text}` : ""].filter(Boolean);
+                return `<article class="search-session-card intent-source-card ${active ? "active" : ""}" role="link" tabindex="0" onclick='openDouyinMonitorProfile(${Number(target.target_id || 0)})' onkeydown='if(event.key==="Enter"||event.key===" "){event.preventDefault();openDouyinMonitorProfile(${Number(target.target_id || 0)})}'><div class="search-session-card-top"><div class="intent-user-cell">${avatar ? `<span class="intent-avatar"><img src="${esc(avatar)}" alt="${esc(target.username || "同行头像")}" loading="lazy" referrerpolicy="no-referrer"></span>` : `<span class="intent-avatar intent-avatar-fallback">${esc(normalize(target.username || "同").charAt(0) || "同")}</span>`}<div class="intent-user-meta"><div class="intent-user-name">${esc(target.username || "未识别昵称")}</div><div class="intent-user-subtle">${esc(metaLine || cut(target.profile_url || "", 24))}</div></div></div>${active ? `<span class="search-session-card-badge">当前同行</span>` : `<span class="search-session-card-badge">点卡片进主页</span>`}</div>${stats.length ? `<div class="intent-source-card-chips" style="margin-top:10px">${stats.map((item) => `<span class="intent-source-card-chip">${esc(item)}</span>`).join("")}</div>` : ""}<div class="intent-source-card-chips" style="margin-top:10px"><span class="intent-source-card-chip">视频 ${esc(target.video_count || 0)}</span><span class="intent-source-card-chip">已选 ${esc(selectedCount)}</span>${newCount ? `<span class="intent-source-card-chip">新视频 ${esc(newCount)}</span>` : ""}</div>${normalize(target.bio || "") ? `<div class="subtle" style="margin-top:10px">${esc(cut(target.bio || "", 46))}</div>` : ""}<div class="subtle" style="margin-top:10px">最近同步：${esc(target.last_video_sync_at || "未同步")}</div><div class="search-session-card-actions" style="margin-top:12px"><button type="button" class="btn ${active ? "btn-primary" : ""}" onclick='event.stopPropagation();setCurrentDouyinMonitorTarget(${Number(target.target_id || 0)})'>${active ? "当前同行" : "只看这个同行"}</button><button type="button" class="btn btn-danger" onclick='event.stopPropagation();confirmDeleteDouyinMonitorTarget(${Number(target.target_id || 0)})'>停止监控</button></div></article>`;
+            }).join("");
+            summary.textContent = current ? `当前共 ${douyinMonitorTargets.length} 个同行，已锁定“${current.username || "未识别昵称"}”，右侧展示其最近同步的视频和客户池。` : `当前共 ${douyinMonitorTargets.length} 个同行。`;
+            if (!current) {
+                tbody.innerHTML = `<tr><td colspan="7" class="empty">请选择左侧同行后查看视频列表。</td></tr>`;
+                renderDouyinMonitorCustomers();
+                return;
+            }
+            const videos = Array.isArray(current.videos) ? current.videos : [];
+            const selectedVideos = videos.filter((video) => video.is_selected);
+            rulesCopy.textContent = `当前同行“${current.username || "未识别昵称"}”会在固定时段自动检查新视频；新视频会自动采评论，手动勾选的视频也会补采，评论少的视频也会采集，结果按历史评论增量去重。`;
+            selectionRule.textContent = selectedVideos.length ? `当前已勾选 ${selectedVideos.length} / ${videos.length || 0} 条旧视频可补采；新视频自动追踪，评论少也会采集` : `当前已勾选 0 / ${videos.length || 0} 条旧视频；新视频仍会自动追踪，评论少也会采集`;
+            setText("douyin-monitor-tab-videos-count", videos.length || 0);
+            setText("douyin-monitor-tab-all-count", douyinMonitorAllCustomers.length || 0);
+            setText("douyin-monitor-tab-precise-count", douyinMonitorPreciseCustomers.length || 0);
+            videosTab.classList.toggle("active", douyinMonitorExplorerTab === "videos");
+            allTab.classList.toggle("active", douyinMonitorExplorerTab === "customers" && douyinMonitorCustomerTab === "all");
+            preciseTab.classList.toggle("active", douyinMonitorExplorerTab === "customers" && douyinMonitorCustomerTab === "precise");
+            videosPanel.style.display = douyinMonitorExplorerTab === "videos" ? "" : "none";
+            customersPanel.style.display = douyinMonitorExplorerTab === "customers" ? "" : "none";
+            videoSummary.textContent = selectedVideos.length ? `同行 ${current.username || "-"} 当前同步 ${videos.length} 条视频，已勾选 ${selectedVideos.length} 条旧视频可补采；新视频会自动进入定时采集。` : `同行 ${current.username || "-"} 当前同步 ${videos.length} 条视频；没有手动勾选时，系统仍会追踪新视频，已采集过的评论会自动去重。`;
+            tbody.innerHTML = videos.length ? videos.map((video) => {
+                const counts = getDouyinMonitorVideoCustomerCounts(video);
+                const sourceKey = getDouyinMonitorVideoSourceKey(video);
+                const publishTime = normalize(video.publish_time_text || video.publish_time || "");
+                return `<tr><td class="cell-tight"><input type="checkbox" ${video.is_selected ? "checked" : ""} onchange='toggleDouyinMonitorVideoSelection(${JSON.stringify(String(video.aweme_id || ""))}, this.checked)'></td><td>${renderTaskPostHtml({ title: video.title || "-", url: video.url || "#", cover_image: video.cover_image || "", author: video.author || "" })}</td><td class="nowrap">${esc(publishTime ? formatAbsoluteDate(publishTime) : "-")}</td><td class="nowrap">${formatDouyinMonitorMetric(video.likes, video.likes_text, false)}</td><td class="nowrap">${video.is_new ? `<span class="badge status-processing">新视频</span>` : `<span class="badge status-completed">已同步</span>`}</td><td class="nowrap">${esc(video.last_collected_at || "未采集")}</td><td><div class="tools"><button type="button" class="btn" onclick='setDouyinMonitorExplorerTab("all", ${JSON.stringify(sourceKey)})'>全部客户 ${counts.all || 0}</button><button type="button" class="btn" onclick='setDouyinMonitorExplorerTab("precise", ${JSON.stringify(sourceKey)})'>精准客户 ${counts.precise || 0}</button></div></td></tr>`;
+            }).join("") : `<tr><td colspan="7" class="empty">当前同行还没有同步到视频数据。</td></tr>`;
+            renderDouyinMonitorCustomers();
+        }
+
+        function getDouyinMonitorActiveRows() {
+            const rows = douyinMonitorCustomerTab === "precise" ? douyinMonitorPreciseCustomers : douyinMonitorAllCustomers;
+            return rows.map(normalizeDouyinMonitorCustomerRow);
+        }
+
+        function getDouyinMonitorBaseFilteredUsers(users = getDouyinMonitorActiveRows()) {
+            return users.filter((user) => {
+                const region = normalize(user.region || "");
+                const commentTime = normalize(parseCommentMeta(user).commentTime || user.comment_time || "");
+                const username = normalize(user.username || "");
+                const sourceTitle = normalize(user.task_title || user.title || "");
+                if (douyinMonitorRegionFilter === "unknown" && region) return false;
+                if (douyinMonitorRegionFilter !== "all" && douyinMonitorRegionFilter !== "unknown" && region !== douyinMonitorRegionFilter) return false;
+                if (!matchesCommentTimeFilter(commentTime, douyinMonitorTimeFilterDays)) return false;
+                if (!matchesTextFilter(username, douyinMonitorUsernameFilter)) return false;
+                if (!matchesTextFilter(sourceTitle, douyinMonitorSourceFilter)) return false;
+                return true;
+            });
+        }
+
+        function getDouyinMonitorSourceGroups(users = getDouyinMonitorBaseFilteredUsers()) {
+            return getIntentSourceGroups(users);
+        }
+
+        function syncDouyinMonitorSourceSelection(groups = getDouyinMonitorSourceGroups()) {
+            if (douyinMonitorSelectedSourceKey !== "all" && !groups.some((group) => group.key === douyinMonitorSelectedSourceKey)) douyinMonitorSelectedSourceKey = "all";
+        }
+
+        function setDouyinMonitorSourceKey(key) {
+            douyinMonitorSelectedSourceKey = key || "all";
+            douyinMonitorCurrentPage = 1;
+            renderDouyinMonitorCustomers();
+        }
+
+        function updateDouyinMonitorSummary(users, allUsers, baseUsers = getDouyinMonitorBaseFilteredUsers(allUsers), sourceGroups = getDouyinMonitorSourceGroups(baseUsers)) {
+            const latestTs = Math.max(0, ...users.map((user) => parseCommentTimestamp(parseCommentMeta(user).commentTime || user.comment_time || "")).filter(Number.isFinite));
+            const selectedGroup = sourceGroups.find((group) => group.key === douyinMonitorSelectedSourceKey) || null;
+            const modeLabel = douyinMonitorCustomerTab === "precise" ? "精准客户" : "全部客户";
+            setText("douyin-monitor-total", users.length || 0);
+            setText("douyin-monitor-task-total", new Set(users.map((user) => normalize(user.task_title || "")).filter(Boolean)).size || 0);
+            setText("douyin-monitor-region-total", new Set(users.map((user) => normalize(user.region || "")).filter(Boolean)).size || 0);
+            setText("douyin-monitor-latest-date", latestTs ? formatDateFromTimestamp(latestTs) : "-");
+            setText("douyin-monitor-total-label", douyinMonitorCustomerTab === "precise" ? "当前精准" : "当前客户");
+            const summary = document.getElementById("douyin-monitor-customer-summary");
+            const sourceSummary = document.getElementById("douyin-monitor-source-summary");
+            const current = getCurrentDouyinMonitorTarget();
+            let summaryText = "当前同行客户池会显示在这里。";
+            let sourceSummaryText = "当前筛选下还没有可展示的来源视频。";
+            if (current && allUsers.length) {
+                summaryText = selectedGroup
+                    ? `同行“${current.username || "-"}”累计 ${allUsers.length} 位${modeLabel}；当前筛选命中 ${baseUsers.length} 位，来源锁定《${cut(selectedGroup.task_title || "未命名视频", 24)}》后显示 ${users.length} 位。`
+                    : `同行“${current.username || "-"}”累计 ${allUsers.length} 位${modeLabel}；当前筛选命中 ${baseUsers.length} 位，最终展示 ${users.length} 位。`;
+            } else if (current) {
+                summaryText = `当前同行“${current.username || "-"}”还没有${modeLabel}数据。`;
+            }
+            if (sourceGroups.length) {
+                sourceSummaryText = selectedGroup
+                    ? `当前筛选下共有 ${sourceGroups.length} 条来源视频。已选中《${cut(selectedGroup.task_title || "未命名视频", 26)}》，共 ${selectedGroup.count} 位${modeLabel}。`
+                    : `当前筛选下共有 ${sourceGroups.length} 条来源视频。点击左侧来源卡片后，右侧只看该视频下的${modeLabel}。`;
+            }
+            if (summary) summary.textContent = summaryText;
+            if (sourceSummary) sourceSummary.textContent = sourceSummaryText;
+        }
+
+        function renderDouyinMonitorRegionFilter(users) {
+            renderPoolRegionFilter("douyin-monitor-region-filter", douyinMonitorRegionFilter, users, () => {
+                douyinMonitorRegionFilter = "all";
+            });
+        }
+
+        function renderDouyinMonitorCustomers() {
+            const summary = document.getElementById("douyin-monitor-customer-summary");
+            const tbody = document.getElementById("douyin-monitor-customer-tbody");
+            const info = document.getElementById("douyin-monitor-page-info");
+            const pager = document.getElementById("douyin-monitor-pagination");
+            const sourceList = document.getElementById("douyin-monitor-source-list");
+            const current = getCurrentDouyinMonitorTarget();
+            renderCommentTimeFilter("douyin-monitor-time-filter", douyinMonitorTimeFilterDays);
+            if (!current) {
+                summary.textContent = "当前同行客户池会显示在这里。";
+                info.textContent = "暂无同行客户数据";
+                pager.innerHTML = "";
+                sourceList.innerHTML = `<div class="search-session-empty"><strong>暂无来源视频</strong><div class="subtle">请选择左侧同行后查看客户聚合。</div></div>`;
+                tbody.innerHTML = `<tr><td colspan="8" class="empty">暂无同行客户数据。</td></tr>`;
+                refreshDouyinMonitorCustomerSelectionActions([]);
+                return;
+            }
+            const allUsers = getDouyinMonitorActiveRows();
+            renderDouyinMonitorRegionFilter(allUsers);
+            const selectedVideos = (current.videos || []).filter((video) => video.is_selected);
+            const baseUsers = getDouyinMonitorBaseFilteredUsers(allUsers);
+            const sourceGroups = getDouyinMonitorSourceGroups(baseUsers);
+            const hasFilter = douyinMonitorRegionFilter !== "all" || douyinMonitorTimeFilterDays !== "all" || normalize(douyinMonitorUsernameFilter) || normalize(douyinMonitorSourceFilter);
+            syncDouyinMonitorSourceSelection(sourceGroups);
+            const selectedGroup = sourceGroups.find((group) => group.key === douyinMonitorSelectedSourceKey) || null;
+            const users = baseUsers.filter((user) => douyinMonitorSelectedSourceKey === "all" || getIntentSourceGroupKey(user) === douyinMonitorSelectedSourceKey);
+            const modeLabel = douyinMonitorCustomerTab === "precise" ? "精准客户" : "全部客户";
+            updateDouyinMonitorSummary(users, allUsers, baseUsers, sourceGroups);
+            syncDouyinMonitorCustomerSelection(allUsers);
+            refreshDouyinMonitorCustomerSelectionActions(users);
+            if (sourceGroups.length) {
+                const cards = [];
+                const allActive = douyinMonitorSelectedSourceKey === "all";
+                cards.push(`<article class="search-session-card intent-source-card ${allActive ? "active" : ""}" role="button" tabindex="0" onclick='setDouyinMonitorSourceKey("all")' onkeydown='if(event.key==="Enter"||event.key===" "){event.preventDefault();setDouyinMonitorSourceKey("all")}'><div class="intent-source-all-card"><div class="search-session-card-top"><div><div class="search-session-card-title">全部来源</div><div class="search-session-card-time">把当前筛选命中的所有来源视频一起看。</div></div>${allActive ? `<span class="search-session-card-badge">当前查看</span>` : ""}</div><div class="intent-source-all-value">${esc(baseUsers.length || 0)}</div><div class="intent-source-card-chips"><span class="intent-source-card-chip">来源视频 ${esc(sourceGroups.length || 0)}</span><span class="intent-source-card-chip">${esc(modeLabel)} ${esc(baseUsers.length || 0)}</span></div></div></article>`);
+                sourceGroups.forEach((group) => {
+                    const active = group.key === douyinMonitorSelectedSourceKey;
+                    const authorText = group.task_author ? `作者：${group.task_author}` : "作者未记录";
+                    const coverHtml = group.cover_image ? `<span class="intent-source-cover"><img src="${esc(group.cover_image)}" alt="${esc(group.task_title || "来源封面")}" loading="lazy" referrerpolicy="no-referrer"></span>` : `<span class="intent-source-cover is-empty">无封面</span>`;
+                    const openLinkHtml = group.task_url ? `<a class="intent-source-card-meta" href="${esc(group.task_url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">打开源视频</a>` : "";
+                    cards.push(`<article class="search-session-card intent-source-card ${active ? "active" : ""}" role="button" tabindex="0" onclick='setDouyinMonitorSourceKey(${JSON.stringify(group.key)})' onkeydown='if(event.key==="Enter"||event.key===" "){event.preventDefault();setDouyinMonitorSourceKey(${JSON.stringify(group.key)})}'><div class="search-session-card-top"><div><div class="search-session-card-title">${esc(cut(group.task_title || "未命名视频", 34))}</div><div class="search-session-card-time">${esc(authorText)}</div></div>${active ? `<span class="search-session-card-badge">当前来源</span>` : ""}</div><div class="intent-source-card-main">${coverHtml}<div class="intent-source-card-body"><div class="intent-source-card-meta">${esc(group.latest_label || "-")} 最近有评论沉淀</div><div class="intent-source-card-chips"><span class="intent-source-card-chip">${esc(modeLabel)} ${esc(group.count || 0)}</span>${group.task_url ? `<span class="intent-source-card-chip">可回看源视频</span>` : ""}</div>${openLinkHtml}</div></div></article>`);
+                });
+                sourceList.innerHTML = cards.join("");
+            } else {
+                sourceList.innerHTML = `<div class="search-session-empty"><strong>${allUsers.length ? "当前没有符合筛选条件的来源视频" : "暂无来源视频"}</strong><div class="subtle">${allUsers.length ? "可以调整地区、评论时间、昵称或来源关键词后再看。" : selectedVideos.length ? `当前还没有${modeLabel}沉淀，先执行采集或等待结果回填。` : "当前还没有客户数据，因为这个同行还没有勾选任何监控视频。"}</div></div>`;
+            }
+            if (!allUsers.length) {
+                tbody.innerHTML = `<tr><td colspan="8" class="empty">${selectedVideos.length ? `当前还没有${modeLabel}，请先执行采集或等待结果回填。` : "当前还没有客户数据，因为这个同行还没有勾选任何监控视频。先在上方视频列表勾选后保存，再点“立即跑一轮”。"}</td></tr>`;
+                info.textContent = `暂无${modeLabel}数据`;
+                pager.innerHTML = "";
+                return;
+            }
+            if (!users.length) {
+                tbody.innerHTML = `<tr><td colspan="8" class="empty">${hasFilter || douyinMonitorSelectedSourceKey !== "all" ? `当前筛选条件下暂无${modeLabel}。` : `当前没有可展示的${modeLabel}。`}</td></tr>`;
+                info.textContent = hasFilter || douyinMonitorSelectedSourceKey !== "all" ? "当前筛选下暂无数据" : "当前暂无可展示数据";
+                pager.innerHTML = "";
+                return;
+            }
+            const size = parseInt(document.getElementById("douyin-monitor-page-size").value, 10) || 10;
+            const total = Math.max(1, Math.ceil(users.length / size));
+            douyinMonitorCurrentPage = Math.min(Math.max(douyinMonitorCurrentPage, 1), total);
+            const start = (douyinMonitorCurrentPage - 1) * size;
+            const page = users.slice(start, start + size);
+            info.textContent = `第 ${douyinMonitorCurrentPage} / ${total} 页，共 ${users.length} 位${modeLabel}${selectedGroup ? `，来源《${cut(selectedGroup.task_title || "未命名视频", 18)}》` : ""}`;
+            tbody.innerHTML = page.map((row) => {
+                const key = getDouyinMonitorCustomerSelectionKey(row);
+                const checked = key && douyinMonitorCustomerSelectionKeys.has(key);
+                return `<tr><td class="cell-tight"><input type="checkbox" ${checked ? "checked" : ""} ${key ? "" : "disabled"} onchange='toggleDouyinMonitorCustomerSelectionByKey(${JSON.stringify(key)}, this.checked)'></td><td>${renderIntentUserCell(row)}</td><td title="${esc(row.comment || row.content || "")}">${esc(cut(row.comment || row.content || "-", 120))}</td><td class="nowrap">${esc(row.comment_time_display || row.comment_time || "-")}</td><td class="nowrap">${esc(row.region || "未标注")}</td><td>${renderTaskPostHtml(row)}</td><td class="nowrap">${row.is_high_intent ? '<span class="badge status-completed">已加入</span>' : '<span class="badge status-pending">待加入</span>'}</td><td class="nowrap"><div class="table-action-row">${row.profile_url ? `<a href="${esc(row.profile_url)}" target="_blank">前往主页</a>` : "-"}${!row.is_high_intent ? `<button type="button" class="btn btn-primary" onclick='addDouyinMonitorCustomersToPreciseByKeys([${JSON.stringify(key)}])'>加入精准</button>` : ""}</div></td></tr>`;
+            }).join("");
+            pager.innerHTML = total > 1
+                ? `<div class="subtle">${modeLabel}分页：每页 ${size} 条</div><div class="pager"><span>第 ${douyinMonitorCurrentPage} / ${total} 页</span><button type="button" class="pager-btn" onclick="goToDouyinMonitorPage(1)" ${douyinMonitorCurrentPage === 1 ? "disabled" : ""}>首页</button><button type="button" class="pager-btn" onclick="goToDouyinMonitorPage(${douyinMonitorCurrentPage - 1})" ${douyinMonitorCurrentPage === 1 ? "disabled" : ""}>上一页</button><button type="button" class="pager-btn" onclick="goToDouyinMonitorPage(${douyinMonitorCurrentPage + 1})" ${douyinMonitorCurrentPage === total ? "disabled" : ""}>下一页</button><button type="button" class="pager-btn" onclick="goToDouyinMonitorPage(${total})" ${douyinMonitorCurrentPage === total ? "disabled" : ""}>末页</button></div>`
+                : `<div class="subtle">${modeLabel}分页：每页 ${size} 条</div>`;
+        }
+
+        function getSelectedDouyinMonitorCustomerRows(users = getDouyinMonitorActiveRows()) {
+            const rows = Array.isArray(users) ? users : [];
+            const lookup = new Map();
+            rows.forEach((row) => {
+                const key = getDouyinMonitorCustomerSelectionKey(row);
+                if (key) lookup.set(key, row);
+            });
+            return Array.from(douyinMonitorCustomerSelectionKeys)
+                .map((key) => lookup.get(key))
+                .filter(Boolean);
+        }
+
+        function syncDouyinMonitorCustomerSelection(users = getDouyinMonitorActiveRows()) {
+            const validKeys = new Set(
+                (Array.isArray(users) ? users : [])
+                    .map((row) => getDouyinMonitorCustomerSelectionKey(row))
+                    .filter(Boolean)
+            );
+            douyinMonitorCustomerSelectionKeys = new Set(
+                Array.from(douyinMonitorCustomerSelectionKeys).filter((key) => validKeys.has(key))
+            );
+        }
+
+        function refreshDouyinMonitorCustomerSelectionActions(users = []) {
+            const addBtn = document.getElementById("douyin-monitor-add-precise-selected-btn");
+            const selectBtn = document.getElementById("douyin-monitor-select-visible-btn");
+            const clearBtn = document.getElementById("douyin-monitor-clear-selection-btn");
+            const visibleRows = Array.isArray(users) ? users : [];
+            const selectedRows = getSelectedDouyinMonitorCustomerRows(getDouyinMonitorActiveRows());
+            const addableRows = selectedRows.filter((row) => row && !row.is_high_intent);
+            const canSelect = douyinMonitorExplorerTab === "customers" && douyinMonitorCustomerTab === "all" && visibleRows.length > 0;
+            if (selectBtn) selectBtn.disabled = !canSelect;
+            if (clearBtn) clearBtn.disabled = douyinMonitorCustomerSelectionKeys.size <= 0;
+            if (addBtn) {
+                addBtn.disabled = !canSelect || addableRows.length <= 0;
+                addBtn.textContent = addableRows.length ? `已选加入精准 ${addableRows.length}` : "已选加入精准";
+            }
+        }
+
+        function toggleDouyinMonitorCustomerSelectionByKey(key, checked) {
+            const normalizedKey = normalize(key || "");
+            if (!normalizedKey) return;
+            if (checked) {
+                douyinMonitorCustomerSelectionKeys.add(normalizedKey);
+            } else {
+                douyinMonitorCustomerSelectionKeys.delete(normalizedKey);
+            }
+            refreshDouyinMonitorCustomerSelectionActions(getDouyinMonitorActiveRows());
+        }
+
+        function toggleDouyinMonitorCustomerSelections(checked) {
+            if (!checked) {
+                douyinMonitorCustomerSelectionKeys = new Set();
+                renderDouyinMonitorCustomers();
+                return;
+            }
+            if (douyinMonitorCustomerTab !== "all") return;
+            const allRows = getDouyinMonitorActiveRows();
+            const baseRows = getDouyinMonitorBaseFilteredUsers(allRows);
+            const visibleRows = baseRows.filter((row) => {
+                return douyinMonitorSelectedSourceKey === "all" || getIntentSourceGroupKey(row) === douyinMonitorSelectedSourceKey;
+            });
+            visibleRows.forEach((row) => {
+                if (row.is_high_intent) return;
+                const key = getDouyinMonitorCustomerSelectionKey(row);
+                if (key) douyinMonitorCustomerSelectionKeys.add(key);
+            });
+            renderDouyinMonitorCustomers();
+        }
+
+        async function addDouyinMonitorCustomersToPrecise(rows = [], options = {}) {
+            const addableRows = (Array.isArray(rows) ? rows : [])
+                .filter((row) => row && typeof row === "object" && !row.is_high_intent);
+            if (!addableRows.length) {
+                addLog("请先勾选未加入精准的客户。", "warning");
+                return false;
+            }
+            const button = document.getElementById("douyin-monitor-add-precise-selected-btn");
+            const previousText = button ? button.textContent : "";
+            if (button) {
+                button.disabled = true;
+                button.textContent = "加入中...";
+            }
+            try {
+                const response = await fetch("/api/douyin/customers/add-precise", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        rows: addableRows.map((row) => buildMonitorCustomerPrecisePayloadRow(row)),
+                    }),
+                });
+                const data = await response.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "加入精准客户失败");
+                addLog(data.msg || `已加入精准客户池 ${addableRows.length} 位。`, "success");
+                const addedKeys = new Set(addableRows.map((row) => getDouyinMonitorCustomerSelectionKey(row)).filter(Boolean));
+                douyinMonitorCustomerSelectionKeys = new Set(
+                    Array.from(douyinMonitorCustomerSelectionKeys).filter((key) => !addedKeys.has(key))
+                );
+                if (typeof options.onSuccess === "function") options.onSuccess(addableRows, data);
+                await loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, false);
+                return true;
+            } catch (error) {
+                addLog(`加入精准客户失败：${error.message}`, "error");
+                return false;
+            } finally {
+                if (button) {
+                    button.textContent = previousText || "已选加入精准";
+                    refreshDouyinMonitorCustomerSelectionActions(getDouyinMonitorActiveRows());
+                }
+            }
+        }
+
+        async function addDouyinMonitorCustomersToPreciseByKeys(keys = []) {
+            const keySet = new Set((Array.isArray(keys) ? keys : []).map((key) => normalize(key || "")).filter(Boolean));
+            const rows = getDouyinMonitorActiveRows().filter((row) => keySet.has(getDouyinMonitorCustomerSelectionKey(row)));
+            await addDouyinMonitorCustomersToPrecise(rows);
+        }
+
+        async function addSelectedDouyinMonitorCustomersToPrecise() {
+            const rows = getSelectedDouyinMonitorCustomerRows(getDouyinMonitorActiveRows());
+            await addDouyinMonitorCustomersToPrecise(rows);
+        }
+
+        function goToDouyinMonitorPage(page) {
+            douyinMonitorCurrentPage = page;
+            renderDouyinMonitorCustomers();
+        }
+
+        function changeDouyinMonitorPageSize() {
+            douyinMonitorCurrentPage = 1;
+            renderDouyinMonitorCustomers();
+        }
+
+        function changeDouyinMonitorRegionFilter() {
+            douyinMonitorRegionFilter = document.getElementById("douyin-monitor-region-filter").value || "all";
+            douyinMonitorCurrentPage = 1;
+            renderDouyinMonitorCustomers();
+        }
+
+        function changeDouyinMonitorTimeFilter() {
+            douyinMonitorTimeFilterDays = document.getElementById("douyin-monitor-time-filter").value || "all";
+            douyinMonitorCurrentPage = 1;
+            renderDouyinMonitorCustomers();
+        }
+
+        function changeDouyinMonitorUsernameFilter() {
+            douyinMonitorUsernameFilter = document.getElementById("douyin-monitor-username-filter").value || "";
+            douyinMonitorCurrentPage = 1;
+            renderDouyinMonitorCustomers();
+        }
+
+        function changeDouyinMonitorSourceFilter() {
+            douyinMonitorSourceFilter = document.getElementById("douyin-monitor-source-filter").value || "";
+            douyinMonitorCurrentPage = 1;
+            renderDouyinMonitorCustomers();
+        }
+
+        function toggleDouyinMonitorVideoSelection(awemeId, checked) {
+            const current = getCurrentDouyinMonitorTarget();
+            if (!current) return;
+            current.videos = (current.videos || []).map((video) => String(video.aweme_id || "") === String(awemeId || "") ? { ...video, is_selected: !!checked } : video);
+            current.selected_video_count = (current.videos || []).filter((video) => video.is_selected).length;
+            setDouyinMonitorSelectionDraft(current.target_id, getDouyinMonitorSelectedAwemeIds(current));
+            scheduleDouyinMonitorSelectionAutoSave(current.target_id);
+            renderDouyinMonitorWorkspace();
+        }
+
+        async function loadDouyinMonitorCustomerPools(targetId = 0, silent = true) {
+            const numericTargetId = Number(targetId || 0);
+            if (!numericTargetId) {
+                const nextDigest = buildDigest({ targetId: 0, all: [], precise: [] });
+                const shouldRender = nextDigest !== douyinMonitorCustomerPoolsDigest;
+                douyinMonitorAllCustomers = [];
+                douyinMonitorPreciseCustomers = [];
+                douyinMonitorCustomerPoolsDigest = nextDigest;
+                if (shouldRender) {
+                    renderDouyinMonitorWorkspace();
+                    renderDouyinMonitorCustomers();
+                }
+                return;
+            }
+            const requestToken = ++monitorCustomerPoolRequestToken;
+            try {
+                const res = await fetch(`/api/douyin/monitor/customer-pools?target_id=${encodeURIComponent(numericTargetId)}`);
+                const data = await res.json();
+                if (requestToken !== monitorCustomerPoolRequestToken) return;
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "加载同行客户池失败");
+                const nextAllCustomers = Array.isArray(data.all_customers) ? data.all_customers : [];
+                const nextPreciseCustomers = Array.isArray(data.precise_customers) ? data.precise_customers : [];
+                const nextDigest = buildDigest({ targetId: numericTargetId, all: nextAllCustomers, precise: nextPreciseCustomers });
+                const shouldRender = nextDigest !== douyinMonitorCustomerPoolsDigest;
+                douyinMonitorAllCustomers = nextAllCustomers;
+                douyinMonitorPreciseCustomers = nextPreciseCustomers;
+                douyinMonitorCustomerPoolsDigest = nextDigest;
+                if (shouldRender) {
+                    renderDouyinMonitorWorkspace();
+                    renderDouyinMonitorCustomers();
+                }
+            } catch (error) {
+                if (!silent) addLog(`加载同行客户池失败：${error.message}`, "error");
+            }
+        }
+
+        async function loadDouyinMonitorTargets(silent = false) {
+            try {
+                const res = await fetch("/api/douyin/monitor/targets");
+                const data = await res.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "加载同行监控失败");
+                const previousTargetId = Number(douyinMonitorCurrentTargetId || 0) || 0;
+                const nextTargets = applyDouyinMonitorSelectionDrafts(Array.isArray(data.targets) ? data.targets : []);
+                const nextRuntimeState = data.state || {};
+                const nextDigest = buildDigest({ targets: nextTargets, state: nextRuntimeState });
+                const shouldRender = nextDigest !== douyinMonitorTargetsDigest;
+                douyinMonitorTargets = nextTargets;
+                douyinMonitorRuntimeState = nextRuntimeState;
+                const hasCurrent = douyinMonitorTargets.some((item) => Number(item.target_id || 0) === Number(douyinMonitorCurrentTargetId || 0));
+                if (!hasCurrent) douyinMonitorCurrentTargetId = Number(douyinMonitorTargets[0]?.target_id || 0) || 0;
+                const currentTargetChanged = Number(douyinMonitorCurrentTargetId || 0) !== previousTargetId;
+                douyinMonitorTargetsDigest = nextDigest;
+                if (shouldRender || currentTargetChanged) {
+                    renderDouyinMonitorWorkspace();
+                    refreshActionState();
+                }
+                if (shouldRender || currentTargetChanged || !douyinMonitorCustomerPoolsDigest) {
+                    await loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, true);
+                }
+                if (!silent) addLog("同行监控列表已刷新。");
+            } catch (error) {
+                if (!silent) addLog(`加载同行监控失败：${error.message}`, "error");
+            }
+        }
+
+        async function addDouyinMonitorTarget() {
+            const shareUrl = normalize(document.getElementById("douyin-monitor-share-url")?.value || "");
+            const button = document.getElementById("douyin-monitor-add-btn");
+            if (!shareUrl) {
+                addLog("请输入同行主页分享链接后再添加。", "warning");
+                return;
+            }
+            setBtn(button, true, "添加同行", "同步中...");
+            try {
+                const res = await fetch("/api/douyin/monitor/targets", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ share_url: shareUrl }),
+                });
+                const data = await res.json();
+                if (data.code === 200) {
+                    document.getElementById("douyin-monitor-share-url").value = "";
+                    douyinMonitorTargets = applyDouyinMonitorSelectionDrafts(Array.isArray(data.targets) ? data.targets : []);
+                    douyinMonitorCurrentTargetId = Number(data.target?.target_id || douyinMonitorTargets[0]?.target_id || 0) || 0;
+                    renderDouyinMonitorWorkspace();
+                    refreshActionState();
+                    await loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, true);
+                    addLog(data.msg || "同行主页已加入监控。", "success");
+                } else {
+                    addLog(data.msg || data.detail || "添加同行失败。", data.type === "no_online_account" ? "warning" : "error");
+                }
+            } catch (error) {
+                addLog(`添加同行失败：${error.message}`, "error");
+            } finally {
+                setBtn(button, false, "添加同行", "同步中...");
+            }
+        }
+
+        async function runDouyinMonitorAiKeywordSearch() {
+            const input = document.getElementById("douyin-monitor-ai-keyword");
+            const button = document.getElementById("douyin-monitor-ai-search-btn");
+            const summary = document.getElementById("douyin-monitor-ai-search-summary");
+            const keyword = normalize(input?.value || "");
+            if (!keyword) {
+                addLog("请输入一个种子关键词后再执行 AI 拓词搜索。", "warning");
+                input?.focus();
+                return;
+            }
+            setBtn(button, true, "AI拓词搜索", "拓词搜索中...");
+            if (summary) summary.textContent = `正在用 AI 扩展“${keyword}”，随后会按 12-25 秒随机间隔逐个搜索并去重入池。`;
+            addLog(`开始 AI 拓词搜索：${keyword}`);
+            try {
+                const res = await fetch("/api/douyin/monitor/keyword-expand-search", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        keyword,
+                        expand_count: 5,
+                        max_results_per_keyword: 50,
+                        interval_min_seconds: 12,
+                        interval_max_seconds: 25,
+                        include_seed: true,
+                    }),
+                });
+                const data = await res.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "AI 拓词搜索失败");
+                const keywordRows = Array.isArray(data.keyword_summaries) ? data.keyword_summaries : [];
+                const chips = keywordRows.slice(0, 12).map((item) => {
+                    const label = `${item.keyword || "-"} ${Number(item.added || 0)}/${Number(item.total || 0)}`;
+                    return `<span class="monitor-rule-pill">${esc(label)}</span>`;
+                }).join("");
+                if (summary) {
+                    summary.innerHTML = `${esc(data.msg || "AI 拓词搜索完成。")}${chips ? `<div class="monitor-rules-pills" style="margin-top:8px">${chips}</div>` : ""}`;
+                }
+                addLog(data.msg || `AI 拓词搜索完成，视频池 ${Number(data.total || 0)} 条。`, Number(data.total || 0) ? "success" : "warning");
+            } catch (error) {
+                if (summary) summary.textContent = `AI 拓词搜索失败：${error.message}`;
+                addLog(`AI 拓词搜索失败：${error.message}`, "error");
+            } finally {
+                setBtn(button, false, "AI拓词搜索", "拓词搜索中...");
+            }
+        }
+
+        async function persistDouyinMonitorVideoSelection(options = {}) {
+            const explicitTargetId = Number(options.targetId || 0) || 0;
+            const target = explicitTargetId ? getDouyinMonitorTargetById(explicitTargetId) : getCurrentDouyinMonitorTarget();
+            if (!target) return false;
+            const targetId = Number(target.target_id || 0) || 0;
+            const silent = !!options.silent;
+            const awemeIds = getDouyinMonitorSelectedAwemeIds(target);
+            setDouyinMonitorSelectionDraft(targetId, awemeIds);
+            try {
+                const res = await fetch(`/api/douyin/monitor/targets/${targetId}/videos/select`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ aweme_ids: awemeIds }),
+                });
+                const data = await res.json();
+                if (data.code === 200) {
+                    clearDouyinMonitorSelectionDraft(targetId);
+                    douyinMonitorTargets = applyDouyinMonitorSelectionDrafts(Array.isArray(data.targets) ? data.targets : douyinMonitorTargets);
+                    renderDouyinMonitorWorkspace();
+                    await loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, true);
+                    if (!silent) addLog(data.msg || "视频监控勾选已保存。", "success");
+                    return true;
+                }
+                if (!silent) addLog(data.msg || data.detail || "保存视频监控勾选失败。", "error");
+                return false;
+            } catch (error) {
+                if (!silent) addLog(`保存视频监控勾选失败：${error.message}`, "error");
+                return false;
+            }
+        }
+
+        async function saveDouyinMonitorVideoSelection() {
+            const current = getCurrentDouyinMonitorTarget();
+            if (!current) {
+                addLog("请先选择一个同行。", "warning");
+                return;
+            }
+            await persistDouyinMonitorVideoSelection();
+        }
+
+        async function refreshCurrentMonitorTarget() {
+            const current = getCurrentDouyinMonitorTarget();
+            if (!current) {
+                addLog("请先选择一个同行。", "warning");
+                return;
+            }
+            if (douyinMonitorRuntimeState.running) {
+                addLog("同行监控正在执行中，请等待当前这一轮结束后再刷新。", "warning");
+                return;
+            }
+            const saved = await persistDouyinMonitorVideoSelection({ silent: true });
+            if (!saved) return;
+            try {
+                const res = await fetch(`/api/douyin/monitor/targets/${Number(current.target_id || 0)}/refresh`, { method: "POST" });
+                const data = await res.json();
+                if (data.state) douyinMonitorRuntimeState = data.state;
+                if (data.code === 200) {
+                    douyinMonitorTargets = Array.isArray(data.targets) ? data.targets : douyinMonitorTargets;
+                    renderDouyinMonitorWorkspace();
+                    await loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, true);
+                    refreshActionState();
+                    addLog(data.result?.message || data.msg || "当前同行刷新完成。", "success");
+                } else {
+                    refreshActionState();
+                    addLog(data.msg || data.detail || "刷新当前同行失败。", data.code === 409 ? "warning" : "error");
+                }
+            } catch (error) {
+                addLog(`刷新当前同行失败：${error.message}`, "error");
+            }
+        }
+
+        async function runDouyinMonitorNow() {
+            const current = getCurrentDouyinMonitorTarget();
+            if (douyinMonitorRuntimeState.running) {
+                addLog("同行监控正在执行中，请等待当前这一轮结束后再试。", "warning");
+                return;
+            }
+            if (current) {
+                const saved = await persistDouyinMonitorVideoSelection({ silent: true });
+                if (!saved) return;
+            }
+            try {
+                const payload = current ? { target_ids: [Number(current.target_id || 0)] } : {};
+                const res = await fetch("/api/douyin/monitor/run", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (data.state) douyinMonitorRuntimeState = data.state;
+                if (data.code === 200) {
+                    await loadDouyinMonitorTargets(true);
+                    await loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, true);
+                    refreshActionState();
+                    addLog(data.result?.message || "同行监控已执行完成。", (data.result?.videos_total || 0) > 0 ? "success" : "warning");
+                } else {
+                    refreshActionState();
+                    addLog(data.msg || data.detail || "执行同行监控失败。", data.code === 409 ? "warning" : "error");
+                }
+            } catch (error) {
+                addLog(`执行同行监控失败：${error.message}`, "error");
+            }
+        }
+
+        async function deleteDouyinMonitorTarget(targetId) {
+            try {
+                const res = await fetch(`/api/douyin/monitor/targets/${Number(targetId || 0)}/delete`, { method: "POST" });
+                const data = await res.json();
+                if (data.code === 200) {
+                    clearDouyinMonitorSelectionDraft(targetId);
+                    douyinMonitorTargets = applyDouyinMonitorSelectionDrafts(Array.isArray(data.targets) ? data.targets : []);
+                    if (Number(douyinMonitorCurrentTargetId || 0) === Number(targetId || 0)) douyinMonitorCurrentTargetId = Number(douyinMonitorTargets[0]?.target_id || 0) || 0;
+                    renderDouyinMonitorWorkspace();
+                    await loadDouyinMonitorCustomerPools(douyinMonitorCurrentTargetId, true);
+                    refreshActionState();
+                    addLog(data.msg || "同行监控已停止。", "success");
+                    return true;
+                }
+                addLog(data.msg || data.detail || "停止同行监控失败。", "error");
+                return false;
+            } catch (error) {
+                addLog(`停止同行监控失败：${error.message}`, "error");
+                return false;
+            }
+        }
+
+        function getMonitorPollInterval() {
+            if (document.hidden) return 30000;
+            return douyinMonitorRuntimeState.running ? 5000 : 15000;
+        }
+
+        async function pollMonitorPageOnce() {
+            if (monitorPollInFlight) return;
+            monitorPollInFlight = true;
+            try {
+                await loadDouyinMonitorTargets(true);
+            } finally {
+                monitorPollInFlight = false;
+            }
+        }
+
+        function scheduleMonitorPolling(immediate = false) {
+            if (monitorPollTimer) {
+                window.clearTimeout(monitorPollTimer);
+                monitorPollTimer = 0;
+            }
+            const delay = immediate ? 0 : getMonitorPollInterval();
+            monitorPollTimer = window.setTimeout(async () => {
+                await pollMonitorPageOnce();
+                scheduleMonitorPolling(false);
+            }, delay);
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            scheduleMonitorPolling(true);
+        });
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            document.getElementById("confirm-modal")?.addEventListener("click", (event) => {
+                if (event.target.id === "confirm-modal") closeConfirmModal();
+            });
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape") closeConfirmModal();
+            });
+            renderCommentTimeFilter("douyin-monitor-time-filter", douyinMonitorTimeFilterDays);
+            refreshActionState();
+            await loadDouyinMonitorTargets(true);
+            scheduleMonitorPolling(false);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音私信互动</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <style>
+        .sidebar-group-header,
+        .sidebar-subbtn {
+            text-decoration: none;
+        }
+        .interaction-page-grid {
+            display: grid;
+            gap: 14px;
+            align-content: start;
+            min-height: 0;
+        }
+        #douyin-interaction-native-page {
+            min-height: 0;
+        }
+        #douyin-interaction-native-page .card {
+            min-height: 0;
+        }
+        .interaction-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .interaction-top-card {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 14px;
+            align-items: stretch;
+        }
+        .interaction-top-card .panel-head {
+            margin-bottom: 0;
+        }
+        .interaction-summary-card {
+            padding: 12px 14px;
+            border: 1px solid rgba(55, 93, 183, 0.12);
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.82);
+            box-shadow: 0 16px 34px rgba(37, 63, 124, 0.08);
+        }
+        .interaction-summary-card span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 800;
+        }
+        .interaction-summary-card strong {
+            display: block;
+            margin-top: 5px;
+            color: var(--text);
+            font-size: 22px;
+            line-height: 1;
+        }
+        .interaction-config-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 14px;
+            align-items: stretch;
+        }
+        .interaction-field-grid {
+            display: grid;
+            gap: 12px;
+        }
+        .interaction-mode-panels {
+            display: grid;
+            gap: 12px;
+        }
+        .interaction-mode-panel {
+            display: none;
+            gap: 10px;
+        }
+        .interaction-mode-panel.active {
+            display: grid;
+        }
+        .interaction-filter-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        .interaction-filter-row select,
+        .interaction-filter-row input {
+            width: auto;
+            min-width: 138px;
+        }
+        .interaction-log {
+            max-height: 160px;
+        }
+        .interaction-table-card {
+            min-width: 0;
+        }
+        #douyin-interaction-native-page .interaction-runtime {
+            padding: 18px 20px;
+        }
+        #douyin-interaction-native-page .interaction-runtime-card {
+            padding: 16px;
+        }
+        #douyin-interaction-native-page .interaction-runtime-metrics {
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+        }
+        .interaction-table-card .table-shell {
+            max-height: none;
+            min-height: 760px;
+        }
+        .interaction-hidden {
+            display: none !important;
+        }
+        @media (max-width: 1180px) {
+            .interaction-top-card,
+            .interaction-config-grid {
+                grid-template-columns: 1fr;
+            }
+            .interaction-summary-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            #douyin-interaction-native-page .interaction-runtime-metrics {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 720px) {
+            .interaction-summary-grid {
+                grid-template-columns: 1fr;
+            }
+            #douyin-interaction-native-page .interaction-runtime-metrics {
+                grid-template-columns: 1fr;
+            }
+            .interaction-filter-row select,
+            .interaction-filter-row input {
+                width: 100%;
+                min-width: 0;
+            }
+        }
+    </style>
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5"></path><path d="M6.5 10.5V19h11v-8.5"></path><path d="M10 19v-4.5h4V19"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">数据大屏</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect><path d="M8 3.5v3"></path><path d="M16 3.5v3"></path><path d="M4.5 9.5h15"></path><path d="M8.5 13h2"></path><path d="M13.5 13h2"></path><path d="M8.5 16h2"></path><path d="M13.5 16h2"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">排期中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group is-active" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header active" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-customers')" aria-expanded="false" aria-controls="sidebar-group-customers">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path><circle cx="10.7" cy="8.7" r="3.2"></circle><path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path><path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">客户仓库</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-nurture')" aria-expanded="false" aria-controls="sidebar-group-nurture">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path><path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">账号养号</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M7 5.5h10"></path><path d="M7 10.5h10"></path><path d="M7 15.5h6"></path><path d="M5 4.5h.01"></path><path d="M5 9.5h.01"></path><path d="M5 14.5h.01"></path><path d="M4.5 19.5h15"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">执行日志</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M12 8.2a3.8 3.8 0 1 1 0 7.6 3.8 3.8 0 0 1 0-7.6Z"></path><path d="M4.8 13.4v-2.8l2-.7.6-1.5-1-1.9 2-2 1.9 1 .1.1 1.5-.6.7-2h2.8l.7 2 1.5.6 1.9-1 2 2-1 1.9.6 1.5 2 .7v2.8l-2 .7-.6 1.5 1 1.9-2 2-1.9-1-.1-.1-1.5.6-.7 2h-2.8l-.7-2-1.5-.6-1.9 1-2-2 1-1.9-.6-1.5-2-.7Z"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">配置中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M6.5 5.5h9A2.5 2.5 0 0 1 18 8v10.5l-3.4-1.8-3.1 1.8-3.1-1.8L5 18.5V8a2.5 2.5 0 0 1 1.5-2.5Z"></path><path d="M8.5 9.5h6"></path><path d="M8.5 12.5h6"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">使用说明</span></span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="douyin-interaction-native-page" class="workspace-panel-page active">
+                    <div class="stack interaction-page-grid">
+                        <section class="card interaction-top-card">
+                            <div class="panel-head">
+                                <div>
+                                    <div class="section-chip status">Douyin Interaction</div>
+                                    <h3>私信互动</h3>
+                                    <p class="subtle">独立私信工作台，只加载私信客户、任务状态和当前账号信息，不再嵌入完整抖音工作台。</p>
+                                </div>
+                                <div class="tools">
+                                    <button type="button" class="btn" onclick="refreshInteractionPage(true)">刷新客户</button>
+                                    <a class="btn" href="/douyin/workbench?target=interaction">完整工作台</a>
+                                </div>
+                            </div>
+                            <div class="interaction-summary-grid">
+                                <div class="interaction-summary-card"><span>精准客户</span><strong id="interaction-total">0</strong></div>
+                                <div class="interaction-summary-card"><span>已勾选</span><strong id="interaction-selected-total">0</strong></div>
+                                <div class="interaction-summary-card"><span>来源视频</span><strong id="interaction-completed-posts">0</strong></div>
+                                <div class="interaction-summary-card"><span>执行账号</span><strong id="interaction-active-account">-</strong></div>
+                            </div>
+                        </section>
+
+                        <div class="interaction-config-grid">
+                            <section class="card">
+                                <div class="panel-head">
+                                    <div>
+                                        <h3>私信话术</h3>
+                                        <p class="subtle">固定话术支持 10 个预设，开始私信时会按非空话术轮换发送。</p>
+                                    </div>
+                                </div>
+                                <div class="interaction-field-grid" style="margin-top:14px">
+                                    <label for="douyin-interaction-mode">私信方式</label>
+                                    <select id="douyin-interaction-mode" onchange="toggleDouyinInteractionOptions()">
+                                        <option value="fixed">固定文案</option>
+                                        <option value="ai">AI 生成</option>
+                                        <option value="rewrite">AI 改写</option>
+                                    </select>
+                                    <div id="douyin-interaction-mode-hint" class="video-comment-hint">直接发送你填写的统一私信。每换一行，系统就顺序发送一条单独消息。</div>
+                                    <div class="interaction-mode-panels">
+                                        <div id="douyin-interaction-fixed-wrap" class="interaction-mode-panel active">
+                                            <div class="dm-preset-head">
+                                                <label for="douyin-interaction-message">固定私信内容</label>
+                                                <div class="dm-preset-tabs" id="douyin-interaction-preset-tabs" aria-label="私信话术预设"></div>
+                                            </div>
+                                            <textarea id="douyin-interaction-message" rows="4" placeholder="请输入要发送的私信内容" oninput="handleDouyinInteractionPresetInput()"></textarea>
+                                            <div class="dm-preset-hint">
+                                                <span>当前编辑内容会先作为页面草稿，点保存后写入本机历史配置；开始私信会使用当前非空话术。</span>
+                                                <button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinInteractionPreset(true)">保存当前话术</button>
+                                            </div>
+                                        </div>
+                                        <div id="douyin-interaction-ai-wrap" class="interaction-mode-panel">
+                                            <label for="douyin-interaction-prompt">AI 生成方向 / 核心观点</label>
+                                            <textarea id="douyin-interaction-prompt" rows="4" placeholder="可选填写，例如：自然一点、像同行交流、先从对方评论切入、别太营销"></textarea>
+                                        </div>
+                                        <div id="douyin-interaction-rewrite-wrap" class="interaction-mode-panel">
+                                            <label for="douyin-interaction-seed-text">私信基准文案</label>
+                                            <textarea id="douyin-interaction-seed-text" rows="4" placeholder="例如：看你刚刚的评论挺有感觉的，方便交流下你现在在关注什么吗？"></textarea>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="card interaction-runtime">
+                                <div class="interaction-runtime-head">
+                                    <div class="interaction-runtime-copy">
+                                        <strong>私信任务状态</strong>
+                                        <span class="interaction-runtime-note">启动后这里显示实时进度、账号状态和最近发送内容。</span>
+                                    </div>
+                                    <div id="douyin-interaction-runtime-badge" class="interaction-runtime-badge">待命</div>
+                                </div>
+                                <div id="douyin-interaction-runtime-card" class="interaction-runtime-card">
+                                    <div class="interaction-runtime-body">
+                                        <div class="interaction-runtime-indicator">
+                                            <span id="douyin-interaction-runtime-spinner" class="interaction-runtime-spinner" aria-hidden="true"></span>
+                                        </div>
+                                        <div class="interaction-runtime-content">
+                                            <div id="douyin-interaction-status" class="interaction-runtime-message">尚未开始私信任务。</div>
+                                            <div id="douyin-interaction-runtime-detail" class="interaction-runtime-detail">开始私信后，这里会高亮显示当前进度、执行账号和实时发送状态。</div>
+                                        </div>
+                                    </div>
+                                    <div id="douyin-interaction-runtime-metrics" class="interaction-runtime-metrics"></div>
+                                </div>
+                            </section>
+                        </div>
+
+                        <section class="card interaction-table-card">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>待私信客户</h3>
+                                    <p class="subtle" id="douyin-interaction-selection-summary">已勾选 0 / 0 人</p>
+                                </div>
+                                <div class="tools">
+                                    <button type="button" class="btn" onclick="toggleCurrentPageInteractionUsers(true)">全选当前页</button>
+                                    <button type="button" class="btn" onclick="toggleAllInteractionUsers(true)">全选</button>
+                                    <button type="button" class="btn" onclick="toggleAllInteractionUsers(false)">清空</button>
+                                </div>
+                            </div>
+                            <div class="interaction-filter-row" style="margin-top:14px">
+                                <label class="subtle" for="douyin-interaction-interval-min">私信间隔</label>
+                                <select id="douyin-interaction-interval-unit" onchange="changeDouyinInteractionIntervalUnit()">
+                                    <option value="seconds">秒</option>
+                                    <option value="minutes" selected>分钟</option>
+                                </select>
+                                <input type="number" id="douyin-interaction-interval-min" min="0" max="1440" step="0.1" value="3" title="最小间隔">
+                                <span class="subtle">-</span>
+                                <input type="number" id="douyin-interaction-interval-max" min="0" max="1440" step="0.1" value="5" title="最大间隔">
+                                <span class="subtle">随机</span>
+                                <button type="button" class="btn btn-primary" id="douyin-interaction-start-btn" onclick="startDouyinInteraction()">开始私信</button>
+                                <button type="button" class="btn btn-warning" id="douyin-interaction-stop-btn" onclick="stopDouyinInteraction()" disabled>停止私信</button>
+                                <select id="interaction-region-filter" onchange="changeInteractionRegionFilter()"><option value="all">全部地区</option></select>
+                                <select id="interaction-time-filter" onchange="changeInteractionTimeFilter()"></select>
+                                <select id="interaction-follow-status-filter" onchange="changeInteractionFollowStatusFilter()">
+                                    <option value="all">关注评论：全部</option>
+                                    <option value="pending">关注评论：待处理</option>
+                                    <option value="queued">关注评论：排队中</option>
+                                    <option value="processing">关注评论：执行中</option>
+                                    <option value="completed">关注评论：已完成</option>
+                                    <option value="failed">关注评论：失败</option>
+                                </select>
+                                <select id="interaction-message-status-filter" onchange="changeInteractionMessageStatusFilter()">
+                                    <option value="all">私信：全部</option>
+                                    <option value="pending">私信：待处理</option>
+                                    <option value="queued">私信：排队中</option>
+                                    <option value="processing">私信：发送中</option>
+                                    <option value="sent">私信：已发送</option>
+                                    <option value="failed">私信：失败</option>
+                                    <option value="interrupted">私信：已中断</option>
+                                </select>
+                                <select id="interaction-page-size" onchange="changeInteractionPageSize()">
+                                    <option value="10">10 / 页</option>
+                                    <option value="20">20 / 页</option>
+                                    <option value="50">50 / 页</option>
+                                    <option value="100">100 / 页</option>
+                                </select>
+                            </div>
+                            <div class="table-shell" style="margin-top:14px">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:72px">勾选</th>
+                                            <th style="width:92px">编号</th>
+                                            <th style="width:240px">客户</th>
+                                            <th>评论内容</th>
+                                            <th style="min-width:300px">来源视频</th>
+                                            <th class="nowrap" style="width:180px">关注评论状态</th>
+                                            <th class="nowrap" style="width:160px">私信状态</th>
+                                            <th style="width:150px">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="interaction-tbody">
+                                        <tr><td colspan="8" class="empty">正在加载精准客户...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div id="interaction-pagination" class="table-tools" style="margin-top:12px"></div>
+                        </section>
+                        <div id="log-content" class="interaction-hidden"></div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script src="/static/douyin-origin/douyin-interaction-page.js?v=20260604a"></script>
+</body>
+</html>

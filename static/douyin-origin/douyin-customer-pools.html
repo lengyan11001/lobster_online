@@ -1,0 +1,1578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音客户池</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">数据大屏</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">排期中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group is-open" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header active" onclick="toggleSidebarGroup('sidebar-group-customers')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">客户仓库</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" id="sidebar-customers-link" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" id="sidebar-intent-link" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-nurture')">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">养号仓库</span></span>
+                                </span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 5.5h10"></path>
+                                            <path d="M7 10.5h10"></path>
+                                            <path d="M7 15.5h6"></path>
+                                            <path d="M5 4.5h.01"></path>
+                                            <path d="M5 9.5h.01"></path>
+                                            <path d="M5 14.5h.01"></path>
+                                            <path d="M4.5 19.5h15"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">执行日志</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="12" cy="12" r="2.6"></circle>
+                                            <path d="M19.4 15a1.3 1.3 0 0 0 .26 1.43l.05.05a1.6 1.6 0 1 1-2.26 2.26l-.05-.05a1.3 1.3 0 0 0-1.43-.26 1.3 1.3 0 0 0-.79 1.18V20a1.6 1.6 0 1 1-3.2 0v-.08a1.3 1.3 0 0 0-.84-1.2 1.3 1.3 0 0 0-1.39.28l-.05.05a1.6 1.6 0 1 1-2.26-2.26l.05-.05a1.3 1.3 0 0 0 .28-1.39 1.3 1.3 0 0 0-1.2-.84H4a1.6 1.6 0 1 1 0-3.2h.08a1.3 1.3 0 0 0 1.2-.84 1.3 1.3 0 0 0-.28-1.39l-.05-.05a1.6 1.6 0 1 1 2.26-2.26l.05.05a1.3 1.3 0 0 0 1.39.28h.06a1.3 1.3 0 0 0 .78-1.19V4a1.6 1.6 0 1 1 3.2 0v.08a1.3 1.3 0 0 0 .84 1.2 1.3 1.3 0 0 0 1.39-.28l.05-.05a1.6 1.6 0 1 1 2.26 2.26l-.05.05a1.3 1.3 0 0 0-.26 1.43v.06a1.3 1.3 0 0 0 1.18.79H20a1.6 1.6 0 1 1 0 3.2h-.08a1.3 1.3 0 0 0-1.2.84Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">配置中心</span></span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M6.8 5.5h9.6A1.6 1.6 0 0 1 18 7.1v9.8a1.6 1.6 0 0 1-1.6 1.6H7.6A1.6 1.6 0 0 1 6 16.9V6.3A.8.8 0 0 1 6.8 5.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h6"></path>
+                                            <path d="M9 15h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">使用说明</span></span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="all-customers-workspace-page" class="workspace-panel-page">
+                    <div class="stack">
+                        <section class="card">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>第三步：全部客户池</h3>
+                                    <p class="subtle">按关键词下的全部评论客户聚合查看，不再按单条视频逐个打开。可以直接按地区、评论时间、昵称和来源视频筛选，再把目标客户加入精准客户池。</p>
+                                </div>
+                            </div>
+                            <div class="table-tools" style="margin-top:14px">
+                                <div id="all-customers-summary" class="subtle">暂无全部客户数据</div>
+                                <div class="tools">
+                                    <button type="button" class="btn" onclick="toggleAllCustomerSelections(true)">全选当前筛选</button>
+                                    <button type="button" class="btn" onclick="toggleAllCustomerSelections(false)">清空勾选</button>
+                                    <button type="button" class="btn btn-primary" id="all-customers-add-precise-selected-btn" onclick="addSelectedAllCustomersToIntent()" disabled>已选加入精准</button>
+                                    <button type="button" class="btn btn-danger" id="all-customers-delete-selected-btn" onclick="deleteSelectedAllCustomers()" disabled>删除已选</button>
+                                    <select id="all-customers-region-filter" style="width:auto;min-width:170px" onchange="changeAllCustomersRegionFilter()">
+                                        <option value="all">全部地区</option>
+                                    </select>
+                                    <select id="all-customers-time-filter" style="width:auto;min-width:170px" onchange="changeAllCustomersTimeFilter()">
+                                        <option value="all">评论时间：无限制</option>
+                                    </select>
+                                    <input type="text" id="all-customers-username-filter" class="input" placeholder="搜索昵称" style="width:180px;min-width:180px" oninput="changeAllCustomersUsernameFilter()">
+                                    <input type="text" id="all-customers-source-filter" class="input" placeholder="搜索来源视频" style="width:220px;min-width:220px" oninput="changeAllCustomersSourceFilter()">
+                                    <select id="all-customers-page-size" style="width:auto;min-width:120px" onchange="changeAllCustomersPageSize()">
+                                        <option value="10">10 / 页</option>
+                                        <option value="20">20 / 页</option>
+                                        <option value="50">50 / 页</option>
+                                        <option value="100">100 / 页</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="search-session-layout intent-source-workspace">
+                                <aside class="search-session-sidebar">
+                                    <div class="search-session-sidebar-head">
+                                        <h4>来源视频</h4>
+                                        <div id="all-customers-source-summary" class="subtle">左侧会按来源视频聚合全部客户，点击卡片后右侧只看该视频下的评论客户。</div>
+                                        <div class="source-nav-search">
+                                            <input type="text" id="all-customers-source-nav-filter" class="input" placeholder="快速定位来源视频" oninput="changeAllCustomersSourceNavFilter()">
+                                        </div>
+                                    </div>
+                                    <div id="all-customers-source-list" class="search-session-list source-nav-list">
+                                        <div class="search-session-empty">
+                                            <strong>暂无来源视频</strong>
+                                            <div class="subtle">全部客户出现后，这里会自动聚合来源视频卡片。</div>
+                                        </div>
+                                    </div>
+                                </aside>
+                                <div class="search-session-stage">
+                                    <div class="table-tools"><div></div><div id="all-customers-page-info" class="subtle">暂无全部客户数据</div></div>
+                                    <div class="metrics">
+                                        <div class="stat"><div class="label">全部客户</div><div class="value" id="all-customers-total">0</div><div class="hint">当前筛选命中的评论客户数</div></div>
+                                        <div class="stat"><div class="label">已入精准</div><div class="value" id="all-customers-precise-total">0</div><div class="hint">当前筛选里已加入精准客户的人数</div></div>
+                                        <div class="stat"><div class="label">覆盖视频</div><div class="value" id="all-customers-task-total">0</div><div class="hint">当前筛选后仍命中的来源视频数</div></div>
+                                        <div class="stat"><div class="label">地区数</div><div class="value" id="all-customers-region-total">0</div><div class="hint">当前列表识别出的地区标签数</div></div>
+                                    </div>
+                                    <div class="table-shell">
+                                        <table class="table">
+                                            <thead>
+                                                <tr>
+                                                    <th style="width:72px">勾选</th>
+                                                    <th style="width:92px">编号</th>
+                                                    <th style="width:240px">客户</th>
+                                                    <th>评论内容</th>
+                                                    <th style="min-width:300px">来源视频</th>
+                                                    <th class="nowrap" style="width:140px">精准状态</th>
+                                                    <th style="width:150px">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="all-customers-tbody">
+                                                <tr><td colspan="7" class="empty">暂无全部客户，请先执行第二步采集。</td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div id="all-customers-pagination" class="table-tools" style="margin-top:12px"></div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+
+                <div id="intent-workspace-page" class="workspace-panel-page">
+                    <div class="stack">
+                        <section class="card">
+                            <div class="panel-head">
+                                <div>
+                                    <h3>第四步：精准客户池</h3>
+                                    <p class="subtle">这里只看已经沉淀下来的精准客户。支持按地区、评论时间、昵称和来源视频复筛，也可以直接把不合适的客户移出精准池。</p>
+                                </div>
+                            </div>
+                            <div class="table-tools" style="margin-top:14px">
+                                <div id="intent-summary" class="subtle">暂无精准客户数据</div>
+                                <div class="tools">
+                                    <select id="intent-region-filter" style="width:auto;min-width:170px" onchange="changeIntentRegionFilter()">
+                                        <option value="all">全部地区</option>
+                                    </select>
+                                    <select id="intent-time-filter" style="width:auto;min-width:170px" onchange="changeIntentTimeFilter()">
+                                        <option value="all">评论时间：无限制</option>
+                                    </select>
+                                    <input type="text" id="intent-username-filter" class="input" placeholder="搜索昵称" style="width:180px;min-width:180px" oninput="changeIntentUsernameFilter()">
+                                    <input type="text" id="intent-source-filter" class="input" placeholder="搜索来源视频" style="width:220px;min-width:220px" oninput="changeIntentSourceFilter()">
+                                    <select id="intent-page-size" style="width:auto;min-width:120px" onchange="changeIntentPageSize()">
+                                        <option value="10">10 / 页</option>
+                                        <option value="20">20 / 页</option>
+                                        <option value="50">50 / 页</option>
+                                        <option value="100">100 / 页</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="search-session-layout intent-source-workspace">
+                                <aside class="search-session-sidebar">
+                                    <div class="search-session-sidebar-head">
+                                        <h4>来源视频</h4>
+                                        <div id="intent-source-summary" class="subtle">左侧会按来源视频聚合精准客户，点击卡片后右侧只看该视频下的客户。</div>
+                                        <div class="source-nav-search">
+                                            <input type="text" id="intent-source-nav-filter" class="input" placeholder="快速定位来源视频" oninput="changeIntentSourceNavFilter()">
+                                        </div>
+                                    </div>
+                                    <div id="intent-source-list" class="search-session-list source-nav-list">
+                                        <div class="search-session-empty">
+                                            <strong>暂无来源视频</strong>
+                                            <div class="subtle">精准客户出现后，这里会自动聚合来源视频卡片。</div>
+                                        </div>
+                                    </div>
+                                </aside>
+                                <div class="search-session-stage">
+                                    <div class="table-tools"><div></div><div id="intent-page-info" class="subtle">暂无精准客户数据</div></div>
+                                    <div class="metrics">
+                                        <div class="stat"><div class="label">当前客户</div><div class="value" id="intent-total">0</div><div class="hint">当前筛选命中的精准客户数量</div></div>
+                                        <div class="stat"><div class="label">覆盖视频</div><div class="value" id="intent-task-total">0</div><div class="hint">当前筛选后仍命中的来源视频数</div></div>
+                                        <div class="stat"><div class="label">地区数</div><div class="value" id="intent-region-total">0</div><div class="hint">已识别的地区标签数量</div></div>
+                                        <div class="stat"><div class="label">最近评论</div><div class="value" id="intent-latest-date">-</div><div class="hint">当前列表里最新一条评论日期</div></div>
+                                    </div>
+                                    <div class="table-shell">
+                                        <table class="table">
+                                            <thead>
+                                                <tr>
+                                                    <th style="width:92px">编号</th>
+                                                    <th style="width:240px">客户</th>
+                                                    <th>评论内容</th>
+                                                    <th style="min-width:300px">来源视频</th>
+                                                    <th class="nowrap" style="width:140px">当前状态</th>
+                                                    <th class="nowrap" style="width:150px">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="intent-tbody">
+                                                <tr><td colspan="6" class="empty">暂无精准客户，请先执行第二步采集。</td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div id="intent-pagination" class="table-tools" style="margin-top:12px"></div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div id="log-content" style="display:none"></div>
+
+    <div id="confirm-modal" class="overlay">
+        <div class="modal confirm-modal">
+            <div class="modal-head">
+                <div>
+                    <h2 id="confirm-modal-title">确认操作</h2>
+                    <p class="subtle">删除后不会自动恢复，请再次确认。</p>
+                </div>
+                <button type="button" class="modal-close" onclick="closeConfirmModal()">&times;</button>
+            </div>
+            <p id="confirm-modal-message" class="confirm-copy">确认继续吗？</p>
+            <div class="modal-actions">
+                <button type="button" class="btn" id="confirm-modal-cancel-btn" onclick="closeConfirmModal()">取消</button>
+                <button type="button" class="btn btn-danger" id="confirm-modal-confirm-btn" onclick="handleConfirmModalConfirm()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentCustomerPoolTarget = "all-customers";
+        let douyinTasks = [];
+        let douyinAllCustomerPool = [];
+        let douyinPreciseCustomerPool = [];
+        let douyinIsRunning = false;
+        let allCustomerCurrentPage = 1;
+        let allCustomerRegionFilter = "all";
+        let allCustomerTimeFilterDays = "all";
+        let allCustomerUsernameFilter = "";
+        let allCustomerSourceFilter = "";
+        let allCustomerSourceNavFilter = "";
+        let allCustomerSelectedSourceKey = "all";
+        let allCustomerSelectionKeys = new Set();
+        let intentCurrentPage = 1;
+        let intentRegionFilter = "all";
+        let intentTimeFilterDays = "all";
+        let intentUsernameFilter = "";
+        let intentSourceFilter = "";
+        let intentSourceNavFilter = "";
+        let intentSelectedSourceKey = "all";
+        let customerPoolPollTimer = 0;
+        let customerPoolPollInFlight = false;
+        let confirmModalState = {
+            title: "确认操作",
+            message: "确认继续吗？",
+            confirmText: "确认",
+            confirmClass: "btn-danger",
+            submitting: false,
+            onConfirm: null,
+        };
+
+        function normalize(value) {
+            return String(value ?? "").replace(/\u200b|\ufeff/g, "").replace(/\s+/g, " ").trim();
+        }
+
+        function esc(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function cut(value, size = 30) {
+            const text = String(value ?? "");
+            return text.length > size ? `${text.slice(0, size)}...` : text;
+        }
+
+        function addLog(message, level = "info") {
+            const box = document.getElementById("log-content");
+            if (!box) return;
+            const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-level-${esc(level)}">${esc(message)}</span>`;
+            box.appendChild(entry);
+            while (box.children.length > 200) box.removeChild(box.firstChild);
+        }
+
+        function setText(id, value) {
+            const element = document.getElementById(id);
+            if (element) element.textContent = String(value ?? "");
+        }
+
+        function toggleSidebarGroup(id) {
+            const panel = document.getElementById(id);
+            if (!panel) return;
+            panel.parentElement?.classList.toggle("is-open");
+        }
+
+        function setOverlayVisibility(id, show) {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.classList.toggle("show", !!show);
+            document.body.classList.toggle("modal-open", !!document.querySelector(".overlay.show"));
+        }
+
+        function renderConfirmModal() {
+            const confirmBtn = document.getElementById("confirm-modal-confirm-btn");
+            const cancelBtn = document.getElementById("confirm-modal-cancel-btn");
+            document.getElementById("confirm-modal-title").textContent = confirmModalState.title || "确认操作";
+            document.getElementById("confirm-modal-message").textContent = confirmModalState.message || "确认继续吗？";
+            confirmBtn.textContent = confirmModalState.submitting ? "处理中..." : (confirmModalState.confirmText || "确认");
+            confirmBtn.className = `btn ${confirmModalState.confirmClass || "btn-danger"}`;
+            confirmBtn.disabled = confirmModalState.submitting;
+            cancelBtn.disabled = confirmModalState.submitting;
+        }
+
+        function openConfirmModal(options = {}) {
+            confirmModalState = {
+                title: options.title || "确认操作",
+                message: options.message || "确认继续吗？",
+                confirmText: options.confirmText || "确认",
+                confirmClass: options.confirmClass || "btn-danger",
+                submitting: false,
+                onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
+            };
+            renderConfirmModal();
+            setOverlayVisibility("confirm-modal", true);
+        }
+
+        function closeConfirmModal(force = false) {
+            if (confirmModalState.submitting && !force) return;
+            setOverlayVisibility("confirm-modal", false);
+            confirmModalState = {
+                title: "确认操作",
+                message: "确认继续吗？",
+                confirmText: "确认",
+                confirmClass: "btn-danger",
+                submitting: false,
+                onConfirm: null,
+            };
+        }
+
+        async function handleConfirmModalConfirm() {
+            if (confirmModalState.submitting || typeof confirmModalState.onConfirm !== "function") return;
+            confirmModalState.submitting = true;
+            renderConfirmModal();
+            try {
+                const shouldClose = await confirmModalState.onConfirm();
+                if (shouldClose !== false) closeConfirmModal(true);
+            } catch (error) {
+                addLog(`确认操作执行失败：${error.message}`, "error");
+                confirmModalState.submitting = false;
+                renderConfirmModal();
+                return;
+            }
+            confirmModalState.submitting = false;
+            renderConfirmModal();
+        }
+
+        function getCustomerPoolTargetFromPath() {
+            const pathname = normalize(window.location.pathname || "").replace(/\/+$/, "");
+            const hash = normalize(window.location.hash || "").replace(/^#/, "").toLowerCase();
+            if (["precise", "intent"].includes(hash)) return "intent";
+            if (["all", "customers", "all-customers"].includes(hash)) return "all-customers";
+            if (pathname === "/douyin/intent") return "intent";
+            return "all-customers";
+        }
+
+        function getCustomerPoolPageTitle(target = "all-customers") {
+            return target === "intent" ? "必火AI获客 · 抖音精准客户" : "必火AI获客 · 抖音全部客户";
+        }
+
+        function applyCustomerPoolTarget(target = "all-customers") {
+            currentCustomerPoolTarget = target === "intent" ? "intent" : "all-customers";
+            document.title = getCustomerPoolPageTitle(currentCustomerPoolTarget);
+            document.getElementById("all-customers-workspace-page")?.classList.toggle("active", currentCustomerPoolTarget === "all-customers");
+            document.getElementById("intent-workspace-page")?.classList.toggle("active", currentCustomerPoolTarget === "intent");
+            document.getElementById("sidebar-customers-link")?.classList.toggle("active", currentCustomerPoolTarget === "all-customers");
+            document.getElementById("sidebar-intent-link")?.classList.toggle("active", currentCustomerPoolTarget === "intent");
+        }
+
+        function syncCustomerPoolTargetFromLocation() {
+            const nextTarget = getCustomerPoolTargetFromPath();
+            applyCustomerPoolTarget(nextTarget);
+            if (nextTarget === "intent") renderIntentPreview();
+            else renderAllCustomersPreview();
+        }
+
+        function getCommentTimeFilterOptions() {
+            return [
+                { value: "all", label: "评论时间：无限制" },
+                { value: "3", label: "评论时间：3天内" },
+                { value: "7", label: "评论时间：7天内" },
+                { value: "30", label: "评论时间：30天内" },
+                { value: "90", label: "评论时间：90天内" },
+                { value: "365", label: "评论时间：1年内" },
+            ];
+        }
+
+        function renderCommentTimeFilter(selectId, currentValue = "all") {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+            const options = getCommentTimeFilterOptions();
+            select.innerHTML = options.map((option) => `<option value="${option.value}" ${String(currentValue) === String(option.value) ? "selected" : ""}>${option.label}</option>`).join("");
+            select.value = options.some((option) => String(option.value) === String(currentValue)) ? String(currentValue) : "all";
+        }
+
+        function parseCommentMeta(row = {}) {
+            const explicitRegion = normalize(row.region || row.location || row.province || row.city || row.ip_location || "");
+            const rawCommentTime = normalize(row.comment_time || "");
+            const parts = rawCommentTime.split(/[·•・]/).map(normalize).filter(Boolean);
+            const commentTime = parts.length ? parts[0] : rawCommentTime;
+            const derivedRegion = parts.length > 1 ? parts.slice(1).join(" · ") : "";
+            return { commentTime, region: explicitRegion || derivedRegion };
+        }
+
+        function createCommentTimestamp(year, month, day, hour = 0, minute = 0) {
+            const ts = new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+            return Number.isFinite(ts) ? ts : null;
+        }
+
+        function parseCommentTimestamp(rawValue) {
+            const text = normalize(rawValue);
+            if (!text) return null;
+            const now = new Date();
+            const nowTs = now.getTime();
+            const todayStartTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+            if (/^(刚刚|刚才)$/.test(text)) return nowTs;
+            let match = text.match(/^(\d+)\s*分钟[前内]?$/);
+            if (match) return nowTs - Number(match[1]) * 60 * 1000;
+            match = text.match(/^(\d+)\s*小时[前内]?$/);
+            if (match) return nowTs - Number(match[1]) * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*天前$/);
+            if (match) return nowTs - Number(match[1]) * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*周前$/);
+            if (match) return nowTs - Number(match[1]) * 7 * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*个?月前$/);
+            if (match) return nowTs - Number(match[1]) * 30 * 24 * 60 * 60 * 1000;
+            match = text.match(/^(\d+)\s*年前$/);
+            if (match) return nowTs - Number(match[1]) * 365 * 24 * 60 * 60 * 1000;
+            if (text === "昨天") return todayStartTs - 24 * 60 * 60 * 1000;
+            if (text === "前天") return todayStartTs - 2 * 24 * 60 * 60 * 1000;
+            const normalizedText = text.replace(/[年./]/g, "-").replace(/月/g, "-").replace(/日/g, "").replace(/\//g, "-").replace(/\s+/g, " ").trim();
+            match = normalizedText.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})(?::(\d{1,2}))?)?$/);
+            if (match) return createCommentTimestamp(Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4] || 0), Number(match[5] || 0));
+            match = normalizedText.match(/^(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2})(?::(\d{1,2}))?)?$/);
+            if (match) {
+                let year = now.getFullYear();
+                let ts = createCommentTimestamp(year, Number(match[1]), Number(match[2]), Number(match[3] || 0), Number(match[4] || 0));
+                if (ts !== null && ts > nowTs + 24 * 60 * 60 * 1000) ts = createCommentTimestamp(year - 1, Number(match[1]), Number(match[2]), Number(match[3] || 0), Number(match[4] || 0));
+                return ts;
+            }
+            const parsed = Date.parse(normalizedText);
+            return Number.isNaN(parsed) ? null : parsed;
+        }
+
+        function formatDateFromTimestamp(ts) {
+            if (!Number.isFinite(ts)) return "-";
+            const date = new Date(ts);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        }
+
+        function formatAbsoluteDate(rawValue) {
+            const ts = parseCommentTimestamp(rawValue);
+            if (!Number.isFinite(ts)) return normalize(rawValue) || "-";
+            return formatDateFromTimestamp(ts);
+        }
+
+        function getAvatarUrl(row = {}) {
+            return normalize(row.avatar || row.avatar_url || row.avatarUrl || "");
+        }
+
+        function formatCommentDateLabel(row = {}) {
+            const meta = parseCommentMeta(row);
+            return formatAbsoluteDate(meta.commentTime || normalize(row.comment_time || ""));
+        }
+
+        function getCommentRegionLabel(row = {}) {
+            const meta = parseCommentMeta(row);
+            return normalize(meta.region || row.region || row.location || row.province || row.city || row.ip_location || "");
+        }
+
+        function getCommentMetaDisplay(row = {}) {
+            const dateText = formatCommentDateLabel(row);
+            const regionText = getCommentRegionLabel(row);
+            return [dateText && dateText !== "-" ? dateText : "", regionText].filter(Boolean).join(" · ") || "-";
+        }
+
+        function renderIntentAvatar(row = {}) {
+            const avatarUrl = getAvatarUrl(row);
+            const fallback = normalize(row.username || "").charAt(0) || "客";
+            return avatarUrl
+                ? `<span class="intent-avatar"><img src="${esc(avatarUrl)}" alt="${esc(row.username || "用户头像")}" loading="lazy" referrerpolicy="no-referrer"></span>`
+                : `<span class="intent-avatar intent-avatar-fallback">${esc(fallback)}</span>`;
+        }
+
+        function matchesCommentTimeFilter(rawValue, filterDays) {
+            if (String(filterDays || "all") === "all") return true;
+            const days = Number(filterDays);
+            if (!days) return true;
+            const ts = parseCommentTimestamp(rawValue);
+            if (!Number.isFinite(ts)) return false;
+            return ts >= Date.now() - days * 24 * 60 * 60 * 1000;
+        }
+
+        function matchesTextFilter(value, keyword) {
+            const source = normalize(value).toLowerCase();
+            const query = normalize(keyword).toLowerCase();
+            return !query || source.includes(query);
+        }
+
+        function userChoiceLooseKey(user = {}) {
+            return [normalize(user.user_id || user.userId || ""), normalize(user.username || ""), normalize(user.comment || user.content || "")].join("|");
+        }
+
+        function userChoiceKey(user = {}) {
+            const id = normalize(user.comment_id || user.commentId || "");
+            if (id) return `id:${id}`;
+            return [
+                normalize(user.user_id || user.userId || ""),
+                normalize(user.username || ""),
+                normalize(user.comment || user.content || ""),
+                normalize(user.comment_time || ""),
+            ].join("|");
+        }
+
+        function toCount(value) {
+            const text = normalize(value).toLowerCase().replace(/\+/g, "");
+            if (!text) return 0;
+            if (text.includes("k")) return Math.round((parseFloat(text.replace(/[^0-9.]/g, "")) || 0) * 1000);
+            if (text.includes("w")) return Math.round((parseFloat(text.replace(/[^0-9.]/g, "")) || 0) * 10000);
+            return parseInt(text.replace(/[^0-9]/g, ""), 10) || 0;
+        }
+
+        function compareCustomerRows(a, b) {
+            const timeDiff = (parseCommentTimestamp(b.comment_time_display || b.comment_time || "") || 0) - (parseCommentTimestamp(a.comment_time_display || a.comment_time || "") || 0);
+            if (timeDiff) return timeDiff;
+            return normalize(a.username || "").localeCompare(normalize(b.username || ""), "zh-CN");
+        }
+
+        function normalizeCustomerPoolRow(source, extra = {}, options = {}) {
+            const merged = { ...source, ...extra };
+            const isHighIntent = !!options.is_high_intent;
+            return {
+                ...merged,
+                avatar: getAvatarUrl(merged),
+                avatar_url: getAvatarUrl(merged),
+                region: getCommentRegionLabel(merged),
+                comment_time_display: formatCommentDateLabel(merged),
+                comment_meta_display: getCommentMetaDisplay(merged),
+                is_high_intent: isHighIntent,
+            };
+        }
+
+        function isMonitorCustomerRow(user = {}) {
+            return normalize(user.source || "") === "douyin_monitor" || (Number(user.task_id || 0) <= 0 && Number(user.monitor_target_id || user.target_id || 0) > 0);
+        }
+
+        function getCustomerSourceTitle(row = {}) {
+            return String(row.task_title || row.title || row.latest_video_title || row.video_title || "").trim();
+        }
+
+        function getCustomerSourceUrl(row = {}) {
+            return String(row.task_url || row.url || row.latest_video_url || row.video_url || row.monitor_target_profile_url || row.target_profile_url || "").trim();
+        }
+
+        function getCustomerSourceAuthorName(row = {}) {
+            return String(row.task_author || row.author || row.monitor_target_username || row.target_username || "").trim();
+        }
+
+        function getCustomerSourceLabel(user = {}) {
+            if (isMonitorCustomerRow(user)) return normalize(getCustomerSourceAuthorName(user)) || "同行监控";
+            return normalize(getCustomerSourceAuthorName(user)) || "";
+        }
+
+        function getTaskCoverImage(task = {}) {
+            return String(task.cover_image || "").trim();
+        }
+
+        function renderTaskPostHtml(task) {
+            const cover = getTaskCoverImage(task);
+            const rawUrl = getCustomerSourceUrl(task) || "#";
+            const rawTitle = getCustomerSourceTitle(task) || "查看详情";
+            const author = getCustomerSourceAuthorName(task);
+            const publishText = normalize(task?.comment_time_display || task?.comment_time || task?.latest_label || "");
+            const url = esc(rawUrl);
+            const title = esc(rawTitle);
+            const coverHtml = cover
+                ? `<a class="task-post-cover" href="${url}" target="_blank" rel="noopener noreferrer"><img src="${esc(cover)}" alt="${title}" loading="lazy" referrerpolicy="no-referrer"></a>`
+                : `<a class="task-post-cover is-empty" href="${url}" target="_blank" rel="noopener noreferrer">无封面</a>`;
+            return `<div class="task-post-cell">${coverHtml}<div class="task-post-meta"><a class="task-post-title" href="${url}" target="_blank" rel="noopener noreferrer" title="${title}">${title}</a>${author ? `<div class="task-post-subtle">${esc(isMonitorCustomerRow(task) ? `同行：${author}` : `作者：${author}`)}</div>` : ""}${publishText ? `<div class="task-post-subtle">${esc(cut(publishText, 30))}</div>` : ""}</div></div>`;
+        }
+
+        function renderTableIndexCell(index, label = "") {
+            return `<div class="table-index"><strong>${esc(index)}</strong>${label ? `<span>${esc(label)}</span>` : ""}</div>`;
+        }
+
+        function renderCustomerCommentCell(user = {}, limit = 96) {
+            const text = cut(user.comment || user.content || "-", limit);
+            const meta = [
+                user.comment_time_display || user.comment_time || "",
+                user.region || "未标注",
+                toCount(user.like_count) > 0 ? `点赞 ${toCount(user.like_count)}` : "",
+                toCount(user.reply_count) > 0 ? `回复 ${toCount(user.reply_count)}` : "",
+            ].filter(Boolean).join(" · ");
+            return `<div class="table-comment"><div class="table-comment-main" title="${esc(user.comment || user.content || "")}">${esc(text)}</div>${meta ? `<div class="table-comment-meta">${esc(meta)}</div>` : ""}</div>`;
+        }
+
+        function renderProfileAction(url, label = "前往主页") {
+            return url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : '<span class="badge status-pending">无主页</span>';
+        }
+
+        function buildHighIntentPayloadRow(row = {}) {
+            return {
+                comment_index: row.comment_index,
+                username: row.username,
+                user_id: row.user_id,
+                user_xsec_token: row.user_xsec_token,
+                comment_id: row.comment_id,
+                comment: row.comment || row.content || "",
+                content: row.comment || row.content || "",
+                comment_time: row.comment_time || "",
+                region: row.region || "",
+                location: row.region || row.location || "",
+                ip_location: row.region || row.ip_location || "",
+                avatar: row.avatar || row.avatar_url || "",
+                avatar_url: row.avatar_url || row.avatar || "",
+                like_count: row.like_count || "",
+                reply_count: row.reply_count || "",
+                profile_url: row.profile_url || "",
+                intent_level: row.intent_level || "manual",
+                reason: row.reason || "手动勾选",
+                is_high_intent: !!row.is_high_intent,
+                source: row.source || "",
+                task_id: row.task_id || 0,
+                target_id: row.target_id || row.monitor_target_id || 0,
+                monitor_target_id: row.monitor_target_id || row.target_id || 0,
+                monitor_target_username: row.monitor_target_username || row.target_username || "",
+                monitor_target_profile_url: row.monitor_target_profile_url || row.target_profile_url || "",
+                aweme_id: row.aweme_id || "",
+                comment_key: row.comment_key || "",
+                user_key: row.user_key || "",
+                latest_video_title: row.latest_video_title || row.task_title || "",
+                latest_video_url: row.latest_video_url || row.task_url || "",
+                task_title: row.task_title || row.latest_video_title || "",
+                task_url: row.task_url || row.latest_video_url || "",
+                task_author: row.task_author || row.monitor_target_username || row.target_username || "",
+            };
+        }
+
+        function taskUserMetaScore(row = {}) {
+            let score = 0;
+            if (getAvatarUrl(row)) score += 3;
+            if (normalize(row.region || "")) score += 2;
+            if (normalize(row.comment_time_display || row.comment_time || "") && normalize(row.comment_time_display || row.comment_time || "") !== "-") score += 2;
+            if (toCount(row.like_count) > 0) score += 1;
+            return score;
+        }
+
+        function sortTaskUserRows(rows) {
+            return [...rows].sort((a, b) => Number(Boolean(b.checked)) - Number(Boolean(a.checked)) || taskUserMetaScore(b) - taskUserMetaScore(a) || toCount(b.like_count) - toCount(a.like_count) || normalize(a.username).localeCompare(normalize(b.username), "zh-CN"));
+        }
+
+        function buildTaskUserRows(task) {
+            const selectedStrict = new Set((task.high_intent_users || []).map(userChoiceKey).filter(Boolean));
+            const selectedLoose = new Set((task.high_intent_users || []).map(userChoiceLooseKey).filter(Boolean));
+            const commentLookup = new Map((task.all_comments || []).map((item) => [userChoiceLooseKey(item), item]).filter((entry) => entry[0]));
+            const rows = [];
+            const seen = new Set();
+
+            function appendRow(source, checked, intentLevel, reason, fallbackIndex) {
+                const row = {
+                    comment_index: source.comment_index || fallbackIndex,
+                    username: source.username || "",
+                    user_id: source.user_id || "",
+                    user_xsec_token: source.user_xsec_token || "",
+                    comment_id: source.comment_id || "",
+                    comment: source.content || source.comment || "",
+                    content: source.content || source.comment || "",
+                    comment_time: source.comment_time || "",
+                    comment_time_display: formatCommentDateLabel(source),
+                    comment_meta_display: getCommentMetaDisplay(source),
+                    region: getCommentRegionLabel(source),
+                    avatar: getAvatarUrl(source),
+                    avatar_url: getAvatarUrl(source),
+                    like_count: source.like_count || "",
+                    reply_count: source.reply_count || "",
+                    profile_url: source.profile_url || "",
+                    intent_level: intentLevel || "",
+                    reason: reason || "",
+                };
+                const key = normalize(row.comment_id || "") ? userChoiceKey(row) : userChoiceLooseKey(row);
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                row.checked = checked;
+                rows.push(row);
+            }
+
+            (task.all_comments || []).forEach((comment, index) => {
+                const looseKey = userChoiceLooseKey(comment);
+                const isSelected = selectedStrict.has(userChoiceKey(comment)) || selectedLoose.has(looseKey);
+                appendRow(comment, isSelected, isSelected ? (comment.intent_level || "high") : "", comment.reason || "", index + 1);
+            });
+
+            (task.high_intent_users || []).forEach((user, index) => {
+                const matchedComment = commentLookup.get(userChoiceLooseKey(user)) || {};
+                appendRow({ ...matchedComment, ...user }, true, user.intent_level || "manual", user.reason || "", index + 1);
+            });
+
+            return sortTaskUserRows(rows);
+        }
+
+        function setLocalTaskHighIntentUsers(taskId, rows = []) {
+            douyinTasks = douyinTasks.map((task) => Number(task.id || 0) === Number(taskId) ? { ...task, high_intent_users: rows.map(buildHighIntentPayloadRow) } : task);
+        }
+
+        function collectAllCommentUsers() {
+            return (Array.isArray(douyinAllCustomerPool) ? douyinAllCustomerPool : []).map((user) => normalizeCustomerPoolRow(user, {}, { is_high_intent: !!user.is_high_intent })).sort(compareCustomerRows);
+        }
+
+        function collectHighIntentUsers() {
+            return (Array.isArray(douyinPreciseCustomerPool) ? douyinPreciseCustomerPool : []).map((user) => normalizeCustomerPoolRow(user, {}, { is_high_intent: true })).sort(compareCustomerRows);
+        }
+
+        function renderPoolRegionFilter(selectId, currentValue, users, onMissing) {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+            const regions = [...new Set(users.map((user) => normalize(user.region || "")).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+            const options = ['<option value="all">全部地区</option>'];
+            if (users.some((user) => !normalize(user.region || ""))) options.push(`<option value="unknown" ${currentValue === "unknown" ? "selected" : ""}>未标注地区</option>`);
+            regions.forEach((region) => options.push(`<option value="${esc(region)}" ${currentValue === region ? "selected" : ""}>${esc(region)}</option>`));
+            select.innerHTML = options.join("");
+            if (currentValue !== "all" && currentValue !== "unknown" && !regions.includes(currentValue)) onMissing();
+            select.value = currentValue;
+        }
+
+        function renderIntentUserCell(user) {
+            const sourceLabel = getCustomerSourceLabel(user);
+            const subtle = sourceLabel ? (isMonitorCustomerRow(user) ? `来源同行：${sourceLabel}` : `来源作者：${sourceLabel}`) : (normalize(user.reason || "") || "来自评论精准筛选");
+            return `<div class="intent-user-cell">${renderIntentAvatar(user)}<div class="intent-user-meta"><div class="intent-user-name">${esc(user.username || "-")}</div><div class="intent-user-subtle">${esc(cut(subtle, 34))}</div></div></div>`;
+        }
+
+        function getCustomerDeleteSelectionKey(user = {}) {
+            const baseKey = userChoiceKey(user) || userChoiceLooseKey(user);
+            const taskId = Number(user.task_id || 0) || 0;
+            if (!baseKey) return "";
+            return `${taskId}:${baseKey}`;
+        }
+
+        function isCustomerRowDeletable(user = {}) {
+            return !isMonitorCustomerRow(user);
+        }
+
+        function getSelectedAllCustomerRows(users = collectAllCommentUsers()) {
+            const lookup = new Map((Array.isArray(users) ? users : []).map((user) => [getCustomerDeleteSelectionKey(user), user]).filter((entry) => entry[0]));
+            return [...allCustomerSelectionKeys].map((key) => lookup.get(key)).filter(Boolean);
+        }
+
+        function syncAllCustomerSelection(users = collectAllCommentUsers()) {
+            const validKeys = new Set((Array.isArray(users) ? users : []).map(getCustomerDeleteSelectionKey).filter(Boolean));
+            allCustomerSelectionKeys = new Set([...allCustomerSelectionKeys].filter((key) => validKeys.has(key)));
+        }
+
+        function toggleAllCustomerSelectionByKey(key, checked) {
+            if (!key) return;
+            if (checked) allCustomerSelectionKeys.add(key);
+            else allCustomerSelectionKeys.delete(key);
+            renderAllCustomersPreview();
+        }
+
+        function getIntentSourceGroupKey(user = {}) {
+            const taskId = Number(user.task_id || 0);
+            if (taskId > 0) return `task:${taskId}`;
+            const taskUrl = normalize(getCustomerSourceUrl(user));
+            if (taskUrl) return `url:${taskUrl}`;
+            const title = normalize(getCustomerSourceTitle(user));
+            const author = normalize(getCustomerSourceAuthorName(user));
+            if (title || author) return `meta:${title}::${author}`;
+            const fallback = userChoiceLooseKey(user);
+            return fallback ? `row:${fallback}` : "";
+        }
+
+        function getAllCustomerBaseFilteredUsers(users = collectAllCommentUsers()) {
+            return users.filter((user) => {
+                const region = normalize(user.region || "");
+                const commentTime = normalize(parseCommentMeta(user).commentTime || user.comment_time || "");
+                const username = normalize(user.username || "");
+                const sourceTitle = normalize(getCustomerSourceTitle(user));
+                if (allCustomerRegionFilter === "unknown" && region) return false;
+                if (allCustomerRegionFilter !== "all" && allCustomerRegionFilter !== "unknown" && region !== allCustomerRegionFilter) return false;
+                if (!matchesCommentTimeFilter(commentTime, allCustomerTimeFilterDays)) return false;
+                if (!matchesTextFilter(username, allCustomerUsernameFilter)) return false;
+                if (!matchesTextFilter(sourceTitle, allCustomerSourceFilter)) return false;
+                return true;
+            });
+        }
+
+        function getIntentBaseFilteredUsers(users = collectHighIntentUsers()) {
+            return users.filter((user) => {
+                const region = normalize(user.region || "");
+                const commentTime = normalize(parseCommentMeta(user).commentTime || user.comment_time || "");
+                const username = normalize(user.username || "");
+                const sourceTitle = normalize(getCustomerSourceTitle(user));
+                if (intentRegionFilter === "unknown" && region) return false;
+                if (intentRegionFilter !== "all" && intentRegionFilter !== "unknown" && region !== intentRegionFilter) return false;
+                if (!matchesCommentTimeFilter(commentTime, intentTimeFilterDays)) return false;
+                if (!matchesTextFilter(username, intentUsernameFilter)) return false;
+                if (!matchesTextFilter(sourceTitle, intentSourceFilter)) return false;
+                return true;
+            });
+        }
+
+        function getFilteredAllCustomers(users = collectAllCommentUsers()) {
+            return getAllCustomerBaseFilteredUsers(users).filter((user) => allCustomerSelectedSourceKey === "all" || getIntentSourceGroupKey(user) === allCustomerSelectedSourceKey);
+        }
+
+        function getFilteredIntentUsers(users = collectHighIntentUsers()) {
+            return getIntentBaseFilteredUsers(users).filter((user) => intentSelectedSourceKey === "all" || getIntentSourceGroupKey(user) === intentSelectedSourceKey);
+        }
+
+        function getIntentSourceGroups(users = getIntentBaseFilteredUsers()) {
+            const groups = [];
+            const map = new Map();
+            users.forEach((user) => {
+                const key = getIntentSourceGroupKey(user);
+                if (!key) return;
+                const parsedTime = parseCommentMeta(user).commentTime || user.comment_time || "";
+                const timestamp = parseCommentTimestamp(parsedTime) || 0;
+                const isMonitor = isMonitorCustomerRow(user);
+                let group = map.get(key);
+                if (!group) {
+                    group = {
+                        key,
+                        task_id: Number(user.task_id || 0) || "",
+                        task_title: getCustomerSourceTitle(user) || "未命名视频",
+                        task_url: getCustomerSourceUrl(user) || "",
+                        task_author: getCustomerSourceAuthorName(user) || "",
+                        cover_image: getTaskCoverImage(user),
+                        count: 0,
+                        latest_ts: timestamp,
+                        latest_label: user.comment_time_display || formatCommentDateLabel(user) || parsedTime || "-",
+                        source_type: isMonitor ? "douyin_monitor" : "douyin_task",
+                    };
+                    map.set(key, group);
+                    groups.push(group);
+                }
+                group.count += 1;
+                if (!group.task_title || group.task_title === "未命名视频") group.task_title = getCustomerSourceTitle(user) || group.task_title;
+                if (!group.task_author) group.task_author = getCustomerSourceAuthorName(user) || "";
+                if (!group.task_url) group.task_url = getCustomerSourceUrl(user) || "";
+                if (!group.cover_image) group.cover_image = getTaskCoverImage(user);
+                if (isMonitor) group.source_type = "douyin_monitor";
+                if (timestamp >= group.latest_ts) {
+                    group.latest_ts = timestamp;
+                    group.latest_label = user.comment_time_display || formatCommentDateLabel(user) || parsedTime || "-";
+                }
+            });
+            return groups.sort((a, b) => {
+                const countDiff = Number(b.count || 0) - Number(a.count || 0);
+                if (countDiff) return countDiff;
+                const timeDiff = Number(b.latest_ts || 0) - Number(a.latest_ts || 0);
+                if (timeDiff) return timeDiff;
+                return normalize(a.task_title || "").localeCompare(normalize(b.task_title || ""), "zh-CN");
+            });
+        }
+
+        function matchesSourceGroupFilter(group, keyword = "") {
+            const text = normalize(keyword || "").toLowerCase();
+            if (!text) return true;
+            return [normalize(group?.task_title || ""), normalize(group?.task_author || ""), normalize(group?.latest_label || ""), normalize(group?.task_url || "")].some((item) => normalize(item).toLowerCase().includes(text));
+        }
+
+        function renderCustomerSourceNavigator(options = {}) {
+            const sourceList = options.sourceList;
+            const groups = Array.isArray(options.groups) ? options.groups : [];
+            const selectedKey = options.selectedKey || "all";
+            const navFilter = normalize(options.navFilter || "");
+            const setKeyName = options.setKeyName || "";
+            const totalUsers = Number(options.totalUsers || 0);
+            const sourceLabel = options.sourceLabel || "来源视频";
+            const userLabel = options.userLabel || "客户";
+            const selectedBadge = options.selectedBadge || "当前来源";
+            if (!sourceList) return;
+            const visibleGroups = groups.filter((group) => matchesSourceGroupFilter(group, navFilter));
+            if (!groups.length) {
+                sourceList.innerHTML = `<div class="search-session-empty"><strong>暂无${sourceLabel}</strong><div class="subtle">${options.emptyText || `${sourceLabel}出现后，这里会自动聚合。`}</div></div>`;
+                return;
+            }
+            if (navFilter && !visibleGroups.length) {
+                sourceList.innerHTML = '<div class="search-session-empty"><strong>没有匹配的来源视频</strong><div class="subtle">可以换个关键词再试，或者清空左侧的快速定位输入框。</div></div>';
+                return;
+            }
+            const allActive = selectedKey === "all";
+            const allSubtitle = navFilter ? `当前共匹配 ${visibleGroups.length} 条${sourceLabel}，右侧可切到其中任意一个来源。` : `把当前筛选命中的所有${sourceLabel}一起看。`;
+            const allUsersText = allActive ? totalUsers : (groups.find((group) => group.key === selectedKey)?.count || totalUsers);
+            const allCard = `<article class="source-nav-item is-all ${allActive ? "active" : ""}" role="button" tabindex="0" onclick='${setKeyName}("all")' onkeydown='if(event.key==="Enter"||event.key===" "){event.preventDefault();${setKeyName}("all")}'><div class="source-nav-item-top"><div class="source-nav-item-copy"><div class="source-nav-item-title">全部来源</div><div class="source-nav-item-meta">${esc(allSubtitle)}</div></div><div class="source-nav-item-count"><strong>${esc(allUsersText || 0)}</strong><span>${esc(userLabel)}</span></div></div><div class="source-nav-item-chips"><span class="source-nav-chip">${esc(sourceLabel)} ${esc(visibleGroups.length || 0)}</span><span class="source-nav-chip">${esc(userLabel)} ${esc(totalUsers || 0)}</span></div></article>`;
+            const items = visibleGroups.map((group) => {
+                const active = group.key === selectedKey;
+                const authorText = group.task_author ? (group.source_type === "douyin_monitor" ? `同行：${group.task_author}` : `作者：${group.task_author}`) : (group.source_type === "douyin_monitor" ? "同行未记录" : "作者未记录");
+                const latestText = group.latest_label ? `${group.latest_label} 最近有沉淀` : "最近有沉淀";
+                const chips = [`${userLabel} ${group.count || 0}`, group.task_url ? "可回看源视频" : "", group.source_type === "douyin_monitor" ? "同行监控" : "搜索采集"].filter(Boolean);
+                return `<article class="source-nav-item ${active ? "active" : ""}" role="button" tabindex="0" onclick='${setKeyName}(${JSON.stringify(group.key)})' onkeydown='if(event.key==="Enter"||event.key===" "){event.preventDefault();${setKeyName}(${JSON.stringify(group.key)})}'><div class="source-nav-item-top"><div class="source-nav-item-copy"><div class="source-nav-item-title">${esc(cut(group.task_title || "未命名视频", 36))}</div><div class="source-nav-item-meta">${esc(authorText)} · ${esc(latestText)}</div></div><div class="source-nav-item-count"><strong>${esc(group.count || 0)}</strong><span>${esc(userLabel)}</span></div></div><div class="source-nav-item-chips">${chips.map((chip) => `<span class="source-nav-chip">${esc(chip)}</span>`).join("")}${active ? `<span class="source-nav-chip">${esc(selectedBadge)}</span>` : ""}</div></article>`;
+            });
+            sourceList.innerHTML = [allCard].concat(items).join("");
+        }
+
+        function syncAllCustomerSourceSelection(groups = getIntentSourceGroups()) {
+            if (allCustomerSelectedSourceKey !== "all" && !groups.some((group) => group.key === allCustomerSelectedSourceKey)) allCustomerSelectedSourceKey = "all";
+        }
+
+        function syncIntentSourceSelection(groups = getIntentSourceGroups()) {
+            if (intentSelectedSourceKey !== "all" && !groups.some((group) => group.key === intentSelectedSourceKey)) intentSelectedSourceKey = "all";
+        }
+
+        function setAllCustomerSourceKey(key) {
+            allCustomerSelectedSourceKey = key || "all";
+            allCustomerCurrentPage = 1;
+            renderAllCustomersPreview();
+        }
+
+        function setIntentSourceKey(key) {
+            intentSelectedSourceKey = key || "all";
+            intentCurrentPage = 1;
+            renderIntentPreview();
+        }
+
+        function updateAllCustomersSummary(users, allUsers, baseUsers = getAllCustomerBaseFilteredUsers(allUsers), sourceGroups = getIntentSourceGroups(baseUsers)) {
+            const selectedGroup = sourceGroups.find((group) => group.key === allCustomerSelectedSourceKey) || null;
+            setText("all-customers-total", users.length || 0);
+            setText("all-customers-precise-total", users.filter((user) => user.is_high_intent).length || 0);
+            setText("all-customers-task-total", new Set(users.map((user) => normalize(getCustomerSourceTitle(user))).filter(Boolean)).size || 0);
+            setText("all-customers-region-total", new Set(users.map((user) => normalize(user.region || "")).filter(Boolean)).size || 0);
+            const summary = document.getElementById("all-customers-summary");
+            const sourceSummary = document.getElementById("all-customers-source-summary");
+            let summaryText = "暂无全部客户数据";
+            let sourceSummaryText = "当前筛选下还没有可展示的来源视频。";
+            if (allUsers.length) {
+                summaryText = selectedGroup
+                    ? `当前累计 ${allUsers.length} 位全部客户，已合并搜索采集和同行监控；当前筛选命中 ${baseUsers.length} 位，来源已锁定《${cut(selectedGroup.task_title || "未命名视频", 24)}》后显示 ${users.length} 位，其中已入精准 ${users.filter((user) => user.is_high_intent).length} 位。`
+                    : `当前累计 ${allUsers.length} 位全部客户，已合并搜索采集和同行监控；当前筛选命中 ${baseUsers.length} 位，最终展示 ${users.length} 位，其中已入精准 ${users.filter((user) => user.is_high_intent).length} 位。`;
+            }
+            if (sourceGroups.length) {
+                sourceSummaryText = selectedGroup
+                    ? `当前筛选下共有 ${sourceGroups.length} 条来源视频。已选中《${cut(selectedGroup.task_title || "未命名视频", 26)}》，共 ${selectedGroup.count} 位评论客户。`
+                    : "当前筛选下共有 " + sourceGroups.length + " 条来源视频。点击左侧来源卡片后，右侧只看该视频下的评论客户。";
+            }
+            if (summary) summary.textContent = summaryText;
+            if (sourceSummary) sourceSummary.textContent = sourceSummaryText;
+        }
+
+        function updateIntentSummary(users, allUsers, baseUsers = getIntentBaseFilteredUsers(allUsers), sourceGroups = getIntentSourceGroups(baseUsers)) {
+            const latestTs = Math.max(0, ...users.map((user) => parseCommentTimestamp(parseCommentMeta(user).commentTime || user.comment_time || "")).filter(Number.isFinite));
+            const selectedGroup = sourceGroups.find((group) => group.key === intentSelectedSourceKey) || null;
+            setText("intent-total", users.length || 0);
+            setText("intent-task-total", new Set(users.map((user) => normalize(getCustomerSourceTitle(user))).filter(Boolean)).size || 0);
+            setText("intent-region-total", new Set(users.map((user) => normalize(user.region || "")).filter(Boolean)).size || 0);
+            setText("intent-latest-date", latestTs ? formatDateFromTimestamp(latestTs) : "-");
+            const summary = document.getElementById("intent-summary");
+            const sourceSummary = document.getElementById("intent-source-summary");
+            let summaryText = "暂无精准客户数据";
+            let sourceSummaryText = "当前筛选下还没有可展示的来源视频。";
+            if (allUsers.length) {
+                summaryText = selectedGroup
+                    ? `当前累计 ${allUsers.length} 位精准客户，已合并搜索采集和同行监控；当前筛选命中 ${baseUsers.length} 位，来源已锁定《${cut(selectedGroup.task_title || "未命名视频", 24)}》后显示 ${users.length} 位。`
+                    : `当前累计 ${allUsers.length} 位精准客户，已合并搜索采集和同行监控；当前筛选命中 ${baseUsers.length} 位，最终展示 ${users.length} 位。`;
+            }
+            if (sourceGroups.length) {
+                sourceSummaryText = selectedGroup
+                    ? `当前筛选下共有 ${sourceGroups.length} 条来源视频。已选中《${cut(selectedGroup.task_title || "未命名视频", 26)}》，共 ${selectedGroup.count} 位精准客户。`
+                    : "当前筛选下共有 " + sourceGroups.length + " 条来源视频。点击左侧来源卡片后，右侧只看该视频下的客户。";
+            }
+            if (summary) summary.textContent = summaryText;
+            if (sourceSummary) sourceSummary.textContent = sourceSummaryText;
+        }
+
+        function renderAllCustomersRegionFilter(users) {
+            renderPoolRegionFilter("all-customers-region-filter", allCustomerRegionFilter, users, () => { allCustomerRegionFilter = "all"; });
+        }
+
+        function renderIntentRegionFilter(users) {
+            renderPoolRegionFilter("intent-region-filter", intentRegionFilter, users, () => { intentRegionFilter = "all"; });
+        }
+
+        function renderAllCustomersPreview() {
+            const tbody = document.getElementById("all-customers-tbody");
+            const info = document.getElementById("all-customers-page-info");
+            const pager = document.getElementById("all-customers-pagination");
+            const sourceList = document.getElementById("all-customers-source-list");
+            const allUsers = collectAllCommentUsers();
+            syncAllCustomerSelection(allUsers);
+            renderAllCustomersRegionFilter(allUsers);
+            renderCommentTimeFilter("all-customers-time-filter", allCustomerTimeFilterDays);
+            const baseUsers = getAllCustomerBaseFilteredUsers(allUsers);
+            const sourceGroups = getIntentSourceGroups(baseUsers);
+            const hasFilter = allCustomerRegionFilter !== "all" || allCustomerTimeFilterDays !== "all" || normalize(allCustomerUsernameFilter) || normalize(allCustomerSourceFilter);
+            syncAllCustomerSourceSelection(sourceGroups);
+            const selectedGroup = sourceGroups.find((group) => group.key === allCustomerSelectedSourceKey) || null;
+            const users = baseUsers.filter((user) => allCustomerSelectedSourceKey === "all" || getIntentSourceGroupKey(user) === allCustomerSelectedSourceKey);
+            updateAllCustomersSummary(users, allUsers, baseUsers, sourceGroups);
+            const selectedRows = getSelectedAllCustomerRows(allUsers);
+            const selectedAddableRows = selectedRows.filter((user) => !user.is_high_intent);
+            const selectedDeletableRows = selectedRows.filter(isCustomerRowDeletable);
+            const addPreciseButton = document.getElementById("all-customers-add-precise-selected-btn");
+            const deleteButton = document.getElementById("all-customers-delete-selected-btn");
+            if (addPreciseButton) addPreciseButton.disabled = !selectedAddableRows.length;
+            if (deleteButton) deleteButton.disabled = !selectedDeletableRows.length;
+            if (selectedRows.length && document.getElementById("all-customers-summary")) document.getElementById("all-customers-summary").textContent += ` 当前已勾选 ${selectedRows.length} 位客户，可加入精准 ${selectedAddableRows.length} 位，可删除 ${selectedDeletableRows.length} 位。`;
+
+            const navInput = document.getElementById("all-customers-source-nav-filter");
+            if (navInput && String(navInput.value || "") !== String(allCustomerSourceNavFilter || "")) navInput.value = allCustomerSourceNavFilter || "";
+            if (sourceList) renderCustomerSourceNavigator({
+                sourceList,
+                groups: sourceGroups,
+                selectedKey: allCustomerSelectedSourceKey,
+                navFilter: allCustomerSourceNavFilter,
+                setKeyName: "setAllCustomerSourceKey",
+                totalUsers: baseUsers.length,
+                sourceLabel: "来源视频",
+                userLabel: "评论客户",
+                selectedBadge: "当前来源",
+                emptyText: allUsers.length ? "可以调整地区、评论时间、昵称或来源关键词后再看。" : "全部客户出现后，这里会自动聚合来源视频卡片。",
+            });
+
+            if (!allUsers.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无全部客户，请先执行第二步采集。</td></tr>';
+                info.textContent = "暂无全部客户数据";
+                pager.innerHTML = "";
+                return;
+            }
+            if (!users.length) {
+                tbody.innerHTML = `<tr><td colspan="7" class="empty">${hasFilter || allCustomerSelectedSourceKey !== "all" ? "当前筛选条件下暂无全部客户。" : "当前没有可展示的全部客户。"}</td></tr>`;
+                info.textContent = hasFilter || allCustomerSelectedSourceKey !== "all" ? "当前筛选下暂无数据" : "当前暂无可展示数据";
+                pager.innerHTML = "";
+                return;
+            }
+
+            const size = parseInt(document.getElementById("all-customers-page-size")?.value, 10) || 10;
+            const total = Math.max(1, Math.ceil(users.length / size));
+            allCustomerCurrentPage = Math.min(Math.max(allCustomerCurrentPage, 1), total);
+            const start = (allCustomerCurrentPage - 1) * size;
+            const page = users.slice(start, start + size);
+            info.textContent = `第 ${allCustomerCurrentPage} / ${total} 页，共 ${users.length} 位客户${selectedGroup ? `，来源《${cut(selectedGroup.task_title || "未命名视频", 18)}》` : ""}`;
+            tbody.innerHTML = page.map((user, index) => {
+                const selectionKey = getCustomerDeleteSelectionKey(user);
+                const selectable = !!selectionKey;
+                const checked = selectable && allCustomerSelectionKeys.has(selectionKey);
+                return `<tr><td class="cell-tight"><input type="checkbox" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"} onchange='toggleAllCustomerSelectionByKey(${JSON.stringify(selectionKey)}, this.checked)'></td><td>${renderTableIndexCell(start + index + 1, normalize(user.comment_id || "") ? "comment" : "pool")}</td><td>${renderIntentUserCell(user)}</td><td>${renderCustomerCommentCell(user, 120)}</td><td>${renderTaskPostHtml(user)}</td><td class="nowrap">${user.is_high_intent ? '<span class="badge status-completed">已加入</span>' : '<span class="badge status-pending">待加入</span>'}</td><td><div class="table-action-row">${renderProfileAction(user.profile_url)}${!user.is_high_intent ? `<button type="button" class="btn btn-primary" onclick='addAllCustomerToIntentByKey(${JSON.stringify(userChoiceKey(user))})'>加入精准</button>` : ""}</div></td></tr>`;
+            }).join("");
+            pager.innerHTML = total > 1
+                ? `<div class="subtle">全部客户分页：每页 ${size} 条</div><div class="pager"><span>第 ${allCustomerCurrentPage} / ${total} 页</span><button type="button" class="pager-btn" onclick="goToAllCustomersPage(1)" ${allCustomerCurrentPage === 1 ? "disabled" : ""}>首页</button><button type="button" class="pager-btn" onclick="goToAllCustomersPage(${allCustomerCurrentPage - 1})" ${allCustomerCurrentPage === 1 ? "disabled" : ""}>上一页</button><button type="button" class="pager-btn" onclick="goToAllCustomersPage(${allCustomerCurrentPage + 1})" ${allCustomerCurrentPage === total ? "disabled" : ""}>下一页</button><button type="button" class="pager-btn" onclick="goToAllCustomersPage(${total})" ${allCustomerCurrentPage === total ? "disabled" : ""}>末页</button></div>`
+                : `<div class="subtle">全部客户分页：每页 ${size} 条</div>`;
+        }
+
+        function renderIntentPreview() {
+            const tbody = document.getElementById("intent-tbody");
+            const info = document.getElementById("intent-page-info");
+            const pager = document.getElementById("intent-pagination");
+            const sourceList = document.getElementById("intent-source-list");
+            const allUsers = collectHighIntentUsers();
+            renderIntentRegionFilter(allUsers);
+            renderCommentTimeFilter("intent-time-filter", intentTimeFilterDays);
+            const baseUsers = getIntentBaseFilteredUsers(allUsers);
+            const sourceGroups = getIntentSourceGroups(baseUsers);
+            const hasFilter = intentRegionFilter !== "all" || intentTimeFilterDays !== "all" || normalize(intentUsernameFilter) || normalize(intentSourceFilter);
+            syncIntentSourceSelection(sourceGroups);
+            const selectedGroup = sourceGroups.find((group) => group.key === intentSelectedSourceKey) || null;
+            const users = baseUsers.filter((user) => intentSelectedSourceKey === "all" || getIntentSourceGroupKey(user) === intentSelectedSourceKey);
+            updateIntentSummary(users, allUsers, baseUsers, sourceGroups);
+
+            const navInput = document.getElementById("intent-source-nav-filter");
+            if (navInput && String(navInput.value || "") !== String(intentSourceNavFilter || "")) navInput.value = intentSourceNavFilter || "";
+            if (sourceList) renderCustomerSourceNavigator({
+                sourceList,
+                groups: sourceGroups,
+                selectedKey: intentSelectedSourceKey,
+                navFilter: intentSourceNavFilter,
+                setKeyName: "setIntentSourceKey",
+                totalUsers: baseUsers.length,
+                sourceLabel: "来源视频",
+                userLabel: "精准客户",
+                selectedBadge: "当前来源",
+                emptyText: allUsers.length ? "可以调整地区、评论时间、昵称或来源关键词后再看。" : "精准客户出现后，这里会自动聚合来源视频卡片。",
+            });
+
+            if (!allUsers.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无精准客户，请先执行第二步采集。</td></tr>';
+                info.textContent = "暂无精准客户数据";
+                pager.innerHTML = "";
+                return;
+            }
+            if (!users.length) {
+                tbody.innerHTML = `<tr><td colspan="6" class="empty">${hasFilter || intentSelectedSourceKey !== "all" ? "当前筛选条件下暂无精准客户。" : "当前没有可展示的精准客户。"}</td></tr>`;
+                info.textContent = hasFilter || intentSelectedSourceKey !== "all" ? "当前筛选下暂无数据" : "当前暂无可展示数据";
+                pager.innerHTML = "";
+                return;
+            }
+
+            const size = parseInt(document.getElementById("intent-page-size")?.value, 10) || 10;
+            const total = Math.max(1, Math.ceil(users.length / size));
+            intentCurrentPage = Math.min(Math.max(intentCurrentPage, 1), total);
+            const start = (intentCurrentPage - 1) * size;
+            const page = users.slice(start, start + size);
+            info.textContent = `第 ${intentCurrentPage} / ${total} 页，共 ${users.length} 位客户${selectedGroup ? `，来源《${cut(selectedGroup.task_title || "未命名视频", 18)}》` : ""}`;
+            tbody.innerHTML = page.map((user, index) => `<tr><td>${renderTableIndexCell(start + index + 1, "intent")}</td><td>${renderIntentUserCell(user)}</td><td>${renderCustomerCommentCell(user, 120)}</td><td>${renderTaskPostHtml(user)}</td><td class="nowrap">${isMonitorCustomerRow(user) ? '<span class="badge status-processing">监控精准</span>' : '<span class="badge status-completed">精准客户</span>'}</td><td><div class="table-action-row">${renderProfileAction(user.profile_url)}${isMonitorCustomerRow(user) ? "" : `<button type="button" class="btn btn-danger" onclick='removeIntentUserByKey(${JSON.stringify(userChoiceKey(user))})'>移出精准</button>`}</div></td></tr>`).join("");
+            pager.innerHTML = total > 1
+                ? `<div class="subtle">精准客户分页：每页 ${size} 条</div><div class="pager"><span>第 ${intentCurrentPage} / ${total} 页</span><button type="button" class="pager-btn" onclick="goToIntentPage(1)" ${intentCurrentPage === 1 ? "disabled" : ""}>首页</button><button type="button" class="pager-btn" onclick="goToIntentPage(${intentCurrentPage - 1})" ${intentCurrentPage === 1 ? "disabled" : ""}>上一页</button><button type="button" class="pager-btn" onclick="goToIntentPage(${intentCurrentPage + 1})" ${intentCurrentPage === total ? "disabled" : ""}>下一页</button><button type="button" class="pager-btn" onclick="goToIntentPage(${total})" ${intentCurrentPage === total ? "disabled" : ""}>末页</button></div>`
+                : `<div class="subtle">精准客户分页：每页 ${size} 条</div>`;
+        }
+
+        function renderActiveWorkspace() {
+            if (currentCustomerPoolTarget === "intent") renderIntentPreview();
+            else renderAllCustomersPreview();
+        }
+
+        async function refreshCustomerPoolData(options = {}) {
+            try {
+                const [taskRes, poolRes] = await Promise.all([
+                    fetch("/api/douyin/tasks"),
+                    fetch("/api/douyin/customer-pools"),
+                ]);
+                const taskData = await taskRes.json();
+                const poolData = await poolRes.json();
+                if (taskData.code !== 200) throw new Error(taskData.msg || taskData.detail || "刷新抖音任务失败");
+                if (poolData.code !== 200) throw new Error(poolData.msg || poolData.detail || "刷新客户池失败");
+                douyinTasks = Array.isArray(taskData.tasks) ? taskData.tasks : [];
+                douyinIsRunning = !!taskData.running;
+                douyinAllCustomerPool = Array.isArray(poolData.all_customers) ? poolData.all_customers : [];
+                douyinPreciseCustomerPool = Array.isArray(poolData.precise_customers) ? poolData.precise_customers : [];
+                renderActiveWorkspace();
+                return true;
+            } catch (error) {
+                if (!options.silent) addLog(`刷新客户池失败：${error.message}`, "warning");
+                return false;
+            }
+        }
+
+        async function loadDouyinCustomerPools(options = {}) {
+            return refreshCustomerPoolData(options);
+        }
+
+        async function updateDouyinTasks(silent = false) {
+            return refreshCustomerPoolData({ silent });
+        }
+
+        async function persistTaskHighIntentUsers(taskId, rows, successMessage, options = {}) {
+            const payloadRows = rows.map(buildHighIntentPayloadRow);
+            const response = await fetch(`/api/douyin/tasks/${taskId}/high-intent-users`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ users: payloadRows }),
+            });
+            const data = await response.json();
+            if (data.code !== 200) throw new Error(data.msg || data.detail || "保存精准客户失败");
+            setLocalTaskHighIntentUsers(taskId, rows);
+            if (successMessage && !options.silent) addLog(successMessage, "success");
+            if (!options.skipRefresh) await refreshCustomerPoolData({ silent: true });
+        }
+
+        async function addDouyinCustomersToPrecise(rows = [], options = {}) {
+            const normalizedRows = (Array.isArray(rows) ? rows : []).filter((row) => row && typeof row === "object" && !row.is_high_intent);
+            if (!normalizedRows.length) {
+                addLog("请先勾选未加入精准的客户。", "warning");
+                return false;
+            }
+            try {
+                const response = await fetch("/api/douyin/customers/add-precise", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ rows: normalizedRows.map(buildHighIntentPayloadRow) }),
+                });
+                const data = await response.json();
+                if (data.code !== 200) throw new Error(data.msg || data.detail || "加入精准客户失败");
+                addLog(data.msg || `已加入精准客户池 ${normalizedRows.length} 位。`, "success");
+                if (typeof options.onSuccess === "function") options.onSuccess(normalizedRows, data);
+                await refreshCustomerPoolData({ silent: true });
+                return true;
+            } catch (error) {
+                addLog(`加入精准客户失败：${error.message}`, "error");
+                return false;
+            }
+        }
+
+        async function deleteDouyinCustomerRows(rows = [], options = {}) {
+            const normalizedRows = (Array.isArray(rows) ? rows : []).filter((row) => row && typeof row === "object");
+            const deletableRows = normalizedRows.filter(isCustomerRowDeletable);
+            const skippedMonitor = normalizedRows.length - deletableRows.length;
+            if (!deletableRows.length) {
+                addLog(skippedMonitor ? "当前勾选的客户都来自同行监控，请回到监控链路处理。" : "请先勾选至少一个客户。", "warning");
+                return false;
+            }
+            const title = options.title || "删除客户";
+            const label = options.label || `${deletableRows.length} 位客户`;
+            const message = skippedMonitor ? `本次将删除 ${label}，另有 ${skippedMonitor} 位同行监控客户会被跳过。删除后不会自动恢复。` : `本次将删除 ${label}，删除后不会自动恢复。`;
+            openConfirmModal({
+                title,
+                message,
+                confirmText: `删除 ${deletableRows.length} 位`,
+                confirmClass: "btn-danger",
+                onConfirm: async () => {
+                    try {
+                        const response = await fetch("/api/douyin/customers/delete", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ rows: deletableRows }),
+                        });
+                        const data = await response.json();
+                        if (data.code === 200) {
+                            if (typeof options.onSuccess === "function") options.onSuccess(deletableRows, data);
+                            addLog(data.msg || `已删除 ${deletableRows.length} 位客户。`, "success");
+                            await refreshCustomerPoolData({ silent: true });
+                            return true;
+                        }
+                        addLog(data.msg || data.detail || "删除客户失败。", "error");
+                        return false;
+                    } catch (error) {
+                        addLog(`删除客户失败：${error.message}`, "error");
+                        return false;
+                    }
+                },
+            });
+            return true;
+        }
+
+        async function addAllCustomerToIntentByKey(key) {
+            const user = collectAllCommentUsers().find((item) => userChoiceKey(item) === key);
+            if (!user) return void addLog("未找到对应客户。", "warning");
+            if (user.is_high_intent) return void addLog("该客户已经在精准客户池中。", "warning");
+            await addDouyinCustomersToPrecise([user]);
+        }
+
+        async function removeIntentUserByKey(key) {
+            const user = collectHighIntentUsers().find((item) => userChoiceKey(item) === key);
+            if (!user) return void addLog("未找到对应精准客户。", "warning");
+            if (isMonitorCustomerRow(user)) return void addLog("同行监控沉淀的精准客户暂不支持在总客户池里直接移出，请回到监控链路处理。", "warning");
+            const task = douyinTasks.find((item) => Number(item.id || 0) === Number(user.task_id || 0));
+            if (!task) return void addLog("未找到对应来源视频任务。", "warning");
+            const nextRows = buildTaskUserRows(task).filter((row) => row.checked && userChoiceKey(row) !== key && userChoiceLooseKey(row) !== userChoiceLooseKey(user));
+            try {
+                await persistTaskHighIntentUsers(task.id, nextRows, `已把 ${user.username || "该客户"} 移出精准客户池。`);
+            } catch (error) {
+                addLog(`移出精准客户失败：${error.message}`, "error");
+            }
+        }
+
+        function toggleAllCustomerSelections(checked) {
+            if (!checked) {
+                allCustomerSelectionKeys = new Set();
+                renderAllCustomersPreview();
+                return;
+            }
+            const rows = getFilteredAllCustomers(collectAllCommentUsers());
+            rows.forEach((user) => {
+                const key = getCustomerDeleteSelectionKey(user);
+                if (key) allCustomerSelectionKeys.add(key);
+            });
+            renderAllCustomersPreview();
+        }
+
+        async function addSelectedAllCustomersToIntent() {
+            const rows = getSelectedAllCustomerRows().filter((user) => !user.is_high_intent);
+            if (!rows.length) return void addLog("请先勾选未加入精准的客户。", "warning");
+            await addDouyinCustomersToPrecise(rows, {
+                onSuccess: (addedRows) => {
+                    addedRows.forEach((row) => allCustomerSelectionKeys.delete(getCustomerDeleteSelectionKey(row)));
+                },
+            });
+        }
+
+        async function deleteSelectedAllCustomers() {
+            const rows = getSelectedAllCustomerRows();
+            if (!rows.length) return void addLog("请先勾选要删除的客户。", "warning");
+            await deleteDouyinCustomerRows(rows, {
+                title: "删除已选客户",
+                label: `${rows.length} 位全部客户`,
+                onSuccess: (deletedRows) => {
+                    deletedRows.forEach((row) => allCustomerSelectionKeys.delete(getCustomerDeleteSelectionKey(row)));
+                },
+            });
+        }
+
+        function goToAllCustomersPage(page) { allCustomerCurrentPage = page; renderAllCustomersPreview(); }
+        function changeAllCustomersPageSize() { allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
+        function changeAllCustomersRegionFilter() { allCustomerRegionFilter = document.getElementById("all-customers-region-filter")?.value || "all"; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
+        function changeAllCustomersTimeFilter() { allCustomerTimeFilterDays = document.getElementById("all-customers-time-filter")?.value || "all"; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
+        function changeAllCustomersUsernameFilter() { allCustomerUsernameFilter = document.getElementById("all-customers-username-filter")?.value || ""; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
+        function changeAllCustomersSourceFilter() { allCustomerSourceFilter = document.getElementById("all-customers-source-filter")?.value || ""; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
+        function changeAllCustomersSourceNavFilter() { allCustomerSourceNavFilter = document.getElementById("all-customers-source-nav-filter")?.value || ""; renderAllCustomersPreview(); }
+        function goToIntentPage(page) { intentCurrentPage = page; renderIntentPreview(); }
+        function changeIntentPageSize() { intentCurrentPage = 1; renderIntentPreview(); }
+        function changeIntentRegionFilter() { intentRegionFilter = document.getElementById("intent-region-filter")?.value || "all"; intentCurrentPage = 1; renderIntentPreview(); }
+        function changeIntentTimeFilter() { intentTimeFilterDays = document.getElementById("intent-time-filter")?.value || "all"; intentCurrentPage = 1; renderIntentPreview(); }
+        function changeIntentUsernameFilter() { intentUsernameFilter = document.getElementById("intent-username-filter")?.value || ""; intentCurrentPage = 1; renderIntentPreview(); }
+        function changeIntentSourceFilter() { intentSourceFilter = document.getElementById("intent-source-filter")?.value || ""; intentCurrentPage = 1; renderIntentPreview(); }
+        function changeIntentSourceNavFilter() { intentSourceNavFilter = document.getElementById("intent-source-nav-filter")?.value || ""; renderIntentPreview(); }
+
+        function getCustomerPoolPollInterval() {
+            if (document.hidden) return 30000;
+            return douyinIsRunning ? 5000 : 15000;
+        }
+
+        async function pollCustomerPoolPageOnce() {
+            if (customerPoolPollInFlight) return;
+            customerPoolPollInFlight = true;
+            try {
+                await refreshCustomerPoolData({ silent: true });
+            } finally {
+                customerPoolPollInFlight = false;
+            }
+        }
+
+        function scheduleCustomerPoolPolling(immediate = false) {
+            if (customerPoolPollTimer) {
+                window.clearTimeout(customerPoolPollTimer);
+                customerPoolPollTimer = 0;
+            }
+            const delay = immediate ? 0 : getCustomerPoolPollInterval();
+            customerPoolPollTimer = window.setTimeout(async () => {
+                await pollCustomerPoolPageOnce();
+                scheduleCustomerPoolPolling(false);
+            }, delay);
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            scheduleCustomerPoolPolling(true);
+        });
+
+        window.addEventListener("hashchange", syncCustomerPoolTargetFromLocation);
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            currentCustomerPoolTarget = getCustomerPoolTargetFromPath();
+            applyCustomerPoolTarget(currentCustomerPoolTarget);
+            document.getElementById("confirm-modal")?.addEventListener("click", (event) => {
+                if (event.target.id === "confirm-modal") closeConfirmModal();
+            });
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape") closeConfirmModal();
+            });
+            await refreshCustomerPoolData({ silent: true });
+            scheduleCustomerPoolPolling(false);
+        });
+    </script>
+</body>
+</html>

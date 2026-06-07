@@ -10,6 +10,10 @@
     html: '/static/views/skill-store.html'
   });
 
+  window.registerLobsterView('douyin-leads', {
+    html: '/static/views/douyin-leads.html?v=20260606-douyin-origin'
+  });
+
   window.registerLobsterView('openclaw-memory', {
     html: '/static/views/openclaw-memory.html?v=20260601-memory-manager',
     cache: 'reload'

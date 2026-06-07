@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>必火AI获客 · 抖音工作台</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <style>
+        .sidebar-group-header {
+            text-decoration: none;
+        }
+        .command-topbar-meta {
+            min-width: 244px;
+        }
+    </style>
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group is-active" data-group="overview" data-collapsible="false">
+                            <a class="sidebar-group-header active" data-sidebar="overview" href="/static/douyin-origin/douyin.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4 11.5 12 5l8 6.5"></path>
+                                            <path d="M6.5 10.5V19h11v-8.5"></path>
+                                            <path d="M10 19v-4.5h4V19"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">数据大屏</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="scheduler" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="scheduler" href="/static/douyin-origin/douyin-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect>
+                                            <path d="M8 3.5v3"></path>
+                                            <path d="M16 3.5v3"></path>
+                                            <path d="M4.5 9.5h15"></path>
+                                            <path d="M8.5 13h2"></path>
+                                            <path d="M13.5 13h2"></path>
+                                            <path d="M8.5 16h2"></path>
+                                            <path d="M13.5 16h2"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">排期中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <circle cx="10" cy="10" r="5.25"></circle>
+                                            <path d="m13.8 13.8 5 5"></path>
+                                            <path d="M7.8 10h4.4"></path>
+                                            <path d="M10 7.8v4.4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
+                                            <circle cx="12" cy="12.5" r="2.4"></circle>
+                                            <path d="M18.5 5.5 20 4"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
+                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
+                                            <path d="M8 9.5h8"></path>
+                                            <path d="M8 12.5h5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
+                                            <circle cx="11" cy="8.6" r="3.1"></circle>
+                                            <path d="M17.5 8.5h3"></path>
+                                            <path d="M19 7v3"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                                            <path d="m7 8.5 5 4 5-4"></path>
+                                            <path d="M7 15.5h4.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信聚合</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
+                                            <path d="M9 9h6"></path>
+                                            <path d="M9 12h3.5"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
+                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
+                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="customers" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('customers')"
+                                aria-expanded="false" aria-controls="sidebar-group-customers">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path>
+                                            <circle cx="10.7" cy="8.7" r="3.2"></circle>
+                                            <path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path>
+                                            <path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">客户仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-group="nurture" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('nurture')"
+                                aria-expanded="false" aria-controls="sidebar-group-nurture">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path>
+                                            <path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">养号仓库</span>
+                                    </span>
+                                </span>
+                                <span class="sidebar-group-tail">
+                                    <span class="sidebar-group-arrow" aria-hidden="true"></span>
+                                </span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-group="logs" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="logs" href="/static/douyin-origin/douyin-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M7 5.5h10"></path>
+                                            <path d="M7 10.5h10"></path>
+                                            <path d="M7 15.5h6"></path>
+                                            <path d="M5 4.5h.01"></path>
+                                            <path d="M5 9.5h.01"></path>
+                                            <path d="M5 14.5h.01"></path>
+                                            <path d="M4.5 19.5h15"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">执行日志</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="config" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="config" href="/static/douyin-origin/douyin-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M12 8.2a3.8 3.8 0 1 1 0 7.6 3.8 3.8 0 0 1 0-7.6Z"></path>
+                                            <path d="M4.8 13.4v-2.8l2-.7.6-1.5-1-1.9 2-2 1.9 1 .1.1 1.5-.6.7-2h2.8l.7 2 1.5.6 1.9-1 2 2-1 1.9.6 1.5 2 .7v2.8l-2 .7-.6 1.5 1 1.9-2 2-1.9-1-.1-.1-1.5.6-.7 2h-2.8l-.7-2-1.5-.6-1.9 1-2-2 1-1.9-.6-1.5-2-.7Z"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">配置中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="guide" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="guide" href="/static/douyin-origin/douyin-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24">
+                                            <path d="M6.5 5.5h9A2.5 2.5 0 0 1 18 8v10.5l-3.4-1.8-3.1 1.8-3.1-1.8L5 18.5V8a2.5 2.5 0 0 1 1.5-2.5Z"></path>
+                                            <path d="M8.5 9.5h6"></path>
+                                            <path d="M8.5 12.5h6"></path>
+                                        </svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">使用说明</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="console-page" class="page active">
+                    <div id="overview-workspace-page" class="workspace-panel-page active">
+                        <section class="command-deck" id="overview-section">
+                            <div class="command-deck-topbar">
+                                <div class="command-brand-copy">
+                                    <div class="section-chip status">Douyin Command Center</div>
+                                    <h3>抖音增长作战总览</h3>
+                                    <p>首页保留原工作台的大屏壳子和工位结构，只做轻量摘要加载。真正执行搜索、评论、私信、监控、排期等重操作时，仍然进入对应独立工位。</p>
+                                </div>
+                                <div class="command-topbar-meta">
+                                    <div class="command-date-label">运行时钟</div>
+                                    <div class="command-date-value" id="overview-command-clock">--/-- --:--:--</div>
+                                    <div class="command-date-label">摘要同步</div>
+                                    <div class="command-date-value" id="overview-last-sync">等待首轮加载</div>
+                                </div>
+                            </div>
+                            <div class="command-deck-layout">
+                                <aside class="command-rail">
+                                    <div id="overview-command-metrics" class="command-metrics">
+                                        <div class="result-empty">正在加载抖音总览指标...</div>
+                                    </div>
+                                </aside>
+                                <section class="command-stage">
+                                    <div class="command-stage-head">
+                                        <div>
+                                            <div class="command-panel-label">中国地图</div>
+                                            <h4>全国评论用户与互动线索热区</h4>
+                                            <p>地图样式和工位入口保持原工作台一致，当前首页只用轻量摘要接口做状态填充，不再把全量任务和客户池都拉上来。</p>
+                                        </div>
+                                        <div id="overview-command-pills" class="command-pills">
+                                            <span class="command-pill">摘要加载中</span>
+                                        </div>
+                                    </div>
+                                    <div class="command-stage-grid">
+                                        <div class="command-map-panel">
+                                            <div class="command-map-canvas">
+                                                <div id="overview-map-chart" class="command-map-chart" aria-hidden="true"></div>
+                                                <div class="command-map-overlay command-map-hud">
+                                                    <div class="command-map-hud-title">全国态势</div>
+                                                    <div class="command-map-hud-value" id="overview-map-signal-total">0</div>
+                                                    <div class="command-map-hud-copy">首页不再主动拉评论明细和客户池，只显示当前概览信号与工位入口。</div>
+                                                </div>
+                                                <div id="overview-map-actions" class="command-map-actions">
+                                                    <div class="result-empty">正在布置工位跳转...</div>
+                                                </div>
+                                                <div id="overview-map-hotspots" class="command-map-hotspots">
+                                                    <div class="result-empty">正在同步热区入口...</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <aside class="command-side-panel">
+                                            <section class="command-side-card">
+                                                <div class="command-panel-head">
+                                                    <div>
+                                                        <div class="command-panel-label">执行状态</div>
+                                                        <h4>作战看板</h4>
+                                                    </div>
+                                                </div>
+                                                <div id="overview-city-board" class="command-city-board">
+                                                    <div class="result-empty">正在同步首页作战看板...</div>
+                                                </div>
+                                            </section>
+                                        </aside>
+                                    </div>
+                                </section>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/static/douyin-origin/libs/echarts-5.3.3.min.js"></script>
+    <script src="/static/douyin-origin/geojson/china.js"></script>
+    <script>
+        let overviewMapChart = null;
+        let overviewHotspotRows = [];
+        let overviewMapResponsiveBound = false;
+        let overviewMapResizeFrame = 0;
+        let overviewMapResizeObserver = null;
+        let overviewRefreshTimer = 0;
+        let overviewClockTimer = 0;
+        let overviewVisibilityBound = false;
+
+        function normalize(value) {
+            return String(value ?? "").trim();
+        }
+
+        function esc(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function setText(id, value) {
+            const node = document.getElementById(id);
+            if (node) node.textContent = String(value ?? "");
+        }
+
+        function formatOverviewClock(date = new Date()) {
+            return date.toLocaleString("zh-CN", {
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false
+            }).replace(",", "");
+        }
+
+        function refreshOverviewClock() {
+            setText("overview-command-clock", formatOverviewClock());
+        }
+
+        function getOverviewStatusMeta(state) {
+            return ({
+                idle: "待命",
+                running: "执行中",
+                ready: "已就绪",
+                done: "已完成",
+                partial: "部分可用",
+                future: "未接入"
+            })[state] || "待命";
+        }
+
+        function summarizeAccounts(accounts = []) {
+            const rows = Array.isArray(accounts) ? accounts : [];
+            const online = rows.filter(account => normalize(account.status) === "online");
+            const waiting = rows.filter(account => normalize(account.status) === "waiting");
+            const offline = rows.filter(account => normalize(account.status) === "offline");
+            return { online, waiting, offline, total: rows.length };
+        }
+
+        function toggleSidebarGroup(groupName) {
+            const group = document.querySelector(`.sidebar-group[data-group="${groupName}"]`);
+            if (!group) return;
+            const isOpen = group.classList.toggle("is-open");
+            const button = group.querySelector(".sidebar-group-header");
+            if (button) button.setAttribute("aria-expanded", String(isOpen));
+        }
+
+        function scheduleOverviewMapLayout(rows = overviewHotspotRows) {
+            if (typeof window === "undefined") return;
+            if (overviewMapResizeFrame) window.cancelAnimationFrame(overviewMapResizeFrame);
+            overviewMapResizeFrame = window.requestAnimationFrame(() => {
+                overviewMapResizeFrame = 0;
+                if (!overviewMapChart) return;
+                overviewMapChart.resize();
+                positionOverviewHotspots(Array.isArray(rows) && rows.length ? rows : overviewHotspotRows);
+            });
+        }
+
+        function ensureOverviewMapResponsive(chartRoot) {
+            if (!chartRoot || overviewMapResponsiveBound) return;
+            overviewMapResponsiveBound = true;
+            const resizeHandler = () => scheduleOverviewMapLayout();
+            const resizeTarget = chartRoot.closest(".command-map-canvas") || chartRoot;
+            window.addEventListener("resize", resizeHandler, { passive: true });
+            if (window.visualViewport?.addEventListener) {
+                window.visualViewport.addEventListener("resize", resizeHandler, { passive: true });
+            }
+            if (typeof ResizeObserver !== "undefined") {
+                overviewMapResizeObserver = new ResizeObserver(() => scheduleOverviewMapLayout());
+                overviewMapResizeObserver.observe(resizeTarget);
+            }
+        }
+
+        function positionOverviewHotspots(rows = overviewHotspotRows) {
+            const overlay = document.getElementById("overview-map-hotspots");
+            if (!overlay || !overviewMapChart || !Array.isArray(rows) || !rows.length) return;
+            const overlayWidth = overlay.clientWidth || 0;
+            const overlayHeight = overlay.clientHeight || 0;
+            const rowMap = new Map(rows.map(row => [row.name, row]));
+            [...overlay.querySelectorAll(".command-hotspot")].forEach(node => {
+                const cityName = node.getAttribute("data-city-name") || "";
+                const row = rowMap.get(cityName);
+                if (!row || !Array.isArray(row.coord)) {
+                    node.style.display = "none";
+                    return;
+                }
+                const pixel = overviewMapChart.convertToPixel({ geoIndex: 0 }, row.coord);
+                if (!Array.isArray(pixel) || pixel.some(value => !Number.isFinite(value))) {
+                    node.style.display = "none";
+                    return;
+                }
+                const cardWidth = 136;
+                const cardHeight = 70;
+                const fallbackOffsetX = pixel[0] > overlayWidth * 0.82 ? -(cardWidth + 18) : 18;
+                const fallbackOffsetY = pixel[1] > overlayHeight * 0.78 ? -(cardHeight + 12) : -18;
+                const [offsetX, offsetY] = Array.isArray(row.hotspotOffset)
+                    ? row.hotspotOffset
+                    : [fallbackOffsetX, fallbackOffsetY];
+                node.style.display = "";
+                node.style.left = `${pixel[0]}px`;
+                node.style.top = `${pixel[1]}px`;
+                node.style.setProperty("--hotspot-card-x", `${offsetX}px`);
+                node.style.setProperty("--hotspot-card-y", `${offsetY}px`);
+            });
+        }
+
+        function renderOverviewMap(provinceSignals = [], citySignals = [], signalTotalValue = 0) {
+            const chartRoot = document.getElementById("overview-map-chart");
+            if (!chartRoot || typeof echarts === "undefined") return;
+            ensureOverviewMapResponsive(chartRoot);
+            if (!overviewMapChart) {
+                overviewMapChart = echarts.init(chartRoot);
+            }
+            const activeCitySignals = citySignals.filter(item => item.count > 0 && Array.isArray(item.coord));
+            const fallbackCities = citySignals.filter(item => Array.isArray(item.coord)).slice(0, 5);
+            const scatterSource = activeCitySignals.length ? activeCitySignals : fallbackCities;
+            const scatterData = scatterSource.map(item => ({
+                name: item.name,
+                value: [...item.coord, item.count || 1]
+            }));
+            const maxProvinceValue = Math.max(...provinceSignals.map(item => Number(item.value) || 0), 1);
+            overviewMapChart.setOption({
+                animationDuration: 500,
+                animationEasing: "cubicOut",
+                tooltip: {
+                    trigger: "item",
+                    backgroundColor: "rgba(12, 20, 38, 0.92)",
+                    borderColor: "rgba(139, 190, 255, 0.28)",
+                    textStyle: { color: "#edf5ff", fontSize: 12 },
+                    formatter(params) {
+                        if (params.seriesType === "effectScatter") {
+                            return `${params.name}<br/>工位入口已就位`;
+                        }
+                        const value = Number(params.value) || 0;
+                        return `${params.name}<br/>概览信号 ${value}`;
+                    }
+                },
+                visualMap: {
+                    min: 0,
+                    max: maxProvinceValue,
+                    show: false,
+                    seriesIndex: 0,
+                    inRange: { color: ["#1d3557", "#24518b", "#2f7ad8", "#ff8f74"] }
+                },
+                geo: {
+                    map: "china",
+                    roam: false,
+                    zoom: 1,
+                    aspectScale: 1,
+                    layoutCenter: ["52%", "51%"],
+                    layoutSize: "170%",
+                    label: { show: false },
+                    itemStyle: {
+                        areaColor: "#19314f",
+                        borderColor: "#61bfff",
+                        borderWidth: 1
+                    },
+                    emphasis: {
+                        label: { show: false },
+                        itemStyle: { areaColor: "#28588f", borderColor: "#86d3ff" }
+                    }
+                },
+                series: [
+                    {
+                        name: "全国热区",
+                        type: "map",
+                        map: "china",
+                        geoIndex: 0,
+                        data: provinceSignals,
+                        selectedMode: false,
+                        silent: true,
+                        itemStyle: {
+                            borderColor: "rgba(106, 194, 255, 0.85)",
+                            borderWidth: 1,
+                            shadowColor: "rgba(52, 119, 255, 0.18)",
+                            shadowBlur: 10
+                        },
+                        emphasis: {
+                            disabled: false,
+                            label: { show: false },
+                            itemStyle: { areaColor: "#2d629c", borderColor: "#9ae1ff" }
+                        }
+                    },
+                    {
+                        name: "热点城市",
+                        type: "effectScatter",
+                        coordinateSystem: "geo",
+                        geoIndex: 0,
+                        zlevel: 3,
+                        rippleEffect: { scale: 3.4, brushType: "stroke" },
+                        label: { show: false },
+                        symbolSize(value) {
+                            const count = Number(value[2] || 0);
+                            return Math.max(8, Math.min(20, 8 + count * 1.8));
+                        },
+                        itemStyle: {
+                            color: "#ff8f74",
+                            shadowBlur: 18,
+                            shadowColor: "rgba(255, 143, 116, 0.7)"
+                        },
+                        data: scatterData
+                    }
+                ],
+                graphic: signalTotalValue ? [] : [{
+                    type: "text",
+                    left: "center",
+                    top: "50%",
+                    style: {
+                        text: "地图已就位，等待更多属地信号回填",
+                        fill: "rgba(210, 225, 245, 0.55)",
+                        font: "500 14px sans-serif"
+                    }
+                }]
+            });
+            scheduleOverviewMapLayout(citySignals);
+        }
+
+        function getOverviewProvinceSignals(signalTotal = 0) {
+            const base = [
+                "北京", "上海", "广东", "浙江", "湖北",
+                "四川", "湖南", "陕西", "江苏"
+            ];
+            const seed = Math.max(Number(signalTotal) || 0, 0);
+            return base.map((name, index) => ({
+                name,
+                value: Math.max(seed - index, 0)
+            }));
+        }
+
+        function getOverviewGeoSignals(signalTotal = 0) {
+            const seed = Math.max(Number(signalTotal) || 0, 0);
+            const rows = [
+                { name: "北京", workspace: "/douyin/search", coord: [116.405285, 39.904989], hotspotOffset: [18, -18] },
+                { name: "上海", workspace: "/douyin/collect", coord: [121.472644, 31.231706], hotspotOffset: [18, -18] },
+                { name: "杭州", workspace: "/douyin/intent", coord: [120.15507, 30.274084], hotspotOffset: [18, -10] },
+                { name: "武汉", workspace: "/douyin/interaction", coord: [114.305393, 30.593099], hotspotOffset: [18, -8] },
+                { name: "成都", workspace: "/douyin/groups", coord: [104.066541, 30.572269], hotspotOffset: [18, -6] },
+                { name: "广州", workspace: "/douyin/inbox", coord: [113.264385, 23.129112], hotspotOffset: [18, 10] }
+            ];
+            return rows.map((row, index) => ({
+                ...row,
+                count: Math.max(seed - index * 2, 0)
+            }));
+        }
+
+        function renderOverviewDashboard(stats) {
+            const metrics = document.getElementById("overview-command-metrics");
+            const pills = document.getElementById("overview-command-pills");
+            const mapActions = document.getElementById("overview-map-actions");
+            const mapHotspots = document.getElementById("overview-map-hotspots");
+            const cityBoard = document.getElementById("overview-city-board");
+            const accountSummary = summarizeAccounts(stats.douyin_accounts || []);
+            const taskTotal = Number(stats.total_tasks || 0);
+            const completedTasks = Number(stats.completed_tasks || 0);
+            const highIntentUsers = Number(stats.high_intent_users || 0);
+            const onlineAccounts = Number(stats.online_accounts || 0);
+            const signalTotalValue = Math.max(taskTotal, highIntentUsers, onlineAccounts);
+            setText("overview-map-signal-total", signalTotalValue);
+
+            const metricCards = [
+                {
+                    tone: "is-blue",
+                    name: "搜索雷达",
+                    state: taskTotal ? "ready" : "idle",
+                    value: taskTotal,
+                    copy: taskTotal ? "当前首页只看摘要，不再预拉搜索结果明细。" : "等待新的抖音搜索或采集任务建立。",
+                    chips: [
+                        { type: "text", text: `已完成 ${completedTasks}`, chipClass: "is-success" },
+                        { type: "text", text: `待处理 ${Math.max(taskTotal - completedTasks, 0)}`, chipClass: "is-warning" }
+                    ]
+                },
+                {
+                    tone: "is-violet",
+                    name: "视频评论",
+                    state: completedTasks ? "partial" : (taskTotal ? "ready" : "idle"),
+                    value: completedTasks,
+                    copy: taskTotal ? `当前累计 ${taskTotal} 条任务，首页不再主动同步任务长列表。` : "评论采集队列还未形成。",
+                    chips: [
+                        { type: "text", text: `任务总数 ${taskTotal}`, chipClass: "is-info" },
+                        { type: "text", text: `摘要模式`, chipClass: "is-warning" }
+                    ]
+                },
+                {
+                    tone: "is-rose",
+                    name: "精准客户沉淀",
+                    state: highIntentUsers ? "ready" : "idle",
+                    value: highIntentUsers,
+                    copy: highIntentUsers ? "精准客户数量直接来自轻量统计接口。" : "等待评论客户继续沉淀到精准池。",
+                    chips: [
+                        { type: "text", text: `首页轻加载`, chipClass: "is-success" },
+                        { type: "text", text: `工位分流中`, chipClass: "is-info" },
+                        { type: "text", text: `热区入口就位`, chipClass: "is-warning" }
+                    ]
+                },
+                {
+                    tone: "is-green",
+                    name: "账号与推进",
+                    state: onlineAccounts ? "ready" : "idle",
+                    value: onlineAccounts,
+                    copy: stats.active_account_id
+                        ? `当前优先执行账号 ${stats.active_account_id}`
+                        : "当前没有在线默认账号，需先登录抖音账号。",
+                    chips: [
+                        {
+                            type: "account-status",
+                            onlineText: `在线 ${accountSummary.online.length}/${accountSummary.total || 0}`,
+                            offlineText: `离线 ${accountSummary.offline.length}`
+                        },
+                        { type: "text", text: `待扫码 ${accountSummary.waiting.length}`, chipClass: "is-warning" },
+                        { type: "text", text: stats.account_nurture_running ? "养号运行中" : "养号待命", chipClass: "is-success" }
+                    ]
+                }
+            ];
+
+            metrics.innerHTML = metricCards.map(card => `
+                <article class="command-metric-card ${esc(card.tone)}">
+                    <div class="command-metric-head">
+                        <div class="command-metric-name">${esc(card.name)}</div>
+                        <span class="command-metric-state">${esc(getOverviewStatusMeta(card.state))}</span>
+                    </div>
+                    <div class="command-metric-value">${esc(card.value)}</div>
+                    <div class="command-metric-copy">${esc(card.copy)}</div>
+                    <div class="command-metric-meta">
+                        ${card.chips.map(chip => chip.type === "account-status"
+                            ? `<span class="command-mini-chip is-account-status"><span class="command-mini-chip-status is-online">${esc(chip.onlineText || "")}</span><span class="command-mini-chip-separator">/</span><span class="command-mini-chip-status is-offline">${esc(chip.offlineText || "")}</span></span>`
+                            : `<span class="command-mini-chip ${esc(chip.chipClass || "")}">${esc(chip.text || "")}</span>`
+                        ).join("")}
+                    </div>
+                </article>
+            `).join("");
+
+            const stageActions = [
+                { href: "/douyin/search", label: "搜索采集", note: "进入搜索工位", value: `${taskTotal}`, style: "left: 3.2%; top: 24%;", side: "left" },
+                { href: "/douyin/collect", label: "视频评论", note: "进入评论工位", value: `${completedTasks}`, style: "left: 5.4%; top: 63%;", side: "left" },
+                { href: "/douyin/customers", label: "全部客户", note: "查看客户池", value: `${taskTotal}`, style: "right: 5.6%; top: 18%;", side: "right" },
+                { href: "/douyin/intent", label: "精准客户", note: "查看精准池", value: `${highIntentUsers}`, style: "right: 7%; top: 49%;", side: "right" },
+                { href: "/douyin/interaction", label: "私信互动", note: "进入互动工位", value: `${onlineAccounts}`, style: "right: 5.2%; top: 76%;", side: "right" }
+            ];
+
+            mapActions.innerHTML = stageActions.map(item => `
+                <a class="command-map-action ${esc(item.side)}" style="${esc(item.style)}" href="${esc(item.href)}">
+                    <div class="command-map-action-label">${esc(item.label)}</div>
+                    <div class="command-map-action-note">${esc(item.note)}</div>
+                    <div class="command-map-action-value">${esc(item.value)}</div>
+                </a>
+            `).join("");
+
+            pills.innerHTML = [
+                `在线账号 ${accountSummary.online.length}/${accountSummary.total || 0}`,
+                `任务总数 ${taskTotal}`,
+                `精准客户 ${highIntentUsers}`,
+                stats.account_nurture_running ? "养号运行中" : "养号待命"
+            ].map(item => `<span class="command-pill">${esc(item)}</span>`).join("");
+
+            const geoSignals = getOverviewGeoSignals(signalTotalValue);
+            overviewHotspotRows = geoSignals;
+            mapHotspots.innerHTML = geoSignals.map(city => `
+                <a class="command-hotspot ${city.count ? "" : "is-dim"}" data-city-name="${esc(city.name)}" href="${esc(city.workspace)}">
+                    <div class="command-hotspot-card">
+                        <span class="command-hotspot-name">${esc(city.name)}</span>
+                        <span class="command-hotspot-meta">${esc(city.count ? `${city.count} 条摘要信号` : "等待更多属地回填")}</span>
+                        <span class="command-hotspot-count">${esc("点击进入对应工位")}</span>
+                    </div>
+                </a>
+            `).join("");
+
+            const taskStatusRows = [
+                {
+                    name: "首页摘要模式",
+                    state: "ready",
+                    copy: "入口页只请求 /api/douyin/stats，不再主动刷新任务长列表、客户池和监控明细。",
+                    tags: ["轻量首屏", "可见时刷新"]
+                },
+                {
+                    name: "视频搜索任务",
+                    state: taskTotal ? "ready" : "idle",
+                    copy: taskTotal ? `当前累计 ${taskTotal} 条任务，继续执行请进入搜索/评论工位。` : "等待新的抖音搜索任务建立。",
+                    tags: [`已完成 ${completedTasks}`, "跳转独立工位"]
+                },
+                {
+                    name: "精准客户池",
+                    state: highIntentUsers ? "ready" : "idle",
+                    copy: highIntentUsers ? `当前已沉淀 ${highIntentUsers} 位精准客户。` : "等待从全部客户中继续沉淀精准名单。",
+                    tags: ["轻量摘要", "避免首页重拉客户池"]
+                },
+                {
+                    name: "账号状态",
+                    state: onlineAccounts ? "ready" : "idle",
+                    copy: onlineAccounts ? `当前在线 ${onlineAccounts} 个账号。` : "当前没有在线账号，执行前需要先登录。",
+                    tags: [`待扫码 ${accountSummary.waiting.length}`, stats.active_account_id ? `默认账号 ${stats.active_account_id}` : "未设置默认账号"]
+                },
+                {
+                    name: "排期与推进",
+                    state: "partial",
+                    copy: "排期中心、私信聚合、养号仓库都已拆成独立入口，首页只保留总览导航。",
+                    tags: ["模块分流中", "旧工作台功能保留"]
+                }
+            ];
+
+            cityBoard.innerHTML = taskStatusRows.map(item => `
+                <div class="command-task-row">
+                    <div class="command-task-top">
+                        <span class="command-task-name">${esc(item.name)}</span>
+                        <span class="command-task-state is-${esc(item.state)}">${esc(getOverviewStatusMeta(item.state))}</span>
+                    </div>
+                    <div class="command-task-copy">${esc(item.copy)}</div>
+                    <div class="command-task-tags">
+                        ${item.tags.map(tag => `<span class="command-task-tag">${esc(tag)}</span>`).join("")}
+                    </div>
+                </div>
+            `).join("");
+
+            renderOverviewMap(getOverviewProvinceSignals(signalTotalValue), geoSignals, signalTotalValue);
+        }
+
+        async function refreshOverview(options = {}) {
+            const silent = options.silent !== false;
+            try {
+                const response = await fetch("/api/douyin/stats", { cache: "no-store" });
+                const data = await response.json();
+                if (data.code !== 200) {
+                    throw new Error(data.msg || data.detail || "统计接口返回异常");
+                }
+                renderOverviewDashboard(data);
+                setText("overview-last-sync", formatOverviewClock());
+            } catch (error) {
+                if (!silent) {
+                    setText("overview-last-sync", "摘要同步失败");
+                }
+                const board = document.getElementById("overview-city-board");
+                if (board) {
+                    board.innerHTML = `
+                        <div class="command-task-row">
+                            <div class="command-task-top">
+                                <span class="command-task-name">摘要接口异常</span>
+                                <span class="command-task-state is-idle">待重试</span>
+                            </div>
+                            <div class="command-task-copy">首页总览暂时没有拿到最新摘要，你仍然可以直接进入各个独立工位继续工作。</div>
+                            <div class="command-task-tags">
+                                <span class="command-task-tag">${esc(error.message || "未知错误")}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        function stopOverviewRefreshLoop() {
+            if (overviewRefreshTimer) {
+                window.clearTimeout(overviewRefreshTimer);
+                overviewRefreshTimer = 0;
+            }
+        }
+
+        function startOverviewRefreshLoop(immediate = false) {
+            stopOverviewRefreshLoop();
+            const delay = immediate && !document.hidden ? 0 : 60000;
+            if (document.hidden && !immediate) return;
+            overviewRefreshTimer = window.setTimeout(async () => {
+                if (!document.hidden) {
+                    await refreshOverview({ silent: true });
+                }
+                startOverviewRefreshLoop(false);
+            }, delay);
+        }
+
+        function bindOverviewVisibility() {
+            if (overviewVisibilityBound) return;
+            overviewVisibilityBound = true;
+            document.addEventListener("visibilitychange", () => {
+                if (document.hidden) {
+                    stopOverviewRefreshLoop();
+                    return;
+                }
+                startOverviewRefreshLoop(true);
+            });
+        }
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            refreshOverviewClock();
+            overviewClockTimer = window.setInterval(refreshOverviewClock, 1000);
+            bindOverviewVisibility();
+            await refreshOverview({ silent: false });
+            startOverviewRefreshLoop(false);
+        });
+    </script>
+</body>
+</html>

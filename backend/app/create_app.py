@@ -56,6 +56,7 @@ from .api.create_ppt import router as create_ppt_router
 from .api.viral_video_remix import router as viral_video_remix_router
 from .api.hifly_digital_human import router as hifly_digital_human_router
 from .api.shanjian_smart_clip import router as shanjian_smart_clip_router
+from .api.douyin_origin import router as douyin_origin_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
 except ModuleNotFoundError as e:
@@ -953,6 +954,7 @@ def create_app() -> FastAPI:
         app.include_router(ecommerce_publish_router, prefix="")
     else:
         logger.info("ecommerce_publish router not found; using publish router for ecommerce account management")
+    app.include_router(douyin_origin_router, prefix="")
     app.include_router(publish_router, prefix="")
     app.include_router(creator_content_router, prefix="")
     app.include_router(account_creator_schedule_router, prefix="")
