@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shlex
+import subprocess
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -31,17 +33,23 @@ from ..services.comfly_seedance_tvc_pipeline_runner import (
 )
 from ..services.comfly_veo_exec import _resolve_comfly_credentials
 from .assets import (
+    ASSETS_DIR,
     SaveAssetReq,
+    _content_type_for_asset_filename,
     _compute_save_url_dedupe_key,
     _final_save_url_dedupe_key,
+    _gen_asset_id,
     _resolve_v3_tasks_url_for_download,
     _save_asset_from_url_locked,
+    _upload_to_tos,
     _save_url_lock_for,
 )
 from .auth import _ServerUser, get_current_user_media_edit
+from ..models import Asset
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_LOCAL_BESTSELLER_CAPTION_LOCK = asyncio.Lock()
 
 
 class ComflySeedancePipelinePayload(BaseModel):
@@ -417,6 +425,72 @@ def _pipeline_result_video_url(result: Dict[str, Any]) -> str:
     return str(final_video.get("url") or final_video.get("path") or "").strip()
 
 
+def _pipeline_result_video_candidates(result: Dict[str, Any]) -> List[str]:
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    candidates: List[str] = []
+    for key in ("url", "path"):
+        value = str(final_video.get(key) or "").strip()
+        if value:
+            candidates.append(value)
+    for pair in collect_video_urls_from_pipeline_result(result):
+        try:
+            value = str(pair[0] or "").strip()
+        except Exception:
+            value = ""
+        if value:
+            candidates.append(value)
+    out: List[str] = []
+    seen = set()
+    for value in candidates:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _normalize_video_download_ref(raw: str, *, job: Dict[str, Any]) -> str:
+    value = str(raw or "").strip().strip('"').strip("'")
+    if not value:
+        return ""
+    if value.startswith("//"):
+        return "https:" + value
+    if value.startswith(("http://", "https://")):
+        return value
+    path = Path(value)
+    if not path.is_absolute():
+        base = Path(job.get("job_output_dir") or _default_runs_root())
+        path = base / value
+    try:
+        if path.is_file():
+            return str(path)
+    except Exception:
+        pass
+    return value
+
+
+def _is_usable_video_download_ref(ref: str) -> bool:
+    value = str(ref or "").strip()
+    if not value:
+        return False
+    if value.startswith(("http://", "https://")):
+        return True
+    try:
+        return Path(value).is_file()
+    except Exception:
+        return False
+
+
+def _select_pipeline_video_download_ref(result: Dict[str, Any], *, job: Dict[str, Any]) -> str:
+    for raw in _pipeline_result_video_candidates(result):
+        ref = _normalize_video_download_ref(raw, job=job)
+        if _is_usable_video_download_ref(ref):
+            return ref
+        if ref:
+            logger.warning("[seedance-tvc] skip unusable video ref for captioning: %s", ref[:300])
+    return ""
+
+
 def _pipeline_result_failure_error(result: Dict[str, Any]) -> str:
     failed = result.get("failed_segments")
     if not isinstance(failed, list) or not failed:
@@ -447,6 +521,241 @@ def _pipeline_result_should_fail(result: Dict[str, Any]) -> bool:
 def _seedance_task_text(inp: Dict[str, Any]) -> str:
     task = inp.get("task") if isinstance(inp.get("task"), dict) else {}
     return str(task.get("text") or inp.get("task_text") or "").strip()
+
+
+def _local_bestseller_caption_lines(text: str) -> List[str]:
+    lines: List[str] = []
+    for raw in str(text or "").replace("。", "\n").replace("！", "！\n").replace("？", "？\n").splitlines():
+        line = raw.strip()
+        line = re.sub(r"^(标题文案|数字人口播内容|口播内容|文案内容|坐标|音乐)\s*[:：]\s*", "", line).strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    return lines[:8]
+
+
+def _escape_ass_text(text: str) -> str:
+    return str(text or "").replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", "\\N")
+
+
+def _ass_color(hex_color: str) -> str:
+    raw = str(hex_color or "").strip().lstrip("#")
+    if len(raw) != 6:
+        raw = "FFFFFF"
+    rr, gg, bb = raw[0:2], raw[2:4], raw[4:6]
+    return f"&H00{bb}{gg}{rr}"
+
+
+def _ass_event(style: str, text: str, *, start: str = "0:00:00.00", end: str = "0:00:10.00", margin_v: int = 0) -> str:
+    return f"Dialogue: 0,{start},{end},{style},,0,0,{int(margin_v)},,{text}"
+
+
+def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = None) -> str:
+    lines = _local_bestseller_caption_lines(subtitle_text)
+    title = lines[0] if lines else "我国南北城市分布"
+    subtitle = lines[1] if len(lines) > 1 else "湖北竟然是南方"
+    south = ["上海", "江苏", "浙江", "安徽", "江西", "湖北", "湖南", "四川", "重庆", "贵州", "云南", "福建", "广东", "广西", "海南"]
+    north = ["北京", "天津", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "山东", "河南", "陕西", "甘肃", "青海", "宁夏", "新疆"]
+    events = [
+        _ass_event("RankTitleRed", _escape_ass_text(title), margin_v=64),
+        _ass_event("RankTitleYellow", _escape_ass_text(subtitle), margin_v=140),
+        _ass_event("RankHeader", r"{\pos(328,300)}南方"),
+        _ass_event("RankHeader", r"{\pos(752,300)}北方"),
+        _ass_event("RankList", r"{\pos(328,390)}" + _escape_ass_text("\n".join(south))),
+        _ass_event("RankList", r"{\pos(752,390)}" + _escape_ass_text("\n".join(north))),
+    ]
+    return "\n".join([
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "PlayResX: 1080",
+        "PlayResY: 1920",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: RankTitleRed,Microsoft YaHei,78,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,7,2,8,54,54,64,1",
+        f"Style: RankTitleYellow,Microsoft YaHei,72,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,7,2,8,54,54,140,1",
+        f"Style: RankHeader,Microsoft YaHei,76,{_ass_color('#ffffff')},{_ass_color('#ffffff')},{_ass_color('#d91f1f')},{_ass_color('#d91f1f')},-1,0,0,0,100,100,0,0,3,14,0,5,54,54,0,1",
+        f"Style: RankList,Microsoft YaHei,44,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,5,1,8,36,36,0,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        *events,
+        "",
+    ])
+
+
+def _local_bestseller_ass_content(subtitle_text: str, subtitle_style: Optional[Dict[str, Any]] = None, *, day: Any = None) -> str:
+    style = subtitle_style if isinstance(subtitle_style, dict) else {}
+    if str(style.get("variant") or "").strip() == "rank_table" and int(day or 0) == 1:
+        return _local_bestseller_rank_table_ass_content(subtitle_text, day=day)
+    lines = _local_bestseller_caption_lines(subtitle_text)
+    title = lines[0] if lines else ""
+    body = lines[1:] if len(lines) > 1 else []
+    events: List[str] = []
+    if title:
+        events.append(f"Dialogue: 0,0:00:00.00,0:00:10.00,Title,,0,72,0,,{_escape_ass_text(title)}")
+    if body:
+        body_text = "\n".join(body)
+        events.append(f"Dialogue: 0,0:00:00.00,0:00:10.00,Body,,0,112,0,,{_escape_ass_text(body_text)}")
+    if not events:
+        events.append("Dialogue: 0,0:00:00.00,0:00:10.00,Body,,0,112,0,,")
+    return "\n".join([
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "PlayResX: 1080",
+        "PlayResY: 1920",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Title,Microsoft YaHei,64,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,5,1,8,72,72,72,1",
+        f"Style: Body,Microsoft YaHei,58,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,5,1,8,80,80,112,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        *events,
+        "",
+    ])
+
+
+def _ffmpeg_path_from_job(job: Dict[str, Any]) -> str:
+    inp = job.get("inp") if isinstance(job.get("inp"), dict) else {}
+    ff = str(inp.get("ffmpeg_path") or "").strip()
+    return ff or "ffmpeg"
+
+
+async def _download_video_to_path(url: str, path: Path) -> None:
+    ref = str(url or "").strip()
+    if not ref:
+        raise RuntimeError("视频下载失败：URL 为空")
+    if not ref.startswith(("http://", "https://")):
+        local = Path(ref)
+        if local.is_file():
+            path.write_bytes(local.read_bytes())
+            return
+        raise RuntimeError(f"视频下载失败：不是有效 URL 或本地文件不存在: {ref[:300]}")
+    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True, trust_env=False) as client:
+        resp = await client.get(ref)
+    resp.raise_for_status()
+    path.write_bytes(resp.content)
+
+
+def _run_caption_ffmpeg(ffmpeg_path: str, input_path: Path, ass_path: Path, output_path: Path) -> None:
+    ass_filter_path = str(ass_path).replace("\\", "/").replace(":", "\\:")
+    vf = f"subtitles='{ass_filter_path}'"
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        quoted = " ".join(shlex.quote(x) for x in cmd)
+        raise RuntimeError((proc.stderr or proc.stdout or f"ffmpeg failed: {quoted}")[:2000])
+
+
+def _save_local_bestseller_caption_asset(
+    *,
+    user_id: int,
+    output_path: Path,
+    source_video_url: str,
+    subtitle_text: str,
+    job_id: str,
+    day: Any,
+) -> Dict[str, Any]:
+    data = output_path.read_bytes()
+    aid = _gen_asset_id()
+    fname = f"{aid}.mp4"
+    asset_path = ASSETS_DIR / fname
+    asset_path.write_bytes(data)
+    ct = _content_type_for_asset_filename(fname)
+    tos_url = _upload_to_tos(data, f"assets/{fname}", ct)
+    db = SessionLocal()
+    try:
+        row = Asset(
+            asset_id=aid,
+            user_id=user_id,
+            filename=fname,
+            media_type="video",
+            file_size=len(data),
+            source_url=tos_url,
+            prompt=subtitle_text[:500],
+            model="local-bestseller-caption-ffmpeg",
+            tags="auto,local_bestseller.captioned_video",
+            meta={
+                "source_video_url": source_video_url,
+                "seedance_job_id": job_id,
+                "local_bestseller_day": day,
+                "captioned": True,
+            },
+        )
+        db.add(row)
+        db.commit()
+        return {
+            "asset_id": aid,
+            "filename": fname,
+            "media_type": "video",
+            "file_size": len(data),
+            "source_url": tos_url or "",
+            "path": str(asset_path),
+        }
+    finally:
+        db.close()
+
+
+async def _caption_local_bestseller_video_if_needed(
+    *,
+    job_id: str,
+    job: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+    if meta.get("feature") != "local_bestseller":
+        return None
+    subtitle_text = str(meta.get("subtitle_text") or "").strip()
+    if not subtitle_text:
+        return None
+    video_url = _select_pipeline_video_download_ref(result, job=job)
+    if not video_url:
+        raise RuntimeError("同城爆款字幕合成失败：未找到原视频 URL")
+
+    async with _LOCAL_BESTSELLER_CAPTION_LOCK:
+        update_job(job_id, post_status="captioning", post_stage="burn_subtitle")
+        work_dir = Path(job.get("job_output_dir") or _default_runs_root()) / "caption_post"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = work_dir / "raw.mp4"
+        ass_path = work_dir / "caption.ass"
+        out_path = work_dir / "captioned.mp4"
+        subtitle_style = meta.get("subtitle_style") if isinstance(meta.get("subtitle_style"), dict) else {}
+        ass_path.write_text(
+            _local_bestseller_ass_content(subtitle_text, subtitle_style, day=meta.get("day")),
+            encoding="utf-8",
+        )
+        await _download_video_to_path(video_url, raw_path)
+        await asyncio.to_thread(_run_caption_ffmpeg, _ffmpeg_path_from_job(job), raw_path, ass_path, out_path)
+        return _save_local_bestseller_caption_asset(
+            user_id=int(job.get("user_id") or 0),
+            output_path=out_path,
+            source_video_url=video_url,
+            subtitle_text=subtitle_text,
+            job_id=job_id,
+            day=meta.get("day"),
+        )
 
 
 async def _seedance_job_runner(job_id: str) -> None:
@@ -548,6 +857,43 @@ async def _seedance_job_runner(job_id: str) -> None:
                 return
             finally:
                 db.close()
+    caption_asset: Optional[Dict[str, Any]] = None
+    try:
+        caption_asset = await _caption_local_bestseller_video_if_needed(job_id=job_id, job=job, result=result)
+    except Exception as exc:
+        error = str(exc)[:2000]
+        update_job(job_id, status="failed", error=f"视频已生成，但字幕合成失败: {error}", result=result, saved_assets=saved_assets)
+        await sync_creative_job_to_cloud(
+            auth_header=auth_header,
+            installation_id=installation_id,
+            job_id=job_id,
+            feature_type="seedance_tvc",
+            provider="comfly_seedance",
+            status="failed",
+            stage="caption_failed",
+            title="创意视频任务",
+            prompt=task_text,
+            request_payload=request_payload,
+            result_payload=result,
+            saved_assets=saved_assets,
+            error=f"caption failed: {error}",
+            meta={"auto_save": auto_save},
+        )
+        return
+    if caption_asset:
+        saved_assets = [*saved_assets, {"asset": caption_asset, "kind": "local_bestseller_captioned"}]
+        result = {
+            **result,
+            "captioned_video": caption_asset,
+            "final_video": {
+                **(result.get("final_video") if isinstance(result.get("final_video"), dict) else {}),
+                "url": caption_asset.get("source_url") or None,
+                "path": caption_asset.get("path") or "",
+                "asset_id": caption_asset.get("asset_id") or "",
+                "kind": "local_bestseller_captioned",
+                "hint": "同城爆款字幕成片已完成。",
+            },
+        }
     update_job(job_id, status="completed", error=None, result=result, saved_assets=saved_assets)
     await sync_creative_job_to_cloud(
         auth_header=auth_header,
@@ -564,6 +910,63 @@ async def _seedance_job_runner(job_id: str) -> None:
         saved_assets=saved_assets,
         meta={"auto_save": auto_save},
     )
+
+
+async def start_seedance_tvc_pipeline_job(
+    *,
+    pl: ComflySeedancePipelinePayload,
+    request: Request,
+    current_user: _ServerUser,
+    db: Session,
+    title: str = "创意视频任务",
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    _validate_payload(pl)
+    runs_root = (pl.output_dir or "").strip() or _default_runs_root()
+    job_id = uuid.uuid4().hex
+    effective_dir = str(Path(runs_root) / "job_runs" / job_id) if pl.isolate_job_dir else runs_root
+    inp = await _prepare_pipeline_input(
+        pl=pl,
+        current_user=current_user,
+        db=db,
+        request=request,
+        effective_output_dir=effective_dir,
+    )
+    auth_header = _request_auth_header(request)
+    installation_id = _request_installation_id(request)
+    create_job_record(
+        user_id=current_user.id,
+        inp=inp,
+        auto_save=pl.auto_save,
+        job_output_dir=effective_dir,
+        job_id=job_id,
+        auth_header=auth_header,
+        installation_id=installation_id,
+        meta=meta,
+    )
+    asyncio.create_task(sync_creative_job_to_cloud(
+        auth_header=auth_header,
+        installation_id=installation_id,
+        job_id=job_id,
+        feature_type="seedance_tvc",
+        provider="comfly_seedance",
+        status="running",
+        stage="queued",
+        title=title,
+        prompt=pl.task_text,
+        request_payload={"payload": pl.model_dump(), "inp": inp},
+        meta={"auto_save": pl.auto_save, "duration": pl.total_duration_seconds, **(meta or {})},
+    ))
+
+    def _log_task_done(task: asyncio.Task) -> None:
+        try:
+            _ = task.exception()
+        except asyncio.CancelledError:
+            pass
+
+    task = asyncio.create_task(_seedance_job_runner(job_id))
+    task.add_done_callback(_log_task_done)
+    return {"ok": True, "async": True, "job_id": job_id, "poll_path": f"/api/comfly-seedance-tvc/pipeline/jobs/{job_id}"}
 
 
 def _redact_progress_for_client(prog: Any) -> Any:
@@ -596,6 +999,8 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str
         "ok": True,
         "job_id": job.get("job_id"),
         "status": st,
+        "post_status": job.get("post_status"),
+        "post_stage": job.get("post_stage"),
         "auto_save": job.get("auto_save"),
         "created_at_ts": job.get("created_at_ts"),
         "updated_at_ts": job.get("updated_at_ts"),
@@ -663,49 +1068,12 @@ async def comfly_seedance_pipeline_start(
     db=Depends(get_db),
 ):
     pl = body.payload
-    _validate_payload(pl)
-    runs_root = (pl.output_dir or "").strip() or _default_runs_root()
-    job_id = uuid.uuid4().hex
-    effective_dir = str(Path(runs_root) / "job_runs" / job_id) if pl.isolate_job_dir else runs_root
-    inp = await _prepare_pipeline_input(
+    return await start_seedance_tvc_pipeline_job(
         pl=pl,
+        request=request,
         current_user=current_user,
         db=db,
-        request=request,
-        effective_output_dir=effective_dir,
     )
-    create_job_record(
-        user_id=current_user.id,
-        inp=inp,
-        auto_save=pl.auto_save,
-        job_output_dir=effective_dir,
-        job_id=job_id,
-        auth_header=_request_auth_header(request),
-        installation_id=_request_installation_id(request),
-    )
-    asyncio.create_task(sync_creative_job_to_cloud(
-        auth_header=_request_auth_header(request),
-        installation_id=_request_installation_id(request),
-        job_id=job_id,
-        feature_type="seedance_tvc",
-        provider="comfly_seedance",
-        status="running",
-        stage="queued",
-        title="创意视频任务",
-        prompt=pl.task_text,
-        request_payload={"payload": pl.model_dump(), "inp": inp},
-        meta={"auto_save": pl.auto_save, "duration": pl.total_duration_seconds},
-    ))
-
-    def _log_task_done(task: asyncio.Task) -> None:
-        try:
-            _ = task.exception()
-        except asyncio.CancelledError:
-            pass
-
-    task = asyncio.create_task(_seedance_job_runner(job_id))
-    task.add_done_callback(_log_task_done)
-    return {"ok": True, "async": True, "job_id": job_id, "poll_path": f"/api/comfly-seedance-tvc/pipeline/jobs/{job_id}"}
 
 
 @router.get("/api/comfly-seedance-tvc/pipeline/jobs/{job_id}")

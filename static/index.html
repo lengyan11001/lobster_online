@@ -7,7 +7,7 @@
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
   <link rel="stylesheet" href="/static/css/common.css?v=20260522-hero-vision-indent">
-  <link rel="stylesheet" href="/static/css/index.css?v=20260606-hifly-layout-scroll">
+  <link rel="stylesheet" href="/static/css/index.css?v=20260607-local-video-inline-fs">
 </head>
 <body>
   <div class="page">
@@ -159,6 +159,11 @@
                         <span class="chat-sidebar-entry-copy">创意分镜头视频</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="local-bestseller">
+                        <span class="chat-sidebar-entry-icon">城</span>
+                        <span class="chat-sidebar-entry-copy">同城爆款</span>
+                        <span class="chat-sidebar-entry-arrow">›</span>
+                      </button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="viral-video-remix">
                         <span class="chat-sidebar-entry-icon">R</span>
                         <span class="chat-sidebar-entry-copy">爆款复刻</span>
@@ -303,6 +308,7 @@
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipEcommerceDetail" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">电商详情</span><span class="chat-suggestion-chip-desc">生成主图和详情页</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-chat-prompt="用爆款tvc帮我生成一个视频。"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">爆款TVC</span><span class="chat-suggestion-chip-desc">填入视频生成话术</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创意分镜头视频</span><span class="chat-suggestion-chip-desc">进入创意分镜头视频工作台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipLocalBestseller" data-chip-tone="douyin" data-open-hidden-view="local-bestseller"><span class="chat-suggestion-chip-icon">城</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">同城爆款</span><span class="chat-suggestion-chip-desc">批量做10天内容</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip9" data-chip-tone="content" data-open-hidden-view="hifly-digital-human"><span class="chat-suggestion-chip-icon">H</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">必火数字人</span><span class="chat-suggestion-chip-desc">进入必火数字人工作台</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-open-hidden-view="douyin-workbench"><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音工作台</span><span class="chat-suggestion-chip-desc">登录、采集、私信互动</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
@@ -969,6 +975,113 @@
           <div id="content-shanjian-smart-clip" class="content-block"></div>
 
           <div id="content-cutcli-template-studio" class="content-block"></div>
+
+          <div id="content-local-bestseller" class="content-block">
+            <div class="lb-studio">
+              <div class="lb-hero">
+                <div>
+                  <h3>同城爆款</h3>
+                  <p>按“AI矩阵获客陪跑营”前10天表格逻辑，生成最终上屏字幕、人物场景合成图和10秒视频提示词。</p>
+                  <div class="lb-hero-meta"><span>双平台底稿</span><span>人物形象不变</span><span>批量合成场景图</span><span>顶部爆款字幕</span></div>
+                </div>
+                <button type="button" id="localBestsellerBackBtn" class="btn btn-ghost btn-sm">返回首页</button>
+              </div>
+
+              <div class="lb-shell">
+                <aside class="lb-sidebar">
+                  <div class="lb-panel">
+                    <h4>1. 选择人物素材</h4>
+                    <p>上传自己的照片，或从素材库选择一张正脸清晰的人物图。也可以先上传一段生活动作视频作为后续姿态参考。</p>
+                    <div class="lb-source-tabs" role="radiogroup" aria-label="素材来源">
+                      <label><input type="radio" name="localBestsellerSourceMode" value="upload" checked>上传照片</label>
+                      <label><input type="radio" name="localBestsellerSourceMode" value="library">素材库</label>
+                      <label><input type="radio" name="localBestsellerSourceMode" value="video">上传视频</label>
+                    </div>
+                    <div class="lb-upload-actions">
+                      <button type="button" id="localBestsellerPhotoBtn" class="btn btn-primary btn-sm">上传人物照片</button>
+                      <button type="button" id="localBestsellerAssetBtn" class="btn btn-ghost btn-sm">从素材库选择</button>
+                      <button type="button" id="localBestsellerVideoBtn" class="btn btn-ghost btn-sm">上传参考视频</button>
+                      <input type="file" id="localBestsellerPhotoInput" accept="image/*" style="display:none;">
+                      <input type="file" id="localBestsellerVideoInput" accept="video/*" style="display:none;">
+                    </div>
+                    <div id="localBestsellerSelectedMedia" class="lb-selected-media"></div>
+                  </div>
+
+                  <div class="lb-panel">
+                    <h4>2. 填写个人信息</h4>
+                    <div class="lb-field-grid">
+                      <label>姓名<input id="localBestsellerName" type="text" placeholder="例如：艾蜜"></label>
+                      <label>短视频昵称<input id="localBestsellerNickname" type="text" placeholder="例如：蜜姐"></label>
+                      <label>性别
+                        <select id="localBestsellerGender">
+                          <option value="female" selected>女</option>
+                          <option value="male">男</option>
+                        </select>
+                      </label>
+                      <label>身份人设<input id="localBestsellerIdentity" type="text" value="女老板"></label>
+                      <label>行业<input id="localBestsellerIndustry" type="text" value="大健康"></label>
+                      <label>当前城市<input id="localBestsellerCity" type="text" value="深圳"></label>
+                      <label>省份<input id="localBestsellerProvince" type="text" value="广东"></label>
+                      <label>家乡<input id="localBestsellerHometown" type="text" value="广东潮汕"></label>
+                      <label>年龄标签<input id="localBestsellerAge" type="text" value="80后"></label>
+                      <label>目标人群<input id="localBestsellerTargetAge" type="text" value="607080后"></label>
+                      <label>画面风格
+                        <select id="localBestsellerStyle">
+                          <option value="真实同城生活感" selected>真实同城生活感</option>
+                          <option value="轻创业励志">轻创业励志</option>
+                          <option value="门店老板日常">门店老板日常</option>
+                          <option value="大健康专业可信">大健康专业可信</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div id="localBestsellerMsg" class="msg" style="display:none;margin-top:0.75rem;"></div>
+                    <div class="lb-actions">
+                      <button type="button" id="localBestsellerPlanBtn" class="btn btn-primary">生成10天方案</button>
+                      <button type="button" id="localBestsellerRenderBtn" class="btn btn-ghost" disabled>批量合成10天场景图</button>
+                      <button type="button" id="localBestsellerResetBtn" class="btn btn-ghost">重置</button>
+                    </div>
+                  </div>
+                </aside>
+
+                <section class="lb-main">
+                  <div class="lb-result-head">
+                    <div>
+                      <h4>10天结果卡</h4>
+                      <p>每张卡只展示最终上屏字幕和可编辑提示词，再用用户照片合成生活化场景图；场景图完成后可继续接 Grok 生成10秒视频。</p>
+                    </div>
+                    <div class="lb-result-toolbar">
+                      <button type="button" id="localBestsellerBatchSceneUploadBtn" class="btn btn-ghost btn-sm" disabled>批量上传底图</button>
+                      <button type="button" id="localBestsellerBatchSceneAssetBtn" class="btn btn-ghost btn-sm" disabled>批量选择素材库底图</button>
+                      <button type="button" id="localBestsellerBatchSceneTopBtn" class="btn btn-primary btn-sm" disabled>批量合成场景图片</button>
+                      <button type="button" id="localBestsellerBatchVideoTopBtn" class="btn btn-ghost btn-sm" disabled>批量合成视频</button>
+                      <input type="file" id="localBestsellerCardSceneInput" accept="image/*" style="display:none;">
+                      <input type="file" id="localBestsellerBatchSceneInput" accept="image/*" multiple style="display:none;">
+                    </div>
+                  </div>
+                  <div id="localBestsellerEmptyResult" class="lb-empty-result">
+                    <strong>等待生成</strong>
+                    <span>先选择照片并填写个人信息，再生成10天同城爆款方案。</span>
+                  </div>
+                  <div id="localBestsellerResultGrid" class="lb-result-grid"></div>
+                </section>
+              </div>
+            </div>
+
+            <div id="localBestsellerAssetPicker" class="lb-asset-modal" aria-hidden="true">
+              <div class="lb-asset-card">
+                <div class="lb-asset-head">
+                  <strong id="localBestsellerAssetTitle">选择素材库人物照片</strong>
+                  <button type="button" id="localBestsellerAssetClose" aria-label="关闭">×</button>
+                </div>
+                <div id="localBestsellerAssetStatus" class="lb-asset-status">正在加载素材库...</div>
+                <div id="localBestsellerAssetGrid" class="lb-asset-grid"></div>
+                <div id="localBestsellerAssetFoot" class="lb-asset-foot" style="display:none;">
+                  <span id="localBestsellerAssetPickedCount">可多选；选 1 张则全部 Day 使用同一张</span>
+                  <button type="button" id="localBestsellerApplyBatchSceneAssets" class="btn btn-primary btn-sm">应用到底图</button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div id="content-seedance-tvc-studio" class="content-block">
             <div class="tvc-studio">
@@ -2326,6 +2439,7 @@
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260604-asset-picker"></script>
   <script src="/static/js/comfly-image-studio.js?v=20260604-asset-picker"></script>
   <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260606-seedance-custom-select"></script>
+  <script src="/static/js/local-bestseller.js?v=20260607-local-video-inline-fs"></script>
   <script src="/static/js/viral-video-remix.js?v=20260513-taskgroup-error-balance-guard"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/cutcli-template-studio.js?v=20260605-cutcli-source-orientation"></script>

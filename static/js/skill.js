@@ -1247,6 +1247,12 @@ window._openHiddenWorkspaceView = function(view) {
     window._openImageComposerStudioView();
     return;
   }
+  if (target === 'local-bestseller' && typeof window.initLocalBestsellerView === 'function') {
+    _switchToHiddenView('local-bestseller');
+    window.initLocalBestsellerView();
+    try { location.hash = 'local-bestseller'; } catch (e1) {}
+    return;
+  }
   if (target === 'ecommerce-detail-studio' && typeof window._openEcommerceDetailStudioView === 'function') {
     window._openEcommerceDetailStudioView();
     return;

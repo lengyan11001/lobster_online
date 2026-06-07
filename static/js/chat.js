@@ -1433,7 +1433,9 @@ function openWechatArticlePage() {
     return;
   }
   if (typeof window.showAppView === 'function') {
-    window.showAppView('wechat-article');
+    window.showAppView('wechat-article').then(function() {
+      if (typeof window.loadWechatArticlePage === 'function') window.loadWechatArticlePage();
+    });
     return;
   }
   openHiddenWorkspaceFallback('wechat-article');
@@ -4027,8 +4029,8 @@ function bindChatHomeActions() {
     var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
     if (hiddenViewBtn) {
       var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
-      if (hiddenView === 'wechat-article' && typeof window.showAppView === 'function') {
-        window.showAppView('wechat-article');
+      if (hiddenView === 'wechat-article' && typeof window.openWechatArticlePage === 'function') {
+        window.openWechatArticlePage();
       } else if (hiddenView === 'hifly-digital-human') {
         openHiddenWorkspaceFallback(hiddenView);
       } else if (typeof window._openHiddenWorkspaceView === 'function') {
@@ -4108,6 +4110,8 @@ function openHiddenWorkspaceFallback(view) {
     window.initSeedanceTvcStudioView();
   } else if (target === 'image-composer-studio' && typeof window.initImageComposerStudioView === 'function') {
     window.initImageComposerStudioView();
+  } else if (target === 'local-bestseller' && typeof window.initLocalBestsellerView === 'function') {
+    window.initLocalBestsellerView();
   } else if (target === 'ecommerce-detail-studio' && typeof window.initEcommerceDetailStudioView === 'function') {
     window.initEcommerceDetailStudioView();
   } else if (target === 'wechat-article' && typeof window.loadWechatArticlePage === 'function') {

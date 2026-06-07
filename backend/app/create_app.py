@@ -48,6 +48,7 @@ from .api.comfly_daihuo import router as comfly_daihuo_router
 from .api.comfly_seedance_tvc import router as comfly_seedance_tvc_router
 from .api.comfly_ecommerce_detail import router as comfly_ecommerce_detail_router
 from .api.comfly_image_studio import router as comfly_image_studio_router
+from .api.local_bestseller import router as local_bestseller_router
 from .api.goal_video_pipeline import router as goal_video_pipeline_router
 from .api.create_video_pipeline import router as create_video_pipeline_router
 from .api.create_ppt_pipeline import router as create_ppt_pipeline_router
@@ -940,6 +941,7 @@ def create_app() -> FastAPI:
     app.include_router(comfly_seedance_tvc_router, prefix="")
     app.include_router(comfly_ecommerce_detail_router, prefix="")
     app.include_router(comfly_image_studio_router, prefix="")
+    app.include_router(local_bestseller_router, prefix="")
     app.include_router(goal_video_pipeline_router, prefix="")
     app.include_router(create_video_pipeline_router, prefix="")
     app.include_router(create_ppt_pipeline_router, prefix="")

@@ -31,6 +31,7 @@ def create_job_record(
     job_id: Optional[str] = None,
     auth_header: str = "",
     installation_id: str = "",
+    meta: Optional[Dict[str, Any]] = None,
 ) -> str:
     jid = (job_id or "").strip().lower()
     if not jid or len(jid) != 32 or any(c not in "0123456789abcdef" for c in jid):
@@ -49,6 +50,7 @@ def create_job_record(
             "job_output_dir": job_output_dir,
             "auth_header": (auth_header or "").strip(),
             "installation_id": (installation_id or "").strip(),
+            "meta": meta if isinstance(meta, dict) else {},
             "error": None,
             "result": None,
             "saved_assets": [],
