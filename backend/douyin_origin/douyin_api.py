@@ -9652,9 +9652,11 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
         auto_reply_suffix = ""
         if auto_reply_enabled:
             if unseen_rows:
+                success_count = int(auto_reply_result.get("success", 0))
+                failed_count = int(auto_reply_result.get("failed", 0))
                 auto_reply_suffix = (
-                    f"，已自动回复 {int(auto_reply_result.get('success', 0))} 个"
-                    f"{f'，失败 {int(auto_reply_result.get('failed', 0))} 个' if int(auto_reply_result.get('failed', 0)) > 0 else ''}"
+                    f"，已自动回复 {success_count} 个"
+                    f"{f'，失败 {failed_count} 个' if failed_count > 0 else ''}"
                 )
             else:
                 auto_reply_suffix = "，本轮没有新的未读会话，不需要自动回复"

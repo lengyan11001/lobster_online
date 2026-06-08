@@ -1258,6 +1258,13 @@ window.showLobsterView = showAppView;
 
 document.querySelectorAll('.nav-left-item').forEach(function(el) {
   el.addEventListener('click', function() {
+    var hiddenView = el.dataset.openHiddenView;
+    if (hiddenView && typeof window._openHiddenWorkspaceView === 'function') {
+      document.querySelectorAll('.nav-left-item').forEach(function(b) { b.classList.remove('active'); });
+      el.classList.add('active');
+      window._openHiddenWorkspaceView(hiddenView);
+      return;
+    }
     var view = el.dataset.view;
     if (!view) return;
     showAppView(view, el).catch(function() {});

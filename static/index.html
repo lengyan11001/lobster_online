@@ -309,7 +309,7 @@
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipEcommerceDetail" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">电商详情</span><span class="chat-suggestion-chip-desc">生成主图和详情页</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-chat-prompt="用爆款tvc帮我生成一个视频。"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">爆款TVC</span><span class="chat-suggestion-chip-desc">填入视频生成话术</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创意分镜头视频</span><span class="chat-suggestion-chip-desc">进入创意分镜头视频工作台</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipLocalBestseller" data-chip-tone="douyin" data-open-hidden-view="local-bestseller"><span class="chat-suggestion-chip-icon">城</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">同城爆款</span><span class="chat-suggestion-chip-desc">批量做10天内容</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipLocalBestseller" data-chip-tone="douyin" data-open-hidden-view="local-bestseller"><span class="chat-suggestion-chip-icon">城</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">同城爆款</span><span class="chat-suggestion-chip-desc">批量做30天内容</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip9" data-chip-tone="content" data-open-hidden-view="hifly-digital-human"><span class="chat-suggestion-chip-icon">H</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">必火数字人</span><span class="chat-suggestion-chip-desc">进入必火数字人工作台</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-view="douyin-leads"><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音获客</span><span class="chat-suggestion-chip-desc">搜索采集、精准客户、私信互动</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
@@ -982,7 +982,7 @@
               <div class="lb-hero">
                 <div>
                   <h3>同城爆款</h3>
-                  <p>按“AI矩阵获客陪跑营”前10天表格逻辑，生成最终上屏字幕、人物场景合成图和10秒视频提示词。</p>
+                  <p>按“AI矩阵获客陪跑营”30天作业逻辑，生成最终上屏字幕、人物场景合成图和10秒视频提示词。</p>
                   <div class="lb-hero-meta"><span>双平台底稿</span><span>人物形象不变</span><span>批量合成场景图</span><span>顶部爆款字幕</span></div>
                 </div>
                 <button type="button" id="localBestsellerBackBtn" class="btn btn-ghost btn-sm">返回首页</button>
@@ -1034,11 +1034,18 @@
                           <option value="大健康专业可信">大健康专业可信</option>
                         </select>
                       </label>
+                      <label>规划天数
+                        <select id="localBestsellerDays">
+                          <option value="10">10天</option>
+                          <option value="20">20天</option>
+                          <option value="30" selected>30天</option>
+                        </select>
+                      </label>
                     </div>
                     <div id="localBestsellerMsg" class="msg" style="display:none;margin-top:0.75rem;"></div>
                     <div class="lb-actions">
-                      <button type="button" id="localBestsellerPlanBtn" class="btn btn-primary">生成10天方案</button>
-                      <button type="button" id="localBestsellerRenderBtn" class="btn btn-ghost" disabled>批量合成10天场景图</button>
+                      <button type="button" id="localBestsellerPlanBtn" class="btn btn-primary">生成30天方案</button>
+                      <button type="button" id="localBestsellerRenderBtn" class="btn btn-ghost" disabled>批量合成30天场景图</button>
                       <button type="button" id="localBestsellerResetBtn" class="btn btn-ghost">重置</button>
                     </div>
                   </div>
@@ -1047,7 +1054,7 @@
                 <section class="lb-main">
                   <div class="lb-result-head">
                     <div>
-                      <h4>10天结果卡</h4>
+                      <h4 id="localBestsellerResultTitle">30天结果卡</h4>
                       <p>每张卡只展示最终上屏字幕和可编辑提示词，再用用户照片合成生活化场景图；场景图完成后可继续接 Grok 生成10秒视频。</p>
                     </div>
                     <div class="lb-result-toolbar">
@@ -1061,7 +1068,7 @@
                   </div>
                   <div id="localBestsellerEmptyResult" class="lb-empty-result">
                     <strong>等待生成</strong>
-                    <span>先选择照片并填写个人信息，再生成10天同城爆款方案。</span>
+                    <span id="localBestsellerEmptyHint">先选择照片并填写个人信息，再生成30天同城爆款方案。</span>
                   </div>
                   <div id="localBestsellerResultGrid" class="lb-result-grid"></div>
                 </section>

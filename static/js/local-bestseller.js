@@ -56,6 +56,16 @@
     return el ? String(el.value || '').trim() : '';
   }
 
+  function planDays() {
+    var n = Number(val('localBestsellerDays') || 30);
+    if (n !== 10 && n !== 20 && n !== 30) n = 30;
+    return n;
+  }
+
+  function planLabel() {
+    return planDays() + '天';
+  }
+
   function setVal(id, value) {
     var el = $(id);
     if (el) el.value = value || '';
@@ -77,8 +87,8 @@
       });
     });
     [
-      ['动作自然：走路、停下、看镜头、轻微招手或口播。', '动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动。'],
-      ['动作自然：走路、停下、看镜头、轻微招手或口播', '动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动'],
+      ['动作自然：走路、停下、看镜头、轻微招手或口播。', '动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头。'],
+      ['动作自然：走路、停下、看镜头、轻微招手或口播', '动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头'],
       ['轻微招手或口播', '自然走动、停下、转身、整理东西或侧身工作'],
       ['招手或口播', '自然走动、整理东西或侧身工作'],
       ['自然口播', '自然动作'],
@@ -94,7 +104,7 @@
       ['嘴型', '嘴巴自然放松'],
       ['唇形', '嘴巴自然放松'],
       ['唇同步', '嘴巴自然放松'],
-      ['看镜头', '偶尔自然扫过镜头或看向周围']
+      ['看镜头', '中间三秒自然看向镜头，其他时间自然看向周围']
     ].forEach(function(pair) {
       out = out.split(pair[0]).join(pair[1]);
     });
@@ -109,12 +119,19 @@
     if (out.indexOf('全程静默自然动作视频') === -1) {
       out += /[。；;.]$/.test(out) ? guard : '。' + guard;
     }
-    var motion = '人物正常走动，步伐和手臂摆动自然；镜头像朋友拿手机边走边拍，轻微跟拍、轻微晃动、轻微推近或侧向视角变化，视角不完美但真实，像真的现场拍摄。';
+    var motion = '人物正常走动，步伐和手臂摆动自然；视频中间约第4-6秒，人物要自然抬头看向镜头或自然扫视镜头，像刚好发现朋友在拍；镜头像朋友拿手机边走边拍，轻微跟拍、轻微晃动、轻微推近或侧向视角变化，视角不完美但真实，像真的现场拍摄。';
     if (out.indexOf('人物正常走动') === -1 && out.indexOf('像真的现场拍摄') === -1) {
       out += /[。；;.]$/.test(out) ? motion : '。' + motion;
     }
-    var bgm = '可加入轻微背景音乐或真实环境氛围感，音量低，不要人声、不要旁白、不要歌词、不要任何人物发声。';
-    if (out.indexOf('轻微背景音乐') === -1) {
+    var midLook = '节奏要求：10秒视频中间约第4-6秒，人物要自然抬头看向镜头或自然扫视镜头，保持真实随手拍感；其他时间可以继续走路、整理东西、侧身工作或看向周围。';
+    if (out.indexOf('第4-6秒') === -1 && out.indexOf('中间约第4') === -1) {
+      out += /[。；;.]$/.test(out) ? midLook : '。' + midLook;
+    }
+    var bgm = '必须加入轻微背景音乐或真实环境氛围感，音量低，只做氛围铺底；不要人声、不要旁白、不要歌词、不要任何人物发声。';
+    var optionalBgm = '可加入轻微背景音乐或真实环境氛围感，音量低，不要人声、不要旁白、不要歌词、不要任何人物发声。';
+    if (out.indexOf(optionalBgm) !== -1) {
+      out = out.split(optionalBgm).join(bgm);
+    } else if (out.indexOf('背景音乐') === -1 || out.indexOf('必须加入') === -1) {
       out += /[。；;.]$/.test(out) ? bgm : '。' + bgm;
     }
     return out;
@@ -265,7 +282,7 @@
   function uploadBatchSceneFiles(files) {
     var list = Array.prototype.slice.call(files || []).filter(Boolean);
     if (!state.plan.length) {
-      showMessage('请先生成10天方案。', true);
+      showMessage('请先生成' + planLabel() + '方案。', true);
       return Promise.resolve([]);
     }
     if (!list.length) return Promise.resolve([]);
@@ -276,7 +293,7 @@
       .then(function(assets) {
         applySceneAssetsToPlan(assets);
         renderPlan();
-        showMessage('已按顺序给10天卡片分配场景底图。', false);
+        showMessage('已按顺序给' + state.plan.length + '天卡片分配场景底图。', false);
         return assets;
       })
       .finally(function() {
@@ -372,7 +389,7 @@
 
   function openBatchSceneAssetPicker() {
     if (!state.plan.length) {
-      showMessage('请先生成10天方案。', true);
+      showMessage('请先生成' + planLabel() + '方案。', true);
       return;
     }
     state.assetPickerMode = 'batch-scene';
@@ -400,7 +417,7 @@
     closeAssetPicker();
     renderPlan();
     updateButtons();
-    showMessage('已按顺序给10天卡片分配素材库底图。', false);
+    showMessage('已按顺序给' + state.plan.length + '天卡片分配素材库底图。', false);
   }
 
   function pickAsset(assetId) {
@@ -515,10 +532,17 @@
     var previewLines = dyLines.slice(0, 8);
     var titleLine = previewLines[0] || '';
     var bodyLines = previewLines.slice(1);
+    function captionClass(line, base) {
+      var len = String(line || '').replace(/[^\x00-\xff]/g, 'aa').length;
+      var cls = base || '';
+      if (len >= 22) cls += ' is-long';
+      if (len >= 30) cls += ' is-xlong';
+      return cls;
+    }
     return '<div class="lb-phone-caption lb-phone-caption-top">' +
-      (titleLine ? '<span class="is-hot">' + escapeHtml(titleLine) + '</span>' : '') +
+      (titleLine ? '<span class="' + captionClass(titleLine, 'is-hot') + '">' + escapeHtml(titleLine) + '</span>' : '') +
       (bodyLines.length ? '<div class="lb-caption-body">' + bodyLines.map(function(line) {
-        return '<span>' + escapeHtml(line) + '</span>';
+        return '<span class="' + captionClass(line, '') + '">' + escapeHtml(line) + '</span>';
       }).join('') + '</div>' : '') +
     '</div>';
   }
@@ -665,11 +689,12 @@
     }
     state.submitting = true;
     updateButtons();
-    showMessage('正在生成10天方案...', false);
+    var days = planDays();
+    showMessage('正在生成' + days + '天方案...', false);
     fetch(base + '/api/local-bestseller/plan', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: 10, profile: getProfile() })
+      body: JSON.stringify({ days: days, profile: getProfile() })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -680,7 +705,7 @@
         if (!result.ok) throw new Error((result.data && result.data.detail) || '生成失败');
         state.plan = normalizePlan(Array.isArray(result.data.items) ? result.data.items : []);
         renderPlan();
-        showMessage('10天同城爆款方案已生成。下一步可以单张或批量合成场景图片。', false);
+        showMessage(state.plan.length + '天同城爆款方案已生成。下一步可以单张或批量合成场景图片。', false);
       })
       .catch(function(err) {
         showMessage((err && err.message) || '生成失败', true);
@@ -794,7 +819,7 @@
   function generateScene(day) {
     if (!ensureMediaSelected()) return;
     if (!state.plan.length) {
-      showMessage('请先生成10天方案。', true);
+      showMessage('请先生成' + planLabel() + '方案。', true);
       return;
     }
     var base = localBase();
@@ -810,7 +835,7 @@
     fetch(base + '/api/local-bestseller/scene/generate', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: 10, day: Number(day), profile: getProfile(), item: cardPayload(item) })
+      body: JSON.stringify({ days: state.plan.length || planDays(), day: Number(day), profile: getProfile(), item: cardPayload(item) })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -835,7 +860,7 @@
   function batchGenerateScenes() {
     if (!ensureMediaSelected()) return;
     if (!state.plan.length) {
-      showMessage('请先生成10天方案。', true);
+      showMessage('请先生成' + planLabel() + '方案。', true);
       return;
     }
     var base = localBase();
@@ -850,12 +875,12 @@
     pending.forEach(function(item) { state.sceneGenerating[item.id] = true; });
     renderPlan();
     updateButtons();
-    showMessage('正在并发合成10天场景图片，完成一张会先显示一张...', false);
+    showMessage('正在并发合成' + pending.length + '天场景图片，完成一张会先显示一张...', false);
     Promise.all(pending.map(function(item) {
       return fetch(base + '/api/local-bestseller/scene/generate', {
         method: 'POST',
         headers: headersJson(),
-        body: JSON.stringify({ days: 10, day: Number(item.day), profile: getProfile(), item: cardPayload(item) })
+        body: JSON.stringify({ days: state.plan.length || planDays(), day: Number(item.day), profile: getProfile(), item: cardPayload(item) })
       })
         .then(function(resp) {
           return resp.json().then(function(data) {
@@ -891,14 +916,14 @@
         if (failCount) {
           showMessage('批量场景图片已结束：成功 ' + (pending.length - failCount) + ' 张，失败 ' + failCount + ' 张。失败卡片可单独重试。', true);
         } else {
-          showMessage('10天场景图片已全部合成完成。', false);
+          showMessage(pending.length + '天场景图片已全部合成完成。', false);
         }
       });
   }
 
   function generateVideo(day) {
     if (!state.plan.length) {
-      showMessage('请先生成10天方案。', true);
+      showMessage('请先生成' + planLabel() + '方案。', true);
       return;
     }
     var base = localBase();
@@ -918,7 +943,7 @@
     fetch(base + '/api/local-bestseller/video/generate', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: 10, day: Number(day), profile: getProfile(), item: cardPayload(item), video_model: 'grok-imagine-video-1.5-preview' })
+      body: JSON.stringify({ days: state.plan.length || planDays(), day: Number(day), profile: getProfile(), item: cardPayload(item), video_model: 'grok-imagine-video-1.5-preview' })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -943,7 +968,7 @@
 
   function batchGenerateVideos() {
     if (!state.plan.length) {
-      showMessage('请先生成10天方案。', true);
+      showMessage('请先生成' + planLabel() + '方案。', true);
       return;
     }
     var ready = state.plan.filter(function(item) { return item.image_url || item.image_asset_id || item.scene_url || item.scene_asset_id; });
@@ -964,7 +989,7 @@
     fetch(base + '/api/local-bestseller/video/batch', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: 10, profile: getProfile(), items: planPayload(), video_model: 'grok-imagine-video-1.5-preview' })
+      body: JSON.stringify({ days: state.plan.length || planDays(), profile: getProfile(), items: planPayload(), video_model: 'grok-imagine-video-1.5-preview' })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -1000,12 +1025,16 @@
     var hasSceneImage = state.plan.some(function(item) { return !!(item.image_url || item.image_asset_id || item.scene_url || item.scene_asset_id); });
     if (planBtn) {
       planBtn.disabled = state.submitting;
-      planBtn.textContent = state.submitting ? '处理中...' : '生成10天方案';
+      planBtn.textContent = state.submitting ? '处理中...' : '生成' + planLabel() + '方案';
     }
     if (renderBtn) {
       renderBtn.disabled = state.submitting || !hasPlan;
-      renderBtn.textContent = state.submitting ? '合成中...' : '批量合成10天场景图';
+      renderBtn.textContent = state.submitting ? '合成中...' : '批量合成' + (state.plan.length || planDays()) + '天场景图';
     }
+    var title = $('localBestsellerResultTitle');
+    if (title) title.textContent = (state.plan.length || planDays()) + '天结果卡';
+    var emptyHint = $('localBestsellerEmptyHint');
+    if (emptyHint) emptyHint.textContent = '先选择照片并填写个人信息，再生成' + planLabel() + '同城爆款方案。';
     if (batchSceneUploadBtn) batchSceneUploadBtn.disabled = state.submitting || !hasPlan;
     if (batchSceneAssetBtn) batchSceneAssetBtn.disabled = state.submitting || !hasPlan;
     if (batchSceneTopBtn) batchSceneTopBtn.disabled = state.submitting || !hasPlan;
@@ -1113,6 +1142,8 @@
       if (gender.value === 'male' && (!current || current === '女老板')) identity.value = '男老板';
       if (gender.value !== 'male' && (!current || current === '男老板')) identity.value = '女老板';
     });
+    var daysSelect = $('localBestsellerDays');
+    if (daysSelect) daysSelect.addEventListener('change', updateButtons);
     document.addEventListener('input', function(event) {
       var edit = event.target.closest('[data-lb-edit-day][data-lb-edit-path]');
       if (!edit) return;

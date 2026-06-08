@@ -42,12 +42,12 @@ class LocalBestsellerProfile(BaseModel):
 
 class LocalBestsellerPlanBody(BaseModel):
     profile: LocalBestsellerProfile = Field(default_factory=LocalBestsellerProfile)
-    days: int = Field(10, ge=1, le=10)
+    days: int = Field(30, ge=1, le=30)
 
 
 class LocalBestsellerCardOverride(BaseModel):
     id: str = ""
-    day: int = Field(..., ge=1, le=10)
+    day: int = Field(..., ge=1, le=30)
     title: str = ""
     stage: str = ""
     douyin: Dict[str, Any] = Field(default_factory=dict)
@@ -70,7 +70,7 @@ class LocalBestsellerCardOverride(BaseModel):
 
 
 class LocalBestsellerSceneBody(LocalBestsellerPlanBody):
-    day: Optional[int] = Field(None, ge=1, le=10)
+    day: Optional[int] = Field(None, ge=1, le=30)
     model: str = Field("gpt-image-2", description="图片合成模型")
     quality: str = Field("high", description="图片质量")
     item: Optional[LocalBestsellerCardOverride] = None
@@ -78,7 +78,7 @@ class LocalBestsellerSceneBody(LocalBestsellerPlanBody):
 
 
 class LocalBestsellerVideoBody(LocalBestsellerPlanBody):
-    day: Optional[int] = Field(None, ge=1, le=10)
+    day: Optional[int] = Field(None, ge=1, le=30)
     video_model: str = Field("grok-imagine-video-1.5-preview", description="Grok/创意分镜图生视频模型")
     item: Optional[LocalBestsellerCardOverride] = None
     items: List[LocalBestsellerCardOverride] = Field(default_factory=list)
@@ -288,8 +288,8 @@ def _sanitize_video_prompt_no_speech(prompt: str) -> str:
             protected[token] = f"{normalized_prefix}{term}"
             out = out.replace(phrase, token)
     replacements = [
-        ("动作自然：走路、停下、看镜头、轻微招手或口播。", "动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动。"),
-        ("动作自然：走路、停下、看镜头、轻微招手或口播", "动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动"),
+        ("动作自然：走路、停下、看镜头、轻微招手或口播。", "动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头。"),
+        ("动作自然：走路、停下、看镜头、轻微招手或口播", "动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头"),
         ("轻微招手或口播", "自然走动、停下、转身、整理东西或侧身工作"),
         ("招手或口播", "自然走动、整理东西或侧身工作"),
         ("自然口播", "自然动作"),
@@ -305,7 +305,7 @@ def _sanitize_video_prompt_no_speech(prompt: str) -> str:
         ("嘴型", "嘴巴自然放松"),
         ("唇形", "嘴巴自然放松"),
         ("唇同步", "嘴巴自然放松"),
-        ("看镜头", "偶尔自然扫过镜头或看向周围"),
+        ("看镜头", "中间三秒自然看向镜头，其他时间自然看向周围"),
     ]
     for old, new in replacements:
         out = out.replace(old, new)
@@ -322,10 +322,19 @@ def _sanitize_video_prompt_no_speech(prompt: str) -> str:
     )
     if "全程静默自然动作视频" not in out:
         out = f"{out}{guard}" if out.endswith(("。", "；", ";", ".")) else f"{out}。{guard}"
-    bgm = (
-        "可加入轻微背景音乐或真实环境氛围感，音量低，不要人声、不要旁白、不要歌词、不要任何人物发声。"
+    mid_look = (
+        "节奏要求：10秒视频中间约第4-6秒，人物要自然抬头看向镜头或自然扫视镜头，保持真实随手拍感；"
+        "其他时间可以继续走路、整理东西、侧身工作或看向周围。"
     )
-    if "轻微背景音乐" not in out:
+    if "第4-6秒" not in out and "中间约第4" not in out:
+        out = f"{out}{mid_look}" if out.endswith(("。", "；", ";", ".")) else f"{out}。{mid_look}"
+    bgm = (
+        "必须加入轻微背景音乐或真实环境氛围感，音量低，只做氛围铺底；不要人声、不要旁白、不要歌词、不要任何人物发声。"
+    )
+    optional_bgm = "可加入轻微背景音乐或真实环境氛围感，音量低，不要人声、不要旁白、不要歌词、不要任何人物发声。"
+    if optional_bgm in out:
+        out = out.replace(optional_bgm, bgm)
+    elif "背景音乐" not in out or "必须加入" not in out:
         out = f"{out}{bgm}" if out.endswith(("。", "；", ";", ".")) else f"{out}。{bgm}"
     return out
 
@@ -353,6 +362,7 @@ def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
     video_prompt = (
         f"基于合成出的场景照片生成10秒竖屏视频。人物身份保持不变，衣服可随场景自然变化；"
         "人物正常走动，步伐和手臂摆动自然，可以停下、转身、低头整理东西、侧身工作或与环境自然互动；"
+        "视频中间约第4-6秒，人物要自然抬头看向镜头或自然扫视镜头，像刚好发现朋友在拍；"
         "镜头像朋友拿手机边走边拍，轻微跟拍、轻微晃动、轻微推近或侧向视角变化，视角不完美但真实，像真的现场拍摄。"
         f"{_real_life_prompt()}"
         "不要出现AI感运镜，不要过度电影光，不要文字水印。"
@@ -634,7 +644,7 @@ def _resolve_reference_urls(
 @router.get("/api/local-bestseller/templates")
 async def local_bestseller_templates(_: _ServerUser = Depends(get_current_user_for_local)):
     rows = _load_templates()
-    return {"ok": True, "items": rows[:10], "total": min(len(rows), 10)}
+    return {"ok": True, "items": rows[:30], "total": min(len(rows), 30)}
 
 
 @router.post("/api/local-bestseller/plan")
@@ -643,7 +653,7 @@ async def local_bestseller_plan(
     _: _ServerUser = Depends(get_current_user_for_local),
 ):
     profile = _clean_profile(body.profile)
-    rows = _load_templates()[: int(body.days or 10)]
+    rows = _load_templates()[: int(body.days or 30)]
     cards = [_build_card(row, profile) for row in rows]
     return {
         "ok": True,
@@ -651,7 +661,7 @@ async def local_bestseller_plan(
         "days": len(cards),
         "profile": profile,
         "items": cards,
-        "render_hint": "当前接口先生成10天批量渲染方案；真实图片/Grok视频生成可按每张卡的 image_prompt/video_prompt 继续接入。",
+        "render_hint": f"当前接口先生成{len(cards)}天批量渲染方案；真实图片/Grok视频生成可按每张卡的 image_prompt/video_prompt 继续接入。",
     }
 
 
