@@ -63,6 +63,8 @@ def _asset_file_token(asset_id: str, expiry_ts: int) -> str:
 
 def _get_tos_config() -> Optional[dict]:
     """从 custom_configs.json 读取 TOS_CONFIG，用于上传到火山 TOS 并得到公网 URL。"""
+    logger.debug("[TOS] online client uses server-side upload; local TOS_CONFIG ignored")
+    return None
     if not _CUSTOM_CONFIGS_FILE.exists():
         logger.info("[TOS] 配置文件不存在: %s", _CUSTOM_CONFIGS_FILE)
         return None
@@ -134,6 +136,76 @@ def _upload_to_tos(data: bytes, object_key: str, content_type: str) -> Optional[
     except Exception as e:
         logger.error("[TOS-步骤2.4] TOS 上传失败 object_key=%s error=%s", object_key, str(e), exc_info=True)
         return None
+
+
+def _normalize_auth_server_base(server_base: str) -> str:
+    upload_base = (server_base or "").strip().rstrip("/")
+    if upload_base.lower().startswith("http://") and not re.search(
+        r"^http://(127\.0\.0\.1|localhost|\[?::1\]?)(:\d+)?$",
+        upload_base,
+        re.IGNORECASE,
+    ):
+        upload_base = "https://" + upload_base[7:]
+    return upload_base
+
+
+async def _upload_bytes_to_auth_server(
+    data: bytes,
+    filename: str,
+    content_type: str,
+    request: Request,
+    *,
+    timeout: float = 120.0,
+) -> tuple[Optional[str], dict[str, Any]]:
+    server_base = (get_settings().auth_server_base or "").strip().rstrip("/")
+    if not server_base:
+        return None, {"error": "AUTH_SERVER_BASE missing"}
+
+    auth_header = (request.headers.get("Authorization") or "").strip() if request else ""
+    if not auth_header.lower().startswith("bearer "):
+        return None, {"error": "Authorization Bearer missing"}
+
+    upload_base = _normalize_auth_server_base(server_base)
+    upload_url = f"{upload_base}/api/assets/upload-temp"
+    headers = {"Authorization": auth_header}
+    installation_id = (
+        request.headers.get("X-Installation-Id")
+        or request.headers.get("x-installation-id")
+        or ""
+    ).strip() if request else ""
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(
+                upload_url,
+                files={"file": (filename or "upload.bin", data, content_type or "application/octet-stream")},
+                headers=headers,
+                follow_redirects=True,
+            )
+        diag: dict[str, Any] = {"status_code": resp.status_code}
+        if resp.status_code >= 400:
+            diag["error"] = f"server returned {resp.status_code}"
+            diag["body_snip"] = (resp.text or "")[:400]
+            return None, diag
+        try:
+            body = resp.json()
+        except Exception as e:
+            diag["error"] = f"invalid JSON: {type(e).__name__}"
+            return None, diag
+        if not isinstance(body, dict):
+            diag["error"] = "response is not object"
+            return None, diag
+        public_url = str(body.get("public_url") or "").strip()
+        diag["storage"] = str(body.get("storage") or "")
+        diag["temp_id"] = str(body.get("temp_id") or "")
+        if not public_url:
+            diag["error"] = "missing public_url"
+            return None, diag
+        return public_url, diag
+    except Exception as e:
+        return None, {"error": f"{type(e).__name__}: {e}"}
 
 
 def _transfer_payload_type(media_type: str) -> str:
@@ -343,6 +415,34 @@ async def _transfer_url_via_sutui_inner(
         return None
 
 
+def _is_auth_server_temp_asset_url(url: str) -> bool:
+    """Return true for the server upload-temp public fallback URL."""
+    u = (url or "").strip()
+    if not u.startswith(("http://", "https://")):
+        return False
+    try:
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(u)
+        hostname = (parsed.hostname or "").lower()
+        if not hostname or not (parsed.path or "").startswith("/api/assets/temp/"):
+            return False
+        query = parse_qs(parsed.query or "")
+        expiry_values = query.get("expiry") or []
+        if not query.get("token") or not expiry_values:
+            return False
+        try:
+            if int(expiry_values[0]) <= int(time.time()):
+                return False
+        except Exception:
+            return False
+        auth_base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhzn.top"
+        auth_host = (urlparse(auth_base).hostname or "").lower()
+        return bool(auth_host and hostname == auth_host)
+    except Exception:
+        return False
+
+
 def _is_internal_asset_http_url(url: str) -> bool:
     """不可直接作为附图/上游拉取的地址：本机、内网、认证域、带签名的 /api/assets/file 等。"""
     u = (url or "").strip()
@@ -356,6 +456,8 @@ def _is_internal_asset_http_url(url: str) -> bool:
         hostname = (parsed.hostname or "").lower()
         if not hostname:
             return True
+        if _is_auth_server_temp_asset_url(u):
+            return False
         if hostname in ("localhost", "127.0.0.1", "0.0.0.0"):
             return True
         if "42.194.209.150" in hostname or "bhzn.top" in hostname:
@@ -680,6 +782,31 @@ def _creative_candidate_groups(meta: Optional[dict]) -> List[str]:
     return [group] if group else []
 
 
+def _creative_candidate_group_usage(meta: Optional[dict], group_name: str) -> dict:
+    if not isinstance(meta, dict):
+        return {}
+    usage = meta.get("creative_candidate_usage")
+    if not isinstance(usage, dict):
+        usage = meta.get("creative_candidate_use_stats")
+    if not isinstance(usage, dict):
+        return {}
+    current = usage.get(group_name)
+    return current if isinstance(current, dict) else {}
+
+
+def _creative_candidate_group_use_count(meta: Optional[dict], group_name: str) -> int:
+    data = _creative_candidate_group_usage(meta, group_name)
+    try:
+        return max(int(data.get("count") or data.get("use_count") or 0), 0)
+    except Exception:
+        return 0
+
+
+def _creative_candidate_group_last_used_at(meta: Optional[dict], group_name: str) -> str:
+    data = _creative_candidate_group_usage(meta, group_name)
+    return str(data.get("last_used_at") or data.get("last_used") or "")
+
+
 def _clean_creative_group_name(value: str) -> str:
     name = re.sub(r"\s+", " ", str(value or "").strip())
     if not name:
@@ -952,6 +1079,88 @@ def _save_url_lock_for(user_id: int, dedupe_key: str) -> asyncio.Lock:
     return _save_url_user_dedupe_locks[k]
 
 
+async def _report_generation_record_to_server(
+    *,
+    body: SaveAssetReq,
+    request: Request,
+    asset_payload: dict,
+    effective_url: str,
+    dedupe_key: str,
+    outcome: str,
+) -> None:
+    """Best-effort report for admin audit; never blocks local save-url success."""
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhzn.top"
+    public_url = str(asset_payload.get("source_url") or "").strip()
+    if not base or not public_url:
+        logger.info(
+            "[生成记录] 跳过上报：server_base/public_url 为空 asset_id=%s base=%s has_public_url=%s",
+            asset_payload.get("asset_id") or "",
+            bool(base),
+            bool(public_url),
+        )
+        return
+    if not (public_url.startswith("http://") or public_url.startswith("https://")):
+        logger.info(
+            "[生成记录] 跳过上报：public_url 不是公网链接 asset_id=%s public_url=%s",
+            asset_payload.get("asset_id") or "",
+            _url_snip_for_log(public_url),
+        )
+        return
+    headers = {"Content-Type": "application/json"}
+    auth = (request.headers.get("Authorization") or request.headers.get("authorization") or "").strip()
+    if auth:
+        headers["Authorization"] = auth if auth.lower().startswith("bearer ") else f"Bearer {auth}"
+    xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
+    if xi:
+        headers["X-Installation-Id"] = xi
+    if "Authorization" not in headers:
+        logger.info(
+            "[生成记录] 跳过上报：save-url 请求未带 Authorization asset_id=%s outcome=%s tags=%s",
+            asset_payload.get("asset_id") or "",
+            outcome,
+            (body.tags or "")[:64],
+        )
+        return
+    payload = {
+        "client_asset_id": str(asset_payload.get("asset_id") or "")[:64],
+        "public_url": public_url,
+        "original_url": (body.url or "").strip(),
+        "dedupe_hint_url": (body.dedupe_hint_url or "").strip(),
+        "media_type": str(asset_payload.get("media_type") or body.media_type or "image"),
+        "filename": str(asset_payload.get("filename") or body.name or "")[:255],
+        "file_size": int(asset_payload.get("file_size") or 0),
+        "prompt": body.prompt or "",
+        "model": body.model or "",
+        "tags": body.tags or "",
+        "generation_task_id": (body.generation_task_id or "").strip(),
+        "dedupe_key": dedupe_key,
+        "source": "save-url",
+        "meta": {
+            "online_outcome": outcome,
+            "effective_url": (effective_url or "").strip(),
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            resp = await client.post(f"{base}/api/generation-records/report", json=payload, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning(
+                "[生成记录] 上报服务器失败 HTTP %s asset_id=%s body=%s",
+                resp.status_code,
+                payload["client_asset_id"],
+                (resp.text or "")[:300],
+            )
+        else:
+            logger.info(
+                "[生成记录] 上报服务器成功 asset_id=%s record_status=%s outcome=%s",
+                payload["client_asset_id"],
+                resp.status_code,
+                outcome,
+            )
+    except Exception as exc:
+        logger.warning("[生成记录] 上报服务器异常 asset_id=%s err=%s", payload["client_asset_id"], exc)
+
+
 def _normalized_url_path(url: str) -> str:
     return (url or "").strip().split("?")[0].split("#")[0].lower()
 
@@ -1016,13 +1225,23 @@ async def _save_asset_from_url_locked(
             )
             logger.info("[素材] save-url 去重 命中已有 asset_id=%s", existing.asset_id)
             _maybe_backfill_prompt_model_on_dedupe(existing, body, db)
-            return {
+            result = {
                 "asset_id": existing.asset_id,
                 "filename": existing.filename,
                 "media_type": existing.media_type,
                 "file_size": existing.file_size or 0,
                 "source_url": existing.source_url or "",
             }
+            db.close()
+            await _report_generation_record_to_server(
+                body=body,
+                request=request,
+                asset_payload=result,
+                effective_url=effective_url_resolved,
+                dedupe_key=dk,
+                outcome="dedupe_meta",
+            )
+            return result
         src_hit = _find_existing_asset_by_normalized_source_url(db, current_user.id, body.url)
         if src_hit:
             logger.info(
@@ -1034,13 +1253,23 @@ async def _save_asset_from_url_locked(
             )
             logger.info("[素材] save-url 去重 命中同 source_url asset_id=%s", src_hit.asset_id)
             _maybe_backfill_prompt_model_on_dedupe(src_hit, body, db)
-            return {
+            result = {
                 "asset_id": src_hit.asset_id,
                 "filename": src_hit.filename,
                 "media_type": src_hit.media_type,
                 "file_size": src_hit.file_size or 0,
                 "source_url": src_hit.source_url or "",
             }
+            db.close()
+            await _report_generation_record_to_server(
+                body=body,
+                request=request,
+                asset_payload=result,
+                effective_url=effective_url_resolved,
+                dedupe_key=dk,
+                outcome="dedupe_source_url",
+            )
+            return result
         cdn_hit = _find_existing_asset_by_cdn_assets_url(db, current_user.id, body.url)
         if cdn_hit:
             logger.info(
@@ -1056,13 +1285,23 @@ async def _save_asset_from_url_locked(
             )
             logger.info("[素材] save-url 去重 命中 CDN /assets/ 路径 asset_id=%s", cdn_hit.asset_id)
             _maybe_backfill_prompt_model_on_dedupe(cdn_hit, body, db)
-            return {
+            result = {
                 "asset_id": cdn_hit.asset_id,
                 "filename": cdn_hit.filename,
                 "media_type": cdn_hit.media_type,
                 "file_size": cdn_hit.file_size or 0,
                 "source_url": cdn_hit.source_url or "",
             }
+            db.close()
+            await _report_generation_record_to_server(
+                body=body,
+                request=request,
+                asset_payload=result,
+                effective_url=effective_url_resolved,
+                dedupe_key=dk,
+                outcome="dedupe_cdn_path",
+            )
+            return result
     finally:
         db.close()
 
@@ -1134,8 +1373,32 @@ async def _save_asset_from_url_locked(
 
     skip_tos_mirror = _skip_tos_mirror_for_downloaded_url(effective_url)
     tos_url: Optional[str] = None
+    server_upload_url: Optional[str] = None
+    server_upload_diag: dict[str, Any] = {}
     if not skip_tos_mirror:
         tos_url = _upload_to_tos(data, f"assets/{fname}", ct)
+        if not tos_url:
+            server_upload_url, server_upload_diag = await _upload_bytes_to_auth_server(
+                data,
+                fname,
+                ct,
+                request,
+                timeout=180.0,
+            )
+            if server_upload_url:
+                effective_url = server_upload_url
+                skip_tos_mirror = True
+            else:
+                logger.error(
+                    "[save-url] server-side TOS upload failed asset_id=%s diag=%s",
+                    aid,
+                    server_upload_diag,
+                )
+                _unlink_safe_asset_file(ASSETS_DIR / fname)
+                raise HTTPException(
+                    status_code=503,
+                    detail="save-url 已下载素材，但服务器转存 TOS 失败，无法入库。请检查登录态、AUTH_SERVER_BASE 和服务器 TOS 配置。",
+                )
 
     if skip_tos_mirror:
         source_url = effective_url
@@ -1202,13 +1465,23 @@ async def _save_asset_from_url_locked(
             skip_tos_mirror,
             bool(tos_url),
         )
-        return {
+        result = {
             "asset_id": aid,
             "filename": fname,
             "media_type": effective_mt,
             "file_size": fsize,
             "source_url": source_url,
         }
+        db_ins.close()
+        await _report_generation_record_to_server(
+            body=body,
+            request=request,
+            asset_payload=result,
+            effective_url=effective_url,
+            dedupe_key=dk,
+            outcome="new_row",
+        )
+        return result
     finally:
         db_ins.close()
 
@@ -1551,6 +1824,7 @@ def list_assets(
                     preview_url = open_url
             elif preview_url is None and open_url:
                 preview_url = open_url
+        creative_group = _creative_candidate_group(r.meta)
         out.append(
             {
                 "asset_id": r.asset_id,
@@ -1563,8 +1837,10 @@ def list_assets(
                 "prompt": r.prompt,
                 "model": r.model,
                 "tags": r.tags,
-                "creative_candidate_group": _creative_candidate_group(r.meta),
+                "creative_candidate_group": creative_group,
                 "creative_candidate_groups": _creative_candidate_groups(r.meta),
+                "creative_candidate_use_count": _creative_candidate_group_use_count(r.meta, creative_group) if creative_group else 0,
+                "creative_candidate_last_used_at": _creative_candidate_group_last_used_at(r.meta, creative_group) if creative_group else "",
                 "created_at": r.created_at.isoformat() if r.created_at else "",
             }
         )
@@ -1577,16 +1853,21 @@ def list_creative_candidate_groups(
     db: Session = Depends(get_db),
 ):
     rows = db.query(Asset).filter(Asset.user_id == current_user.id, Asset.media_type == "image").all()
-    groups: Dict[str, int] = {}
+    groups: Dict[str, dict] = {}
     for row in rows:
         name = _creative_candidate_group(row.meta)
         if name:
-            groups[name] = groups.get(name, 0) + 1
+            current = groups.setdefault(name, {"name": name, "count": 0, "use_count": 0, "last_used_at": ""})
+            current["count"] += 1
+            current["use_count"] += _creative_candidate_group_use_count(row.meta, name)
+            last_used = _creative_candidate_group_last_used_at(row.meta, name)
+            if last_used and (not current["last_used_at"] or last_used > current["last_used_at"]):
+                current["last_used_at"] = last_used
     return {
         "ok": True,
         "groups": [
-            {"name": name, "count": count}
-            for name, count in sorted(groups.items(), key=lambda kv: (-kv[1], kv[0]))
+            item
+            for item in sorted(groups.values(), key=lambda row: (-int(row.get("count") or 0), str(row.get("name") or "")))
         ],
     }
 

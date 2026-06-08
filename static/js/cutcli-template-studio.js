@@ -29,6 +29,82 @@
       .replace(/'/g, '&#39;');
   }
 
+  function isPlainObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function cloneValue(value) {
+    if (!isPlainObject(value) && !Array.isArray(value)) return value;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (err) {
+      return Array.isArray(value) ? value.slice() : Object.assign({}, value);
+    }
+  }
+
+  function mergeDeep(base, patch) {
+    var out = isPlainObject(base) ? cloneValue(base) : {};
+    if (!isPlainObject(patch)) return out;
+    Object.keys(patch).forEach(function(key) {
+      var next = patch[key];
+      if (isPlainObject(next) && isPlainObject(out[key])) {
+        out[key] = mergeDeep(out[key], next);
+      } else {
+        out[key] = cloneValue(next);
+      }
+    });
+    return out;
+  }
+
+  function orientationDefaultsForStyle(style) {
+    style = style || {};
+    var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
+    var layout = String(overlay.layout || style.ass_layout || '').trim();
+    var common = null;
+    if (layout === 'right_vertical_card') {
+      common = { font_size: 10, ass_font_size: 50, ass_margin_v: 96, caption_position: { x: 0, y: -0.74 }, overlay_style: { card_width_ratio: 0.12, card_height_ratio: 0.62, title_x_ratio: 0.84, title_y_ratio: 0.34, title_font_size: 28, subtitle_font_size: 24 } };
+    } else if (layout === 'education_focus_bar') {
+      common = { font_size: 9, ass_font_size: 44, ass_margin_v: 96, caption_position: { x: 0, y: -0.78 }, overlay_style: { top_y_ratio: 0.20, top_screen_y_ratio: 0.20, headline_y_ratio: 0.20, top_font_size: 54, top_sub_font_size: 46, top_min_font_size: 24, top_sub_min_font_size: 22, title_font_size: 24, subtitle_font_size: 18, subtitle_gap: 29, badge_font_size: 32, badge_height_ratio: 0.10, badge_y_ratio: 0.60 } };
+    } else if (layout === 'tea_center_title') {
+      common = { font_size: 9, ass_font_size: 48, ass_margin_v: 92, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.34, subheadline_y_ratio: 0.49, headline_font_size: 58, subheadline_font_size: 38 } };
+    } else if (layout === 'red_yellow_hook') {
+      common = { font_size: 10, ass_font_size: 52, ass_margin_v: 92, caption_position: { x: 0, y: -0.74 }, overlay_style: { headline_y_ratio: 0.18, subheadline_y_ratio: 0.32, headline_font_size: 56, subheadline_font_size: 48 } };
+    } else if (layout === 'top_banner') {
+      common = { font_size: 10, ass_font_size: 54, ass_margin_v: 98, caption_position: { x: 0, y: -0.74 }, overlay_style: { banner_height_ratio: 0.30, headline_y_ratio: 0.54, top_y_ratio: 0.16, top_screen_y_ratio: 0.16, headline_font_size: 54, profile_x_ratio: 0.08, profile_y_ratio: 0.66, profile_title_font_size: 24, profile_subtitle_font_size: 18 } };
+    } else if (layout === 'center_quote') {
+      common = { font_size: 9, ass_font_size: 46, ass_margin_v: 98, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.41, subheadline_y_ratio: 0.55, headline_font_size: 54, subheadline_font_size: 28 } };
+    } else if (layout === 'market_label') {
+      common = { font_size: 10, ass_font_size: 50, ass_margin_v: 96, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.55, badge_y_ratio: 0.40, headline_font_size: 56, badge_font_size: 28 } };
+    } else if (layout === 'black_gold_quote') {
+      common = { font_size: 9, ass_font_size: 48, ass_margin_v: 96, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.42, subheadline_y_ratio: 0.58, headline_font_size: 54, subheadline_font_size: 58 } };
+    } else if (layout === 'tcm_waist_banner') {
+      common = { font_size: 9, ass_font_size: 48, ass_margin_v: 96, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.43, badge_y_ratio: 0.57, headline_font_size: 52, badge_font_size: 28 } };
+    } else if (layout === 'news_brief') {
+      common = { font_size: 9, ass_font_size: 46, ass_margin_v: 96, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.16, title_x_ratio: 0.43, subheadline_x_ratio: 0.58, headline_font_size: 56 } };
+    } else if (layout === 'side_neon') {
+      common = { font_size: 9, ass_font_size: 44, ass_margin_v: 96, caption_position: { x: -0.42, y: 0.24 } };
+    } else if (layout === 'dramatic_hook') {
+      common = { font_size: 11, ass_font_size: 62, ass_margin_v: 96, caption_position: { x: 0, y: -0.28 } };
+    } else if (layout === 'center_burst') {
+      common = { font_size: 11, ass_font_size: 58, ass_margin_v: 96, caption_position: { x: 0, y: -0.58 } };
+    } else if (layout === 'lower_clean') {
+      common = { font_size: 9, ass_font_size: 44, ass_margin_v: 96, caption_position: { x: 0, y: -0.76 } };
+    }
+    return common || {};
+  }
+
+  function withOrientationDefaults(style) {
+    var out = cloneValue(style || {});
+    var styles = out.orientation_styles && typeof out.orientation_styles === 'object' ? out.orientation_styles : {};
+    var current = styles.landscape && typeof styles.landscape === 'object' ? styles.landscape : {};
+    var defaults = orientationDefaultsForStyle(out);
+    if (Object.keys(defaults).length) {
+      styles.landscape = mergeDeep(defaults, current);
+      out.orientation_styles = styles;
+    }
+    return out;
+  }
+
   function apiBase() {
     return (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
   }
@@ -122,12 +198,19 @@
     return true;
   }
 
+  function resetPositionsForCurrentTemplate() {
+    var tpl = modalTemplate();
+    if (!tpl) return;
+    state.positionOverrides = defaultPositionOverrides(tpl);
+  }
+
   function detectPosterOrientation(src) {
     if (!src) return;
     var img = new Image();
     img.onload = function() {
       if (state.uploadedPosterUrl !== src) return;
       if (updateSourceVideoOrientation(img.naturalWidth, img.naturalHeight)) {
+        resetPositionsForCurrentTemplate();
         renderTemplateModal();
       }
     };
@@ -147,7 +230,9 @@
     }
     video.addEventListener('loadeddata', function() {
       try {
-        updateSourceVideoOrientation(video.videoWidth, video.videoHeight);
+        if (updateSourceVideoOrientation(video.videoWidth, video.videoHeight)) {
+          resetPositionsForCurrentTemplate();
+        }
         var canvas = document.createElement('canvas');
         canvas.width = video.videoWidth || 720;
         canvas.height = video.videoHeight || 1280;
@@ -172,6 +257,7 @@
   function setUploadedFile(file) {
     revokeUploadedPreview();
     state.uploadedFile = file || null;
+    resetPositionsForCurrentTemplate();
     if (state.uploadedFile && window.URL && URL.createObjectURL) {
       state.uploadedPreviewUrl = URL.createObjectURL(state.uploadedFile);
       captureVideoPoster(state.uploadedPreviewUrl);
@@ -411,9 +497,24 @@
 
   function templateCaptionStyle(tpl) {
     var strategy = tpl && tpl.generation_strategy && typeof tpl.generation_strategy === 'object' ? tpl.generation_strategy : {};
-    return (strategy.caption_style && typeof strategy.caption_style === 'object')
+    var style = (strategy.caption_style && typeof strategy.caption_style === 'object')
       ? strategy.caption_style
       : ((tpl && tpl.caption_style && typeof tpl.caption_style === 'object') ? tpl.caption_style : {});
+    style = withOrientationDefaults(style);
+    return orientedCaptionStyle(style, currentSourceOrientation());
+  }
+
+  function currentSourceOrientation() {
+    return state.sourceVideoOrientation === 'portrait' ? 'portrait' : 'landscape';
+  }
+
+  function orientedCaptionStyle(style, orientation) {
+    var base = cloneValue(style || {});
+    var styles = base.orientation_styles && typeof base.orientation_styles === 'object' ? base.orientation_styles : {};
+    var patch = styles && styles[orientation] && typeof styles[orientation] === 'object' ? styles[orientation] : null;
+    if (patch) base = mergeDeep(base, patch);
+    base.current_orientation = orientation || '';
+    return base;
   }
 
   function clamp(value, min, max) {
@@ -441,14 +542,15 @@
   function positionTargets(tpl) {
     var fields = overlayFields(tpl);
     var keys = fields.map(function(field) { return String((field && field.key) || '').trim(); });
+    var layout = overlayLayout(tpl);
     var out = [];
     function add(key, label) {
       if (out.some(function(item) { return item.key === key; })) return;
       out.push({ key: key, label: label });
     }
     if (keys.indexOf('top_text') >= 0 || keys.indexOf('headline') >= 0) add('top_text', '\u9876\u90e8\u6587\u6848');
-    if (keys.indexOf('title') >= 0) add('title', '\u4e3b\u6807\u9898');
-    if (keys.indexOf('subtitle') >= 0 || keys.indexOf('subheadline') >= 0) add('subtitle', '\u526f\u6807\u9898');
+    if (keys.indexOf('title') >= 0) add('title', layout === 'right_vertical_card' ? '\u84dd\u6761\u540d\u7247' : '\u4e3b\u6807\u9898');
+    if (layout !== 'right_vertical_card' && (keys.indexOf('subtitle') >= 0 || keys.indexOf('subheadline') >= 0)) add('subtitle', '\u526f\u6807\u9898');
     if (keys.indexOf('badge') >= 0) add('badge', '\u6807\u7b7e');
     add('caption', '\u5b57\u5e55');
     return out;
@@ -457,6 +559,7 @@
   function defaultPositionOverrides(tpl) {
     var style = templateCaptionStyle(tpl);
     var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
+    var layout = overlayLayout(tpl);
     var captionX = Number(style.transform_x != null ? style.transform_x : (style.cutcli_transform_x != null ? style.cutcli_transform_x : 0));
     var captionY = Number(style.transform_y != null ? style.transform_y : (style.cutcli_transform_y != null ? style.cutcli_transform_y : -0.66));
     var out = {
@@ -477,14 +580,17 @@
           y_ratio: clamp(Number(topY != null ? topY : (overlay.headline_y_ratio != null ? overlay.headline_y_ratio : 0.12)), 0.05, 0.95)
         };
       } else if (target.key === 'title') {
+        var titleDefaultX = layout === 'right_vertical_card' ? 0.805 : (overlay.profile_x_ratio != null ? overlay.profile_x_ratio : (overlay.headline_x_ratio != null ? overlay.headline_x_ratio : 0.5));
+        var titleDefaultY = layout === 'right_vertical_card' ? 0.27 : (overlay.profile_y_ratio != null ? overlay.profile_y_ratio : (overlay.headline_y_ratio != null ? overlay.headline_y_ratio : 0.45));
         out.overlay.title = {
-          x_ratio: clamp(Number(overlay.title_x_ratio != null ? overlay.title_x_ratio : (overlay.profile_x_ratio != null ? overlay.profile_x_ratio : (overlay.headline_x_ratio != null ? overlay.headline_x_ratio : 0.5))), 0.05, 0.95),
-          y_ratio: clamp(Number(overlay.title_y_ratio != null ? overlay.title_y_ratio : (overlay.profile_y_ratio != null ? overlay.profile_y_ratio : (overlay.headline_y_ratio != null ? overlay.headline_y_ratio : 0.45))), 0.05, 0.95)
+          x_ratio: clamp(Number(overlay.title_x_ratio != null ? overlay.title_x_ratio : titleDefaultX), 0.05, 0.95),
+          y_ratio: clamp(Number(overlay.title_y_ratio != null ? overlay.title_y_ratio : titleDefaultY), 0.05, 0.95)
         };
       } else if (target.key === 'subtitle') {
+        var subDefaultY = (overlay.headline_y_ratio != null ? Number(overlay.headline_y_ratio) : 0.45) + (layout === 'tea_center_title' ? 0.105 : 0.08);
         out.overlay.subtitle = {
           x_ratio: clamp(Number(overlay.subheadline_x_ratio != null ? overlay.subheadline_x_ratio : (overlay.headline_x_ratio != null ? overlay.headline_x_ratio : 0.5)), 0.05, 0.95),
-          y_ratio: clamp(Number(overlay.subheadline_y_ratio != null ? overlay.subheadline_y_ratio : ((overlay.headline_y_ratio != null ? Number(overlay.headline_y_ratio) : 0.45) + 0.08)), 0.05, 0.95)
+          y_ratio: clamp(Number(overlay.subheadline_y_ratio != null ? overlay.subheadline_y_ratio : subDefaultY), 0.05, 0.95)
         };
       } else if (target.key === 'badge') {
         out.overlay.badge = {
@@ -544,6 +650,310 @@
     return String((el && (el.innerText || el.textContent)) || '').replace(/\u00a0/g, ' ').trim();
   }
 
+  function num(value, fallback) {
+    var n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function assColorToCss(value, fallback, withAlpha) {
+    var text = String(value || '').trim();
+    var match = text.match(/^&H([0-9a-fA-F]{6,8})&?$/);
+    if (!match) {
+      if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(text)) return text;
+      if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/.test(text)) return text;
+      return fallback || '#ffffff';
+    }
+    var hex = match[1].toUpperCase();
+    if (hex.length === 6) hex = '00' + hex;
+    var alpha = parseInt(hex.slice(0, 2), 16);
+    var bb = hex.slice(2, 4);
+    var gg = hex.slice(4, 6);
+    var rr = hex.slice(6, 8);
+    if (withAlpha && alpha > 0) {
+      var opacity = Math.max(0, Math.min(1, 1 - alpha / 255));
+      return 'rgba(' + parseInt(rr, 16) + ',' + parseInt(gg, 16) + ',' + parseInt(bb, 16) + ',' + opacity.toFixed(2) + ')';
+    }
+    return '#' + rr + gg + bb;
+  }
+
+  function pxFromAssFont(size, minPx, maxPx) {
+    var n = Math.max(1, num(size, 64));
+    var cqw = (n / 1080 * 100).toFixed(2);
+    return 'clamp(' + (minPx || 12) + 'px, ' + cqw + 'cqw, ' + (maxPx || 56) + 'px)';
+  }
+
+  function strokeWidthCqw(border) {
+    var n = Math.max(0, num(border, 3));
+    return (Math.max(0.06, Math.min(0.72, n / 1080 * 100))).toFixed(2) + 'cqw';
+  }
+
+  function shadowCss(color, shadow) {
+    var n = Math.max(0, num(shadow, 2));
+    if (!n) return 'none';
+    var y = (n / 1080 * 100).toFixed(2) + 'cqw';
+    var blur = (Math.max(2, n * 2.4) / 1080 * 100).toFixed(2) + 'cqw';
+    return '0 ' + y + ' ' + blur + ' rgba(0,0,0,0.42), 0 ' + y + ' 0 ' + (color || 'rgba(0,0,0,0.9)');
+  }
+
+  function cssText(map) {
+    return Object.keys(map || {}).filter(function(key) {
+      return map[key] !== undefined && map[key] !== null && map[key] !== '';
+    }).map(function(key) {
+      return key + ':' + String(map[key]);
+    }).join(';');
+  }
+
+  function overlayLayout(tpl) {
+    var style = templateCaptionStyle(tpl);
+    var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
+    return String(overlay.layout || 'default').replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
+  }
+
+  function assTextStyle(opts) {
+    opts = opts || {};
+    var color = opts.color || '#ffffff';
+    var outline = opts.outline || '#111827';
+    var border = opts.border == null ? 4 : opts.border;
+    var shadow = opts.shadow == null ? 2 : opts.shadow;
+    return {
+      color: color,
+      'font-size': pxFromAssFont(opts.fontSize || 64, opts.minPx || 12, opts.maxPx || 58),
+      'font-weight': opts.weight || 900,
+      'line-height': opts.lineHeight || 1.12,
+      '-webkit-text-stroke': border > 0 ? (strokeWidthCqw(border) + ' ' + outline) : '0 transparent',
+      'text-shadow': opts.noShadow ? 'none' : shadowCss(outline, shadow),
+      'text-align': opts.align || 'center'
+    };
+  }
+
+  function previewInlineStyle(tpl, targetKey) {
+    var style = templateCaptionStyle(tpl);
+    var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
+    var layout = overlayLayout(tpl);
+    var base = {
+      'box-sizing': 'border-box'
+    };
+    var captionColor = assColorToCss(style.ass_primary || style.cutcli_text_color, '#ffffff');
+    var captionOutline = assColorToCss(style.ass_outline || style.cutcli_border_color, '#111827');
+    if (targetKey === 'caption') {
+      return cssText(Object.assign(base, assTextStyle({
+        color: captionColor,
+        outline: captionOutline,
+        border: num(style.ass_border, 5),
+        shadow: num(style.ass_shadow, 2),
+        fontSize: num(style.ass_font_size, 72),
+        minPx: 12,
+        maxPx: 48
+      }), {
+        cursor: 'grab'
+      }));
+    }
+    var yellow = '#fff700';
+    var black = '#000000';
+    var white = '#ffffff';
+    if (layout === 'education_focus_bar') {
+      if (targetKey === 'top_text') {
+        return cssText(Object.assign(base, assTextStyle({
+          color: yellow,
+          outline: black,
+          border: 4,
+          shadow: 1,
+          fontSize: 74,
+          minPx: 14,
+          maxPx: 44
+        }), { 'max-width': '92%', padding: '0.08em 0.18em' }));
+      }
+      if (targetKey === 'title') {
+        return cssText(Object.assign(base, assTextStyle({
+          color: yellow,
+          outline: '#111111',
+          border: 2,
+          shadow: 1,
+          fontSize: 32,
+          minPx: 10,
+          maxPx: 24,
+          align: 'left'
+        }), { transform: 'translate(0,-50%)', 'max-width': '48%' }));
+      }
+      if (targetKey === 'subtitle') {
+        return cssText(Object.assign(base, assTextStyle({
+          color: white,
+          outline: '#111111',
+          border: 2,
+          shadow: 1,
+          fontSize: 26,
+          minPx: 9,
+          maxPx: 21,
+          align: 'left'
+        }), { transform: 'translate(0,-50%)', 'max-width': '48%' }));
+      }
+      if (targetKey === 'badge') {
+        return cssText(Object.assign(base, {
+          width: '84%',
+          'max-width': '84%',
+          padding: '0.42em 0.65em',
+          background: '#ffffff',
+          color: '#000000',
+          'font-size': pxFromAssFont(42, 13, 32),
+          'font-weight': 900,
+          'line-height': 1.05,
+          'border-radius': 0,
+          '-webkit-text-stroke': '0 transparent',
+          'text-shadow': 'none',
+          'text-align': 'center'
+        }));
+      }
+    }
+    if (layout === 'top_banner') {
+      if (targetKey === 'top_text') {
+        return cssText(Object.assign(base, assTextStyle({
+          color: assColorToCss(overlay.headline_color, '#864a1f'),
+          outline: assColorToCss(overlay.headline_outline, '#ffffff'),
+          border: 4,
+          shadow: 1,
+          fontSize: num(overlay.headline_font_size, 76),
+          minPx: 14,
+          maxPx: 46
+        }), {
+          width: '100%',
+          'max-width': '100%',
+          'min-height': (Math.max(0.16, Math.min(0.34, num(overlay.banner_height_ratio, 0.24))) * 100).toFixed(1) + '%',
+          display: 'flex',
+          'align-items': 'center',
+          'justify-content': 'center',
+          background: assColorToCss(overlay.banner_color, 'rgba(207,231,243,0.55)', true),
+          padding: '0.18em 0.7em',
+          'border-radius': 0
+        }));
+      }
+      if (targetKey === 'title' || targetKey === 'subtitle') {
+        return cssText(Object.assign(base, assTextStyle({
+          color: white,
+          outline: '#2a1606',
+          border: targetKey === 'title' ? 4 : 2,
+          shadow: 2,
+          fontSize: targetKey === 'title' ? num(overlay.profile_title_font_size, 42) : num(overlay.profile_subtitle_font_size, 26),
+          minPx: targetKey === 'title' ? 11 : 8,
+          maxPx: targetKey === 'title' ? 28 : 20,
+          align: 'left'
+        }), { transform: 'translate(0,-50%)', 'max-width': '48%' }));
+      }
+    }
+    if (layout === 'right_vertical_card') {
+      if (targetKey === 'title' || targetKey === 'subtitle') {
+        if (targetKey === 'subtitle') {
+          return cssText(Object.assign(base, {
+            display: 'none'
+          }));
+        }
+        return cssText(Object.assign(base, assTextStyle({
+          color: white,
+          outline: '#000000',
+          border: 0,
+          shadow: 0,
+          fontSize: num(overlay.title_font_size, 40),
+          minPx: 12,
+          maxPx: 30
+        }), {
+          'writing-mode': 'vertical-rl',
+          'text-orientation': 'upright',
+          display: 'grid',
+          'grid-auto-flow': 'column',
+          'grid-template-rows': 'auto',
+          'align-items': 'center',
+          'justify-items': 'center',
+          gap: '0.36em',
+          'letter-spacing': '0.05em',
+          background: assColorToCss(overlay.card_color, '#4b73e8'),
+          padding: '0.56em 0.34em',
+          'border-radius': 0,
+          'min-height': '34%',
+          'max-height': '38%',
+          'max-width': '20%',
+          cursor: 'grab',
+          overflow: 'hidden'
+        }));
+      }
+    }
+    if (layout === 'tea_center_title') {
+      if (targetKey === 'title') return cssText(Object.assign(base, assTextStyle({ color: white, outline: '#111111', border: 5, shadow: 2, fontSize: num(overlay.headline_font_size, 92), minPx: 16, maxPx: 54 }), { 'max-width': '84%', 'white-space': 'pre' }));
+      if (targetKey === 'subtitle') return cssText(Object.assign(base, assTextStyle({ color: yellow, outline: '#111111', border: 4, shadow: 2, fontSize: num(overlay.subheadline_font_size, 56), minPx: 13, maxPx: 40 }), { 'max-width': '86%', 'white-space': 'pre' }));
+    }
+    if (layout === 'red_yellow_hook') {
+      if (targetKey === 'title') return cssText(Object.assign(base, assTextStyle({ color: '#d82026', outline: white, border: 4, shadow: 2, fontSize: num(overlay.headline_font_size, 78), minPx: 15, maxPx: 48 }), { transform: 'translate(-50%,-50%) rotate(-2deg)' }));
+      if (targetKey === 'subtitle') return cssText(Object.assign(base, assTextStyle({ color: yellow, outline: black, border: 4, shadow: 2, fontSize: num(overlay.subheadline_font_size, 70), minPx: 14, maxPx: 44 }), { transform: 'translate(-50%,-50%) rotate(-2deg)' }));
+    }
+    if (layout === 'black_gold_quote') {
+      if (targetKey === 'title') return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 5, shadow: 2, fontSize: num(overlay.headline_font_size, 78), minPx: 15, maxPx: 48 })));
+      if (targetKey === 'subtitle') return cssText(Object.assign(base, assTextStyle({ color: yellow, outline: black, border: 5, shadow: 3, fontSize: num(overlay.subheadline_font_size, 86), minPx: 16, maxPx: 52 })));
+    }
+    if (layout === 'tcm_waist_banner') {
+      if (targetKey === 'title') return cssText(Object.assign(base, assTextStyle({ color: '#ffb800', outline: black, border: 5, shadow: 3, fontSize: num(overlay.headline_font_size, 76), minPx: 15, maxPx: 48 })));
+      if (targetKey === 'badge') {
+        return cssText(Object.assign(base, {
+          color: white,
+          background: assColorToCss(overlay.waist_color, '#384a6b'),
+          padding: '0.18em 1.1em',
+          'font-size': pxFromAssFont(num(overlay.badge_font_size, 38), 11, 26),
+          'font-weight': 900,
+          'line-height': 1.08,
+          '-webkit-text-stroke': strokeWidthCqw(2) + ' ' + black,
+          'text-shadow': shadowCss(black, 1),
+          'border-radius': '0.28em',
+          'max-width': '54%'
+        }));
+      }
+    }
+    if (layout === 'news_brief') {
+      if (targetKey === 'title') return cssText(Object.assign(base, assTextStyle({ color: yellow, outline: black, border: 5, shadow: 2, fontSize: num(overlay.headline_font_size, 82), minPx: 15, maxPx: 50 })));
+      if (targetKey === 'subtitle') return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 5, shadow: 2, fontSize: num(overlay.headline_font_size, 82), minPx: 15, maxPx: 50 })));
+    }
+    if (layout === 'center_quote') {
+      if (targetKey === 'title') return cssText(Object.assign(base, assTextStyle({ color: assColorToCss(overlay.headline_color, white), outline: assColorToCss(overlay.headline_outline, '#222931'), border: 5, shadow: 2, fontSize: num(overlay.headline_font_size, 76), minPx: 15, maxPx: 50 }), { 'white-space': 'pre', 'overflow-wrap': 'normal', 'word-break': 'keep-all', 'max-width': '86%' }));
+      if (targetKey === 'subtitle') return cssText(Object.assign(base, assTextStyle({ color: white, outline: '#1e293b', border: 2, shadow: 2, fontSize: num(overlay.subheadline_font_size, 36), minPx: 11, maxPx: 28 }), { 'white-space': 'pre', 'overflow-wrap': 'normal', 'word-break': 'keep-all', 'max-width': '86%' }));
+    }
+    if (layout === 'market_label') {
+      if (targetKey === 'title') return cssText(Object.assign(base, assTextStyle({ color: assColorToCss(overlay.headline_color, white), outline: assColorToCss(overlay.headline_outline, '#111111'), border: 5, shadow: 3, fontSize: num(overlay.headline_font_size, 76), minPx: 15, maxPx: 50 })));
+      if (targetKey === 'badge') {
+        return cssText(Object.assign(base, {
+          color: white,
+          background: assColorToCss(overlay.badge_color, '#e67b1b'),
+          padding: '0.18em 1.1em',
+          'font-size': pxFromAssFont(num(overlay.badge_font_size, 34), 10, 24),
+          'font-weight': 900,
+          '-webkit-text-stroke': '0 transparent',
+          'text-shadow': 'none',
+          'border-radius': 0,
+          'max-width': '46%'
+        }));
+      }
+    }
+    if (targetKey === 'title' || targetKey === 'top_text') {
+      return cssText(Object.assign(base, assTextStyle({ color: white, outline: '#111827', border: 4, shadow: 2, fontSize: 64, minPx: 14, maxPx: 44 })));
+    }
+    if (targetKey === 'subtitle' || targetKey === 'badge') {
+      return cssText(Object.assign(base, assTextStyle({ color: yellow, outline: '#111827', border: 3, shadow: 1, fontSize: 42, minPx: 12, maxPx: 32 })));
+    }
+    return cssText(base);
+  }
+
+  function previewTextHtml(tpl, targetKey) {
+    var value = overlayTextForTarget(tpl, targetKey);
+    if (overlayLayout(tpl) === 'right_vertical_card' && targetKey === 'title') {
+      var subtitle = overlayTextForTarget(tpl, 'subtitle');
+      return '<span class="cutcli-template-preview-text-value is-card-title" contenteditable="plaintext-only" spellcheck="false" data-cutcli-preview-card-field="title">' + multilineHtml(value) + '</span>' +
+        '<span class="cutcli-template-preview-text-value is-card-subtitle" contenteditable="plaintext-only" spellcheck="false" data-cutcli-preview-card-field="subtitle">' + multilineHtml(subtitle) + '</span>';
+    }
+    if (overlayLayout(tpl) === 'education_focus_bar' && targetKey === 'top_text') {
+      var lines = String(value || '').split(/\r\n|\r|\n/);
+      return lines.map(function(line, idx) {
+        var lineStyle = idx === 0 ? '' : ' style="color:#ffffff"';
+        return '<span class="cutcli-template-preview-line"' + lineStyle + '>' + esc(line) + '</span>';
+      }).join('');
+    }
+    return '<span class="cutcli-template-preview-text-value">' + multilineHtml(value) + '</span>';
+  }
+
   function previewTextClass(tpl, targetKey) {
     var style = templateCaptionStyle(tpl);
     var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
@@ -577,12 +987,14 @@
   function renderPositionLayer(tpl) {
     var layer = $('cutcliTplPositionLayer');
     if (!layer) return;
+    var layout = overlayLayout(tpl);
     layer.innerHTML = positionTargets(tpl).map(function(target) {
       var pos = targetPosition(target.key);
-      var editable = target.key === 'caption' ? 'false' : 'plaintext-only';
-      return '<div class="' + previewTextClass(tpl, target.key) + '" contenteditable="' + editable + '" spellcheck="false" data-cutcli-preview-text-target="' + esc(target.key) + '" style="left:' + (pos.x_ratio * 100).toFixed(2) + '%;top:' + (pos.y_ratio * 100).toFixed(2) + '%;">' +
+      var editable = (target.key === 'caption' || (layout === 'right_vertical_card' && target.key === 'title')) ? 'false' : 'plaintext-only';
+      var inline = 'left:' + (pos.x_ratio * 100).toFixed(2) + '%;top:' + (pos.y_ratio * 100).toFixed(2) + '%;' + previewInlineStyle(tpl, target.key);
+      return '<div class="' + previewTextClass(tpl, target.key) + '" contenteditable="' + editable + '" spellcheck="false" data-cutcli-preview-text-target="' + esc(target.key) + '" style="' + inline + '">' +
         '<span class="cutcli-template-preview-drag-dot" contenteditable="false" aria-hidden="true"></span>' +
-        multilineHtml(overlayTextForTarget(tpl, target.key)) +
+        previewTextHtml(tpl, target.key) +
       '</div>';
     }).join('');
     bindPreviewTextEditing(tpl, layer);
@@ -592,7 +1004,27 @@
   function bindPreviewTextEditing(tpl, layer) {
     layer.querySelectorAll('[data-cutcli-preview-text-target]').forEach(function(node) {
       var targetKey = node.dataset.cutcliPreviewTextTarget || '';
+      node.querySelectorAll('[data-cutcli-preview-card-field]').forEach(function(cardNode) {
+        cardNode.addEventListener('input', function() {
+          var key = cardNode.dataset.cutcliPreviewCardField || '';
+          var input = document.getElementById('cutcliTplOverlay_' + key);
+          var value = editablePlainText(cardNode);
+          if (input && input.value !== value) {
+            input.value = value;
+            updateOverlayCounter(input);
+            value = input.value || '';
+          }
+          state.overlayTexts = state.overlayTexts || {};
+          state.overlayTexts[key] = value;
+        });
+        cardNode.addEventListener('paste', function(evt) {
+          evt.preventDefault();
+          var text = (evt.clipboardData || window.clipboardData).getData('text/plain');
+          document.execCommand && document.execCommand('insertText', false, text);
+        });
+      });
       if (targetKey === 'caption') return;
+      if (overlayLayout(tpl) === 'right_vertical_card' && targetKey === 'title') return;
       node.addEventListener('input', function() {
         updateOverlayInputFromPreview(tpl, targetKey, editablePlainText(node));
       });
@@ -1495,6 +1927,7 @@
           if (key) fd.append(key, overlays[key] || '');
         });
         fd.append('position_overrides', JSON.stringify(state.positionOverrides || {}));
+        fd.append('source_orientation', currentSourceOrientation());
         setModalMsg('\u4efb\u52a1\u5df2\u8fdb\u5165\u672c\u673a\u6d41\u7a0b\uff1a\u63d0\u53d6\u97f3\u9891\u2192STT\u2192\u6e32\u67d3\u3002', false);
         return submitLocalRenderForm(tpl, fd);
       })

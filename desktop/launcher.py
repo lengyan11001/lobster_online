@@ -660,6 +660,16 @@ def update_startup_status_from_code_line(line: str) -> None:
         set_startup_status("update_stop", "正在停止旧服务", detail=text, percent=52)
     elif "stop_services_done" in lower:
         set_startup_status("update_stop_done", "旧服务已停止", detail=text, percent=56)
+    elif "extract_start" in lower:
+        set_startup_status("update_extract", "正在解压更新包", detail=text, percent=60)
+    elif "extract_done" in lower:
+        set_startup_status("update_apply", "正在准备覆盖文件", detail=text, percent=62)
+    elif "apply_path" in lower:
+        set_startup_status("update_apply", "正在覆盖更新文件", detail=text, percent=66)
+    elif "ppt_runtime_install_start" in lower:
+        set_startup_status("update_ppt_runtime", "正在安装PPT运行依赖", detail=text, percent=72)
+    elif "ppt_runtime_install_done" in lower:
+        set_startup_status("update_ppt_runtime_done", "PPT运行依赖已就绪", detail=text, percent=76)
     elif "apply_start" in lower or "覆盖" in text or "解压" in text:
         set_startup_status("update_apply", "正在安装更新", detail=text, percent=62)
     elif "apply_done" in lower or "已覆盖更新" in text:

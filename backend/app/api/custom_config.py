@@ -12,6 +12,13 @@ router = APIRouter()
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 _CUSTOM_CONFIGS_FILE = _BASE_DIR / "custom_configs.json"
+_SERVER_MANAGED_CONFIGS = {"TOS_CONFIG"}
+
+
+def _redact_config_for_response(name: str, config):
+    if name in _SERVER_MANAGED_CONFIGS:
+        return {"managed_by_server": True, "present": bool(config)}
+    return config
 
 
 def _load_configs() -> dict:
@@ -42,7 +49,7 @@ def list_configs(current_user: _ServerUser = Depends(get_current_user_for_local)
     configs = data.get("configs", {})
     return {
         "configs": [
-            {"name": k, "config": v}
+            {"name": k, "config": _redact_config_for_response(k, v)}
             for k, v in configs.items()
         ]
     }
@@ -53,6 +60,11 @@ def save_config(body: ConfigBlockIn, current_user: _ServerUser = Depends(get_cur
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Config name is required")
+    if name in _SERVER_MANAGED_CONFIGS:
+        raise HTTPException(
+            status_code=400,
+            detail="在线版不在本机保存 TOS_CONFIG，请在服务器配置 TOS，由服务器转存上传。",
+        )
 
     raw = body.config_json.strip()
     parsed = _try_parse_config(raw)

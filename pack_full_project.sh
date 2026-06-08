@@ -40,9 +40,11 @@ cd "$PARENT"
 if command -v zip >/dev/null 2>&1; then
   zip -r "$OUT_NAME" "$PROJ" \
     -x "${PROJ}/.git/*" \
-    -x "${PROJ}/*.pyc" "${PROJ}/*__pycache__*" "${PROJ}/*.db" \
-    -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" \
-    -x "${PROJ}/_pack_exe_test/*" "${PROJ}/_lobster_runtime/*" "${PROJ}/dist/*" "${PROJ}/build/*" "${PROJ}/tmp_responsive_check/*" "${PROJ}/.updates/*" "${PROJ}/chat_storage/*" \
+    -x "${PROJ}/*.pyc" "${PROJ}/*.pyo" "${PROJ}/*__pycache__*" "${PROJ}/*.db" "${PROJ}/*.sqlite" "${PROJ}/*.sqlite3" "${PROJ}/*.tmp" "${PROJ}/*.temp" "${PROJ}/*.bak" \
+    -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/workspace-*/*" "${PROJ}/openclaw/.env" "${PROJ}/openclaw/.openclaw/*" "${PROJ}/openclaw/agents/*" "${PROJ}/openclaw/browser/*" "${PROJ}/openclaw/logs/*" "${PROJ}/openclaw/memory/*" "${PROJ}/openclaw/tasks/*" "${PROJ}/openclaw/user_memory/*" \
+    -x "${PROJ}/openclaw/.channel_fallback.json" "${PROJ}/openclaw/.lobster_plugin_state_backup.json" "${PROJ}/openclaw/.weixin_login_last.json" "${PROJ}/openclaw/update-check.json" "${PROJ}/openclaw/openclaw.json.bak*" \
+    -x "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" "${PROJ}/static/uploads/*" \
+    -x "${PROJ}/_pack_exe_test/*" "${PROJ}/_lobster_runtime/*" "${PROJ}/dist/*" "${PROJ}/build/*" "${PROJ}/tmp_responsive_check/*" "${PROJ}/.updates/*" "${PROJ}/release_updates/*" "${PROJ}/chat_storage/*" \
     -x "${PROJ}/desktop/webview2/fixed-runtime/*" \
     -x "${PROJ}/sutui_config.json" \
     -x "${PROJ}/pack_bundle.env" \

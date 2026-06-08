@@ -1,0 +1,730 @@
+<div id="content-ip-content-studio" class="content-block">
+  <div class="ip-content-page">
+    <style>
+      .ip-content-page {
+        --ip-accent: #0f766e;
+        --ip-accent-2: #2563eb;
+        --ip-ink: #0f172a;
+        --ip-muted: #64748b;
+        --ip-border: rgba(15, 23, 42, 0.12);
+        --ip-panel: #ffffff;
+        color: var(--ip-ink);
+        min-height: calc(100vh - 72px);
+        padding: 1rem;
+        background: #f6f8fb;
+      }
+      .ip-content-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.9rem;
+        margin-bottom: 0.8rem;
+      }
+      .ip-content-kicker {
+        color: var(--ip-accent);
+        font-size: 0.76rem;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+      .ip-content-title {
+        margin: 0.12rem 0 0;
+        font-size: 1.35rem;
+        line-height: 1.25;
+      }
+      .ip-content-subtitle {
+        margin-top: 0.28rem;
+        color: var(--ip-muted);
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+      .ip-content-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+        max-width: 760px;
+      }
+      .ip-content-actions .btn {
+        min-height: 34px;
+      }
+      .ip-content-tabs {
+        display: flex;
+        gap: 0.35rem;
+        padding: 0.3rem;
+        border: 1px solid var(--ip-border);
+        background: rgba(255, 255, 255, 0.82);
+        border-radius: 8px;
+        overflow-x: auto;
+        margin-bottom: 0.8rem;
+      }
+      .ip-content-tab {
+        border: 0;
+        background: transparent;
+        color: #334155;
+        padding: 0.52rem 0.76rem;
+        border-radius: 6px;
+        font-weight: 800;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .ip-content-tab.is-active {
+        background: var(--ip-accent);
+        color: #fff;
+      }
+      .ip-content-tab-panel {
+        display: none;
+      }
+      .ip-content-tab-panel.is-active {
+        display: block;
+      }
+      .ip-content-layout {
+        display: grid;
+        grid-template-columns: minmax(300px, 0.86fr) minmax(380px, 1.14fr);
+        gap: 0.85rem;
+        align-items: start;
+      }
+      .ip-content-layout.is-even {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .ip-content-layout.is-records {
+        grid-template-columns: minmax(270px, 0.72fr) minmax(460px, 1.28fr);
+      }
+      .ip-content-panel {
+        background: var(--ip-panel);
+        border: 1px solid var(--ip-border);
+        border-radius: 8px;
+        padding: 0.9rem;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+      }
+      .ip-content-panel-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.55rem;
+        font-size: 0.98rem;
+        font-weight: 900;
+        margin-bottom: 0.65rem;
+      }
+      .ip-source-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        min-width: 0;
+      }
+      .ip-source-toolbar select {
+        min-width: 150px;
+        max-width: 220px;
+        height: 32px;
+        border: 1px solid rgba(15, 23, 42, 0.16);
+        border-radius: 7px;
+        background: #fff;
+        color: var(--ip-ink);
+        padding: 0.28rem 0.5rem;
+        font-size: 0.82rem;
+        outline: none;
+      }
+      .ip-content-field {
+        display: grid;
+        gap: 0.35rem;
+        margin-bottom: 0.72rem;
+      }
+      .ip-content-field label {
+        color: #334155;
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+      .ip-content-field input,
+      .ip-content-field select,
+      .ip-content-field textarea {
+        width: 100%;
+        border: 1px solid rgba(15, 23, 42, 0.16);
+        border-radius: 7px;
+        padding: 0.58rem 0.68rem;
+        background: #fff;
+        color: var(--ip-ink);
+        font-size: 0.9rem;
+        outline: none;
+      }
+      .ip-content-field textarea {
+        min-height: 96px;
+        resize: vertical;
+        line-height: 1.55;
+      }
+      .ip-content-field-hint {
+        color: var(--ip-muted);
+        font-size: 0.78rem;
+        line-height: 1.45;
+      }
+      .ip-content-inline {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+      }
+      .ip-content-msg {
+        display: none;
+        margin-bottom: 0.8rem;
+        padding: 0.65rem 0.75rem;
+        border-radius: 7px;
+        border: 1px solid rgba(20, 184, 166, 0.28);
+        background: rgba(20, 184, 166, 0.08);
+        color: #0f766e;
+        white-space: pre-line;
+      }
+      .ip-content-msg.err {
+        border-color: rgba(225, 29, 72, 0.28);
+        background: rgba(225, 29, 72, 0.08);
+        color: #be123c;
+      }
+      .ip-content-list {
+        display: grid;
+        gap: 0.55rem;
+        max-height: 610px;
+        overflow: auto;
+        padding-right: 0.2rem;
+      }
+      .ip-content-list.is-compact {
+        max-height: 360px;
+      }
+      .ip-content-list.is-groups {
+        max-height: 640px;
+      }
+      .ip-content-item {
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.72rem;
+      }
+      .ip-content-item.is-active {
+        border-color: rgba(15, 118, 110, 0.6);
+        box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.1);
+      }
+      .ip-content-item strong {
+        display: block;
+        font-size: 0.92rem;
+        line-height: 1.45;
+        word-break: break-word;
+      }
+      .ip-content-item small,
+      .ip-content-meta {
+        display: block;
+        margin-top: 0.25rem;
+        color: var(--ip-muted);
+        line-height: 1.45;
+        word-break: break-word;
+      }
+      .ip-content-item-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        flex-wrap: wrap;
+        margin-top: 0.55rem;
+      }
+      .ip-content-empty {
+        padding: 1rem;
+        border: 1px dashed rgba(15, 23, 42, 0.18);
+        border-radius: 8px;
+        color: var(--ip-muted);
+        background: rgba(255, 255, 255, 0.68);
+      }
+      .ip-user-results {
+        display: grid;
+        gap: 0.55rem;
+        max-height: 330px;
+        overflow: auto;
+        margin-top: 0.65rem;
+      }
+      .ip-user-card {
+        display: grid;
+        grid-template-columns: 46px minmax(0, 1fr) auto;
+        gap: 0.65rem;
+        align-items: center;
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.65rem;
+      }
+      .ip-user-card img,
+      .ip-user-avatar {
+        width: 46px;
+        height: 46px;
+        border-radius: 50%;
+        object-fit: cover;
+        background: #e2e8f0;
+      }
+      .ip-user-avatar {
+        display: grid;
+        place-items: center;
+        color: #64748b;
+        font-weight: 700;
+      }
+      .ip-user-card strong {
+        display: block;
+        font-size: 0.92rem;
+        line-height: 1.4;
+        word-break: break-word;
+      }
+      .ip-user-card small {
+        display: block;
+        margin-top: 0.18rem;
+        color: var(--ip-muted);
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .ip-memory-list {
+        display: grid;
+        gap: 0.45rem;
+        max-height: 420px;
+        overflow: auto;
+      }
+      .ip-memory-list.is-inline {
+        max-height: 170px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .ip-memory-option {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.55rem;
+        align-items: flex-start;
+        padding: 0.58rem;
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 7px;
+        background: #fff;
+      }
+      .ip-memory-option span {
+        min-width: 0;
+      }
+      .ip-memory-option strong,
+      .ip-memory-option small {
+        display: block;
+        word-break: break-word;
+      }
+      .ip-memory-option small {
+        color: var(--ip-muted);
+        margin-top: 0.2rem;
+      }
+      .ip-memory-select {
+        position: relative;
+      }
+      .ip-memory-select-btn {
+        width: 100%;
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        border: 1px solid rgba(15, 23, 42, 0.16);
+        border-radius: 7px;
+        padding: 0.58rem 0.68rem;
+        background: #fff;
+        color: var(--ip-ink);
+        font-size: 0.9rem;
+        text-align: left;
+        cursor: pointer;
+      }
+      .ip-memory-select-btn span:first-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ip-memory-caret {
+        color: var(--ip-muted);
+        flex: 0 0 auto;
+      }
+      .ip-memory-select-menu {
+        position: absolute;
+        z-index: 30;
+        top: calc(100% + 0.35rem);
+        left: 0;
+        right: 0;
+        max-height: 260px;
+        overflow: auto;
+        border: 1px solid rgba(15, 23, 42, 0.16);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 18px 38px rgba(15, 23, 42, 0.16);
+        padding: 0.35rem;
+      }
+      .ip-memory-select-menu[hidden] {
+        display: none;
+      }
+      .ip-memory-select-menu .ip-memory-option {
+        border: 0;
+        border-radius: 6px;
+        padding: 0.52rem;
+      }
+      .ip-memory-select-menu .ip-memory-option:hover {
+        background: #f8fafc;
+      }
+      .ip-template-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto auto;
+        gap: 0.4rem;
+        align-items: center;
+      }
+      .ip-generate-compact {
+        display: grid;
+        grid-template-columns: minmax(260px, 0.8fr) minmax(360px, 1.2fr);
+        gap: 0.8rem;
+        align-items: end;
+      }
+      .ip-generate-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+        padding-bottom: 0;
+      }
+      .ip-generate-actions .btn {
+        min-height: 40px;
+      }
+      .ip-requirement-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.72rem;
+        align-items: start;
+      }
+      .ip-draft-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+      }
+      .ip-draft-grid.is-detail {
+        grid-template-columns: 1fr;
+      }
+      .ip-draft-card {
+        border: 1px solid rgba(15, 23, 42, 0.11);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.75rem;
+        display: grid;
+        gap: 0.5rem;
+      }
+      .ip-draft-card textarea {
+        width: 100%;
+        min-height: 42px;
+        max-height: 260px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        border-radius: 7px;
+        padding: 0.6rem;
+        resize: vertical;
+        line-height: 1.55;
+        overflow: auto;
+      }
+      .ip-badge-row {
+        display: flex;
+        align-items: center;
+        gap: 0.32rem;
+        flex-wrap: wrap;
+      }
+      .ip-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        padding: 0.12rem 0.45rem;
+        border-radius: 999px;
+        background: #eef2ff;
+        color: #3730a3;
+        font-size: 0.75rem;
+        font-weight: 800;
+      }
+      .ip-badge.is-used {
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .ip-badge.is-new {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .ip-badge.is-image {
+        background: #e0f2fe;
+        color: #075985;
+      }
+      .ip-image-preview {
+        display: grid;
+        gap: 0.4rem;
+      }
+      .ip-image-preview img {
+        width: 100%;
+        max-height: 260px;
+        object-fit: contain;
+        border-radius: 7px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        background: #f8fafc;
+      }
+      .ip-image-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.55rem;
+      }
+      .ip-image-tile {
+        display: grid;
+        gap: 0.35rem;
+      }
+      .ip-image-tile img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 7px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        background: #f8fafc;
+      }
+      .ip-filter-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.65rem;
+      }
+      .ip-filter-row .btn.is-active {
+        background: var(--ip-accent);
+        color: #fff;
+        border-color: var(--ip-accent);
+      }
+      .ip-config-subtabs {
+        display: flex;
+        gap: 0.35rem;
+        margin-bottom: 0.72rem;
+        flex-wrap: wrap;
+      }
+      .ip-config-subtab {
+        border: 1px solid var(--ip-border);
+        background: #fff;
+        color: #334155;
+        padding: 0.45rem 0.72rem;
+        border-radius: 6px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .ip-config-subtab.is-active {
+        background: var(--ip-accent);
+        border-color: var(--ip-accent);
+        color: #fff;
+      }
+      .ip-config-panel {
+        display: none;
+      }
+      .ip-config-panel.is-active {
+        display: block;
+      }
+      @media (max-width: 980px) {
+        .ip-content-layout,
+        .ip-content-layout.is-even,
+        .ip-content-layout.is-records,
+        .ip-generate-compact,
+        .ip-requirement-grid,
+        .ip-draft-grid,
+        .ip-image-grid {
+          grid-template-columns: 1fr;
+        }
+        .ip-content-head {
+          flex-direction: column;
+        }
+        .ip-content-actions {
+          justify-content: flex-start;
+        }
+      }
+      @media (max-width: 560px) {
+        .ip-content-page {
+          padding: 0.72rem;
+        }
+        .ip-content-inline {
+          grid-template-columns: 1fr;
+        }
+        .ip-template-row {
+          grid-template-columns: 1fr;
+        }
+        .ip-memory-list.is-inline {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+
+    <header class="ip-content-head">
+      <div>
+        <div class="ip-content-kicker">IP日更文案</div>
+        <h3 class="ip-content-title">热点、同行与朋友圈内容工作台</h3>
+        <div class="ip-content-subtitle">关键词榜单、同行作品、记忆文件、文案生成记录</div>
+      </div>
+      <div class="ip-content-actions">
+        <button type="button" id="ipContentRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+        <button type="button" id="ipContentBackBtn" class="btn btn-ghost btn-sm">返回</button>
+      </div>
+    </header>
+
+    <div id="ipContentMsg" class="ip-content-msg"></div>
+
+    <nav class="ip-content-tabs" aria-label="IP日更文案工作台">
+      <button type="button" class="ip-content-tab is-active" data-ip-tab="records">文案生成记录</button>
+      <button type="button" class="ip-content-tab" data-ip-tab="moment-images">朋友圈图片生成记录</button>
+      <button type="button" class="ip-content-tab" data-ip-tab="config">配置</button>
+      <button type="button" class="ip-content-tab" data-ip-tab="synced">已同步数据</button>
+    </nav>
+
+    <section class="ip-content-tab-panel is-active" data-ip-panel="records">
+      <section class="ip-content-panel" style="margin-bottom:0.85rem;">
+        <div class="ip-content-panel-title">生成设置</div>
+        <div class="ip-generate-compact">
+          <div class="ip-content-field" style="margin-bottom:0;">
+            <label>记忆文件</label>
+            <div id="ipMemoryList" class="ip-memory-select"></div>
+          </div>
+          <div class="ip-generate-actions">
+            <button type="button" id="ipGenerateIndustryBtn" class="btn btn-primary btn-sm">行业热门口播</button>
+            <button type="button" id="ipGenerateIpBtn" class="btn btn-primary btn-sm">专业 IP 口播</button>
+            <button type="button" id="ipGenerateMomentsBtn" class="btn btn-primary btn-sm">生成朋友圈文案</button>
+            <button type="button" id="ipOpenRequirementConfigBtn" class="btn btn-ghost btn-sm">配置要求</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="ip-content-layout is-records">
+        <section class="ip-content-panel">
+          <div class="ip-content-panel-title">文案生成记录</div>
+          <div class="ip-filter-row">
+            <button type="button" class="btn btn-ghost btn-sm is-active" data-ip-record-filter="">全部</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="industry_hot_oral">行业口播</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="professional_ip_oral">IP口播</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="moments_candidate">朋友圈</button>
+          </div>
+          <div id="ipDraftGroupList" class="ip-content-list is-groups"></div>
+        </section>
+        <section class="ip-content-panel">
+          <div class="ip-content-panel-title">
+            <span id="ipRecordDetailTitle">生成明细</span>
+            <button type="button" id="ipGenerateSelectedImagesBtn" class="btn btn-primary btn-sm" style="display:none;">生成选中图片</button>
+          </div>
+          <div id="ipLatestDraftList" class="ip-draft-grid is-detail"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="ip-content-tab-panel" data-ip-panel="moment-images">
+      <div class="ip-content-layout is-records">
+        <section class="ip-content-panel">
+          <div class="ip-content-panel-title">朋友圈图片生成记录</div>
+          <div id="ipMomentImageRecordList" class="ip-content-list is-groups"></div>
+        </section>
+        <section class="ip-content-panel">
+          <div class="ip-content-panel-title">图片明细</div>
+          <div id="ipMomentImageDetail" class="ip-content-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="ip-content-tab-panel" data-ip-panel="config">
+      <section class="ip-content-panel">
+        <div class="ip-config-subtabs">
+          <button type="button" class="ip-config-subtab is-active" data-config-tab="requirements">生成要求</button>
+          <button type="button" class="ip-config-subtab" data-config-tab="keywords">关键词</button>
+          <button type="button" class="ip-config-subtab" data-config-tab="competitors">同行账号</button>
+        </div>
+
+        <div class="ip-config-panel is-active" data-config-panel="requirements">
+          <div class="ip-content-panel-title">生成要求</div>
+          <div class="ip-content-field">
+            <label for="ipTemplateSelect">要求模板</label>
+            <div class="ip-template-row">
+              <select id="ipTemplateSelect"></select>
+              <button type="button" id="ipApplyTemplateBtn" class="btn btn-ghost btn-sm">应用</button>
+              <button type="button" id="ipSaveTemplateBtn" class="btn btn-primary btn-sm">保存当前</button>
+              <button type="button" id="ipDeleteTemplateBtn" class="btn btn-ghost btn-sm">删除</button>
+            </div>
+          </div>
+          <div class="ip-requirement-grid">
+            <div class="ip-content-field">
+              <label for="ipTask1Extra">口播要求</label>
+              <textarea id="ipTask1Extra" placeholder="面向人群、语气、禁用表达、行业侧重点"></textarea>
+              <div class="ip-content-field-hint">用于“行业热门口播”和“专业 IP 口播”。</div>
+            </div>
+            <div class="ip-content-field">
+              <label for="ipTask2Extra">朋友圈文案要求</label>
+              <textarea id="ipTask2Extra" placeholder="生活感、专业度、字数、发布语气"></textarea>
+              <div class="ip-content-field-hint">用于“生成朋友圈文案”。</div>
+            </div>
+            <div class="ip-content-field">
+              <label for="ipImageExtra">出图要求</label>
+              <textarea id="ipImageExtra" placeholder="画面主体、风格、场景、禁用元素、配图比例倾向"></textarea>
+              <div class="ip-content-field-hint">用于朋友圈文案勾选后的图片生成。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ip-config-panel" data-config-panel="keywords">
+          <div class="ip-content-panel-title">关键词</div>
+          <div class="ip-content-inline">
+            <div class="ip-content-field">
+              <label for="ipKeywordInput">关键词</label>
+              <input id="ipKeywordInput" placeholder="例如 3D打印">
+            </div>
+            <div class="ip-content-field">
+              <label for="ipKeywordDisplayName">显示名</label>
+              <input id="ipKeywordDisplayName" placeholder="可空">
+            </div>
+          </div>
+          <button type="button" id="ipAddKeywordBtn" class="btn btn-primary btn-sm">添加关键词</button>
+          <div id="ipKeywordList" class="ip-content-list is-compact" style="margin-top:0.72rem;"></div>
+        </div>
+
+        <div class="ip-config-panel" data-config-panel="competitors">
+          <div class="ip-content-panel-title">同行账号</div>
+          <div class="ip-content-inline">
+            <div class="ip-content-field">
+              <label for="ipCompetitorPlatform">平台</label>
+              <select id="ipCompetitorPlatform">
+                <option value="douyin">抖音</option>
+                <option value="wechat_channels">视频号</option>
+              </select>
+            </div>
+            <div class="ip-content-field">
+              <label for="ipCompetitorSearchInput">昵称或抖音号</label>
+              <input id="ipCompetitorSearchInput" placeholder="输入昵称或抖音号">
+            </div>
+          </div>
+          <div class="ip-content-inline">
+            <div class="ip-content-field">
+              <label for="ipCompetitorTags">行业标签</label>
+              <input id="ipCompetitorTags" placeholder="例如 3D打印,工厂,老板IP">
+            </div>
+            <div class="ip-content-field">
+              <label>&nbsp;</label>
+              <button type="button" id="ipSearchCompetitorBtn" class="btn btn-primary btn-sm">搜索账号</button>
+            </div>
+          </div>
+          <div id="ipCompetitorSearchResults" class="ip-user-results"></div>
+          <div id="ipCompetitorList" class="ip-content-list is-compact" style="margin-top:0.72rem;"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="ip-content-tab-panel" data-ip-panel="synced">
+      <div class="ip-content-layout is-even">
+        <section class="ip-content-panel">
+          <div class="ip-content-panel-title">
+            <span>关键词榜单</span>
+            <div class="ip-source-toolbar">
+              <select id="ipKeywordSourceFilter" aria-label="按关键词筛选">
+                <option value="">全部关键词</option>
+              </select>
+              <button type="button" id="ipRefreshKeywordSourcesBtn" class="btn btn-ghost btn-sm">刷新</button>
+            </div>
+          </div>
+          <div id="ipKeywordSourceList" class="ip-content-list"></div>
+        </section>
+        <section class="ip-content-panel">
+          <div class="ip-content-panel-title">
+            <span>同行作品</span>
+            <div class="ip-source-toolbar">
+              <select id="ipCompetitorSourceFilter" aria-label="按同行筛选">
+                <option value="">全部同行</option>
+              </select>
+              <button type="button" id="ipRefreshCompetitorSourcesBtn" class="btn btn-ghost btn-sm">刷新</button>
+            </div>
+          </div>
+          <div id="ipCompetitorSourceList" class="ip-content-list"></div>
+        </section>
+      </div>
+    </section>
+  </div>
+</div>

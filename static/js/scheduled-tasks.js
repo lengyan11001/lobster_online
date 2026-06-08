@@ -618,7 +618,7 @@
   function renderGoalFields(host) {
     host.innerHTML = compactGrid(
       fieldHtml('首帧图片来源', selectHtml('scheduledTaskVideoSourceMode',
-        optionHtml('asset_random', '从素材库备选组随机图片')
+        optionHtml('asset_random', '从素材库备选组轮换图片')
         + optionHtml('ai_image', 'AI 生成图片')
       ))
       + '<div id="scheduledTaskCandidateGroupField" style="margin:0;">'

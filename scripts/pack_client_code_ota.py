@@ -18,6 +18,7 @@ import datetime
 import hashlib
 import json
 import os
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -55,6 +56,47 @@ OTA_PATHS: tuple[str, ...] = (
 OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
     "nodejs/.openclaw/npm",
     "nodejs/node_modules",
+)
+
+PPT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
+    "python_pptx-*.whl",
+    "svglib-*.whl",
+    "reportlab-*.whl",
+    "cssselect2-*.whl",
+    "rlpycairo-*.whl",
+    "pycairo-*.whl",
+    "freetype_py-*.whl",
+    "tinycss2-*.whl",
+    "webencodings-*.whl",
+    "lxml-*-cp312-*-win_amd64.whl",
+    "pyyaml-*-cp312-*-win_amd64.whl",
+    "pillow-*-cp312-*-win_amd64.whl",
+    "xlsxwriter-*.whl",
+    "charset_normalizer-*-cp312-*-win_amd64.whl",
+    "rich-*.whl",
+    "markdown_it_py-*.whl",
+    "mdurl-*.whl",
+    "pygments-*.whl",
+    "typer-*.whl",
+    "annotated_doc-*.whl",
+    "shellingham-*.whl",
+    "colorama-*.whl",
+    "openai-*.whl",
+    "anyio-*.whl",
+    "distro-*.whl",
+    "httpx-*.whl",
+    "httpcore-*.whl",
+    "jiter-*-cp312-*-win_amd64.whl",
+    "pydantic-*.whl",
+    "pydantic_core-*-cp312-*-win_amd64.whl",
+    "tzdata-*.whl",
+    "tqdm-*.whl",
+    "typing_extensions-*.whl",
+    "sniffio-*.whl",
+    "certifi-*.whl",
+    "idna-*.whl",
+    "h11-*.whl",
+    "annotated_types-*.whl",
 )
 
 SKIP_DIR_NAMES = {"__pycache__", ".git"}
@@ -102,6 +144,7 @@ _OTA_SKIP_DIR_RELS = {
 OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     ".updates",
     "scripts/_probe",
+    "scripts/ppt_runtime_wheels",
     "static/uploads",
     "tmp_templates",
     "chat_storage",
@@ -143,6 +186,9 @@ def _norm(p: str) -> str:
     return p.replace("\\", "/")
 
 
+_INCLUDE_PPT_RUNTIME_WHEELS = False
+
+
 def _skip_file(rel: str) -> bool:
     r = _norm(rel).lower()
     nr = _norm(rel)
@@ -155,7 +201,11 @@ def _skip_file(rel: str) -> bool:
     parts = r.split("/")
     if "__pycache__" in parts:
         return True
-    if any(nr.startswith(p) for p in OTA_SKIP_REL_PREFIXES):
+    if any(
+        nr.startswith(p)
+        for p in OTA_SKIP_REL_PREFIXES
+        if not _INCLUDE_PPT_RUNTIME_WHEELS or p != "scripts/ppt_runtime_wheels"
+    ):
         return True
     if any(r.startswith(p + "/") or r == p for p in _OTA_SKIP_DIR_RELS):
         return True
@@ -287,7 +337,31 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
     _add_openclaw_bundled_defaults(zf, root)
 
 
+def _prepare_ppt_runtime_wheels(root: Path) -> list[str]:
+    src_dir = root / "deps" / "wheels"
+    out_dir = root / "scripts" / "ppt_runtime_wheels"
+    if not src_dir.is_dir():
+        raise FileNotFoundError(f"missing deps/wheels: {src_dir}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.iterdir():
+        if old.is_file():
+            old.unlink()
+    picked: dict[str, Path] = {}
+    for pattern in PPT_RUNTIME_WHEEL_PATTERNS:
+        matches = sorted(src_dir.glob(pattern), key=lambda p: p.name.lower())
+        if not matches:
+            raise FileNotFoundError(f"missing PPT runtime wheel matching {pattern}")
+        picked[pattern] = matches[-1]
+    copied: list[str] = []
+    for src in sorted(set(picked.values()), key=lambda p: p.name.lower()):
+        dst = out_dir / src.name
+        shutil.copy2(src, dst)
+        copied.append(dst.relative_to(root).as_posix())
+    return copied
+
+
 def main() -> int:
+    global _INCLUDE_PPT_RUNTIME_WHEELS
     ap = argparse.ArgumentParser(description="Pack client-code OTA zip")
     ap.add_argument(
         "--root",
@@ -306,13 +380,31 @@ def main() -> int:
         action="store_true",
         help="打入 nodejs/node_modules 与 .openclaw/npm（需本机已 npm install + ensure-npm-cli 跑通）",
     )
+    ap.add_argument(
+        "--with-ppt-runtime-deps",
+        action="store_true",
+        help="打入 scripts/ppt_runtime_wheels，并让新版 updater 离线安装 PPT Master 所需依赖",
+    )
     args = ap.parse_args()
     root: Path = args.root.resolve()
     parent = root.parent
     paths_tuple: tuple[str, ...] = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
+    if args.with_ppt_runtime_deps:
+        copied = _prepare_ppt_runtime_wheels(root)
+        print(f"[ppt-runtime] copied {len(copied)} wheels into scripts/ppt_runtime_wheels")
+        _INCLUDE_PPT_RUNTIME_WHEELS = True
+        paths_tuple = tuple(p for p in paths_tuple if p != "CLIENT_CODE_VERSION.json") + (
+            "scripts/ppt_runtime_wheels",
+            "CLIENT_CODE_VERSION.json",
+        )
     if args.out is None:
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        suffix = "_with_nodejs" if args.with_nodejs_deps else ""
+        suffix_parts = []
+        if args.with_nodejs_deps:
+            suffix_parts.append("with_nodejs")
+        if args.with_ppt_runtime_deps:
+            suffix_parts.append("with_ppt_runtime")
+        suffix = "_" + "_".join(suffix_parts) if suffix_parts else ""
         out = (parent / f"lobster_online_client_code_ota{suffix}_{ts}.zip").resolve()
     else:
         out = args.out.resolve()

@@ -33,6 +33,18 @@
     scripts: '/static/js/wechat-article.js?v=20260605-wechat-save-local-doubleclick'
   });
 
+  window.registerLobsterView('creative-film-studio', {
+    html: '/static/views/creative-film-studio.html?v=20260606-creative-film-entry',
+    scripts: '/static/js/creative-film-studio.js?v=20260606-creative-film-entry',
+    cache: 'reload'
+  });
+
+  window.registerLobsterView('ip-content-studio', {
+    html: '/static/views/ip-content-studio.html?v=20260608-ip-content-flow',
+    scripts: '/static/js/ip-content-studio.js?v=20260608-ip-content-flow',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260603-copy-clean',
     cache: 'reload'

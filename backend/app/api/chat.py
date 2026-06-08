@@ -4452,6 +4452,11 @@ async def _exec_tool(
                     "PPT 生成等待超时：PPT 能力已注册，但本次生成耗时过长。"
                     "请稍后查看生成目录或素材库；若仍未出现，请重新提交。"
                 )
+            if capability_id == "task.get_result":
+                return (
+                    "查询结果等待超时：任务可能仍在生成、上传或自动入库。"
+                    "请稍后再查，或到素材库查看是否已经出现结果。"
+                )
             return (
                 "请求超时：本机对话等 MCP 返回时间过长（常见于爆款TVC 整包在 MCP 内长时间轮询）。"
                 "已放宽该能力超时；若仍出现，请查看 logs/app.log 与 mcp.log。"
@@ -6871,7 +6876,7 @@ async def _query_task_status_once(
             request=request,
             db=db,
             user_id=uid,
-            timeout_override=25.0,
+            timeout_override=90.0,
         )
         return res or ""
     poll_a = _normalize_invoke_task_get_result_args(
@@ -6889,7 +6894,7 @@ async def _query_task_status_once(
         request=request,
         db=db,
         user_id=uid,
-        timeout_override=25.0,
+        timeout_override=90.0,
     )
 
 

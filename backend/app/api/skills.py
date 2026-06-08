@@ -1,12 +1,16 @@
 """Skill/MCP package management: install, uninstall, list store."""
+import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from ..core.config import get_settings
 from ..db import get_db
 from .auth import get_current_user_for_local, get_current_user_media_edit, _ServerUser
 from ..models import CapabilityConfig
@@ -14,6 +18,8 @@ from ..models import CapabilityConfig
 router = APIRouter()
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+_SKILL_STORE_ADMIN_CACHE: dict[str, tuple[float, bool]] = {}
+_SKILL_STORE_ADMIN_CACHE_TTL_SEC = 120.0
 
 
 def _load_registry() -> dict:
@@ -71,13 +77,59 @@ def _save_upstream_urls(urls: dict):
     p.write_text(json.dumps(urls, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+async def _is_skill_store_admin(request: Request) -> bool:
+
+    settings = get_settings()
+    base = (settings.auth_server_base or "").strip().rstrip("/")
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not base or not auth:
+        return False
+
+    bearer = auth if auth.lower().startswith("bearer ") else f"Bearer {auth}"
+    cache_key = hashlib.sha256(bearer.encode("utf-8")).hexdigest()
+    now = time.monotonic()
+    cached = _SKILL_STORE_ADMIN_CACHE.get(cache_key)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    headers = {"Authorization": bearer}
+    installation_id = (request.headers.get("X-Installation-Id") or "").strip()
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base}/skills/skill-store-admin", headers=headers)
+        is_admin = bool(resp.status_code == 200 and resp.json().get("is_skill_store_admin"))
+    except Exception:
+        is_admin = False
+    _SKILL_STORE_ADMIN_CACHE[cache_key] = (
+        time.monotonic() + _SKILL_STORE_ADMIN_CACHE_TTL_SEC,
+        is_admin,
+    )
+    return is_admin
+
+
+def _package_visible_in_store(pkg: dict, is_admin: bool) -> bool:
+    visibility = str(pkg.get("store_visibility") or "").strip().lower()
+    if visibility in {"hidden", "off", "disabled"}:
+        return False
+    if visibility == "debug" and not is_admin:
+        return False
+    return True
+
+
 @router.get("/skills/store", summary="技能商店列表")
-def list_store():
+async def list_store(request: Request):
     registry = _load_registry()
     installed = set(_load_installed().get("installed", []))
     packages = registry.get("packages", {})
+    is_admin = await _is_skill_store_admin(request)
     out = []
     for pkg_id, pkg in packages.items():
+        if not isinstance(pkg, dict):
+            continue
+        if not _package_visible_in_store(pkg, is_admin):
+            continue
         out.append({
             "id": pkg_id,
             "name": pkg.get("name", pkg_id),
@@ -91,7 +143,7 @@ def list_store():
             "default_installed": pkg.get("default_installed"),
             "store_visibility": pkg.get("store_visibility"),
         })
-    return {"packages": out}
+    return {"packages": out, "is_skill_store_admin": is_admin}
 
 
 @router.get("/skills/installed", summary="已安装技能列表")

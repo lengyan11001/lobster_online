@@ -1,6 +1,225 @@
 /** 在线版：独立认证时显示手机号验证码注册和登录；/api/edition 可覆盖。 */
 var USE_INDEPENDENT_AUTH = true;
 
+(function bindDesktopContextMenu() {
+  if (window.__bihuoDesktopContextMenuInstalled) return;
+  window.__bihuoDesktopContextMenuInstalled = true;
+
+  function isDesktopWindow() {
+    try {
+      if (window.pywebview && window.pywebview.api) return true;
+      if (new URLSearchParams(window.location.search || '').get('desktop') === '1') return true;
+      return /^(127\.0\.0\.1|localhost|\[::1\])$/i.test(window.location.hostname || '');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isEditable(el) {
+    if (!el) return false;
+    var node = el.nodeType === 1 ? el : el.parentElement;
+    if (!node) return false;
+    return !!(node.closest && node.closest('textarea,input,[contenteditable="true"],[contenteditable="plaintext-only"]'));
+  }
+
+  function editableTarget(el) {
+    var node = el && el.nodeType === 1 ? el : (el ? el.parentElement : null);
+    return node && node.closest ? node.closest('textarea,input,[contenteditable="true"],[contenteditable="plaintext-only"]') : null;
+  }
+
+  function hasSelection() {
+    try {
+      var sel = window.getSelection && window.getSelection();
+      return !!(sel && !sel.isCollapsed && String(sel.toString() || '').length);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function hasEditableSelection(target) {
+    if (!target) return false;
+    if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+      return Number(target.selectionEnd || 0) > Number(target.selectionStart || 0);
+    }
+    return hasSelection();
+  }
+
+  function copyTextFallback(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text || '';
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+    return ok;
+  }
+
+  function textFromContextElement(el) {
+    var node = el && el.nodeType === 1 ? el : (el ? el.parentElement : null);
+    if (!node || !node.closest) return '';
+    var copyNode = node.closest('[data-copy-text],.chat-msg-body,.chat-msg-text,.openclaw-skill-chat-bubble,.ip-content-draft-body,pre,code');
+    if (!copyNode) {
+      var msg = node.closest('.chat-msg');
+      if (msg) copyNode = msg.querySelector('.chat-msg-body') || msg;
+    }
+    if (!copyNode) return '';
+    var dataText = copyNode.getAttribute && copyNode.getAttribute('data-copy-text');
+    return String(dataText || copyNode.innerText || copyNode.textContent || '').trim();
+  }
+
+  function copySelection(target, fallbackText) {
+    var text = '';
+    if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) {
+      var start = Number(target.selectionStart || 0);
+      var end = Number(target.selectionEnd || 0);
+      text = String(target.value || '').slice(start, end);
+    } else {
+      try {
+        var sel = window.getSelection && window.getSelection();
+        text = sel ? String(sel.toString() || '') : '';
+      } catch (e) {}
+    }
+    if (!text && fallbackText) text = String(fallbackText || '');
+    if (!text) return Promise.resolve(false);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function() { return true; }).catch(function() {
+        return copyTextFallback(text);
+      });
+    }
+    return Promise.resolve(copyTextFallback(text));
+  }
+
+  function command(name) {
+    try {
+      return document.execCommand(name);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function selectAll(target) {
+    if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) {
+      target.focus();
+      target.select();
+      return true;
+    }
+    command('selectAll');
+    return true;
+  }
+
+  function createMenu() {
+    var menu = document.createElement('div');
+    menu.id = 'desktopContextMenu';
+    menu.className = 'desktop-context-menu';
+    menu.hidden = true;
+    menu.innerHTML = ''
+      + '<button type="button" data-cmd="copy"><span>复制</span><kbd>Ctrl+C</kbd></button>'
+      + '<button type="button" data-cmd="cut"><span>剪切</span><kbd>Ctrl+X</kbd></button>'
+      + '<button type="button" data-cmd="paste"><span>粘贴</span><kbd>Ctrl+V</kbd></button>'
+      + '<div class="desktop-context-menu-divider"></div>'
+      + '<button type="button" data-cmd="selectAll"><span>全选</span><kbd>Ctrl+A</kbd></button>';
+    document.body.appendChild(menu);
+    return menu;
+  }
+
+  var menu = null;
+  var activeTarget = null;
+  var activeFallbackText = '';
+
+  function hideMenu() {
+    if (menu) menu.hidden = true;
+  }
+
+  function placeMenu(x, y) {
+    if (!menu) return;
+    menu.hidden = false;
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    var rect = menu.getBoundingClientRect();
+    var left = Math.min(Math.max(8, x), Math.max(8, window.innerWidth - rect.width - 8));
+    var top = Math.min(Math.max(8, y), Math.max(8, window.innerHeight - rect.height - 8));
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+  }
+
+  function updateMenuState(target, fallbackText) {
+    if (!menu) return;
+    var editable = !!target;
+    var selected = editable ? hasEditableSelection(target) : hasSelection();
+    var copyBtn = menu.querySelector('[data-cmd="copy"]');
+    var cutBtn = menu.querySelector('[data-cmd="cut"]');
+    var pasteBtn = menu.querySelector('[data-cmd="paste"]');
+    var allBtn = menu.querySelector('[data-cmd="selectAll"]');
+    if (copyBtn) copyBtn.disabled = !selected && !fallbackText;
+    if (cutBtn) cutBtn.disabled = !editable || !selected;
+    if (pasteBtn) pasteBtn.disabled = !editable;
+    if (allBtn) allBtn.disabled = false;
+  }
+
+  function bind() {
+    if (!isDesktopWindow()) return;
+    menu = createMenu();
+    document.addEventListener('contextmenu', function(e) {
+      if (e.target && e.target.closest && e.target.closest('.kf-customer-item')) return;
+      activeTarget = editableTarget(e.target);
+      activeFallbackText = activeTarget ? '' : textFromContextElement(e.target);
+      e.preventDefault();
+      e.stopPropagation();
+      updateMenuState(activeTarget, activeFallbackText);
+      placeMenu(e.clientX || 8, e.clientY || 8);
+    }, true);
+    document.addEventListener('click', function(e) {
+      if (menu && !menu.hidden && !(e.target && e.target.closest && e.target.closest('#desktopContextMenu'))) {
+        hideMenu();
+      }
+    }, true);
+    document.addEventListener('scroll', hideMenu, true);
+    window.addEventListener('resize', hideMenu);
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') hideMenu();
+    });
+    menu.addEventListener('click', function(e) {
+      var btn = e.target && e.target.closest ? e.target.closest('button[data-cmd]') : null;
+      if (!btn || btn.disabled) return;
+      var cmd = btn.getAttribute('data-cmd');
+      var target = activeTarget;
+      hideMenu();
+      if (target && typeof target.focus === 'function') target.focus();
+      if (cmd === 'copy') {
+        copySelection(target, activeFallbackText);
+      } else if (cmd === 'cut') {
+        if (!command('cut')) {
+          copySelection(target, activeFallbackText).then(function(ok) {
+            if (!ok || !target || !(target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
+            var start = Number(target.selectionStart || 0);
+            var end = Number(target.selectionEnd || 0);
+            target.setRangeText('', start, end, 'start');
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+          });
+        }
+      } else if (cmd === 'paste') {
+        if (!command('paste') && navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(function(text) {
+            if (!target || !(target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return;
+            var start = Number(target.selectionStart || 0);
+            var end = Number(target.selectionEnd || 0);
+            target.setRangeText(text || '', start, end, 'end');
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+          }).catch(function() {});
+        }
+      } else if (cmd === 'selectAll') {
+        selectAll(target);
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
+
 (function bindBihuoCloseGuard() {
   if (window.__bihuoCloseGuardInstalled) return;
   window.__bihuoCloseGuardInstalled = true;
@@ -587,7 +806,7 @@ if (registerForm) {
   });
 }
 
-/** 在线版：本机未配 TOS 时从认证中心拉取服务器 TOS_CONFIG 写入 custom_configs.json */
+/** 在线版：切换为服务器端 TOS 转存，并清理本机旧 TOS_CONFIG */
 function syncTosFromServerIfOnline() {
   if (typeof EDITION === 'undefined' || EDITION !== 'online' || !token) return;
   var localBase = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
@@ -624,7 +843,8 @@ var LOBSTER_MAIN_VIEWS = {
   'sys-config': true,
   logs: true,
   agent: true,
-  'openclaw-memory': true
+  'openclaw-memory': true,
+  'creative-film-studio': true
 };
 var LOBSTER_HIDDEN_VIEWS = {
   'wecom-config': true,
@@ -1213,6 +1433,7 @@ function runAppViewInit(view) {
   if (view === 'sys-config') { loadOpenClawConfig(); }
   if (view === 'logs') { if (typeof ensureLogsBindings === 'function') ensureLogsBindings(); }
   if (view === 'openclaw-memory' && typeof window.initOpenclawMemoryManager === 'function') window.initOpenclawMemoryManager();
+  if (view === 'creative-film-studio' && typeof window.initCreativeFilmStudioView === 'function') window.initCreativeFilmStudioView();
   if (view === 'messenger-config' && typeof loadMessengerConfigPage === 'function') loadMessengerConfigPage();
   if (view === 'youtube-accounts' && typeof loadYoutubeAccountsPage === 'function') loadYoutubeAccountsPage();
   if (view === 'meta-social' && typeof loadMetaSocialPage === 'function') loadMetaSocialPage();

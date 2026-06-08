@@ -14,8 +14,8 @@ import hashlib
 import json
 import logging
 import os
-import random
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -73,6 +73,7 @@ _SCHEDULED_CAPTION_STYLES = [
 _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM = "asset_random"
 _SCHEDULED_VIDEO_SOURCE_AI_IMAGE = "ai_image"
 _SCHEDULED_VIDEO_SOURCE_REFERENCE_IMAGE = "reference_image"
+_CREATIVE_CANDIDATE_USAGE_META_KEY = "creative_candidate_usage"
 _IMAGE_MODEL_ALIASES = {
     "openai/gpt-image2": "openai/gpt-image-2",
     "openai/gptimage2": "openai/gpt-image-2",
@@ -110,6 +111,74 @@ def _asset_creative_candidate_groups(meta: Any) -> List[str]:
         if name:
             return [name]
     return []
+
+
+def _creative_candidate_usage(meta: Any, group_name: str) -> Dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {}
+    usage = meta.get(_CREATIVE_CANDIDATE_USAGE_META_KEY)
+    if not isinstance(usage, dict):
+        usage = meta.get("creative_candidate_use_stats")
+    if not isinstance(usage, dict):
+        return {}
+    current = usage.get(group_name)
+    return current if isinstance(current, dict) else {}
+
+
+def _creative_candidate_use_count(meta: Any, group_name: str) -> int:
+    data = _creative_candidate_usage(meta, group_name)
+    try:
+        return max(int(data.get("count") or data.get("use_count") or 0), 0)
+    except Exception:
+        return 0
+
+
+def _creative_candidate_last_used_at(meta: Any, group_name: str) -> str:
+    data = _creative_candidate_usage(meta, group_name)
+    return str(data.get("last_used_at") or data.get("last_used") or "")
+
+
+def _mark_creative_candidate_asset_used(asset_id: str, group_name: str, jwt_token: str) -> None:
+    aid = str(asset_id or "").strip()
+    name = str(group_name or "").strip()
+    if not aid or not name:
+        return
+    uid = int(_decode_jwt_sub(jwt_token) or "0")
+    if uid <= 0:
+        return
+    db = SessionLocal()
+    try:
+        row = db.query(Asset).filter(Asset.user_id == uid, Asset.asset_id == aid).first()
+        if not row:
+            return
+        meta = dict(row.meta or {})
+        usage = meta.get(_CREATIVE_CANDIDATE_USAGE_META_KEY)
+        if not isinstance(usage, dict):
+            usage = {}
+        current = usage.get(name)
+        if not isinstance(current, dict):
+            current = {}
+        try:
+            count = max(int(current.get("count") or current.get("use_count") or 0), 0)
+        except Exception:
+            count = 0
+        current["count"] = count + 1
+        current["last_used_at"] = datetime.now(timezone.utc).isoformat()
+        usage[name] = current
+        meta[_CREATIVE_CANDIDATE_USAGE_META_KEY] = usage
+        row.meta = meta
+        db.add(row)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "[SCHEDULED-TASK] mark creative candidate used failed asset_id=%s group=%s err=%s",
+            aid,
+            name,
+            exc,
+        )
+    finally:
+        db.close()
 
 
 def _normalize_image_model_id(value: Any) -> str:
@@ -696,7 +765,15 @@ def _pick_creative_candidate_asset(
                 usable.append((candidate, url))
         if not usable:
             raise RuntimeError(f"备选组“{name}”里没有可用于视频生成的公网图片素材，请重新上传或保存 URL 后再设为备选")
-        row, url = random.choice(usable)
+        usable.sort(
+            key=lambda item: (
+                _creative_candidate_use_count(getattr(item[0], "meta", None), name),
+                _creative_candidate_last_used_at(getattr(item[0], "meta", None), name),
+                item[0].created_at.isoformat() if getattr(item[0], "created_at", None) else "",
+                item[0].asset_id or "",
+            )
+        )
+        row, url = usable[0]
         if not url:
             raise RuntimeError(f"备选组“{name}”选中的图片没有可用链接")
         return {
@@ -704,6 +781,7 @@ def _pick_creative_candidate_asset(
             "url": url,
             "group_name": name,
             "filename": row.filename,
+            "usage_count": str(_creative_candidate_use_count(getattr(row, "meta", None), name)),
         }
     finally:
         db.close()
@@ -1821,7 +1899,7 @@ def _scheduled_complete_text(
         if source_mode == _SCHEDULED_VIDEO_SOURCE_AI_IMAGE:
             lines.append(f"首帧来源：AI 生成图片{('（' + image_model + '）') if image_model else ''}")
         elif source_mode == _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM:
-            lines.append("首帧来源：素材库备选组随机图片")
+            lines.append("首帧来源：素材库备选组轮换图片")
         elif source_mode == "create_video_pipeline":
             video_model = str(input_refs.get("video_model") or "").strip()
             planning_model = str(input_refs.get("planning_model") or "").strip()
@@ -2119,7 +2197,7 @@ async def _run_goal_video_scheduled_pipeline(
         headers,
         run_id,
         "thinking",
-        {"text": f"已从备选组“{picked['group_name']}”随机选择图片素材 {picked['asset_id']}"},
+        {"text": f"已从备选组“{picked['group_name']}”轮换选择图片素材 {picked['asset_id']}"},
     )
     pl.reference_asset_ids = [picked["asset_id"]] if picked.get("asset_id") else []
     pl.reference_image_urls = [picked["url"]] if picked.get("url") else []
@@ -2133,6 +2211,7 @@ async def _run_goal_video_scheduled_pipeline(
     result["source_mode"] = _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM
     result["candidate_group"] = picked["group_name"]
     result["reference_asset_id"] = picked["asset_id"]
+    result["reference_asset_usage_count_before"] = picked.get("usage_count") or "0"
     return result
 
 
@@ -2422,6 +2501,16 @@ async def _run_scheduled_capability(
                 raise RuntimeError(_goal_video_pipeline_pending_reason(result) or "创意成片视频仍未完成，未取得视频素材或视频链接")
             if capability_id == "create.video.pipeline" and not _create_video_pipeline_has_video_result(result):
                 raise RuntimeError(_create_video_pipeline_pending_reason(result) or "gtp创意成片视频仍未完成，未取得视频素材或视频链接")
+            if (
+                capability_id == "goal.video.pipeline"
+                and str(result.get("source_mode") or "") == _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM
+                and str(result.get("reference_asset_id") or "").strip()
+            ):
+                _mark_creative_candidate_asset_used(
+                    str(result.get("reference_asset_id") or ""),
+                    str(result.get("candidate_group") or cap_payload.get("candidate_group") or ""),
+                    jwt_token,
+                )
             await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在生成发布文案"})
             caption = await _generate_scheduled_caption(
                 base=base,

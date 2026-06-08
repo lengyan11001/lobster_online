@@ -829,6 +829,22 @@ async def list_openclaw_memory(
     return {"ok": True, "documents": docs}
 
 
+@router.get("/api/openclaw/memory/{doc_id}/content", summary="Read one OpenClaw memory doc content")
+async def get_openclaw_memory_content(
+    doc_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    clean_id = re.sub(r"[^a-zA-Z0-9_-]", "", (doc_id or "").strip())[:64]
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="document_id 无效")
+    docs = _load_index(current_user.id)
+    found = next((doc for doc in docs if str(doc.get("id") or "") == clean_id), None)
+    if not found:
+        raise HTTPException(status_code=404, detail="资料不存在")
+    text = _read_canonical_memory_content(found, max_chars=12000)
+    return {"ok": True, "document": found, "content_text": text}
+
+
 @router.post("/api/openclaw/memory/sync-cloud", summary="Sync cloud-distributed OpenClaw memory docs")
 async def sync_cloud_openclaw_memory(
     request: Request,

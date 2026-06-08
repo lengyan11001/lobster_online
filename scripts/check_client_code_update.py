@@ -134,6 +134,20 @@ ALLOWED_NODEJS_TREE_PREFIXES: tuple[str, ...] = (
     "nodejs/node_modules",
     "nodejs/.openclaw/npm",
 )
+ALLOWED_DEPS_WHEEL_PREFIX = "deps/wheels/"
+ALLOWED_DEPS_WHEEL_SUFFIXES = (".whl", ".tar.gz")
+
+PPT_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "ppt_runtime_wheels"
+PPT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
+    "python-pptx>=1.0.0",
+    "svglib>=1.5.0",
+    "reportlab>=4.0.0",
+    "PyYAML>=6.0",
+    "lxml>=4.9.0",
+    "rich>=13.0",
+    "typer>=0.9.0",
+    "openai>=1.0.0",
+)
 
 # 与 backend chat 读取路径一致；OTA 宜随包更新，安装机保留其余 workspace 文件
 _OPENCLAW_POLICY_FILENAMES = ("LOBSTER_CHAT_POLICY_INTRO.md", "LOBSTER_CHAT_POLICY_TOOLS.md")
@@ -396,6 +410,8 @@ def _path_allowed(rel: str) -> bool:
         return False
     if rl == "python" or rl.startswith("python/"):
         return False
+    if rl.startswith(ALLOWED_DEPS_WHEEL_PREFIX) and rl.endswith(ALLOWED_DEPS_WHEEL_SUFFIXES):
+        return True
     if rl == "deps" or rl.startswith("deps/"):
         return False
     if rl == "browser_chromium" or rl.startswith("browser_chromium/"):
@@ -874,6 +890,42 @@ def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
     return applied
 
 
+def _should_install_ppt_runtime(applied: list[str]) -> bool:
+    for rel in applied:
+        r = _norm_rel(rel)
+        if r in {"requirements.txt", "skills/ppt_master", "skills/ppt-master", "scripts/ppt_runtime_wheels"}:
+            return True
+        if r.startswith("scripts/ppt_runtime_wheels/") or r.startswith("deps/wheels/"):
+            return True
+    return False
+
+
+def _install_ppt_runtime_if_needed(applied: list[str]) -> None:
+    if not _should_install_ppt_runtime(applied):
+        return
+    wheel_dirs = [p for p in (PPT_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels") if p.is_dir()]
+    if not wheel_dirs:
+        print("[code] [WARN] PPT runtime wheels missing; skip offline dependency install.", flush=True)
+        return
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--no-index",
+    ]
+    for wheel_dir in wheel_dirs:
+        cmd.extend(["--find-links", str(wheel_dir)])
+    cmd.extend(PPT_RUNTIME_REQUIREMENTS)
+    print("[code-progress] ppt_runtime_install_start", flush=True)
+    try:
+        subprocess.run(cmd, cwd=str(ROOT), check=True, creationflags=_creation_flags())
+    except Exception as exc:
+        print(f"[code] [ERR] PPT runtime dependency install failed: {exc}", flush=True)
+        return
+    print("[code-progress] ppt_runtime_install_done", flush=True)
+
+
 def _patch_matches_local(patch: dict[str, Any], local_build: int, local_ver: str) -> bool:
     from_build = patch.get("from_build")
     if from_build is not None and _as_int(from_build, -1) != int(local_build):
@@ -1077,6 +1129,7 @@ def main() -> int:
             return 0
 
         _apply_resources(manifest.get("resources"), tdir)
+        _install_ppt_runtime_if_needed(applied)
 
     mver = manifest.get("version")
     mver_s = str(mver).strip() if mver is not None else ""

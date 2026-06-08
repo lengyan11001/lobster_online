@@ -37,18 +37,22 @@ _CUSTOM_CONFIGS_FILE = Path(__file__).resolve().parent.parent.parent.parent / "c
 _CLIENT_CODE_VERSION_FILE = Path(__file__).resolve().parent.parent.parent.parent / "CLIENT_CODE_VERSION.json"
 
 
-def _local_tos_config_has_credentials() -> bool:
-    """本机 custom_configs.json 是否已含可用 TOS 凭据（有则不再覆盖）。"""
+def _remove_local_tos_config() -> bool:
     if not _CUSTOM_CONFIGS_FILE.exists():
         return False
     try:
         data = json.loads(_CUSTOM_CONFIGS_FILE.read_text(encoding="utf-8"))
-        cfg = (data.get("configs") or {}).get("TOS_CONFIG")
-        if not isinstance(cfg, dict):
-            return False
-        return bool(str(cfg.get("access_key", "")).strip() and str(cfg.get("secret_key", "")).strip())
     except Exception:
         return False
+    configs = data.get("configs")
+    if not isinstance(configs, dict) or "TOS_CONFIG" not in configs:
+        return False
+    configs.pop("TOS_CONFIG", None)
+    _CUSTOM_CONFIGS_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return True
 
 
 _DEFAULT_CLIENT_SEMVER = "1.0.0"
@@ -240,67 +244,50 @@ def update_chat_route_settings(
 
 @router.post(
     "/api/settings/sync-tos-from-server",
-    summary="本机未配 TOS 时从认证中心拉取并写入 custom_configs.json",
+    summary="从认证中心同步 TOS 到本机 custom_configs.json",
 )
 async def sync_tos_from_server(
     request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    """仅当本机无 TOS_CONFIG 凭据时，从 AUTH_SERVER_BASE 拉取服务器上的 TOS 并写入本机，供上传/附图走公网 URL。"""
+    """Switch this client to server-side TOS upload and remove stale local credentials."""
+    removed = _remove_local_tos_config()
+    server_status: dict[str, Any] = {}
     base = (settings.auth_server_base or "").strip().rstrip("/")
-    if not base:
-        raise HTTPException(status_code=400, detail="未配置 AUTH_SERVER_BASE，无法拉取云端 TOS")
-    if _local_tos_config_has_credentials():
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": "本机已存在 TOS_CONFIG（access_key/secret_key），不覆盖",
-        }
     auth = (request.headers.get("Authorization") or "").strip()
-    if not auth:
-        raise HTTPException(status_code=401, detail="缺少 Authorization")
-    url = f"{base}/api/settings/tos-config"
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.get(url, headers={"Authorization": auth})
-    except Exception as e:
-        logger.exception("[sync-tos] 请求认证中心失败")
-        raise HTTPException(status_code=503, detail=f"无法连接认证中心: {e!s}") from e
-    if r.status_code == 404:
-        return {
-            "ok": False,
-            "skipped": True,
-            "reason": "认证中心未配置 TOS_CONFIG",
-        }
-    if r.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail=f"认证中心返回 {r.status_code}: {(r.text or '')[:400]}",
-        )
-    try:
-        body: Any = r.json()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail="认证中心响应非 JSON") from e
-    tos = body.get("TOS_CONFIG") if isinstance(body, dict) else None
-    if not isinstance(tos, dict) or not str(tos.get("access_key", "")).strip():
-        return {"ok": False, "skipped": True, "reason": "响应中无有效 TOS_CONFIG"}
-    if _CUSTOM_CONFIGS_FILE.exists():
+    if base and auth:
+        url = f"{base}/api/settings/tos-config"
         try:
-            data = json.loads(_CUSTOM_CONFIGS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            data = {"configs": {}, "custom_models": []}
-    else:
-        data = {"configs": {}, "custom_models": []}
-    data.setdefault("configs", {})["TOS_CONFIG"] = tos
-    _CUSTOM_CONFIGS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+            async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
+                r = await client.get(url, headers={"Authorization": auth})
+            if r.status_code < 400:
+                body: Any = r.json()
+                if isinstance(body, dict):
+                    server_status = {
+                        "mode": body.get("mode") or "server-side-upload",
+                        "tos_configured": bool(body.get("tos_configured")),
+                        "bucket_name": str(body.get("bucket_name") or ""),
+                        "public_domain": str(body.get("public_domain") or ""),
+                    }
+            else:
+                server_status = {"status_code": r.status_code}
+        except Exception as e:
+            server_status = {"error": f"{type(e).__name__}: {e}"}
+
     logger.info(
-        "[sync-tos] 已从认证中心写入本机 TOS_CONFIG user_id=%s",
+        "[sync-tos] switched to server-side upload removed_local_tos_config=%s user_id=%s server_status=%s",
+        removed,
         getattr(current_user, "id", None),
+        server_status,
     )
-    return {"ok": True, "skipped": False, "message": "已写入本机 custom_configs.json"}
+    return {
+        "ok": True,
+        "skipped": False,
+        "mode": "server-side-upload",
+        "removed_local_tos_config": removed,
+        "server": server_status,
+        "message": "TOS 上传已切换为服务器转存，本机不再保存 TOS_CONFIG",
+    }
 
 
 @router.post(

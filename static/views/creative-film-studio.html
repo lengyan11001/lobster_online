@@ -1,0 +1,107 @@
+<div id="content-creative-film-studio" class="content-block">
+  <div class="creative-film-page">
+    <header class="creative-film-head">
+      <div>
+        <div class="page-section-kicker">文案+创意图片</div>
+        <h3 class="page-section-title">记忆生成图片与平台文案</h3>
+      </div>
+      <div class="creative-film-head-actions">
+        <button type="button" id="creativeFilmBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+        <button type="button" id="creativeFilmRefreshMemoryBtn" class="btn btn-ghost btn-sm">刷新记忆</button>
+      </div>
+    </header>
+
+    <div id="creativeFilmMsg" class="msg" style="display:none;"></div>
+
+    <div class="creative-film-grid">
+      <section class="creative-film-panel creative-film-control-panel">
+        <div class="creative-film-field">
+          <label for="creativeFilmMemoryTrigger">记忆文件</label>
+          <div class="creative-film-memory-picker">
+            <button type="button" id="creativeFilmMemoryTrigger" class="creative-film-memory-trigger">
+              <span id="creativeFilmMemoryTriggerText">选择记忆文件</span>
+              <span aria-hidden="true">⌄</span>
+            </button>
+            <div id="creativeFilmMemoryDropdown" class="creative-film-memory-dropdown" hidden>
+              <div id="creativeFilmMemoryList" class="creative-film-memory-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="creative-film-field">
+          <label for="creativeFilmGoal">创作目标</label>
+          <textarea id="creativeFilmGoal" rows="5" placeholder="例如：根据产品资料生成一张竖屏宣传图，并写三条平台文案。"></textarea>
+        </div>
+
+        <div class="creative-film-inline">
+          <div class="creative-film-field">
+            <label for="creativeFilmRatio">图片比例</label>
+            <select id="creativeFilmRatio">
+              <option value="9:16">9:16 竖屏</option>
+              <option value="1:1">1:1 方图</option>
+              <option value="3:2">3:2 横图</option>
+              <option value="16:9">16:9 宽屏</option>
+            </select>
+          </div>
+          <div class="creative-film-field">
+            <label for="creativeFilmImageModel">图片模型</label>
+            <select id="creativeFilmImageModel">
+              <option value="gpt-image-2">gpt-image-2</option>
+            </select>
+          </div>
+        </div>
+
+        <button type="button" id="creativeFilmGenerateImageBtn" class="btn btn-primary creative-film-main-btn">生成图片</button>
+
+        <div class="creative-film-prompt-card">
+          <div class="creative-film-card-title">图片提示词</div>
+          <div id="creativeFilmImagePrompt" class="creative-film-prompt-text">生成后显示。</div>
+        </div>
+      </section>
+
+      <section class="creative-film-panel creative-film-preview-panel">
+        <div class="creative-film-preview-head">
+          <div>
+            <div class="creative-film-card-title">图片预览</div>
+            <div id="creativeFilmPreviewMeta" class="creative-film-muted">等待生成。</div>
+          </div>
+          <a id="creativeFilmOpenImage" class="btn btn-ghost btn-sm" href="#" target="_blank" rel="noopener" hidden>打开图片</a>
+        </div>
+        <div id="creativeFilmPreview" class="creative-film-preview">
+          <div class="creative-film-empty">暂无图片</div>
+        </div>
+        <div id="creativeFilmPlatformActions" class="creative-film-platform-actions" hidden>
+          <button type="button" class="btn btn-primary btn-sm" data-creative-platform="douyin">生成抖音文案</button>
+          <button type="button" class="btn btn-primary btn-sm" data-creative-platform="wechat">生成公众号文章</button>
+          <button type="button" class="btn btn-primary btn-sm" data-creative-platform="shipinhao">生成视频号文案</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="creative-film-copy-section">
+      <article class="creative-film-copy-card" data-copy-platform="douyin">
+        <div class="creative-film-copy-head">
+          <strong>抖音</strong>
+          <button type="button" class="btn btn-ghost btn-sm" data-copy-platform-btn="douyin" disabled>复制</button>
+        </div>
+        <textarea id="creativeFilmCopyDouyin" readonly placeholder="生成后显示可直接发布的抖音文案。"></textarea>
+      </article>
+
+      <article class="creative-film-copy-card" data-copy-platform="wechat">
+        <div class="creative-film-copy-head">
+          <strong>公众号</strong>
+          <button type="button" class="btn btn-ghost btn-sm" data-copy-platform-btn="wechat" disabled>复制</button>
+        </div>
+        <textarea id="creativeFilmCopyWechat" readonly placeholder="生成后显示可直接发布的公众号文章。"></textarea>
+      </article>
+
+      <article class="creative-film-copy-card" data-copy-platform="shipinhao">
+        <div class="creative-film-copy-head">
+          <strong>视频号</strong>
+          <button type="button" class="btn btn-ghost btn-sm" data-copy-platform-btn="shipinhao" disabled>复制</button>
+        </div>
+        <textarea id="creativeFilmCopyShipinhao" readonly placeholder="生成后显示可直接发布的视频号文案。"></textarea>
+      </article>
+    </section>
+  </div>
+</div>

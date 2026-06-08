@@ -25,10 +25,11 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
         return True
 
     root_name = parts[0] if len(parts) == 1 else None
+    lower_rel = rel_posix.lower()
 
-    if root_name and root_name.endswith(".pyc"):
+    if lower_rel.endswith((".pyc", ".pyo", ".log", ".db", ".sqlite", ".sqlite3", ".tmp", ".temp")):
         return True
-    if root_name and root_name.endswith(".db"):
+    if lower_rel.endswith(".bak") or ".bak." in lower_rel:
         return True
     if rel_posix == ".env":
         return True
@@ -36,13 +37,34 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
         return True
     if rel_posix.startswith("openclaw/workspace/"):
         return True
+    if rel_posix.startswith("openclaw/workspace-"):
+        return True
+    if rel_posix.startswith((
+        "openclaw/.openclaw/",
+        "openclaw/agents/",
+        "openclaw/browser/",
+        "openclaw/logs/",
+        "openclaw/memory/",
+        "openclaw/tasks/",
+        "openclaw/user_memory/",
+    )):
+        return True
+    if rel_posix in {
+        "openclaw/.channel_fallback.json",
+        "openclaw/.lobster_plugin_state_backup.json",
+        "openclaw/.weixin_login_last.json",
+        "openclaw/update-check.json",
+    }:
+        return True
     if rel_posix.startswith("browser_data/"):
         return True
-    if rel_posix.startswith(("_pack_exe_test/", "_lobster_runtime/", "dist/", "build/", "tmp_responsive_check/", "tmp_templates/", ".updates/")):
+    if rel_posix.startswith(("_pack_exe_test/", "_lobster_runtime/", "dist/", "build/", "tmp_responsive_check/", "tmp_templates/", ".updates/", "release_updates/")):
         return True
     if rel_posix.startswith("desktop/webview2/fixed-runtime/"):
         return True
     if rel_posix.startswith("assets/"):
+        return True
+    if rel_posix.startswith("static/uploads/"):
         return True
     if rel_posix.startswith("chat_storage/"):
         return True

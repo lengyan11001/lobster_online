@@ -1,6 +1,6 @@
 {
   "version": "1.0.65",
   "build": 100,
-  "applied_at": "2026-06-06T16:20:00+08:00",
-  "note": "Creative storyboard progress display, video fullscreen hint, and custom select menus"
+  "applied_at": "2026-06-07T21:08:00+08:00",
+  "note": "Sync TOS_CONFIG from server when local config differs"
 }

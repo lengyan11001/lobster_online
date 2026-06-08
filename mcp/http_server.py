@@ -2455,7 +2455,9 @@ async def _stabilize_openclaw_video_generate_payload(
     request: Optional[Request],
 ) -> Tuple[Dict[str, Any], str]:
     """OpenClaw-only: rehost image refs through the asset library before video generation."""
-    if not _openclaw_scope_intent(request) or not isinstance(payload, dict):
+    if not isinstance(payload, dict) or not (
+        _openclaw_scope_intent(request) or _request_from_openclaw_mcp(request)
+    ):
         return payload, ""
     out, prompt_guard = _ensure_openclaw_video_generate_prompt(payload)
     if prompt_guard:
@@ -2565,7 +2567,7 @@ def _coerce_video_aspect_ratio_for_upstream(raw: Any) -> str:
     return "16:9"
 
 
-def _parse_video_duration_seconds(raw: Any, *, default: int = 5) -> int:
+def _parse_video_duration_seconds(raw: Any, *, default: int = 10) -> int:
     """解析 5、6s、\"10\" 等为整数秒；无法解析时用 default，避免抛错。"""
     if raw is None or raw == "":
         return default
@@ -2964,12 +2966,12 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     aspect_ratio = _coerce_video_aspect_ratio_for_upstream(_payload_get_aspect_ratio(payload))
     valid_ratios = _VIDEO_ASPECT_RATIOS
     ratio_ok = aspect_ratio in valid_ratios
-    duration_sec = _parse_video_duration_seconds(_payload_get_duration_raw(payload), default=5)
+    duration_sec = _parse_video_duration_seconds(_payload_get_duration_raw(payload), default=10)
 
     # st-ai/super-seed2：ratio, filePaths, functionMode（保留 backend 注入的多图 filePaths）
     if "super-seed2" in model or "st-ai/super-seed2" == model:
         duration_raw = _payload_get_duration_raw(payload)
-        parsed_duration = _parse_video_duration_seconds(duration_raw, default=5)
+        parsed_duration = _parse_video_duration_seconds(duration_raw, default=10)
         seed2_duration = _coerce_super_seed2_duration_seconds(parsed_duration)
         if seed2_duration != parsed_duration:
             logger.info(

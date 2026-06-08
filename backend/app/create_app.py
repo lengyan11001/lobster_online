@@ -51,6 +51,7 @@ from .api.comfly_image_studio import router as comfly_image_studio_router
 from .api.local_bestseller import router as local_bestseller_router
 from .api.goal_video_pipeline import router as goal_video_pipeline_router
 from .api.create_video_pipeline import router as create_video_pipeline_router
+from .api.creative_film_studio import router as creative_film_studio_router
 from .api.create_ppt_pipeline import router as create_ppt_pipeline_router
 from .api.create_ppt import router as create_ppt_router
 from .api.viral_video_remix import router as viral_video_remix_router
@@ -945,6 +946,7 @@ def create_app() -> FastAPI:
     app.include_router(local_bestseller_router, prefix="")
     app.include_router(goal_video_pipeline_router, prefix="")
     app.include_router(create_video_pipeline_router, prefix="")
+    app.include_router(creative_film_studio_router, prefix="")
     app.include_router(create_ppt_pipeline_router, prefix="")
     app.include_router(create_ppt_router, prefix="")
     app.include_router(viral_video_remix_router, prefix="")
