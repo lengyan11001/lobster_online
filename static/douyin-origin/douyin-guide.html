@@ -1,11 +1,11 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>鎶栭煶宸ヤ綔鍙颁娇鐢ㄦ墜鍐?/title>
-    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
-    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <title>抖音工作台使用手册</title>
+    <link rel="icon" type="image/png" href="/static/static/douyin-origin/douyin.html-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-workbench.css">
     <style>
         :root {
             --bg: #f6f8fb;
@@ -394,7 +394,7 @@
             }
         }
     </style>
-    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+    <script src="/static/static/douyin-origin/douyin.html-origin/lobster-bridge.js?v=20260608-encoding"></script>
 </head>
 <body class="guide-shell-page">
     <div class="app">
@@ -404,7 +404,7 @@
                     <div class="sidebar-brand-head">
                         <div class="sidebar-brand-mark">AI</div>
                         <div class="sidebar-brand-copy">
-                            <div class="brand-name">蹇呯伀AI鑾峰</div>
+                            <div class="brand-name">必火AI获客</div>
                         </div>
                     </div>
                 </div>
@@ -417,148 +417,53 @@
                                     <span class="sidebar-group-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5"></path><path d="M6.5 10.5V19h11v-8.5"></path><path d="M10 19v-4.5h4V19"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">鏁版嵁澶у睆</span></span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">数据大屏</span></span>
                                 </span>
                             </a>
                         </section>
                         <section class="sidebar-group" data-collapsible="false">
-                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-scheduler.html">
+                            <a class="sidebar-group-header" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-scheduler.html">
                                 <span class="sidebar-group-main">
                                     <span class="sidebar-group-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect><path d="M8 3.5v3"></path><path d="M16 3.5v3"></path><path d="M4.5 9.5h15"></path><path d="M8.5 13h2"></path><path d="M13.5 13h2"></path><path d="M8.5 16h2"></path><path d="M13.5 16h2"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">鎺掓湡涓績</span></span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">排期中心</span></span>
                                 </span>
                             </a>
                         </section>
-                        <section class="sidebar-group" data-group="search" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html">
+                        <section class="sidebar-group" data-collapsible="false">
+                            <a class="sidebar-group-header" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-inbox.html">
                                 <span class="sidebar-group-main">
                                     <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <circle cx="10" cy="10" r="5.25"></circle>
-                                            <path d="m13.8 13.8 5 5"></path>
-                                            <path d="M7.8 10h4.4"></path>
-                                            <path d="M10 7.8v4.4"></path>
-                                        </svg>
+                                        <svg viewBox="0 0 24 24"><path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path><path d="m7 8.5 5 4 5-4"></path><path d="M7 15.5h4.5"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">鎼滅储閲囬泦</span>
-                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">私信聚合</span></span>
                                 </span>
                             </a>
                         </section>
-                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html">
+                        <section class="sidebar-group is-open" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-collect')">
                                 <span class="sidebar-group-main">
                                     <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path>
-                                            <circle cx="12" cy="12.5" r="2.4"></circle>
-                                            <path d="M18.5 5.5 20 4"></path>
-                                        </svg>
+                                        <svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="5.25"></circle><path d="m13.8 13.8 5 5"></path><path d="M7.8 10h4.4"></path><path d="M10 7.8v4.4"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">鐩戞帶鍚岃</span>
-                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">采集模块</span></span>
                                 </span>
-                            </a>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-collect"><div class="sidebar-subnav-inner"><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-search.html">搜索采集</a><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-monitor.html">监控同行</a></div></div>
                         </section>
-                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html">
+                        <section class="sidebar-group is-open" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-interaction')">
                                 <span class="sidebar-group-main">
                                     <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path>
-                                            <path d="m10 10 3.2 2-3.2 2Z"></path>
-                                        </svg>
+                                        <svg viewBox="0 0 24 24"><path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path><path d="M8 9.5h8"></path><path d="M8 12.5h5"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">瑙嗛璇勮</span>
-                                    </span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">抖音互动</span></span>
                                 </span>
-                            </a>
-                        </section>
-                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html">
-                                <span class="sidebar-group-main">
-                                    <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path>
-                                            <path d="M8 9.5h8"></path>
-                                            <path d="M8 12.5h5"></path>
-                                        </svg>
-                                    </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">绉佷俊浜掑姩</span>
-                                    </span>
-                                </span>
-                            </a>
-                        </section>
-                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html">
-                                <span class="sidebar-group-main">
-                                    <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path>
-                                            <circle cx="11" cy="8.6" r="3.1"></circle>
-                                            <path d="M17.5 8.5h3"></path>
-                                            <path d="M19 7v3"></path>
-                                        </svg>
-                                    </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">鍏虫敞璇勮</span>
-                                    </span>
-                                </span>
-                            </a>
-                        </section>
-                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html">
-                                <span class="sidebar-group-main">
-                                    <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path>
-                                            <path d="m7 8.5 5 4 5-4"></path>
-                                            <path d="M7 15.5h4.5"></path>
-                                        </svg>
-                                    </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">绉佷俊鑱氬悎</span>
-                                    </span>
-                                </span>
-                            </a>
-                        </section>
-                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html">
-                                <span class="sidebar-group-main">
-                                    <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path>
-                                            <path d="M9 9h6"></path>
-                                            <path d="M9 12h3.5"></path>
-                                        </svg>
-                                    </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">绉佷俊寮曟祦</span>
-                                    </span>
-                                </span>
-                            </a>
-                        </section>
-                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
-                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html">
-                                <span class="sidebar-group-main">
-                                    <span class="sidebar-group-icon" aria-hidden="true">
-                                        <svg viewBox="0 0 24 24">
-                                            <path d="M12 20a8 8 0 1 1 7.5-5.2"></path>
-                                            <path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path>
-                                            <path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path>
-                                        </svg>
-                                    </span>
-                                    <span class="sidebar-group-copy">
-                                        <span class="sidebar-group-title">璇勮@瀹㈡埛</span>
-                                    </span>
-                                </span>
-                            </a>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-interaction"><div class="sidebar-subnav-inner"><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-collect.html">视频评论</a><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-follow.html">关注评论</a><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-interaction.html">私信互动</a><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-stranger-leads.html">私信引流</a><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-mention.html">评论@客户</a></div></div>
                         </section>
                         <section class="sidebar-group is-open" data-collapsible="true">
                             <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-customers')">
@@ -566,11 +471,11 @@
                                     <span class="sidebar-group-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24"><path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path><circle cx="10.7" cy="8.7" r="3.2"></circle><path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path><path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">瀹㈡埛浠撳簱</span></span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">客户仓库</span></span>
                                 </span>
                                 <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
                             </button>
-                            <div class="sidebar-subnav" id="sidebar-group-customers"><div class="sidebar-subnav-inner"><a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">鍏ㄩ儴瀹㈡埛</a><a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">绮惧噯瀹㈡埛</a></div></div>
+                            <div class="sidebar-subnav" id="sidebar-group-customers"><div class="sidebar-subnav-inner"><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-customer-pools.html">全部客户</a><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-customer-pools.html#precise">精准客户</a></div></div>
                         </section>
                         <section class="sidebar-group is-open" data-collapsible="true">
                             <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('sidebar-group-nurture')">
@@ -578,39 +483,39 @@
                                     <span class="sidebar-group-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24"><path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path><path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">鍏诲彿浠撳簱</span></span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">养号仓库</span></span>
                                 </span>
                                 <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
                             </button>
-                            <div class="sidebar-subnav" id="sidebar-group-nurture"><div class="sidebar-subnav-inner"><a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">璐﹀彿鍏诲彿</a><a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">缇ゆ垚鍛樻彁鍙?/a></div></div>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture"><div class="sidebar-subnav-inner"><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-nurture.html">账号养号</a><a class="sidebar-subbtn" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-groups.html">群成员提取</a></div></div>
                         </section>
                         <section class="sidebar-group" data-collapsible="false">
-                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-logs.html">
+                            <a class="sidebar-group-header" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-logs.html">
                                 <span class="sidebar-group-main">
                                     <span class="sidebar-group-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24"><path d="M7 5.5h10"></path><path d="M7 10.5h10"></path><path d="M7 15.5h6"></path><path d="M5 4.5h.01"></path><path d="M5 9.5h.01"></path><path d="M5 14.5h.01"></path><path d="M4.5 19.5h15"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">鎵ц鏃ュ織</span></span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">执行日志</span></span>
                                 </span>
                             </a>
                         </section>
                         <section class="sidebar-group" data-collapsible="false">
-                            <a class="sidebar-group-header" href="/static/douyin-origin/douyin-config.html">
+                            <a class="sidebar-group-header" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-config.html">
                                 <span class="sidebar-group-main">
                                     <span class="sidebar-group-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.6"></circle><path d="M19.4 15a1.3 1.3 0 0 0 .26 1.43l.05.05a1.6 1.6 0 1 1-2.26 2.26l-.05-.05a1.3 1.3 0 0 0-1.43-.26 1.3 1.3 0 0 0-.79 1.18V20a1.6 1.6 0 1 1-3.2 0v-.08a1.3 1.3 0 0 0-.84-1.2 1.3 1.3 0 0 0-1.39.28l-.05.05a1.6 1.6 0 1 1-2.26-2.26l.05-.05a1.3 1.3 0 0 0 .28-1.39 1.3 1.3 0 0 0-1.2-.84H4a1.6 1.6 0 1 1 0-3.2h.08a1.3 1.3 0 0 0 1.2-.84 1.3 1.3 0 0 0-.28-1.39l-.05-.05a1.6 1.6 0 1 1 2.26-2.26l.05.05a1.3 1.3 0 0 0 1.39.28h.06a1.3 1.3 0 0 0 .78-1.19V4a1.6 1.6 0 1 1 3.2 0v.08a1.3 1.3 0 0 0 .84 1.2 1.3 1.3 0 0 0 1.39-.28l.05-.05a1.6 1.6 0 1 1 2.26 2.26l-.05.05a1.3 1.3 0 0 0-.26 1.43v.06a1.3 1.3 0 0 0 1.18.79H20a1.6 1.6 0 1 1 0 3.2h-.08a1.3 1.3 0 0 0-1.2.84Z"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">閰嶇疆涓績</span></span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">配置中心</span></span>
                                 </span>
                             </a>
                         </section>
                         <section class="sidebar-group" data-collapsible="false">
-                            <a class="sidebar-group-header active" href="/static/douyin-origin/douyin-guide.html">
+                            <a class="sidebar-group-header active" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-guide.html">
                                 <span class="sidebar-group-main">
                                     <span class="sidebar-group-icon" aria-hidden="true">
                                         <svg viewBox="0 0 24 24"><path d="M6.8 5.5h9.6A1.6 1.6 0 0 1 18 7.1v9.8a1.6 1.6 0 0 1-1.6 1.6H7.6A1.6 1.6 0 0 1 6 16.9V6.3A.8.8 0 0 1 6.8 5.5Z"></path><path d="M9 9h6"></path><path d="M9 12h6"></path><path d="M9 15h3.5"></path></svg>
                                     </span>
-                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">浣跨敤璇存槑</span></span>
+                                    <span class="sidebar-group-copy"><span class="sidebar-group-title">使用说明</span></span>
                                 </span>
                             </a>
                         </section>
@@ -621,32 +526,32 @@
                 <div class="guide-main-shell">
                     <header class="hero">
                         <div class="actions">
-                            <a class="button primary" href="/douyin/workbench">杩涘叆鎶栭煶宸ヤ綔鍙?/a>
-                            <a class="button" href="#config">鍏堢湅閰嶇疆涓績</a>
-                            <a class="button" href="#workflow">鏌ョ湅鎺ㄨ崘娴佺▼</a>
+                            <a class="button primary" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html.html">进入抖音工作台</a>
+                            <a class="button" href="#config">先看配置中心</a>
+                            <a class="button" href="#workflow">查看推荐流程</a>
                         </div>
                     </header>
                     <section class="guide-toolbar">
                         <div class="guide-toolbar-head">
                             <div class="guide-toolbar-copy">
-                                <h3>鎶栭煶宸ヤ綔鍙颁娇鐢ㄦ墜鍐?/h3>
-                                <p>鎵嬪唽鐩綍鍜屾悳绱㈡斁鍦ㄥ綋鍓嶅唴瀹瑰尯锛屽乏渚у缁堜繚鎸佸伐浣滃彴瀵艰埅锛屽垏椤典笉浼氬啀涓㈣彍鍗曠姸鎬併€?/p>
+                                <h3>抖音工作台使用手册</h3>
+                                <p>手册目录和搜索放在当前内容区，左侧始终保持工作台导航，切页不会再丢菜单状态。</p>
                             </div>
-                            <div class="pill">鏈€鍚庢洿鏂帮細2026-04-17</div>
+                            <div class="pill">最后更新：2026-04-17</div>
                         </div>
                         <div class="guide-searchbar">
-                            <label for="guide-search">鎼滅储鎵嬪唽</label>
-                            <input id="guide-search" type="search" placeholder="杈撳叆锛氭悳绱€佺淇°€佺兢鎴愬憳銆侀厤缃?>
+                            <label for="guide-search">搜索手册</label>
+                            <input id="guide-search" type="search" placeholder="输入：搜索、私信、群成员、配置">
                         </div>
-                        <nav class="guide-directory" id="guide-nav" aria-label="鎶栭煶鎵嬪唽鐩綍"></nav>
+                        <nav class="guide-directory" id="guide-nav" aria-label="抖音手册目录"></nav>
                     </section>
                     <section id="workflow" class="note">
-                        <h3>鎺ㄨ崘浣跨敤娴佺▼</h3>
-                        <p>閰嶇疆涓績鐧诲綍璐﹀彿骞朵繚瀛樿鍒?-> 鎼滅储閲囬泦鍏抽敭璇嶈棰戞垨鐩戞帶鍚岃 -> 瑙嗛璇勮鎶撳彇瀹㈡埛 -> 鏌ョ湅鍏ㄩ儴瀹㈡埛鍜岀簿鍑嗗鎴?-> 瀵圭簿鍑嗗鎴峰仛鍏虫敞璇勮鎴栫淇′簰鍔?-> 闇€瑕佺珯澶栫嚎绱㈡椂浣跨敤闄岀敓浜虹暀璧勩€佹彁鍙婅瘎璁烘垨缇ゆ垚鍛樻彁鍙?-> 閬囧埌寮傚父鏃舵煡鐪嬫墽琛屾棩蹇椼€?/p>
+                        <h3>推荐使用流程</h3>
+                        <p>配置中心登录账号并保存规则 -> 搜索采集关键词视频或监控同行 -> 视频评论抓取客户 -> 查看全部客户和精准客户 -> 对精准客户做关注评论或私信互动 -> 需要站外线索时使用陌生人留资、提及评论或群成员提取 -> 遇到异常时查看执行日志。</p>
                     </section>
                     <div id="sections"></div>
-                    <section class="note"><h3>杩欑被鍦ㄧ嚎鎵嬪唽鎬庝箞鏇存柊</h3><p>椤甸潰鍐呭鏄潤鎬?HTML锛岄€傚悎鐩存帴闅忕綉绔欎竴璧烽儴缃层€傚悗缁鏋滄姈闊冲伐浣滃彴鏀圭増锛屽彧闇€瑕侀噸鏂扮敓鎴愬搴旀埅鍥撅紝骞惰皟鏁存湰椤甸潰鐨勬楠ゅ拰娉ㄦ剰浜嬮」銆傜敤鎴疯闂?`/douyin-guide` 鏃朵細鐪嬪埌鏈€鏂扮増鏈紝涓嶉渶瑕佸崟鐙笅杞芥枃妗ｃ€?/p></section>
-                    <p class="footer">鏈墜鍐屽彧璇存槑绯荤粺椤甸潰鐨勪娇鐢ㄦ柟娉曘€傚疄闄呮墽琛屾晥鏋滀細鍙楀埌璐﹀彿鐘舵€併€佸钩鍙伴〉闈㈠彉鍖栥€佺綉缁滅幆澧冦€佸叧閿瘝璐ㄩ噺鍜岄厤缃鍒欏奖鍝嶃€傛壒閲忔墽琛屽墠寤鸿鍏堢敤灏戦噺浠诲姟娴嬭瘯銆?/p>
+                    <section class="note"><h3>这类在线手册怎么更新</h3><p>页面内容是静态 HTML，适合直接随网站一起部署。后续如果抖音工作台改版，只需要重新生成对应截图，并调整本页面的步骤和注意事项。用户访问 `/static/douyin-origin/douyin.html-guide` 时会看到最新版本，不需要单独下载文档。</p></section>
+                    <p class="footer">本手册只说明系统页面的使用方法。实际执行效果会受到账号状态、平台页面变化、网络环境、关键词质量和配置规则影响。批量执行前建议先用少量任务测试。</p>
                 </div>
             </main>
         </div>
@@ -664,149 +569,149 @@
         }
 
         const guideSections = [
-    ["config", "01", "閰嶇疆涓績", "14-config.png", "閰嶇疆涓績鏄墍鏈夋姈闊冲伐浣滃彴鑳藉姏鐨勮捣鐐癸紝鐢ㄦ潵鐧诲綍璐﹀彿銆佽缃粯璁ゆ墽琛岃处鍙枫€侀厤缃悳绱㈢瓫閫夎鍒欎互鍙?AI 鍒ゆ柇瑙勫垯銆?, [
-        "鍏堢‘璁よ浣跨敤鐨勬姈闊宠处鍙峰凡缁忕櫥褰曪紝骞朵笖鐘舵€佹樉绀哄湪绾裤€?,
-        "璁剧疆榛樿鎵ц璐﹀彿锛岄伩鍏嶅悗缁换鍔¤窇鍒伴敊璇处鍙蜂笂銆?,
-        "鏍规嵁涓氬姟鍦烘櫙璋冩暣鏈€浣庣偣璧炪€侀噸澶嶈繃婊ゃ€佽瘎璁烘姄鍙栦笂闄愮瓑鍩虹瑙勫垯銆?,
-        "琛ュ厖 AI 妯″瀷鍜岀簿鍑嗗鎴峰垽鏂彁绀鸿瘝锛屽啀鐐瑰嚮淇濆瓨閰嶇疆銆?
+    ["config", "01", "配置中心", "14-config.png", "配置中心是所有抖音工作台能力的起点，用来登录账号、设置默认执行账号、配置搜索筛选规则以及 AI 判断规则。", [
+        "先确认要使用的抖音账号已经登录，并且状态显示在线。",
+        "设置默认执行账号，避免后续任务跑到错误账号上。",
+        "根据业务场景调整最低点赞、重复过滤、评论抓取上限等基础规则。",
+        "补充 AI 模型和精准客户判断提示词，再点击保存配置。"
     ], [
-        "娌℃湁鍦ㄧ嚎璐﹀彿鏃讹紝涓嶈鐩存帴寮€濮嬫悳绱€佽瘎璁烘垨绉佷俊浠诲姟銆?,
-        "淇敼閰嶇疆鍚庤鍏堜繚瀛橈紝鍐嶈繘鍏ュ叾浠栭〉闈㈡墽琛屼换鍔°€?,
-        "榛樿鎵ц璐﹀彿鍒囬敊鏃讹紝鍚庣画鎵€鏈夊姩浣滈兘浼氳窡鐫€璺戝亸銆?
-    ], ["璐﹀彿绠＄悊", "绛涢€夎鍒?, "AI 閰嶇疆"]],
-    ["overview", "02", "鏁版嵁澶у睆", "01-overview.png", "鏁版嵁澶у睆鐢ㄦ潵蹇€熸煡鐪嬪綋鍓嶈处鍙枫€佷换鍔″拰瀹㈡埛娌夋穩鎯呭喌锛岄€傚悎鍏堝垽鏂郴缁熸槸鍚﹀浜庡彲鎵ц鐘舵€併€?, [
-        "鍏堢湅鍦ㄧ嚎璐﹀彿銆佷换鍔℃暟閲忓拰瀹㈡埛瑙勬ā鏄惁姝ｅ父銆?,
-        "鍐嶇湅鍦板浘鐑尯鍜屾ā鍧楁瑙堬紝鍒ゆ柇鏁版嵁涓昏鏉ヨ嚜鍝噷銆?,
-        "濡傛灉鍙槸宸℃鐘舵€侊紝鍋滅暀鍦ㄥぇ灞忓嵆鍙紱瑕佹墽琛屼换鍔″啀杩涘叆瀵瑰簲妯″潡銆?
+        "没有在线账号时，不要直接开始搜索、评论或私信任务。",
+        "修改配置后要先保存，再进入其他页面执行任务。",
+        "默认执行账号切错时，后续所有动作都会跟着跑偏。"
+    ], ["账号管理", "筛选规则", "AI 配置"]],
+    ["overview", "02", "数据大屏", "01-overview.png", "数据大屏用来快速查看当前账号、任务和客户沉淀情况，适合先判断系统是否处于可执行状态。", [
+        "先看在线账号、任务数量和客户规模是否正常。",
+        "再看地图热区和模块概览，判断数据主要来自哪里。",
+        "如果只是巡检状态，停留在大屏即可；要执行任务再进入对应模块。"
     ], [
-        "澶у睆涓昏鏄粨鏋滄眹鎬伙紝涓嶄細涓诲姩閲囬泦鏂版暟鎹€?,
-        "鍒氭墽琛屽畬浠诲姟鏃讹紝澶у睆鍙兘浼氭湁鐭殏寤惰繜銆?,
-        "鏁版嵁寮傚父鏃朵紭鍏堝幓鎵ц鏃ュ織鐪嬫渶鏂扮姸鎬併€?
-    ], ["鎬昏", "鐘舵€佹鏌?, "缁撴灉姹囨€?]],
-    ["search", "03", "鎼滅储閲囬泦", "02-search.png", "鎼滅储閲囬泦鐢ㄤ簬杈撳叆鍏抽敭璇嶉噰闆嗘姈闊宠棰戯紝骞舵妸缁撴灉娌夋穩鎴愬叧閿瘝鍗＄墖锛屼綔涓哄悗缁瘎璁洪噰闆嗐€佸鎴疯瘑鍒拰鍚岃杩借釜鐨勮棰戞潵婧愩€?, [
-        "杈撳叆鍏抽敭璇嶅悗鐐瑰嚮鎼滅储骞堕噰闆嗭紝绯荤粺浼氱敓鎴愭垨鏇存柊瀵瑰簲鐨勫叧閿瘝鍗＄墖銆?,
-        "濡傛灉涓€涓叧閿瘝瑙嗛姹犲お灏戯紝鍙互鐐瑰嚮 AI鎷撹瘝鎼滅储锛岀郴缁熶細鑷姩鎵╁睍鐩稿叧鍏抽敭璇嶅苟鍒嗘壒鎼滅储锛屾墿澶ц棰戞睜銆?,
-        "鐐瑰紑鍏抽敭璇嶅崱鐗囨煡鐪嬭鍏抽敭璇嶄笅鐨勮棰戝垪琛ㄣ€佸巻鍙查噸澶嶆暟閲忋€佽瘎璁洪噰闆嗚繘搴︺€佸叏閮ㄥ鎴峰拰绮惧噯瀹㈡埛銆?,
-        "鏍规嵁鏍囬銆佷綔鑰呫€佺偣璧炪€佸彂甯冩椂闂村拰鍘嗗彶閲嶅鎻愮ず绛涢€夌洰鏍囪棰戯紝鍐嶇敤鍏ㄩ€夊綋鍓嶉〉鎴栨墜鍔ㄥ嬀閫夌‘璁よ寖鍥淬€?,
-        "鍕鹃€夊悗鐐瑰嚮寮€濮嬮噰闆嗘椂锛屼細鍏堝脊鍑洪噰闆嗚缃脊绐楋紱纭鍗忚妯″紡鎴栬剼鏈ā寮忋€侀噰闆嗘暟閲忓拰瀹㈡埛鍒ゆ柇瑙勫垯鍚庡啀鍚姩銆?
+        "大屏主要是结果汇总，不会主动采集新数据。",
+        "刚执行完任务时，大屏可能会有短暂延迟。",
+        "数据异常时优先去执行日志看最新状态。"
+    ], ["总览", "状态检查", "结果汇总"]],
+    ["search", "03", "搜索采集", "02-search.png", "搜索采集用于输入关键词采集抖音视频，并把结果沉淀成关键词卡片，作为后续评论采集、客户识别和同行追踪的视频来源。", [
+        "输入关键词后点击搜索并采集，系统会生成或更新对应的关键词卡片。",
+        "如果一个关键词视频池太少，可以点击 AI拓词搜索，系统会自动扩展相关关键词并分批搜索，扩大视频池。",
+        "点开关键词卡片查看该关键词下的视频列表、历史重复数量、评论采集进度、全部客户和精准客户。",
+        "根据标题、作者、点赞、发布时间和历史重复提示筛选目标视频，再用全选当前页或手动勾选确认范围。",
+        "勾选后点击开始采集时，会先弹出采集设置弹窗；确认协议模式或脚本模式、采集数量和客户判断规则后再启动。"
     ], [
-        "AI鎷撹瘝浼氳繛缁悳绱㈠涓叧閿瘝锛屼负浜嗛檷浣庤处鍙锋帀绾块闄╋紝寤鸿涓嶈棰戠箒杩炵画瑙﹀彂銆?,
-        "鍗忚妯″紡閫熷害鏇村揩锛屼絾褰撳墠涓嶆敮鎸佹寜鍦板尯/IP 灞炲湴绛涢€夛紱濡傛灉蹇呴』鎸夊湴鍖哄垽鏂紝璇锋敼鐢ㄨ剼鏈ā寮忔垨鍙寜鎻愮ず璇嶇瓫閫夈€?,
-        "鍘嗗彶閲嶅鍙槸鎻愰啋杩欎釜瑙嗛鎴栧鎴蜂互鍓嶅嚭鐜拌繃锛屽嬀閫夊墠浠嶈鐪嬩笟鍔＄浉鍏虫€с€?,
-        "鍏ㄩ€夊綋鍓嶉〉鍙€夋嫨褰撳墠鍒嗛〉鐨勮棰戯紱瀵煎嚭鎴栧紑濮嬮噰闆嗗墠瑕佺‘璁ゅ嬀閫夎寖鍥淬€?,
-        "娌℃湁鍦ㄧ嚎璐﹀彿鏃舵悳绱㈠拰璇勮閲囬泦閮戒笉浼氱湡姝ｆ墽琛岋紝寮傚父鏃跺厛鐪嬫墽琛屾棩蹇椼€?
-    ], ["鍏抽敭璇嶅崱鐗?, "AI鎷撹瘝", "鍗忚妯″紡", "閲囬泦杩涘害"]],
-    ["monitor", "04", "鐩戞帶鍚岃", "03-monitor.png", "鐩戞帶鍚岃閫傚悎闀挎湡鐩綇鐩爣璐﹀彿銆佸悓琛岃处鍙锋垨绔炲搧璐﹀彿锛屾寜鏈€鏂板彂甯冩椂闂村悓姝ュ鏂硅棰戯紝骞舵妸鏂拌瘎璁烘寔缁矇娣€涓哄鎴锋潵婧愩€?, [
-        "绮樿创鍚岃涓婚〉閾炬帴鎴栧悓琛岃棰戝垎浜摼鎺ュ悗鐐瑰嚮娣诲姞鍚岃锛岃棰戦摼鎺ヤ細鑷姩璇嗗埆浣滆€呭苟鍔犲叆鐩戞帶銆?,
-        "宸︿晶閫夋嫨鍚岃锛屽彸渚ф煡鐪嬭鍚岃鏈€杩戝悓姝ョ殑瑙嗛鍒楄〃锛岄噸鐐圭湅鍙戝竷鏃堕棿鍜屾柊瑙嗛鏍囪銆?,
-        "绯荤粺浼氬湪姣忓ぉ鍥哄畾鏃舵鑷姩妫€鏌ユ柊瑙嗛锛涙柊瑙嗛浼氳嚜鍔ㄨ拷韪紝鎵嬪姩鍕鹃€夋棫瑙嗛鍙互琛ラ噰銆?,
-        "鐐瑰嚮绔嬪嵆璺戜竴杞彲浠ユ墜鍔ㄨЕ鍙戝悓姝ュ拰璇勮閲囬泦锛岃瘎璁哄皯鐨勮棰戜篃浼氶噰闆嗐€?,
-        "閲囬泦缁撴灉浼氳繘鍏ュ綋鍓嶅悓琛屽鎴锋睜锛屽苟鍚屾鍒板叏閮ㄥ鎴峰拰绮惧噯瀹㈡埛锛屽凡閲囪繃鐨勫巻鍙茶瘎璁轰細鑷姩鍘婚噸銆?
+        "AI拓词会连续搜索多个关键词，为了降低账号掉线风险，建议不要频繁连续触发。",
+        "协议模式速度更快，但当前不支持按地区/IP 属地筛选；如果必须按地区判断，请改用脚本模式或只按提示词筛选。",
+        "历史重复只是提醒这个视频或客户以前出现过，勾选前仍要看业务相关性。",
+        "全选当前页只选择当前分页的视频；导出或开始采集前要确认勾选范围。",
+        "没有在线账号时搜索和评论采集都不会真正执行，异常时先看执行日志。"
+    ], ["关键词卡片", "AI拓词", "协议模式", "采集进度"]],
+    ["monitor", "04", "监控同行", "03-monitor.png", "监控同行适合长期盯住目标账号、同行账号或竞品账号，按最新发布时间同步对方视频，并把新评论持续沉淀为客户来源。", [
+        "粘贴同行主页链接或同行视频分享链接后点击添加同行，视频链接会自动识别作者并加入监控。",
+        "左侧选择同行，右侧查看该同行最近同步的视频列表，重点看发布时间和新视频标记。",
+        "系统会在每天固定时段自动检查新视频；新视频会自动追踪，手动勾选旧视频可以补采。",
+        "点击立即跑一轮可以手动触发同步和评论采集，评论少的视频也会采集。",
+        "采集结果会进入当前同行客户池，并同步到全部客户和精准客户，已采过的历史评论会自动去重。"
     ], [
-        "鐩戞帶涓嶆槸涓€娆℃€ф悳绱紝瀹冩洿閫傚悎闀挎湡杩借釜鍚岃鏂拌棰戝拰鏂拌瘎璁恒€?,
-        "鍒锋柊褰撳墠鍚岃鍙悓姝ヤ富椤靛拰瑙嗛锛屼笉浼氶噰闆嗚瘎璁猴紱瑕侀噰瀹㈡埛璇风敤绔嬪嵆璺戜竴杞垨绛夊緟瀹氭椂浠诲姟銆?,
-        "绯荤粺榛樿姣忓ぉ 00:00 鍜?18:30 璺戠洃鎺э紝鎵ц鍓嶈淇濊瘉鎶栭煶璐﹀彿鍦ㄧ嚎銆?,
-        "濡傛灉鐩爣涓婚〉鏃犳硶璁块棶銆佽处鍙锋帀绾挎垨瑙﹀彂椋庢帶锛岀洃鎺х粨鏋滃彲鑳戒负绌猴紝鍏堢湅鎵ц鏃ュ織銆?,
-        "鎵嬪姩鍕鹃€夌殑浣滅敤鏄ˉ閲囨棫瑙嗛锛涙柊瑙嗛鍗充娇娌℃湁鍕鹃€夛紝涔熶細鎸夎鍒欒嚜鍔ㄨ拷韪€?
-    ], ["鍚岃鐩戞帶", "鏈€鏂拌棰?, "璇勮澧為噺", "瀹氭椂閲囬泦"]],
-    ["collect", "05", "瑙嗛璇勮", "04-collect.png", "瑙嗛璇勮妯″潡鎵挎帴鎼滅储閲囬泦鍜岀洃鎺у悓琛岀殑缁撴灉锛岀敤鏉ュ垱寤鸿瘎璁洪噰闆嗕换鍔°€佹姄鍙栬瘎璁虹敤鎴峰苟娌夋穩瀹㈡埛銆?, [
-        "鍏堝湪鎼滅储閲囬泦閲屽嬀閫夌洰鏍囪棰戙€?,
-        "杩涘叆瑙嗛璇勮椤靛悗娌跨敤鎼滅储鍕鹃€夋垨閲嶆柊閫夋嫨鏉ユ簮銆?,
-        "鐐瑰嚮寮€濮嬮噰闆嗭紝绛夊緟浠诲姟瀹屾垚銆?,
-        "閲囬泦缁撴潫鍚庡幓鍏ㄩ儴瀹㈡埛鎴栫簿鍑嗗鎴锋煡鐪嬫矇娣€缁撴灉銆?
+        "监控不是一次性搜索，它更适合长期追踪同行新视频和新评论。",
+        "刷新当前同行只同步主页和视频，不会采集评论；要采客户请用立即跑一轮或等待定时任务。",
+        "系统默认每天 00:00 和 18:30 跑监控，执行前要保证抖音账号在线。",
+        "如果目标主页无法访问、账号掉线或触发风控，监控结果可能为空，先看执行日志。",
+        "手动勾选的作用是补采旧视频；新视频即使没有勾选，也会按规则自动追踪。"
+    ], ["同行监控", "最新视频", "评论增量", "定时采集"]],
+    ["collect", "05", "视频评论", "04-collect.png", "视频评论模块承接搜索采集和监控同行的结果，用来创建评论采集任务、抓取评论用户并沉淀客户。", [
+        "先在搜索采集里勾选目标视频。",
+        "进入视频评论页后沿用搜索勾选或重新选择来源。",
+        "点击开始采集，等待任务完成。",
+        "采集结束后去全部客户或精准客户查看沉淀结果。"
     ], [
-        "娌℃湁鍕鹃€夋椂锛岀郴缁熷彲鑳芥寜褰撳墠绛涢€夎寖鍥存壒閲忔墽琛屻€?,
-        "璇勮鎶撳彇鑼冨洿瓒婂ぇ锛屾墽琛屾椂闂磋秺闀裤€?,
-        "浠诲姟澶辫触鏃朵笉瑕佸弽澶嶉噸璇曪紝鍏堢湅鏃ュ織瀹氫綅鍘熷洜銆?
-    ], ["璇勮閲囬泦", "浠诲姟鎵ц", "瀹㈡埛娌夋穩"]],
-    ["follow", "06", "鍏虫敞璇勮", "05-follow.png", "鍏虫敞璇勮鐢ㄤ簬瀵瑰凡缁忚瘑鍒嚭鐨勭簿鍑嗗鎴峰仛鍏紑浜掑姩锛岄€傚悎鍦ㄧ淇″墠鍏堝缓绔嬭交浜掑姩銆?, [
-        "鍏堢‘璁ょ簿鍑嗗鎴峰垪琛ㄩ噷宸茬粡鏈夋暟鎹€?,
-        "绛涢€夊嚭瑕佽Е杈剧殑鐢ㄦ埛鍚庡嬀閫夎寖鍥淬€?,
-        "閫夋嫨鍥哄畾鏂囨鎴?AI 鐢熸垚鏂瑰紡锛屽啀寮€濮嬫墽琛屻€?,
-        "鎵ц涓寔缁瀵熶换鍔＄姸鎬佸拰鏃ュ織銆?
+        "没有勾选时，系统可能按当前筛选范围批量执行。",
+        "评论抓取范围越大，执行时间越长。",
+        "任务失败时不要反复重试，先看日志定位原因。"
+    ], ["评论采集", "任务执行", "客户沉淀"]],
+    ["follow", "06", "关注评论", "05-follow.png", "关注评论用于对已经识别出的精准客户做公开互动，适合在私信前先建立轻互动。", [
+        "先确认精准客户列表里已经有数据。",
+        "筛选出要触达的用户后勾选范围。",
+        "选择固定文案或 AI 生成方式，再开始执行。",
+        "执行中持续观察任务状态和日志。"
     ], [
-        "鍏紑璇勮灞炰簬楂橀鍔ㄤ綔锛岃妭濂忚淇濆畧銆?,
-        "涓嶈瀵瑰ぇ鎵归噺鐢ㄦ埛浣跨敤瀹屽叏鐩稿悓鐨勮瘽鏈€?,
-        "鍑虹幇寮傚父鏃跺厛鍋滄褰撳墠浠诲姟锛屽啀鐪嬫棩蹇椼€?
-    ], ["鍏紑浜掑姩", "绮惧噯瀹㈡埛", "璇濇湳閰嶇疆"]],
-    ["interaction", "07", "绉佷俊浜掑姩", "06-interaction.png", "绉佷俊浜掑姩鐢ㄤ簬鍚戠簿鍑嗗鎴锋垨浜哄伐鍔犲叆鍚嶅崟鐨勭敤鎴峰彂閫佺淇★紝鐜板湪鏄嫭绔嬬淇″伐浣滃彴锛屽彧鍔犺浇绉佷俊瀹㈡埛銆佷换鍔＄姸鎬佸拰褰撳墠璐﹀彿淇℃伅銆?, [
-        "杩涘叆椤甸潰鍚庡厛纭椤堕儴绮惧噯瀹㈡埛銆佸凡鍕鹃€夈€佹潵婧愯棰戝拰鎵ц璐﹀彿鏄惁姝ｅ父銆?,
-        "鍦ㄧ淇¤瘽鏈尯閫夋嫨鍥哄畾鏂囨銆丄I 鐢熸垚鎴?AI 鏀瑰啓锛涘浐瀹氭枃妗堟敮鎸佷繚瀛?10 涓瘽鏈璁俱€?,
-        "澶氫釜闈炵┖璇濇湳浼氬湪鍙戦€佹椂鎸夐『搴忚疆鎹娇鐢紝绌虹櫧璇濇湳浼氳嚜鍔ㄨ烦杩囥€?,
-        "鍦ㄥ緟绉佷俊瀹㈡埛鍒楄〃閲屾寜鍦板尯銆佽瘎璁烘椂闂淬€佸叧娉ㄨ瘎璁虹姸鎬佹垨绉佷俊鐘舵€佺瓫閫夛紝鍐嶄娇鐢ㄥ叏閫夊綋鍓嶉〉鍕鹃€夋湰椤靛鎴枫€?,
-        "璁剧疆绉佷俊闂撮殧鍚庣偣鍑诲紑濮嬬淇★紝鎵ц涓瀵熺淇′换鍔＄姸鎬佸尯鍩熺殑杩涘害銆佽处鍙风姸鎬佸拰鏈€杩戝紓甯搞€?
+        "公开评论属于高频动作，节奏要保守。",
+        "不要对大批量用户使用完全相同的话术。",
+        "出现异常时先停止当前任务，再看日志。"
+    ], ["公开互动", "精准客户", "话术配置"]],
+    ["interaction", "07", "私信互动", "06-interaction.png", "私信互动用于向精准客户或人工加入名单的用户发送私信，现在是独立私信工作台，只加载私信客户、任务状态和当前账号信息。", [
+        "进入页面后先确认顶部精准客户、已勾选、来源视频和执行账号是否正常。",
+        "在私信话术区选择固定文案、AI 生成或 AI 改写；固定文案支持保存 10 个话术预设。",
+        "多个非空话术会在发送时按顺序轮换使用，空白话术会自动跳过。",
+        "在待私信客户列表里按地区、评论时间、关注评论状态或私信状态筛选，再使用全选当前页勾选本页客户。",
+        "设置私信间隔后点击开始私信，执行中观察私信任务状态区域的进度、账号状态和最近异常。"
     ], [
-        "绉佷俊姣旇瘎璁烘洿鏁忔劅锛屽缓璁棿闅旇缃繚瀹堬紝涓嶈涓€娆℃€у嬀閫夎繃澶氬鎴枫€?,
-        "璇濇湳瑕佸厛鐐瑰嚮淇濆瓨褰撳墠璇濇湳锛屾墠浼氬啓鍏ユ湰鏈哄巻鍙查厤缃紱涓嬫鎵撳紑椤甸潰浼氳嚜鍔ㄨ鍙栥€?,
-        "鍏ㄩ€夊綋鍓嶉〉鍙嬀閫夊綋鍓嶅垎椤电殑瀹㈡埛锛涘叏閫変細鍕鹃€夊綋鍓嶇瓫閫夊懡涓殑鍏ㄩ儴鍙敤瀹㈡埛銆?,
-        "椤甸潰搴曢儴涓嶅啀鏄剧ず鐙珛椤甸潰鏃ュ織锛屽紓甯镐細鍦ㄤ换鍔＄姸鎬佸拰鎵ц鏃ュ織閲屾煡鐪嬨€?,
-        "璐﹀彿寮傚父銆侀〉闈㈠姞杞戒笉瀹屾暣鎴栫淇℃寜閽笉鍙敤鏃讹紝鍏堝仠姝换鍔″啀澶嶆牳璐﹀彿鐘舵€併€?
-    ], ["绉佷俊瑙﹁揪", "10鏉¤瘽鏈?, "杞崲鍙戦€?, "鍏ㄩ€夊綋鍓嶉〉"]],
-    ["stranger-leads", "08", "闄岀敓浜虹暀璧?, "07-stranger-leads.png", "闄岀敓浜虹暀璧勭敤浜庡鐞嗙郴缁熷彂鐜扮殑绔欏唴绾跨储鍜屼富鍔ㄥ挩璇紝閫傚悎鎶婇潪绮惧噯姹犻噷鐨勬綔鍦ㄧ嚎绱㈣ˉ鍏呰繘鍚庣画璺熻繘娴佺▼銆?, [
-        "杩涘叆椤甸潰鍚庡厛鐪嬪綋鍓嶇嚎绱㈡潵婧愬拰鐘舵€併€?,
-        "閫氳繃绛涢€夋潯浠剁缉灏忕嚎绱㈣寖鍥淬€?,
-        "浜哄伐澶嶆牳绾跨储璐ㄩ噺锛屽啀鍐冲畾鏄惁杩涘叆鍚庣画绉佷俊鎴栭攢鍞祦绋嬨€?
+        "私信比评论更敏感，建议间隔设置保守，不要一次性勾选过多客户。",
+        "话术要先点击保存当前话术，才会写入本机历史配置；下次打开页面会自动读取。",
+        "全选当前页只勾选当前分页的客户；全选会勾选当前筛选命中的全部可用客户。",
+        "页面底部不再显示独立页面日志，异常会在任务状态和执行日志里查看。",
+        "账号异常、页面加载不完整或私信按钮不可用时，先停止任务再复核账号状态。"
+    ], ["私信触达", "10条话术", "轮换发送", "全选当前页"]],
+    ["stranger-leads", "08", "陌生人留资", "07-stranger-leads.png", "陌生人留资用于处理系统发现的站内线索和主动咨询，适合把非精准池里的潜在线索补充进后续跟进流程。", [
+        "进入页面后先看当前线索来源和状态。",
+        "通过筛选条件缩小线索范围。",
+        "人工复核线索质量，再决定是否进入后续私信或销售流程。"
     ], [
-        "杩欑被绾跨储璐ㄩ噺娉㈠姩杈冨ぇ锛屼笉鑳介粯璁ゅ叏閮ㄦ湁鏁堛€?,
-        "娌℃湁鏁版嵁鏃跺厛妫€鏌ヤ笂娓镐换鍔℃槸鍚︾湡鐨勪骇鍑轰簡绾跨储銆?,
-        "鎵归噺璺熻繘鍓嶅缓璁厛浜哄伐鎶芥牱澶嶆牳銆?
-    ], ["绾跨储琛ュ厖", "浜哄伐澶嶆牳", "鍚庣画璺熻繘"]],
-    ["mention", "09", "鎻愬強璇勮", "08-mention.png", "鎻愬強璇勮鐢ㄤ簬鍥寸粫鍝佺墝璇嶃€佸叧閿瘝鎴栨寚瀹氳瘽棰樺仛璇勮鍖轰簰鍔紝閫傚悎鍝佺墝缁存姢鍜岃瘽棰樺弬涓庛€?, [
-        "鍏堣缃渶瑕佸鐞嗙殑鍏抽敭璇嶆垨鐩爣鑼冨洿銆?,
-        "鏌ョ湅寰呭鐞嗚瘎璁烘槸鍚︿笌涓氬姟鍦烘櫙鐩稿叧銆?,
-        "閫夋嫨鏂囨鏂瑰紡鍚庡紑濮嬫墽琛屻€?
+        "这类线索质量波动较大，不能默认全部有效。",
+        "没有数据时先检查上游任务是否真的产出了线索。",
+        "批量跟进前建议先人工抽样复核。"
+    ], ["线索补充", "人工复核", "后续跟进"]],
+    ["mention", "09", "提及评论", "08-mention.png", "提及评论用于围绕品牌词、关键词或指定话题做评论区互动，适合品牌维护和话题参与。", [
+        "先设置需要处理的关键词或目标范围。",
+        "查看待处理评论是否与业务场景相关。",
+        "选择文案方式后开始执行。"
     ], [
-        "鎻愬強璇勮灞炰簬鍏紑浜掑姩锛岃閬垮厤杩囧己钀ラ攢鎰熴€?,
-        "鍝佺墝璇嶅拰绔炲搧璇嶈璋ㄦ厧浣跨敤銆?,
-        "寮傚父鏃跺厛鍋滀换鍔★紝鍐嶅幓鏃ュ織瀹氫綅銆?
-    ], ["鍝佺墝缁存姢", "鍏紑璇勮", "鍏抽敭璇嶄簰鍔?]],
-    ["all-customers", "10", "鍏ㄩ儴瀹㈡埛", "09-all-customers.png", "鍏ㄩ儴瀹㈡埛灞曠ず璇勮閲囬泦寰楀埌鐨勫叏閲忕敤鎴凤紝閫傚悎鍋氫汉宸ュ鐩樸€佹潵婧愯拷韪拰浜屾绛涢€夈€?, [
-        "鎸夊叧閿瘝鍗＄墖銆佸湴鍖恒€佹椂闂存垨鏉ユ簮瑙嗛绛涢€夊鎴枫€?,
-        "鏌ョ湅鐢ㄦ埛鏄电О銆佽瘎璁哄唴瀹瑰拰鏉ユ簮瑙嗛銆?,
-        "瀵逛笉纭畾鐢ㄦ埛鍋氫汉宸ュ垽鏂紝鍐嶅喅瀹氭槸鍚﹁繘鍏ョ簿鍑嗗鎴锋垨绉佷俊娴佺▼銆?
+        "提及评论属于公开互动，要避免过强营销感。",
+        "品牌词和竞品词要谨慎使用。",
+        "异常时先停任务，再去日志定位。"
+    ], ["品牌维护", "公开评论", "关键词互动"]],
+    ["all-customers", "10", "全部客户", "09-all-customers.png", "全部客户展示评论采集得到的全量用户，适合做人工复盘、来源追踪和二次筛选。", [
+        "按关键词卡片、地区、时间或来源视频筛选客户。",
+        "查看用户昵称、评论内容和来源视频。",
+        "对不确定用户做人工判断，再决定是否进入精准客户或私信流程。"
     ], [
-        "鍏ㄩ儴瀹㈡埛涓嶇瓑浜庡叏閮ㄩ兘鏄珮鎰忓悜瀹㈡埛銆?,
-        "瀹㈡埛涓虹┖鏃堕€氬父璇存槑涓婃父璇勮閲囬泦杩樻病瀹屾垚銆?,
-        "涓嶈鐩存帴瀵瑰叏閲忓鎴锋壒閲忕淇°€?
-    ], ["鍏ㄩ噺绾跨储", "浜哄伐绛涢€?, "鏉ユ簮杩借釜"]],
-    ["intent", "11", "绮惧噯瀹㈡埛", "10-intent.png", "绮惧噯瀹㈡埛椤甸潰灞曠ず绯荤粺渚濇嵁璇勮鍐呭鍜屽垽鏂鍒欑瓫閫夊嚭鐨勯珮鎰忓悜鐢ㄦ埛锛屾槸閲嶇偣瑙﹁揪鍚嶅崟銆?, [
-        "鎸夊叧閿瘝鍗＄墖鏌ョ湅涓嶅悓鏉ユ簮涓嬬殑绮惧噯瀹㈡埛銆?,
-        "閲嶇偣鐪嬭瘎璁哄唴瀹广€佷富椤点€佹椂闂村拰鏉ユ簮瑙嗛銆?,
-        "纭璐ㄩ噺鍚庡啀杩涘叆鍏虫敞璇勮鎴栫淇′簰鍔ㄦ墽琛岃Е杈俱€?
+        "全部客户不等于全部都是高意向客户。",
+        "客户为空时通常说明上游评论采集还没完成。",
+        "不要直接对全量客户批量私信。"
+    ], ["全量线索", "人工筛选", "来源追踪"]],
+    ["intent", "11", "精准客户", "10-intent.png", "精准客户页面展示系统依据评论内容和判断规则筛选出的高意向用户，是重点触达名单。", [
+        "按关键词卡片查看不同来源下的精准客户。",
+        "重点看评论内容、主页、时间和来源视频。",
+        "确认质量后再进入关注评论或私信互动执行触达。"
     ], [
-        "绮惧噯瀹㈡埛鏄?AI 鍜岃鍒欏叡鍚岀瓫鍑虹殑缁撴灉锛屼粛寤鸿浜哄伐鎶芥煡銆?,
-        "杩囧皯鏃跺彲浠ュ洖閰嶇疆涓績璋冩暣鍒ゆ柇瑙勫垯銆?,
-        "杩囧涓旇川閲忎綆鏃讹紝閫氬父璇存槑鍏抽敭璇嶆垨瑙勫垯澶銆?
-    ], ["楂樻剰鍚?, "AI 绛涢€?, "閲嶇偣鍚嶅崟"]],
-    ["nurture", "12", "鍏诲彿浠诲姟", "11-nurture.png", "鍏诲彿浠诲姟鐢ㄤ簬鍋氳处鍙风殑鏃ュ父娴忚鍜岀淮鎶ゅ姩浣滐紝璁╂墽琛岃妭濂忔洿鎺ヨ繎鐪熷疄浜哄伐浣跨敤銆?, [
-        "鍏堢‘璁よ处鍙峰湪绾夸笖褰撳墠鏃犲紓甯搞€?,
-        "璁剧疆鍏抽敭璇嶃€佹椂闀垮拰鎵ц闂撮殧銆?,
-        "鍚姩鍚庤瀵熶换鍔＄姸鎬侊紝閬垮厤鍜岄珮棰戣瘎璁恒€佺淇″悓鏃堕噸鍘嬭繍琛屻€?
+        "精准客户是 AI 和规则共同筛出的结果，仍建议人工抽查。",
+        "过少时可以回配置中心调整判断规则。",
+        "过多且质量低时，通常说明关键词或规则太宽。"
+    ], ["高意向", "AI 筛选", "重点名单"]],
+    ["nurture", "12", "养号任务", "11-nurture.png", "养号任务用于做账号的日常浏览和维护动作，让执行节奏更接近真实人工使用。", [
+        "先确认账号在线且当前无异常。",
+        "设置关键词、时长和执行间隔。",
+        "启动后观察任务状态，避免和高频评论、私信同时重压运行。"
     ], [
-        "鍏诲彿涓嶆槸瓒婂瓒婂ソ锛岄噸鍦ㄧǔ瀹氳妭濂忋€?,
-        "璐﹀彿寮傚父鎴栭〉闈㈠姞杞戒笉绋虫椂搴斿厛鏆傚仠銆?,
-        "鎵ц缁撴潫鍚庡缓璁煡鐪嬫棩蹇楃‘璁ゆ槸鍚︽甯稿畬鎴愩€?
-    ], ["璐﹀彿缁存姢", "鎵ц鑺傚", "淇濆畧杩愯"]],
-    ["groups", "13", "缇ゆ垚鍛樻彁鍙?, "12-groups.png", "缇ゆ垚鍛樻彁鍙栫敤浜庝粠娑堟伅椤佃瘑鍒兢鑱婂苟鎻愬彇鎴愬憳淇℃伅锛岃ˉ鍏呮綔鍦ㄥ鎴峰悕鍗曘€?, [
-        "鍏堢‘淇濈郴缁熻处鍙锋祻瑙堝櫒宸茬粡鐧诲綍骞跺彲姝ｅ父璁块棶娑堟伅椤点€?,
-        "杈撳叆缇ゅ悕鍏抽敭璇嶅苟璁剧疆鎻愬彇瑙勬ā銆?,
-        "璇嗗埆缇よ亰鍚庡嬀閫夌洰鏍囩兢锛屽啀寮€濮嬫彁鍙栥€?,
-        "鎻愬彇瀹屾垚鍚庡彲瀵煎嚭缁撴灉鎴栧姞鍏ュ悗缁簰鍔ㄥ悕鍗曘€?
+        "养号不是越多越好，重在稳定节奏。",
+        "账号异常或页面加载不稳时应先暂停。",
+        "执行结束后建议查看日志确认是否正常完成。"
+    ], ["账号维护", "执行节奏", "保守运行"]],
+    ["groups", "13", "群成员提取", "12-groups.png", "群成员提取用于从消息页识别群聊并提取成员信息，补充潜在客户名单。", [
+        "先确保系统账号浏览器已经登录并可正常访问消息页。",
+        "输入群名关键词并设置提取规模。",
+        "识别群聊后勾选目标群，再开始提取。",
+        "提取完成后可导出结果或加入后续互动名单。"
     ], [
-        "寤鸿鍏堢敤灏忚寖鍥存祴璇曡瘑鍒粨鏋勬槸鍚︽甯搞€?,
-        "缇ゆ垚鍛樿繘鍏ョ淇″悕鍗曞悗浠嶅缓璁汉宸ュ鏍搞€?,
-        "璇嗗埆涓虹┖鏃跺厛妫€鏌ヨ处鍙风姸鎬併€佹秷鎭〉鏉冮檺鍜屽叧閿瘝銆?
-    ], ["缇よ亰璇嗗埆", "鎴愬憳鎻愬彇", "鍚嶅崟琛ュ厖"]],
-    ["logs", "14", "鎵ц鏃ュ織", "13-logs.png", "鎵ц鏃ュ織鏄帓鏌ュ紓甯稿拰纭浠诲姟杩涘害鐨勭涓€鍏ュ彛锛屾墍鏈夋ā鍧楁墽琛岄棶棰橀兘搴旇鍏堢湅杩欓噷銆?, [
-        "浠诲姟鎵ц涓垨澶辫触鍚庣涓€鏃堕棿鎵撳紑鎵ц鏃ュ織銆?,
-        "鏌ョ湅璐﹀彿鐘舵€併€佹帴鍙ｆ彁绀恒€佹祻瑙堝櫒杩炴帴鍜屼换鍔¤繘搴︺€?,
-        "鏍规嵁鏃ュ織鎻愮ず鍥炲埌瀵瑰簲椤甸潰澶勭悊闂銆?,
-        "鏃ュ織澶鏃跺彲浠ユ竻绌洪〉闈㈡樉绀猴紝渚夸簬缁х画瑙傚療銆?
+        "建议先用小范围测试识别结构是否正常。",
+        "群成员进入私信名单后仍建议人工复核。",
+        "识别为空时先检查账号状态、消息页权限和关键词。"
+    ], ["群聊识别", "成员提取", "名单补充"]],
+    ["logs", "14", "执行日志", "13-logs.png", "执行日志是排查异常和确认任务进度的第一入口，所有模块执行问题都应该先看这里。", [
+        "任务执行中或失败后第一时间打开执行日志。",
+        "查看账号状态、接口提示、浏览器连接和任务进度。",
+        "根据日志提示回到对应页面处理问题。",
+        "日志太多时可以清空页面显示，便于继续观察。"
     ], [
-        "娓呯┖椤甸潰鏃ュ織涓嶇瓑浜庡垹闄ゅ悗绔棩蹇楁枃浠躲€?,
-        "鍚屼竴閿欒杩炵画鍑虹幇鏃讹紝涓嶈鍙槸閲嶅鐐瑰嚮寮€濮嬨€?,
-        "椤甸潰鎸夐挳鐘舵€佸拰鐪熷疄鎵ц鐘舵€佷笉涓€鑷存椂锛屼互鏃ュ織涓哄噯銆?
-    ], ["寮傚父鎺掓煡", "杩涘害纭", "鐘舵€佽瘖鏂?]]
+        "清空页面日志不等于删除后端日志文件。",
+        "同一错误连续出现时，不要只是重复点击开始。",
+        "页面按钮状态和真实执行状态不一致时，以日志为准。"
+    ], ["异常排查", "进度确认", "状态诊断"]]
 ];
 
         const nav = document.getElementById("guide-nav");
@@ -815,10 +720,10 @@
         sectionRoot.innerHTML = guideSections.map(([id, index, title, image, desc, steps, notes, tags]) => `
             <section id="${id}" class="section" data-keywords="${[title, ...tags].join(" ")}">
                 <div class="section-head"><div class="label">${index} / ${title}</div><h3>${title}</h3><p>${desc}</p></div>
-                <figure><img src="/static/douyin-origin/assets/douyin-guide/${image}" alt="鎶栭煶${title}椤甸潰鎴浘"><figcaption>${title}椤甸潰鎴浘銆傛搷浣滃墠鍏堢‘璁よ处鍙峰湪绾裤€佺瓫閫夎寖鍥村拰浠诲姟鐘舵€侀兘姝ｅ父銆?/figcaption></figure>
+                <figure><img src="/static/static/douyin-origin/douyin.html-origin/assets/static/douyin-origin/douyin.html-guide/${image}" alt="抖音${title}页面截图"><figcaption>${title}页面截图。操作前先确认账号在线、筛选范围和任务状态都正常。</figcaption></figure>
                 <div class="section-body">
-                    <div class="block"><h4>鎬庝箞鐢?/h4><ol>${steps.map((item) => `<li>${item}</li>`).join("")}</ol></div>
-                    <div class="block notice-block"><h4>娉ㄦ剰浜嬮」</h4><ul>${notes.map((item) => `<li>${item}</li>`).join("")}</ul><div class="tags">${tags.map((item) => `<span class="tag">${item}</span>`).join("")}</div></div>
+                    <div class="block"><h4>怎么用</h4><ol>${steps.map((item) => `<li>${item}</li>`).join("")}</ol></div>
+                    <div class="block notice-block"><h4>注意事项</h4><ul>${notes.map((item) => `<li>${item}</li>`).join("")}</ul><div class="tags">${tags.map((item) => `<span class="tag">${item}</span>`).join("")}</div></div>
                 </div>
             </section>
         `).join("");
