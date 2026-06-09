@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 
-import pandas as pd
 import requests
 from fastapi import APIRouter, HTTPException
 
@@ -26,6 +25,17 @@ from state_store import RuntimeStateStore
 
 
 router = APIRouter(prefix="/api/douyin", tags=["douyin"])
+
+
+def _write_excel_sheets(filepath: Path, sheets: List[tuple[str, List[Dict]]]) -> None:
+    try:
+        import pandas as pd  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("Excel export requires pandas/openpyxl in the client runtime") from exc
+
+    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+        for sheet_name, rows in sheets:
+            pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
 
 
 BASE_DIR = resolve_runtime_root(resolve_install_dir())
@@ -9881,8 +9891,7 @@ def export_search_rows(data: List[Dict]) -> str:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     filepath = DOUYIN_DAILY_DIR / f"douyin_search_results_{ts}.xlsx"
-    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
-        pd.DataFrame(rows).to_excel(writer, sheet_name="搜索结果", index=False)
+    _write_excel_sheets(filepath, [("搜索结果", rows)])
     return str(filepath)
 
 
@@ -9952,12 +9961,12 @@ def export_task_results() -> str:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     filepath = DOUYIN_DAILY_DIR / f"douyin_comment_results_{ts}.xlsx"
-    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
-        pd.DataFrame(comment_rows).to_excel(writer, sheet_name="全部评论用户", index=False)
-        pd.DataFrame(high_intent_rows).to_excel(writer, sheet_name="高意向客户", index=False)
-    with pd.ExcelWriter(LATEST_RESULTS_FILE, engine="openpyxl") as writer:
-        pd.DataFrame(comment_rows).to_excel(writer, sheet_name="全部评论用户", index=False)
-        pd.DataFrame(high_intent_rows).to_excel(writer, sheet_name="高意向客户", index=False)
+    sheets = [
+        ("全部评论用户", comment_rows),
+        ("高意向客户", high_intent_rows),
+    ]
+    _write_excel_sheets(filepath, sheets)
+    _write_excel_sheets(LATEST_RESULTS_FILE, sheets)
     return str(filepath)
 
 
@@ -9982,8 +9991,7 @@ def export_group_member_results() -> str:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     filepath = DOUYIN_DAILY_DIR / f"douyin_group_members_{ts}.xlsx"
-    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
-        pd.DataFrame(rows).to_excel(writer, sheet_name="群成员", index=False)
+    _write_excel_sheets(filepath, [("群成员", rows)])
     return str(filepath)
 
 

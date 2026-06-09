@@ -37,22 +37,62 @@ _CUSTOM_CONFIGS_FILE = Path(__file__).resolve().parent.parent.parent.parent / "c
 _CLIENT_CODE_VERSION_FILE = Path(__file__).resolve().parent.parent.parent.parent / "CLIENT_CODE_VERSION.json"
 
 
-def _remove_local_tos_config() -> bool:
+def _load_custom_configs() -> dict[str, Any]:
     if not _CUSTOM_CONFIGS_FILE.exists():
-        return False
+        return {"configs": {}, "custom_models": []}
     try:
         data = json.loads(_CUSTOM_CONFIGS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
     except Exception:
-        return False
-    configs = data.get("configs")
-    if not isinstance(configs, dict) or "TOS_CONFIG" not in configs:
-        return False
-    configs.pop("TOS_CONFIG", None)
+        pass
+    return {"configs": {}, "custom_models": []}
+
+
+def _save_custom_configs(data: dict[str, Any]) -> None:
     _CUSTOM_CONFIGS_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _remove_local_tos_config() -> bool:
+    data = _load_custom_configs()
+    configs = data.get("configs")
+    if not isinstance(configs, dict) or "TOS_CONFIG" not in configs:
+        return False
+    configs.pop("TOS_CONFIG", None)
+    _save_custom_configs(data)
     return True
+
+
+def _normalize_server_tos_config(raw: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    cfg = {str(k): v for k, v in raw.items()}
+    required = (
+        "access_key",
+        "secret_key",
+        "endpoint",
+        "region",
+        "bucket_name",
+        "public_domain",
+    )
+    if not all(str(cfg.get(k) or "").strip() for k in required):
+        return None
+    return cfg
+
+
+def _save_local_tos_config(cfg: dict[str, Any]) -> bool:
+    data = _load_custom_configs()
+    configs = data.get("configs")
+    if not isinstance(configs, dict):
+        configs = {}
+        data["configs"] = configs
+    before = configs.get("TOS_CONFIG")
+    configs["TOS_CONFIG"] = cfg
+    _save_custom_configs(data)
+    return before != cfg
 
 
 _DEFAULT_CLIENT_SEMVER = "1.0.0"
@@ -250,9 +290,12 @@ async def sync_tos_from_server(
     request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    """Switch this client to server-side TOS upload and remove stale local credentials."""
-    removed = _remove_local_tos_config()
+    """Sync server-provided TOS config when available; otherwise use server-side upload."""
+    removed = False
+    saved = False
     server_status: dict[str, Any] = {}
+    mode = "server-side-upload"
+    message = "服务器未下发 TOS_CONFIG，本机将使用服务器转存上传"
     base = (settings.auth_server_base or "").strip().rstrip("/")
     auth = (request.headers.get("Authorization") or "").strip()
     if base and auth:
@@ -263,31 +306,48 @@ async def sync_tos_from_server(
             if r.status_code < 400:
                 body: Any = r.json()
                 if isinstance(body, dict):
+                    tos_cfg = _normalize_server_tos_config(body.get("TOS_CONFIG"))
+                    if tos_cfg:
+                        saved = _save_local_tos_config(tos_cfg)
+                        mode = "local-tos"
+                        message = "已同步服务器下发的 TOS_CONFIG，本机将优先直传 TOS"
+                    else:
+                        removed = _remove_local_tos_config()
                     server_status = {
-                        "mode": body.get("mode") or "server-side-upload",
+                        "mode": mode if tos_cfg else (body.get("mode") or "server-side-upload"),
                         "tos_configured": bool(body.get("tos_configured")),
                         "bucket_name": str(body.get("bucket_name") or ""),
                         "public_domain": str(body.get("public_domain") or ""),
+                        "tos_config_received": bool(tos_cfg),
                     }
+                else:
+                    removed = _remove_local_tos_config()
+                    server_status = {"error": "response is not object"}
             else:
+                if r.status_code == 404:
+                    removed = _remove_local_tos_config()
                 server_status = {"status_code": r.status_code}
         except Exception as e:
             server_status = {"error": f"{type(e).__name__}: {e}"}
 
     logger.info(
-        "[sync-tos] switched to server-side upload removed_local_tos_config=%s user_id=%s server_status=%s",
+        "[sync-tos] mode=%s saved_local_tos_config=%s removed_local_tos_config=%s user_id=%s server_status=%s",
+        mode,
+        saved,
         removed,
         getattr(current_user, "id", None),
         server_status,
     )
-    return {
+    out = {
         "ok": True,
         "skipped": False,
-        "mode": "server-side-upload",
+        "mode": mode,
+        "saved_local_tos_config": saved,
         "removed_local_tos_config": removed,
         "server": server_status,
-        "message": "TOS 上传已切换为服务器转存，本机不再保存 TOS_CONFIG",
+        "message": message,
     }
+    return out
 
 
 @router.post(

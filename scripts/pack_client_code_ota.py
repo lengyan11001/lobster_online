@@ -99,6 +99,17 @@ PPT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
     "annotated_types-*.whl",
 )
 
+DOUYIN_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
+    "pandas-*-cp312-*-win_amd64.whl",
+    "numpy-*-cp312-*-win_amd64.whl",
+    "openpyxl-*.whl",
+    "et_xmlfile-*.whl",
+    "pymysql-*.whl",
+    "python_dateutil-*.whl",
+    "six-*.whl",
+    "tzdata-*.whl",
+)
+
 SKIP_DIR_NAMES = {"__pycache__", ".git"}
 
 # OpenClaw state/runtime directories are intentionally excluded from OTA.
@@ -145,6 +156,7 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     ".updates",
     "scripts/_probe",
     "scripts/ppt_runtime_wheels",
+    "scripts/douyin_runtime_wheels",
     "static/uploads",
     "tmp_templates",
     "chat_storage",
@@ -186,7 +198,7 @@ def _norm(p: str) -> str:
     return p.replace("\\", "/")
 
 
-_INCLUDE_PPT_RUNTIME_WHEELS = False
+_INCLUDE_RUNTIME_WHEEL_DIRS: set[str] = set()
 
 
 def _skip_file(rel: str) -> bool:
@@ -204,7 +216,7 @@ def _skip_file(rel: str) -> bool:
     if any(
         nr.startswith(p)
         for p in OTA_SKIP_REL_PREFIXES
-        if not _INCLUDE_PPT_RUNTIME_WHEELS or p != "scripts/ppt_runtime_wheels"
+        if p not in _INCLUDE_RUNTIME_WHEEL_DIRS
     ):
         return True
     if any(r.startswith(p + "/") or r == p for p in _OTA_SKIP_DIR_RELS):
@@ -238,7 +250,11 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
             d
             for d in dirnames
             if d not in SKIP_DIR_NAMES
-            and not any(_norm(os.path.join(rel_here, d)).startswith(p) for p in OTA_SKIP_REL_PREFIXES)
+            and not any(
+                _norm(os.path.join(rel_here, d)).startswith(p)
+                for p in OTA_SKIP_REL_PREFIXES
+                if p not in _INCLUDE_RUNTIME_WHEEL_DIRS
+            )
             and _norm(os.path.join(rel_here, d)).lower() not in _OTA_SKIP_DIR_RELS
             and not (
                 not any(
@@ -337,9 +353,9 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
     _add_openclaw_bundled_defaults(zf, root)
 
 
-def _prepare_ppt_runtime_wheels(root: Path) -> list[str]:
+def _prepare_runtime_wheels(root: Path, out_rel: str, patterns: tuple[str, ...]) -> list[str]:
     src_dir = root / "deps" / "wheels"
-    out_dir = root / "scripts" / "ppt_runtime_wheels"
+    out_dir = root / out_rel
     if not src_dir.is_dir():
         raise FileNotFoundError(f"missing deps/wheels: {src_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -347,10 +363,10 @@ def _prepare_ppt_runtime_wheels(root: Path) -> list[str]:
         if old.is_file():
             old.unlink()
     picked: dict[str, Path] = {}
-    for pattern in PPT_RUNTIME_WHEEL_PATTERNS:
+    for pattern in patterns:
         matches = sorted(src_dir.glob(pattern), key=lambda p: p.name.lower())
         if not matches:
-            raise FileNotFoundError(f"missing PPT runtime wheel matching {pattern}")
+            raise FileNotFoundError(f"missing runtime wheel matching {pattern}")
         picked[pattern] = matches[-1]
     copied: list[str] = []
     for src in sorted(set(picked.values()), key=lambda p: p.name.lower()):
@@ -360,8 +376,16 @@ def _prepare_ppt_runtime_wheels(root: Path) -> list[str]:
     return copied
 
 
+def _prepare_ppt_runtime_wheels(root: Path) -> list[str]:
+    return _prepare_runtime_wheels(root, "scripts/ppt_runtime_wheels", PPT_RUNTIME_WHEEL_PATTERNS)
+
+
+def _prepare_douyin_runtime_wheels(root: Path) -> list[str]:
+    return _prepare_runtime_wheels(root, "scripts/douyin_runtime_wheels", DOUYIN_RUNTIME_WHEEL_PATTERNS)
+
+
 def main() -> int:
-    global _INCLUDE_PPT_RUNTIME_WHEELS
+    global _INCLUDE_RUNTIME_WHEEL_DIRS
     ap = argparse.ArgumentParser(description="Pack client-code OTA zip")
     ap.add_argument(
         "--root",
@@ -385,6 +409,11 @@ def main() -> int:
         action="store_true",
         help="打入 scripts/ppt_runtime_wheels，并让新版 updater 离线安装 PPT Master 所需依赖",
     )
+    ap.add_argument(
+        "--with-douyin-runtime-deps",
+        action="store_true",
+        help="Pack scripts/douyin_runtime_wheels and let updater install Douyin export dependencies offline",
+    )
     args = ap.parse_args()
     root: Path = args.root.resolve()
     parent = root.parent
@@ -392,9 +421,17 @@ def main() -> int:
     if args.with_ppt_runtime_deps:
         copied = _prepare_ppt_runtime_wheels(root)
         print(f"[ppt-runtime] copied {len(copied)} wheels into scripts/ppt_runtime_wheels")
-        _INCLUDE_PPT_RUNTIME_WHEELS = True
+        _INCLUDE_RUNTIME_WHEEL_DIRS.add("scripts/ppt_runtime_wheels")
         paths_tuple = tuple(p for p in paths_tuple if p != "CLIENT_CODE_VERSION.json") + (
             "scripts/ppt_runtime_wheels",
+            "CLIENT_CODE_VERSION.json",
+        )
+    if args.with_douyin_runtime_deps:
+        copied = _prepare_douyin_runtime_wheels(root)
+        print(f"[douyin-runtime] copied {len(copied)} wheels into scripts/douyin_runtime_wheels")
+        _INCLUDE_RUNTIME_WHEEL_DIRS.add("scripts/douyin_runtime_wheels")
+        paths_tuple = tuple(p for p in paths_tuple if p != "CLIENT_CODE_VERSION.json") + (
+            "scripts/douyin_runtime_wheels",
             "CLIENT_CODE_VERSION.json",
         )
     if args.out is None:
@@ -404,6 +441,8 @@ def main() -> int:
             suffix_parts.append("with_nodejs")
         if args.with_ppt_runtime_deps:
             suffix_parts.append("with_ppt_runtime")
+        if args.with_douyin_runtime_deps:
+            suffix_parts.append("with_douyin_runtime")
         suffix = "_" + "_".join(suffix_parts) if suffix_parts else ""
         out = (parent / f"lobster_online_client_code_ota{suffix}_{ts}.zip").resolve()
     else:

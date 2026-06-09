@@ -138,6 +138,7 @@ ALLOWED_DEPS_WHEEL_PREFIX = "deps/wheels/"
 ALLOWED_DEPS_WHEEL_SUFFIXES = (".whl", ".tar.gz")
 
 PPT_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "ppt_runtime_wheels"
+DOUYIN_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "douyin_runtime_wheels"
 PPT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
     "python-pptx>=1.0.0",
     "svglib>=1.5.0",
@@ -147,6 +148,27 @@ PPT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
     "rich>=13.0",
     "typer>=0.9.0",
     "openai>=1.0.0",
+)
+DOUYIN_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
+    "pandas>=2.2.0",
+    "openpyxl>=3.1.0",
+    "pymysql>=1.1.0",
+)
+RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "ppt_runtime",
+        "wheel_dirs": (PPT_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels"),
+        "requirements": PPT_RUNTIME_REQUIREMENTS,
+        "trigger_exact": {"requirements.txt", "skills/ppt_master", "skills/ppt-master", "scripts/ppt_runtime_wheels"},
+        "trigger_prefix": ("scripts/ppt_runtime_wheels/", "deps/wheels/"),
+    },
+    {
+        "name": "douyin_runtime",
+        "wheel_dirs": (DOUYIN_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels"),
+        "requirements": DOUYIN_RUNTIME_REQUIREMENTS,
+        "trigger_exact": {"scripts/douyin_runtime_wheels"},
+        "trigger_prefix": ("scripts/douyin_runtime_wheels/",),
+    },
 )
 
 # 与 backend chat 读取路径一致；OTA 宜随包更新，安装机保留其余 workspace 文件
@@ -890,22 +912,25 @@ def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
     return applied
 
 
-def _should_install_ppt_runtime(applied: list[str]) -> bool:
+def _should_install_runtime_group(group: dict[str, Any], applied: list[str]) -> bool:
+    trigger_exact = set(group.get("trigger_exact") or ())
+    trigger_prefix = tuple(group.get("trigger_prefix") or ())
     for rel in applied:
         r = _norm_rel(rel)
-        if r in {"requirements.txt", "skills/ppt_master", "skills/ppt-master", "scripts/ppt_runtime_wheels"}:
+        if r in trigger_exact:
             return True
-        if r.startswith("scripts/ppt_runtime_wheels/") or r.startswith("deps/wheels/"):
+        if any(r.startswith(prefix) for prefix in trigger_prefix):
             return True
     return False
 
 
-def _install_ppt_runtime_if_needed(applied: list[str]) -> None:
-    if not _should_install_ppt_runtime(applied):
+def _install_runtime_group_if_needed(group: dict[str, Any], applied: list[str]) -> None:
+    if not _should_install_runtime_group(group, applied):
         return
-    wheel_dirs = [p for p in (PPT_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels") if p.is_dir()]
+    name = str(group.get("name") or "runtime")
+    wheel_dirs = [p for p in group.get("wheel_dirs", ()) if isinstance(p, Path) and p.is_dir()]
     if not wheel_dirs:
-        print("[code] [WARN] PPT runtime wheels missing; skip offline dependency install.", flush=True)
+        print(f"[code] [WARN] {name} wheels missing; skip offline dependency install.", flush=True)
         return
     cmd = [
         sys.executable,
@@ -916,14 +941,19 @@ def _install_ppt_runtime_if_needed(applied: list[str]) -> None:
     ]
     for wheel_dir in wheel_dirs:
         cmd.extend(["--find-links", str(wheel_dir)])
-    cmd.extend(PPT_RUNTIME_REQUIREMENTS)
-    print("[code-progress] ppt_runtime_install_start", flush=True)
+    cmd.extend(tuple(group.get("requirements") or ()))
+    print(f"[code-progress] {name}_install_start", flush=True)
     try:
         subprocess.run(cmd, cwd=str(ROOT), check=True, creationflags=_creation_flags())
     except Exception as exc:
-        print(f"[code] [ERR] PPT runtime dependency install failed: {exc}", flush=True)
+        print(f"[code] [ERR] {name} dependency install failed: {exc}", flush=True)
         return
-    print("[code-progress] ppt_runtime_install_done", flush=True)
+    print(f"[code-progress] {name}_install_done", flush=True)
+
+
+def _install_runtime_dependencies_if_needed(applied: list[str]) -> None:
+    for group in RUNTIME_DEPENDENCY_GROUPS:
+        _install_runtime_group_if_needed(group, applied)
 
 
 def _patch_matches_local(patch: dict[str, Any], local_build: int, local_ver: str) -> bool:
@@ -1129,7 +1159,7 @@ def main() -> int:
             return 0
 
         _apply_resources(manifest.get("resources"), tdir)
-        _install_ppt_runtime_if_needed(applied)
+        _install_runtime_dependencies_if_needed(applied)
 
     mver = manifest.get("version")
     mver_s = str(mver).strip() if mver is not None else ""

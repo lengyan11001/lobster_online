@@ -63,8 +63,6 @@ def _asset_file_token(asset_id: str, expiry_ts: int) -> str:
 
 def _get_tos_config() -> Optional[dict]:
     """从 custom_configs.json 读取 TOS_CONFIG，用于上传到火山 TOS 并得到公网 URL。"""
-    logger.debug("[TOS] online client uses server-side upload; local TOS_CONFIG ignored")
-    return None
     if not _CUSTOM_CONFIGS_FILE.exists():
         logger.info("[TOS] 配置文件不存在: %s", _CUSTOM_CONFIGS_FILE)
         return None
@@ -90,6 +88,20 @@ def _get_tos_config() -> Optional[dict]:
     except Exception as e:
         logger.warning("[TOS] 读取配置文件失败: %s", e)
         return None
+
+
+def _tos_object_headers(content_type: str, object_key: str) -> tuple[str, str]:
+    ct = (content_type or "").strip() or "application/octet-stream"
+    ct_lower = ct.lower()
+    ext = Path(object_key).suffix.lower()
+    inline_exts = {
+        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg",
+        ".mp4", ".mov", ".webm", ".m4v",
+        ".mp3", ".wav", ".m4a", ".aac", ".ogg",
+    }
+    if ct_lower.startswith(("image/", "video/", "audio/")) or ext in inline_exts:
+        return ct, "inline"
+    return ct, "attachment"
 
 
 def _upload_to_tos(data: bytes, object_key: str, content_type: str) -> Optional[str]:
@@ -129,7 +141,18 @@ def _upload_to_tos(data: bytes, object_key: str, content_type: str) -> Optional[
         logger.info("[TOS-步骤2.3] 配置完整，创建 TOS 客户端 object_key=%s endpoint=%s region=%s bucket=%s", object_key, endpoint, region, bucket)
         client = tos.TosClientV2(ak, sk, endpoint, region)
         logger.info("[TOS-步骤2.4] 开始上传到 TOS object_key=%s bucket=%s size=%d", object_key, bucket, len(data))
-        client.put_object(bucket, object_key, content=data)
+        object_content_type, content_disposition = _tos_object_headers(content_type, object_key)
+        try:
+            client.put_object(
+                bucket,
+                object_key,
+                content=data,
+                content_type=object_content_type,
+                content_disposition=content_disposition,
+            )
+        except TypeError:
+            logger.warning("[TOS] SDK does not accept content_disposition; retrying object_key=%s", object_key)
+            client.put_object(bucket, object_key, content=data, content_type=object_content_type)
         url = f"{public_domain}/{object_key}"
         logger.info("[TOS-步骤2.5] TOS 上传成功 object_key=%s url=%s", object_key, url[:80])
         return url
@@ -552,6 +575,111 @@ def _content_type_for_asset_filename(filename: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
+def _should_probe_source_url_for_use(url: str) -> bool:
+    u = (url or "").strip().lower()
+    if not u.startswith(("http://", "https://")):
+        return False
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        host = ""
+    return "tos-cn-" in host or "volces.com" in host or "lobster-online-assets" in host
+
+
+def _source_url_is_fetchable_for_upstream(url: str) -> bool:
+    u = (url or "").strip()
+    if not u:
+        return False
+    try:
+        with httpx.Client(timeout=8.0, follow_redirects=True, trust_env=False) as client:
+            try:
+                r = client.head(u)
+                if 200 <= r.status_code < 400:
+                    return True
+                if r.status_code not in (405, 501):
+                    logger.warning("[assets] source_url HEAD probe failed status=%s url=%s", r.status_code, u[:120])
+                    return False
+            except httpx.HTTPError as exc:
+                logger.warning("[assets] source_url HEAD probe exception url=%s err=%s", u[:120], exc)
+            r = client.get(u, headers={**_SAVE_URL_DOWNLOADER_HEADERS, "Range": "bytes=0-0"})
+            if 200 <= r.status_code < 400:
+                return True
+            logger.warning("[assets] source_url GET probe failed status=%s url=%s body=%s", r.status_code, u[:120], (r.text or "")[:200])
+            return False
+    except Exception as exc:
+        logger.warning("[assets] source_url probe exception url=%s err=%s", u[:120], exc)
+        return False
+
+
+def _upload_local_asset_to_auth_server_sync(
+    path: Path,
+    filename: str,
+    content_type: str,
+    request: Request,
+) -> tuple[Optional[str], dict[str, Any]]:
+    server_base = (get_settings().auth_server_base or "").strip().rstrip("/")
+    if not server_base:
+        return None, {"error": "AUTH_SERVER_BASE missing"}
+    auth_header = (request.headers.get("Authorization") or "").strip() if request else ""
+    if not auth_header.lower().startswith("bearer "):
+        return None, {"error": "Authorization Bearer missing"}
+    upload_url = f"{_normalize_auth_server_base(server_base)}/api/assets/upload-temp"
+    try:
+        with path.open("rb") as fh:
+            files = {"file": (filename or path.name, fh, content_type or "application/octet-stream")}
+            with httpx.Client(timeout=180.0, follow_redirects=True, trust_env=False) as client:
+                resp = client.post(upload_url, files=files, headers={"Authorization": auth_header})
+        data = resp.json() if resp.content else {}
+    except Exception as exc:
+        return None, {"error": f"{type(exc).__name__}: {exc}"}
+    if resp.status_code >= 400:
+        return None, {"http_status": resp.status_code, "body": data or (resp.text or "")[:500]}
+    if not isinstance(data, dict):
+        return None, {"http_status": resp.status_code, "body": str(data)[:500]}
+    public_url = str(data.get("public_url") or data.get("source_url") or data.get("url") or "").strip()
+    return (public_url or None), {"http_status": resp.status_code, "body": data}
+
+
+def _refresh_asset_source_url_from_local_file(
+    row: Asset,
+    request: Request,
+    db: Session,
+    *,
+    reason: str,
+) -> Optional[str]:
+    local_path = _asset_local_path(row)
+    if local_path is None:
+        logger.warning("[assets] cannot refresh source_url: local file missing asset_id=%s reason=%s", getattr(row, "asset_id", ""), reason)
+        return None
+    filename = row.filename or local_path.name
+    public_url, diag = _upload_local_asset_to_auth_server_sync(
+        local_path,
+        filename,
+        _content_type_for_asset_filename(filename),
+        request,
+    )
+    if not public_url:
+        logger.warning("[assets] refresh source_url failed asset_id=%s reason=%s diag=%s", row.asset_id, reason, diag)
+        return None
+    old_url = (row.source_url or "").strip()
+    row.source_url = public_url
+    try:
+        meta = dict(row.meta or {})
+        meta["source_url_refreshed_at"] = datetime.utcnow().isoformat()
+        meta["source_url_refresh_reason"] = reason[:80]
+        if old_url:
+            meta["previous_source_url"] = old_url[:500]
+        row.meta = meta
+    except Exception:
+        pass
+    db.add(row)
+    db.commit()
+    logger.info("[assets] refreshed source_url asset_id=%s old=%s new=%s", row.asset_id, old_url[:80], public_url[:80])
+    return public_url
+
+
 def get_asset_public_url(
     asset_id: str, user_id: int, request: Request, db: Session
 ) -> Optional[str]:
@@ -563,11 +691,29 @@ def get_asset_public_url(
         logger.info("[使用素材-步骤A.2] 找到素材 source_url=%s asset_id=%s", url[:100] if url else "None", asset_id)
         if url.startswith("http://") or url.startswith("https://"):
             if _is_internal_asset_http_url(url):
+                refreshed = _refresh_asset_source_url_from_local_file(
+                    row,
+                    request,
+                    db,
+                    reason="internal_or_expired_source_url",
+                )
+                if refreshed:
+                    return refreshed
                 logger.warning(
                     "[使用素材-步骤A.3] 内部或签名地址，返回 None asset_id=%s url=%s",
                     asset_id,
                     url[:100],
                 )
+                return None
+            if _should_probe_source_url_for_use(url) and not _source_url_is_fetchable_for_upstream(url):
+                refreshed = _refresh_asset_source_url_from_local_file(
+                    row,
+                    request,
+                    db,
+                    reason="unfetchable_source_url",
+                )
+                if refreshed:
+                    return refreshed
                 return None
             logger.info("[使用素材-步骤A.4] 返回公网 URL asset_id=%s url=%s", asset_id, url[:80])
             return url

@@ -3326,6 +3326,127 @@ def _unwrap_lobster_server_gateway_response(raw: Dict[str, Any]) -> Dict[str, An
     return raw
 
 
+def _extract_first_http_url_from_any(obj: Any, _seen: Optional[set[int]] = None) -> str:
+    if _seen is None:
+        _seen = set()
+    if isinstance(obj, (dict, list, tuple)):
+        oid = id(obj)
+        if oid in _seen:
+            return ""
+        _seen.add(oid)
+    if isinstance(obj, str):
+        item = obj.strip()
+        if item.startswith(("http://", "https://")):
+            return item
+        m = re.search(r"https?://[^\s\"'<>\\)\\]]+", item)
+        return m.group(0).rstrip(".,;") if m else ""
+    if isinstance(obj, dict):
+        for key in (
+            "public_url", "publicUrl", "cdn_url", "cdnUrl", "transfer_url", "transferUrl",
+            "url", "image_url", "video_url", "output_url", "file_url",
+        ):
+            found = _extract_first_http_url_from_any(obj.get(key), _seen)
+            if found:
+                return found
+        for value in obj.values():
+            found = _extract_first_http_url_from_any(value, _seen)
+            if found:
+                return found
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            found = _extract_first_http_url_from_any(value, _seen)
+            if found:
+                return found
+    return ""
+
+
+def _object_contains_text(obj: Any, needles: Tuple[str, ...], _seen: Optional[set[int]] = None) -> bool:
+    if _seen is None:
+        _seen = set()
+    if isinstance(obj, str):
+        text = obj.lower()
+        return any(n.lower() in text for n in needles)
+    if isinstance(obj, (dict, list, tuple)):
+        oid = id(obj)
+        if oid in _seen:
+            return False
+        _seen.add(oid)
+        values = obj.values() if isinstance(obj, dict) else obj
+        return any(_object_contains_text(value, needles, _seen) for value in values)
+    return False
+
+
+def _sutui_media_download_failed_response(upstream_resp: Any) -> bool:
+    return _object_contains_text(
+        upstream_resp,
+        (
+            "Failed to download the file",
+            "check if the URL is accessible",
+            "无法下载文件",
+            "下载文件失败",
+        ),
+    )
+
+
+async def _transfer_sutui_image_for_video_generate(
+    image_url: str,
+    upstream_name: str,
+    upstream_url: str,
+    sutui_token: Optional[str],
+    user_auth: Optional[str],
+    xi_for_upstream: str,
+    pipeline_forward_headers: Dict[str, str],
+) -> str:
+    src = (image_url or "").strip()
+    if not src or upstream_name != "sutui" or not upstream_url:
+        return ""
+    transfer_args = {"capability_id": "sutui.transfer_url", "payload": {"url": src, "type": "image"}}
+    try:
+        if _sutui_upstream_is_server_gateway(upstream_url):
+            raw = await _call_upstream_mcp_tool(
+                upstream_url,
+                "invoke_capability",
+                transfer_args,
+                upstream_name=upstream_name,
+                sutui_token=sutui_token,
+                user_authorization=user_auth,
+                x_installation_id=xi_for_upstream or None,
+                lobster_capability_id="sutui.transfer_url",
+                extra_headers=pipeline_forward_headers,
+            )
+            result = _unwrap_lobster_server_gateway_response(raw if isinstance(raw, dict) else {})
+        else:
+            result = await _call_upstream_mcp_tool(
+                upstream_url,
+                "invoke_capability",
+                transfer_args,
+                upstream_name=upstream_name,
+                sutui_token=sutui_token,
+                user_authorization=user_auth,
+                x_installation_id=xi_for_upstream or None,
+                lobster_capability_id="sutui.transfer_url",
+                extra_headers=pipeline_forward_headers,
+            )
+        if isinstance(result, dict) and result.get("error"):
+            logger.warning(
+                "[MCP video.generate] sutui.transfer_url failed before retry: %s",
+                str(result.get("error"))[:500],
+            )
+            return ""
+        transferred = _extract_first_http_url_from_any(result)
+        if transferred and transferred != src:
+            logger.info("[MCP video.generate] transferred input image for retry %s -> %s", src[:96], transferred[:96])
+            return transferred
+        logger.warning(
+            "[MCP video.generate] sutui.transfer_url returned no replacement url, src=%s result=%s",
+            src[:120],
+            json.dumps(_sanitize_for_json(result), ensure_ascii=False)[:500],
+        )
+    except Exception as exc:
+        logger.warning("[MCP video.generate] sutui.transfer_url retry preparation failed: %s", exc)
+    return ""
+
+
 def _parse_sse_or_json(resp: httpx.Response) -> Dict[str, Any]:
     """Parse response that may be JSON or SSE (text/event-stream)."""
     ct = (resp.headers.get("content-type") or "").lower()
@@ -5602,6 +5723,30 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 else:
                     upstream_resp = await _run_upstream_request()
             # task.get_result: 不再在此处轮询，由 backend chat 每 15s 轮询并写回对话
+            if (
+                not transfer_url_from_cache
+                and capability_id == "video.generate"
+                and upstream_name == "sutui"
+                and isinstance(payload, dict)
+                and _sutui_media_download_failed_response(upstream_resp)
+            ):
+                refs = _collect_video_image_refs(payload)
+                src_image_url = refs[0] if refs else ""
+                replacement_url = await _transfer_sutui_image_for_video_generate(
+                    src_image_url,
+                    upstream_name,
+                    upstream_url,
+                    sutui_token,
+                    user_auth,
+                    xi_for_upstream,
+                    pipeline_forward_headers,
+                )
+                if replacement_url:
+                    payload = _replace_openclaw_video_image_refs(payload, replacement_url)
+                    logger.info(
+                        "[MCP video.generate] retrying after upstream download failure with transferred image url"
+                    )
+                    upstream_resp = await _run_upstream_request()
             latency_ms = int((time.perf_counter() - t0) * 1000)
             upstream_error = ""
             if isinstance(upstream_resp, dict):

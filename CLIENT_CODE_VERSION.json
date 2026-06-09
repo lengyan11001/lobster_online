@@ -1,6 +1,6 @@
 {
-  "version": "1.0.65",
-  "build": 100,
-  "applied_at": "2026-06-07T21:08:00+08:00",
-  "note": "Sync TOS_CONFIG from server when local config differs"
+  "version": "1.0.68",
+  "build": 103,
+  "applied_at": "2026-06-09T17:05:00+08:00",
+  "note": "Sync server-provided TOS config for local upload with server fallback"
 }

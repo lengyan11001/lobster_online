@@ -8,8 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import pymysql
-
 
 class RuntimeStateStore:
     def __init__(self, db_path: Path):
@@ -1785,6 +1783,11 @@ class RemoteAuthStore:
         return bool(self.host and self.user and self.database)
 
     def _connect(self):
+        try:
+            import pymysql  # type: ignore
+        except Exception as exc:
+            raise RuntimeError("Remote auth store requires pymysql in the client runtime") from exc
+
         conn = pymysql.connect(
             host=self.host,
             port=self.port,
