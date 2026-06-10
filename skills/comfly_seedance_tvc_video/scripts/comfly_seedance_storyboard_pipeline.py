@@ -127,6 +127,45 @@ class PipelineError(RuntimeError):
     pass
 
 
+class InsufficientCreditError(PipelineError):
+    pass
+
+
+class StopNewSubmissionsError(PipelineError):
+    pass
+
+
+@dataclass
+class SubmitControl:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    stop_new_submits: threading.Event = field(default_factory=threading.Event)
+    submitted_success_count: int = 0
+    stop_reason: str = ""
+
+    def note_submit_success(self) -> None:
+        with self.lock:
+            self.submitted_success_count += 1
+
+    def mark_stop_new_submits(self, reason: str) -> bool:
+        with self.lock:
+            already_stopped = self.stop_new_submits.is_set()
+            if not already_stopped:
+                self.stop_reason = reason
+                self.stop_new_submits.set()
+            return already_stopped
+
+    def should_stop_new_submits(self) -> bool:
+        return self.stop_new_submits.is_set()
+
+    def current_stop_reason(self) -> str:
+        with self.lock:
+            return self.stop_reason
+
+    def has_any_successful_submit(self) -> bool:
+        with self.lock:
+            return self.submitted_success_count > 0
+
+
 def _extract_progress_percent(payload: Any) -> Optional[int]:
     if not isinstance(payload, dict):
         return None
@@ -451,6 +490,11 @@ def _first_text(d: Dict[str, Any], *keys: str) -> str:
 def _non_retryable(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(key in text for key in ("http 400", "http 401", "http 403", "http 404", "missing", "not found"))
+
+
+def _is_insufficient_credit_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "http 402" in text or "积分不足" in str(exc or "") or "余额不足" in str(exc or "")
 
 
 def _retry(action: str, attempts: int, delay: int, logger_obj: RunLogger, fn: Callable[[], Any]) -> tuple[Any, int]:
@@ -1273,13 +1317,21 @@ def _submit_segment_video(
     logger_obj: RunLogger,
     segment_plan: Dict[str, Any],
     reference_image_urls: List[str],
+    submit_control: Optional[SubmitControl] = None,
 ) -> Dict[str, Any]:
     index = int(segment_plan["index"])
     segment_reference_result = segment_plan["segment_reference_result"]
     providers = _ordered_video_providers(client)
 
+    if submit_control is not None and submit_control.should_stop_new_submits():
+        reason = submit_control.current_stop_reason() or "余额不足，已停止新的分镜提交"
+        raise StopNewSubmissionsError(reason)
+
     last_error = ""
     for provider_index, provider in enumerate(providers, start=1):
+        if submit_control is not None and submit_control.should_stop_new_submits():
+            reason = submit_control.current_stop_reason() or "余额不足，已停止新的分镜提交"
+            raise StopNewSubmissionsError(reason)
         provider_role = provider["role"]
         provider_channel = _normalize_video_channel(provider["channel"])
         provider_model = provider["model"]
@@ -1317,6 +1369,8 @@ def _submit_segment_video(
             out["video_model"] = provider_model
             out["video_provider_role"] = provider_role
             out["video_provider_attempt"] = provider_index
+            if submit_control is not None:
+                submit_control.note_submit_success()
             return out
         except Exception as exc:
             last_error = str(exc)
@@ -1327,6 +1381,16 @@ def _submit_segment_video(
                 error=last_error,
                 payload={"video_channel": provider_channel, "video_model": provider_model, "provider_role": provider_role},
             )
+            if submit_control is not None and _is_insufficient_credit_error(exc):
+                if submit_control.has_any_successful_submit():
+                    reason = (
+                        "余额不足，已停止新的分镜提交；已成功提交的分镜会继续合成。"
+                    )
+                    submit_control.mark_stop_new_submits(reason)
+                    raise StopNewSubmissionsError(reason) from exc
+                reason = "余额不足，未成功提交任何分镜，请先充值后重试。"
+                submit_control.mark_stop_new_submits(reason)
+                raise InsufficientCreditError(reason) from exc
     raise PipelineError(f"segment {index:02d} video submit failed: {last_error}")
 
 
@@ -1422,6 +1486,33 @@ def _poll_segment_video(
         "video_provider_role": segment_plan.get("video_provider_role") or "primary",
         "workflow_mode": segment_plan.get("workflow_mode") or client.config.workflow_mode,
     }
+
+
+def _run_single_segment_pipeline(
+    client: ComflySeedanceClient,
+    logger_obj: RunLogger,
+    segment_plan: Dict[str, Any],
+    reference_image_urls: List[str],
+    submit_control: Optional[SubmitControl] = None,
+) -> Dict[str, Any]:
+    image_ready_plan = _generate_segment_image(
+        client,
+        logger_obj,
+        segment_plan,
+        reference_image_urls,
+    )
+    submitted_plan = _submit_segment_video(
+        client,
+        logger_obj,
+        image_ready_plan,
+        reference_image_urls,
+        submit_control,
+    )
+    return _poll_segment_video(
+        client,
+        logger_obj,
+        submitted_plan,
+    )
 
 
 def _direct_video_prompt(config: PipelineConfig) -> str:
@@ -1732,59 +1823,18 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
 
         results_map: Dict[int, Dict[str, Any]] = {}
         failure_map: Dict[int, Dict[str, Any]] = {}
-        image_ready_map: Dict[int, Dict[str, Any]] = {}
-        submitted_map: Dict[int, Dict[str, Any]] = {}
+        submit_control = SubmitControl()
         with concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency) as ex:
             futures = {
                 ex.submit(
-                    _generate_segment_image,
+                    _run_single_segment_pipeline,
                     client,
                     logger_obj,
                     segment_plan,
                     reference_image_urls,
+                    submit_control,
                 ): segment_plan
                 for segment_plan in segment_plans
-            }
-            for future in concurrent.futures.as_completed(futures):
-                segment_plan = futures[future]
-                idx = int(segment_plan["index"])
-                try:
-                    image_ready_map[idx] = future.result()
-                except Exception as exc:
-                    payload = {"index": idx, "error": str(exc), "traceback": traceback.format_exc()}
-                    failure_map[idx] = payload
-                    logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency) as ex:
-            futures = {
-                ex.submit(
-                    _submit_segment_video,
-                    client,
-                    logger_obj,
-                    segment_plan,
-                    reference_image_urls,
-                ): segment_plan
-                for _, segment_plan in sorted(image_ready_map.items())
-            }
-            for future in concurrent.futures.as_completed(futures):
-                segment_plan = futures[future]
-                idx = int(segment_plan["index"])
-                try:
-                    submitted_map[idx] = future.result()
-                except Exception as exc:
-                    payload = {"index": idx, "error": str(exc), "traceback": traceback.format_exc()}
-                    failure_map[idx] = payload
-                    logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency) as ex:
-            futures = {
-                ex.submit(
-                    _poll_segment_video,
-                    client,
-                    logger_obj,
-                    segment_plan,
-                ): segment_plan
-                for _, segment_plan in sorted(submitted_map.items())
             }
             for future in concurrent.futures.as_completed(futures):
                 segment_plan = futures[future]
@@ -1793,6 +1843,22 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                     result = future.result()
                     results_map[idx] = result
                     logger_obj.segment(idx, "final", "success", payload=result)
+                except StopNewSubmissionsError as exc:
+                    payload = {
+                        "index": idx,
+                        "error": str(exc),
+                        "reason": "stop_new_submits",
+                    }
+                    failure_map[idx] = payload
+                    logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+                except InsufficientCreditError as exc:
+                    payload = {
+                        "index": idx,
+                        "error": str(exc),
+                        "reason": "insufficient_credit",
+                    }
+                    failure_map[idx] = payload
+                    logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
                 except Exception as exc:
                     payload = {"index": idx, "error": str(exc), "traceback": traceback.format_exc()}
                     failure_map[idx] = payload

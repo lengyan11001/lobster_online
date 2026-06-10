@@ -341,7 +341,7 @@
   function jobStageText(job) {
     if (!job) return '';
     if (job.status === 'completed') {
-      return job.videoUrl ? '最终视频已生成，可以点击查看。' : '任务已完成，正在同步最终视频。';
+      return job.videoUrl ? '最终视频已生成，可以点击查看。' : '任务已完成，正在同步最终视频展示。';
     }
     if (job.status === 'failed') {
       return jobDetailText(job) || '任务失败，请查看错误后重新提交。';
@@ -383,6 +383,57 @@
     return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + hh + ':' + mm;
   }
 
+  function currentJobPromptText() {
+    return String(state.currentJobPrompt || '').trim();
+  }
+
+  function currentJobHeading() {
+    var text = currentJobPromptText() || String(state.currentJobTitle || '').trim();
+    if (!text) return '创意视频任务';
+    return text.length > 28 ? (text.slice(0, 28) + '...') : text;
+  }
+
+  function currentJobSummary(values, boards) {
+    if (state.currentJobStatus === 'completed') {
+      return state.currentResultVideoUrl ? '最终视频已生成，可以直接播放、下载或打开。' : '任务已完成，最终视频正在同步展示与入库，请稍后刷新结果。';
+    }
+    if (state.currentJobStatus === 'failed') {
+      return jobDetailText({ error: state.currentJobError, progress: state.currentJobProgress }) || '任务执行失败，请调整后重新提交。';
+    }
+    if (state.currentJobStatus === 'running') {
+      return currentProgressText() || '高质量模型生成通常需要 5-10 分钟，任务完成后会提醒你。';
+    }
+    var summary = String(state.duration || 0) + ' 秒 / ' + boards.length + ' 个分镜 / ' + values.aspectRatio;
+    return state.mode === 'prompt_only'
+      ? summary + '。当前按纯提示词模式规划并生成视频。'
+      : summary + '。提交后这里会展示最终成片和任务信息。';
+  }
+
+  function renderResultPills(values, boards) {
+    var pills = [
+      '<span class="seedance-result-pill" data-tone="' + escapeHtml(statusTone(state.currentJobStatus)) + '">' + escapeHtml(statusLabel(state.currentJobStatus)) + '</span>'
+    ];
+    if (state.currentJobId) pills.push('<span class="seedance-result-pill" data-tone="processing">任务 ' + escapeHtml(state.currentJobId.slice(0, 8)) + '</span>');
+    if (values && values.model) pills.push('<span class="seedance-result-pill">模型 ' + escapeHtml(customSelectLabel($('seedanceModelSelect')) || values.model) + '</span>');
+    if (values && values.aspectRatio) pills.push('<span class="seedance-result-pill">' + escapeHtml(values.aspectRatio) + '</span>');
+    if (boards && boards.length) pills.push('<span class="seedance-result-pill">' + escapeHtml(String(boards.length)) + ' 个分镜</span>');
+    if (state.duration) pills.push('<span class="seedance-result-pill">' + escapeHtml(String(state.duration)) + ' 秒</span>');
+    return pills.join('');
+  }
+
+  function copyCurrentPromptToEditor() {
+    var prompt = currentJobPromptText();
+    if (!prompt) return showMessage('当前任务还没有可复制的提示词。');
+    if ($('seedanceTaskPromptInput')) {
+      $('seedanceTaskPromptInput').value = prompt;
+      $('seedanceTaskPromptInput').focus();
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(prompt).catch(function() {});
+    }
+    showMessage('已复制提示词并回填到左侧输入框。');
+  }
+
   function jobMediaHtml(job) {
     var status = String((job && job.status) || 'running');
     var videoUrl = String((job && job.videoUrl) || '').trim();
@@ -397,7 +448,7 @@
       ].join('');
     }
     if (status === 'completed') {
-      return '<span class="seedance-business-job-placeholder">视频同步中</span>';
+      return '<span class="seedance-business-job-placeholder">已完成，正在同步成片</span>';
     }
     if (status === 'failed') {
       return '<span class="seedance-business-job-placeholder is-failed">生成失败</span>';
@@ -1440,7 +1491,8 @@
     if (state.currentResultVideoUrl) {
       var resultUrl = String(state.currentResultVideoUrl);
       var bare = resultUrl.split('?')[0].toLowerCase();
-      var looksVideo = /\.(mp4|mov|m4v|webm|mkv)$/.test(bare);
+      var looksVideo = /\.(mp4|mov|m4v|webm|mkv)$/.test(bare)
+        || bare.indexOf('/api/comfly-ecommerce-detail/local-file/') >= 0;
       if (looksVideo) {
         return [
           '<div class="seedance-result-video-wrap">',
@@ -1459,8 +1511,8 @@
       }
       return [
         '<div class="tvc-video-placeholder">',
-        '<strong>未拿到完整成片</strong>',
-        '<span>本次任务返回的素材不是视频文件（' + escapeHtml(resultUrl.slice(0, 200)) + '），可能某段视频生成失败。请在素材库里查看分段结果，或重新提交任务。</span>',
+        '<strong>任务已完成</strong>',
+        '<span>最终视频已经生成，但当前预览地址暂时不是可直接内嵌播放的视频链接（' + escapeHtml(resultUrl.slice(0, 200)) + '）。你可以先在下方任务卡片或素材库中查看成片。</span>',
         '</div>'
       ].join('');
     }
@@ -1480,6 +1532,15 @@
         '</div>',
         '</div>',
         progressHtml,
+        '</div>'
+      ].join('');
+    }
+
+    if (state.currentJobStatus === 'completed') {
+      return [
+        '<div class="tvc-video-placeholder">',
+        '<strong>任务已完成</strong>',
+        '<span>' + escapeHtml(detailText || '最终视频已生成，正在同步预览与素材库地址，请稍后刷新或到素材库查看。') + '</span>',
         '</div>'
       ].join('');
     }
@@ -1572,7 +1633,6 @@
     var stage = $('seedanceBusinessResultSurface');
     var status = $('seedanceTaskStatusText');
     var kind = $('seedanceTaskKindText');
-    var title = $('seedanceCurrentTaskTitle');
     if (!view || !stage) return;
 
     if (status) {
@@ -1583,10 +1643,40 @@
       kind.textContent = state.currentJobId ? ('任务 ' + state.currentJobId.slice(0, 8)) : '未开始';
       kind.setAttribute('data-tone', state.currentJobId ? 'processing' : 'idle');
     }
-    if (title) title.textContent = state.currentJobTitle || '还没有提交创意视频任务';
-
-    stage.innerHTML = resultVideoHtml(getFormValues(), buildBoards());
+    var values = getFormValues();
+    var boards = buildBoards();
+    var canOperate = !!String(state.currentResultVideoUrl || '').trim();
+    stage.innerHTML = [
+      '<div class="seedance-result-layout">',
+      '<div class="seedance-result-preview-pane">',
+      resultVideoHtml(values, boards),
+      '</div>',
+      '<div class="seedance-result-side">',
+      '<div class="seedance-result-side-top">',
+      '<span class="seedance-result-kicker">' + escapeHtml(state.currentJobId ? '当前结果' : '结果预览') + '</span>',
+      '<h5 class="seedance-result-heading">' + escapeHtml(currentJobHeading()) + '</h5>',
+      '</div>',
+      '<div class="seedance-result-meta">' + renderResultPills(values, boards) + '</div>',
+      '<div class="seedance-result-actions">',
+      '<button type="button" class="btn btn-sm seedance-action-btn is-copy" data-seedance-copy-prompt' + (currentJobPromptText() ? '' : ' disabled') + '>复制提示词并回填</button>',
+      '<button type="button" class="btn btn-sm seedance-action-btn is-download" data-seedance-video-download="' + escapeHtml(state.currentResultVideoUrl || '') + '" data-download-filename="creative-video.mp4"' + (canOperate ? '' : ' disabled') + '>下载视频</button>',
+      '<button type="button" class="btn btn-sm seedance-action-btn is-open" data-seedance-video-open="' + escapeHtml(state.currentResultVideoUrl || '') + '"' + (canOperate ? '' : ' disabled') + '>打开视频</button>',
+      '</div>',
+      '<div class="seedance-result-prompt-panel">',
+      '<div class="seedance-result-prompt-head">提示词</div>',
+      '<div class="seedance-result-prompt-body">' + escapeHtml(currentJobPromptText() || '当前任务还没有可展示的提示词。') + '</div>',
+      '</div>',
+      '<p class="seedance-result-task-note">' + escapeHtml(currentJobSummary(values, boards)) + '</p>',
+      '</div>',
+      '</div>'
+    ].join('');
     bindResultVideoActions();
+    document.querySelectorAll('[data-seedance-copy-prompt]').forEach(function(btn) {
+      btn.onclick = function() {
+        if (btn.disabled) return;
+        copyCurrentPromptToEditor();
+      };
+    });
 
     var list = $('seedanceBusinessHistoryGrid');
     var empty = $('seedanceBusinessHistoryEmpty');
@@ -1758,7 +1848,7 @@
       showTaskToast(
         'success',
         '创意视频已生成',
-        state.currentResultVideoUrl ? '任务已完成，可以回来查看或下载最终视频。' : '任务已完成，正在同步最终视频地址，可以到结果页查看。',
+        state.currentResultVideoUrl ? '任务已完成，可以回来查看或下载最终视频。' : '任务已完成，最终视频正在同步展示与入库，可以到结果页查看。',
         '查看结果'
       );
     } else if (status === 'failed') {
@@ -1915,6 +2005,11 @@
       return /\.(mp4|mov|m4v|webm|mkv)$/.test(s);
     }
 
+    var result = resp.result || {};
+    var finalVideo = result.final_video || {};
+    var finalUrl = String(finalVideo.url || finalVideo.preview_url || finalVideo.local_preview_url || '').trim();
+    if (finalUrl) return finalUrl;
+
     var saved = Array.isArray(resp.saved_assets) ? resp.saved_assets : [];
     for (var i = 0; i < saved.length; i += 1) {
       var asset = saved[i] && saved[i].asset;
@@ -1924,11 +2019,6 @@
       if (!src) continue;
       if (mt === 'video' || _looksLikeVideoUrl(src)) return src;
     }
-
-    var result = resp.result || {};
-    var finalVideo = result.final_video || {};
-    var finalUrl = String(finalVideo.url || '').trim();
-    if (finalUrl) return finalUrl;
 
     function pickSegmentUrl(item) {
       if (!item || typeof item !== 'object') return '';
@@ -2173,7 +2263,7 @@
           if (state.currentResultVideoUrl) {
             showMessage('任务已完成，右侧已切换到最终结果视频。');
           } else {
-            showMessage('任务已完成，但未拿到可播放的视频地址，请刷新任务状态或到素材库查看。');
+            showMessage('任务已完成，最终视频正在同步展示与入库，请稍后刷新结果页或到素材库查看。');
           }
           notifyTaskOnce('completed');
         } else if (state.currentJobStatus === 'failed') {

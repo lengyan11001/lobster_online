@@ -26,6 +26,7 @@
     references: [],
     results: [],
     activeResultIndex: 0,
+    selectedJobId: '',
     submitting: false,
     examples: [],
     exampleCatalog: [],
@@ -37,6 +38,7 @@
     exampleSearch: '',
     currentJobId: '',
     currentJobStatus: '',
+    currentJobPrompt: '',
     pollTimer: null,
     recentJobs: []
   };
@@ -48,6 +50,7 @@
     selected: {},
     query: ''
   };
+  var customSelectEventsBound = false;
 
   var JOB_RESTORE_WINDOW_MS = 6 * 60 * 60 * 1000;
   var JOB_HISTORY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
@@ -607,6 +610,415 @@
     return item.sourceUrl || item.data_url || item.url || '';
   }
 
+  function shortenText(text, maxChars) {
+    var clean = String(text || '').trim().replace(/\s+/g, ' ');
+    if (!clean) return '';
+    return clean.length > maxChars ? (clean.slice(0, maxChars) + '...') : clean;
+  }
+
+  function cleanPromptText(text) {
+    var raw = String(text || '').trim();
+    if (!raw) return '';
+    var marker = '用户提示词：';
+    var idx = raw.lastIndexOf(marker);
+    if (idx >= 0) {
+      var userText = raw.slice(idx + marker.length).trim();
+      if (userText) return userText;
+    }
+    return raw;
+  }
+
+  function promptTitleText(prompt, fallback) {
+    return shortenText(cleanPromptText(prompt), 30) || fallback || '图片任务';
+  }
+
+  function displayModelName(model) {
+    var value = String(model || '').trim().toLowerCase();
+    if (!value) return '';
+    if (value.indexOf('gpt-image-2') >= 0) return '\u5f71\u68a6lite';
+    return '';
+  }
+
+  function customSelectLabel(select) {
+    if (!select) return '';
+    var option = select.options && select.options[select.selectedIndex];
+    return option ? option.textContent : '';
+  }
+
+  function closeImglabCustomSelects(exceptWrap) {
+    document.querySelectorAll('#content-image-composer-studio .imglab-custom-select.is-open').forEach(function(wrap) {
+      if (exceptWrap && wrap === exceptWrap) return;
+      wrap.classList.remove('is-open');
+      var button = wrap.querySelector('.imglab-custom-select-button');
+      if (button) button.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function syncImglabCustomSelect(select) {
+    if (!select || !select.dataset.imglabCustomSelect) return;
+    var wrap = select.nextElementSibling;
+    if (!wrap || !wrap.classList || !wrap.classList.contains('imglab-custom-select')) return;
+    var value = select.value;
+    var label = customSelectLabel(select);
+    var labelEl = wrap.querySelector('.imglab-custom-select-label');
+    if (labelEl) labelEl.textContent = label;
+    wrap.querySelectorAll('[data-custom-select-value]').forEach(function(item) {
+      var active = item.getAttribute('data-custom-select-value') === value;
+      item.classList.toggle('is-selected', active);
+      item.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+  }
+
+  function buildImglabCustomSelect(select) {
+    if (!select || select.dataset.imglabCustomSelect === '1') return;
+    select.dataset.imglabCustomSelect = '1';
+    select.classList.add('imglab-native-select-hidden');
+
+    if (!select.dataset.imglabCustomSelectSyncBound) {
+      select.dataset.imglabCustomSelectSyncBound = '1';
+      select.addEventListener('change', function() {
+        syncImglabCustomSelect(select);
+      });
+    }
+
+    var wrap = document.createElement('div');
+    wrap.className = 'imglab-custom-select';
+    wrap.setAttribute('data-custom-select-for', select.id || '');
+
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'imglab-custom-select-button';
+    button.setAttribute('aria-haspopup', 'listbox');
+    button.setAttribute('aria-expanded', 'false');
+    button.innerHTML = '<span class="imglab-custom-select-label"></span><span class="imglab-custom-select-arrow" aria-hidden="true"></span>';
+
+    var menu = document.createElement('div');
+    menu.className = 'imglab-custom-select-menu';
+    menu.setAttribute('role', 'listbox');
+
+    Array.prototype.forEach.call(select.options || [], function(option) {
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'imglab-custom-select-option';
+      item.setAttribute('role', 'option');
+      item.setAttribute('data-custom-select-value', option.value);
+      item.textContent = option.textContent || option.value;
+      item.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        select.value = option.value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        syncImglabCustomSelect(select);
+        closeImglabCustomSelects();
+      });
+      menu.appendChild(item);
+    });
+
+    button.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      var willOpen = !wrap.classList.contains('is-open');
+      closeImglabCustomSelects(wrap);
+      wrap.classList.toggle('is-open', willOpen);
+      button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+
+    wrap.appendChild(button);
+    wrap.appendChild(menu);
+    select.parentNode.insertBefore(wrap, select.nextSibling);
+    syncImglabCustomSelect(select);
+  }
+
+  function initImglabCustomSelects() {
+    [
+      'imglabAspectRatioSelect',
+      'imglabModelSelect',
+      'imglabQualitySelect',
+      'imglabBackgroundSelect'
+    ].forEach(function(id) {
+      buildImglabCustomSelect($(id));
+    });
+    if (!customSelectEventsBound) {
+      customSelectEventsBound = true;
+      document.addEventListener('click', function(event) {
+        if (event.target && event.target.closest && event.target.closest('#content-image-composer-studio .imglab-custom-select')) return;
+        closeImglabCustomSelects();
+      });
+      document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape') closeImglabCustomSelects();
+      });
+    }
+  }
+
+  function syncImglabCustomSelects() {
+    [
+      'imglabAspectRatioSelect',
+      'imglabModelSelect',
+      'imglabQualitySelect',
+      'imglabBackgroundSelect'
+    ].forEach(function(id) {
+      syncImglabCustomSelect($(id));
+    });
+  }
+
+  function promptFromJob(job) {
+    if (!job) return '';
+    return cleanPromptText(
+      job.prompt
+      || (job.requestPayload && job.requestPayload.prompt)
+      || (job.cloudJob && (job.cloudJob.prompt || (job.cloudJob.request_payload && job.cloudJob.request_payload.prompt)))
+      || ''
+    );
+  }
+
+  function promptFromResult(item) {
+    if (!item) return '';
+    var remembered = state.currentJobId
+      ? state.recentJobs.find(function(job) { return job && job.jobId === state.currentJobId; })
+      : null;
+    return cleanPromptText(item.prompt || state.currentJobPrompt || promptFromJob(remembered) || '');
+  }
+
+  function selectedHistoryJob() {
+    if (!state.selectedJobId) return null;
+    return state.recentJobs.find(function(job) {
+      return job && job.jobId === state.selectedJobId;
+    }) || null;
+  }
+
+  function activeResultDetail() {
+    var selectedJob = selectedHistoryJob();
+    if (selectedJob) {
+      return {
+        type: 'job',
+        status: selectedJob.status || 'running',
+        title: promptTitleText(promptFromJob(selectedJob), selectedJob.title || '图片任务'),
+        prompt: promptFromJob(selectedJob),
+        previewUrl: selectedJob.image || '',
+        downloadUrl: selectedJob.image || '',
+        assetId: selectedJob.assetId || selectedJob.asset_id || '',
+        model: selectedJob.model || '',
+        aspectRatio: selectedJob.aspectRatio || '',
+        size: selectedJob.size || '',
+        jobId: selectedJob.jobId || '',
+        resultCount: selectedJob.resultCount || 0
+      };
+    }
+
+    var active = currentResult();
+    if (active) {
+      return {
+        type: 'result',
+        status: 'completed',
+        title: promptTitleText(promptFromResult(active), '生成结果 ' + (state.activeResultIndex + 1)),
+        prompt: promptFromResult(active),
+        previewUrl: resultPreviewUrl(active),
+        downloadUrl: active.sourceUrl || active.url || active.data_url || '',
+        assetId: active.assetId || '',
+        model: active.model || '',
+        aspectRatio: active.aspectRatio || '',
+        size: active.size || '',
+        jobId: state.currentJobId || '',
+        resultCount: state.results.length
+      };
+    }
+
+    if (state.currentJobId && state.currentJobStatus) {
+      var remembered = state.recentJobs.find(function(job) {
+        return job && job.jobId === state.currentJobId;
+      }) || null;
+      return {
+        type: 'job',
+        status: state.currentJobStatus,
+        title: promptTitleText(state.currentJobPrompt || promptFromJob(remembered), '当前图片任务'),
+        prompt: cleanPromptText(state.currentJobPrompt || promptFromJob(remembered)),
+        previewUrl: remembered && remembered.image ? remembered.image : '',
+        downloadUrl: remembered && remembered.image ? remembered.image : '',
+        assetId: remembered ? (remembered.assetId || remembered.asset_id || '') : '',
+        model: remembered ? (remembered.model || '') : '',
+        aspectRatio: remembered ? (remembered.aspectRatio || '') : '',
+        size: remembered ? (remembered.size || '') : '',
+        jobId: state.currentJobId,
+        resultCount: remembered ? (remembered.resultCount || 0) : 0
+      };
+    }
+    return null;
+  }
+
+  function renderResultPreview(detail) {
+    if (detail && detail.previewUrl) {
+      return '<img src="' + escapeHtml(detail.previewUrl) + '" alt="' + escapeHtml(detail.title || '图片结果') + '">';
+    }
+    if (detail && detail.status === 'failed') {
+      return [
+        '<div class="imglab-result-preview-placeholder is-error">',
+        '<strong>任务失败</strong>',
+        '<span>这条任务没有可展示的图片结果，你可以复制右侧提示词继续修改后重试。</span>',
+        '</div>'
+      ].join('');
+    }
+    if (detail && (detail.status === 'running' || detail.status === 'stale')) {
+      return [
+        '<div class="imglab-result-preview-placeholder">',
+        '<strong>图片正在生成中</strong>',
+        '<span>高质量模型通常需要 5-10 分钟。你可以先继续使用其他功能，完成后会在右下角提醒。</span>',
+        '</div>'
+      ].join('');
+    }
+    return [
+      '<div class="imglab-result-preview-placeholder">',
+      '<strong>暂无图片预览</strong>',
+      '<span>这条历史任务暂时还没有可加载的图片，你可以先查看提示词或刷新任务状态。</span>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderDetailPills(detail) {
+    if (!detail) return '';
+    var pills = [
+      detail.type === 'result' ? ('第 ' + (state.activeResultIndex + 1) + ' 张结果') : ('任务 ' + String(detail.jobId || '').slice(0, 8)),
+      jobStatusText(detail.status)
+    ];
+    var modelLabel = displayModelName(detail.model);
+    if (modelLabel) pills.push(modelLabel);
+    if (detail.aspectRatio) pills.push(detail.aspectRatio);
+    if (detail.size) pills.push(detail.size);
+    if (detail.resultCount) pills.push(detail.resultCount + ' 张');
+    if (detail.assetId) pills.push('素材 ' + detail.assetId);
+    return pills.map(function(text) {
+      return '<span class="imglab-result-pill">' + escapeHtml(text) + '</span>';
+    }).join('');
+  }
+
+  function fillPromptInput(prompt) {
+    var input = $('imglabPromptInput');
+    if (!input) return;
+    input.value = prompt || '';
+    input.focus();
+    if (typeof input.setSelectionRange === 'function') {
+      var pos = input.value.length;
+      input.setSelectionRange(pos, pos);
+    }
+  }
+
+  function writeTextToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function(resolve, reject) {
+      try {
+        var textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (ok) resolve();
+        else reject(new Error('copy failed'));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  function copyActivePrompt() {
+    var detail = activeResultDetail();
+    var prompt = detail ? cleanPromptText(detail.prompt) : '';
+    if (!prompt) {
+      showMessage('当前结果还没有可复制的提示词。', true);
+      return;
+    }
+    fillPromptInput(prompt);
+    writeTextToClipboard(prompt)
+      .then(function() {
+        showMessage('提示词已复制，并回填到左侧输入框。', false);
+      })
+      .catch(function() {
+        showMessage('提示词已回填到左侧输入框，但复制到剪贴板失败了。', true);
+      });
+  }
+
+  function downloadActiveImage() {
+    var detail = activeResultDetail();
+    var url = detail ? (detail.downloadUrl || detail.previewUrl || '') : '';
+    if (!url) {
+      showMessage('当前结果还没有可下载的图片。', true);
+      return;
+    }
+    var link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.download = (detail && detail.jobId ? ('image-studio-' + detail.jobId) : 'image-studio-result') + '.png';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showMessage('已开始下载图片。', false);
+  }
+
+  function ensureResultPreviewModal() {
+    var existing = $('imglabPreviewModal');
+    if (existing) return existing;
+
+    var wrapper = document.createElement('div');
+    wrapper.innerHTML = [
+      '<div id="imglabPreviewModal" class="imglab-preview-modal" hidden>',
+      '<div class="imglab-preview-backdrop" data-imglab-preview-close></div>',
+      '<div class="imglab-preview-dialog" role="dialog" aria-modal="true" aria-label="Image preview">',
+      '<button type="button" class="imglab-preview-close" data-imglab-preview-close aria-label="Close">&times;</button>',
+      '<div class="imglab-preview-stage">',
+      '<img id="imglabPreviewModalImage" alt="Image preview">',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(wrapper.firstChild);
+    var modal = $('imglabPreviewModal');
+    if (!modal) return null;
+
+    modal.addEventListener('click', function(event) {
+      if (event.target.closest('[data-imglab-preview-close]')) {
+        closeResultPreviewModal();
+      }
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') {
+        closeResultPreviewModal();
+      }
+    });
+    return modal;
+  }
+
+  function openResultPreviewModal(url, title) {
+    if (!url) {
+      showMessage('Current result has no preview image yet.', true);
+      return;
+    }
+    var modal = ensureResultPreviewModal();
+    if (!modal) return;
+    var image = $('imglabPreviewModalImage');
+    if (!image) return;
+    image.src = url;
+    image.alt = title ? (title + ' preview') : 'Image preview';
+    modal.hidden = false;
+    document.body.classList.add('imglab-preview-open');
+  }
+
+  function closeResultPreviewModal() {
+    var modal = $('imglabPreviewModal');
+    if (!modal) return;
+    var image = $('imglabPreviewModalImage');
+    if (image) {
+      image.removeAttribute('src');
+      image.alt = 'Image preview';
+    }
+    modal.hidden = true;
+    document.body.classList.remove('imglab-preview-open');
+  }
+
   function cloudImageUrlFromJob(job) {
     var assets = (job && job.assets) || {};
     var ids = Array.isArray(job && job.asset_ids) ? job.asset_ids : [];
@@ -632,12 +1044,18 @@
     var payload = job.result_payload || {};
     var images = Array.isArray(payload.images) ? payload.images : [];
     var ids = Array.isArray(job.asset_ids) ? job.asset_ids : [];
+    var prompt = cleanPromptText(job.prompt || (job.request_payload && job.request_payload.prompt) || '');
     return {
       jobId: String(job.job_id || ''),
       status: String(job.status || 'running'),
-      title: job.title || '图片任务',
+      title: promptTitleText(prompt, job.title || '图片任务'),
+      prompt: prompt,
       image: cloudImageUrlFromJob(job),
+      assetId: ids[0] || '',
       resultCount: ids.length || images.length || 0,
+      model: (payload.meta && payload.meta.model) || '',
+      aspectRatio: (payload.meta && payload.meta.aspect_ratio) || '',
+      size: (payload.meta && payload.meta.size) || '',
       updatedAt: Date.parse(job.updated_at || job.completed_at || job.created_at || '') || Date.now(),
       cloud: true,
       cloudJob: job
@@ -658,6 +1076,7 @@
         data_url: item.data_url || '',
         assetId: aid,
         sourceUrl: asset.source_url || row.source_url || item.source_url || savedItem.source_url || '',
+        prompt: cleanPromptText((job && job.prompt) || (job && job.request_payload && job.request_payload.prompt) || ''),
         model: payload.meta && payload.meta.model,
         aspectRatio: payload.meta && payload.meta.aspect_ratio,
         size: payload.meta && payload.meta.size
@@ -668,6 +1087,8 @@
       if (fallback) state.results = [{ url: fallback, sourceUrl: fallback, assetId: (job.asset_ids || [])[0] || '' }];
     }
     state.activeResultIndex = 0;
+    state.selectedJobId = '';
+    state.currentJobPrompt = cleanPromptText((job && job.prompt) || (job && job.request_payload && job.request_payload.prompt) || '');
     state.currentJobStatus = String((job && job.status) || 'completed');
     renderResultSurface();
     setRightView('result');
@@ -705,7 +1126,7 @@
       cards.push({
         type: 'job',
         jobId: state.currentJobId,
-        title: '当前图片任务',
+        title: promptTitleText(state.currentJobPrompt, '当前图片任务'),
         status: 'running'
       });
     }
@@ -713,7 +1134,7 @@
       cards.push({
         type: 'result',
         index: index,
-        title: '生成结果 ' + (index + 1),
+        title: promptTitleText(promptFromResult(item), '生成结果 ' + (index + 1)),
         status: 'completed',
         image: resultPreviewUrl(item),
         assetId: item.assetId || ''
@@ -730,7 +1151,7 @@
       cards.push({
         type: 'job',
         jobId: job.jobId,
-        title: job.title || '图片任务',
+        title: promptTitleText(promptFromJob(job), job.title || '图片任务'),
         status: displayStatus,
         image: job.image || '',
         resultCount: job.resultCount || 0
@@ -740,6 +1161,9 @@
       return '<div class="imglab-empty-slot" style="grid-column:1 / -1;">还没有图片任务，提交一次后这里会出现任务卡片。</div>';
     }
     return cards.slice(0, 12).map(function(card) {
+      var isActive = card.type === 'result'
+        ? (!state.selectedJobId && card.index === state.activeResultIndex)
+        : (!!state.selectedJobId && card.jobId === state.selectedJobId);
       var attrs = card.type === 'result'
         ? 'data-result-index="' + card.index + '"'
         : 'data-imglab-job="' + escapeHtml(card.jobId) + '"';
@@ -748,7 +1172,7 @@
         : '<div class="imglab-task-card-pending">' + (card.status === 'running' ? '<span class="imglab-task-spinner" aria-hidden="true"></span>' : '<span class="imglab-task-done-mark">' + (card.status === 'stale' ? '刷新' : '完成') + '</span>') + '</div>';
       if (card.status === 'failed') media = '<div class="imglab-task-card-failed">失败</div>';
       return [
-        '<button type="button" class="imglab-task-card' + (card.type === 'result' && card.index === state.activeResultIndex ? ' is-active' : '') + ' is-' + escapeHtml(card.status || 'running') + '" ' + attrs + '>',
+        '<button type="button" class="imglab-task-card' + (isActive ? ' is-active' : '') + ' is-' + escapeHtml(card.status || 'running') + '" ' + attrs + ' title="' + escapeHtml(card.title || '图片任务') + '">',
         '<div class="imglab-task-card-media">' + media + '</div>',
         '<div class="imglab-task-card-body">',
         '<span class="imglab-task-card-title">' + escapeHtml(card.title || '图片任务') + '</span>',
@@ -765,21 +1189,8 @@
     var gallery = $('imglabResultGallery');
     if (!surface || !meta || !gallery) return;
 
-    var active = currentResult();
-    if (!active && state.currentJobStatus === 'running') {
-      surface.innerHTML = [
-        '<div class="imglab-result-placeholder">',
-        '<strong>图片正在生成中</strong>',
-        '<span>高质量模型生成通常需要 5-10 分钟。你可以继续提交新任务，或先去使用其他功能；任务完成后会在右下角提醒你。</span>',
-        '</div>'
-      ].join('');
-      meta.innerHTML = '<div class="imglab-result-pills"><span class="imglab-result-pill">任务 ' + escapeHtml(state.currentJobId ? state.currentJobId.slice(0, 8) : '') + '</span><span class="imglab-result-pill">生成中</span></div>';
-      gallery.innerHTML = resultCardsHtml();
-      bindRecentJobButtons();
-      return;
-    }
-
-    if (!active) {
+    var detail = activeResultDetail();
+    if (!detail) {
       surface.innerHTML = [
         '<div class="imglab-result-placeholder">',
         '<strong>结果展示区</strong>',
@@ -792,16 +1203,34 @@
       return;
     }
 
-    surface.innerHTML = '<img src="' + escapeHtml(resultPreviewUrl(active)) + '" alt="生成结果">';
-    meta.innerHTML = [
-      '<div class="imglab-result-pills">',
-      '<span class="imglab-result-pill">第 ' + (state.activeResultIndex + 1) + ' 张结果</span>',
-      active.model ? '<span class="imglab-result-pill">' + escapeHtml(active.model) + '</span>' : '',
-      active.aspectRatio ? '<span class="imglab-result-pill">' + escapeHtml(active.aspectRatio) + '</span>' : '',
-      active.size ? '<span class="imglab-result-pill">' + escapeHtml(active.size) + '</span>' : '',
-      active.assetId ? '<span class="imglab-result-pill">素材 ' + escapeHtml(active.assetId) + '</span>' : '',
+    surface.innerHTML = [
+      '<div class="imglab-result-layout">',
+      '<div class="imglab-result-preview-pane">',
+      renderResultPreview(detail),
       '</div>',
-      (active.sourceUrl || active.url) ? '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(active.sourceUrl || active.url) + '" target="_blank" rel="noopener">打开原图</a>' : '<span></span>'
+      '<div class="imglab-result-side">',
+      '<div class="imglab-result-side-top">',
+      '<span class="imglab-result-kicker">' + escapeHtml(detail.type === 'result' ? '当前结果' : '历史任务') + '</span>',
+      '<h5 class="imglab-result-heading">' + escapeHtml(detail.title || '图片任务') + '</h5>',
+      '</div>',
+      '<div class="imglab-result-pills">' + renderDetailPills(detail) + '</div>',
+      '<div class="imglab-result-actions">',
+      '<button type="button" class="btn btn-sm imglab-action-btn is-copy" data-imglab-copy-prompt>' + (detail.prompt ? '复制提示词并回填' : '暂无提示词') + '</button>',
+      '<button type="button" class="btn btn-sm imglab-action-btn is-download" data-imglab-download-image' + (detail.previewUrl ? '' : ' disabled') + '>下载图片</button>',
+      '<button type="button" class="btn btn-sm imglab-action-btn is-preview" data-imglab-open-preview' + (detail.previewUrl ? '' : ' disabled') + '>查看原图</button>',
+      '</div>',
+      '<div class="imglab-result-prompt-panel">',
+      '<div class="imglab-result-prompt-head">提示词</div>',
+      '<div class="imglab-result-prompt-body">' + escapeHtml(detail.prompt || '这条任务暂时没有可展示的提示词。') + '</div>',
+      '</div>',
+      '</div>',
+      '</div>'
+    ].join('');
+    meta.innerHTML = [
+      '<div class="imglab-result-gallery-head">',
+      '<strong>任务记录</strong>',
+      '<span>点击下方卡片切换当前结果和历史任务详情。</span>',
+      '</div>'
     ].join('');
 
     gallery.innerHTML = resultCardsHtml();
@@ -813,6 +1242,7 @@
       if (btn.dataset.bound) return;
       btn.dataset.bound = '1';
       btn.addEventListener('click', function() {
+        state.selectedJobId = '';
         state.activeResultIndex = Number(btn.getAttribute('data-result-index')) || 0;
         renderResultSurface();
       });
@@ -826,15 +1256,20 @@
         state.currentJobId = jobId;
         var hit = state.recentJobs.find(function(item) { return item && item.jobId === jobId; });
         state.currentJobStatus = (hit && hit.status) || 'running';
+        state.currentJobPrompt = promptFromJob(hit);
         if (state.currentJobStatus === 'stale') state.currentJobStatus = 'running';
         setRightView('result');
         if (hit && hit.cloud && hit.cloudJob && hit.status === 'completed') {
+          state.selectedJobId = '';
           applyCloudJobResult(hit.cloudJob);
           showMessage('已加载服务器保存的历史结果。', false);
           return;
         }
+        state.selectedJobId = jobId;
         renderResultSurface();
-        refreshJobStatus(true);
+        if (state.currentJobStatus === 'running' || (!hit || (hit.status === 'completed' && !hit.image))) {
+          refreshJobStatus(true);
+        }
       });
     });
   }
@@ -892,7 +1327,7 @@
         tags.slice(0, 4).map(function(tag) {
           return '<span class="imglab-example-tag">' + escapeHtml(tag) + '</span>';
         }).join(''),
-        (item.model ? '<span class="imglab-example-tag">' + escapeHtml(item.model) + '</span>' : ''),
+        (displayModelName(item.model) ? '<span class="imglab-example-tag">' + escapeHtml(displayModelName(item.model)) + '</span>' : ''),
         '</div>',
         '</div>',
         '</button>'
@@ -931,15 +1366,18 @@
     state.references = [];
     state.results = [];
     state.activeResultIndex = 0;
+    state.selectedJobId = '';
     state.view = 'examples';
     state.submitting = false;
     state.currentJobId = '';
     state.currentJobStatus = '';
+    state.currentJobPrompt = '';
     if ($('imglabPromptInput')) $('imglabPromptInput').value = '';
-    if ($('imglabAspectRatioSelect')) $('imglabAspectRatioSelect').value = '1:1';
+    if ($('imglabAspectRatioSelect')) $('imglabAspectRatioSelect').value = '9:16';
     if ($('imglabModelSelect')) $('imglabModelSelect').value = 'gpt-image-2';
     if ($('imglabQualitySelect')) $('imglabQualitySelect').value = 'high';
     if ($('imglabBackgroundSelect')) $('imglabBackgroundSelect').value = 'auto';
+    syncImglabCustomSelects();
     if ($('imglabReferenceInput')) $('imglabReferenceInput').value = '';
     showMessage('');
     renderReferenceList();
@@ -972,12 +1410,14 @@
         data_url: item.data_url || '',
         assetId: item.asset_id || '',
         sourceUrl: item.source_url || '',
+        prompt: cleanPromptText(state.currentJobPrompt),
         model: payload.meta && payload.meta.model,
         aspectRatio: payload.meta && payload.meta.aspect_ratio,
         size: payload.meta && payload.meta.size
       };
     });
     state.activeResultIndex = 0;
+    state.selectedJobId = '';
     renderResultSurface();
     setRightView('result');
   }
@@ -1263,6 +1703,7 @@
       console.warn('图片任务提交失败', err);
       state.currentJobId = '';
       state.currentJobStatus = '';
+      state.currentJobPrompt = '';
       renderResultSurface();
       showMessage(imageTaskFailureMessage({ error: err && err.message }), true);
     } finally {
@@ -1287,6 +1728,7 @@
     var input = $('imglabReferenceInput');
     var list = $('imglabReferenceList');
     var gallery = $('imglabResultGallery');
+    var surface = $('imglabResultSurface');
     var examples = $('imglabExamplesGrid');
     var resetBtn = $('imglabResetBtn');
     var generateBtn = $('imglabGenerateBtn');
@@ -1343,8 +1785,31 @@
       gallery.addEventListener('click', function(event) {
         var btn = event.target.closest('.imglab-result-thumb');
         if (!btn) return;
+        state.selectedJobId = '';
         state.activeResultIndex = Number(btn.getAttribute('data-result-index')) || 0;
         renderResultSurface();
+      });
+    }
+    if (surface && !surface.dataset.bound) {
+      surface.dataset.bound = '1';
+      surface.addEventListener('click', function(event) {
+        var copyBtn = event.target.closest('[data-imglab-copy-prompt]');
+        if (copyBtn) {
+          copyActivePrompt();
+          return;
+        }
+        var downloadBtn = event.target.closest('[data-imglab-download-image]');
+        if (downloadBtn) {
+          if (downloadBtn.disabled) return;
+          downloadActiveImage();
+          return;
+        }
+        var previewBtn = event.target.closest('[data-imglab-open-preview]');
+        if (previewBtn) {
+          if (previewBtn.disabled) return;
+          var detail = activeResultDetail();
+          openResultPreviewModal(detail ? (detail.downloadUrl || detail.previewUrl || '') : '', detail ? detail.title : '');
+        }
       });
     }
     if (examples && !examples.dataset.bound) {
@@ -1424,6 +1889,7 @@
   }
 
   function init() {
+    initImglabCustomSelects();
     bindEvents();
     if (!state.initialized) {
       state.initialized = true;
@@ -1442,6 +1908,7 @@
         refreshJobStatus(false);
       }
     }
+    syncImglabCustomSelects();
     renderWorkspace();
   }
 

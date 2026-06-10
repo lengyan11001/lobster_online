@@ -764,17 +764,17 @@
                       <div class="imglab-field">
                         <label for="imglabAspectRatioSelect">比例</label>
                         <select id="imglabAspectRatioSelect">
-                          <option value="1:1" selected>1:1 方图</option>
+                          <option value="1:1">1:1 方图</option>
                           <option value="3:2">3:2 横图</option>
                           <option value="16:9">16:9 横版</option>
                           <option value="2:3">2:3 竖图</option>
-                          <option value="9:16">9:16 竖版</option>
+                          <option value="9:16" selected>9:16 竖版</option>
                         </select>
                       </div>
                       <div class="imglab-field">
                         <label for="imglabModelSelect">模型</label>
                         <select id="imglabModelSelect">
-                          <option value="gpt-image-2" selected>gpt-image-2</option>
+                          <option value="gpt-image-2" selected>&#24433;&#26790;lite</option>
                         </select>
                       </div>
                     </div>
@@ -1286,10 +1286,7 @@
                       </div>
                       <button type="button" id="seedanceBusinessResultBackBtn" class="btn btn-ghost btn-sm">返回分镜预览</button>
                     </div>
-                    <div class="tvc-panel-hint" id="seedanceCurrentTaskTitle" style="margin:-0.35rem 0 0.75rem 0;">还没有提交创意视频任务</div>
-                    <div class="tvc-video-stage">
-                      <div id="seedanceBusinessResultSurface" class="tvc-video-surface"></div>
-                    </div>
+                    <div id="seedanceBusinessResultSurface" class="seedance-result-surface"></div>
                     <div class="seedance-business-history">
                       <div class="tvc-toolbar" style="margin-bottom:0.72rem;">
                         <div>
