@@ -73,38 +73,56 @@ fi
 echo ">>> [6/7] 拉齐后复检（核心项不齐则中止，不生成 zip）"
 "$PY" "$ROOT/scripts/report_pack_gaps.py"
 
-_restore_env_example() {
+_restore_pack_config_files() {
   if [ -n "${_ENV_EXAMPLE_BACKUP:-}" ] && [ -f "$_ENV_EXAMPLE_BACKUP" ]; then
     cp -f "$_ENV_EXAMPLE_BACKUP" "$ROOT/.env.example"
     rm -f "$_ENV_EXAMPLE_BACKUP"
   fi
+  if [ -n "${_ENV_BACKUP:-}" ] && [ -f "$_ENV_BACKUP" ]; then
+    cp -f "$_ENV_BACKUP" "$ROOT/.env"
+    rm -f "$_ENV_BACKUP"
+  fi
 }
 if [ "${LOBSTER_BRAND_MARK}" != "yingshi" ]; then
-  echo ">>> [6b/7] 将 LOBSTER_BRAND_MARK=${LOBSTER_BRAND_MARK} 写入 .env.example（zip 仅含模板、不含 .env）"
+  echo ">>> [6b/7] 将 LOBSTER_BRAND_MARK=${LOBSTER_BRAND_MARK} 写入 .env / .env.example（打包后自动恢复）"
   _ENV_EXAMPLE_BACKUP="$(mktemp "${TMPDIR:-/tmp}/lobster_env_example.XXXXXX")"
   cp "$ROOT/.env.example" "$_ENV_EXAMPLE_BACKUP"
-  export _ENV_EXAMPLE_BACKUP
-  trap '_restore_env_example' EXIT
+  _ENV_BACKUP=""
+  if [ -f "$ROOT/.env" ]; then
+    _ENV_BACKUP="$(mktemp "${TMPDIR:-/tmp}/lobster_env.XXXXXX")"
+    cp "$ROOT/.env" "$_ENV_BACKUP"
+  fi
+  export _ENV_EXAMPLE_BACKUP _ENV_BACKUP
+  trap '_restore_pack_config_files' EXIT
   "$PY" -c "
 import pathlib, os
 root = pathlib.Path(os.environ['ROOT'])
 mark = os.environ.get('LOBSTER_BRAND_MARK', 'yingshi')
-p = root / '.env.example'
-text = p.read_text(encoding='utf-8')
-out = []
-for line in text.splitlines(True):
-    if line.strip().startswith('LOBSTER_BRAND_MARK='):
+for name in ('.env.example', '.env'):
+    p = root / name
+    if not p.exists():
+        continue
+    text = p.read_text(encoding='utf-8')
+    out = []
+    found = False
+    for line in text.splitlines(True):
+        if line.strip().startswith('LOBSTER_BRAND_MARK='):
+            out.append(f'LOBSTER_BRAND_MARK={mark}\n')
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        if out and not out[-1].endswith('\n'):
+            out[-1] += '\n'
         out.append(f'LOBSTER_BRAND_MARK={mark}\n')
-    else:
-        out.append(line)
-p.write_text(''.join(out), encoding='utf-8')
+    p.write_text(''.join(out), encoding='utf-8')
 "
 fi
 
 echo ">>> [7/7] pack_full_project.sh（仅 zip，不改 bat）"
 export SKIP_ENSURE_FULL_PACK_DEPS=1
 bash "$ROOT/pack_full_project.sh"
-_restore_env_example
+_restore_pack_config_files
 trap - EXIT 2>/dev/null || true
 
 echo ""

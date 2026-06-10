@@ -31,8 +31,6 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
         return True
     if lower_rel.endswith(".bak") or ".bak." in lower_rel:
         return True
-    if rel_posix == ".env":
-        return True
     if rel_posix == "openclaw/.env":
         return True
     if rel_posix.startswith("openclaw/workspace/"):

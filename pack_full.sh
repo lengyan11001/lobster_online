@@ -41,7 +41,7 @@ fi
 cd "$PARENT"
 zip -r "$OUT_NAME" "$PROJ" \
   -x "${PROJ}/.git/*" "${PROJ}/*.pyc" "${PROJ}/*__pycache__*" "${PROJ}/*.db" \
-  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" \
+  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" \
   -x "${PROJ}/_pack_exe_test/*" "${PROJ}/_lobster_runtime/*" "${PROJ}/dist/*" "${PROJ}/build/*" "${PROJ}/tmp_responsive_check/*" "${PROJ}/.updates/*" "${PROJ}/chat_storage/*" \
   -x "${PROJ}/desktop/webview2/fixed-runtime/*" \
   -x "${PROJ}/sutui_config.json" \

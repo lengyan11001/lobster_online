@@ -69,8 +69,8 @@ cd /d D:\lobster_online
 
 1. 清理并重建 `_pack_exe_test/staging/`。
 2. 复制运行所需目录和文件到 staging。
-3. 将 `backend/`、`mcp/`、`publisher/` 内的 `.py` 编译为模块级 `.pyc`。
-4. 删除已编译模块的 `.py` 源码，保留入口类文件，例如 `run.py`、`__main__.py`、`__init__.py`。
+3. 将 `backend/`、`desktop/`、`mcp/`、`publisher/`、`scripts/`、`skills/`、`static/` 内的 `.py` 编译为同级 `.pyc`。
+4. 将 `.py` 源码替换为极小 loader stub，由 stub 加载同名 `.pyc`。这样 `python xxx.py`、`import package.module`、`importlib.util.spec_from_file_location(..., "xxx.py")` 三类入口都能继续工作。
 5. 用 PyInstaller 编译 `launcher.py` 为 `lobster.exe`。
 6. 将 staging 打成 zip，输出到 `_pack_exe_test/output/`。
 
@@ -97,6 +97,8 @@ _pack_exe_test/output/lobster_desktop_YYYYMMDD_HHMMSS.zip
 
 - `_pack_exe_test/` 是本地忽略目录，里面可能有 staging、历史 zip、日志、数据库或本机配置，不要整体提交。
 - 加密流程不会修改原始项目文件，所有源码编译与删除只发生在 `_pack_exe_test/staging/`。
-- 当前加密方式是 `.py -> .pyc` 后删除源码，并编译启动器；不是严格意义上的不可逆代码保护。
-- 生成 zip 前确认 `.env`、日志、数据库、用户素材等本机数据没有被误复制。
+- 当前加密方式是 `.py -> .pyc` 后用 loader stub 替换源码，并编译启动器；不是严格意义上的不可逆代码保护。
+- 需要通过 OTA 把明文客户端升级成加密客户端时，使用 `python scripts\pack_client_code_ota.py --encrypted`。该模式会在临时目录内用包内 Python 编译 `.pyc`，并把 `.py` loader stub 与同名 `.pyc` 一起打入 OTA；不要用普通 OTA 包替代。
+- 生成 zip 前确认 `.env`、`openclaw/openclaw.json`、日志、数据库、用户素材、技能运行目录等本机数据没有被误复制。
+- 加密包会带 `CLIENT_CODE_VERSION.json` 与 `static/client_version.json`，启动器仍按 `scripts/check_client_code_update.py` 检查 OTA；后续 OTA 若下发普通源码包，功能可正常升级，但被覆盖的路径会恢复为 OTA 包里的内容。若要求升级后仍保持 `.pyc` 形态，需要 OTA 也按加密规则制包或在 updater 中增加升级后编译逻辑。
 - 只打包不等于发布。OTA 或服务器发布必须单独按发布流程执行。

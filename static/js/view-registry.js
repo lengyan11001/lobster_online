@@ -46,12 +46,14 @@
   });
 
   window.registerLobsterView('assets', {
-    html: '/static/views/assets.html?v=20260603-copy-clean',
+    html: '/static/views/assets.html?v=20260610-asset-origin-filter-fix',
+    scripts: '/static/js/publish.js?v=20260610-asset-origin-filter-fix',
     cache: 'reload'
   });
 
   window.registerLobsterView('scheduled-tasks', {
-    html: '/static/views/scheduled-tasks.html'
+    html: '/static/views/scheduled-tasks.html?v=20260610-scheduled-form-only',
+    cache: 'reload'
   });
 
   window.registerLobsterView('billing', {
