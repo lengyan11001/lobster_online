@@ -1384,9 +1384,6 @@ function decorateWorkspaceSubsections() {
   addSectionChrome(document.getElementById('pubTabAccounts'), {
     title: readLabel('.pub-tab[data-pub-tab="accounts"]', '发布账号')
   });
-  addSectionChrome(document.getElementById('pubTabAssets'), {
-    title: '素材列表'
-  });
   addSectionChrome(document.getElementById('pubTabTasks'), {
     title: readLabel('.pub-tab[data-pub-tab="tasks"]', '发布记录')
   });
@@ -1396,8 +1393,8 @@ function decorateWorkspaceSubsections() {
     { selector: '#accountFilterToolbar', className: 'publish-filter-toolbar' }
   ]);
   markToolbars('pubTabAssets', [
-    { selector: ':scope > div:nth-of-type(1)', className: 'publish-filter-toolbar' },
-    { selector: ':scope > div:nth-of-type(2)', className: 'publish-assets-toolbar' }
+    { selector: ':scope > div:nth-of-type(2)', className: 'publish-filter-toolbar' },
+    { selector: ':scope > div:nth-of-type(3)', className: 'publish-assets-toolbar' }
   ]);
 
   addClass('accountPublishShell', 'publish-shell-grid');

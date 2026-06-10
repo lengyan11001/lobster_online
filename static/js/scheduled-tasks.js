@@ -5,20 +5,20 @@
 
   var CAPABILITIES = {
     'create.video.pipeline': {
-      label: 'gtp创意成片',
-      description: '按脚本、分镜图、视频提示词三段规划，先用 gpt-image-2 生成首帧，再生成视频并入素材库。'
+      label: 'GPT 创意成片',
+      description: '脚本、分镜、首帧和视频一体生成。'
     },
     'create.ppt.pipeline': {
-      label: '智能PPT',
-      description: '根据记忆或自定义主题生成可编辑 PPTX，并保存到素材库。'
+      label: '智能 PPT',
+      description: '生成可编辑 PPTX 并保存到素材库。'
     },
     'goal.video.pipeline': {
       label: '创意成片',
-      description: '根据记忆或自定义提示词生成文案，可从备选素材组随机取图，或先 AI 生成首帧再生成视频。'
+      description: '生成文案、首帧和视频，支持备选素材组。'
     },
     'goal.image.pipeline': {
-      label: '文案+创意图片',
-      description: '根据记忆或自定义提示词生成文案和创意图片，生成图片后结束。'
+      label: '文案 + 创意图片',
+      description: '生成文案和创意图片，生成图片后结束。'
     },
     'hifly.video.create_by_tts': {
       label: '必火数字人',
@@ -866,12 +866,16 @@
     var sel = document.getElementById('scheduledTaskCapability');
     if (!sel) return Promise.resolve();
     var current = sel.value;
-    sel.innerHTML = optionHtml('goal.video.pipeline', '创意成片')
-      + optionHtml('create.video.pipeline', 'gtp创意成片')
-      + optionHtml('create.ppt.pipeline', '智能PPT')
-      + optionHtml('goal.image.pipeline', '文案+创意图片')
-      + optionHtml('hifly.video.create_by_tts', '必火数字人');
-    sel.value = CAPABILITIES[current] ? current : 'goal.video.pipeline';
+    sel.innerHTML = [
+      'goal.image.pipeline',
+      'goal.video.pipeline',
+      'create.video.pipeline',
+      'create.ppt.pipeline',
+      'hifly.video.create_by_tts'
+    ].map(function (id) {
+      return optionHtml(id, (CAPABILITIES[id] || {}).label || id);
+    }).join('');
+    sel.value = CAPABILITIES[current] ? current : 'goal.image.pipeline';
     toggleCapability();
     return Promise.resolve();
   }
@@ -1302,6 +1306,7 @@
     var autoFill = document.getElementById('scheduledTaskAutoFillBtn');
     if (autoFill) autoFill.addEventListener('click', autoFillParams);
     updateScheduleFields('scheduledTask');
+    if (!collectDailyTimes('scheduledTask').length) addDailyTime('scheduledTask');
   }
 
   window.initScheduledTasksView = function initScheduledTasksView() {

@@ -745,52 +745,247 @@
     .store-tab, .pub-tab, .sys-tab, .wecom-detail-tab, .account-type-tab { background: none; border: none; padding: 0.6rem 1.25rem; font-size: 0.9rem; font-weight: 500; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
     .store-tab:hover, .pub-tab:hover, .sys-tab:hover, .wecom-detail-tab:hover, .account-type-tab:hover { color: var(--text); }
     .store-tab.active, .pub-tab.active, .sys-tab.active, .wecom-detail-tab.active, .account-type-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    #content-scheduled-tasks {
+      --scheduled-blue: var(--accent);
+      --scheduled-text: var(--text);
+      --scheduled-muted: var(--text-muted);
+      --scheduled-line: var(--border);
+      --scheduled-soft: rgba(255, 255, 255, 0.04);
+    }
+    #content-scheduled-tasks .scheduled-hero-card {
+      padding: 1rem;
+    }
+    #content-scheduled-tasks .scheduled-hero-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+    }
+    #content-scheduled-tasks .scheduled-page-title {
+      margin: 0;
+      font-size: 1.15rem;
+      line-height: 1.25;
+      color: var(--text);
+    }
+    #content-scheduled-tasks .scheduled-page-subtitle {
+      margin: 0.45rem 0 0;
+      color: var(--text-muted);
+      font-size: 0.86rem;
+      line-height: 1.45;
+    }
+    #content-scheduled-tasks .scheduled-refresh-btn {
+      min-height: 34px;
+    }
     #content-scheduled-tasks .store-tabs {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 0.5rem;
-      padding: 0.35rem;
-      border: 1px solid rgba(66,98,223,0.12);
-      border-radius: 10px;
-      background: rgba(66,98,223,0.06);
-      max-width: 680px;
-      min-width: 0;
-      overflow-x: auto;
-      white-space: nowrap;
+      margin-top: 0.75rem;
     }
     #content-scheduled-tasks .sched-tab {
-      min-height: 46px;
-      min-width: 0;
-      white-space: nowrap;
-      border: 0;
-      border-radius: 8px;
       background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
       color: var(--text-muted);
-      font-size: 0.95rem;
-      font-weight: 750;
-      line-height: 1;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 0.6rem 1.25rem;
       cursor: pointer;
-      transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+      transition: color 0.16s ease, border-color 0.16s ease;
     }
-    #content-scheduled-tasks .sched-tab:hover {
-      color: #22324f;
-      background: rgba(255,255,255,0.62);
+    #content-scheduled-tasks .sched-tab:hover,
+    #content-scheduled-tasks .sched-tab.active {
+      color: var(--accent);
     }
     #content-scheduled-tasks .sched-tab.active {
-      color: #4262df;
-      background: #fff;
-      box-shadow: 0 8px 18px rgba(36,54,88,0.08);
+      border-bottom-color: var(--accent);
+    }
+    #content-scheduled-tasks .sched-tab-panel {
+      margin-top: 1rem;
+      overflow: visible;
+    }
+    #content-scheduled-tasks .scheduled-create-card {
+      padding: 0;
+      overflow: hidden;
+    }
+    #content-scheduled-tasks .scheduled-form-grid {
+      display: grid;
+      grid-template-columns: minmax(300px, 0.78fr) minmax(420px, 1fr);
+      gap: 1rem;
+      align-items: start;
+      padding: 1rem;
+    }
+    #content-scheduled-tasks .scheduled-form-section,
+    #content-scheduled-tasks .scheduled-param-panel {
+      min-width: 0;
+    }
+    #content-scheduled-tasks .scheduled-param-panel {
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--scheduled-soft);
+    }
+    #content-scheduled-tasks .scheduled-section-title,
+    #content-scheduled-tasks .scheduled-list-head h4 {
+      margin: 0 0 0.8rem;
+      padding-left: 0.65rem;
+      border-left: 3px solid var(--accent);
+      color: var(--text);
+      font-size: 1rem;
+      line-height: 1.35;
+      font-weight: 600;
+    }
+    #content-scheduled-tasks .scheduled-section-title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    #content-scheduled-tasks .scheduled-section-title-row .scheduled-section-title {
+      margin-bottom: 0.8rem;
+    }
+    #content-scheduled-tasks .modal-field {
+      margin: 0 0 0.85rem;
+    }
+    #content-scheduled-tasks .modal-field label,
+    #content-scheduled-tasks .scheduled-label-row label {
+      display: block;
+      margin: 0 0 0.35rem;
+      color: var(--text);
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+    #content-scheduled-tasks .required-mark {
+      color: #ef4444;
     }
     #content-scheduled-tasks select,
     #content-scheduled-tasks input,
     #content-scheduled-tasks textarea {
-      min-height: 40px;
+      width: 100%;
+      min-height: 38px;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      font-size: 0.88rem;
+      box-shadow: none;
+    }
+    #content-scheduled-tasks textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+    #content-scheduled-tasks select:focus,
+    #content-scheduled-tasks input:focus,
+    #content-scheduled-tasks textarea:focus {
+      border-color: var(--accent);
+      outline: 2px solid rgba(6, 182, 212, 0.14);
+    }
+    #content-scheduled-tasks .scheduled-inline-hint {
+      margin: 0.35rem 0 0;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      line-height: 1.45;
+    }
+    #content-scheduled-tasks .scheduled-inline-hint:empty {
+      display: none;
+    }
+    #content-scheduled-tasks .scheduled-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    #content-scheduled-tasks .scheduled-label-row label {
+      margin: 0;
+    }
+    #content-scheduled-tasks .btn-link {
+      border: 0;
+      background: transparent;
+      color: var(--accent);
+      padding: 0;
+      box-shadow: none;
+    }
+    #content-scheduled-tasks .scheduled-time-list {
+      display: grid;
+      gap: 8px;
+      max-width: 180px;
+    }
+    #content-scheduled-tasks .scheduled-param-fields > div,
+    #content-scheduled-tasks .scheduled-param-fields > div > div {
+      gap: 0.75rem 0.85rem !important;
+    }
+    #content-scheduled-tasks .scheduled-param-fields > div {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    #content-scheduled-tasks .scheduled-param-fields .modal-field {
+      margin: 0 !important;
+    }
+    #content-scheduled-tasks .scheduled-param-fields p.meta {
+      display: none;
+    }
+    #content-scheduled-tasks .scheduled-asset-field {
+      margin-top: 18px;
+      margin-bottom: 0;
+    }
+    #content-scheduled-tasks .scheduled-form-footer {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 16px;
+      min-height: 64px;
+      padding: 0.85rem 1rem;
+      border-top: 1px solid var(--border);
+      background: var(--scheduled-soft);
+    }
+    #content-scheduled-tasks .scheduled-task-msg {
+      margin-right: auto;
+      font-size: 0.85rem;
     }
     #content-scheduled-tasks #scheduledTaskCreateBtn {
+      min-width: 148px;
       min-height: 40px;
-      padding: 0.52rem 1.05rem;
-      font-size: 0.86rem;
-      border-radius: 8px;
+      padding: 0.55rem 1.15rem;
+      border-radius: var(--radius-sm);
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    #content-scheduled-tasks .scheduled-list-card {
+      margin-top: 1rem;
+      padding: 1rem;
+      overflow-x: auto;
+    }
+    #content-scheduled-tasks .scheduled-list-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    #content-scheduled-tasks .scheduled-list-head h4 {
+      margin-bottom: 16px;
+    }
+    @media (max-width: 980px) {
+      #content-scheduled-tasks {
+        max-width: 100%;
+      }
+      #content-scheduled-tasks .scheduled-hero-head,
+      #content-scheduled-tasks .scheduled-form-footer {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      #content-scheduled-tasks .scheduled-refresh-btn,
+      #content-scheduled-tasks #scheduledTaskCreateBtn {
+        width: 100%;
+      }
+      #content-scheduled-tasks .scheduled-form-grid,
+      #content-scheduled-tasks .scheduled-param-fields > div {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+      #content-scheduled-tasks .scheduled-form-grid {
+        gap: 24px;
+        padding: 22px;
+      }
+      #content-scheduled-tasks .scheduled-param-panel {
+        padding: 18px;
+      }
     }
     .category-chip { display: inline-block; padding: 0.25rem 0.65rem; font-size: 0.78rem; border-radius: 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: var(--text-muted); cursor: pointer; transition: all 0.15s; }
     .category-chip:hover { background: rgba(6,182,212,0.12); border-color: var(--accent); color: var(--accent); }
@@ -4696,6 +4891,34 @@
     .publish-assets-toolbar {
       justify-content: flex-start;
     }
+    .asset-origin-tabs {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+      margin: 0.75rem 0 0;
+      padding: 0.28rem;
+      width: fit-content;
+      border: 1px solid rgba(34, 49, 78, 0.08);
+      border-radius: 999px;
+      background: rgba(248, 249, 253, 0.86);
+    }
+    .asset-origin-tab {
+      min-height: 34px;
+      padding: 0.42rem 0.95rem;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.84rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .asset-origin-tab.active {
+      color: #31405a;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 0 8px 18px rgba(36,54,88,0.06), inset 0 0 0 1px rgba(34,49,78,0.08);
+    }
     .page-toolbar-group {
       display: flex;
       align-items: center;
@@ -4832,6 +5055,24 @@
       font-size: 0.74rem;
       color: var(--text-muted);
       font-weight: 600;
+    }
+    .asset-origin-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0.12rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      white-space: nowrap;
+      color: #4262df;
+      background: rgba(66,98,223,0.1);
+      border: 1px solid rgba(66,98,223,0.14);
+    }
+    .asset-origin-badge.is-upload {
+      color: #047857;
+      background: rgba(16,185,129,0.1);
+      border-color: rgba(16,185,129,0.16);
     }
     .asset-card .asset-preview-wrap {
       margin: 0.1rem 0 0.75rem !important;

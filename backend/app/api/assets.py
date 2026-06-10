@@ -903,6 +903,28 @@ class CreativeCandidateGroupReq(BaseModel):
     group_name: str
 
 
+def _asset_origin(meta: Optional[dict]) -> str:
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            meta = None
+    if isinstance(meta, dict):
+        origin = str(meta.get("asset_origin") or meta.get("origin") or "").strip()
+        if origin == "user_upload":
+            return "user_upload"
+    return "generated"
+
+
+def _normalize_asset_origin_filter(value: Optional[str]) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in ("user_upload", "upload", "uploaded", "manual_upload"):
+        return "user_upload"
+    if raw in ("generated", "generate", "ai_generated"):
+        return "generated"
+    return ""
+
+
 def _creative_candidate_group(meta: Optional[dict]) -> str:
     if not isinstance(meta, dict):
         return ""
@@ -1228,7 +1250,7 @@ def _save_url_lock_for(user_id: int, dedupe_key: str) -> asyncio.Lock:
 async def _report_generation_record_to_server(
     *,
     body: SaveAssetReq,
-    request: Request,
+    request: Optional[Request],
     asset_payload: dict,
     effective_url: str,
     dedupe_key: str,
@@ -1253,10 +1275,11 @@ async def _report_generation_record_to_server(
         )
         return
     headers = {"Content-Type": "application/json"}
-    auth = (request.headers.get("Authorization") or request.headers.get("authorization") or "").strip()
+    request_headers = request.headers if request is not None else {}
+    auth = (request_headers.get("Authorization") or request_headers.get("authorization") or "").strip()
     if auth:
         headers["Authorization"] = auth if auth.lower().startswith("bearer ") else f"Bearer {auth}"
-    xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
+    xi = (request_headers.get("X-Installation-Id") or request_headers.get("x-installation-id") or "").strip()
     if xi:
         headers["X-Installation-Id"] = xi
     if "Authorization" not in headers:
@@ -1346,7 +1369,7 @@ def _find_existing_asset_by_cdn_assets_url(db: Session, user_id: int, url: str) 
 async def _save_asset_from_url_locked(
     dk: str,
     body: SaveAssetReq,
-    request: Request,
+    request: Optional[Request],
     current_user: _ServerUser,
     *,
     effective_url_resolved: str,
@@ -1879,6 +1902,7 @@ async def upload_asset(
         media_type=mtype,
         file_size=fsize,
         source_url=public_url,
+        meta={"asset_origin": "user_upload"},
     )
     db.add(asset)
     db.commit()
@@ -1907,6 +1931,8 @@ def list_assets(
     media_type: Optional[str] = None,
     q: Optional[str] = None,
     creative_group: Optional[str] = None,
+    origin: Optional[str] = None,
+    asset_origin: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -1924,11 +1950,13 @@ def list_assets(
         )
     creative_group_name = (creative_group or "").strip()
     max_limit = min(limit, 200)
-    if creative_group_name:
+    origin_filter = _normalize_asset_origin_filter(origin or asset_origin)
+    if creative_group_name or origin_filter:
         matched = [
             row
             for row in query.order_by(Asset.created_at.desc()).all()
-            if _creative_candidate_group(row.meta) == creative_group_name
+            if (not creative_group_name or _creative_candidate_group(row.meta) == creative_group_name)
+            and (not origin_filter or _asset_origin(row.meta) == origin_filter)
         ]
         total = len(matched)
         rows = matched[offset : offset + max_limit]
@@ -1971,6 +1999,7 @@ def list_assets(
             elif preview_url is None and open_url:
                 preview_url = open_url
         creative_group = _creative_candidate_group(r.meta)
+        asset_origin = _asset_origin(r.meta)
         out.append(
             {
                 "asset_id": r.asset_id,
@@ -1987,6 +2016,7 @@ def list_assets(
                 "creative_candidate_groups": _creative_candidate_groups(r.meta),
                 "creative_candidate_use_count": _creative_candidate_group_use_count(r.meta, creative_group) if creative_group else 0,
                 "creative_candidate_last_used_at": _creative_candidate_group_last_used_at(r.meta, creative_group) if creative_group else "",
+                "asset_origin": asset_origin,
                 "created_at": r.created_at.isoformat() if r.created_at else "",
             }
         )

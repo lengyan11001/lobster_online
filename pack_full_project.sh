@@ -36,14 +36,14 @@ rm -f "$PARENT/${PROJ}_完整项目包_${BM_SAFE}_"*.zip 2>/dev/null || true
 cd "$PARENT"
 
 # 仅 zip，不修改 install.bat / start.bat / run_*.bat（与 build_result_package.sh 约定一致；CRLF 请在仓库内维护或本地手动执行 scripts/ensure_bat_crlf.py）
-# 与 pack_full 相同的排除，并额外排除：使用说明、打包脚本、开发文档、制包用密钥 pack_bundle.env 等（上线包仅保留 .env.example）
+# 与 pack_full 相同的排除，并额外排除：使用说明、打包脚本、开发文档、制包用密钥 pack_bundle.env 等（完整包保留根 .env/.env.example）
 if command -v zip >/dev/null 2>&1; then
   zip -r "$OUT_NAME" "$PROJ" \
     -x "${PROJ}/.git/*" \
     -x "${PROJ}/*.pyc" "${PROJ}/*.pyo" "${PROJ}/*__pycache__*" "${PROJ}/*.db" "${PROJ}/*.sqlite" "${PROJ}/*.sqlite3" "${PROJ}/*.tmp" "${PROJ}/*.temp" "${PROJ}/*.bak" \
     -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/workspace-*/*" "${PROJ}/openclaw/.env" "${PROJ}/openclaw/.openclaw/*" "${PROJ}/openclaw/agents/*" "${PROJ}/openclaw/browser/*" "${PROJ}/openclaw/logs/*" "${PROJ}/openclaw/memory/*" "${PROJ}/openclaw/tasks/*" "${PROJ}/openclaw/user_memory/*" \
     -x "${PROJ}/openclaw/.channel_fallback.json" "${PROJ}/openclaw/.lobster_plugin_state_backup.json" "${PROJ}/openclaw/.weixin_login_last.json" "${PROJ}/openclaw/update-check.json" "${PROJ}/openclaw/openclaw.json.bak*" \
-    -x "${PROJ}/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" "${PROJ}/static/uploads/*" \
+    -x "${PROJ}/browser_data/*" "${PROJ}/assets/*" "${PROJ}/static/uploads/*" \
     -x "${PROJ}/_pack_exe_test/*" "${PROJ}/_lobster_runtime/*" "${PROJ}/dist/*" "${PROJ}/build/*" "${PROJ}/tmp_responsive_check/*" "${PROJ}/.updates/*" "${PROJ}/release_updates/*" "${PROJ}/chat_storage/*" \
     -x "${PROJ}/desktop/webview2/fixed-runtime/*" \
     -x "${PROJ}/sutui_config.json" \

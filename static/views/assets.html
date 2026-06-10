@@ -1,3 +1,54 @@
+<style>
+  #content-assets .asset-origin-tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0.85rem 0 0.15rem;
+    padding: 4px;
+    border: 1px solid rgba(34, 49, 78, 0.1);
+    border-radius: 10px;
+    background: rgba(244, 247, 252, 0.92);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  }
+  #content-assets .asset-origin-tab {
+    appearance: none;
+    min-width: 92px;
+    min-height: 34px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #64748b;
+    font-size: 0.86rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+  }
+  #content-assets .asset-origin-tab:hover {
+    color: #334155;
+    background: rgba(255, 255, 255, 0.58);
+  }
+  #content-assets .asset-origin-tab.active {
+    color: #2563eb;
+    background: #fff;
+    box-shadow: 0 8px 18px rgba(36, 54, 88, 0.08), inset 0 0 0 1px rgba(37, 99, 235, 0.1);
+  }
+  #content-assets .asset-origin-tab:focus-visible {
+    outline: 2px solid rgba(37, 99, 235, 0.35);
+    outline-offset: 2px;
+  }
+  @media (max-width: 520px) {
+    #content-assets .asset-origin-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      width: 100%;
+    }
+    #content-assets .asset-origin-tab {
+      min-width: 0;
+    }
+  }
+</style>
 <div id="content-assets" class="content-block">
             <div class="card">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
@@ -6,6 +57,10 @@
               </div>
             </div>
             <div id="pubTabAssets" class="pub-tab-panel">
+              <div class="asset-origin-tabs" role="tablist" aria-label="素材来源">
+                <button type="button" class="asset-origin-tab active" data-asset-origin="generated">生成素材</button>
+                <button type="button" class="asset-origin-tab" data-asset-origin="user_upload">用户上传</button>
+              </div>
               <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;padding:0.5rem 0;">
                 <select id="assetTypeFilter" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                   <option value="">全部类型</option>

@@ -1805,6 +1805,7 @@ if (addPubAcctSubmit && !addPubAcctSubmit._publishAddAccountBound) {
 var _MEDIA_TYPE_LABELS = { image: '图片', video: '视频', audio: '音频', document: '文档' };
 var _assetCreativeGroupsCache = [];
 var _assetCreativeGroupEditingAssetId = '';
+var _currentAssetOrigin = 'generated';
 
 function _assetMsgShow(text, isErr) {
   var m = document.getElementById('assetUploadMsg');
@@ -1828,6 +1829,17 @@ function _currentAssetSearchQuery() {
 
 function _currentAssetCreativeGroupFilter() {
   return ((document.getElementById('assetCreativeGroupFilter') || {}).value || '').trim();
+}
+
+function _currentAssetOriginFilter() {
+  return _currentAssetOrigin === 'user_upload' ? 'user_upload' : 'generated';
+}
+
+function _setAssetOriginTab(origin) {
+  _currentAssetOrigin = origin === 'user_upload' ? 'user_upload' : 'generated';
+  document.querySelectorAll('.asset-origin-tab').forEach(function(item) {
+    item.classList.toggle('active', item.getAttribute('data-asset-origin') === _currentAssetOrigin);
+  });
 }
 
 function _renderAssetCreativeGroupControls() {
@@ -2095,7 +2107,9 @@ function loadAssets(query) {
   el.innerHTML = '<div class="page-empty-card">加载中…</div>';
   var mediaType = (document.getElementById('assetTypeFilter') || {}).value || '';
   var creativeGroup = _currentAssetCreativeGroupFilter();
+  var origin = _currentAssetOriginFilter();
   var url = publishLocalBase() + '/api/assets?limit=50';
+  if (origin) url += '&origin=' + encodeURIComponent(origin);
   if (mediaType) url += '&media_type=' + encodeURIComponent(mediaType);
   if (creativeGroup) url += '&creative_group=' + encodeURIComponent(creativeGroup);
   if (query) url += '&q=' + encodeURIComponent(query);
@@ -2103,6 +2117,10 @@ function loadAssets(query) {
     .then(function(r) { return r.json(); })
     .then(function(d) {
       var assets = (d && Array.isArray(d.assets)) ? d.assets : [];
+      assets = assets.filter(function(a) {
+        var itemOrigin = a && a.asset_origin === 'user_upload' ? 'user_upload' : 'generated';
+        return itemOrigin === origin;
+      });
       if (!assets.length) {
         el.innerHTML = '<div class="page-empty-card">暂无素材。可上传本地文件或保存网络URL，也可在对话中让龙虾生成。</div>';
         return;
@@ -2182,6 +2200,8 @@ function loadAssets(query) {
           preview = '<div class="asset-preview-wrap asset-document-preview" ' + wrapAttrs + '><div class="asset-document-preview-inner"><div class="asset-document-icon">FILE</div><div class="asset-document-name">' + escapeHtml(a.filename || a.media_type || 'file') + '</div><div class="asset-document-meta">' + escapeHtml(a.media_type || '文件') + '</div></div></div>';
         }
         var typeLabel = _MEDIA_TYPE_LABELS[a.media_type] || a.media_type;
+        var originLabel = a.asset_origin === 'user_upload' ? '用户上传' : '生成素材';
+        var originClass = a.asset_origin === 'user_upload' ? ' is-upload' : ' is-generated';
         var tags = a.tags ? '<div class="card-tags">' + a.tags.split(',').map(function(t) { return '<span class="tag">' + escapeHtml(t.trim()) + '</span>'; }).join('') + '</div>' : '';
         var currentGroup = (a.creative_candidate_group || (Array.isArray(a.creative_candidate_groups) && a.creative_candidate_groups[0]) || '').trim();
         var groupHtml = currentGroup ? '<div class="card-tags"><span class="tag">备选：' + escapeHtml(currentGroup) + '</span></div>' : '';
@@ -2191,7 +2211,7 @@ function loadAssets(query) {
         var deleteBtn = '<button type="button" class="btn btn-ghost btn-sm" data-delete-asset="' + escapeAttr(a.asset_id) + '">删除</button>';
         var badgeColor = isImage ? '#6366f1' : isVideo ? '#f59e0b' : isDocument ? '#64748b' : '#888';
         return '<div class="skill-store-card asset-card">' +
-          '<div class="card-label"><span class="asset-card-badge" style="background:' + badgeColor + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
+          '<div class="card-label"><span style="display:inline-flex;align-items:center;gap:0.35rem;flex-wrap:wrap;"><span class="asset-card-badge" style="background:' + badgeColor + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-origin-badge' + originClass + '">' + escapeHtml(originLabel) + '</span></span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
           preview +
           '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(a.prompt || a.filename) + '</div>' +
           tags +
@@ -2260,6 +2280,15 @@ function setAssetUploadState(loading, text) {
 }
 
 function bindAssetLibraryUi() {
+  document.querySelectorAll('.asset-origin-tab').forEach(function(tab) {
+    if (tab._assetOriginBound) return;
+    tab._assetOriginBound = true;
+    tab.addEventListener('click', function() {
+      _setAssetOriginTab(tab.getAttribute('data-asset-origin'));
+      loadAssets(_currentAssetSearchQuery());
+    });
+  });
+
   var assetSearchBtn = document.getElementById('assetSearchBtn');
   if (assetSearchBtn && !assetSearchBtn._assetLibraryBound) {
     assetSearchBtn._assetLibraryBound = true;
@@ -2366,6 +2395,7 @@ function bindAssetLibraryUi() {
             if (noTos) msg += ', ' + noTos + ' 未同步火山（失败）';
             if (failed) msg += ', ' + failed + ' 请求失败';
             _assetMsgShow(msg, noTos > 0 || failed > 0);
+            if (done || noTos) _setAssetOriginTab('user_upload');
             loadCreativeCandidateGroups().then(function() {
               loadAssets(_currentAssetSearchQuery());
             });
