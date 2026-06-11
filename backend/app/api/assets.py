@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import time
 import uuid
 from datetime import datetime
@@ -820,6 +821,51 @@ def _unique_download_path(download_dir: Path, filename: str) -> Path:
     return download_dir / f"{stem}-{int(time.time())}{suffix}"
 
 
+def _asset_library_export_root() -> Path:
+    root = _BASE_DIR / "素材库"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _asset_library_export_dir(media_type: str) -> Path:
+    mt = (media_type or "").strip().lower()
+    folder_name = {
+        "image": "图片",
+        "video": "视频",
+        "document": "文档",
+        "audio": "音频",
+    }.get(mt, "其他")
+    export_dir = _asset_library_export_root() / folder_name
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return export_dir
+
+
+def _best_effort_open_folder_for_file(path: Path) -> bool:
+    try:
+        target = Path(path).resolve()
+    except Exception:
+        target = Path(path)
+    try:
+        if os.name == "nt":
+            import subprocess
+
+            subprocess.Popen(["explorer", "/select,", str(target)])
+            return True
+        if sys.platform == "darwin":
+            import subprocess
+
+            subprocess.Popen(["open", "-R", str(target)])
+            return True
+        if shutil.which("xdg-open"):
+            import subprocess
+
+            subprocess.Popen(["xdg-open", str(target.parent)])
+            return True
+    except Exception:
+        logger.warning("[assets] open folder failed target=%s", target, exc_info=True)
+    return False
+
+
 def _save_bytes(data: bytes, ext: str) -> tuple[str, str, int]:
     """Save raw bytes, return (asset_id, filename, size)."""
     aid = _gen_asset_id()
@@ -891,6 +937,7 @@ class SaveAssetReq(BaseModel):
 
 class SaveAssetToDownloadsReq(BaseModel):
     filename: Optional[str] = None
+    open_folder: bool = True
 
 
 class ChatSessionBackupReq(BaseModel):
@@ -2112,7 +2159,7 @@ def save_asset_to_downloads(
     if not source:
         raise HTTPException(404, detail="文件不存在")
 
-    download_dir = Path.home() / "Downloads"
+    download_dir = _asset_library_export_dir(a.media_type or "")
     download_dir.mkdir(parents=True, exist_ok=True)
     requested_name = (body.filename if body else None) or a.filename or source.name
     dest = _unique_download_path(download_dir, requested_name)
@@ -2125,11 +2172,14 @@ def save_asset_to_downloads(
     except Exception as exc:
         logger.exception("[assets] save to downloads failed asset_id=%s dest=%s", asset_id, dest)
         raise HTTPException(500, detail=f"保存失败：{exc}") from exc
+    opened = _best_effort_open_folder_for_file(dest) if (body.open_folder if body else True) else False
     return {
         "ok": True,
         "asset_id": a.asset_id,
         "filename": dest.name,
         "path": str(dest),
+        "directory": str(download_dir),
+        "opened_folder": opened,
     }
 
 

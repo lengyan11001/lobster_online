@@ -1893,6 +1893,36 @@
     </div>
   </div>
 
+  <div id="assetPreviewModal" class="modal-mask" style="display:none;">
+    <div class="modal" style="max-width:1080px;width:min(1080px,92vw);padding:0;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;padding:1rem 1.1rem;border-bottom:1px solid rgba(255,255,255,0.08);">
+        <div>
+          <h4 id="assetPreviewModalTitle" style="margin:0;font-size:1.02rem;">素材预览</h4>
+          <p id="assetPreviewModalMeta" class="meta" style="margin:0.3rem 0 0 0;font-size:0.78rem;"></p>
+        </div>
+        <button type="button" id="assetPreviewModalClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
+      </div>
+      <div style="display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,0.9fr);min-height:560px;max-height:78vh;">
+        <div id="assetPreviewStage" style="background:rgba(255,255,255,0.03);padding:1rem;display:flex;align-items:center;justify-content:center;overflow:auto;"></div>
+        <div style="padding:1rem 1rem 1.1rem 1rem;border-left:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:0.9rem;min-height:0;">
+          <div style="display:flex;gap:0.55rem;flex-wrap:wrap;">
+            <button type="button" id="assetPreviewCopyPromptBtn" class="btn btn-sm" style="background:#16a34a;color:#fff;border-color:#16a34a;">复制提示词</button>
+            <button type="button" id="assetPreviewDownloadBtn" class="btn btn-sm" style="background:#dc2626;color:#fff;border-color:#dc2626;">下载到素材库文件夹</button>
+          </div>
+          <div id="assetPreviewModalMsg" class="msg" style="display:none;margin:0;"></div>
+          <div class="modal-field" style="margin:0;">
+            <label>提示词</label>
+            <div id="assetPreviewPrompt" style="margin-top:0.35rem;padding:0.75rem 0.8rem;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);font-size:0.84rem;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:14rem;overflow:auto;"></div>
+          </div>
+          <div class="modal-field" style="margin:0;">
+            <label>素材信息</label>
+            <div id="assetPreviewInfo" style="margin-top:0.35rem;display:grid;gap:0.45rem;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="seedanceVideoModal" class="tvc-video-modal-mask" aria-hidden="true">
     <div class="tvc-video-modal" role="dialog" aria-modal="true" aria-labelledby="seedanceVideoModalTitle">
       <div class="tvc-video-modal-head">
@@ -2449,7 +2479,7 @@
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/cutcli-template-studio.js?v=20260605-cutcli-source-orientation"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
-  <script src="/static/js/publish.js?v=20260610-asset-origin-filter-fix"></script>
+  <script src="/static/js/publish.js?v=20260611-asset-preview-origin-no-tags"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260610-scheduled-form-only"></script>
   <script src="/static/js/init.js?v=20260610-assets-no-section-title"></script>
 </body>
