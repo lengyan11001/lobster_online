@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
+import os
 import random
 import re
 import sys
@@ -14,7 +16,7 @@ from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from ai_client import AIClient
 from douyin_account_nurture import DouyinAccountNurtureScheduler
@@ -25,6 +27,11 @@ from state_store import RuntimeStateStore
 
 
 router = APIRouter(prefix="/api/douyin", tags=["douyin"])
+
+_douyin_ai_auth_token_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "douyin_ai_auth_token",
+    default="",
+)
 
 
 def _write_excel_sheets(filepath: Path, sheets: List[tuple[str, List[Dict]]]) -> None:
@@ -4367,11 +4374,74 @@ def reconcile_douyin_interaction_runtime_state() -> bool:
 
 def create_ai_client(model_override: str = "") -> AIClient:
     config = load_global_config()
+    server_api_url, server_token = get_douyin_server_ai_proxy_credentials()
+    if server_api_url and server_token:
+        api_url = server_api_url
+        api_key = server_token
+    else:
+        api_key = str(config.get("api_key", "") or "").strip()
+        api_url = str(config.get("api_url", "https://ai.comfly.chat/v1/chat/completions") or "").strip()
     return AIClient(
-        api_url=config.get("api_url", "https://ai.comfly.chat/v1/chat/completions"),
-        api_key=config.get("api_key", ""),
+        api_url=api_url,
+        api_key=api_key,
         model=str(model_override or config.get("model", "gpt-5.4") or "gpt-5.4"),
     )
+
+
+def get_douyin_request_bearer_token(request: Optional[Request] = None) -> str:
+    if request is None:
+        return ""
+    auth = str(request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return ""
+
+
+def set_douyin_ai_auth_token_from_request(request: Optional[Request] = None) -> None:
+    token = get_douyin_request_bearer_token(request)
+    if token:
+        _douyin_ai_auth_token_var.set(token)
+
+
+def get_douyin_server_ai_proxy_credentials() -> tuple[str, str]:
+    token = str(_douyin_ai_auth_token_var.get("") or "").strip()
+    if not token:
+        token = str(os.environ.get("LOBSTER_COMFLY_PROXY_DEFAULT_TOKEN") or "").strip()
+    if not token:
+        try:
+            from backend.app.services.openclaw_channel_auth_store import read_channel_fallback  # type: ignore
+
+            token = str((read_channel_fallback()[0] or "")).strip()
+        except Exception:
+            token = ""
+    auth_base = get_douyin_auth_server_base()
+    if not auth_base or not token:
+        return "", ""
+    return f"{auth_base}/api/comfly-proxy/v1/chat/completions", token
+
+
+def get_douyin_auth_server_base() -> str:
+    auth_base = str(os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
+    if not auth_base:
+        auth_base = str(os.environ.get("LOBSTER_AUTH_SERVER_BASE") or "").strip().rstrip("/")
+    if auth_base:
+        return auth_base
+    try:
+        from backend.app.core.config import settings as app_settings  # type: ignore
+
+        return str(getattr(app_settings, "auth_server_base", "") or "").strip().rstrip("/")
+    except Exception:
+        return ""
+
+
+def douyin_ai_available(config: Optional[Dict] = None, request: Optional[Request] = None) -> bool:
+    cfg = config if isinstance(config, dict) else load_global_config()
+    if get_douyin_request_bearer_token(request):
+        return bool(get_douyin_auth_server_base())
+    url, token = get_douyin_server_ai_proxy_credentials()
+    if url and token:
+        return True
+    return bool(str(cfg.get("api_key", "") or "").strip())
 
 
 def get_douyin_ai_service_label(api_url: str) -> str:
@@ -6336,7 +6406,7 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             },
         )
         start_result = await douyin_start_tasks(
-            {
+            request={
                 "selected_task_ids": task_ids,
                 "comment_scroll_rounds": normalized.get("comment_scroll_rounds", 300),
                 "comment_max_comments": normalized.get("comment_max_comments", 500),
@@ -6364,7 +6434,7 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             "interval_minutes_min": normalized.get("follow_interval_minutes_min", 3),
             "interval_minutes_max": normalized.get("follow_interval_minutes_max", 5),
         }
-        return await douyin_start_follow_comment(payload)
+        return await douyin_start_follow_comment(request=payload)
     if plan_type == "interaction":
         users = collect_plan_interaction_users(normalized)
         if not users:
@@ -6378,7 +6448,7 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             "interval_minutes_min": normalized.get("interaction_interval_minutes_min", 3),
             "interval_minutes_max": normalized.get("interaction_interval_minutes_max", 5),
         }
-        return await douyin_start_interaction(payload)
+        return await douyin_start_interaction(request=payload)
     return {"code": 400, "msg": "未知的排期计划类型。"}
 
 
@@ -10052,10 +10122,11 @@ async def douyin_get_monitor_targets():
 
 
 @router.post("/monitor/keyword-expand-search")
-async def douyin_monitor_keyword_expand_search(request: Optional[dict] = None):
+async def douyin_monitor_keyword_expand_search(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("执行 AI 拓词搜索")
     if nurture_conflict:
         return nurture_conflict
+    set_douyin_ai_auth_token_from_request(http_request)
     payload = request if isinstance(request, dict) else {}
     seed_keyword = normalize_douyin_text(payload.get("keyword", ""))
     if not seed_keyword:
@@ -10414,10 +10485,11 @@ async def douyin_delete_monitor_target(target_id: int):
 
 
 @router.post("/monitor/run")
-async def douyin_run_monitor_targets(request: Optional[dict] = None):
+async def douyin_run_monitor_targets(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("执行同行监控")
     if nurture_conflict:
         return nurture_conflict
+    set_douyin_ai_auth_token_from_request(http_request)
     payload = request if isinstance(request, dict) else {}
     target_ids = payload.get("target_ids", [])
     if target_ids is not None and not isinstance(target_ids, list):
@@ -10461,7 +10533,13 @@ async def douyin_get_monitor_customer_pools(target_id: int = 0):
 
 
 @router.post("/monitor/targets/{target_id}/videos/{aweme_id}/refilter")
-async def douyin_refilter_monitor_video_customers(target_id: int, aweme_id: str, request: Optional[dict] = None):
+async def douyin_refilter_monitor_video_customers(
+    target_id: int,
+    aweme_id: str,
+    http_request: Request = None,
+    request: Optional[dict] = None,
+):
+    set_douyin_ai_auth_token_from_request(http_request)
     payload = request if isinstance(request, dict) else {}
     target_id = int(target_id or 0)
     aweme_id = str(aweme_id or "").strip()
@@ -10577,11 +10655,16 @@ async def douyin_get_monitor_status():
 
 
 @router.get("/config")
-async def douyin_get_config():
+async def douyin_get_config(http_request: Request = None):
     config = load_global_config()
+    local_api_key_configured = bool(str(config.get("api_key", "") or "").strip())
+    server_ai_proxy_available = douyin_ai_available(config, http_request) and not local_api_key_configured
     return {
         "code": 200,
         "model": config.get("model", "gpt-5.4"),
+        "api_key_configured": local_api_key_configured or server_ai_proxy_available,
+        "local_api_key_configured": local_api_key_configured,
+        "server_ai_proxy_available": server_ai_proxy_available,
         "comment_direction": get_douyin_comment_direction(config),
         "comment_filter_strategy": get_douyin_comment_filter_strategy(config),
         "search_min_likes": config.get("search_min_likes", 500),
@@ -11358,7 +11441,12 @@ async def douyin_update_task_high_intent_users(task_id: int, request: dict):
 
 
 @router.post("/tasks/{task_id}/refilter-customers")
-async def douyin_refilter_task_customers(task_id: int, request: Optional[dict] = None):
+async def douyin_refilter_task_customers(
+    task_id: int,
+    http_request: Request = None,
+    request: Optional[dict] = None,
+):
+    set_douyin_ai_auth_token_from_request(http_request)
     payload = request if isinstance(request, dict) else {}
     task = next((item for item in douyin_tasks if int(item.get("id", 0) or 0) == int(task_id)), None)
     if not task:
@@ -11933,10 +12021,11 @@ async def douyin_video_comment_status():
 
 
 @router.post("/video-comment/start")
-async def douyin_start_video_comment(request: Optional[dict] = None):
+async def douyin_start_video_comment(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("执行视频评论")
     if nurture_conflict:
         return nurture_conflict
+    set_douyin_ai_auth_token_from_request(http_request)
     global douyin_video_comment_running, douyin_video_comment_stop_requested, douyin_video_comment_background_task
 
     reconcile_douyin_runtime_state()
@@ -11998,7 +12087,7 @@ async def douyin_start_video_comment(request: Optional[dict] = None):
     skipped_commented = max(0, selected_total - len(runnable_tasks)) if selected_total else 0
 
     config = load_global_config()
-    if comment_mode in {"ai", "rewrite"} and not str(config.get("api_key", "") or "").strip():
+    if comment_mode in {"ai", "rewrite"} and not douyin_ai_available(config, http_request):
         return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能使用 AI 评论模式。"}
 
     account = get_active_douyin_account(config)
@@ -12077,10 +12166,11 @@ async def douyin_follow_comment_status(lite: bool = False, include_users: bool =
 
 
 @router.post("/follow-comment/start")
-async def douyin_start_follow_comment(request: Optional[dict] = None):
+async def douyin_start_follow_comment(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("执行关注评论")
     if nurture_conflict:
         return nurture_conflict
+    set_douyin_ai_auth_token_from_request(http_request)
     global douyin_follow_comment_running, douyin_follow_comment_stop_requested, douyin_follow_comment_background_task
 
     reconcile_douyin_runtime_state()
@@ -12154,7 +12244,7 @@ async def douyin_start_follow_comment(request: Optional[dict] = None):
         return {"code": 400, "msg": "当前任务列表里没有可用的高意向用户。"}
 
     config = load_global_config()
-    if comment_mode in {"ai", "rewrite"} and not str(config.get("api_key", "") or "").strip():
+    if comment_mode in {"ai", "rewrite"} and not douyin_ai_available(config, http_request):
         return {
             "code": 400,
             "msg": "当前未配置 AI 接口 Key，不能使用 AI 评论模式。",
@@ -12263,10 +12353,11 @@ async def douyin_interaction_status(lite: bool = False, include_users: bool = Tr
 
 
 @router.post("/interaction/start")
-async def douyin_start_interaction(request: Optional[dict] = None):
+async def douyin_start_interaction(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("执行私信互动")
     if nurture_conflict:
         return nurture_conflict
+    set_douyin_ai_auth_token_from_request(http_request)
     global douyin_interaction_running, douyin_interaction_stop_requested, douyin_interaction_background_task
 
     reconcile_douyin_runtime_state()
@@ -12349,7 +12440,7 @@ async def douyin_start_interaction(request: Optional[dict] = None):
         assign_douyin_interaction_fixed_messages(selected_users, fixed_messages)
 
     config = load_global_config()
-    if message_mode in {"ai", "rewrite"} and not str(config.get("api_key", "") or "").strip():
+    if message_mode in {"ai", "rewrite"} and not douyin_ai_available(config, http_request):
         return {
             "code": 400,
             "msg": "当前未配置 AI 接口 Key，不能使用 AI 私信模式。",
@@ -12951,7 +13042,8 @@ async def douyin_stranger_message_status():
 
 
 @router.post("/stranger-messages/monitor/start")
-async def douyin_start_stranger_message_monitor(request: Optional[dict] = None):
+async def douyin_start_stranger_message_monitor(http_request: Request = None, request: Optional[dict] = None):
+    set_douyin_ai_auth_token_from_request(http_request)
     payload = request if isinstance(request, dict) else {}
     config = load_global_config()
     accounts = _normalize_accounts(config.get("douyin_accounts"))
@@ -12975,7 +13067,7 @@ async def douyin_start_stranger_message_monitor(request: Optional[dict] = None):
         if reply_mode == "ai_lead":
             if not contact_value:
                 return {"code": 400, "msg": "开启监控自动回复前，请先填写绿泡泡联系方式。"}
-            if not str(config.get("api_key", "") or "").strip():
+            if not douyin_ai_available(config, http_request):
                 return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能开启 AI 自动回复监控。"}
     target_account_id = int((account or {}).get("id", 0) or account_id or config.get("douyin_default_account_id", 1) or 1)
 
@@ -13113,10 +13205,11 @@ async def douyin_collect_stranger_messages(request: Optional[dict] = None):
 
 
 @router.post("/stranger-messages/send")
-async def douyin_send_stranger_messages(request: Optional[dict] = None):
+async def douyin_send_stranger_messages(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("发送私信引流")
     if nurture_conflict:
         return nurture_conflict
+    set_douyin_ai_auth_token_from_request(http_request)
     global douyin_stranger_message_running, douyin_stranger_message_stop_requested
     global douyin_stranger_message_background_task
 
@@ -13156,7 +13249,7 @@ async def douyin_send_stranger_messages(request: Optional[dict] = None):
         if not contact_value:
             return {"code": 400, "msg": "请先填写要引导添加的联系方式。"}
         config = load_global_config()
-        if not str(config.get("api_key", "") or "").strip():
+        if not douyin_ai_available(config, http_request):
             return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能使用 AI 引导加绿泡泡模式。"}
     if not isinstance(raw_rows, list) or not raw_rows:
         return {"code": 400, "msg": "请先勾选至少一条陌生人私信。"}
@@ -13254,10 +13347,11 @@ async def douyin_stop_stranger_messages():
 
 
 @router.post("/start")
-async def douyin_start_tasks(request: Optional[dict] = None):
+async def douyin_start_tasks(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("执行评论采集")
     if nurture_conflict:
         return nurture_conflict
+    set_douyin_ai_auth_token_from_request(http_request)
     global douyin_running, douyin_stop_requested, douyin_background_task
     reconcile_douyin_runtime_state()
     reconcile_douyin_video_comment_runtime_state()
