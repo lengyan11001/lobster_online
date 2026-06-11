@@ -754,17 +754,15 @@
             box-shadow: 0 12px 24px rgba(214, 225, 247, 0.76);
         }
         #search-workspace-page {
-            height: calc(100dvh - 34px);
-            overflow: hidden;
+            min-height: 0;
+            overflow: visible;
         }
         #search-workspace-page .stack {
-            height: 100%;
             min-height: 0;
         }
         #search-workspace-page .card {
             display: flex;
             flex-direction: column;
-            height: 100%;
             min-height: 0;
         }
         #collect-workspace-page .stack,
@@ -803,28 +801,24 @@
         #search-workspace-page,
         #search-workspace-page .stack,
         #search-workspace-page .card {
-            height: 100%;
             min-height: 0;
         }
         #search-workspace-page #douyin-search-results {
             flex: 1 1 auto;
-            height: 100%;
             min-height: 0;
-            overflow: hidden;
+            overflow: visible;
         }
         .search-session-layout {
             display: grid;
             gap: 16px;
             grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
-            align-items: stretch;
-            height: 100%;
+            align-items: start;
             min-height: 0;
         }
         .search-session-sidebar {
             display: grid;
             gap: 12px;
-            grid-template-rows: auto minmax(0, 1fr);
-            height: 100%;
+            grid-template-rows: auto auto;
             min-height: 0;
         }
         .search-session-sidebar-head {
@@ -848,11 +842,10 @@
             grid-auto-rows: max-content;
             align-content: start;
             min-height: 0;
-            max-height: 100%;
-            overflow-y: auto;
+            max-height: none;
+            overflow-y: visible;
             overflow-x: hidden;
             padding-right: 6px;
-            overscroll-behavior: contain;
         }
         .search-session-list::-webkit-scrollbar {
             width: 8px;
@@ -971,14 +964,19 @@
             gap: 16px;
             min-width: 0;
             min-height: 0;
-            height: 100%;
-            overflow-y: auto;
+            overflow-y: visible;
             overflow-x: hidden;
             padding-right: 6px;
-            overscroll-behavior: contain;
         }
         #search-workspace-page .search-session-stage {
             overflow-x: auto;
+        }
+        #search-workspace-page .search-session-list,
+        #search-workspace-page .search-session-stage {
+            height: auto;
+            max-height: none;
+            overflow-y: visible;
+            overscroll-behavior: auto;
         }
         .search-session-stage > * {
             min-width: 0;
