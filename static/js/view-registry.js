@@ -11,7 +11,8 @@
   });
 
   window.registerLobsterView('douyin-leads', {
-    html: '/static/views/douyin-leads.html?v=20260606-douyin-origin'
+    html: '/static/views/douyin-leads.html?v=20260611-search-scroll-final',
+    cache: 'reload'
   });
 
   window.registerLobsterView('openclaw-memory', {

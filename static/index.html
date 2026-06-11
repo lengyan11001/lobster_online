@@ -7,7 +7,7 @@
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
   <link rel="stylesheet" href="/static/css/common.css?v=20260608-latest-ota">
-  <link rel="stylesheet" href="/static/css/index.css?v=20260610-asset-origin-tabs">
+  <link rel="stylesheet" href="/static/css/index.css?v=20260611-douyin-search-scroll">
 </head>
 <body>
   <div class="page">
@@ -35,6 +35,11 @@
       </nav>
       <div class="header-actions" id="headerActions" style="display: none;">
         <span id="sutuiBalanceWrap" style="display:none;margin-right:0.75rem;font-size:0.85rem;color:var(--text-muted);align-items:center;gap:0.5rem;">
+          <span class="sutui-balance-badge" aria-hidden="true">
+            <svg viewBox="0 0 20 20" fill="none">
+              <path d="M11.2 1.8L4.9 10h3.9l-1 8.2 7.3-9.3h-4.1l.2-7.1z" fill="currentColor"></path>
+            </svg>
+          </span>
           <span id="sutuiBalanceText">算力: -</span>
           <a href="#" id="sutuiRechargeBtn" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="display:none;">充值</a>
         </span>
@@ -209,12 +214,26 @@
                   </div>
                   <div class="chat-toolbar-actions">
                     <label for="chatMemoryScopeSelect" class="chat-memory-scope-label">记忆:</label>
-                    <select id="chatMemoryScopeSelect" class="chat-memory-scope-select" title="本会话使用的记忆范围">
-                      <option value="default">默认记忆</option>
-                      <option value="personal">个人记忆</option>
-                      <option value="system">系统记忆</option>
-                      <option value="none">不使用资料</option>
-                    </select>
+                    <div class="chat-memory-scope-dropdown" id="chatMemoryScopeDropdown">
+                      <button
+                        type="button"
+                        id="chatMemoryScopeButton"
+                        class="chat-memory-scope-button"
+                        aria-haspopup="listbox"
+                        aria-expanded="false"
+                        aria-controls="chatMemoryScopeMenu"
+                      >
+                        <span id="chatMemoryScopeButtonText">默认记忆</span>
+                        <span class="chat-memory-scope-chevron" aria-hidden="true"></span>
+                      </button>
+                      <div id="chatMemoryScopeMenu" class="chat-memory-scope-menu" role="listbox" aria-label="记忆范围"></div>
+                      <select id="chatMemoryScopeSelect" class="chat-memory-scope-select" title="本会话使用的记忆范围">
+                        <option value="default">默认记忆</option>
+                        <option value="personal">个人记忆</option>
+                        <option value="system">系统记忆</option>
+                        <option value="none">不使用资料</option>
+                      </select>
+                    </div>
                     <button type="button" id="chatMemorySyncBtn" class="btn btn-ghost btn-sm" title="同步个人记忆">同步记忆</button>
                     <span id="chatMemorySyncStatus" class="chat-memory-sync-status"></span>
                     <button type="button" id="chatTipsBtn" class="help-q" title="使用说明" aria-label="使用说明">?</button>
@@ -2457,10 +2476,10 @@
 
   <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
   <script src="/static/js/view-loader.js?v=20260528-view-loader"></script>
-  <script src="/static/js/view-registry.js?v=20260610-asset-origin-filter-fix"></script>
+  <script src="/static/js/view-registry.js?v=20260611-search-scroll-final"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
-  <script src="/static/js/chat.js?v=20260605-wechat-save-local-doubleclick"></script>
+  <script src="/static/js/chat.js?v=20260611-memory-dropdown-fix"></script>
   <script src="/static/js/skill.js?v=20260606-creative-film-entry"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
@@ -2479,7 +2498,7 @@
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/cutcli-template-studio.js?v=20260605-cutcli-source-orientation"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
-  <script src="/static/js/publish.js?v=20260611-asset-preview-origin-no-tags"></script>
+  <script src="/static/js/publish.js?v=20260611-asset-library-paging"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260610-scheduled-form-only"></script>
   <script src="/static/js/init.js?v=20260610-assets-no-section-title"></script>
 </body>

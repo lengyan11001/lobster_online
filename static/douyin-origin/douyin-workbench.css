@@ -703,27 +703,25 @@
             min-height: 100%;
         }
         .search-stage-sticky {
-            position: sticky;
-            top: 0;
+            position: static;
+            top: auto;
             z-index: 8;
             display: grid;
             gap: 12px;
-            padding-bottom: 6px;
-            background: rgba(245, 248, 255, 0.96);
-            box-shadow: 0 12px 24px rgba(214, 225, 247, 0.76);
+            padding-bottom: 0;
+            background: transparent;
+            box-shadow: none;
         }
         #search-workspace-page {
-            height: calc(100dvh - 34px);
-            overflow: hidden;
+            min-height: 0;
+            overflow: visible;
         }
         #search-workspace-page .stack {
-            height: 100%;
             min-height: 0;
         }
         #search-workspace-page .card {
             display: flex;
             flex-direction: column;
-            height: 100%;
             min-height: 0;
         }
         #collect-workspace-page .stack,
@@ -762,28 +760,24 @@
         #search-workspace-page,
         #search-workspace-page .stack,
         #search-workspace-page .card {
-            height: 100%;
             min-height: 0;
         }
         #search-workspace-page #douyin-search-results {
             flex: 1 1 auto;
-            height: 100%;
             min-height: 0;
-            overflow: hidden;
+            overflow: visible;
         }
         .search-session-layout {
             display: grid;
             gap: 16px;
             grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
-            align-items: stretch;
-            height: 100%;
+            align-items: start;
             min-height: 0;
         }
         .search-session-sidebar {
             display: grid;
             gap: 12px;
-            grid-template-rows: auto minmax(0, 1fr);
-            height: 100%;
+            grid-template-rows: auto auto;
             min-height: 0;
         }
         .search-session-sidebar-head {
@@ -807,11 +801,10 @@
             grid-auto-rows: max-content;
             align-content: start;
             min-height: 0;
-            max-height: 100%;
-            overflow-y: auto;
+            max-height: none;
+            overflow-y: visible;
             overflow-x: hidden;
             padding-right: 6px;
-            overscroll-behavior: contain;
         }
         .search-session-list::-webkit-scrollbar {
             width: 8px;
@@ -930,11 +923,9 @@
             gap: 16px;
             min-width: 0;
             min-height: 0;
-            height: 100%;
-            overflow-y: auto;
+            overflow-y: visible;
             overflow-x: hidden;
             padding-right: 6px;
-            overscroll-behavior: contain;
         }
         #search-workspace-page .search-session-stage {
             overflow-x: auto;
@@ -956,31 +947,35 @@
         }
         #search-workspace-page .card {
             min-height: 0;
-            max-height: calc(100dvh - 34px);
-            overflow: hidden;
+            max-height: none;
+            overflow: visible;
         }
         #search-workspace-page #douyin-search-results {
             flex: 1 1 auto;
-            max-height: calc(100dvh - 250px);
-            min-height: 360px;
-            overflow: hidden;
+            max-height: none;
+            min-height: 0;
+            overflow: visible;
         }
         #search-workspace-page .search-session-layout {
-            height: 100%;
-            max-height: 100%;
-            overflow: hidden;
-            align-items: stretch;
+            max-height: none;
+            overflow: visible;
+            align-items: start;
         }
         #search-workspace-page .search-session-sidebar,
         #search-workspace-page .search-session-stage {
-            height: 100%;
-            max-height: 100%;
+            max-height: none;
             min-height: 0;
         }
         #search-workspace-page .search-session-stage {
-            overflow-y: auto;
+            overflow-y: visible;
             overflow-x: hidden;
             align-content: start;
+        }
+        #search-workspace-page .search-session-list,
+        #search-workspace-page .search-session-stage {
+            height: auto;
+            max-height: none;
+            overscroll-behavior: auto;
         }
         .search-session-stage .table-tools {
             margin-bottom: 0;
@@ -2770,6 +2765,29 @@
                 min-height: clamp(320px, 44dvh, 620px);
                 max-height: none;
             }
+        }
+        #search-workspace-page,
+        #search-workspace-page .stack,
+        #search-workspace-page .card,
+        #search-workspace-page #douyin-search-results,
+        #search-workspace-page .search-session-layout,
+        #search-workspace-page .search-session-sidebar,
+        #search-workspace-page .search-session-list,
+        #search-workspace-page .search-session-stage,
+        #search-workspace-page .search-workspace-box,
+        #search-workspace-page .search-result-table-shell {
+            height: auto;
+            max-height: none;
+            overflow-y: visible;
+        }
+        #search-workspace-page .search-session-stage {
+            overflow-x: hidden !important;
+            overflow-y: visible !important;
+            padding-right: 0;
+        }
+        #search-workspace-page .search-result-table-shell {
+            overflow-x: auto !important;
+            overflow-y: visible !important;
         }
         .search-subtabs {
             display: flex;

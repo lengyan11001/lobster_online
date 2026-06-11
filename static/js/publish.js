@@ -2428,6 +2428,323 @@ function loadAssets(query) {
     .catch(function() { el.innerHTML = '<div class="page-empty-card msg err">加载失败</div>'; });
 }
 
+var _ASSET_PAGE_SIZE = 20;
+var _assetLibraryState = {
+  offset: 0,
+  total: 0,
+  query: '',
+  mediaType: '',
+  creativeGroup: '',
+  origin: '',
+  loading: false,
+  assetMap: {}
+};
+var _assetLibraryLoadSeq = 0;
+
+function _snapshotAssetQuery(query) {
+  return {
+    query: query || '',
+    mediaType: (document.getElementById('assetTypeFilter') || {}).value || '',
+    creativeGroup: _currentAssetCreativeGroupFilter(),
+    origin: _currentAssetOriginFilter()
+  };
+}
+
+function _ensureAssetLoadMoreWrap() {
+  var el = document.getElementById('assetList');
+  if (!el) return null;
+  var wrap = document.getElementById('assetLoadMoreWrap');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'assetLoadMoreWrap';
+    wrap.style.display = 'none';
+    wrap.style.marginTop = '0.9rem';
+    el.insertAdjacentElement('afterend', wrap);
+  }
+  return wrap;
+}
+
+function _setAssetLoadMoreState(visible, loading) {
+  var wrap = _ensureAssetLoadMoreWrap();
+  if (!wrap) return;
+  if (!visible) {
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  var shown = _assetLibraryState.offset || 0;
+  var total = _assetLibraryState.total || 0;
+  wrap.style.display = 'flex';
+  wrap.style.justifyContent = 'center';
+  wrap.innerHTML =
+    '<div style="display:flex;flex-direction:column;align-items:center;gap:0.45rem;">' +
+      '<div class="meta" style="font-size:0.78rem;color:var(--text-muted);">已加载 ' + escapeHtml(String(shown)) + ' / ' + escapeHtml(String(total)) + '</div>' +
+      '<button type="button" id="assetLoadMoreBtn" class="btn btn-ghost">' + (loading ? '加载中...' : '查看更多') + '</button>' +
+    '</div>';
+  var btn = document.getElementById('assetLoadMoreBtn');
+  if (btn) {
+    btn.disabled = !!loading;
+    if (!btn._assetLibraryBound) {
+      btn._assetLibraryBound = true;
+      btn.addEventListener('click', function() {
+        if (_assetLibraryState.loading) return;
+        loadAssets(_assetLibraryState.query, { append: true });
+      });
+    }
+  }
+}
+
+function _bindAssetCardActions(container) {
+  if (!container) return;
+  container.querySelectorAll('button[data-preview-asset]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-preview-asset');
+      _openAssetPreviewModal(_assetLibraryState.assetMap[aid]);
+    });
+  });
+  container.querySelectorAll('button[data-copy-asset-prompt]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-copy-asset-prompt');
+      var asset = _assetLibraryState.assetMap[aid];
+      _copyAssetPrompt(asset && asset.prompt);
+      _assetMsgShow((asset && asset.prompt) ? '提示词已复制。' : '当前素材没有提示词可复制。', !(asset && asset.prompt));
+    });
+  });
+  container.querySelectorAll('button[data-download-asset]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-download-asset');
+      var asset = _assetLibraryState.assetMap[aid];
+      _openAssetPreviewModal(asset);
+      _downloadAssetToLibrary(asset);
+    });
+  });
+  container.querySelectorAll('button[data-creative-candidate]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function() {
+      var aid = btn.getAttribute('data-creative-candidate');
+      var currentGroup = btn.getAttribute('data-current-creative-group') || '';
+      _openAssetCreativeGroupModal(aid, currentGroup);
+    });
+  });
+  container.querySelectorAll('button[data-use-as-attach]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function() {
+      var aid = btn.getAttribute('data-use-as-attach');
+      var mtype = btn.getAttribute('data-attach-media-type') || 'image';
+      var hasUrl = btn.getAttribute('data-attach-has-url') === '1';
+      if (typeof addChatAttachment === 'function') {
+        addChatAttachment(aid, mtype, hasUrl);
+        var chatNav = document.querySelector('.nav-left-item[data-view="chat"]');
+        if (chatNav) chatNav.click();
+        if (typeof _assetMsgShow === 'function') _assetMsgShow('已添加为附图，输入内容后发送即可带图生成。', false);
+        else alert('已添加为附图，请在输入框输入内容后发送。');
+      }
+    });
+  });
+  container.querySelectorAll('button[data-delete-asset]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function() {
+      var aid = btn.getAttribute('data-delete-asset');
+      if (!confirm('确定删除此素材？')) return;
+      fetch(publishLocalBase() + '/api/assets/' + aid, { method: 'DELETE', headers: authHeaders() })
+        .then(function() {
+          return loadCreativeCandidateGroups();
+        })
+        .then(function() {
+          loadAssets(_currentAssetSearchQuery());
+        })
+        .catch(function() { alert('删除失败'); });
+    });
+  });
+  container.querySelectorAll('.asset-preview-wrap').forEach(function(wrap) {
+    if (wrap._assetLibraryBound) return;
+    wrap._assetLibraryBound = true;
+    wrap.addEventListener('click', function() {
+      var aid = wrap.getAttribute('data-asset-id');
+      _openAssetPreviewModal(_assetLibraryState.assetMap[aid]);
+    });
+  });
+}
+
+function _renderAssetCards(container, assets, append) {
+  if (!container) return;
+  var html = assets.map(function(a) {
+    _assetLibraryState.assetMap[a.asset_id] = a;
+    var isImage = a.media_type === 'image';
+    var isVideo = a.media_type === 'video';
+    var isDocument = a.media_type === 'document';
+    var hasUrl = _isAbsoluteHttpUrl(a.source_url);
+    var thumbUrl = _pickAssetListThumbUrl(a);
+    var openUrl = _resolvePossiblyRelativeMediaUrl(a.open_url);
+    if (!openUrl && hasUrl) openUrl = _resolvePossiblyRelativeMediaUrl(a.source_url);
+    if (!openUrl) openUrl = thumbUrl || '';
+    var localBase = publishLocalBase();
+    var blobOk = !!(localBase && a.asset_id);
+    var canDirectThumb = _isAbsoluteHttpUrl(thumbUrl) || (!!thumbUrl && thumbUrl.charAt(0) === '/');
+    var showThumb = (isImage || isVideo) && (canDirectThumb || blobOk);
+    var safeDirectFallback = (canDirectThumb && !_thumbDirectLoadLikelyBroken(thumbUrl)) ? thumbUrl : '';
+    var preview = '';
+    var titleHint = openUrl && _isAbsoluteHttpUrl(openUrl)
+      ? '点击在新窗口打开（优先公网可分享链接）'
+      : blobOk
+        ? '预览由本机素材接口加载；点击后会优先尝试打开可访问链接'
+        : '无可用缩略图';
+    var wrapAttrs = 'data-asset-id="' + escapeAttr(a.asset_id) + '" data-media-type="' + escapeAttr(a.media_type || '') + '" data-open-url="' + escapeAttr(openUrl || '') + '" style="margin:0.5rem 0;cursor:pointer;" title="' + titleHint + '"';
+    if (isImage) {
+      if (showThumb) {
+        var imgPreferContent = blobOk ? '1' : '0';
+        var imgInitialSrc = blobOk ? '' : safeDirectFallback;
+        preview =
+          '<div class="asset-preview-wrap" ' + wrapAttrs +
+          '><img class="asset-list-thumb" data-asset-id="' + escapeAttr(a.asset_id) +
+          '" data-prefer-content="' + imgPreferContent +
+          '" data-direct-fallback="' + escapeAttr(safeDirectFallback) +
+          '" data-initial-src="' + escapeAttr(imgInitialSrc) +
+          '" alt="" style="max-width:160px;max-height:120px;border-radius:6px;object-fit:cover;pointer-events:none;"></div>';
+      } else {
+        preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
+      }
+    } else if (isVideo) {
+      if (showThumb) {
+        var vidPreferContent = blobOk ? '1' : '0';
+        var vidInitialSrc = blobOk ? '' : safeDirectFallback;
+        preview =
+          '<div class="asset-preview-wrap" ' + wrapAttrs +
+          '><video class="asset-list-thumb-video" data-asset-id="' + escapeAttr(a.asset_id) +
+          '" data-prefer-content="' + vidPreferContent +
+          '" data-direct-fallback="' + escapeAttr(safeDirectFallback) +
+          '" data-initial-src="' + escapeAttr(vidInitialSrc) +
+          '" style="max-width:160px;max-height:120px;border-radius:6px;pointer-events:none;" muted preload="auto" playsinline></video></div>';
+      } else {
+        preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
+      }
+    } else if (isDocument) {
+      var docExt = String(a.filename || '').split('.').pop().toUpperCase();
+      if (!docExt || docExt === String(a.filename || '').toUpperCase()) docExt = 'DOC';
+      if (docExt === 'PPTX') docExt = 'PPT';
+      preview =
+        '<div class="asset-preview-wrap asset-document-preview" ' + wrapAttrs + '><div class="asset-document-preview-inner">' +
+        '<div class="asset-document-icon">' + escapeHtml(docExt.slice(0, 4)) + '</div>' +
+        '<div class="asset-document-name">' + escapeHtml(a.filename || 'document') + '</div>' +
+        '<div class="asset-document-meta">文档文件</div>' +
+        '</div></div>';
+    } else {
+      preview = '<div class="asset-preview-wrap asset-document-preview" ' + wrapAttrs + '><div class="asset-document-preview-inner"><div class="asset-document-icon">FILE</div><div class="asset-document-name">' + escapeHtml(a.filename || a.media_type || 'file') + '</div><div class="asset-document-meta">' + escapeHtml(a.media_type || '文件') + '</div></div></div>';
+    }
+    var typeLabel = _MEDIA_TYPE_LABELS[a.media_type] || a.media_type;
+    var originLabel = a.asset_origin === 'user_upload' ? '用户上传' : '生成素材';
+    var originClass = a.asset_origin === 'user_upload' ? ' is-upload' : ' is-generated';
+    var currentGroup = (a.creative_candidate_group || (Array.isArray(a.creative_candidate_groups) && a.creative_candidate_groups[0]) || '').trim();
+    var groupHtml = currentGroup ? '<div class="card-tags"><span class="tag">备选：' + escapeHtml(currentGroup) + '</span></div>' : '';
+    var size = a.file_size ? (a.file_size > 1048576 ? (a.file_size / 1048576).toFixed(1) + ' MB' : (a.file_size / 1024).toFixed(1) + ' KB') : '';
+    var useAsAttachBtn = (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
+    var previewBtn = '<button type="button" class="btn btn-ghost btn-sm" data-preview-asset="' + escapeAttr(a.asset_id) + '">查看结果</button>';
+    var copyPromptBtn = '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-prompt="' + escapeAttr(a.asset_id) + '"' + (((a.prompt || '').trim()) ? '' : ' disabled') + '>复制提示词</button>';
+    var downloadBtn = '<button type="button" class="btn btn-ghost btn-sm" data-download-asset="' + escapeAttr(a.asset_id) + '">下载</button>';
+    var candidateBtn = isImage ? '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '">设为创意备选</button>' : '';
+    var deleteBtn = '<button type="button" class="btn btn-ghost btn-sm" data-delete-asset="' + escapeAttr(a.asset_id) + '">删除</button>';
+    var badgeColor = isImage ? '#6366f1' : isVideo ? '#f59e0b' : isDocument ? '#64748b' : '#888';
+    return '<div class="skill-store-card asset-card">' +
+      '<div class="card-label"><span style="display:inline-flex;align-items:center;gap:0.35rem;flex-wrap:wrap;"><span class="asset-card-badge" style="background:' + badgeColor + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-origin-badge' + originClass + '">' + escapeHtml(originLabel) + '</span></span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
+      preview +
+      '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(a.prompt || a.filename) + '</div>' +
+      groupHtml +
+      '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' 路 ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
+      '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + deleteBtn + '</div></div>';
+  }).join('');
+
+  if (append) container.insertAdjacentHTML('beforeend', html);
+  else container.innerHTML = html;
+  _bindAssetCardActions(container);
+  _wireAssetListThumbs(container);
+}
+
+function loadAssets(query, options) {
+  options = options || {};
+  var el = document.getElementById('assetList');
+  if (!el) return;
+  var append = !!options.append;
+  var snap = _snapshotAssetQuery(query);
+  var offset = append ? (_assetLibraryState.offset || 0) : 0;
+  var seq = ++_assetLibraryLoadSeq;
+
+  if (!append) {
+    _assetLibraryState.assetMap = {};
+    el.innerHTML = '<div class="page-empty-card">加载中...</div>';
+    _setAssetLoadMoreState(false, false);
+  } else {
+    _setAssetLoadMoreState(true, true);
+  }
+
+  _assetLibraryState.loading = true;
+  var url = publishLocalBase() + '/api/assets?limit=' + _ASSET_PAGE_SIZE + '&offset=' + offset;
+  if (snap.origin) url += '&origin=' + encodeURIComponent(snap.origin);
+  if (snap.mediaType) url += '&media_type=' + encodeURIComponent(snap.mediaType);
+  if (snap.creativeGroup) url += '&creative_group=' + encodeURIComponent(snap.creativeGroup);
+  if (snap.query) url += '&q=' + encodeURIComponent(snap.query);
+
+  fetch(url, { headers: authHeaders() })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (seq !== _assetLibraryLoadSeq) return;
+      var assets = (d && Array.isArray(d.assets)) ? d.assets : [];
+      if (snap.origin) {
+        assets = assets.filter(function(a) {
+          var itemOrigin = a && a.asset_origin === 'user_upload' ? 'user_upload' : 'generated';
+          return itemOrigin === snap.origin;
+        });
+      }
+      var total = (d && typeof d.total === 'number') ? d.total : assets.length;
+      if (!assets.length && !append) {
+        el.innerHTML = '<div class="page-empty-card">暂无素材。可上传本地文件或保存网络 URL，也可在对话中让龙虾生成。</div>';
+        _assetLibraryState = {
+          offset: 0,
+          total: total,
+          query: snap.query,
+          mediaType: snap.mediaType,
+          creativeGroup: snap.creativeGroup,
+          origin: snap.origin,
+          loading: false,
+          assetMap: {}
+        };
+        _setAssetLoadMoreState(false, false);
+        return;
+      }
+      _renderAssetCards(el, assets, append);
+      _assetLibraryState.offset = offset + assets.length;
+      _assetLibraryState.total = total;
+      _assetLibraryState.query = snap.query;
+      _assetLibraryState.mediaType = snap.mediaType;
+      _assetLibraryState.creativeGroup = snap.creativeGroup;
+      _assetLibraryState.origin = snap.origin;
+      _assetLibraryState.loading = false;
+      _setAssetLoadMoreState(_assetLibraryState.offset < total, false);
+    })
+    .catch(function() {
+      if (seq !== _assetLibraryLoadSeq) return;
+      _assetLibraryState.loading = false;
+      if (append) {
+        _setAssetLoadMoreState(_assetLibraryState.offset < _assetLibraryState.total, false);
+        _assetMsgShow('加载更多失败，请稍后重试。', true);
+      } else {
+        _setAssetLoadMoreState(false, false);
+        el.innerHTML = '<div class="page-empty-card msg err">加载失败</div>';
+      }
+    });
+}
+
 var assetUploadFile = null;
 var assetUploadLabel = null;
 function setAssetUploadState(loading, text) {

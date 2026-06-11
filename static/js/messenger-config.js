@@ -12,13 +12,24 @@
   var cloudInput = document.getElementById('messengerCloudUrlInput');
   var saveCloudBtn = document.getElementById('saveMessengerCloudConfigBtn');
   var cloudMsg = document.getElementById('messengerCloudConfigMsg');
+  var modalCancelBtn = document.getElementById('messengerConfigModalCancel');
+  var modalSaveBtn = document.getElementById('messengerConfigModalSave');
+  var messengerToastTimer = null;
+
+  function resolveBase() {
+    var stored = '';
+    try { stored = localStorage.getItem('lobster_messenger_api_base') || ''; } catch (e1) {}
+    var runtime = (typeof window.__MESSENGER_API_BASE !== 'undefined' && window.__MESSENGER_API_BASE) ? String(window.__MESSENGER_API_BASE) : '';
+    var globalBase = (typeof MESSENGER_API_BASE !== 'undefined' && MESSENGER_API_BASE) ? String(MESSENGER_API_BASE) : '';
+    return String(stored || runtime || globalBase || '').trim().replace(/\/$/, '');
+  }
 
   function base() {
-    return (typeof MESSENGER_API_BASE !== 'undefined' && MESSENGER_API_BASE) ? MESSENGER_API_BASE.replace(/\/$/, '') : '';
+    return resolveBase();
   }
 
   function api(method, path, body) {
-    var b = (typeof MESSENGER_API_BASE !== 'undefined' ? MESSENGER_API_BASE : '') || '';
+    var b = resolveBase();
     if (!b) {
       return Promise.reject(new Error('未配置 Messenger API 基址'));
     }
@@ -35,6 +46,46 @@
     el.textContent = text || '';
     el.className = 'msg' + (isErr ? ' err' : '');
     el.style.display = text ? 'inline-block' : 'none';
+  }
+
+  function ensureMessengerToast() {
+    var toast = document.getElementById('messengerConfigToast');
+    if (toast) return toast;
+    toast = document.createElement('div');
+    toast.id = 'messengerConfigToast';
+    toast.className = 'seedance-task-toast messenger-config-toast';
+    toast.innerHTML = [
+      '<div class="seedance-task-toast-main">',
+      '<strong class="seedance-task-toast-title"></strong>',
+      '<p class="seedance-task-toast-body"></p>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(toast);
+    return toast;
+  }
+
+  function showToast(title, body, isErr) {
+    var toast = ensureMessengerToast();
+    var titleEl = toast.querySelector('.seedance-task-toast-title');
+    var bodyEl = toast.querySelector('.seedance-task-toast-body');
+    if (messengerToastTimer) {
+      clearTimeout(messengerToastTimer);
+      messengerToastTimer = null;
+    }
+    toast.classList.remove('is-visible', 'is-success', 'is-error');
+    toast.classList.add(isErr ? 'is-error' : 'is-success');
+    if (titleEl) titleEl.textContent = title || (isErr ? '保存失败' : '保存成功');
+    if (bodyEl) {
+      bodyEl.textContent = body || '';
+      bodyEl.style.display = body ? 'block' : 'none';
+    }
+    window.requestAnimationFrame(function() {
+      toast.classList.add('is-visible');
+    });
+    messengerToastTimer = window.setTimeout(function() {
+      toast.classList.remove('is-visible');
+      messengerToastTimer = null;
+    }, 3000);
   }
 
   function loadMessengerCloudInput() {
@@ -134,6 +185,11 @@
 
   function saveModal() {
     var msgEl = document.getElementById('messengerConfigModalMsg');
+    if (modalSaveBtn) {
+      modalSaveBtn.disabled = true;
+      modalSaveBtn.textContent = '保存中…';
+    }
+    showMsg(msgEl, '保存中…', false);
     var body = {
       name: document.getElementById('messengerConfigName').value.trim() || 'Messenger',
       verify_token: document.getElementById('messengerVerifyToken').value.trim(),
@@ -151,11 +207,21 @@
       return r.json();
     })
       .then(function() {
+        showMsg(msgEl, '已保存', false);
         modal.classList.remove('visible');
+        showToast('保存成功', '配置已保存', false);
         loadList();
       })
       .catch(function(e) {
-        showMsg(msgEl, (e && e.message) ? e.message : '保存失败', true);
+        var errText = (e && e.message) ? e.message : '保存失败';
+        showMsg(msgEl, errText, true);
+        showToast('保存失败', errText, true);
+      })
+      .finally(function() {
+        if (modalSaveBtn) {
+          modalSaveBtn.disabled = false;
+          modalSaveBtn.textContent = '保存';
+        }
       });
   }
 
@@ -176,16 +242,32 @@
 
   if (saveCloudBtn && cloudInput) {
     saveCloudBtn.addEventListener('click', function() {
+      saveCloudBtn.disabled = true;
+      saveCloudBtn.textContent = '保存中…';
       var v = (cloudInput.value || '').trim().replace(/\/$/, '');
       if (!v) {
         showMsg(cloudMsg, '请填写 API Base', true);
+        showToast('保存失败', '请填写 API Base', true);
+        saveCloudBtn.disabled = false;
+        saveCloudBtn.textContent = '保存';
         return;
       }
       localStorage.setItem('lobster_messenger_api_base', v);
       window.__MESSENGER_API_BASE = v;
       try { MESSENGER_API_BASE = v; } catch (e1) {}
       showMsg(cloudMsg, '已保存，刷新列表', false);
-      loadList();
+      showToast('保存成功', '配置已保存', false);
+      Promise.resolve()
+        .then(function() { return loadList(); })
+        .catch(function(e) {
+          var errText = (e && e.message) ? e.message : '保存失败';
+          showMsg(cloudMsg, errText, true);
+          showToast('保存失败', errText, true);
+        })
+        .finally(function() {
+          saveCloudBtn.disabled = false;
+          saveCloudBtn.textContent = '保存';
+        });
     });
   }
 
@@ -195,8 +277,8 @@
   });
   if (addBtn) addBtn.addEventListener('click', openAdd);
   if (checklistBtn) checklistBtn.addEventListener('click', copyChecklist);
-  document.getElementById('messengerConfigModalCancel').addEventListener('click', function() { modal.classList.remove('visible'); });
-  document.getElementById('messengerConfigModalSave').addEventListener('click', saveModal);
+  if (modalCancelBtn && modal) modalCancelBtn.addEventListener('click', function() { modal.classList.remove('visible'); });
+  if (modalSaveBtn) modalSaveBtn.addEventListener('click', saveModal);
 
   window.loadMessengerConfigPage = function() {
     loadMessengerCloudInput();

@@ -658,6 +658,71 @@
     saveRecentJobs();
   }
 
+  function currentJobAssetId() {
+    var current = (state.recentJobs || []).find(function(item) { return item && item.jobId === state.currentJobId; }) || {};
+    return String(current.assetId || '').trim();
+  }
+
+  function findJobAssetId(job) {
+    if (!job || typeof job !== 'object') return '';
+    var saved = Array.isArray(job.saved_assets) ? job.saved_assets : [];
+    for (var i = 0; i < saved.length; i += 1) {
+      var item = saved[i] || {};
+      var row = item.asset || {};
+      var mediaType = String(row.media_type || item.media_type || '').toLowerCase();
+      var assetId = String(row.asset_id || item.asset_id || '').trim();
+      if (assetId && (!mediaType || mediaType === 'video')) return assetId;
+    }
+    var result = job.result || {};
+    var finalVideo = result.final_video || {};
+    var finalAssetId = String(finalVideo.asset_id || '').trim();
+    if (!finalAssetId) return '';
+    for (var j = 0; j < saved.length; j += 1) {
+      var localAsset = ((saved[j] || {}).asset) || {};
+      if (String(localAsset.asset_id || '').trim() === finalAssetId) return finalAssetId;
+    }
+    return '';
+  }
+
+  function normalizeLocalJob(job) {
+    if (!job || !job.job_id) return null;
+    var result = job.result || {};
+    return {
+      jobId: String(job.job_id || ''),
+      status: String(job.status || 'running'),
+      title: String(job.title || '创意视频任务').trim() || '创意视频任务',
+      prompt: String(job.prompt || '').trim(),
+      videoUrl: extractResultVideoUrl({ result: result, saved_assets: job.saved_assets || [] }),
+      assetId: findJobAssetId(job),
+      error: String(job.error || '').trim(),
+      progress: job.progress || null,
+      progressPercent: job.progress_percent != null ? job.progress_percent : null,
+      progressLabel: job.progress_label || '',
+      progressDetail: job.progress_detail || '',
+      createdAt: Number(job.created_at_ts || 0) * 1000 || 0,
+      updatedAt: Number(job.updated_at_ts || 0) * 1000 || Date.now(),
+      local: true,
+      saved_assets: Array.isArray(job.saved_assets) ? job.saved_assets : [],
+      result: result
+    };
+  }
+
+  function saveVideoAssetToLibrary(assetId, filename) {
+    var local = localBase();
+    if (!local || !assetId) return Promise.reject(new Error('video asset missing'));
+    return fetch(local + '/api/assets/' + encodeURIComponent(assetId) + '/save-to-downloads', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+      body: JSON.stringify({ filename: filename || 'creative-video.mp4', open_folder: true })
+    })
+      .then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          if (!response.ok) throw new Error(responseErrorText(data, 'download failed'));
+          return data || {};
+        });
+      });
+  }
+
   function downloadUrlForVideo(videoUrl, filename) {
     var local = localBase();
     var safeName = filename || 'seedance-tvc-result.mp4';
@@ -747,9 +812,27 @@
     document.querySelectorAll('[data-seedance-video-download]').forEach(function(btn) {
       btn.onclick = function() {
         var url = btn.getAttribute('data-seedance-video-download') || '';
+        var assetId = btn.getAttribute('data-seedance-asset-id') || '';
+        var filename = btn.getAttribute('data-download-filename') || 'seedance-tvc-result.mp4';
+        if (assetId) {
+          saveVideoAssetToLibrary(assetId, filename)
+            .then(function(data) {
+              var folderText = data && data.directory ? (' / ' + data.directory) : '';
+              showMessage((data && data.opened_folder ? '视频已保存并打开文件夹' : '视频已保存') + folderText);
+            })
+            .catch(function(err) {
+              if (url) {
+                openExternalUrl(downloadUrlForVideo(url, filename));
+                showMessage('素材库保存失败，已改为直接下载。');
+                return;
+              }
+              showMessage('保存视频失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
+            });
+          return;
+        }
         if (!url) return showMessage('视频地址为空，无法下载。');
-        openExternalUrl(downloadUrlForVideo(url, btn.getAttribute('data-download-filename') || 'seedance-tvc-result.mp4'));
-        showMessage('已发起下载。如果系统没有弹出下载，请点击“打开视频”后在浏览器中另存。');
+        openExternalUrl(downloadUrlForVideo(url, filename));
+        showMessage('已发起下载。');
       };
     });
     document.querySelectorAll('[data-seedance-video-open]').forEach(function(btn) {
@@ -1503,7 +1586,7 @@
           '<button type="button" class="seedance-video-exit-btn" data-seedance-video-exit>退出全屏 Esc</button>',
           '</div>',
           '<div class="seedance-result-video-actions">',
-          '<button type="button" class="btn btn-primary btn-sm" data-seedance-video-download="' + escapeHtml(resultUrl) + '" data-download-filename="seedance-tvc-result.mp4">下载视频</button>',
+          '<button type="button" class="btn btn-primary btn-sm" data-seedance-video-download="' + escapeHtml(resultUrl) + '" data-seedance-asset-id="' + escapeHtml(currentJobAssetId()) + '" data-download-filename="seedance-tvc-result.mp4">下载视频</button>',
           '<button type="button" class="btn btn-ghost btn-sm" data-seedance-video-open="' + escapeHtml(resultUrl) + '">打开视频</button>',
           '</div>',
           '</div>'
@@ -1659,7 +1742,7 @@
       '<div class="seedance-result-meta">' + renderResultPills(values, boards) + '</div>',
       '<div class="seedance-result-actions">',
       '<button type="button" class="btn btn-sm seedance-action-btn is-copy" data-seedance-copy-prompt' + (currentJobPromptText() ? '' : ' disabled') + '>复制提示词并回填</button>',
-      '<button type="button" class="btn btn-sm seedance-action-btn is-download" data-seedance-video-download="' + escapeHtml(state.currentResultVideoUrl || '') + '" data-download-filename="creative-video.mp4"' + (canOperate ? '' : ' disabled') + '>下载视频</button>',
+      '<button type="button" class="btn btn-sm seedance-action-btn is-download" data-seedance-video-download="' + escapeHtml(state.currentResultVideoUrl || '') + '" data-seedance-asset-id="' + escapeHtml(currentJobAssetId()) + '" data-download-filename="creative-video.mp4"' + (canOperate ? '' : ' disabled') + '>下载视频</button>',
       '<button type="button" class="btn btn-sm seedance-action-btn is-open" data-seedance-video-open="' + escapeHtml(state.currentResultVideoUrl || '') + '"' + (canOperate ? '' : ' disabled') + '>打开视频</button>',
       '</div>',
       '<div class="seedance-result-prompt-panel">',
@@ -1696,7 +1779,7 @@
         var actionHtml = videoUrl && job.status === 'completed'
           ? [
               '<span class="seedance-business-job-actions">',
-              '<button type="button" class="btn btn-primary btn-sm" data-seedance-video-download="' + escapeHtml(videoUrl) + '" data-download-filename="creative-video.mp4">下载</button>',
+              '<button type="button" class="btn btn-primary btn-sm" data-seedance-video-download="' + escapeHtml(videoUrl) + '" data-seedance-asset-id="' + escapeHtml(job.assetId || '') + '" data-download-filename="creative-video.mp4">下载</button>',
               '<button type="button" class="btn btn-ghost btn-sm" data-seedance-video-open="' + escapeHtml(videoUrl) + '">打开</button>',
               '</span>'
             ].join('')
@@ -2083,6 +2166,7 @@
       title: job.title || '创意视频任务',
       prompt: promptText,
       videoUrl: cloudVideoUrlFromJob(job),
+      assetId: findJobAssetId(job),
       error: String(job.error || '').trim(),
       progress: null,
       createdAt: Date.parse(job.created_at || job.createdAt || '') || 0,
@@ -2090,6 +2174,32 @@
       cloud: true,
       cloudJob: job
     };
+  }
+
+  function loadLocalJobHistory() {
+    var base = pipelineBase();
+    if (!base) return Promise.resolve([]);
+    return fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs?limit=12', {
+      headers: authHeadersSafe()
+    })
+      .then(function(response) {
+        return response.json().then(function(data) {
+          return { ok: response.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error(responseErrorText(result.data, 'local history failed'));
+        var rows = (Array.isArray(result.data.items) ? result.data.items : [])
+          .map(normalizeLocalJob)
+          .filter(Boolean);
+        mergeRecentJobs(rows);
+        renderWorkspace();
+        return rows;
+      })
+      .catch(function(err) {
+        console.warn('Seedance local history load failed', err);
+        return [];
+      });
   }
 
   function loadCloudJobHistory() {
@@ -2156,6 +2266,7 @@
       title: state.currentJobTitle,
       prompt: state.currentJobPrompt || job.prompt || '',
       videoUrl: state.currentResultVideoUrl || '',
+      assetId: job.assetId || currentJobAssetId() || '',
       error: state.currentJobError,
       progress: state.currentJobProgress,
       progressPercent: state.currentJobProgressPercent,
@@ -2245,6 +2356,7 @@
           status: state.currentJobStatus,
           prompt: state.currentJobPrompt || '',
           videoUrl: state.currentResultVideoUrl || '',
+          assetId: findJobAssetId(result.data) || currentJobAssetId() || '',
           error: state.currentJobError,
           progress: state.currentJobProgress,
           progressPercent: state.currentJobProgressPercent,
@@ -2413,6 +2525,7 @@
         status: 'running',
         title: state.currentJobTitle,
         prompt: state.currentJobPrompt,
+        assetId: '',
         error: '',
         progress: null,
         progressPercent: state.currentJobProgressPercent,
@@ -2696,22 +2809,19 @@
       initSeedanceCustomSelects();
       syncSeedanceCustomSelects();
       loadRecentJobs();
-      loadCloudJobHistory();
-      var active = state.recentJobs.find(function(item) { return item && item.status === 'running' && item.jobId; });
-      if (active) {
+      Promise.allSettled([loadLocalJobHistory(), loadCloudJobHistory()]).then(function() {
+        var active = state.recentJobs.find(function(item) { return item && item.status === 'running' && item.jobId; })
+          || state.recentJobs.find(function(item) { return item && item.jobId; });
+        if (!active) return;
         state.currentJobId = active.jobId;
-        state.currentJobStatus = 'running';
-        state.currentResultVideoUrl = active.videoUrl || '';
-        state.currentJobTitle = active.title || '创意视频任务';
-        state.currentJobError = active.error || '';
-        state.currentJobProgress = active.progress || null;
-        state.currentJobProgressPercent = active.progressPercent != null ? active.progressPercent : null;
-        state.currentJobProgressLabel = active.progressLabel || '';
-        state.currentJobProgressDetail = active.progressDetail || '';
         state.examplesOpen = false;
         state.mainView = 'result';
-        refreshJobStatus(false);
-      }
+        applyJobSnapshot(active, active.status || 'running');
+        renderWorkspace();
+        if (String(active.status || '').toLowerCase() === 'running') {
+          refreshJobStatus(false);
+        }
+      });
     }
 
     updateExamplesBadge();

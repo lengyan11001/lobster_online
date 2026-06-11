@@ -85,7 +85,7 @@ async function fetchJsonWithTimeout(url,timeoutMs=4000){let timer=null;try{retur
         const normalize=t=>String(t??"").replace(/\u200b|\ufeff/g,"").replace(/\s+/g," ").trim();
         function rememberUiScrollState(key,element){if(!key||!element)return;douyinUiScrollState[key]={top:element.scrollTop,left:element.scrollLeft}}
         function restoreUiScrollState(key,element){const state=key?douyinUiScrollState[key]:null;if(!state||!element)return;element.scrollTop=Number(state.top||0);element.scrollLeft=Number(state.left||0)}
-        function resetSearchWorkspaceScroll(){requestAnimationFrame(()=>{try{window.scrollTo(0,0);document.documentElement.scrollTop=0;document.body.scrollTop=0;const stage=document.querySelector("#search-workspace-page .search-session-stage");if(stage)stage.scrollTop=0}catch(error){}})}
+        function resetSearchWorkspaceScroll(){requestAnimationFrame(()=>{try{const scroller=document.querySelector(".workspace-content");if(scroller)scroller.scrollTop=0;window.scrollTo(0,0);document.documentElement.scrollTop=0;document.body.scrollTop=0;const stage=document.querySelector("#search-workspace-page .search-session-stage");if(stage)stage.scrollTop=0}catch(error){}})}
         function getWheelForwardScrollTarget(source){if(!source||typeof source.closest!=="function")return null;const sidebar=source.closest(".search-session-sidebar");if(!sidebar)return null;const layout=sidebar.closest(".search-session-layout,.collect-session-workspace,.douyin-monitor-customer-workspace");if(!layout)return null;return layout.querySelector(".search-session-stage,.collect-session-stage")}
         function forwardSidebarWheelToStage(event){if(event.defaultPrevented||!event.deltaY)return;const source=event.target instanceof Element?event.target:null,target=getWheelForwardScrollTarget(source);if(!target)return;const maxScroll=Math.max(0,target.scrollHeight-target.clientHeight);if(maxScroll<=0)return;const nextTop=Math.max(0,Math.min(maxScroll,target.scrollTop+event.deltaY));if(nextTop===target.scrollTop)return;target.scrollTop=nextTop;event.preventDefault()}
         document.addEventListener("wheel",forwardSidebarWheelToStage,{passive:false})
@@ -656,8 +656,12 @@ async function fetchJsonWithTimeout(url,timeoutMs=4000){let timer=null;try{retur
         function goToDouyinSearchPage(page){const total=Math.max(1,Math.ceil(douyinSearchResultData.length/douyinSearchPageSize));douyinSearchCurrentPage=Math.min(Math.max(page,1),total);renderDouyinSearchResults(douyinSearchResultData)}
         function renderDouyinSearchResults(data){
             const box=document.getElementById("douyin-search-results");
-            const existingSessionList=box?.querySelector(".search-session-list");
+            const existingSessionList=box?.querySelector(".search-session-list"),
+                existingWorkspaceScroller=document.querySelector(".workspace-content"),
+                existingSearchStage=box?.querySelector(".search-session-stage");
             rememberUiScrollState("douyin-search-session-list",existingSessionList);
+            rememberUiScrollState("douyin-search-workspace-content",existingWorkspaceScroller);
+            rememberUiScrollState("douyin-search-stage",existingSearchStage);
             const sessions=douyinSearchSessions;
             if(!sessions.length&&!data.length){
                 searchExplorerSelectedKey="";
@@ -754,7 +758,8 @@ async function fetchJsonWithTimeout(url,timeoutMs=4000){let timer=null;try{retur
             }
             box.innerHTML=`<div class="search-session-layout">${sidebarHtml}<section class="search-session-stage">${html}</section></div>`;
             restoreUiScrollState("douyin-search-session-list",document.getElementById("douyin-search-session-list"));
-            resetSearchWorkspaceScroll();
+            restoreUiScrollState("douyin-search-workspace-content",document.querySelector(".workspace-content"));
+            restoreUiScrollState("douyin-search-stage",box.querySelector(".search-session-stage"));
             refreshActionState()
         }
         function taskUserMetaScore(row={}){let score=0;if(getAvatarUrl(row))score+=3;if(normalize(row.region||""))score+=2;if(normalize(row.comment_time_display||row.comment_time||"")&&normalize(row.comment_time_display||row.comment_time||"")!=="-")score+=2;if(toCount(row.like_count)>0)score+=1;return score}

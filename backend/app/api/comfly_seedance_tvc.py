@@ -21,6 +21,7 @@ from ..services.creative_job_cloud_sync import sync_creative_job_to_cloud
 from ..services.comfly_seedance_tvc_job_store import (
     create_job_record,
     get_job,
+    list_jobs_for_user,
     read_manifest_progress,
     update_job,
 )
@@ -1208,6 +1209,32 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str
     return out
 
 
+def _recent_job_summary(job: Dict[str, Any], request: Optional[Request] = None) -> Dict[str, Any]:
+    payload = _job_status_response(job, include_full=True)
+    result = payload.get("result")
+    if request is not None and result is not None:
+        payload["result"] = _with_local_final_video_url(result, request, job)
+    inp = job.get("inp") if isinstance(job.get("inp"), dict) else {}
+    task = inp.get("task") if isinstance(inp.get("task"), dict) else {}
+    prompt = str(task.get("text") or inp.get("task_text") or "").strip()
+    meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+    return {
+        "job_id": payload.get("job_id"),
+        "status": payload.get("status"),
+        "created_at_ts": payload.get("created_at_ts"),
+        "updated_at_ts": payload.get("updated_at_ts"),
+        "progress": payload.get("progress"),
+        "progress_percent": payload.get("progress_percent"),
+        "progress_label": payload.get("progress_label"),
+        "progress_detail": payload.get("progress_detail"),
+        "error": payload.get("error"),
+        "result": payload.get("result"),
+        "saved_assets": payload.get("saved_assets") or [],
+        "title": str(meta.get("title") or "创意视频任务"),
+        "prompt": prompt,
+    }
+
+
 def _with_local_final_video_url(result: Any, request: Request, job: Dict[str, Any]) -> Any:
     if not isinstance(result, dict):
         return result
@@ -1309,4 +1336,17 @@ async def comfly_seedance_pipeline_job_status(
     if not compact and request is not None and payload.get("result") is not None:
         payload["result"] = _with_local_final_video_url(payload.get("result"), request, job)
     return payload
+
+
+@router.get("/api/comfly-seedance-tvc/pipeline/jobs")
+async def comfly_seedance_pipeline_jobs(
+    request: Request,
+    limit: int = 12,
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+):
+    rows = list_jobs_for_user(int(current_user.id), limit=limit)
+    return {
+        "ok": True,
+        "items": [_recent_job_summary(job, request=request) for job in rows],
+    }
 

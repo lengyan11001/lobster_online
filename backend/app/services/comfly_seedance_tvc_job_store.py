@@ -11,6 +11,51 @@ from typing import Any, Dict, List, Optional
 JOBS_LOCK = threading.Lock()
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOB_TTL_SEC = 86400 * 3
+_JOB_STORE_FILE = Path(__file__).resolve().parents[3] / "_lobster_runtime" / "seedance_tvc_job_store.json"
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
+def _load_store_from_disk() -> Dict[str, Dict[str, Any]]:
+    try:
+        if not _JOB_STORE_FILE.is_file():
+            return {}
+        raw = json.loads(_JOB_STORE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for jid, row in raw.items():
+        if isinstance(row, dict):
+            out[str(jid).strip().lower()] = row
+    return out
+
+
+def _save_store_to_disk_unlocked() -> None:
+    _JOB_STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {jid: _json_safe(job) for jid, job in _JOBS.items()}
+    tmp = _JOB_STORE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(_JOB_STORE_FILE)
+
+
+def _ensure_loaded_unlocked() -> None:
+    if _JOBS:
+        return
+    disk_rows = _load_store_from_disk()
+    if disk_rows:
+        _JOBS.update(disk_rows)
 
 
 def _prune_stale_unlocked(now: float) -> None:
@@ -20,6 +65,12 @@ def _prune_stale_unlocked(now: float) -> None:
             dead.append(jid)
     for jid in dead:
         _JOBS.pop(jid, None)
+
+
+def _persist_jobs_unlocked(now: Optional[float] = None) -> None:
+    _ensure_loaded_unlocked()
+    _prune_stale_unlocked(now if now is not None else time.time())
+    _save_store_to_disk_unlocked()
 
 
 def create_job_record(
@@ -38,6 +89,7 @@ def create_job_record(
         jid = uuid.uuid4().hex
     now = time.time()
     with JOBS_LOCK:
+        _ensure_loaded_unlocked()
         _prune_stale_unlocked(now)
         _JOBS[jid] = {
             "job_id": jid,
@@ -55,6 +107,7 @@ def create_job_record(
             "result": None,
             "saved_assets": [],
         }
+        _save_store_to_disk_unlocked()
     return jid
 
 
@@ -64,6 +117,7 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
         return None
     now = time.time()
     with JOBS_LOCK:
+        _ensure_loaded_unlocked()
         _prune_stale_unlocked(now)
         job = _JOBS.get(jid)
         return dict(job) if job is not None else None
@@ -72,12 +126,30 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 def update_job(job_id: str, **fields: Any) -> bool:
     jid = (job_id or "").strip().lower()
     with JOBS_LOCK:
+        _ensure_loaded_unlocked()
         job = _JOBS.get(jid)
         if not job:
             return False
         job.update(fields)
         job["updated_at_ts"] = time.time()
+        _save_store_to_disk_unlocked()
         return True
+
+
+def list_jobs_for_user(user_id: int, *, limit: int = 12) -> List[Dict[str, Any]]:
+    now = time.time()
+    with JOBS_LOCK:
+        _ensure_loaded_unlocked()
+        _prune_stale_unlocked(now)
+        rows = [
+            dict(job)
+            for job in _JOBS.values()
+            if int(job.get("user_id") or -1) == int(user_id)
+        ]
+        rows.sort(key=lambda item: float(item.get("updated_at_ts") or item.get("created_at_ts") or 0), reverse=True)
+        rows = rows[: max(1, int(limit or 12))]
+        _save_store_to_disk_unlocked()
+        return rows
 
 
 def _safe_int(value: Any, default: int = 0) -> int:

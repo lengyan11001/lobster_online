@@ -407,7 +407,6 @@
         let activeDouyinAccountId = null;
         let savedDouyinIntentPrompt = "";
         let savedDouyinIntentStrategy = "prompt";
-
         const accountStatusText = (status) => ({ online: "在线", waiting: "待扫码", offline: "离线" })[String(status || "").trim()] || "离线";
 
         function normalize(value) {

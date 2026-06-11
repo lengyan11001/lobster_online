@@ -1552,6 +1552,10 @@ function setChatQuickMode(mode, options) {
 function renderChatMemoryScopeUi() {
   var select = document.getElementById('chatMemoryScopeSelect');
   if (!select) return;
+  var dropdown = document.getElementById('chatMemoryScopeDropdown');
+  var button = document.getElementById('chatMemoryScopeButton');
+  var buttonText = document.getElementById('chatMemoryScopeButtonText');
+  var menu = document.getElementById('chatMemoryScopeMenu');
   var current = getSessionById(currentSessionId);
   var isDefaultChat = current && !_isWorkspaceSession(current) && !_isH5MirrorSession(current);
   var scope = _getSessionMemoryScope(current);
@@ -1581,12 +1585,86 @@ function applyChatMemoryScopeHeader(headers, session) {
 
 function bindChatMemoryScopeSelect() {
   var select = document.getElementById('chatMemoryScopeSelect');
+  var dropdown = document.getElementById('chatMemoryScopeDropdown');
+  var button = document.getElementById('chatMemoryScopeButton');
   if (!select || select.dataset.bound === '1') return;
   select.dataset.bound = '1';
   select.addEventListener('change', function() {
     setChatMemoryScope(select.value);
   });
 }
+
+function syncChatMemoryScopeDropdownUi() {
+  var select = document.getElementById('chatMemoryScopeSelect');
+  var dropdown = document.getElementById('chatMemoryScopeDropdown');
+  var button = document.getElementById('chatMemoryScopeButton');
+  var buttonText = document.getElementById('chatMemoryScopeButtonText');
+  var menu = document.getElementById('chatMemoryScopeMenu');
+  if (!select || !dropdown || !button || !buttonText || !menu) return;
+  var disabled = !!select.disabled;
+  var selectedOption = select.options[select.selectedIndex];
+  button.disabled = disabled;
+  button.setAttribute('title', select.title || '');
+  buttonText.textContent = selectedOption ? (selectedOption.textContent || '') : '';
+  menu.innerHTML = '';
+  Array.prototype.forEach.call(select.options, function(option) {
+    var item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'chat-memory-scope-option' + (option.value === select.value ? ' is-selected' : '');
+    item.textContent = option.textContent || '';
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', option.value === select.value ? 'true' : 'false');
+    item.disabled = disabled;
+    item.addEventListener('click', function() {
+      if (disabled) return;
+      select.value = option.value;
+      setChatMemoryScope(option.value);
+      dropdown.classList.remove('is-open');
+      button.setAttribute('aria-expanded', 'false');
+      button.focus();
+    });
+    menu.appendChild(item);
+  });
+}
+
+function bindChatMemoryScopeDropdown() {
+  var dropdown = document.getElementById('chatMemoryScopeDropdown');
+  var button = document.getElementById('chatMemoryScopeButton');
+  if (!dropdown || !button || button.dataset.dropdownBound === '1') return;
+  button.dataset.dropdownBound = '1';
+  button.addEventListener('click', function(event) {
+    if (button.disabled) return;
+    event.preventDefault();
+    var nextOpen = !dropdown.classList.contains('is-open');
+    dropdown.classList.toggle('is-open', nextOpen);
+    button.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  });
+  button.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      dropdown.classList.remove('is-open');
+      button.setAttribute('aria-expanded', 'false');
+    }
+  });
+  document.addEventListener('click', function(event) {
+    if (!dropdown.contains(event.target)) {
+      dropdown.classList.remove('is-open');
+      button.setAttribute('aria-expanded', 'false');
+    }
+  });
+}
+
+var _renderChatMemoryScopeUiBase = renderChatMemoryScopeUi;
+renderChatMemoryScopeUi = function() {
+  _renderChatMemoryScopeUiBase();
+  syncChatMemoryScopeDropdownUi();
+};
+
+var _bindChatMemoryScopeSelectBase = bindChatMemoryScopeSelect;
+bindChatMemoryScopeSelect = function() {
+  _bindChatMemoryScopeSelectBase();
+  bindChatMemoryScopeDropdown();
+  syncChatMemoryScopeDropdownUi();
+};
 
 function updateWorkspaceCategoryUi(category) {
   var normalized = WORKSPACE_CATEGORY_CONFIG[category] ? category : WORKSPACE_CATEGORY_DEFAULT;

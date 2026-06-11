@@ -371,6 +371,73 @@ function _normalizeDouyinFilterStrategy(value) {
   return value === 'reverse' ? 'reverse' : 'prompt';
 }
 
+function _douyinWorkbenchStorageKey() {
+  return 'lobster_douyin_workbench_state_v1';
+}
+
+function _douyinWorkbenchPersistState() {
+  try {
+    localStorage.setItem(_douyinWorkbenchStorageKey(), JSON.stringify({
+      searchResults: Array.isArray(_douyinWorkbenchState.searchResults) ? _douyinWorkbenchState.searchResults : [],
+      leads: Array.isArray(_douyinWorkbenchState.leads) ? _douyinWorkbenchState.leads : [],
+      selectedLeadIds: _douyinWorkbenchState.selectedLeadIds || {},
+      saved_at: Date.now()
+    }));
+  } catch (e1) {}
+}
+
+function _douyinWorkbenchClearPersistedState() {
+  try { localStorage.removeItem(_douyinWorkbenchStorageKey()); } catch (e1) {}
+}
+
+function _douyinWorkbenchRestoreState() {
+  try {
+    var raw = localStorage.getItem(_douyinWorkbenchStorageKey());
+    if (!raw) return false;
+    var data = JSON.parse(raw);
+    _douyinWorkbenchState.searchResults = Array.isArray(data && data.searchResults) ? data.searchResults : [];
+    _douyinWorkbenchState.leads = Array.isArray(data && data.leads) ? data.leads : [];
+    _douyinWorkbenchState.selectedLeadIds = (data && typeof data.selectedLeadIds === 'object' && data.selectedLeadIds) ? data.selectedLeadIds : {};
+    return !!(_douyinWorkbenchState.searchResults.length || _douyinWorkbenchState.leads.length);
+  } catch (e1) {
+    return false;
+  }
+}
+
+function _douyinWorkbenchLeadBelongsToVideo(lead, video) {
+  if (!lead || !video) return false;
+  var leadAwemeId = String(lead.aweme_id || '').trim();
+  var videoAwemeId = String(video.aweme_id || '').trim();
+  if (leadAwemeId && videoAwemeId && leadAwemeId === videoAwemeId) return true;
+  var leadUrl = String(lead.video_url || '').trim();
+  var videoUrl = String(video.url || '').trim();
+  if (leadUrl && videoUrl && leadUrl === videoUrl) return true;
+  var leadTitle = String(lead.source_title || '').trim();
+  var videoTitle = String(video.title || '').trim();
+  var leadAuthor = String(lead.source_author || lead.video_author || '').trim();
+  var videoAuthor = String(video.author || '').trim();
+  if (leadTitle && videoTitle && leadTitle === videoTitle) {
+    if (!leadAuthor || !videoAuthor || leadAuthor === videoAuthor) return true;
+  }
+  return false;
+}
+
+function _douyinWorkbenchVideoCustomerStats(video) {
+  var stats = { all: 0, precise: 0 };
+  (_douyinWorkbenchState.leads || []).forEach(function(lead) {
+    if (!_douyinWorkbenchLeadBelongsToVideo(lead, video)) return;
+    stats.all += 1;
+    if (lead && lead.is_high_intent) stats.precise += 1;
+  });
+  return stats;
+}
+
+function _douyinWorkbenchRestoreAndRenderState() {
+  if (!_douyinWorkbenchRestoreState()) return false;
+  _douyinWorkbenchRenderSearchResults(_douyinWorkbenchState.searchResults || []);
+  return true;
+}
+
 function loadDouyinWorkbenchConfig(silent) {
   return _douyinWorkbenchFetch('/api/douyin/workbench/config', { method: 'GET' })
     .then(function(data) {
@@ -560,6 +627,7 @@ function loadDouyinWorkbenchAccounts() {
         return acct && acct.platform === 'douyin';
       });
       _douyinWorkbenchRenderAccounts();
+      _douyinWorkbenchRestoreAndRenderState();
     })
     .catch(function(err) {
       _douyinWorkbenchStatus('加载账号失败：' + (err && err.message ? err.message : err), true);
@@ -724,24 +792,29 @@ function _douyinWorkbenchMergeCustomers(customers, sourceVideo) {
       intent_reason: customer.intent_reason || customer.reason || existing.intent_reason || '',
       intent_score: customer.intent_score || customer.score || existing.intent_score || '',
       source_title: (sourceVideo && sourceVideo.title) || existing.source_title || '',
+      source_author: (sourceVideo && sourceVideo.author) || existing.source_author || '',
       source_cover: (sourceVideo && sourceVideo.cover_image) || existing.source_cover || '',
       aweme_id: customer.aweme_id || (sourceVideo && sourceVideo.aweme_id) || existing.aweme_id || '',
       video_url: customer.video_url || (sourceVideo && sourceVideo.url) || existing.video_url || ''
     });
   });
   _douyinWorkbenchState.leads = Object.keys(map).map(function(key) { return map[key]; });
+  _douyinWorkbenchPersistState();
 }
 
 function _douyinWorkbenchRenderSearchResults(results) {
   var box = document.getElementById('douyinSearchResults');
   if (!box) return;
   results = Array.isArray(results) ? results : [];
+  var preservedLeads = Array.isArray(_douyinWorkbenchState.leads) ? _douyinWorkbenchState.leads.slice() : [];
   _douyinWorkbenchState.searchResults = results;
   _douyinWorkbenchState.leads = _douyinWorkbenchBuildLeads(results);
+  if (preservedLeads.length) _douyinWorkbenchMergeCustomers(preservedLeads, null);
   if (!results.length) {
     box.innerHTML = '<div class="douyin-empty">暂无搜索结果。已用可见 Chrome 打开抖音搜索页；如果页面有验证码、安全校验或内容未加载，请先在浏览器里处理后再点击“开始采集”。</div>';
     _douyinWorkbenchRenderCustomers();
     _douyinWorkbenchUpdateCounts();
+    _douyinWorkbenchPersistState();
     return;
   }
   box.innerHTML = results.map(function(item, idx) {
@@ -750,6 +823,7 @@ function _douyinWorkbenchRenderSearchResults(results) {
     var cover = String(item.cover_image || '').trim();
     var likes = String(item.likes_text || item.likes || '').trim();
     var comments = String(item.comments_text || item.comments || '').trim();
+    var stats = _douyinWorkbenchVideoCustomerStats(item);
     return '<div class="douyin-video-card">' +
       '<div class="douyin-video-thumb">' +
         (cover ? '<img src="' + escapeAttr(cover) + '" alt="视频封面" loading="lazy">' : '<span>无封面</span>') +
@@ -762,6 +836,7 @@ function _douyinWorkbenchRenderSearchResults(results) {
           (likes ? '<span>点赞 ' + escapeHtml(likes) + '</span>' : '') +
           (comments ? '<span>评论 ' + escapeHtml(comments) + '</span>' : '') +
         '</div>' +
+        '<div class="douyin-video-meta">客户沉淀：全部 ' + stats.all + ' / 精准 ' + stats.precise + '</div>' +
         '<div class="douyin-video-actions">' +
           '<button type="button" class="btn btn-primary btn-sm" data-douyin-video-action="collect-customers" data-douyin-video-index="' + idx + '">采集客户</button>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-douyin-video-action="select-video" data-douyin-video-index="' + idx + '">选中视频</button>' +
@@ -771,6 +846,7 @@ function _douyinWorkbenchRenderSearchResults(results) {
   }).join('');
   _douyinWorkbenchRenderCustomers();
   _douyinWorkbenchUpdateCounts();
+  _douyinWorkbenchPersistState();
 }
 
 function _douyinWorkbenchRenderCustomers() {
@@ -809,6 +885,7 @@ function _douyinWorkbenchRenderCustomers() {
   }).join('');
   _douyinWorkbenchUpdateSelectedTargetCard();
   _douyinWorkbenchUpdateCounts();
+  _douyinWorkbenchPersistState();
 }
 
 function _douyinWorkbenchUpdateSelectedTargetCard() {
