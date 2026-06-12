@@ -34,6 +34,8 @@
   var lastSeedanceModel = '';
   var seedanceVideoFullscreenEventsBound = false;
   var customSelectEventsBound = false;
+  var lastSeedanceStageRenderSignature = '';
+  var lastSeedanceBusinessRenderSignature = '';
   var assetPickerState = {
     loading: false,
     items: [],
@@ -1673,9 +1675,28 @@
     ].join('');
   }
 
+  function currentResultRenderSignature(values, boards) {
+    return JSON.stringify({
+      jobId: state.currentJobId || '',
+      status: state.currentJobStatus || '',
+      videoUrl: state.currentResultVideoUrl || '',
+      prompt: state.currentJobPrompt || '',
+      error: state.currentJobError || '',
+      progressPercent: state.currentJobProgressPercent != null ? state.currentJobProgressPercent : null,
+      progressLabel: state.currentJobProgressLabel || '',
+      progressDetail: state.currentJobProgressDetail || '',
+      boardCount: Array.isArray(boards) ? boards.length : 0,
+      duration: state.duration || 0,
+      aspectRatio: (values && values.aspectRatio) || ''
+    });
+  }
+
   function renderVideoStage(values, boards) {
     var videoSurface = $('seedanceVideoSurface');
     if (!videoSurface) return;
+    var signature = currentResultRenderSignature(values, boards);
+    if (signature === lastSeedanceStageRenderSignature) return;
+    lastSeedanceStageRenderSignature = signature;
     videoSurface.innerHTML = resultVideoHtml(values, boards);
     bindResultVideoActions();
   }
@@ -1752,7 +1773,9 @@
     var values = getFormValues();
     var boards = buildBoards();
     var canOperate = !!String(state.currentResultVideoUrl || '').trim();
-    stage.innerHTML = [
+    var signature = currentResultRenderSignature(values, boards);
+    if (signature !== lastSeedanceBusinessRenderSignature) {
+      stage.innerHTML = [
       '<div class="seedance-result-layout">',
       '<div class="seedance-result-preview-pane">',
       resultVideoHtml(values, boards),
@@ -1775,14 +1798,16 @@
       '<p class="seedance-result-task-note">' + escapeHtml(currentJobSummary(values, boards)) + '</p>',
       '</div>',
       '</div>'
-    ].join('');
-    bindResultVideoActions();
-    document.querySelectorAll('[data-seedance-copy-prompt]').forEach(function(btn) {
-      btn.onclick = function() {
-        if (btn.disabled) return;
-        copyCurrentPromptToEditor();
-      };
-    });
+      ].join('');
+      lastSeedanceBusinessRenderSignature = signature;
+      bindResultVideoActions();
+      document.querySelectorAll('[data-seedance-copy-prompt]').forEach(function(btn) {
+        btn.onclick = function() {
+          if (btn.disabled) return;
+          copyCurrentPromptToEditor();
+        };
+      });
+    }
 
     var list = $('seedanceBusinessHistoryGrid');
     var empty = $('seedanceBusinessHistoryEmpty');

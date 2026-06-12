@@ -44,6 +44,7 @@
   };
   var imglabTaskToastTimer = null;
   var imglabTaskNotifiedJobs = {};
+  var lastImglabResultRenderSignature = '';
   var assetPickerState = {
     loading: false,
     items: [],
@@ -1183,11 +1184,51 @@
     }).join('');
   }
 
+  function currentResultRenderSignature() {
+    return JSON.stringify({
+      currentJobId: state.currentJobId || '',
+      currentJobStatus: state.currentJobStatus || '',
+      currentJobPrompt: state.currentJobPrompt || '',
+      activeResultIndex: state.activeResultIndex || 0,
+      selectedJobId: state.selectedJobId || '',
+      results: (state.results || []).map(function(item) {
+        return {
+          url: item && item.url || '',
+          dataUrl: item && item.data_url || '',
+          sourceUrl: item && item.sourceUrl || '',
+          assetId: item && item.assetId || '',
+          prompt: item && item.prompt || '',
+          model: item && item.model || '',
+          aspectRatio: item && item.aspectRatio || '',
+          size: item && item.size || ''
+        };
+      }),
+      recentJobs: (state.recentJobs || []).slice(0, 12).map(function(job) {
+        return {
+          jobId: job && job.jobId || '',
+          status: job && job.status || '',
+          title: job && job.title || '',
+          prompt: promptFromJob(job),
+          image: job && job.image || '',
+          resultCount: job && job.resultCount || 0,
+          assetId: job && (job.assetId || job.asset_id) || '',
+          model: job && job.model || '',
+          aspectRatio: job && job.aspectRatio || '',
+          size: job && job.size || ''
+        };
+      })
+    });
+  }
+
   function renderResultSurface() {
     var surface = $('imglabResultSurface');
     var meta = $('imglabResultMeta');
     var gallery = $('imglabResultGallery');
     if (!surface || !meta || !gallery) return;
+
+    var signature = currentResultRenderSignature();
+    if (signature === lastImglabResultRenderSignature) return;
+    lastImglabResultRenderSignature = signature;
 
     var detail = activeResultDetail();
     if (!detail) {
