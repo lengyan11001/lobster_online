@@ -173,7 +173,7 @@ def _viral_remix_estimated_credits(
     seconds: float,
     *,
     segment_seconds: int = 10,
-    model: str = "doubao-seedance-2-0-260128",
+    model: str = "grok-imagine-video-1.5-preview",
     include_narration_split: bool = False,
 ) -> Dict[str, Any]:
     billable_seconds = max(1, int(math.ceil(float(seconds or 0))))
@@ -186,7 +186,7 @@ def _viral_remix_estimated_credits(
         "billable_seconds": billable_seconds,
         "estimated_credits": estimated_credits,
         "pricing_unit": "credits",
-        "seedance_model": _normalize_remix_model(model),
+        "seedance_model": _provider_video_model_for_remix(model),
         "seedance_credits_per_second": _VIRAL_REMIX_SEEDANCE_CREDITS_PER_SECOND,
         "segment_count": segment_count,
         "segment_duration_seconds": normalized_segment_seconds,
@@ -542,7 +542,7 @@ def _extract_video_url_from_obj(obj: Any) -> str:
         found = _extract_video_url_from_obj(obj.get(key))
         if found:
             return found
-    for key in ("content", "data", "result", "outputs", "videos"):
+    for key in ("video", "content", "data", "result", "output", "outputs", "videos", "metadata"):
         found = _extract_video_url_from_obj(obj.get(key))
         if found:
             return found
@@ -554,8 +554,42 @@ def _extract_seedance_poll(payload: Any) -> tuple[str, str, str]:
     data = _as_dict(root.get("data"))
     result = _as_dict(root.get("result"))
     content = _as_dict(root.get("content"))
-    status = _first_str(root.get("status"), data.get("status"), result.get("status")).lower()
+    status = _first_str(
+        root.get("status"),
+        root.get("state"),
+        root.get("task_status"),
+        root.get("phase"),
+        data.get("status"),
+        data.get("state"),
+        data.get("task_status"),
+        data.get("phase"),
+        result.get("status"),
+        result.get("state"),
+        result.get("task_status"),
+        result.get("phase"),
+    ).lower()
     video_url = _extract_video_url_from_obj(content) or _extract_video_url_from_obj(data) or _extract_video_url_from_obj(result)
+    completed_at = _first_str(
+        root.get("completed_at"),
+        root.get("finished_at"),
+        data.get("completed_at"),
+        data.get("finished_at"),
+        result.get("completed_at"),
+        result.get("finished_at"),
+    )
+    progress_raw = root.get("progress")
+    if progress_raw in (None, ""):
+        progress_raw = data.get("progress")
+    if progress_raw in (None, ""):
+        progress_raw = result.get("progress")
+    try:
+        progress_value = float(progress_raw)
+    except Exception:
+        progress_value = -1.0
+    if video_url and (completed_at or progress_value >= 100.0):
+        status = status or "completed"
+        if status in {"queued", "pending", "processing", "running", "in_progress"}:
+            status = "completed"
     error_detail = ""
     if status in _FAILED_STATUSES:
         error_detail = _first_str(root.get("error"), root.get("message"), data.get("error"), data.get("message"), result.get("error"), result.get("message"))
@@ -1017,11 +1051,11 @@ async def resolve_viral_video_share_link(
 class ViralRemixStartBody(BaseModel):
     original_video_url: str = Field(..., min_length=8)
     character_image_url: str = ""
-    product_image_url: str = Field(..., min_length=8)
+    product_image_url: str = ""
     prompt: str = ""
     audio_prompt: str = ""
     narration_script: str = ""
-    model: str = "doubao-seedance-2-0-260128"
+    model: str = "grok-imagine-video-1.5-preview"
     ratio: str = "9:16"
     resolution: str = "720p"
     duration: int = 10
@@ -1033,7 +1067,7 @@ class ViralRemixStartBody(BaseModel):
 
 class ViralRemixBillingEstimateBody(BaseModel):
     original_video_url: str = Field(..., min_length=8)
-    model: str = "doubao-seedance-2-0-260128"
+    model: str = "grok-imagine-video-1.5-preview"
     duration: int = 10
     narration_script: str = ""
 
@@ -1099,13 +1133,41 @@ def _normalize_seedance_model(raw: str) -> str:
         "seedance-2-0-pro-250528": "doubao-seedance-2-0-260128",
         "seedance-2-0-260128": "doubao-seedance-2-0-260128",
         "seedance-2-0-fast-260128": "doubao-seedance-2-0-fast-260128",
+        "grok-imagine-video-1.5-preview": "grok-imagine-video-1.5-preview",
+        "grok-imagine-1.0-video": "grok-imagine-video-1.5-preview",
+        "grok-video-3": "grok-imagine-video-1.5-preview",
+        "yingmeng1.5plus": "grok-imagine-video-1.5-preview",
+        "影梦1.5plus": "grok-imagine-video-1.5-preview",
     }
-    return aliases.get(value, value or "doubao-seedance-2-0-260128")
+    return aliases.get(value, value or "grok-imagine-video-1.5-preview")
 
 
 def _normalize_remix_model(raw: str) -> str:
-    """Product replacement is an edit task; force Pro for better reference obedience."""
-    return "doubao-seedance-2-0-260128"
+    value = _normalize_seedance_model(raw)
+    if value == "doubao-seedance-2-0-fast-260128":
+        return "doubao-seedance-2-0-260128"
+    return value
+
+
+def _is_grok_remix_model(raw: str) -> bool:
+    return _normalize_remix_model(raw) == "grok-imagine-video-1.5-preview"
+
+
+def _provider_video_model_for_remix(raw: str) -> str:
+    normalized = (raw or "").strip().lower().replace("_", "-").replace(" ", "")
+    if normalized in {
+        "grok-imagine-video-1.5-preview",
+        "grok-imagine-1.0-video",
+        "grok-video-3",
+        "yingmeng1.5plus",
+        "褰辨ⅵ1.5plus",
+    }:
+        return "grok-video-3"
+    return _normalize_remix_model(raw)
+
+
+def _has_remix_reference(body: ViralRemixStartBody) -> bool:
+    return bool((body.product_image_url or "").strip() or (body.character_image_url or "").strip())
 
 
 def _normalize_duration(value: int) -> int:
@@ -1273,26 +1335,42 @@ def _remix_prompt(body: ViralRemixStartBody) -> str:
     return " ".join(parts)
 
 
-def _remix_prompt(body: ViralRemixStartBody) -> str:
+def _remix_prompt(body: ViralRemixStartBody, *, use_source_video_reference: bool = True) -> str:
     """Use an ASCII prompt here to avoid mojibake from older mixed-encoding copies."""
     extra = _compact_prompt_text(body.prompt, 1800)
     audio_extra = _compact_prompt_text(body.audio_prompt, 1200)
-    parts = [
-        "Use the input video as the only source of camera motion, timing, composition, hand actions, subject blocking, and scene continuity.",
-        "Replace the old product seen in the input video with the target product from the first reference image.",
-        "The first reference image is the only product identity source. The final video must show that exact product, not the old product from the source video and not a similar redesigned variant.",
-        "Preserve the target product exactly: package shape, materials, color palette, label layout, logo position, cap, proportions, and visible markings.",
-        "Keep the original video's scene, performer motion, framing, pacing, and hand interaction whenever possible. Only the product itself should change.",
-        "Remove subtitles, stickers, watermarks, UI text, marketing copy, and unrelated logos from the final video. Do not add new text overlays.",
-        "Strict anti-watermark rule: never reproduce Douyin/TikTok/short-video platform watermarks, musical-note icons, account IDs, user handles, translucent corner logos, bottom-right logos, or any app interface overlays from the source video.",
-        "If the source video contains a visible watermark or account text, treat it as unwanted noise and reconstruct that area as clean natural scene background instead of copying it.",
-        "Material binding: the video_url item is the source motion video, and the first reference_image item is the replacement product image.",
-    ]
+    if use_source_video_reference:
+        parts = [
+            "Use the input video as the only source of camera motion, timing, composition, hand actions, subject blocking, and scene continuity.",
+            "Replace the old product seen in the input video with the target product from the first reference image.",
+            "The first reference image is the only product identity source. The final video must show that exact product, not the old product from the source video and not a similar redesigned variant.",
+            "Preserve the target product exactly: package shape, materials, color palette, label layout, logo position, cap, proportions, and visible markings.",
+            "Keep the original video's scene, performer motion, framing, pacing, and hand interaction whenever possible. Only the product itself should change.",
+            "Remove subtitles, stickers, watermarks, UI text, marketing copy, and unrelated logos from the final video. Do not add new text overlays.",
+            "Strict anti-watermark rule: never reproduce Douyin/TikTok/short-video platform watermarks, musical-note icons, account IDs, user handles, translucent corner logos, bottom-right logos, or any app interface overlays from the source video.",
+            "If the source video contains a visible watermark or account text, treat it as unwanted noise and reconstruct that area as clean natural scene background instead of copying it.",
+            "Material binding: the video_url item is the source motion video, and the first reference_image item is the replacement product image.",
+        ]
+    else:
+        parts = [
+            "Create a vertical ecommerce short video from the reference product image.",
+            "The first reference image is the only product identity source. The final video must show that exact product and must not redesign it into a similar variant.",
+            "Preserve the target product exactly: package shape, materials, color palette, label layout, logo position, cap, proportions, and visible markings.",
+            "Use premium short-video advertising language: smooth camera movement, clean composition, stable lighting, clear product focus, natural scene continuity, and no abrupt motion.",
+            "Remove subtitles, stickers, watermarks, UI text, marketing copy, and unrelated logos from the final video. Do not add new text overlays.",
+            "Use the product image as the main visual anchor. Keep the video polished, realistic, and suitable for high-quality ecommerce delivery.",
+        ]
     if body.use_character_reference and (body.character_image_url or "").strip():
-        parts.append(
-            "If a second reference_image is present, use it only for character identity such as face, hairstyle, and styling. "
-            "Product replacement has higher priority than character reference."
-        )
+        if use_source_video_reference:
+            parts.append(
+                "If a second reference_image is present, use it only for character identity such as face, hairstyle, and styling. "
+                "Product replacement has higher priority than character reference."
+            )
+        else:
+            parts.append(
+                "If multiple reference images are present, keep the product identity from the first image as the highest priority. "
+                "Use any additional reference image only to stabilize character styling."
+            )
     if body.generate_audio:
         parts.append(
             "Audio rule: do not keep the source video's original narration, music, platform sounds, or voice identity unless the user explicitly asks for it. "
@@ -1312,8 +1390,10 @@ def _remix_segment_prompt(
     index: int,
     total: int,
     segment_script_override: Optional[str] = None,
+    *,
+    use_source_video_reference: bool = True,
 ) -> str:
-    base = _remix_prompt(body)
+    base = _remix_prompt(body, use_source_video_reference=use_source_video_reference)
     if segment_script_override is None:
         script_segments = _split_narration_script(body.narration_script, total)
         segment_script = script_segments[index] if 0 <= index < len(script_segments) else ""
@@ -1331,6 +1411,11 @@ def _remix_segment_prompt(
         "Keep character identity, product identity, scene logic, and motion style continuous across adjacent segments. "
         "Apply the anti-watermark rule independently to this segment even if the watermark appears only in this segment."
     )
+    if not use_source_video_reference:
+        prompt = (
+            f"{base} This request is segment {index + 1} of {total} from one longer ecommerce concept. "
+            "Keep character identity, product identity, scene logic, and visual rhythm continuous across adjacent segments."
+        )
     if segment_script and body.generate_audio:
         prompt += (
             f" Narration script for segment {index + 1}: {segment_script} "
@@ -1521,10 +1606,13 @@ async def _submit_seedance_remix_task(
     content: List[Dict[str, Any]] = [
         {"type": "text", "text": prompt_text},
         {"type": "video_url", "video_url": {"url": _quote_public_url(original_video_url)}},
-        {"type": "image_url", "image_url": {"url": product_url}, "role": "reference_image"},
     ]
-    if body.use_character_reference and character_url:
+    if product_url:
+        content.append({"type": "image_url", "image_url": {"url": product_url}, "role": "reference_image"})
+    if character_url:
         content.append({"type": "image_url", "image_url": {"url": character_url}, "role": "reference_image"})
+    if len(content) < 3:
+        raise RuntimeError("视频复刻至少需要一张人物图或产品图作为参考素材。")
     request_body: Dict[str, Any] = {
         "model": _normalize_remix_model(body.model),
         "prompt": prompt_text,
@@ -1557,6 +1645,105 @@ async def _submit_seedance_remix_task(
     if not task_id:
         raise RuntimeError(f"Seedance returned no task id: {json.dumps(payload, ensure_ascii=False)[:400]}")
     return {"task_id": task_id, "raw": payload}
+
+
+def _openmind_size_for_ratio(ratio: str) -> str:
+    normalized = (ratio or "9:16").strip()
+    if normalized == "16:9":
+        return "1280x720"
+    if normalized == "1:1":
+        return "1024x1024"
+    return "720x1280"
+
+
+async def _submit_grok_remix_task(
+    *,
+    api_base: str,
+    api_key: str,
+    body: ViralRemixStartBody,
+    prompt_text: str,
+) -> Dict[str, Any]:
+    product_url = _quote_public_url(body.product_image_url)
+    character_url = _quote_public_url(body.character_image_url)
+    primary_reference = product_url or character_url
+    if not primary_reference:
+        raise RuntimeError("影梦 1.5 Plus 至少需要一张人物图或产品图作为参考图。")
+    images: List[str] = [primary_reference]
+    if product_url and product_url != primary_reference:
+        images.append(product_url)
+    if character_url and character_url != primary_reference and character_url != product_url:
+        images.append(character_url)
+    request_body: Dict[str, Any] = {
+        "model": _provider_video_model_for_remix(body.model),
+        "prompt": prompt_text,
+        "image": primary_reference,
+        "image_url": primary_reference,
+        "images": images,
+        "seconds": str(_normalize_duration(body.duration)),
+        "duration": str(_normalize_duration(body.duration)),
+        "aspect_ratio": (body.ratio or "9:16").strip() or "9:16",
+        "size": _openmind_size_for_ratio(body.ratio),
+        "resolution": _normalize_resolution(body.resolution),
+    }
+    url = _endpoint(api_base, "/openmind/v1/videos")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "lobster-online/viral-remix",
+            },
+            json=request_body,
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(_pick_error_detail(resp))
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise RuntimeError("OpenMind Grok submit returned invalid JSON") from exc
+    task_id = _extract_task_id(payload)
+    if not task_id:
+        raise RuntimeError(f"OpenMind Grok returned no task id: {json.dumps(payload, ensure_ascii=False)[:400]}")
+    return {"task_id": task_id, "raw": payload}
+
+
+async def _poll_openmind_video_until_done(api_base: str, api_key: str, task_id: str) -> Dict[str, Any]:
+    url = _endpoint(api_base, f"/openmind/v1/videos/{task_id}")
+    last_status = "queued"
+    for _ in range(180):
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                    "User-Agent": "lobster-online/viral-remix",
+                },
+            )
+        if resp.status_code >= 400:
+            raise RuntimeError(_pick_error_detail(resp))
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            raise RuntimeError("OpenMind Grok poll returned invalid JSON") from exc
+        status, video_url, error_detail = _extract_seedance_poll(payload)
+        if status:
+            last_status = status
+        logger.info(
+            "[viral_video_remix] openmind poll task_id=%s status=%s has_video=%s progress=%s",
+            task_id,
+            status or "",
+            bool(video_url),
+            _first_str(payload.get("progress"), _as_dict(payload.get("data")).get("progress"), _as_dict(payload.get("result")).get("progress")),
+        )
+        if status in _FAILED_STATUSES:
+            raise RuntimeError(error_detail or f"OpenMind Grok task failed: {task_id}")
+        if status in _SUCCESS_STATUSES and video_url:
+            return {"task_id": task_id, "status": status, "video_url": _quote_public_url(video_url), "raw": payload}
+        await asyncio.sleep(8)
+    raise RuntimeError(f"OpenMind Grok task polling timed out: {task_id} status={last_status}")
 
 
 async def _poll_seedance_until_done(api_base: str, api_key: str, task_id: str) -> Dict[str, Any]:
@@ -1692,6 +1879,68 @@ def _job_status_response(job: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _recover_viral_remix_status_from_disk(job_id: str) -> Optional[Dict[str, Any]]:
+    job_dir = _viral_remix_jobs_root() / job_id
+    if not job_dir.is_dir():
+        return None
+    final_path = job_dir / "final.mp4"
+    outputs_dir = job_dir / "outputs"
+    segment_paths: List[Path] = []
+    if outputs_dir.is_dir():
+        segment_paths = sorted(outputs_dir.glob("segment_*.mp4"))
+    if final_path.is_file():
+        relative_url = f"/static/generated/viral_remix_jobs/{job_id}/final.mp4?ts={int(final_path.stat().st_mtime)}"
+        return {
+            "ok": True,
+            "task_id": job_id,
+            "job_id": job_id,
+            "status": "completed",
+            "stage": "completed",
+            "video_url": relative_url,
+            "error": "",
+            "total_segments": len(segment_paths),
+            "completed_segments": len(segment_paths),
+            "segment_duration_seconds": 0,
+            "source_duration_seconds": 0.0,
+            "narration_split_method": "",
+            "asset_id": "",
+            "segments": [{"status": "completed", "result_video_path": str(path)} for path in segment_paths],
+            "result": {"merged_video_url": relative_url},
+        }
+    if segment_paths:
+        return {
+            "ok": True,
+            "task_id": job_id,
+            "job_id": job_id,
+            "status": "running",
+            "stage": "segment_running",
+            "video_url": "",
+            "error": "",
+            "total_segments": len(segment_paths),
+            "completed_segments": len(segment_paths),
+            "segment_duration_seconds": 0,
+            "source_duration_seconds": 0.0,
+            "narration_split_method": "",
+            "asset_id": "",
+            "segments": [{"status": "completed", "result_video_path": str(path)} for path in segment_paths],
+        }
+    return {
+        "ok": False,
+        "task_id": job_id,
+        "job_id": job_id,
+        "status": "failed",
+        "stage": "failed",
+        "video_url": "",
+        "error": "本地复刻任务状态已丢失，当前这次任务无法继续轮询，请重新提交一次。",
+        "total_segments": 0,
+        "completed_segments": 0,
+        "segment_duration_seconds": 0,
+        "source_duration_seconds": 0.0,
+        "narration_split_method": "",
+        "asset_id": "",
+    }
+
+
 async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base: str, api_key: str) -> None:
     job = get_job(job_id)
     if not job:
@@ -1773,7 +2022,10 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
             async with semaphore:
                 try:
                     seg_path = Path(str(seg.get("segment_path") or "")).resolve()
-                    seg_upload_url = await _upload_local_file_to_comfly(api_base, api_key, seg_path, "video/mp4")
+                    use_grok_flow = _is_grok_remix_model(body.model)
+                    seg_upload_url = ""
+                    if not use_grok_flow:
+                        seg_upload_url = await _upload_local_file_to_comfly(api_base, api_key, seg_path, "video/mp4")
                     await _update_segment_state(
                         index,
                         stage="segment_submitted",
@@ -1781,20 +2033,31 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
                         extra={
                             "segment_video_url": seg_upload_url,
                             "narration_script": narration_segments[index] if index < len(narration_segments) else "",
+                            "submit_model": _normalize_remix_model(body.model),
                         },
                     )
-                    submit_result = await _submit_seedance_remix_task(
-                        api_base=api_base,
-                        api_key=api_key,
-                        body=body,
-                        original_video_url=seg_upload_url,
-                        prompt_text=_remix_segment_prompt(
-                            body,
-                            index,
-                            len(segments),
-                            narration_segments[index] if index < len(narration_segments) else "",
-                        ),
+                    segment_prompt = _remix_segment_prompt(
+                        body,
+                        index,
+                        len(segments),
+                        narration_segments[index] if index < len(narration_segments) else "",
+                        use_source_video_reference=not use_grok_flow,
                     )
+                    if use_grok_flow:
+                        submit_result = await _submit_grok_remix_task(
+                            api_base=api_base,
+                            api_key=api_key,
+                            body=body,
+                            prompt_text=segment_prompt,
+                        )
+                    else:
+                        submit_result = await _submit_seedance_remix_task(
+                            api_base=api_base,
+                            api_key=api_key,
+                            body=body,
+                            original_video_url=seg_upload_url,
+                            prompt_text=segment_prompt,
+                        )
                     task_id = str(submit_result.get("task_id") or "").strip()
                     await _update_segment_state(
                         index,
@@ -1802,7 +2065,11 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
                         status="polling",
                         extra={"remote_task_id": task_id},
                     )
-                    poll_result = await _poll_seedance_until_done(api_base, api_key, task_id)
+                    poll_result = await (
+                        _poll_openmind_video_until_done(api_base, api_key, task_id)
+                        if use_grok_flow
+                        else _poll_seedance_until_done(api_base, api_key, task_id)
+                    )
                     output_url = str(poll_result.get("video_url") or "").strip()
                     local_output = outputs_dir / f"segment_{index + 1:02d}.mp4"
                     await _download_to_file(output_url, local_output, timeout_seconds=300.0)
@@ -1843,7 +2110,7 @@ async def _run_viral_remix_job(job_id: str, body: ViralRemixStartBody, api_base:
         saved_asset = _save_local_video_to_asset(
             path=merged_final,
             user_id=int(job.get("user_id") or 0),
-            prompt=_remix_prompt(body),
+            prompt=_remix_prompt(body, use_source_video_reference=not _is_grok_remix_model(body.model)),
             model=_normalize_remix_model(body.model),
             tags="auto,viral.video.remix,merged_final",
             meta={
@@ -1891,6 +2158,8 @@ async def start_viral_video_remix(
     api_base, api_key = _resolve_local_comfly_credentials(request)
     if not body.billing_confirmed:
         raise HTTPException(status_code=400, detail="请先确认视频复刻预计消耗的算力后再提交任务")
+    if not _has_remix_reference(body):
+        raise HTTPException(status_code=400, detail="请至少提供一张人物图或产品图作为复刻参考素材。")
     estimate_tmp_dir = _viral_remix_jobs_root() / "billing_estimate"
     estimate_tmp_dir.mkdir(parents=True, exist_ok=True)
     estimate_tmp_path = estimate_tmp_dir / f"start_{current_user.id}_{int(time.time() * 1000)}.mp4"
@@ -1986,6 +2255,11 @@ async def poll_viral_video_remix_task(
     job = get_job(safe_task)
     if job is not None:
         return _job_status_response(job)
+    recovered = _recover_viral_remix_status_from_disk(safe_task)
+    if recovered is not None:
+        return recovered
+    if not safe_task.startswith("task_"):
+        raise HTTPException(status_code=404, detail="未找到该复刻任务")
         """
         if int(job.get("user_id") or 0) != int(current_user.id or 0):
             raise HTTPException(status_code=404, detail="未找到复刻任务")

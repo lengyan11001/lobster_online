@@ -76,6 +76,41 @@
     try { return JSON.stringify(detail); } catch (e) { return String(detail); }
   }
 
+  function isGrokRemixModel(model) {
+    var value = String(model || '').toLowerCase().replace(/\s+/g, '');
+    return value === 'grok-imagine-video-1.5-preview' || value === 'yingmeng1.5plus' || value === '\u5f71\u68a61.5plus';
+  }
+
+  function remixModelDisplayName(model) {
+    return isGrokRemixModel(model) ? '\u5f71\u68a6 1.5 Plus' : '\u5f71\u68a6 2.0 Pro';
+  }
+
+  function syncRemixModelUi() {
+    var modelEl = $('viralRemixModelSelect');
+    var durationEl = $('viralRemixDurationSelect');
+    var hintEl = $('viralRemixModelHint');
+    if (!modelEl) return;
+    var model = String(modelEl.value || 'doubao-seedance-2-0-260128');
+    if (durationEl) {
+      if (isGrokRemixModel(model)) {
+        durationEl.value = '10';
+        Array.prototype.forEach.call(durationEl.options || [], function(option) {
+          option.disabled = String(option.value || '') !== '10';
+        });
+      } else {
+        Array.prototype.forEach.call(durationEl.options || [], function(option) {
+          option.disabled = false;
+        });
+        if (!durationEl.value) durationEl.value = '10';
+      }
+    }
+    if (hintEl) {
+      hintEl.textContent = isGrokRemixModel(model)
+        ? '\u5f71\u68a6 1.5 Plus \u9ed8\u8ba4\u6309 10s \u63d0\u4ea4\uff0c\u4f18\u5148\u7528\u4ea7\u54c1\u53c2\u8003\u56fe\u751f\u6210\u9ad8\u8d28\u91cf\u6210\u7247\u3002'
+        : '\u5f71\u68a6 2.0 Pro \u66f4\u9002\u5408\u539f\u89c6\u9891\u4ea7\u54c1\u66ff\u6362\u590d\u523b\uff0c\u4f1a\u4fdd\u7559\u66f4\u5f3a\u7684\u52a8\u4f5c\u4e0e\u8fd0\u955c\u7ea6\u675f\u3002';
+    }
+  }
+
   function formatNumber(value, digits) {
     var n = Number(value || 0);
     if (!isFinite(n)) n = 0;
@@ -216,13 +251,13 @@
   function videoStatusMeta(status) {
     var value = String(status || '').toLowerCase();
     var map = {
-      queued: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85 Seedance \u5206\u914d\u751f\u6210\u8d44\u6e90\u3002'],
-      pending: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85 Seedance \u5206\u914d\u751f\u6210\u8d44\u6e90\u3002'],
-      submitted: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85 Seedance \u5206\u914d\u751f\u6210\u8d44\u6e90\u3002'],
-      created: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85 Seedance \u5206\u914d\u751f\u6210\u8d44\u6e90\u3002'],
-      running: ['\u6b63\u5728\u751f\u6210\u89c6\u9891', 'Seedance \u6b63\u5728\u6309\u539f\u89c6\u9891\u7684\u52a8\u4f5c\u3001\u8fd0\u955c\u548c\u8282\u594f\u751f\u6210\u590d\u523b\u7ed3\u679c\u3002'],
-      processing: ['\u6b63\u5728\u751f\u6210\u89c6\u9891', 'Seedance \u6b63\u5728\u6309\u539f\u89c6\u9891\u7684\u52a8\u4f5c\u3001\u8fd0\u955c\u548c\u8282\u594f\u751f\u6210\u590d\u523b\u7ed3\u679c\u3002'],
-      in_progress: ['\u6b63\u5728\u751f\u6210\u89c6\u9891', 'Seedance \u6b63\u5728\u6309\u539f\u89c6\u9891\u7684\u52a8\u4f5c\u3001\u8fd0\u955c\u548c\u8282\u594f\u751f\u6210\u590d\u523b\u7ed3\u679c\u3002'],
+      queued: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85\u89c6\u9891\u751f\u6210\u8d44\u6e90\u3002'],
+      pending: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85\u89c6\u9891\u751f\u6210\u8d44\u6e90\u3002'],
+      submitted: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85\u89c6\u9891\u751f\u6210\u8d44\u6e90\u3002'],
+      created: ['\u7b49\u5f85\u5f00\u59cb', '\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85\u89c6\u9891\u751f\u6210\u8d44\u6e90\u3002'],
+      running: ['\u6b63\u5728\u751f\u6210\u89c6\u9891', '\u6b63\u5728\u6839\u636e\u5f53\u524d\u6a21\u578b\u4e0e\u7d20\u6750\u751f\u6210\u590d\u523b\u6210\u7247\u3002'],
+      processing: ['\u6b63\u5728\u751f\u6210\u89c6\u9891', '\u6b63\u5728\u6839\u636e\u5f53\u524d\u6a21\u578b\u4e0e\u7d20\u6750\u751f\u6210\u590d\u523b\u6210\u7247\u3002'],
+      in_progress: ['\u6b63\u5728\u751f\u6210\u89c6\u9891', '\u6b63\u5728\u6839\u636e\u5f53\u524d\u6a21\u578b\u4e0e\u7d20\u6750\u751f\u6210\u590d\u523b\u6210\u7247\u3002'],
       success: ['\u751f\u6210\u5b8c\u6210', '\u89c6\u9891\u5df2\u7ecf\u751f\u6210\u5b8c\u6210\u3002'],
       succeeded: ['\u751f\u6210\u5b8c\u6210', '\u89c6\u9891\u5df2\u7ecf\u751f\u6210\u5b8c\u6210\u3002'],
       done: ['\u751f\u6210\u5b8c\u6210', '\u89c6\u9891\u5df2\u7ecf\u751f\u6210\u5b8c\u6210\u3002'],
@@ -398,6 +433,51 @@
       .filter(function(item, index, arr) { return item && arr.indexOf(item) === index; });
   }
 
+  function hasCharacterInput(characterUrl) {
+    var current = String(characterUrl || (($('viralCharacterUrlInput') || {}).value || state.characterUrl || '')).trim();
+    return !!current || !!state.personImage;
+  }
+
+  function hasProductInput(productUrl) {
+    var current = String(productUrl || (($('viralProductUrlInput') || {}).value || state.productUrl || '')).trim();
+    return !!current || !!state.productImage || !!((state.productImages || []).length);
+  }
+
+  function autoEnableCharacterReference() {
+    var checkbox = $('viralUseCharacterCheck');
+    if (checkbox && hasCharacterInput()) checkbox.checked = true;
+  }
+
+  function prepareCharacterReference() {
+    var raw = (($('viralCharacterUrlInput') || {}).value || state.characterUrl || '').trim();
+    if (raw) return Promise.resolve(raw);
+    if (!state.personImage) return Promise.resolve('');
+    showMessage('\u6b63\u5728\u4e0a\u4f20\u4eba\u7269\u53c2\u8003\u56fe...', false);
+    return uploadAsset(state.personImage).then(function(data) {
+      var url = String(data.source_url || '').trim();
+      state.characterUrl = url;
+      if ($('viralCharacterUrlInput')) $('viralCharacterUrlInput').value = url;
+      autoEnableCharacterReference();
+      showMessage('\u4eba\u7269\u53c2\u8003\u56fe\u5df2\u5c31\u7eea\u3002', false);
+      return url;
+    });
+  }
+
+  function prepareProductReference() {
+    var raw = (($('viralProductUrlInput') || {}).value || state.productUrl || '').trim();
+    var urlList = parseProductUrlList(raw);
+    var localImages = (state.productImages || []).filter(Boolean);
+    var useGeneratedReference = !!(($('viralCleanProductCheck') || {}).checked);
+    if (!localImages.length && !urlList.length) return Promise.resolve('');
+    if (state.cleanedProductUrl) return Promise.resolve(state.cleanedProductUrl);
+    if (localImages.length > 1 || urlList.length > 1 || useGeneratedReference) {
+      return cleanProductReference(urlList);
+    }
+    if (raw) return Promise.resolve(raw);
+    if (state.productImage) return uploadProductImage();
+    return Promise.resolve('');
+  }
+
   function renderCharacterResult(url, done) {
     var surface = $('viralCharacterResult');
     if (!surface) return;
@@ -505,6 +585,7 @@
           if (!url) throw new Error('\u4eba\u7269\u56db\u89c6\u56fe\u6ca1\u6709\u8fd4\u56de\u53ef\u7528\u56fe\u7247');
           state.characterUrl = url;
           if ($('viralCharacterUrlInput')) $('viralCharacterUrlInput').value = url;
+          autoEnableCharacterReference();
           showCharacterStatus('\u5df2\u751f\u6210\uff0c\u6b63\u5728\u52a0\u8f7d\u9884\u89c8\u56fe...', false);
           renderCharacterResult(url, function(ok) {
             showCharacterStatus(ok ? '\u5df2\u751f\u6210\uff0c\u53ef\u4ee5\u7ee7\u7eed\u4e0a\u4f20\u4ea7\u54c1\u56fe\u548c\u539f\u89c6\u9891\u3002' : '\u5df2\u751f\u6210\uff0c\u4f46\u9884\u89c8\u56fe\u52a0\u8f7d\u5931\u8d25\u3002', !ok);
@@ -631,8 +712,6 @@
     var originalVideoUrl = (($('viralOriginalVideoUrlInput') || {}).value || state.originalVideoUrl || '').trim();
     var characterUrl = (($('viralCharacterUrlInput') || {}).value || state.characterUrl || '').trim();
     var productUrl = (($('viralProductUrlInput') || {}).value || state.productUrl || '').trim();
-    var productUrlList = parseProductUrlList(productUrl);
-    var useGeneratedReference = !!(($('viralCleanProductCheck') || {}).checked);
     setBusy(true);
     Promise.resolve()
       .then(function() {
@@ -641,27 +720,26 @@
       })
       .then(function(url) {
         originalVideoUrl = url || originalVideoUrl;
-        if (useGeneratedReference) {
-          if (state.cleanedProductUrl) return state.cleanedProductUrl;
-          return cleanProductReference(productUrlList);
-        }
-        if (!productUrl && state.productImage) return uploadProductImage();
-        if (!productUrl && (state.productImages || []).length > 1) {
-          throw new Error('\u5df2\u9009\u62e9\u591a\u5f20\u4ea7\u54c1\u56fe\uff0c\u8bf7\u4fdd\u6301\u52fe\u9009\u201c\u751f\u6210\u4ea7\u54c1\u53c2\u8003\u56fe\u201d\u540e\u518d\u5f00\u59cb\u590d\u523b\u3002');
-        }
-        return productUrl;
+        return prepareCharacterReference();
+      })
+      .then(function(url) {
+        characterUrl = url || characterUrl;
+        return prepareProductReference();
       })
       .then(function(url) {
         productUrl = url || productUrl;
-        if (!originalVideoUrl || !productUrl) {
-          throw new Error('\u7f3a\u5c11\u539f\u89c6\u9891\u6216\u4ea7\u54c1\u56fe URL\uff0c\u8bf7\u5148\u4e0a\u4f20\u6216\u751f\u6210\u7d20\u6750\u3002');
+        if (!originalVideoUrl) {
+          throw new Error('\u8bf7\u5148\u63d0\u4f9b\u539f\u89c6\u9891\uff0c\u53ef\u4ee5\u4e0a\u4f20\u672c\u5730\u89c6\u9891\u6216\u7c98\u8d34\u5206\u4eab\u94fe\u63a5\u3002');
+        }
+        if (!characterUrl && !productUrl) {
+          throw new Error('\u8bf7\u81f3\u5c11\u63d0\u4f9b\u4eba\u7269\u56fe\u6216\u4ea7\u54c1\u56fe\uff0c\u7cfb\u7edf\u4f1a\u5728\u63d0\u4ea4\u65f6\u81ea\u52a8\u5904\u7406\u53c2\u8003\u7d20\u6750\u3002');
         }
         var audioPrompt = (($('viralRemixAudioPrompt') || {}).value || '').trim();
         var narrationScript = (($('viralRemixNarrationScript') || {}).value || '').trim();
         var body = {
           original_video_url: ensureRemoteUrl(originalVideoUrl, '\u539f\u89c6\u9891', false),
           character_image_url: characterUrl ? ensureRemoteUrl(characterUrl, '\u4eba\u7269\u56db\u89c6\u56fe', true) : '',
-          product_image_url: ensureRemoteUrl(productUrl, '\u4ea7\u54c1\u56fe', true),
+          product_image_url: productUrl ? ensureRemoteUrl(productUrl, '\u4ea7\u54c1\u56fe', true) : '',
           prompt: (($('viralRemixPrompt') || {}).value || '').trim(),
           audio_prompt: audioPrompt,
           narration_script: narrationScript,
@@ -670,7 +748,7 @@
           resolution: (($('viralRemixResolutionSelect') || {}).value || '720p'),
           duration: Number((($('viralRemixDurationSelect') || {}).value || 10)),
           generate_audio: !!(($('viralRemixAudioCheck') || {}).checked || audioPrompt || narrationScript),
-          use_character_reference: !!(($('viralUseCharacterCheck') || {}).checked && characterUrl),
+          use_character_reference: !!characterUrl,
           watermark: false,
           billing_confirmed: false
         };
@@ -679,7 +757,7 @@
           return confirmRemixBilling(estimate).then(function(ok) {
             if (!ok) throw new Error('\u5df2\u53d6\u6d88\u63d0\u4ea4\u3002');
             body.billing_confirmed = true;
-            showMessage('\u6b63\u5728\u63d0\u4ea4 Seedance \u4ea7\u54c1\u66ff\u6362\u4efb\u52a1...', false);
+            showMessage('\u6b63\u5728\u63d0\u4ea4' + remixModelDisplayName(body.model) + '\u89c6\u9891\u4efb\u52a1...', false);
             return fetch(baseUrl() + '/api/viral-video-remix/seedance/start', {
               method: 'POST',
               headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
@@ -690,9 +768,9 @@
       })
       .then(function(resp) {
         return resp.json().catch(function() { return {}; }).then(function(data) {
-          if (!resp.ok) throw new Error(normalizeApiError(data, 'Seedance \u4efb\u52a1\u63d0\u4ea4\u5931\u8d25'));
+          if (!resp.ok) throw new Error(normalizeApiError(data, '\u89c6\u9891\u4efb\u52a1\u63d0\u4ea4\u5931\u8d25'));
           state.taskId = data.task_id || '';
-          if (!state.taskId) throw new Error('Seedance \u6ca1\u6709\u8fd4\u56de\u4efb\u52a1 ID');
+          if (!state.taskId) throw new Error('\u672a\u8fd4\u56de\u4efb\u52a1 ID');
           showMessage('\u4efb\u52a1\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u751f\u6210\u89c6\u9891\u3002', false);
           renderVideoResult('', 'running', true);
           pollTask(true);
@@ -719,7 +797,7 @@
             var videoUrl = data.video_url || '';
             if (['failed', 'failure', 'error', 'cancelled', 'canceled', 'expired'].indexOf(status) >= 0 || data.ok === false) {
               renderVideoResult('', status || 'failed', false);
-              showMessage(data.error || 'Seedance \u4efb\u52a1\u5931\u8d25\uff0c\u8bf7\u8c03\u6574\u7d20\u6750\u6216\u8865\u5145\u8981\u6c42\u540e\u91cd\u8bd5\u3002', true);
+              showMessage(data.error || '\u89c6\u9891\u4efb\u52a1\u5931\u8d25\uff0c\u8bf7\u8c03\u6574\u7d20\u6750\u6216\u8865\u5145\u8981\u6c42\u540e\u91cd\u8bd5\u3002', true);
               return;
             }
             if (videoUrl || ['success', 'succeeded', 'done', 'completed'].indexOf(status) >= 0) {
@@ -751,6 +829,12 @@
     if (personInput) personInput.addEventListener('change', function(e) {
       state.personImage = (e.target.files || [])[0] || null;
       setFilePreview('viralPersonPreview', state.personImage, 'image');
+      if (state.personImage) {
+        state.characterUrl = '';
+        if ($('viralCharacterUrlInput')) $('viralCharacterUrlInput').value = '';
+        autoEnableCharacterReference();
+        showMessage('\u5df2\u9009\u62e9\u4eba\u7269\u56fe\uff0c\u63d0\u4ea4\u590d\u523b\u4efb\u52a1\u65f6\u4f1a\u81ea\u52a8\u4f5c\u4e3a\u4eba\u7269\u53c2\u8003\u4f7f\u7528\u3002', false);
+      }
     });
     var videoBtn = $('viralOriginalVideoPickBtn');
     var videoInput = $('viralOriginalVideoInput');
@@ -802,6 +886,7 @@
         showMessage(err && err.message ? err.message : '\u4ea7\u54c1\u5168\u89c6\u56fe\u751f\u6210\u5931\u8d25', true);
       }).finally(function() { setBusy(false); });
     });
+    if ($('viralRemixModelSelect')) $('viralRemixModelSelect').addEventListener('change', syncRemixModelUi);
     if ($('viralRemixStartBtn')) $('viralRemixStartBtn').addEventListener('click', startRemix);
   }
 
@@ -814,8 +899,12 @@
       if ($('viralProductInput')) $('viralProductInput').setAttribute('multiple', 'multiple');
       if ($('viralProductPickBtn')) $('viralProductPickBtn').textContent = '\u9009\u62e9\u4ea7\u54c1\u56fe';
       if ($('viralCleanProductBtn')) $('viralCleanProductBtn').textContent = '\u751f\u6210\u4ea7\u54c1\u5168\u89c6\u56fe';
+      if ($('viralUploadVideoBtn')) $('viralUploadVideoBtn').textContent = '\u7acb\u5373\u4e0a\u4f20\uff08\u53ef\u9009\uff09';
+      if ($('viralUploadProductBtn')) $('viralUploadProductBtn').textContent = '\u7acb\u5373\u4e0a\u4f20\uff08\u53ef\u9009\uff09';
       showProductStatus('\u4e0a\u4f20\u4ea7\u54c1\u56fe\u540e\uff0c\u5efa\u8bae\u5148\u70b9\u4e0a\u65b9\u6309\u94ae\u751f\u6210\u5168\u89c6\u56fe\u3002', false);
+      if ($('viralRemixModelSelect')) $('viralRemixModelSelect').value = 'doubao-seedance-2-0-260128';
       if ($('viralRemixDurationSelect')) $('viralRemixDurationSelect').value = '10';
+      syncRemixModelUi();
       renderCharacterResult('');
       renderProductReferenceResult('');
       renderVideoResult('', '');
