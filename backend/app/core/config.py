@@ -164,7 +164,8 @@ class Settings(BaseSettings):
     comfly_veo_submit_path: str = "/v2/videos/generations"
     """轮询视频任务 GET：以 / 开头则相对主机根（与 submit 同为 v2）；{task_id} 为 submit 返回的完整 id（含 video_ 前缀）"""
     comfly_veo_poll_path_template: str = "/v2/videos/generations/{task_id}"
-    comfly_daihuo_video_channel: str = "yunwu"
+    comfly_daihuo_video_channel: str = "openmind"
+    comfly_daihuo_grok_video_model: str = "grok-imagine-video-1.5-preview"
     comfly_daihuo_yunwu_video_model: str = "veo3.1"
 
     def cors_origins_list(self) -> List[str]:

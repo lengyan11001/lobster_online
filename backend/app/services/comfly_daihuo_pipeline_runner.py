@@ -117,6 +117,7 @@ def build_pipeline_input(
     video_channel: Optional[str] = None,
     video_base_url: Optional[str] = None,
     video_model: Optional[str] = None,
+    video_fallbacks: Optional[List[Dict[str, Any]]] = None,
     video_fallback_channel: Optional[str] = None,
     video_fallback_base_url: Optional[str] = None,
     video_fallback_model: Optional[str] = None,
@@ -159,6 +160,8 @@ def build_pipeline_input(
         inp["video_base_url"] = _api_base_for_pipeline(video_base_url)
     if (video_model or "").strip():
         inp["video_model"] = video_model.strip()
+    if video_fallbacks:
+        inp["video_fallbacks"] = list(video_fallbacks)
     if (video_fallback_channel or "").strip():
         inp["video_fallback_channel"] = video_fallback_channel.strip()
     if (video_fallback_base_url or "").strip():

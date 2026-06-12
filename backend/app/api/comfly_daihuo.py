@@ -14,6 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -48,6 +49,7 @@ from .auth import _ServerUser, get_current_user_media_edit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_VIDEO_PROVIDER_POLICY_FEATURE = "seedance_tvc"
 
 
 class ComflyDaihuoPipelinePayload(BaseModel):
@@ -78,9 +80,10 @@ class ComflyDaihuoPipelinePayload(BaseModel):
     image_model_fallback: Optional[str] = Field(None, description="角色/分镜图主模型失败时的兜底模型，默认 nano-banana-2")
 
 
-    video_channel: Optional[str] = Field(None, description="Video provider channel: comfly or yunwu. Default comfly.")
-    video_base_url: Optional[str] = Field(None, description="Optional video provider base URL. Yunwu uses https://yunwu.ai.")
-    video_model: Optional[str] = Field(None, description="Video generation model. Comfly default veo3.1-fast; Yunwu can use veo3.1.")
+    video_channel: Optional[str] = Field(None, description="Video provider channel: openmind, comfly, or yunwu. Default openmind for Grok.")
+    video_base_url: Optional[str] = Field(None, description="Optional video provider base URL. Defaults to the server-side Comfly proxy.")
+    video_model: Optional[str] = Field(None, description="Video generation model. OpenMind default grok-imagine-video-1.5-preview.")
+    video_fallbacks: List[Dict[str, Any]] = Field(default_factory=list, description="Ordered video fallback providers, each item supports channel/base_url/model.")
     video_fallback_channel: Optional[str] = Field(None, description="Video fallback provider channel. Default comfly when primary is Yunwu.")
     video_fallback_base_url: Optional[str] = Field(None, description="Optional fallback video provider base URL.")
     video_fallback_model: Optional[str] = Field(None, description="Fallback video generation model. Default veo3.1-fast for Comfly.")
@@ -109,6 +112,87 @@ def _validate_payload(pl: ComflyDaihuoPipelinePayload) -> None:
         raise HTTPException(status_code=400, detail="请提供 asset_id 或 image_url")
 
 
+def _request_auth_header(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    return (request.headers.get("Authorization") or "").strip()
+
+
+async def _fetch_video_provider_policy(
+    *,
+    request: Request,
+    model: str,
+    channel: str,
+) -> Dict[str, Any]:
+    server_base = (settings.auth_server_base or "").strip().rstrip("/")
+    auth = _request_auth_header(request)
+    if not server_base or not auth:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(
+                f"{server_base}/api/comfly-proxy/video/provider-policy",
+                params={
+                    "model": model or "",
+                    "channel": channel or "",
+                    "feature": _VIDEO_PROVIDER_POLICY_FEATURE,
+                },
+                headers={"Authorization": auth},
+            )
+        if resp.status_code >= 400:
+            logger.warning(
+                "[comfly.daihuo.pipeline] video provider policy fetch failed status=%s body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
+            return {}
+        data = resp.json() if resp.content else {}
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.warning("[comfly.daihuo.pipeline] video provider policy fetch error: %s", exc)
+        return {}
+
+
+def _policy_video_fallbacks(policy: Dict[str, Any]) -> List[Dict[str, Any]]:
+    providers = policy.get("providers") if isinstance(policy, dict) else None
+    if not isinstance(providers, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in providers[1:]:
+        if not isinstance(item, dict):
+            continue
+        channel = str(item.get("channel") or "").strip()
+        model = str(item.get("model") or "").strip()
+        if not channel or not model:
+            continue
+        provider: Dict[str, Any] = {"channel": channel, "model": model}
+        if str(item.get("base_url") or "").strip():
+            provider["base_url"] = str(item.get("base_url") or "").strip()
+        out.append(provider)
+    return out
+
+
+def _absolute_policy_base(base_url: str, server_base: str, default_base: str) -> str:
+    raw = str(base_url or "").strip()
+    if raw.startswith(("http://", "https://")):
+        return raw
+    if raw.startswith("/"):
+        return f"{server_base.rstrip('/')}{raw}"
+    return raw or default_base
+
+
+def _is_grok_video_request(channel: str, model: str) -> bool:
+    channel_hint = (channel or "").strip().lower()
+    model_hint = (model or "").strip().lower().replace("_", "-").replace(" ", "")
+    return channel_hint in {"openmind", "open-mind", "om", "openmindapi"} or model_hint in {
+        "grok-imagine-video-1.5-preview",
+        "grok-imagine-1.0-video",
+        "grok-video-3",
+        "yingmeng1.5plus",
+        "褰辨ⅵ1.5plus",
+    } or model_hint.startswith("xai/grok-imagine-video/")
+
+
 async def _prepare_pipeline_input(
     *,
     pl: ComflyDaihuoPipelinePayload,
@@ -130,18 +214,75 @@ async def _prepare_pipeline_input(
     video_channel = (pl.video_channel or configured_video_channel or "").strip()
     video_base_url = (pl.video_base_url or "").strip()
     video_model = (pl.video_model or "").strip()
+    video_fallbacks = list(pl.video_fallbacks or [])
     video_fallback_channel = (pl.video_fallback_channel or "").strip()
     video_fallback_base_url = (pl.video_fallback_base_url or "").strip()
     video_fallback_model = (pl.video_fallback_model or "").strip()
+    if not video_channel:
+        video_channel = "openmind"
+    if _is_grok_video_request(video_channel, video_model):
+        video_channel = "openmind"
+        video_base_url = video_base_url or pipe_base
+        video_model = video_model or (getattr(settings, "comfly_daihuo_grok_video_model", None) or "grok-imagine-video-1.5-preview")
+        if not video_fallbacks:
+            video_fallbacks = [
+                {"channel": "comfly", "model": "veo3.1-fast", "base_url": pipe_base},
+                {"channel": "yunwu", "model": "veo3.1", "base_url": pipe_base},
+            ]
+        video_fallback_channel = video_fallback_channel or "comfly"
+        video_fallback_base_url = video_fallback_base_url or pipe_base
+        video_fallback_model = video_fallback_model or "veo3.1-fast"
     if video_channel in {"yunwu", "云雾", "雲霧"}:
         video_channel = "yunwu"
         video_base_url = video_base_url or pipe_base
         video_model = video_model or (getattr(settings, "comfly_daihuo_yunwu_video_model", None) or "veo3.1")
+        if not video_fallbacks:
+            video_fallbacks = [{"channel": "comfly", "model": "veo3.1-fast", "base_url": pipe_base}]
         video_fallback_channel = video_fallback_channel or "comfly"
         video_fallback_base_url = video_fallback_base_url or pipe_base
         video_fallback_model = video_fallback_model or "veo3.1-fast"
+
+    policy = await _fetch_video_provider_policy(
+        request=request,
+        model=video_model or pl.video_model or "",
+        channel=video_channel or pl.video_channel or "",
+    )
+    policy_providers = policy.get("providers") if isinstance(policy.get("providers"), list) else []
+    server_base_for_policy = (settings.auth_server_base or "").strip().rstrip("/")
+    if policy_providers:
+        primary = policy_providers[0] if isinstance(policy_providers[0], dict) else {}
+        previous_channel = video_channel
+        previous_model = video_model
+        video_channel = str(primary.get("channel") or video_channel or "").strip()
+        video_model = str(primary.get("model") or video_model or pl.video_model or "").strip()
+        video_base_url = _absolute_policy_base(
+            str(primary.get("base_url") or ""),
+            server_base_for_policy,
+            video_base_url or pipe_base,
+        )
+        video_fallbacks = _policy_video_fallbacks(policy)
+        for item in video_fallbacks:
+            item["base_url"] = _absolute_policy_base(
+                str(item.get("base_url") or ""),
+                server_base_for_policy,
+                pipe_base,
+            )
+        if video_fallbacks:
+            video_fallback_channel = str(video_fallbacks[0].get("channel") or video_fallback_channel or "").strip()
+            video_fallback_base_url = str(video_fallbacks[0].get("base_url") or video_fallback_base_url or "").strip()
+            video_fallback_model = str(video_fallbacks[0].get("model") or video_fallback_model or "").strip()
+        logger.info(
+            "[comfly.daihuo.pipeline] video provider policy applied feature=%s requested=%s:%s primary=%s:%s fallback_count=%s",
+            _VIDEO_PROVIDER_POLICY_FEATURE,
+            previous_channel or "",
+            previous_model or "",
+            video_channel or "",
+            video_model or "",
+            len(video_fallbacks),
+        )
+
     logger.info(
-        "[comfly.daihuo.pipeline] credentials user_id=%s key_len=%s api_base=%s pipeline_base=%s video_channel=%s video_base=%s video_model=%s fallback_channel=%s fallback_model=%s",
+        "[comfly.daihuo.pipeline] credentials user_id=%s key_len=%s api_base=%s pipeline_base=%s video_channel=%s video_base=%s video_model=%s fallback_channel=%s fallback_model=%s fallback_count=%s",
         current_user.id,
         len((api_key or "").strip()),
         (api_base or "")[:120],
@@ -151,6 +292,7 @@ async def _prepare_pipeline_input(
         video_model or "",
         video_fallback_channel or "",
         video_fallback_model or "",
+        len(video_fallbacks),
     )
     return build_pipeline_input(
         product_image=product_image,
@@ -171,6 +313,7 @@ async def _prepare_pipeline_input(
         video_channel=video_channel,
         video_base_url=video_base_url,
         video_model=video_model,
+        video_fallbacks=video_fallbacks,
         video_fallback_channel=video_fallback_channel,
         video_fallback_base_url=video_fallback_base_url,
         video_fallback_model=video_fallback_model,

@@ -12,7 +12,7 @@ import threading
 import time
 import traceback
 from urllib.parse import urlencode
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar, TypedDict
@@ -46,6 +46,7 @@ class Input(TypedDict, total=False):
     video_model: str
     video_channel: str
     video_base_url: str
+    video_fallbacks: List[Dict[str, Any]]
     video_fallback_channel: str
     video_fallback_base_url: str
     video_fallback_model: str
@@ -97,6 +98,7 @@ class PipelineConfig:
     video_model: str = "veo3.1-fast"
     video_channel: str = "comfly"
     video_base_url: str = ""
+    video_fallbacks: List[Dict[str, Any]] = field(default_factory=list)
     video_fallback_channel: str = "comfly"
     video_fallback_base_url: str = ""
     video_fallback_model: str = "veo3.1-fast"
@@ -188,6 +190,7 @@ class RunLogger:
                 "video_model": config.video_model,
                 "video_channel": config.video_channel,
                 "video_base_url": config.video_base_url,
+                "video_fallbacks": config.video_fallbacks or [],
                 "video_fallback_channel": config.video_fallback_channel,
                 "video_fallback_base_url": config.video_fallback_base_url,
                 "video_fallback_model": config.video_fallback_model,
@@ -338,6 +341,8 @@ def _normalize_comfly_api_key(raw: str) -> str:
 
 def _normalize_video_channel(raw: str) -> str:
     s = (raw or "").strip().lower()
+    if s in {"openmind", "open-mind", "om", "openmindapi"}:
+        return "openmind"
     if s in {"yunwu", "yw", "cloudmist", "cloud-mist", "云雾", "雲霧"}:
         return "yunwu"
     return "comfly"
@@ -357,11 +362,40 @@ def _default_video_base_url(channel: str, api_base: str) -> str:
 
 
 def _default_video_model(channel: str) -> str:
-    return "veo3.1" if _normalize_video_channel(channel) == "yunwu" else "veo3.1-fast"
+    normalized = _normalize_video_channel(channel)
+    if normalized == "openmind":
+        return "grok-imagine-video-1.5-preview"
+    return "veo3.1" if normalized == "yunwu" else "veo3.1-fast"
 
 
 def _video_provider_label(channel: str, model: str) -> str:
     return f"{_normalize_video_channel(channel)}:{(model or '').strip()}"
+
+
+def _is_grok_video_model(raw: str) -> bool:
+    s = (raw or "").strip().lower().replace("_", "-").replace(" ", "")
+    return s in {
+        "grok-imagine-video-1.5-preview",
+        "grok-imagine-1.0-video",
+        "grok-video-3",
+        "yingmeng1.5plus",
+        "褰辨ⅵ1.5plus",
+    } or s.startswith("xai/grok-imagine-video/")
+
+
+_GROK_VIDEO_DURATION_SECONDS = 10
+
+
+def _normalize_video_provider_item(raw: Any, base_url: str) -> Dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    channel = _normalize_video_channel(str(raw.get("channel") or raw.get("video_channel") or ""))
+    model = str(raw.get("model") or raw.get("video_model") or "").strip() or _default_video_model(channel)
+    provider_base_url = _normalize_api_base_url(
+        str(raw.get("base_url") or raw.get("video_base_url") or ""),
+        _default_video_base_url(channel, base_url),
+    )
+    return {"channel": channel, "model": model, "base_url": provider_base_url}
 
 
 def _yunwu_video_create_body(prompt: str, model: str, images: List[str], aspect_ratio: str, enhance_prompt: bool) -> Dict[str, Any]:
@@ -410,6 +444,8 @@ def _first_str(value: Any) -> str:
 def _video_poll_fields(payload: Dict[str, Any]) -> Dict[str, str]:
     data = payload.get("data")
     data_obj = data if isinstance(data, dict) else {}
+    result = payload.get("result")
+    result_obj = result if isinstance(result, dict) else {}
     status = (
         payload.get("status")
         or payload.get("state")
@@ -417,9 +453,12 @@ def _video_poll_fields(payload: Dict[str, Any]) -> Dict[str, str]:
         or data_obj.get("status")
         or data_obj.get("state")
         or data_obj.get("task_status")
+        or result_obj.get("status")
+        or result_obj.get("state")
+        or result_obj.get("task_status")
         or ""
     )
-    progress = payload.get("progress") or data_obj.get("progress") or ""
+    progress = payload.get("progress") or data_obj.get("progress") or result_obj.get("progress") or ""
     fail_reason = (
         payload.get("fail_reason")
         or payload.get("error")
@@ -427,6 +466,9 @@ def _video_poll_fields(payload: Dict[str, Any]) -> Dict[str, str]:
         or data_obj.get("fail_reason")
         or data_obj.get("error")
         or data_obj.get("message")
+        or result_obj.get("fail_reason")
+        or result_obj.get("error")
+        or result_obj.get("message")
         or ""
     )
     output = _first_str(data_obj.get("output"))
@@ -434,6 +476,10 @@ def _video_poll_fields(payload: Dict[str, Any]) -> Dict[str, str]:
         output = _first_str(data_obj.get("outputs"))
     if not output:
         output = _first_str(data_obj.get("video_url") or data_obj.get("url") or data_obj.get("result"))
+    if not output:
+        output = _first_str(result_obj.get("output") or result_obj.get("outputs"))
+    if not output:
+        output = _first_str(result_obj.get("video_url") or result_obj.get("url") or result_obj.get("result"))
     if not output:
         output = _first_str(payload.get("output") or payload.get("outputs") or payload.get("video_url") or payload.get("url") or payload.get("result"))
     return {
@@ -747,27 +793,52 @@ class ComflyClient:
         ar = _normalize_aspect_ratio_for_comfly(aspect_ratio)
         video_channel = _normalize_video_channel(channel or self.video_channel)
         video_base_url = _normalize_api_base_url(base_url or "", _default_video_base_url(video_channel, self.base_url))
-        if video_channel == "yunwu":
-            body = _yunwu_video_create_body(prompt, model, images, ar, enhance_prompt)
-        elif model.strip().lower() == "grok-video-3":
+        video_model = (model or _default_video_model(video_channel)).strip() or _default_video_model(video_channel)
+        if video_channel == "openmind":
+            is_grok = _is_grok_video_model(video_model)
+            grok_duration = str(_GROK_VIDEO_DURATION_SECONDS)
+            body = {
+                "prompt": prompt,
+                "model": video_model,
+                "images": images[:1],
+                "seconds": grok_duration if is_grok else 6,
+                "duration": grok_duration if is_grok else 6,
+                "aspect_ratio": ar,
+                "resolution": "720p",
+            }
+            body["size"] = "720x1280" if ar == "9:16" else "1280x720"
+            if images:
+                body["image"] = images[0]
+                body["image_url"] = images[0]
+        elif video_channel == "yunwu":
+            body = _yunwu_video_create_body(prompt, video_model, images, ar, enhance_prompt)
+        elif _is_grok_video_model(video_model):
             body: Dict[str, Any] = {
                 "prompt": prompt,
-                "model": model,
+                "model": video_model,
                 "images": images[:1],
                 "ratio": ar if ar in ("9:16", "16:9", "1:1", "2:3", "3:2") else "9:16",
                 "resolution": "720P",
-                "duration": 6,
+                "duration": _GROK_VIDEO_DURATION_SECONDS,
             }
         else:
-            body = {"prompt": prompt, "model": model, "images": images, "watermark": bool(watermark)}
+            body = {"prompt": prompt, "model": video_model, "images": images, "watermark": bool(watermark)}
             body["aspect_ratio"] = ar
             if enhance_prompt:
                 body["enhance_prompt"] = True
 
         def call() -> Dict[str, Any]:
-            vid_url = f"{video_base_url}/v1/video/create" if video_channel == "yunwu" else f"{video_base_url}/v2/videos/generations"
+            if video_channel == "openmind":
+                vid_url = f"{video_base_url}/openmind/v1/videos"
+                phase = "openmind_video_submit"
+            elif video_channel == "yunwu":
+                vid_url = f"{video_base_url}/v1/video/create"
+                phase = "yunwu_video_submit"
+            else:
+                vid_url = f"{video_base_url}/v2/videos/generations"
+                phase = "videos_generations_submit"
             ex = {"Content-Type": "application/json"}
-            self._trace_request("videos_generations_submit", vid_url, ex, body)
+            self._trace_request(phase, vid_url, ex, body)
             r = self.session.post(vid_url, headers=ex, json=body, timeout=120)
             payload = self._check(r)
             task_id = str(payload.get("id") or "").strip() if video_channel == "yunwu" else _task_id_from_video_submit_payload(payload)
@@ -777,7 +848,7 @@ class ComflyClient:
             payload["task_id"] = task_id
             payload["video_channel"] = video_channel
             payload["video_base_url"] = video_base_url
-            payload["video_model"] = model
+            payload["video_model"] = video_model
             return payload
 
         return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call)
@@ -798,11 +869,16 @@ class ComflyClient:
         for attempt in range(1, max_polls + 1):
             _ensure_before_deadline(deadline_monotonic, "video polling")
             def call() -> Dict[str, Any]:
-                if video_channel == "yunwu":
+                if video_channel == "openmind":
+                    poll_url = f"{video_base_url}/openmind/v1/videos/{task_id}"
+                    phase = "openmind_video_poll"
+                elif video_channel == "yunwu":
                     poll_url = f"{video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
+                    phase = "yunwu_video_poll"
                 else:
                     poll_url = f"{video_base_url}/v2/videos/generations/{task_id}"
-                self._trace_request("videos_generations_poll", poll_url, None, None)
+                    phase = "videos_generations_poll"
+                self._trace_request(phase, poll_url, None, None)
                 r = self.session.get(poll_url, timeout=60)
                 return self._check(r)
 
@@ -903,6 +979,7 @@ def _build_config(data: Input) -> PipelineConfig:
         video_model=(data.get("video_model") or video_model_default),
         video_channel=video_channel,
         video_base_url=_normalize_api_base_url(str(data.get("video_base_url") or ""), video_base_default),
+        video_fallbacks=list(data.get("video_fallbacks") or data.get("fallback_video_providers") or []),
         video_fallback_channel=video_fallback_channel,
         video_fallback_base_url=_normalize_api_base_url(str(data.get("video_fallback_base_url") or data.get("fallback_video_base_url") or ""), fallback_base_default),
         video_fallback_model=(data.get("video_fallback_model") or data.get("fallback_video_model") or video_fallback_model_default),
@@ -1764,9 +1841,21 @@ def _run_shot(client: ComflyClient, config: PipelineConfig, logger: RunLogger, s
             "model": (config.video_model or "").strip() or _default_video_model(config.video_channel),
         }
     ]
+    seen = {_video_provider_label(providers[0]["channel"], providers[0]["model"])}
+    for raw_provider in config.video_fallbacks or []:
+        item = _normalize_video_provider_item(raw_provider, client.base_url)
+        if not item:
+            continue
+        label = _video_provider_label(item["channel"], item["model"])
+        if label in seen:
+            continue
+        seen.add(label)
+        providers.append({"role": "fallback", **item})
+
     fallback_channel = _normalize_video_channel(config.video_fallback_channel)
     fallback_model = (config.video_fallback_model or "").strip() or _default_video_model(fallback_channel)
-    if _video_provider_label(fallback_channel, fallback_model) != _video_provider_label(providers[0]["channel"], providers[0]["model"]):
+    fallback_label = _video_provider_label(fallback_channel, fallback_model)
+    if fallback_label not in seen:
         providers.append(
             {
                 "role": "fallback",
@@ -2078,6 +2167,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "video_model": config.video_model,
                 "video_channel": config.video_channel,
                 "video_base_url": config.video_base_url,
+                "video_fallbacks": config.video_fallbacks or [],
                 "video_fallback_channel": config.video_fallback_channel,
                 "video_fallback_base_url": config.video_fallback_base_url,
                 "video_fallback_model": config.video_fallback_model,
