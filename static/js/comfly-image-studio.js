@@ -1404,13 +1404,20 @@
   }
 
   function applyJobResult(payload) {
+    var resultPrompt = cleanPromptText(
+      state.currentJobPrompt
+      || (payload && payload.prompt)
+      || (payload && payload.request_payload && payload.request_payload.prompt)
+      || ''
+    );
+    state.currentJobPrompt = resultPrompt;
     state.results = (payload.images || []).map(function(item) {
       return {
         url: item.url || '',
         data_url: item.data_url || '',
         assetId: item.asset_id || '',
         sourceUrl: item.source_url || '',
-        prompt: cleanPromptText(state.currentJobPrompt),
+        prompt: resultPrompt,
         model: payload.meta && payload.meta.model,
         aspectRatio: payload.meta && payload.meta.aspect_ratio,
         size: payload.meta && payload.meta.size
@@ -1477,10 +1484,14 @@
           var first = state.results[0] || {};
           updateRememberedJob(state.currentJobId, {
             status: 'completed',
-            title: '图片任务',
+            title: promptTitleText(state.currentJobPrompt, '图片任务'),
+            prompt: state.currentJobPrompt || '',
             resultCount: state.results.length,
             image: resultPreviewUrl(first),
-            assetId: first.assetId || ''
+            assetId: first.assetId || '',
+            model: first.model || '',
+            aspectRatio: first.aspectRatio || '',
+            size: first.size || ''
           });
           showMessage(savedCount ? '图片任务已完成，并已保存到素材库。' : '图片任务已完成，素材库保存失败时会记录到日志。', false);
           notifyTaskOnce('completed');
@@ -1661,6 +1672,7 @@
 
     var form = new FormData();
     var finalPrompt = buildPromptWithReferenceHints(prompt);
+    var displayPrompt = cleanPromptText(finalPrompt);
     form.append('prompt', finalPrompt);
     form.append('model', $('imglabModelSelect').value);
     form.append('aspect_ratio', $('imglabAspectRatioSelect').value);
@@ -1689,11 +1701,20 @@
         throw new Error(friendlyImageTaskFailureMessage());
       }
       state.currentJobStatus = 'running';
+      state.currentJobPrompt = displayPrompt;
       state.results = [];
       rememberJob({
         jobId: state.currentJobId,
         status: 'running',
-        title: prompt.slice(0, 18) || '图片任务'
+        title: promptTitleText(displayPrompt, prompt.slice(0, 18) || '图片任务'),
+        prompt: displayPrompt,
+        requestPayload: {
+          prompt: displayPrompt,
+          aspect_ratio: $('imglabAspectRatioSelect').value,
+          model: $('imglabModelSelect').value,
+          quality: $('imglabQualitySelect').value,
+          background: $('imglabBackgroundSelect').value
+        }
       });
       renderResultSurface();
       setRightView('result');

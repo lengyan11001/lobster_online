@@ -1990,11 +1990,15 @@ function _openAssetPreviewModal(asset) {
   if (mask) mask.style.display = 'flex';
 }
 
-function _downloadAssetToLibrary(asset) {
+function _downloadAssetToLibrary(asset, options) {
   if (!asset || !asset.asset_id) return;
-  var btn = document.getElementById('assetPreviewDownloadBtn');
+  options = options || {};
+  var previewBtn = document.getElementById('assetPreviewDownloadBtn');
+  var btn = options.button || previewBtn;
+  var showMsg = options.usePreviewMsg ? _assetPreviewMsgShow : _assetMsgShow;
   if (btn) {
     btn.disabled = true;
+    btn.dataset.originalText = btn.dataset.originalText || btn.textContent || '下载';
     btn.textContent = '下载中...';
   }
   fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(asset.asset_id) + '/save-to-downloads', {
@@ -2010,15 +2014,15 @@ function _downloadAssetToLibrary(asset) {
     })
     .then(function(d) {
       var folderText = d && d.directory ? (' 已保存到：' + d.directory) : '';
-      _assetPreviewMsgShow((d && d.opened_folder ? '已下载并打开文件夹。' : '已下载。') + folderText, false);
+      showMsg((d && d.opened_folder ? '已下载并打开文件夹。' : '已下载。') + folderText, false);
     })
     .catch(function(err) {
-      _assetPreviewMsgShow((err && err.message) || '下载失败，请稍后重试。', true);
+      showMsg((err && err.message) || '下载失败，请稍后重试。', true);
     })
     .finally(function() {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = '下载到素材库文件夹';
+        btn.textContent = btn.dataset.originalText || '下载';
       }
     });
 }
@@ -2621,8 +2625,7 @@ function _bindAssetCardActions(container) {
       e.stopPropagation();
       var aid = btn.getAttribute('data-download-asset');
       var asset = _assetLibraryState.assetMap[aid];
-      _openAssetPreviewModal(asset);
-      _downloadAssetToLibrary(asset);
+      _downloadAssetToLibrary(asset, { button: btn, usePreviewMsg: false });
     });
   });
   container.querySelectorAll('button[data-creative-candidate]').forEach(function(btn) {
@@ -2946,7 +2949,7 @@ function bindAssetLibraryUi() {
   if (assetPreviewDownload && !assetPreviewDownload._assetLibraryBound) {
     assetPreviewDownload._assetLibraryBound = true;
     assetPreviewDownload.addEventListener('click', function() {
-      _downloadAssetToLibrary(_assetPreviewState);
+      _downloadAssetToLibrary(_assetPreviewState, { button: assetPreviewDownload, usePreviewMsg: true });
     });
   }
 

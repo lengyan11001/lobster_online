@@ -3441,6 +3441,61 @@
             background: rgba(229, 110, 132, 0.09);
             color: #a43f58;
         }
+        .douyin-config-save-status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 36px;
+            margin-top: 0;
+            padding: 8px 12px;
+            border-radius: 999px;
+            border: 1px solid rgba(127, 163, 255, 0.18);
+            background: rgba(89, 124, 231, 0.08);
+            color: #355184;
+            font-size: 13px;
+            font-weight: 800;
+            line-height: 1.35;
+            white-space: nowrap;
+        }
+        .douyin-config-save-status.is-success {
+            border-color: rgba(57, 183, 128, 0.24);
+            background: rgba(57, 183, 128, 0.1);
+            color: #24765b;
+        }
+        .douyin-config-save-status.is-error {
+            border-color: rgba(229, 110, 132, 0.26);
+            background: rgba(229, 110, 132, 0.1);
+            color: #a43f58;
+        }
+        .btn.is-saving {
+            animation: douyin-config-save-pulse 0.9s ease-in-out infinite;
+        }
+        .douyin-config-save-btn.is-save-pending {
+            color: #fff;
+            background: linear-gradient(135deg, #7aa2ff, #3a63e8);
+            border-color: transparent;
+        }
+        .douyin-config-save-btn.is-save-success {
+            color: #fff;
+            background: linear-gradient(135deg, #3dc18a, #24855e);
+            border-color: transparent;
+            box-shadow: 0 14px 28px rgba(36, 133, 94, 0.26);
+        }
+        .douyin-config-save-btn.is-save-error {
+            color: #fff;
+            background: linear-gradient(135deg, #f07c93, #bc455d);
+            border-color: transparent;
+            box-shadow: 0 14px 28px rgba(188, 69, 93, 0.24);
+        }
+        @keyframes douyin-config-save-pulse {
+            0%, 100% {
+                transform: translateY(0);
+                box-shadow: 0 12px 24px rgba(71, 105, 218, 0.16);
+            }
+            50% {
+                transform: translateY(-1px);
+                box-shadow: 0 16px 30px rgba(71, 105, 218, 0.24);
+            }
+        }
         .account-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
         .account-id { font-size: 18px; font-weight: 900; }
         .account-meta-list {

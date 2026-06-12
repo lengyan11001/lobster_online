@@ -497,6 +497,27 @@ def _is_insufficient_credit_error(exc: Exception) -> bool:
     return "http 402" in text or "积分不足" in str(exc or "") or "余额不足" in str(exc or "")
 
 
+def _is_transient_video_poll_error(exc: Exception, channel: str) -> bool:
+    text = str(exc or "").lower()
+    normalized_channel = _normalize_video_channel(channel)
+    if normalized_channel == "openmind":
+        return any(
+            flag in text
+            for flag in (
+                "http 500",
+                "http 502",
+                "http 503",
+                "http 504",
+                "readtimeout",
+                "timed out",
+                "timeout",
+                "connection reset",
+                "temporarily unavailable",
+            )
+        )
+    return any(flag in text for flag in ("readtimeout", "timed out", "timeout"))
+
+
 def _retry(action: str, attempts: int, delay: int, logger_obj: RunLogger, fn: Callable[[], Any]) -> tuple[Any, int]:
     last: Optional[Exception] = None
     for i in range(1, attempts + 1):
@@ -1175,7 +1196,34 @@ class ComflySeedanceClient:
                 r = self.session.get(poll_url, timeout=60)
                 return self._check(r)
 
-            payload, request_attempts = _retry(f"poll_{task_id}", 3, self.config.network_retry_delay_seconds, self.logger, call)
+            try:
+                payload, request_attempts = _retry(f"poll_{task_id}", 3, self.config.network_retry_delay_seconds, self.logger, call)
+            except Exception as exc:
+                if _is_transient_video_poll_error(exc, video_channel):
+                    history_item = {
+                        "attempt": attempt,
+                        "request_attempts": 3,
+                        "status": "poll_retry",
+                        "video_url": "",
+                        "error": str(exc),
+                    }
+                    history.append(history_item)
+                    if on_progress is not None:
+                        try:
+                            on_progress(history, {"status": "poll_retry", "error": str(exc), "task_id": task_id})
+                        except Exception:
+                            logger.warning("video poll progress callback failed", exc_info=True)
+                    logger.warning(
+                        "Transient %s video poll error for task %s on attempt %s/%s: %s",
+                        video_channel,
+                        task_id,
+                        attempt,
+                        self.config.max_polls,
+                        exc,
+                    )
+                    time.sleep(self.config.poll_interval_seconds)
+                    continue
+                raise
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
             result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
             status = str(

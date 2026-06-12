@@ -663,23 +663,46 @@
     return String(current.assetId || '').trim();
   }
 
+  function creativeVideoAssetMeta(item) {
+    if (!item || typeof item !== 'object') return {};
+    var row = item.cloud_asset || item.asset || item || {};
+    var meta = row && typeof row.meta === 'object' ? row.meta : {};
+    return {
+      row: row,
+      meta: meta,
+      kind: String(item.kind || row.kind || meta.kind || '').trim().toLowerCase(),
+      assetId: String(row.asset_id || item.asset_id || '').trim(),
+      mediaType: String(row.media_type || item.media_type || row.type || '').trim().toLowerCase(),
+      sourceUrl: String(row.source_url || row.preview_url || item.source_url || item.preview_url || '').trim(),
+      tags: String(row.tags || item.tags || '').trim().toLowerCase()
+    };
+  }
+
+  function looksLikeFinalCreativeVideo(item, finalVideo) {
+    var meta = creativeVideoAssetMeta(item);
+    if (!meta.assetId && !meta.sourceUrl && !meta.kind) return false;
+    var finalAssetId = String((finalVideo && finalVideo.asset_id) || '').trim();
+    if (finalAssetId && meta.assetId === finalAssetId) return true;
+    if (meta.kind === 'merged_final' || meta.kind === 'local_bestseller_captioned') return true;
+    if (meta.meta && (meta.meta.seedance_final_video || meta.meta.origin === 'daihuo_merged')) return true;
+    if (meta.tags && (meta.tags.indexOf('merged') >= 0 || meta.tags.indexOf('captioned') >= 0)) return true;
+    return false;
+  }
+
   function findJobAssetId(job) {
     if (!job || typeof job !== 'object') return '';
     var saved = Array.isArray(job.saved_assets) ? job.saved_assets : [];
-    for (var i = 0; i < saved.length; i += 1) {
-      var item = saved[i] || {};
-      var row = item.asset || {};
-      var mediaType = String(row.media_type || item.media_type || '').toLowerCase();
-      var assetId = String(row.asset_id || item.asset_id || '').trim();
-      if (assetId && (!mediaType || mediaType === 'video')) return assetId;
-    }
     var result = job.result || {};
     var finalVideo = result.final_video || {};
     var finalAssetId = String(finalVideo.asset_id || '').trim();
-    if (!finalAssetId) return '';
-    for (var j = 0; j < saved.length; j += 1) {
-      var localAsset = ((saved[j] || {}).asset) || {};
-      if (String(localAsset.asset_id || '').trim() === finalAssetId) return finalAssetId;
+    if (finalAssetId) return finalAssetId;
+    for (var p = 0; p < saved.length; p += 1) {
+      var preferred = creativeVideoAssetMeta(saved[p]);
+      if (looksLikeFinalCreativeVideo(saved[p], finalVideo) && preferred.assetId) return preferred.assetId;
+    }
+    for (var i = 0; i < saved.length; i += 1) {
+      var item = creativeVideoAssetMeta(saved[i]);
+      if (item.assetId && (!item.mediaType || item.mediaType === 'video')) return item.assetId;
     }
     return '';
   }
@@ -2094,13 +2117,15 @@
     if (finalUrl) return finalUrl;
 
     var saved = Array.isArray(resp.saved_assets) ? resp.saved_assets : [];
+    for (var p = 0; p < saved.length; p += 1) {
+      var preferred = creativeVideoAssetMeta(saved[p]);
+      if (!looksLikeFinalCreativeVideo(saved[p], finalVideo)) continue;
+      if (preferred.sourceUrl) return preferred.sourceUrl;
+    }
     for (var i = 0; i < saved.length; i += 1) {
-      var asset = saved[i] && saved[i].asset;
-      if (!asset) continue;
-      var mt = String(asset.media_type || asset.type || '').toLowerCase();
-      var src = String(asset.source_url || asset.preview_url || '').trim();
-      if (!src) continue;
-      if (mt === 'video' || _looksLikeVideoUrl(src)) return src;
+      var item = creativeVideoAssetMeta(saved[i]);
+      if (!item.sourceUrl) continue;
+      if (item.mediaType === 'video' || _looksLikeVideoUrl(item.sourceUrl)) return item.sourceUrl;
     }
 
     function pickSegmentUrl(item) {
@@ -2136,20 +2161,36 @@
   function cloudVideoUrlFromJob(job) {
     var assets = (job && job.assets) || {};
     var ids = Array.isArray(job && job.asset_ids) ? job.asset_ids : [];
+    var resultPayload = (job && job.result_payload) || {};
+    var finalVideo = resultPayload.final_video || {};
+    var finalAssetId = String(finalVideo.asset_id || '').trim();
+    if (finalAssetId) {
+      var matched = assets[finalAssetId] || {};
+      var matchedUrl = String(matched.source_url || matched.preview_url || '').trim();
+      if (matchedUrl) return matchedUrl;
+    }
     for (var i = 0; i < ids.length; i += 1) {
       var asset = assets[ids[i]] || {};
+      var assetTags = String(asset.tags || '').trim().toLowerCase();
       var src = String(asset.source_url || asset.preview_url || '').trim();
-      if (src) return src;
+      if (src && (assetTags.indexOf('merged') >= 0 || assetTags.indexOf('captioned') >= 0)) return src;
     }
     var saved = Array.isArray(job && job.saved_assets) ? job.saved_assets : [];
+    for (var p = 0; p < saved.length; p += 1) {
+      var preferred = creativeVideoAssetMeta(saved[p]);
+      if (looksLikeFinalCreativeVideo(saved[p], finalVideo) && preferred.sourceUrl) return preferred.sourceUrl;
+    }
+    for (var j = 0; j < ids.length; j += 1) {
+      var row = assets[ids[j]] || {};
+      var rowUrl = String(row.source_url || row.preview_url || '').trim();
+      if (rowUrl) return rowUrl;
+    }
     for (var j = 0; j < saved.length; j += 1) {
-      var item = saved[j] || {};
-      var row = item.cloud_asset || item.asset || {};
-      var url = String(row.source_url || row.preview_url || item.source_url || '').trim();
-      if (url) return url;
+      var item = creativeVideoAssetMeta(saved[j]);
+      if (item.sourceUrl) return item.sourceUrl;
     }
     return extractResultVideoUrl({
-      result: (job && job.result_payload) || {},
+      result: resultPayload,
       saved_assets: saved
     });
   }

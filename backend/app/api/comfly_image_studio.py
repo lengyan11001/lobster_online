@@ -34,6 +34,13 @@ _ASPECT_TO_SIZE = {
     "9:16": "1024x1536",
 }
 
+
+def _normalize_image_aspect_ratio(value: str) -> str:
+    ratio = str(value or "").strip()
+    if ratio in _ASPECT_TO_SIZE:
+        return ratio
+    return "1:1"
+
 _FALLBACK_EXAMPLES = [
     {
         "id": 1050,
@@ -181,7 +188,8 @@ async def _generate_image_studio_core(
     if not prompt:
         raise HTTPException(status_code=400, detail="请输入图片提示词")
 
-    size = _ASPECT_TO_SIZE.get((aspect_ratio or "").strip(), "1024x1024")
+    normalized_ratio = _normalize_image_aspect_ratio(aspect_ratio)
+    size = _ASPECT_TO_SIZE.get(normalized_ratio, "1024x1024")
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
     model_id = (model or "gpt-image-2").strip() or "gpt-image-2"
     quality_id = (quality or "high").strip() or "high"
@@ -194,6 +202,11 @@ async def _generate_image_studio_core(
         "size": size,
         "response_format": "url",
     }
+    # gpt-image-2 目前会经过不同代理/渠道，部分渠道认像素 size，部分更稳定地认比例枚举。
+    # 三个字段一起带，避免 9:16 在某一层被默认回退成 1:1。
+    if "gpt-image-2" in model_id or "gptimage2" in model_id.replace("-", ""):
+        body["aspect_ratio"] = normalized_ratio
+        body["image_size"] = normalized_ratio
     if background and background != "auto":
         body["background"] = background
     refs = [
@@ -280,7 +293,7 @@ async def _generate_image_studio_core(
         "saved_assets": saved_assets,
         "meta": {
             "model": model_id,
-            "aspect_ratio": aspect_ratio,
+            "aspect_ratio": normalized_ratio,
             "size": size,
             "quality": quality_id,
             "reference_count": len(files) + len(refs),
