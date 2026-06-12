@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -74,6 +75,7 @@ _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM = "asset_random"
 _SCHEDULED_VIDEO_SOURCE_AI_IMAGE = "ai_image"
 _SCHEDULED_VIDEO_SOURCE_REFERENCE_IMAGE = "reference_image"
 _CREATIVE_CANDIDATE_USAGE_META_KEY = "creative_candidate_usage"
+_CREATIVE_CANDIDATE_RESERVATION_META_KEY = "creative_candidate_reservations"
 _IMAGE_MODEL_ALIASES = {
     "openai/gpt-image2": "openai/gpt-image-2",
     "openai/gptimage2": "openai/gpt-image-2",
@@ -138,7 +140,58 @@ def _creative_candidate_last_used_at(meta: Any, group_name: str) -> str:
     return str(data.get("last_used_at") or data.get("last_used") or "")
 
 
-def _mark_creative_candidate_asset_used(asset_id: str, group_name: str, jwt_token: str) -> None:
+def _creative_candidate_group_reservations(meta: Any, group_name: str) -> Dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {}
+    reservations = meta.get(_CREATIVE_CANDIDATE_RESERVATION_META_KEY)
+    if not isinstance(reservations, dict):
+        return {}
+    current = reservations.get(group_name)
+    return current if isinstance(current, dict) else {}
+
+
+def _creative_candidate_reservation_count(meta: Any, group_name: str) -> int:
+    return len(_creative_candidate_group_reservations(meta, group_name))
+
+
+def _creative_candidate_last_reserved_at(meta: Any, group_name: str) -> str:
+    latest = ""
+    for item in _creative_candidate_group_reservations(meta, group_name).values():
+        if not isinstance(item, dict):
+            continue
+        reserved_at = str(item.get("reserved_at") or "")
+        if reserved_at > latest:
+            latest = reserved_at
+    return latest
+
+
+def _remove_creative_candidate_reservation(meta: Dict[str, Any], group_name: str, reservation_id: str) -> None:
+    rid = str(reservation_id or "").strip()
+    if not rid:
+        return
+    reservations = meta.get(_CREATIVE_CANDIDATE_RESERVATION_META_KEY)
+    if not isinstance(reservations, dict):
+        return
+    current = reservations.get(group_name)
+    if not isinstance(current, dict):
+        return
+    current.pop(rid, None)
+    if current:
+        reservations[group_name] = current
+    else:
+        reservations.pop(group_name, None)
+    if reservations:
+        meta[_CREATIVE_CANDIDATE_RESERVATION_META_KEY] = reservations
+    else:
+        meta.pop(_CREATIVE_CANDIDATE_RESERVATION_META_KEY, None)
+
+
+def _mark_creative_candidate_asset_used(
+    asset_id: str,
+    group_name: str,
+    jwt_token: str,
+    reservation_id: str = "",
+) -> None:
     aid = str(asset_id or "").strip()
     name = str(group_name or "").strip()
     if not aid or not name:
@@ -162,6 +215,7 @@ def _mark_creative_candidate_asset_used(asset_id: str, group_name: str, jwt_toke
             count = max(int(current.get("count") or current.get("use_count") or 0), 0)
         except Exception:
             count = 0
+        _remove_creative_candidate_reservation(meta, name, reservation_id)
         current["count"] = count + 1
         current["last_used_at"] = datetime.now(timezone.utc).isoformat()
         usage[name] = current
@@ -175,6 +229,43 @@ def _mark_creative_candidate_asset_used(asset_id: str, group_name: str, jwt_toke
             "[SCHEDULED-TASK] mark creative candidate used failed asset_id=%s group=%s err=%s",
             aid,
             name,
+            exc,
+        )
+    finally:
+        db.close()
+
+
+def _release_creative_candidate_asset_reservation(
+    asset_id: str,
+    group_name: str,
+    jwt_token: str,
+    reservation_id: str,
+) -> None:
+    aid = str(asset_id or "").strip()
+    name = str(group_name or "").strip()
+    rid = str(reservation_id or "").strip()
+    if not aid or not name or not rid:
+        return
+    uid = int(_decode_jwt_sub(jwt_token) or "0")
+    if uid <= 0:
+        return
+    db = SessionLocal()
+    try:
+        row = db.query(Asset).filter(Asset.user_id == uid, Asset.asset_id == aid).first()
+        if not row:
+            return
+        meta = dict(row.meta or {})
+        _remove_creative_candidate_reservation(meta, name, rid)
+        row.meta = meta
+        db.add(row)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "[SCHEDULED-TASK] release creative candidate reservation failed asset_id=%s group=%s rid=%s err=%s",
+            aid,
+            name,
+            rid,
             exc,
         )
     finally:
@@ -740,6 +831,7 @@ def _scheduled_asset_open_url(row: Asset, asset_id: str, user_id: int, request: 
 def _pick_creative_candidate_asset(
     group_name: str,
     jwt_token: str,
+    run_id: str = "",
 ) -> Dict[str, str]:
     name = str(group_name or "").strip()
     if not name:
@@ -767,8 +859,10 @@ def _pick_creative_candidate_asset(
             raise RuntimeError(f"备选组“{name}”里没有可用于视频生成的公网图片素材，请重新上传或保存 URL 后再设为备选")
         usable.sort(
             key=lambda item: (
-                _creative_candidate_use_count(getattr(item[0], "meta", None), name),
-                _creative_candidate_last_used_at(getattr(item[0], "meta", None), name),
+                _creative_candidate_use_count(getattr(item[0], "meta", None), name)
+                + _creative_candidate_reservation_count(getattr(item[0], "meta", None), name),
+                _creative_candidate_last_used_at(getattr(item[0], "meta", None), name)
+                or _creative_candidate_last_reserved_at(getattr(item[0], "meta", None), name),
                 item[0].created_at.isoformat() if getattr(item[0], "created_at", None) else "",
                 item[0].asset_id or "",
             )
@@ -776,12 +870,30 @@ def _pick_creative_candidate_asset(
         row, url = usable[0]
         if not url:
             raise RuntimeError(f"备选组“{name}”选中的图片没有可用链接")
+        reservation_id = str(run_id or "").strip() or uuid.uuid4().hex
+        meta = dict(row.meta or {})
+        reservations = meta.get(_CREATIVE_CANDIDATE_RESERVATION_META_KEY)
+        if not isinstance(reservations, dict):
+            reservations = {}
+        current_reservations = reservations.get(name)
+        if not isinstance(current_reservations, dict):
+            current_reservations = {}
+        current_reservations[reservation_id] = {
+            "run_id": str(run_id or "").strip(),
+            "reserved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        reservations[name] = current_reservations
+        meta[_CREATIVE_CANDIDATE_RESERVATION_META_KEY] = reservations
+        row.meta = meta
+        db.add(row)
+        db.commit()
         return {
             "asset_id": row.asset_id,
             "url": url,
             "group_name": name,
             "filename": row.filename,
             "usage_count": str(_creative_candidate_use_count(getattr(row, "meta", None), name)),
+            "reservation_id": reservation_id,
         }
     finally:
         db.close()
@@ -2190,7 +2302,7 @@ async def _run_goal_video_scheduled_pipeline(
         result["reference_asset_id"] = pl.reference_asset_ids[0] if pl.reference_asset_ids else ""
         return result
 
-    picked = _pick_creative_candidate_asset(candidate_group, jwt_token)
+    picked = _pick_creative_candidate_asset(candidate_group, jwt_token, run_id=run_id)
     await _post_task_event(
         cloud,
         base,
@@ -2201,16 +2313,26 @@ async def _run_goal_video_scheduled_pipeline(
     )
     pl.reference_asset_ids = [picked["asset_id"]] if picked.get("asset_id") else []
     pl.reference_image_urls = [picked["url"]] if picked.get("url") else []
-    result = await run_goal_video_pipeline_with_total_billing(
-        pl=pl,
-        token=jwt_token,
-        installation_id=installation_id,
-        progress=progress,
-        source_mode=_SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM,
-    )
+    try:
+        result = await run_goal_video_pipeline_with_total_billing(
+            pl=pl,
+            token=jwt_token,
+            installation_id=installation_id,
+            progress=progress,
+            source_mode=_SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM,
+        )
+    except Exception:
+        _release_creative_candidate_asset_reservation(
+            picked.get("asset_id") or "",
+            picked.get("group_name") or "",
+            jwt_token,
+            picked.get("reservation_id") or "",
+        )
+        raise
     result["source_mode"] = _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM
     result["candidate_group"] = picked["group_name"]
     result["reference_asset_id"] = picked["asset_id"]
+    result["reference_asset_reservation_id"] = picked.get("reservation_id") or ""
     result["reference_asset_usage_count_before"] = picked.get("usage_count") or "0"
     return result
 
@@ -2510,6 +2632,7 @@ async def _run_scheduled_capability(
                     str(result.get("reference_asset_id") or ""),
                     str(result.get("candidate_group") or cap_payload.get("candidate_group") or ""),
                     jwt_token,
+                    str(result.get("reference_asset_reservation_id") or ""),
                 )
             await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在生成发布文案"})
             caption = await _generate_scheduled_caption(
@@ -2548,6 +2671,7 @@ async def _run_scheduled_capability(
                     "image_model": result.get("image_model"),
                     "candidate_group": result.get("candidate_group"),
                     "reference_asset_id": result.get("reference_asset_id"),
+                    "reference_asset_reservation_id": result.get("reference_asset_reservation_id"),
                 }
             elif capability_id == "create.video.pipeline":
                 models = result.get("models") if isinstance(result.get("models"), dict) else {}
@@ -2656,6 +2780,23 @@ async def _run_scheduled_capability(
     except Exception as exc:
         logger.exception("[SCHEDULED-TASK] capability failed run_id=%s capability_id=%s", run_id, capability_id)
         error_text = str(exc).strip() or exc.__class__.__name__
+        partial = (
+            exc.partial_result
+            if isinstance(exc, PipelinePartialResultError) and isinstance(exc.partial_result, dict)
+            else None
+        )
+        reservation_source = (
+            partial.get("resume_payload")
+            if isinstance(partial, dict) and isinstance(partial.get("resume_payload"), dict)
+            else locals().get("result")
+        )
+        if isinstance(reservation_source, dict):
+            _release_creative_candidate_asset_reservation(
+                str(reservation_source.get("reference_asset_id") or ""),
+                str(reservation_source.get("candidate_group") or cap_payload.get("candidate_group") or ""),
+                jwt_token,
+                str(reservation_source.get("reference_asset_reservation_id") or ""),
+            )
         if isinstance(exc, PipelinePartialResultError) and isinstance(exc.partial_result, dict) and exc.partial_result:
             partial_result = dict(exc.partial_result)
             refs = _collect_scheduled_result_refs(partial_result)

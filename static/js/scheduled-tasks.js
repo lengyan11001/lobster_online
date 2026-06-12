@@ -35,7 +35,8 @@
     publishAccountsLoaded: false,
     publishAccountsLoading: false,
     hiflyLoaded: false,
-    hiflyLoading: false
+    hiflyLoading: false,
+    runsById: {}
   };
 
   function base() {
@@ -260,6 +261,144 @@
     }).join('') + '</div>';
   }
 
+  function formatJson(value) {
+    if (value == null || value === '') return '-';
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch (e) {
+      return String(value);
+    }
+  }
+
+  function collectPromptFields(obj) {
+    var out = [];
+    var seen = [];
+    var promptKeys = {
+      prompt: true,
+      image_prompt: true,
+      video_prompt: true,
+      visual_prompt: true,
+      motion_prompt: true,
+      final_prompt: true,
+      generated_prompt: true,
+      creative_prompt: true,
+      goal: true,
+      script: true,
+      requirements_text: true,
+      custom_prompt: true
+    };
+    function walk(value, path, depth) {
+      if (value == null || depth > 6) return;
+      if (typeof value === 'object') {
+        if (seen.indexOf(value) >= 0) return;
+        seen.push(value);
+      }
+      if (Array.isArray(value)) {
+        value.slice(0, 40).forEach(function (item, idx) {
+          walk(item, path + '[' + idx + ']', depth + 1);
+        });
+        return;
+      }
+      if (typeof value !== 'object') return;
+      Object.keys(value).forEach(function (key) {
+        var child = value[key];
+        var childPath = path ? path + '.' + key : key;
+        var low = String(key || '').toLowerCase();
+        if (promptKeys[low] && typeof child !== 'object' && String(child || '').trim()) {
+          out.push({ path: childPath, text: String(child).trim() });
+        }
+        walk(child, childPath, depth + 1);
+      });
+    }
+    walk(obj, '', 0);
+    return out.slice(0, 24);
+  }
+
+  function runResultText(run) {
+    return (run && (run.error || run.result_text || (run.progress && (run.progress.text || run.progress.message)))) || '';
+  }
+
+  function detailSection(title, bodyHtml) {
+    return '<section class="scheduled-run-detail-section">'
+      + '<h5>' + html(title) + '</h5>'
+      + bodyHtml
+      + '</section>';
+  }
+
+  function ensureRunDetailModal() {
+    var modal = document.getElementById('scheduledRunDetailModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'scheduledRunDetailModal';
+    modal.className = 'modal-mask scheduled-run-detail-mask';
+    modal.innerHTML = ''
+      + '<div class="modal scheduled-run-detail-modal" role="dialog" aria-modal="true" aria-labelledby="scheduledRunDetailTitle">'
+      + '<div class="scheduled-run-detail-head">'
+      + '<h4 id="scheduledRunDetailTitle">执行详情</h4>'
+      + '<button type="button" class="btn btn-ghost btn-sm" data-scheduled-detail-close="1">关闭</button>'
+      + '</div>'
+      + '<div id="scheduledRunDetailBody" class="scheduled-run-detail-body"></div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function (evt) {
+      if (evt.target === modal || (evt.target && evt.target.closest && evt.target.closest('[data-scheduled-detail-close]'))) {
+        closeRunDetailModal();
+      }
+    });
+    return modal;
+  }
+
+  function closeRunDetailModal() {
+    var modal = document.getElementById('scheduledRunDetailModal');
+    if (modal) modal.classList.remove('visible');
+  }
+
+  function openRunDetail(runId) {
+    var run = state.runsById[String(runId || '')];
+    if (!run) return;
+    var modal = ensureRunDetailModal();
+    var body = document.getElementById('scheduledRunDetailBody');
+    if (!body) return;
+    var payload = resultPayload(run);
+    var urls = collectMediaUrls(run);
+    var prompts = collectPromptFields({ request: run.payload || {}, result: payload });
+    var metaRows = [
+      ['执行时间', fmtTime(run.created_at)],
+      ['任务名称', run.title || run.content || run.id],
+      ['能力', capabilityText(rowCapabilityId(run)) || kindText(run.task_kind)],
+      ['设备', run.installation_id || '任意设备'],
+      ['状态', statusText(run.status)],
+      ['记录 ID', run.id || '-']
+    ];
+    var metaHtml = '<div class="scheduled-run-detail-meta">'
+      + metaRows.map(function (row) {
+        return '<div><span>' + html(row[0]) + '</span><strong>' + html(row[1]) + '</strong></div>';
+      }).join('')
+      + '</div>';
+    var materialHtml = urls.length
+      ? '<div class="scheduled-run-detail-material">' + mediaPreviewHtml(urls) + '</div>'
+      : '<p class="meta">暂无生成素材。</p>';
+    var promptHtml = prompts.length
+      ? '<div class="scheduled-run-detail-prompts">' + prompts.map(function (item) {
+        return '<div class="scheduled-run-detail-prompt">'
+          + '<div>' + html(item.path) + '</div>'
+          + '<pre>' + html(item.text) + '</pre>'
+          + '</div>';
+      }).join('') + '</div>'
+      : '<p class="meta">未找到提示词字段。</p>';
+    var resultText = runResultText(run);
+    var resultHtml = resultText
+      ? '<pre class="scheduled-run-detail-pre">' + html(resultText) + '</pre>'
+      : '<p class="meta">无错误或文本结果。</p>';
+    body.innerHTML = metaHtml
+      + detailSection('生成素材', materialHtml)
+      + detailSection('提示词', promptHtml)
+      + detailSection('结果 / 错误', resultHtml)
+      + detailSection('任务参数', '<pre class="scheduled-run-detail-pre">' + html(formatJson(run.payload || {})) + '</pre>')
+      + detailSection('结果数据', '<pre class="scheduled-run-detail-pre">' + html(formatJson(payload || {})) + '</pre>');
+    modal.classList.add('visible');
+  }
+
   function taskActionHtml(task) {
     var status = String((task && task.status) || '').toLowerCase();
     var parts = [];
@@ -278,9 +417,15 @@
     return parts.join(' ');
   }
 
-  function runActionHtml(run) {
+  function runActionHtml(run, options) {
+    options = options || {};
     var parts = [];
     var draft = publishDraft(run);
+    if (options.detail) {
+      parts.push('<button type="button" class="btn btn-ghost btn-sm scheduled-run-detail-btn" data-run-id="'
+        + html(run && run.id)
+        + '">查看详情</button>');
+    }
     if (canResumeVideoRun(run)) {
       parts.push('<button type="button" class="btn btn-primary btn-sm scheduled-run-resume-video-btn" data-run-id="'
         + html(run && run.id)
@@ -1043,6 +1188,39 @@
     el.innerHTML = h;
   }
 
+  function renderFinishedRuns(rows) {
+    var el = document.getElementById('scheduledTaskFinishedRunsList');
+    if (!el) return;
+    if (!rows || !rows.length) {
+      el.innerHTML = '<p class="meta">暂无执行结束任务。</p>';
+      return;
+    }
+    var h = '<div class="scheduled-finished-run-list">';
+    rows.forEach(function (r) {
+      var urls = collectMediaUrls(r);
+      var previews = mediaPreviewHtml(urls);
+      h += '<article class="scheduled-finished-run-card">'
+        + '<div class="scheduled-finished-run-main">'
+        + '<div class="scheduled-finished-run-topline">'
+        + '<span>' + html(fmtTime(r.created_at)) + '</span>'
+        + '<span>' + html(statusText(r.status)) + '</span>'
+        + '</div>'
+        + '<div class="scheduled-finished-run-title">' + html(r.title || r.content || r.id) + '</div>'
+        + '<div class="scheduled-finished-run-meta">'
+        + '<span>' + html(capabilityText(rowCapabilityId(r)) || kindText(r.task_kind)) + '</span>'
+        + '<span>' + html(r.installation_id || '任意设备') + '</span>'
+        + '</div>'
+        + '<div class="scheduled-finished-run-assets">'
+        + (previews || '<span class="meta">暂无生成素材</span>')
+        + '</div>'
+        + '</div>'
+        + '<div class="scheduled-finished-run-actions">' + runActionHtml(r, { detail: true }) + '</div>'
+        + '</article>';
+    });
+    h += '</div>';
+    el.innerHTML = h;
+  }
+
   function renderTasks(rows) {
     var el = document.getElementById('scheduledTaskList');
     if (!el) return;
@@ -1178,10 +1356,14 @@
 
   function renderRunsByStatus(rows) {
     rows = Array.isArray(rows) ? rows : [];
+    state.runsById = {};
+    rows.forEach(function (row) {
+      if (row && row.id != null) state.runsById[String(row.id)] = row;
+    });
     var running = rows.filter(runIsRunning);
     var finished = rows.filter(function (row) { return !runIsRunning(row); });
     renderRuns(running, 'scheduledTaskRunningRunsList', '暂无执行中的任务。');
-    renderRuns(finished, 'scheduledTaskFinishedRunsList', '暂无执行结束任务。');
+    renderFinishedRuns(finished);
   }
 
   function loadRuns() {
@@ -1279,6 +1461,11 @@
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-delete-btn') : null;
       if (!btn) return;
       deleteRun(btn.getAttribute('data-run-id'), btn);
+    });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-detail-btn') : null;
+      if (!btn) return;
+      openRunDetail(btn.getAttribute('data-run-id'));
     });
     document.addEventListener('click', function (evt) {
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-publish-btn') : null;

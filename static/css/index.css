@@ -1169,6 +1169,144 @@
     #content-scheduled-tasks .scheduled-list-head h4 {
       margin-bottom: 16px;
     }
+    #content-scheduled-tasks .scheduled-finished-run-list {
+      display: grid;
+      gap: 0.85rem;
+    }
+    #content-scheduled-tasks .scheduled-finished-run-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 1rem;
+      align-items: start;
+      padding: 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--scheduled-soft);
+    }
+    #content-scheduled-tasks .scheduled-finished-run-main {
+      min-width: 0;
+    }
+    #content-scheduled-tasks .scheduled-finished-run-topline,
+    #content-scheduled-tasks .scheduled-finished-run-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem 0.75rem;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+    #content-scheduled-tasks .scheduled-finished-run-title {
+      margin-top: 0.28rem;
+      color: var(--text);
+      font-size: 0.94rem;
+      font-weight: 700;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    #content-scheduled-tasks .scheduled-finished-run-meta {
+      margin-top: 0.28rem;
+    }
+    #content-scheduled-tasks .scheduled-finished-run-assets {
+      margin-top: 0.35rem;
+    }
+    #content-scheduled-tasks .scheduled-finished-run-assets > div {
+      margin-top: 0;
+    }
+    #content-scheduled-tasks .scheduled-finished-run-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.45rem;
+      max-width: 260px;
+    }
+    .scheduled-run-detail-mask {
+      z-index: 1300;
+    }
+    .scheduled-run-detail-modal {
+      width: min(920px, 94vw);
+      max-width: 920px;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+    }
+    .scheduled-run-detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 1rem 1.1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .scheduled-run-detail-head h4 {
+      margin: 0;
+      font-size: 1rem;
+    }
+    .scheduled-run-detail-body {
+      overflow: auto;
+      padding: 1rem 1.1rem 1.15rem;
+      display: grid;
+      gap: 0.85rem;
+    }
+    .scheduled-run-detail-meta {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.65rem;
+    }
+    .scheduled-run-detail-meta > div,
+    .scheduled-run-detail-section {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.04);
+      padding: 0.75rem;
+    }
+    .scheduled-run-detail-meta span {
+      display: block;
+      color: var(--text-muted);
+      font-size: 0.74rem;
+      margin-bottom: 0.22rem;
+    }
+    .scheduled-run-detail-meta strong {
+      display: block;
+      color: var(--text);
+      font-size: 0.84rem;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .scheduled-run-detail-section h5 {
+      margin: 0 0 0.55rem;
+      color: var(--text);
+      font-size: 0.88rem;
+      line-height: 1.35;
+    }
+    .scheduled-run-detail-material > div {
+      margin-top: 0;
+    }
+    .scheduled-run-detail-prompts {
+      display: grid;
+      gap: 0.55rem;
+    }
+    .scheduled-run-detail-prompt > div {
+      margin-bottom: 0.25rem;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+    .scheduled-run-detail-pre,
+    .scheduled-run-detail-prompt pre {
+      margin: 0;
+      max-height: 280px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text);
+      font-size: 0.78rem;
+      line-height: 1.5;
+      background: rgba(0, 0, 0, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      padding: 0.65rem;
+    }
     @media (max-width: 980px) {
       #content-scheduled-tasks {
         max-width: 100%;
@@ -1192,6 +1330,14 @@
       }
       #content-scheduled-tasks .scheduled-param-panel {
         padding: 18px;
+      }
+      #content-scheduled-tasks .scheduled-finished-run-card,
+      .scheduled-run-detail-meta {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      #content-scheduled-tasks .scheduled-finished-run-actions {
+        justify-content: flex-start;
+        max-width: none;
       }
     }
     .category-chip { display: inline-block; padding: 0.25rem 0.65rem; font-size: 0.78rem; border-radius: 12px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: var(--text-muted); cursor: pointer; transition: all 0.15s; }

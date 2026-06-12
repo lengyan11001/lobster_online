@@ -1807,6 +1807,8 @@ var _assetCreativeGroupsCache = [];
 var _assetCreativeGroupEditingAssetId = '';
 var _currentAssetOrigin = 'generated';
 var _assetPreviewState = null;
+var _assetListCache = {};
+var _assetActiveCacheKey = '';
 
 function _assetMsgShow(text, isErr) {
   var m = document.getElementById('assetUploadMsg');
@@ -1842,6 +1844,48 @@ function _currentAssetCreativeGroupFilter() {
 
 function _currentAssetOriginFilter() {
   return _currentAssetOrigin === 'user_upload' ? 'user_upload' : 'generated';
+}
+
+function _assetListCacheKey(query) {
+  var mediaType = (document.getElementById('assetTypeFilter') || {}).value || '';
+  var creativeGroup = _currentAssetCreativeGroupFilter();
+  var origin = _currentAssetOriginFilter();
+  return [
+    publishLocalBase(),
+    origin,
+    mediaType,
+    creativeGroup,
+    (query || '').trim()
+  ].join('\u0001');
+}
+
+function _assetListFingerprint(assets) {
+  return JSON.stringify((assets || []).map(function(a) {
+    return [
+      a && a.asset_id,
+      a && a.asset_origin,
+      a && a.media_type,
+      a && a.source_url,
+      a && a.preview_url,
+      a && a.open_url,
+      a && a.filename,
+      a && a.prompt,
+      a && a.file_size,
+      a && a.tags,
+      a && a.creative_candidate_group,
+      a && (Array.isArray(a.creative_candidate_groups) ? a.creative_candidate_groups.join('|') : ''),
+      a && a.created_at,
+      a && a.updated_at
+    ];
+  }));
+}
+
+function _assetListLoadingHtml() {
+  return '<div class="page-empty-card">加载中...</div>';
+}
+
+function _assetListEmptyHtml() {
+  return '<div class="page-empty-card">暂无素材。可上传本地文件或保存网络URL，也可在对话中让龙虾生成。</div>';
 }
 
 function _setAssetOriginTab(origin) {
@@ -2055,7 +2099,7 @@ function _saveAssetCreativeGroup() {
       return loadCreativeCandidateGroups();
     })
     .then(function() {
-      loadAssets(_currentAssetSearchQuery());
+      loadAssets(_currentAssetSearchQuery(), { force: true });
     })
     .catch(function(e) {
       _showAssetCreativeGroupMsg('设置失败：' + e.message, true);
@@ -2238,13 +2282,108 @@ function _wireAssetListThumbs(container) {
   });
 }
 
-function loadAssets(query) {
+function _bindRenderedAssetListInteractions(el, assets) {
+  if (!el) return;
+  var assetMap = {};
+  (assets || []).forEach(function(asset) {
+    if (asset && asset.asset_id) assetMap[asset.asset_id] = asset;
+  });
+  el.querySelectorAll('button[data-preview-asset]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-preview-asset');
+      _openAssetPreviewModal(assetMap[aid]);
+    });
+  });
+  el.querySelectorAll('button[data-copy-asset-prompt]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-copy-asset-prompt');
+      _copyAssetPrompt(assetMap[aid] && assetMap[aid].prompt);
+      _assetMsgShow((assetMap[aid] && assetMap[aid].prompt) ? '提示词已复制。' : '当前素材没有提示词可复制。', !(assetMap[aid] && assetMap[aid].prompt));
+    });
+  });
+  el.querySelectorAll('button[data-download-asset]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-download-asset');
+      _openAssetPreviewModal(assetMap[aid]);
+      _downloadAssetToLibrary(assetMap[aid]);
+    });
+  });
+  el.querySelectorAll('button[data-creative-candidate]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var aid = btn.getAttribute('data-creative-candidate');
+      var currentGroup = btn.getAttribute('data-current-creative-group') || '';
+      _openAssetCreativeGroupModal(aid, currentGroup);
+    });
+  });
+  el.querySelectorAll('button[data-use-as-attach]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var aid = btn.getAttribute('data-use-as-attach');
+      var mtype = btn.getAttribute('data-attach-media-type') || 'image';
+      var hasUrl = btn.getAttribute('data-attach-has-url') === '1';
+      if (typeof addChatAttachment === 'function') {
+        addChatAttachment(aid, mtype, hasUrl);
+        var chatNav = document.querySelector('.nav-left-item[data-view="chat"]');
+        if (chatNav) chatNav.click();
+        if (typeof _assetMsgShow === 'function') _assetMsgShow('已添加为附图，输入内容后发送即可带图生成', false);
+        else alert('已添加为附图，请在输入框输入内容后发送');
+      }
+    });
+  });
+  el.querySelectorAll('button[data-delete-asset]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var aid = btn.getAttribute('data-delete-asset');
+      if (!confirm('确定删除此素材？')) return;
+      fetch(publishLocalBase() + '/api/assets/' + aid, { method: 'DELETE', headers: authHeaders() })
+        .then(function() {
+          return loadCreativeCandidateGroups();
+        })
+        .then(function() {
+          loadAssets(_currentAssetSearchQuery(), { force: true });
+        })
+        .catch(function() { alert('删除失败'); });
+    });
+  });
+  _wireAssetListThumbs(el);
+  el.querySelectorAll('.asset-preview-wrap').forEach(function(wrap) {
+    wrap.addEventListener('click', function() {
+      var aid = wrap.getAttribute('data-asset-id');
+      if (aid && assetMap[aid]) {
+        _openAssetPreviewModal(assetMap[aid]);
+        return;
+      }
+      var url = wrap.getAttribute('data-open-url');
+      if (!url || !_isAbsoluteHttpUrl(url)) {
+        alert('无法在新窗口打开：当前无公网 http(s) 链接。缩略图已从本机加载时，可在素材目录或对话附图中使用。');
+        return;
+      }
+      window.open(url, '_blank');
+    });
+  });
+}
+
+function loadAssets(query, options) {
+  options = options || {};
   var el = document.getElementById('assetList');
   if (!el) return;
-  el.innerHTML = '<div class="page-empty-card">加载中…</div>';
   var mediaType = (document.getElementById('assetTypeFilter') || {}).value || '';
   var creativeGroup = _currentAssetCreativeGroupFilter();
   var origin = _currentAssetOriginFilter();
+  var cacheKey = _assetListCacheKey(query);
+  var hasRenderedCurrentKey = el.getAttribute('data-asset-cache-key') === cacheKey && !!el.innerHTML.trim();
+  var cached = _assetListCache[cacheKey];
+  _assetActiveCacheKey = cacheKey;
+  if (!hasRenderedCurrentKey && cached && cached.html) {
+    el.innerHTML = cached.html;
+    el.setAttribute('data-asset-cache-key', cacheKey);
+    _bindRenderedAssetListInteractions(el, cached.assets || []);
+    hasRenderedCurrentKey = true;
+  }
+  if (!hasRenderedCurrentKey) {
+    el.innerHTML = _assetListLoadingHtml();
+  }
   var url = publishLocalBase() + '/api/assets?limit=50';
   if (origin) url += '&origin=' + encodeURIComponent(origin);
   if (mediaType) url += '&media_type=' + encodeURIComponent(mediaType);
@@ -2258,8 +2397,23 @@ function loadAssets(query) {
         var itemOrigin = a && a.asset_origin === 'user_upload' ? 'user_upload' : 'generated';
         return itemOrigin === origin;
       });
+      var nextFingerprint = _assetListFingerprint(assets);
+      var prev = _assetListCache[cacheKey];
+      if (!options.force && hasRenderedCurrentKey && prev && prev.fingerprint === nextFingerprint) {
+        prev.fetchedAt = Date.now();
+        return;
+      }
+      _assetListCache[cacheKey] = {
+        assets: assets,
+        fingerprint: nextFingerprint,
+        html: '',
+        fetchedAt: Date.now()
+      };
+      if (_assetActiveCacheKey !== cacheKey) return;
+      el.setAttribute('data-asset-cache-key', cacheKey);
       if (!assets.length) {
-        el.innerHTML = '<div class="page-empty-card">暂无素材。可上传本地文件或保存网络URL，也可在对话中让龙虾生成。</div>';
+        el.innerHTML = _assetListEmptyHtml();
+        _assetListCache[cacheKey].html = el.innerHTML;
         return;
       }
       var assetMap = {};
@@ -2359,73 +2513,17 @@ function loadAssets(query) {
           '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
           '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + deleteBtn + '</div></div>';
       }).join('');
-      el.querySelectorAll('button[data-preview-asset]').forEach(function(btn) {
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          var aid = btn.getAttribute('data-preview-asset');
-          _openAssetPreviewModal(assetMap[aid]);
-        });
-      });
-      el.querySelectorAll('button[data-copy-asset-prompt]').forEach(function(btn) {
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          var aid = btn.getAttribute('data-copy-asset-prompt');
-          _copyAssetPrompt(assetMap[aid] && assetMap[aid].prompt);
-          _assetMsgShow((assetMap[aid] && assetMap[aid].prompt) ? '提示词已复制。' : '当前素材没有提示词可复制。', !(assetMap[aid] && assetMap[aid].prompt));
-        });
-      });
-      el.querySelectorAll('button[data-download-asset]').forEach(function(btn) {
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          var aid = btn.getAttribute('data-download-asset');
-          _openAssetPreviewModal(assetMap[aid]);
-          _downloadAssetToLibrary(assetMap[aid]);
-        });
-      });
-      el.querySelectorAll('button[data-creative-candidate]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var aid = btn.getAttribute('data-creative-candidate');
-          var currentGroup = btn.getAttribute('data-current-creative-group') || '';
-          _openAssetCreativeGroupModal(aid, currentGroup);
-        });
-      });
-      el.querySelectorAll('button[data-use-as-attach]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var aid = btn.getAttribute('data-use-as-attach');
-          var mtype = btn.getAttribute('data-attach-media-type') || 'image';
-          var hasUrl = btn.getAttribute('data-attach-has-url') === '1';
-          if (typeof addChatAttachment === 'function') {
-            addChatAttachment(aid, mtype, hasUrl);
-            var chatNav = document.querySelector('.nav-left-item[data-view="chat"]');
-            if (chatNav) chatNav.click();
-            if (typeof _assetMsgShow === 'function') _assetMsgShow('已添加为附图，输入内容后发送即可带图生成', false);
-            else alert('已添加为附图，请在输入框输入内容后发送');
-          }
-        });
-      });
-      el.querySelectorAll('button[data-delete-asset]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var aid = btn.getAttribute('data-delete-asset');
-          if (!confirm('确定删除此素材？')) return;
-          fetch(publishLocalBase() + '/api/assets/' + aid, { method: 'DELETE', headers: authHeaders() })
-            .then(function() {
-              return loadCreativeCandidateGroups();
-            })
-            .then(function() {
-              loadAssets(_currentAssetSearchQuery());
-            })
-            .catch(function() { alert('删除失败'); });
-        });
-      });
-      _wireAssetListThumbs(el);
-      el.querySelectorAll('.asset-preview-wrap').forEach(function(wrap) {
-        wrap.addEventListener('click', function() {
-          var aid = wrap.getAttribute('data-asset-id');
-          _openAssetPreviewModal(assetMap[aid]);
-        });
-      });
+      _assetListCache[cacheKey].html = el.innerHTML;
+      _bindRenderedAssetListInteractions(el, assets);
     })
-    .catch(function() { el.innerHTML = '<div class="page-empty-card msg err">加载失败</div>'; });
+    .catch(function() {
+      if (_assetActiveCacheKey !== cacheKey) return;
+      if (hasRenderedCurrentKey) {
+        _assetMsgShow('素材列表刷新失败，已显示当前列表', true);
+        return;
+      }
+      el.innerHTML = '<div class="page-empty-card msg err">加载失败</div>';
+    });
 }
 
 var _ASSET_PAGE_SIZE = 20;
@@ -2794,7 +2892,7 @@ function bindAssetLibraryUi() {
     assetRefreshBtn._assetLibraryBound = true;
     assetRefreshBtn.addEventListener('click', function() {
       loadCreativeCandidateGroups().then(function() {
-        loadAssets(_currentAssetSearchQuery());
+        loadAssets(_currentAssetSearchQuery(), { force: true });
       });
     });
   }
@@ -2900,7 +2998,7 @@ function bindAssetLibraryUi() {
             _assetMsgShow(msg, noTos > 0 || failed > 0);
             if (done || noTos) _setAssetOriginTab('user_upload');
             loadCreativeCandidateGroups().then(function() {
-              loadAssets(_currentAssetSearchQuery());
+              loadAssets(_currentAssetSearchQuery(), { force: true });
             });
           } else {
             setAssetUploadState(true, '正在上传到火山 ' + finished + '/' + total + '…');
@@ -2954,14 +3052,13 @@ function bindAssetSaveUrlUi() {
           if (urlInput) urlInput.value = '';
           _assetMsgShow('保存成功 (ID: ' + (d.asset_id || '') + ')', false);
           loadCreativeCandidateGroups().then(function() {
-            loadAssets(_currentAssetSearchQuery());
+            loadAssets(_currentAssetSearchQuery(), { force: true });
           });
         })
         .catch(function(e) { _assetMsgShow('保存失败: ' + e.message, true); })
         .finally(function() { assetSaveUrlBtn.disabled = false; });
     });
   }
-  bindAssetSaveUrlUi();
 }
 
 // ── Tasks ────────────────────────────────────────────────────────
@@ -3054,7 +3151,7 @@ function bindPublishRefreshButtons() {
     assetTopRefreshBtn._assetTopRefreshBound = true;
     assetTopRefreshBtn.addEventListener('click', function() {
       loadCreativeCandidateGroups();
-      loadAssets(_currentAssetSearchQuery());
+      loadAssets(_currentAssetSearchQuery(), { force: true });
     });
   }
 }
@@ -3071,6 +3168,7 @@ function initPublishView() {
 
 function initAssetLibraryView() {
   bindAssetLibraryUi();
+  bindAssetSaveUrlUi();
   bindPublishRefreshButtons();
   loadCreativeCandidateGroups().then(function() {
     loadAssets(_currentAssetSearchQuery());

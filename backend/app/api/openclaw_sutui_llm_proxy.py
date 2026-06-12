@@ -11,6 +11,7 @@ import asyncio
 import hmac
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, Optional
@@ -45,6 +46,9 @@ _OPENCLAW_SKILL_AGENT_IDS = {"lobster-browser-use", "lobster-computer-use"}
 _OPENCLAW_SKILL_SERVER_MODEL_ALIAS = "openclaw-skill-chat"
 _TRANSIENT_LIMIT_MAX_ATTEMPTS = 3
 _TRANSIENT_LIMIT_BACKOFF_SECONDS = (1.5, 3.0)
+_REQUEST_ERROR_MAX_ATTEMPTS = 3
+_REQUEST_ERROR_BACKOFF_SECONDS = (1.5, 3.0)
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 
 _FAKE_TOOL_CALL_RE = __import__("re").compile(
     r"tool_call|tool\u2581call|function_calls|<\|tool|<\s*[\|｜]\s*DSML\s*[\|｜]|```json\s*\{[^}]*capability",
@@ -133,8 +137,114 @@ def _transient_limit_backoff(attempt: int) -> float:
     return _TRANSIENT_LIMIT_BACKOFF_SECONDS[idx]
 
 
+def _request_error_backoff(attempt: int) -> float:
+    idx = max(0, min(attempt - 1, len(_REQUEST_ERROR_BACKOFF_SECONDS) - 1))
+    return _REQUEST_ERROR_BACKOFF_SECONDS[idx]
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in _FALSE_ENV_VALUES
+
+
+def _cloud_http_trust_env() -> bool:
+    return _env_bool("OPENCLAW_SUTUI_PROXY_TRUST_ENV", False)
+
+
+def _cloud_http_fallback_trust_env(primary: bool) -> Optional[bool]:
+    if not _env_bool("OPENCLAW_SUTUI_PROXY_TRUST_ENV_FALLBACK", True):
+        return None
+    return not primary
+
+
+def _cloud_http_trust_env_modes(primary: bool) -> tuple[bool, ...]:
+    fallback = _cloud_http_fallback_trust_env(primary)
+    if fallback is None or fallback == primary:
+        return (primary,)
+    return (primary, fallback)
+
+
 def _upstream_concurrent_limit_message() -> str:
     return "上游模型当前并发已满，已自动重试但仍未拿到可用回复。请稍后再试。"
+
+
+def _cloud_dialog_connect_failure_message() -> str:
+    return "云端对话服务连接失败，已自动重试但仍未连通。请稍后重试。"
+
+
+async def _post_upstream_with_request_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    json_body: Dict[str, Any],
+    headers: Dict[str, str],
+    trace_id: str,
+    context: str,
+    trust_env: Optional[bool] = None,
+) -> httpx.Response:
+    last_exc: Optional[httpx.RequestError] = None
+    for attempt in range(1, _REQUEST_ERROR_MAX_ATTEMPTS + 1):
+        try:
+            return await client.post(url, json=json_body, headers=headers)
+        except httpx.RequestError as exc:
+            last_exc = exc
+            logger.warning(
+                "[chat_trace] trace_id=%s path=openclaw_sutui_proxy %s_request_failed attempt=%s/%s trust_env=%s err_type=%s err=%s",
+                trace_id,
+                context,
+                attempt,
+                _REQUEST_ERROR_MAX_ATTEMPTS,
+                trust_env,
+                type(exc).__name__,
+                str(exc)[:500],
+            )
+            if attempt >= _REQUEST_ERROR_MAX_ATTEMPTS:
+                break
+            await asyncio.sleep(_request_error_backoff(attempt))
+    assert last_exc is not None
+    raise last_exc
+
+
+async def _post_upstream_with_cloud_client_retry(
+    url: str,
+    *,
+    json_body: Dict[str, Any],
+    headers: Dict[str, str],
+    trace_id: str,
+    context: str,
+    primary_trust_env: bool,
+) -> httpx.Response:
+    last_exc: Optional[httpx.RequestError] = None
+    modes = _cloud_http_trust_env_modes(primary_trust_env)
+    for index, trust_env in enumerate(modes):
+        try:
+            async with httpx.AsyncClient(timeout=300.0, trust_env=trust_env) as client:
+                return await _post_upstream_with_request_retry(
+                    client,
+                    url,
+                    json_body=json_body,
+                    headers=headers,
+                    trace_id=trace_id,
+                    context=context,
+                    trust_env=trust_env,
+                )
+        except httpx.RequestError as exc:
+            last_exc = exc
+            if index >= len(modes) - 1:
+                break
+            logger.warning(
+                "[chat_trace] trace_id=%s path=openclaw_sutui_proxy %s_switch_trust_env after_request_error trust_env=%s next_trust_env=%s err_type=%s err=%s",
+                trace_id,
+                context,
+                trust_env,
+                modes[index + 1],
+                type(exc).__name__,
+                str(exc)[:500],
+            )
+    assert last_exc is not None
+    raise last_exc
 
 
 def _upstream_error_message(status_code: int, content: bytes, min_charge: str = "") -> str:
@@ -518,10 +628,11 @@ async def openclaw_sutui_chat_completions(request: Request):
 
     stream = bool(body.get("stream"))
     model_forward = (body.get("model") or "").strip()
+    cloud_trust_env = _cloud_http_trust_env()
     wx_log = (wx_uid[-16:] if wx_uid and len(wx_uid) > 16 else wx_uid) or "-"
     logger.info(
         "[chat_trace] trace_id=%s path=openclaw_sutui_proxy route=lobster-sutui->POST_AUTH_SUTUI_CHAT "
-        "model_in=%s model_forward=%s stream=%s user_auth=%s agent_id=%s wx_tail=%s installation_id_set=%s auth_center=%s chat_turn_id=%s",
+        "model_in=%s model_forward=%s stream=%s user_auth=%s agent_id=%s wx_tail=%s installation_id_set=%s auth_center=%s chat_turn_id=%s trust_env=%s",
         trace_id,
         model_in or "-",
         model_forward or "-",
@@ -532,36 +643,43 @@ async def openclaw_sutui_chat_completions(request: Request):
         bool(xi),
         asb,
         headers.get(CHAT_TURN_ID_HEADER, "-"),
+        cloud_trust_env,
     )
 
     if not stream:
         try:
-            async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
-                max_attempts = _TRANSIENT_LIMIT_MAX_ATTEMPTS if is_openclaw_skill_request else 1
-                for attempt in range(1, max_attempts + 1):
-                    if attempt > 1:
-                        await asyncio.sleep(_transient_limit_backoff(attempt - 1))
-                    r = await client.post(url, json=body, headers=headers)
-                    if not _response_looks_like_concurrent_limit(r.content):
-                        break
-                    logger.warning(
-                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy upstream_concurrent_limit "
-                        "attempt=%s/%s http=%s",
-                        trace_id,
-                        attempt,
-                        max_attempts,
-                        r.status_code,
-                    )
-                if _response_looks_like_concurrent_limit(r.content):
-                    out_h = {TRACE_HEADER: trace_id, "content-type": "application/json"}
-                    return Response(
-                        content=_openai_json_text_response(_upstream_concurrent_limit_message(), model=model_forward),
-                        status_code=200,
-                        headers=out_h,
-                    )
+            max_attempts = _TRANSIENT_LIMIT_MAX_ATTEMPTS if is_openclaw_skill_request else 1
+            for attempt in range(1, max_attempts + 1):
+                if attempt > 1:
+                    await asyncio.sleep(_transient_limit_backoff(attempt - 1))
+                r = await _post_upstream_with_cloud_client_retry(
+                    url,
+                    json_body=body,
+                    headers=headers,
+                    trace_id=trace_id,
+                    context="nonstream",
+                    primary_trust_env=cloud_trust_env,
+                )
+                if not _response_looks_like_concurrent_limit(r.content):
+                    break
+                logger.warning(
+                    "[chat_trace] trace_id=%s path=openclaw_sutui_proxy upstream_concurrent_limit "
+                    "attempt=%s/%s http=%s",
+                    trace_id,
+                    attempt,
+                    max_attempts,
+                    r.status_code,
+                )
+            if _response_looks_like_concurrent_limit(r.content):
+                out_h = {TRACE_HEADER: trace_id, "content-type": "application/json"}
+                return Response(
+                    content=_openai_json_text_response(_upstream_concurrent_limit_message(), model=model_forward),
+                    status_code=200,
+                    headers=out_h,
+                )
         except httpx.RequestError as e:
             logger.exception("[openclaw-sutui-proxy] 转发失败: %s", e)
-            raise HTTPException(status_code=502, detail=f"认证中心不可达: {e!s}") from e
+            raise HTTPException(status_code=502, detail=_cloud_dialog_connect_failure_message()) from e
         response_content = r.content
         json_data: Optional[Dict[str, Any]] = None
         json_overridden = False
@@ -576,8 +694,14 @@ async def openclaw_sutui_chat_completions(request: Request):
                     retry_body = dict(body)
                     retry_body["tool_choice"] = "required"
                     try:
-                        async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
-                            r2 = await client.post(url, json=retry_body, headers=headers)
+                        r2 = await _post_upstream_with_cloud_client_retry(
+                            url,
+                            json_body=retry_body,
+                            headers=headers,
+                            trace_id=trace_id,
+                            context="nonstream_fake_tool_retry",
+                            primary_trust_env=cloud_trust_env,
+                        )
                         ct2 = (r2.headers.get("content-type") or "").lower().split(";")[0].strip()
                         jd2 = r2.json() if r2.status_code == 200 and ct2 == "application/json" else None
                         if isinstance(jd2, dict) and not _response_has_fake_tool_text(jd2):
@@ -637,79 +761,92 @@ async def openclaw_sutui_chat_completions(request: Request):
         bridge_body["stream"] = False
         max_attempts = _TRANSIENT_LIMIT_MAX_ATTEMPTS if is_openclaw_skill_request else 1
         try:
-            async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
-                r: Optional[httpx.Response] = None
-                for attempt in range(1, max_attempts + 1):
-                    if attempt > 1:
-                        await asyncio.sleep(_transient_limit_backoff(attempt - 1))
-                    r = await client.post(url, json=bridge_body, headers=headers)
-                    if not _response_looks_like_concurrent_limit(r.content):
-                        break
-                    logger.warning(
-                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_upstream_concurrent_limit "
-                        "attempt=%s/%s http=%s",
-                        trace_id,
-                        attempt,
-                        max_attempts,
-                        r.status_code,
-                    )
-                if r is None:
-                    yield _openai_stream_text_event("LLM upstream returned no response.", model=model_forward)
-                    return
-                if _response_looks_like_concurrent_limit(r.content):
-                    yield _openai_stream_text_event(_upstream_concurrent_limit_message(), model=model_forward)
-                    return
-                if r.status_code >= 400:
-                    min_charge = (r.headers.get("X-Lobster-Min-Charge-Credits") or "").strip()
-                    yield _openai_stream_text_event(
-                        _upstream_error_message(r.status_code, r.content, min_charge=min_charge),
-                        model=model_forward,
-                    )
-                    return
+            r: Optional[httpx.Response] = None
+            for attempt in range(1, max_attempts + 1):
+                if attempt > 1:
+                    await asyncio.sleep(_transient_limit_backoff(attempt - 1))
+                r = await _post_upstream_with_cloud_client_retry(
+                    url,
+                    json_body=bridge_body,
+                    headers=headers,
+                    trace_id=trace_id,
+                    context="nonstream_bridge",
+                    primary_trust_env=cloud_trust_env,
+                )
+                if not _response_looks_like_concurrent_limit(r.content):
+                    break
+                logger.warning(
+                    "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_upstream_concurrent_limit "
+                    "attempt=%s/%s http=%s",
+                    trace_id,
+                    attempt,
+                    max_attempts,
+                    r.status_code,
+                )
+            if r is None:
+                yield _openai_stream_text_event("LLM upstream returned no response.", model=model_forward)
+                return
+            if _response_looks_like_concurrent_limit(r.content):
+                yield _openai_stream_text_event(_upstream_concurrent_limit_message(), model=model_forward)
+                return
+            if r.status_code >= 400:
+                min_charge = (r.headers.get("X-Lobster-Min-Charge-Credits") or "").strip()
+                yield _openai_stream_text_event(
+                    _upstream_error_message(r.status_code, r.content, min_charge=min_charge),
+                    model=model_forward,
+                )
+                return
 
-                try:
-                    json_data = r.json()
-                except Exception:
-                    logger.warning(
-                        "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_invalid_json http=%s bytes=%s",
-                        trace_id,
-                        r.status_code,
-                        len(r.content or b""),
-                    )
-                    yield _openai_stream_text_event("LLM upstream returned invalid JSON.", model=model_forward)
-                    return
-
-                if isinstance(json_data, dict) and _should_retry_fake_tool_call(json_data, bridge_body):
-                    retry_body = dict(bridge_body)
-                    retry_body["tool_choice"] = "required"
-                    try:
-                        r2 = await client.post(url, json=retry_body, headers=headers)
-                        jd2 = r2.json() if r2.status_code == 200 else None
-                    except Exception as e:
-                        logger.warning(
-                            "[chat_trace] trace_id=%s openclaw_sutui_proxy nonstream_bridge fake_tool_text retry failed: %s",
-                            trace_id,
-                            e,
-                        )
-                        jd2 = None
-                    if isinstance(jd2, dict) and not _response_has_fake_tool_text(jd2):
-                        json_data = jd2
-                        logger.info(
-                            "[chat_trace] trace_id=%s openclaw_sutui_proxy nonstream_bridge fake_tool_text retry succeeded",
-                            trace_id,
-                        )
-                if isinstance(json_data, dict):
-                    _strip_fake_tool_text_from_response(json_data)
-                logger.info(
-                    "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_response http=%s summary=%s",
+            try:
+                json_data = r.json()
+            except Exception:
+                logger.warning(
+                    "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_invalid_json http=%s bytes=%s",
                     trace_id,
                     r.status_code,
-                    _upstream_resp_summary(json_data if isinstance(json_data, dict) else None),
+                    len(r.content or b""),
                 )
-                yield _openai_stream_from_completion_response(json_data, model=model_forward)
+                yield _openai_stream_text_event("LLM upstream returned invalid JSON.", model=model_forward)
+                return
+
+            if isinstance(json_data, dict) and _should_retry_fake_tool_call(json_data, bridge_body):
+                retry_body = dict(bridge_body)
+                retry_body["tool_choice"] = "required"
+                try:
+                    r2 = await _post_upstream_with_cloud_client_retry(
+                        url,
+                        json_body=retry_body,
+                        headers=headers,
+                        trace_id=trace_id,
+                        context="nonstream_bridge_fake_tool_retry",
+                        primary_trust_env=cloud_trust_env,
+                    )
+                    jd2 = r2.json() if r2.status_code == 200 else None
+                except Exception as e:
+                    logger.warning(
+                        "[chat_trace] trace_id=%s openclaw_sutui_proxy nonstream_bridge fake_tool_text retry failed: %s",
+                        trace_id,
+                        e,
+                    )
+                    jd2 = None
+                if isinstance(jd2, dict) and not _response_has_fake_tool_text(jd2):
+                    json_data = jd2
+                    logger.info(
+                        "[chat_trace] trace_id=%s openclaw_sutui_proxy nonstream_bridge fake_tool_text retry succeeded",
+                        trace_id,
+                    )
+            if isinstance(json_data, dict):
+                _strip_fake_tool_text_from_response(json_data)
+            logger.info(
+                "[chat_trace] trace_id=%s path=openclaw_sutui_proxy nonstream_bridge_response http=%s summary=%s",
+                trace_id,
+                r.status_code,
+                _upstream_resp_summary(json_data if isinstance(json_data, dict) else None),
+            )
+            yield _openai_stream_from_completion_response(json_data, model=model_forward)
         except httpx.RequestError as e:
             logger.exception("[openclaw-sutui-proxy] nonstream bridge forward failed: %s", e)
-            yield _openai_stream_text_event(f"认证中心不可达：{e!s}", model=model_forward)
+            yield _openai_stream_text_event(_cloud_dialog_connect_failure_message(), model=model_forward)
 
     return StreamingResponse(
         gen_nonstream_bridge(),
@@ -717,13 +854,14 @@ async def openclaw_sutui_chat_completions(request: Request):
         headers={TRACE_HEADER: trace_id, "X-Lobster-OpenClaw-Stream-Bridge": "nonstream"},
     )
 
-    async def stream_once(client: httpx.AsyncClient, attempt: int) -> AsyncIterator[bytes]:
+    async def stream_once(client: httpx.AsyncClient, attempt: int, trust_env: bool) -> AsyncIterator[bytes]:
         async with client.stream("POST", url, json=body, headers=headers) as r:
             logger.info(
-                "[chat_trace] trace_id=%s path=openclaw_sutui_proxy auth_center_stream_first_byte http=%s attempt=%s",
+                "[chat_trace] trace_id=%s path=openclaw_sutui_proxy auth_center_stream_first_byte http=%s attempt=%s trust_env=%s",
                 trace_id,
                 r.status_code,
                 attempt,
+                trust_env,
             )
             if r.status_code >= 400:
                 content = await r.aread()
@@ -763,10 +901,25 @@ async def openclaw_sutui_chat_completions(request: Request):
                 try:
                     if attempt > 1:
                         await asyncio.sleep(_transient_limit_backoff(attempt - 1))
-                    async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
-                        async for chunk in stream_once(client, attempt):
-                            yield chunk
-                    return
+                    modes = _cloud_http_trust_env_modes(cloud_trust_env)
+                    for index, trust_env in enumerate(modes):
+                        try:
+                            async with httpx.AsyncClient(timeout=300.0, trust_env=trust_env) as client:
+                                async for chunk in stream_once(client, attempt, trust_env):
+                                    yield chunk
+                            return
+                        except httpx.RequestError as exc:
+                            if index >= len(modes) - 1:
+                                raise
+                            logger.warning(
+                                "[chat_trace] trace_id=%s path=openclaw_sutui_proxy stream_switch_trust_env "
+                                "after_request_error trust_env=%s next_trust_env=%s err_type=%s err=%s",
+                                trace_id,
+                                trust_env,
+                                modes[index + 1],
+                                type(exc).__name__,
+                                str(exc)[:500],
+                            )
                 except _UpstreamConcurrentLimit as e:
                     logger.warning(
                         "[chat_trace] trace_id=%s path=openclaw_sutui_proxy upstream_concurrent_limit "
@@ -781,7 +934,7 @@ async def openclaw_sutui_chat_completions(request: Request):
                         return
         except httpx.RequestError as e:
             logger.exception("[openclaw-sutui-proxy] 流式转发失败: %s", e)
-            err = f"data: {json.dumps({'error': {'message': str(e)}}, ensure_ascii=False)}\n\n"
+            err = f"data: {json.dumps({'error': {'message': _cloud_dialog_connect_failure_message()}}, ensure_ascii=False)}\n\n"
             yield err.encode("utf-8")
 
     return StreamingResponse(

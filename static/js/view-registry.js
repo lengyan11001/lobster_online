@@ -47,9 +47,8 @@
   });
 
   window.registerLobsterView('assets', {
-    html: '/static/views/assets.html?v=20260610-asset-origin-filter-fix',
-    scripts: '/static/js/publish.js?v=20260610-asset-origin-filter-fix',
-    cache: 'reload'
+    html: '/static/views/assets.html?v=20260611-asset-cache-incremental',
+    scripts: '/static/js/publish.js?v=20260611-asset-preview-cache-incremental'
   });
 
   window.registerLobsterView('scheduled-tasks', {
