@@ -77,9 +77,18 @@ from __future__ import annotations
 import importlib.machinery as _lobster_machinery
 import pathlib as _lobster_pathlib
 import sys as _lobster_sys
+import types as _lobster_types
 _lobster_pyc = _lobster_pathlib.Path(__file__).with_suffix(".pyc")
 _lobster_loader = _lobster_machinery.SourcelessFileLoader(__name__, str(_lobster_pyc))
-_lobster_loader.exec_module(_lobster_sys.modules[__name__])
+_lobster_module = _lobster_sys.modules.get(__name__)
+if _lobster_module is None:
+    _lobster_module = _lobster_types.ModuleType(__name__)
+    _lobster_module.__file__ = __file__
+    _lobster_module.__loader__ = _lobster_loader
+    _lobster_module.__package__ = __package__
+    _lobster_sys.modules[__name__] = _lobster_module
+_lobster_loader.exec_module(_lobster_module)
+globals().update(_lobster_module.__dict__)
 """
 
 PPT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
@@ -476,9 +485,18 @@ from __future__ import annotations
 import importlib.machinery as _lobster_machinery
 import pathlib as _lobster_pathlib
 import sys as _lobster_sys
+import types as _lobster_types
 _lobster_pyc = _lobster_pathlib.Path(__file__).with_suffix(".pyc")
 _lobster_loader = _lobster_machinery.SourcelessFileLoader(__name__, str(_lobster_pyc))
-_lobster_loader.exec_module(_lobster_sys.modules[__name__])
+_lobster_module = _lobster_sys.modules.get(__name__)
+if _lobster_module is None:
+    _lobster_module = _lobster_types.ModuleType(__name__)
+    _lobster_module.__file__ = __file__
+    _lobster_module.__loader__ = _lobster_loader
+    _lobster_module.__package__ = __package__
+    _lobster_sys.modules[__name__] = _lobster_module
+_lobster_loader.exec_module(_lobster_module)
+globals().update(_lobster_module.__dict__)
 """
 failures = []
 count = 0

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.73",
-  "build": 108,
-  "applied_at": "2026-06-09T19:44:00+08:00",
-  "note": "Restore Douyin leads entries"
+  "version": "1.0.75",
+  "build": 110,
+  "applied_at": "2026-06-12T19:48:00+08:00",
+  "note": "Fix Douyin protocol loader with source patch"
 }
