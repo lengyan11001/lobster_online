@@ -145,7 +145,8 @@
   function rememberJob(job) {
     if (!job || !job.jobId) return;
     var next = state.recentJobs.filter(function(item) { return item && item.jobId !== job.jobId; });
-    next.unshift(Object.assign({}, job, { updatedAt: Date.now() }));
+    var now = Date.now();
+    next.unshift(Object.assign({}, job, { updatedAt: now, sortAt: Number(job.sortAt || job.createdAt || job.updatedAt || now) }));
     state.recentJobs = next.slice(0, 12);
     saveRecentJobs();
   }
@@ -154,7 +155,10 @@
     if (!jobId) return;
     state.recentJobs = state.recentJobs.map(function(item) {
       if (!item || item.jobId !== jobId) return item;
-      return Object.assign({}, item, patch || {}, { updatedAt: Date.now() });
+      return Object.assign({}, item, patch || {}, {
+        updatedAt: Date.now(),
+        sortAt: Number(item.sortAt || item.createdAt || item.updatedAt || Date.now())
+      });
     });
     saveRecentJobs();
   }
@@ -165,11 +169,12 @@
       if (!item || !item.jobId) return;
       var old = byId[item.jobId] || {};
       byId[item.jobId] = Object.assign({}, old, item, {
-        updatedAt: item.updatedAt || old.updatedAt || Date.now()
+        updatedAt: item.updatedAt || old.updatedAt || Date.now(),
+        sortAt: Number(old.sortAt || item.sortAt || item.createdAt || item.updatedAt || old.updatedAt || Date.now())
       });
     });
     state.recentJobs = Object.keys(byId).map(function(id) { return byId[id]; })
-      .sort(function(a, b) { return Number(b.updatedAt || 0) - Number(a.updatedAt || 0); })
+      .sort(function(a, b) { return Number(b.sortAt || b.updatedAt || 0) - Number(a.sortAt || a.updatedAt || 0); })
       .slice(0, 12);
     saveRecentJobs();
   }
@@ -1294,21 +1299,16 @@
       btn.addEventListener('click', function() {
         var jobId = btn.getAttribute('data-imglab-job') || '';
         if (!jobId) return;
-        state.currentJobId = jobId;
         var hit = state.recentJobs.find(function(item) { return item && item.jobId === jobId; });
-        state.currentJobStatus = (hit && hit.status) || 'running';
-        state.currentJobPrompt = promptFromJob(hit);
-        if (state.currentJobStatus === 'stale') state.currentJobStatus = 'running';
+        var status = (hit && hit.status) || 'running';
+        if (status === 'stale') status = 'running';
         setRightView('result');
-        if (hit && hit.cloud && hit.cloudJob && hit.status === 'completed') {
-          state.selectedJobId = '';
-          applyCloudJobResult(hit.cloudJob);
-          showMessage('已加载服务器保存的历史结果。', false);
-          return;
-        }
         state.selectedJobId = jobId;
         renderResultSurface();
-        if (state.currentJobStatus === 'running' || (!hit || (hit.status === 'completed' && !hit.image))) {
+        if (status === 'running' || (!hit || (hit.status === 'completed' && !hit.image))) {
+          state.currentJobId = jobId;
+          state.currentJobStatus = status;
+          state.currentJobPrompt = promptFromJob(hit);
           refreshJobStatus(true);
         }
       });
