@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
@@ -59,6 +59,7 @@ class UserOut(BaseModel):
     brand_mark: Optional[str] = None
     wecom_userid: Optional[str] = None
     is_agent: bool = False
+    features: Dict[str, bool] = Field(default_factory=dict)
 
 
 class Token(BaseModel):
@@ -724,6 +725,7 @@ async def get_me(
         preferred_model=preferred,
         credits=getattr(current_user, "credits", None),
         brand_mark=getattr(current_user, "brand_mark", None),
+        features={},
     )
 
 

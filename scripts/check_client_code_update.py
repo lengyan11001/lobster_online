@@ -134,6 +134,9 @@ ALLOWED_NODEJS_TREE_PREFIXES: tuple[str, ...] = (
     "nodejs/node_modules",
     "nodejs/.openclaw/npm",
 )
+ALLOWED_BUNDLED_NODE_MODULE_PREFIXES: tuple[str, ...] = (
+    "backend/douyin_origin/douyin_protocol/node_modules",
+)
 ALLOWED_DEPS_WHEEL_PREFIX = "deps/wheels/"
 ALLOWED_DEPS_WHEEL_SUFFIXES = (".whl", ".tar.gz")
 
@@ -150,9 +153,24 @@ PPT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
     "openai>=1.0.0",
 )
 DOUYIN_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
+    "requests>=2.31.0",
+    "playwright>=1.49.0",
+    "PyExecJS>=1.5.1",
+    "protobuf>=5.28.0,<7.0.0",
     "pandas>=2.2.0",
     "openpyxl>=3.1.0",
     "pymysql>=1.1.0",
+    "websockets>=12.0",
+)
+DOUYIN_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
+    "requests",
+    "playwright.async_api",
+    "execjs",
+    "google.protobuf",
+    "pandas",
+    "openpyxl",
+    "pymysql",
+    "websockets.sync.client",
 )
 RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
     {
@@ -166,6 +184,8 @@ RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
         "name": "douyin_runtime",
         "wheel_dirs": (DOUYIN_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels"),
         "requirements": DOUYIN_RUNTIME_REQUIREMENTS,
+        "verify_imports": DOUYIN_RUNTIME_IMPORT_CHECKS,
+        "required": True,
         "trigger_exact": {"scripts/douyin_runtime_wheels"},
         "trigger_prefix": ("scripts/douyin_runtime_wheels/",),
     },
@@ -432,6 +452,9 @@ def _path_allowed(rel: str) -> bool:
         return False
     if rl == "python" or rl.startswith("python/"):
         return False
+    for pref in ALLOWED_BUNDLED_NODE_MODULE_PREFIXES:
+        if r == pref or r.startswith(pref + "/"):
+            return True
     if rl.startswith(ALLOWED_DEPS_WHEEL_PREFIX) and rl.endswith(ALLOWED_DEPS_WHEEL_SUFFIXES):
         return True
     if rl == "deps" or rl.startswith("deps/"):
@@ -928,9 +951,13 @@ def _install_runtime_group_if_needed(group: dict[str, Any], applied: list[str]) 
     if not _should_install_runtime_group(group, applied):
         return
     name = str(group.get("name") or "runtime")
+    required = bool(group.get("required"))
     wheel_dirs = [p for p in group.get("wheel_dirs", ()) if isinstance(p, Path) and p.is_dir()]
     if not wheel_dirs:
-        print(f"[code] [WARN] {name} wheels missing; skip offline dependency install.", flush=True)
+        msg = f"{name} wheels missing; skip offline dependency install."
+        print(f"[code] [WARN] {msg}", flush=True)
+        if required:
+            raise RuntimeError(msg)
         return
     cmd = [
         sys.executable,
@@ -947,7 +974,24 @@ def _install_runtime_group_if_needed(group: dict[str, Any], applied: list[str]) 
         subprocess.run(cmd, cwd=str(ROOT), check=True, creationflags=_creation_flags())
     except Exception as exc:
         print(f"[code] [ERR] {name} dependency install failed: {exc}", flush=True)
+        if required:
+            raise RuntimeError(f"{name} dependency install failed") from exc
         return
+    imports = [str(item).strip() for item in (group.get("verify_imports") or ()) if str(item).strip()]
+    if imports:
+        code = "import importlib\nfor name in " + repr(imports) + ":\n    importlib.import_module(name)\n"
+        try:
+            subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=str(ROOT),
+                check=True,
+                creationflags=_creation_flags(),
+            )
+        except Exception as exc:
+            print(f"[code] [ERR] {name} dependency verify failed: {exc}", flush=True)
+            if required:
+                raise RuntimeError(f"{name} dependency verify failed") from exc
+            return
     print(f"[code-progress] {name}_install_done", flush=True)
 
 

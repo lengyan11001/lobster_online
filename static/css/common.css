@@ -1,4 +1,4 @@
-    .hidden { display: none !important; }
+    [hidden], .hidden { display: none !important; }
     :root {
       --bg: #0a0a0f;
       --bg-card: rgba(18, 18, 24, 0.9);

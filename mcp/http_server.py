@@ -79,10 +79,11 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "wewrite.article.generate": ("/api/wechat-article/generate", 300.0),
     "wewrite.article.draft": ("/api/wechat-article/drafts", 120.0),
     "ppt.create": ("/api/create-ppt/run", 1800.0),
+    "cutcli.template.customize": ("/api/cutcli/local/capability", 1800.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish", "wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft", "ppt.create"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish", "wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft", "ppt.create", "cutcli.template.customize"})
 
 _LOCAL_PIPELINE_JOB_LOOKUP_SPECS: tuple[tuple[str, str, str], ...] = (
     ("comfly.daihuo.pipeline", "/api/comfly-daihuo/pipeline/jobs/{job_id}", "local_comfly_daihuo_job"),
@@ -90,6 +91,7 @@ _LOCAL_PIPELINE_JOB_LOOKUP_SPECS: tuple[tuple[str, str, str], ...] = (
     ("goal.video.pipeline", "/api/goal-video/pipeline/jobs/{job_id}", "local_goal_video_job"),
     ("create.video.pipeline", "/api/create-video/pipeline/jobs/{job_id}", "local_create_video_job"),
     ("comfly.ecommerce.detail_pipeline", "/api/comfly-ecommerce-detail/pipeline/jobs/{job_id}", "local_ecommerce_detail_job"),
+    ("cutcli.template.customize", "/api/cutcli/local/templates/jobs/{job_id}", "local_cutcli_template_job"),
 )
 _LOCAL_PIPELINE_JOB_LOOKUP_BY_CAPABILITY = {
     cap: (cap, path, source) for cap, path, source in _LOCAL_PIPELINE_JOB_LOOKUP_SPECS
@@ -491,7 +493,9 @@ def _normalize_invoke_wewrite_article_args(args: Dict[str, Any]) -> Dict[str, An
 
 def _looks_like_local_pipeline_job_id(value: Any) -> bool:
     s = str(value or "").strip().lower()
-    return len(s) == 32 and all(c in "0123456789abcdef" for c in s)
+    if len(s) == 32 and all(c in "0123456789abcdef" for c in s):
+        return True
+    return bool(re.fullmatch(r"\d{14}_[0-9a-f]{8}", s))
 
 
 async def _lookup_local_pipeline_job_from_task_get_result(
@@ -5297,6 +5301,19 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         len(str(_p.get("topic") or "")),
                         BASE_URL,
                     )
+                elif capability_id == "cutcli.template.customize":
+                    tpl_action = (_p.get("action") or "start").strip().lower()
+                    timeout_s = 120.0 if tpl_action in {"start", "run", "render", "poll", "status", "get", "list", "history", "templates", "list_templates"} else 60.0
+                    req_json = dict(_p)
+                    logger.info(
+                        "[MCP cutcli.template.customize] invoke has_token=%s action=%s template_id=%s asset_id=%s job_id=%s base_url=%s",
+                        bool(token),
+                        tpl_action,
+                        _p.get("template_id"),
+                        _p.get("asset_id"),
+                        (_p.get("job_id") or "")[:24],
+                        BASE_URL,
+                    )
                 else:
                     logger.info(
                         "[MCP comfly.daihuo] invoke has_token=%s action=%s asset_id=%s payload_keys=%s base_url=%s",
@@ -5614,6 +5631,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                         fail_msg = "公众号文章生成后端调用失败"
                     elif capability_id == "wewrite.article.draft":
                         fail_msg = "公众号文章草稿后端调用失败"
+                    elif capability_id == "cutcli.template.customize":
+                        fail_msg = "模板定制后端调用失败"
                     else:
                         fail_msg = "comfly.daihuo 后端调用失败"
                     return [{"type": "text", "text": f"{fail_msg}: {e}"}], True

@@ -64,6 +64,13 @@ def resolve_protocol_root() -> Path:
 
 PROTOCOL_ROOT = resolve_protocol_root()
 STATIC_DIR = PROTOCOL_ROOT / "static"
+DOUYIN_PROTOCOL_DEPS_ERROR = "抖音协议模式依赖未安装，请重新安装更新包"
+
+
+def _ensure_protocol_node_deps() -> None:
+    jsrsasign_pkg = PROTOCOL_ROOT / "node_modules" / "jsrsasign" / "package.json"
+    if not jsrsasign_pkg.is_file():
+        raise RuntimeError(DOUYIN_PROTOCOL_DEPS_ERROR)
 
 
 def _iter_node_candidates():
@@ -124,9 +131,15 @@ def _compile_static_js(filename: str):
     script_path = STATIC_DIR / filename
     if not script_path.exists():
         raise FileNotFoundError(f"Douyin protocol script not found: {script_path}")
+    _ensure_protocol_node_deps()
     node_modules = PROTOCOL_ROOT / "node_modules"
     cwd = str(node_modules if node_modules.is_dir() else PROTOCOL_ROOT)
-    return EXECJS_RUNTIME.compile(script_path.read_text(encoding="utf-8"), cwd=cwd)
+    try:
+        return EXECJS_RUNTIME.compile(script_path.read_text(encoding="utf-8"), cwd=cwd)
+    except Exception as exc:
+        if "jsrsasign" in str(exc):
+            raise RuntimeError(DOUYIN_PROTOCOL_DEPS_ERROR) from exc
+        raise
 
 
 _login_js = _compile_static_js("login.js")

@@ -14,6 +14,9 @@ desktop/webview2/
 # Node.js（顶层打包的 Node 运行时；openclaw 内的 node_modules 也排除）
 nodejs/
 **/node_modules/
+!backend/douyin_origin/douyin_protocol/node_modules/
+!backend/douyin_origin/douyin_protocol/node_modules/jsrsasign/
+!backend/douyin_origin/douyin_protocol/node_modules/jsrsasign/**
 backend/douyin_origin/douyin_protocol/node/
 
 # ── 数据库 / 日志 / 缓存 ──

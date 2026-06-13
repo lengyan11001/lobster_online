@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 打「纯代码」OTA zip（与 scripts/check_client_code_update.py 的 DEFAULT_PATHS 一致）。
-默认已含 nodejs/package*.json 与 ensure-npm-cli.mjs、run-npm.mjs、.gitignore（不含 node_modules），
+默认已含 nodejs/package*.json 与 ensure-npm-cli.mjs、run-npm.mjs、.gitignore（不含整包 nodejs/node_modules），
+并随包带上 backend/douyin_origin/douyin_protocol/node_modules/jsrsasign，供抖音协议模式离线使用。
 另一机覆盖后需保证安装包自带 node.exe，点微信授权即可在线拉齐依赖。
 可选 --with-nodejs-deps：额外打入 nodejs/node_modules 与 .openclaw/npm（离线大块，一般不用于 OTA）。
 
@@ -51,6 +52,7 @@ OTA_PATHS: tuple[str, ...] = (
     "nodejs/run-npm.mjs",
     "nodejs/.gitignore",
     "nodejs/node_modules/@tencent-weixin/openclaw-weixin",
+    "backend/douyin_origin/douyin_protocol/node_modules",
     # Keep version last so partial OTA failures do not mark the client updated.
     "CLIENT_CODE_VERSION.json",
 )
@@ -133,14 +135,27 @@ PPT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
 )
 
 DOUYIN_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
+    "requests-*.whl",
+    "urllib3-*.whl",
+    "certifi-*.whl",
+    "charset_normalizer-*-cp312-*-win_amd64.whl",
+    "idna-*.whl",
+    "playwright-*.whl",
+    "pyee-*.whl",
+    "greenlet-*-cp312-*-win_amd64.whl",
+    "typing_extensions-*.whl",
+    "PyExecJS-*.tar.gz",
+    "protobuf-*-win_amd64.whl",
     "pandas-*-cp312-*-win_amd64.whl",
     "numpy-*-cp312-*-win_amd64.whl",
     "openpyxl-*.whl",
     "et_xmlfile-*.whl",
     "pymysql-*.whl",
     "python_dateutil-*.whl",
+    "pytz-*.whl",
     "six-*.whl",
     "tzdata-*.whl",
+    "websockets-*-cp312-*-win_amd64.whl",
 )
 
 SKIP_DIR_NAMES = {"__pycache__", ".git"}
@@ -418,6 +433,32 @@ def _prepare_douyin_runtime_wheels(root: Path) -> list[str]:
     return _prepare_runtime_wheels(root, "scripts/douyin_runtime_wheels", DOUYIN_RUNTIME_WHEEL_PATTERNS)
 
 
+def _ensure_douyin_protocol_node_deps(root: Path) -> None:
+    protocol_root = root / "backend" / "douyin_origin" / "douyin_protocol"
+    package_lock = protocol_root / "package-lock.json"
+    package_json = protocol_root / "package.json"
+    jsrsasign_pkg = protocol_root / "node_modules" / "jsrsasign" / "package.json"
+    if jsrsasign_pkg.is_file():
+        return
+    if not package_json.is_file():
+        raise RuntimeError(f"Douyin protocol package.json missing: {package_json}")
+    node = root / "nodejs" / "node.exe"
+    if not node.is_file():
+        raise RuntimeError(f"Bundled node.exe missing, cannot install Douyin protocol deps: {node}")
+    npm_cli = root / "nodejs" / ".openclaw" / "npm" / "bin" / "npm-cli.js"
+    if not npm_cli.is_file():
+        ensure = root / "nodejs" / "ensure-npm-cli.mjs"
+        if not ensure.is_file():
+            raise RuntimeError(f"Bundled npm bootstrap missing: {ensure}")
+        subprocess.run([str(node), str(ensure)], cwd=str(root / "nodejs"), check=True)
+    if not npm_cli.is_file():
+        raise RuntimeError(f"Bundled npm cli missing after bootstrap: {npm_cli}")
+    cmd = [str(node), str(npm_cli), "ci" if package_lock.is_file() else "install", "--omit=dev", "--no-audit", "--no-fund"]
+    subprocess.run(cmd, cwd=str(protocol_root), check=True)
+    if not jsrsasign_pkg.is_file():
+        raise RuntimeError("Douyin protocol dependency jsrsasign was not installed")
+
+
 def _bundled_python(root: Path) -> Path:
     bundled = root / "python" / "python.exe"
     return bundled if bundled.is_file() else Path(sys.executable)
@@ -628,6 +669,7 @@ def main() -> int:
             "scripts/douyin_runtime_wheels",
             "CLIENT_CODE_VERSION.json",
         )
+    _ensure_douyin_protocol_node_deps(root)
     if args.out is None:
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         suffix_parts = []
@@ -716,7 +758,7 @@ def main() -> int:
     hint = (
         "paths 与 DEFAULT_PATHS_WITH_NODEJS_DEPS 对齐（含整包 node 依赖）"
         if args.with_nodejs_deps
-        else "paths 与 check_client_code_update.DEFAULT_PATHS 对齐（无 node_modules，点授权在线装）"
+        else "paths 与 check_client_code_update.DEFAULT_PATHS 对齐（无整包 nodejs/node_modules，含抖音协议依赖）"
     )
     print(f"\n--- manifest 片段（{hint}）---")
     print(json.dumps(snippet, ensure_ascii=False, indent=2))

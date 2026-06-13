@@ -6,7 +6,7 @@
   <title>必火AI员工</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
-  <link rel="stylesheet" href="/static/css/common.css?v=20260608-latest-ota">
+  <link rel="stylesheet" href="/static/css/common.css?v=20260612-feature-gate-cache">
   <link rel="stylesheet" href="/static/css/index.css?v=20260611-douyin-search-scroll">
 </head>
 <body>
@@ -23,7 +23,7 @@
       <nav class="app-top-nav" id="appTopNav" aria-label="主导航" style="display:none;">
         <button type="button" class="nav-left-item active" data-view="chat">首页</button>
         <button type="button" class="nav-left-item" data-view="skill-store">技能商店</button>
-        <button type="button" class="nav-left-item" data-view="douyin-leads">抖音获客</button>
+        <button type="button" class="nav-left-item" data-view="douyin-leads" data-feature-gate="douyin_leads_access" hidden>抖音获客</button>
         <button type="button" class="nav-left-item" data-view="publish">发布中心</button>
         <button type="button" class="nav-left-item" data-view="assets">素材库</button>
         <button type="button" class="nav-left-item" data-view="scheduled-tasks">定时任务</button>
@@ -249,10 +249,6 @@
                   <div class="chat-empty-state" id="chatEmptyState">
                     <div class="chat-home-hero">
                       <div class="chat-home-copy">
-                        <div class="chat-home-badge-row">
-                          <button type="button" class="chat-empty-eyebrow is-active" id="chatEmptyEyebrow" data-chat-home-mode="default">智能对话</button>
-                          <button type="button" class="chat-home-mode-pill" id="chatHomeWorkspacePill" data-chat-home-mode="workspace_cli" hidden aria-hidden="true">云端工作台</button>
-                        </div>
                         <h2 class="chat-empty-title" id="chatEmptyTitle">👋 您好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
                         <p class="chat-empty-subtitle" id="chatEmptySubtitle">我可以帮您创作内容、生成视频、处理数据、运营分析等</p>
                         <p class="chat-home-helper">选择下方功能，或直接对我说出您的需求吧~</p>
@@ -330,7 +326,7 @@
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创意分镜头视频</span><span class="chat-suggestion-chip-desc">进入创意分镜头视频工作台</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipLocalBestseller" data-chip-tone="douyin" data-open-hidden-view="local-bestseller"><span class="chat-suggestion-chip-icon">城</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">同城爆款</span><span class="chat-suggestion-chip-desc">批量做30天内容</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip9" data-chip-tone="content" data-open-hidden-view="hifly-digital-human"><span class="chat-suggestion-chip-icon">H</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">必火数字人</span><span class="chat-suggestion-chip-desc">进入必火数字人工作台</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-view="douyin-leads"><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音获客</span><span class="chat-suggestion-chip-desc">搜索采集、精准客户、私信互动</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-view="douyin-leads" data-feature-gate="douyin_leads_access" hidden><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音获客</span><span class="chat-suggestion-chip-desc">搜索采集、精准客户、私信互动</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-jump-view="skill-store"><span class="chat-suggestion-chip-icon">&lt;/&gt;</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">技能商店</span><span class="chat-suggestion-chip-desc">查看可用技能</span></span></button>
                     </div>
@@ -2475,7 +2471,7 @@
   </div>
 
   <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
-  <script src="/static/js/view-loader.js?v=20260528-view-loader"></script>
+  <script src="/static/js/view-loader.js?v=20260612-cache-bust"></script>
   <script src="/static/js/view-registry.js?v=20260612-search-scroll-asset-cache"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
@@ -2500,6 +2496,6 @@
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js?v=20260612-asset-library-preview-cache"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260612-scheduled-form-run-detail"></script>
-  <script src="/static/js/init.js?v=20260610-assets-no-section-title"></script>
+  <script src="/static/js/init.js?v=20260612-feature-gate-cache"></script>
 </body>
 </html>

@@ -81,6 +81,20 @@ logger = logging.getLogger(__name__)
 _OPENCLAW_AUTOSTART_THREAD: threading.Thread | None = None
 
 
+def _add_no_store_headers(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+class NoStoreStaticFiles(StaticFiles):
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        return _add_no_store_headers(
+            FileResponse(full_path, status_code=status_code, stat_result=stat_result)
+        )
+
+
 def _ensure_default_user():
     """Create the default user if it doesn't exist. 在线版且独立认证时不创建，仅通过注册。"""
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
@@ -978,7 +992,7 @@ def create_app() -> FastAPI:
 
     static_dir = Path(__file__).resolve().parent.parent.parent / "static"
     if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        app.mount("/static", NoStoreStaticFiles(directory=str(static_dir)), name="static")
 
         @app.get("/", include_in_schema=False)
         def index():

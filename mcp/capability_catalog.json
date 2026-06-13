@@ -1208,5 +1208,72 @@
         "idea"
       ]
     }
+  },
+  "cutcli.template.customize": {
+    "description": "模板定制本地能力：选择服务器配置的模板，把素材库视频或公网视频生成同款包装视频。用于其他 online 功能复用模板定制；action=start 提交任务，poll 查询任务，list 查历史，templates 查模板。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "start",
+            "poll",
+            "list",
+            "templates"
+          ],
+          "description": "start 提交模板任务；poll 按 job_id 查进度；list 查历史；templates 查服务器模板列表。",
+          "default": "start"
+        },
+        "template_id": {
+          "type": "string",
+          "description": "模板 ID。先用 action=templates 查询可用模板；默认 auto_caption_pop_huazi_v1。"
+        },
+        "render_mode": {
+          "type": "string",
+          "enum": [
+            "ffmpeg",
+            "cutcli_cloud"
+          ],
+          "description": "渲染方式。ffmpeg 表示本机渲染；cutcli_cloud 表示模板支持时走云渲染。",
+          "default": "ffmpeg"
+        },
+        "asset_id": {
+          "type": "string",
+          "description": "素材库视频 asset_id。start 时 asset_id 和 video_url 二选一。"
+        },
+        "video_url": {
+          "type": "string",
+          "description": "公网视频 URL。start 时 asset_id 和 video_url 二选一。"
+        },
+        "overlay_texts": {
+          "type": "object",
+          "description": "模板额外文字，如 top_text、title、subtitle、badge、headline、subheadline。"
+        },
+        "position_overrides": {
+          "type": "object",
+          "description": "位置覆盖。格式：{\"caption\":{\"x\":0,\"y\":-0.7},\"overlay\":{\"title\":{\"x_ratio\":0.5,\"y_ratio\":0.2}}}。"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "poll 时必填的任务 ID。"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "list 历史数量。"
+        },
+        "external_task_id": {
+          "type": "string",
+          "description": "外部功能自己的任务 ID，便于关联。"
+        }
+      }
+    }
   }
 }

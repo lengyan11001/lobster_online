@@ -41,8 +41,20 @@
     return Array.isArray(value) ? value : [value];
   }
 
+  function cacheBustUrl(url) {
+    if (!url || !/^\/static\//.test(String(url))) return url;
+    var key = window.__LOBSTER_STATIC_CACHE_BUST;
+    if (!key) {
+      key = Date.now().toString(36);
+      window.__LOBSTER_STATIC_CACHE_BUST = key;
+    }
+    var sep = String(url).indexOf('?') >= 0 ? '&' : '?';
+    return String(url) + sep + '_lobster_v=' + encodeURIComponent(key);
+  }
+
   function loadStyleOnce(href) {
     if (!href) return Promise.resolve();
+    href = cacheBustUrl(href);
     if (state.styles[href]) return state.styles[href];
     var absoluteHref = toAbsoluteUrl(href);
     var links = document.getElementsByTagName('link');
@@ -65,6 +77,7 @@
 
   function loadScriptOnce(src) {
     if (!src) return Promise.resolve();
+    src = cacheBustUrl(src);
     if (state.scripts[src]) return state.scripts[src];
     var absoluteSrc = toAbsoluteUrl(src);
     var scripts = document.getElementsByTagName('script');
@@ -138,7 +151,7 @@
     if (state.loading[view]) return state.loading[view];
 
     var config = registry[view] || {};
-    var htmlUrl = config.html || config.url;
+    var htmlUrl = cacheBustUrl(config.html || config.url);
     if (!htmlUrl) return Promise.resolve(null);
 
     state.loading[view] = Promise.all(asArray(config.css).map(loadStyleOnce))

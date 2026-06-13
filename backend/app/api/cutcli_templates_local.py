@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .assets import ASSETS_DIR, _asset_file_token, _save_bytes_or_tos, get_asset_public_url
@@ -171,9 +171,22 @@ class LocalTemplateTaskBody(BaseModel):
     render_mode: str = "ffmpeg"
     asset_id: str = ""
     video_url: str = ""
-    overlay_texts: Dict[str, Any] = {}
-    position_overrides: Dict[str, Any] = {}
+    overlay_texts: Dict[str, Any] = Field(default_factory=dict)
+    position_overrides: Dict[str, Any] = Field(default_factory=dict)
     callback_url: str = ""
+    external_task_id: str = ""
+
+
+class LocalTemplateCapabilityBody(BaseModel):
+    action: str = "start"
+    template_id: str = "auto_caption_pop_huazi_v1"
+    render_mode: str = "ffmpeg"
+    asset_id: str = ""
+    video_url: str = ""
+    overlay_texts: Dict[str, Any] = Field(default_factory=dict)
+    position_overrides: Dict[str, Any] = Field(default_factory=dict)
+    job_id: str = ""
+    limit: int = 20
     external_task_id: str = ""
 
 
@@ -774,7 +787,9 @@ def _run_cmd(
     )
     if proc.returncode != 0:
         msg = (proc.stderr or proc.stdout or "").strip()
-        raise RuntimeError(msg[:1600] or f"command failed: {proc.returncode}")
+        if len(msg) > 1800:
+            msg = msg[-1800:]
+        raise RuntimeError(msg or f"command failed: {proc.returncode}")
     return proc.stdout or ""
 
 
@@ -1117,8 +1132,12 @@ def _safe_error(value: Any, limit: int = 1200) -> str:
         for key in ("message", "detail", "error", "code"):
             if value.get(key):
                 return _safe_error(value.get(key), limit)
-        return json.dumps(value, ensure_ascii=False)[:limit]
-    return str(value or "").strip()[:limit]
+        text = json.dumps(value, ensure_ascii=False)
+    else:
+        text = str(value or "").strip()
+    if len(text) > limit:
+        return text[-limit:]
+    return text
 
 
 _EDGE_PUNCT = " \t\r\n,.;:!?\uff0c\u3002\uff01\uff1f\uff1b\uff1a\u3001\"'\u201c\u201d\u2018\u2019\uff08\uff09()[]\u3010\u3011<>\u300a\u300b"
@@ -2695,7 +2714,9 @@ def _run_job(
     db = SessionLocal()
     job_dir = _JOBS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    current_stage = "queued"
     try:
+        current_stage = "resolve_source"
         _update_job(db, job_id, status="running", stage="resolve_source")
         source, source_asset_id, source_name, public_source = _resolve_source(
             db=db,
@@ -2718,6 +2739,7 @@ def _run_job(
         if not style:
             raise RuntimeError(f"template {template.get('id') or ''} has no caption strategy")
 
+        current_stage = "extract_audio"
         _update_job(db, job_id, stage="extract_audio", response_updates={"source_name": source_name, "source_asset_id": source_asset_id})
         audio_path = job_dir / "audio.wav"
         _extract_audio(ffmpeg, source, audio_path)
@@ -2744,6 +2766,7 @@ def _run_job(
         if not audio_url.startswith(("http://", "https://")):
             raise RuntimeError("audio extracted but no public URL is available for STT")
 
+        current_stage = "stt"
         _update_job(db, job_id, stage="stt", response_updates={"audio_asset_id": audio_asset_id, "audio_url": audio_url})
         stt_result = _call_server(
             "/api/cutcli/stt/transcribe",
@@ -2769,6 +2792,7 @@ def _run_job(
         if not captions:
             raise RuntimeError("STT returned no usable captions")
         (job_dir / "captions.json").write_text(json.dumps(captions, ensure_ascii=False, indent=2), encoding="utf-8")
+        current_stage = "render"
         _update_job(db, job_id, stage="render", response_updates={"caption_count": len(captions), "stt_model": _STT_MODEL})
 
         if render_mode == "cutcli_cloud":
@@ -2892,15 +2916,16 @@ def _run_job(
             },
         )
     except Exception as exc:
-        logger.exception("[cutcli-local] job failed job_id=%s", job_id)
+        err_text = _safe_error(exc, limit=2000)
+        logger.exception("[cutcli-local] job failed job_id=%s stage=%s error=%s", job_id, current_stage, err_text)
         _update_job(
             db,
             job_id,
             status="failed",
             stage="failed",
             success=False,
-            error=str(exc)[:2000],
-            response_updates={"error_code": "cutcli_local_failed"},
+            error=err_text,
+            response_updates={"error_code": "cutcli_local_failed", "failed_stage": current_stage},
         )
     finally:
         db.close()
@@ -2935,6 +2960,62 @@ def _start_background_job(
         daemon=True,
     )
     thread.start()
+
+
+def _start_template_job_from_values(
+    *,
+    request: Request,
+    db: Session,
+    user_id: int,
+    template_id: str,
+    render_mode: str,
+    asset_id: str = "",
+    video_url: str = "",
+    overlay_texts: Optional[Dict[str, Any]] = None,
+    position_overrides: Optional[Any] = None,
+    source_name: str = "",
+    external_task_id: str = "",
+) -> Dict[str, Any]:
+    try:
+        template = _resolve_server_template(template_id, _auth_header(request))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    mode = (render_mode or "ffmpeg").strip().lower()
+    render_modes = template.get("render_modes") if isinstance(template.get("render_modes"), list) else ["ffmpeg", "cutcli_cloud"]
+    if mode not in {"ffmpeg", "cutcli_cloud"} or mode not in render_modes:
+        raise HTTPException(status_code=400, detail="render_mode must be ffmpeg or cutcli_cloud")
+    aid = (asset_id or "").strip()
+    url = (video_url or "").strip()
+    if not aid and not url:
+        raise HTTPException(status_code=400, detail="asset_id or video_url is required")
+    clean_overlay_texts = _clean_overlay_texts(overlay_texts or {}, _overlay_fields_from_template(template))
+    clean_position_overrides = _parse_position_overrides(position_overrides)
+    job_id = datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    row = _create_job(
+        db,
+        user_id=user_id,
+        job_id=job_id,
+        template=template,
+        render_mode=mode,
+        asset_id=aid,
+        video_url=url,
+        source_name=source_name or aid or url,
+        overlay_texts=clean_overlay_texts,
+        position_overrides=clean_position_overrides,
+        external_task_id=(external_task_id or "").strip(),
+    )
+    _start_background_job(
+        job_id=job_id,
+        user_id=user_id,
+        template=template,
+        render_mode=mode,
+        asset_id=aid,
+        video_url=url,
+        overlay_texts=clean_overlay_texts,
+        position_overrides=clean_position_overrides,
+        auth_headers=_auth_header(request),
+    )
+    return _job_to_public(row)
 
 
 async def _save_upload_as_asset(
@@ -3111,46 +3192,59 @@ async def start_local_template_task(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    try:
-        template = _resolve_server_template(body.template_id, _auth_header(request))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    mode = (body.render_mode or "ffmpeg").strip().lower()
-    render_modes = template.get("render_modes") if isinstance(template.get("render_modes"), list) else ["ffmpeg", "cutcli_cloud"]
-    if mode not in {"ffmpeg", "cutcli_cloud"} or mode not in render_modes:
-        raise HTTPException(status_code=400, detail="render_mode must be ffmpeg or cutcli_cloud")
-    aid = (body.asset_id or "").strip()
-    url = (body.video_url or "").strip()
-    if not aid and not url:
-        raise HTTPException(status_code=400, detail="asset_id or video_url is required")
-    overlay_texts = _clean_overlay_texts(body.overlay_texts, _overlay_fields_from_template(template))
-    clean_position_overrides = _parse_position_overrides(body.position_overrides)
-    job_id = datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:8]
-    row = _create_job(
-        db,
+    return _start_template_job_from_values(
+        request=request,
+        db=db,
         user_id=current_user.id,
-        job_id=job_id,
-        template=template,
-        render_mode=mode,
-        asset_id=aid,
-        video_url=url,
-        source_name=aid or url,
-        overlay_texts=overlay_texts,
-        position_overrides=clean_position_overrides,
-        external_task_id=(body.external_task_id or "").strip(),
+        template_id=body.template_id,
+        render_mode=body.render_mode,
+        asset_id=body.asset_id,
+        video_url=body.video_url,
+        overlay_texts=body.overlay_texts,
+        position_overrides=body.position_overrides,
+        external_task_id=body.external_task_id,
     )
-    _start_background_job(
-        job_id=job_id,
-        user_id=current_user.id,
-        template=template,
-        render_mode=mode,
-        asset_id=aid,
-        video_url=url,
-        overlay_texts=overlay_texts,
-        position_overrides=clean_position_overrides,
-        auth_headers=_auth_header(request),
-    )
-    return _job_to_public(row)
+
+
+@router.post("/api/cutcli/local/capability", summary="Invoke local template customization capability")
+async def invoke_local_template_capability(
+    body: LocalTemplateCapabilityBody,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    action = (body.action or "start").strip().lower()
+    if action in {"start", "run", "render"}:
+        return _start_template_job_from_values(
+            request=request,
+            db=db,
+            user_id=current_user.id,
+            template_id=body.template_id,
+            render_mode=body.render_mode,
+            asset_id=body.asset_id,
+            video_url=body.video_url,
+            overlay_texts=body.overlay_texts,
+            position_overrides=body.position_overrides,
+            external_task_id=body.external_task_id,
+        )
+    if action in {"poll", "status", "get"}:
+        jid = (body.job_id or "").strip()
+        if not jid:
+            raise HTTPException(status_code=400, detail="job_id is required")
+        return _job_to_public(_get_job(db, current_user.id, jid))
+    if action in {"list", "history"}:
+        max_items = max(1, min(int(body.limit or 20), 100))
+        rows = (
+            db.query(CapabilityCallLog)
+            .filter(CapabilityCallLog.user_id == current_user.id, CapabilityCallLog.capability_id == _FEATURE)
+            .order_by(CapabilityCallLog.created_at.desc())
+            .limit(max_items)
+            .all()
+        )
+        return {"ok": True, "jobs": [_job_to_public(row) for row in rows]}
+    if action in {"templates", "list_templates"}:
+        return _get_server("/api/cutcli/templates", _auth_header(request), timeout=120.0)
+    raise HTTPException(status_code=400, detail="action must be start, poll, list, or templates")
 
 
 @router.get("/api/cutcli/local/templates/jobs", summary="Local CutCLI template jobs")
