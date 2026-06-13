@@ -2014,15 +2014,17 @@ def list_assets(
     for r in rows:
         mt = (r.media_type or "").lower()
         preview_url = None
+        local_preview_url = None
         open_url = None
         if mt in ("image", "video", "document"):
             su = (r.source_url or "").strip()
             if mt in ("image", "video") and _asset_local_path(r):
-                preview_url = build_asset_file_url(
+                local_preview_url = build_asset_file_url(
                     request,
                     r.asset_id,
                     expiry_sec=_ASSET_LIST_PREVIEW_EXPIRY_SEC,
                 )
+                preview_url = local_preview_url
             elif su.startswith(("http://", "https://")) and not _is_internal_asset_http_url(su):
                 preview_url = su
             pub = get_asset_public_url(r.asset_id, current_user.id, request, db)
@@ -2054,6 +2056,7 @@ def list_assets(
                 "media_type": r.media_type,
                 "file_size": r.file_size,
                 "source_url": r.source_url,
+                "local_preview_url": local_preview_url,
                 "preview_url": preview_url,
                 "open_url": open_url,
                 "prompt": r.prompt,
@@ -2159,27 +2162,15 @@ def save_asset_to_downloads(
     if not source:
         raise HTTPException(404, detail="文件不存在")
 
-    download_dir = _asset_library_export_dir(a.media_type or "")
-    download_dir.mkdir(parents=True, exist_ok=True)
-    requested_name = (body.filename if body else None) or a.filename or source.name
-    dest = _unique_download_path(download_dir, requested_name)
-    if not dest.suffix and source.suffix:
-        dest = dest.with_suffix(source.suffix)
-        if dest.exists():
-            dest = _unique_download_path(download_dir, dest.name)
-    try:
-        shutil.copy2(source, dest)
-    except Exception as exc:
-        logger.exception("[assets] save to downloads failed asset_id=%s dest=%s", asset_id, dest)
-        raise HTTPException(500, detail=f"保存失败：{exc}") from exc
-    opened = _best_effort_open_folder_for_file(dest) if (body.open_folder if body else True) else False
+    opened = _best_effort_open_folder_for_file(source) if (body.open_folder if body else True) else False
     return {
         "ok": True,
         "asset_id": a.asset_id,
-        "filename": dest.name,
-        "path": str(dest),
-        "directory": str(download_dir),
+        "filename": source.name,
+        "path": str(source),
+        "directory": str(source.parent),
         "opened_folder": opened,
+        "reused_existing": True,
     }
 
 

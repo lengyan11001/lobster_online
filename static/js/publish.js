@@ -2013,8 +2013,12 @@ function _downloadAssetToLibrary(asset, options) {
       });
     })
     .then(function(d) {
-      var folderText = d && d.directory ? (' 已保存到：' + d.directory) : '';
-      showMsg((d && d.opened_folder ? '已下载并打开文件夹。' : '已下载。') + folderText, false);
+      var folderText = d && d.directory ? (' 位置：' + d.directory) : '';
+      if (d && d.reused_existing) {
+        showMsg((d.opened_folder ? '已打开本地素材位置。' : '本地素材文件已存在。') + folderText, false);
+      } else {
+        showMsg((d && d.opened_folder ? '已下载并打开文件夹。' : '已下载。') + folderText, false);
+      }
     })
     .catch(function(err) {
       showMsg((err && err.message) || '下载失败，请稍后重试。', true);
@@ -2195,6 +2199,7 @@ function _bindVideoListThumbSeek(vid) {
 
 function _pickAssetListThumbUrl(a) {
   var parts = [
+    _resolvePossiblyRelativeMediaUrl(a.local_preview_url),
     _resolvePossiblyRelativeMediaUrl(a.preview_url),
     _resolvePossiblyRelativeMediaUrl(a.open_url),
     _resolvePossiblyRelativeMediaUrl(a.source_url)
@@ -2239,6 +2244,7 @@ function _wireAssetListThumbs(container) {
   function wireImg(img) {
     var initial = (img.getAttribute('data-initial-src') || '').trim();
     var preferBlobFirst = img.getAttribute('data-prefer-content') === '1';
+    if (initial && !_thumbDirectLoadLikelyBroken(initial)) preferBlobFirst = false;
     if (preferBlobFirst) {
       loadBlobIntoMedia(img, false, '');
       return;
@@ -2265,6 +2271,7 @@ function _wireAssetListThumbs(container) {
   container.querySelectorAll('video.asset-list-thumb-video').forEach(function(vid) {
     var initial = (vid.getAttribute('data-initial-src') || '').trim();
     var preferBlobFirst = vid.getAttribute('data-prefer-content') === '1';
+    if (initial && !_thumbDirectLoadLikelyBroken(initial)) preferBlobFirst = false;
     if (preferBlobFirst) {
       loadBlobIntoMedia(vid, true, '');
       return;
@@ -2477,7 +2484,7 @@ function loadAssets(query, options) {
               escapeAttr(safeDirectFallback) +
               '" data-initial-src="' +
               escapeAttr(vidInitialSrc) +
-              '" style="max-width:160px;max-height:120px;border-radius:6px;pointer-events:none;" muted preload="auto" playsinline></video></div>';
+              '" style="max-width:160px;max-height:120px;border-radius:6px;pointer-events:none;" muted preload="metadata" playsinline></video></div>';
           } else {
             preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
           }
@@ -2531,6 +2538,8 @@ function loadAssets(query, options) {
 }
 
 var _ASSET_PAGE_SIZE = 20;
+var _ASSET_PROGRESSIVE_FIRST_BATCH = 4;
+var _ASSET_PROGRESSIVE_BATCH = 4;
 var _assetLibraryState = {
   offset: 0,
   total: 0,
@@ -2542,6 +2551,7 @@ var _assetLibraryState = {
   assetMap: {}
 };
 var _assetLibraryLoadSeq = 0;
+var _assetLibraryRenderTimer = 0;
 
 function _snapshotAssetQuery(query) {
   return {
@@ -2727,7 +2737,7 @@ function _renderAssetCards(container, assets, append) {
           '" data-prefer-content="' + vidPreferContent +
           '" data-direct-fallback="' + escapeAttr(safeDirectFallback) +
           '" data-initial-src="' + escapeAttr(vidInitialSrc) +
-          '" style="max-width:160px;max-height:120px;border-radius:6px;pointer-events:none;" muted preload="auto" playsinline></video></div>';
+          '" style="max-width:160px;max-height:120px;border-radius:6px;pointer-events:none;" muted preload="metadata" playsinline></video></div>';
       } else {
         preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
       }
@@ -2772,6 +2782,40 @@ function _renderAssetCards(container, assets, append) {
   _wireAssetListThumbs(container);
 }
 
+function _cancelAssetProgressiveRender() {
+  if (_assetLibraryRenderTimer) {
+    var caf = window.cancelAnimationFrame || window.clearTimeout;
+    caf(_assetLibraryRenderTimer);
+    _assetLibraryRenderTimer = 0;
+  }
+}
+
+function _renderAssetCardsProgressively(container, assets, append, seq, onDone) {
+  if (!container) return;
+  _cancelAssetProgressiveRender();
+  var list = Array.isArray(assets) ? assets : [];
+  if (!append) container.innerHTML = '';
+  var index = 0;
+  function renderChunk(count) {
+    if (seq !== _assetLibraryLoadSeq) return;
+    var end = Math.min(list.length, index + count);
+    if (end > index) {
+      _renderAssetCards(container, list.slice(index, end), true);
+      index = end;
+    }
+    if (index >= list.length) {
+      _assetLibraryRenderTimer = 0;
+      if (typeof onDone === 'function') onDone();
+      return;
+    }
+    var raf = window.requestAnimationFrame || function(fn) { return window.setTimeout(fn, 16); };
+    _assetLibraryRenderTimer = raf(function() {
+      renderChunk(_ASSET_PROGRESSIVE_BATCH);
+    });
+  }
+  renderChunk(Math.max(1, _ASSET_PROGRESSIVE_FIRST_BATCH));
+}
+
 function loadAssets(query, options) {
   options = options || {};
   var el = document.getElementById('assetList');
@@ -2780,6 +2824,7 @@ function loadAssets(query, options) {
   var snap = _snapshotAssetQuery(query);
   var offset = append ? (_assetLibraryState.offset || 0) : 0;
   var seq = ++_assetLibraryLoadSeq;
+  _cancelAssetProgressiveRender();
 
   if (!append) {
     _assetLibraryState.assetMap = {};
@@ -2823,15 +2868,20 @@ function loadAssets(query, options) {
         _setAssetLoadMoreState(false, false);
         return;
       }
-      _renderAssetCards(el, assets, append);
-      _assetLibraryState.offset = offset + assets.length;
+      _assetLibraryState.offset = offset;
       _assetLibraryState.total = total;
       _assetLibraryState.query = snap.query;
       _assetLibraryState.mediaType = snap.mediaType;
       _assetLibraryState.creativeGroup = snap.creativeGroup;
       _assetLibraryState.origin = snap.origin;
-      _assetLibraryState.loading = false;
-      _setAssetLoadMoreState(_assetLibraryState.offset < total, false);
+      _assetLibraryState.loading = true;
+      _setAssetLoadMoreState(false, false);
+      _renderAssetCardsProgressively(el, assets, append, seq, function() {
+        if (seq !== _assetLibraryLoadSeq) return;
+        _assetLibraryState.offset = offset + assets.length;
+        _assetLibraryState.loading = false;
+        _setAssetLoadMoreState(_assetLibraryState.offset < total, false);
+      });
     })
     .catch(function() {
       if (seq !== _assetLibraryLoadSeq) return;
