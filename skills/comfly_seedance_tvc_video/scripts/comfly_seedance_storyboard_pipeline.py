@@ -448,6 +448,14 @@ def _ordered_video_providers(client: "ComflySeedanceClient") -> List[Dict[str, s
     return providers
 
 
+def _video_provider_stage_role(provider: Dict[str, str], provider_index: int) -> str:
+    role = str(provider.get("role") or "").strip() or "fallback"
+    if role == "primary":
+        return "primary"
+    channel = _normalize_video_channel(str(provider.get("channel") or "")) or "video"
+    return f"fallback_{max(provider_index - 1, 1):02d}_{channel}"
+
+
 def _segment_seconds_for_channel(channel: str) -> int:
     return YUNWU_SEGMENT_DURATION_SECONDS if _normalize_video_channel(channel) == "yunwu" else FIXED_SEGMENT_DURATION_SECONDS
 
@@ -573,7 +581,7 @@ def _resolve_tool_binary(tool_name: str, configured_path: str = "") -> str:
     return found or explicit or tool_name
 
 
-def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
+def _ffprobe_binary_for(ffmpeg_path: str) -> str:
     ffprobe_binary = _resolve_tool_binary("ffprobe", "")
     if (not ffprobe_binary or ffprobe_binary == "ffprobe") and ffmpeg_path and ffmpeg_path != "ffmpeg":
         ffmpeg_candidate = Path(ffmpeg_path)
@@ -581,6 +589,40 @@ def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
         candidate = ffmpeg_candidate.with_name(sidecar_name)
         if candidate.exists():
             ffprobe_binary = str(candidate)
+    return ffprobe_binary
+
+
+def _probe_video_dimensions(media_path: str, ffmpeg_path: str) -> Optional[Dict[str, int]]:
+    ffprobe_binary = _ffprobe_binary_for(ffmpeg_path)
+    proc = subprocess.run(
+        [ffprobe_binary, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", media_path],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except Exception:
+        return None
+    streams = payload.get("streams") if isinstance(payload, dict) else None
+    if not isinstance(streams, list) or not streams:
+        return None
+    first = streams[0] if isinstance(streams[0], dict) else {}
+    try:
+        width = int(first.get("width") or 0)
+        height = int(first.get("height") or 0)
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"width": width, "height": height}
+
+
+def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
+    ffprobe_binary = _ffprobe_binary_for(ffmpeg_path)
     proc = subprocess.run(
         [ffprobe_binary, "-v", "error", "-show_entries", "stream=codec_type", "-of", "json", media_path],
         capture_output=True,
@@ -1107,16 +1149,28 @@ class ComflySeedanceClient:
 
         if video_channel == "comfly":
             images = [segment_reference_url] if segment_reference_url else []
-            body = {
-                "prompt": prompt,
-                "model": video_model,
-                "images": images,
-                "watermark": bool(self.config.watermark),
-                "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
-            }
+            normalized_ratio = _normalize_aspect_ratio(self.config.aspect_ratio)
             if _is_grok_video_model(video_model):
-                body["duration"] = int(duration_seconds)
-                body["seconds"] = str(int(duration_seconds))
+                output_size = "720x1280" if normalized_ratio == "9:16" else ("1280x720" if normalized_ratio == "16:9" else "1024x1024")
+                body = {
+                    "prompt": prompt,
+                    "model": video_model,
+                    "images": images[:1],
+                    "ratio": normalized_ratio if normalized_ratio in {"9:16", "16:9", "1:1", "2:3", "3:2"} else "9:16",
+                    "aspect_ratio": normalized_ratio if normalized_ratio in {"9:16", "16:9", "1:1", "2:3", "3:2"} else "9:16",
+                    "size": output_size,
+                    "resolution": "720P",
+                    "duration": 10 if int(duration_seconds) == 10 else 6,
+                }
+            else:
+                body = {
+                    "prompt": prompt,
+                    "model": video_model,
+                    "images": images,
+                    "watermark": bool(self.config.watermark),
+                }
+                if normalized_ratio in {"9:16", "16:9"}:
+                    body["aspect_ratio"] = normalized_ratio
 
             def call_comfly_veo() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v2/videos/generations"
@@ -1360,6 +1414,110 @@ def _generate_segment_image(
     return out
 
 
+def _video_submit_debug_request(
+    client: ComflySeedanceClient,
+    segment_plan: Dict[str, Any],
+    segment_reference_result: Dict[str, Any],
+    provider_model: str,
+    provider_channel: str = "",
+) -> Dict[str, Any]:
+    normalized_ratio = _normalize_aspect_ratio(client.config.aspect_ratio)
+    images = [segment_reference_result.get("url")] if segment_reference_result.get("url") else []
+    if _normalize_video_channel(provider_channel) == "comfly" and _is_grok_video_model(provider_model):
+        output_size = "720x1280" if normalized_ratio == "9:16" else ("1280x720" if normalized_ratio == "16:9" else "1024x1024")
+        return {
+            "prompt": segment_plan.get("video_prompt") or "",
+            "model": provider_model,
+            "images": images[:1],
+            "ratio": normalized_ratio if normalized_ratio in {"9:16", "16:9", "1:1", "2:3", "3:2"} else "9:16",
+            "aspect_ratio": normalized_ratio if normalized_ratio in {"9:16", "16:9", "1:1", "2:3", "3:2"} else "9:16",
+            "size": output_size,
+            "resolution": "720P",
+            "duration": 10 if int(segment_plan["duration_seconds"]) == 10 else 6,
+        }
+    out = {
+        "prompt": segment_plan.get("video_prompt") or "",
+        "model": provider_model,
+        "images": images,
+        "duration": int(segment_plan["duration_seconds"]),
+        "aspect_ratio": normalized_ratio,
+    }
+    if _is_grok_video_model(provider_model):
+        out["seconds"] = str(int(segment_plan["duration_seconds"]))
+        out["ratio"] = normalized_ratio
+    return out
+
+
+def _submit_segment_video_to_provider(
+    client: ComflySeedanceClient,
+    logger_obj: RunLogger,
+    segment_plan: Dict[str, Any],
+    reference_image_urls: List[str],
+    provider: Dict[str, str],
+    provider_index: int,
+    submit_control: Optional[SubmitControl] = None,
+) -> Dict[str, Any]:
+    index = int(segment_plan["index"])
+    segment_reference_result = segment_plan["segment_reference_result"]
+
+    if submit_control is not None and submit_control.should_stop_new_submits():
+        reason = submit_control.current_stop_reason() or "余额不足，已停止新的分镜提交"
+        raise StopNewSubmissionsError(reason)
+
+    provider_role = _video_provider_stage_role(provider, provider_index)
+    provider_channel = _normalize_video_channel(provider["channel"])
+    provider_model = provider["model"]
+    provider_base_url = provider["base_url"]
+    try:
+        submit_result, submit_attempts = client.submit_seedance_video(
+            segment_plan["video_prompt"],
+            segment_reference_result["url"],
+            reference_image_urls,
+            int(segment_plan["duration_seconds"]),
+            f"segment_{index:02d}_submit_{provider_role}",
+            channel=provider_channel,
+            model=provider_model,
+            base_url=provider_base_url,
+        )
+        logger_obj.segment(index, f"submit_{provider_role}", "success", attempts=submit_attempts, payload=submit_result)
+        out = dict(segment_plan)
+        out["submit_result"] = submit_result
+        out["video_task_id"] = str(submit_result.get("id") or submit_result.get("task_id") or "").strip()
+        out["video_channel"] = provider_channel
+        out["video_base_url"] = provider_base_url
+        out["video_model"] = provider_model
+        out["video_provider_role"] = provider["role"]
+        out["video_provider_stage_role"] = provider_role
+        out["video_provider_attempt"] = provider_index
+        if submit_control is not None:
+            submit_control.note_submit_success()
+        return out
+    except Exception as exc:
+        logger_obj.segment(
+            index,
+            f"submit_{provider_role}",
+            "failed",
+            error=str(exc),
+            payload={
+                "video_channel": provider_channel,
+                "video_model": provider_model,
+                "provider_role": provider_role,
+                "request": _video_submit_debug_request(client, segment_plan, segment_reference_result, provider_model, provider_channel),
+            },
+        )
+        if submit_control is not None and _is_insufficient_credit_error(exc):
+            if submit_control.has_any_successful_submit():
+                reason = (
+                    "余额不足，已停止新的分镜提交；已成功提交的分镜会继续合成。"
+                )
+                submit_control.mark_stop_new_submits(reason)
+                raise StopNewSubmissionsError(reason) from exc
+            reason = "余额不足，未成功提交任何分镜，请先充值后重试。"
+            submit_control.mark_stop_new_submits(reason)
+            raise InsufficientCreditError(reason) from exc
+        raise
+
+
 def _submit_segment_video(
     client: ComflySeedanceClient,
     logger_obj: RunLogger,
@@ -1368,12 +1526,7 @@ def _submit_segment_video(
     submit_control: Optional[SubmitControl] = None,
 ) -> Dict[str, Any]:
     index = int(segment_plan["index"])
-    segment_reference_result = segment_plan["segment_reference_result"]
     providers = _ordered_video_providers(client)
-
-    if submit_control is not None and submit_control.should_stop_new_submits():
-        reason = submit_control.current_stop_reason() or "余额不足，已停止新的分镜提交"
-        raise StopNewSubmissionsError(reason)
 
     last_error = ""
     for provider_index, provider in enumerate(providers, start=1):
@@ -1398,47 +1551,17 @@ def _submit_segment_video(
                 },
             )
         try:
-            submit_result, submit_attempts = client.submit_seedance_video(
-                segment_plan["video_prompt"],
-                segment_reference_result["url"],
+            return _submit_segment_video_to_provider(
+                client,
+                logger_obj,
+                segment_plan,
                 reference_image_urls,
-                int(segment_plan["duration_seconds"]),
-                f"segment_{index:02d}_submit_{provider_role}",
-                channel=provider_channel,
-                model=provider_model,
-                base_url=provider_base_url,
+                provider,
+                provider_index,
+                submit_control,
             )
-            logger_obj.segment(index, f"submit_{provider_role}", "success", attempts=submit_attempts, payload=submit_result)
-            out = dict(segment_plan)
-            out["submit_result"] = submit_result
-            out["video_task_id"] = str(submit_result.get("id") or submit_result.get("task_id") or "").strip()
-            out["video_channel"] = provider_channel
-            out["video_base_url"] = provider_base_url
-            out["video_model"] = provider_model
-            out["video_provider_role"] = provider_role
-            out["video_provider_attempt"] = provider_index
-            if submit_control is not None:
-                submit_control.note_submit_success()
-            return out
         except Exception as exc:
             last_error = str(exc)
-            logger_obj.segment(
-                index,
-                f"submit_{provider_role}",
-                "failed",
-                error=last_error,
-                payload={"video_channel": provider_channel, "video_model": provider_model, "provider_role": provider_role},
-            )
-            if submit_control is not None and _is_insufficient_credit_error(exc):
-                if submit_control.has_any_successful_submit():
-                    reason = (
-                        "余额不足，已停止新的分镜提交；已成功提交的分镜会继续合成。"
-                    )
-                    submit_control.mark_stop_new_submits(reason)
-                    raise StopNewSubmissionsError(reason) from exc
-                reason = "余额不足，未成功提交任何分镜，请先充值后重试。"
-                submit_control.mark_stop_new_submits(reason)
-                raise InsufficientCreditError(reason) from exc
     raise PipelineError(f"segment {index:02d} video submit failed: {last_error}")
 
 
@@ -1532,8 +1655,71 @@ def _poll_segment_video(
         "video_channel": segment_plan.get("video_channel") or client.video_channel,
         "video_model": segment_plan.get("video_model") or client.config.video_model,
         "video_provider_role": segment_plan.get("video_provider_role") or "primary",
+        "video_provider_stage_role": segment_plan.get("video_provider_stage_role") or segment_plan.get("video_provider_role") or "primary",
         "workflow_mode": segment_plan.get("workflow_mode") or client.config.workflow_mode,
     }
+
+
+def _aspect_matches_request(dimensions: Dict[str, int], aspect_ratio: str) -> bool:
+    width = int(dimensions.get("width") or 0)
+    height = int(dimensions.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return True
+    normalized = _normalize_aspect_ratio(aspect_ratio)
+    actual = width / height
+    if normalized == "9:16":
+        return height > width and abs(actual - (9 / 16)) <= 0.12
+    if normalized == "16:9":
+        return width > height and abs(actual - (16 / 9)) <= 0.20
+    if normalized == "1:1":
+        return abs(actual - 1) <= 0.08
+    return True
+
+
+def _validate_segment_video_aspect(
+    client: ComflySeedanceClient,
+    logger_obj: RunLogger,
+    segment_result: Dict[str, Any],
+) -> None:
+    aspect_ratio = _normalize_aspect_ratio(client.config.aspect_ratio)
+    if aspect_ratio not in {"9:16", "16:9", "1:1"}:
+        return
+    index = int(segment_result.get("index") or 0)
+    video_url = str(segment_result.get("mp4url") or "").strip()
+    if not video_url:
+        return
+    role = str(segment_result.get("video_provider_stage_role") or segment_result.get("video_provider_role") or "primary").strip() or "primary"
+    channel = str(segment_result.get("video_channel") or "").strip()
+    model = str(segment_result.get("video_model") or "").strip()
+    validation_dir = logger_obj.run_dir / "validation"
+    validation_path = validation_dir / f"segment_{index:02d}_{role}_{channel or 'video'}.mp4"
+    logger_obj.segment(
+        index,
+        f"aspect_check_{role}",
+        "running",
+        payload={"url": video_url, "expected_aspect_ratio": aspect_ratio, "video_channel": channel, "video_model": model},
+    )
+    downloaded_path, attempts = _retry(
+        f"validate_segment_{index:02d}_{role}",
+        client.config.clip_download_retries,
+        client.config.network_retry_delay_seconds,
+        logger_obj,
+        lambda: _download_file(video_url, validation_path, client.config.clip_download_timeout_seconds),
+    )
+    dimensions = _probe_video_dimensions(str(downloaded_path), client.config.ffmpeg_path)
+    payload = {
+        "path": str(downloaded_path),
+        "expected_aspect_ratio": aspect_ratio,
+        "dimensions": dimensions or {},
+        "video_channel": channel,
+        "video_model": model,
+    }
+    if dimensions and not _aspect_matches_request(dimensions, aspect_ratio):
+        logger_obj.segment(index, f"aspect_check_{role}", "failed", attempts=attempts, error="video aspect ratio mismatch", payload=payload)
+        raise PipelineError(
+            f"video aspect ratio mismatch: expected {aspect_ratio}, got {dimensions['width']}x{dimensions['height']} from {channel}/{model}"
+        )
+    logger_obj.segment(index, f"aspect_check_{role}", "success", attempts=attempts, payload=payload)
 
 
 def _run_single_segment_pipeline(
@@ -1549,18 +1735,82 @@ def _run_single_segment_pipeline(
         segment_plan,
         reference_image_urls,
     )
-    submitted_plan = _submit_segment_video(
+    return _run_segment_video_providers(
         client,
         logger_obj,
         image_ready_plan,
         reference_image_urls,
         submit_control,
     )
-    return _poll_segment_video(
-        client,
-        logger_obj,
-        submitted_plan,
-    )
+
+
+def _run_segment_video_providers(
+    client: ComflySeedanceClient,
+    logger_obj: RunLogger,
+    image_ready_plan: Dict[str, Any],
+    reference_image_urls: List[str],
+    submit_control: Optional[SubmitControl] = None,
+) -> Dict[str, Any]:
+    index = int(image_ready_plan["index"])
+    providers = _ordered_video_providers(client)
+    last_error = ""
+    for provider_index, provider in enumerate(providers, start=1):
+        if submit_control is not None and submit_control.should_stop_new_submits():
+            reason = submit_control.current_stop_reason() or "余额不足，已停止新的分镜提交"
+            raise StopNewSubmissionsError(reason)
+        provider_kind = provider["role"]
+        provider_role = _video_provider_stage_role(provider, provider_index)
+        provider_channel = _normalize_video_channel(provider["channel"])
+        provider_model = provider["model"]
+        if provider_kind == "fallback":
+            logger_obj.segment(
+                index,
+                f"video_fallback_{provider_index - 1:02d}",
+                "running",
+                payload={
+                    "from_channel": providers[0]["channel"],
+                    "from_model": providers[0]["model"],
+                    "to_channel": provider_channel,
+                    "to_model": provider_model,
+                    "provider_role": provider_role,
+                    "previous_error": last_error,
+                },
+            )
+        try:
+            submitted_plan = _submit_segment_video_to_provider(
+                client,
+                logger_obj,
+                image_ready_plan,
+                reference_image_urls,
+                provider,
+                provider_index,
+                submit_control,
+            )
+            segment_result = _poll_segment_video(
+                client,
+                logger_obj,
+                submitted_plan,
+            )
+            _validate_segment_video_aspect(client, logger_obj, segment_result)
+            return segment_result
+        except (InsufficientCreditError, StopNewSubmissionsError):
+            raise
+        except Exception as exc:
+            last_error = str(exc)
+            logger_obj.segment(
+                index,
+                f"video_attempt_{provider_role}",
+                "failed",
+                error=last_error,
+                payload={
+                    "video_channel": provider_channel,
+                    "video_model": provider_model,
+                    "provider_role": provider_kind,
+                    "provider_stage_role": provider_role,
+                    "provider_attempt": provider_index,
+                },
+            )
+    raise PipelineError(f"segment {index:02d} video generation failed: {last_error}")
 
 
 def _direct_video_prompt(config: PipelineConfig) -> str:
@@ -1658,6 +1908,7 @@ def _finish_segments(
             "video_fallback_model": config.video_fallback_model,
             "video_fallback_channel": config.video_fallback_channel,
             "video_fallback_base_url": config.video_fallback_base_url,
+            "video_fallbacks": config.video_fallbacks or [],
             "workflow_mode": config.workflow_mode,
             "aspect_ratio": config.aspect_ratio,
             "segment_count": config.segment_count,
@@ -1813,9 +2064,15 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             )
             results_map: Dict[int, Dict[str, Any]] = {}
             failure_map: Dict[int, Dict[str, Any]] = {}
+            submit_control = SubmitControl()
             try:
-                submitted = _submit_segment_video(client, logger_obj, segment_plan, reference_image_urls)
-                result = _poll_segment_video(client, logger_obj, submitted)
+                result = _run_segment_video_providers(
+                    client,
+                    logger_obj,
+                    segment_plan,
+                    reference_image_urls,
+                    submit_control,
+                )
                 results_map[1] = result
                 logger_obj.segment(1, "final", "success", payload=result)
             except Exception as exc:
