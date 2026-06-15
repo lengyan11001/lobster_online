@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
+from console_safe import safe_print
 
 
 def _safe_event_log(event_logger: Optional[Callable], event: str, **fields) -> None:
@@ -326,7 +327,7 @@ class AIClient:
                     post_title=post_title,
                 )
             else:
-                print(f"API错误: {response.status_code}, body={response.text[:500]}")
+                safe_print(f"API错误: {response.status_code}, body={response.text[:500]}")
                 return self._fallback_filter(
                     candidate_comments,
                     intent_profile=intent_profile,
@@ -335,7 +336,7 @@ class AIClient:
                 )
 
         except Exception as e:
-            print(f"调用AI失败: {str(e)}")
+            safe_print(f"调用AI失败: {str(e)}")
             return self._fallback_filter(
                 candidate_comments,
                 intent_profile=intent_profile,
@@ -520,7 +521,7 @@ class AIClient:
                     http_status=response.status_code,
                     raw_response=response.text[:600],
                 )
-                print(f"API错误: {response.status_code}, body={response.text[:500]}")
+                safe_print(f"API错误: {response.status_code}, body={response.text[:500]}")
         except Exception as e:
             _safe_event_log(
                 event_logger,
@@ -528,7 +529,7 @@ class AIClient:
                 batch_index=batch_index,
                 error=str(e),
             )
-            print(f"调用AI失败: {str(e)}")
+            safe_print(f"调用AI失败: {str(e)}")
 
         fallback = self._fallback_filter_v2(
             candidate_comments,
@@ -951,10 +952,10 @@ class AIClient:
                 result = response.json()
                 return result.get("choices", [{}])[0].get("message", {}).get("content", "")
             else:
-                print(f"API错误: {response.status_code}, body={response.text[:500]}")
+                safe_print(f"API错误: {response.status_code}, body={response.text[:500]}")
                 return "{}"
         except Exception as e:
-            print(f"调用AI失败: {str(e)}")
+            safe_print(f"调用AI失败: {str(e)}")
             return "{}"
 
     def generate_comment(self, username: str, post_title: str, direction: str = "亲切、有趣") -> str:
@@ -1009,7 +1010,7 @@ class AIClient:
                 return "写得真好，支持一下！"
 
         except Exception as e:
-            print(f"生成评论失败: {str(e)}")
+            safe_print(f"生成评论失败: {str(e)}")
             return "写得真好，支持一下！"
 
     @staticmethod
@@ -1066,9 +1067,9 @@ class AIClient:
                 if cleaned:
                     return cleaned
             else:
-                print(f"AI生成采集回复失败: {response.status_code}, body={response.text[:300]}")
+                safe_print(f"AI生成采集回复失败: {response.status_code}, body={response.text[:300]}")
         except Exception as e:
-            print(f"AI生成采集回复失败: {str(e)}")
+            safe_print(f"AI生成采集回复失败: {str(e)}")
 
         fallback = "我也是试了几版，后面才顺手" if any(token in str(comment_content or "") for token in ["?", "？", "吗", "么"]) else "我当时也踩过坑，后面才慢慢顺"
         return self._clean_short_reply(fallback)
@@ -1095,5 +1096,5 @@ class AIClient:
             return response.status_code == 200
 
         except Exception as e:
-            print(f"API连接测试失败: {str(e)}")
+            safe_print(f"API连接测试失败: {str(e)}")
             return False

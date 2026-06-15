@@ -7,9 +7,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import requests
+
+from console_safe import safe_print
 from win_subprocess import run_hidden
 
 
@@ -81,9 +83,7 @@ def get_chrome_path() -> str:
         for env_var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
             base = os.environ.get(env_var, "")
             if base:
-                candidates.append(
-                    os.path.join(base, "Google", "Chrome", "Application", "chrome.exe")
-                )
+                candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
         _append_windows_chrome_registry_candidates(candidates)
     elif sys.platform == "darwin":
         candidates.extend(
@@ -202,8 +202,8 @@ def _cleanup_stale_browser_processes(profile_dir: str, port: int, process_name: 
     if not stale_pids:
         return
 
-    print(
-        f"[抖音账号] 检测到账号浏览器残留进程，浏览器 {browser_label}，端口 {port}，profile={profile_dir}，"
+    safe_print(
+        f"[抖音账号] 检测到账号浏览器残留进程，浏览器 {browser_label}，端口 {port}，profile={profile_dir}；"
         f"准备清理 PID: {', '.join(str(pid) for pid in stale_pids)}"
     )
     for pid in stale_pids:
@@ -233,12 +233,7 @@ class DouyinClient:
         local_appdata = os.environ.get("LOCALAPPDATA", "")
         default_base = os.path.join(local_appdata, "Google", "Chrome", "DouyinProfiles")
 
-        base = Path(
-            os.environ.get(
-                "DOUYIN_PROFILE_BASE",
-                default_base,
-            )
-        )
+        base = Path(os.environ.get("DOUYIN_PROFILE_BASE", default_base))
         base.mkdir(parents=True, exist_ok=True)
 
         if self.account_id is not None:
@@ -292,14 +287,14 @@ class DouyinClient:
                 self.last_launch_summary = (
                     f"已使用 {browser_label} 启动，profile={profile_dir}，port={self.port}"
                 )
-                print(f"[抖音账号] {self.last_launch_summary}")
+                safe_print(f"[抖音账号] {self.last_launch_summary}")
                 return True
             time.sleep(0.5)
 
-        self.last_launch_summary = f"{browser_label} 启动失败（profile={profile_dir}）"
+        self.last_launch_summary = f"{browser_label} 启动失败，profile={profile_dir}"
         _terminate_windows_process_tree(int(getattr(proc, "pid", 0) or 0))
         _cleanup_stale_browser_processes(profile_dir, self.port, process_name, browser_label)
-        print(f"[抖音账号] 浏览器启动失败：{self.last_launch_summary}")
+        safe_print(f"[抖音账号] 浏览器启动失败：{self.last_launch_summary}")
         return False
 
     def close_browser(self):
