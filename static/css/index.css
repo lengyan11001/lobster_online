@@ -3885,7 +3885,9 @@
       border:1px solid rgba(116,134,168,0.18); box-shadow:0 24px 70px rgba(15,23,42,0.28);
     }
     .tvc-video-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:0.8rem; }
+    .tvc-video-modal-title-wrap { min-width:0; display:grid; gap:0.16rem; }
     .tvc-video-modal-title { margin:0; font-size:0.96rem; line-height:1.45; color:#20314d; }
+    .tvc-video-modal-hint { color:#7a8799; font-size:0.74rem; font-weight:700; }
     .tvc-video-modal video { width:100%; max-height:74vh; border-radius:16px; background:#101827; display:block; }
     .tvc-side-stack { display:flex; flex-direction:column; gap:1rem; }
     .tvc-insight-list { display:grid; gap:0.6rem; }

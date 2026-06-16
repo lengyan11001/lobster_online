@@ -568,20 +568,24 @@
     btn.textContent = state.examplesLoading ? '加载中...' : '加载更多示例';
   }
 
-  function openExampleVideo(example) {
-    if (!example || !example.video_url) return;
+  function openSeedanceVideoModal(videoUrl, titleText) {
+    var target = String(videoUrl || '').trim();
+    if (!target) return;
     var modal = $('seedanceVideoModal');
     var player = $('seedanceVideoModalPlayer');
     var title = $('seedanceVideoModalTitle');
     if (!modal || !player) return;
-    if (title) title.textContent = example.title || '案例视频';
-    player.src = example.video_url;
+    if (title) title.textContent = titleText || '视频预览';
+    player.src = target;
     modal.classList.add('is-visible');
     modal.setAttribute('aria-hidden', 'false');
-    try { player.play(); } catch (err) {}
+    try {
+      var playPromise = player.play();
+      if (playPromise && playPromise.catch) playPromise.catch(function() {});
+    } catch (err) {}
   }
 
-  function closeExampleVideo() {
+  function closeSeedanceVideoModal() {
     var modal = $('seedanceVideoModal');
     var player = $('seedanceVideoModalPlayer');
     if (player) {
@@ -593,6 +597,11 @@
       modal.classList.remove('is-visible');
       modal.setAttribute('aria-hidden', 'true');
     }
+  }
+
+  function openExampleVideo(example) {
+    if (!example || !example.video_url) return;
+    openSeedanceVideoModal(example.video_url, example.title || '案例视频');
   }
 
   function localBase() {
@@ -864,7 +873,7 @@
       btn.onclick = function() {
         var url = btn.getAttribute('data-seedance-video-open') || '';
         if (!url) return showMessage('视频地址为空，无法打开。');
-        openExternalUrl(url);
+        openSeedanceVideoModal(url, '视频预览');
       };
     });
   }
@@ -2726,15 +2735,18 @@
     }
 
     if ($('seedanceVideoModalClose')) {
-      $('seedanceVideoModalClose').addEventListener('click', closeExampleVideo);
+      $('seedanceVideoModalClose').addEventListener('click', closeSeedanceVideoModal);
     }
     if ($('seedanceVideoModal')) {
       $('seedanceVideoModal').addEventListener('click', function(event) {
-        if (event.target === $('seedanceVideoModal')) closeExampleVideo();
+        if (event.target === $('seedanceVideoModal')) closeSeedanceVideoModal();
       });
     }
     document.addEventListener('keydown', function(event) {
-      if (event.key === 'Escape') closeExampleVideo();
+      var modal = $('seedanceVideoModal');
+      if (event.key === 'Escape' && modal && modal.classList.contains('is-visible')) {
+        closeSeedanceVideoModal();
+      }
     });
 
     if ($('seedanceExamplesGrid')) {

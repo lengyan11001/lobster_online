@@ -7,7 +7,7 @@
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
   <link rel="stylesheet" href="/static/css/common.css?v=20260612-feature-gate-cache">
-  <link rel="stylesheet" href="/static/css/index.css?v=20260611-douyin-search-scroll">
+  <link rel="stylesheet" href="/static/css/index.css?v=20260616-seedance-video-modal">
 </head>
 <body>
   <div class="page">
@@ -1941,10 +1941,13 @@
   <div id="seedanceVideoModal" class="tvc-video-modal-mask" aria-hidden="true">
     <div class="tvc-video-modal" role="dialog" aria-modal="true" aria-labelledby="seedanceVideoModalTitle">
       <div class="tvc-video-modal-head">
-        <h4 id="seedanceVideoModalTitle" class="tvc-video-modal-title">案例视频</h4>
+        <div class="tvc-video-modal-title-wrap">
+          <h4 id="seedanceVideoModalTitle" class="tvc-video-modal-title">视频预览</h4>
+          <span class="tvc-video-modal-hint">按 Esc 退出预览</span>
+        </div>
         <button type="button" id="seedanceVideoModalClose" class="btn btn-ghost btn-sm">关闭</button>
       </div>
-      <video id="seedanceVideoModalPlayer" controls playsinline preload="metadata"></video>
+      <video id="seedanceVideoModalPlayer" controls controlsList="nodownload" playsinline preload="metadata"></video>
     </div>
   </div>
 
@@ -2488,7 +2491,7 @@
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260604-asset-picker"></script>
   <script src="/static/js/comfly-image-studio.js?v=20260604-asset-picker"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260606-seedance-custom-select"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260616-video-modal-open"></script>
   <script src="/static/js/local-bestseller.js?v=20260607-local-video-inline-fs"></script>
   <script src="/static/js/viral-video-remix.js?v=20260612-auto-ref-upload-flow"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
