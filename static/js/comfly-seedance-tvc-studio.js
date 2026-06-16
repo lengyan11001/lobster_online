@@ -47,7 +47,7 @@
     aspectRatio: '9:16',
     visualTone: 'clean_bright',
     rhythm: 'smooth',
-    model: 'yunwu-veo3.1-plus',
+    model: 'grok-imagine-video-1.5-preview',
     needAudio: true,
     needMerge: true,
     prompt: ''
