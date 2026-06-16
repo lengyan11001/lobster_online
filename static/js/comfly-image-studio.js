@@ -1,4 +1,4 @@
-(function() {
+﻿(function() {
   var FALLBACK_EXAMPLES = [
     {
       id: 1050,
@@ -44,7 +44,6 @@
   };
   var imglabTaskToastTimer = null;
   var imglabTaskNotifiedJobs = {};
-  var lastImglabResultRenderSignature = '';
   var assetPickerState = {
     loading: false,
     items: [],
@@ -55,6 +54,7 @@
 
   var JOB_RESTORE_WINDOW_MS = 6 * 60 * 60 * 1000;
   var JOB_HISTORY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+  var JOB_HISTORY_LIMIT = 60;
 
   var PURPOSE_LABELS = {
     auto: '普通参考',
@@ -130,7 +130,7 @@
         if (item.updatedAt && now - Number(item.updatedAt) > JOB_HISTORY_WINDOW_MS) return false;
         if (item.status === 'completed' && !item.image && !item.resultCount) return false;
         return true;
-      }).slice(0, 12);
+      }).slice(0, JOB_HISTORY_LIMIT);
     } catch (e) {
       state.recentJobs = [];
     }
@@ -138,16 +138,15 @@
 
   function saveRecentJobs() {
     try {
-      if (window.localStorage) window.localStorage.setItem(jobsStorageKey(), JSON.stringify(state.recentJobs.slice(0, 12)));
+      if (window.localStorage) window.localStorage.setItem(jobsStorageKey(), JSON.stringify(state.recentJobs.slice(0, JOB_HISTORY_LIMIT)));
     } catch (e) {}
   }
 
   function rememberJob(job) {
     if (!job || !job.jobId) return;
     var next = state.recentJobs.filter(function(item) { return item && item.jobId !== job.jobId; });
-    var now = Date.now();
-    next.unshift(Object.assign({}, job, { updatedAt: now, sortAt: Number(job.sortAt || job.createdAt || job.updatedAt || now) }));
-    state.recentJobs = next.slice(0, 12);
+    next.unshift(Object.assign({}, job, { updatedAt: Date.now() }));
+    state.recentJobs = next.slice(0, JOB_HISTORY_LIMIT);
     saveRecentJobs();
   }
 
@@ -155,10 +154,7 @@
     if (!jobId) return;
     state.recentJobs = state.recentJobs.map(function(item) {
       if (!item || item.jobId !== jobId) return item;
-      return Object.assign({}, item, patch || {}, {
-        updatedAt: Date.now(),
-        sortAt: Number(item.sortAt || item.createdAt || item.updatedAt || Date.now())
-      });
+      return Object.assign({}, item, patch || {}, { updatedAt: Date.now() });
     });
     saveRecentJobs();
   }
@@ -169,13 +165,12 @@
       if (!item || !item.jobId) return;
       var old = byId[item.jobId] || {};
       byId[item.jobId] = Object.assign({}, old, item, {
-        updatedAt: item.updatedAt || old.updatedAt || Date.now(),
-        sortAt: Number(old.sortAt || item.sortAt || item.createdAt || item.updatedAt || old.updatedAt || Date.now())
+        updatedAt: item.updatedAt || old.updatedAt || Date.now()
       });
     });
     state.recentJobs = Object.keys(byId).map(function(id) { return byId[id]; })
-      .sort(function(a, b) { return Number(b.sortAt || b.updatedAt || 0) - Number(a.sortAt || a.updatedAt || 0); })
-      .slice(0, 12);
+      .sort(function(a, b) { return Number(b.updatedAt || 0) - Number(a.updatedAt || 0); })
+      .slice(0, JOB_HISTORY_LIMIT);
     saveRecentJobs();
   }
 
@@ -947,6 +942,85 @@
       });
   }
 
+  function responseErrorText(data, fallback) {
+    if (!data) return fallback || '请求失败';
+    if (typeof data === 'string') return data || fallback || '请求失败';
+    if (typeof data.detail === 'string' && data.detail) return data.detail;
+    if (typeof data.message === 'string' && data.message) return data.message;
+    if (typeof data.msg === 'string' && data.msg) return data.msg;
+    if (data.error) {
+      if (typeof data.error === 'string') return data.error;
+      if (typeof data.error.message === 'string' && data.error.message) return data.error.message;
+    }
+    try {
+      return JSON.stringify(data);
+    } catch (err) {
+      return fallback || '请求失败';
+    }
+  }
+
+  function saveAssetToDownloads(assetId, filename) {
+    var base = localBase();
+    if (!base || !assetId) return Promise.reject(new Error('缺少素材信息，无法保存到本地文件夹'));
+    return fetch(base + '/api/assets/' + encodeURIComponent(assetId) + '/save-to-downloads', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+      body: JSON.stringify({
+        filename: filename || 'image-studio-result.png',
+        open_folder: true
+      })
+    })
+      .then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          if (!response.ok) throw new Error(responseErrorText(data, '保存到本地文件夹失败'));
+          return data || {};
+        });
+      });
+  }
+
+  function saveRemoteImageToDownloads(url, filename, prompt) {
+    var base = localBase();
+    var rawUrl = String(url || '').trim();
+    if (!base || !rawUrl) return Promise.reject(new Error('当前图片缺少可保存的地址'));
+    return fetch(base + '/api/assets/save-url', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+      body: JSON.stringify({
+        url: rawUrl,
+        media_type: 'image',
+        tags: 'image_studio,generated',
+        prompt: String(prompt || '').trim().slice(0, 500)
+      })
+    })
+      .then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          if (!response.ok || !data || !data.asset_id) {
+            throw new Error(responseErrorText(data, '图片保存到素材库失败'));
+          }
+          return data;
+        });
+      })
+      .then(function(data) {
+        return saveAssetToDownloads(data.asset_id, filename).then(function(saveData) {
+          saveData.asset_id = data.asset_id;
+          return saveData;
+        });
+      });
+  }
+
+  function shouldFallbackToUrlDownload(err) {
+    var msg = String((err && err.message) || err || '').trim();
+    if (!msg) return true;
+    return msg.indexOf('素材不存在') >= 0
+      || msg.indexOf('404') >= 0
+      || msg.toLowerCase().indexOf('not found') >= 0;
+  }
+
+  function imageDownloadFilename(detail) {
+    var id = String((detail && (detail.assetId || detail.jobId)) || '').trim();
+    return (id ? ('image-studio-' + id) : 'image-studio-result') + '.png';
+  }
+
   function downloadActiveImage() {
     var detail = activeResultDetail();
     var url = detail ? (detail.downloadUrl || detail.previewUrl || '') : '';
@@ -954,15 +1028,44 @@
       showMessage('当前结果还没有可下载的图片。', true);
       return;
     }
-    var link = document.createElement('a');
-    link.href = url;
-    link.target = '_blank';
-    link.rel = 'noopener';
-    link.download = (detail && detail.jobId ? ('image-studio-' + detail.jobId) : 'image-studio-result') + '.png';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showMessage('已开始下载图片。', false);
+    showMessage('正在保存图片到素材文件夹...', false);
+    var filename = imageDownloadFilename(detail);
+    var task = detail && detail.assetId
+      ? saveAssetToDownloads(detail.assetId, filename).catch(function(err) {
+        if (!url || !shouldFallbackToUrlDownload(err)) throw err;
+        return saveRemoteImageToDownloads(url, filename, detail ? detail.prompt : '');
+      })
+      : saveRemoteImageToDownloads(url, filename, detail ? detail.prompt : '');
+    task
+      .then(function() {
+        showMessage('图片已保存到素材图片文件夹，并已打开文件夹。', false);
+      })
+      .catch(function(err) {
+        showMessage((err && err.message) || '图片保存到本地文件夹失败', true);
+      });
+  }
+
+  function useActiveResultAsReference() {
+    var detail = activeResultDetail();
+    var url = detail ? (detail.previewUrl || detail.downloadUrl || '') : '';
+    if (!url) {
+      showMessage('当前结果还没有可以作为参考图的图片。', true);
+      return;
+    }
+    var purpose = (($('imglabReferencePurposeSelect') || {}).value || 'auto').trim() || 'auto';
+    var incoming = [{
+      name: (detail && detail.title) || '生成结果参考图',
+      size: 0,
+      purpose: purpose,
+      objectUrl: url,
+      source_url: url,
+      asset_id: (detail && detail.assetId) || '',
+      prompt: (detail && detail.prompt) || ''
+    }];
+    var before = state.references.length;
+    state.references = appendReferenceItems(state.references, incoming);
+    renderReferenceList();
+    showMessage(state.references.length > before ? '已把当前结果加入左侧参考图。' : '这张图已经在参考图列表里了。', false);
   }
 
   function ensureResultPreviewModal() {
@@ -1166,13 +1269,14 @@
     if (!cards.length) {
       return '<div class="imglab-empty-slot" style="grid-column:1 / -1;">还没有图片任务，提交一次后这里会出现任务卡片。</div>';
     }
-    return cards.slice(0, 12).map(function(card) {
+    return cards.slice(0, JOB_HISTORY_LIMIT).map(function(card) {
       var isActive = card.type === 'result'
         ? (!state.selectedJobId && card.index === state.activeResultIndex)
         : (!!state.selectedJobId && card.jobId === state.selectedJobId);
       var attrs = card.type === 'result'
         ? 'data-result-index="' + card.index + '"'
         : 'data-imglab-job="' + escapeHtml(card.jobId) + '"';
+      var wideClass = (card.status === 'completed' && card.image) ? ' is-wide' : '';
       var media = card.status === 'completed' && card.image
         ? '<img src="' + escapeHtml(card.image) + '" alt="' + escapeHtml(card.title) + '">'
         : '<div class="imglab-task-card-pending">' + (card.status === 'running' ? '<span class="imglab-task-spinner" aria-hidden="true"></span>' : '<span class="imglab-task-done-mark">' + (card.status === 'stale' ? '刷新' : '完成') + '</span>') + '</div>';
@@ -1189,51 +1293,11 @@
     }).join('');
   }
 
-  function currentResultRenderSignature() {
-    return JSON.stringify({
-      currentJobId: state.currentJobId || '',
-      currentJobStatus: state.currentJobStatus || '',
-      currentJobPrompt: state.currentJobPrompt || '',
-      activeResultIndex: state.activeResultIndex || 0,
-      selectedJobId: state.selectedJobId || '',
-      results: (state.results || []).map(function(item) {
-        return {
-          url: item && item.url || '',
-          dataUrl: item && item.data_url || '',
-          sourceUrl: item && item.sourceUrl || '',
-          assetId: item && item.assetId || '',
-          prompt: item && item.prompt || '',
-          model: item && item.model || '',
-          aspectRatio: item && item.aspectRatio || '',
-          size: item && item.size || ''
-        };
-      }),
-      recentJobs: (state.recentJobs || []).slice(0, 12).map(function(job) {
-        return {
-          jobId: job && job.jobId || '',
-          status: job && job.status || '',
-          title: job && job.title || '',
-          prompt: promptFromJob(job),
-          image: job && job.image || '',
-          resultCount: job && job.resultCount || 0,
-          assetId: job && (job.assetId || job.asset_id) || '',
-          model: job && job.model || '',
-          aspectRatio: job && job.aspectRatio || '',
-          size: job && job.size || ''
-        };
-      })
-    });
-  }
-
   function renderResultSurface() {
     var surface = $('imglabResultSurface');
     var meta = $('imglabResultMeta');
     var gallery = $('imglabResultGallery');
     if (!surface || !meta || !gallery) return;
-
-    var signature = currentResultRenderSignature();
-    if (signature === lastImglabResultRenderSignature) return;
-    lastImglabResultRenderSignature = signature;
 
     var detail = activeResultDetail();
     if (!detail) {
@@ -1264,6 +1328,7 @@
       '<button type="button" class="btn btn-sm imglab-action-btn is-copy" data-imglab-copy-prompt>' + (detail.prompt ? '复制提示词并回填' : '暂无提示词') + '</button>',
       '<button type="button" class="btn btn-sm imglab-action-btn is-download" data-imglab-download-image' + (detail.previewUrl ? '' : ' disabled') + '>下载图片</button>',
       '<button type="button" class="btn btn-sm imglab-action-btn is-preview" data-imglab-open-preview' + (detail.previewUrl ? '' : ' disabled') + '>查看原图</button>',
+      '<button type="button" class="btn btn-sm imglab-action-btn is-reference" data-imglab-use-reference' + (detail.previewUrl ? '' : ' disabled') + '>用作参考图</button>',
       '</div>',
       '<div class="imglab-result-prompt-panel">',
       '<div class="imglab-result-prompt-head">提示词</div>',
@@ -1299,22 +1364,23 @@
       btn.addEventListener('click', function() {
         var jobId = btn.getAttribute('data-imglab-job') || '';
         if (!jobId) return;
-        var hit = state.recentJobs.find(function(item) { return item && item.jobId === jobId; });
-        var status = (hit && hit.status) || 'running';
-        if (status === 'stale') status = 'running';
+        var clickedJob = state.recentJobs.find(function(item) { return item && item.jobId === jobId; });
+        var clickedStatus = (clickedJob && clickedJob.status) || 'running';
+        if (clickedStatus === 'stale') clickedStatus = 'running';
         setRightView('result');
         state.selectedJobId = jobId;
-        renderResultSurface();
-        if (status === 'running' || (!hit || (hit.status === 'completed' && !hit.image))) {
+        if (clickedStatus === 'running' || (!clickedJob || (clickedJob.status === 'completed' && !clickedJob.image))) {
           state.currentJobId = jobId;
-          state.currentJobStatus = status;
-          state.currentJobPrompt = promptFromJob(hit);
+          state.currentJobStatus = clickedStatus;
+          state.currentJobPrompt = promptFromJob(clickedJob);
+          renderResultSurface();
           refreshJobStatus(true);
+          return;
         }
+        renderResultSurface();
       });
     });
   }
-
   function setRightView(view) {
     state.view = view === 'result' ? 'result' : 'examples';
     var resultPanel = $('imglabResultPanel');
@@ -1473,7 +1539,7 @@
   function loadCloudJobHistory() {
     var base = cloudBase();
     if (!base) return Promise.resolve([]);
-    return fetch(base + '/api/creative-jobs?feature_type=image_studio&limit=12', {
+    return fetch(base + '/api/creative-jobs?feature_type=image_studio&limit=' + JOB_HISTORY_LIMIT, {
       headers: authHeadersSafe()
     })
       .then(function(response) {
@@ -1871,6 +1937,12 @@
           if (previewBtn.disabled) return;
           var detail = activeResultDetail();
           openResultPreviewModal(detail ? (detail.downloadUrl || detail.previewUrl || '') : '', detail ? detail.title : '');
+          return;
+        }
+        var referenceBtn = event.target.closest('[data-imglab-use-reference]');
+        if (referenceBtn) {
+          if (referenceBtn.disabled) return;
+          useActiveResultAsReference();
         }
       });
     }

@@ -24,6 +24,8 @@
     currentJobProgressPercent: null,
     currentJobProgressLabel: '',
     currentJobProgressDetail: '',
+    currentSegmentArtifacts: null,
+    finalComposeRequested: false,
     submitBusy: false,
     submitLabel: '',
     pollTimer: null,
@@ -34,8 +36,7 @@
   var lastSeedanceModel = '';
   var seedanceVideoFullscreenEventsBound = false;
   var customSelectEventsBound = false;
-  var lastSeedanceStageRenderSignature = '';
-  var lastSeedanceBusinessRenderSignature = '';
+  var RECENT_JOB_LIMIT = 60;
   var assetPickerState = {
     loading: false,
     items: [],
@@ -108,7 +109,7 @@
     },
     image_prompt: {
       name: '图片 + 提示词共创',
-      hint: '当前模式会同时参考图片主体和提示词描述；未上传图片时，会按提示词直接规划分镜。',
+      hint: '当前模式会参考上传图片，并把你的提示词原样用于每个分段，不再自动扩写分镜话术。',
       emphasis: '图文共同控制'
     },
     prompt_only: {
@@ -315,6 +316,51 @@
     return null;
   }
 
+  function normalizeSegmentArtifacts(raw) {
+    var artifacts = raw && typeof raw === 'object' ? raw : null;
+    var source = artifacts && Array.isArray(artifacts.segments) ? artifacts.segments : [];
+    if (!source.length) return null;
+    var segments = source.map(function(item, idx) {
+      item = item && typeof item === 'object' ? item : {};
+      var index = Number(item.index || idx + 1) || idx + 1;
+      var imagePrompt = String(item.image_prompt || item.imagePrompt || item.prompt || '').trim();
+      var videoPrompt = String(item.video_prompt || item.videoPrompt || item.prompt || '').trim();
+      var imageUrl = String(item.image_url || item.imageUrl || '').trim();
+      var videoUrl = String(item.video_url || item.videoUrl || '').trim();
+      var status = String(item.status || '').trim() || (videoUrl ? 'video_ready' : (imageUrl ? 'image_ready' : 'pending'));
+      return {
+        index: index,
+        start: item.start != null ? Number(item.start) : null,
+        end: item.end != null ? Number(item.end) : null,
+        status: status,
+        imageStatus: String(item.image_status || item.imageStatus || (imageUrl ? 'ready' : 'pending')),
+        videoStatus: String(item.video_status || item.videoStatus || (videoUrl ? 'ready' : 'pending')),
+        imagePrompt: imagePrompt,
+        videoPrompt: videoPrompt,
+        imageUrl: imageUrl,
+        videoUrl: videoUrl,
+        provider: String(item.provider || '').trim(),
+        model: String(item.model || '').trim(),
+        taskId: String(item.task_id || item.taskId || '').trim(),
+        error: String(item.error || '').trim(),
+        progress: item.progress != null ? item.progress : null
+      };
+    }).sort(function(a, b) {
+      return a.index - b.index;
+    });
+    var imageReady = segments.filter(function(item) { return !!item.imageUrl; }).length;
+    var videoReady = segments.filter(function(item) { return !!item.videoUrl; }).length;
+    var failed = segments.filter(function(item) { return item.status === 'failed' || !!item.error; }).length;
+    return {
+      segmentCount: Number(artifacts.segment_count || artifacts.segmentCount || segments.length) || segments.length,
+      imageReadyCount: Number(artifacts.image_ready_count || artifacts.imageReadyCount || imageReady) || imageReady,
+      videoReadyCount: Number(artifacts.video_ready_count || artifacts.videoReadyCount || artifacts.ready_count || videoReady) || videoReady,
+      failedCount: Number(artifacts.failed_count || artifacts.failedCount || failed) || failed,
+      segmentSeconds: Number(artifacts.segment_seconds || artifacts.segmentSeconds || 0) || 0,
+      segments: segments
+    };
+  }
+
   function currentProgressPercent() {
     var direct = normalizeProgressPercent(state.currentJobProgressPercent);
     if (direct != null) return direct;
@@ -440,12 +486,19 @@
     var status = String((job && job.status) || 'running');
     var videoUrl = String((job && job.videoUrl) || '').trim();
     if (videoUrl && status === 'completed') {
+      var thumb = jobThumbUrl(job);
+      if (thumb) {
+        return [
+          '<span class="seedance-job-thumb-shell">',
+          '<img src="' + escapeHtml(thumb) + '" alt="' + escapeHtml(jobPromptText(job) || '任务缩略图') + '">',
+          '<span class="seedance-job-play-badge">点击查看</span>',
+          '</span>'
+        ].join('');
+      }
       return [
-        '<span class="seedance-inline-video-shell" data-seedance-video-shell>',
-        '<video src="' + escapeHtml(videoUrl) + '" controls controlsList="nodownload nofullscreen" playsinline preload="metadata"></video>',
-        '<button type="button" class="seedance-video-fs-btn is-mini" data-seedance-video-fullscreen>放大</button>',
-        '<span class="seedance-video-fullscreen-hint">按 Esc 退出全屏</span>',
-        '<button type="button" class="seedance-video-exit-btn" data-seedance-video-exit>退出全屏 Esc</button>',
+        '<span class="seedance-job-thumb-shell is-video-only">',
+        '<span class="seedance-job-play-mark">▶</span>',
+        '<span class="seedance-job-play-badge">点击查看</span>',
         '</span>'
       ].join('');
     }
@@ -456,6 +509,28 @@
       return '<span class="seedance-business-job-placeholder is-failed">生成失败</span>';
     }
     return '<span class="seedance-business-job-placeholder is-running"><span class="tvc-status-spinner" aria-hidden="true"></span><span>生成中</span></span>';
+  }
+
+  function jobThumbUrl(job) {
+    if (!job || typeof job !== 'object') return '';
+    var artifacts = job.artifacts || {};
+    var segments = Array.isArray(artifacts.segments) ? artifacts.segments : [];
+    for (var i = 0; i < segments.length; i += 1) {
+      var seg = segments[i] || {};
+      var imageUrl = String(seg.imageUrl || seg.image_url || seg.first_frame_image_url || seg.segment_reference_image_url || '').trim();
+      if (imageUrl) return imageUrl;
+    }
+    var cloudJob = job.cloudJob || {};
+    var result = cloudJob.result || cloudJob.result_payload || {};
+    var completed = result.completed_segments || result.completed_shots || [];
+    if (Array.isArray(completed)) {
+      for (var j = 0; j < completed.length; j += 1) {
+        var item = completed[j] || {};
+        var url = String(item.first_frame_image_url || item.segment_reference_image_url || item.storyboard_board_image_url || '').trim();
+        if (url) return url;
+      }
+    }
+    return '';
   }
 
   function jobDetailText(job) {
@@ -568,24 +643,20 @@
     btn.textContent = state.examplesLoading ? '加载中...' : '加载更多示例';
   }
 
-  function openSeedanceVideoModal(videoUrl, titleText) {
-    var target = String(videoUrl || '').trim();
-    if (!target) return;
+  function openExampleVideo(example) {
+    if (!example || !example.video_url) return;
     var modal = $('seedanceVideoModal');
     var player = $('seedanceVideoModalPlayer');
     var title = $('seedanceVideoModalTitle');
     if (!modal || !player) return;
-    if (title) title.textContent = titleText || '视频预览';
-    player.src = target;
+    if (title) title.textContent = example.title || '案例视频';
+    player.src = example.video_url;
     modal.classList.add('is-visible');
     modal.setAttribute('aria-hidden', 'false');
-    try {
-      var playPromise = player.play();
-      if (playPromise && playPromise.catch) playPromise.catch(function() {});
-    } catch (err) {}
+    try { player.play(); } catch (err) {}
   }
 
-  function closeSeedanceVideoModal() {
+  function closeExampleVideo() {
     var modal = $('seedanceVideoModal');
     var player = $('seedanceVideoModalPlayer');
     if (player) {
@@ -597,11 +668,6 @@
       modal.classList.remove('is-visible');
       modal.setAttribute('aria-hidden', 'true');
     }
-  }
-
-  function openExampleVideo(example) {
-    if (!example || !example.video_url) return;
-    openSeedanceVideoModal(example.video_url, example.title || '案例视频');
   }
 
   function localBase() {
@@ -625,7 +691,7 @@
     try {
       var raw = window.localStorage ? window.localStorage.getItem(jobsStorageKey()) : '';
       var rows = JSON.parse(raw || '[]');
-      state.recentJobs = Array.isArray(rows) ? rows.slice(0, 12) : [];
+      state.recentJobs = Array.isArray(rows) ? rows.slice(0, RECENT_JOB_LIMIT) : [];
     } catch (e) {
       state.recentJobs = [];
     }
@@ -633,7 +699,7 @@
 
   function saveRecentJobs() {
     try {
-      if (window.localStorage) window.localStorage.setItem(jobsStorageKey(), JSON.stringify(state.recentJobs.slice(0, 12)));
+      if (window.localStorage) window.localStorage.setItem(jobsStorageKey(), JSON.stringify(state.recentJobs.slice(0, RECENT_JOB_LIMIT)));
     } catch (e) {}
   }
 
@@ -641,7 +707,7 @@
     if (!job || !job.jobId) return;
     var next = state.recentJobs.filter(function(item) { return item && item.jobId !== job.jobId; });
     next.unshift(Object.assign({}, job, { updatedAt: Date.now() }));
-    state.recentJobs = next.slice(0, 12);
+    state.recentJobs = next.slice(0, RECENT_JOB_LIMIT);
     saveRecentJobs();
   }
 
@@ -665,7 +731,7 @@
     });
     state.recentJobs = Object.keys(byId).map(function(id) { return byId[id]; })
       .sort(function(a, b) { return Number(b.updatedAt || 0) - Number(a.updatedAt || 0); })
-      .slice(0, 12);
+      .slice(0, RECENT_JOB_LIMIT);
     saveRecentJobs();
   }
 
@@ -733,6 +799,7 @@
       progressPercent: job.progress_percent != null ? job.progress_percent : null,
       progressLabel: job.progress_label || '',
       progressDetail: job.progress_detail || '',
+      artifacts: normalizeSegmentArtifacts(job.artifacts || null),
       createdAt: Number(job.created_at_ts || 0) * 1000 || 0,
       updatedAt: Number(job.updated_at_ts || 0) * 1000 || Date.now(),
       local: true,
@@ -754,6 +821,46 @@
           if (!response.ok) throw new Error(responseErrorText(data, 'download failed'));
           return data || {};
         });
+      });
+  }
+
+  function saveRemoteAssetToLibraryAndDownloads(url, mediaType, filename, prompt) {
+    var local = localBase();
+    var rawUrl = String(url || '').trim();
+    var mt = mediaType === 'video' ? 'video' : 'image';
+    if (!local || !rawUrl) return Promise.reject(new Error('asset url missing'));
+    var body = {
+      url: rawUrl,
+      media_type: mt,
+      tags: 'seedance_tvc,segment',
+      prompt: String(prompt || '').trim().slice(0, 500)
+    };
+    return fetch(local + '/api/assets/save-url', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+      body: JSON.stringify(body)
+    })
+      .then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          if (!response.ok || !data || !data.asset_id) {
+            throw new Error(responseErrorText(data, '素材入库失败'));
+          }
+          return data;
+        });
+      })
+      .then(function(data) {
+        return fetch(local + '/api/assets/' + encodeURIComponent(data.asset_id) + '/save-to-downloads', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+          body: JSON.stringify({ filename: filename || (mt === 'video' ? 'seedance-segment.mp4' : 'seedance-segment.png'), open_folder: true })
+        })
+          .then(function(response) {
+            return response.json().catch(function() { return {}; }).then(function(saveData) {
+              if (!response.ok) throw new Error(responseErrorText(saveData, '保存到本机失败'));
+              saveData.asset_id = data.asset_id;
+              return saveData;
+            });
+          });
       });
   }
 
@@ -873,7 +980,7 @@
       btn.onclick = function() {
         var url = btn.getAttribute('data-seedance-video-open') || '';
         if (!url) return showMessage('视频地址为空，无法打开。');
-        openSeedanceVideoModal(url, '视频预览');
+        openExternalUrl(url);
       };
     });
   }
@@ -1540,20 +1647,22 @@
     var segmentSeconds = getCurrentSegmentSeconds(values.model);
     var count = getDurationSegmentCount(state.duration, values.model);
     var promptSnippet = shortenText(values.prompt, 42);
+    var userPrompt = String(values.prompt || '').trim();
+    var useUserPromptForEverySegment = state.mode === 'image_prompt' && !!userPrompt;
     var boards = [];
 
     for (var i = 0; i < count; i += 1) {
       var seed = narrativeSeeds[i] || narrativeSeeds[narrativeSeeds.length - 1];
       var media = state.images.length ? state.images[i % state.images.length] : null;
-      var copy = seed.copy;
-      if (promptSnippet) {
+      var copy = useUserPromptForEverySegment ? userPrompt : seed.copy;
+      if (!useUserPromptForEverySegment && promptSnippet) {
         copy += ' 当前提示重点：' + promptSnippet;
       }
       boards.push({
         index: i,
         start: i * segmentSeconds,
         end: (i + 1) * segmentSeconds,
-        title: seed.title,
+        title: useUserPromptForEverySegment ? ('第 ' + (i + 1) + ' 段') : seed.title,
         copy: copy,
         media: media
       });
@@ -1567,36 +1676,14 @@
 
   function renderBoards(boards) {
     if ($('seedanceBoardsCounter')) {
-      $('seedanceBoardsCounter').textContent = boards.length + ' 张分镜';
+      $('seedanceBoardsCounter').textContent = boards.length + ' 段';
     }
     if ($('seedanceBoardsHint')) {
-      $('seedanceBoardsHint').textContent = '下面按所选模型时长展示分镜图。';
+      $('seedanceBoardsHint').textContent = '';
     }
     if (!$('seedanceStoryboardStrip')) return;
-
-    $('seedanceStoryboardStrip').innerHTML = boards.map(function(board) {
-      var media = board.media
-        ? '<img src="' + escapeHtml(board.media.url) + '" alt="' + escapeHtml(board.title) + '">'
-        : '<div style="position:absolute;left:0;right:0;bottom:0;padding:0.85rem;color:#31445f;font-size:0.82rem;font-weight:600;">' + escapeHtml(modeMeta[state.mode].emphasis) + '</div>';
-
-      return [
-        '<button type="button" class="tvc-board-card' + (board.index === state.activeBoardIndex ? ' is-active' : '') + '" data-board-index="' + board.index + '">',
-        '<div class="tvc-board-media">' + media + '</div>',
-        '<div class="tvc-board-body">',
-        '<div class="tvc-board-time">' + board.start + 's - ' + board.end + 's</div>',
-        '<div class="tvc-board-title">' + escapeHtml(board.title) + '</div>',
-        '<div class="tvc-board-copy">' + escapeHtml(board.copy) + '</div>',
-        '</div>',
-        '</button>'
-      ].join('');
-    }).join('');
-
-    document.querySelectorAll('#seedanceStoryboardStrip .tvc-board-card').forEach(function(card) {
-      card.addEventListener('click', function() {
-        state.activeBoardIndex = Number(card.getAttribute('data-board-index')) || 0;
-        renderWorkspace();
-      });
-    });
+    $('seedanceStoryboardStrip').innerHTML = renderSegmentBoard(boards);
+    bindSegmentBoardActions();
   }
 
   function resultVideoHtml(values, boards) {
@@ -1684,28 +1771,352 @@
     ].join('');
   }
 
-  function currentResultRenderSignature(values, boards) {
-    return JSON.stringify({
-      jobId: state.currentJobId || '',
-      status: state.currentJobStatus || '',
-      videoUrl: state.currentResultVideoUrl || '',
-      prompt: state.currentJobPrompt || '',
-      error: state.currentJobError || '',
-      progressPercent: state.currentJobProgressPercent != null ? state.currentJobProgressPercent : null,
-      progressLabel: state.currentJobProgressLabel || '',
-      progressDetail: state.currentJobProgressDetail || '',
-      boardCount: Array.isArray(boards) ? boards.length : 0,
-      duration: state.duration || 0,
-      aspectRatio: (values && values.aspectRatio) || ''
+  function segmentStatusLabel(status) {
+    if (status === 'video_ready') return '视频完成';
+    if (status === 'image_ready') return '图片完成';
+    if (status === 'failed') return '失败';
+    if (status === 'running') return '生成中';
+    return '等待中';
+  }
+
+  function segmentDisplayStatus(seg) {
+    if (!seg || typeof seg !== 'object') return '等待中';
+    if (seg.error || seg.status === 'failed') return '失败';
+    if (seg.videoUrl) return '视频完成';
+    if (seg.imageUrl) return '视频合成中';
+    return '图片合成中';
+  }
+
+  function fallbackSegmentImageUrl(index) {
+    var list = state.images || [];
+    if (!list.length) return '';
+    var pos = Math.max(0, (Number(index || 1) || 1) - 1) % list.length;
+    var item = list[pos] || {};
+    return String(item.url || item.source_url || item.preview_url || '').trim();
+  }
+
+  function segmentPromptButton(prompt, action, label, disabled, extraClass) {
+    return '<button type="button" class="btn btn-sm seedance-segment-action' + (extraClass ? ' ' + escapeHtml(extraClass) : '') + '" data-seedance-segment-' + action + '="' + escapeHtml(prompt || '') + '"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
+  }
+
+  function segmentPromptPanel(kind, segIndex, prompt) {
+    var label = kind === 'video' ? '视频提示词' : '图片提示词';
+    return [
+      '<label class="seedance-segment-prompt-panel">',
+      '<span class="seedance-segment-prompt-head">',
+      '<strong>' + label + '</strong>',
+      segmentPromptButton(prompt, 'copy', '复制', !prompt),
+      '</span>',
+      '<textarea data-seedance-segment-' + kind + '-prompt="' + escapeHtml(String(segIndex || '')) + '">' + escapeHtml(prompt || '') + '</textarea>',
+      '</label>'
+    ].join('');
+  }
+
+  function segmentMediaPanel(kind, seg, prompt) {
+    var isVideo = kind === 'video';
+    var url = String(isVideo ? (seg.videoUrl || '') : (seg.imageUrl || '')).trim();
+    var title = (isVideo ? '视频结果' : '图片结果') + ' · 片段 ' + (seg.index || '');
+    var retryAction = isVideo ? 'retry-video' : 'retry-image';
+    var retryText = isVideo ? '重新合成视频' : '重新合成图片';
+    var filename = 'seedance-segment-' + (seg.index || '1') + (isVideo ? '.mp4' : '.png');
+    var mediaBody = '';
+    if (url) {
+      mediaBody = isVideo
+        ? '<video src="' + escapeHtml(url) + '" muted playsinline preload="metadata"></video><em>视频已出</em>'
+        : '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(title) + '"><em>图片已出</em>';
+      mediaBody = [
+        '<button type="button" class="seedance-segment-media-card' + (isVideo ? ' is-video' : '') + '"',
+        ' data-seedance-segment-preview="' + escapeHtml(url) + '"',
+        ' data-seedance-media-type="' + (isVideo ? 'video' : 'image') + '"',
+        ' data-seedance-media-title="' + escapeHtml(title) + '"',
+        ' data-download-filename="' + escapeHtml(filename) + '"',
+        ' data-seedance-media-prompt="' + escapeHtml(prompt || '') + '">',
+        mediaBody,
+        '<span class="seedance-segment-open-hint">点击预览</span>',
+        '</button>'
+      ].join('');
+    } else {
+      var waitingTitle = isVideo ? '视频正在合成中' : '图片正在合成中';
+      var waitingCopy = isVideo ? '可能需要 5-10 分钟，完成后会自动展示结果。' : '可能需要 1-2 分钟，完成后会自动展示结果。';
+      mediaBody = [
+        '<div class="seedance-segment-media-card is-waiting' + (isVideo ? ' is-video' : ' is-image') + '">',
+        '<strong>' + waitingTitle + '</strong>',
+        '<small>' + waitingCopy + '</small>',
+        '</div>'
+      ].join('');
+    }
+
+    return [
+      '<div class="seedance-segment-result-panel">',
+      '<div class="seedance-segment-result-head">',
+      '<strong>' + (isVideo ? '视频结果' : '图片结果') + '</strong>',
+      '<div class="seedance-segment-inline-actions">',
+      segmentPromptButton(prompt, retryAction, retryText, !prompt, 'is-retry'),
+      url ? '<button type="button" class="btn btn-sm seedance-segment-action" data-seedance-segment-download="' + escapeHtml(url) + '" data-seedance-media-type="' + (isVideo ? 'video' : 'image') + '" data-download-filename="' + escapeHtml(filename) + '" data-seedance-media-prompt="' + escapeHtml(prompt || '') + '">下载</button>' : '',
+      '</div>',
+      '</div>',
+      mediaBody,
+      '</div>'
+    ].join('');
+  }
+
+  function renderSegmentBoard(boards) {
+    var artifacts = state.currentSegmentArtifacts;
+    var segments = artifacts && Array.isArray(artifacts.segments) ? artifacts.segments : [];
+    if (!segments.length && Array.isArray(boards)) {
+      segments = boards.map(function(board) {
+        var prompt = (board.copy || board.title || '').trim();
+        return {
+          index: Number(board.index || 0) + 1,
+          start: board.start,
+          end: board.end,
+          status: 'pending',
+          imagePrompt: prompt,
+          videoPrompt: prompt,
+          imageUrl: board.media && board.media.url ? board.media.url : '',
+          videoUrl: '',
+          provider: '',
+          model: '',
+          taskId: '',
+          error: ''
+        };
+      });
+    } else {
+      segments = segments.map(function(seg) {
+        seg = seg && typeof seg === 'object' ? Object.assign({}, seg) : {};
+        if (!String(seg.imageUrl || '').trim()) {
+          seg.imageUrl = fallbackSegmentImageUrl(seg.index);
+        }
+        return seg;
+      });
+    }
+    if (!segments.length) return '';
+    var total = artifacts && artifacts.segmentCount ? artifacts.segmentCount : segments.length;
+    var imageReady = segments.filter(function(item) { return !!item.imageUrl; }).length;
+    var videoReady = artifacts && artifacts.videoReadyCount ? artifacts.videoReadyCount : segments.filter(function(item) { return !!item.videoUrl; }).length;
+    var failed = artifacts && artifacts.failedCount ? artifacts.failedCount : segments.filter(function(item) { return item.status === 'failed' || !!item.error; }).length;
+    var rows = segments.map(function(seg) {
+      var imagePrompt = seg.imagePrompt || seg.prompt || '';
+      var videoPrompt = seg.videoPrompt || seg.prompt || '';
+      var timeText = (seg.start != null && seg.end != null) ? (seg.start + 's-' + seg.end + 's') : ('片段 ' + seg.index);
+      return [
+        '<article class="seedance-segment-card" data-status="' + escapeHtml(seg.status || 'pending') + '">',
+        '<div class="seedance-segment-index">',
+        '<strong>' + escapeHtml(String(seg.index || '')) + '</strong>',
+        '<span>' + escapeHtml(timeText) + '</span>',
+        '<em>' + escapeHtml(segmentDisplayStatus(seg)) + '</em>',
+        seg.error ? '<small class="is-error">' + escapeHtml(seg.error) + '</small>' : '',
+        '</div>',
+        '<div class="seedance-segment-lane">',
+        segmentPromptPanel('image', seg.index, imagePrompt),
+        segmentMediaPanel('image', seg, imagePrompt),
+        '</div>',
+        '<div class="seedance-segment-lane">',
+        segmentPromptPanel('video', seg.index, videoPrompt),
+        segmentMediaPanel('video', seg, videoPrompt),
+        '</div>',
+        '</article>'
+      ].join('');
+    }).join('');
+    return [
+      '<section class="seedance-segment-board">',
+      '<div class="seedance-segment-board-head">',
+      '<div><strong>分段生产表</strong></div>',
+      '<div class="seedance-segment-stats">',
+      '<span>图片 ' + imageReady + '/' + total + '</span>',
+      '<span>视频 ' + videoReady + '/' + total + '</span>',
+      failed ? '<span data-tone="danger">失败 ' + failed + '</span>' : '',
+      '</div>',
+      '</div>',
+      '<div class="seedance-segment-toolbar">',
+      '<button type="button" class="btn btn-primary btn-sm seedance-segment-compose-btn" data-seedance-segment-merge' + (videoReady ? '' : ' disabled') + '>合成已有视频</button>',
+      '<button type="button" class="btn btn-ghost btn-sm" data-seedance-segment-refresh>刷新状态</button>',
+      '</div>',
+      '<div class="seedance-segment-card-list">',
+      rows,
+      '</div>',
+      '</section>'
+    ].join('');
+  }
+
+  function ensureSegmentMediaModal() {
+    var modal = $('seedanceSegmentMediaModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'seedanceSegmentMediaModal';
+    modal.className = 'seedance-segment-media-modal';
+    modal.hidden = true;
+    modal.innerHTML = [
+      '<div class="seedance-segment-media-dialog" role="dialog" aria-modal="true" aria-label="分段结果预览">',
+      '<div class="seedance-segment-media-modal-head">',
+      '<strong class="seedance-segment-media-modal-title"></strong>',
+      '<div class="seedance-segment-media-modal-actions">',
+      '<button type="button" class="btn btn-primary btn-sm" data-seedance-modal-download>下载到素材文件夹</button>',
+      '<button type="button" class="btn btn-ghost btn-sm" data-seedance-modal-close>关闭</button>',
+      '</div>',
+      '</div>',
+      '<div class="seedance-segment-media-modal-body"></div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(event) {
+      if (event.target === modal || (event.target && event.target.closest && event.target.closest('[data-seedance-modal-close]'))) {
+        closeSegmentMediaModal();
+      }
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && !modal.hidden) closeSegmentMediaModal();
+    });
+    return modal;
+  }
+
+  function closeSegmentMediaModal() {
+    var modal = $('seedanceSegmentMediaModal');
+    if (!modal) return;
+    var body = modal.querySelector('.seedance-segment-media-modal-body');
+    if (body) body.innerHTML = '';
+    modal.hidden = true;
+  }
+
+  function openSegmentMediaModal(url, mediaType, title, filename, prompt) {
+    var modal = ensureSegmentMediaModal();
+    var body = modal.querySelector('.seedance-segment-media-modal-body');
+    var titleEl = modal.querySelector('.seedance-segment-media-modal-title');
+    var download = modal.querySelector('[data-seedance-modal-download]');
+    var mt = mediaType === 'video' ? 'video' : 'image';
+    if (titleEl) titleEl.textContent = title || (mt === 'video' ? '视频预览' : '图片预览');
+    if (body) {
+      body.innerHTML = mt === 'video'
+        ? '<video src="' + escapeHtml(url) + '" controls playsinline preload="metadata"></video>'
+        : '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(title || '图片预览') + '">';
+    }
+    if (download) {
+      download.onclick = function() {
+        downloadSegmentMedia(url, mt, filename, prompt);
+      };
+    }
+    modal.hidden = false;
+  }
+
+  function downloadSegmentMedia(url, mediaType, filename, prompt) {
+    var mt = mediaType === 'video' ? 'video' : 'image';
+    if (!url) return showMessage((mt === 'video' ? '视频' : '图片') + '地址为空，无法下载。');
+    saveRemoteAssetToLibraryAndDownloads(url, mt, filename, prompt)
+      .then(function(data) {
+        var folderText = data && data.directory ? (' / ' + data.directory) : '';
+        showMessage((mt === 'video' ? '视频' : '图片') + '已保存到素材库并下载到本机文件夹' + folderText);
+      })
+      .catch(function(err) {
+        showMessage('保存失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
+        if (mt === 'video') openExternalUrl(downloadUrlForVideo(url, filename || 'seedance-segment.mp4'));
+        else openExternalUrl(url);
+      });
+  }
+
+  function setMainPromptFromSegment(prompt) {
+    var text = String(prompt || '').trim();
+    if (!text) return;
+    var input = $('seedanceTaskPromptInput');
+    if (input) {
+      input.value = text;
+      input.focus();
+    }
+    state.currentJobPrompt = text;
+    showMessage('已把该段提示词回填到左侧输入框。');
+    renderWorkspace();
+  }
+
+  function bindSegmentBoardActions() {
+    document.querySelectorAll('[data-seedance-segment-copy]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        var text = btn.getAttribute('data-seedance-segment-copy') || '';
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(function() {});
+        }
+        setMainPromptFromSegment(text);
+      });
+    });
+    document.querySelectorAll('[data-seedance-segment-retry-image],[data-seedance-segment-retry-video]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        var text = btn.getAttribute('data-seedance-segment-retry-image') || btn.getAttribute('data-seedance-segment-retry-video') || '';
+        setMainPromptFromSegment(text);
+      });
+    });
+    document.querySelectorAll('[data-seedance-segment-refresh]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        refreshJobStatus(true);
+      });
+    });
+    document.querySelectorAll('[data-seedance-segment-merge]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        state.finalComposeRequested = true;
+        showMessage('已开始查看总视频合成状态，完成后会自动展示。');
+        renderWorkspace();
+        refreshJobStatus(false);
+      });
+    });
+    document.querySelectorAll('[data-seedance-segment-preview]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        openSegmentMediaModal(
+          btn.getAttribute('data-seedance-segment-preview') || '',
+          btn.getAttribute('data-seedance-media-type') || 'image',
+          btn.getAttribute('data-seedance-media-title') || '',
+          btn.getAttribute('data-download-filename') || '',
+          btn.getAttribute('data-seedance-media-prompt') || ''
+        );
+      });
+    });
+    document.querySelectorAll('[data-seedance-segment-download]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        downloadSegmentMedia(
+          btn.getAttribute('data-seedance-segment-download') || '',
+          btn.getAttribute('data-seedance-media-type') || 'image',
+          btn.getAttribute('data-download-filename') || '',
+          btn.getAttribute('data-seedance-media-prompt') || ''
+        );
+      });
     });
   }
 
+  function shouldShowFinalResultStage() {
+    return !!String(state.currentResultVideoUrl || '').trim() || !!state.finalComposeRequested;
+  }
+
   function renderVideoStage(values, boards) {
+    var resultStage = $('seedanceFinalResultStage');
+    var videoStage = $('seedanceVideoStage');
     var videoSurface = $('seedanceVideoSurface');
+    var stateEl = $('seedanceFinalResultState');
+    var hintEl = $('seedanceFinalResultHint');
+    var showFinal = shouldShowFinalResultStage();
+    if (resultStage) resultStage.hidden = !showFinal;
+    if (videoStage) videoStage.hidden = !showFinal;
+    if (stateEl) {
+      stateEl.textContent = state.currentResultVideoUrl ? '已完成' : '合成中';
+    }
+    if (hintEl) {
+      hintEl.textContent = state.currentResultVideoUrl
+        ? '合成完成后，这里显示最终成片。'
+        : '视频正在合成中，可能需要 1-2 分钟。';
+    }
+    if (!showFinal) {
+      if (videoSurface) videoSurface.innerHTML = '';
+      return;
+    }
     if (!videoSurface) return;
-    var signature = currentResultRenderSignature(values, boards);
-    if (signature === lastSeedanceStageRenderSignature) return;
-    lastSeedanceStageRenderSignature = signature;
     videoSurface.innerHTML = resultVideoHtml(values, boards);
     bindResultVideoActions();
   }
@@ -1716,7 +2127,7 @@
       card.dataset.bound = '1';
       function openCard(event) {
         var interactive = event.target && event.target.closest
-          ? event.target.closest('video,button,a,[data-seedance-video-download],[data-seedance-video-open]')
+          ? event.target.closest('button,a,[data-seedance-video-download],[data-seedance-video-open]')
           : null;
         if (interactive) return;
         var jobId = card.getAttribute('data-seedance-job') || '';
@@ -1732,6 +2143,7 @@
         state.currentJobProgressPercent = hit && hit.progressPercent != null ? hit.progressPercent : null;
         state.currentJobProgressLabel = (hit && hit.progressLabel) || '';
         state.currentJobProgressDetail = (hit && hit.progressDetail) || '';
+        state.currentSegmentArtifacts = (hit && hit.artifacts) || null;
         state.examplesOpen = false;
         state.mainView = 'result';
         renderWorkspace();
@@ -1782,9 +2194,7 @@
     var values = getFormValues();
     var boards = buildBoards();
     var canOperate = !!String(state.currentResultVideoUrl || '').trim();
-    var signature = currentResultRenderSignature(values, boards);
-    if (signature !== lastSeedanceBusinessRenderSignature) {
-      stage.innerHTML = [
+    stage.innerHTML = [
       '<div class="seedance-result-layout">',
       '<div class="seedance-result-preview-pane">',
       resultVideoHtml(values, boards),
@@ -1807,16 +2217,14 @@
       '<p class="seedance-result-task-note">' + escapeHtml(currentJobSummary(values, boards)) + '</p>',
       '</div>',
       '</div>'
-      ].join('');
-      lastSeedanceBusinessRenderSignature = signature;
-      bindResultVideoActions();
-      document.querySelectorAll('[data-seedance-copy-prompt]').forEach(function(btn) {
-        btn.onclick = function() {
-          if (btn.disabled) return;
-          copyCurrentPromptToEditor();
-        };
-      });
-    }
+    ].join('');
+    bindResultVideoActions();
+    document.querySelectorAll('[data-seedance-copy-prompt]').forEach(function(btn) {
+      btn.onclick = function() {
+        if (btn.disabled) return;
+        copyCurrentPromptToEditor();
+      };
+    });
 
     var list = $('seedanceBusinessHistoryGrid');
     var empty = $('seedanceBusinessHistoryEmpty');
@@ -2084,10 +2492,9 @@
     var segmentSeconds = getCurrentSegmentSeconds(values.model);
     var segmentCount = getDurationSegmentCount(state.duration, values.model);
     var videoRequest = videoRequestForModel(values.model);
-    var useDirectVideo = state.mode !== 'prompt_only'
+    var useDirectVideo = state.mode === 'image_prompt'
       && uploaded.length >= 1
       && !!(uploaded[0] && uploaded[0].asset_id)
-      && segmentCount === 1
       && !!values.prompt;
     var basePayload = {
       total_duration_seconds: segmentCount * segmentSeconds,
@@ -2244,6 +2651,7 @@
       assetId: findJobAssetId(job),
       error: String(job.error || '').trim(),
       progress: null,
+      artifacts: normalizeSegmentArtifacts(job.artifacts || null),
       createdAt: Date.parse(job.created_at || job.createdAt || '') || 0,
       updatedAt: Date.parse(job.updated_at || job.completed_at || job.created_at || '') || Date.now(),
       cloud: true,
@@ -2254,7 +2662,7 @@
   function loadLocalJobHistory() {
     var base = pipelineBase();
     if (!base) return Promise.resolve([]);
-    return fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs?limit=12', {
+    return fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs?limit=' + encodeURIComponent(String(RECENT_JOB_LIMIT)), {
       headers: authHeadersSafe()
     })
       .then(function(response) {
@@ -2280,7 +2688,7 @@
   function loadCloudJobHistory() {
     var base = cloudBase();
     if (!base) return Promise.resolve([]);
-    return fetch(base + '/api/creative-jobs?feature_type=seedance_tvc&limit=12', {
+    return fetch(base + '/api/creative-jobs?feature_type=seedance_tvc&limit=' + encodeURIComponent(String(RECENT_JOB_LIMIT)), {
       headers: authHeadersSafe()
     })
       .then(function(response) {
@@ -2336,6 +2744,7 @@
     state.currentJobProgressPercent = job.progressPercent != null ? job.progressPercent : null;
     state.currentJobProgressLabel = job.progressLabel || '';
     state.currentJobProgressDetail = job.progressDetail || '';
+    state.currentSegmentArtifacts = job.artifacts || state.currentSegmentArtifacts || null;
     updateRememberedJob(job.jobId, {
       status: status,
       title: state.currentJobTitle,
@@ -2347,6 +2756,7 @@
       progressPercent: state.currentJobProgressPercent,
       progressLabel: state.currentJobProgressLabel,
       progressDetail: state.currentJobProgressDetail,
+      artifacts: state.currentSegmentArtifacts,
       createdAt: job.createdAt || 0,
       cloud: !!job.cloud
     });
@@ -2427,6 +2837,7 @@
         state.currentJobProgressPercent = result.data.progress_percent != null ? result.data.progress_percent : null;
         state.currentJobProgressLabel = result.data.progress_label || '';
         state.currentJobProgressDetail = result.data.progress_detail || '';
+        state.currentSegmentArtifacts = normalizeSegmentArtifacts(result.data.artifacts || null) || state.currentSegmentArtifacts || null;
         updateRememberedJob(state.currentJobId, {
           status: state.currentJobStatus,
           prompt: state.currentJobPrompt || '',
@@ -2436,7 +2847,8 @@
           progress: state.currentJobProgress,
           progressPercent: state.currentJobProgressPercent,
           progressLabel: state.currentJobProgressLabel,
-          progressDetail: state.currentJobProgressDetail
+          progressDetail: state.currentJobProgressDetail,
+          artifacts: state.currentSegmentArtifacts
         });
         renderWorkspace();
 
@@ -2593,8 +3005,10 @@
       state.currentJobProgressPercent = 1;
       state.currentJobProgressLabel = '任务已提交';
       state.currentJobProgressDetail = '任务已提交，正在准备生成';
+      state.currentSegmentArtifacts = null;
+      state.finalComposeRequested = false;
       state.examplesOpen = false;
-      state.mainView = 'result';
+      state.mainView = 'storyboard';
       rememberJob({
         jobId: state.currentJobId,
         status: 'running',
@@ -2606,6 +3020,7 @@
         progressPercent: state.currentJobProgressPercent,
         progressLabel: state.currentJobProgressLabel,
         progressDetail: state.currentJobProgressDetail,
+        artifacts: null,
         createdAt: Date.now()
       });
       setSubmitBusy(false);
@@ -2735,18 +3150,15 @@
     }
 
     if ($('seedanceVideoModalClose')) {
-      $('seedanceVideoModalClose').addEventListener('click', closeSeedanceVideoModal);
+      $('seedanceVideoModalClose').addEventListener('click', closeExampleVideo);
     }
     if ($('seedanceVideoModal')) {
       $('seedanceVideoModal').addEventListener('click', function(event) {
-        if (event.target === $('seedanceVideoModal')) closeSeedanceVideoModal();
+        if (event.target === $('seedanceVideoModal')) closeExampleVideo();
       });
     }
     document.addEventListener('keydown', function(event) {
-      var modal = $('seedanceVideoModal');
-      if (event.key === 'Escape' && modal && modal.classList.contains('is-visible')) {
-        closeSeedanceVideoModal();
-      }
+      if (event.key === 'Escape') closeExampleVideo();
     });
 
     if ($('seedanceExamplesGrid')) {

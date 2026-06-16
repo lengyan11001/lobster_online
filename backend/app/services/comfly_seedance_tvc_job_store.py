@@ -136,7 +136,7 @@ def update_job(job_id: str, **fields: Any) -> bool:
         return True
 
 
-def list_jobs_for_user(user_id: int, *, limit: int = 12) -> List[Dict[str, Any]]:
+def list_jobs_for_user(user_id: int, *, limit: int = 60) -> List[Dict[str, Any]]:
     now = time.time()
     with JOBS_LOCK:
         _ensure_loaded_unlocked()
@@ -357,5 +357,347 @@ def read_manifest_progress(job_output_dir: str) -> Optional[Dict[str, Any]]:
         "segment_indexes": sorted(segments.keys(), key=lambda x: int(x) if str(x).isdigit() else 0),
         "last_steps": last_steps,
         "errors": (data.get("errors") or [])[-5:] if isinstance(data.get("errors"), list) else [],
+    }
+
+
+def _latest_manifest(job_output_dir: str) -> Optional[Path]:
+    base = Path((job_output_dir or "").strip())
+    if not base.is_dir():
+        return None
+    candidates = list(base.glob("run_*/manifest.json"))
+    if not candidates:
+        return None
+    try:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+    except Exception:
+        return None
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _first_url(value: Any) -> str:
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith(("http://", "https://", "/api/")):
+            return raw
+        return ""
+    if isinstance(value, dict):
+        keys = (
+            "url",
+            "preview_url",
+            "local_preview_url",
+            "source_url",
+            "image_url",
+            "video_url",
+            "mp4url",
+            "output",
+            "download_url",
+        )
+        for key in keys:
+            found = _first_url(value.get(key))
+            if found:
+                return found
+        for key in ("data", "result", "content", "payload", "raw", "video", "image", "final_video"):
+            found = _first_url(value.get(key))
+            if found:
+                return found
+    if isinstance(value, list):
+        for item in value:
+            found = _first_url(item)
+            if found:
+                return found
+    return ""
+
+
+def _looks_like_video_url(url: str) -> bool:
+    path = str(url or "").split("?", 1)[0].lower()
+    return path.endswith((".mp4", ".mov", ".m4v", ".webm", ".mkv"))
+
+
+def _looks_like_image_url(url: str) -> bool:
+    path = str(url or "").split("?", 1)[0].lower()
+    return path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"))
+
+
+def _merge_segment_row(row: Dict[str, Any], payload: Dict[str, Any], *, stage: str = "") -> None:
+    if not isinstance(payload, dict):
+        return
+    status = _first_text(payload.get("status"), payload.get("state"), payload.get("upstream_status"))
+    if status:
+        normalized = status.lower()
+        if normalized in {"success", "succeeded", "completed", "complete", "done"}:
+            if stage == "image":
+                row["image_status"] = "ready"
+            elif stage == "video":
+                row["video_status"] = "ready"
+            else:
+                row["status"] = "ready"
+        elif normalized in {"failed", "error"}:
+            row["status"] = "failed"
+        elif row.get("status") not in {"failed", "video_ready"}:
+            row["status"] = "running"
+    err = _first_text(payload.get("error"), payload.get("message"), payload.get("detail"))
+    if err and not row.get("error"):
+        row["error"] = err[:800]
+    prompt = _first_text(
+        payload.get("prompt"),
+        payload.get("image_prompt"),
+        payload.get("video_prompt"),
+        payload.get("submitted_video_prompt"),
+        payload.get("submitted_video_prompt_en"),
+        payload.get("first_frame_prompt"),
+        payload.get("first_frame_prompt_en"),
+        payload.get("segment_reference_prompt"),
+        payload.get("segment_reference_prompt_en"),
+        payload.get("task_text"),
+        payload.get("text"),
+    )
+    if prompt:
+        if stage == "image" and not row.get("image_prompt"):
+            row["image_prompt"] = prompt
+        elif stage == "video" and not row.get("video_prompt"):
+            row["video_prompt"] = prompt
+        elif not row.get("prompt"):
+            row["prompt"] = prompt
+    provider = _first_text(payload.get("provider"), payload.get("channel"), payload.get("vendor"))
+    model = _first_text(payload.get("model"), payload.get("video_model"), payload.get("image_model"))
+    task_id = _first_text(payload.get("task_id"), payload.get("id"), payload.get("request_id"), payload.get("upstream_task_id"))
+    if provider and not row.get("provider"):
+        row["provider"] = provider
+    if model and not row.get("model"):
+        row["model"] = model
+    if task_id and not row.get("task_id"):
+        row["task_id"] = task_id
+    progress = payload.get("progress")
+    if progress is None:
+        progress = payload.get("progress_percent")
+    if progress is not None:
+        row["progress"] = progress
+    explicit_image_url = _first_url(
+        payload.get("first_frame_image_url")
+        or payload.get("segment_reference_image_url")
+        or payload.get("storyboard_board_image_url")
+        or payload.get("image_url")
+    )
+    if explicit_image_url and not row.get("image_url"):
+        row["image_url"] = explicit_image_url
+    explicit_video_url = _first_url(payload.get("mp4url") or payload.get("video_url"))
+    if explicit_video_url and not row.get("video_url"):
+        row["video_url"] = explicit_video_url
+    url = _first_url(payload)
+    if not url:
+        url = explicit_video_url or explicit_image_url
+    if url:
+        if stage == "image" or (_looks_like_image_url(url) and not _looks_like_video_url(url)):
+            row["image_url"] = row.get("image_url") or url
+        elif stage == "video" or _looks_like_video_url(url):
+            row["video_url"] = row.get("video_url") or url
+
+
+def _segment_index_from_name(name: str) -> Optional[int]:
+    match = None
+    try:
+        import re
+
+        match = re.search(r"segment[_-]?(\d+)", name or "", re.IGNORECASE)
+    except Exception:
+        match = None
+    if not match:
+        return None
+    try:
+        return max(1, int(match.group(1)))
+    except Exception:
+        return None
+
+
+def _segment_stage_from_name(name: str) -> str:
+    raw = str(name or "").lower()
+    if "image" in raw or "reference" in raw or "board" in raw:
+        return "image"
+    if "video" in raw or "poll" in raw or "final" in raw:
+        return "video"
+    return ""
+
+
+def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
+    latest = _latest_manifest(job_output_dir)
+    if latest is None:
+        return None
+    manifest = _read_json_file(latest)
+    if not manifest:
+        return None
+    run_dir = latest.parent
+    config = manifest.get("config") if isinstance(manifest.get("config"), dict) else {}
+    segment_count = max(1, _safe_int(config.get("segment_count"), 1))
+    segment_seconds = max(1, _safe_int(config.get("segment_duration_seconds") or config.get("segment_seconds"), 10))
+
+    rows: Dict[int, Dict[str, Any]] = {}
+    for idx in range(1, segment_count + 1):
+        rows[idx] = {
+            "index": idx,
+            "start": (idx - 1) * segment_seconds,
+            "end": idx * segment_seconds,
+            "status": "pending",
+            "image_status": "pending",
+            "video_status": "pending",
+            "image_prompt": "",
+            "video_prompt": "",
+            "prompt": "",
+            "image_url": "",
+            "video_url": "",
+            "provider": "",
+            "model": "",
+            "task_id": "",
+            "error": "",
+            "progress": None,
+        }
+
+    reference_urls: List[str] = []
+    steps = manifest.get("steps") if isinstance(manifest.get("steps"), dict) else {}
+    for name, meta in steps.items():
+        if not str(name or "").startswith("01_reference_upload") or not isinstance(meta, dict):
+            continue
+        payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else meta
+        ref_url = _first_url(payload.get("reference_image_url") or payload.get("url"))
+        if ref_url and ref_url not in reference_urls:
+            reference_urls.append(ref_url)
+
+    shots = manifest.get("shots") if isinstance(manifest.get("shots"), dict) else {}
+    for raw_idx, shot in shots.items():
+        idx = _safe_int(raw_idx, 0)
+        if idx <= 0:
+            continue
+        row = rows.setdefault(idx, {
+            "index": idx,
+            "start": (idx - 1) * segment_seconds,
+            "end": idx * segment_seconds,
+            "status": "pending",
+            "image_status": "pending",
+            "video_status": "pending",
+            "image_prompt": "",
+            "video_prompt": "",
+            "prompt": "",
+            "image_url": "",
+            "video_url": "",
+            "provider": "",
+            "model": "",
+            "task_id": "",
+            "error": "",
+            "progress": None,
+        })
+        if isinstance(shot, dict):
+            row["image_prompt"] = row.get("image_prompt") or _first_text(shot.get("image_prompt"), shot.get("prompt"), shot.get("visual_prompt"))
+            row["video_prompt"] = row.get("video_prompt") or _first_text(shot.get("video_prompt"), shot.get("motion_prompt"), shot.get("prompt"))
+            _merge_segment_row(row, shot)
+
+    segments = manifest.get("segments") if isinstance(manifest.get("segments"), dict) else {}
+    for raw_idx, stages in segments.items():
+        idx = _safe_int(raw_idx, 0)
+        if idx <= 0 or not isinstance(stages, dict):
+            continue
+        row = rows.setdefault(idx, {
+            "index": idx,
+            "start": (idx - 1) * segment_seconds,
+            "end": idx * segment_seconds,
+            "status": "pending",
+            "image_status": "pending",
+            "video_status": "pending",
+            "image_prompt": "",
+            "video_prompt": "",
+            "prompt": "",
+            "image_url": "",
+            "video_url": "",
+            "provider": "",
+            "model": "",
+            "task_id": "",
+            "error": "",
+            "progress": None,
+        })
+        for stage_name, meta in stages.items():
+            if isinstance(meta, dict):
+                _merge_segment_row(row, meta, stage=_segment_stage_from_name(str(stage_name)))
+
+    for path in sorted(run_dir.glob("segment_*_*.json")):
+        idx = _segment_index_from_name(path.name)
+        if not idx:
+            continue
+        row = rows.setdefault(idx, {
+            "index": idx,
+            "start": (idx - 1) * segment_seconds,
+            "end": idx * segment_seconds,
+            "status": "pending",
+            "image_status": "pending",
+            "video_status": "pending",
+            "image_prompt": "",
+            "video_prompt": "",
+            "prompt": "",
+            "image_url": "",
+            "video_url": "",
+            "provider": "",
+            "model": "",
+            "task_id": "",
+            "error": "",
+            "progress": None,
+        })
+        _merge_segment_row(row, _read_json_file(path), stage=_segment_stage_from_name(path.name))
+
+    final_payload = _read_json_file(run_dir / "99_result.json")
+    completed = final_payload.get("completed_segments")
+    if not isinstance(completed, list):
+        completed = final_payload.get("completed_shots")
+    if isinstance(completed, list):
+        for pos, item in enumerate(completed, start=1):
+            if not isinstance(item, dict):
+                continue
+            idx = _safe_int(item.get("index") or item.get("segment_index") or item.get("shot_index"), pos)
+            row = rows.get(idx)
+            if row:
+                _merge_segment_row(row, item, stage="video")
+
+    out_segments: List[Dict[str, Any]] = []
+    for idx in sorted(rows):
+        row = rows[idx]
+        if reference_urls and not row.get("image_url"):
+            row["image_url"] = reference_urls[(idx - 1) % len(reference_urls)]
+        if row.get("video_url"):
+            row["status"] = "video_ready"
+            row["video_status"] = "ready"
+        elif row.get("image_url"):
+            row["status"] = "image_ready" if row.get("status") not in {"failed"} else row.get("status")
+            row["image_status"] = "ready"
+        elif row.get("error"):
+            row["status"] = "failed"
+        elif row.get("progress") is not None or row.get("provider") or row.get("task_id"):
+            row["status"] = "running"
+        out_segments.append(_json_safe(row))
+
+    video_ready_count = sum(1 for item in out_segments if item.get("video_url"))
+    image_ready_count = sum(1 for item in out_segments if item.get("image_url"))
+    failed_count = sum(1 for item in out_segments if item.get("status") == "failed")
+    return {
+        "manifest_file": str(latest),
+        "run_dir": str(run_dir),
+        "segment_count": len(out_segments),
+        "ready_count": video_ready_count,
+        "video_ready_count": video_ready_count,
+        "image_ready_count": image_ready_count,
+        "failed_count": failed_count,
+        "segment_seconds": segment_seconds,
+        "segments": out_segments,
     }
 

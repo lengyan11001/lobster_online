@@ -6,8 +6,8 @@
   <title>必火AI员工</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
-  <link rel="stylesheet" href="/static/css/common.css?v=20260612-feature-gate-cache">
-  <link rel="stylesheet" href="/static/css/index.css?v=20260616-seedance-video-modal">
+  <link rel="stylesheet" href="/static/css/common.css?v=20260608-latest-ota">
+  <link rel="stylesheet" href="/static/css/index.css?v=20260611-douyin-search-scroll">
 </head>
 <body>
   <div class="page">
@@ -23,7 +23,7 @@
       <nav class="app-top-nav" id="appTopNav" aria-label="主导航" style="display:none;">
         <button type="button" class="nav-left-item active" data-view="chat">首页</button>
         <button type="button" class="nav-left-item" data-view="skill-store">技能商店</button>
-        <button type="button" class="nav-left-item" data-view="douyin-leads" data-feature-gate="douyin_leads_access" hidden>抖音获客</button>
+        <button type="button" class="nav-left-item" data-view="douyin-leads">抖音获客</button>
         <button type="button" class="nav-left-item" data-view="publish">发布中心</button>
         <button type="button" class="nav-left-item" data-view="assets">素材库</button>
         <button type="button" class="nav-left-item" data-view="scheduled-tasks">定时任务</button>
@@ -249,6 +249,10 @@
                   <div class="chat-empty-state" id="chatEmptyState">
                     <div class="chat-home-hero">
                       <div class="chat-home-copy">
+                        <div class="chat-home-badge-row">
+                          <button type="button" class="chat-empty-eyebrow is-active" id="chatEmptyEyebrow" data-chat-home-mode="default">智能对话</button>
+                          <button type="button" class="chat-home-mode-pill" id="chatHomeWorkspacePill" data-chat-home-mode="workspace_cli" hidden aria-hidden="true">云端工作台</button>
+                        </div>
                         <h2 class="chat-empty-title" id="chatEmptyTitle">👋 您好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
                         <p class="chat-empty-subtitle" id="chatEmptySubtitle">我可以帮您创作内容、生成视频、处理数据、运营分析等</p>
                         <p class="chat-home-helper">选择下方功能，或直接对我说出您的需求吧~</p>
@@ -326,7 +330,7 @@
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创意分镜头视频</span><span class="chat-suggestion-chip-desc">进入创意分镜头视频工作台</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipLocalBestseller" data-chip-tone="douyin" data-open-hidden-view="local-bestseller"><span class="chat-suggestion-chip-icon">城</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">同城爆款</span><span class="chat-suggestion-chip-desc">批量做30天内容</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip9" data-chip-tone="content" data-open-hidden-view="hifly-digital-human"><span class="chat-suggestion-chip-icon">H</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">必火数字人</span><span class="chat-suggestion-chip-desc">进入必火数字人工作台</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-view="douyin-leads" data-feature-gate="douyin_leads_access" hidden><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音获客</span><span class="chat-suggestion-chip-desc">搜索采集、精准客户、私信互动</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-view="douyin-leads"><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音获客</span><span class="chat-suggestion-chip-desc">搜索采集、精准客户、私信互动</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
                       <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-jump-view="skill-store"><span class="chat-suggestion-chip-icon">&lt;/&gt;</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">技能商店</span><span class="chat-suggestion-chip-desc">查看可用技能</span></span></button>
                     </div>
@@ -1269,24 +1273,31 @@
                   <div class="tvc-panel" id="seedanceResultPanel">
                     <div class="tvc-toolbar" style="margin-bottom:0.2rem;">
                       <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">结果展示</h4>
-                        <p class="tvc-panel-hint" style="margin:0;">最终合成视频会直接显示在这里，下面的分镜缩略图只负责帮助您快速检查整条视频节奏。</p>
+                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">分段工作区</h4>
                       </div>
                       <button type="button" id="seedanceExamplesToggleBtn" class="tvc-tip-toggle" title="查看精选案例">
                         TIP · 精选案例 <span class="badge" id="seedanceExamplesBadge">0</span>
                       </button>
                     </div>
-                    <div id="seedanceVideoStage" class="tvc-video-stage">
-                      <div id="seedanceVideoSurface" class="tvc-video-surface"></div>
-                    </div>
                     <div class="tvc-toolbar" style="margin:0.95rem 0 0.78rem;">
                       <div>
-                        <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">分镜预览</h4>
-                        <p id="seedanceBoardsHint" class="tvc-panel-hint" style="margin:0;">这里按所选模型时长生成分镜草案，用来检查画面是否前后连贯。</p>
+                        <p id="seedanceBoardsHint" class="tvc-panel-hint" style="margin:0;"></p>
                       </div>
-                      <span id="seedanceBoardsCounter" class="tvc-summary-pill">2 张分镜</span>
+                      <span id="seedanceBoardsCounter" class="tvc-summary-pill">2 段</span>
                     </div>
                     <div id="seedanceStoryboardStrip" class="tvc-storyboard-strip"></div>
+                    <div id="seedanceFinalResultStage" class="seedance-final-result-stage" hidden>
+                      <div class="tvc-toolbar" style="margin:0.95rem 0 0.78rem;">
+                        <div>
+                          <h4 class="tvc-panel-title" style="margin-bottom:0.2rem;">总视频结果</h4>
+                          <p id="seedanceFinalResultHint" class="tvc-panel-hint" style="margin:0;">合成完成后，这里显示最终成片。</p>
+                        </div>
+                        <span id="seedanceFinalResultState" class="tvc-summary-pill">已完成</span>
+                      </div>
+                      <div id="seedanceVideoStage" class="tvc-video-stage" hidden>
+                        <div id="seedanceVideoSurface" class="tvc-video-surface"></div>
+                      </div>
+                    </div>
                   </div>
 
                   <div class="tvc-panel" id="seedanceBusinessResultView" hidden>
@@ -1941,13 +1952,10 @@
   <div id="seedanceVideoModal" class="tvc-video-modal-mask" aria-hidden="true">
     <div class="tvc-video-modal" role="dialog" aria-modal="true" aria-labelledby="seedanceVideoModalTitle">
       <div class="tvc-video-modal-head">
-        <div class="tvc-video-modal-title-wrap">
-          <h4 id="seedanceVideoModalTitle" class="tvc-video-modal-title">视频预览</h4>
-          <span class="tvc-video-modal-hint">按 Esc 退出预览</span>
-        </div>
+        <h4 id="seedanceVideoModalTitle" class="tvc-video-modal-title">案例视频</h4>
         <button type="button" id="seedanceVideoModalClose" class="btn btn-ghost btn-sm">关闭</button>
       </div>
-      <video id="seedanceVideoModalPlayer" controls controlsList="nodownload" playsinline preload="metadata"></video>
+      <video id="seedanceVideoModalPlayer" controls playsinline preload="metadata"></video>
     </div>
   </div>
 
@@ -2474,7 +2482,7 @@
   </div>
 
   <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
-  <script src="/static/js/view-loader.js?v=20260612-cache-bust"></script>
+  <script src="/static/js/view-loader.js?v=20260528-view-loader"></script>
   <script src="/static/js/view-registry.js?v=20260612-search-scroll-asset-cache"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
@@ -2491,14 +2499,14 @@
   <script src="/static/js/wecom-kf.js?v=20260416e"></script>
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260604-asset-picker"></script>
   <script src="/static/js/comfly-image-studio.js?v=20260604-asset-picker"></script>
-  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260616-default-yingmeng15"></script>
-  <script src="/static/js/local-bestseller.js?v=20260616-caption-wait"></script>
+  <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260606-seedance-custom-select"></script>
+  <script src="/static/js/local-bestseller.js?v=20260607-local-video-inline-fs"></script>
   <script src="/static/js/viral-video-remix.js?v=20260612-auto-ref-upload-flow"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/cutcli-template-studio.js?v=20260605-cutcli-source-orientation"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js?v=20260612-asset-library-preview-cache"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260612-scheduled-form-run-detail"></script>
-  <script src="/static/js/init.js?v=20260612-feature-gate-cache"></script>
+  <script src="/static/js/init.js?v=20260610-assets-no-section-title"></script>
 </body>
 </html>

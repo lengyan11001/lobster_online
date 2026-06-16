@@ -1820,13 +1820,17 @@ def _direct_video_prompt(config: PipelineConfig) -> str:
     return "基于上传参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
 
 
-def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str]) -> Dict[str, Any]:
+def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str], index: int = 1) -> Dict[str, Any]:
     if not reference_image_urls:
         raise PipelineError("direct_video requires at least one reference image")
     video_prompt = _direct_video_prompt(config)
+    segment_index = max(1, int(index or 1))
+    reference_url = reference_image_urls[(segment_index - 1) % len(reference_image_urls)]
+    start_second = (segment_index - 1) * config.segment_duration_seconds
+    end_second = segment_index * config.segment_duration_seconds
     board = {
-        "index": 1,
-        "time_range_cn": f"0-{config.segment_duration_seconds}秒",
+        "index": segment_index,
+        "time_range_cn": f"{start_second}-{end_second}秒",
         "board_title_cn": "直接图生视频",
         "board_goal_cn": "使用用户上传图片和提示词直接生成视频",
         "narrative_stage_cn": "direct_video",
@@ -1835,18 +1839,18 @@ def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: Lis
         "storyboard_image_prompt_en": "",
     }
     return {
-        "index": 1,
+        "index": segment_index,
         "board": board,
         "duration_seconds": config.segment_duration_seconds,
         "board_image_prompt": "",
         "segment_reference_prompt": video_prompt,
         "video_prompt": video_prompt,
         "segment_reference_result": {
-            "url": reference_image_urls[0],
+            "url": reference_url,
             "source": "uploaded_reference_image",
         },
         "board_image_result": {
-            "url": reference_image_urls[0],
+            "url": reference_url,
             "source": "uploaded_reference_image",
         },
         "workflow_mode": "direct_video",
@@ -1857,7 +1861,7 @@ def _should_use_direct_video(config: PipelineConfig, reference_image_urls: List[
     mode = (config.workflow_mode or "").strip().lower().replace("-", "_")
     if mode not in {"direct", "direct_video", "image_to_video", "i2v"}:
         return False
-    return bool(reference_image_urls) and config.segment_count == 1
+    return bool(reference_image_urls)
 
 
 def _finish_segments(
@@ -2039,7 +2043,10 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             )
 
         if _should_use_direct_video(config, reference_image_urls):
-            segment_plan = _build_direct_segment_plan(config, reference_image_urls)
+            segment_plans = [
+                _build_direct_segment_plan(config, reference_image_urls, idx)
+                for idx in range(1, config.segment_count + 1)
+            ]
             logger_obj.step(
                 "02_direct_video_plan",
                 "success",
@@ -2047,45 +2054,75 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 payload={
                     "workflow_mode": "direct_video",
                     "reference_image_url": reference_image_urls[0],
-                    "submitted_video_prompt": segment_plan["video_prompt"],
-                    "segment_duration_seconds": segment_plan["duration_seconds"],
+                    "submitted_video_prompt": segment_plans[0]["video_prompt"],
+                    "segment_count": len(segment_plans),
+                    "segment_duration_seconds": config.segment_duration_seconds,
                 },
             )
-            logger_obj.segment(
-                1,
-                "plan",
-                "ready",
-                payload={
-                    "board": segment_plan["board"],
-                    "first_frame_image_url": reference_image_urls[0],
-                    "submitted_video_prompt": segment_plan["video_prompt"],
-                    "workflow_mode": "direct_video",
-                },
-            )
+            for segment_plan in segment_plans:
+                logger_obj.segment(
+                    int(segment_plan["index"]),
+                    "plan",
+                    "ready",
+                    payload={
+                        "board": segment_plan["board"],
+                        "image_prompt": segment_plan["video_prompt"],
+                        "video_prompt": segment_plan["video_prompt"],
+                        "prompt": segment_plan["video_prompt"],
+                        "first_frame_image_url": segment_plan["segment_reference_result"]["url"],
+                        "submitted_video_prompt": segment_plan["video_prompt"],
+                        "workflow_mode": "direct_video",
+                    },
+                )
             results_map: Dict[int, Dict[str, Any]] = {}
             failure_map: Dict[int, Dict[str, Any]] = {}
             submit_control = SubmitControl()
-            try:
-                result = _run_segment_video_providers(
-                    client,
-                    logger_obj,
-                    segment_plan,
-                    reference_image_urls,
-                    submit_control,
-                )
-                results_map[1] = result
-                logger_obj.segment(1, "final", "success", payload=result)
-            except Exception as exc:
-                payload = {"index": 1, "error": str(exc), "traceback": traceback.format_exc()}
-                failure_map[1] = payload
-                logger_obj.segment(1, "final", "failed", error=str(exc), payload=payload)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency) as ex:
+                futures = {
+                    ex.submit(
+                        _run_segment_video_providers,
+                        client,
+                        logger_obj,
+                        segment_plan,
+                        reference_image_urls,
+                        submit_control,
+                    ): segment_plan
+                    for segment_plan in segment_plans
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    segment_plan = futures[future]
+                    idx = int(segment_plan["index"])
+                    try:
+                        result = future.result()
+                        results_map[idx] = result
+                        logger_obj.segment(idx, "final", "success", payload=result)
+                    except StopNewSubmissionsError as exc:
+                        payload = {
+                            "index": idx,
+                            "error": str(exc),
+                            "reason": "stop_new_submits",
+                        }
+                        failure_map[idx] = payload
+                        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+                    except InsufficientCreditError as exc:
+                        payload = {
+                            "index": idx,
+                            "error": str(exc),
+                            "reason": "insufficient_credit",
+                        }
+                        failure_map[idx] = payload
+                        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+                    except Exception as exc:
+                        payload = {"index": idx, "error": str(exc), "traceback": traceback.format_exc()}
+                        failure_map[idx] = payload
+                        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
             return _finish_segments(
                 config,
                 logger_obj,
                 reference_image_urls,
                 results_map,
                 failure_map,
-                boards=[segment_plan["board"]],
+                boards=[segment_plan["board"] for segment_plan in segment_plans],
                 product_summary={"mode": "direct_video"},
                 campaign_context={"task_text": config.task_text},
             )
