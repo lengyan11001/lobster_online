@@ -741,11 +741,14 @@
     if (!item || !data) return;
     var status = String(data.status || '').toLowerCase();
     var label = data.progress_label || data.progress_detail || '';
-    if (data.post_status === 'captioning') label = '字幕合成中';
+    if (data.post_status === 'captioning' || (data.requires_caption && !data.caption_ready)) label = '字幕合成中';
+    if (data.requires_caption && !data.caption_ready && status === 'completed') {
+      status = 'running';
+    }
     if (status === 'completed') {
       item.video_status = 'completed';
       item.status = 'video_completed';
-      item.video_progress_label = '视频已完成';
+      item.video_progress_label = data.caption_ready ? '字幕成片已完成' : '视频已完成';
       var url = finalVideoUrlFromJob(data);
       if (url) item.video_url = url;
       return;
@@ -753,7 +756,7 @@
     if (status === 'failed') {
       item.video_status = 'failed';
       item.status = 'video_failed';
-      item.video_progress_label = data.error || '视频生成失败';
+      item.video_progress_label = data.error || data.post_error || '视频生成失败';
       return;
     }
     item.video_status = 'running';

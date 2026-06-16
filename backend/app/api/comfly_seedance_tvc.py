@@ -1179,14 +1179,43 @@ def _redact_progress_for_client(prog: Any) -> Any:
     return red
 
 
+def _local_bestseller_caption_required(job: Dict[str, Any]) -> bool:
+    meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+    return meta.get("feature") == "local_bestseller" and bool(str(meta.get("subtitle_text") or "").strip())
+
+
+def _result_has_captioned_video(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    captioned = result.get("captioned_video")
+    if not isinstance(captioned, dict):
+        return False
+    return bool(str(captioned.get("source_url") or captioned.get("open_url") or captioned.get("path") or "").strip())
+
+
 def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str, Any]:
-    st = (job.get("status") or "").strip()
+    stored_status = (job.get("status") or "").strip()
+    st = stored_status
+    post_status = (job.get("post_status") or "").strip()
+    post_stage = (job.get("post_stage") or "").strip()
+    result = job.get("result")
+    requires_caption = _local_bestseller_caption_required(job)
+    caption_ready = _result_has_captioned_video(result)
+    post_error = str(job.get("post_error") or "").strip()
+    if requires_caption and stored_status == "completed" and not caption_ready:
+        if post_status == "failed" or post_stage == "caption_failed":
+            st = "failed"
+        else:
+            st = "running"
     out: Dict[str, Any] = {
         "ok": True,
         "job_id": job.get("job_id"),
         "status": st,
         "post_status": job.get("post_status"),
         "post_stage": job.get("post_stage"),
+        "post_error": post_error or None,
+        "requires_caption": requires_caption,
+        "caption_ready": caption_ready,
         "auto_save": job.get("auto_save"),
         "created_at_ts": job.get("created_at_ts"),
         "updated_at_ts": job.get("updated_at_ts"),
@@ -1198,13 +1227,16 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str
         out["progress_percent"] = prog.get("progress_percent")
         out["progress_label"] = prog.get("progress_label")
         out["progress_detail"] = prog.get("progress_detail")
+    if requires_caption and not caption_ready and st == "running":
+        out["progress_label"] = "字幕合成中"
+        out["progress_detail"] = "视频已生成，正在合成上屏字幕"
     if st == "failed":
-        out["error"] = job.get("error")
-        if include_full and job.get("result") is not None:
-            out["result"] = job.get("result")
+        out["error"] = post_error or job.get("error")
+        if include_full and result is not None:
+            out["result"] = result
     if st == "completed":
         if include_full:
-            out["result"] = job.get("result")
+            out["result"] = result
             out["saved_assets"] = job.get("saved_assets") or []
     return out
 
