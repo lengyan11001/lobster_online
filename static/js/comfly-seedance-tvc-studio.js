@@ -37,6 +37,7 @@
   var seedanceVideoFullscreenEventsBound = false;
   var customSelectEventsBound = false;
   var RECENT_JOB_LIMIT = 60;
+  var REFERENCE_IMAGE_PROMPT_TEXT = '提示图片为上传图片';
   var assetPickerState = {
     loading: false,
     items: [],
@@ -129,7 +130,7 @@
   };
 
   var PURPOSE_HINTS = {
-    storyboard: '参考图{n}是分镜/画面结构参考，请学习它的构图、镜头节奏、画面层次和商业短视频表达方式，不要把它误当成必须替换的人物或产品。',
+    storyboard: '参考图{n}是分镜/画面结构参考，请学习它的构图、镜头节奏、画面层次和创意短视频表达方式，不要把它误当成必须替换的人物或产品。',
     person: '参考图{n}是目标人物，请所有分镜和最终视频都保持参考图{n}的人物脸型、五官、发型、气质和服装核心特征；不要生成相似但不同的人。',
     product: '参考图{n}是目标产品，请所有产品展示镜头都保持参考图{n}的产品外观、包装、颜色、材质、标签布局和主要识别特征；不要沿用其他产品。',
     style: '参考图{n}只作为风格参考，请学习它的色彩、光线、质感、镜头氛围和视觉调性，不要复制其中无关人物或产品。',
@@ -323,10 +324,34 @@
     var segments = source.map(function(item, idx) {
       item = item && typeof item === 'object' ? item : {};
       var index = Number(item.index || idx + 1) || idx + 1;
-      var imagePrompt = String(item.image_prompt || item.imagePrompt || item.prompt || '').trim();
-      var videoPrompt = String(item.video_prompt || item.videoPrompt || item.prompt || '').trim();
+      var imagePrompt = String(
+        item.image_prompt
+        || item.imagePrompt
+        || item.storyboard_board_image_prompt
+        || item.storyboardBoardImagePrompt
+        || item.storyboard_image_prompt
+        || item.storyboard_image_prompt_en
+        || item.first_frame_prompt
+        || item.first_frame_prompt_en
+        || item.segment_reference_prompt
+        || item.segment_reference_prompt_en
+        || item.prompt
+        || ''
+      ).trim();
+      var videoPrompt = String(
+        item.video_prompt
+        || item.videoPrompt
+        || item.submitted_video_prompt
+        || item.submitted_video_prompt_en
+        || item.seedance_prompt
+        || item.seedance_prompt_en
+        || item.prompt
+        || ''
+      ).trim();
       var imageUrl = String(item.image_url || item.imageUrl || '').trim();
       var videoUrl = String(item.video_url || item.videoUrl || '').trim();
+      var workflowMode = String(item.workflow_mode || item.workflowMode || '').trim();
+      var imageSource = String(item.image_source || item.imageSource || item.source || '').trim();
       var status = String(item.status || '').trim() || (videoUrl ? 'video_ready' : (imageUrl ? 'image_ready' : 'pending'));
       return {
         index: index,
@@ -339,6 +364,9 @@
         videoPrompt: videoPrompt,
         imageUrl: imageUrl,
         videoUrl: videoUrl,
+        workflowMode: workflowMode,
+        imageSource: imageSource,
+        usesReferenceImage: !!(item.uses_reference_image || item.usesReferenceImage),
         provider: String(item.provider || '').trim(),
         model: String(item.model || '').trim(),
         taskId: String(item.task_id || item.taskId || '').trim(),
@@ -549,6 +577,29 @@
 
   function cleanRemoteUrl(url) {
     return String(url || '').trim().replace(/[\\\/]+$/, '');
+  }
+
+  function mediaItemUrl(item) {
+    if (!item || typeof item !== 'object') return '';
+    var fields = [
+      item.url,
+      item.objectUrl,
+      item.source_url,
+      item.sourceUrl,
+      item.preview_url,
+      item.previewUrl,
+      item.open_url,
+      item.openUrl,
+      item.local_preview_url,
+      item.localPreviewUrl,
+      item.image_url,
+      item.imageUrl
+    ];
+    for (var i = 0; i < fields.length; i += 1) {
+      var url = String(fields[i] || '').trim();
+      if (url) return url;
+    }
+    return '';
   }
 
   function normalizeExampleItem(item) {
@@ -1169,7 +1220,7 @@
 
   function releaseMediaItems(items) {
     (items || []).forEach(function(item) {
-      if (item && item.url) {
+      if (item && item.url && String(item.url).indexOf('blob:') === 0) {
         try {
           URL.revokeObjectURL(item.url);
         } catch (err) {}
@@ -1185,6 +1236,10 @@
         size: file.size,
         type: file.type,
         url: URL.createObjectURL(file),
+        objectUrl: '',
+        source_url: '',
+        preview_url: '',
+        open_url: '',
         file: file,
         purpose: purpose
       };
@@ -1215,7 +1270,9 @@
       name: String((asset && asset.filename) || aid).trim() || aid,
       size: Number((asset && asset.file_size) || 0),
       url: resolveAssetMediaUrl(asset),
-      source_url: String((asset && (asset.open_url || asset.source_url || asset.preview_url)) || '').trim(),
+      source_url: String((asset && asset.source_url) || '').trim(),
+      preview_url: String((asset && asset.preview_url) || '').trim(),
+      open_url: String((asset && asset.open_url) || '').trim(),
       prompt: String((asset && asset.prompt) || '').trim(),
       purpose: (($('seedanceReferencePurposeSelect') || {}).value || 'storyboard').trim() || 'storyboard'
     };
@@ -1792,7 +1849,23 @@
     if (!list.length) return '';
     var pos = Math.max(0, (Number(index || 1) || 1) - 1) % list.length;
     var item = list[pos] || {};
-    return String(item.url || item.source_url || item.preview_url || '').trim();
+    return mediaItemUrl(item);
+  }
+
+  function isReferenceImageSegment(seg) {
+    if (!seg || typeof seg !== 'object') return false;
+    var workflow = String(seg.workflowMode || seg.workflow_mode || '').toLowerCase().replace(/-/g, '_');
+    var source = String(seg.imageSource || seg.image_source || seg.source || '').toLowerCase();
+    return workflow === 'direct_video'
+      || source === 'uploaded_reference_image'
+      || source === 'reference_image'
+      || !!seg.usesReferenceImage;
+  }
+
+  function displayImagePrompt(seg) {
+    if (isReferenceImageSegment(seg)) return REFERENCE_IMAGE_PROMPT_TEXT;
+    if (!seg) return '';
+    return seg.imagePrompt || seg.prompt || seg.videoPrompt || '';
   }
 
   function segmentPromptButton(prompt, action, label, disabled, extraClass) {
@@ -1866,15 +1939,20 @@
     if (!segments.length && Array.isArray(boards)) {
       segments = boards.map(function(board) {
         var prompt = (board.copy || board.title || '').trim();
+        var media = board.media || null;
+        var usesReferenceImage = state.mode === 'image_prompt' && !!mediaItemUrl(media);
         return {
           index: Number(board.index || 0) + 1,
           start: board.start,
           end: board.end,
           status: 'pending',
-          imagePrompt: prompt,
+          imagePrompt: usesReferenceImage ? REFERENCE_IMAGE_PROMPT_TEXT : prompt,
           videoPrompt: prompt,
-          imageUrl: board.media && board.media.url ? board.media.url : '',
+          imageUrl: mediaItemUrl(media),
           videoUrl: '',
+          workflowMode: usesReferenceImage ? 'direct_video' : '',
+          imageSource: usesReferenceImage ? 'uploaded_reference_image' : '',
+          usesReferenceImage: usesReferenceImage,
           provider: '',
           model: '',
           taskId: '',
@@ -1885,7 +1963,11 @@
       segments = segments.map(function(seg) {
         seg = seg && typeof seg === 'object' ? Object.assign({}, seg) : {};
         if (!String(seg.imageUrl || '').trim()) {
-          seg.imageUrl = fallbackSegmentImageUrl(seg.index);
+          var fallbackImageUrl = fallbackSegmentImageUrl(seg.index);
+          if (fallbackImageUrl) {
+            seg.imageUrl = fallbackImageUrl;
+            seg.usesReferenceImage = true;
+          }
         }
         return seg;
       });
@@ -1896,7 +1978,7 @@
     var videoReady = artifacts && artifacts.videoReadyCount ? artifacts.videoReadyCount : segments.filter(function(item) { return !!item.videoUrl; }).length;
     var failed = artifacts && artifacts.failedCount ? artifacts.failedCount : segments.filter(function(item) { return item.status === 'failed' || !!item.error; }).length;
     var rows = segments.map(function(seg) {
-      var imagePrompt = seg.imagePrompt || seg.prompt || '';
+      var imagePrompt = displayImagePrompt(seg);
       var videoPrompt = seg.videoPrompt || seg.prompt || '';
       var timeText = (seg.start != null && seg.end != null) ? (seg.start + 's-' + seg.end + 's') : ('片段 ' + seg.index);
       return [
@@ -2147,7 +2229,7 @@
         state.examplesOpen = false;
         state.mainView = 'result';
         renderWorkspace();
-        if (hit && hit.cloud && hit.status === 'completed' && hit.videoUrl) {
+        if (false && hit && hit.cloud && hit.status === 'completed' && hit.videoUrl) {
           showMessage('已加载服务器保存的历史视频结果。');
           return;
         }
@@ -2452,7 +2534,10 @@
           throw new Error(responseErrorText(result.data, '素材上传失败'));
         }
         item.asset_id = result.data.asset_id || '';
-        item.source_url = result.data.source_url || '';
+        item.source_url = result.data.source_url || item.source_url || '';
+        item.preview_url = result.data.preview_url || result.data.local_preview_url || item.preview_url || '';
+        item.open_url = result.data.open_url || item.open_url || '';
+        item.url = mediaItemUrl(item) || item.url || '';
         return item;
       });
   }
@@ -2481,7 +2566,7 @@
     var userPrompt = String(prompt || '').trim();
     if (!hints.length) return userPrompt;
     if (!userPrompt) {
-      userPrompt = '请基于以上参考图规划一条统一、连贯、适合短视频平台发布的商业视频。';
+      userPrompt = '请基于以上参考图规划一条统一、连贯、适合短视频平台发布的创意短视频。除非用户明确要求电商、商品、品牌广告或带货，不要按电商广告方向分析。';
     }
     return hints.join('\n') + '\n\n用户提示词：' + userPrompt;
   }

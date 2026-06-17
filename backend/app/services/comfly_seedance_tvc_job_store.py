@@ -390,6 +390,9 @@ def _first_text(*values: Any) -> str:
     return ""
 
 
+REFERENCE_IMAGE_PROMPT_TEXT = "提示图片为上传图片"
+
+
 def _first_url(value: Any) -> str:
     if isinstance(value, str):
         raw = value.strip()
@@ -454,19 +457,34 @@ def _merge_segment_row(row: Dict[str, Any], payload: Dict[str, Any], *, stage: s
     err = _first_text(payload.get("error"), payload.get("message"), payload.get("detail"))
     if err and not row.get("error"):
         row["error"] = err[:800]
-    prompt = _first_text(
-        payload.get("prompt"),
+    image_prompt = _first_text(
         payload.get("image_prompt"),
-        payload.get("video_prompt"),
-        payload.get("submitted_video_prompt"),
-        payload.get("submitted_video_prompt_en"),
+        payload.get("storyboard_board_image_prompt"),
+        payload.get("storyboard_image_prompt"),
+        payload.get("storyboard_image_prompt_en"),
         payload.get("first_frame_prompt"),
         payload.get("first_frame_prompt_en"),
         payload.get("segment_reference_prompt"),
         payload.get("segment_reference_prompt_en"),
+    )
+    video_prompt = _first_text(
+        payload.get("video_prompt"),
+        payload.get("submitted_video_prompt"),
+        payload.get("submitted_video_prompt_en"),
+        payload.get("seedance_prompt"),
+        payload.get("seedance_prompt_en"),
+    )
+    prompt = _first_text(
+        payload.get("prompt"),
+        image_prompt,
+        video_prompt,
         payload.get("task_text"),
         payload.get("text"),
     )
+    if image_prompt and not row.get("image_prompt"):
+        row["image_prompt"] = image_prompt
+    if video_prompt and not row.get("video_prompt"):
+        row["video_prompt"] = video_prompt
     if prompt:
         if stage == "image" and not row.get("image_prompt"):
             row["image_prompt"] = prompt
@@ -507,6 +525,22 @@ def _merge_segment_row(row: Dict[str, Any], payload: Dict[str, Any], *, stage: s
             row["image_url"] = row.get("image_url") or url
         elif stage == "video" or _looks_like_video_url(url):
             row["video_url"] = row.get("video_url") or url
+    workflow_mode = _first_text(payload.get("workflow_mode"), payload.get("mode"))
+    if workflow_mode and not row.get("workflow_mode"):
+        row["workflow_mode"] = workflow_mode
+    image_source = _first_text(
+        payload.get("image_source"),
+        payload.get("source"),
+        (payload.get("segment_reference_result") or {}).get("source") if isinstance(payload.get("segment_reference_result"), dict) else "",
+        (payload.get("board_image_result") or {}).get("source") if isinstance(payload.get("board_image_result"), dict) else "",
+    )
+    if image_source and not row.get("image_source"):
+        row["image_source"] = image_source
+    if (
+        str(row.get("workflow_mode") or "").strip().lower().replace("-", "_") == "direct_video"
+        or str(row.get("image_source") or "").strip().lower() == "uploaded_reference_image"
+    ):
+        row["image_prompt"] = REFERENCE_IMAGE_PROMPT_TEXT
 
 
 def _segment_index_from_name(name: str) -> Optional[int]:
@@ -563,6 +597,8 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "provider": "",
             "model": "",
             "task_id": "",
+            "workflow_mode": config.get("workflow_mode") or "",
+            "image_source": "",
             "error": "",
             "progress": None,
         }
@@ -576,6 +612,17 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
         ref_url = _first_url(payload.get("reference_image_url") or payload.get("url"))
         if ref_url and ref_url not in reference_urls:
             reference_urls.append(ref_url)
+    for path in sorted(run_dir.glob("01_reference_upload_*.json")):
+        ref_payload = _read_json_file(path)
+        ref_url = _first_url(ref_payload.get("reference_image_url") or ref_payload)
+        if ref_url and ref_url not in reference_urls:
+            reference_urls.append(ref_url)
+    result_reference_urls = _read_json_file(run_dir / "99_result.json").get("reference_image_urls")
+    if isinstance(result_reference_urls, list):
+        for ref_url in result_reference_urls:
+            found = _first_url(ref_url)
+            if found and found not in reference_urls:
+                reference_urls.append(found)
 
     shots = manifest.get("shots") if isinstance(manifest.get("shots"), dict) else {}
     for raw_idx, shot in shots.items():

@@ -711,40 +711,41 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
 
 def _locale_guidance(config: PipelineConfig) -> str:
     if (config.country or "").strip().lower() in {"china", "mainland china", ""}:
-        return "Use Simplified Chinese copy and China-market premium brand advertising style."
+        return "Use Simplified Chinese copy and a natural short-video style for the China market. Use premium brand advertising language only when the user explicitly asks for product, ecommerce, brand ad, or sales content."
     if (config.country or "").strip():
-        return f"Use localized copy and premium commercial styling appropriate for {config.country.strip()}."
+        return f"Use localized copy and a natural short-video style appropriate for {config.country.strip()}. Use premium commercial styling only when the user explicitly asks for product, ecommerce, brand ad, or sales content."
     return "Use localized styling that matches the intended market and language."
 
 
 def _analysis_prompt(config: PipelineConfig) -> str:
     return (
-        "You are a senior TVC storyboard director and premium commercial planner.\n"
-        "The user may upload one or more reference images, or may provide only a text task brief. If reference images are present, the first image can be a storyboard board example, and other images may be product references, packaging references, scene references, or style references. If no reference image is present, infer the product, scene, and style from the text task brief.\n"
-        "Your task is to plan one coherent commercial film with a single visual identity, a single campaign arc, and smooth transitions between segments.\n"
+        "You are a senior creative short-video storyboard director.\n"
+        "The user may upload one or more reference images, or may provide only a text task brief. If reference images are present, first identify the real subject and intent from the image: it may be a person, a selfie, a scene, a lifestyle moment, a product, a packaging reference, a style reference, or a storyboard example. Do not assume ecommerce, product promotion, brand advertising, or sales content unless the user text or the image clearly indicates a product/brand/sales scenario.\n"
+        "Your task is to plan one coherent creative short video with a single visual identity, a single story/emotion arc, and smooth transitions between segments. If the image is a person, preserve that person's visible identity, outfit, temperament, and scene logic. If the image is a scene, preserve the location atmosphere and spatial logic. If it is explicitly a product or brand asset, then plan it as a product/brand commercial.\n"
         f"The final film must be exactly {config.total_duration_seconds} seconds, split into exactly {config.segment_count} storyboard boards.\n"
         f"Each storyboard board must represent exactly {config.segment_duration_seconds} seconds of the same film.\n"
         "Return strict JSON with top-level keys: product_summary, global_style, campaign_context, storyboard_boards.\n"
-        "product_summary must contain: brand_name, product_name, product_form, consistency_rules.\n"
+        "product_summary is a legacy compatibility object. If this is not a product/brand/ecommerce task, leave brand_name/product_name/product_form empty and put subject/person/scene consistency rules in consistency_rules.\n"
         "global_style must contain: palette_cn, tone_cn, keywords_en.\n"
         "campaign_context must contain: hero_subject_cn, campaign_arc_cn, continuity_rules_cn, transition_style_cn.\n"
         "storyboard_boards must be an array of exactly "
         f"{config.segment_count} items.\n"
         "Each item must contain these keys:\n"
-        "index, time_range_cn, duration_seconds, board_title_cn, board_goal_cn, narrative_stage_cn, continuity_anchor_cn, transition_in_cn, transition_out_cn, subshots_cn, voiceover_cn, board_copy_cn, visual_focus_cn, composition_notes_cn, storyboard_image_prompt_en, seedance_prompt_en.\n"
+        "index, time_range_cn, duration_seconds, board_title_cn, board_goal_cn, narrative_stage_cn, continuity_anchor_cn, transition_in_cn, transition_out_cn, subshots_cn, voiceover_cn, board_copy_cn, visual_focus_cn, composition_notes_cn, image_prompt, video_prompt, storyboard_image_prompt_en, seedance_prompt_en.\n"
         "Rules:\n"
         f"1. This is not per-shot output. Each item is one complete {config.segment_duration_seconds}-second storyboard board image for one segment of the same final film.\n"
         f"2. Every board must have duration_seconds={config.segment_duration_seconds}, and the boards together must cover {config.total_duration_seconds} seconds continuously with no overlap and no gaps.\n"
         f"3. Each board must internally describe 3-5 micro-shots or scenes inside the same {config.segment_duration_seconds}-second segment.\n"
-        "4. The full set of boards must feel like one integrated commercial, not disconnected mini videos. The story should progress naturally from opening, to product proof, to payoff, to brand close.\n"
+        "4. The full set of boards must feel like one integrated short video, not disconnected mini videos. The story should progress naturally from opening, to development, to emotional/visual payoff, to a clean close. Use product-proof/brand-close structure only for explicit product or ad tasks.\n"
         "5. continuity_anchor_cn must describe what must visually stay continuous from the previous segment into this one.\n"
         "6. transition_in_cn and transition_out_cn must describe how the current segment connects to its neighbors in camera motion, lighting, props, subject behavior, or composition rhythm.\n"
         "7. voiceover_cn should be the full Chinese narration for that segment, but all segments together must read like one continuous ad voice-over.\n"
         "8. board_copy_cn should be the Chinese labels / supporting copy that should appear on the board image.\n"
-        "9. storyboard_image_prompt_en must ask for one polished storyboard board image with premium graphic design, multiple internal sub-panels, time labels, Chinese script/copy blocks, and product-consistent visuals.\n"
-        "10. Keep product consistency across all boards: same package family, logo family, hero subject, props, colorway, materials, and campaign art direction.\n"
-        "11. The final segment must feel like a true commercial ending, clearly resolving the same campaign arc established by the first segment.\n"
-        "12. Return JSON only.\n"
+        "9. image_prompt and video_prompt MUST be Simplified Chinese prompts for users to read and edit. Do not output English in these two fields. image_prompt describes the image/storyboard result for this segment; video_prompt describes the video motion result for this segment.\n"
+        "10. storyboard_image_prompt_en and seedance_prompt_en may be English technical prompts for generation, but image_prompt and video_prompt must be the Chinese user-facing versions.\n"
+        "11. Keep subject consistency across all boards: same person/object/scene identity, outfit or key visual traits, props, colorway, spatial logic, and art direction. For explicit product tasks, also keep packaging/logo/product identity consistent.\n"
+        "12. The final segment must clearly resolve the same story/emotion/campaign arc established by the first segment.\n"
+        "13. Return JSON only.\n"
         f"Extra user task brief: {config.task_text or 'No extra task text provided.'}\n"
         f"Locale guidance: {_locale_guidance(config)}"
     )
@@ -800,6 +801,7 @@ def _compose_board_image_prompt(
     brand = _first_text(product_summary, "brand_name")
     product = _first_text(product_summary, "product_name", "product_form")
     consistency = _first_text(product_summary, "consistency_rules")
+    brand_product = f"{brand} {product}".strip()
     style_keywords = global_style.get("keywords_en")
     if isinstance(style_keywords, list):
         style_keywords = ", ".join(str(x).strip() for x in style_keywords if str(x).strip())
@@ -808,8 +810,8 @@ def _compose_board_image_prompt(
 
     parts = [
         _first_text(board, "storyboard_image_prompt_en"),
-        f"Create one premium Chinese storyboard board image for a {board.get('duration_seconds', FIXED_SEGMENT_DURATION_SECONDS)}-second segment inside a single {total_duration_seconds}-second commercial film",
-        f"Brand and product: {brand} {product}".strip(),
+        f"Create one polished Chinese storyboard board image for a {board.get('duration_seconds', FIXED_SEGMENT_DURATION_SECONDS)}-second segment inside a single {total_duration_seconds}-second creative short video",
+        f"Explicit brand/product only if provided by the user: {brand_product}" if brand_product else "",
         f"Board title in Chinese: {_first_text(board, 'board_title_cn')}",
         f"Board goal in Chinese: {_first_text(board, 'board_goal_cn')}",
         f"Narrative stage in Chinese: {_first_text(board, 'narrative_stage_cn')}",
@@ -826,9 +828,9 @@ def _compose_board_image_prompt(
         f"Composition note: {_first_text(board, 'composition_notes_cn')}",
         f"Style keywords: {style_keywords}",
         f"Consistency rules: {consistency}",
-        "The board must look like a polished ad-planning sheet with multiple internal panels, scene thumbnails, Chinese shot notes, Chinese copy blocks, and clear time labels",
-        "This board must clearly belong to the same campaign film as the other boards, with continuous subject identity, prop logic, motion logic, and visual rhythm",
-        "Keep product identity, packaging, logo family, props, and campaign color palette highly consistent with the uploaded references",
+        "The board must look like a polished storyboard planning sheet with multiple internal panels, scene thumbnails, Chinese shot notes, Chinese copy blocks, and clear time labels",
+        "This board must clearly belong to the same creative short video as the other boards, with continuous subject identity, prop logic, motion logic, and visual rhythm",
+        "Keep the uploaded subject, person, scene, outfit, props, and color palette highly consistent with the references. Only enforce packaging, logo, or product identity when the user explicitly provided a product or brand task",
         "No random extra brands, no fake UI, no watermark, no irrelevant English slogans",
     ]
     return ". ".join(part for part in parts if part)
@@ -844,6 +846,7 @@ def _compose_segment_reference_prompt(
     brand = _first_text(product_summary, "brand_name")
     product = _first_text(product_summary, "product_name", "product_form")
     consistency = _first_text(product_summary, "consistency_rules")
+    brand_product = f"{brand} {product}".strip()
     style_keywords = global_style.get("keywords_en")
     if isinstance(style_keywords, list):
         style_keywords = ", ".join(str(x).strip() for x in style_keywords if str(x).strip())
@@ -851,8 +854,8 @@ def _compose_segment_reference_prompt(
         style_keywords = str(style_keywords or "").strip()
 
     parts = [
-        f"Create one photoreal premium commercial keyframe as a visual reference image for a {board.get('duration_seconds', FIXED_SEGMENT_DURATION_SECONDS)}-second segment inside a single {total_duration_seconds}-second commercial film",
-        f"Brand and product: {brand} {product}".strip(),
+        f"Create one photoreal cinematic keyframe as a visual reference image for a {board.get('duration_seconds', FIXED_SEGMENT_DURATION_SECONDS)}-second segment inside a single {total_duration_seconds}-second creative short video",
+        f"Explicit brand/product only if provided by the user: {brand_product}" if brand_product else "",
         f"Board title in Chinese: {_first_text(board, 'board_title_cn')}",
         f"Narrative stage in Chinese: {_first_text(board, 'narrative_stage_cn')}",
         f"Board goal in Chinese: {_first_text(board, 'board_goal_cn')}",
@@ -868,8 +871,8 @@ def _compose_segment_reference_prompt(
         f"Consistency rules: {consistency}",
         "Return one single-scene cinematic still for motion guidance, not a storyboard board and not a multi-panel layout",
         "Do not include storyboard panels, split screens, time labels, shot callouts, copy blocks, subtitles, poster typography, collage composition, UI overlays, or watermark",
-        "Use one single-camera composition with believable product placement, lighting continuity, and room for natural motion development across the whole segment",
-        "Keep product identity, packaging, logo family, props, and campaign color palette highly consistent with the uploaded references",
+        "Use one single-camera composition with believable subject placement, lighting continuity, and room for natural motion development across the whole segment",
+        "Keep the uploaded subject, person, scene, outfit, props, and color palette highly consistent with the references. Only enforce packaging, logo, or product identity when the user explicitly provided a product or brand task",
     ]
     return ". ".join(part for part in parts if part)
 
@@ -883,19 +886,21 @@ def _compose_seedance_prompt(
 ) -> str:
     brand = _first_text(product_summary, "brand_name")
     product = _first_text(product_summary, "product_name", "product_form")
+    brand_product = f"{brand} {product}".strip()
     style_keywords = global_style.get("keywords_en")
     if isinstance(style_keywords, list):
         style_keywords = ", ".join(str(x).strip() for x in style_keywords if str(x).strip())
     else:
         style_keywords = str(style_keywords or "").strip()
     parts = [
-        f"Create one premium photoreal commercial video segment for {brand} {product}".strip(),
+        "Create one premium photoreal creative short-video segment",
+        f"Explicit brand/product only if provided by the user: {brand_product}" if brand_product else "",
         f"Board title in Chinese: {_first_text(board, 'board_title_cn')}",
         f"Board goal in Chinese: {_first_text(board, 'board_goal_cn')}",
         f"Narrative stage in Chinese: {_first_text(board, 'narrative_stage_cn')}",
         f"Animate the full {int(board.get('duration_seconds') or FIXED_SEGMENT_DURATION_SECONDS)}-second sequence according to the provided segment reference image and the continuity plan",
-        f"This segment is one part of a single {total_duration_seconds}-second commercial and must feel continuous with the previous and next segments after merge",
-        f"Keep the product identity exactly consistent with the references for {brand} {product}".strip(),
+        f"This segment is one part of a single {total_duration_seconds}-second creative short video and must feel continuous with the previous and next segments after merge",
+        "Keep the uploaded subject, person, scene, outfit, props, and key visual traits exactly consistent with the references. Only enforce product packaging/logo identity when the user explicitly provided a product or brand task",
         f"Follow the overall campaign arc in Chinese: {_first_text(campaign_context, 'campaign_arc_cn')}",
         f"Keep the same hero subject in Chinese: {_first_text(campaign_context, 'hero_subject_cn')}",
         f"Respect these continuity rules in Chinese: {_first_text(campaign_context, 'continuity_rules_cn')}",
@@ -906,9 +911,9 @@ def _compose_seedance_prompt(
         f"Composition notes in Chinese: {_first_text(board, 'composition_notes_cn')}",
         f"Follow this Chinese narration: {_first_text(board, 'voiceover_cn')}",
         f"Treat this Chinese copy as campaign messaging guidance only, not on-screen typography: {_first_text(board, 'board_copy_cn')}",
-        f"Maintain premium commercial styling: {style_keywords}",
+        f"Maintain the planned visual style: {style_keywords}",
         "Respect the order of the micro-shots described on the board, with natural transitions inside one coherent commercial segment",
-        "Preserve the same subject, lighting direction, color treatment, prop logic, and emotional progression so the merged video feels like one unified ad rather than disconnected clips",
+        "Preserve the same subject, lighting direction, color treatment, prop logic, and emotional progression so the merged video feels like one unified short video rather than disconnected clips",
         "Do not render storyboard boards, split panels, time labels, copy blocks, comic layouts, or presentation-sheet compositions",
         "Do not introduce extra products, extra brand marks, unwanted subtitles, UI overlays, or watermarks",
     ]
@@ -1380,6 +1385,8 @@ def _build_segment_plan(
         "board_image_prompt": board_image_prompt,
         "segment_reference_prompt": segment_reference_prompt,
         "video_prompt": video_prompt,
+        "user_image_prompt": _first_text(board, "image_prompt") or board_image_prompt,
+        "user_video_prompt": _first_text(board, "video_prompt") or video_prompt,
     }
 
 
@@ -1636,6 +1643,8 @@ def _poll_segment_video(
         "visual_focus_cn": board.get("visual_focus_cn"),
         "composition_notes_cn": board.get("composition_notes_cn"),
         "duration_seconds": int(segment_plan["duration_seconds"]),
+        "image_prompt": segment_plan.get("user_image_prompt") or board.get("image_prompt") or board.get("storyboard_image_prompt_en"),
+        "video_prompt": segment_plan.get("user_video_prompt") or board.get("video_prompt") or board.get("seedance_prompt_en"),
         "storyboard_image_prompt_en": board.get("storyboard_image_prompt_en"),
         "seedance_prompt_en": board.get("seedance_prompt_en"),
         "segment_reference_prompt_en": segment_plan["segment_reference_prompt"],
@@ -1836,13 +1845,13 @@ def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: Lis
         "narrative_stage_cn": "direct_video",
         "visual_focus_cn": "用户上传参考图",
         "seedance_prompt_en": video_prompt,
-        "storyboard_image_prompt_en": "",
+        "storyboard_image_prompt_en": "提示图片为上传图片",
     }
     return {
         "index": segment_index,
         "board": board,
         "duration_seconds": config.segment_duration_seconds,
-        "board_image_prompt": "",
+        "board_image_prompt": "提示图片为上传图片",
         "segment_reference_prompt": video_prompt,
         "video_prompt": video_prompt,
         "segment_reference_result": {
@@ -2066,10 +2075,11 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                     "ready",
                     payload={
                         "board": segment_plan["board"],
-                        "image_prompt": segment_plan["video_prompt"],
+                        "image_prompt": "提示图片为上传图片",
                         "video_prompt": segment_plan["video_prompt"],
                         "prompt": segment_plan["video_prompt"],
                         "first_frame_image_url": segment_plan["segment_reference_result"]["url"],
+                        "image_source": "uploaded_reference_image",
                         "submitted_video_prompt": segment_plan["video_prompt"],
                         "workflow_mode": "direct_video",
                     },
@@ -2156,6 +2166,8 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 "ready",
                 payload={
                     "board": segment_plan["board"],
+                    "image_prompt": segment_plan.get("user_image_prompt") or segment_plan["board_image_prompt"],
+                    "video_prompt": segment_plan.get("user_video_prompt") or segment_plan["video_prompt"],
                     "storyboard_board_image_prompt": segment_plan["board_image_prompt"],
                     "segment_reference_prompt": segment_plan["segment_reference_prompt"],
                     "first_frame_prompt": segment_plan["segment_reference_prompt"],
