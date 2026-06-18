@@ -105,12 +105,12 @@
   var modeMeta = {
     image_auto: {
       name: '参考图自动分析',
-      hint: '当前模式会优先使用参考图统一主体和画面风格；未上传图片时，会按提示词直接规划分镜。',
+      hint: '当前模式会先分析上传图片，再重新设计分镜并合成新的分镜图片；不会直接把上传图当作每段结果图。',
       emphasis: '主体统一'
     },
     image_prompt: {
       name: '图片 + 提示词共创',
-      hint: '当前模式会参考上传图片，并把你的提示词原样用于每个分段，不再自动扩写分镜话术。',
+      hint: '当前模式会直接使用上传图片作为每段参考图，并把你的提示词用于图生视频。',
       emphasis: '图文共同控制'
     },
     prompt_only: {
@@ -1948,7 +1948,7 @@
           status: 'pending',
           imagePrompt: usesReferenceImage ? REFERENCE_IMAGE_PROMPT_TEXT : prompt,
           videoPrompt: prompt,
-          imageUrl: mediaItemUrl(media),
+          imageUrl: usesReferenceImage ? mediaItemUrl(media) : '',
           videoUrl: '',
           workflowMode: usesReferenceImage ? 'direct_video' : '',
           imageSource: usesReferenceImage ? 'uploaded_reference_image' : '',
@@ -1962,7 +1962,7 @@
     } else {
       segments = segments.map(function(seg) {
         seg = seg && typeof seg === 'object' ? Object.assign({}, seg) : {};
-        if (!String(seg.imageUrl || '').trim()) {
+        if (!String(seg.imageUrl || '').trim() && isReferenceImageSegment(seg)) {
           var fallbackImageUrl = fallbackSegmentImageUrl(seg.index);
           if (fallbackImageUrl) {
             seg.imageUrl = fallbackImageUrl;
@@ -2579,8 +2579,7 @@
     var videoRequest = videoRequestForModel(values.model);
     var useDirectVideo = state.mode === 'image_prompt'
       && uploaded.length >= 1
-      && !!(uploaded[0] && uploaded[0].asset_id)
-      && !!values.prompt;
+      && !!(uploaded[0] && uploaded[0].asset_id);
     var basePayload = {
       total_duration_seconds: segmentCount * segmentSeconds,
       segment_count: segmentCount,

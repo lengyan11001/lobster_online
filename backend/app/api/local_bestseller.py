@@ -329,12 +329,13 @@ def _sanitize_video_prompt_no_speech(prompt: str) -> str:
     if "第4-6秒" not in out and "中间约第4" not in out:
         out = f"{out}{mid_look}" if out.endswith(("。", "；", ";", ".")) else f"{out}。{mid_look}"
     bgm = (
-        "必须加入轻微背景音乐或真实环境氛围感，音量低，只做氛围铺底；不要人声、不要旁白、不要歌词、不要任何人物发声。"
+        "视频必须伴随街头背景音和轻快节奏音乐，音量低，只做真实街头氛围和轻快节奏铺底；"
+        "不要人声、不要旁白、不要歌词、不要任何人物发声。"
     )
     optional_bgm = "可加入轻微背景音乐或真实环境氛围感，音量低，不要人声、不要旁白、不要歌词、不要任何人物发声。"
     if optional_bgm in out:
         out = out.replace(optional_bgm, bgm)
-    elif "背景音乐" not in out or "必须加入" not in out:
+    elif "街头背景音" not in out or "轻快节奏音乐" not in out:
         out = f"{out}{bgm}" if out.endswith(("。", "；", ";", ".")) else f"{out}。{bgm}"
     return out
 

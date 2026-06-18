@@ -127,11 +127,11 @@
     if (out.indexOf('第4-6秒') === -1 && out.indexOf('中间约第4') === -1) {
       out += /[。；;.]$/.test(out) ? midLook : '。' + midLook;
     }
-    var bgm = '必须加入轻微背景音乐或真实环境氛围感，音量低，只做氛围铺底；不要人声、不要旁白、不要歌词、不要任何人物发声。';
+    var bgm = '视频必须伴随街头背景音和轻快节奏音乐，音量低，只做真实街头氛围和轻快节奏铺底；不要人声、不要旁白、不要歌词、不要任何人物发声。';
     var optionalBgm = '可加入轻微背景音乐或真实环境氛围感，音量低，不要人声、不要旁白、不要歌词、不要任何人物发声。';
     if (out.indexOf(optionalBgm) !== -1) {
       out = out.split(optionalBgm).join(bgm);
-    } else if (out.indexOf('背景音乐') === -1 || out.indexOf('必须加入') === -1) {
+    } else if (out.indexOf('街头背景音') === -1 || out.indexOf('轻快节奏音乐') === -1) {
       out += /[。；;.]$/.test(out) ? bgm : '。' + bgm;
     }
     return out;

@@ -251,13 +251,6 @@ async def _prepare_pipeline_input(
         uses_yunwu_veo = _is_veo31_request(video_channel or pl.video_channel or "", video_model or pl.video_model or "")
         requested_count = int(pl.total_duration_seconds) // (8 if uses_yunwu_veo else 10)
     workflow_mode = (pl.workflow_mode or "storyboard").strip().lower().replace("-", "_") or "storyboard"
-    if (
-        workflow_mode == "storyboard"
-        and len(reference_images) >= 1
-        and (pl.task_text or "").strip()
-        and int(requested_count or 1) == 1
-    ):
-        workflow_mode = "direct_video"
     logger.info(
         "[seedance-tvc] prepared pipeline user_id=%s workflow_mode=%s references=%s segment_count=%s segment_seconds=%s video_channel=%s video_model=%s",
         current_user.id,
@@ -690,11 +683,11 @@ def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = N
     north = ["北京", "天津", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "山东", "河南", "陕西", "甘肃", "青海", "宁夏", "新疆"]
     events = [
         _ass_event("RankTitleRed", _escape_ass_text(title), margin_v=64),
-        _ass_event("RankTitleYellow", _escape_ass_text(subtitle), margin_v=140),
-        _ass_event("RankHeader", r"{\pos(328,300)}南方"),
-        _ass_event("RankHeader", r"{\pos(752,300)}北方"),
-        _ass_event("RankList", r"{\pos(328,390)}" + _escape_ass_text("\n".join(south))),
-        _ass_event("RankList", r"{\pos(752,390)}" + _escape_ass_text("\n".join(north))),
+        _ass_event("RankTitleYellow", _escape_ass_text(subtitle), margin_v=172),
+        _ass_event("RankHeader", r"{\pos(328,336)}南方"),
+        _ass_event("RankHeader", r"{\pos(752,336)}北方"),
+        _ass_event("RankList", r"{\pos(328,430)}" + _escape_ass_text("\n".join(south))),
+        _ass_event("RankList", r"{\pos(752,430)}" + _escape_ass_text("\n".join(north))),
     ]
     return "\n".join([
         "[Script Info]",
@@ -705,10 +698,10 @@ def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = N
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: RankTitleRed,Microsoft YaHei,78,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,7,2,8,54,54,64,1",
-        f"Style: RankTitleYellow,Microsoft YaHei,72,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,7,2,8,54,54,140,1",
-        f"Style: RankHeader,Microsoft YaHei,76,{_ass_color('#ffffff')},{_ass_color('#ffffff')},{_ass_color('#d91f1f')},{_ass_color('#d91f1f')},-1,0,0,0,100,100,0,0,3,14,0,5,54,54,0,1",
-        f"Style: RankList,Microsoft YaHei,44,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,5,1,8,36,36,0,1",
+        f"Style: RankTitleRed,Microsoft YaHei,96,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,8,2,8,54,54,64,1",
+        f"Style: RankTitleYellow,Microsoft YaHei,88,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,8,2,8,54,54,150,1",
+        f"Style: RankHeader,Microsoft YaHei,90,{_ass_color('#ffffff')},{_ass_color('#ffffff')},{_ass_color('#d91f1f')},{_ass_color('#d91f1f')},-1,0,0,0,100,100,0,0,3,15,0,5,54,54,0,1",
+        f"Style: RankList,Microsoft YaHei,54,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,6,1,8,36,36,0,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -741,8 +734,8 @@ def _local_bestseller_ass_content(subtitle_text: str, subtitle_style: Optional[D
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Title,Microsoft YaHei,64,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,5,1,8,72,72,72,1",
-        f"Style: Body,Microsoft YaHei,58,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,5,1,8,80,80,112,1",
+        f"Style: Title,Microsoft YaHei,82,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,7,2,8,72,72,72,1",
+        f"Style: Body,Microsoft YaHei,74,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,7,2,8,80,80,118,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
