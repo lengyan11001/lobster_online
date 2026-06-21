@@ -4122,7 +4122,14 @@ function bindChatHomeActions() {
     if (jumpBtn) {
       var view = jumpBtn.getAttribute('data-jump-view');
       var navBtn = document.querySelector('.nav-left-item[data-view="' + view + '"]');
-      if (navBtn) navBtn.click();
+      if (navBtn) {
+        navBtn.click();
+      } else if (view === 'wecom-config' && typeof showWecomConfigView === 'function') {
+        showWecomConfigView();
+      } else if (view && view.indexOf('wecom-detail') === 0 && typeof showWecomDetailView === 'function') {
+        var parts = view.split(':');
+        showWecomDetailView(parts[1] ? parseInt(parts[1], 10) : undefined);
+      }
       return;
     }
     var promptBtn = e.target.closest('[data-chat-prompt]');

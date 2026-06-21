@@ -320,6 +320,7 @@ function applyBrandingFromApi() {
       if (!b || typeof b !== 'object') return;
       if (b.mark) window.__LOBSTER_BRAND_MARK = b.mark;
       if (b.parent_account) window.__LOBSTER_PARENT_ACCOUNT = b.parent_account;
+      window.__LOBSTER_IS_OVERSEAS_USER = !!b.is_overseas_user;
       if (b.document_title) document.title = b.document_title;
       var icons = b.icons || {};
       var fav = document.getElementById('brandFavicon');
@@ -758,8 +759,10 @@ if (registerForm) {
 
     function postRegisterPhone(brandMark, parentAccount) {
       var payload = { phone: phone, code: smsCode };
+      var isOverseasUser = !!window.__LOBSTER_IS_OVERSEAS_USER;
       if (brandMark) payload.brand_mark = brandMark;
       if (parentAccount) payload.parent_account = parentAccount;
+      if (isOverseasUser) payload.is_overseas_user = true;
       fetch(API_BASE + '/auth/register-phone', {
         method: 'POST',
         headers: {
@@ -1867,6 +1870,7 @@ function openCreditLimitModal() {
     location.hash.indexOf('messenger') !== -1 ||
     location.hash.indexOf('twilio-whatsapp') !== -1 ||
     location.hash.indexOf('youtube-accounts') !== -1 ||
+    location.hash.indexOf('juhe-wechat') !== -1 ||
     location.hash.indexOf('meta-social') !== -1 ||
     location.hash.indexOf('ecommerce-detail-studio') !== -1 ||
     location.hash.indexOf('image-composer-studio') !== -1 ||

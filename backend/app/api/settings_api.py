@@ -20,6 +20,7 @@ from .auth import (
 )
 from .openclaw_config import clear_openclaw_local_provider_keys
 from ..models import ConsumptionAccount, User
+from ..services.asset_storage_paths import get_asset_path_settings, set_asset_export_dir
 from ..services.chat_route_mode import (
     CHAT_ROUTE_MODE_DIRECT,
     CHAT_ROUTE_MODE_OPENCLAW,
@@ -166,6 +167,10 @@ class UpdateSettingsRequest(BaseModel):
 
 class ChatRouteModeRequest(BaseModel):
     mode: str
+
+
+class AssetPathSettingsRequest(BaseModel):
+    export_dir: Optional[str] = None
 
 
 @router.get("/api/settings", summary="获取用户设置")
@@ -348,6 +353,21 @@ async def sync_tos_from_server(
         "message": message,
     }
     return out
+
+
+@router.get("/api/settings/asset-paths", summary="Get local asset storage/export paths")
+def get_asset_paths_settings(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return get_asset_path_settings()
+
+
+@router.post("/api/settings/asset-paths", summary="Update local asset export path")
+def update_asset_paths_settings(
+    body: AssetPathSettingsRequest,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return set_asset_export_dir(body.export_dir)
 
 
 @router.post(

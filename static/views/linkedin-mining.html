@@ -1,0 +1,696 @@
+<div id="content-linkedin-mining" class="content-block">
+  <div class="li-mining-page">
+    <style>
+      .li-mining-page {
+        --li-accent: #0a66c2;
+        --li-accent-2: #0f766e;
+        --li-ink: #0f172a;
+        --li-muted: #64748b;
+        --li-border: rgba(15, 23, 42, 0.12);
+        min-height: calc(100vh - 72px);
+        padding: 1rem;
+        background: #f6f8fb;
+        color: var(--li-ink);
+      }
+      .li-mining-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        margin-bottom: 0.85rem;
+      }
+      .li-mining-kicker {
+        font-size: 0.76rem;
+        font-weight: 900;
+        color: var(--li-accent);
+      }
+      .li-mining-title {
+        margin: 0.12rem 0 0;
+        font-size: 1.35rem;
+        line-height: 1.25;
+      }
+      .li-mining-subtitle {
+        margin-top: 0.28rem;
+        color: var(--li-muted);
+        font-size: 0.9rem;
+      }
+      .li-mining-actions {
+        display: flex;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .li-mining-tabs {
+        display: flex;
+        gap: 0.35rem;
+        padding: 0.3rem;
+        border: 1px solid var(--li-border);
+        background: rgba(255,255,255,0.86);
+        border-radius: 8px;
+        overflow-x: auto;
+        margin-bottom: 0.85rem;
+      }
+      .li-mining-tab {
+        border: 0;
+        background: transparent;
+        color: #334155;
+        padding: 0.52rem 0.76rem;
+        border-radius: 6px;
+        font-weight: 900;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .li-mining-tab.is-active {
+        background: var(--li-accent);
+        color: #fff;
+      }
+      .li-mining-panel {
+        display: none;
+      }
+      .li-mining-panel.is-active {
+        display: block;
+      }
+      .li-mining-grid {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.85fr) minmax(460px, 1.15fr);
+        gap: 0.85rem;
+        align-items: start;
+      }
+      .li-mining-grid.is-even {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .li-card {
+        background: #fff;
+        border: 1px solid var(--li-border);
+        border-radius: 8px;
+        padding: 0.9rem;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+      }
+      .li-card-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 900;
+        margin-bottom: 0.7rem;
+      }
+      .li-field {
+        display: grid;
+        gap: 0.35rem;
+        margin-bottom: 0.75rem;
+      }
+      .li-field label {
+        font-size: 0.78rem;
+        font-weight: 900;
+        color: #334155;
+      }
+      .li-field input,
+      .li-field textarea,
+      .li-field select {
+        width: 100%;
+        border: 1px solid rgba(15,23,42,0.16);
+        border-radius: 7px;
+        background: #fff;
+        color: var(--li-ink);
+        padding: 0.58rem 0.68rem;
+        font-size: 0.9rem;
+        outline: none;
+      }
+      .li-field textarea {
+        min-height: 92px;
+        line-height: 1.55;
+        resize: vertical;
+      }
+      .li-inline {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.65rem;
+      }
+      .li-msg {
+        display: none;
+        margin-bottom: 0.8rem;
+        padding: 0.65rem 0.75rem;
+        border-radius: 7px;
+        border: 1px solid rgba(10,102,194,0.24);
+        background: rgba(10,102,194,0.08);
+        color: #075985;
+        white-space: pre-line;
+      }
+      .li-msg.err {
+        border-color: rgba(225,29,72,0.28);
+        background: rgba(225,29,72,0.08);
+        color: #be123c;
+      }
+      .li-list {
+        display: grid;
+        gap: 0.55rem;
+        max-height: 620px;
+        overflow: auto;
+        padding-right: 0.2rem;
+      }
+      .li-item {
+        border: 1px solid rgba(15,23,42,0.1);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.72rem;
+        cursor: pointer;
+      }
+      .li-item.is-active {
+        border-color: rgba(10,102,194,0.58);
+        box-shadow: 0 0 0 2px rgba(10,102,194,0.1);
+      }
+      .li-item strong {
+        display: block;
+        line-height: 1.45;
+        word-break: break-word;
+      }
+      .li-meta {
+        display: block;
+        margin-top: 0.25rem;
+        color: var(--li-muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+        word-break: break-word;
+      }
+      .li-badges {
+        display: flex;
+        gap: 0.35rem;
+        flex-wrap: wrap;
+        margin-top: 0.45rem;
+      }
+      .li-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        border-radius: 999px;
+        padding: 0.12rem 0.45rem;
+        background: rgba(10,102,194,0.1);
+        color: #075985;
+        font-weight: 800;
+        font-size: 0.72rem;
+      }
+      .li-badge.done { background: rgba(16,185,129,0.12); color: #047857; }
+      .li-badge.fail { background: rgba(244,63,94,0.12); color: #be123c; }
+      .li-badge.run { background: rgba(245,158,11,0.14); color: #92400e; }
+      .li-progress {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(15,23,42,0.08);
+        overflow: hidden;
+      }
+      .li-progress span {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, var(--li-accent), var(--li-accent-2));
+      }
+      .li-step {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        gap: 0.6rem;
+        align-items: start;
+        padding: 0.65rem 0;
+        border-bottom: 1px solid rgba(15,23,42,0.08);
+      }
+      .li-step:last-child { border-bottom: 0; }
+      .li-step-dot {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(15,23,42,0.08);
+        color: #475569;
+        font-size: 0.74rem;
+        font-weight: 900;
+      }
+      .li-step.is-completed .li-step-dot { background: #10b981; color: #fff; }
+      .li-step.is-running .li-step-dot { background: #f59e0b; color: #fff; }
+      .li-step.is-failed .li-step-dot { background: #ef4444; color: #fff; }
+      .li-pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        border: 1px solid rgba(15,23,42,0.1);
+        border-radius: 8px;
+        background: #f8fafc;
+        padding: 0.75rem;
+        max-height: 520px;
+        overflow: auto;
+        font-size: 0.86rem;
+        line-height: 1.6;
+      }
+      .li-report {
+        display: grid;
+        gap: 0.7rem;
+      }
+      .li-report-section {
+        border: 1px solid rgba(15,23,42,0.1);
+        border-radius: 8px;
+        padding: 0.75rem;
+        background: #fff;
+      }
+      .li-report-section h4 {
+        margin: 0 0 0.45rem;
+        font-size: 0.94rem;
+      }
+      .li-copy-row {
+        display: flex;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+      }
+      .li-output-cards {
+        display: grid;
+        gap: 0.75rem;
+      }
+      .li-output-section {
+        display: grid;
+        gap: 0.85rem;
+      }
+      .li-output-section h3,
+      .li-output-section h4 {
+        margin: 0;
+      }
+      .li-output-section p,
+      .li-main-text {
+        margin: 0;
+        color: #334155;
+        line-height: 1.65;
+      }
+      .li-output-card {
+        border: 1px solid #dbe3ef;
+        border-radius: 10px;
+        padding: 0.85rem;
+        background: #fff;
+      }
+      .li-workbench {
+        display: grid;
+        grid-template-columns: minmax(260px, 0.72fr) minmax(520px, 1.28fr);
+        gap: 0.85rem;
+        align-items: start;
+      }
+      .li-segment-tabs {
+        display: flex;
+        gap: 0.35rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.65rem;
+      }
+      .li-segment-tab {
+        border: 1px solid #dbe3ef;
+        background: #fff;
+        color: #334155;
+        border-radius: 999px;
+        padding: 0.38rem 0.62rem;
+        font-size: 0.78rem;
+        font-weight: 900;
+        cursor: pointer;
+      }
+      .li-segment-tab.is-active {
+        border-color: var(--li-accent);
+        background: rgba(10,102,194,0.1);
+        color: #075985;
+      }
+      .li-lead-list {
+        display: grid;
+        gap: 0.55rem;
+        max-height: 650px;
+        overflow: auto;
+        padding-right: 0.2rem;
+      }
+      .li-lead-row {
+        border: 1px solid #dbe3ef;
+        border-radius: 10px;
+        background: #fff;
+        padding: 0.72rem;
+        cursor: pointer;
+      }
+      .li-lead-row.is-active {
+        border-color: rgba(10,102,194,0.58);
+        box-shadow: 0 0 0 2px rgba(10,102,194,0.1);
+      }
+      .li-lead-row-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.5rem;
+      }
+      .li-lead-name {
+        font-weight: 900;
+        line-height: 1.4;
+        word-break: break-word;
+      }
+      .li-priority-chip {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.14rem 0.46rem;
+        font-size: 0.72rem;
+        font-weight: 900;
+        background: #eef2ff;
+        color: #3730a3;
+        white-space: nowrap;
+      }
+      .li-priority-chip.a { background: rgba(220,38,38,0.1); color: #b91c1c; }
+      .li-priority-chip.b { background: rgba(245,158,11,0.14); color: #92400e; }
+      .li-priority-chip.watch { background: rgba(10,102,194,0.1); color: #075985; }
+      .li-priority-chip.supplement { background: rgba(15,118,110,0.1); color: #0f766e; }
+      .li-detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+      }
+      .li-detail-box {
+        border: 1px solid #dbe3ef;
+        border-radius: 10px;
+        padding: 0.75rem;
+        background: #f8fafc;
+      }
+      .li-detail-box h4 {
+        margin: 0 0 0.4rem;
+        font-size: 0.88rem;
+      }
+      .li-action-board {
+        display: grid;
+        gap: 0.5rem;
+      }
+      .li-action-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.65rem;
+        align-items: center;
+        border: 1px solid #dbe3ef;
+        border-radius: 10px;
+        padding: 0.65rem;
+        background: #fff;
+      }
+      .li-action-item strong,
+      .li-action-item span {
+        display: block;
+      }
+      .li-action-item span {
+        margin-top: 0.16rem;
+        color: #64748b;
+        font-size: 0.8rem;
+        line-height: 1.45;
+      }
+      .li-note-editor {
+        width: 100%;
+        min-height: 74px;
+        border: 1px solid #dbe3ef;
+        border-radius: 8px;
+        padding: 0.55rem 0.65rem;
+        line-height: 1.55;
+        resize: vertical;
+      }
+      .li-output-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+      .li-score {
+        display: inline-flex;
+        min-width: 2.5rem;
+        height: 2rem;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        background: #0a66c2;
+        color: #fff;
+        font-weight: 900;
+      }
+      .li-stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.65rem;
+      }
+      .li-stat {
+        border: 1px solid #dbe3ef;
+        border-radius: 10px;
+        padding: 0.75rem;
+        background: #f8fafc;
+      }
+      .li-stat strong {
+        display: block;
+        color: #0f172a;
+        font-size: 1.05rem;
+        line-height: 1.25;
+        word-break: break-word;
+      }
+      .li-stat span {
+        display: block;
+        margin-top: 0.2rem;
+        color: #64748b;
+        font-size: 0.78rem;
+      }
+      .li-toolbar-note {
+        border-left: 3px solid #0a66c2;
+        background: #eff6ff;
+        color: #1e3a8a;
+        padding: 0.65rem 0.75rem;
+        border-radius: 8px;
+        line-height: 1.55;
+      }
+      .li-contact-box {
+        display: grid;
+        gap: 0.35rem;
+        margin-top: 0.65rem;
+        padding: 0.65rem;
+        border-radius: 8px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+      }
+      .li-contact-box div {
+        display: grid;
+        grid-template-columns: 4rem 1fr;
+        gap: 0.5rem;
+        align-items: start;
+      }
+      .li-contact-box span {
+        color: #64748b;
+      }
+      .li-contact-box strong {
+        color: #0f172a;
+        font-weight: 600;
+        word-break: break-all;
+      }
+      .li-next-action {
+        display: grid;
+        gap: 0.25rem;
+        margin-top: 0.65rem;
+        padding: 0.65rem;
+        border-radius: 8px;
+        background: #f0fdfa;
+        border: 1px solid #ccfbf1;
+      }
+      .li-next-action span {
+        color: #0f766e;
+        font-size: 0.76rem;
+        font-weight: 900;
+      }
+      .li-next-action strong {
+        color: #134e4a;
+        line-height: 1.55;
+      }
+      .li-table-wrap {
+        overflow: auto;
+      }
+      .li-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.86rem;
+      }
+      .li-table th,
+      .li-table td {
+        border-bottom: 1px solid #e2e8f0;
+        padding: 0.55rem;
+        text-align: left;
+        vertical-align: top;
+        line-height: 1.5;
+      }
+      .li-table th {
+        color: #334155;
+        background: #f8fafc;
+      }
+      .li-bullet-list {
+        margin: 0;
+        padding-left: 1.2rem;
+        line-height: 1.7;
+      }
+      .li-raw-details {
+        border: 1px dashed #cbd5e1;
+        border-radius: 8px;
+        padding: 0.65rem;
+        background: #f8fafc;
+      }
+      .li-raw-details summary {
+        cursor: pointer;
+        color: #475569;
+        font-weight: 800;
+      }
+      .li-raw-details pre {
+        margin: 0.6rem 0 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 320px;
+        overflow: auto;
+      }
+      @media (max-width: 980px) {
+        .li-mining-grid,
+        .li-mining-grid.is-even,
+        .li-inline,
+        .li-workbench,
+        .li-detail-grid,
+        .li-stats {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+
+    <div class="li-mining-head">
+      <div>
+        <div class="li-mining-kicker">LinkedIn 线索挖掘</div>
+        <h2 class="li-mining-title">社媒人脉数据工作台</h2>
+        <div class="li-mining-subtitle">TikHub 数据同步、断点续跑、步骤输出、候选人归并和最终分析报告</div>
+      </div>
+      <div class="li-mining-actions">
+        <button type="button" id="linkedinMiningRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+        <button type="button" id="linkedinMiningBackBtn" class="btn btn-ghost btn-sm">返回</button>
+      </div>
+    </div>
+
+    <div id="linkedinMiningMsg" class="li-msg"></div>
+
+    <nav class="li-mining-tabs" aria-label="LinkedIn线索挖掘">
+      <button type="button" class="li-mining-tab is-active" data-li-tab="new">新建任务</button>
+      <button type="button" class="li-mining-tab" data-li-tab="runs">执行过程</button>
+      <button type="button" class="li-mining-tab" data-li-tab="workbench">行动工作台</button>
+      <button type="button" class="li-mining-tab" data-li-tab="outputs">输出明细</button>
+      <button type="button" class="li-mining-tab" data-li-tab="report">最终报告</button>
+    </nav>
+
+    <section class="li-mining-panel is-active" data-li-panel="new">
+      <div class="li-mining-grid">
+        <div class="li-card">
+          <div class="li-card-title">输入信息</div>
+          <div class="li-field">
+            <label for="liJobTitleInput">任务名称</label>
+            <input id="liJobTitleInput" type="text" placeholder="例如：北美 SaaS CEO 线索挖掘">
+          </div>
+          <div class="li-field">
+            <label for="liSeedProfilesInput">LinkedIn 个人主页或 username</label>
+            <textarea id="liSeedProfilesInput" placeholder="每行一个，例如：https://www.linkedin.com/in/xxx"></textarea>
+          </div>
+          <div class="li-field">
+            <label for="liSeedCompaniesInput">LinkedIn 公司主页或 universal name</label>
+            <textarea id="liSeedCompaniesInput" placeholder="每行一个，例如：https://www.linkedin.com/company/microsoft"></textarea>
+          </div>
+          <div class="li-field">
+            <label for="liKeywordsInput">搜索关键词</label>
+            <textarea id="liKeywordsInput" placeholder="每行一个，例如：AI founder&#10;manufacturing owner"></textarea>
+          </div>
+          <div class="li-field">
+            <label for="liHashtagsInput">话题 Hashtag</label>
+            <textarea id="liHashtagsInput" placeholder="每行一个，例如：ai&#10;b2bmarketing"></textarea>
+          </div>
+        </div>
+        <div class="li-card">
+          <div class="li-card-title">筛选与分析要求</div>
+          <div class="li-field">
+            <label for="liTargetProfileInput">目标客户画像</label>
+            <textarea id="liTargetProfileInput" style="min-height:145px;" placeholder="描述你要找的人：行业、职位、公司规模、国家地区、痛点、排除条件"></textarea>
+          </div>
+          <div class="li-inline">
+            <div class="li-field">
+              <label for="liMaxPeopleInput">候选人数</label>
+              <input id="liMaxPeopleInput" type="number" min="5" max="80" value="30">
+            </div>
+            <div class="li-field">
+              <label for="liMaxEmployeesInput">公司员工数</label>
+              <input id="liMaxEmployeesInput" type="number" min="0" max="50" value="20">
+            </div>
+            <div class="li-field">
+              <label for="liMaxInteractionsInput">互动追踪数</label>
+              <input id="liMaxInteractionsInput" type="number" min="0" max="50" value="20">
+            </div>
+          </div>
+          <div class="li-field">
+            <label>记忆文件</label>
+            <select id="liMemorySelect" multiple size="7"></select>
+          </div>
+          <div class="li-copy-row">
+            <button type="button" id="liStartJobBtn" class="btn btn-primary">开始一键挖掘</button>
+            <button type="button" id="liSaveDraftBtn" class="btn btn-ghost">保存输入</button>
+            <button type="button" id="liLoadDraftBtn" class="btn btn-ghost">读取上次输入</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="li-mining-panel" data-li-panel="runs">
+      <div class="li-mining-grid">
+        <div class="li-card">
+          <div class="li-card-title">任务记录</div>
+          <div id="liJobList" class="li-list"></div>
+        </div>
+        <div class="li-card">
+          <div class="li-card-title">
+            <span>执行步骤</span>
+            <span class="li-copy-row">
+              <button type="button" id="liResumeJobBtn" class="btn btn-primary btn-sm">继续执行</button>
+              <button type="button" id="liRunNextBtn" class="btn btn-ghost btn-sm">执行下一步</button>
+            </span>
+          </div>
+          <div class="li-progress"><span id="liProgressBar"></span></div>
+          <div id="liStepList" style="margin-top:0.75rem;"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="li-mining-panel" data-li-panel="workbench">
+      <div class="li-workbench">
+        <div class="li-card">
+          <div class="li-card-title">
+            <span>线索名单</span>
+            <button type="button" id="liExportLeadsBtn" class="btn btn-ghost btn-sm">复制名单</button>
+          </div>
+          <div id="liLeadSegments" class="li-segment-tabs"></div>
+          <div id="liLeadList" class="li-lead-list"></div>
+        </div>
+        <div class="li-card">
+          <div class="li-card-title">
+            <span>线索详情与动作</span>
+            <button type="button" id="liCopyLeadBtn" class="btn btn-primary btn-sm">复制跟进卡片</button>
+          </div>
+          <div id="liLeadDetail" class="li-report"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="li-mining-panel" data-li-panel="outputs">
+      <div class="li-mining-grid">
+        <div class="li-card">
+          <div class="li-card-title">输出列表</div>
+          <div id="liOutputList" class="li-list"></div>
+        </div>
+        <div class="li-card">
+          <div class="li-card-title">输出详情</div>
+          <div id="liOutputDetail" class="li-pre">请选择左侧输出。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="li-mining-panel" data-li-panel="report">
+      <div class="li-card">
+        <div class="li-card-title">
+          <span>最终汇总文档</span>
+          <span class="li-copy-row">
+            <button type="button" id="liCopyReportBtn" class="btn btn-ghost btn-sm">复制报告</button>
+            <button type="button" id="liDownloadReportBtn" class="btn btn-primary btn-sm">下载 Markdown</button>
+          </span>
+        </div>
+        <div id="liReportHost" class="li-report"></div>
+      </div>
+    </section>
+  </div>
+</div>

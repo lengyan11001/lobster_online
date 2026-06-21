@@ -24,6 +24,7 @@ from ..services.openclaw_channel_auth_store import read_channel_fallback, read_w
 from ..services.openclaw_tool_scope import (
     HEADER_ALLOWED_CAPABILITIES,
     HEADER_ALLOWED_TOOLS,
+    HEADER_DENIED_CAPABILITIES,
     HEADER_INTENT,
     HEADER_VIDEO_MODEL_LOCK,
     HEADER_VIDEO_MODEL_LOCK_SOURCE,
@@ -58,6 +59,7 @@ _OPENCLAW_SCOPE_CACHE_HEADERS = {
     HEADER_INTENT,
     HEADER_ALLOWED_TOOLS,
     HEADER_ALLOWED_CAPABILITIES,
+    HEADER_DENIED_CAPABILITIES,
     HEADER_VIDEO_MODEL_LOCK,
     HEADER_VIDEO_MODEL_LOCK_SOURCE,
 }
@@ -395,6 +397,9 @@ async def mcp_gateway_proxy(request: Request) -> Response:
     scope_headers = _openclaw_tool_scope_headers_for_mcp_forward(request)
     if scope_headers:
         headers.update(scope_headers)
+    turn_headers = openclaw_chat_turn_billing_headers_from_request(request, token or "")
+    if turn_headers:
+        headers.update(turn_headers)
     headers["X-Lobster-OpenClaw-Mcp"] = "1"
     mcp_method = ""
     try:

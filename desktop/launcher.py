@@ -27,12 +27,12 @@ else:
 
 APP_NAME = "必火智能"
 DEFAULT_WINDOW_TITLE = "必火智能"
+OVERSEAS_WINDOW_TITLE = "必火AI海外员工"
 SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
-CONFIRM_CLOSE_TITLE = "\u5fc5\u706b\u667a\u80fd"
-CONFIRM_CLOSE_BODY = (
-    "\u786e\u5b9a\u8981\u5173\u95ed\u5fc5\u706b\u667a\u80fd\u5417\uff1f\n\n"
+CONFIRM_CLOSE_BODY_TEMPLATE = (
+    "\u786e\u5b9a\u8981\u5173\u95ed{title}\u5417\uff1f\n\n"
     "\u5982\u679c\u6b63\u5728\u5168\u5c4f\u9884\u89c8\u89c6\u9891\uff0c"
     "\u53ef\u4ee5\u5148\u70b9\u51fb\u300c\u9000\u51fa\u5168\u5c4f\u300d\u6216\u6309 Esc\u3002"
 )
@@ -41,7 +41,7 @@ LOADING_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>必火智能</title>
+  <title>__APP_TITLE__</title>
   <style>
     html, body {
       margin: 0;
@@ -134,7 +134,7 @@ LOADING_HTML = """<!doctype html>
     <div class="panel">
       <div class="brand">
         <img src="__LOADING_MARK__" alt="">
-        <span>必火智能</span>
+        <span>__APP_TITLE__</span>
       </div>
       <div class="text">正在打开客户端，请稍候...</div>
       <div class="progress"><span id="progressFill"></span></div>
@@ -303,6 +303,19 @@ def read_env_value(name: str, default: str) -> str:
                 return value.strip() or default
     except Exception as exc:
         log(f"read .env failed: {exc}")
+    return default
+
+
+def is_truthy_env_value(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "overseas", "海外"}
+
+
+def desktop_brand_title(default: str = DEFAULT_WINDOW_TITLE) -> str:
+    explicit = read_env_value("LOBSTER_DESKTOP_TITLE", "").strip()
+    if explicit:
+        return explicit
+    if is_truthy_env_value(read_env_value("LOBSTER_IS_OVERSEAS_USER", "")):
+        return OVERSEAS_WINDOW_TITLE
     return default
 
 
@@ -978,7 +991,7 @@ class DesktopApi:
         return {"ok": True, "path": str(target), "filename": target.name}
 
 
-def desktop_loading_html(url: str) -> str:
+def desktop_loading_html(url: str, title: str) -> str:
     match = re.match(r"^(https?://[^/]+)", url)
     base = match.group(1) if match else "http://127.0.0.1:8000"
     mark_src = f"{base}/static/bihu_64.png"
@@ -988,7 +1001,8 @@ def desktop_loading_html(url: str) -> str:
             mark_src = f"data:image/png;base64,{data}"
     except Exception as exc:
         log(f"load desktop loading mark failed: {exc}")
-    return LOADING_HTML.replace("__LOADING_MARK__", mark_src)
+    safe_title = escape(title or DEFAULT_WINDOW_TITLE)
+    return LOADING_HTML.replace("__LOADING_MARK__", mark_src).replace("__APP_TITLE__", safe_title)
 
 
 def desktop_error_html(message: str) -> str:
@@ -1155,7 +1169,7 @@ class NativeLoadingWindow:
                 if self._font_title:
                     old_font = gdi32.SelectObject(hdc, self._font_title)
                     gdi32.SetTextColor(hdc, 0x00102033)
-                    user32.DrawTextW(hdc, "必火智能", -1, ctypes.byref(title_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
+                    user32.DrawTextW(hdc, self.title, -1, ctypes.byref(title_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
                     gdi32.SelectObject(hdc, old_font)
                 if self._font_text:
                     old_font = gdi32.SelectObject(hdc, self._font_text)
@@ -1374,7 +1388,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
         window = webview.create_window(
             title,
-            html=desktop_loading_html(url),
+            html=desktop_loading_html(url, title),
             width=width,
             height=height,
             min_size=(900, 640),
@@ -1383,7 +1397,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         )
 
         def confirm_window_close() -> bool | None:
-            return None if confirm_box(CONFIRM_CLOSE_TITLE, CONFIRM_CLOSE_BODY) else False
+            return None if confirm_box(title, CONFIRM_CLOSE_BODY_TEMPLATE.format(title=title)) else False
 
         window.events.closing += confirm_window_close
         webview.start(
@@ -1412,14 +1426,14 @@ def main() -> int:
     args = parser.parse_args()
 
     if not (ROOT / "backend").is_dir() or not (ROOT / "static").is_dir():
-        message_box(APP_NAME, f"客户端目录不完整，找不到 backend/static。\n\n当前目录：{ROOT}")
+        message_box(desktop_brand_title(APP_NAME), f"客户端目录不完整，找不到 backend/static。\n\n当前目录：{ROOT}")
         return 2
 
     if not (ROOT / ".env").is_file():
         log(".env not found; launcher will continue with built-in/default environment values")
     port = args.port or int(read_env_value("PORT", str(DEFAULT_PORT)) or DEFAULT_PORT)
     mcp_port = int(read_env_value("MCP_PORT", str(DEFAULT_MCP_PORT)) or DEFAULT_MCP_PORT)
-    title = args.title or read_env_value("LOBSTER_DESKTOP_TITLE", DEFAULT_WINDOW_TITLE)
+    title = args.title or desktop_brand_title()
     url = f"http://127.0.0.1:{port}/?desktop=1&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
     env = build_env()
     env["PORT"] = str(port)

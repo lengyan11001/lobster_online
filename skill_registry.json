@@ -940,6 +940,26 @@
         "workflow"
       ]
     },
+    "juhe_wechat_skill": {
+      "name": "微信协议助手",
+      "description": "使用管理后台已绑定的微信实例执行在线检测、文本发送和调用记录查看。",
+      "type": "builtin",
+      "store_visibility": "online",
+      "default_installed": true,
+      "status": "available",
+      "capabilities": {},
+      "tags": ["wechat", "juhebot", "server-proxy"]
+    },
+    "wechat_channels_transcript_skill": {
+      "name": "视频号文案提取",
+      "description": "输入视频号昵称查询账号，拉取作品并批量提取口播文案，支持复制和导出。",
+      "type": "builtin",
+      "store_visibility": "online",
+      "default_installed": true,
+      "status": "available",
+      "capabilities": {},
+      "tags": ["视频号", "TikHub", "文案提取"]
+    },
     "create_ppt_skill": {
       "name": "PPT??",
       "description": "?????Markdown????PPTX???AI??????????",

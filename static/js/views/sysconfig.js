@@ -54,6 +54,76 @@ function loadLanInfo() {
   return;
 }
 
+function showAssetPathMsg(text, isErr) {
+  var msgEl = document.getElementById('assetPathMsg');
+  if (typeof showMsg === 'function') {
+    showMsg(msgEl, text, !!isErr);
+  } else if (msgEl) {
+    msgEl.textContent = text || '';
+    msgEl.className = 'msg ' + (isErr ? 'err' : 'ok');
+    msgEl.style.display = text ? 'inline-block' : 'none';
+  }
+}
+
+function renderAssetPathSettings(data) {
+  var internalEl = document.getElementById('assetInternalPathText');
+  var input = document.getElementById('assetExportPathInput');
+  var defaultEl = document.getElementById('assetDefaultPathText');
+  if (internalEl) {
+    internalEl.textContent = (data && data.internal_assets_dir) || '-';
+    internalEl.title = internalEl.textContent;
+  }
+  if (input) {
+    input.value = (data && data.export_dir) || '';
+    input.title = input.value;
+  }
+  if (defaultEl) {
+    defaultEl.textContent = '默认下载目录：' + ((data && data.default_export_dir) || '-');
+  }
+}
+
+function loadAssetPathSettings() {
+  if (!document.getElementById('assetPathSettingsBlock')) return;
+  fetch((LOCAL_API_BASE || '') + '/api/settings/asset-paths', { headers: authHeaders() })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(x) {
+      if (!x.ok) throw new Error((x.data && x.data.detail) || '加载失败');
+      renderAssetPathSettings(x.data || {});
+      showAssetPathMsg('', false);
+    })
+    .catch(function(err) {
+      showAssetPathMsg((err && err.message) || '素材路径加载失败', true);
+    });
+}
+
+function saveAssetPathSettings(useDefault) {
+  var input = document.getElementById('assetExportPathInput');
+  var btn = document.getElementById('saveAssetPathBtn');
+  var resetBtn = document.getElementById('resetAssetPathBtn');
+  var exportDir = useDefault ? '' : ((input && input.value) || '').trim();
+  if (btn) btn.disabled = true;
+  if (resetBtn) resetBtn.disabled = true;
+  showAssetPathMsg('正在保存...', false);
+  fetch((LOCAL_API_BASE || '') + '/api/settings/asset-paths', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ export_dir: exportDir })
+  })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(x) {
+      if (!x.ok) throw new Error((x.data && x.data.detail) || '保存失败');
+      renderAssetPathSettings(x.data || {});
+      showAssetPathMsg('素材下载路径已保存', false);
+    })
+    .catch(function(err) {
+      showAssetPathMsg((err && err.message) || '保存失败', true);
+    })
+    .finally(function() {
+      if (btn) btn.disabled = false;
+      if (resetBtn) resetBtn.disabled = false;
+    });
+}
+
 function setChatRouteModeValue(mode) {
   var normalized = (mode === 'openclaw') ? 'openclaw' : 'direct';
   document.querySelectorAll('input[name="chatRouteMode"]').forEach(function(radio) {
@@ -223,6 +293,7 @@ function loadOpenClawConfig() {
   if (EDITION !== 'online') loadSutuiConfig();
   checkOcStatus();
   loadLanInfo();
+  loadAssetPathSettings();
   loadChatRouteMode();
   if (_currentSysTab === 'custom') loadCustomConfigs();
   if (ocConfigLoaded && EDITION !== 'online') return;
@@ -428,6 +499,14 @@ if (restartOcBtn) {
 }
 var saveCustomBtn = document.getElementById('saveCustomConfigBtn');
 if (saveCustomBtn) saveCustomBtn.addEventListener('click', saveCustomConfig);
+var saveAssetPathBtn = document.getElementById('saveAssetPathBtn');
+if (saveAssetPathBtn) saveAssetPathBtn.addEventListener('click', function() {
+  saveAssetPathSettings(false);
+});
+var resetAssetPathBtn = document.getElementById('resetAssetPathBtn');
+if (resetAssetPathBtn) resetAssetPathBtn.addEventListener('click', function() {
+  saveAssetPathSettings(true);
+});
 
 function clearLocalUserConfigClientStorage() {
   try {

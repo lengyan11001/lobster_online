@@ -57,6 +57,7 @@ class UserOut(BaseModel):
     preferred_model: str
     credits: Optional[float] = None
     brand_mark: Optional[str] = None
+    is_overseas_user: bool = False
     wecom_userid: Optional[str] = None
     is_agent: bool = False
     features: Dict[str, bool] = Field(default_factory=dict)
@@ -101,6 +102,7 @@ class RegisterPhoneBody(BaseModel):
     code: str
     password: Optional[str] = None
     brand_mark: Optional[str] = None
+    is_overseas_user: bool = False
     parent_account: Optional[str] = None
 
 
@@ -725,6 +727,7 @@ async def get_me(
         preferred_model=preferred,
         credits=getattr(current_user, "credits", None),
         brand_mark=getattr(current_user, "brand_mark", None),
+        is_overseas_user=bool(getattr(current_user, "is_overseas_user", False)),
         features={},
     )
 

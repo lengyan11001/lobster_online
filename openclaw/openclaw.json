@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.4.1",
-    "lastTouchedAt": "2026-04-29T09:48:23.717Z"
+    "lastTouchedAt": "2026-06-13T14:47:14.246Z"
   },
   "wizard": {
     "lastRunAt": "2026-03-25T11:18:09.044Z",
@@ -99,7 +99,10 @@
         "mode": "safeguard"
       },
       "timeoutSeconds": 600,
-      "thinkingDefault": "off"
+      "thinkingDefault": "off",
+      "llm": {
+        "idleTimeoutSeconds": 180
+      }
     },
     "list": [
       {

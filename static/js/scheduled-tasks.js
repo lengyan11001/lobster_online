@@ -4,14 +4,6 @@
   'use strict';
 
   var CAPABILITIES = {
-    'create.video.pipeline': {
-      label: 'GPT 创意成片',
-      description: '脚本、分镜、首帧和视频一体生成。'
-    },
-    'create.ppt.pipeline': {
-      label: '智能 PPT',
-      description: '生成可编辑 PPTX 并保存到素材库。'
-    },
     'goal.video.pipeline': {
       label: '创意成片',
       description: '生成文案、首帧和视频，支持备选素材组。'
@@ -23,6 +15,10 @@
     'hifly.video.create_by_tts': {
       label: '必火数字人',
       description: '选择本机已有数字人/模板数字人和声音，生成数字人口播视频。'
+    },
+    'ip_content_daily': {
+      label: 'IP日更文案',
+      description: '服务器定时同步关键词和同行数据，生成行业口播、专业IP口播、朋友圈文案。'
     }
   };
 
@@ -34,10 +30,19 @@
     publishAccounts: [],
     publishAccountsLoaded: false,
     publishAccountsLoading: false,
+    ipTemplates: [],
+    ipTemplatesLoaded: false,
+    ipTemplatesLoading: false,
     hiflyLoaded: false,
     hiflyLoading: false,
     runsById: {}
   };
+
+  var IP_DAILY_TASK_OPTIONS = [
+    { value: 'industry_hot_oral', label: '行业热门口播' },
+    { value: 'professional_ip_oral', label: '专业 IP 口播' },
+    { value: 'moments_candidate', label: '朋友圈文案' }
+  ];
 
   function base() {
     var local = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
@@ -164,7 +169,8 @@
     return {
       openclaw_message: 'OpenClaw 消息',
       chat_message: '本地对话',
-      capability: '能力调用'
+      capability: '能力调用',
+      ip_content_daily: 'IP日更文案'
     }[k] || k || '-';
   }
 
@@ -199,7 +205,7 @@
     var raw = [];
     if (Array.isArray(payload.media_urls)) raw = raw.concat(payload.media_urls);
     if (Array.isArray(refs.urls)) raw = raw.concat(refs.urls);
-    if (rowCapabilityId(row) === 'goal.video.pipeline' || rowCapabilityId(row) === 'create.video.pipeline') {
+    if (rowCapabilityId(row) === 'goal.video.pipeline') {
       var videos = raw.filter(function (u) {
         return /\.(mp4|webm|mov|m4v|avi)(\?|#|$)/i.test(String(u || ''));
       }).slice(0, 1);
@@ -325,6 +331,45 @@
       + '</section>';
   }
 
+  function ipTaskLabel(task) {
+    return {
+      industry_hot_oral: '行业热门口播',
+      professional_ip_oral: '专业 IP 口播',
+      moments_candidate: '朋友圈文案'
+    }[String(task || '')] || task || '文案';
+  }
+
+  function ipContentGroupHtml(payload) {
+    if (!payload || !payload.ip_content_daily) return '';
+    var groups = Array.isArray(payload.groups) ? payload.groups : [];
+    if (!groups.length && payload.records_by_task && typeof payload.records_by_task === 'object') {
+      groups = Object.keys(payload.records_by_task).map(function (key) {
+        return { task: key, records: payload.records_by_task[key] || [] };
+      });
+    }
+    if (!groups.length) return '<p class="meta">暂无 IP 日更文案结果。</p>';
+    var openStudioBtn = '<button type="button" class="btn btn-primary btn-sm scheduled-open-ip-studio-btn">打开 IP日更工作台出图</button>';
+    return '<div class="scheduled-ip-result">'
+      + '<div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem;">' + openStudioBtn + '</div>'
+      + groups.map(function (group) {
+        var records = Array.isArray(group.records) ? group.records : [];
+        return '<div class="scheduled-ip-group">'
+          + '<h6>' + html(ipTaskLabel(group.task)) + ' · ' + html(records.length) + '条</h6>'
+          + (records.length ? records.map(function (rec, idx) {
+            var prompts = Array.isArray(rec.image_prompts) ? rec.image_prompts : [];
+            return '<article class="scheduled-ip-record">'
+              + '<div class="scheduled-ip-record-title">' + html((idx + 1) + '. ' + (rec.title || '未命名文案')) + '</div>'
+              + '<pre>' + html(rec.body || rec.content || '') + '</pre>'
+              + (prompts.length ? '<div class="scheduled-ip-prompts">'
+                + prompts.map(function (p, pIdx) { return '<div><strong>配图 ' + (pIdx + 1) + '</strong><span>' + html(p) + '</span></div>'; }).join('')
+                + '</div>' : (rec.image_prompt ? '<div class="scheduled-ip-prompts"><div><strong>配图</strong><span>' + html(rec.image_prompt) + '</span></div></div>' : ''))
+              + '</article>';
+          }).join('') : '<p class="meta">本组暂无记录。</p>')
+          + '</div>';
+      }).join('')
+      + '</div>';
+  }
+
   function ensureRunDetailModal() {
     var modal = document.getElementById('scheduledRunDetailModal');
     if (modal) return modal;
@@ -390,13 +435,30 @@
     var resultHtml = resultText
       ? '<pre class="scheduled-run-detail-pre">' + html(resultText) + '</pre>'
       : '<p class="meta">无错误或文本结果。</p>';
+    var ipHtml = ipContentGroupHtml(payload);
     body.innerHTML = metaHtml
+      + (ipHtml ? detailSection('IP日更文案', ipHtml) : '')
       + detailSection('生成素材', materialHtml)
       + detailSection('提示词', promptHtml)
       + detailSection('结果 / 错误', resultHtml)
       + detailSection('任务参数', '<pre class="scheduled-run-detail-pre">' + html(formatJson(run.payload || {})) + '</pre>')
       + detailSection('结果数据', '<pre class="scheduled-run-detail-pre">' + html(formatJson(payload || {})) + '</pre>');
     modal.classList.add('visible');
+  }
+
+  function openIpContentStudio() {
+    closeRunDetailModal();
+    if (typeof window.openIpContentStudio === 'function') {
+      window.openIpContentStudio();
+      return;
+    }
+    var target = document.querySelector('[data-skill-id="ip-content-studio"], [data-skill="ip-content-studio"], [data-view="ip-content-studio"]');
+    if (target && typeof target.click === 'function') {
+      target.click();
+      return;
+    }
+    loadIpTemplates(true);
+    showMsg('scheduledTaskMsg', '请在技能商店打开 IP日更文案工作台查看和出图。', false);
   }
 
   function taskActionHtml(task) {
@@ -452,7 +514,7 @@
 
   function canResumeVideoRun(run) {
     var cid = rowCapabilityId(run);
-    if (cid !== 'goal.video.pipeline' && cid !== 'create.video.pipeline') return false;
+    if (cid !== 'goal.video.pipeline') return false;
     if (runIsRunning(run)) return false;
     var payload = resultPayload(run);
     if (payload.resume_available) return true;
@@ -466,6 +528,7 @@
 
   function rowCapabilityId(row) {
     var payload = row && row.payload && typeof row.payload === 'object' ? row.payload : {};
+    if (row && row.task_kind === 'ip_content_daily') return 'ip_content_daily';
     return String(payload.capability_id || '');
   }
 
@@ -647,16 +710,26 @@
       + '</label>';
   }
 
-  function textareaHtml(id, rows, placeholder) {
-    return '<textarea id="' + html(id) + '" rows="' + html(rows || 3) + '" placeholder="' + html(placeholder || '') + '" style="width:100%;box-sizing:border-box;"></textarea>';
+  function ipDailyTaskOptionsHtml() {
+    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0.45rem;">'
+      + IP_DAILY_TASK_OPTIONS.map(function (item) {
+        return '<label style="display:flex;align-items:center;gap:0.45rem;min-height:2.35rem;padding:0 0.55rem;border:1px solid var(--border);border-radius:8px;background:#fff;">'
+          + '<input type="checkbox" data-ip-daily-task="' + html(item.value) + '" checked style="width:auto;min-height:auto;">'
+          + '<span>' + html(item.label) + '</span>'
+          + '</label>';
+      }).join('')
+      + '</div>';
   }
 
-  function numberVal(id, fallback, min, max) {
-    var n = parseInt(val(id) || String(fallback), 10);
-    if (isNaN(n)) n = fallback;
-    if (typeof min === 'number') n = Math.max(min, n);
-    if (typeof max === 'number') n = Math.min(max, n);
-    return n;
+  function selectedIpDailyTasks() {
+    return Array.prototype.slice.call(document.querySelectorAll('[data-ip-daily-task]'))
+      .filter(function (el) { return !!el.checked; })
+      .map(function (el) { return String(el.getAttribute('data-ip-daily-task') || '').trim(); })
+      .filter(Boolean);
+  }
+
+  function textareaHtml(id, rows, placeholder) {
+    return '<textarea id="' + html(id) + '" rows="' + html(rows || 3) + '" placeholder="' + html(placeholder || '') + '" style="width:100%;box-sizing:border-box;"></textarea>';
   }
 
   function platformDisplayName(platform) {
@@ -754,6 +827,73 @@
       });
   }
 
+  function fillIpTemplateSelect() {
+    var sel = document.getElementById('scheduledTaskIpTemplate');
+    if (!sel) return;
+    var current = sel.value;
+    if (state.ipTemplatesLoading) {
+      sel.innerHTML = optionHtml('', '模板加载中...');
+      return;
+    }
+    if (!state.ipTemplates.length) {
+      sel.innerHTML = optionHtml('', '暂无服务器模板');
+      return;
+    }
+    sel.innerHTML = optionHtml('', '请选择模板') + state.ipTemplates.map(function (row) {
+      var k = Array.isArray(row.keyword_ids) ? row.keyword_ids.length : 0;
+      var c = Array.isArray(row.competitor_ids) ? row.competitor_ids.length : 0;
+      return optionHtml(row.id, (row.name || ('模板 #' + row.id)) + ' · 关键词' + k + ' · 同行' + c);
+    }).join('');
+    if (current && state.ipTemplates.some(function (row) { return String(row.id) === String(current); })) sel.value = current;
+  }
+
+  function loadIpTemplates(force) {
+    if (!force && (state.ipTemplatesLoaded || state.ipTemplatesLoading)) {
+      fillIpTemplateSelect();
+      return Promise.resolve(state.ipTemplates);
+    }
+    state.ipTemplatesLoading = true;
+    fillIpTemplateSelect();
+    return getCloud('/api/ip-content/schedule-templates')
+      .then(function (d) {
+        state.ipTemplates = Array.isArray(d.items) ? d.items : [];
+        state.ipTemplatesLoaded = true;
+        return state.ipTemplates;
+      })
+      .catch(function (e) {
+        state.ipTemplates = [];
+        showMsg('scheduledTaskMsg', e.message || 'IP日更模板加载失败', true);
+        return [];
+      })
+      .then(function (rows) {
+        state.ipTemplatesLoading = false;
+        fillIpTemplateSelect();
+        return rows;
+      }, function (e) {
+        state.ipTemplatesLoading = false;
+        fillIpTemplateSelect();
+        throw e;
+      });
+  }
+
+  function renderIpContentDailyFields(host) {
+    host.innerHTML = compactGrid(
+      fieldHtml('关键词和同行模板', selectHtml('scheduledTaskIpTemplate', optionHtml('', '模板加载中...')))
+      + fieldHtml('生成内容', ipDailyTaskOptionsHtml(), true)
+      + fieldHtml('执行前同步', checkboxHtml('scheduledTaskIpSyncBefore', '每次执行前同步关键词和同行新数据', true))
+      + fieldHtml(
+        '补充要求（可选）',
+        textareaHtml('scheduledTaskIpRequirement', 3, '例如：口播更有案例感；朋友圈短句分行、多段落留白、适当 Emoji、强痛点和结果导向；图片干净真实')
+      )
+      + fieldHtml(
+        '模板维护',
+        '<button type="button" class="btn btn-ghost btn-sm scheduled-open-ip-studio-btn">打开 IP日更配置</button>',
+        true
+      )
+    );
+    loadIpTemplates(true);
+  }
+
   function updateGoalVideoSourceMode() {
     var mode = val('scheduledTaskVideoSourceMode') || 'asset_random';
     var groupField = document.getElementById('scheduledTaskCandidateGroupField');
@@ -781,58 +921,6 @@
     updateGoalVideoSourceMode();
     fillCandidateGroupSelect();
     loadCandidateGroups();
-  }
-
-  function renderCreateVideoFields(host) {
-    host.innerHTML = compactGrid(
-      fieldHtml(
-        '核心主题/传达信息',
-        textareaHtml('scheduledTaskCreateVideoPrompt', 4, '例如：一款高端白酒，画面高级、真实商业广告质感，适合品牌宣传')
-        + '<p class="meta" style="margin:0.35rem 0 0;">留空时根据记忆资料自动生成本次 brief。</p>',
-        true
-      )
-      + fieldHtml('视频类型', inputHtml('scheduledTaskCreateVideoType', 'text', 'value="brand_promo" placeholder="brand_promo / 宣传 / 种草 / 剧情"'))
-      + fieldHtml('目标受众', inputHtml('scheduledTaskCreateVideoAudience', 'text', 'value="general_audience" placeholder="例如：高净值商务人群"'))
-      + fieldHtml('画面比例', selectHtml('scheduledTaskCreateVideoRatio',
-        optionHtml('9:16', '9:16 竖屏')
-        + optionHtml('16:9', '16:9 横屏')
-        + optionHtml('1:1', '1:1 方图')
-      ))
-      + fieldHtml('总时长（秒）', inputHtml('scheduledTaskCreateVideoDuration', 'number', 'min="3" max="60" value="8"'))
-      + fieldHtml('镜头数', inputHtml('scheduledTaskCreateVideoSceneCount', 'number', 'min="1" max="6" value="1"'))
-      + fieldHtml(
-        '风格偏好',
-        textareaHtml('scheduledTaskCreateVideoStyle', 3, 'premium commercial, realistic, cinematic lighting')
-        + '<p class="meta" style="margin:0.35rem 0 0;">生成视频时会自动追加避免文字、字母、数字、logo、水印的限制。</p>',
-        true
-      )
-      + fieldHtml('规划模型', inputHtml('scheduledTaskCreateVideoPlanningModel', 'text', 'value="gpt-5.4"'))
-      + fieldHtml('首帧模型', inputHtml('scheduledTaskCreateVideoImageModel', 'text', 'value="openai/gpt-image-2"'))
-      + fieldHtml('视频模型', inputHtml('scheduledTaskCreateVideoVideoModel', 'text', 'value="fal-ai/veo3.1/image-to-video"'))
-    );
-  }
-
-  function renderCreatePptFields(host) {
-    host.innerHTML = compactGrid(
-      fieldHtml(
-        'PPT主题/汇报需求',
-        textareaHtml('scheduledTaskCreatePptPrompt', 4, '例如：为高端白酒品牌生成一份招商路演PPT，突出品牌定位、产品卖点和合作价值')
-        + '<p class="meta" style="margin:0.35rem 0 0;">留空时根据记忆资料自动生成本次汇报 brief。</p>',
-        true
-      )
-      + fieldHtml('页数', inputHtml('scheduledTaskCreatePptSlideCount', 'number', 'min="3" max="30" value="10"'))
-      + fieldHtml('主题样式', selectHtml('scheduledTaskCreatePptTheme',
-        optionHtml('business', '商务蓝')
-        + optionHtml('default', '简洁白')
-        + optionHtml('dark', '深色科技')
-      ))
-      + fieldHtml('目标受众', inputHtml('scheduledTaskCreatePptAudience', 'text', 'value="business" placeholder="例如：代理商 / 投资人 / 企业客户"'))
-      + fieldHtml(
-        '风格偏好',
-        textareaHtml('scheduledTaskCreatePptStyle', 3, '专业、清晰、商务、适合汇报和路演')
-      )
-      + fieldHtml('规划模型', inputHtml('scheduledTaskCreatePptPlanningModel', 'text', 'value="gpt-5.4"'))
-    );
   }
 
   function fillCandidateGroupSelect() {
@@ -1000,9 +1088,8 @@
     var host = document.getElementById('scheduledTaskParamFields');
     if (!host) return;
     var capabilityId = val('scheduledTaskCapability') || 'goal.video.pipeline';
-    if (capabilityId === 'hifly.video.create_by_tts') renderHiflyFields(host);
-    else if (capabilityId === 'create.video.pipeline') renderCreateVideoFields(host);
-    else if (capabilityId === 'create.ppt.pipeline') renderCreatePptFields(host);
+    if (capabilityId === 'ip_content_daily') renderIpContentDailyFields(host);
+    else if (capabilityId === 'hifly.video.create_by_tts') renderHiflyFields(host);
     else if (capabilityId === 'goal.image.pipeline') renderImageFields(host);
     else renderGoalFields(host);
   }
@@ -1013,9 +1100,8 @@
     var current = sel.value;
     sel.innerHTML = [
       'goal.image.pipeline',
+      'ip_content_daily',
       'goal.video.pipeline',
-      'create.video.pipeline',
-      'create.ppt.pipeline',
       'hifly.video.create_by_tts'
     ].map(function (id) {
       return optionHtml(id, (CAPABILITIES[id] || {}).label || id);
@@ -1045,8 +1131,39 @@
     }
   }
 
+  function selectedIpTemplate() {
+    var id = val('scheduledTaskIpTemplate');
+    if (!id) return null;
+    return (state.ipTemplates || []).find(function (row) { return String(row.id) === String(id); }) || null;
+  }
+
   function collectCapabilityPayload() {
     var capabilityId = val('scheduledTaskCapability') || 'goal.video.pipeline';
+    if (capabilityId === 'ip_content_daily') {
+      var template = selectedIpTemplate();
+      var templateId = parseInt(val('scheduledTaskIpTemplate') || '0', 10);
+      if (!templateId || isNaN(templateId)) throw new Error('请选择 IP日更服务器模板');
+      var tasks = selectedIpDailyTasks();
+      if (!tasks.length) throw new Error('请选择至少一种生成内容');
+      var extra = val('scheduledTaskIpRequirement');
+      var requirements = {};
+      if (extra) {
+        requirements.common = extra;
+        requirements.oral = extra;
+        requirements.moments = extra;
+        requirements.image = extra;
+      }
+      return {
+        template_id: templateId,
+        template_name: template ? (template.name || '') : '',
+        tasks: tasks,
+        sync_before: !!(document.getElementById('scheduledTaskIpSyncBefore') || {}).checked,
+        requirements: requirements,
+        industry_count: 5,
+        ip_count: 5,
+        moments_count: 20
+      };
+    }
     if (capabilityId === 'hifly.video.create_by_tts') {
       var avatar = val('scheduledTaskHiflyAvatar');
       var voice = val('scheduledTaskHiflyVoice');
@@ -1066,35 +1183,6 @@
         source_mode: sourceMode,
         candidate_group: sourceMode === 'ai_image' ? '' : group,
         prompt: prompt
-      };
-    }
-    if (capabilityId === 'create.video.pipeline') {
-      var cvPrompt = val('scheduledTaskCreateVideoPrompt');
-      return {
-        action: 'start_pipeline',
-        prompt: cvPrompt,
-        video_type: val('scheduledTaskCreateVideoType') || 'brand_promo',
-        target_audience: val('scheduledTaskCreateVideoAudience') || 'general_audience',
-        style: val('scheduledTaskCreateVideoStyle') || 'premium commercial, realistic, cinematic lighting',
-        duration: numberVal('scheduledTaskCreateVideoDuration', 8, 3, 60),
-        scene_count: numberVal('scheduledTaskCreateVideoSceneCount', 1, 1, 6),
-        aspect_ratio: val('scheduledTaskCreateVideoRatio') || '9:16',
-        language: 'Chinese',
-        planning_model: val('scheduledTaskCreateVideoPlanningModel') || 'gpt-5.4',
-        image_model: val('scheduledTaskCreateVideoImageModel') || 'openai/gpt-image-2',
-        video_model: val('scheduledTaskCreateVideoVideoModel') || 'fal-ai/veo3.1/image-to-video'
-      };
-    }
-    if (capabilityId === 'create.ppt.pipeline') {
-      return {
-        action: 'run_pipeline',
-        prompt: val('scheduledTaskCreatePptPrompt'),
-        slide_count: numberVal('scheduledTaskCreatePptSlideCount', 10, 3, 30),
-        theme: val('scheduledTaskCreatePptTheme') || 'business',
-        language: 'zh-CN',
-        audience: val('scheduledTaskCreatePptAudience') || 'business',
-        style: val('scheduledTaskCreatePptStyle') || '专业、清晰、商务、适合汇报和路演',
-        planning_model: val('scheduledTaskCreatePptPlanningModel') || 'gpt-5.4'
       };
     }
     if (capabilityId === 'goal.image.pipeline') {
@@ -1144,11 +1232,15 @@
     var title = val(prefix + 'Title') || (capabilityText(capabilityId) || '能力定时任务');
     var capPayload = collectCapabilityPayload();
     if (scheduleType === 'daily_times' && !dailyTimes.length) throw new Error('请填写每天执行时间，例如 9,12,18 或 09:00,12:00,18:00');
+    if (capabilityId === 'ip_content_daily') {
+      kind = 'ip_content_daily';
+      installationIds = [];
+    }
     var body = {
       title: title,
       task_kind: kind,
-      content: '定时调用能力 ' + capabilityId,
-      payload: { capability_id: capabilityId, payload: capPayload },
+      content: capabilityId === 'ip_content_daily' ? '定时生成 IP日更文案' : '定时调用能力 ' + capabilityId,
+      payload: capabilityId === 'ip_content_daily' ? capPayload : { capability_id: capabilityId, payload: capPayload },
       schedule_type: scheduleType,
       timezone_offset_minutes: timezoneOffsetMinutes(),
       installation_ids: installationIds
@@ -1402,7 +1494,7 @@
       if (btn) { btn.disabled = false; btn.textContent = '添加并下发'; }
       return;
     }
-    if (!body.installation_ids || !body.installation_ids.length) {
+    if (body.task_kind !== 'ip_content_daily' && (!body.installation_ids || !body.installation_ids.length)) {
       showMsg('scheduledTaskMsg', '未获取到本机设备标识，请刷新页面或重启本机盒子后再试。', true);
       if (btn) { btn.disabled = false; btn.textContent = '添加并下发'; }
       return;
@@ -1476,6 +1568,11 @@
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-resume-video-btn') : null;
       if (!btn) return;
       resumeVideoRun(btn.getAttribute('data-run-id'), btn);
+    });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-open-ip-studio-btn') : null;
+      if (!btn) return;
+      openIpContentStudio();
     });
     var kind = document.getElementById('scheduledTaskKind');
     if (kind) kind.value = 'capability';

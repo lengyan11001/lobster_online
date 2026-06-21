@@ -1,0 +1,101 @@
+<section id="content-wechat-channels-transcript" class="view-section active">
+  <style>
+    #content-wechat-channels-transcript { padding: 18px 24px 28px; background:#f6f8fb; color:#0f172a; min-height:100%; }
+    .wct-shell { max-width: 1220px; margin:0 auto; display:flex; flex-direction:column; gap:14px; }
+    .wct-hero, .wct-card { background:#fff; border:1px solid #dfe7f2; border-radius:8px; box-shadow:0 8px 24px rgba(15,23,42,.04); }
+    .wct-hero { padding:16px 18px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+    .wct-title { margin:0; font-size:22px; font-weight:900; }
+    .wct-sub { margin-top:4px; color:#64748b; font-size:13px; }
+    .wct-card { padding:14px; }
+    .wct-card-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; }
+    .wct-card-head h3 { margin:0; font-size:16px; font-weight:900; }
+    .wct-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .wct-input, .wct-select { border:1px solid #cbd5e1; border-radius:8px; background:#fff; padding:9px 10px; font-size:14px; min-height:38px; }
+    .wct-input { min-width:280px; flex:1; }
+    .wct-grid { display:grid; grid-template-columns: 390px minmax(0, 1fr); gap:14px; align-items:start; }
+    .wct-list { display:flex; flex-direction:column; gap:8px; max-height:520px; overflow:auto; padding-right:2px; }
+    .wct-item { border:1px solid #dfe7f2; border-radius:8px; background:#fff; padding:10px; display:grid; grid-template-columns:24px minmax(0,1fr) auto; gap:8px; align-items:start; }
+    .wct-item.is-active { border-color:#0f766e; box-shadow:0 0 0 1px rgba(15,118,110,.16); }
+    .wct-item-title { font-weight:900; line-height:1.35; word-break:break-word; }
+    .wct-meta { color:#64748b; font-size:12px; line-height:1.45; margin-top:3px; word-break:break-all; }
+    .wct-empty { color:#64748b; border:1px dashed #cbd5e1; border-radius:8px; padding:22px; text-align:center; background:#fff; }
+    .wct-video-row { display:grid; grid-template-columns:24px 86px minmax(0,1fr); gap:10px; align-items:start; }
+    .wct-cover { width:86px; aspect-ratio:16/10; object-fit:cover; border-radius:6px; background:#e2e8f0; }
+    .wct-output { border:1px solid #dfe7f2; border-radius:8px; padding:10px; background:#fbfdff; margin-bottom:10px; }
+    .wct-output textarea { width:100%; min-height:130px; border:1px solid #cbd5e1; border-radius:8px; padding:10px; resize:vertical; box-sizing:border-box; font-size:13px; line-height:1.6; }
+    .wct-status { display:inline-flex; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:800; background:#eef2ff; color:#3730a3; }
+    .wct-status.completed { background:#dcfce7; color:#166534; }
+    .wct-status.failed { background:#fee2e2; color:#991b1b; }
+    .wct-status.running { background:#dbeafe; color:#1d4ed8; }
+    .wct-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .wct-msg { display:none; padding:9px 10px; border-radius:8px; font-size:13px; }
+    .wct-msg.ok { display:block; background:#ecfdf5; border:1px solid #a7f3d0; color:#047857; }
+    .wct-msg.err { display:block; background:#fff1f2; border:1px solid #fecdd3; color:#be123c; }
+    @media (max-width: 960px) { .wct-grid { grid-template-columns:1fr; } .wct-hero { flex-direction:column; } }
+  </style>
+
+  <div class="wct-shell">
+    <header class="wct-hero">
+      <div>
+        <h2 class="wct-title">视频号文案提取</h2>
+        <div class="wct-sub">输入视频号昵称，确认账号后拉取作品，选择视频批量提取口播文本。</div>
+      </div>
+      <div class="wct-actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="wctRefreshJobsBtn">刷新记录</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="wctBackBtn">返回技能商店</button>
+      </div>
+    </header>
+
+    <div id="wctMsg" class="wct-msg"></div>
+
+    <section class="wct-card">
+      <div class="wct-card-head">
+        <h3>账号查询</h3>
+      </div>
+      <div class="wct-row">
+        <input id="wctKeywordInput" class="wct-input" placeholder="输入视频号昵称或 username">
+        <button type="button" class="btn btn-primary btn-sm" id="wctSearchBtn">查询账号</button>
+      </div>
+      <div id="wctAccountList" class="wct-list" style="margin-top:12px; max-height:220px;"></div>
+    </section>
+
+    <div class="wct-grid">
+      <section class="wct-card">
+        <div class="wct-card-head">
+          <div>
+            <h3>作品列表</h3>
+            <div id="wctSelectedAccount" class="wct-meta">请先选择账号</div>
+          </div>
+          <div class="wct-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="wctFetchVideosBtn">拉取作品</button>
+          </div>
+        </div>
+        <div class="wct-row" style="margin-bottom:10px;">
+          <button type="button" class="btn btn-ghost btn-sm" id="wctSelectAllBtn">全选</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="wctClearSelectBtn">清空</button>
+          <button type="button" class="btn btn-primary btn-sm" id="wctCreateJobBtn">获取文案</button>
+        </div>
+        <div id="wctVideoList" class="wct-empty">选择账号后点击“拉取作品”。</div>
+      </section>
+
+      <section class="wct-card">
+        <div class="wct-card-head">
+          <div>
+            <h3>转写记录</h3>
+            <div id="wctJobSummary" class="wct-meta">点击左侧记录查看结果。</div>
+          </div>
+          <div class="wct-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="wctResumeJobBtn">继续任务</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="wctCopyAllBtn">复制全部</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="wctExportTxtBtn">导出TXT</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="wctExportCsvBtn">导出CSV</button>
+          </div>
+        </div>
+        <div class="wct-grid" style="grid-template-columns:260px minmax(0,1fr);">
+          <div id="wctJobList" class="wct-empty">暂无任务</div>
+          <div id="wctResultList" class="wct-empty">暂无结果</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

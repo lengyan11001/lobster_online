@@ -5,6 +5,8 @@ import html
 import json
 import logging
 import secrets
+import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -21,17 +23,14 @@ from sqlalchemy.orm import Session
 from ..core.config import settings
 from ..db import get_db
 from ..models import Asset, YoutubePublishSchedule
-from publisher.browser_pool import (
-    browser_options_from_youtube_proxy_fields,
-    open_url_in_persistent_chromium,
-)
+from publisher.browser_pool import _find_chrome_executable
 
 from ..services.youtube_api_upload import (
     upload_local_video_file,
     youtube_httpx_client_kwargs,
 )
 from ..services.youtube_analytics import sync_youtube_account_data
-from .auth import _ServerUser, get_current_user_for_local, require_skill_store_admin
+from .auth import _ServerUser, get_current_user_for_local
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -230,9 +229,37 @@ SCHEDULE_INTERVAL_MAX = 10080  # 7 天，与创作者定时一致
 
 
 class YoutubeOauthStartBody(BaseModel):
-    """默认用内置 Chromium 打开授权页，与发布「打开浏览器」同源可执行文件与代理策略。"""
+    """打开 YouTube OAuth 授权页。字段名保留 open_chromium 以兼容旧前端。"""
 
     open_chromium: bool = True
+
+
+def _open_url_in_system_chrome(url: str) -> Dict[str, Any]:
+    try:
+        chrome_path = _find_chrome_executable()
+        if sys.platform == "win32":
+            ps = (
+                "$p = Start-Process -FilePath $args[0] -ArgumentList $args[1] -PassThru; "
+                "Start-Sleep -Milliseconds 700; "
+                "$ws = New-Object -ComObject WScript.Shell; "
+                "$null = $ws.AppActivate($p.Id)"
+            )
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps, chrome_path, url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0),
+            )
+        else:
+            subprocess.Popen(
+                [chrome_path, url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        return {"ok": True, "message": f"已用 Google Chrome 打开授权页: {chrome_path}"}
+    except Exception as e:
+        logger.warning("[youtube-publish] open system Chrome failed: %s", e)
+        return {"ok": False, "message": str(e)}
 
 
 class YoutubePublishSchedulePut(BaseModel):
@@ -253,7 +280,6 @@ class YoutubePublishSchedulePut(BaseModel):
 @router.get("/api/youtube-publish/summary")
 async def youtube_publish_summary(
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
@@ -273,7 +299,6 @@ async def youtube_publish_summary(
 @router.get("/api/youtube-publish/accounts", response_model=list[YoutubeAccountOut])
 async def list_youtube_accounts(
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
@@ -313,7 +338,6 @@ async def list_youtube_accounts(
 async def create_youtube_account(
     body: YoutubeAccountCreateIn,
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     ps = (body.proxy_server or "").strip()
     _validate_proxy_url(ps)
@@ -377,7 +401,6 @@ async def patch_youtube_account(
     account_id: str,
     body: YoutubeAccountPatchIn,
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
@@ -455,7 +478,6 @@ def _youtube_account_proxy_url(ent: Dict[str, Any]) -> tuple[Optional[str], str]
 async def delete_youtube_account(
     account_id: str,
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
@@ -472,7 +494,6 @@ async def youtube_account_oauth_start(
     account_id: str,
     body: YoutubeOauthStartBody = Body(),
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     """返回 Google 授权页 URL。
 
@@ -526,21 +547,7 @@ async def youtube_account_oauth_start(
         "chromium_message": "",
     }
     if body.open_chromium:
-        ps = (ent.get("proxy_server") or "").strip()
-        pu = (ent.get("proxy_username") or "").strip()
-        pp = (ent.get("proxy_password") or "").strip()
-        try:
-            bopts = browser_options_from_youtube_proxy_fields(
-                ps or None,
-                pu or None,
-                pp or None,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-        prof_root = _BASE_DIR / "browser_data"
-        prof_root.mkdir(parents=True, exist_ok=True)
-        profile_dir = str(prof_root / f"youtube_oauth_{aid}")
-        launch_res = await open_url_in_persistent_chromium(profile_dir, url, bopts)
+        launch_res = _open_url_in_system_chrome(url)
         out["chromium_opened"] = bool(launch_res.get("ok"))
         out["chromium_message"] = str(launch_res.get("message") or "")
     return out
@@ -673,7 +680,9 @@ async def youtube_oauth_callback(
     return HTMLResponse(
         content="<html><head><meta charset=\"utf-8\"/></head><body style=\"font-family:sans-serif;padding:1.5rem;\">"
         "<p><strong>授权成功</strong>，账号已标记为可用。</p>"
-        "<p>请关闭本页，回到龙虾 YouTube 账号列表。</p></body></html>"
+        "<p>龙虾 YouTube 账号列表会自动刷新；本页将尝试自动关闭。</p>"
+        "<script>setTimeout(function(){try{window.close();}catch(e){}},1200);</script>"
+        "</body></html>"
     )
 
 
@@ -876,7 +885,6 @@ async def youtube_publish_upload(
     body: YoutubePublishUploadBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     try:
         return await perform_youtube_upload(db, current_user.id, body)
@@ -899,7 +907,6 @@ def get_youtube_publish_schedule(
     account_id: str,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     aid = account_id.strip()
     doc = _load_doc(current_user.id)
@@ -916,7 +923,6 @@ def put_youtube_publish_schedule(
     body: YoutubePublishSchedulePut,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     from datetime import datetime
 
@@ -976,7 +982,6 @@ def put_youtube_publish_schedule(
 async def youtube_account_analytics(
     account_id: str,
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts", {})
@@ -999,7 +1004,6 @@ async def youtube_account_analytics(
 async def youtube_sync_analytics(
     account_id: str,
     current_user: _ServerUser = Depends(get_current_user_for_local),
-    _admin: None = Depends(require_skill_store_admin),
 ):
     doc = _load_doc(current_user.id)
     accounts = doc.get("accounts", {})

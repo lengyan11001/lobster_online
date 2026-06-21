@@ -1,6 +1,6 @@
 /**
  * YouTube 多账号：列表页 + 添加弹窗（Client ID/Secret、代理）。
- * 授权默认由后端用与「发布-打开浏览器」相同的 Playwright 持久化 Chromium 打开；失败时回退 window.open。
+ * 授权由后端直接拉起本机 Google Chrome；失败时提示复制授权链接。
  */
 (function() {
   function localApiBase() {
@@ -10,6 +10,18 @@
   function apiUrl(path) {
     var base = localApiBase().replace(/\/$/, '');
     return (base ? base : '') + path;
+  }
+
+  function oauthRedirectUri() {
+    var base = localApiBase().replace(/\/$/, '');
+    if (!base) {
+      var loc = window.location || {};
+      var protocol = String(loc.protocol || 'http:');
+      var host = String(loc.hostname || '127.0.0.1');
+      var port = String(loc.port || '8000');
+      base = protocol + '//' + host + (port ? (':' + port) : '');
+    }
+    return base.replace(/\/$/, '') + '/api/youtube-publish/oauth/callback';
   }
 
   function localApiCandidates(path) {
@@ -74,6 +86,23 @@
   var _youtubeModalMode = 'add';
   var _youtubeEditAid = '';
   var _youtubeScheduleAid = '';
+  var _oauthRefreshTimer = null;
+
+  function startOauthRefreshPolling() {
+    if (_oauthRefreshTimer) {
+      clearInterval(_oauthRefreshTimer);
+      _oauthRefreshTimer = null;
+    }
+    var tries = 0;
+    _oauthRefreshTimer = setInterval(function() {
+      tries += 1;
+      renderList();
+      if (tries >= 60) {
+        clearInterval(_oauthRefreshTimer);
+        _oauthRefreshTimer = null;
+      }
+    }, 2000);
+  }
 
   function statusLabel(st) {
     if (st === 'ready') return '<span class="badge-installed">可用</span>';
@@ -203,49 +232,32 @@
   function startOauth(accountId) {
     var aid = (accountId || '').trim();
     if (!aid) return;
-    var popup = null;
-    try {
-      popup = window.open('', '_blank');
-      if (popup && popup.document) {
-        popup.document.title = 'Opening YouTube authorization';
-        popup.document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px;">Opening YouTube authorization...</p>';
-      }
-    } catch (_) {
-      popup = null;
-    }
     fetch(apiUrl('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/oauth/start'), {
       method: 'POST',
       headers: hdrs(),
-      body: JSON.stringify({ open_chromium: false })
+      body: JSON.stringify({ open_chromium: true })
     })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d, status: r.status }; }); })
       .then(function(x) {
         if (!x.ok) {
-          if (popup && !popup.closed) popup.close();
           alert((x.d && x.d.detail) ? x.d.detail : ('请求失败 HTTP ' + (x.status || '')));
           return;
         }
         var u = (x.d && x.d.url) ? String(x.d.url) : '';
-        if (u && popup && !popup.closed) {
-          popup.location.href = u;
-          try { popup.opener = null; } catch (_) {}
-          return;
-        }
         var opened = !!(x.d && x.d.chromium_opened);
         var cmsg = (x.d && x.d.chromium_message) ? String(x.d.chromium_message) : '';
         if (opened) {
+          startOauthRefreshPolling();
           return;
         }
         if (u) {
-          var systemPopup = window.open(u, '_blank', 'noopener,noreferrer');
-          if (!systemPopup) alert('Popup was blocked. Please copy this URL to authorize YouTube:\n' + u);
-          if (cmsg) alert('内置 Chromium 未启动，已改用系统浏览器。' + cmsg);
+          startOauthRefreshPolling();
+          alert('未能自动打开 Google Chrome，请复制这个链接到 Chrome 打开：\n' + u + (cmsg ? ('\n\n' + cmsg) : ''));
         } else if (cmsg) {
           alert(cmsg);
         }
       })
       .catch(function(e) {
-        if (popup && !popup.closed) popup.close();
         alert(e && e.message ? e.message : '请求失败');
       });
   }
@@ -529,16 +541,14 @@
 
   window.loadYoutubeAccountsPage = function() {
     var pre = document.getElementById('youtubeAccountsRedirectPre');
-    fetch(apiUrl('/api/youtube-publish/accounts'), { headers: typeof authHeaders === 'function' ? authHeaders() : {} })
-      .then(function(r) { return r.json(); })
-      .then(function(rows) {
-        var redir = '';
-        if (Array.isArray(rows) && rows.length && rows[0].oauth_redirect_uri) redir = rows[0].oauth_redirect_uri;
-        if (pre && redir) pre.textContent = redir;
-      })
-      .catch(function() {});
+    if (pre) pre.textContent = oauthRedirectUri();
     renderList();
   };
+
+  window.addEventListener('focus', function() {
+    var view = (location.hash || '').replace(/^#/, '');
+    if (view === 'youtube-accounts') renderList();
+  });
 
   var backBtn = document.getElementById('youtubeAccountsBackBtn');
   if (backBtn) {

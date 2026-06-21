@@ -25,6 +25,7 @@ from .auth import get_current_user_for_local, _ServerUser
 from ..core.config import get_settings, settings
 from ..db import SessionLocal, get_db
 from ..models import Asset
+from ..services.asset_storage_paths import get_asset_export_dir, get_asset_export_dir_for_media
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -822,22 +823,11 @@ def _unique_download_path(download_dir: Path, filename: str) -> Path:
 
 
 def _asset_library_export_root() -> Path:
-    root = _BASE_DIR / "素材库"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    return get_asset_export_dir()
 
 
 def _asset_library_export_dir(media_type: str) -> Path:
-    mt = (media_type or "").strip().lower()
-    folder_name = {
-        "image": "图片",
-        "video": "视频",
-        "document": "文档",
-        "audio": "音频",
-    }.get(mt, "其他")
-    export_dir = _asset_library_export_root() / folder_name
-    export_dir.mkdir(parents=True, exist_ok=True)
-    return export_dir
+    return get_asset_export_dir_for_media(media_type)
 
 
 def _best_effort_open_folder_for_file(path: Path) -> bool:
@@ -2162,15 +2152,25 @@ def save_asset_to_downloads(
     if not source:
         raise HTTPException(404, detail="文件不存在")
 
-    opened = _best_effort_open_folder_for_file(source) if (body.open_folder if body else True) else False
+    requested_name = body.filename if body else None
+    source_name = requested_name or a.filename or source.name
+    export_dir = _asset_library_export_dir(a.media_type or "")
+    target = _unique_download_path(export_dir, source_name)
+    reused_existing = False
+    if source.resolve() == target.resolve():
+        reused_existing = True
+    else:
+        shutil.copy2(source, target)
+
+    opened = _best_effort_open_folder_for_file(target) if (body.open_folder if body else True) else False
     return {
         "ok": True,
         "asset_id": a.asset_id,
-        "filename": source.name,
-        "path": str(source),
-        "directory": str(source.parent),
+        "filename": target.name,
+        "path": str(target),
+        "directory": str(target.parent),
         "opened_folder": opened,
-        "reused_existing": True,
+        "reused_existing": reused_existing,
     }
 
 

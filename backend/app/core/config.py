@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     """品牌标记：与 static/branding/brands.json 的 marks 键一致（如 bihuo）。桌面快捷方式与首页 logo/文案由该标记决定。"""
     lobster_brand_mark: str = "bihuo"
     lobster_parent_account: Optional[str] = None
+    """安装包默认注册为海外版用户；未设置时默认 False（国内版）。"""
+    lobster_is_overseas_user: bool = False
     """在线版为 True 时：登录注册与充值全部自维护，不走速推；用户配置算力账号（速推 Token）用于耗算力，速推扣多少我们扣多少算力。"""
     lobster_independent_auth: bool = True
     """完成充值订单时需在请求头 X-Admin-Secret 携带此值（仅服务端/管理员使用）。"""

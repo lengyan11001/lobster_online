@@ -34,8 +34,10 @@ except ImportError:
         return "direct"
 
 try:
-    from ..services.openclaw_tool_scope import classify_openclaw_tool_scope
+    from ..services.openclaw_tool_scope import HEADER_DENIED_CAPABILITIES, classify_openclaw_tool_scope
 except ImportError:
+    HEADER_DENIED_CAPABILITIES = "X-Lobster-Denied-Capabilities"
+
     class _OpenClawFallbackScope:
         intent = "legacy"
         allowed_tools = set()
@@ -994,6 +996,7 @@ OpenClaw 主对话补充规则：
 - 如果工具返回 openclaw_evidence，请严格按其中 claim_rules 回答；claim_rules 不允许的状态必须如实说明还不能确认，不要用经验或历史内容补齐。
 - 查询任务进度必须使用本会话工具返回的真实 task_id，或本机流水线能力返回的 job_id。comfly.daihuo.pipeline 这类本机脚本只能用同能力 poll_pipeline + job_id 查询，不能改用 task.get_result；找不到真实 ID 时说明“没有拿到可查询的任务 ID”，不要生成看起来像 ID 的字符串。
 - task.get_result 返回 pending/processing/running 且 output/result 为空时，只能告诉用户“仍在生成中”并保留 task_id；不要说已完成，也不要说“不确定无结果”。
+- OpenClaw 同步对话里，image.generate/video.generate 返回 task_id 后不要在同一轮长时间轮询到终态；立即回复“任务已提交，正在生成中”和 task_id。只有用户后续明确问进度/结果，或工具本轮已直接返回终态 saved_assets/media_urls，才继续查询/发布。
 - 用户要求“短视频方案 / 创意方案 / 拍摄方案 / 镜头脚本 / 分镜脚本 / 口播文案 / 文案脚本”时，这是文字创作任务，只输出可执行方案和脚本，不调用 image.generate、video.generate 或 goal.video.pipeline；资料不足时先给通用可执行版本并注明可按行业再细化，不要把补充问题当作唯一回复。只有用户明确说“开始生成视频 / 做成片 / 渲染成视频 / 按这个脚本生成视频”时，才调用生成能力。
 - 用户明确要求生成图片/视频/创意成片时，本轮必须直接调用 lobster__invoke_capability 执行对应生成能力；不要只回复“我先找素材/先查能力/确认可用工具”。如果消息中已有 asset_id 或系统已注入素材 URL，直接用于生成，MCP 边界会自动补齐素材 URL。禁止用 exec/shell/browser 代替业务能力。
 """
@@ -1081,13 +1084,16 @@ async def try_openclaw(
 
     agent_id = _openclaw_agent_id_from_chat_model(model)
     openclaw_body_model = _openclaw_gateway_body_model(agent_id)
-    tool_scope_enabled = bool(getattr(settings, "openclaw_tool_scope_enabled", False))
     classified_scope = classify_openclaw_tool_scope(msgs)
-    # Even when the general OpenClaw intent limiter is disabled, keep this narrow
-    # billing-safety guard: a result/progress follow-up must never submit a fresh
-    # image/video generation task.
-    scope = classified_scope if (tool_scope_enabled or classified_scope.intent == "task_status_lookup") else None
+    # Use strict scope only for result/progress lookup. For new tasks, avoid
+    # intent white-lists because a bad classification hides the real capability;
+    # instead just deny task.get_result so new work cannot be misrouted into
+    # the "query previous task" path.
+    scope = classified_scope if classified_scope.intent == "task_status_lookup" else None
     scope_headers = scope.headers() if scope is not None else {}
+    if scope is None:
+        scope_headers[HEADER_DENIED_CAPABILITIES] = "task.get_result"
+        scope_headers["X-Lobster-OpenClaw-Intent"] = classified_scope.intent or "new_task_guard"
     locked_video_model = str(video_model_lock or "").strip()
     locked_video_model_source = str(video_model_lock_source or "").strip()
     if locked_video_model:
@@ -1115,11 +1121,13 @@ async def try_openclaw(
             ),
             locked_video_model or "-",
             locked_video_model_source or "-",
-            tool_scope_enabled,
+            False,
         )
     else:
         logger.info(
-            "[OPENCLAW] tool scope disabled; mcp capabilities unscoped video_model_lock=%s source=%s",
+            "[OPENCLAW] tool scope deny-only intent=%s denied_caps=%s video_model_lock=%s source=%s",
+            classified_scope.intent or "-",
+            scope_headers.get(HEADER_DENIED_CAPABILITIES, "-"),
             locked_video_model or "-",
             locked_video_model_source or "-",
         )

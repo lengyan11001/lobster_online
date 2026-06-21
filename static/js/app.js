@@ -137,6 +137,7 @@ function getOrCreateInstallationId() {
 function authHeaders() {
   var h = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (token || '') };
   h['X-Installation-Id'] = getOrCreateInstallationId();
+  if (window.__LOBSTER_IS_OVERSEAS_USER) h['X-Lobster-Client-Overseas'] = 'true';
   return h;
 }
 

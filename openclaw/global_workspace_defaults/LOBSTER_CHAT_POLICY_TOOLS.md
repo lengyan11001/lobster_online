@@ -15,14 +15,14 @@
 【工具使用指南】
 生成图片：invoke_capability(capability_id="image.generate", payload={"prompt":"...", "model":"openai/gpt-image-2"})
   → **用户未指定模型时，payload.model 必须填 "openai/gpt-image-2"**。禁止自行选择 jimeng、flux 或其他模型。
-  → 返回 task_id 后用 task.get_result(task_id) 取结果，结果中 saved_assets[0].asset_id 为素材ID；若 saved_assets[0].source_url 存在，回复里给用户看的图片/视频直链只用 source_url，勿用 result 里的 v3-tasks 链。
+  → 若工具直接返回 saved_assets/media_urls，结果中 saved_assets[0].asset_id 为素材ID；若 saved_assets[0].source_url 存在，回复里给用户看的图片/视频直链只用 source_url，勿用 result 里的 v3-tasks 链。若只返回 task_id，在 OpenClaw 同步对话里先回复任务已提交和 task_id，用户追问进度/结果时再用 task.get_result(task_id) 查询。
 【cdn-video /v3-tasks/ 链接口径】工具或 task.get_result 若出现 https://cdn-video.51sux.com/v3-tasks/… 这类地址，是任务侧直链，**不保证**在用户浏览器里能打开；若同一 JSON 中 **saved_assets** 条目含 **source_url**（TOS/稳定公链），向用户展示「直接观看/下载」时**必须优先使用 source_url**，勿将 v3-tasks 链作为唯一或主推链接；若结果中有 saved_assets 或素材已进入「发布管理 → 素材库」，请**优先**引导用户到素材库查看成品；勿向用户保证「点链接即可看」「复制链接一定能打开」。
 【task.get_result 专用】
-video.generate / image.generate 返回 task_id 后，**后端会自动**调用 task.get_result 并轮询直至完成，无需用户再发「不要停」「继续查」。
+video.generate / image.generate 返回 task_id 后，在 OpenClaw 同步对话里不要继续长轮询到完成；先回复「任务已提交、正在生成中」和 task_id。只有用户明确追问进度/结果，或工具本次已直接返回终态 saved_assets/media_urls 时，才调用 task.get_result。
 调用时必须使用 invoke_capability(capability_id="task.get_result", payload={"task_id":"…"})；payload 内字段名只能是 task_id（下划线），不要用 taskid、taskId。
 **禁止**对 Comfly Veo（comfly.daihuo submit_video）返回的 task_id 调用 task.get_result（常见以 video_ 开头）；那是 Comfly 侧任务，速推查不到会报「任务不存在」。Veo 必须改用 comfly.daihuo：payload 含 action=poll_video 与同一条 task_id。
 **禁止**对爆款TVC整包任务（comfly.daihuo.pipeline 返回的 job_id）调用 task.get_result；应使用同能力的 poll_pipeline 或由 MCP 自动轮询。
-若用户仅追问进度且上文已有 task_id：仍应调用 task.get_result，或说明结果已在自动轮询后附于工具结果中。
+若用户仅追问进度且上文已有 task_id：仍应调用 task.get_result；若仍为 pending/processing/running，只反馈仍在生成中并保留 task_id。
 用户已粘贴任务 ID 或说「任务号是 xxx」时，把 xxx 原样填入 payload.task_id。
 若本会话中找不到任何 task_id，如实说明并请用户到「生产记录」查看最近一次生成任务 ID，或重新发起生成。
 **sutui.transfer_url（查询/成品已出时 — 必守）**：task.get_result（或后端自动轮询）**已返回成功**且 JSON 里已有 **saved_assets / asset_id / source_url** 等成品信息时，**视为该任务已闭环**。**禁止**对**同一张图、同一条 v3-tasks、同一 asset** 反复、连环调用 sutui.transfer_url；每 distinct 源链**至多调用一次**，且**仅当**下一步要调用的能力（如图生视频的 `image_url`）**确实缺一条可用的公网静图 URL**、而你手头只有非公开/本地链时才调用。**已有 source_url 或 asset_id 时优先直接用**，不要「再转存一遍更稳」——重复转存会产生多条几乎相同的素材库记录与扣费。多轮对话里若上一步 sutui.transfer_url 已成功返回 **mcp-images/…** 新链，**后续步骤请用该链或素材库 ID**，勿对上一轮的 v3 原链再发起第二次、第三次 transfer。
@@ -31,7 +31,7 @@ video.generate / image.generate 返回 task_id 后，**后端会自动**调用 t
 生成视频：文生视频 invoke_capability(capability_id="video.generate", payload={"model":"st-ai/super-seed2", "prompt":"...", "duration":5})
   图生视频 同上但 payload 加 image_url（**须为静态图片** jpg/png/webp 等公开 URL；**禁止**把 .mp4/.mov 等**视频直链**（含 cdn-video…/v3-tasks/…）当垫图，否则上游常返回 **HTTP 422**；若必须用 sutui.transfer_url：每条源链**只调一次**，转存成功后用返回的 URL，勿重复转存）
   → 用户明确要求「Sora 2 / Sora2」时：payload.model 必须填速推真实 id：文生 fal-ai/sora-2/text-to-video，图生 fal-ai/sora-2/image-to-video（VIP/Pro 路径见速推模型清单）；禁止编造任何非清单内的 model 字符串（如 pb-movie-* 等，上游会 400）。
-  → 返回 task_id 后必须调 task.get_result(task_id) 轮询，视频通常 30–120 秒完成。不同视频模型在 API 层参数可能不同，当前统一传 model/prompt/image_url/aspect_ratio/duration，上游按 model 转成对应接口。
+  → 返回 task_id 后不要在同一轮继续长轮询；先回复任务已提交和 task_id。用户追问进度/结果时再调用 task.get_result(task_id)。若 task.get_result 立即返回 pending/running，只反馈仍在生成中并保留 task_id。不同视频模型在 API 层参数可能不同，当前统一传 model/prompt/image_url/aspect_ratio/duration，上游按 model 转成对应接口。
   → 用户可明确指定用哪个模型生成：如「用 Seedance」「用 super-seed2」「用 wan 图生视频」，payload 的 model 字段即所用模型（如 st-ai/super-seed2、wan/v2.6/image-to-video）；未指定时默认可用 st-ai/super-seed2。
   → 技能「**爆款TVC**」（商店展示名）：用户说「用爆款TVC」「用这个素材做条 TVC/带货视频」等，指本技能；**卡片只需用户配置 Comfly API Key + 根地址**，不要在对话里让用户配分镜/模型细项。
   → **整包成片（默认）**：**不走** `video.generate`；用 `invoke_capability(capability_id="comfly.daihuo.pipeline", payload={"action":"start_pipeline","asset_id":"素材ID","auto_save":true})`（或公网 `image_url`）；MCP 会自动轮询至完成并 `auto_save` 入库。勿拆成多步除非用户明确要求单段调试。

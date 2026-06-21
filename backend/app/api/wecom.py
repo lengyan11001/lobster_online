@@ -78,6 +78,17 @@ def _write_wecom_cloud_config(data: dict) -> None:
     )
 
 
+def get_wecom_master_enabled() -> bool:
+    return bool(_read_wecom_cloud_config().get("wecom_master_enabled", False))
+
+
+def set_wecom_master_enabled(enabled: bool) -> bool:
+    cfg = _read_wecom_cloud_config()
+    cfg["wecom_master_enabled"] = bool(enabled)
+    _write_wecom_cloud_config(cfg)
+    return bool(enabled)
+
+
 def _get_wecom_cloud_url() -> str:
     url = (_read_wecom_cloud_config().get("wecom_cloud_url") or "").strip().rstrip("/")
     if url:
@@ -1057,7 +1068,9 @@ async def wecom_poll_loop():
     import asyncio
     from ..db import SessionLocal
     while True:
-        await asyncio.sleep(2)
+        await asyncio.sleep(15)
+        if not get_wecom_master_enabled():
+            continue
         if not _get_server_base_url():
             continue
         db = SessionLocal()

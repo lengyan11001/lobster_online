@@ -457,6 +457,19 @@ async def proxy_scheduled_task_runs(
     )
 
 
+@router.get("/api/scheduled-tasks/runs/{run_id}", summary="Proxy cloud scheduled task run detail for local online UI")
+async def proxy_scheduled_task_run_detail(
+    run_id: str,
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    return await _proxy_cloud_json(
+        request,
+        "GET",
+        f"/api/scheduled-tasks/runs/{run_id}",
+    )
+
+
 @router.delete("/api/scheduled-tasks/runs/{run_id}", summary="Proxy delete scheduled task run for local online UI")
 async def proxy_delete_scheduled_task_run(
     run_id: str,
@@ -2873,6 +2886,14 @@ def _channel_concurrency(name: str, default: int, upper: int) -> int:
     return max(1, min(upper, value))
 
 
+def _channel_interval(name: str, default: float, minimum: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)) or str(default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
 def _try_mark_scheduled_run_active(run_id: str) -> bool:
     run_id = str(run_id or "").strip()
     if not run_id:
@@ -3010,15 +3031,29 @@ async def h5_chat_poll_loop() -> None:
         logger.info("[H5-CHAT] remote H5 chat channel disabled")
         return
 
-    sleep_empty = float(os.environ.get("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", "2.0") or "2.0")
+    h5_poll_interval = _channel_interval("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", 5.0, 3.0)
+    task_poll_interval = _channel_interval("LOBSTER_SCHEDULED_TASK_POLL_INTERVAL_SEC", 30.0, 10.0)
+    publish_poll_interval = _channel_interval("LOBSTER_SCHEDULED_PUBLISH_POLL_INTERVAL_SEC", 30.0, 10.0)
+    heartbeat_interval = _channel_interval("LOBSTER_H5_CHAT_HEARTBEAT_INTERVAL_SEC", 60.0, 30.0)
     sleep_missing_auth = 10.0
     logged_missing = False
+    last_heartbeat_at = 0.0
+    last_h5_poll_at = 0.0
+    last_task_poll_at = 0.0
+    last_publish_poll_at = 0.0
     max_h5_concurrency = _channel_concurrency("LOBSTER_H5_CHAT_CONCURRENCY", 1, 5)
     max_task_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_TASK_CONCURRENCY", 2, 10)
     max_publish_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_PUBLISH_CONCURRENCY", 1, 3)
     active_items: set[asyncio.Task] = set()
     active_task_runs: set[asyncio.Task] = set()
     active_publish_runs: set[asyncio.Task] = set()
+    logger.info(
+        "[H5-CHAT] poll intervals h5=%ss scheduled=%ss publish=%ss heartbeat=%ss",
+        h5_poll_interval,
+        task_poll_interval,
+        publish_poll_interval,
+        heartbeat_interval,
+    )
 
     while True:
         _reap_channel_tasks(active_items, "H5-CHAT")
@@ -3039,14 +3074,18 @@ async def h5_chat_poll_loop() -> None:
         try:
             timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                await client.post(
-                    f"{base}/api/h5-chat/device-heartbeat",
-                    json={"display_name": "local-online"},
-                    headers=headers,
-                )
+                now_loop = asyncio.get_event_loop().time()
+                if now_loop - last_heartbeat_at >= heartbeat_interval:
+                    await client.post(
+                        f"{base}/api/h5-chat/device-heartbeat",
+                        json={"display_name": "local-online"},
+                        headers=headers,
+                    )
+                    last_heartbeat_at = now_loop
                 items: list[Dict[str, Any]] = []
                 h5_slots = max(0, max_h5_concurrency - len(active_items))
-                if h5_slots > 0:
+                if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_poll_interval:
+                    last_h5_poll_at = now_loop
                     resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers)
                     if resp.status_code == 401:
                         logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
@@ -3056,7 +3095,8 @@ async def h5_chat_poll_loop() -> None:
                     items = (resp.json() or {}).get("items") or []
                 task_items: list[Dict[str, Any]] = []
                 task_slots = max(0, max_task_concurrency - len(active_task_runs))
-                if task_slots > 0:
+                if task_slots > 0 and now_loop - last_task_poll_at >= task_poll_interval:
+                    last_task_poll_at = now_loop
                     task_resp = await client.get(
                         f"{base}/api/scheduled-tasks/pending",
                         params={"limit": task_slots},
@@ -3072,7 +3112,8 @@ async def h5_chat_poll_loop() -> None:
                         logger.debug("[SCHEDULED-TASK] pending request HTTP %s: %s", task_resp.status_code, task_resp.text[:300])
                 publish_items: list[Dict[str, Any]] = []
                 publish_slots = max(0, max_publish_concurrency - len(active_publish_runs))
-                if publish_slots > 0:
+                if publish_slots > 0 and now_loop - last_publish_poll_at >= publish_poll_interval:
+                    last_publish_poll_at = now_loop
                     publish_resp = await client.get(
                         f"{base}/api/scheduled-tasks/publish/pending",
                         params={"limit": publish_slots},
@@ -3087,7 +3128,13 @@ async def h5_chat_poll_loop() -> None:
                     elif publish_resp.status_code != 404:
                         logger.debug("[SCHEDULED-PUBLISH] pending request HTTP %s: %s", publish_resp.status_code, publish_resp.text[:300])
                 if not items and not task_items and not publish_items:
-                    await asyncio.sleep(sleep_empty)
+                    next_due = min(
+                        last_h5_poll_at + h5_poll_interval if h5_slots > 0 else now_loop + h5_poll_interval,
+                        last_task_poll_at + task_poll_interval if task_slots > 0 else now_loop + task_poll_interval,
+                        last_publish_poll_at + publish_poll_interval if publish_slots > 0 else now_loop + publish_poll_interval,
+                        last_heartbeat_at + heartbeat_interval,
+                    )
+                    await asyncio.sleep(max(0.5, min(5.0, next_due - asyncio.get_event_loop().time())))
                     continue
                 for item in items:
                     active_items.add(asyncio.create_task(_process_item_detached(base, jwt_token, installation_id, item)))

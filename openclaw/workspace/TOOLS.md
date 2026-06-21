@@ -45,7 +45,7 @@ Use this as the local playbook when the user asks OpenClaw to generate, edit, or
 
 - Existing asset publish: `list_publish_accounts` if account is ambiguous, then `publish_content` with the existing `asset_id`. Do not call generation tools first.
 - Generate then publish: call the generation capability, wait for the real terminal result, then publish the returned `saved_assets[0].asset_id`.
-- Task polling: SuTui image/video tasks use `task.get_result`; Comfly `video_` tasks use `comfly.daihuo` `poll_video`; full TVC pipeline jobs use `comfly.daihuo.pipeline` polling/terminal result.
+- Task polling: SuTui image/video tasks use `task.get_result` when the user asks for progress/result; in OpenClaw synchronous chat, return the submitted `task_id` first instead of long-polling to completion in the same turn. Comfly `video_` tasks use `comfly.daihuo` `poll_video`; full TVC pipeline jobs use `comfly.daihuo.pipeline` polling/terminal result.
 - Account/platform checks: use `list_publish_accounts`; use account IDs from tool results when possible.
 - Xiaohongshu needs title plus description or tags. Douyin/Toutiao can rely on backend AI copy fill when the user did not provide copy.
 - Never claim success before the publishing/generation tool returns success. On failure, quote the returned reason and stop unless the user asks to retry.

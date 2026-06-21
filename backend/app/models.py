@@ -25,6 +25,8 @@ class User(Base):
     wechat_openid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     """注册时客户端所在安装包的品牌标记（与 LOBSTER_BRAND_MARK / brands.json 的 marks 键一致，如 bihuo、yingshi）。"""
     brand_mark: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    """是否为海外版用户。未标记或历史用户默认 False（国内版）。"""
+    is_overseas_user: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     """浏览器 localStorage 安装槽位 ID（与 X-Installation-Id 一致）；登录写入，供 OpenClaw 微信等渠道无 .env 时复用。"""
     client_installation_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -477,7 +479,7 @@ class KfAccount(Base):
     open_kfid: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(64), nullable=False, default="AI客服")
     url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sync_cursor: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 

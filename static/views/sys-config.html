@@ -52,6 +52,22 @@
         <button type="button" id="saveSutuiTokenBtn" class="btn btn-ghost btn-sm" style="margin-top:0.25rem;">保存 Token</button>
         <span id="sutuiTokenMsg" class="msg" style="display:none;margin-left:0.5rem;"></span>
       </div>
+      <div class="form-group" id="assetPathSettingsBlock">
+        <label>素材路径</label>
+        <div class="form-hint">内部素材目录用于系统入库读取，不建议手动移动；下载目录用于素材库“下载/下载到素材文件夹”。</div>
+        <div style="display:grid;grid-template-columns:110px minmax(0,1fr);gap:0.55rem 0.75rem;align-items:center;margin-top:0.55rem;max-width:56rem;">
+          <div style="font-size:0.8rem;color:var(--text-muted);">内部目录</div>
+          <code id="assetInternalPathText" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.45rem 0.55rem;background:rgba(15,23,42,0.04);font-size:0.78rem;">加载中...</code>
+          <div style="font-size:0.8rem;color:var(--text-muted);">下载目录</div>
+          <input type="text" id="assetExportPathInput" placeholder="例如 D:\素材库 或留空使用默认路径" style="width:100%;box-sizing:border-box;">
+        </div>
+        <div class="form-hint" id="assetDefaultPathText" style="margin-top:0.4rem;"></div>
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-top:0.55rem;">
+          <button type="button" id="saveAssetPathBtn" class="btn btn-ghost btn-sm">保存素材下载路径</button>
+          <button type="button" id="resetAssetPathBtn" class="btn btn-ghost btn-sm">恢复默认</button>
+          <span id="assetPathMsg" class="msg" style="display:none;"></span>
+        </div>
+      </div>
     </div>
   </div>
 

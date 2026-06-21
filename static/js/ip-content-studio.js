@@ -16,8 +16,11 @@
     activeMomentImageBatchId: '',
     latestDrafts: [],
     recordFilter: '',
-    configTab: 'requirements',
-    settingTemplates: []
+    configTab: 'templates',
+    settingTemplates: [],
+    activeTemplateId: '',
+    templateKeywordIds: [],
+    templateCompetitorIds: []
   };
 
   var SETTINGS_STORAGE_KEY = 'ipContentStudio.generationSettings.v1';
@@ -113,7 +116,13 @@
     if (!base) return Promise.reject(new Error('未配置云端 API_BASE'));
     var req = { method: opts.method || 'GET', headers: headers(opts.json !== false) };
     if (opts.body !== undefined) req.body = JSON.stringify(opts.body || {});
-    return fetch(base + path, req).then(function(resp) {
+    return fetch(base + path, req).catch(function(err) {
+      var raw = err && err.message ? String(err.message) : '';
+      if (raw === 'Failed to fetch' || /Failed to fetch|NetworkError|Load failed/i.test(raw)) {
+        throw new Error('网络请求中断：云端接口响应太久或连接被浏览器断开，请稍后重试。');
+      }
+      throw err;
+    }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
         if (!resp.ok || data.ok === false) throw new Error(parseErr(data, '请求失败'));
         return data;
@@ -145,7 +154,7 @@
   }
 
   function switchConfigTab(tab) {
-    state.configTab = tab || 'keywords';
+    state.configTab = tab || 'templates';
     document.querySelectorAll('#content-ip-content-studio [data-config-tab]').forEach(function(btn) {
       btn.classList.toggle('is-active', btn.getAttribute('data-config-tab') === state.configTab);
     });
@@ -317,9 +326,11 @@
         state.selectedDocs[input.getAttribute('data-memory-id')] = input.checked;
         saveGenerationSettings();
         updateMemorySelectionLabel();
+        renderTemplateSummary();
       });
     });
     updateMemorySelectionLabel();
+    renderTemplateSummary();
   }
 
   function loadMemory() {
@@ -338,6 +349,8 @@
   function generationSettingSnapshot() {
     return {
       memory_doc_ids: selectedMemoryIds(),
+      keyword_ids: cleanTemplateIds(state.templateKeywordIds, false),
+      competitor_ids: cleanTemplateIds(state.templateCompetitorIds, false),
       task1_extra: (($('ipTask1Extra') && $('ipTask1Extra').value) || '').trim(),
       task2_extra: (($('ipTask2Extra') && $('ipTask2Extra').value) || '').trim(),
       image_extra: (($('ipImageExtra') && $('ipImageExtra').value) || '').trim()
@@ -348,33 +361,311 @@
     writeStoredJson(SETTINGS_STORAGE_KEY, generationSettingSnapshot());
   }
 
+  function cleanTemplateIds(values, asString) {
+    if (!Array.isArray(values)) return [];
+    var seen = {};
+    var out = [];
+    values.forEach(function(value) {
+      var normalized = asString ? String(value || '').trim() : parseInt(value, 10);
+      if (!normalized || seen[String(normalized)]) return;
+      seen[String(normalized)] = true;
+      out.push(normalized);
+    });
+    return out;
+  }
+
+  function templateRequirements(item) {
+    var req = item && item.requirements && typeof item.requirements === 'object' ? item.requirements : {};
+    return {
+      oral: String(item.task1_extra || item.task1Extra || req.oral || req.industry_oral || req.ip_oral || ''),
+      moments: String(item.task2_extra || item.task2Extra || req.moments || req.moments_copy || ''),
+      image: String(item.image_extra || item.imageExtra || req.image || '')
+    };
+  }
+
+  function templateMemoryDocs(item) {
+    var docs = Array.isArray(item && item.memory_docs) ? item.memory_docs : [];
+    return docs.map(function(doc) {
+      if (typeof doc === 'string') return { id: doc, title: doc };
+      return Object.assign({}, doc || {});
+    }).filter(function(doc) {
+      return doc && (doc.id || doc.doc_id || doc.filename || doc.name || doc.title);
+    });
+  }
+
   function normalizeTemplates(raw) {
     if (!Array.isArray(raw)) return [];
     return raw.filter(function(item) { return item && item.id && item.name; }).map(function(item) {
+      var req = templateRequirements(item);
+      var memoryDocs = templateMemoryDocs(item);
+      var memoryIds = cleanTemplateIds(item.memory_doc_ids || item.memoryIds || memoryDocs.map(memoryDocId), true);
+      var source = item.source || (item.requirements || item.keyword_ids || item.competitor_ids || item.memory_docs ? 'server' : 'local');
       return {
         id: String(item.id),
+        server_id: item.server_id || (source === 'server' ? item.id : ''),
+        source: source,
         name: String(item.name || ''),
-        memory_doc_ids: Array.isArray(item.memory_doc_ids) ? item.memory_doc_ids.map(String) : (Array.isArray(item.memoryIds) ? item.memoryIds.map(String) : []),
-        task1_extra: String(item.task1_extra || item.task1Extra || ''),
-        task2_extra: String(item.task2_extra || item.task2Extra || ''),
-        image_extra: String(item.image_extra || item.imageExtra || ''),
+        keyword_ids: cleanTemplateIds(item.keyword_ids, false),
+        competitor_ids: cleanTemplateIds(item.competitor_ids, false),
+        memory_docs: memoryDocs,
+        memory_doc_ids: memoryIds,
+        task1_extra: req.oral,
+        task2_extra: req.moments,
+        image_extra: req.image,
+        requirements: item.requirements || {},
+        meta: item.meta || {},
         updated_at: item.updated_at || item.updatedAt || ''
       };
     });
   }
 
-  function renderTemplateOptions() {
-    var select = $('ipTemplateSelect');
-    if (!select) return;
-    var current = select.value;
+  function activeTemplate() {
+    return state.settingTemplates.find(function(item) { return item.id === state.activeTemplateId; }) || null;
+  }
+
+  function localTemplateBackup() {
+    return state.settingTemplates.map(function(tpl) {
+      return Object.assign({}, tpl, { source: tpl.source || 'local' });
+    });
+  }
+
+  function writeTemplateBackup() {
+    writeStoredJson(TEMPLATES_STORAGE_KEY, localTemplateBackup());
+  }
+
+  function upsertTemplate(tpl) {
+    if (!tpl || !tpl.id) return;
+    var idx = state.settingTemplates.findIndex(function(item) {
+      return item.id === tpl.id ||
+        (tpl.server_id && String(item.server_id || '') === String(tpl.server_id)) ||
+        (tpl.source === 'server' && item.source !== 'server' && item.name === tpl.name);
+    });
+    if (idx >= 0) state.settingTemplates.splice(idx, 1, tpl);
+    else state.settingTemplates.unshift(tpl);
+    var keptIndex = state.settingTemplates.indexOf(tpl);
+    if (tpl.source === 'server') {
+      state.settingTemplates = state.settingTemplates.filter(function(item, index) {
+        if (index === keptIndex) return true;
+        if (tpl.server_id && String(item.server_id || '') === String(tpl.server_id)) return false;
+        if (item.source !== 'server' && item.name === tpl.name) return false;
+        return true;
+      });
+    }
+    state.activeTemplateId = tpl.id;
+    writeTemplateBackup();
+  }
+
+  function templateMemoryLabelFromRef(ref) {
+    if (!ref) return '';
+    var id = memoryDocId(ref);
+    var doc = state.docs.find(function(item) { return memoryDocId(item) === id; });
+    return memoryDocTitle(doc || ref);
+  }
+
+  function keywordLabelById(id) {
+    var row = state.keywords.find(function(item) { return String(item.id || '') === String(id || ''); });
+    return row ? (row.display_name || row.keyword || String(id)) : String(id || '');
+  }
+
+  function competitorLabelById(id) {
+    var row = state.competitors.find(function(item) { return String(item.id || '') === String(id || ''); });
+    return row ? (row.display_name || row.account_key || String(id)) : String(id || '');
+  }
+
+  function templateIdSelected(list, id) {
+    return cleanTemplateIds(list, false).some(function(item) { return String(item) === String(id); });
+  }
+
+  function setTemplateIdSelected(key, id, checked) {
+    var list = cleanTemplateIds(state[key], false);
+    var value = parseInt(id, 10);
+    if (!value) return;
+    if (checked && !templateIdSelected(list, value)) list.push(value);
+    if (!checked) list = list.filter(function(item) { return String(item) !== String(value); });
+    state[key] = list;
+    saveGenerationSettings();
+    renderTemplateSummary();
+  }
+
+  function renderTemplatePickers() {
+    var keywordBox = $('ipTemplateKeywordPicker');
+    var competitorBox = $('ipTemplateCompetitorPicker');
+    if (keywordBox) {
+      if (!state.keywords.length) {
+        keywordBox.innerHTML = '<div class="ip-content-empty">暂无关键词，先到关键词页添加。</div>';
+      } else {
+        keywordBox.innerHTML = state.keywords.map(function(item) {
+          var id = item.id;
+          return '<label class="ip-template-choice">' +
+            '<input type="checkbox" data-template-keyword="' + escAttr(id) + '"' + (templateIdSelected(state.templateKeywordIds, id) ? ' checked' : '') + '>' +
+            '<span><strong>' + esc(item.display_name || item.keyword || ('关键词 #' + id)) + '</strong><small>' + esc(item.keyword || '') + '</small></span>' +
+            '</label>';
+        }).join('');
+        keywordBox.querySelectorAll('[data-template-keyword]').forEach(function(input) {
+          input.addEventListener('change', function() {
+            setTemplateIdSelected('templateKeywordIds', input.getAttribute('data-template-keyword'), input.checked);
+          });
+        });
+      }
+    }
+    if (competitorBox) {
+      if (!state.competitors.length) {
+        competitorBox.innerHTML = '<div class="ip-content-empty">暂无同行账号，先到同行账号页添加。</div>';
+      } else {
+        competitorBox.innerHTML = state.competitors.map(function(item) {
+          var id = item.id;
+          return '<label class="ip-template-choice">' +
+            '<input type="checkbox" data-template-competitor="' + escAttr(id) + '"' + (templateIdSelected(state.templateCompetitorIds, id) ? ' checked' : '') + '>' +
+            '<span><strong>' + esc(item.display_name || item.account_key || ('同行 #' + id)) + '</strong><small>' + esc(platformLabel(item.platform || 'douyin')) + ' · ' + esc(item.account_key || '') + '</small></span>' +
+            '</label>';
+        }).join('');
+        competitorBox.querySelectorAll('[data-template-competitor]').forEach(function(input) {
+          input.addEventListener('change', function() {
+            setTemplateIdSelected('templateCompetitorIds', input.getAttribute('data-template-competitor'), input.checked);
+          });
+        });
+      }
+    }
+  }
+
+  function chipHtml(items, emptyText) {
+    var rows = (items || []).filter(Boolean);
+    if (!rows.length) return '<small>' + esc(emptyText || '未选择') + '</small>';
+    return '<div class="ip-template-chip-row">' + rows.map(function(text) {
+      return '<span class="ip-template-chip">' + esc(text) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function requirementPreview(label, text) {
+    return '<div class="ip-template-snapshot-section"><strong>' + esc(label) + '</strong>' +
+      '<div class="ip-template-text-preview">' + esc(text || '未填写') + '</div></div>';
+  }
+
+  function templateSummaryHtml(title, data) {
+    data = data || {};
+    var memories = (data.memory_docs || []).map(templateMemoryLabelFromRef);
+    if (!memories.length && data.memory_doc_ids) {
+      memories = data.memory_doc_ids.map(function(id) {
+        var doc = state.docs.find(function(item) { return memoryDocId(item) === String(id); });
+        return doc ? memoryDocTitle(doc) : String(id);
+      });
+    }
+    var keywords = (data.keyword_ids || []).map(keywordLabelById);
+    var competitors = (data.competitor_ids || []).map(competitorLabelById);
+    return '<div class="ip-template-snapshot-section"><strong>' + esc(title) + '</strong>' +
+      '<small>记忆文件</small>' + chipHtml(memories, '未选择记忆文件') +
+      '<small>关键词</small>' + chipHtml(keywords, '未配置关键词') +
+      '<small>同行账号</small>' + chipHtml(competitors, '未配置同行账号') +
+      '</div>' +
+      requirementPreview('口播要求', data.task1_extra || '') +
+      requirementPreview('朋友圈文案要求', data.task2_extra || '') +
+      requirementPreview('出图要求', data.image_extra || '');
+  }
+
+  function currentTemplateSnapshot() {
+    var snapshot = generationSettingSnapshot();
+    return {
+      memory_doc_ids: snapshot.memory_doc_ids,
+      memory_docs: selectedMemoryDocs(),
+      keyword_ids: cleanTemplateIds(state.templateKeywordIds, false),
+      competitor_ids: cleanTemplateIds(state.templateCompetitorIds, false),
+      task1_extra: snapshot.task1_extra,
+      task2_extra: snapshot.task2_extra,
+      image_extra: snapshot.image_extra
+    };
+  }
+
+  function renderTemplateList() {
+    var list = $('ipTemplateRecordList');
     state.settingTemplates = normalizeTemplates(state.settingTemplates);
-    select.innerHTML = '<option value="">选择模板</option>' + state.settingTemplates.map(function(tpl) {
-      return '<option value="' + escAttr(tpl.id) + '">' + esc(tpl.name) + '</option>';
-    }).join('');
-    if (current && state.settingTemplates.some(function(tpl) { return tpl.id === current; })) select.value = current;
-    var hasSelected = !!select.value;
-    if ($('ipApplyTemplateBtn')) $('ipApplyTemplateBtn').disabled = !hasSelected;
-    if ($('ipDeleteTemplateBtn')) $('ipDeleteTemplateBtn').disabled = !hasSelected;
+    if (state.activeTemplateId && !state.settingTemplates.some(function(tpl) { return tpl.id === state.activeTemplateId; })) {
+      state.activeTemplateId = '';
+    }
+    var generateSelect = $('ipGenerateTemplateSelect');
+    if (generateSelect) {
+      var current = generateSelect.value || state.activeTemplateId || '';
+      generateSelect.innerHTML = '<option value="">请选择模板</option>' + state.settingTemplates.map(function(tpl) {
+        return '<option value="' + escAttr(tpl.id) + '">' + esc(tpl.name) + '</option>';
+      }).join('');
+      if (current && state.settingTemplates.some(function(tpl) { return tpl.id === current; })) generateSelect.value = current;
+      else generateSelect.value = '';
+    }
+    if (!list) return;
+    if (!state.settingTemplates.length) {
+      list.innerHTML = '<div class="ip-content-empty">暂无模板。点击添加模板，填写记忆、关键词、同行和要求后保存。</div>';
+    } else {
+      list.innerHTML = state.settingTemplates.map(function(tpl) {
+        var meta = [];
+        meta.push(tpl.source === 'server' ? '服务器' : '本地');
+        if (tpl.keyword_ids.length) meta.push('关键词 ' + tpl.keyword_ids.length);
+        if (tpl.competitor_ids.length) meta.push('同行 ' + tpl.competitor_ids.length);
+        if (tpl.memory_doc_ids.length || tpl.memory_docs.length) meta.push('记忆 ' + Math.max(tpl.memory_doc_ids.length, tpl.memory_docs.length));
+        return '<button type="button" class="ip-template-record' + (tpl.id === state.activeTemplateId ? ' is-active' : '') + '" data-template-id="' + escAttr(tpl.id) + '">' +
+          '<strong>' + esc(tpl.name) + '</strong>' +
+          '<small>' + esc(meta.join(' · ') || '模板') + '</small>' +
+          (tpl.updated_at ? '<small>' + esc(fmtTime(tpl.updated_at)) + '</small>' : '') +
+          '</button>';
+      }).join('');
+      list.querySelectorAll('[data-template-id]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          state.activeTemplateId = btn.getAttribute('data-template-id') || '';
+          var tpl = activeTemplate();
+          if ($('ipTemplateNameInput') && tpl) $('ipTemplateNameInput').value = tpl.name || '';
+          if (tpl) applyTemplate(tpl);
+          renderTemplateOptions();
+        });
+      });
+    }
+  }
+
+  function renderTemplateSummary() {
+    var box = $('ipTemplateSnapshot');
+    var tpl = activeTemplate();
+    if ($('ipDeleteTemplateBtn')) $('ipDeleteTemplateBtn').disabled = !tpl;
+    if (!box) return;
+    if (tpl) {
+      box.innerHTML = templateSummaryHtml('选中模板记录', tpl) +
+        '<div class="ip-content-empty">左侧点击模板后，会直接回填到右侧表单，可修改后保存。</div>';
+      return;
+    }
+    box.innerHTML = templateSummaryHtml('当前将保存的内容', currentTemplateSnapshot()) +
+      '<div class="ip-content-empty">左侧选择模板后，可查看模板记录内容并应用或删除。</div>';
+  }
+
+  function renderTemplateOptions() {
+    renderTemplateList();
+    renderTemplatePickers();
+    renderTemplateSummary();
+  }
+
+  function newTemplateDraft() {
+    state.activeTemplateId = '';
+    state.templateKeywordIds = [];
+    state.templateCompetitorIds = [];
+    state.selectedDocs = {};
+    if ($('ipTemplateNameInput')) $('ipTemplateNameInput').value = '';
+    if ($('ipTask1Extra')) $('ipTask1Extra').value = '';
+    if ($('ipTask2Extra')) $('ipTask2Extra').value = '';
+    if ($('ipImageExtra')) $('ipImageExtra').value = '';
+    saveGenerationSettings();
+    renderMemoryList();
+    renderTemplateOptions();
+    setMsg('请填写模板内容后保存。');
+  }
+
+  function selectTemplateById(id, opts) {
+    opts = opts || {};
+    var tpl = state.settingTemplates.find(function(item) { return item.id === String(id || ''); });
+    if (!tpl) {
+      if (opts.required) setMsg('请选择模板后再生成。', true);
+      return null;
+    }
+    state.activeTemplateId = tpl.id;
+    if ($('ipGenerateTemplateSelect')) $('ipGenerateTemplateSelect').value = tpl.id;
+    if ($('ipTemplateNameInput')) $('ipTemplateNameInput').value = tpl.name || '';
+    applyTemplate(tpl);
+    renderTemplateOptions();
+    return tpl;
   }
 
   function restoreGenerationSettings() {
@@ -387,6 +678,8 @@
     if ($('ipTask1Extra') && typeof saved.task1_extra === 'string') $('ipTask1Extra').value = saved.task1_extra;
     if ($('ipTask2Extra') && typeof saved.task2_extra === 'string') $('ipTask2Extra').value = saved.task2_extra;
     if ($('ipImageExtra') && typeof saved.image_extra === 'string') $('ipImageExtra').value = saved.image_extra;
+    state.templateKeywordIds = cleanTemplateIds(saved.keyword_ids, false);
+    state.templateCompetitorIds = cleanTemplateIds(saved.competitor_ids, false);
     state.settingTemplates = normalizeTemplates(readStoredJson(TEMPLATES_STORAGE_KEY, []));
     renderTemplateOptions();
   }
@@ -396,13 +689,38 @@
     if ($('ipTask1Extra')) $('ipTask1Extra').value = tpl.task1_extra || '';
     if ($('ipTask2Extra')) $('ipTask2Extra').value = tpl.task2_extra || '';
     if ($('ipImageExtra')) $('ipImageExtra').value = tpl.image_extra || '';
+    state.templateKeywordIds = cleanTemplateIds(tpl.keyword_ids, false);
+    state.templateCompetitorIds = cleanTemplateIds(tpl.competitor_ids, false);
+    state.selectedDocs = {};
+    var markMemoryId = function(rawId) {
+      var id = String(rawId || '').trim();
+      if (!id) return false;
+      var doc = state.docs.find(function(item) {
+        return memoryDocId(item) === id ||
+          String(item.name || '').trim() === id ||
+          String(item.title || '').trim() === id ||
+          String(item.filename || '').trim() === id;
+      });
+      state.selectedDocs[doc ? memoryDocId(doc) : id] = true;
+      return true;
+    };
+    (tpl.memory_doc_ids || []).forEach(function(id) {
+      markMemoryId(id);
+    });
+    if (!Object.keys(state.selectedDocs).length && Array.isArray(tpl.memory_docs)) {
+      tpl.memory_docs.forEach(function(doc) {
+        markMemoryId(memoryDocId(doc) || doc.title || doc.name || doc.filename);
+      });
+    }
+    renderMemoryList();
+    renderTemplatePickers();
     saveGenerationSettings();
+    if ($('ipTemplateNameInput')) $('ipTemplateNameInput').value = tpl.name || '';
+    renderTemplateSummary();
   }
 
   function applySelectedTemplate() {
-    var select = $('ipTemplateSelect');
-    var id = select && select.value;
-    var tpl = state.settingTemplates.find(function(item) { return item.id === id; });
+    var tpl = activeTemplate();
     if (!tpl) {
       setMsg('请选择要应用的模板。', true);
       return;
@@ -411,47 +729,144 @@
     setMsg('已应用模板：' + tpl.name);
   }
 
-  function saveCurrentTemplate() {
-    var name = window.prompt('模板名称', '');
-    name = (name || '').trim();
-    if (!name) return;
-    var snapshot = generationSettingSnapshot();
-    var existingIndex = state.settingTemplates.findIndex(function(tpl) { return tpl.name === name; });
-    var tpl = {
-      id: existingIndex >= 0 ? state.settingTemplates[existingIndex].id : ('tpl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)),
+  function templateRequestBody(name, snapshot, memoryDocs) {
+    return {
       name: name,
+      keyword_ids: cleanTemplateIds(snapshot.keyword_ids, false),
+      competitor_ids: cleanTemplateIds(snapshot.competitor_ids, false),
+      memory_docs: memoryDocs || [],
+      requirements: {
+        oral: snapshot.task1_extra || '',
+        industry_oral: snapshot.task1_extra || '',
+        ip_oral: snapshot.task1_extra || '',
+        moments: snapshot.task2_extra || '',
+        image: snapshot.image_extra || '',
+        common: ''
+      },
+      meta: { source: 'ip_content_studio' }
+    };
+  }
+
+  function serverTemplateFromItem(item) {
+    item = Object.assign({}, item || {}, { source: 'server', server_id: item && item.id });
+    return normalizeTemplates([item])[0] || null;
+  }
+
+  function localTemplateFromSnapshot(id, name, snapshot) {
+    return normalizeTemplates([{
+      id: id || ('tpl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)),
+      source: 'local',
+      name: name,
+      keyword_ids: snapshot.keyword_ids,
+      competitor_ids: snapshot.competitor_ids,
+      memory_doc_ids: snapshot.memory_doc_ids,
       task1_extra: snapshot.task1_extra,
       task2_extra: snapshot.task2_extra,
       image_extra: snapshot.image_extra,
       updated_at: new Date().toISOString()
-    };
-    if (existingIndex >= 0) state.settingTemplates.splice(existingIndex, 1, tpl);
-    else state.settingTemplates.unshift(tpl);
-    writeStoredJson(TEMPLATES_STORAGE_KEY, state.settingTemplates);
+    }])[0];
+  }
+
+  function loadServerTemplates() {
+    return cloudJson('/api/ip-content/schedule-templates')
+      .then(function(data) {
+        var server = normalizeTemplates((Array.isArray(data.items) ? data.items : []).map(function(item) {
+          return Object.assign({}, item || {}, { source: 'server', server_id: item && item.id });
+        }));
+        var localOnly = normalizeTemplates(readStoredJson(TEMPLATES_STORAGE_KEY, [])).filter(function(tpl) {
+          if (tpl.source === 'server') return false;
+          return !server.some(function(row) { return row.name === tpl.name; });
+        });
+        state.settingTemplates = server.concat(localOnly);
+        if (state.activeTemplateId && !state.settingTemplates.some(function(tpl) { return tpl.id === state.activeTemplateId; })) {
+          state.activeTemplateId = '';
+        }
+        renderTemplateOptions();
+      })
+      .catch(function(err) {
+        state.settingTemplates = normalizeTemplates(readStoredJson(TEMPLATES_STORAGE_KEY, []));
+        renderTemplateOptions();
+        setMsg('模板记录加载失败，已显示本地备份：' + (err.message || '未知错误'), true);
+      });
+  }
+
+  function saveCurrentTemplate() {
+    var active = activeTemplate();
+    var name = (($('ipTemplateNameInput') && $('ipTemplateNameInput').value) || (active && active.name) || '').trim();
+    if (!name) {
+      setMsg('请先填写模板名称。', true);
+      if ($('ipTemplateNameInput')) $('ipTemplateNameInput').focus();
+      return;
+    }
+    var snapshot = currentTemplateSnapshot();
+    var localId = active && active.source !== 'server' ? active.id : '';
+    var localTpl = localTemplateFromSnapshot(localId, name, snapshot);
+    upsertTemplate(localTpl);
     saveGenerationSettings();
     renderTemplateOptions();
-    if ($('ipTemplateSelect')) $('ipTemplateSelect').value = tpl.id;
-    renderTemplateOptions();
-    setMsg('模板已保存：' + name);
+    setMsg('模板本地备份已保存，正在同步服务器...');
+    setBusy($('ipSaveTemplateBtn'), true, '保存中...');
+    selectedMemoryDocsWithContent().then(function(memoryDocs) {
+      var body = templateRequestBody(name, snapshot, memoryDocs);
+      var activeServerId = active && active.source === 'server' ? (active.server_id || active.id) : '';
+      return cloudJson('/api/ip-content/schedule-templates')
+        .then(function(data) {
+          var existing = (Array.isArray(data.items) ? data.items : []).find(function(item) {
+            return item && (String(item.id) === String(activeServerId) || item.name === name);
+          });
+          return cloudJson('/api/ip-content/schedule-templates' + (existing ? '/' + encodeURIComponent(existing.id) : ''), {
+            method: existing ? 'PATCH' : 'POST',
+            body: body
+          });
+        });
+    }).then(function(data) {
+      var serverTpl = serverTemplateFromItem(data.item || data);
+      if (serverTpl) {
+        upsertTemplate(serverTpl);
+        if ($('ipTemplateNameInput')) $('ipTemplateNameInput').value = serverTpl.name || name;
+        renderTemplateOptions();
+      }
+      setMsg('模板已保存到服务器：' + name);
+    }).catch(function(err) {
+      setMsg('本地模板已保存，服务器模板保存失败：' + (err.message || '未知错误'), true);
+    }).finally(function() {
+      setBusy($('ipSaveTemplateBtn'), false);
+    });
   }
 
   function deleteSelectedTemplate() {
-    var select = $('ipTemplateSelect');
-    var id = select && select.value;
-    var tpl = state.settingTemplates.find(function(item) { return item.id === id; });
+    var tpl = activeTemplate();
     if (!tpl) {
       setMsg('请选择要删除的模板。', true);
       return;
     }
     if (!window.confirm('删除模板“' + tpl.name + '”？')) return;
-    state.settingTemplates = state.settingTemplates.filter(function(item) { return item.id !== id; });
-    writeStoredJson(TEMPLATES_STORAGE_KEY, state.settingTemplates);
-    renderTemplateOptions();
-    setMsg('模板已删除。');
+    var removeLocal = function() {
+      state.settingTemplates = state.settingTemplates.filter(function(item) { return item.id !== tpl.id; });
+      state.activeTemplateId = '';
+      writeTemplateBackup();
+      if ($('ipTemplateNameInput')) $('ipTemplateNameInput').value = '';
+      renderTemplateOptions();
+    };
+    setBusy($('ipDeleteTemplateBtn'), true, '删除中...');
+    var serverId = tpl.source === 'server' ? (tpl.server_id || tpl.id) : '';
+    var task = serverId
+      ? cloudJson('/api/ip-content/schedule-templates/' + encodeURIComponent(serverId), { method: 'DELETE', json: false })
+      : Promise.resolve();
+    task.then(function() {
+      removeLocal();
+      setMsg('模板已删除。');
+    }).catch(function(err) {
+      setMsg(err.message || '模板删除失败', true);
+    }).finally(function() {
+      setBusy($('ipDeleteTemplateBtn'), false);
+    });
   }
 
   function renderKeywords() {
     var list = $('ipKeywordList');
+    renderTemplatePickers();
+    renderTemplateSummary();
     if (!list) return;
     if (!state.keywords.length) {
       list.innerHTML = '<div class="ip-content-empty">先添加行业关键词，行业热门口播会按这些关键词同步抖音榜单。</div>';
@@ -533,6 +948,8 @@
 
   function renderCompetitors() {
     var list = $('ipCompetitorList');
+    renderTemplatePickers();
+    renderTemplateSummary();
     if (!list) return;
     if (!state.competitors.length) {
       list.innerHTML = '<div class="ip-content-empty">添加同行账号后，可同步查看他的最新作品。</div>';
@@ -618,6 +1035,27 @@
     if (Array.isArray(meta.images) && meta.images.length) return meta.images;
     if (rec && rec.image_url) return [{ image_url: rec.image_url, image_asset_id: rec.image_asset_id || '', image_prompt: rec.image_prompt || '', index: 1 }];
     return [];
+  }
+
+  function recordImagePrompts(rec) {
+    var prompts = [];
+    function add(value) {
+      value = String(value || '').trim();
+      if (value && prompts.indexOf(value) < 0) prompts.push(value);
+    }
+    if (rec && Array.isArray(rec.image_prompts)) rec.image_prompts.forEach(add);
+    var meta = rec && rec.meta ? rec.meta : {};
+    if (Array.isArray(meta.image_prompts)) meta.image_prompts.forEach(add);
+    add(rec && rec.image_prompt);
+    return prompts.slice(0, 3);
+  }
+
+  function renderImagePrompts(rec) {
+    var prompts = recordImagePrompts(rec);
+    if (!prompts.length) return '';
+    return '<div class="ip-image-prompt-list">' + prompts.map(function(prompt, idx) {
+      return '<small>配图 ' + esc(idx + 1) + '：' + esc(prompt) + '</small>';
+    }).join('') + '</div>';
   }
 
   function storedMomentImageBatchId(rec) {
@@ -707,6 +1145,7 @@
           source: 'creative-film-studio',
           image_batch_id: batchId,
           image_batch_created_at: batchCreatedAt,
+          image_prompts: recordImagePrompts(rec),
           image_status: rec._image_status || momentRecordStatus(rec) || '',
           image_progress: rec._image_progress || momentRecordProgress(rec) || '0/3',
           images: images
@@ -1058,6 +1497,8 @@
     box.innerHTML = records.map(function(rec) {
       var checked = selectable && rec._selected ? ' checked' : '';
       var images = recordImages(rec);
+      var isMoments = rec.task === 'moments_candidate';
+      var bodyText = rec.body || rec.content || '';
       var image = images.length
         ? '<div class="ip-image-grid">' + images.slice(0, 3).map(function(img, idx) {
             var url = img.image_url || img.url || '';
@@ -1069,8 +1510,8 @@
         (selectable ? '<label class="ip-badge-row"><input type="checkbox" data-moment-select="' + escAttr(rec.record_id || '') + '"' + checked + '> <span class="ip-badge">选中出图</span></label>' : '') +
         '<div class="ip-badge-row"><span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' + (rec.image_url ? '<span class="ip-badge is-image">已出图</span>' : '') + '</div>' +
         '<strong>' + esc(rec.title || '未命名文案') + '</strong>' +
-        '<textarea data-record-copy="' + escAttr(rec.record_id || '') + '">' + esc(rec.body || rec.content || '') + '</textarea>' +
-        (rec.image_prompt ? '<small>配图提示：' + esc(rec.image_prompt) + '</small>' : '') +
+        '<textarea class="' + (isMoments ? 'ip-moments-copy-editor' : '') + '" data-record-copy="' + escAttr(rec.record_id || '') + '">' + esc(bodyText) + '</textarea>' +
+        renderImagePrompts(rec) +
         image +
         '<div class="ip-content-item-actions">' +
         '<button type="button" class="btn btn-ghost btn-sm" data-copy-record="' + escAttr(rec.record_id || '') + '">复制</button>' +
@@ -1086,10 +1527,12 @@
     });
     box.querySelectorAll('[data-record-copy]').forEach(function(ta) {
       ta.style.height = 'auto';
-      ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, 42), 260) + 'px';
+      var maxH = ta.classList.contains('ip-moments-copy-editor') ? 520 : 260;
+      var minH = ta.classList.contains('ip-moments-copy-editor') ? 220 : 42;
+      ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, minH), maxH) + 'px';
       ta.addEventListener('input', function() {
         ta.style.height = 'auto';
-        ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, 42), 260) + 'px';
+        ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, minH), maxH) + 'px';
       });
     });
     box.querySelectorAll('[data-moment-select]').forEach(function(input) {
@@ -1203,11 +1646,12 @@
         var images = recordImages(rec);
         var status = momentRecordStatus(rec);
         var progress = momentRecordProgress(rec);
+        var bodyText = rec.body || rec.content || '';
         return '<div class="ip-draft-card">' +
           '<div class="ip-badge-row"><span class="ip-badge">朋友圈</span><span class="ip-badge is-image">图片 ' + esc(images.length) + '</span><span class="ip-badge' + (momentRecordFailed(rec) ? ' is-used' : '') + '">' + esc(status || '等待生成') + '</span>' + (progress ? '<span class="ip-badge">进度 ' + esc(progress) + '</span>' : '') + '</div>' +
           '<strong>' + esc(rec.title || '未命名文案') + '</strong>' +
-          '<textarea readonly data-moment-image-copy="' + escAttr(rec.record_id || '') + '">' + esc(rec.body || rec.content || '') + '</textarea>' +
-          (rec.image_prompt ? '<small>配图提示：' + esc(rec.image_prompt) + '</small>' : '') +
+          '<div class="ip-moments-copy-preview" data-moment-image-copy="' + escAttr(rec.record_id || '') + '">' + esc(bodyText) + '</div>' +
+          renderImagePrompts(rec) +
           (images.length ? '<div class="ip-image-grid">' + images.slice(0, 3).map(function(img, idx) {
             var url = img.image_url || img.url || '';
             return '<div class="ip-image-tile"><img src="' + escAttr(url) + '" alt="朋友圈图片 ' + escAttr(idx + 1) + '">' +
@@ -1216,10 +1660,6 @@
           '<div class="ip-content-item-actions"><button type="button" class="btn btn-ghost btn-sm" data-copy-moment-image-record="' + escAttr(rec.record_id) + '">复制文案</button></div>' +
           '</div>';
       }).join('');
-    box.querySelectorAll('textarea').forEach(function(ta) {
-      ta.style.height = 'auto';
-      ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, 42), 180) + 'px';
-    });
     box.querySelectorAll('[data-copy-moment-image-record]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-copy-moment-image-record');
@@ -1274,12 +1714,28 @@
     document.body.removeChild(ta);
   }
 
-  function generationPayload(extraId, count) {
+  function generationPayload(extraId, count, opts) {
+    opts = opts || {};
+    var selectedTemplateId = ($('ipGenerateTemplateSelect') && $('ipGenerateTemplateSelect').value) || state.activeTemplateId || '';
+    if (!selectTemplateById(selectedTemplateId, { required: true })) {
+      return Promise.reject(new Error('请选择模板后再生成。'));
+    }
     var extraNode = extraId ? $(extraId) : null;
     saveGenerationSettings();
+    var keywordIds = cleanTemplateIds(state.templateKeywordIds, false);
+    var competitorIds = cleanTemplateIds(state.templateCompetitorIds, false);
+    if (opts.requireKeywords && !keywordIds.length) return Promise.reject(new Error('请选择模板里的关键词后再生成。'));
+    if (opts.requireCompetitors && !competitorIds.length) return Promise.reject(new Error('请选择模板里的同行账号后再生成。'));
     return selectedMemoryDocsWithContent().then(function(memoryDocs) {
+      if (!memoryDocs.length) {
+        var tpl = activeTemplate();
+        var savedMemoryDocs = templateMemoryDocs(tpl);
+        if (savedMemoryDocs.length) memoryDocs = savedMemoryDocs;
+      }
       return {
         memory_docs: memoryDocs,
+        keyword_ids: keywordIds,
+        competitor_ids: competitorIds,
         extra_requirements: ((extraNode && extraNode.value) || '').trim(),
         count: count || 5,
         sync_before: false
@@ -1287,10 +1743,93 @@
     });
   }
 
-  function runGenerate(btn, endpoint, extraId, count, successTab) {
+  function clonePayload(payload) {
+    var copy = {};
+    Object.keys(payload || {}).forEach(function(key) {
+      var value = payload[key];
+      if (Array.isArray(value)) copy[key] = value.slice();
+      else if (value && typeof value === 'object') copy[key] = JSON.parse(JSON.stringify(value));
+      else copy[key] = value;
+    });
+    return copy;
+  }
+
+  function delay(ms) {
+    return new Promise(function(resolve) { setTimeout(resolve, ms); });
+  }
+
+  function postWithRetry(endpoint, payload, attempts, label) {
+    attempts = Math.max(1, attempts || 1);
+    var tried = 0;
+    function once() {
+      return cloudJson(endpoint, { method: 'POST', body: payload }).catch(function(err) {
+        tried += 1;
+        var message = err && err.message ? err.message : '请求失败';
+        if (tried >= attempts) throw new Error((label ? label + '：' : '') + message);
+        return delay(1200 * tried).then(once);
+      });
+    }
+    return once();
+  }
+
+  function runMomentsGenerate(btn, successTab) {
+    setBusy(btn, true, '生成中...');
+    setMsg('正在分批生成朋友圈文案，请稍等...');
+    generationPayload('ipTask2Extra', 20, {})
+      .then(function(payload) {
+        var total = 20;
+        var batchSize = 5;
+        var batchCount = Math.ceil(total / batchSize);
+        var groupId = 'moments_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        var allRecords = [];
+        var chain = Promise.resolve();
+        for (var i = 0; i < batchCount; i += 1) {
+          (function(batchIndex) {
+            chain = chain.then(function() {
+              var batchPayload = clonePayload(payload);
+              batchPayload.count = Math.min(batchSize, total - batchIndex * batchSize);
+              batchPayload.group_id = groupId;
+              batchPayload.sync_before = false;
+              setMsg('正在生成朋友圈文案：第 ' + (batchIndex + 1) + '/' + batchCount + ' 批...');
+              return postWithRetry('/api/ip-content/generate/moments-candidates', batchPayload, 2, '第 ' + (batchIndex + 1) + ' 批生成失败')
+                .then(function(data) {
+                  var records = Array.isArray(data.records) ? data.records : [];
+                  records.forEach(function(rec) {
+                    rec.group_id = rec.group_id || groupId;
+                    rec.meta = Object.assign({}, rec.meta || {}, { group_id: groupId });
+                  });
+                  allRecords = allRecords.concat(records);
+                  state.latestDrafts = allRecords;
+                  if (records.length && !state.activeGroupId) {
+                    state.activeGroupId = recordGroupId(records[0]);
+                    state.recordFilter = records[0].task || 'moments_candidate';
+                  }
+                  setMsg('已生成 ' + allRecords.length + '/' + total + ' 条朋友圈文案...');
+                });
+            });
+          })(i);
+        }
+        return chain.then(function() { return allRecords; });
+      })
+      .then(function(records) {
+        if (records.length) {
+          state.activeGroupId = recordGroupId(records[0]);
+          state.recordFilter = records[0].task || 'moments_candidate';
+        }
+        setMsg('已生成 ' + records.length + ' 条朋友圈文案。');
+        return Promise.all([loadDraftRecords(), loadSources()]).then(function() {
+          setRecordFilter(state.recordFilter || 'moments_candidate');
+          switchTab(successTab || 'records');
+        });
+      })
+      .catch(function(err) { setMsg(err.message || '生成失败', true); })
+      .finally(function() { setBusy(btn, false); });
+  }
+
+  function runGenerate(btn, endpoint, extraId, count, successTab, opts) {
     setBusy(btn, true, '生成中...');
     setMsg('正在同步数据并生成，请稍候...');
-    generationPayload(extraId, count)
+    generationPayload(extraId, count, opts)
       .then(function(payload) {
         return cloudJson(endpoint, { method: 'POST', body: payload });
       })
@@ -1346,30 +1885,52 @@
         rec.meta = Object.assign({}, rec.meta || {}, { image_status: rec._image_status, image_progress: rec._image_progress });
         refreshMomentBatchProgress(selected);
         var copyTextValue = (rec.body || rec.content || '').trim();
-        var originalImagePrompt = (rec.image_prompt || '').trim();
+        var promptList = recordImagePrompts(rec);
+        var originalImagePrompt = (promptList[0] || rec.image_prompt || '').trim();
         var imageExtra = (($('ipImageExtra') && $('ipImageExtra').value) || '').trim();
         var memoryIds = selectedMemoryIdsForRecord(rec);
         saveGenerationSettings();
         var basePrompt = [
-          originalImagePrompt ? '配图提示：' + originalImagePrompt : '',
           copyTextValue ? '朋友圈文案：' + copyTextValue : '',
           imageExtra ? '出图要求：' + imageExtra : '',
-          '只根据以上已审核文案和配图提示生成朋友圈配图。文案里的选题可能来自行业热门或同行新内容，图片要贴合这个新内容；同时必须遵守记忆文件里的账号定位、行业事实、产品/服务特点和表达风格，不要另起主题，不要出现文字、水印、按钮或二维码。'
+          '只根据以上已审核文案和当前配图文案生成朋友圈配图。文案里的选题可能来自行业热门或同行新内容，图片要贴合这个新内容；同时必须遵守记忆文件里的账号定位、行业事实、产品/服务特点和表达风格，不要另起主题，不要出现文字、水印、按钮或二维码。'
         ].filter(Boolean).join('\n\n');
         var images = [];
+        var imageVariants = [
+          {
+            name: '真实场景纪实',
+            prompt: '画面方向：真实场景纪实。用自然光、真实空间、人物动作或工作现场表现文案里的场景，强调可信和生活感。'
+          },
+          {
+            name: '细节特写隐喻',
+            prompt: '画面方向：细节特写隐喻。选择一个能代表文案观点的物件、手部动作、桌面资料、工具或局部空间做主体，强调情绪和专业细节。'
+          },
+          {
+            name: '关系与结果场景',
+            prompt: '画面方向：关系与结果场景。表现人与人沟通、客户反馈、团队讨论、成果交付或前后对比的瞬间，强调业务结果和案例感。'
+          }
+        ];
         var generateOne = function(index) {
           if (preview) preview.innerHTML = '<small>正在出图 ' + (index - 1) + '/3...</small>';
           rec._image_status = '正在出图 ' + (index - 1) + '/3...';
           rec._image_progress = (index - 1) + '/3';
           rec.meta = Object.assign({}, rec.meta || {}, { image_status: rec._image_status, image_progress: rec._image_progress, images: images });
           refreshMomentBatchProgress(selected);
+          var variant = imageVariants[(index - 1) % imageVariants.length];
+          var promptForImage = (promptList[index - 1] || originalImagePrompt || variant.prompt).trim();
           return localJson('/api/creative-film-studio/generate-image', {
             method: 'POST',
             body: {
               memory_doc_ids: memoryIds,
               title: rec.title || '朋友圈配图',
               goal: copyTextValue,
-              direct_prompt: basePrompt + '\n\n图片序号：' + index + '。在主体和文案情绪一致的前提下，构图、场景或细节要和其他图片有所区别。',
+              direct_prompt: [
+                promptForImage ? '当前配图文案：' + promptForImage : '',
+                basePrompt,
+                variant.prompt,
+                '这是同一条朋友圈文案的一组 3 张备选图中的第 ' + index + ' 张。优先执行“当前配图文案”，并保持和朋友圈正文同一个主题。三张图必须明显不同：主体、景别、构图、环境和关键道具至少改变三项；不要只改变色调或角度。',
+                '不要把朋友圈文案或配图提示写成画面里的文字；不要出现文字、水印、按钮、二维码。'
+              ].filter(Boolean).join('\n\n'),
               aspect_ratio: '1:1',
               image_model: 'gpt-image-2'
             }
@@ -1380,8 +1941,9 @@
             images.push({
               image_url: imageUrl,
               image_asset_id: assetId,
-              image_prompt: originalImagePrompt,
+              image_prompt: promptForImage,
               generated_prompt: data.image_prompt || '',
+              variant: variant.name,
               index: index,
               created_at: new Date().toISOString()
             });
@@ -1452,7 +2014,10 @@
   }
 
   function refreshAll() {
-    return Promise.all([loadMemory(), loadKeywords(), loadCompetitors(), loadSources(), loadDraftRecords()]);
+    return Promise.all([loadMemory(), loadKeywords(), loadCompetitors()])
+      .then(function() {
+        return Promise.all([loadServerTemplates(), loadSources(), loadDraftRecords()]);
+      });
   }
 
   function bind() {
@@ -1471,10 +2036,19 @@
       });
     });
     ['ipTask1Extra', 'ipTask2Extra', 'ipImageExtra'].forEach(function(id) {
-      if ($(id)) $(id).addEventListener('input', saveGenerationSettings);
+      if ($(id)) $(id).addEventListener('input', function() {
+        saveGenerationSettings();
+        renderTemplateSummary();
+      });
     });
-    if ($('ipTemplateSelect')) $('ipTemplateSelect').addEventListener('change', renderTemplateOptions);
-    if ($('ipApplyTemplateBtn')) $('ipApplyTemplateBtn').addEventListener('click', applySelectedTemplate);
+    if ($('ipRefreshTemplateBtn')) $('ipRefreshTemplateBtn').addEventListener('click', function() {
+      setBusy($('ipRefreshTemplateBtn'), true, '刷新中...');
+      loadServerTemplates().then(function() { setMsg('模板记录已刷新。'); }).finally(function() { setBusy($('ipRefreshTemplateBtn'), false); });
+    });
+    if ($('ipGenerateTemplateSelect')) $('ipGenerateTemplateSelect').addEventListener('change', function() {
+      selectTemplateById($('ipGenerateTemplateSelect').value);
+    });
+    if ($('ipNewTemplateBtn')) $('ipNewTemplateBtn').addEventListener('click', newTemplateDraft);
     if ($('ipSaveTemplateBtn')) $('ipSaveTemplateBtn').addEventListener('click', saveCurrentTemplate);
     if ($('ipDeleteTemplateBtn')) $('ipDeleteTemplateBtn').addEventListener('click', deleteSelectedTemplate);
     document.addEventListener('click', function() {
@@ -1503,7 +2077,7 @@
     });
     if ($('ipOpenRequirementConfigBtn')) $('ipOpenRequirementConfigBtn').addEventListener('click', function() {
       switchTab('config');
-      switchConfigTab('requirements');
+      switchConfigTab('templates');
     });
     if ($('ipRefreshKeywordSourcesBtn')) $('ipRefreshKeywordSourcesBtn').addEventListener('click', function() { loadSources(); });
     if ($('ipRefreshCompetitorSourcesBtn')) $('ipRefreshCompetitorSourcesBtn').addEventListener('click', function() { loadSources(); });
@@ -1516,13 +2090,13 @@
       renderSourceList('ipCompetitorSourceList', state.competitorSources, 'competitor', currentSourceFilter());
     });
     if ($('ipGenerateIndustryBtn')) $('ipGenerateIndustryBtn').addEventListener('click', function() {
-      runGenerate($('ipGenerateIndustryBtn'), '/api/ip-content/generate/industry-hot-oral', 'ipTask1Extra', 5, 'records');
+      runGenerate($('ipGenerateIndustryBtn'), '/api/ip-content/generate/industry-hot-oral', 'ipTask1Extra', 5, 'records', { requireKeywords: true });
     });
     if ($('ipGenerateIpBtn')) $('ipGenerateIpBtn').addEventListener('click', function() {
-      runGenerate($('ipGenerateIpBtn'), '/api/ip-content/generate/professional-ip-oral', 'ipTask1Extra', 5, 'records');
+      runGenerate($('ipGenerateIpBtn'), '/api/ip-content/generate/professional-ip-oral', 'ipTask1Extra', 5, 'records', { requireCompetitors: true });
     });
     if ($('ipGenerateMomentsBtn')) $('ipGenerateMomentsBtn').addEventListener('click', function() {
-      runGenerate($('ipGenerateMomentsBtn'), '/api/ip-content/generate/moments-candidates', 'ipTask2Extra', 20, 'records');
+      runMomentsGenerate($('ipGenerateMomentsBtn'), 'records');
     });
     if ($('ipGenerateSelectedImagesBtn')) $('ipGenerateSelectedImagesBtn').addEventListener('click', confirmMomentsImages);
   }

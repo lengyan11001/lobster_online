@@ -462,6 +462,9 @@ def _openclaw_local_model_patch_needed(config: dict) -> bool:
             return True
         if int(defaults.get("timeoutSeconds") or 0) < 600:
             return True
+        llm_cfg = defaults.get("llm")
+        if not isinstance(llm_cfg, dict) or int(llm_cfg.get("idleTimeoutSeconds") or 0) < 180:
+            return True
 
         models = config.get("models")
         if not isinstance(models, dict) or models.get("mode") != "merge":
@@ -585,6 +588,14 @@ def _ensure_lobster_sutui_local_models(config: dict) -> bool:
         changed = True
     if _safe_int(defaults.get("timeoutSeconds"), 0) < 600:
         defaults["timeoutSeconds"] = 600
+        changed = True
+    llm_cfg = defaults.setdefault("llm", {})
+    if not isinstance(llm_cfg, dict):
+        llm_cfg = {}
+        defaults["llm"] = llm_cfg
+        changed = True
+    if _safe_int(llm_cfg.get("idleTimeoutSeconds"), 0) < 180:
+        llm_cfg["idleTimeoutSeconds"] = 180
         changed = True
 
     agent_list = agents.setdefault("list", [])

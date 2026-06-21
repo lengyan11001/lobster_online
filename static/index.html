@@ -179,13 +179,21 @@
                   <details class="chat-sidebar-tree-group">
                     <summary><span class="chat-sidebar-tree-dot"></span><span>销售部</span></summary>
                     <div class="chat-sidebar-tree-items">
-                      <div class="chat-sidebar-tree-empty">暂无入口</div>
+                      <button type="button" class="chat-sidebar-entry" data-jump-view="douyin-leads" data-feature-gate="douyin_leads_access" hidden>
+                        <span class="chat-sidebar-entry-icon">D</span>
+                        <span class="chat-sidebar-entry-copy">抖音获客</span>
+                        <span class="chat-sidebar-entry-arrow">›</span>
+                      </button>
                     </div>
                   </details>
                   <details class="chat-sidebar-tree-group">
                     <summary><span class="chat-sidebar-tree-dot"></span><span>客服部</span></summary>
                     <div class="chat-sidebar-tree-items">
-                      <div class="chat-sidebar-tree-empty">暂无入口</div>
+                      <button type="button" class="chat-sidebar-entry" data-jump-view="wecom-config">
+                        <span class="chat-sidebar-entry-icon">微</span>
+                        <span class="chat-sidebar-entry-copy">企业微信客服</span>
+                        <span class="chat-sidebar-entry-arrow">›</span>
+                      </button>
                     </div>
                   </details>
                   <details class="chat-sidebar-tree-group" open>
@@ -1542,8 +1550,8 @@
                 <div style="display:flex;align-items:center;gap:0.75rem;">
                   <h3 style="margin:0;">企业微信客服 <span id="wecomDetailAppName" style="font-weight:normal;font-size:0.85rem;color:var(--text-muted);"></span></h3>
                   <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;font-size:0.82rem;" title="总开关：关闭后停止所有轮询和主动API调用">
-                    <input type="checkbox" id="wecomMasterSwitch" checked style="accent-color:var(--accent);width:16px;height:16px;">
-                    <span id="wecomMasterSwitchLabel" style="color:var(--accent);font-weight:600;">已启用</span>
+                    <input type="checkbox" id="wecomMasterSwitch" style="accent-color:var(--accent);width:16px;height:16px;">
+                    <span id="wecomMasterSwitchLabel" style="color:var(--text-muted);font-weight:600;">已关闭</span>
                   </label>
                 </div>
                 <button type="button" id="wecomDetailBackBtn" class="btn btn-ghost btn-sm">← 返回配置</button>
@@ -2482,12 +2490,12 @@
   </div>
 
   <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
-  <script src="/static/js/view-loader.js?v=20260528-view-loader"></script>
-  <script src="/static/js/view-registry.js?v=20260612-search-scroll-asset-cache"></script>
+  <script src="/static/js/view-loader.js?v=20260612-cache-bust"></script>
+  <script src="/static/js/view-registry.js?v=20260616-linkedin-workbench"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
   <script src="/static/js/chat.js?v=20260611-memory-dropdown-fix"></script>
-  <script src="/static/js/skill.js?v=20260606-creative-film-entry"></script>
+  <script src="/static/js/skill.js?v=20260616-linkedin-workbench"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>
@@ -2506,7 +2514,7 @@
   <script src="/static/js/cutcli-template-studio.js?v=20260605-cutcli-source-orientation"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js?v=20260612-asset-library-preview-cache"></script>
-  <script src="/static/js/scheduled-tasks.js?v=20260612-scheduled-form-run-detail"></script>
-  <script src="/static/js/init.js?v=20260610-assets-no-section-title"></script>
+  <script src="/static/js/scheduled-tasks.js?v=20260615-ip-daily-task-options"></script>
+  <script src="/static/js/init.js?v=20260612-feature-gate-cache"></script>
 </body>
 </html>

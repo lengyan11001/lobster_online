@@ -657,6 +657,7 @@ def _json_dumps_mcp_payload(obj: Any) -> str:
 _OPENCLAW_SCOPE_HEADER_INTENT = "X-Lobster-OpenClaw-Intent"
 _OPENCLAW_SCOPE_HEADER_TOOLS = "X-Lobster-Allowed-MCP-Tools"
 _OPENCLAW_SCOPE_HEADER_CAPS = "X-Lobster-Allowed-Capabilities"
+_OPENCLAW_SCOPE_HEADER_DENIED_CAPS = "X-Lobster-Denied-Capabilities"
 _OPENCLAW_VIDEO_MODEL_LOCK_HEADER = "X-Lobster-Video-Model-Lock"
 _OPENCLAW_VIDEO_MODEL_LOCK_SOURCE_HEADER = "X-Lobster-Video-Model-Lock-Source"
 _NO_AUTH_UNSCOPED_SAFE_TOOLS = frozenset({"list_capabilities", "list_assets"})
@@ -796,6 +797,9 @@ def _track_openclaw_background_task(task: asyncio.Task) -> None:
 _OPENCLAW_TASK_REGISTRY: Dict[str, Tuple[float, set[str]]] = {}
 _OPENCLAW_TASK_REGISTRY_TTL_SEC = 6 * 60 * 60.0
 _OPENCLAW_TASK_REGISTRY_MAX = 256
+_OPENCLAW_TURN_INVOKE_RESULT_CACHE: Dict[str, Tuple[float, str]] = {}
+_OPENCLAW_TURN_INVOKE_RESULT_CACHE_TTL_SEC = 30 * 60.0
+_OPENCLAW_TURN_INVOKE_RESULT_CACHE_MAX = 256
 _OPENCLAW_GENERATION_RESULT_GUARD_INTENTS = frozenset(
     {"image_generate", "image_generate_publish", "video_generate", "video_generate_publish"}
 )
@@ -846,6 +850,60 @@ def _known_openclaw_task_ids(request: Optional[Any], token: Optional[str]) -> se
     key = _openclaw_guard_key(request, token)
     entry = _OPENCLAW_TASK_REGISTRY.get(key)
     return set(entry[1]) if entry else set()
+
+
+def _openclaw_chat_turn_id(request: Optional[Any]) -> str:
+    return (
+        _request_header_raw(request, "X-Lobster-Chat-Turn-Id")
+        or _request_header_raw(request, "x-lobster-chat-turn-id")
+        or ""
+    ).strip()[:128]
+
+
+def _openclaw_turn_invoke_cache_key(
+    request: Optional[Any],
+    capability_id: str,
+    payload: Dict[str, Any],
+) -> str:
+    turn_id = _openclaw_chat_turn_id(request)
+    if not turn_id:
+        return ""
+    try:
+        payload_blob = json.dumps(_sanitize_for_json(payload or {}), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        payload_blob = str(payload or {})
+    digest = hashlib.sha256(payload_blob.encode("utf-8", errors="ignore")).hexdigest()
+    return f"{turn_id}:{(capability_id or '').strip()}:{digest}"
+
+
+def _prune_openclaw_turn_invoke_cache() -> None:
+    now = time.monotonic()
+    stale = [k for k, (ts, _) in _OPENCLAW_TURN_INVOKE_RESULT_CACHE.items() if now - ts > _OPENCLAW_TURN_INVOKE_RESULT_CACHE_TTL_SEC]
+    for key in stale:
+        _OPENCLAW_TURN_INVOKE_RESULT_CACHE.pop(key, None)
+    if len(_OPENCLAW_TURN_INVOKE_RESULT_CACHE) <= _OPENCLAW_TURN_INVOKE_RESULT_CACHE_MAX:
+        return
+    for key, _ in sorted(_OPENCLAW_TURN_INVOKE_RESULT_CACHE.items(), key=lambda kv: kv[1][0])[
+        : max(1, _OPENCLAW_TURN_INVOKE_RESULT_CACHE_MAX // 4)
+    ]:
+        _OPENCLAW_TURN_INVOKE_RESULT_CACHE.pop(key, None)
+
+
+def _openclaw_turn_invoke_cache_get(key: str) -> Optional[str]:
+    if not key:
+        return None
+    _prune_openclaw_turn_invoke_cache()
+    entry = _OPENCLAW_TURN_INVOKE_RESULT_CACHE.get(key)
+    if not entry:
+        return None
+    return entry[1]
+
+
+def _openclaw_turn_invoke_cache_set(key: str, text: str) -> None:
+    if not key or not text:
+        return
+    _prune_openclaw_turn_invoke_cache()
+    _OPENCLAW_TURN_INVOKE_RESULT_CACHE[key] = (time.monotonic(), text)
 
 
 def _openclaw_task_id_guard_error(
@@ -902,11 +960,12 @@ def _request_has_auth_material(request: Optional[Any]) -> bool:
 
 def _effective_openclaw_scope(
     request: Optional[Any],
-) -> Tuple[Optional[set[str]], Optional[set[str]], str, bool]:
+) -> Tuple[Optional[set[str]], Optional[set[str]], set[str], str, bool]:
     allowed_tools = _csv_scope_header(request, _OPENCLAW_SCOPE_HEADER_TOOLS)
     allowed_caps = _csv_scope_header(request, _OPENCLAW_SCOPE_HEADER_CAPS)
+    denied_caps = _csv_scope_header(request, _OPENCLAW_SCOPE_HEADER_DENIED_CAPS) or set()
     intent = _openclaw_scope_intent(request)
-    scoped = allowed_tools is not None or allowed_caps is not None
+    scoped = allowed_tools is not None or allowed_caps is not None or bool(denied_caps)
     if not scoped and not _request_has_auth_material(request):
         # OpenClaw/mcp-remote may do an unauthenticated warm-up tools/list before
         # the per-turn scope reaches the gateway. Never expose write/generate tools
@@ -915,7 +974,7 @@ def _effective_openclaw_scope(
         allowed_caps = set()
         intent = intent or "unauthenticated_safe"
         scoped = True
-    return allowed_tools, allowed_caps, intent, scoped
+    return allowed_tools, allowed_caps, denied_caps, intent, scoped
 
 
 def _openclaw_scope_error(name: str, cap_id: str, intent: str) -> Tuple[List[Dict[str, Any]], bool]:
@@ -1202,6 +1261,13 @@ def _backend_headers(token: Optional[str], request: Optional[Request] = None) ->
             h["X-Lobster-Pipeline-Id"] = pipeline_id[:128]
         if pipeline_cap:
             h["X-Lobster-Pipeline-Capability"] = pipeline_cap[:128]
+        client_overseas = (
+            request.headers.get("X-Lobster-Client-Overseas")
+            or request.headers.get("x-lobster-client-overseas")
+            or ""
+        ).strip()
+        if client_overseas:
+            h["X-Lobster-Client-Overseas"] = client_overseas
     bk = (os.environ.get("LOBSTER_MCP_BILLING_INTERNAL_KEY") or "").strip()
     if not bk and request is not None:
         bk = (
@@ -4613,7 +4679,7 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
 
         if name == "list_capabilities":
             is_admin = await _fetch_is_skill_store_admin(token)
-            _, allowed_caps, intent, _ = _effective_openclaw_scope(request)
+            _, allowed_caps, denied_caps, intent, _ = _effective_openclaw_scope(request)
             caps_out = []
             for cid in sorted(catalog.keys()):
                 if catalog[cid].get("enabled") is False:
@@ -4621,6 +4687,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 if _capability_id_is_debug_only_in_registry(cid) and not is_admin:
                     continue
                 if allowed_caps is not None and cid not in allowed_caps:
+                    continue
+                if cid in denied_caps:
                     continue
                 caps_out.append({"capability_id": cid, "description": catalog[cid].get("description") or cid})
             data = {"capabilities": caps_out}
@@ -4885,6 +4953,20 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 _task_guard_error = _openclaw_task_id_guard_error(payload, request, token)
                 if _task_guard_error:
                     return [{"type": "text", "text": _task_guard_error}], True
+
+            openclaw_turn_cache_key = ""
+            if capability_id != "task.get_result" and (
+                _request_from_openclaw_mcp(request) or _openclaw_scope_intent(request)
+            ):
+                openclaw_turn_cache_key = _openclaw_turn_invoke_cache_key(request, capability_id, payload)
+                cached_text = _openclaw_turn_invoke_cache_get(openclaw_turn_cache_key)
+                if cached_text is not None:
+                    logger.warning(
+                        "[MCP OpenClaw] duplicate invoke blocked capability_id=%s cache_key=%s",
+                        capability_id,
+                        openclaw_turn_cache_key[:48],
+                    )
+                    return [{"type": "text", "text": cached_text}], False
 
             def _pre_deduct_insufficient_user_text(detail: Any) -> str:
                 base = "当前账户算力不足，无法调用该能力。请前往「充值」页购买/充值后再试。"
@@ -5585,6 +5667,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                     if local_error:
                         out_payload["error"] = local_error
                     text = _json_dumps_mcp_payload(out_payload)
+                    if openclaw_turn_cache_key and not local_error:
+                        _openclaw_turn_invoke_cache_set(openclaw_turn_cache_key, text)
                     return [{"type": "text", "text": text}], bool(local_error)
                 except Exception as e:
                     logger.exception("local backend %s failed: %s", capability_id, e)
@@ -5813,6 +5897,8 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 _attach_openclaw_evidence_contract(data, capability_id, payload, upstream_resp, saved)
 
             text = _json_dumps_mcp_payload(data)
+            if openclaw_turn_cache_key and not upstream_error:
+                _openclaw_turn_invoke_cache_set(openclaw_turn_cache_key, text)
             return [{"type": "text", "text": text}], bool(upstream_error)
 
         if name == "save_asset":
@@ -6268,16 +6354,26 @@ async def _handle_single_message(msg: Dict[str, Any], request: Request) -> Optio
     if method == "tools/list":
         catalog = _load_capability_catalog()
         token = _get_token_from_request(request)
-        allowed_tools, allowed_caps, intent, scoped = _effective_openclaw_scope(request)
+        allowed_tools, allowed_caps, denied_caps, intent, scoped = _effective_openclaw_scope(request)
         if _request_from_openclaw_mcp(request):
             is_admin = False
         else:
             is_admin = await _fetch_is_skill_store_admin(token)
+        effective_allowed_caps = allowed_caps
+        if denied_caps:
+            if effective_allowed_caps is None:
+                effective_allowed_caps = {
+                    cid
+                    for cid, cfg in catalog.items()
+                    if cfg.get("enabled") is not False and cid not in denied_caps
+                }
+            else:
+                effective_allowed_caps = set(effective_allowed_caps) - set(denied_caps)
         tools = _tool_definitions(
             catalog,
             is_skill_store_admin=is_admin,
             allowed_tool_names=allowed_tools,
-            allowed_capability_ids=allowed_caps,
+            allowed_capability_ids=effective_allowed_caps,
             openclaw_mode=bool(scoped or intent),
         )
         logger.info(
@@ -6292,12 +6388,15 @@ async def _handle_single_message(msg: Dict[str, Any], request: Request) -> Optio
         arguments = params.get("arguments") or {}
         cap_id = str(arguments.get("capability_id") or "").strip() if name == "invoke_capability" else ""
         token = _get_token_from_request(request)
-        allowed_tools, allowed_caps, intent, _ = _effective_openclaw_scope(request)
+        allowed_tools, allowed_caps, denied_caps, intent, _ = _effective_openclaw_scope(request)
         logger.info("[MCP] tools/call name=%s capability_id=%s intent=%s", name, cap_id or "-", intent or "-")
         if allowed_tools is not None and str(name or "") not in allowed_tools:
             content, is_error = _openclaw_scope_error(str(name or ""), cap_id, intent)
             return {"jsonrpc": "2.0", "id": msg_id, "result": {"content": content, "isError": is_error}}
         if name == "invoke_capability" and allowed_caps is not None and cap_id not in allowed_caps:
+            content, is_error = _openclaw_scope_error(str(name or ""), cap_id, intent)
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"content": content, "isError": is_error}}
+        if name == "invoke_capability" and cap_id in denied_caps:
             content, is_error = _openclaw_scope_error(str(name or ""), cap_id, intent)
             return {"jsonrpc": "2.0", "id": msg_id, "result": {"content": content, "isError": is_error}}
         content, is_error = await _call_tool(name, arguments, token, request=request)

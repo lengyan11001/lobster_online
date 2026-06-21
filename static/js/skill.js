@@ -1324,8 +1324,8 @@ window._openCreativeFilmStudioView = function() {
 window._openIpContentStudioView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ip-content-studio', {
-      html: '/static/views/ip-content-studio.html?v=20260608-ip-content-flow',
-      scripts: '/static/js/ip-content-studio.js?v=20260608-ip-content-flow',
+      html: '/static/views/ip-content-studio.html?v=20260615-ip-content-batch',
+      scripts: '/static/js/ip-content-studio.js?v=20260615-ip-content-batch',
       cache: 'reload'
     });
   }
@@ -1343,6 +1343,78 @@ window._openIpContentStudioView = function() {
   _switchToHiddenView('ip-content-studio');
   if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView();
   try { location.hash = 'ip-content-studio'; } catch (e1) {}
+};
+
+window._openJuheWechatView = function() {
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('juhe-wechat', {
+      html: '/static/views/juhe-wechat.html?v=20260618-user-actions-only',
+      scripts: '/static/js/juhe-wechat.js?v=20260618-user-actions-only',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('juhe-wechat', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .then(function() {
+        if (typeof window.initJuheWechatView === 'function') window.initJuheWechatView();
+      })
+      .catch(function(err) {
+        console.error('Failed to open juhe-wechat', err);
+        alert('微信协议助手页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('juhe-wechat');
+  if (typeof window.initJuheWechatView === 'function') window.initJuheWechatView();
+  try { location.hash = 'juhe-wechat'; } catch (e1) {}
+};
+
+window._openLinkedinMiningView = function() {
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('linkedin-mining', {
+      html: '/static/views/linkedin-mining.html?v=20260616-linkedin-workbench',
+      scripts: '/static/js/linkedin-mining.js?v=20260616-linkedin-workbench',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('linkedin-mining', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .then(function() {
+        if (typeof window.initLinkedinMiningView === 'function') window.initLinkedinMiningView();
+      })
+      .catch(function(err) {
+        console.error('Failed to open linkedin-mining', err);
+        alert('LinkedIn线索挖掘页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('linkedin-mining');
+  if (typeof window.initLinkedinMiningView === 'function') window.initLinkedinMiningView();
+  try { location.hash = 'linkedin-mining'; } catch (e1) {}
+};
+
+window._openWechatChannelsTranscriptView = function() {
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('wechat-channels-transcript', {
+      html: '/static/views/wechat-channels-transcript.html?v=20260621-wct',
+      scripts: '/static/js/wechat-channels-transcript.js?v=20260621-wct',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('wechat-channels-transcript', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .then(function() {
+        if (typeof window.initWechatChannelsTranscriptView === 'function') window.initWechatChannelsTranscriptView();
+      })
+      .catch(function(err) {
+        console.error('Failed to open wechat-channels-transcript', err);
+        alert('视频号文案提取页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('wechat-channels-transcript');
+  if (typeof window.initWechatChannelsTranscriptView === 'function') window.initWechatChannelsTranscriptView();
+  try { location.hash = 'wechat-channels-transcript'; } catch (e1) {}
 };
 
 window._openHiddenWorkspaceView = function(view) {
@@ -1404,6 +1476,18 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'ip-content-studio' && typeof window._openIpContentStudioView === 'function') {
     window._openIpContentStudioView();
+    return;
+  }
+  if (target === 'juhe-wechat' && typeof window._openJuheWechatView === 'function') {
+    window._openJuheWechatView();
+    return;
+  }
+  if (target === 'wechat-channels-transcript' && typeof window._openWechatChannelsTranscriptView === 'function') {
+    window._openWechatChannelsTranscriptView();
+    return;
+  }
+  if (target === 'linkedin-mining' && typeof window._openLinkedinMiningView === 'function') {
+    window._openLinkedinMiningView();
     return;
   }
   if (target === 'meta-social' && typeof window._openMetaSocialView === 'function') {
@@ -1690,6 +1774,53 @@ function _renderIpContentStudioCard(pkg, showDebug) {
   '</div>';
 }
 
+function _renderLinkedinMiningCard(pkg, showDebug) {
+  pkg = pkg || {};
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['TikHub', 'LinkedIn', 'B2B']);
+  var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+  return '<div class="skill-store-card linkedin-mining-card" data-skill-package-id="' + escapeAttr(pkg.id || 'linkedin_mining_skill') + '" style="cursor:pointer;border-color:rgba(10,102,194,0.36);background:linear-gradient(135deg,rgba(10,102,194,0.09),rgba(15,118,110,0.05));">' +
+    '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || 'LinkedIn线索挖掘')) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '输入LinkedIn主页、公司、关键词或话题，自动同步数据并生成线索分析报告。')) + cap + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm linkedin-mining-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _renderJuheWechatCard(pkg, showDebug) {
+  pkg = pkg || {};
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['微信协议', '服务器托管', '批量加人']);
+  var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+  return '<div class="skill-store-card juhe-wechat-card" data-skill-package-id="' + escapeAttr(pkg.id || 'juhe_wechat_skill') + '" style="cursor:pointer;border-color:rgba(34,197,94,0.34);background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(20,184,166,0.05));">' +
+    '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '微信协议助手')) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '使用后台已绑定的微信实例执行检测、消息发送和调用记录查看。')) + cap + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm juhe-wechat-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _renderWechatChannelsTranscriptCard(pkg, showDebug) {
+  pkg = pkg || {};
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['视频号', 'TikHub', '文案提取']);
+  return '<div class="skill-store-card wechat-channels-transcript-card" data-skill-package-id="' + escapeAttr(pkg.id || 'wechat_channels_transcript_skill') + '" style="cursor:pointer;border-color:rgba(14,165,233,0.34);background:linear-gradient(135deg,rgba(14,165,233,0.08),rgba(20,184,166,0.05));">' +
+    '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '视频号文案提取')) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '查询视频号账号作品，批量下载视频并提取口播文案，可复制和导出。')) + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-channels-transcript-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
 function _openclawWeixinResolveBase() {
   if (typeof LOCAL_API_BASE === 'undefined' || !LOCAL_API_BASE) return '';
   return String(LOCAL_API_BASE).replace(/\/$/, '');
@@ -1736,11 +1867,13 @@ function _fetchSkillStoreFrom(base) {
   var b = String(base || '').replace(/\/$/, '');
   if (!b) return Promise.resolve({ packages: [] });
   var auth = '';
+  var overseas = 'domestic';
   try {
     var headers = (typeof authHeaders === 'function') ? authHeaders() : {};
     auth = String((headers && headers.Authorization) || (headers && headers.authorization) || '');
+    overseas = (headers && (headers['X-Lobster-Client-Overseas'] || headers['x-lobster-client-overseas'])) ? 'overseas' : 'domestic';
   } catch (eAuth) {}
-  var key = b + '|' + auth;
+  var key = b + '|' + auth + '|' + overseas;
   var now = Date.now();
   var cached = _skillStoreFetchCache[key];
   if (cached && cached.data && (now - cached.at) < _SKILL_STORE_FETCH_TTL_MS) {
@@ -2414,6 +2547,8 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'wecom_reply': { title: '企业微信自动回复', desc: '企微客服回复' },
   'ecommerce_publish_skill': { title: '商品发布', desc: '管理店铺账号' },
   'ip_content_daily_skill': { title: 'IP日更文案', desc: '榜单、同行、记忆生成文案' },
+  'linkedin_mining_skill': { title: 'LinkedIn线索挖掘', desc: '画像、候选人、图谱和报告' },
+  'juhe_wechat_skill': { title: '微信协议助手', desc: '使用后台绑定实例' },
   'create_ppt_skill': { title: 'PPT 生成', desc: '主题生成演示文稿' },
   'mcp_agency_lona_trading': { title: 'Lona Trading', desc: '业务自动化工具' }
 };
@@ -2434,7 +2569,9 @@ var _SKILL_STORE_SIMPLE_COPY_BY_CLASS = {
   'messenger-reply-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.messenger_reply,
   'wecom-reply-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.wecom_reply,
   'ecommerce-publish-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ecommerce_publish_skill,
-  'ip-content-studio-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ip_content_daily_skill
+  'ip-content-studio-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ip_content_daily_skill,
+  'linkedin-mining-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.linkedin_mining_skill,
+  'juhe-wechat-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.juhe_wechat_skill
 };
 var _SKILL_STORE_SIMPLE_COPY_PATTERNS = [
   [/AI\s*模型|模型能力|sutui|速推/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.sutui_mcp],
@@ -2456,6 +2593,8 @@ var _SKILL_STORE_SIMPLE_COPY_PATTERNS = [
   [/企业微信|企微|wecom/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.wecom_reply],
   [/商品发布|电商发布|店铺账号/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.ecommerce_publish_skill],
   [/IP日更|日更文案|TikHub|同行|榜单/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.ip_content_daily_skill],
+  [/LinkedIn|linkedin|线索挖掘|B2B/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.linkedin_mining_skill],
+  [/juhe|juhebot|wechat protocol|微信协议/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.juhe_wechat_skill],
   [/ppt|presentation|演示文稿/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.create_ppt_skill],
   [/agency_lona|lona/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.mcp_agency_lona_trading]
 ];
@@ -2480,6 +2619,8 @@ var _SKILL_STORE_ICON_BY_ID = {
   'wecom_reply': { icon: 'building', tone: 'cyan' },
   'ecommerce_publish_skill': { icon: 'store', tone: 'orange' },
   'ip_content_daily_skill': { icon: 'trend', tone: 'teal' },
+  'linkedin_mining_skill': { icon: 'network', tone: 'blue' },
+  'juhe_wechat_skill': { icon: 'message', tone: 'green' },
   'create_ppt_skill': { icon: 'presentation', tone: 'orange' },
   'mcp_agency_lona_trading': { icon: 'plug', tone: 'slate' }
 };
@@ -2500,7 +2641,9 @@ var _SKILL_STORE_ICON_BY_CLASS = {
   'messenger-reply-card': _SKILL_STORE_ICON_BY_ID.messenger_reply,
   'wecom-reply-card': _SKILL_STORE_ICON_BY_ID.wecom_reply,
   'ecommerce-publish-card': _SKILL_STORE_ICON_BY_ID.ecommerce_publish_skill,
-  'ip-content-studio-card': _SKILL_STORE_ICON_BY_ID.ip_content_daily_skill
+  'ip-content-studio-card': _SKILL_STORE_ICON_BY_ID.ip_content_daily_skill,
+  'linkedin-mining-card': _SKILL_STORE_ICON_BY_ID.linkedin_mining_skill,
+  'juhe-wechat-card': _SKILL_STORE_ICON_BY_ID.juhe_wechat_skill
 };
 var _SKILL_STORE_ICON_PATTERNS = [
   [/AI\s*模型|模型能力|sutui|速推/i, _SKILL_STORE_ICON_BY_ID.sutui_mcp],
@@ -2522,6 +2665,8 @@ var _SKILL_STORE_ICON_PATTERNS = [
   [/企业微信|企微|wecom/i, _SKILL_STORE_ICON_BY_ID.wecom_reply],
   [/商品发布|电商发布|店铺账号/i, _SKILL_STORE_ICON_BY_ID.ecommerce_publish_skill],
   [/IP日更|日更文案|TikHub|同行|榜单/i, _SKILL_STORE_ICON_BY_ID.ip_content_daily_skill],
+  [/LinkedIn|linkedin|线索挖掘|B2B/i, _SKILL_STORE_ICON_BY_ID.linkedin_mining_skill],
+  [/juhe|juhebot|wechat protocol|微信协议/i, _SKILL_STORE_ICON_BY_ID.juhe_wechat_skill],
   [/ppt|presentation|演示文稿/i, _SKILL_STORE_ICON_BY_ID.create_ppt_skill],
   [/agency_lona|lona|mcp/i, _SKILL_STORE_ICON_BY_ID.mcp_agency_lona_trading]
 ];
@@ -2567,6 +2712,7 @@ function _skillStoreIconSvg(name) {
     film: '<rect x="4" y="5" width="16" height="14" rx="3"></rect><path d="M8 5v14"></path><path d="M16 5v14"></path><path d="M4 10h4"></path><path d="M16 10h4"></path><path d="M4 15h4"></path><path d="M16 15h4"></path>',
     presentation: '<rect x="5" y="4" width="14" height="11" rx="2"></rect><path d="M12 15v5"></path><path d="M8 20h8"></path><path d="M9 9h6"></path><path d="M9 12h4"></path>',
     trend: '<path d="M4 17l6-6 4 4 6-8"></path><path d="M14 7h6v6"></path><path d="M4 21h16"></path>',
+    network: '<circle cx="6" cy="7" r="3"></circle><circle cx="18" cy="7" r="3"></circle><circle cx="12" cy="18" r="3"></circle><path d="M8.6 8.6l6.8 6.8"></path><path d="M15.4 8.6l-6.8 6.8"></path><path d="M9 7h6"></path>',
     plug: '<path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M7 7h10v5a5 5 0 0 1-10 0V7z"></path><path d="M12 17v4"></path>'
   };
   var paths = icons[name] || icons.sparkles;
@@ -2610,10 +2756,34 @@ function _isIpContentSkillCard(card) {
     card.classList.contains('ip-content-studio-card');
 }
 
+function _isLinkedinMiningSkillCard(card) {
+  if (!card) return false;
+  var packageId = card.getAttribute('data-skill-package-id') || '';
+  return packageId === 'linkedin_mining_skill' ||
+    card.classList.contains('linkedin-mining-card');
+}
+
+function _isJuheWechatSkillCard(card) {
+  if (!card) return false;
+  var packageId = card.getAttribute('data-skill-package-id') || '';
+  return packageId === 'juhe_wechat_skill' ||
+    card.classList.contains('juhe-wechat-card');
+}
+
+function _isWechatChannelsTranscriptSkillCard(card) {
+  if (!card) return false;
+  var packageId = card.getAttribute('data-skill-package-id') || '';
+  return packageId === 'wechat_channels_transcript_skill' ||
+    card.classList.contains('wechat-channels-transcript-card');
+}
+
 function _simplifySkillStoreCards(el) {
   if (!el) return;
   el.querySelectorAll('.skill-store-card').forEach(function(card) {
     if (_isCreativeFilmSkillCard(card)) return;
+    if (_isLinkedinMiningSkillCard(card)) return;
+    if (_isJuheWechatSkillCard(card)) return;
+    if (_isWechatChannelsTranscriptSkillCard(card)) return;
     var copy = _skillStoreSimpleCopyFor(card) || {};
     card.classList.add('is-simple-skill-card');
     Array.prototype.slice.call(card.children || []).forEach(function(child) {
@@ -2671,6 +2841,8 @@ function _decorateSkillImageCards(el) {
     'shanjian-smart-clip-card',
     'goal-video-pipeline-card',
     'ip-content-studio-card',
+    'linkedin-mining-card',
+    'juhe-wechat-card',
     'wechat-article-card',
     'openclaw-skill-workspace-card',
     'openclaw-memory-card'
@@ -2693,6 +2865,9 @@ function _decorateSkillImageCards(el) {
     var hasCardClick = cardClickableClasses.some(function(cls) { return card.classList.contains(cls); });
     if (_isCreativeFilmSkillCard(card)) return;
     if (_isIpContentSkillCard(card)) return;
+    if (_isLinkedinMiningSkillCard(card)) return;
+    if (_isJuheWechatSkillCard(card)) return;
+    if (_isWechatChannelsTranscriptSkillCard(card)) return;
     if (hasCardClick || card.dataset.imageCardProxyBound === '1') return;
     var primaryAction = card.querySelector(
       '[data-unlock-credits], [data-install], ' +
@@ -2737,6 +2912,9 @@ function loadSkillStore() {
       var metaPkg = pkgById('meta_social');
       var cutcliPkg = pkgById('cutcli_template_skill') || pkgById('cutcli_templates_skill') || pkgById('cutcli_template_studio');
       var ipContentPkg = pkgById('ip_content_daily_skill');
+      var linkedinMiningPkg = pkgById('linkedin_mining_skill');
+      var juheWechatPkg = pkgById('juhe_wechat_skill');
+      var wechatTranscriptPkg = pkgById('wechat_channels_transcript_skill');
 
       function paintSkillStoreList() {
         var html = '';
@@ -2749,6 +2927,9 @@ function loadSkillStore() {
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
         if (ipContentPkg) html += _renderIpContentStudioCard(ipContentPkg, !!(isSkillAdmin && ipContentPkg.store_visibility === 'debug'));
+        if (linkedinMiningPkg) html += _renderLinkedinMiningCard(linkedinMiningPkg, !!(isSkillAdmin && linkedinMiningPkg.store_visibility === 'debug'));
+        if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
+        if (wechatTranscriptPkg) html += _renderWechatChannelsTranscriptCard(wechatTranscriptPkg, !!(isSkillAdmin && wechatTranscriptPkg.store_visibility === 'debug'));
         if (browserUsePkg) {
           html += _renderOpenclawSkillWorkspaceCard(browserUsePkg, {
             skillId: 'browser_use_skill',
@@ -2793,6 +2974,8 @@ function loadSkillStore() {
           if (pkg.id === 'cutcli_template_studio') return '';
           if (pkg.id === 'comfly_ecommerce_detail_skill') return '';
           if (pkg.id === 'ip_content_daily_skill') return '';
+          if (pkg.id === 'linkedin_mining_skill') return '';
+          if (pkg.id === 'juhe_wechat_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
           if (pkg.id === 'browser_use_skill') return '';
@@ -2887,6 +3070,9 @@ function loadSkillStore() {
         _bindShanjianSmartClipCardEntry();
         _bindGoalVideoPipelineCardEntry();
         _bindIpContentStudioCardEntry();
+        _bindLinkedinMiningCardEntry();
+        _bindJuheWechatCardEntry();
+        _bindWechatChannelsTranscriptCardEntry();
         _bindWechatArticleCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
@@ -3248,6 +3434,66 @@ function _bindIpContentStudioCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openIpContentStudioView === 'function') window._openIpContentStudioView();
+    });
+  });
+}
+
+function _bindLinkedinMiningCardEntry() {
+  document.querySelectorAll('.linkedin-mining-card, [data-skill-package-id="linkedin_mining_skill"]').forEach(function(card) {
+    if (card.dataset.linkedinMiningEntryBound === '1') return;
+    card.dataset.linkedinMiningEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openLinkedinMiningView === 'function') window._openLinkedinMiningView();
+    });
+  });
+  document.querySelectorAll('.linkedin-mining-entry-btn').forEach(function(btn) {
+    if (btn.dataset.linkedinMiningEntryBound === '1') return;
+    btn.dataset.linkedinMiningEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openLinkedinMiningView === 'function') window._openLinkedinMiningView();
+    });
+  });
+}
+
+function _bindJuheWechatCardEntry() {
+  document.querySelectorAll('.juhe-wechat-card, [data-skill-package-id="juhe_wechat_skill"]').forEach(function(card) {
+    if (card.dataset.juheWechatEntryBound === '1') return;
+    card.dataset.juheWechatEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openJuheWechatView === 'function') window._openJuheWechatView();
+    });
+  });
+  document.querySelectorAll('.juhe-wechat-entry-btn').forEach(function(btn) {
+    if (btn.dataset.juheWechatEntryBound === '1') return;
+    btn.dataset.juheWechatEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openJuheWechatView === 'function') window._openJuheWechatView();
+    });
+  });
+}
+
+function _bindWechatChannelsTranscriptCardEntry() {
+  document.querySelectorAll('.wechat-channels-transcript-card, [data-skill-package-id="wechat_channels_transcript_skill"]').forEach(function(card) {
+    if (card.dataset.wechatChannelsTranscriptEntryBound === '1') return;
+    card.dataset.wechatChannelsTranscriptEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openWechatChannelsTranscriptView === 'function') window._openWechatChannelsTranscriptView();
+    });
+  });
+  document.querySelectorAll('.wechat-channels-transcript-entry-btn').forEach(function(btn) {
+    if (btn.dataset.wechatChannelsTranscriptEntryBound === '1') return;
+    btn.dataset.wechatChannelsTranscriptEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openWechatChannelsTranscriptView === 'function') window._openWechatChannelsTranscriptView();
     });
   });
 }

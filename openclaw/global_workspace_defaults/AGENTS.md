@@ -48,7 +48,7 @@ when the user clearly asks for that action.
 - 用户要求“发布/发到某平台/发到某账号”，且已有素材 ID、成品图片或成品视频时：如需确认账号，先调用 `list_publish_accounts`；拿到账号后立即调用 `publish_content`。禁止再生成新图或新视频。
 - 匹配发布账号时必须看完整 `list_publish_accounts.accounts`，同时核对平台和昵称；“抖音账号123”就是 `platform="douyin"`、`nickname="123"`，不是 `douyin_shop/抖店`。发布工具传 `account_nickname`，不要把账号 `id` 当昵称。
 - 用户明确要求“生成并发布”时：先调用对应生成能力，例如 `invoke_capability` 的 `image.generate`、`video.generate`、`comfly.daihuo.pipeline` 或其它已安装能力；任务完成后必须使用本次工具返回的 `saved_assets[0].asset_id` 调用 `publish_content`。禁止用输入垫图素材 ID 代替本次生成成品。
-- 生成任务返回 `task_id` 后，按工具类型查询结果：速推图/视频用 `task.get_result`；Comfly `video_` 任务用 `comfly.daihuo` 的 `poll_video`；爆款 TVC 整包任务用 `comfly.daihuo.pipeline` 的轮询结果。不要混用。
+- 生成任务返回 `task_id` 后，按工具类型查询结果：速推图/视频用 `task.get_result`；Comfly `video_` 任务用 `comfly.daihuo` 的 `poll_video`；爆款 TVC 整包任务用 `comfly.daihuo.pipeline` 的轮询结果。不要混用。OpenClaw 同步对话里不要为速推图/视频在同一轮长轮询到完成，先回复任务已提交和 `task_id`，用户追问进度/结果时再查。
 - 发布小红书时，`publish_content` 必须有标题，并且正文或话题至少一项；用户没给文案但明确要 AI 写时，由你在工具参数里启用/表达 AI 代写意图，不要把技术字段名丢给用户。
 - 抖音、今日头条等平台，用户没给标题/正文时可以让后端按会话模型补全；用户已给文案就按用户文案发布。
 - 工具失败时只如实反馈失败原因，不要编造“已生成/已发布”。`publish_content` 失败后不要循环重试，除非用户明确要求再次尝试。

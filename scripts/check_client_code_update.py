@@ -20,11 +20,13 @@ from __future__ import annotations
 import datetime
 import errno
 import hashlib
+import msvcrt
 import json
 import os
 import shutil
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -200,7 +202,49 @@ _DESKTOP_EXE_NAME = "必火智能AI.exe"
 _DESKTOP_EXE_NAMES = (_DESKTOP_EXE_NAME, "必火AI员工.exe")
 _PENDING_UPDATE_DIR = ROOT / ".updates"
 _PENDING_EXE_MARKER = _PENDING_UPDATE_DIR / "pending_exe_replace.json"
+_PENDING_PATH_REPLACE_MARKER = _PENDING_UPDATE_DIR / "pending_path_replace.json"
+_PENDING_BUNDLE_ROLLBACK_MARKER = _PENDING_UPDATE_DIR / "pending_bundle_rollback.json"
+_UPDATE_LOCK_FILE = _PENDING_UPDATE_DIR / "client_code_update.lock"
 _STOP_CLIENT_SERVICES_DONE = False
+_INCREMENTAL_APPLY_DIRS = {
+    "scripts",
+    "backend",
+    "desktop",
+    "mcp",
+    "static",
+    "publisher",
+    "skills",
+}
+_FILE_COMPARE_CHUNK_SIZE = 1024 * 1024
+_MANIFEST_FETCH_RETRIES = 3
+_MANIFEST_FETCH_TIMEOUT_SECONDS = 30
+_MANIFEST_FETCH_RETRY_BASE_DELAY_SECONDS = 2
+
+
+def _acquire_update_lock() -> Any | None:
+    _PENDING_UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+    f = _UPDATE_LOCK_FILE.open("a+b")
+    try:
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        return f
+    except OSError:
+        f.close()
+        print("[code] [WARN] updater already running; skip this check.", flush=True)
+        return None
+
+
+def _release_update_lock(lock_file: Any | None) -> None:
+    if lock_file is None:
+        return
+    try:
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    try:
+        lock_file.close()
+    except OSError:
+        pass
 
 
 def _load_dotenv_simple(path: Path) -> dict[str, str]:
@@ -286,7 +330,7 @@ def _save_local_build(build: int, version_from_manifest: str | None = None) -> N
         except Exception:
             prev = {}
     prev["build"] = int(build)
-    applied = datetime.datetime.utcnow().isoformat() + "Z"
+    applied = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
     prev["applied_at"] = applied
     mv = (version_from_manifest or "").strip()
     if mv:
@@ -331,9 +375,55 @@ def _fetch_json(url: str, timeout: int = 45) -> dict:
     return json.loads(raw.decode("utf-8"))
 
 
-def _download_file(url: str, dest: Path, timeout: int = 300) -> None:
+def _fetch_manifest_with_retry(url: str) -> dict:
+    last_exc: Exception | None = None
+    for attempt in range(1, _MANIFEST_FETCH_RETRIES + 1):
+        try:
+            print(
+                f"[code-progress] manifest_fetch_start attempt={attempt}/{_MANIFEST_FETCH_RETRIES}",
+                flush=True,
+            )
+            data = _fetch_json(url, timeout=_MANIFEST_FETCH_TIMEOUT_SECONDS)
+            print(f"[code-progress] manifest_fetch_done attempt={attempt}", flush=True)
+            return data
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"[code] [WARN] manifest fetch failed attempt={attempt}/{_MANIFEST_FETCH_RETRIES}: {exc}",
+                flush=True,
+            )
+            if attempt < _MANIFEST_FETCH_RETRIES:
+                time.sleep(_MANIFEST_FETCH_RETRY_BASE_DELAY_SECONDS * attempt)
+    assert last_exc is not None
+    raise last_exc
+
+
+def _download_file(url: str, dest: Path, timeout: int = 900) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "LobsterClientCode/1.0"})
-    dest.write_bytes(_urlopen_with_fallback(req, timeout))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.downloading.{os.getpid()}")
+    if tmp.exists():
+        tmp.unlink()
+    try:
+        with tmp.open("wb") as f:
+            try:
+                with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
+                    shutil.copyfileobj(resp, f, length=1024 * 1024)
+            except urllib.error.URLError as e:
+                if "CERTIFICATE_VERIFY_FAILED" not in str(e) and "SSL" not in str(e).upper():
+                    raise
+                print(f"[code] [WARN] SSL 璇佷功楠岃瘉澶辫触锛岄檷绾т负涓嶉獙璇佹ā寮? {e}", flush=True)
+                req2 = urllib.request.Request(req.full_url, headers=dict(req.headers))
+                with urllib.request.urlopen(req2, timeout=timeout, context=_ssl_context(allow_unverified=True)) as resp:
+                    shutil.copyfileobj(resp, f, length=1024 * 1024)
+        os.replace(str(tmp), str(dest))
+    except Exception:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _sha256_file(path: Path) -> str:
@@ -376,7 +466,7 @@ def _stage_pending_exe_replace(src: Path, dst: Path, exc: BaseException) -> None
         "target_path": _norm_rel(str(dst.relative_to(ROOT))),
         "pending_path": _norm_rel(str(pending.relative_to(ROOT))),
         "sha256": sha,
-        "staged_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "staged_at": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
         "reason": str(exc)[:500],
     }
     _PENDING_EXE_MARKER.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -417,6 +507,116 @@ def _apply_pending_exe_replace() -> None:
             return
         print(f"[code] [WARN] pending exe 替换失败: {exc}", flush=True)
 
+
+def _rel_for_marker(path: Path) -> str:
+    return _norm_rel(str(path.relative_to(ROOT)))
+
+
+def _path_from_marker(value: Any) -> Path:
+    rel = _norm_rel(str(value or ""))
+    if not _path_allowed(rel):
+        raise ValueError(f"invalid pending update path: {rel}")
+    return ROOT / rel.replace("/", os.sep)
+
+
+def _write_pending_path_replace_marker(dst: Path, backup: Path) -> None:
+    _PENDING_UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "target_path": _rel_for_marker(dst),
+        "backup_path": _rel_for_marker(backup),
+        "staged_at": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
+    }
+    _PENDING_PATH_REPLACE_MARKER.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _clear_pending_path_replace_marker() -> None:
+    try:
+        _PENDING_PATH_REPLACE_MARKER.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _restore_path_from_backup(dst: Path, backup: Path) -> None:
+    if not backup.exists():
+        return
+    _delete_path(dst)
+    os.replace(str(backup), str(dst))
+
+
+def _apply_pending_path_replace_recovery() -> None:
+    if not _PENDING_PATH_REPLACE_MARKER.is_file():
+        return
+    try:
+        data = json.loads(_PENDING_PATH_REPLACE_MARKER.read_text(encoding="utf-8"))
+        dst = _path_from_marker(data.get("target_path"))
+        backup = _path_from_marker(data.get("backup_path"))
+        if backup.exists():
+            _restore_path_from_backup(dst, backup)
+            print(f"[code] recovered interrupted path replace: {_rel_for_marker(dst)}", flush=True)
+        _clear_pending_path_replace_marker()
+    except Exception as exc:
+        print(f"[code] [WARN] pending path replace recovery failed: {exc}", flush=True)
+
+
+def _write_pending_bundle_apply_marker(items: list[tuple[Path, Path | None]]) -> None:
+    _PENDING_UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "items": [
+            {
+                "target_path": _rel_for_marker(dst),
+                "backup_path": _rel_for_marker(backup) if backup is not None and backup.exists() else "",
+            }
+            for dst, backup in items
+        ],
+        "staged_at": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
+    }
+    _PENDING_BUNDLE_ROLLBACK_MARKER.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _clear_pending_bundle_rollback_marker() -> None:
+    try:
+        _PENDING_BUNDLE_ROLLBACK_MARKER.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _restore_bundle_backups(backups: list[tuple[Path, Path | None]]) -> None:
+    for dst, backup in reversed(backups):
+        try:
+            if backup is None or not backup.exists():
+                _delete_path(dst)
+            else:
+                _restore_path_from_backup(dst, backup)
+        except Exception as restore_exc:
+            print(f"[code] [ERR] rollback failed for {dst}: {restore_exc}", flush=True)
+
+
+def _apply_pending_bundle_rollback_recovery() -> None:
+    if not _PENDING_BUNDLE_ROLLBACK_MARKER.is_file():
+        return
+    try:
+        data = json.loads(_PENDING_BUNDLE_ROLLBACK_MARKER.read_text(encoding="utf-8"))
+        raw_items = data.get("items") if isinstance(data, dict) else []
+        backups: list[tuple[Path, Path | None]] = []
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                dst = _path_from_marker(item.get("target_path"))
+                backup_rel = str(item.get("backup_path") or "").strip()
+                backup = _path_from_marker(backup_rel) if backup_rel else None
+                backups.append((dst, backup if backup is not None and backup.exists() else None))
+        if backups:
+            _restore_bundle_backups(backups)
+            print(f"[code] recovered interrupted bundle rollback: {len(backups)} path(s)", flush=True)
+        _clear_pending_bundle_rollback_marker()
+    except Exception as exc:
+        print(f"[code] [WARN] pending bundle rollback recovery failed: {exc}", flush=True)
+
+
+def _apply_pending_update_recovery() -> None:
+    _apply_pending_path_replace_recovery()
+    _apply_pending_bundle_rollback_recovery()
 
 def _apply_exe_file(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -769,114 +969,252 @@ def _write_openclaw_gateway_token(config_path: Path, token: str) -> None:
         print(f"[code] [WARN] 保留 OpenClaw Gateway token 失败: {exc}", flush=True)
 
 
-def _apply_openclaw_with_preserve(src: Path, dst: Path) -> None:
-    """Replace OpenClaw code while preserving local runtime state and user memory."""
-    preserved: list[tuple[str, Path]] = []
-    tmp_root = Path(tempfile.mkdtemp(prefix="lobster_oc_preserve_"))
-    try:
-        if dst.is_dir():
-            for child in dst.iterdir():
-                if child.is_dir() and (child.name == "workspace" or child.name.startswith("workspace-")):
-                    holder = tmp_root / child.name
-                    shutil.move(str(child), str(holder))
-                    preserved.append((child.name, holder))
-                elif child.is_dir() and child.name in _OPENCLAW_PRESERVE_DIR_NAMES:
-                    holder = tmp_root / child.name
-                    shutil.move(str(child), str(holder))
-                    preserved.append((child.name, holder))
-            for filename in _OPENCLAW_PRESERVE_FILE_NAMES:
-                state_file = dst / filename
-                if state_file.is_file():
-                    holder = tmp_root / filename
-                    shutil.copy2(state_file, holder)
-                    preserved.append((filename, holder))
+def _delete_path(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
-        if dst.exists():
-            if dst.is_dir():
-                shutil.rmtree(dst)
-            else:
-                dst.unlink()
+
+def _copy_path(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
         shutil.copytree(src, dst)
+    else:
+        shutil.copy2(src, dst)
+
+
+def _same_file(src: Path, dst: Path) -> bool:
+    try:
+        if not dst.is_file() or src.stat().st_size != dst.stat().st_size:
+            return False
+        with src.open("rb") as sf, dst.open("rb") as df:
+            while True:
+                a = sf.read(_FILE_COMPARE_CHUNK_SIZE)
+                b = df.read(_FILE_COMPARE_CHUNK_SIZE)
+                if a != b:
+                    return False
+                if not a:
+                    return True
+    except OSError:
+        return False
+
+
+def _copy_file_atomic(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.updating.{os.getpid()}.{int(time.time() * 1000)}")
+    try:
+        if tmp.exists():
+            tmp.unlink()
+        shutil.copy2(src, tmp)
+        os.replace(str(tmp), str(dst))
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _path_under_any(rel: str, prefixes: tuple[str, ...]) -> bool:
+    r = _norm_rel(rel)
+    for prefix in prefixes:
+        p = _norm_rel(prefix)
+        if r == p or r.startswith(p + "/"):
+            return True
+    return False
+
+
+def _sync_tree_incremental(src: Path, dst: Path, *, preserve_rels: tuple[str, ...] = ()) -> dict[str, int]:
+    stats = {"copied": 0, "skipped": 0, "removed": 0}
+    dst.mkdir(parents=True, exist_ok=True)
+    src_files: set[str] = set()
+
+    for path in src.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(src).as_posix()
+        root_rel = _norm_rel(str(dst.relative_to(ROOT)))
+        full_rel = f"{root_rel}/{rel}" if root_rel else rel
+        if _path_under_any(full_rel, preserve_rels):
+            stats["skipped"] += 1
+            continue
+        src_files.add(rel)
+        target = dst / rel.replace("/", os.sep)
+        if _same_file(path, target):
+            stats["skipped"] += 1
+            continue
+        _copy_file_atomic(path, target)
+        stats["copied"] += 1
+
+    for path in sorted((p for p in dst.rglob("*") if p.is_file()), reverse=True):
+        rel = path.relative_to(dst).as_posix()
+        root_rel = _norm_rel(str(dst.relative_to(ROOT)))
+        full_rel = f"{root_rel}/{rel}" if root_rel else rel
+        if _path_under_any(full_rel, preserve_rels):
+            continue
+        if rel not in src_files:
+            try:
+                path.unlink()
+                stats["removed"] += 1
+            except OSError as exc:
+                print(f"[code] [WARN] remove stale file failed: {full_rel}: {exc}", flush=True)
+
+    for path in sorted((p for p in dst.rglob("*") if p.is_dir()), reverse=True):
+        try:
+            next(path.iterdir())
+        except StopIteration:
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+        except OSError:
+            pass
+
+    return stats
+
+
+def _unique_sibling_path(dst: Path, label: str) -> Path:
+    base = f".{dst.name}.{label}.{os.getpid()}.{int(time.time() * 1000)}"
+    candidate = dst.with_name(base)
+    idx = 0
+    while candidate.exists():
+        idx += 1
+        candidate = dst.with_name(f"{base}.{idx}")
+    return candidate
+
+
+def _replace_with_staged_path(staged: Path, dst: Path, *, keep_backup: bool = False) -> Path | None:
+    backup: Path | None = None
+    switched = False
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            backup = _unique_sibling_path(dst, "backup")
+            _write_pending_path_replace_marker(dst, backup)
+            os.replace(str(dst), str(backup))
+        os.replace(str(staged), str(dst))
+        switched = True
+    except Exception:
+        if backup is not None and backup.exists() and not dst.exists():
+            try:
+                os.replace(str(backup), str(dst))
+            except Exception as restore_exc:
+                print(f"[code] [ERR] rollback failed for {dst}: {restore_exc}", flush=True)
+        _clear_pending_path_replace_marker()
+        raise
+    finally:
+        if not switched and staged.exists():
+            try:
+                _delete_path(staged)
+            except Exception:
+                pass
+        if switched and not keep_backup:
+            _clear_pending_path_replace_marker()
+    if backup is not None and backup.exists():
+        if keep_backup:
+            return backup
+        try:
+            _delete_path(backup)
+        except Exception as cleanup_exc:
+            print(f"[code] [WARN] cleanup backup failed for {backup}: {cleanup_exc}", flush=True)
+    return None
+
+
+def _copy_preserved_rel_to_stage(child_rel: str, root_rel: str, staged_root: Path) -> None:
+    child_norm = _norm_rel(child_rel)
+    root_norm = _norm_rel(root_rel)
+    prefix = root_norm + "/"
+    if not child_norm.startswith(prefix):
+        return
+    source = ROOT / child_norm.replace("/", os.sep)
+    if not source.exists():
+        return
+    target = staged_root / child_norm[len(prefix):].replace("/", os.sep)
+    _delete_path(target)
+    _copy_path(source, target)
+
+
+def _apply_openclaw_with_preserve(src: Path, dst: Path, *, keep_backup: bool = False) -> tuple[Path | None, bool]:
+    """Replace OpenClaw code while preserving local runtime state and user memory."""
+    staged = _unique_sibling_path(dst, "updating")
+    try:
+        _copy_path(src, staged)
 
         for filename in _OPENCLAW_PRESERVE_FILE_NAMES:
-            bundled_state_file = dst / filename
-            if bundled_state_file.exists():
-                if bundled_state_file.is_dir():
-                    shutil.rmtree(bundled_state_file)
-                else:
-                    bundled_state_file.unlink()
+            bundled_state_file = staged / filename
+            _delete_path(bundled_state_file)
 
-        for name, holder in preserved:
-            target = dst / name
-            if target.exists():
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            if holder.is_dir():
-                shutil.move(str(holder), str(target))
-            elif holder.is_file():
-                shutil.copy2(holder, target)
+        if dst.is_dir():
+            for child in dst.iterdir():
+                should_preserve = child.is_dir() and (
+                    child.name == "workspace"
+                    or child.name.startswith("workspace-")
+                    or child.name in _OPENCLAW_PRESERVE_DIR_NAMES
+                )
+                if not should_preserve:
+                    continue
+                target = staged / child.name
+                _delete_path(target)
+                _copy_path(child, target)
+            for filename in _OPENCLAW_PRESERVE_FILE_NAMES:
+                state_file = dst / filename
+                if not state_file.is_file():
+                    continue
+                target = staged / filename
+                _delete_path(target)
+                _copy_path(state_file, target)
 
-        _merge_openclaw_policies_from_bundle(src, dst)
-    finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        _merge_openclaw_policies_from_bundle(src, staged)
+        backup = _replace_with_staged_path(staged, dst, keep_backup=keep_backup)
+        return backup, True
+    except Exception:
+        if staged.exists():
+            try:
+                _delete_path(staged)
+            except Exception:
+                pass
+        raise
 
 
-def _apply_path(src: Path, dst: Path) -> None:
+def _apply_path(src: Path, dst: Path, *, keep_backup: bool = False) -> tuple[Path | None, bool]:
     rel = _norm_rel(str(dst.relative_to(ROOT)))
     if rel == "openclaw" and src.is_dir():
-        _apply_openclaw_with_preserve(src, dst)
-        return
+        return _apply_openclaw_with_preserve(src, dst, keep_backup=keep_backup)
     if rel in _DESKTOP_EXE_NAMES and src.is_file():
         _apply_exe_file(src, dst)
-        return
-    preserved: list[tuple[str, Path]] = []
-    tmp_root: Path | None = None
+        return None, False
     preserve_rels: tuple[str, ...] = ()
     if src.is_dir() and rel == "static":
         preserve_rels = _PRESERVED_STATIC_REL_PATHS
     elif src.is_dir() and rel == "desktop":
         preserve_rels = _PRESERVED_DESKTOP_REL_PATHS
-    if preserve_rels:
-        tmp_root = Path(tempfile.mkdtemp(prefix="lobster_path_preserve_"))
-        for child_rel in preserve_rels:
-            child = ROOT / child_rel
-            if not child.exists():
-                continue
-            holder = tmp_root / child_rel
-            holder.parent.mkdir(parents=True, exist_ok=True)
-            if child.is_dir():
-                shutil.copytree(child, holder)
-            else:
-                shutil.copy2(child, holder)
-            preserved.append((child_rel, holder))
-    if dst.exists():
-        if dst.is_dir():
-            shutil.rmtree(dst)
-        else:
-            dst.unlink()
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.is_file():
-        shutil.copy2(src, dst)
-    else:
-        shutil.copytree(src, dst)
+
+    if src.is_dir() and dst.is_dir() and rel in _INCREMENTAL_APPLY_DIRS:
+        stats = _sync_tree_incremental(src, dst, preserve_rels=preserve_rels)
+        print(
+            f"[code-progress] apply_incremental {rel} copied={stats['copied']} "
+            f"skipped={stats['skipped']} removed={stats['removed']}",
+            flush=True,
+        )
+        return None, False
+
+    staged = _unique_sibling_path(dst, "updating")
     try:
-        for child_rel, holder in preserved:
-            target = ROOT / child_rel
-            if target.exists():
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if holder.is_dir():
-                shutil.copytree(holder, target)
-            else:
-                shutil.copy2(holder, target)
-    finally:
-        if tmp_root is not None:
-            shutil.rmtree(tmp_root, ignore_errors=True)
+        _copy_path(src, staged)
+        for child_rel in preserve_rels:
+            _copy_preserved_rel_to_stage(child_rel, rel, staged)
+        backup = _replace_with_staged_path(staged, dst, keep_backup=keep_backup)
+        return backup, True
+    except Exception:
+        if staged.exists():
+            try:
+                _delete_path(staged)
+            except Exception:
+                pass
+        raise
 
 
 def _extract_zip_to(path: Path, target: Path) -> Path:
@@ -920,17 +1258,45 @@ def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
     extract_root = tdir / ("extracted_" + hashlib.sha1(str(zpath).encode("utf-8")).hexdigest()[:8])
     inner = _extract_zip_to(zpath, extract_root)
     print(f"[code-progress] extract_done file={zpath.name}", flush=True)
-    applied: list[str] = []
-    total = max(1, len(paths))
-    for idx, rel in enumerate(paths, 1):
+    missing: list[str] = []
+    for rel in paths:
         src = inner / rel.replace("/", os.sep)
         if not src.exists():
-            print(f"[code] [WARN] 包内无路径 {rel}，跳过。", flush=True)
-            continue
-        print(f"[code-progress] apply_path {idx}/{total} {rel}", flush=True)
-        dst = ROOT / rel.replace("/", os.sep)
-        _apply_path(src, dst)
-        applied.append(rel)
+            missing.append(rel)
+    if missing:
+        joined = ", ".join(missing[:20])
+        more = "" if len(missing) <= 20 else f" ... (+{len(missing) - 20})"
+        raise RuntimeError(f"bundle missing required path(s): {joined}{more}")
+
+    applied: list[str] = []
+    backups: list[tuple[Path, Path | None]] = []
+    total = max(1, len(paths))
+    try:
+        for idx, rel in enumerate(paths, 1):
+            src = inner / rel.replace("/", os.sep)
+            if not src.exists():
+                print(f"[code] [WARN] bundle path disappeared before apply: {rel}", flush=True)
+                continue
+            print(f"[code-progress] apply_path {idx}/{total} {rel}", flush=True)
+            dst = ROOT / rel.replace("/", os.sep)
+            backup, can_rollback = _apply_path(src, dst, keep_backup=True)
+            if can_rollback:
+                backups.append((dst, backup))
+                _write_pending_bundle_apply_marker(backups)
+                _clear_pending_path_replace_marker()
+            applied.append(rel)
+    except Exception:
+        _restore_bundle_backups(backups)
+        _clear_pending_bundle_rollback_marker()
+        raise
+
+    for _, backup in backups:
+        if backup.exists():
+            try:
+                _delete_path(backup)
+            except Exception as cleanup_exc:
+                print(f"[code] [WARN] cleanup backup failed for {backup}: {cleanup_exc}", flush=True)
+    _clear_pending_bundle_rollback_marker()
     print(f"[code-progress] apply_done count={len(applied)}", flush=True)
     return applied
 
@@ -1101,7 +1467,7 @@ def _apply_resources(resources: Any, tdir: Path) -> None:
             continue
         state.setdefault("resources", {})[rid] = {
             "sha256": sha,
-            "applied_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "applied_at": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
             "paths": applied,
         }
         _save_resource_state(state)
@@ -1129,7 +1495,8 @@ def _apply_update_artifact(artifact: dict[str, Any], tdir: Path, *, label: str) 
     return applied
 
 
-def main() -> int:
+def _main_locked() -> int:
+    _apply_pending_update_recovery()
     _apply_pending_exe_replace()
     env = _load_dotenv_simple(ROOT / ".env")
     env.update({k: v for k, v in os.environ.items() if k.startswith("CLIENT_CODE_")})
@@ -1145,12 +1512,15 @@ def main() -> int:
     local = _local_build()
     local_ver = _local_semver()
     try:
-        manifest = _fetch_json(manifest_url)
+        manifest = _fetch_manifest_with_retry(manifest_url)
     except urllib.error.URLError as e:
         print(f"[code] [WARN] 无法拉取 manifest，使用本地代码: {e}", flush=True)
         return 0
+    except json.JSONDecodeError as e:
+        print(f"[code] [WARN] manifest JSON 解析失败，跳过更新: {e}", flush=True)
+        return 0
     except Exception as e:
-        print(f"[code] [WARN] manifest 解析失败，跳过更新: {e}", flush=True)
+        print(f"[code] [WARN] manifest 拉取失败，跳过更新: {e}", flush=True)
         return 0
 
     try:
@@ -1202,14 +1572,27 @@ def main() -> int:
             print("[code] [ERR] 未成功应用任何更新，未写入版本号。", flush=True)
             return 0
 
-        _apply_resources(manifest.get("resources"), tdir)
-        _install_runtime_dependencies_if_needed(applied)
+        mver = manifest.get("version")
+        mver_s = str(mver).strip() if mver is not None else ""
+        _save_local_build(remote_build, mver_s or None)
+        try:
+            _apply_resources(manifest.get("resources"), tdir)
+            _install_runtime_dependencies_if_needed(applied)
+        except Exception as exc:
+            print(f"[code] [WARN] post-update runtime/resource step failed: {exc}", flush=True)
 
-    mver = manifest.get("version")
-    mver_s = str(mver).strip() if mver is not None else ""
-    _save_local_build(remote_build, mver_s or None)
     print(f"[code] 已覆盖更新 build={remote_build}，路径: {', '.join(applied)}", flush=True)
     return 0
+
+
+def main() -> int:
+    lock_file = _acquire_update_lock()
+    if lock_file is None:
+        return 0
+    try:
+        return _main_locked()
+    finally:
+        _release_update_lock(lock_file)
 
 
 if __name__ == "__main__":

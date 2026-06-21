@@ -48,4 +48,10 @@ def get_branding() -> Dict[str, Any]:
     parent = (getattr(settings, "lobster_parent_account", None) or "").strip()
     if parent:
         out["parent_account"] = parent
+    is_overseas_user = bool(getattr(settings, "lobster_is_overseas_user", False))
+    out["is_overseas_user"] = is_overseas_user
+    if is_overseas_user:
+        out["document_title"] = "必火AI海外员工"
+        out["logo_primary"] = "必火"
+        out["logo_accent"] = "AI海外员工"
     return out

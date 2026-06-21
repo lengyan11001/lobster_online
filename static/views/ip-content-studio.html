@@ -357,17 +357,151 @@
       .ip-memory-select-menu .ip-memory-option:hover {
         background: #f8fafc;
       }
-      .ip-template-row {
+      .ip-template-manager {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto auto;
-        gap: 0.4rem;
+        grid-template-columns: minmax(260px, 0.78fr) minmax(420px, 1.22fr);
+        gap: 0.8rem;
+        align-items: start;
+      }
+      .ip-template-list-panel,
+      .ip-template-detail-panel {
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 8px;
+        background: #f8fafc;
+        padding: 0.75rem;
+        min-width: 0;
+      }
+      .ip-template-record-list {
+        display: grid;
+        gap: 0.5rem;
+        max-height: 520px;
+        overflow: auto;
+      }
+      .ip-template-record {
+        width: 100%;
+        text-align: left;
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.65rem;
+        cursor: pointer;
+      }
+      .ip-template-record.is-active {
+        border-color: var(--ip-accent);
+        box-shadow: 0 0 0 2px rgba(12, 127, 119, 0.12);
+      }
+      .ip-template-record strong {
+        display: block;
+        color: #0f172a;
+        margin-bottom: 0.28rem;
+      }
+      .ip-template-record small {
+        display: block;
+        color: var(--ip-muted);
+        line-height: 1.45;
+      }
+      .ip-template-actions {
+        display: flex;
+        gap: 0.45rem;
         align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        margin: 0.72rem 0;
+      }
+      .ip-template-editor {
+        display: grid;
+        gap: 0.72rem;
+      }
+      .ip-template-editor-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.72rem;
+      }
+      .ip-template-picker {
+        border: 1px solid rgba(15, 23, 42, 0.09);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.65rem;
+        min-height: 118px;
+      }
+      .ip-template-picker-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-bottom: 0.45rem;
+        color: #0f172a;
+        font-weight: 900;
+      }
+      .ip-template-choice-list {
+        display: grid;
+        gap: 0.4rem;
+        max-height: 180px;
+        overflow: auto;
+      }
+      .ip-template-choice {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.42rem;
+        padding: 0.42rem;
+        border-radius: 6px;
+        background: #f8fafc;
+        color: #334155;
+        line-height: 1.4;
+      }
+      .ip-template-choice small {
+        display: block;
+        color: var(--ip-muted);
+      }
+      .ip-template-snapshot {
+        display: grid;
+        gap: 0.62rem;
+        margin-top: 0.72rem;
+      }
+      .ip-template-snapshot-section {
+        border: 1px solid rgba(15, 23, 42, 0.09);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.65rem;
+      }
+      .ip-template-snapshot-section strong {
+        display: block;
+        color: #0f172a;
+        margin-bottom: 0.42rem;
+      }
+      .ip-template-snapshot-section small {
+        display: block;
+        color: var(--ip-muted);
+        margin: 0.35rem 0 0.2rem;
+      }
+      .ip-template-chip-row {
+        display: flex;
+        gap: 0.35rem;
+        flex-wrap: wrap;
+      }
+      .ip-template-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0.12rem 0.5rem;
+        border-radius: 999px;
+        background: #eef2ff;
+        color: #3730a3;
+        font-size: 0.76rem;
+        font-weight: 800;
+      }
+      .ip-template-text-preview {
+        white-space: pre-wrap;
+        color: #334155;
+        line-height: 1.55;
+        max-height: 88px;
+        overflow: auto;
       }
       .ip-generate-compact {
-        display: grid;
-        grid-template-columns: minmax(260px, 0.8fr) minmax(360px, 1.2fr);
+        display: flex;
         gap: 0.8rem;
-        align-items: end;
+        align-items: center;
+        justify-content: flex-start;
       }
       .ip-generate-actions {
         display: flex;
@@ -411,6 +545,25 @@
         resize: vertical;
         line-height: 1.55;
         overflow: auto;
+      }
+      .ip-draft-card textarea.ip-moments-copy-editor {
+        min-height: 220px;
+        max-height: 520px;
+        line-height: 1.72;
+        font-size: 0.94rem;
+        white-space: pre-wrap;
+        background: #fffdf9;
+      }
+      .ip-moments-copy-preview {
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        border-radius: 8px;
+        padding: 0.75rem 0.82rem;
+        background: #fffdf9;
+        color: #0f172a;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.78;
+        font-size: 0.95rem;
       }
       .ip-badge-row {
         display: flex;
@@ -512,8 +665,9 @@
         .ip-content-layout,
         .ip-content-layout.is-even,
         .ip-content-layout.is-records,
-        .ip-generate-compact,
         .ip-requirement-grid,
+        .ip-template-editor-grid,
+        .ip-template-manager,
         .ip-draft-grid,
         .ip-image-grid {
           grid-template-columns: 1fr;
@@ -530,9 +684,6 @@
           padding: 0.72rem;
         }
         .ip-content-inline {
-          grid-template-columns: 1fr;
-        }
-        .ip-template-row {
           grid-template-columns: 1fr;
         }
         .ip-memory-list.is-inline {
@@ -558,7 +709,7 @@
     <nav class="ip-content-tabs" aria-label="IP日更文案工作台">
       <button type="button" class="ip-content-tab is-active" data-ip-tab="records">文案生成记录</button>
       <button type="button" class="ip-content-tab" data-ip-tab="moment-images">朋友圈图片生成记录</button>
-      <button type="button" class="ip-content-tab" data-ip-tab="config">配置</button>
+      <button type="button" class="ip-content-tab" data-ip-tab="config">模板</button>
       <button type="button" class="ip-content-tab" data-ip-tab="synced">已同步数据</button>
     </nav>
 
@@ -566,15 +717,15 @@
       <section class="ip-content-panel" style="margin-bottom:0.85rem;">
         <div class="ip-content-panel-title">生成设置</div>
         <div class="ip-generate-compact">
-          <div class="ip-content-field" style="margin-bottom:0;">
-            <label>记忆文件</label>
-            <div id="ipMemoryList" class="ip-memory-select"></div>
+          <div class="ip-content-field" style="margin-bottom:0; min-width:280px;">
+            <label for="ipGenerateTemplateSelect">模板</label>
+            <select id="ipGenerateTemplateSelect"></select>
           </div>
           <div class="ip-generate-actions">
             <button type="button" id="ipGenerateIndustryBtn" class="btn btn-primary btn-sm">行业热门口播</button>
             <button type="button" id="ipGenerateIpBtn" class="btn btn-primary btn-sm">专业 IP 口播</button>
             <button type="button" id="ipGenerateMomentsBtn" class="btn btn-primary btn-sm">生成朋友圈文案</button>
-            <button type="button" id="ipOpenRequirementConfigBtn" class="btn btn-ghost btn-sm">配置要求</button>
+            <button type="button" id="ipOpenRequirementConfigBtn" class="btn btn-ghost btn-sm">模板</button>
           </div>
         </div>
       </section>
@@ -616,38 +767,62 @@
     <section class="ip-content-tab-panel" data-ip-panel="config">
       <section class="ip-content-panel">
         <div class="ip-config-subtabs">
-          <button type="button" class="ip-config-subtab is-active" data-config-tab="requirements">生成要求</button>
+          <button type="button" class="ip-config-subtab is-active" data-config-tab="templates">模板</button>
           <button type="button" class="ip-config-subtab" data-config-tab="keywords">关键词</button>
           <button type="button" class="ip-config-subtab" data-config-tab="competitors">同行账号</button>
         </div>
 
-        <div class="ip-config-panel is-active" data-config-panel="requirements">
-          <div class="ip-content-panel-title">生成要求</div>
-          <div class="ip-content-field">
-            <label for="ipTemplateSelect">要求模板</label>
-            <div class="ip-template-row">
-              <select id="ipTemplateSelect"></select>
-              <button type="button" id="ipApplyTemplateBtn" class="btn btn-ghost btn-sm">应用</button>
-              <button type="button" id="ipSaveTemplateBtn" class="btn btn-primary btn-sm">保存当前</button>
-              <button type="button" id="ipDeleteTemplateBtn" class="btn btn-ghost btn-sm">删除</button>
-            </div>
-          </div>
-          <div class="ip-requirement-grid">
-            <div class="ip-content-field">
-              <label for="ipTask1Extra">口播要求</label>
-              <textarea id="ipTask1Extra" placeholder="面向人群、语气、禁用表达、行业侧重点"></textarea>
-              <div class="ip-content-field-hint">用于“行业热门口播”和“专业 IP 口播”。</div>
-            </div>
-            <div class="ip-content-field">
-              <label for="ipTask2Extra">朋友圈文案要求</label>
-              <textarea id="ipTask2Extra" placeholder="生活感、专业度、字数、发布语气"></textarea>
-              <div class="ip-content-field-hint">用于“生成朋友圈文案”。</div>
-            </div>
-            <div class="ip-content-field">
-              <label for="ipImageExtra">出图要求</label>
-              <textarea id="ipImageExtra" placeholder="画面主体、风格、场景、禁用元素、配图比例倾向"></textarea>
-              <div class="ip-content-field-hint">用于朋友圈文案勾选后的图片生成。</div>
-            </div>
+        <div class="ip-config-panel is-active" data-config-panel="templates">
+          <div class="ip-template-manager">
+            <section class="ip-template-list-panel">
+              <div class="ip-content-panel-title">
+                <span>模板列表</span>
+                <button type="button" id="ipNewTemplateBtn" class="btn btn-primary btn-sm">添加模板</button>
+                <button type="button" id="ipRefreshTemplateBtn" class="btn btn-ghost btn-sm">刷新模板</button>
+              </div>
+              <div id="ipTemplateRecordList" class="ip-template-record-list"></div>
+            </section>
+            <section class="ip-template-detail-panel">
+              <div class="ip-content-panel-title">模板内容</div>
+              <div class="ip-template-editor">
+                <div class="ip-content-field">
+                  <label for="ipTemplateNameInput">模板名称</label>
+                  <input id="ipTemplateNameInput" placeholder="填写模板名称">
+                </div>
+                <div class="ip-content-field">
+                  <label>记忆文件</label>
+                  <div id="ipMemoryList" class="ip-memory-select"></div>
+                </div>
+                <div class="ip-template-actions">
+                  <button type="button" id="ipSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button>
+                  <button type="button" id="ipDeleteTemplateBtn" class="btn btn-ghost btn-sm">删除选中模板</button>
+                </div>
+                <div class="ip-template-editor-grid">
+                  <div class="ip-template-picker">
+                    <div class="ip-template-picker-title">关键词</div>
+                    <div id="ipTemplateKeywordPicker" class="ip-template-choice-list"></div>
+                  </div>
+                  <div class="ip-template-picker">
+                    <div class="ip-template-picker-title">同行账号</div>
+                    <div id="ipTemplateCompetitorPicker" class="ip-template-choice-list"></div>
+                  </div>
+                </div>
+                <div class="ip-requirement-grid">
+                  <div class="ip-content-field">
+                    <label for="ipTask1Extra">口播要求</label>
+                    <textarea id="ipTask1Extra" placeholder="面向人群、语气、禁用表达、行业侧重点"></textarea>
+                  </div>
+                  <div class="ip-content-field">
+                    <label for="ipTask2Extra">朋友圈文案要求</label>
+                    <textarea id="ipTask2Extra" placeholder="短句分行、多段落留白、适当 Emoji、强痛点和结果导向，像社群爆款发售体"></textarea>
+                  </div>
+                  <div class="ip-content-field">
+                    <label for="ipImageExtra">出图要求</label>
+                    <textarea id="ipImageExtra" placeholder="画面主体、风格、场景、禁用元素、配图比例倾向"></textarea>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
 

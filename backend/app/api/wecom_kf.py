@@ -61,6 +61,22 @@ def _get_server_base_url() -> str:
         return ""
 
 
+def _get_wecom_master_enabled() -> bool:
+    try:
+        from .wecom import get_wecom_master_enabled as _orig
+        return bool(_orig())
+    except Exception:
+        return False
+
+
+def _set_wecom_master_enabled(enabled: bool) -> bool:
+    try:
+        from .wecom import set_wecom_master_enabled as _orig
+        return bool(_orig(enabled))
+    except Exception:
+        return False
+
+
 async def _cloud_post(path: str, body: dict) -> dict:
     base = _get_server_base_url()
     if not base:
@@ -143,6 +159,7 @@ async def kf_account_create(
         open_kfid=open_kfid,
         name=body.name,
         url=kf_url,
+        auto_reply_enabled=False,
     )
     db.add(kf)
     db.commit()
@@ -209,6 +226,7 @@ async def kf_account_sync(
                 open_kfid=open_kfid,
                 name=item.get("name", "客服"),
                 url=kf_url,
+                auto_reply_enabled=False,
             ))
             synced += 1
     db.commit()
@@ -412,17 +430,16 @@ async def kf_pull_messages(
 # 后台轮询：拉取 KF 消息 + AI 自动回复
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_KF_FAST_CHECK = 2              # 秒，检查 server 事件标记的频率（内部请求）
-_KF_FALLBACK_POLL = 60          # 秒，无事件时兜底强制拉取一次
+_KF_FAST_CHECK = 30             # 秒，检查 server 事件标记的频率（内部请求）
+_KF_FALLBACK_POLL = 180         # 秒，无事件时兜底强制拉取一次
 _KF_ACCOUNT_GAP = 1             # 秒，同一轮中不同账号之间的间隔
 _KF_BACKOFF_MAX = 120           # 秒，限流时最大退避
 _kf_poll_backoff = 0            # 当前退避秒数（动态）
-_wecom_master_enabled = True    # 总开关：关闭后停止所有轮询和主动 API 调用
 
 
 @router.get("/api/wecom/master-switch", summary="获取企微总开关状态")
 async def get_master_switch():
-    return {"enabled": _wecom_master_enabled}
+    return {"enabled": _get_wecom_master_enabled()}
 
 
 class MasterSwitchBody(BaseModel):
@@ -431,10 +448,9 @@ class MasterSwitchBody(BaseModel):
 
 @router.post("/api/wecom/master-switch", summary="设置企微总开关")
 async def set_master_switch(body: MasterSwitchBody):
-    global _wecom_master_enabled
-    _wecom_master_enabled = body.enabled
-    logger.info("[WeChat] master switch set to %s", body.enabled)
-    return {"ok": True, "enabled": _wecom_master_enabled}
+    enabled = _set_wecom_master_enabled(body.enabled)
+    logger.info("[WeChat] master switch set to %s", enabled)
+    return {"ok": True, "enabled": enabled}
 
 
 async def _has_kf_events() -> bool:
@@ -469,7 +485,7 @@ async def kf_poll_loop():
 
     while True:
         await asyncio.sleep(_KF_FAST_CHECK)
-        if not _wecom_master_enabled:
+        if not _get_wecom_master_enabled():
             continue
         if not _get_server_base_url():
             continue
