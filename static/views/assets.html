@@ -3,7 +3,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    margin: 0.85rem 0 0.15rem;
+    margin: 0 0 0.55rem;
     padding: 4px;
     border: 1px solid rgba(34, 49, 78, 0.1);
     border-radius: 10px;
@@ -38,6 +38,144 @@
     outline: 2px solid rgba(37, 99, 235, 0.35);
     outline-offset: 2px;
   }
+  #content-assets .asset-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    padding: 0.1rem 0 0.65rem;
+    margin-bottom: 0.65rem;
+    border-bottom: 1px solid rgba(34, 49, 78, 0.08);
+  }
+  #content-assets .asset-controls select,
+  #content-assets .asset-controls input[type="text"] {
+    height: 34px;
+    box-sizing: border-box;
+  }
+  #content-assets .asset-controls .btn {
+    min-height: 34px;
+    white-space: nowrap;
+  }
+  #content-assets .asset-controls #assetSearchInput {
+    flex: 1 1 170px;
+    min-width: 150px;
+    max-width: 260px;
+  }
+  #content-assets .asset-controls #assetUrlInput {
+    flex: 1 1 220px;
+    min-width: 180px;
+    max-width: 360px;
+  }
+  #content-assets .asset-controls #assetUploadMsg {
+    flex: 1 1 160px;
+    min-width: 140px;
+  }
+  #content-assets #assetList.skill-store-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)) !important;
+    align-items: start;
+    gap: 0.85rem !important;
+    width: 100%;
+    margin-top: 0.75rem;
+    overflow: visible !important;
+  }
+  #content-assets #assetList .asset-card {
+    width: auto !important;
+    min-width: 0;
+    max-width: none;
+    padding: 0.85rem;
+    box-sizing: border-box;
+  }
+  #content-assets #assetList .asset-card * {
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  #content-assets #assetList .asset-card .card-label {
+    min-width: 0;
+  }
+  #content-assets #assetList .asset-preview-wrap {
+    width: 100% !important;
+    max-width: 100% !important;
+    aspect-ratio: 16 / 10;
+    margin: 0.1rem 0 0.65rem !important;
+    overflow: hidden !important;
+  }
+  #content-assets #assetList .asset-list-thumb,
+  #content-assets #assetList .asset-list-thumb-video {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+    object-fit: cover;
+    display: block !important;
+  }
+  #content-assets #assetList .asset-preview-wrap > div {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+  }
+  #content-assets #assetList .asset-document-preview {
+    min-height: 0 !important;
+    height: auto;
+  }
+  #content-assets #assetList .asset-card .card-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    gap: 0.35rem;
+  }
+  #content-assets #assetList .asset-card .card-actions .btn {
+    min-width: 0;
+    width: 100%;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+  }
+  #content-assets .asset-bulk-bar {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    min-height: 34px;
+    margin: 0;
+    padding: 0.2rem 0.45rem;
+    border: 1px solid rgba(34, 49, 78, 0.1);
+    border-radius: 8px;
+    background: rgba(248, 250, 252, 0.82);
+  }
+  #content-assets .asset-bulk-active {
+    display: none;
+  }
+  #content-assets.asset-bulk-mode .asset-bulk-active {
+    display: inline-flex;
+  }
+  #content-assets.asset-bulk-mode #assetBulkStartBtn {
+    display: none;
+  }
+  #content-assets .asset-bulk-select,
+  #content-assets .asset-card-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: #334155;
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+    user-select: none;
+  }
+  #content-assets:not(.asset-bulk-mode) .asset-card-select {
+    display: none;
+  }
+  #content-assets .asset-card-select {
+    justify-content: flex-end;
+    width: 100%;
+    margin-bottom: 0.35rem;
+    color: #64748b;
+  }
+  #content-assets .asset-bulk-count {
+    color: #64748b;
+    font-size: 0.8rem;
+  }
   @media (max-width: 520px) {
     #content-assets .asset-origin-tabs {
       display: grid;
@@ -50,18 +188,12 @@
   }
 </style>
 <div id="content-assets" class="content-block">
-            <div class="card">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
-                <h3 style="margin:0;display:inline-flex;align-items:center;gap:0.35rem;">素材库 <button type="button" class="help-q" data-help-key="publish_assets" aria-label="说明">?</button></h3>
-                <button type="button" id="assetTopRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
-              </div>
-            </div>
             <div id="pubTabAssets" class="pub-tab-panel">
               <div class="asset-origin-tabs" role="tablist" aria-label="素材来源">
                 <button type="button" class="asset-origin-tab active" data-asset-origin="generated">生成素材</button>
                 <button type="button" class="asset-origin-tab" data-asset-origin="user_upload">用户上传</button>
               </div>
-              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;padding:0.5rem 0;">
+              <div class="asset-controls">
                 <select id="assetTypeFilter" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                   <option value="">全部类型</option>
                   <option value="image">图片</option>
@@ -74,14 +206,22 @@
                 <input type="text" id="assetSearchInput" placeholder="搜索素材..." style="flex:1;min-width:100px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <button type="button" id="assetSearchBtn" class="btn btn-ghost btn-sm">搜索</button>
                 <button type="button" id="assetRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
-              </div>
-              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.3rem 0 0.5rem 0;">
                 <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;">
                   上传本地文件
                   <input type="file" id="assetUploadFile" accept="image/*,video/*,.ppt,.pptx,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md" multiple style="display:none;">
                 </label>
                 <input type="text" id="assetUrlInput" placeholder="网络素材URL（图片/视频链接）" style="flex:1;min-width:160px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <button type="button" id="assetSaveUrlBtn" class="btn btn-ghost btn-sm">保存URL素材</button>
+                <div id="assetBulkBar" class="asset-bulk-bar">
+                  <button type="button" id="assetBulkStartBtn" class="btn btn-ghost btn-sm">批量删除</button>
+                  <label class="asset-bulk-select asset-bulk-active">
+                    <input type="checkbox" id="assetSelectLoaded">
+                    <span>选择当前已加载</span>
+                  </label>
+                  <span id="assetSelectedCount" class="asset-bulk-count asset-bulk-active">已选 0 个</span>
+                  <button type="button" id="assetBulkCancelBtn" class="btn btn-ghost btn-sm asset-bulk-active">取消</button>
+                  <button type="button" id="assetBulkConfirmBtn" class="btn btn-ghost btn-sm asset-bulk-active" disabled>确定删除</button>
+                </div>
                 <span id="assetUploadMsg" class="msg" style="display:none;font-size:0.8rem;"></span>
               </div>
               <div id="assetList" class="skill-store-grid"></div>

@@ -930,6 +930,10 @@ class SaveAssetToDownloadsReq(BaseModel):
     open_folder: bool = True
 
 
+class BulkDeleteAssetsReq(BaseModel):
+    asset_ids: List[str] = []
+
+
 class ChatSessionBackupReq(BaseModel):
     key: str
     sessions: List[Any] = []
@@ -2313,3 +2317,59 @@ def delete_asset(
     db.delete(a)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/api/assets/bulk-delete", summary="批量删除素材")
+def bulk_delete_assets(
+    body: BulkDeleteAssetsReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    seen: set[str] = set()
+    asset_ids: List[str] = []
+    for raw in body.asset_ids or []:
+        aid = str(raw or "").strip()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        asset_ids.append(aid)
+    if not asset_ids:
+        raise HTTPException(400, detail="请选择要删除的素材")
+    if len(asset_ids) > 500:
+        raise HTTPException(400, detail="单次最多删除 500 个素材")
+
+    rows = (
+        db.query(Asset)
+        .filter(Asset.user_id == current_user.id, Asset.asset_id.in_(asset_ids))
+        .all()
+    )
+    found_ids = {row.asset_id for row in rows}
+    missing_ids = [aid for aid in asset_ids if aid not in found_ids]
+    deleted_ids: List[str] = []
+    file_deleted = 0
+    file_missing = 0
+    file_failed: List[str] = []
+    for row in rows:
+        fp = ASSETS_DIR / row.filename
+        if fp.exists():
+            try:
+                fp.unlink()
+                file_deleted += 1
+            except OSError:
+                file_failed.append(row.asset_id)
+                continue
+        else:
+            file_missing += 1
+        deleted_ids.append(row.asset_id)
+        db.delete(row)
+    db.commit()
+    return {
+        "ok": True,
+        "requested": len(asset_ids),
+        "deleted": len(deleted_ids),
+        "deleted_ids": deleted_ids,
+        "missing_ids": missing_ids,
+        "file_deleted": file_deleted,
+        "file_missing": file_missing,
+        "file_failed_ids": file_failed,
+    }

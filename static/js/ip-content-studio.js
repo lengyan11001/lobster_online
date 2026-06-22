@@ -510,7 +510,7 @@
     }
     if (competitorBox) {
       if (!state.competitors.length) {
-        competitorBox.innerHTML = '<div class="ip-content-empty">暂无同行账号，先到同行账号页添加。</div>';
+        competitorBox.innerHTML = '<div class="ip-content-empty">暂无同行账号。同行是可选输入，没有同行也可以保存模板和生成。</div>';
       } else {
         competitorBox.innerHTML = state.competitors.map(function(item) {
           var id = item.id;
@@ -555,7 +555,7 @@
     return '<div class="ip-template-snapshot-section"><strong>' + esc(title) + '</strong>' +
       '<small>记忆文件</small>' + chipHtml(memories, '未选择记忆文件') +
       '<small>关键词</small>' + chipHtml(keywords, '未配置关键词') +
-      '<small>同行账号</small>' + chipHtml(competitors, '未配置同行账号') +
+      '<small>同行账号（可选）</small>' + chipHtml(competitors, '未配置同行账号') +
       '</div>' +
       requirementPreview('口播要求', data.task1_extra || '') +
       requirementPreview('朋友圈文案要求', data.task2_extra || '') +
@@ -592,7 +592,7 @@
     }
     if (!list) return;
     if (!state.settingTemplates.length) {
-      list.innerHTML = '<div class="ip-content-empty">暂无模板。点击添加模板，填写记忆、关键词、同行和要求后保存。</div>';
+      list.innerHTML = '<div class="ip-content-empty">暂无模板。点击添加模板，填写记忆、关键词、可选同行和要求后保存。</div>';
     } else {
       list.innerHTML = state.settingTemplates.map(function(tpl) {
         var meta = [];
@@ -1725,7 +1725,6 @@
     var keywordIds = cleanTemplateIds(state.templateKeywordIds, false);
     var competitorIds = cleanTemplateIds(state.templateCompetitorIds, false);
     if (opts.requireKeywords && !keywordIds.length) return Promise.reject(new Error('请选择模板里的关键词后再生成。'));
-    if (opts.requireCompetitors && !competitorIds.length) return Promise.reject(new Error('请选择模板里的同行账号后再生成。'));
     return selectedMemoryDocsWithContent().then(function(memoryDocs) {
       if (!memoryDocs.length) {
         var tpl = activeTemplate();
@@ -2093,7 +2092,7 @@
       runGenerate($('ipGenerateIndustryBtn'), '/api/ip-content/generate/industry-hot-oral', 'ipTask1Extra', 5, 'records', { requireKeywords: true });
     });
     if ($('ipGenerateIpBtn')) $('ipGenerateIpBtn').addEventListener('click', function() {
-      runGenerate($('ipGenerateIpBtn'), '/api/ip-content/generate/professional-ip-oral', 'ipTask1Extra', 5, 'records', { requireCompetitors: true });
+      runGenerate($('ipGenerateIpBtn'), '/api/ip-content/generate/professional-ip-oral', 'ipTask1Extra', 5, 'records', {});
     });
     if ($('ipGenerateMomentsBtn')) $('ipGenerateMomentsBtn').addEventListener('click', function() {
       runMomentsGenerate($('ipGenerateMomentsBtn'), 'records');
