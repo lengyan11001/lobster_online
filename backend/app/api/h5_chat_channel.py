@@ -1,4 +1,4 @@
-"""Remote H5 chat channel.
+﻿"""Remote H5 chat channel.
 
 The public H5 page cannot call a user's local online backend directly, so the
 cloud server works as a mailbox. This local worker claims messages for the
@@ -15,16 +15,19 @@ import json
 import logging
 import os
 import re
+import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 
 from ..core.config import settings
 from ..db import SessionLocal
-from ..models import Asset
+from ..models import Asset, PublishAccount
 from ..services.openclaw_channel_auth_store import read_channel_fallback
 from .auth import get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
@@ -42,10 +45,13 @@ from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_BASE_DIR = Path(__file__).resolve().parents[3]
+_DOUYIN_ORIGIN_DIR = _BASE_DIR / "backend" / "douyin_origin"
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
 _active_scheduled_run_ids: set[str] = set()
-_MOBILE_UPLOAD_TITLE = "【手机上传素材】"
-_MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
+_SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
+_MOBILE_UPLOAD_TITLE = "銆愭墜鏈轰笂浼犵礌鏉愩€?
+_MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*銆愭墜鏈轰笂浼犵礌鏉愩€慭n(?P<body>[\s\S]*)", re.IGNORECASE)
 
 
 def _local_mcp_url() -> str:
@@ -54,22 +60,22 @@ def _local_mcp_url() -> str:
 _MOBILE_UPLOAD_URL_RE = re.compile(r"\bURL:\s*(?P<url>https?://[^\s]+)", re.IGNORECASE)
 _MOBILE_UPLOAD_ASSET_RE = re.compile(r"\basset_id:\s*(?P<asset_id>[A-Za-z0-9_-]{4,80})", re.IGNORECASE)
 _SCHEDULED_CREATIVE_ANGLES = [
-    "痛点切入",
-    "场景体验",
-    "结果收益",
-    "工艺实力",
-    "交付效率",
-    "信任背书",
-    "对比反差",
-    "客户视角",
+    "鐥涚偣鍒囧叆",
+    "鍦烘櫙浣撻獙",
+    "缁撴灉鏀剁泭",
+    "宸ヨ壓瀹炲姏",
+    "浜や粯鏁堢巼",
+    "淇′换鑳屼功",
+    "瀵规瘮鍙嶅樊",
+    "瀹㈡埛瑙嗚",
 ]
 _SCHEDULED_CAPTION_STYLES = [
-    "像朋友分享一次新发现",
-    "突出一个明确业务结果",
-    "用轻松口吻讲专业能力",
-    "强调省心和交付确定性",
-    "从客户常见问题切入",
-    "用一句有记忆点的结论收束",
+    "鍍忔湅鍙嬪垎浜竴娆℃柊鍙戠幇",
+    "绐佸嚭涓€涓槑纭笟鍔＄粨鏋?,
+    "鐢ㄨ交鏉惧彛鍚昏涓撲笟鑳藉姏",
+    "寮鸿皟鐪佸績鍜屼氦浠樼‘瀹氭€?,
+    "浠庡鎴峰父瑙侀棶棰樺垏鍏?,
+    "鐢ㄤ竴鍙ユ湁璁板繂鐐圭殑缁撹鏀舵潫",
 ]
 _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM = "asset_random"
 _SCHEDULED_VIDEO_SOURCE_AI_IMAGE = "ai_image"
@@ -85,6 +91,12 @@ _IMAGE_MODEL_ALIASES = {
     "gpt-image": "openai/gpt-image-2",
     "gptimage2": "openai/gpt-image-2",
 }
+
+
+def _install_douyin_origin_import_path() -> None:
+    origin_path = str(_DOUYIN_ORIGIN_DIR)
+    if origin_path not in sys.path:
+        sys.path.insert(0, origin_path)
 
 
 def _scheduled_variant(seed: str, options: List[str]) -> str:
@@ -103,7 +115,7 @@ def _asset_creative_candidate_groups(meta: Any) -> List[str]:
         return [current]
     raw = meta.get("creative_candidate_groups")
     if isinstance(raw, str):
-        values = re.split(r"[,\s，、;；]+", raw)
+        values = re.split(r"[,\s锛屻€?锛沒+", raw)
     elif isinstance(raw, list):
         values = raw
     else:
@@ -327,6 +339,173 @@ def _local_chat_headers(headers: Dict[str, str]) -> Dict[str, str]:
     if billing_key:
         out["X-Lobster-Mcp-Billing"] = billing_key
     return out
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _today_date_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+async def _build_douyin_dashboard_snapshot(jwt_token: str, installation_id: str) -> Dict[str, Any]:
+    _install_douyin_origin_import_path()
+    from douyin_api import (  # type: ignore
+        douyin_get_customer_pools,
+        douyin_get_tasks_lite,
+        douyin_interaction_status,
+        get_online_douyin_accounts,
+        load_global_config,
+        douyin_stranger_message_status,
+        douyin_video_comment_status,
+    )
+
+    user_id = int(_decode_jwt_sub(jwt_token) or "0")
+    accounts: List[Dict[str, Any]] = []
+    today_task_runs = 0
+    config = load_global_config()
+    online_accounts = get_online_douyin_accounts(config)
+    db = SessionLocal()
+    try:
+        db_rows: Dict[int, PublishAccount] = {}
+        if user_id > 0:
+            rows = (
+                db.query(PublishAccount)
+                .filter(PublishAccount.user_id == user_id, PublishAccount.platform == "douyin")
+                .order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
+                .all()
+            )
+            db_rows = {int(row.id): row for row in rows}
+        seen_ids: set[int] = set()
+        config_accounts = config.get("douyin_accounts") if isinstance(config, dict) else []
+        if isinstance(config_accounts, list):
+            for item in config_accounts:
+                if not isinstance(item, dict):
+                    continue
+                account_id = _safe_int(item.get("id"))
+                if account_id <= 0 or account_id in seen_ids:
+                    continue
+                seen_ids.add(account_id)
+                db_row = db_rows.get(account_id)
+                online = any(_safe_int(row.get("id")) == account_id for row in online_accounts)
+                accounts.append(
+                    {
+                        "account_id": account_id,
+                        "nickname": str((db_row.nickname if db_row else "") or f"璐﹀彿 {account_id}").strip(),
+                        "status": "active" if online else str(item.get("status") or (db_row.status if db_row else "offline")).strip(),
+                        "online": online,
+                        "installation_id": installation_id,
+                        "last_login": db_row.last_login.isoformat() if db_row and db_row.last_login else "",
+                    }
+                )
+        for account_id, db_row in db_rows.items():
+            if account_id in seen_ids:
+                continue
+            online = any(_safe_int(row.get("id")) == account_id for row in online_accounts)
+            accounts.append(
+                {
+                    "account_id": account_id,
+                    "nickname": str(db_row.nickname or f"璐﹀彿 {account_id}").strip(),
+                    "status": "active" if online else str(db_row.status or "offline").strip(),
+                    "online": online,
+                    "installation_id": installation_id,
+                    "last_login": db_row.last_login.isoformat() if db_row.last_login else "",
+                }
+            )
+    finally:
+        db.close()
+
+    tasks_data = await douyin_get_tasks_lite()
+    pool_data = await douyin_get_customer_pools()
+    interaction_data = await douyin_interaction_status(lite=True, include_users=True)
+    stranger_data = await douyin_stranger_message_status()
+    video_comment_data = await douyin_video_comment_status()
+
+    task_rows = tasks_data.get("tasks") if isinstance(tasks_data, dict) and isinstance(tasks_data.get("tasks"), list) else []
+    all_customers = pool_data.get("all_customers") if isinstance(pool_data, dict) and isinstance(pool_data.get("all_customers"), list) else []
+    precise_customers = pool_data.get("precise_customers") if isinstance(pool_data, dict) and isinstance(pool_data.get("precise_customers"), list) else []
+    interaction_users = interaction_data.get("users") if isinstance(interaction_data, dict) and isinstance(interaction_data.get("users"), list) else []
+
+    commented_videos = 0
+    for task in task_rows:
+        if not isinstance(task, dict):
+            continue
+        status = str(task.get("comment_status") or task.get("video_comment_status") or task.get("status") or "").strip().lower()
+        if status in {"commented", "completed", "success"}:
+            commented_videos += 1
+
+    private_messages_sent = 0
+    for row in interaction_users:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("interaction_status") or "").strip().lower()
+        if status in {"sent", "completed", "success"}:
+            private_messages_sent += 1
+
+    today = _today_date_text()
+    for row in precise_customers:
+        if not isinstance(row, dict):
+            continue
+        created = str(row.get("created_at") or row.get("updated_at") or "").strip()
+        if created.startswith(today):
+            today_task_runs += 1
+
+    runtime_comment = ""
+    if isinstance(video_comment_data, dict):
+        state = video_comment_data.get("state") if isinstance(video_comment_data.get("state"), dict) else {}
+        runtime_comment = str(state.get("message") or state.get("last_message") or "").strip()
+    runtime_interaction = ""
+    if isinstance(interaction_data, dict):
+        state = interaction_data.get("state") if isinstance(interaction_data.get("state"), dict) else {}
+        runtime_interaction = str(state.get("message") or state.get("last_message") or interaction_data.get("msg") or "").strip()
+    runtime_monitor = ""
+    if isinstance(stranger_data, dict):
+        state = stranger_data.get("state") if isinstance(stranger_data.get("state"), dict) else {}
+        runtime_monitor = str(state.get("message") or state.get("last_message") or stranger_data.get("msg") or "").strip()
+
+    return {
+        "accounts": accounts,
+        "runtime": {
+            "comment_message": runtime_comment,
+            "interaction_message": runtime_interaction,
+            "monitor_message": runtime_monitor,
+        },
+        "metrics": {
+            "collected_videos": _safe_int(tasks_data.get("total") if isinstance(tasks_data, dict) else 0),
+            "all_customers": len(all_customers),
+            "precise_customers": len(precise_customers),
+            "commented_videos": commented_videos,
+            "private_messages_sent": private_messages_sent,
+            "monitor_tasks": 1 if runtime_monitor else 0,
+            "today_new_customers": sum(
+                1
+                for row in precise_customers
+                if isinstance(row, dict) and str(row.get("created_at") or row.get("updated_at") or "").startswith(today)
+            ),
+            "today_task_runs": today_task_runs,
+        },
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+
+async def _report_douyin_dashboard_status(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    *,
+    jwt_token: str,
+    installation_id: str,
+) -> None:
+    snapshot = await _build_douyin_dashboard_snapshot(jwt_token, installation_id)
+    await cloud.post(
+        f"{base}/api/douyin/dashboard-status/report",
+        json={"payload": snapshot},
+        headers=headers,
+    )
 
 
 def _chat_turn_payload_fields(item: Dict[str, Any], fallback_prefix: str) -> Dict[str, Any]:
@@ -623,6 +802,77 @@ async def proxy_run_scheduled_task_now(
     )
 
 
+@router.post("/api/scheduled-tasks/debug/run-local", summary="Debug run a scheduled task locally without waiting for cloud pending")
+async def debug_run_scheduled_task_local(
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+    kind = str(body.get("task_kind") or "").strip().lower()
+    if not kind:
+        raise HTTPException(status_code=400, detail="缂哄皯 task_kind")
+    if kind == "capability":
+        _normalize_goal_video_task_create_body(body)
+
+    auth = str(request.headers.get("Authorization") or "").strip()
+    jwt_token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+    if not jwt_token:
+        raise HTTPException(status_code=401, detail="缂哄皯 Authorization Bearer")
+    installation_id = str(request.headers.get("X-Installation-Id") or "").strip()
+    item = {
+        "id": str(body.get("id") or f"debug-{uuid.uuid4().hex[:12]}"),
+        "title": str(body.get("title") or "鏈湴璋冭瘯浠诲姟").strip(),
+        "content": str(body.get("content") or body.get("title") or "鏈湴璋冭瘯浠诲姟").strip(),
+        "task_kind": kind,
+        "payload": body.get("payload") if isinstance(body.get("payload"), dict) else {},
+        "installation_id": installation_id,
+    }
+
+    cloud_base = _cloud_base()
+    timeout = httpx.Timeout(7200.0, connect=10.0, read=7200.0, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        if kind == "douyin_leads":
+            if cloud_base:
+                await _run_scheduled_douyin_leads(
+                    client,
+                    cloud_base,
+                    _headers(jwt_token, installation_id),
+                    item,
+                    jwt_token=jwt_token,
+                    installation_id=installation_id,
+                )
+            else:
+                await _run_local_debug_douyin_leads(item)
+        elif kind == "capability":
+            if not cloud_base:
+                raise HTTPException(status_code=503, detail="鏈厤缃?AUTH_SERVER_BASE锛宑apability 璋冭瘯浠诲姟闇€瑕佷簯绔洖浼犻摼璺?)
+            await _run_scheduled_capability(
+                client,
+                cloud_base,
+                _headers(jwt_token, installation_id),
+                item,
+                jwt_token=jwt_token,
+                installation_id=installation_id,
+            )
+        else:
+            if not cloud_base:
+                raise HTTPException(status_code=503, detail="鏈厤缃?AUTH_SERVER_BASE锛屽綋鍓嶄粎鏀寔鏈湴璋冭瘯 douyin_leads")
+            await _process_scheduled_task(
+                client,
+                cloud_base,
+                jwt_token,
+                installation_id,
+                item,
+            )
+    return {"ok": True, "debug": True, "run_id": item["id"], "task_kind": kind}
+
+
 async def _post_cloud_event(
     client: httpx.AsyncClient,
     base: str,
@@ -686,11 +936,28 @@ async def _complete_task_run(
     result_payload: Optional[Dict[str, Any]] = None,
     error: str = "",
 ) -> None:
-    await client.post(
-        f"{base}/api/scheduled-tasks/runs/{run_id}/complete",
-        json={"result_text": result_text, "result_payload": result_payload or {}, "error": error},
-        headers=headers,
-    )
+    payload = {"result_text": result_text, "result_payload": result_payload or {}, "error": error}
+    last_error: Optional[str] = None
+    for attempt in range(1, 4):
+        try:
+            resp = await client.post(
+                f"{base}/api/scheduled-tasks/runs/{run_id}/complete",
+                json=payload,
+                headers=headers,
+            )
+            if resp.status_code in _SCHEDULED_COMPLETE_RETRY_STATUS:
+                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                if attempt < 3:
+                    await asyncio.sleep(1.5 * attempt)
+                    continue
+            resp.raise_for_status()
+            return
+        except Exception as exc:
+            last_error = str(exc).strip() or exc.__class__.__name__
+            if attempt < 3:
+                await asyncio.sleep(1.5 * attempt)
+                continue
+    raise RuntimeError(f"scheduled task complete callback failed run_id={run_id}: {last_error or 'unknown error'}")
 
 
 def _local_chat_url() -> str:
@@ -715,7 +982,7 @@ def _extract_mobile_upload_attachments(content: str) -> tuple[str, List[str], Li
                 asset_ids.append(aid)
         url_match = _MOBILE_UPLOAD_URL_RE.search(line or "")
         if url_match:
-            url = (url_match.group("url") or "").strip().rstrip("，。；;)")
+            url = (url_match.group("url") or "").strip().rstrip("锛屻€傦紱;)")
             if url and url not in urls:
                 urls.append(url)
     return clean, asset_ids[:8], urls[:8]
@@ -731,7 +998,7 @@ def _merge_id_list(existing: Any, asset_ids: List[str]) -> List[str]:
     if isinstance(existing, list):
         raw.extend(existing)
     elif isinstance(existing, str):
-        raw.extend([x for x in existing.replace("，", ",").split(",")])
+        raw.extend([x for x in existing.replace("锛?, ",").split(",")])
     raw.extend(asset_ids)
     seen: set[str] = set()
     out: List[str] = []
@@ -754,7 +1021,7 @@ def _scheduled_attachment_asset_ids(item: Dict[str, Any]) -> List[str]:
         if isinstance(val, list):
             raw.extend(val)
         elif isinstance(val, str):
-            raw.extend([x for x in val.replace("，", ",").split(",")])
+            raw.extend([x for x in val.replace("锛?, ",").split(",")])
     inner = payload.get("payload")
     if isinstance(inner, dict):
         for key in ("attachment_asset_ids", "asset_ids", "reference_asset_ids"):
@@ -762,7 +1029,7 @@ def _scheduled_attachment_asset_ids(item: Dict[str, Any]) -> List[str]:
             if isinstance(val, list):
                 raw.extend(val)
             elif isinstance(val, str):
-                raw.extend([x for x in val.replace("，", ",").split(",")])
+                raw.extend([x for x in val.replace("锛?, ",").split(",")])
         for key in ("asset_id", "image_asset_id", "video_asset_id", "source_asset_id", "reference_asset_id"):
             val = inner.get(key)
             if isinstance(val, str):
@@ -784,9 +1051,9 @@ def _append_scheduled_asset_context(content: str, asset_ids: List[str]) -> str:
     ids = [a for a in asset_ids if a]
     if not ids:
         return content
-    if "【附加素材】" in (content or ""):
+    if "銆愰檮鍔犵礌鏉愩€? in (content or ""):
         return content
-    return (content or "").rstrip() + "\n\n【附加素材】\n" + "\n".join(f"- asset_id: {aid}" for aid in ids)
+    return (content or "").rstrip() + "\n\n銆愰檮鍔犵礌鏉愩€慭n" + "\n".join(f"- asset_id: {aid}" for aid in ids)
 
 
 def _inject_scheduled_assets_into_capability_payload(cap_payload: Dict[str, Any], asset_ids: List[str]) -> Dict[str, Any]:
@@ -812,14 +1079,14 @@ def _scheduled_asset_context_with_urls(asset_ids: List[str], jwt_token: str, ins
         for aid in ids:
             row = db.query(Asset).filter(Asset.user_id == uid, Asset.asset_id == aid).first()
             if not row:
-                lines.append(f"- asset_id: {aid}  状态: 本机素材库未找到")
+                lines.append(f"- asset_id: {aid}  鐘舵€? 鏈満绱犳潗搴撴湭鎵惧埌")
                 continue
             url = _scheduled_asset_open_url(row, aid, uid, req, db)
             mt = (row.media_type or "").strip()
             if url:
                 lines.append(f"- asset_id: {aid}  media_type: {mt}  URL: {url}")
             else:
-                lines.append(f"- asset_id: {aid}  media_type: {mt}  状态: 无公网 URL")
+                lines.append(f"- asset_id: {aid}  media_type: {mt}  鐘舵€? 鏃犲叕缃?URL")
         return "\n".join(lines)
     except Exception as exc:
         logger.warning("[SCHEDULED-TASK] build asset context failed ids=%s err=%s", ids, exc)
@@ -848,10 +1115,10 @@ def _pick_creative_candidate_asset(
 ) -> Dict[str, str]:
     name = str(group_name or "").strip()
     if not name:
-        raise RuntimeError("请先选择创意成片备选素材组")
+        raise RuntimeError("璇峰厛閫夋嫨鍒涙剰鎴愮墖澶囬€夌礌鏉愮粍")
     uid = int(_decode_jwt_sub(jwt_token) or "0")
     if uid <= 0:
-        raise RuntimeError("未识别到当前用户，无法读取备选素材组")
+        raise RuntimeError("鏈瘑鍒埌褰撳墠鐢ㄦ埛锛屾棤娉曡鍙栧閫夌礌鏉愮粍")
     db = SessionLocal()
     try:
         rows = db.query(Asset).filter(Asset.user_id == uid, Asset.media_type == "image").all()
@@ -861,7 +1128,7 @@ def _pick_creative_candidate_asset(
             if name in _asset_creative_candidate_groups(getattr(row, "meta", None))
         ]
         if not candidates:
-            raise RuntimeError(f"备选组“{name}”里没有图片素材")
+            raise RuntimeError(f"澶囬€夌粍鈥渰name}鈥濋噷娌℃湁鍥剧墖绱犳潗")
         req = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
         usable: List[tuple[Asset, str]] = []
         for candidate in candidates:
@@ -869,7 +1136,7 @@ def _pick_creative_candidate_asset(
             if url:
                 usable.append((candidate, url))
         if not usable:
-            raise RuntimeError(f"备选组“{name}”里没有可用于视频生成的公网图片素材，请重新上传或保存 URL 后再设为备选")
+            raise RuntimeError(f"澶囬€夌粍鈥渰name}鈥濋噷娌℃湁鍙敤浜庤棰戠敓鎴愮殑鍏綉鍥剧墖绱犳潗锛岃閲嶆柊涓婁紶鎴栦繚瀛?URL 鍚庡啀璁句负澶囬€?)
         usable.sort(
             key=lambda item: (
                 _creative_candidate_use_count(getattr(item[0], "meta", None), name)
@@ -882,7 +1149,7 @@ def _pick_creative_candidate_asset(
         )
         row, url = usable[0]
         if not url:
-            raise RuntimeError(f"备选组“{name}”选中的图片没有可用链接")
+            raise RuntimeError(f"澶囬€夌粍鈥渰name}鈥濋€変腑鐨勫浘鐗囨病鏈夊彲鐢ㄩ摼鎺?)
         reservation_id = str(run_id or "").strip() or uuid.uuid4().hex
         meta = dict(row.meta or {})
         reservations = meta.get(_CREATIVE_CANDIDATE_RESERVATION_META_KEY)
@@ -926,9 +1193,9 @@ async def _run_direct_chat(
     if not message_id or not (clean_content or attachment_urls):
         return
 
-    await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "本地直连链路正在处理"})
+    await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "鏈湴鐩磋繛閾捐矾姝ｅ湪澶勭悊"})
     payload = {
-        "message": clean_content or "请根据上传图片继续处理。",
+        "message": clean_content or "璇锋牴鎹笂浼犲浘鐗囩户缁鐞嗐€?,
         "history": [],
         "session_id": f"h5-{message_id}",
         "context_id": f"h5-{message_id}",
@@ -991,12 +1258,12 @@ async def _run_direct_chat(
                 base,
                 headers,
                 message_id,
-                reply_text=final_reply or "处理完成。",
+                reply_text=final_reply or "澶勭悊瀹屾垚銆?,
                 payload={"mode": "direct", "result_refs": refs, "media_urls": refs.get("urls") or []},
             )
     except Exception as exc:
         logger.exception("[H5-CHAT] direct chat failed message_id=%s", message_id)
-        await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "本地直连处理失败")
+        await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "鏈湴鐩磋繛澶勭悊澶辫触")
 
 
 async def _run_openclaw_chat(
@@ -1012,8 +1279,8 @@ async def _run_openclaw_chat(
     clean_content, attachment_asset_ids, attachment_urls = _extract_mobile_upload_attachments(content)
     if not message_id or not (clean_content or attachment_urls):
         return
-    await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "已交给本机 OpenClaw"})
-    user_content = clean_content or "请根据上传图片继续处理。"
+    await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "宸蹭氦缁欐湰鏈?OpenClaw"})
+    user_content = clean_content or "璇锋牴鎹笂浼犲浘鐗囩户缁鐞嗐€?
     if attachment_urls:
         upload_lines = "\n".join(
             f"- asset_id: {attachment_asset_ids[idx] if idx < len(attachment_asset_ids) else ''}  media_type: image  URL: {url}"
@@ -1021,7 +1288,7 @@ async def _run_openclaw_chat(
         )
         user_content += f"\n\n{_MOBILE_UPLOAD_TITLE}\n{upload_lines}"
     messages = [
-        {"role": "system", "content": "你是用户的手机会话助手。根据用户消息自然完成任务，使用中文回复。"},
+        {"role": "system", "content": "浣犳槸鐢ㄦ埛鐨勬墜鏈轰細璇濆姪鎵嬨€傛牴鎹敤鎴锋秷鎭嚜鐒跺畬鎴愪换鍔★紝浣跨敤涓枃鍥炲銆?},
         {"role": "user", "content": user_content},
     ]
     try:
@@ -1041,7 +1308,7 @@ async def _run_openclaw_chat(
                 base,
                 headers,
                 message_id,
-                error="OpenClaw 无有效回复，请检查本机 OpenClaw Gateway 是否启动。",
+                error="OpenClaw 鏃犳湁鏁堝洖澶嶏紝璇锋鏌ユ湰鏈?OpenClaw Gateway 鏄惁鍚姩銆?,
             )
             return
         await _complete_cloud_message(
@@ -1054,7 +1321,7 @@ async def _run_openclaw_chat(
         )
     except Exception as exc:
         logger.exception("[H5-CHAT] openclaw chat failed message_id=%s", message_id)
-        await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "OpenClaw 处理失败")
+        await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "OpenClaw 澶勭悊澶辫触")
 
 
 async def _process_item(
@@ -1092,9 +1359,9 @@ async def _run_scheduled_chat_message(
             if asset_context:
                 user_content = (
                     content.rstrip()
-                    + "\n\n【本机素材库上下文】\n"
+                    + "\n\n銆愭湰鏈虹礌鏉愬簱涓婁笅鏂囥€慭n"
                     + asset_context
-                    + "\n请优先使用这些真实素材 ID/URL；不要编造素材 ID。"
+                    + "\n璇蜂紭鍏堜娇鐢ㄨ繖浜涚湡瀹炵礌鏉?ID/URL锛涗笉瑕佺紪閫犵礌鏉?ID銆?
                 )
             messages = [
                 {"role": "system", "content": "You are executing a scheduled OpenClaw task. Follow the user request and return the final result concisely."},
@@ -1253,36 +1520,36 @@ async def _call_scheduled_llm(
 
 def _fallback_goal(task_title: str) -> str:
     title = (task_title or "").strip()
-    if title and title not in {"能力定时任务", "目标成片", "创意成片"}:
-        return f"根据我的记忆和任务名称“{title}”，生成一个 6 秒抖音 9:16 中文宣传视频。"
-    return "根据我的记忆，自动选择最适合推广的产品或服务，生成一个 6 秒抖音 9:16 中文宣传视频。"
+    if title and title not in {"鑳藉姏瀹氭椂浠诲姟", "鐩爣鎴愮墖", "鍒涙剰鎴愮墖"}:
+        return f"鏍规嵁鎴戠殑璁板繂鍜屼换鍔″悕绉扳€渰title}鈥濓紝鐢熸垚涓€涓?6 绉掓姈闊?9:16 涓枃瀹ｄ紶瑙嗛銆?
+    return "鏍规嵁鎴戠殑璁板繂锛岃嚜鍔ㄩ€夋嫨鏈€閫傚悎鎺ㄥ箍鐨勪骇鍝佹垨鏈嶅姟锛岀敓鎴愪竴涓?6 绉掓姈闊?9:16 涓枃瀹ｄ紶瑙嗛銆?
 
 
 def _fallback_image_goal(task_title: str) -> str:
     title = (task_title or "").strip()
-    if title and title not in {"能力定时任务", "文案+创意图片", "创意图片"}:
-        return f"根据我的记忆和任务名称“{title}”，生成一张适合朋友圈或短视频封面的中文宣传创意图片。"
-    return "根据我的记忆，自动选择最适合推广的产品或服务，生成一张中文宣传创意图片。"
+    if title and title not in {"鑳藉姏瀹氭椂浠诲姟", "鏂囨+鍒涙剰鍥剧墖", "鍒涙剰鍥剧墖"}:
+        return f"鏍规嵁鎴戠殑璁板繂鍜屼换鍔″悕绉扳€渰title}鈥濓紝鐢熸垚涓€寮犻€傚悎鏈嬪弸鍦堟垨鐭棰戝皝闈㈢殑涓枃瀹ｄ紶鍒涙剰鍥剧墖銆?
+    return "鏍规嵁鎴戠殑璁板繂锛岃嚜鍔ㄩ€夋嫨鏈€閫傚悎鎺ㄥ箍鐨勪骇鍝佹垨鏈嶅姟锛岀敓鎴愪竴寮犱腑鏂囧浼犲垱鎰忓浘鐗囥€?
 
 
 def _fallback_create_video_goal(task_title: str) -> str:
     title = (task_title or "").strip()
-    if title and title not in {"能力定时任务", "gtp创意成片", "GPT创意成片", "创意成片"}:
-        return f"根据我的记忆和任务名称“{title}”，生成一条商业广告质感的创意成片视频。"
-    return "根据我的记忆，自动选择最适合推广的产品或服务，生成一条商业广告质感的创意成片视频。"
+    if title and title not in {"鑳藉姏瀹氭椂浠诲姟", "gtp鍒涙剰鎴愮墖", "GPT鍒涙剰鎴愮墖", "鍒涙剰鎴愮墖"}:
+        return f"鏍规嵁鎴戠殑璁板繂鍜屼换鍔″悕绉扳€渰title}鈥濓紝鐢熸垚涓€鏉″晢涓氬箍鍛婅川鎰熺殑鍒涙剰鎴愮墖瑙嗛銆?
+    return "鏍规嵁鎴戠殑璁板繂锛岃嚜鍔ㄩ€夋嫨鏈€閫傚悎鎺ㄥ箍鐨勪骇鍝佹垨鏈嶅姟锛岀敓鎴愪竴鏉″晢涓氬箍鍛婅川鎰熺殑鍒涙剰鎴愮墖瑙嗛銆?
 
 
 def _fallback_ppt_goal(task_title: str) -> str:
     title = (task_title or "").strip()
-    if title and title not in {"能力定时任务", "PPT", "生成PPT", "智能PPT"}:
-        return f"根据我的记忆和任务名称“{title}”，生成一份结构清晰的商务演示PPT。"
-    return "根据我的记忆，自动选择最适合汇报的产品、服务或业务主题，生成一份结构清晰的商务演示PPT。"
+    if title and title not in {"鑳藉姏瀹氭椂浠诲姟", "PPT", "鐢熸垚PPT", "鏅鸿兘PPT"}:
+        return f"鏍规嵁鎴戠殑璁板繂鍜屼换鍔″悕绉扳€渰title}鈥濓紝鐢熸垚涓€浠界粨鏋勬竻鏅扮殑鍟嗗姟婕旂ずPPT銆?
+    return "鏍规嵁鎴戠殑璁板繂锛岃嚜鍔ㄩ€夋嫨鏈€閫傚悎姹囨姤鐨勪骇鍝併€佹湇鍔℃垨涓氬姟涓婚锛岀敓鎴愪竴浠界粨鏋勬竻鏅扮殑鍟嗗姟婕旂ずPPT銆?
 
 
 def _fallback_hifly_script(task_title: str) -> str:
     title = (task_title or "").strip()
-    subject = title[:12] if title and title not in {"能力定时任务", "飞影数字人", "飞鹰数字人", "必火数字人"} else "这款产品"
-    return f"大家好，今天带你了解{subject}，一起看看核心亮点。"
+    subject = title[:12] if title and title not in {"鑳藉姏瀹氭椂浠诲姟", "椋炲奖鏁板瓧浜?, "椋為拱鏁板瓧浜?, "蹇呯伀鏁板瓧浜?} else "杩欐浜у搧"
+    return f"澶у濂斤紝浠婂ぉ甯︿綘浜嗚В{subject}锛屼竴璧风湅鐪嬫牳蹇冧寒鐐广€?
 
 
 def _hifly_script_text(text: Any) -> str:
@@ -1300,21 +1567,21 @@ def _scheduled_custom_prompt(cap_payload: Dict[str, Any]) -> str:
 
 def _generated_from_scheduled_prompt(capability_id: str, task_title: str, prompt: str) -> Dict[str, Any]:
     title = (task_title or "").strip()
-    if not title or title in {"能力定时任务", "目标成片", "创意成片", "文案+创意图片", "创意图片", "智能PPT", "PPT"}:
+    if not title or title in {"鑳藉姏瀹氭椂浠诲姟", "鐩爣鎴愮墖", "鍒涙剰鎴愮墖", "鏂囨+鍒涙剰鍥剧墖", "鍒涙剰鍥剧墖", "鏅鸿兘PPT", "PPT"}:
         if capability_id == "goal.image.pipeline":
-            title = "创意图片"
+            title = "鍒涙剰鍥剧墖"
         elif capability_id == "create.video.pipeline":
-            title = "gtp创意成片"
+            title = "gtp鍒涙剰鎴愮墖"
         elif capability_id == "create.ppt.pipeline":
-            title = "智能PPT"
+            title = "鏅鸿兘PPT"
         else:
-            title = "创意成片"
+            title = "鍒涙剰鎴愮墖"
     return {
         "title": title[:120],
         "goal": prompt[:1000],
         "caption_hint": "",
-        "creative_angle": "自定义提示词",
-        "caption_style": "根据用户提示词生成发布文案",
+        "creative_angle": "鑷畾涔夋彁绀鸿瘝",
+        "caption_style": "鏍规嵁鐢ㄦ埛鎻愮ず璇嶇敓鎴愬彂甯冩枃妗?,
         "selling_points": [],
         "memory_context_used": False,
         "custom_prompt_used": True,
@@ -1326,8 +1593,8 @@ def _scheduled_goal_video_direct_plan(prompt: str, task_title: str) -> Dict[str,
     if not raw:
         return {}
     title = (task_title or "").strip()
-    if not title or title in {"能力定时任务", "目标成片", "创意成片"}:
-        title = "创意成片"
+    if not title or title in {"鑳藉姏瀹氭椂浠诲姟", "鐩爣鎴愮墖", "鍒涙剰鎴愮墖"}:
+        title = "鍒涙剰鎴愮墖"
     video_prompt = _with_video_no_text_constraint(raw, 2500)
     return {
         "title": title[:120],
@@ -1376,7 +1643,7 @@ def _goal_video_source_config_from_payload(payload: Dict[str, Any]) -> tuple[str
         return source_mode, ""
     candidate_group = str(payload.get("candidate_group") or payload.get("candidate_group_name") or "").strip()
     if not candidate_group:
-        raise ValueError("请选择创意成片备选素材组")
+        raise ValueError("璇烽€夋嫨鍒涙剰鎴愮墖澶囬€夌礌鏉愮粍")
     return source_mode, candidate_group
 
 
@@ -1392,15 +1659,15 @@ async def _generate_scheduled_content(
     run_id: str = "",
 ) -> Dict[str, Any]:
     if capability_id == "hifly.video.create_by_tts":
-        ability = "必火数字人"
+        ability = "蹇呯伀鏁板瓧浜?
     elif capability_id == "goal.image.pipeline":
-        ability = "文案+创意图片"
+        ability = "鏂囨+鍒涙剰鍥剧墖"
     elif capability_id == "create.video.pipeline":
-        ability = "gtp创意成片"
+        ability = "gtp鍒涙剰鎴愮墖"
     elif capability_id == "create.ppt.pipeline":
-        ability = "智能PPT"
+        ability = "鏅鸿兘PPT"
     else:
-        ability = "创意成片"
+        ability = "鍒涙剰鎴愮墖"
     query = "\n".join([task_title or ability, ability, asset_context or ""]).strip()
     memory_context = _scheduled_memory_context(jwt_token, installation_id, query)
     seed = "|".join([run_id, capability_id, task_title, str(len(memory_context)), str(len(asset_context))])
@@ -1408,51 +1675,51 @@ async def _generate_scheduled_content(
     caption_style = _scheduled_variant(seed + "|caption", _SCHEDULED_CAPTION_STYLES)
     if capability_id == "hifly.video.create_by_tts":
         system = (
-            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为必火数字人口播生成内容。"
-            "字段：title(string), script(string), caption_hint(string)。"
-            "script 是数字人口播文案，中文，一句话，必须完整通顺，最多 50 个字。"
-            "不要先写长文案，不要分段，不要要求用户补充信息，不要编造素材 ID。"
+            "浣犳槸瀹氭椂浠诲姟鍐呭缂栨帓鍣ㄣ€傚彧杈撳嚭 JSON 瀵硅薄锛屼笉瑕?Markdown銆俓n"
+            "鏍规嵁鐢ㄦ埛璁板繂鍜屽彲鐢ㄧ礌鏉愶紝涓哄繀鐏暟瀛椾汉鍙ｆ挱鐢熸垚鍐呭銆?
+            "瀛楁锛歵itle(string), script(string), caption_hint(string)銆?
+            "script 鏄暟瀛椾汉鍙ｆ挱鏂囨锛屼腑鏂囷紝涓€鍙ヨ瘽锛屽繀椤诲畬鏁撮€氶『锛屾渶澶?50 涓瓧銆?
+            "涓嶈鍏堝啓闀挎枃妗堬紝涓嶈鍒嗘锛屼笉瑕佽姹傜敤鎴疯ˉ鍏呬俊鎭紝涓嶈缂栭€犵礌鏉?ID銆?
         )
     elif capability_id == "goal.image.pipeline":
         system = (
-            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为文案+创意图片任务生成目标。"
-            "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
-            "goal 要能直接传给创意图片能力，明确要生成一张中文宣传创意图片，并写出本次图片的切入角度、画面方向和核心短文案。"
-            "每次都要换表达，不要复用固定开头、固定句式或通用宣传套话；不要要求用户补充信息，不要编造素材 ID。"
+            "浣犳槸瀹氭椂浠诲姟鍐呭缂栨帓鍣ㄣ€傚彧杈撳嚭 JSON 瀵硅薄锛屼笉瑕?Markdown銆俓n"
+            "鏍规嵁鐢ㄦ埛璁板繂鍜屽彲鐢ㄧ礌鏉愶紝涓烘枃妗?鍒涙剰鍥剧墖浠诲姟鐢熸垚鐩爣銆?
+            "瀛楁锛歵itle(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)銆?
+            "goal 瑕佽兘鐩存帴浼犵粰鍒涙剰鍥剧墖鑳藉姏锛屾槑纭鐢熸垚涓€寮犱腑鏂囧浼犲垱鎰忓浘鐗囷紝骞跺啓鍑烘湰娆″浘鐗囩殑鍒囧叆瑙掑害銆佺敾闈㈡柟鍚戝拰鏍稿績鐭枃妗堛€?
+            "姣忔閮借鎹㈣〃杈撅紝涓嶈澶嶇敤鍥哄畾寮€澶淬€佸浐瀹氬彞寮忔垨閫氱敤瀹ｄ紶濂楄瘽锛涗笉瑕佽姹傜敤鎴疯ˉ鍏呬俊鎭紝涓嶈缂栭€犵礌鏉?ID銆?
         )
     elif capability_id == "create.video.pipeline":
         system = (
-            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为 gtp创意成片生成核心视频创作 brief。"
-            "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
-            "goal 要能直接传给 create-video 流水线，写清楚视频主题、核心卖点、目标受众、画面风格和叙事方向。"
-            "不要要求用户补充信息，不要编造素材 ID；避免要求画面出现字幕、文字、字母、数字、logo、水印。"
+            "浣犳槸瀹氭椂浠诲姟鍐呭缂栨帓鍣ㄣ€傚彧杈撳嚭 JSON 瀵硅薄锛屼笉瑕?Markdown銆俓n"
+            "鏍规嵁鐢ㄦ埛璁板繂鍜屽彲鐢ㄧ礌鏉愶紝涓?gtp鍒涙剰鎴愮墖鐢熸垚鏍稿績瑙嗛鍒涗綔 brief銆?
+            "瀛楁锛歵itle(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)銆?
+            "goal 瑕佽兘鐩存帴浼犵粰 create-video 娴佹按绾匡紝鍐欐竻妤氳棰戜富棰樸€佹牳蹇冨崠鐐广€佺洰鏍囧彈浼椼€佺敾闈㈤鏍煎拰鍙欎簨鏂瑰悜銆?
+            "涓嶈瑕佹眰鐢ㄦ埛琛ュ厖淇℃伅锛屼笉瑕佺紪閫犵礌鏉?ID锛涢伩鍏嶈姹傜敾闈㈠嚭鐜板瓧骞曘€佹枃瀛椼€佸瓧姣嶃€佹暟瀛椼€乴ogo銆佹按鍗般€?
         )
     elif capability_id == "create.ppt.pipeline":
         system = (
-            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为智能PPT生成核心汇报 brief。"
-            "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
-            "goal 要能直接传给 PPT 生成流水线，写清楚汇报主题、目标受众、核心结构、关键观点和希望呈现的商务风格。"
-            "不要要求用户补充信息，不要编造素材 ID；没有真实数据时不要硬造数字。"
+            "浣犳槸瀹氭椂浠诲姟鍐呭缂栨帓鍣ㄣ€傚彧杈撳嚭 JSON 瀵硅薄锛屼笉瑕?Markdown銆俓n"
+            "鏍规嵁鐢ㄦ埛璁板繂鍜屽彲鐢ㄧ礌鏉愶紝涓烘櫤鑳絇PT鐢熸垚鏍稿績姹囨姤 brief銆?
+            "瀛楁锛歵itle(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)銆?
+            "goal 瑕佽兘鐩存帴浼犵粰 PPT 鐢熸垚娴佹按绾匡紝鍐欐竻妤氭眹鎶ヤ富棰樸€佺洰鏍囧彈浼椼€佹牳蹇冪粨鏋勩€佸叧閿鐐瑰拰甯屾湜鍛堢幇鐨勫晢鍔￠鏍笺€?
+            "涓嶈瑕佹眰鐢ㄦ埛琛ュ厖淇℃伅锛屼笉瑕佺紪閫犵礌鏉?ID锛涙病鏈夌湡瀹炴暟鎹椂涓嶈纭€犳暟瀛椼€?
         )
     else:
         system = (
-            "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为创意成片流水线生成目标。"
-            "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
-            "先从记忆里抽取真实卖点，再围绕指定创意角度生成本次视频目标。"
-            "goal 要能直接传给创意成片能力，明确 6 秒、抖音、9:16、中文宣传视频，并写出本次成片的切入角度、画面方向和核心短文案。"
-            "每次都要换表达，不要复用固定开头、固定句式或通用宣传套话；不要要求用户补充信息，不要编造素材 ID。"
+            "浣犳槸瀹氭椂浠诲姟鍐呭缂栨帓鍣ㄣ€傚彧杈撳嚭 JSON 瀵硅薄锛屼笉瑕?Markdown銆俓n"
+            "鏍规嵁鐢ㄦ埛璁板繂鍜屽彲鐢ㄧ礌鏉愶紝涓哄垱鎰忔垚鐗囨祦姘寸嚎鐢熸垚鐩爣銆?
+            "瀛楁锛歵itle(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)銆?
+            "鍏堜粠璁板繂閲屾娊鍙栫湡瀹炲崠鐐癸紝鍐嶅洿缁曟寚瀹氬垱鎰忚搴︾敓鎴愭湰娆¤棰戠洰鏍囥€?
+            "goal 瑕佽兘鐩存帴浼犵粰鍒涙剰鎴愮墖鑳藉姏锛屾槑纭?6 绉掋€佹姈闊炽€?:16銆佷腑鏂囧浼犺棰戯紝骞跺啓鍑烘湰娆℃垚鐗囩殑鍒囧叆瑙掑害銆佺敾闈㈡柟鍚戝拰鏍稿績鐭枃妗堛€?
+            "姣忔閮借鎹㈣〃杈撅紝涓嶈澶嶇敤鍥哄畾寮€澶淬€佸浐瀹氬彞寮忔垨閫氱敤瀹ｄ紶濂楄瘽锛涗笉瑕佽姹傜敤鎴疯ˉ鍏呬俊鎭紝涓嶈缂栭€犵礌鏉?ID銆?
         )
     user_payload = {
         "task_title": task_title,
         "ability": ability,
         "creative_angle": creative_angle,
         "caption_style": caption_style,
-        "variation_rule": "本次必须围绕 creative_angle 取材和表达，避免和以往定时任务使用同一套宣传话术。",
+        "variation_rule": "鏈蹇呴』鍥寸粫 creative_angle 鍙栨潗鍜岃〃杈撅紝閬垮厤鍜屼互寰€瀹氭椂浠诲姟浣跨敤鍚屼竴濂楀浼犺瘽鏈€?,
         "memory_context": memory_context[:12000],
         "asset_context": asset_context[:4000],
     }
@@ -1474,7 +1741,7 @@ async def _generate_scheduled_content(
         if not script:
             script = _fallback_hifly_script(task_title)
         return {
-            "title": title or "数字人口播",
+            "title": title or "鏁板瓧浜哄彛鎾?,
             "script": script,
             "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
             "creative_angle": creative_angle,
@@ -1485,7 +1752,7 @@ async def _generate_scheduled_content(
     if not goal:
         goal = _fallback_image_goal(task_title) if capability_id == "goal.image.pipeline" else _fallback_create_video_goal(task_title) if capability_id == "create.video.pipeline" else _fallback_ppt_goal(task_title) if capability_id == "create.ppt.pipeline" else _fallback_goal(task_title)
     return {
-        "title": title or ("创意图片" if capability_id == "goal.image.pipeline" else "gtp创意成片" if capability_id == "create.video.pipeline" else "创意成片"),
+        "title": title or ("鍒涙剰鍥剧墖" if capability_id == "goal.image.pipeline" else "gtp鍒涙剰鎴愮墖" if capability_id == "create.video.pipeline" else "鍒涙剰鎴愮墖"),
         "goal": goal[:1000],
         "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
         "creative_angle": str(data.get("creative_angle") or creative_angle).strip()[:40],
@@ -1530,7 +1797,7 @@ def _collect_scheduled_result_refs(obj: Any) -> Dict[str, List[str]]:
         elif isinstance(x, str):
             add_url(x)
             for match in _RESULT_URL_RE.finditer(x):
-                add_url(match.group(0).rstrip(".,!?，。！？、；："))
+                add_url(match.group(0).rstrip(".,!?锛屻€傦紒锛熴€侊紱锛?))
 
     walk(obj)
     return {"asset_ids": asset_ids[:12], "urls": urls[:8]}
@@ -1580,7 +1847,7 @@ def _scheduled_publish_config(cap_payload: Dict[str, Any]) -> Dict[str, Any]:
         "true",
         "yes",
         "on",
-        "是",
+        "鏄?,
     } or payload.get("publish_auto") is True or payload.get("auto_publish") is True
     if not (platform or account_id_int or account_nickname or auto_publish):
         return {}
@@ -1631,7 +1898,7 @@ def _clean_publish_tags(value: Any) -> str:
     if isinstance(value, list):
         raw = [str(x or "").strip() for x in value]
     else:
-        raw = re.split(r"[,，\s#、]+", str(value or ""))
+        raw = re.split(r"[,锛孿s#銆乚+", str(value or ""))
     out: List[str] = []
     seen: set[str] = set()
     for item in raw:
@@ -1648,14 +1915,14 @@ def _clean_publish_tags(value: Any) -> str:
 def _platform_publish_rules(platform: str) -> str:
     p = (platform or "").strip().lower()
     if p == "xiaohongshu":
-        return "小红书：标题 12-20 字，有种草感；正文 80-180 字，分段自然，结尾带 3-6 个话题标签。"
+        return "灏忕孩涔︼細鏍囬 12-20 瀛楋紝鏈夌鑽夋劅锛涙鏂?80-180 瀛楋紝鍒嗘鑷劧锛岀粨灏惧甫 3-6 涓瘽棰樻爣绛俱€?
     if p == "toutiao":
-        return "今日头条：标题 18-30 字，信息明确；正文 120-300 字，适合图文资讯口吻，少用夸张符号。"
+        return "浠婃棩澶存潯锛氭爣棰?18-30 瀛楋紝淇℃伅鏄庣‘锛涙鏂?120-300 瀛楋紝閫傚悎鍥炬枃璧勮鍙ｅ惢锛屽皯鐢ㄥじ寮犵鍙枫€?
     if p == "kuaishou":
-        return "快手：标题短直接；正文 40-100 字，生活化、接地气，带 2-4 个标签。"
+        return "蹇墜锛氭爣棰樼煭鐩存帴锛涙鏂?40-100 瀛楋紝鐢熸椿鍖栥€佹帴鍦版皵锛屽甫 2-4 涓爣绛俱€?
     if p == "bilibili":
-        return "B站：标题 16-32 字；简介说明亮点和看点，带 2-5 个标签。"
-    return "抖音：标题 10-24 字，正文 40-90 字，开头有吸引力，带 2-5 个话题标签。"
+        return "B绔欙細鏍囬 16-32 瀛楋紱绠€浠嬭鏄庝寒鐐瑰拰鐪嬬偣锛屽甫 2-5 涓爣绛俱€?
+    return "鎶栭煶锛氭爣棰?10-24 瀛楋紝姝ｆ枃 40-90 瀛楋紝寮€澶存湁鍚稿紩鍔涳紝甯?2-5 涓瘽棰樻爣绛俱€?
 
 
 async def _generate_scheduled_publish_copy(
@@ -1670,12 +1937,12 @@ async def _generate_scheduled_publish_copy(
     task_title: str,
     caption: str,
 ) -> Dict[str, str]:
-    fallback_title = (str(generated.get("title") or task_title or "AI 创意内容").strip() or "AI 创意内容")[:30]
+    fallback_title = (str(generated.get("title") or task_title or "AI 鍒涙剰鍐呭").strip() or "AI 鍒涙剰鍐呭")[:30]
     fallback_desc = caption or _fallback_scheduled_caption(capability_id, generated)
     fallback_tags = _clean_publish_tags(generated.get("tags") or generated.get("keywords") or "")
     system = (
-        "你是中文社交平台运营。只输出 JSON 对象，字段必须是 title、description、tags。"
-        "不要 Markdown，不要解释。"
+        "浣犳槸涓枃绀句氦骞冲彴杩愯惀銆傚彧杈撳嚭 JSON 瀵硅薄锛屽瓧娈靛繀椤绘槸 title銆乨escription銆乼ags銆?
+        "涓嶈 Markdown锛屼笉瑕佽В閲娿€?
         + _platform_publish_rules(platform)
     )
     try:
@@ -1690,7 +1957,7 @@ async def _generate_scheduled_publish_copy(
                 "caption": caption,
                 "skill_result_summary": _compact_result_text(result)[:1200],
                 "result_refs": refs,
-                "requirements": "标题、正文、标签要适合所选平台；不要编造不存在的优惠、价格或地址。",
+                "requirements": "鏍囬銆佹鏂囥€佹爣绛捐閫傚悎鎵€閫夊钩鍙帮紱涓嶈缂栭€犱笉瀛樺湪鐨勪紭鎯犮€佷环鏍兼垨鍦板潃銆?,
             },
             temperature=0.55,
         )
@@ -1711,7 +1978,7 @@ async def _submit_local_publish_draft(
 ) -> Dict[str, Any]:
     asset_id = str(draft.get("asset_id") or "").strip()
     if not asset_id:
-        raise RuntimeError("发布草稿缺少素材 asset_id")
+        raise RuntimeError("鍙戝竷鑽夌缂哄皯绱犳潗 asset_id")
     body = {
         "asset_id": asset_id,
         "account_id": draft.get("account_id"),
@@ -1749,7 +2016,7 @@ def _scheduled_refs_asset_urls_only(
 
 
 def _scheduled_goal_video_result_refs(result: Any, jwt_token: str) -> Dict[str, List[str]]:
-    """创意成片只返回最终视频素材，避免把备选图/上游临时链接一起塞给 H5。"""
+    """鍒涙剰鎴愮墖鍙繑鍥炴渶缁堣棰戠礌鏉愶紝閬垮厤鎶婂閫夊浘/涓婃父涓存椂閾炬帴涓€璧峰缁?H5銆?""
     if not isinstance(result, dict):
         return _scheduled_refs_with_asset_urls(_collect_scheduled_result_refs(result), jwt_token)
     video_asset_id = str(result.get("video_asset_id") or result.get("final_asset_id") or "").strip()
@@ -1774,7 +2041,7 @@ def _scheduled_goal_video_result_refs(result: Any, jwt_token: str) -> Dict[str, 
 
 
 def _scheduled_create_video_result_refs(result: Any, jwt_token: str) -> Dict[str, List[str]]:
-    """gtp创意成片也只返回最终视频素材，避免把中间首帧图混进 H5 结果。"""
+    """gtp鍒涙剰鎴愮墖涔熷彧杩斿洖鏈€缁堣棰戠礌鏉愶紝閬垮厤鎶婁腑闂撮甯у浘娣疯繘 H5 缁撴灉銆?""
     return _scheduled_goal_video_result_refs(result, jwt_token)
 
 
@@ -1894,31 +2161,31 @@ def _goal_video_pipeline_pending_reason(result: Any) -> str:
                 video_status = str(video.get("status") or "").strip().lower()
                 if video_status in {"running", "processing", "pending", "queued", "waiting"}:
                     task_id = str(video.get("task_id") or "").strip()
-                    return f"创意成片视频仍在生成中{('，task_id=' + task_id) if task_id else ''}"
+                    return f"鍒涙剰鎴愮墖瑙嗛浠嶅湪鐢熸垚涓瓄('锛宼ask_id=' + task_id) if task_id else ''}"
                 final = video.get("final_result")
                 if isinstance(final, dict):
                     final_status = str(final.get("status") or (final.get("result") or {}).get("status") or "").strip().lower()
                     if final_status in {"running", "processing", "pending", "queued", "waiting"}:
                         task_id = str(video.get("task_id") or (final.get("result") or {}).get("task_id") or "").strip()
-                        return f"创意成片视频仍在生成中{('，task_id=' + task_id) if task_id else ''}"
+                        return f"鍒涙剰鎴愮墖瑙嗛浠嶅湪鐢熸垚涓瓄('锛宼ask_id=' + task_id) if task_id else ''}"
             for value in cur.values():
                 if isinstance(value, (dict, list)):
                     stack.append(value)
         elif isinstance(cur, list):
             stack.extend(v for v in cur if isinstance(v, (dict, list)))
     if any(s in {"running", "processing", "pending", "queued", "waiting"} for s in statuses):
-        return "创意成片视频仍在生成中"
+        return "鍒涙剰鎴愮墖瑙嗛浠嶅湪鐢熸垚涓?
     return ""
 
 
 def _create_video_pipeline_pending_reason(result: Any) -> str:
     reason = _goal_video_pipeline_pending_reason(result)
-    return reason.replace("创意成片", "gtp创意成片") if reason else ""
+    return reason.replace("鍒涙剰鎴愮墖", "gtp鍒涙剰鎴愮墖") if reason else ""
 
 
 def _scheduled_caption_candidate(value: Any) -> str:
-    text = " ".join(str(value or "").strip().strip('"“”`').split())
-    text = re.sub(r"^(发布文案|朋友圈文案|文案)\s*[:：]\s*", "", text).strip()
+    text = " ".join(str(value or "").strip().strip('"鈥溾€漙').split())
+    text = re.sub(r"^(鍙戝竷鏂囨|鏈嬪弸鍦堟枃妗坾鏂囨)\s*[:锛歖\s*", "", text).strip()
     return text if 0 < len(text) <= 50 else ""
 
 
@@ -1927,25 +2194,25 @@ def _fallback_scheduled_caption(capability_id: str, generated: Dict[str, Any]) -
     if hint:
         return hint
     title = str(generated.get("title") or "").strip()
-    subject = title[:12] if title and title not in {"能力定时任务", "目标成片", "创意成片", "智能PPT", "PPT", "数字人口播"} else "这次内容"
+    subject = title[:12] if title and title not in {"鑳藉姏瀹氭椂浠诲姟", "鐩爣鎴愮墖", "鍒涙剰鎴愮墖", "鏅鸿兘PPT", "PPT", "鏁板瓧浜哄彛鎾?} else "杩欐鍐呭"
     angle = str(generated.get("creative_angle") or "").strip()
     options = {
-        "痛点切入": f"{subject}把难点讲清楚，选型和落地都更有底气。",
-        "场景体验": f"把{subject}放进真实场景里看，价值会更直观。",
-        "结果收益": f"{subject}不只好看，更要带来效率、品质和确定性。",
-        "工艺实力": f"用细节呈现{subject}实力，让专业能力被一眼看见。",
-        "交付效率": f"{subject}从需求到交付更顺畅，少等待，多确定。",
-        "信任背书": f"靠谱的{subject}，来自持续稳定的能力和服务。",
-        "对比反差": f"同样做{subject}，差别往往藏在细节和交付里。",
-        "客户视角": f"站在客户角度看{subject}，省心就是最大的价值。",
+        "鐥涚偣鍒囧叆": f"{subject}鎶婇毦鐐硅娓呮锛岄€夊瀷鍜岃惤鍦伴兘鏇存湁搴曟皵銆?,
+        "鍦烘櫙浣撻獙": f"鎶妠subject}鏀捐繘鐪熷疄鍦烘櫙閲岀湅锛屼环鍊间細鏇寸洿瑙傘€?,
+        "缁撴灉鏀剁泭": f"{subject}涓嶅彧濂界湅锛屾洿瑕佸甫鏉ユ晥鐜囥€佸搧璐ㄥ拰纭畾鎬с€?,
+        "宸ヨ壓瀹炲姏": f"鐢ㄧ粏鑺傚憟鐜皗subject}瀹炲姏锛岃涓撲笟鑳藉姏琚竴鐪肩湅瑙併€?,
+        "浜や粯鏁堢巼": f"{subject}浠庨渶姹傚埌浜や粯鏇撮『鐣咃紝灏戠瓑寰咃紝澶氱‘瀹氥€?,
+        "淇′换鑳屼功": f"闈犺氨鐨剓subject}锛屾潵鑷寔缁ǔ瀹氱殑鑳藉姏鍜屾湇鍔°€?,
+        "瀵规瘮鍙嶅樊": f"鍚屾牱鍋歿subject}锛屽樊鍒線寰€钘忓湪缁嗚妭鍜屼氦浠橀噷銆?,
+        "瀹㈡埛瑙嗚": f"绔欏湪瀹㈡埛瑙掑害鐪媨subject}锛岀渷蹇冨氨鏄渶澶х殑浠峰€笺€?,
     }
     if angle in options:
         return options[angle]
     if capability_id == "hifly.video.create_by_tts":
-        return f"{subject}亮点已生成，适合直接分享给客户看看。"
+        return f"{subject}浜偣宸茬敓鎴愶紝閫傚悎鐩存帴鍒嗕韩缁欏鎴风湅鐪嬨€?
     if capability_id == "create.ppt.pipeline":
-        return f"{subject}PPT已生成，适合直接用于汇报和沟通。"
-    return f"{subject}宣传视频已生成，换个角度看看产品价值。"
+        return f"{subject}PPT宸茬敓鎴愶紝閫傚悎鐩存帴鐢ㄤ簬姹囨姤鍜屾矡閫氥€?
+    return f"{subject}瀹ｄ紶瑙嗛宸茬敓鎴愶紝鎹釜瑙掑害鐪嬬湅浜у搧浠峰€笺€?
 
 
 async def _generate_scheduled_caption(
@@ -1958,10 +2225,10 @@ async def _generate_scheduled_caption(
 ) -> str:
     fallback = _fallback_scheduled_caption(capability_id, generated)
     system = (
-        "你只负责写发布朋友圈文案。输出一条中文，一句完整话，35 到 50 个字，不要 Markdown，不要解释。"
-        "必须根据 generated_content 里的 goal/script、caption_hint、creative_angle 和 result_refs 重新创作，"
-        "不要照抄 caption_hint，不要使用固定宣传口号。"
-        "同一用户多次执行时要换切入角度和句式，让每次发布看起来不是同一模板。"
+        "浣犲彧璐熻矗鍐欏彂甯冩湅鍙嬪湀鏂囨銆傝緭鍑轰竴鏉′腑鏂囷紝涓€鍙ュ畬鏁磋瘽锛?5 鍒?50 涓瓧锛屼笉瑕?Markdown锛屼笉瑕佽В閲娿€?
+        "蹇呴』鏍规嵁 generated_content 閲岀殑 goal/script銆乧aption_hint銆乧reative_angle 鍜?result_refs 閲嶆柊鍒涗綔锛?
+        "涓嶈鐓ф妱 caption_hint锛屼笉瑕佷娇鐢ㄥ浐瀹氬浼犲彛鍙枫€?
+        "鍚屼竴鐢ㄦ埛澶氭鎵ц鏃惰鎹㈠垏鍏ヨ搴﹀拰鍙ュ紡锛岃姣忔鍙戝竷鐪嬭捣鏉ヤ笉鏄悓涓€妯℃澘銆?
     )
     refs = _collect_scheduled_result_refs(result)
     text = ""
@@ -1977,7 +2244,7 @@ async def _generate_scheduled_caption(
                 "creative_angle": generated.get("creative_angle"),
                 "caption_style": generated.get("caption_style"),
                 "prompt_sent_to_skill": generated.get("goal") or generated.get("script"),
-                "length_rule": "必须是一句完整中文，最多 50 个字，不允许先生成长文再截断。",
+                "length_rule": "蹇呴』鏄竴鍙ュ畬鏁翠腑鏂囷紝鏈€澶?50 涓瓧锛屼笉鍏佽鍏堢敓鎴愰暱鏂囧啀鎴柇銆?,
             },
             temperature=0.85 if capability_id in {"goal.video.pipeline", "goal.image.pipeline", "create.video.pipeline", "create.ppt.pipeline"} else 0.55,
         )
@@ -1989,12 +2256,12 @@ async def _generate_scheduled_caption(
             rewrite = await _call_scheduled_llm(
                 base=base,
                 headers=headers,
-                system="把原文重写为一条完整中文朋友圈文案，最多 50 个字，不要 Markdown，不要解释。",
+                system="鎶婂師鏂囬噸鍐欎负涓€鏉″畬鏁翠腑鏂囨湅鍙嬪湀鏂囨锛屾渶澶?50 涓瓧锛屼笉瑕?Markdown锛屼笉瑕佽В閲娿€?,
                 user_payload={
                     "ability": capability_id,
                     "generated_content": generated,
                     "original_caption": text,
-                    "length_rule": "不要截断，直接重写成一句完整话。",
+                    "length_rule": "涓嶈鎴柇锛岀洿鎺ラ噸鍐欐垚涓€鍙ュ畬鏁磋瘽銆?,
                 },
                 temperature=0.6,
             )
@@ -2013,61 +2280,61 @@ def _scheduled_complete_text(
     publish_draft: Optional[Dict[str, Any]] = None,
 ) -> str:
     ready = _scheduled_result_ready(result)
-    lines = ["生成完成。" if ready else "任务已提交，仍在生成中。", f"发布文案：{caption}"]
+    lines = ["鐢熸垚瀹屾垚銆? if ready else "浠诲姟宸叉彁浜わ紝浠嶅湪鐢熸垚涓€?, f"鍙戝竷鏂囨锛歿caption}"]
     if skill_prompt:
-        lines.append(f"传给技能的提示词：{skill_prompt}")
+        lines.append(f"浼犵粰鎶€鑳界殑鎻愮ず璇嶏細{skill_prompt}")
     if input_refs:
         source_mode = str(input_refs.get("source_mode") or "").strip()
         image_model = str(input_refs.get("image_model") or "").strip()
         group = str(input_refs.get("candidate_group") or "").strip()
         ref_asset = str(input_refs.get("reference_asset_id") or "").strip()
         if source_mode == _SCHEDULED_VIDEO_SOURCE_AI_IMAGE:
-            lines.append(f"首帧来源：AI 生成图片{('（' + image_model + '）') if image_model else ''}")
+            lines.append(f"棣栧抚鏉ユ簮锛欰I 鐢熸垚鍥剧墖{('锛? + image_model + '锛?) if image_model else ''}")
         elif source_mode == _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM:
-            lines.append("首帧来源：素材库备选组轮换图片")
+            lines.append("棣栧抚鏉ユ簮锛氱礌鏉愬簱澶囬€夌粍杞崲鍥剧墖")
         elif source_mode == "create_video_pipeline":
             video_model = str(input_refs.get("video_model") or "").strip()
             planning_model = str(input_refs.get("planning_model") or "").strip()
             if image_model:
-                lines.append(f"首帧模型：{image_model}")
+                lines.append(f"棣栧抚妯″瀷锛歿image_model}")
             if video_model:
-                lines.append(f"视频模型：{video_model}")
+                lines.append(f"瑙嗛妯″瀷锛歿video_model}")
             if planning_model:
-                lines.append(f"规划模型：{planning_model}")
+                lines.append(f"瑙勫垝妯″瀷锛歿planning_model}")
         elif source_mode == "create_ppt_pipeline":
             planning_model = str(input_refs.get("planning_model") or "").strip()
             theme = str(input_refs.get("theme") or "").strip()
             slide_count = str(input_refs.get("slide_count") or "").strip()
             if planning_model:
-                lines.append(f"PPT规划模型：{planning_model}")
+                lines.append(f"PPT瑙勫垝妯″瀷锛歿planning_model}")
             if theme:
-                lines.append(f"PPT主题样式：{theme}")
+                lines.append(f"PPT涓婚鏍峰紡锛歿theme}")
             if slide_count:
-                lines.append(f"PPT页数：{slide_count}")
+                lines.append(f"PPT椤垫暟锛歿slide_count}")
         if group:
-            lines.append(f"备选组：{group}")
+            lines.append(f"澶囬€夌粍锛歿group}")
         if ref_asset:
-            lines.append(f"使用备选素材：{ref_asset}")
+            lines.append(f"浣跨敤澶囬€夌礌鏉愶細{ref_asset}")
     refs = refs or _collect_scheduled_result_refs(result)
     if refs["asset_ids"]:
-        lines.append("生成素材：" + "、".join(refs["asset_ids"][:6]))
+        lines.append("鐢熸垚绱犳潗锛? + "銆?.join(refs["asset_ids"][:6]))
     if refs["urls"]:
-        lines.append("预览链接：")
+        lines.append("棰勮閾炬帴锛?)
         lines.extend(refs["urls"][:6])
     if publish_draft:
         status = str(publish_draft.get("status") or "ready").strip()
         platform = str(publish_draft.get("platform_name") or publish_draft.get("platform") or "").strip()
         acct = str(publish_draft.get("account_nickname") or publish_draft.get("account_id") or "").strip()
         label = {
-            "ready": "待发布",
-            "pending": "等待发布",
-            "processing": "发布中",
-            "published": "已发布",
-            "failed": "发布失败",
-        }.get(status, status or "待发布")
-        lines.append("发布状态：" + label + (f"（{platform} · {acct}）" if platform or acct else ""))
+            "ready": "寰呭彂甯?,
+            "pending": "绛夊緟鍙戝竷",
+            "processing": "鍙戝竷涓?,
+            "published": "宸插彂甯?,
+            "failed": "鍙戝竷澶辫触",
+        }.get(status, status or "寰呭彂甯?)
+        lines.append("鍙戝竷鐘舵€侊細" + label + (f"锛坽platform} 路 {acct}锛? if platform or acct else ""))
         if publish_draft.get("error"):
-            lines.append("发布错误：" + str(publish_draft.get("error"))[:200])
+            lines.append("鍙戝竷閿欒锛? + str(publish_draft.get("error"))[:200])
     return "\n".join(lines)
 
 
@@ -2115,6 +2382,656 @@ async def _invoke_local_capability(
     return _extract_mcp_payload(data)
 
 
+def _compact_douyin_message(value: Any, fallback: str) -> str:
+    text = _compact_result_text(value)
+    return text or fallback
+
+
+def _douyin_result_error(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    code = result.get("code")
+    try:
+        if code is not None and int(code) != 200:
+            return _compact_douyin_message(
+                result.get("msg") or result.get("message") or result.get("detail") or result,
+                "鎶栭煶浠诲姟鎵ц澶辫触",
+            )
+    except Exception:
+        pass
+    return _scheduled_capability_error(result)
+
+
+def _douyin_stats_from_tasks(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
+    total = len(tasks)
+    completed = 0
+    failed = 0
+    high_intent_users = 0
+    comments_collected = 0
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        status = str(task.get("status") or "").strip().lower()
+        if status == "completed":
+            completed += 1
+        elif status == "failed":
+            failed += 1
+        high_intent_users += max(0, int(task.get("high_intent_count", 0) or 0))
+        comments_collected += max(
+            int(task.get("comment_count", 0) or 0),
+            len(task.get("all_comments") or []) if isinstance(task.get("all_comments"), list) else 0,
+        )
+    return {
+        "tasks_total": total,
+        "tasks_completed": completed,
+        "tasks_failed": failed,
+        "high_intent_users": high_intent_users,
+        "comments_collected": comments_collected,
+    }
+
+
+def _douyin_stats_from_users(users: List[Dict[str, Any]], status_field: str, success_statuses: set[str]) -> Dict[str, int]:
+    total = len(users)
+    success = 0
+    failed = 0
+    for row in users:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get(status_field) or "").strip().lower()
+        if status in success_statuses:
+            success += 1
+        elif status == "failed":
+            failed += 1
+    return {
+        "users_total": total,
+        "users_success": success,
+        "users_failed": failed,
+    }
+
+
+async def _run_local_debug_douyin_leads(item: Dict[str, Any]) -> None:
+    _install_douyin_origin_import_path()
+    from douyin_api import (  # type: ignore
+        douyin_collect_stranger_messages,
+        douyin_interaction_status,
+        douyin_search_collect,
+        douyin_send_stranger_messages,
+        douyin_start_interaction,
+        douyin_start_tasks,
+        douyin_stranger_message_status,
+        douyin_tasks_from_search,
+        douyin_get_tasks_lite,
+    )
+
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    action = str(payload.get("action") or "").strip().lower()
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if not action:
+        raise RuntimeError("缂哄皯 douyin_leads.action")
+
+    async def poll_until_finished(
+        *,
+        status_func,
+        done_when,
+        interval_seconds: float = 5.0,
+        max_seconds: float = 7200.0,
+    ) -> Dict[str, Any]:
+        waited = 0.0
+        last_payload: Dict[str, Any] = {}
+        while waited <= max_seconds:
+            current = await status_func()
+            if not isinstance(current, dict):
+                current = {"code": 500, "msg": "鐘舵€佹帴鍙ｈ繑鍥炲紓甯?}
+            last_payload = current
+            err = _douyin_result_error(current)
+            if err:
+                raise RuntimeError(err)
+            if done_when(current):
+                return current
+            await asyncio.sleep(interval_seconds)
+            waited += interval_seconds
+        raise RuntimeError(f"鏈湴璋冭瘯浠诲姟瓒呮椂锛歿action}")
+
+    if action == "search_collect":
+        search_request = dict(params or {})
+        search_request["mode"] = "script"
+        result = await douyin_search_collect(search_request)
+        err = _douyin_result_error(result)
+        if err:
+            raise RuntimeError(err)
+        rows = result.get("data") if isinstance(result.get("data"), list) else []
+        if not rows:
+            logger.info("[debug.douyin_leads] search_collect no rows result=%s", _json_trunc(result, 1200))
+            return
+        first_item = dict(rows[0] if isinstance(rows[0], dict) else {})
+        sync_result = await douyin_tasks_from_search({"data": [first_item]})
+        err = _douyin_result_error(sync_result)
+        if err:
+            raise RuntimeError(err)
+        final_tasks = await douyin_get_tasks_lite()
+        lite_tasks = final_tasks.get("tasks") if isinstance(final_tasks.get("tasks"), list) else []
+        matched_task = None
+        first_url = str(first_item.get("url", "") or "").strip()
+        first_title = str(first_item.get("title", "") or "").strip()
+        for task in lite_tasks:
+            if not isinstance(task, dict):
+                continue
+            if str(task.get("url", "") or "").strip() == first_url and first_url:
+                matched_task = task
+                break
+            if str(task.get("title", "") or "").strip() == first_title and first_title:
+                matched_task = task
+        if not matched_task:
+            raise RuntimeError("鎼滅储瀹屾垚鍚庢湭鑳藉畾浣嶅埌棣栦釜瑙嗛浠诲姟")
+        task_id = int(matched_task.get("id", 0) or 0)
+        if task_id <= 0:
+            raise RuntimeError("鎼滅储瀹屾垚鍚庨涓棰戜换鍔＄己灏戞湁鏁?ID")
+        start_result = await douyin_start_tasks(request={"selected_task_ids": [task_id], "collection_mode": "script"})
+        err = _douyin_result_error(start_result)
+        if err:
+            raise RuntimeError(err)
+        final = await poll_until_finished(
+            status_func=douyin_get_tasks_lite,
+            done_when=lambda current: not bool(current.get("running")),
+        )
+        logger.info(
+            "[debug.douyin_leads] search_collect search=%s sync=%s start=%s final=%s",
+            _json_trunc(result, 800),
+            _json_trunc(sync_result, 800),
+            _json_trunc(start_result, 800),
+            _json_trunc(final, 1600),
+        )
+        return
+
+    if action == "tasks_from_search":
+        result = await douyin_tasks_from_search(dict(params or {}))
+        err = _douyin_result_error(result)
+        if err:
+            raise RuntimeError(err)
+        logger.info("[debug.douyin_leads] tasks_from_search result=%s", _json_trunc(result, 1200))
+        return
+
+    if action == "comment_collect":
+        start_result = await douyin_start_tasks(request=dict(params or {}))
+        err = _douyin_result_error(start_result)
+        if err:
+            raise RuntimeError(err)
+        final = await poll_until_finished(
+            status_func=douyin_get_tasks_lite,
+            done_when=lambda current: not bool(current.get("running")),
+        )
+        logger.info("[debug.douyin_leads] comment_collect start=%s final=%s", _json_trunc(start_result, 800), _json_trunc(final, 1600))
+        return
+
+    if action == "interaction":
+        start_result = await douyin_start_interaction(request=dict(params or {}))
+        err = _douyin_result_error(start_result)
+        if err:
+            raise RuntimeError(err)
+        final = await poll_until_finished(
+            status_func=lambda: douyin_interaction_status(lite=True, include_users=True),
+            done_when=lambda current: not bool(current.get("running")),
+        )
+        logger.info("[debug.douyin_leads] interaction start=%s final=%s", _json_trunc(start_result, 800), _json_trunc(final, 1600))
+        return
+
+    if action == "stranger_collect":
+        start_result = await douyin_collect_stranger_messages(request=dict(params or {}))
+        err = _douyin_result_error(start_result)
+        if err:
+            raise RuntimeError(err)
+        final = await poll_until_finished(
+            status_func=douyin_stranger_message_status,
+            done_when=lambda current: not bool(current.get("running")),
+        )
+        logger.info("[debug.douyin_leads] stranger_collect start=%s final=%s", _json_trunc(start_result, 800), _json_trunc(final, 1600))
+        return
+
+    if action == "stranger_send":
+        start_result = await douyin_send_stranger_messages(request=dict(params or {}))
+        err = _douyin_result_error(start_result)
+        if err:
+            raise RuntimeError(err)
+        final = await poll_until_finished(
+            status_func=douyin_stranger_message_status,
+            done_when=lambda current: not bool(current.get("running")),
+        )
+        logger.info("[debug.douyin_leads] stranger_send start=%s final=%s", _json_trunc(start_result, 800), _json_trunc(final, 1600))
+        return
+
+    raise RuntimeError(f"鏆備笉鏀寔鐨?douyin_leads.action: {action}")
+
+
+async def _run_scheduled_douyin_leads(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+    *,
+    jwt_token: str,
+    installation_id: str,
+) -> None:
+    _install_douyin_origin_import_path()
+    from douyin_api import (  # type: ignore
+        douyin_collect_stranger_messages,
+        douyin_interaction_status,
+        douyin_search_collect,
+        douyin_send_stranger_messages,
+        douyin_start_interaction,
+        douyin_start_tasks,
+        douyin_stranger_message_status,
+        douyin_tasks_from_search,
+        douyin_video_comment_status,
+        douyin_get_tasks_lite,
+    )
+
+    run_id = str(item.get("id") or "").strip()
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    action = str(payload.get("action") or "").strip().lower()
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    title = str(item.get("title") or item.get("content") or run_id or "").strip()
+    if not run_id:
+        return
+    if not action:
+        raise RuntimeError("缂哄皯 douyin_leads.action")
+
+    async def emit(stage: str, text: str, *, progress: Optional[int] = None, stats: Optional[Dict[str, Any]] = None) -> None:
+        body: Dict[str, Any] = {"text": text, "stage": stage, "action": action}
+        if progress is not None:
+            body["progress"] = max(0, min(100, int(progress)))
+        if stats:
+            body["stats"] = stats
+        await _post_task_event(cloud, base, headers, run_id, stage, body)
+
+    def progress(done: int, total: int) -> int:
+        if total <= 0:
+            return 0
+        return max(0, min(99, int(done * 100 / total)))
+
+    def pick_task_from_lite_rows(tasks: List[Dict[str, Any]], item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        target_url = str(item.get("url", "") or "").strip()
+        target_title = str(item.get("title", "") or "").strip()
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            if target_url and str(task.get("url", "") or "").strip() == target_url:
+                return task
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            if target_title and str(task.get("title", "") or "").strip() == target_title:
+                return task
+        return None
+
+    async def poll_until_finished(
+        *,
+        status_func,
+        state_key: str,
+        done_when,
+        stats_builder,
+        interval_seconds: float = 5.0,
+        max_seconds: float = 7200.0,
+    ) -> Dict[str, Any]:
+        waited = 0.0
+        last_payload: Dict[str, Any] = {}
+        last_digest = ""
+        while waited <= max_seconds:
+            current = await status_func()
+            if not isinstance(current, dict):
+                current = {"code": 500, "msg": "鐘舵€佹帴鍙ｈ繑鍥炲紓甯?}
+            last_payload = current
+            err = _scheduled_capability_error(current)
+            if err:
+                raise RuntimeError(err)
+            state = current.get(state_key) if isinstance(current.get(state_key), dict) else {}
+            running = bool(current.get("running"))
+            stats = stats_builder(current)
+            state_message = _compact_douyin_message(
+                state.get("message") or state.get("last_message") or current.get("msg"),
+                f"{title or action} 姝ｅ湪鎵ц",
+            )
+            digest = json.dumps({"running": running, "stats": stats, "message": state_message}, ensure_ascii=False, sort_keys=True)
+            if digest != last_digest:
+                total = int(stats.get("total") or stats.get("tasks_total") or stats.get("users_total") or 0)
+                done = int(
+                    stats.get("completed")
+                    or stats.get("tasks_completed")
+                    or stats.get("users_success")
+                    or stats.get("processed")
+                    or 0
+                )
+                await emit("progress", state_message, progress=progress(done, total), stats=stats)
+                last_digest = digest
+            if done_when(current):
+                return current
+            await asyncio.sleep(interval_seconds)
+            waited += interval_seconds
+        raise RuntimeError(f"{title or action} 瓒呮椂锛岃秴杩?{int(max_seconds)} 绉掍粛鏈粨鏉?)
+
+    try:
+        await emit("claimed", f"宸查鍙栨姈闊宠幏瀹换鍔★細{action}", progress=1)
+        if action == "search_collect":
+            await emit("searching", "姝ｅ湪鎵ц鎶栭煶鎼滅储閲囬泦", progress=5)
+            search_request = dict(params or {})
+            search_request["mode"] = "script"
+            result = await douyin_search_collect(search_request)
+            err = _douyin_result_error(result)
+            if err:
+                raise RuntimeError(err)
+            rows = result.get("data") if isinstance(result.get("data"), list) else []
+            total_rows = int(result.get("total", len(rows)) or len(rows))
+            await emit(
+                "search_done",
+                _compact_douyin_message(result.get("msg"), f"鎼滅储鍏抽敭璇嶅畬鎴愶紝鎵惧埌浜?{total_rows} 涓棰?),
+                progress=20,
+                stats={"videos_found": total_rows},
+            )
+            if not rows:
+                result_payload = {
+                    "task_kind": "douyin_leads",
+                    "action": action,
+                    "search_mode": result.get("search_mode"),
+                    "account_id": result.get("account_id"),
+                    "total": total_rows,
+                    "items": [],
+                    "search_result": result,
+                    "raw_result": result,
+                }
+                await _complete_task_run(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    result_text=_compact_douyin_message(result.get("msg"), "鎼滅储瀹屾垚锛屼絾娌℃湁鎵惧埌鍙噰闆嗙殑瑙嗛"),
+                    result_payload=result_payload,
+                )
+                return
+            first_item = dict(rows[0] if isinstance(rows[0], dict) else {})
+            await emit(
+                "collect_prepare",
+                "鎼滅储瀹屾垚锛屾鍦ㄥ绗?1 涓棰戦噰闆嗗鎴?,
+                progress=28,
+                stats={"videos_found": total_rows},
+            )
+            sync_result = await douyin_tasks_from_search({"data": [first_item]})
+            err = _douyin_result_error(sync_result)
+            if err:
+                raise RuntimeError(err)
+            current_tasks = await douyin_get_tasks_lite()
+            err = _douyin_result_error(current_tasks)
+            if err:
+                raise RuntimeError(err)
+            lite_tasks = current_tasks.get("tasks") if isinstance(current_tasks.get("tasks"), list) else []
+            matched_task = pick_task_from_lite_rows(lite_tasks, first_item)
+            if not matched_task:
+                raise RuntimeError("鎼滅储瀹屾垚鍚庢湭鑳藉畾浣嶅埌棣栦釜瑙嗛浠诲姟")
+            task_id = int(matched_task.get("id", 0) or 0)
+            if task_id <= 0:
+                raise RuntimeError("鎼滅储瀹屾垚鍚庨涓棰戜换鍔＄己灏戞湁鏁?ID")
+            await emit(
+                "collect_start",
+                f"姝ｅ湪閲囬泦銆妠str(matched_task.get('title') or first_item.get('title') or '绗?1 涓棰?)}銆嬬殑瀹㈡埛",
+                progress=35,
+                stats={"videos_found": total_rows, "selected_task_id": task_id},
+            )
+            start_result = await douyin_start_tasks(request={"selected_task_ids": [task_id], "collection_mode": "script"})
+            err = _douyin_result_error(start_result)
+            if err:
+                raise RuntimeError(err)
+            final = await poll_until_finished(
+                status_func=douyin_get_tasks_lite,
+                state_key="state",
+                done_when=lambda current: not bool(current.get("running")),
+                stats_builder=lambda current: {
+                    **_douyin_stats_from_tasks(current.get("tasks") if isinstance(current.get("tasks"), list) else []),
+                    "total": int(current.get("total", 0) or 0),
+                },
+                interval_seconds=5.0,
+                max_seconds=7200.0,
+            )
+            final_tasks = final.get("tasks") if isinstance(final.get("tasks"), list) else []
+            final_task = pick_task_from_lite_rows(final_tasks, first_item) or matched_task
+            comments_collected = max(
+                int((final_task or {}).get("comment_count", 0) or 0),
+                len((final_task or {}).get("all_comments") or []) if isinstance((final_task or {}).get("all_comments"), list) else 0,
+            )
+            precise_count = max(
+                int((final_task or {}).get("high_intent_count", 0) or 0),
+                len((final_task or {}).get("high_intent_users") or []) if isinstance((final_task or {}).get("high_intent_users"), list) else 0,
+            )
+            result_payload = {
+                "task_kind": "douyin_leads",
+                "action": action,
+                "search_mode": result.get("search_mode"),
+                "account_id": result.get("account_id"),
+                "total": total_rows,
+                "items": rows[:20],
+                "search_result": result,
+                "search_videos_total": total_rows,
+                "selected_video": {
+                    "task_id": task_id,
+                    "title": str((final_task or {}).get("title") or first_item.get("title") or "").strip(),
+                    "url": str((final_task or {}).get("url") or first_item.get("url") or "").strip(),
+                    "author": str((final_task or {}).get("author") or first_item.get("author") or "").strip(),
+                },
+                "stats": {
+                    "tasks_total": 1,
+                    "tasks_completed": 1 if str((final_task or {}).get("status", "") or "").strip().lower() == "completed" else 0,
+                    "comments_collected": comments_collected,
+                    "high_intent_users": precise_count,
+                },
+                "tasks": [final_task] if isinstance(final_task, dict) else [],
+                "start_result": start_result,
+                "final_status": final,
+                "sync_result": sync_result,
+                "raw_result": {
+                    "search": result,
+                    "sync": sync_result,
+                    "start": start_result,
+                    "final": final,
+                },
+            }
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=f"鎼滅储瀹屾垚锛屾壘鍒?{total_rows} 涓棰戯紱宸查噰闆嗙 1 涓棰戠殑瀹㈡埛 {comments_collected} 浜猴紝绮惧噯瀹㈡埛 {precise_count} 浜恒€?,
+                result_payload=result_payload,
+            )
+            return
+
+        if action == "tasks_from_search":
+            await emit("preparing", "姝ｅ湪鎶婃悳绱㈢粨鏋滃啓鍏ユ姈闊充换鍔℃睜", progress=5)
+            result = await douyin_tasks_from_search(dict(params or {}))
+            err = _douyin_result_error(result)
+            if err:
+                raise RuntimeError(err)
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=_compact_douyin_message(result.get("msg"), "宸插悓姝ユ悳绱㈢粨鏋滃埌浠诲姟姹?),
+                result_payload={
+                    "task_kind": "douyin_leads",
+                    "action": action,
+                    "selected_total": int(result.get("selected_total", 0) or 0),
+                    "total": int(result.get("total", 0) or 0),
+                    "raw_result": result,
+                },
+            )
+            return
+
+        if action == "comment_collect":
+            await emit("collect_start", "姝ｅ湪鍚姩璇勮閲囬泦", progress=5)
+            start_result = await douyin_start_tasks(request=dict(params or {}))
+            err = _douyin_result_error(start_result)
+            if err:
+                raise RuntimeError(err)
+            final = await poll_until_finished(
+                status_func=douyin_get_tasks_lite,
+                state_key="state",
+                done_when=lambda current: not bool(current.get("running")),
+                stats_builder=lambda current: {
+                    **_douyin_stats_from_tasks(current.get("tasks") if isinstance(current.get("tasks"), list) else []),
+                    "total": int(current.get("total", 0) or 0),
+                },
+            )
+            tasks = final.get("tasks") if isinstance(final.get("tasks"), list) else []
+            stats = _douyin_stats_from_tasks(tasks)
+            result_text = (
+                f"璇勮閲囬泦瀹屾垚锛屽叡 {stats['tasks_total']} 鏉′换鍔★紝"
+                f"瀹屾垚 {stats['tasks_completed']} 鏉★紝"
+                f"楂樻剰鍚戝鎴?{stats['high_intent_users']} 浜恒€?
+            )
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=result_text,
+                result_payload={
+                    "task_kind": "douyin_leads",
+                    "action": action,
+                    "start_result": start_result,
+                    "final_status": final,
+                    "stats": stats,
+                    "tasks": tasks[:50],
+                },
+            )
+            return
+
+        if action == "interaction":
+            await emit("interaction_start", "姝ｅ湪鍚姩绮惧噯瀹㈡埛绉佷俊", progress=5)
+            start_result = await douyin_start_interaction(request=dict(params or {}))
+            err = _douyin_result_error(start_result)
+            if err:
+                raise RuntimeError(err)
+            final = await poll_until_finished(
+                status_func=lambda: douyin_interaction_status(lite=True, include_users=True),
+                state_key="state",
+                done_when=lambda current: not bool(current.get("running")),
+                stats_builder=lambda current: {
+                    **_douyin_stats_from_users(
+                        current.get("users") if isinstance(current.get("users"), list) else [],
+                        "interaction_status",
+                        {"sent", "completed"},
+                    ),
+                    "processed": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("processed", 0)) or 0),
+                    "total": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("total", 0)) or 0),
+                },
+            )
+            users = final.get("users") if isinstance(final.get("users"), list) else []
+            stats = _douyin_stats_from_users(users, "interaction_status", {"sent", "completed"})
+            result_text = f"绉佷俊浜掑姩瀹屾垚锛屽叡 {stats['users_total']} 浜猴紝鎴愬姛 {stats['users_success']} 浜恒€?
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=result_text,
+                result_payload={
+                    "task_kind": "douyin_leads",
+                    "action": action,
+                    "start_result": start_result,
+                    "final_status": final,
+                    "stats": stats,
+                    "users": users[:100],
+                },
+            )
+            return
+
+        if action == "stranger_collect":
+            await emit("stranger_collect_start", "姝ｅ湪閲囬泦闄岀敓浜虹淇?, progress=5)
+            start_result = await douyin_collect_stranger_messages(request=dict(params or {}))
+            err = _douyin_result_error(start_result)
+            if err:
+                raise RuntimeError(err)
+            final = await poll_until_finished(
+                status_func=douyin_stranger_message_status,
+                state_key="state",
+                done_when=lambda current: not bool(current.get("running")),
+                stats_builder=lambda current: {
+                    "processed": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("processed", 0)) or 0),
+                    "success": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("success", 0)) or 0),
+                    "failed": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("failed", 0)) or 0),
+                    "total": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("total", 0)) or 0),
+                },
+            )
+            results = final.get("results") if isinstance(final.get("results"), list) else []
+            stats = {
+                "total": len(results),
+                "users_success": sum(1 for row in results if str((row or {}).get("reply_status") or "").strip().lower() in {"collected", "completed", "success"}),
+                "users_failed": sum(1 for row in results if str((row or {}).get("reply_status") or "").strip().lower() == "failed"),
+            }
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=f"闄岀敓浜虹淇￠噰闆嗗畬鎴愶紝鍏?{len(results)} 鏉°€?,
+                result_payload={
+                    "task_kind": "douyin_leads",
+                    "action": action,
+                    "start_result": start_result,
+                    "final_status": final,
+                    "stats": stats,
+                    "rows": results[:100],
+                },
+            )
+            return
+
+        if action == "stranger_send":
+            await emit("stranger_send_start", "姝ｅ湪鍙戦€侀檶鐢熶汉绉佷俊", progress=5)
+            start_result = await douyin_send_stranger_messages(request=dict(params or {}))
+            err = _douyin_result_error(start_result)
+            if err:
+                raise RuntimeError(err)
+            final = await poll_until_finished(
+                status_func=douyin_stranger_message_status,
+                state_key="state",
+                done_when=lambda current: not bool(current.get("running")),
+                stats_builder=lambda current: {
+                    "processed": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("processed", 0)) or 0),
+                    "success": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("success", 0)) or 0),
+                    "failed": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("failed", 0)) or 0),
+                    "total": int(((current.get("state") if isinstance(current.get("state"), dict) else {}).get("total", 0)) or 0),
+                },
+            )
+            rows = final.get("results") if isinstance(final.get("results"), list) else []
+            stats = _douyin_stats_from_users(rows, "reply_status", {"sent", "completed", "success"})
+            result_text = f"闄岀敓浜虹淇″彂閫佸畬鎴愶紝鍏?{stats['users_total']} 浜猴紝鎴愬姛 {stats['users_success']} 浜恒€?
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=result_text,
+                result_payload={
+                    "task_kind": "douyin_leads",
+                    "action": action,
+                    "start_result": start_result,
+                    "final_status": final,
+                    "stats": stats,
+                    "rows": rows[:100],
+                },
+            )
+            return
+
+        raise RuntimeError(f"鏆備笉鏀寔鐨?douyin_leads.action: {action}")
+    except Exception as exc:
+        logger.exception("[SCHEDULED-TASK] douyin leads failed run_id=%s action=%s", run_id, action)
+        await _complete_task_run(
+            cloud,
+            base,
+            headers,
+            run_id,
+            error=(str(exc).strip() or exc.__class__.__name__)[:500],
+            result_payload={"task_kind": "douyin_leads", "action": action},
+        )
+
+
 async def _invoke_hifly_cloud_tts(
     *,
     cloud: httpx.AsyncClient,
@@ -2123,7 +3040,7 @@ async def _invoke_hifly_cloud_tts(
     cap_payload: Dict[str, Any],
 ) -> Dict[str, Any]:
     body = {
-        "title": str(cap_payload.get("title") or "数字人口播")[:128],
+        "title": str(cap_payload.get("title") or "鏁板瓧浜哄彛鎾?)[:128],
         "avatar": str(cap_payload.get("avatar") or "").strip(),
         "voice": str(cap_payload.get("voice") or "").strip(),
         "text": str(cap_payload.get("text") or "").strip(),
@@ -2136,12 +3053,12 @@ async def _invoke_hifly_cloud_tts(
         raise RuntimeError(str(create_data.get("detail") or create_data.get("error") or create_data or create_resp.text)[:500])
     task_id = str(create_data.get("task_id") or "").strip()
     if not task_id:
-        raise RuntimeError("HiFly 未返回 task_id")
+        raise RuntimeError("HiFly 鏈繑鍥?task_id")
     poll_timeout = int(cap_payload.get("poll_timeout_seconds") or 2400)
     interval = max(3, int(cap_payload.get("poll_interval_seconds") or 10))
     poll_request_timeout = httpx.Timeout(90.0, connect=10.0, read=90.0, write=30.0, pool=10.0)
     waited = 0
-    last: Dict[str, Any] = {"ok": True, "task_id": task_id, "status": 2, "status_text": "生成中"}
+    last: Dict[str, Any] = {"ok": True, "task_id": task_id, "status": 2, "status_text": "鐢熸垚涓?}
     while waited <= poll_timeout:
         try:
             poll_resp = await cloud.post(
@@ -2151,7 +3068,7 @@ async def _invoke_hifly_cloud_tts(
                 timeout=poll_request_timeout,
             )
         except httpx.TimeoutException:
-            last = {"ok": True, "task_id": task_id, "status": 2, "status_text": "查询超时，继续等待生成结果"}
+            last = {"ok": True, "task_id": task_id, "status": 2, "status_text": "鏌ヨ瓒呮椂锛岀户缁瓑寰呯敓鎴愮粨鏋?}
             await asyncio.sleep(interval)
             waited += interval
             continue
@@ -2177,7 +3094,7 @@ async def _invoke_hifly_cloud_tts(
                 out["source_media_urls"] = [video_url]
             return out
         if status == 4:
-            raise RuntimeError(str(last.get("message") or last.get("detail") or "HiFly 任务失败")[:500])
+            raise RuntimeError(str(last.get("message") or last.get("detail") or "HiFly 浠诲姟澶辫触")[:500])
         await asyncio.sleep(interval)
         waited += interval
     last["result_ready"] = False
@@ -2265,7 +3182,7 @@ async def _run_goal_video_scheduled_pipeline(
             headers,
             run_id,
             "thinking",
-            {"text": "将先用 AI 生成首帧图片，再用该图片生成视频"},
+            {"text": "灏嗗厛鐢?AI 鐢熸垚棣栧抚鍥剧墖锛屽啀鐢ㄨ鍥剧墖鐢熸垚瑙嗛"},
         )
         result = await run_goal_video_pipeline_with_total_billing(
             pl=pl,
@@ -2293,7 +3210,7 @@ async def _run_goal_video_scheduled_pipeline(
         if not ref_asset_ids and not ref_urls:
             ref_asset_ids = [str(x).strip() for x in (generated.get("attachment_asset_ids") or []) if str(x).strip()]
         if not ref_asset_ids and not ref_urls:
-            raise RuntimeError("补发视频缺少可用的首帧图片")
+            raise RuntimeError("琛ュ彂瑙嗛缂哄皯鍙敤鐨勯甯у浘鐗?)
         pl.reference_asset_ids = ref_asset_ids[:1]
         pl.reference_image_urls = ref_urls[:1]
         await _post_task_event(
@@ -2322,7 +3239,7 @@ async def _run_goal_video_scheduled_pipeline(
         headers,
         run_id,
         "thinking",
-        {"text": f"已从备选组“{picked['group_name']}”轮换选择图片素材 {picked['asset_id']}"},
+        {"text": f"宸蹭粠澶囬€夌粍鈥渰picked['group_name']}鈥濊疆鎹㈤€夋嫨鍥剧墖绱犳潗 {picked['asset_id']}"},
     )
     pl.reference_asset_ids = [picked["asset_id"]] if picked.get("asset_id") else []
     pl.reference_image_urls = [picked["url"]] if picked.get("url") else []
@@ -2400,7 +3317,7 @@ async def _run_create_video_scheduled_pipeline(
         headers,
         run_id,
         "thinking",
-        {"text": "正在执行 gtp创意成片：脚本规划、首帧生成、视频生成"},
+        {"text": "姝ｅ湪鎵ц gtp鍒涙剰鎴愮墖锛氳剼鏈鍒掋€侀甯х敓鎴愩€佽棰戠敓鎴?},
     )
     result = await run_create_video_pipeline_with_total_billing(
         pl=pl,
@@ -2430,7 +3347,7 @@ async def _run_create_ppt_scheduled_pipeline(
         goal = _fallback_ppt_goal(task_title)
     user_id = int(_decode_jwt_sub(jwt_token) or "0")
     if user_id <= 0:
-        raise RuntimeError("未识别到当前用户，无法保存 PPT 素材")
+        raise RuntimeError("鏈瘑鍒埌褰撳墠鐢ㄦ埛锛屾棤娉曚繚瀛?PPT 绱犳潗")
     pl = CreatePptPipelinePayload(
         action="run_pipeline",
         prompt=goal,
@@ -2457,7 +3374,7 @@ async def _run_create_ppt_scheduled_pipeline(
         headers,
         run_id,
         "thinking",
-        {"text": "正在执行智能PPT：大纲规划、PPTX渲染、保存素材"},
+        {"text": "姝ｅ湪鎵ц鏅鸿兘PPT锛氬ぇ绾茶鍒掋€丳PTX娓叉煋銆佷繚瀛樼礌鏉?},
     )
     result = await run_create_ppt_pipeline(
         pl=pl,
@@ -2501,10 +3418,10 @@ async def _run_scheduled_capability(
                     "reference_image_urls": cap_payload.get("reference_image_urls") or [],
                 }
             elif custom_prompt and capability_id in {"goal.video.pipeline", "goal.image.pipeline", "create.video.pipeline", "create.ppt.pipeline"}:
-                await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在使用自定义提示词生成本次内容"})
+                await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "姝ｅ湪浣跨敤鑷畾涔夋彁绀鸿瘝鐢熸垚鏈鍐呭"})
                 generated = _generated_from_scheduled_prompt(capability_id, task_title, custom_prompt)
             else:
-                await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在根据记忆生成本次内容"})
+                await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "姝ｅ湪鏍规嵁璁板繂鐢熸垚鏈鍐呭"})
                 generated = await _generate_scheduled_content(
                     base=base,
                     headers=headers,
@@ -2548,12 +3465,12 @@ async def _run_scheduled_capability(
                 avatar = str(cap_payload.get("avatar") or "").strip()
                 voice = str(cap_payload.get("voice") or "").strip()
                 if not avatar:
-                    raise RuntimeError("请选择数字人")
+                    raise RuntimeError("璇烽€夋嫨鏁板瓧浜?)
                 if not voice:
-                    raise RuntimeError("请选择声音")
+                    raise RuntimeError("璇烽€夋嫨澹伴煶")
                 skill_prompt = _hifly_script_text(generated.get("script")) or _fallback_hifly_script(task_title)
                 cap_payload = {
-                    "title": (generated.get("title") or task_title or "数字人口播")[:20],
+                    "title": (generated.get("title") or task_title or "鏁板瓧浜哄彛鎾?)[:20],
                     "avatar": avatar,
                     "voice": voice,
                     "text": skill_prompt,
@@ -2563,7 +3480,7 @@ async def _run_scheduled_capability(
                     "poll_timeout_seconds": 2400,
                 }
             cap_payload = _inject_scheduled_assets_into_capability_payload(cap_payload, attachment_asset_ids)
-            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在调用 {capability_id}"})
+            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"姝ｅ湪璋冪敤 {capability_id}"})
             if capability_id == "hifly.video.create_by_tts":
                 result = await _invoke_hifly_cloud_tts(
                     cloud=cloud,
@@ -2633,9 +3550,9 @@ async def _run_scheduled_capability(
             if cap_error:
                 raise RuntimeError(cap_error)
             if capability_id == "goal.video.pipeline" and not _goal_video_pipeline_has_video_result(result):
-                raise RuntimeError(_goal_video_pipeline_pending_reason(result) or "创意成片视频仍未完成，未取得视频素材或视频链接")
+                raise RuntimeError(_goal_video_pipeline_pending_reason(result) or "鍒涙剰鎴愮墖瑙嗛浠嶆湭瀹屾垚锛屾湭鍙栧緱瑙嗛绱犳潗鎴栬棰戦摼鎺?)
             if capability_id == "create.video.pipeline" and not _create_video_pipeline_has_video_result(result):
-                raise RuntimeError(_create_video_pipeline_pending_reason(result) or "gtp创意成片视频仍未完成，未取得视频素材或视频链接")
+                raise RuntimeError(_create_video_pipeline_pending_reason(result) or "gtp鍒涙剰鎴愮墖瑙嗛浠嶆湭瀹屾垚锛屾湭鍙栧緱瑙嗛绱犳潗鎴栬棰戦摼鎺?)
             if (
                 capability_id == "goal.video.pipeline"
                 and str(result.get("source_mode") or "") == _SCHEDULED_VIDEO_SOURCE_ASSET_RANDOM
@@ -2647,7 +3564,7 @@ async def _run_scheduled_capability(
                     jwt_token,
                     str(result.get("reference_asset_reservation_id") or ""),
                 )
-            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "正在生成发布文案"})
+            await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "姝ｅ湪鐢熸垚鍙戝竷鏂囨"})
             caption = await _generate_scheduled_caption(
                 base=base,
                 headers=headers,
@@ -2720,7 +3637,7 @@ async def _run_scheduled_capability(
                     "status": "ready",
                     "auto_publish": bool(publish_cfg.get("auto_publish")),
                     "platform": publish_cfg.get("platform"),
-                    "platform_name": publish_cfg.get("platform_name") or _platform_publish_rules(str(publish_cfg.get("platform") or "")).split("：", 1)[0],
+                    "platform_name": publish_cfg.get("platform_name") or _platform_publish_rules(str(publish_cfg.get("platform") or "")).split("锛?, 1)[0],
                     "account_id": publish_cfg.get("account_id"),
                     "account_nickname": publish_cfg.get("account_nickname"),
                     "asset_id": asset_id,
@@ -2731,7 +3648,7 @@ async def _run_scheduled_capability(
                 }
                 if not asset_id:
                     publish_draft["status"] = "failed"
-                    publish_draft["error"] = "未取得可发布素材 asset_id"
+                    publish_draft["error"] = "鏈彇寰楀彲鍙戝竷绱犳潗 asset_id"
                 elif publish_draft["auto_publish"]:
                     await _post_task_event(
                         cloud,
@@ -2739,7 +3656,7 @@ async def _run_scheduled_capability(
                         headers,
                         run_id,
                         "thinking",
-                        {"text": "正在按所选平台自动发布"},
+                        {"text": "姝ｅ湪鎸夋墍閫夊钩鍙拌嚜鍔ㄥ彂甯?},
                     )
                     try:
                         publish_result = await _submit_local_publish_draft(draft=publish_draft, headers=headers)
@@ -2748,7 +3665,7 @@ async def _run_scheduled_capability(
                     except Exception as exc:
                         logger.exception("[SCHEDULED-TASK] auto publish failed run_id=%s", run_id)
                         publish_draft["status"] = "failed"
-                        publish_draft["error"] = str(exc)[:500] or "自动发布失败"
+                        publish_draft["error"] = str(exc)[:500] or "鑷姩鍙戝竷澶辫触"
             result_payload = {
                 "capability_id": capability_id,
                 "generated": generated,
@@ -2856,6 +3773,15 @@ async def _process_scheduled_task(
             jwt_token=jwt_token,
             installation_id=installation_id,
         )
+    elif kind == "douyin_leads":
+        await _run_scheduled_douyin_leads(
+            client,
+            base,
+            headers,
+            item,
+            jwt_token=jwt_token,
+            installation_id=installation_id,
+        )
     elif kind == "chat_message":
         await _run_scheduled_chat_message(
             client,
@@ -2940,7 +3866,7 @@ async def _scheduled_task_keepalive(
                 headers,
                 run_id,
                 "heartbeat",
-                {"text": "本地执行中", "heartbeat": True},
+                {"text": "鏈湴鎵ц涓?, "heartbeat": True},
             )
         except Exception as exc:
             logger.debug("[SCHEDULED-TASK] heartbeat failed run_id=%s: %s", run_id, exc)
@@ -3019,7 +3945,7 @@ async def _process_publish_request_detached(
             try:
                 await client.post(
                     f"{base}/api/scheduled-tasks/runs/{run_id}/publish-complete",
-                    json={"error": str(exc)[:500] or "发布失败", "publish_result": {}},
+                    json={"error": str(exc)[:500] or "鍙戝竷澶辫触", "publish_result": {}},
                     headers=headers,
                 )
             except Exception as post_exc:
@@ -3082,11 +4008,20 @@ async def h5_chat_poll_loop() -> None:
                         headers=headers,
                     )
                     last_heartbeat_at = now_loop
+                try:
+                    await _report_douyin_dashboard_status(
+                        client,
+                        base,
+                        headers,
+                        jwt_token=jwt_token,
+                        installation_id=installation_id,
+                    )
+                except Exception as exc:
+                    logger.debug("[DOUYIN-DASHBOARD] report failed: %s", exc)
                 items: list[Dict[str, Any]] = []
                 h5_slots = max(0, max_h5_concurrency - len(active_items))
                 if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_poll_interval:
-                    last_h5_poll_at = now_loop
-                    resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers)
+                    last_h5_poll_at = now_loop                    resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers)
                     if resp.status_code == 401:
                         logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
                         await asyncio.sleep(sleep_missing_auth)
@@ -3152,3 +4087,4 @@ async def h5_chat_poll_loop() -> None:
         except Exception as exc:
             logger.warning("[H5-CHAT] poll loop error: %s", exc)
             await asyncio.sleep(5.0)
+

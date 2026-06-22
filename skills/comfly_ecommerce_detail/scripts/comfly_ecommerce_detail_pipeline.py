@@ -522,17 +522,62 @@ class ComflyClient:
         return _retry(action, self.config.analysis_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
     def generate_image(self, model: str, prompt: str, aspect_ratio: str, refs: List[str], action: str) -> tuple[Dict[str, Any], int]:
+        normalized_refs = [str(ref or "").strip() for ref in refs if str(ref or "").strip()]
+        remote_refs: List[str] = []
+        local_refs: List[Path] = []
+        for ref in normalized_refs:
+            if ref.startswith(("http://", "https://")):
+                if ref not in remote_refs:
+                    remote_refs.append(ref)
+                continue
+            local_path = _resolve_local_path(ref)
+            if local_path.exists() and local_path.is_file():
+                if local_path not in local_refs:
+                    local_refs.append(local_path)
+                continue
+            if ref not in remote_refs:
+                remote_refs.append(ref)
+
         body: Dict[str, Any] = {"model": model, "prompt": prompt, "aspect_ratio": aspect_ratio}
-        if refs:
-            body["image"] = refs
+        if "gpt-image-2" in model or "gptimage2" in model.replace("-", ""):
+            body["size"] = _aspect_ratio_to_size(aspect_ratio)
+            body["response_format"] = "url"
+            body["aspect_ratio"] = aspect_ratio
+            body["image_size"] = aspect_ratio
+        if remote_refs:
+            body["image"] = remote_refs
 
         def call() -> Dict[str, Any]:
-            response = self.session.post(
-                f"{self.base_url}/v1/images/generations",
-                headers={"Content-Type": "application/json"},
-                json=body,
-                timeout=180,
-            )
+            if local_refs:
+                data = {k: str(v) for k, v in body.items() if k != "response_format"}
+                if remote_refs:
+                    data["image"] = json.dumps(remote_refs, ensure_ascii=False)
+                files = []
+                opened = []
+                try:
+                    for path in local_refs:
+                        handle = path.open("rb")
+                        opened.append(handle)
+                        files.append(("image", (path.name, handle, _guess_mime_type(path))))
+                    response = self.session.post(
+                        f"{self.base_url}/v1/images/edits",
+                        data=data,
+                        files=files,
+                        timeout=180,
+                    )
+                finally:
+                    for handle in opened:
+                        try:
+                            handle.close()
+                        except Exception:
+                            pass
+            else:
+                response = self.session.post(
+                    f"{self.base_url}/v1/images/generations",
+                    headers={"Content-Type": "application/json"},
+                    json=body,
+                    timeout=180,
+                )
             payload = self._check(response)
             data = payload.get("data", [])
             if not isinstance(data, list) or not data:
@@ -1114,6 +1159,28 @@ def _resolve_local_path(src: str) -> Path:
     if not path.is_absolute():
         path = (Path.cwd() / path).resolve()
     return path
+
+
+def _aspect_ratio_to_size(aspect_ratio: str) -> str:
+    mapping = {
+        "1:1": "1024x1024",
+        "3:2": "1536x1024",
+        "16:9": "1920x1080",
+        "2:3": "1024x1536",
+        "9:16": "1080x1920",
+    }
+    return mapping.get(str(aspect_ratio or "").strip(), "1024x1024")
+
+
+def _guess_mime_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".webp":
+        return "image/webp"
+    return "application/octet-stream"
 
 
 def _skill_root() -> Path:
@@ -3692,19 +3759,28 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
 
         product_image_url, upload_attempts = client.upload(product_image)
         reference_urls = [product_image_url]
+        generation_reference_inputs = [product_image]
         for ref in refs_in[:5]:
             ref_url, _ = client.upload(ref)
             if ref_url not in reference_urls:
                 reference_urls.append(ref_url)
+            if ref not in generation_reference_inputs:
+                generation_reference_inputs.append(ref)
         for ref in style_refs_in[:3]:
             ref_url, _ = client.upload(ref)
             if ref_url not in reference_urls:
                 reference_urls.append(ref_url)
+            if ref not in generation_reference_inputs:
+                generation_reference_inputs.append(ref)
         logger.step(
             "01_upload_inputs",
             "success",
             attempts=upload_attempts,
-            payload={"product_image_url": product_image_url, "reference_urls": reference_urls},
+            payload={
+                "product_image_url": product_image_url,
+                "reference_urls": reference_urls,
+                "generation_reference_inputs": generation_reference_inputs,
+            },
         )
 
         analysis_raw, analysis_attempts = client.analyze_json(
@@ -3770,7 +3846,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                         config.image_model,
                         image_prompt,
                         config.aspect_ratio,
-                        reference_urls,
+                        generation_reference_inputs,
                         f"05_{phase}_page_{idx:02d}",
                     )
                     logger.record_usage(
@@ -3936,7 +4012,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 logger=logger,
                 analysis=analysis,
                 config=config,
-                reference_urls=reference_urls,
+                reference_urls=generation_reference_inputs,
             )
             logger.step(
                 "07_generate_main_image_assets",
@@ -3975,7 +4051,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 logger=logger,
                 analysis=analysis,
                 config=config,
-                reference_urls=reference_urls,
+                reference_urls=generation_reference_inputs,
                 product_image_rgba=product_image_rgba,
             )
             logger.step(
@@ -4000,7 +4076,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 logger=logger,
                 analysis=analysis,
                 config=config,
-                reference_urls=reference_urls,
+                reference_urls=generation_reference_inputs,
                 white_bg_assets=white_bg_assets,
             )
             logger.step(

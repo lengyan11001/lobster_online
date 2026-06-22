@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import tempfile
 from datetime import datetime
@@ -76,6 +77,190 @@ DOUYIN_COMMENT_FILTER_STRATEGIES = {"prompt", "reverse"}
 def _normalize_douyin_comment_filter_strategy(value: object) -> str:
     normalized = str(value or "prompt").strip().lower()
     return normalized if normalized in DOUYIN_COMMENT_FILTER_STRATEGIES else "prompt"
+
+
+DOUYIN_SEARCH_MODES = {"api", "script"}
+
+
+def _normalize_douyin_search_mode(value: object) -> str:
+    normalized = str(value or "api").strip().lower()
+    return normalized if normalized in DOUYIN_SEARCH_MODES else "api"
+
+
+def _format_douyin_compact_count(value: object) -> str:
+    try:
+        count = int(float(value or 0))
+    except Exception:
+        return ""
+    if count <= 0:
+        return ""
+    if count >= 100000000:
+        text = f"{count / 100000000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}亿"
+    if count >= 10000:
+        text = f"{count / 10000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}w"
+    return str(count)
+
+
+def _format_douyin_duration_text(value: object) -> str:
+    try:
+        raw = int(value or 0)
+    except Exception:
+        return ""
+    if raw <= 0:
+        return ""
+    seconds = raw // 1000 if raw > 1000 else raw
+    minutes = seconds // 60
+    remain = seconds % 60
+    hours = minutes // 60
+    if hours > 0:
+        minutes = minutes % 60
+        return f"{hours:02d}:{minutes:02d}:{remain:02d}"
+    return f"{minutes:02d}:{remain:02d}"
+
+
+def _format_douyin_publish_time(value: object) -> str:
+    try:
+        ts = int(value or 0)
+    except Exception:
+        return ""
+    if ts <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)
+
+
+def _build_douyin_profile_url(sec_uid: str) -> str:
+    sec_uid = str(sec_uid or "").strip()
+    return f"https://www.douyin.com/user/{sec_uid}" if sec_uid else ""
+
+
+def _pick_tikhub_douyin_cover(video: Dict[str, Any]) -> str:
+    for key in ("cover", "dynamic_cover", "origin_cover"):
+        node = video.get(key)
+        if isinstance(node, dict):
+            url_list = node.get("url_list")
+            if isinstance(url_list, list):
+                for url in url_list:
+                    if isinstance(url, str) and url.strip():
+                        return url.strip()
+    return ""
+
+
+def _normalize_tikhub_douyin_search_items(
+    payload: Dict[str, Any],
+    *,
+    keyword: str,
+    max_results: int,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    data = payload.get("data") or {}
+    raw_items = []
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            raw_items = data.get("data") or []
+        elif isinstance(data.get("business_data"), list):
+            raw_items = data.get("business_data") or []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        aweme = raw.get("aweme_info")
+        if not isinstance(aweme, dict):
+            nested = raw.get("data")
+            aweme = nested.get("aweme_info") if isinstance(nested, dict) else None
+        if not isinstance(aweme, dict):
+            continue
+        share_url_probe = ""
+        share_info_probe = aweme.get("share_info") if isinstance(aweme.get("share_info"), dict) else {}
+        if isinstance(share_info_probe, dict):
+            share_url_probe = str(share_info_probe.get("share_url") or "").strip()
+        if not share_url_probe:
+            share_url_probe = str(aweme.get("share_url") or "").strip()
+        if "/share/note/" in share_url_probe:
+            continue
+        aweme_id = str(aweme.get("aweme_id") or "").strip()
+        desc = str(aweme.get("desc") or "").strip()
+        author = aweme.get("author") if isinstance(aweme.get("author"), dict) else {}
+        stats = aweme.get("statistics") if isinstance(aweme.get("statistics"), dict) else {}
+        video = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
+        sec_uid = str(author.get("sec_uid") or "").strip()
+        share_info = aweme.get("share_info") if isinstance(aweme.get("share_info"), dict) else {}
+        share_url = str(share_info.get("share_url") or aweme.get("share_url") or "").strip()
+        canonical_url = f"https://www.douyin.com/video/{aweme_id}" if aweme_id else (share_url or "")
+        digg_count = int(stats.get("digg_count") or 0)
+        comment_count = int(stats.get("comment_count") or 0)
+        row = {
+            "aweme_id": aweme_id,
+            "url": canonical_url,
+            "share_url": share_url,
+            "title": desc,
+            "author": str(author.get("nickname") or "").strip(),
+            "profile_url": _build_douyin_profile_url(sec_uid),
+            "cover_image": _pick_tikhub_douyin_cover(video),
+            "likes": digg_count,
+            "comments": comment_count,
+            "likes_text": _format_douyin_compact_count(digg_count),
+            "comments_text": _format_douyin_compact_count(comment_count),
+            "duration": _format_douyin_duration_text(aweme.get("duration")),
+            "publish_time": _format_douyin_publish_time(aweme.get("create_time")),
+            "criteria_reason": "",
+            "index": len(rows) + 1,
+            "keyword": keyword,
+            "export_selected": False,
+            "sec_user_id": sec_uid,
+        }
+        if not row["url"] and share_url:
+            row["url"] = share_url
+        if not row["title"] and aweme_id:
+            row["title"] = f"抖音视频 {aweme_id}"
+        if not row["url"] or not row["title"]:
+            continue
+        rows.append(row)
+        if len(rows) >= max_results:
+            break
+    return rows
+
+
+async def _tikhub_douyin_keyword_search(keyword: str, max_results: int) -> Dict[str, Any]:
+    base = ((getattr(settings, "tikhub_api_base", None) or "") or os.environ.get("TIKHUB_API_BASE", "")).strip().rstrip("/") or "https://api.tikhub.dev"
+    api_key = ((getattr(settings, "tikhub_api_key", None) or "") or os.environ.get("TIKHUB_API_KEY", "")).strip()
+    if not api_key:
+        raise RuntimeError("服务器未配置 TIKHUB_API_KEY")
+    payload = {
+        "keyword": keyword,
+        "offset": "0",
+        "count": str(max(1, min(int(max_results or 30), 30))),
+        "sort_type": "0",
+        "publish_time": "0",
+        "filter_duration": "0",
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{base}/api/v1/douyin/search/fetch_general_search_v1",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+    resp.raise_for_status()
+    data = resp.json()
+    code = int(data.get("code") or 0)
+    if code != 200:
+        raise RuntimeError(str(data.get("message_zh") or data.get("message") or "Tikhub 搜索失败"))
+    rows = _normalize_tikhub_douyin_search_items(data, keyword=keyword, max_results=max_results)
+    return {
+        "ok": True,
+        "message": f"抖音搜索完成，共采集到 {len(rows)} 条视频。",
+        "data": rows,
+        "total": len(rows),
+        "request_id": str(data.get("request_id") or "").strip(),
+        "cache_url": str(data.get("cache_url") or "").strip(),
+    }
 
 
 def _default_douyin_workbench_config() -> Dict[str, Any]:
@@ -535,6 +720,7 @@ class DouyinSearchCollectReq(BaseModel):
     keyword: str
     account_id: Optional[int] = None
     max_results: Optional[int] = 30
+    mode: Optional[str] = "api"
 
 
 class DouyinVideoCustomersReq(BaseModel):
@@ -1275,8 +1461,27 @@ async def douyin_workbench_search_collect(
     db: Session = Depends(get_db),
 ):
     keyword = (body.keyword or "").strip()
+    search_mode = _normalize_douyin_search_mode(body.mode)
+    max_results = max(1, min(int(body.max_results or 30), 100))
     if not keyword:
         return {"code": 400, "msg": "请输入抖音搜索关键词", "data": [], "total": 0}
+    if search_mode == "api":
+        try:
+            result = await _tikhub_douyin_keyword_search(keyword, max_results)
+            return {
+                "code": 200,
+                "msg": result.get("message") or f"抖音搜索完成，共 {int(result.get('total') or 0)} 条结果。",
+                "data": result.get("data") or [],
+                "total": int(result.get("total") or 0),
+                "account_id": "api",
+                "search_mode": "api",
+                "request_id": result.get("request_id") or "",
+                "cache_url": result.get("cache_url") or "",
+            }
+        except Exception as e:
+            logger.exception("Douyin workbench api search collect failed")
+            logger.warning("Douyin workbench search falling back to script mode: %s", e)
+            search_mode = "script"
     query = db.query(PublishAccount).filter(
         PublishAccount.user_id == current_user.id,
         PublishAccount.platform == "douyin",
@@ -1303,7 +1508,7 @@ async def douyin_workbench_search_collect(
         result = await collect_douyin_search_results(
             profile_dir=profile_dir,
             keyword=keyword,
-            max_results=int(body.max_results or 30),
+            max_results=max_results,
             browser_options=bopts,
         )
         if not result.get("ok"):
@@ -1325,10 +1530,18 @@ async def douyin_workbench_search_collect(
             "total": int(result.get("total") or 0),
             "account_id": acct.id,
             "search_url": result.get("search_url") or "",
+            "search_mode": "script",
         }
     except Exception as e:
         logger.exception("Douyin workbench search collect failed")
-        return {"code": 500, "msg": f"抖音搜索采集失败：{e}", "data": [], "total": 0, "account_id": acct.id}
+        return {
+            "code": 500,
+            "msg": f"抖音搜索采集失败：{e}",
+            "data": [],
+            "total": 0,
+            "account_id": acct.id,
+            "search_mode": "script",
+        }
 
 
 @router.post("/api/douyin/video/customers", summary="抖音工作台：协议模式采集视频评论客户")

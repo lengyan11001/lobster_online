@@ -90,6 +90,6 @@
 
   window.registerLobsterView('agent', {
     html: '/static/views/agent.html',
-    scripts: '/static/js/views/agent.js?v=20260528-view-split'
+    scripts: '/static/js/views/agent.js?v=20260622-agent-execution-screen'
   });
 })();

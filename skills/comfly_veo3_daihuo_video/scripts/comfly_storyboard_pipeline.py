@@ -499,9 +499,9 @@ def _comfly_model_supports_image_size_field(model: str) -> bool:
 _OPENAI_IMAGE_ASPECT_TO_SIZE: Dict[str, str] = {
     "1:1": "1024x1024",
     "3:2": "1536x1024",
-    "16:9": "1536x1024",
+    "16:9": "1920x1080",
     "2:3": "1024x1536",
-    "9:16": "1024x1536",
+    "9:16": "1080x1920",
 }
 
 

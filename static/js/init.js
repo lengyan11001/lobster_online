@@ -1115,7 +1115,7 @@ function loadDashboard() {
         if (w) w.style.display = 'none';
       }
       var navAgent = document.getElementById('navAgent');
-      if (navAgent) navAgent.style.display = 'none';
+      if (navAgent) navAgent.style.display = '';
       window.__currentUserIsAgent = !!d.is_agent;
     });
 }

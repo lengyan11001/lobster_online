@@ -19,6 +19,7 @@ import requests
 from fastapi import APIRouter, HTTPException, Request
 
 from ai_client import AIClient
+from console_safe import safe_print
 from douyin_account_nurture import DouyinAccountNurtureScheduler
 from douyin_client import DouyinClient, is_port_open
 from douyin_comment_scraper import DouyinCommentScraper, DouyinMentionCommentStopped
@@ -53,6 +54,7 @@ DOUYIN_DATA_DIR.mkdir(exist_ok=True)
 DOUYIN_DAILY_DIR = DOUYIN_DATA_DIR / "daily"
 DOUYIN_DAILY_DIR.mkdir(exist_ok=True)
 GLOBAL_CONFIG_FILE = ROOT_DATA_DIR / "config.json"
+CUSTOM_CONFIGS_FILE = BASE_DIR / "custom_configs.json"
 SEARCH_HISTORY_FILE = DOUYIN_DATA_DIR / "search_history.json"
 LATEST_RESULTS_FILE = DOUYIN_DATA_DIR / "results.xlsx"
 STATE_DB_FILE = ROOT_DATA_DIR / "app_state.db"
@@ -78,6 +80,8 @@ DOUYIN_GROUP_SENDER_PREFIX_PATTERN = re.compile(r"^[^：:\n]{1,24}[：:]")
 
 
 douyin_search_cache: Dict[str, List[Dict]] = {"latest": []}
+
+DOUYIN_SEARCH_MODES = {"api", "script"}
 douyin_tasks: List[Dict] = []
 douyin_all_customer_pool: List[Dict] = []
 douyin_precise_customer_pool: List[Dict] = []
@@ -332,7 +336,30 @@ def douyin_log(message: str, level: str = "info"):
             "level": level_text,
         }
     )
-    print(f"[douyin][{level_text}] {text}")
+    console_text = f"[douyin][{level_text}] {text}"
+    try:
+        safe_print(console_text, end="")
+        return
+    except UnicodeEncodeError:
+        pass
+    except Exception:
+        return
+
+    try:
+        stdout = getattr(sys, "stdout", None)
+        if stdout is None:
+            return
+        encoding = getattr(stdout, "encoding", None) or "utf-8"
+        payload = (console_text + "\n").encode(encoding, errors="replace")
+        buffer = getattr(stdout, "buffer", None)
+        if buffer is not None:
+            buffer.write(payload)
+            buffer.flush()
+            return
+        stdout.write(payload.decode(encoding, errors="replace"))
+        stdout.flush()
+    except Exception:
+        return
 
 
 DOUYIN_FILTER_LOG_DIR = BASE_DIR / "logs"
@@ -1884,6 +1911,161 @@ def build_douyin_search_session_item_key(item: Dict) -> str:
     return f"meta:{title}::{author}"
 
 
+def normalize_douyin_search_mode(value: object) -> str:
+    normalized = normalize_douyin_text(value).lower()
+    return normalized if normalized in DOUYIN_SEARCH_MODES else "api"
+
+
+def load_custom_configs() -> Dict:
+    if not CUSTOM_CONFIGS_FILE.exists():
+        return {"configs": {}, "custom_models": []}
+    try:
+        with open(CUSTOM_CONFIGS_FILE, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            return loaded
+    except Exception:
+        pass
+    return {"configs": {}, "custom_models": []}
+
+
+def get_tikhub_runtime_config() -> Dict[str, str]:
+    custom_configs = load_custom_configs()
+    configs = custom_configs.get("configs") if isinstance(custom_configs, dict) else {}
+    if not isinstance(configs, dict):
+        configs = {}
+    api_key = str(
+        os.environ.get("TIKHUB_API_KEY")
+        or configs.get("TIKHUB_API_KEY")
+        or configs.get("tikhub_api_key")
+        or ""
+    ).strip()
+    api_base = str(
+        os.environ.get("TIKHUB_API_BASE")
+        or configs.get("TIKHUB_API_BASE")
+        or configs.get("tikhub_api_base")
+        or "https://api.tikhub.dev"
+    ).strip().rstrip("/")
+    return {
+        "api_key": api_key,
+        "api_base": api_base or "https://api.tikhub.dev",
+    }
+
+
+def format_douyin_compact_count(value: object) -> str:
+    try:
+        count = int(float(value or 0))
+    except Exception:
+        return ""
+    if count <= 0:
+        return ""
+    if count >= 100000000:
+        text = f"{count / 100000000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}亿"
+    if count >= 10000:
+        text = f"{count / 10000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}w"
+    return str(count)
+
+
+def format_douyin_duration_text(value: object) -> str:
+    try:
+        raw = int(value or 0)
+    except Exception:
+        return ""
+    if raw <= 0:
+        return ""
+    seconds = raw // 1000 if raw > 1000 else raw
+    minutes = seconds // 60
+    remain = seconds % 60
+    hours = minutes // 60
+    if hours > 0:
+        minutes = minutes % 60
+        return f"{hours:02d}:{minutes:02d}:{remain:02d}"
+    return f"{minutes:02d}:{remain:02d}"
+
+
+def format_douyin_publish_time(value: object) -> str:
+    try:
+        ts = int(value or 0)
+    except Exception:
+        return ""
+    if ts <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)
+
+
+def pick_tikhub_douyin_cover(video: Dict) -> str:
+    for key in ("cover", "dynamic_cover", "origin_cover"):
+        node = video.get(key)
+        if isinstance(node, dict):
+            url_list = node.get("url_list")
+            if isinstance(url_list, list):
+                for url in url_list:
+                    if isinstance(url, str) and url.strip():
+                        return url.strip()
+    return ""
+
+
+def normalize_tikhub_douyin_search_results(payload: Dict, keyword: str, max_results: int) -> List[Dict]:
+    rows: List[Dict] = []
+    data = payload.get("data") or {}
+    raw_items = []
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            raw_items = data.get("data") or []
+        elif isinstance(data.get("business_data"), list):
+            raw_items = data.get("business_data") or []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        aweme = raw.get("aweme_info")
+        if not isinstance(aweme, dict):
+            nested = raw.get("data")
+            aweme = nested.get("aweme_info") if isinstance(nested, dict) else None
+        if not isinstance(aweme, dict):
+            continue
+        share_info_probe = aweme.get("share_info") if isinstance(aweme.get("share_info"), dict) else {}
+        share_url = str(share_info_probe.get("share_url") or aweme.get("share_url") or "").strip()
+        if "/share/note/" in share_url:
+            continue
+        aweme_id = str(aweme.get("aweme_id") or "").strip()
+        author = aweme.get("author") if isinstance(aweme.get("author"), dict) else {}
+        stats = aweme.get("statistics") if isinstance(aweme.get("statistics"), dict) else {}
+        video = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
+        sec_uid = str(author.get("sec_uid") or "").strip()
+        row = {
+            "aweme_id": aweme_id,
+            "title": str(aweme.get("desc") or "").strip() or (f"抖音视频 {aweme_id}" if aweme_id else ""),
+            "url": f"https://www.douyin.com/video/{aweme_id}" if aweme_id else share_url,
+            "author": str(author.get("nickname") or "").strip(),
+            "profile_url": f"https://www.douyin.com/user/{sec_uid}" if sec_uid else "",
+            "cover_image": pick_tikhub_douyin_cover(video),
+            "likes": int(stats.get("digg_count") or 0),
+            "comments": int(stats.get("comment_count") or 0),
+            "likes_text": format_douyin_compact_count(stats.get("digg_count") or 0),
+            "comments_text": format_douyin_compact_count(stats.get("comment_count") or 0),
+            "duration": format_douyin_duration_text(aweme.get("duration")),
+            "publish_time": format_douyin_publish_time(aweme.get("create_time")),
+            "criteria_reason": "",
+            "is_historical_duplicate": False,
+            "export_selected": True,
+            "source_session_id": "",
+            "source_item_key": "",
+            "keyword": keyword,
+            "sec_user_id": sec_uid,
+        }
+        if not row["url"] or not row["title"]:
+            continue
+        rows.append(row)
+        if len(rows) >= max_results:
+            break
+    return rows
+
+
 def normalize_douyin_search_session_result(
     item: Dict,
     *,
@@ -2138,6 +2320,70 @@ async def run_douyin_keyword_search(
         "results": results,
         "total": len(results),
         "session": session,
+    }
+
+
+async def run_douyin_keyword_search_via_api(
+    keyword: str,
+    *,
+    max_results: int = 50,
+    account_id: object = "api",
+) -> Dict:
+    keyword_text = normalize_douyin_text(keyword)
+    if not keyword_text:
+        raise RuntimeError("请输入抖音搜索关键词")
+    result_limit = max(10, min(int(max_results or 50), 100))
+    tikhub_config = get_tikhub_runtime_config()
+    api_key = tikhub_config["api_key"]
+    api_base = tikhub_config["api_base"]
+    if not api_key:
+        raise RuntimeError("未配置 TIKHUB_API_KEY")
+    payload = {
+        "keyword": keyword_text,
+        "offset": "0",
+        "count": str(min(result_limit, 30)),
+        "sort_type": "0",
+        "publish_time": "0",
+        "filter_duration": "0",
+    }
+    response = requests.post(
+        f"{api_base}/api/v1/douyin/search/fetch_general_search_v1",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if int(data.get("code") or 0) != 200:
+        raise RuntimeError(str(data.get("message_zh") or data.get("message") or "接口搜索失败"))
+    results = normalize_tikhub_douyin_search_results(data, keyword_text, result_limit)
+    results = annotate_search_duplicates(results, keyword_text)
+    results = mark_search_results_for_export(results)
+    session = upsert_douyin_search_session_state(
+        keyword=keyword_text,
+        account_id=account_id,
+        results=results,
+        capture_state={
+            "source": "tikhub_api",
+            "searched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "max_results": result_limit,
+            "request_id": str(data.get("request_id") or "").strip(),
+            "cache_url": str(data.get("cache_url") or "").strip(),
+        },
+    )
+    douyin_search_cache["latest"] = results
+    douyin_log(f"[抖音搜索] 接口搜索完成：{keyword_text}，共 {len(results)} 条", "success")
+    return {
+        "keyword": keyword_text,
+        "results": results,
+        "total": len(results),
+        "session": session,
+        "request_id": str(data.get("request_id") or "").strip(),
+        "cache_url": str(data.get("cache_url") or "").strip(),
     }
 
 
@@ -10982,9 +11228,36 @@ async def douyin_view_account(account_id: int):
 
 @router.post("/search/collect")
 async def douyin_search_collect(request: dict):
-    nurture_conflict = build_douyin_nurture_conflict("执行抖音搜索")
+    nurture_conflict = build_douyin_nurture_conflict("??????")
     if nurture_conflict:
         return nurture_conflict
+    request = request or {}
+    keyword = str(request.get("keyword", "") or "").strip()
+    if not keyword:
+        return {"code": 400, "msg": "??????????"}
+    search_mode = normalize_douyin_search_mode(request.get("mode", "api"))
+    max_results = max(10, min(int(request.get("max_results", 50) or 50), 100))
+    if search_mode == "api":
+        try:
+            payload = await run_douyin_keyword_search_via_api(
+                keyword,
+                max_results=max_results,
+                account_id="api",
+            )
+        except Exception as exc:
+            douyin_log(f"[抖音搜索] 接口模式失败，准备回退脚本模式：{keyword}，原因：{exc}", "warning")
+            search_mode = "script"
+        else:
+            return {
+                "code": 200,
+                "msg": "抖音搜索已通过接口模式完成",
+                "data": payload["results"],
+                "total": len(payload["results"]),
+                "account_id": "api",
+                "search_mode": "api",
+                "request_id": payload.get("request_id", ""),
+                "cache_url": payload.get("cache_url", ""),
+            }
     config = load_global_config()
     account = get_active_douyin_account(config)
     if not account:
@@ -10995,12 +11268,6 @@ async def douyin_search_collect(request: dict):
             "data": [],
             "total": 0,
         }
-
-    keyword = str((request or {}).get("keyword", "") or "").strip()
-    if not keyword:
-        return {"code": 400, "msg": "请输入抖音搜索关键词"}
-
-    max_results = max(10, min(int((request or {}).get("max_results", 50) or 50), 100))
     try:
         payload = await run_douyin_keyword_search(
             account,
@@ -11009,14 +11276,15 @@ async def douyin_search_collect(request: dict):
             update_latest=True,
         )
     except Exception as exc:
-        douyin_log(f"[抖音搜索] 搜索失败：{keyword}，原因：{exc}", "error")
-        return {"code": 500, "msg": f"抖音搜索失败: {exc}", "data": [], "total": 0}
+        douyin_log(f"[????] ?????{keyword}????{exc}", "error")
+        return {"code": 500, "msg": f"??????: {exc}", "data": [], "total": 0, "search_mode": "script"}
     return {
         "code": 200,
-        "msg": f"抖音搜索成功，使用账号 {account['id']}",
+        "msg": f"??????????? {account['id']}",
         "data": payload["results"],
         "total": len(payload["results"]),
         "account_id": account["id"],
+        "search_mode": "script",
     }
 
 

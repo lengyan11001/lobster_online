@@ -130,8 +130,18 @@ echo   Share the LAN address with other devices
 echo ================================================
 echo.
 
+set "DEV_CODE_UPDATE_FLAG=%LOBSTER_ENABLE_DEV_CODE_UPDATE%"
+if /I "%DEV_CODE_UPDATE_FLAG%"=="1" goto :run_code_update
+if /I "%DEV_CODE_UPDATE_FLAG%"=="true" goto :run_code_update
+if /I "%DEV_CODE_UPDATE_FLAG%"=="yes" goto :run_code_update
+if /I "%DEV_CODE_UPDATE_FLAG%"=="on" goto :run_code_update
+echo [Code] source mode detected, skip client code update check.
+goto :after_code_update
+
+:run_code_update
 echo [Code] checking client code pack update...
 "%PYTHON%" "%ROOT%\scripts\check_client_code_update.py"
+:after_code_update
 echo.
 
 if exist "openclaw\.env" (

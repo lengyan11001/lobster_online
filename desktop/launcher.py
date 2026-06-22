@@ -701,6 +701,17 @@ def run_client_code_update(env: dict[str, str]) -> None:
     script = ROOT / "scripts" / "check_client_code_update.py"
     if not script.is_file():
         return
+    if not _is_frozen():
+        raw = str(env.get("LOBSTER_ENABLE_DEV_CODE_UPDATE", "") or "").strip().lower()
+        if raw not in {"1", "true", "yes", "on"}:
+            log("CodeUpdate: skipped in source mode (set LOBSTER_ENABLE_DEV_CODE_UPDATE=1 to enable)")
+            set_startup_status(
+                "update_skip",
+                "源码模式已跳过更新检查",
+                detail="当前为本地开发运行，默认不下载客户端更新包。",
+                percent=8,
+            )
+            return
     py = bundled_python()
     if not py:
         log("CodeUpdate: skipped because no bundled python is available in frozen launcher")
