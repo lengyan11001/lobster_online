@@ -62,8 +62,8 @@
   });
 
   window.registerLobsterView('wechat-channels-transcript', {
-    html: '/static/views/wechat-channels-transcript.html?v=20260621-wct',
-    scripts: '/static/js/wechat-channels-transcript.js?v=20260621-wct',
+    html: '/static/views/wechat-channels-transcript.html?v=20260622-wct-db',
+    scripts: '/static/js/wechat-channels-transcript.js?v=20260622-wct-db',
     init: 'initWechatChannelsTranscriptView',
     cache: 'reload'
   });

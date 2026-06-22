@@ -73,6 +73,7 @@ from .api.wechat_oa import router as wechat_oa_router
 from .api.twilio_whatsapp import router as twilio_whatsapp_router
 from .api.youtube_publish import router as youtube_publish_router
 from .api.wechat_article import router as wechat_article_router
+from .api.wechat_channels_transcript_local import router as wechat_channels_transcript_local_router
 from .core.config import settings
 from .db import Base, engine, SessionLocal
 from . import models  # noqa: F401
@@ -979,6 +980,7 @@ def create_app() -> FastAPI:
     app.include_router(twilio_whatsapp_router, prefix="")
     app.include_router(youtube_publish_router, prefix="")
     app.include_router(wechat_article_router, prefix="")
+    app.include_router(wechat_channels_transcript_local_router, prefix="")
     if wecom_router is not None:
         app.include_router(wecom_router, prefix="")
     else:

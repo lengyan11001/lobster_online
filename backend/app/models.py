@@ -265,6 +265,62 @@ class TwilioWhatsappMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class WechatChannelsTranscriptAccount(Base):
+    __tablename__ = "wechat_channels_transcript_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "account_key", name="uq_wct_account_user_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    account_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    selected_keys: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    video_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WechatChannelsTranscriptVideo(Base):
+    __tablename__ = "wechat_channels_transcript_videos"
+    __table_args__ = (
+        UniqueConstraint("user_id", "account_key", "item_key", name="uq_wct_video_user_account_item"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    item_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    publish_time: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    video_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    public_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cover_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decode_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    metrics: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WechatChannelsTranscriptJob(Base):
+    __tablename__ = "wechat_channels_transcript_jobs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "job_id", name="uq_wct_job_user_job"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    item_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class PublishTask(Base):
     __tablename__ = "publish_tasks"
 

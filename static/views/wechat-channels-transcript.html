@@ -23,7 +23,7 @@
     .wct-cover { width:86px; aspect-ratio:16/10; object-fit:cover; border-radius:6px; background:#e2e8f0; }
     .wct-output { border:1px solid #dfe7f2; border-radius:8px; padding:10px; background:#fbfdff; margin-bottom:10px; }
     .wct-output textarea { width:100%; min-height:130px; border:1px solid #cbd5e1; border-radius:8px; padding:10px; resize:vertical; box-sizing:border-box; font-size:13px; line-height:1.6; }
-    .wct-status { display:inline-flex; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:800; background:#eef2ff; color:#3730a3; }
+    .wct-status { display:inline-flex; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:800; background:#eef2ff; color:#3730a3; white-space:nowrap; }
     .wct-status.completed { background:#dcfce7; color:#166534; }
     .wct-status.failed { background:#fee2e2; color:#991b1b; }
     .wct-status.running { background:#dbeafe; color:#1d4ed8; }
@@ -85,14 +85,14 @@
             <div id="wctJobSummary" class="wct-meta">点击左侧记录查看结果。</div>
           </div>
           <div class="wct-actions">
-            <button type="button" class="btn btn-ghost btn-sm" id="wctResumeJobBtn">继续任务</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="wctResumeJobBtn">重试失败项</button>
             <button type="button" class="btn btn-ghost btn-sm" id="wctCopyAllBtn">复制全部</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="wctExportTxtBtn">导出TXT</button>
-            <button type="button" class="btn btn-ghost btn-sm" id="wctExportCsvBtn">导出CSV</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="wctExportTxtBtn">导出 TXT</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="wctExportCsvBtn">导出 CSV</button>
           </div>
         </div>
         <div class="wct-grid" style="grid-template-columns:260px minmax(0,1fr);">
-          <div id="wctJobList" class="wct-empty">暂无任务</div>
+          <div id="wctJobList" class="wct-empty">暂无记录</div>
           <div id="wctResultList" class="wct-empty">暂无结果</div>
         </div>
       </section>
