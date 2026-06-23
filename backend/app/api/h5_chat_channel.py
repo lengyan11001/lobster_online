@@ -15,16 +15,19 @@ import json
 import logging
 import os
 import re
+import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 
 from ..core.config import settings
 from ..db import SessionLocal
-from ..models import Asset
+from ..models import Asset, PublishAccount
 from ..services.openclaw_channel_auth_store import read_channel_fallback
 from .auth import get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
@@ -42,8 +45,11 @@ from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_BASE_DIR = Path(__file__).resolve().parents[3]
+_DOUYIN_ORIGIN_DIR = _BASE_DIR / "backend" / "douyin_origin"
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
 _active_scheduled_run_ids: set[str] = set()
+_SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
 
@@ -85,6 +91,12 @@ _IMAGE_MODEL_ALIASES = {
     "gpt-image": "openai/gpt-image-2",
     "gptimage2": "openai/gpt-image-2",
 }
+
+
+def _install_douyin_origin_import_path() -> None:
+    origin_path = str(_DOUYIN_ORIGIN_DIR)
+    if origin_path not in sys.path:
+        sys.path.insert(0, origin_path)
 
 
 def _scheduled_variant(seed: str, options: List[str]) -> str:
@@ -327,6 +339,173 @@ def _local_chat_headers(headers: Dict[str, str]) -> Dict[str, str]:
     if billing_key:
         out["X-Lobster-Mcp-Billing"] = billing_key
     return out
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _today_date_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+async def _build_douyin_dashboard_snapshot(jwt_token: str, installation_id: str) -> Dict[str, Any]:
+    _install_douyin_origin_import_path()
+    from douyin_api import (  # type: ignore
+        douyin_get_customer_pools,
+        douyin_get_tasks_lite,
+        douyin_interaction_status,
+        douyin_stranger_message_status,
+        douyin_video_comment_status,
+        get_online_douyin_accounts,
+        load_global_config,
+    )
+
+    user_id = int(_decode_jwt_sub(jwt_token) or "0")
+    accounts: List[Dict[str, Any]] = []
+    today_task_runs = 0
+    config = load_global_config()
+    online_accounts = get_online_douyin_accounts(config)
+    db = SessionLocal()
+    try:
+        db_rows: Dict[int, PublishAccount] = {}
+        if user_id > 0:
+            rows = (
+                db.query(PublishAccount)
+                .filter(PublishAccount.user_id == user_id, PublishAccount.platform == "douyin")
+                .order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
+                .all()
+            )
+            db_rows = {int(row.id): row for row in rows}
+        seen_ids: set[int] = set()
+        config_accounts = config.get("douyin_accounts") if isinstance(config, dict) else []
+        if isinstance(config_accounts, list):
+            for item in config_accounts:
+                if not isinstance(item, dict):
+                    continue
+                account_id = _safe_int(item.get("id"))
+                if account_id <= 0 or account_id in seen_ids:
+                    continue
+                seen_ids.add(account_id)
+                db_row = db_rows.get(account_id)
+                online = any(_safe_int(row.get("id")) == account_id for row in online_accounts)
+                accounts.append(
+                    {
+                        "account_id": account_id,
+                        "nickname": str((db_row.nickname if db_row else "") or f"账号 {account_id}").strip(),
+                        "status": "active" if online else str(item.get("status") or (db_row.status if db_row else "offline")).strip(),
+                        "online": online,
+                        "installation_id": installation_id,
+                        "last_login": db_row.last_login.isoformat() if db_row and db_row.last_login else "",
+                    }
+                )
+        for account_id, db_row in db_rows.items():
+            if account_id in seen_ids:
+                continue
+            online = any(_safe_int(row.get("id")) == account_id for row in online_accounts)
+            accounts.append(
+                {
+                    "account_id": account_id,
+                    "nickname": str(db_row.nickname or f"账号 {account_id}").strip(),
+                    "status": "active" if online else str(db_row.status or "offline").strip(),
+                    "online": online,
+                    "installation_id": installation_id,
+                    "last_login": db_row.last_login.isoformat() if db_row.last_login else "",
+                }
+            )
+    finally:
+        db.close()
+
+    tasks_data = await douyin_get_tasks_lite()
+    pool_data = await douyin_get_customer_pools()
+    interaction_data = await douyin_interaction_status(lite=True, include_users=True)
+    stranger_data = await douyin_stranger_message_status()
+    video_comment_data = await douyin_video_comment_status()
+
+    task_rows = tasks_data.get("tasks") if isinstance(tasks_data, dict) and isinstance(tasks_data.get("tasks"), list) else []
+    all_customers = pool_data.get("all_customers") if isinstance(pool_data, dict) and isinstance(pool_data.get("all_customers"), list) else []
+    precise_customers = pool_data.get("precise_customers") if isinstance(pool_data, dict) and isinstance(pool_data.get("precise_customers"), list) else []
+    interaction_users = interaction_data.get("users") if isinstance(interaction_data, dict) and isinstance(interaction_data.get("users"), list) else []
+
+    commented_videos = 0
+    for task in task_rows:
+        if not isinstance(task, dict):
+            continue
+        status = str(task.get("comment_status") or task.get("video_comment_status") or task.get("status") or "").strip().lower()
+        if status in {"commented", "completed", "success"}:
+            commented_videos += 1
+
+    private_messages_sent = 0
+    for row in interaction_users:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("interaction_status") or "").strip().lower()
+        if status in {"sent", "completed", "success"}:
+            private_messages_sent += 1
+
+    today = _today_date_text()
+    for row in precise_customers:
+        if not isinstance(row, dict):
+            continue
+        created = str(row.get("created_at") or row.get("updated_at") or "").strip()
+        if created.startswith(today):
+            today_task_runs += 1
+
+    runtime_comment = ""
+    if isinstance(video_comment_data, dict):
+        state = video_comment_data.get("state") if isinstance(video_comment_data.get("state"), dict) else {}
+        runtime_comment = str(state.get("message") or state.get("last_message") or "").strip()
+    runtime_interaction = ""
+    if isinstance(interaction_data, dict):
+        state = interaction_data.get("state") if isinstance(interaction_data.get("state"), dict) else {}
+        runtime_interaction = str(state.get("message") or state.get("last_message") or interaction_data.get("msg") or "").strip()
+    runtime_monitor = ""
+    if isinstance(stranger_data, dict):
+        state = stranger_data.get("state") if isinstance(stranger_data.get("state"), dict) else {}
+        runtime_monitor = str(state.get("message") or state.get("last_message") or stranger_data.get("msg") or "").strip()
+
+    return {
+        "accounts": accounts,
+        "runtime": {
+            "comment_message": runtime_comment,
+            "interaction_message": runtime_interaction,
+            "monitor_message": runtime_monitor,
+        },
+        "metrics": {
+            "collected_videos": _safe_int(tasks_data.get("total") if isinstance(tasks_data, dict) else 0),
+            "all_customers": len(all_customers),
+            "precise_customers": len(precise_customers),
+            "commented_videos": commented_videos,
+            "private_messages_sent": private_messages_sent,
+            "monitor_tasks": 1 if runtime_monitor else 0,
+            "today_new_customers": sum(
+                1
+                for row in precise_customers
+                if isinstance(row, dict) and str(row.get("created_at") or row.get("updated_at") or "").startswith(today)
+            ),
+            "today_task_runs": today_task_runs,
+        },
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+
+async def _report_douyin_dashboard_status(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    *,
+    jwt_token: str,
+    installation_id: str,
+) -> None:
+    snapshot = await _build_douyin_dashboard_snapshot(jwt_token, installation_id)
+    await cloud.post(
+        f"{base}/api/douyin/dashboard-status/report",
+        json={"payload": snapshot},
+        headers=headers,
+    )
 
 
 def _chat_turn_payload_fields(item: Dict[str, Any], fallback_prefix: str) -> Dict[str, Any]:
@@ -3082,6 +3261,16 @@ async def h5_chat_poll_loop() -> None:
                         headers=headers,
                     )
                     last_heartbeat_at = now_loop
+                    try:
+                        await _report_douyin_dashboard_status(
+                            client,
+                            base,
+                            headers,
+                            jwt_token=jwt_token,
+                            installation_id=installation_id,
+                        )
+                    except Exception as exc:
+                        logger.debug("[DOUYIN-DASHBOARD] report failed: %s", exc)
                 items: list[Dict[str, Any]] = []
                 h5_slots = max(0, max_h5_concurrency - len(active_items))
                 if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_poll_interval:

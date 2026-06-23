@@ -20,7 +20,27 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
-from ..api.assets import _is_internal_asset_http_url, get_asset_public_url
+try:
+    from ..api.assets import _is_internal_asset_http_url, get_asset_public_url
+except ImportError:
+    from ..api.assets import get_asset_public_url
+
+    def _is_internal_asset_http_url(url: str) -> bool:
+        raw = (url or "").strip().lower()
+        if not raw:
+            return True
+        return any(
+            token in raw
+            for token in (
+                "127.0.0.1",
+                "localhost",
+                "0.0.0.0",
+                "/api/assets/file/",
+                "token=",
+                "expires=",
+                "signature=",
+            )
+        )
 from ..models import Asset, UserComflyConfig  # UserComflyConfig 仍被高级用户配置 UI 使用，但 Comfly 调用不再读它
 
 logger = logging.getLogger(__name__)
@@ -29,6 +49,11 @@ _DEFAULT_VIDEO_MODEL = "grok-video-3"
 _DEFAULT_ANALYSIS_MODEL = "gemini-2.5-pro"
 _DEFAULT_ASPECT = "9:16"
 LOCAL_COMFLY_CONFIG_USER_ID = 0
+_COMFLY_GROK15_MODEL_SECONDS: Dict[str, int] = {
+    "grok-1.5-video-6s": 6,
+    "grok-1.5-video-10s": 10,
+    "grok-1.5-video-15s": 15,
+}
 
 
 def _default_comfly_api_base() -> str:
@@ -156,6 +181,14 @@ def _headers(api_key: str) -> Dict[str, str]:
     }
 
 
+def _headers_multipart(api_key: str) -> Dict[str, str]:
+    k = _comfly_key_plain(api_key)
+    return {
+        "Authorization": f"Bearer {k}",
+        "Accept": "application/json",
+    }
+
+
 def _headers_for_log(h: Dict[str, str]) -> Dict[str, Any]:
     """日志脱敏：Authorization 仅长度 + 末尾 4 字符。"""
     out: Dict[str, Any] = {}
@@ -255,10 +288,73 @@ def _prompt_for_veo_submit(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _normalize_video_model_token(raw: str) -> str:
+    return (raw or "").strip().lower().replace("_", "-").replace(" ", "")
+
+
+def _is_comfly_grok15_model(raw: str) -> bool:
+    return _normalize_video_model_token(raw) in _COMFLY_GROK15_MODEL_SECONDS
+
+
+def _is_comfly_grok_alias_model(raw: str) -> bool:
+    return _normalize_video_model_token(raw) in {
+        "grok-video-3",
+        "grok-imagine-video-1.5-preview",
+        "grok-imagine-1.0-video",
+        "yingmeng1.5plus",
+        "影梦1.5plus",
+    }
+
+
+def _is_comfly_grok_request_model(raw: str) -> bool:
+    return _is_comfly_grok15_model(raw) or _is_comfly_grok_alias_model(raw)
+
+
+def _resolve_comfly_grok15_duration(payload: Dict[str, Any], raw_model: str) -> int:
+    for key in ("duration", "seconds"):
+        value = payload.get(key)
+        try:
+            seconds = int(value)
+        except (TypeError, ValueError):
+            seconds = 0
+        if seconds in {6, 10, 15}:
+            return seconds
+    normalized = _normalize_video_model_token(raw_model)
+    if normalized in _COMFLY_GROK15_MODEL_SECONDS:
+        return _COMFLY_GROK15_MODEL_SECONDS[normalized]
+    return 10
+
+
+def _resolve_comfly_grok15_model(raw_model: str, duration_seconds: int) -> str:
+    normalized = _normalize_video_model_token(raw_model)
+    if normalized in _COMFLY_GROK15_MODEL_SECONDS:
+        return normalized
+    if duration_seconds >= 15:
+        return "grok-1.5-video-15s"
+    if duration_seconds <= 6:
+        return "grok-1.5-video-6s"
+    return "grok-1.5-video-10s"
+
+
+def _comfly_grok15_size_for_ratio(raw_aspect_ratio: str) -> str:
+    normalized = (raw_aspect_ratio or "").strip().replace(" ", "")
+    if normalized == "16:9":
+        return "1280x720"
+    if normalized == "1:1":
+        return "1024x1024"
+    if normalized == "3:2":
+        return "1216x832"
+    if normalized == "2:3":
+        return "832x1216"
+    return "720x1280"
+
+
 def _veo_clamp_images_for_model(model: str, images: List[str]) -> List[str]:
     """Comfly POST /v2/videos/generations：不同 model 对 images 条数上限不同。"""
     clean = [u.strip() for u in (images or []) if isinstance(u, str) and u.strip()]
     m = (model or "").strip().lower()
+    if m in _COMFLY_GROK15_MODEL_SECONDS:
+        return clean[:1]
     if m == "grok-video-3":
         return clean[:1]
     if m == "veo3-pro-frames":
@@ -433,19 +529,49 @@ async def run_comfly_veo(
         if not images:
             raise HTTPException(status_code=400, detail="submit_video 参考图为空（经 model 裁剪后无有效 URL）")
         ar = (payload.get("aspect_ratio") or aspect_ratio or "").strip()
-        if video_model.strip().lower() == "grok-video-3":
-            body = {
+        if _is_comfly_grok_request_model(video_model):
+            requested_duration = _resolve_comfly_grok15_duration(payload, video_model)
+            effective_model = _resolve_comfly_grok15_model(video_model, requested_duration)
+            submit_path = "/v1/videos"
+            post_url = _comfly_request_url(api_base, submit_path)
+            sh = _headers_multipart(api_key)
+            request_summary = {
                 "prompt": prompt,
-                "model": video_model,
-                "images": images[:1],
-                "ratio": ar if ar in ("9:16", "16:9", "1:1", "2:3", "3:2") else "9:16",
-                "resolution": str(payload.get("resolution") or "720P"),
+                "model": effective_model,
+                "size": _comfly_grok15_size_for_ratio(ar if ar in ("9:16", "16:9", "1:1", "2:3", "3:2") else "9:16"),
+                "input_reference": images[0],
+                "requested_video_model": video_model,
+                "requested_duration_seconds": requested_duration,
             }
-            try:
-                duration = int(payload.get("duration") or payload.get("seconds") or 6)
-            except (TypeError, ValueError):
-                duration = 6
-            body["duration"] = 10 if duration == 10 else 6
+            _log_comfly_http_out("videos_grok15_submit", "POST", post_url, sh, request_summary)
+            files = {
+                "model": (None, effective_model),
+                "prompt": (None, prompt),
+                "size": (None, request_summary["size"]),
+                "input_reference": (None, images[0]),
+            }
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                r = await client.post(post_url, headers=sh, files=files)
+            _log_comfly_http_in("videos_grok15_submit", r)
+            if r.status_code >= 400:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Comfly Grok 1.5 提交视频失败 HTTP {r.status_code}: {(r.text or '')[:1500]}",
+                )
+            out = r.json() if r.content else {}
+            _data = out.get("data")
+            _dd: Dict[str, Any] = _data if isinstance(_data, dict) else {}
+            task_id = out.get("task_id") or out.get("id") or _dd.get("task_id") or _dd.get("id")
+            tid = str(task_id).strip() if task_id else None
+            logger.info("[comfly.daihuo] submit_video grok15 task_id=%s effective_model=%s requested_model=%s", tid or "(none)", effective_model, video_model)
+            return {
+                "ok": True,
+                "action": action,
+                "task_id": tid,
+                "result": out,
+                "effective_video_model": effective_model,
+                **({"warning": "上游 JSON 中未解析到 task_id，请根据 result 自行取 ID"} if not tid else {}),
+            }
         else:
             body = {
                 "prompt": prompt,
@@ -491,19 +617,32 @@ async def run_comfly_veo(
         tpl = (
             getattr(settings, "comfly_veo_poll_path_template", None) or "/v2/videos/generations/{task_id}"
         ).strip()
-        path = tpl.format(task_id=quote(task_id, safe="")).strip()
-        get_url = _comfly_request_url(api_base, path if path.startswith("/") else path.lstrip("/"))
-        gh = _headers(api_key)
-        _log_comfly_http_out("videos_generations_poll", "GET", get_url, gh, None, f"task_id={task_id[:80]}")
+        quoted_task_id = quote(task_id, safe="")
+        path = tpl.format(task_id=quoted_task_id).strip()
+        gh = _headers_multipart(api_key)
+        candidates = [
+            ("videos_grok15_poll", _comfly_request_url(api_base, f"/v1/videos/{quoted_task_id}")),
+            ("videos_generations_poll", _comfly_request_url(api_base, path if path.startswith("/") else path.lstrip("/"))),
+            ("videos_query_poll", _comfly_request_url(api_base, f"/v1/video/query?id={quoted_task_id}")),
+        ]
+        result: Dict[str, Any] = {}
+        last_status = 0
+        last_text = ""
         async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.get(get_url, headers=gh)
-        _log_comfly_http_in("videos_generations_poll", r, f"task_id={task_id[:80]}")
-        if r.status_code >= 400:
+            for phase, get_url in candidates:
+                _log_comfly_http_out(phase, "GET", get_url, gh, None, f"task_id={task_id[:80]}")
+                r = await client.get(get_url, headers=gh)
+                _log_comfly_http_in(phase, r, f"task_id={task_id[:80]}")
+                if r.status_code < 400:
+                    result = r.json() if r.content else {}
+                    break
+                last_status = r.status_code
+                last_text = (r.text or "")[:1000]
+        if not result:
             raise HTTPException(
                 status_code=502,
-                detail=f"Comfly 查询任务失败 HTTP {r.status_code}: {(r.text or '')[:1000]}",
+                detail=f"Comfly 查询任务失败 HTTP {last_status}: {last_text}",
             )
-        result = r.json() if r.content else {}
         logger.info("[comfly.daihuo] poll_video task_id=%s", task_id)
         return {"ok": True, "action": action, "task_id": task_id, "result": result}
 

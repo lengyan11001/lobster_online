@@ -508,9 +508,9 @@ def _image_size_for_aspect_ratio(aspect_ratio: str) -> str:
     sizes = {
         "1:1": "1024x1024",
         "3:2": "1536x1024",
-        "16:9": "1536x1024",
+        "16:9": "1920x1080",
         "2:3": "1024x1536",
-        "9:16": "1024x1536",
+        "9:16": "1080x1920",
     }
     return sizes.get((aspect_ratio or "").strip(), "1536x1024")
 

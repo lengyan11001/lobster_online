@@ -165,6 +165,9 @@ def _is_veo31_request(channel: str, model: str) -> bool:
 def _is_grok_video_request(channel: str, model: str) -> bool:
     model_hint = (model or "").strip().lower().replace("_", "-").replace(" ", "")
     return model_hint in {
+        "grok-1.5-video-6s",
+        "grok-1.5-video-10s",
+        "grok-1.5-video-15s",
         "grok-imagine-video-1.5-preview",
         "grok-imagine-1.0-video",
         "grok-video-3",
@@ -228,7 +231,7 @@ async def _prepare_pipeline_input(
         video_channel = "yunwu"
         video_model = "veo3.1"
     if _is_grok_video_request(video_channel, video_model):
-        video_channel = video_channel or "openmind"
+        video_channel = video_channel or "comfly"
     if video_channel in {"yunwu", "云雾", "雲霧"}:
         video_channel = "yunwu"
         video_base_url = video_base_url or pipe_base

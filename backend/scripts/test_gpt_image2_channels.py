@@ -232,9 +232,9 @@ def _size_for_ratio(ratio: str) -> str:
     mapping = {
         "1:1": "1024x1024",
         "3:2": "1536x1024",
-        "16:9": "1536x1024",
+        "16:9": "1920x1080",
         "2:3": "1024x1536",
-        "9:16": "1024x1536",
+        "9:16": "1080x1920",
     }
     return mapping.get(_normalize_ratio(ratio), "1024x1024")
 

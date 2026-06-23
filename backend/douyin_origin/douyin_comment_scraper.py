@@ -6720,6 +6720,7 @@ class DouyinCommentScraper:
             self._emit(logger, f"[抖音搜索] 打开搜索页：{keyword}")
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(3000)
+            await self._raise_if_login_intercept(page)
             await page.wait_for_selector('a[href*="/video/"]', timeout=30000)
 
             max_scroll_rounds = 18

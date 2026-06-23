@@ -185,6 +185,9 @@ def _is_grok_video_request(channel: str, model: str) -> bool:
     channel_hint = (channel or "").strip().lower()
     model_hint = (model or "").strip().lower().replace("_", "-").replace(" ", "")
     return channel_hint in {"openmind", "open-mind", "om", "openmindapi"} or model_hint in {
+        "grok-1.5-video-6s",
+        "grok-1.5-video-10s",
+        "grok-1.5-video-15s",
         "grok-imagine-video-1.5-preview",
         "grok-imagine-1.0-video",
         "grok-video-3",
@@ -221,17 +224,19 @@ async def _prepare_pipeline_input(
     if not video_channel:
         video_channel = "openmind"
     if _is_grok_video_request(video_channel, video_model):
-        video_channel = "openmind"
+        video_channel = "comfly"
         video_base_url = video_base_url or pipe_base
-        video_model = video_model or (getattr(settings, "comfly_daihuo_grok_video_model", None) or "grok-imagine-video-1.5-preview")
+        video_model = video_model or (getattr(settings, "comfly_daihuo_grok_video_model", None) or "grok-video-3")
         if not video_fallbacks:
             video_fallbacks = [
+                {"channel": "yunwu", "model": "grok-video-3", "base_url": pipe_base},
+                {"channel": "openmind", "model": "grok-imagine-video-1.5-preview", "base_url": pipe_base},
                 {"channel": "comfly", "model": "veo3.1-fast", "base_url": pipe_base},
                 {"channel": "yunwu", "model": "veo3.1", "base_url": pipe_base},
             ]
-        video_fallback_channel = video_fallback_channel or "comfly"
+        video_fallback_channel = video_fallback_channel or "yunwu"
         video_fallback_base_url = video_fallback_base_url or pipe_base
-        video_fallback_model = video_fallback_model or "veo3.1-fast"
+        video_fallback_model = video_fallback_model or "grok-video-3"
     if video_channel in {"yunwu", "云雾", "雲霧"}:
         video_channel = "yunwu"
         video_base_url = video_base_url or pipe_base
