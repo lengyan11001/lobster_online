@@ -1,18 +1,27 @@
-/* global API_BASE, LOCAL_API_BASE, authHeaders, escapeHtml */
+﻿/* global API_BASE, LOCAL_API_BASE, authHeaders, escapeHtml */
 
 (function () {
   'use strict';
 
   var POLL_MS = 5000;
   var REFRESH_DEBOUNCE_MS = 1200;
+  var SWARM_PAGE_SIZE = 10;
 
   var state = {
     loadedSubUsers: false,
     timer: null,
     inFlight: false,
     lastRefreshAt: 0,
-    lastFingerprint: '',
-    destroyed: false
+    lastFingerprints: {
+      summary: '',
+      swarm: '',
+      timeline: '',
+      result: ''
+    },
+    destroyed: false,
+    selectedSwarmId: '',
+    lastSnapshot: null,
+    swarmVisibleCount: SWARM_PAGE_SIZE
   };
 
   function localBase() {
@@ -39,6 +48,20 @@
   function text(id, value) {
     var node = el(id);
     if (node) node.textContent = value == null ? '' : String(value);
+  }
+
+  function html(id, value, preserveScroll) {
+    var node = el(id);
+    if (!node) return;
+    var next = value == null ? '' : String(value);
+    if (node.innerHTML === next) return;
+    var scrollTop = preserveScroll ? node.scrollTop : 0;
+    var scrollLeft = preserveScroll ? node.scrollLeft : 0;
+    node.innerHTML = next;
+    if (preserveScroll) {
+      node.scrollTop = scrollTop;
+      node.scrollLeft = scrollLeft;
+    }
   }
 
   function hasMeaningfulText(value) {
@@ -327,11 +350,25 @@
     return (runs || []).filter(function (run) { return isRunningStatus(run.status); });
   }
 
+  function recentRuns(runs, limit) {
+    return (runs || []).slice().sort(function (a, b) {
+      return newestTime(b) - newestTime(a);
+    }).slice(0, limit || 4);
+  }
+
   function latestRun(runs) {
     var rows = activeRuns(runs);
     if (!rows.length) rows = (runs || []).slice();
     rows.sort(function (a, b) { return newestTime(b) - newestTime(a); });
     return rows[0] || null;
+  }
+
+  function resetSwarmVisibleCount() {
+    state.swarmVisibleCount = SWARM_PAGE_SIZE;
+  }
+
+  function growSwarmVisibleCount() {
+    state.swarmVisibleCount += SWARM_PAGE_SIZE;
   }
 
   function inferProgress(run, message) {
@@ -402,6 +439,301 @@
       return messageStatusLabel(message.status);
     }
     return '当前没有活跃任务';
+  }
+
+  function workerTone(run) {
+    var status = String((run && run.status) || '').toLowerCase();
+    if (status === 'completed') return 'done';
+    if (status === 'failed' || status === 'cancelled') return 'failed';
+    return 'running';
+  }
+
+  function workerStateLabel(run) {
+    if (!run) return '等待中';
+    return statusLabel(run.status);
+  }
+
+  function workerDetailText(run) {
+    if (!run) return '等待新的任务接入';
+    if (hasMeaningfulText(run.progressDetail)) return compactText(run.progressDetail, '');
+    if (hasMeaningfulText(run.title)) return compactText(run.title, '');
+    if (hasMeaningfulText(run.content)) return compactText(run.content, '');
+    if (hasMeaningfulText(run.resultText) && String(run.status).toLowerCase() === 'completed') return compactText(run.resultText, '');
+    if (hasMeaningfulText(run.error)) return compactText(run.error, '');
+    return capabilityLabel(run) + '正在处理';
+  }
+
+  function workerProgress(run) {
+    if (!run) return 0;
+    if (run.progressPercent != null && run.progressPercent !== '') return clampPercent(run.progressPercent);
+    if (String(run.status).toLowerCase() === 'completed') return 100;
+    if (String(run.status).toLowerCase() === 'failed' || String(run.status).toLowerCase() === 'cancelled') return 100;
+    return inferProgress(run, null) || 16;
+  }
+
+  function workerAvatar(run, index) {
+    var status = String((run && run.status) || '').toLowerCase();
+    var capability = String((((run || {}).payload || {}).capability_id) || '').toLowerCase();
+    var action = String((((run || {}).payload || {}).action) || '').toLowerCase();
+    if (capability.indexOf('image') >= 0) {
+      return status === 'failed'
+        ? '/static/generated/agent/avatars/h5-employee-female-offline.png'
+        : '/static/generated/agent/avatars/h5-employee-female-working.png';
+    }
+    if (capability.indexOf('video') >= 0) {
+      return status === 'completed'
+        ? '/static/generated/agent/avatars/h5-employee-male-idle.png'
+        : '/static/generated/agent/avatars/h5-employee-male-working.png';
+    }
+    if (action === 'search_collect' || action === 'tasks_from_search') {
+      return status === 'completed'
+        ? '/static/generated/agent/avatars/h5-employee-male-idle.png'
+        : '/static/generated/agent/avatars/h5-employee-male-working.png';
+    }
+    if (action === 'comment_collect' || action === 'interaction') {
+      return status === 'failed'
+        ? '/static/generated/agent/avatars/h5-employee-male-offline.png'
+        : '/static/generated/agent/avatars/h5-employee-female-idle.png';
+    }
+    return [
+      '/static/generated/agent/avatars/h5-employee-female-working.png',
+      '/static/generated/agent/avatars/h5-employee-male-working.png',
+      '/static/generated/agent/avatars/h5-employee-female-idle.png',
+      '/static/generated/agent/avatars/h5-boss-avatar.png'
+    ][index % 4];
+  }
+
+  function buildFocusTimeline(run, message) {
+    var timeline = buildTimeline(message, run) || [];
+    return timeline.slice(0, 6);
+  }
+
+  function buildFocusRows(run, message) {
+    var rows = collectResultRows(run, message) || [];
+    return rows.slice(0, 4);
+  }
+
+  function normalizeFocusItem(item) {
+    if (!item) return null;
+    return {
+      id: item.id,
+      title: item.title,
+      subtitle: item.subtitle,
+      detail: item.detail,
+      tone: item.tone,
+      progress: item.progress,
+      state: item.state,
+      age: item.age,
+      timeline: item.timeline || [],
+      resultRows: item.resultRows || []
+    };
+  }
+
+  function buildSwarmItems(runs, message) {
+    var items = recentRuns(runs, state.swarmVisibleCount).map(function (run, index) {
+      return {
+        id: run.id || ('run-' + index),
+        title: capabilityLabel(run),
+        subtitle: compactText(run.progressLabel, '执行单元 ' + String(index + 1).padStart(2, '0')),
+        detail: workerDetailText(run),
+        tone: workerTone(run),
+        progress: workerProgress(run),
+        avatar: workerAvatar(run, index),
+        state: workerStateLabel(run),
+        statusText: (function () {
+          var lowered = String(run.status || '').toLowerCase();
+          if (lowered === 'completed' || lowered === 'failed' || lowered === 'cancelled') return workerStateLabel(run);
+          return compactText(run.progressDetail || run.progressLabel || run.title || '', workerStateLabel(run));
+        })(),
+        age: relativeTime(run.updatedAt || run.finishedAt || run.createdAt || '') || fmtTime(run.updatedAt || run.createdAt || ''),
+        timeline: buildFocusTimeline(run, message),
+        resultRows: buildFocusRows(run, message)
+      };
+    });
+    if (!items.length && message) {
+      items.push({
+        id: message.id || 'message-primary',
+        title: '语音任务',
+        subtitle: '等待转入执行单元',
+        detail: summarizeVoicePrompt(message.content),
+        tone: String(message.status).toLowerCase() === 'failed' ? 'failed' : 'running',
+        progress: inferProgress(null, message),
+        avatar: '/static/generated/agent/avatars/h5-boss-avatar.png',
+        state: messageStatusLabel(message.status),
+        statusText: messageStatusLabel(message.status),
+        age: relativeTime(message.updatedAt || message.createdAt || '') || fmtTime(message.updatedAt || message.createdAt || ''),
+        timeline: buildFocusTimeline(null, message),
+        resultRows: buildFocusRows(null, message)
+      });
+    }
+    return items.slice(0, state.swarmVisibleCount);
+  }
+
+  function renderSwarm(items, stageLabel, stageText) {
+    text('agentVisualStageLabel', stageLabel || '等待任务接入');
+    text('agentVisualStageText', stageText || '手机端下发语音任务后，左侧会展示多个执行任务的实时状态。');
+    if (!items || !items.length) {
+      html('agentVisualSwarm', '<div class="agent-visual-empty">等待任务接入后，这里会出现多个执行单元的协同状态。</div>');
+      return;
+    }
+    html('agentVisualSwarm', items.map(function (item) {
+      var progress = clampPercent(item.progress);
+      return ''
+        + '<article class="agent-visual-worker" data-tone="' + h(item.tone || 'running') + '" style="--agent-x:' + h(item.x) + ';--agent-y:' + h(item.y) + ';--agent-progress:' + h(progress) + ';">'
+        + '  <div class="agent-visual-worker-head">'
+        + '    <div class="agent-visual-worker-avatar"></div>'
+        + '    <div class="agent-visual-worker-title">'
+        + '      <strong>' + h(item.title || '执行单元') + '</strong>'
+        + '      <span>' + h(item.subtitle || '') + '</span>'
+        + '    </div>'
+        + '    <div class="agent-visual-worker-state">' + h(item.state || '') + '</div>'
+        + '  </div>'
+        + '  <div class="agent-visual-worker-desc">' + h(item.detail || '') + '</div>'
+        + '  <div class="agent-visual-worker-progress">'
+        + '    <div class="agent-visual-worker-progress-top">'
+        + '      <span>' + h(item.age || '') + '</span>'
+        + '      <span>' + h(progress + '%') + '</span>'
+        + '    </div>'
+        + '    <div class="agent-visual-worker-progress-bar"><div class="agent-visual-worker-progress-fill"></div></div>'
+        + '  </div>'
+        + '</article>';
+    }).join(''));
+  }
+
+  function renderTaskGrid(items) {
+    if (!items || !items.length) {
+      html('agentVisualSwarm', '<div class="agent-task-grid-empty">等待任务接入后，这里会出现规则排列的任务卡片。</div>', true);
+      return;
+    }
+    html('agentVisualSwarm', items.map(function (item) {
+      var progress = clampPercent(item.progress);
+      return ''
+        + '<button type="button" class="agent-task-card' + (item.id === state.selectedSwarmId ? ' active' : '') + '" data-agent-id="' + h(item.id || '') + '" data-tone="' + h(item.tone || 'running') + '" style="--agent-progress:' + h(progress) + ';">'
+        + '  <div class="agent-task-card-head">'
+        + '    <div class="agent-task-card-avatar"><img src="' + h(item.avatar || '/static/generated/agent/avatars/h5-boss-avatar.png') + '" alt="' + h(item.title || '任务头像') + '"></div>'
+        + '    <div class="agent-task-card-title">'
+        + '      <strong>' + h(item.title || '执行单元') + '</strong>'
+        + '      <span>' + h(item.subtitle || '') + '</span>'
+        + '    </div>'
+        + '  </div>'
+        + '  <div class="agent-task-card-desc">' + h(item.detail || '') + '</div>'
+        + '  <div class="agent-task-card-meta">'
+        + '    <span>当前状态</span>'
+        + '    <span>' + h(item.statusText || item.state || '') + '</span>'
+        + '  </div>'
+        + '  <div class="agent-task-card-meta">'
+        + '    <span>' + h(item.age || '') + '</span>'
+        + '    <span class="agent-task-card-state">' + h(item.state || '') + '</span>'
+        + '  </div>'
+        + '  <div class="agent-task-card-meta">'
+        + '    <span>进度</span>'
+        + '    <span>' + h(progress + '%') + '</span>'
+        + '  </div>'
+        + '  <div class="agent-task-card-progress"><div class="agent-task-card-progress-fill"></div></div>'
+        + '</button>';
+    }).join(''), true);
+  }
+
+  function renderFocusTimeline(items) {
+    var host = el('agentFocusTimeline');
+    if (!host) return;
+    if (!items || !items.length) {
+      host.innerHTML = '<div class="agent-focus-empty">当前没有可展示的执行过程。</div>';
+      return;
+    }
+    host.innerHTML = items.map(function (item) {
+      return ''
+        + '<article class="agent-focus-event">'
+        + '  <div class="agent-focus-event-head">'
+        + '    <strong>' + h(item.title || '任务事件') + '</strong>'
+        + '    <span>' + h(relativeTime(item.time) || fmtTime(item.time) || '') + '</span>'
+        + '  </div>'
+        + '  <p>' + h(item.text || '') + '</p>'
+        + '</article>';
+    }).join('');
+  }
+
+  function renderFocusResult(rows) {
+    var host = el('agentFocusResult');
+    if (!host) return;
+    if (!rows || !rows.length) {
+      host.innerHTML = '<div class="agent-focus-empty">当前没有可展示的结果。</div>';
+      return;
+    }
+    host.innerHTML = rows.map(function (row) {
+      if (row && row.kind === 'media' && row.media && row.media.url) {
+        return ''
+          + '<div class="agent-result-media-card">'
+          + '  <div class="agent-result-media-head">'
+          + '    <span>' + h(row.label || '素材结果') + '</span>'
+          + '    <div class="agent-result-media-meta">' + h(row.meta || '') + '</div>'
+          + '  </div>'
+          + '  <button type="button" class="agent-result-media-button" data-media-url="' + h(row.media.url) + '" data-media-type="' + h(row.media.type || '') + '" data-media-title="' + h(row.label || '媒体预览') + '">'
+          + (row.media.type === 'video'
+            ? '    <video src="' + h(row.media.url) + '" muted playsinline preload="metadata"></video>'
+            : '    <img src="' + h(row.media.url) + '" alt="' + h(row.label || '图片结果') + '">')
+          + '    <span class="agent-result-media-action">' + h(row.media.type === 'video' ? '查看视频' : '放大查看') + '</span>'
+          + '  </button>'
+          + (hasMeaningfulText(row.note) ? '  <div class="agent-result-media-note">' + h(row.note) + '</div>' : '')
+          + '</div>';
+      }
+      return ''
+        + '<div class="agent-result-row">'
+        + '  <span>' + h(row.label || '') + '</span>'
+        + '  <strong>' + h(row.value || '') + '</strong>'
+        + '</div>';
+    }).join('');
+  }
+
+  function renderFocusCard(item) {
+    var focus = normalizeFocusItem(item);
+    text('agentFocusTitle', focus ? focus.title : '等待任务接入');
+    text('agentFocusSummary', focus ? focus.detail : '点击右侧任务卡后，这里会显示对应任务的执行过程和结果。');
+    var statusNode = el('agentFocusStatus');
+    if (statusNode) {
+      statusNode.textContent = focus ? (focus.state || '等待中') : '等待中';
+      statusNode.setAttribute('data-tone', focus ? (focus.tone || 'running') : 'running');
+    }
+    renderFocusTimeline(focus ? focus.timeline : []);
+    renderFocusResult(focus ? focus.resultRows : []);
+  }
+
+  function syncSelectedSwarm(items) {
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      state.selectedSwarmId = '';
+      return null;
+    }
+    var found = list.some(function (item) { return item.id === state.selectedSwarmId; });
+    if (!found) state.selectedSwarmId = list[0].id;
+    return list.find(function (item) { return item.id === state.selectedSwarmId; }) || list[0];
+  }
+
+  function bindSwarmSelection() {
+    var host = el('agentVisualSwarm');
+    if (!host || host.__agentSwarmBound) return;
+    host.__agentSwarmBound = true;
+    host.addEventListener('click', function (event) {
+      var card = event.target && event.target.closest ? event.target.closest('.agent-task-card') : null;
+      if (!card) return;
+      var nextId = card.getAttribute('data-agent-id') || '';
+      if (!nextId) return;
+      state.selectedSwarmId = nextId;
+      rerenderFromCache();
+      refreshDashboard(false);
+    });
+  }
+
+  function bindSwarmScrollPagination() {
+    var host = el('agentVisualSwarm');
+    if (!host || host.__agentSwarmScrollBound) return;
+    host.__agentSwarmScrollBound = true;
+    host.addEventListener('scroll', function () {
+      if (host.scrollHeight <= host.clientHeight + 8) return;
+      if (host.scrollTop + host.clientHeight < host.scrollHeight - 24) return;
+      growSwarmVisibleCount();
+      rerenderFromCache();
+    });
   }
 
   function appendEvent(events, item) {
@@ -821,21 +1153,65 @@
   }
 
   function renderSnapshot(snapshot) {
-    var fp = fingerprint(snapshot);
-    if (state.lastFingerprint === fp) return;
-    state.lastFingerprint = fp;
-    text('agentVoicePrompt', snapshot.voicePrompt);
-    text('agentOnlineDeviceCount', snapshot.onlineDevices);
-    text('agentTaskRunCount', snapshot.runningRuns);
-    text('agentCurrentStage', snapshot.stageLabel);
-    text('agentStageDetail', snapshot.stageDetail);
-    text('agentExecutionHeadline', snapshot.headline);
-    setProgress(snapshot.progressPercent);
-    text('agentExecutionSubtitle', snapshot.subtitle);
-    renderTimeline(snapshot.timeline);
-    renderResult(snapshot.resultRows);
+    state.lastSnapshot = snapshot;
+    var activeItem = syncSelectedSwarm(snapshot.swarmItems || []);
+    var activeTimeline = activeItem && activeItem.timeline ? activeItem.timeline : snapshot.timeline;
+    var activeResultRows = activeItem && activeItem.resultRows ? activeItem.resultRows : snapshot.resultRows;
+    var activeHeadline = activeItem && activeItem.title ? activeItem.title + '姝ｅ湪鑷姩澶勭悊' : snapshot.headline;
+    var activeStageLabel = activeItem && activeItem.subtitle ? activeItem.subtitle : snapshot.stageLabel;
+    var activeStageDetail = activeItem && activeItem.detail ? activeItem.detail : snapshot.stageDetail;
+    var summaryFp = fingerprint({
+      voicePrompt: snapshot.voicePrompt,
+      onlineDevices: snapshot.onlineDevices,
+      runningRuns: snapshot.runningRuns,
+      stageLabel: activeStageLabel,
+      stageDetail: activeStageDetail,
+      headline: activeHeadline,
+      progressPercent: snapshot.progressPercent,
+      subtitle: snapshot.subtitle
+    });
+    var swarmFp = fingerprint({
+      selectedSwarmId: state.selectedSwarmId || '',
+      swarmItems: snapshot.swarmItems || []
+    });
+    var timelineFp = fingerprint(activeTimeline || []);
+    var resultFp = fingerprint(activeResultRows || []);
+
+    if (state.lastFingerprints.summary !== summaryFp) {
+      state.lastFingerprints.summary = summaryFp;
+      text('agentVoicePrompt', snapshot.voicePrompt);
+      text('agentVisualOnlineDevices', snapshot.onlineDevices);
+      text('agentVisualRunningRuns', snapshot.runningRuns);
+      text('agentOnlineDeviceCount', snapshot.onlineDevices);
+      text('agentTaskRunCount', snapshot.runningRuns);
+      text('agentCurrentStage', activeStageLabel);
+      text('agentStageDetail', activeStageDetail);
+      text('agentExecutionHeadline', activeHeadline);
+      setProgress(snapshot.progressPercent);
+      text('agentExecutionSubtitle', snapshot.subtitle);
+    }
+    if (state.lastFingerprints.swarm !== swarmFp) {
+      state.lastFingerprints.swarm = swarmFp;
+      renderTaskGrid(snapshot.swarmItems || []);
+    }
+    if (state.lastFingerprints.timeline !== timelineFp) {
+      state.lastFingerprints.timeline = timelineFp;
+      renderTimeline(activeTimeline);
+    }
+    if (state.lastFingerprints.result !== resultFp) {
+      state.lastFingerprints.result = resultFp;
+      renderResult(activeResultRows);
+    }
   }
 
+  function rerenderFromCache() {
+    if (!state.lastSnapshot) return;
+    state.lastFingerprints.summary = '';
+    state.lastFingerprints.swarm = '';
+    state.lastFingerprints.timeline = '';
+    state.lastFingerprints.result = '';
+    renderSnapshot(state.lastSnapshot);
+  }
   function loadAgentSubUsers() {
     var listEl = el('agentSubUserList');
     var countEl = el('agentSubUserCount');
@@ -907,6 +1283,7 @@
         stageDetail: buildStageDetail(run, msg),
         progressPercent: inferProgress(run, msg),
         subtitle: buildSubtitle(run, msg),
+        swarmItems: buildSwarmItems(runItems, msg),
         timeline: buildTimeline(msg, run),
         resultRows: collectResultRows(run, msg)
       };
@@ -958,6 +1335,7 @@
     if (!btn || btn.__agentBound) return;
     btn.__agentBound = true;
     btn.addEventListener('click', function () {
+      resetSwarmVisibleCount();
       refreshDashboard(true);
       loadAgentSubUsers();
     });
@@ -966,6 +1344,9 @@
   window.loadAgentSubUsers = function loadAgentView() {
     bindRefreshButton();
     bindMediaPreview();
+    bindSwarmSelection();
+    bindSwarmScrollPagination();
+    resetSwarmVisibleCount();
     ensurePolling();
     loadAgentSubUsers();
     refreshDashboard(true);
