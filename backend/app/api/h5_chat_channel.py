@@ -2018,6 +2018,583 @@ def _scheduled_capability_error(result: Any) -> str:
     return ""
 
 
+_SCHEDULED_DOUYIN_SKIP_MARKERS = (
+    "没有可执行的采集任务",
+    "已完成任务会自动跳过",
+)
+
+
+def _scheduled_is_douyin_skip_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    code = result.get("code")
+    if code not in (400, "400"):
+        return False
+    msg = " ".join(
+        str(result.get(key) or "").strip()
+        for key in ("msg", "message", "detail", "error")
+    )
+    return any(marker in msg for marker in _SCHEDULED_DOUYIN_SKIP_MARKERS)
+
+
+def _scheduled_is_douyin_skip_error_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return any(marker in raw for marker in _SCHEDULED_DOUYIN_SKIP_MARKERS)
+
+
+def _scheduled_douyin_selected_task_ids(payload: Optional[Dict[str, Any]]) -> List[int]:
+    source = payload if isinstance(payload, dict) else {}
+    selected_ids: List[int] = []
+    seen: set[int] = set()
+    for task_id in source.get("selected_task_ids") or []:
+        value = _safe_int(task_id)
+        if value <= 0 or value in seen:
+            continue
+        seen.add(value)
+        selected_ids.append(value)
+    return selected_ids
+
+
+def _scheduled_douyin_task_snapshot(selected_ids: List[int]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    normalized_ids = [task_id for task_id in selected_ids if _safe_int(task_id) > 0]
+    if not normalized_ids:
+        return payload
+    try:
+        _install_douyin_origin_import_path()
+        from douyin_api import ensure_douyin_task_shape  # type: ignore
+        from douyin_api import douyin_tasks as raw_douyin_tasks  # type: ignore
+
+        selected_id_set = {_safe_int(task_id) for task_id in normalized_ids if _safe_int(task_id) > 0}
+        matched_tasks: List[Dict[str, Any]] = []
+        for task in raw_douyin_tasks if isinstance(raw_douyin_tasks, list) else []:
+            if not isinstance(task, dict):
+                continue
+            task_id = _safe_int(task.get("id"))
+            if task_id <= 0 or task_id not in selected_id_set:
+                continue
+            matched_tasks.append(ensure_douyin_task_shape(dict(task)))
+        if not matched_tasks:
+            return payload
+        selected_video = matched_tasks[0]
+        precise_customers: List[Dict[str, Any]] = []
+        for task in matched_tasks:
+            for row in task.get("high_intent_users", []) or []:
+                if isinstance(row, dict):
+                    precise_customers.append(dict(row))
+        payload.update(
+            {
+                "selected_task_ids": sorted(selected_id_set),
+                "selected_videos_total": len(matched_tasks),
+                "selected_video": {
+                    "task_id": _safe_int(selected_video.get("id")),
+                    "title": str(selected_video.get("title") or "").strip(),
+                    "url": str(selected_video.get("url") or "").strip(),
+                    "author": str(selected_video.get("author") or "").strip(),
+                    "cover_image": str(selected_video.get("cover_image") or "").strip(),
+                    "comments_collected": max(
+                        _safe_int(selected_video.get("comment_count")),
+                        len(selected_video.get("all_comments", []) or []),
+                    ),
+                    "high_intent_users": precise_customers,
+                    "precise_customers": precise_customers,
+                },
+                "precise_customers": precise_customers,
+                "high_intent_users": precise_customers,
+                "total_customers": sum(
+                    max(_safe_int(task.get("comment_count")), len(task.get("all_comments", []) or []))
+                    for task in matched_tasks
+                ),
+                "total_high_intent": len(precise_customers),
+            }
+        )
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] build douyin task snapshot failed: %s", exc)
+    return payload
+
+
+def _scheduled_douyin_regions(params: Optional[Dict[str, Any]]) -> List[str]:
+    source = params if isinstance(params, dict) else {}
+    raw_values: List[Any] = []
+    for key in ("regions", "region_list", "area_list", "region_values"):
+        value = source.get(key)
+        if isinstance(value, list):
+            raw_values.extend(value)
+        elif isinstance(value, str):
+            raw_values.extend([part.strip() for part in re.split(r"[,\s，]+", value) if part.strip()])
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for item in raw_values:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized or ["全国"]
+
+
+def _scheduled_douyin_skip_payload(
+    capability_id: str,
+    result: Any,
+    cap_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "capability_id": capability_id,
+        "skipped": True,
+        "skip_reason": "no_executable_collect_task",
+    }
+    if isinstance(result, dict):
+        payload["mcp_result"] = result
+    cap_payload = cap_payload if isinstance(cap_payload, dict) else {}
+    selected_ids = _scheduled_douyin_selected_task_ids(cap_payload)
+    if selected_ids:
+        payload["action"] = str(cap_payload.get("action") or "search_collect").strip() or "search_collect"
+        payload.update(_scheduled_douyin_task_snapshot(selected_ids))
+        payload["skipped_completed"] = int(payload.get("selected_videos_total") or 0)
+    return payload
+
+
+def _scheduled_douyin_result_payload(
+    action: str,
+    result: Any,
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    source = params if isinstance(params, dict) else {}
+    payload: Dict[str, Any] = {
+        "task_kind": "douyin_leads",
+        "action": str(action or "").strip() or "search_collect",
+    }
+    if isinstance(result, dict):
+        payload["mcp_result"] = result
+    selected_ids = _scheduled_douyin_selected_task_ids(source)
+    if isinstance(result, dict) and not selected_ids:
+        selected_ids = _scheduled_douyin_selected_task_ids(result)
+    if selected_ids:
+        payload.update(_scheduled_douyin_task_snapshot(selected_ids))
+    if isinstance(result, dict):
+        for key in ("search_total", "session_id", "keyword", "search_mode"):
+            value = result.get(key)
+            if value not in (None, "", []):
+                payload[key] = value
+        regions = result.get("regions")
+        if isinstance(regions, list) and regions:
+            payload["regions"] = [str(item or "").strip() for item in regions if str(item or "").strip()]
+    if "regions" not in payload:
+        payload["regions"] = _scheduled_douyin_regions(source)
+    return payload
+
+
+async def _wait_for_douyin_collect_completion(
+    selected_task_ids: List[int],
+    *,
+    timeout_seconds: float = 900.0,
+    poll_interval_seconds: float = 3.0,
+) -> Dict[str, Any]:
+    selected_ids = [task_id for task_id in selected_task_ids if _safe_int(task_id) > 0]
+    if not selected_ids:
+        return {"status": "empty", "tasks": [], "selected_video": None}
+
+    deadline = asyncio.get_running_loop().time() + max(timeout_seconds, poll_interval_seconds)
+    last_snapshot: List[Dict[str, Any]] = []
+    while True:
+        _install_douyin_origin_import_path()
+        from douyin_api import ensure_douyin_task_shape  # type: ignore
+        from douyin_api import douyin_tasks as raw_douyin_tasks  # type: ignore
+
+        task_map: Dict[int, Dict[str, Any]] = {}
+        for task in raw_douyin_tasks if isinstance(raw_douyin_tasks, list) else []:
+            if not isinstance(task, dict):
+                continue
+            task_id = _safe_int(task.get("id"))
+            if task_id <= 0 or task_id not in selected_ids:
+                continue
+            task_map[task_id] = ensure_douyin_task_shape(dict(task))
+        snapshot = [task_map[task_id] for task_id in selected_ids if task_id in task_map]
+        if snapshot:
+            last_snapshot = snapshot
+            statuses = [str(task.get("status") or "").strip().lower() for task in snapshot]
+            if statuses and all(status in {"completed", "failed"} for status in statuses):
+                return {
+                    "status": "done",
+                    "tasks": snapshot,
+                    "selected_video": snapshot[0] if snapshot else None,
+                }
+        if asyncio.get_running_loop().time() >= deadline:
+            return {
+                "status": "timeout",
+                "tasks": last_snapshot,
+                "selected_video": last_snapshot[0] if last_snapshot else None,
+            }
+        await asyncio.sleep(max(1.0, poll_interval_seconds))
+
+
+def _scheduled_douyin_collect_result_payload(
+    action: str,
+    start_result: Dict[str, Any],
+    final_state: Dict[str, Any],
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = _scheduled_douyin_result_payload(action, start_result, params)
+    tasks = final_state.get("tasks") if isinstance(final_state, dict) else []
+    selected_video = final_state.get("selected_video") if isinstance(final_state, dict) else None
+    normalized_tasks = [task for task in tasks if isinstance(task, dict)]
+    if normalized_tasks:
+        precise_customers: List[Dict[str, Any]] = []
+        total_customers = 0
+        total_high_intent = 0
+        for task in normalized_tasks:
+            comment_count = max(_safe_int(task.get("comment_count")), len(task.get("all_comments", []) or []))
+            total_customers += comment_count
+            users = [dict(row) for row in (task.get("high_intent_users", []) or []) if isinstance(row, dict)]
+            total_high_intent += len(users)
+            precise_customers.extend(users)
+        payload.update(
+            {
+                "selected_videos_total": len(normalized_tasks),
+                "total_customers": total_customers,
+                "total_high_intent": total_high_intent,
+                "precise_customers": precise_customers,
+                "high_intent_users": precise_customers,
+            }
+        )
+    if isinstance(selected_video, dict):
+        users = [dict(row) for row in (selected_video.get("high_intent_users", []) or []) if isinstance(row, dict)]
+        payload["selected_video"] = {
+            "task_id": _safe_int(selected_video.get("id")),
+            "title": str(selected_video.get("title") or "").strip(),
+            "url": str(selected_video.get("url") or "").strip(),
+            "author": str(selected_video.get("author") or "").strip(),
+            "cover_image": str(selected_video.get("cover_image") or "").strip(),
+            "comments_collected": max(
+                _safe_int(selected_video.get("comment_count")),
+                len(selected_video.get("all_comments", []) or []),
+            ),
+            "high_intent_users": users,
+            "precise_customers": users,
+        }
+    payload["final_state"] = {
+        "status": str(final_state.get("status") or "").strip(),
+        "tasks": normalized_tasks,
+    }
+    return payload
+
+
+async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    source = params if isinstance(params, dict) else {}
+    keyword = str(
+        source.get("keyword")
+        or source.get("query")
+        or source.get("search_keyword")
+        or source.get("prompt")
+        or ""
+    ).strip()
+    if not keyword:
+        return {"code": 400, "msg": "缺少采集关键词"}
+
+    max_results = max(10, min(_safe_int(source.get("max_results") or 50) or 50, 100))
+    max_videos = max(1, min(_safe_int(source.get("max_videos_per_run") or source.get("max_videos") or 1) or 1, 50))
+    comment_scroll_rounds = max(
+        20,
+        min(_safe_int(source.get("comment_scroll_rounds") or 300) or 300, 300),
+    )
+    comment_max_comments = max(
+        20,
+        min(_safe_int(source.get("comment_max_comments") or 500) or 500, 500),
+    )
+    search_mode = str(source.get("mode") or "script").strip().lower()
+    if search_mode not in {"api", "script"}:
+        search_mode = "script"
+    regions = _scheduled_douyin_regions(source)
+
+    _install_douyin_origin_import_path()
+    from douyin_api import douyin_search_collect  # type: ignore
+    from douyin_api import douyin_start_tasks  # type: ignore
+    from douyin_api import match_douyin_tasks_for_rows  # type: ignore
+    from douyin_api import normalize_douyin_search_session_result  # type: ignore
+    from douyin_api import set_tasks_from_rows  # type: ignore
+    from douyin_api import upsert_douyin_search_session_state  # type: ignore
+
+    search_result = await douyin_search_collect(
+        {
+            "keyword": keyword,
+            "max_results": max_results,
+            "mode": search_mode,
+        }
+    )
+    if _safe_int(search_result.get("code")) != 200:
+        return search_result if isinstance(search_result, dict) else {"code": 500, "msg": "抖音搜索失败"}
+
+    raw_results = search_result.get("data", []) if isinstance(search_result, dict) else []
+    normalized_results = [
+        normalize_douyin_search_session_result(item)
+        for item in (raw_results if isinstance(raw_results, list) else [])
+        if isinstance(item, dict)
+    ]
+    selected_item_keys: List[str] = [
+        str(item.get("source_item_key", "") or "").strip()
+        for item in normalized_results
+        if bool(item.get("export_selected", True))
+    ][:max_videos]
+    if not selected_item_keys:
+        selected_item_keys = [
+            str(item.get("source_item_key", "") or "").strip()
+            for item in normalized_results
+            if str(item.get("source_item_key", "") or "").strip()
+        ][:max_videos]
+        if selected_item_keys:
+            logger.warning(
+                "[SCHEDULED-TASK] douyin search_collect fallback to first search results keyword=%s keys=%s",
+                keyword,
+                selected_item_keys,
+            )
+    if not selected_item_keys:
+        return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
+
+    selected_item_key_set = {key for key in selected_item_keys if key}
+    session = upsert_douyin_search_session_state(
+        keyword=keyword,
+        account_id=search_result.get("account_id", "") if isinstance(search_result, dict) else "",
+        results=normalized_results,
+        capture_state={
+            "enabled": True,
+            "status": "running",
+            "region_values": regions,
+            "account_id": "auto",
+            "task_ids": [],
+            "selected_item_keys": selected_item_keys,
+            "matched_users": 0,
+            "precise_users": 0,
+            "last_message": f"已完成关键词“{keyword}”搜索，正在准备采集第 1 个视频的客户。",
+            "updated_at": int(datetime.now().timestamp() * 1000),
+        },
+    )
+    rows = [
+        {
+            **item,
+            "source_session_id": str(session.get("id", "") or "").strip(),
+            "source_item_key": str(item.get("source_item_key", "") or "").strip(),
+            "source_keyword": keyword,
+        }
+        for item in (session.get("results", []) if isinstance(session.get("results", []), list) else [])
+        if str(item.get("source_item_key", "") or "").strip() in selected_item_key_set
+    ]
+    if not rows:
+        rows = [
+            {
+                **item,
+                "source_session_id": str(session.get("id", "") or "").strip(),
+                "source_item_key": str(item.get("source_item_key", "") or "").strip(),
+                "source_keyword": keyword,
+                "export_selected": True,
+            }
+            for item in normalized_results
+            if str(item.get("source_item_key", "") or "").strip() in selected_item_key_set
+        ]
+        if rows:
+            logger.warning(
+                "[SCHEDULED-TASK] douyin search_collect rebuilt rows from normalized results keyword=%s keys=%s",
+                keyword,
+                selected_item_keys,
+            )
+    if not rows:
+        return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
+
+    set_tasks_from_rows(rows)
+    matched_tasks = match_douyin_tasks_for_rows(rows)
+    task_ids = [int(task.get("id", 0) or 0) for task in matched_tasks if int(task.get("id", 0) or 0) > 0]
+    if not task_ids:
+        return {"code": 400, "msg": f"关键词“{keyword}”本次没有匹配到可执行任务。"}
+
+    upsert_douyin_search_session_state(
+        keyword=keyword,
+        account_id=search_result.get("account_id", "") if isinstance(search_result, dict) else "",
+        results=session.get("results", []),
+        session_id=str(session.get("id", "") or "").strip(),
+        capture_state={
+            "enabled": True,
+            "status": "running",
+            "region_values": regions,
+            "account_id": "auto",
+            "task_ids": task_ids,
+            "selected_item_keys": selected_item_keys,
+            "matched_users": 0,
+            "precise_users": 0,
+            "last_message": "搜索完成，正在对第 1 个视频采集客户。",
+            "updated_at": int(datetime.now().timestamp() * 1000),
+        },
+    )
+
+    start_result = await douyin_start_tasks(
+        request={
+            "selected_task_ids": task_ids,
+            "comment_scroll_rounds": comment_scroll_rounds,
+            "comment_max_comments": comment_max_comments,
+            "collection_mode": "script",
+        }
+    )
+    result = dict(start_result) if isinstance(start_result, dict) else {"code": 500, "msg": "抖音采集启动失败"}
+    result.update(
+        {
+            "keyword": keyword,
+            "search_mode": search_mode,
+            "regions": regions,
+            "session_id": str(session.get("id", "") or "").strip(),
+            "search_total": len(normalized_results),
+            "selected_task_ids": task_ids,
+            "selected_videos_total": len(task_ids),
+            "selected_item_keys": selected_item_keys,
+        }
+    )
+    if _safe_int(result.get("code")) == 200:
+        actual_started = max(0, _safe_int(result.get("selected_count") or len(task_ids)))
+        skipped_existing = max(0, len(task_ids) - actual_started)
+        result["msg"] = (
+            f"搜索完成，找到 {len(normalized_results)} 个视频；已开始采集第 1 个视频的客户。"
+            + (f" 已跳过 {skipped_existing} 个已完成任务。" if skipped_existing else "")
+        )
+    return result
+
+
+async def _run_scheduled_douyin_leads(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+    *,
+    jwt_token: str,
+    installation_id: str,
+) -> None:
+    _ = (jwt_token, installation_id)
+    run_id = str(item.get("id") or "").strip()
+    payload = _scheduled_payload(item)
+    action = str(payload.get("action") or "").strip().lower()
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if not run_id or not action:
+        return
+    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行抖音获客任务：{action}"})
+    try:
+        if action == "search_collect":
+            result = await _run_scheduled_douyin_search_collect_action(params)
+        else:
+            raise RuntimeError(f"暂不支持的抖音获客任务类型：{action}")
+
+        if _scheduled_is_douyin_skip_result(result):
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text="本次没有新的可执行采集任务，已自动跳过重复或已完成的任务。",
+                result_payload=_scheduled_douyin_skip_payload("douyin_leads", result, {"action": action, **params}),
+            )
+            return
+
+        code = _safe_int(result.get("code") if isinstance(result, dict) else 0)
+        error_text = ""
+        if isinstance(result, dict):
+            error_text = str(result.get("msg") or result.get("detail") or "").strip()
+        if code and code != 200:
+            if _scheduled_is_douyin_skip_error_text(error_text):
+                await _complete_task_run(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    result_text="本次没有新的可执行采集任务，已自动跳过重复或已完成的任务。",
+                    result_payload=_scheduled_douyin_skip_payload("douyin_leads", result, {"action": action, **params}),
+                )
+                return
+            raise RuntimeError(error_text or f"douyin_leads {action} failed")
+
+        if action == "search_collect" and isinstance(result, dict):
+            selected_task_ids = _scheduled_douyin_selected_task_ids(result)
+            if selected_task_ids:
+                await _post_task_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    "progress",
+                    {
+                        "text": "已启动采集任务，正在等待最终结果。",
+                        "action": action,
+                        "progress": 65,
+                        "stats": {
+                            "videos_found": _safe_int(result.get("search_total") or 0),
+                            "selected_task_id": selected_task_ids[0] if selected_task_ids else 0,
+                            "selected_tasks_total": len(selected_task_ids),
+                        },
+                    },
+                )
+                final_state = await _wait_for_douyin_collect_completion(selected_task_ids)
+                result_payload = _scheduled_douyin_collect_result_payload(action, result, final_state, params)
+                selected_video = result_payload.get("selected_video") if isinstance(result_payload.get("selected_video"), dict) else {}
+                comments_collected = max(
+                    _safe_int(selected_video.get("comments_collected")),
+                    _safe_int(result_payload.get("total_customers")),
+                )
+                precise_total = max(
+                    len(result_payload.get("precise_customers") or []),
+                    _safe_int(result_payload.get("total_high_intent")),
+                )
+                search_total = _safe_int(result.get("search_total") or result_payload.get("search_total"))
+                final_status = str((final_state or {}).get("status") or "").strip().lower()
+                if final_status == "done":
+                    result_text = (
+                        f"搜索完成，找到 {search_total} 个视频；"
+                        f"已采集第 1 个视频的客户 {comments_collected} 人，精准客户 {precise_total} 人。"
+                    )
+                elif final_status == "timeout":
+                    result_text = (
+                        f"搜索完成，找到 {search_total} 个视频；"
+                        "采集任务仍在执行，结果会继续同步。"
+                    )
+                else:
+                    result_text = (
+                        str(result.get("msg") or "").strip()
+                        or _compact_result_text(result)
+                    )
+                await _complete_task_run(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    result_text=result_text,
+                    result_payload=result_payload,
+                )
+                return
+
+        result_text = (
+            str(result.get("msg") or "").strip()
+            if isinstance(result, dict)
+            else ""
+        ) or _compact_result_text(result)
+        await _complete_task_run(
+            cloud,
+            base,
+            headers,
+            run_id,
+            result_text=result_text,
+            result_payload=_scheduled_douyin_result_payload(action, result, params),
+        )
+    except Exception as exc:
+        logger.exception("[SCHEDULED-TASK] douyin leads failed run_id=%s action=%s", run_id, action)
+        error_text = str(exc).strip() or exc.__class__.__name__
+        if _scheduled_is_douyin_skip_error_text(error_text):
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text="本次没有新的可执行采集任务，已自动跳过重复或已完成的任务。",
+                result_payload=_scheduled_douyin_skip_payload("douyin_leads", {"msg": error_text}, {"action": action, **(params or {})}),
+            )
+            return
+        await _complete_task_run(cloud, base, headers, run_id, error=error_text[:500] or "douyin leads failed")
+
+
 def _goal_video_pipeline_has_video_result(result: Any) -> bool:
     if not isinstance(result, dict):
         return False
@@ -2958,6 +3535,16 @@ async def _run_scheduled_capability(
             capability_id=capability_id,
             cap_payload=cap_payload,
         )
+        if _scheduled_is_douyin_skip_result(result):
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text="本次没有新的可执行采集任务，已自动跳过重复或已完成的任务。",
+                result_payload=_scheduled_douyin_skip_payload(capability_id, result, cap_payload),
+            )
+            return
         cap_error = _scheduled_capability_error(result)
         if cap_error:
             raise RuntimeError(cap_error)
@@ -2972,6 +3559,16 @@ async def _run_scheduled_capability(
     except Exception as exc:
         logger.exception("[SCHEDULED-TASK] capability failed run_id=%s capability_id=%s", run_id, capability_id)
         error_text = str(exc).strip() or exc.__class__.__name__
+        if _scheduled_is_douyin_skip_error_text(error_text):
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text="本次没有新的可执行采集任务，已自动跳过重复或已完成的任务。",
+                result_payload=_scheduled_douyin_skip_payload(capability_id, locals().get("result"), cap_payload),
+            )
+            return
         partial = (
             exc.partial_result
             if isinstance(exc, PipelinePartialResultError) and isinstance(exc.partial_result, dict)
@@ -3028,6 +3625,15 @@ async def _process_scheduled_task(
     kind = str(item.get("task_kind") or "openclaw_message").strip().lower()
     if kind == "capability":
         await _run_scheduled_capability(
+            client,
+            base,
+            headers,
+            item,
+            jwt_token=jwt_token,
+            installation_id=installation_id,
+        )
+    elif kind == "douyin_leads":
+        await _run_scheduled_douyin_leads(
             client,
             base,
             headers,

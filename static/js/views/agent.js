@@ -162,6 +162,11 @@
     }[s] || (status || '处理中');
   }
 
+  function isSkippedRun(run) {
+    var rp = run && run.resultPayload && typeof run.resultPayload === 'object' ? run.resultPayload : {};
+    return !!(rp && rp.skipped);
+  }
+
   function capabilityLabel(run) {
     var payload = run && run.payload && typeof run.payload === 'object' ? run.payload : {};
     var capabilityId = String(payload.capability_id || '').trim();
@@ -183,6 +188,17 @@
       'create.ppt.pipeline': 'PPT 生成',
       'hifly.video.create_by_tts': '数字人口播'
     }[capabilityId] || capabilityId || String(run && run.task_kind || '任务');
+  }
+
+  function isInstructionalResultText(value) {
+    var text = compactText(value, '');
+    if (!text) return false;
+    return text.indexOf('统计说明') >= 0
+      || text.indexOf('上报口径') >= 0
+      || text.indexOf('精准客户\t') >= 0
+      || text.indexOf('关注/评论客户') >= 0
+      || text.indexOf('私信客户') >= 0
+      || text.indexOf('视频评论数') >= 0;
   }
 
   function compactText(value, fallback) {
@@ -252,6 +268,103 @@
     return media[media.length - 1] || null;
   }
 
+  function asArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function firstMeaningful() {
+    var i;
+    for (i = 0; i < arguments.length; i += 1) {
+      if (hasMeaningfulText(arguments[i])) return String(arguments[i]).trim();
+    }
+    return '';
+  }
+
+  function resultPayloadRoot(run) {
+    return run && run.resultPayload && typeof run.resultPayload === 'object' ? run.resultPayload : {};
+  }
+
+  function resultPayloadMcp(run) {
+    var root = resultPayloadRoot(run);
+    return root.mcp_result && typeof root.mcp_result === 'object' ? root.mcp_result : {};
+  }
+
+  function resultPayloadSelectedVideo(run) {
+    var root = resultPayloadRoot(run);
+    var mcp = resultPayloadMcp(run);
+    if (root.selected_video && typeof root.selected_video === 'object') return root.selected_video;
+    if (mcp.selected_video && typeof mcp.selected_video === 'object') return mcp.selected_video;
+    return {};
+  }
+
+  function resultPayloadCustomers(run) {
+    var root = resultPayloadRoot(run);
+    var mcp = resultPayloadMcp(run);
+    var selectedVideo = resultPayloadSelectedVideo(run);
+    var lists = [
+      root.precise_customers,
+      root.high_intent_users,
+      selectedVideo.precise_customers,
+      selectedVideo.high_intent_users,
+      mcp.precise_customers,
+      mcp.high_intent_users
+    ];
+    var seen = {};
+    var rows = [];
+    lists.forEach(function (list) {
+      asArray(list).forEach(function (item) {
+        if (!item || typeof item !== 'object') return;
+        var key = [
+          firstMeaningful(item.comment_id, item.cid, item.id),
+          firstMeaningful(item.sec_user_id, item.sec_uid, item.user_id),
+          firstMeaningful(item.nickname, item.user_name, item.display_name),
+          firstMeaningful(item.comment_text, item.comment, item.text, item.content)
+        ].join('||');
+        if (seen[key]) return;
+        seen[key] = true;
+        rows.push({
+          nickname: firstMeaningful(item.nickname, item.username, item.user_name, item.display_name, item.name, '未命名客户'),
+          commentText: firstMeaningful(item.comment_text, item.comment, item.text, item.content),
+          reason: firstMeaningful(item.intent_reason, item.reason, item.ai_reason, item.summary),
+          score: firstMeaningful(item.score, item.intent_score, item.confidence),
+          profileUrl: firstMeaningful(item.profile_url, item.homepage, item.user_profile_url),
+          sourceVideoTitle: firstMeaningful(item.video_title, item.source_video_title, item.aweme_title),
+          sourceVideoUrl: firstMeaningful(item.video_url, item.source_video_url, item.aweme_url)
+        });
+      });
+    });
+    return rows;
+  }
+
+  function resultPayloadSummaryStats(run) {
+    var root = resultPayloadRoot(run);
+    var mcp = resultPayloadMcp(run);
+    var selectedVideo = resultPayloadSelectedVideo(run);
+    var customers = resultPayloadCustomers(run);
+    var selectedVideoHighIntentCount = asArray(selectedVideo.high_intent_users).length || asArray(selectedVideo.precise_customers).length || 0;
+    var rootHighIntentCount = asArray(root.precise_customers).length || asArray(root.high_intent_users).length || 0;
+    var mcpHighIntentCount = asArray(mcp.precise_customers).length || asArray(mcp.high_intent_users).length || 0;
+    return {
+      searchVideosTotal: firstMeaningful(root.search_videos_total, mcp.search_videos_total, root.total_videos, mcp.total_videos),
+      commentsCollected: firstMeaningful(
+        selectedVideo.comments_collected,
+        root.total_customers,
+        mcp.total_customers,
+        root.all_customers,
+        mcp.all_customers
+      ),
+      highIntentUsers: firstMeaningful(
+        selectedVideo.high_intent_count,
+        root.total_high_intent,
+        mcp.total_high_intent,
+        selectedVideoHighIntentCount ? selectedVideoHighIntentCount : '',
+        rootHighIntentCount ? rootHighIntentCount : '',
+        mcpHighIntentCount ? mcpHighIntentCount : '',
+        customers.length ? customers.length : ''
+      )
+    };
+  }
+
   function openMediaLightbox(item, title) {
     var modal = el('agentMediaLightbox');
     var stage = el('agentMediaLightboxStage');
@@ -291,6 +404,16 @@
       .replace(/^执行抖音获客任务[:：]?\s*/i, '')
       .replace(/^执行任务[:：]?\s*/i, '')
       .trim();
+    if (/^(search_collect|tasks_from_search|comment_collect|interaction|stranger_collect|stranger_send)$/i.test(out)) {
+      return ({
+        search_collect: '采集客户',
+        tasks_from_search: '同步任务池',
+        comment_collect: '评论采集',
+        interaction: '精准私信',
+        stranger_collect: '陌生人私信采集',
+        stranger_send: '陌生人私信发送'
+      })[out.toLowerCase()] || out;
+    }
     return out || '已收到手机任务，正在处理中';
   }
 
@@ -450,22 +573,25 @@
 
   function workerStateLabel(run) {
     if (!run) return '等待中';
+    if (isSkippedRun(run)) return '已完成';
     return statusLabel(run.status);
   }
 
   function workerDetailText(run) {
     if (!run) return '等待新的任务接入';
+    if (isSkippedRun(run) && hasMeaningfulText(run.resultText)) return compactText(run.resultText, '');
     if (hasMeaningfulText(run.progressDetail)) return compactText(run.progressDetail, '');
     if (hasMeaningfulText(run.title)) return compactText(run.title, '');
     if (hasMeaningfulText(run.content)) return compactText(run.content, '');
     if (hasMeaningfulText(run.resultText) && String(run.status).toLowerCase() === 'completed') return compactText(run.resultText, '');
-    if (hasMeaningfulText(run.error)) return compactText(run.error, '');
+    if (!isSkippedRun(run) && hasMeaningfulText(run.error)) return compactText(run.error, '');
     return capabilityLabel(run) + '正在处理';
   }
 
   function workerProgress(run) {
     if (!run) return 0;
     if (run.progressPercent != null && run.progressPercent !== '') return clampPercent(run.progressPercent);
+    if (isSkippedRun(run)) return 100;
     if (String(run.status).toLowerCase() === 'completed') return 100;
     if (String(run.status).toLowerCase() === 'failed' || String(run.status).toLowerCase() === 'cancelled') return 100;
     return inferProgress(run, null) || 16;
@@ -541,6 +667,7 @@
         avatar: workerAvatar(run, index),
         state: workerStateLabel(run),
         statusText: (function () {
+          if (isSkippedRun(run)) return compactText(run.resultText || '已跳过重复任务，已展示历史结果', workerStateLabel(run));
           var lowered = String(run.status || '').toLowerCase();
           if (lowered === 'completed' || lowered === 'failed' || lowered === 'cancelled') return workerStateLabel(run);
           return compactText(run.progressDetail || run.progressLabel || run.title || '', workerStateLabel(run));
@@ -826,7 +953,7 @@
           status: ''
         });
       }
-      if (run.error) {
+      if (run.error && !isSkippedRun(run)) {
         appendEvent(items, {
           type: 'error',
           title: '任务失败',
@@ -848,31 +975,6 @@
       deduped.push(item);
     });
     return deduped.slice(0, 4);
-  }
-
-  function collectResultRows(run, message) {
-    var rows = [];
-    if (run && run.resultPayload && typeof run.resultPayload === 'object') {
-      var rp = run.resultPayload;
-      if (rp.search_videos_total != null) rows.push({ label: '命中视频', value: String(rp.search_videos_total) });
-      if (rp.selected_video && typeof rp.selected_video === 'object') {
-        if (rp.selected_video.comments_collected != null) rows.push({ label: '采集客户', value: String(rp.selected_video.comments_collected) });
-        if (rp.selected_video.high_intent_users != null) rows.push({ label: '精准客户', value: String(rp.selected_video.high_intent_users) });
-      }
-      if (Array.isArray(rp.media_urls) && rp.media_urls.length) {
-        rows.push({ label: '素材结果', value: rp.media_urls.length + ' 个文件已生成' });
-      }
-      if (rp.publish_draft) {
-        rows.push({ label: '发布草稿', value: '已生成草稿，可继续发布' });
-      }
-    }
-    if (run && run.resultText) rows.push({ label: '结果摘要', value: compactText(run.resultText, '') });
-    if (run && run.error) rows.push({ label: '错误信息', value: compactText(run.error, '') });
-    if (!rows.length && message && message.replyText) rows.push({ label: '回复内容', value: compactText(message.replyText, '') });
-    if (!rows.length && message && message.error) rows.push({ label: '错误信息', value: compactText(message.error, '') });
-    return rows.filter(function (row) {
-      return hasMeaningfulText(row && row.value);
-    }).slice(0, 4);
   }
 
   function renderTimeline(items) {
@@ -898,40 +1000,28 @@
     }).join('');
   }
 
-  function renderResult(rows) {
-    var card = el('agentResultCard');
-    var body = el('agentResultBody');
-    if (!card || !body) return;
-    if (!rows || !rows.length) {
-      card.hidden = true;
-      body.innerHTML = '';
-      return;
-    }
-    card.hidden = false;
-    body.innerHTML = rows.map(function (row) {
-      return ''
-        + '<div class="agent-result-row">'
-        + '  <span>' + h(row.label || '') + '</span>'
-        + '  <strong>' + h(row.value || '') + '</strong>'
-        + '</div>';
-    }).join('');
-  }
-
   function collectResultRows(run, message) {
     var rows = [];
     var primaryMedia = pickPrimaryMedia(run);
     if (run && run.resultPayload && typeof run.resultPayload === 'object') {
       var rp = run.resultPayload;
-      if (rp.search_videos_total != null) rows.push({ label: '命中视频', value: String(rp.search_videos_total) });
-      if (rp.selected_video && typeof rp.selected_video === 'object') {
-        if (rp.selected_video.comments_collected != null) rows.push({ label: '采集客户', value: String(rp.selected_video.comments_collected) });
-        if (rp.selected_video.high_intent_users != null) rows.push({ label: '精准客户', value: String(rp.selected_video.high_intent_users) });
-      }
+      var stats = resultPayloadSummaryStats(run);
+      var preciseCustomers = resultPayloadCustomers(run);
+      if (hasMeaningfulText(stats.searchVideosTotal)) rows.push({ label: '命中视频', value: String(stats.searchVideosTotal) });
+      if (hasMeaningfulText(stats.commentsCollected)) rows.push({ label: '采集客户', value: String(stats.commentsCollected) });
+      if (hasMeaningfulText(stats.highIntentUsers)) rows.push({ label: '精准客户', value: String(stats.highIntentUsers) });
       if (Array.isArray(rp.media_urls) && rp.media_urls.length) {
         rows.push({ label: '素材结果', value: rp.media_urls.length + ' 个文件已生成' });
       }
       if (rp.publish_draft) {
         rows.push({ label: '发布草稿', value: '已生成草稿，可继续发布' });
+      }
+      if (preciseCustomers.length) {
+        rows.push({
+          label: '精准客户列表',
+          kind: 'customer-list',
+          customers: preciseCustomers.slice(0, 8)
+        });
       }
     }
     if (primaryMedia) {
@@ -943,14 +1033,17 @@
         note: '已加入素材库，可直接在素材库中继续查看和使用。'
       });
     }
-    if (run && run.resultText && !primaryMedia) rows.push({ label: '结果摘要', value: compactText(run.resultText, '') });
-    if (run && run.error) rows.push({ label: '错误信息', value: compactText(run.error, '') });
+    if (run && run.resultText && !primaryMedia && !isInstructionalResultText(run.resultText)) {
+      rows.push({ label: isSkippedRun(run) ? '处理结果' : '结果摘要', value: compactText(run.resultText, '') });
+    }
+    if (run && run.error && !isSkippedRun(run)) rows.push({ label: '错误信息', value: compactText(run.error, '') });
     if (!rows.length && message && message.replyText) rows.push({ label: '回复内容', value: compactText(message.replyText, '') });
     if (!rows.length && message && message.error) rows.push({ label: '错误信息', value: compactText(message.error, '') });
     return rows.filter(function (row) {
       if (row && row.kind === 'media') return !!(row.media && row.media.url);
+      if (row && row.kind === 'customer-list') return Array.isArray(row.customers) && row.customers.length > 0;
       return hasMeaningfulText(row && row.value);
-    }).slice(0, primaryMedia ? 3 : 4);
+    }).slice(0, primaryMedia ? 4 : 5);
   }
 
   function renderResult(rows) {
@@ -978,6 +1071,38 @@
           + '    <span class="agent-result-media-action">' + h(row.media.type === 'video' ? '查看视频' : '放大查看') + '</span>'
           + '  </button>'
           + (hasMeaningfulText(row.note) ? '  <div class="agent-result-media-note">' + h(row.note) + '</div>' : '')
+          + '</div>';
+      }
+      if (row && row.kind === 'customer-list' && Array.isArray(row.customers) && row.customers.length) {
+        return ''
+          + '<div class="agent-customer-list-card">'
+          + '  <div class="agent-customer-list-head">'
+          + '    <span>' + h(row.label || '精准客户列表') + '</span>'
+          + '    <strong>' + h(String(row.customers.length)) + ' 人</strong>'
+          + '  </div>'
+          + '  <div class="agent-customer-list-body">'
+          + row.customers.map(function (customer) {
+            var meta = [];
+            if (hasMeaningfulText(customer.reason)) meta.push(customer.reason);
+            if (hasMeaningfulText(customer.score)) meta.push('评分 ' + customer.score);
+            if (hasMeaningfulText(customer.sourceVideoTitle)) meta.push('来源：' + customer.sourceVideoTitle);
+            return ''
+              + '<article class="agent-customer-item">'
+              + '  <div class="agent-customer-item-top">'
+              + '    <strong>' + h(customer.nickname || '未命名客户') + '</strong>'
+              + (hasMeaningfulText(customer.profileUrl)
+                ? '    <a href="' + h(customer.profileUrl) + '" target="_blank" rel="noopener noreferrer">查看主页</a>'
+                : '')
+              + '  </div>'
+              + (hasMeaningfulText(customer.commentText)
+                ? '  <p class="agent-customer-comment">' + h(customer.commentText) + '</p>'
+                : '  <p class="agent-customer-comment is-empty">暂无客户评论内容</p>')
+              + (meta.length
+                ? '  <div class="agent-customer-meta">' + h(meta.join(' · ')) + '</div>'
+                : '')
+              + '</article>';
+          }).join('')
+          + '  </div>'
           + '</div>';
       }
       return ''
