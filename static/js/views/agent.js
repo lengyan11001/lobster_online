@@ -6,6 +6,7 @@
   var POLL_MS = 5000;
   var REFRESH_DEBOUNCE_MS = 1200;
   var SWARM_PAGE_SIZE = 10;
+  var SYNC_CACHE_GRACE_MS = 60000;
 
   var state = {
     loadedSubUsers: false,
@@ -21,7 +22,10 @@
     destroyed: false,
     selectedSwarmId: '',
     lastSnapshot: null,
-    swarmVisibleCount: SWARM_PAGE_SIZE
+    swarmVisibleCount: SWARM_PAGE_SIZE,
+    lastMessageItems: [],
+    lastRunItems: [],
+    lastSuccessSyncAt: 0
   };
 
   function localBase() {
@@ -101,6 +105,24 @@
     var base = localBase();
     if (!base) return Promise.reject(new Error('本地服务地址未配置'));
     return fetch(base + path, { headers: headers() }).then(parseJsonResponse);
+  }
+
+  function buildDashboardSnapshot(messageItems, runItems) {
+    var msg = latestMessage(messageItems);
+    var run = latestRun(runItems);
+    return {
+      headline: buildHeadline(run, msg),
+      voicePrompt: buildVoicePrompt(msg),
+      onlineDevices: String(msg ? 1 : 0),
+      runningRuns: String(activeRuns(runItems).length),
+      stageLabel: buildStageLabel(run, msg),
+      stageDetail: buildStageDetail(run, msg),
+      progressPercent: inferProgress(run, msg),
+      subtitle: buildSubtitle(run, msg),
+      swarmItems: buildSwarmItems(runItems, msg),
+      timeline: buildTimeline(msg, run),
+      resultRows: collectResultRows(run, msg)
+    };
   }
 
   function fmtTime(value) {
@@ -1391,27 +1413,62 @@
     if (!force && now - state.lastRefreshAt < REFRESH_DEBOUNCE_MS) return Promise.resolve(false);
     state.inFlight = true;
     state.lastRefreshAt = now;
-    return Promise.all([
+    return Promise.allSettled([
       fetchJson('/api/h5-chat/messages?limit=40'),
       fetchJson('/api/scheduled-tasks/runs?limit=80')
     ]).then(function (results) {
-      var messageItems = Array.isArray(results[0] && results[0].messages) ? results[0].messages.map(normalizeMessageItem) : [];
-      var runItems = Array.isArray(results[1] && results[1].runs) ? results[1].runs.map(normalizeRun) : [];
-      var msg = latestMessage(messageItems);
-      var run = latestRun(runItems);
-      var snapshot = {
-        headline: buildHeadline(run, msg),
-        voicePrompt: buildVoicePrompt(msg),
-        onlineDevices: String(msg ? 1 : 0),
-        runningRuns: String(activeRuns(runItems).length),
-        stageLabel: buildStageLabel(run, msg),
-        stageDetail: buildStageDetail(run, msg),
-        progressPercent: inferProgress(run, msg),
-        subtitle: buildSubtitle(run, msg),
-        swarmItems: buildSwarmItems(runItems, msg),
-        timeline: buildTimeline(msg, run),
-        resultRows: collectResultRows(run, msg)
-      };
+      var messageResult = results[0];
+      var runResult = results[1];
+
+      if (messageResult && messageResult.status === 'fulfilled') {
+        state.lastMessageItems = Array.isArray(messageResult.value && messageResult.value.messages)
+          ? messageResult.value.messages.map(normalizeMessageItem)
+          : [];
+      }
+
+      if (runResult && runResult.status === 'fulfilled') {
+        state.lastRunItems = Array.isArray(runResult.value && runResult.value.runs)
+          ? runResult.value.runs.map(normalizeRun)
+          : [];
+      }
+
+      var messageItems = Array.isArray(state.lastMessageItems) ? state.lastMessageItems : [];
+      var runItems = Array.isArray(state.lastRunItems) ? state.lastRunItems : [];
+      var hasAnyFreshResult = (messageResult && messageResult.status === 'fulfilled') || (runResult && runResult.status === 'fulfilled');
+      if (hasAnyFreshResult && (messageItems.length || runItems.length)) {
+        state.lastSuccessSyncAt = Date.now();
+      }
+
+      var cacheAge = state.lastSuccessSyncAt > 0 ? (Date.now() - state.lastSuccessSyncAt) : Infinity;
+      if ((messageItems.length || runItems.length) && cacheAge <= SYNC_CACHE_GRACE_MS) {
+        var snapshotFromCache = buildDashboardSnapshot(messageItems, runItems);
+        renderSnapshot(snapshotFromCache);
+        return true;
+      }
+
+      if (!messageItems.length && !runItems.length) {
+        var reasons = [];
+        if (messageResult && messageResult.status === 'rejected') {
+          reasons.push(messageResult.reason && messageResult.reason.message ? messageResult.reason.message : String(messageResult.reason || ''));
+        }
+        if (runResult && runResult.status === 'rejected') {
+          reasons.push(runResult.reason && runResult.reason.message ? runResult.reason.message : String(runResult.reason || ''));
+        }
+        throw new Error(compactText(reasons.join('；'), '当前无法获取执行状态，请稍后重试'));
+      }
+
+      if (!hasAnyFreshResult) {
+        var staleReasons = [];
+        if (messageResult && messageResult.status === 'rejected') {
+          staleReasons.push(messageResult.reason && messageResult.reason.message ? messageResult.reason.message : String(messageResult.reason || ''));
+        }
+        if (runResult && runResult.status === 'rejected') {
+          staleReasons.push(runResult.reason && runResult.reason.message ? runResult.reason.message : String(runResult.reason || ''));
+        }
+        throw new Error(compactText(staleReasons.join('；'), '当前无法获取最新执行状态，请稍后重试'));
+      }
+
+      var snapshot = buildDashboardSnapshot(messageItems, runItems);
       renderSnapshot(snapshot);
       return true;
     }).catch(function (err) {
