@@ -877,6 +877,14 @@ def _local_chat_url() -> str:
     return f"http://127.0.0.1:{port}/chat/stream"
 
 
+def _local_api_url(path: str) -> str:
+    port = int(getattr(settings, "port", 8000) or 8000)
+    suffix = str(path or "").strip()
+    if not suffix.startswith("/"):
+        suffix = "/" + suffix
+    return f"http://127.0.0.1:{port}{suffix}"
+
+
 def _extract_mobile_upload_attachments(content: str) -> tuple[str, List[str], List[str]]:
     raw = str(content or "")
     match = _MOBILE_UPLOAD_BLOCK_RE.search(raw)
@@ -3307,7 +3315,12 @@ async def _run_scheduled_capability(
                     raise RuntimeError("请选择数字人")
                 if not voice:
                     raise RuntimeError("请选择声音")
-                skill_prompt = _hifly_script_text(generated.get("script")) or _fallback_hifly_script(task_title)
+                skill_prompt = (
+                    _hifly_script_text(cap_payload.get("script"))
+                    or _hifly_script_text(cap_payload.get("text"))
+                    or _hifly_script_text(generated.get("script"))
+                    or _fallback_hifly_script(task_title)
+                )
                 cap_payload = {
                     "title": (generated.get("title") or task_title or "数字人口播")[:20],
                     "avatar": avatar,
@@ -3614,6 +3627,175 @@ async def _run_scheduled_capability(
         await _complete_task_run(cloud, base, headers, run_id, error=error_text[:500] or "capability failed")
 
 
+async def _post_local_api_json(
+    path: str,
+    body: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    timeout_seconds: float = 7200.0,
+) -> Dict[str, Any]:
+    timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
+        resp = await local.post(_local_api_url(path), json=body or {}, headers=_local_chat_headers(headers))
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"detail": (resp.text or "")[:1000]}
+    if resp.status_code >= 400:
+        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+    if isinstance(data, dict) and data.get("ok") is False:
+        raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
+    return data if isinstance(data, dict) else {"result": data}
+
+
+async def _run_client_workflow_action(
+    action: str,
+    params: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    run_id: str,
+) -> Dict[str, Any]:
+    source = params if isinstance(params, dict) else {}
+    if action == "local_bestseller_plan":
+        return await _post_local_api_json(
+            "/api/local-bestseller/plan",
+            {
+                "profile": source.get("profile") if isinstance(source.get("profile"), dict) else {},
+                "days": max(1, min(_safe_int(source.get("days") or 30), 30)),
+            },
+            headers=headers,
+        )
+    if action == "local_bestseller_scene_batch":
+        return await _post_local_api_json(
+            "/api/local-bestseller/scene/batch",
+            {
+                "profile": source.get("profile") if isinstance(source.get("profile"), dict) else {},
+                "days": max(1, min(_safe_int(source.get("days") or 30), 30)),
+                "model": str(source.get("model") or "gpt-image-2").strip() or "gpt-image-2",
+                "quality": str(source.get("quality") or "high").strip() or "high",
+            },
+            headers=headers,
+        )
+    if action == "viral_video_remix_start":
+        body = {
+            "original_video_url": str(source.get("original_video_url") or "").strip(),
+            "character_image_url": str(source.get("character_image_url") or "").strip(),
+            "product_image_url": str(source.get("product_image_url") or "").strip(),
+            "prompt": str(source.get("prompt") or "").strip(),
+            "audio_prompt": str(source.get("audio_prompt") or "").strip(),
+            "narration_script": str(source.get("narration_script") or "").strip(),
+            "model": str(source.get("model") or "grok-imagine-video-1.5-preview").strip() or "grok-imagine-video-1.5-preview",
+            "ratio": str(source.get("ratio") or "9:16").strip() or "9:16",
+            "resolution": str(source.get("resolution") or "720p").strip() or "720p",
+            "duration": max(5, min(_safe_int(source.get("duration") or 10), 10)),
+            "generate_audio": bool(source.get("generate_audio", True)),
+            "watermark": bool(source.get("watermark", False)),
+            "use_character_reference": bool(source.get("use_character_reference") or source.get("character_image_url")),
+            "billing_confirmed": bool(source.get("billing_confirmed", True)),
+        }
+        if not body["original_video_url"]:
+            raise RuntimeError("爆款复刻缺少参考视频链接")
+        if not (body["character_image_url"] or body["product_image_url"]):
+            raise RuntimeError("爆款复刻需要人物图或产品图")
+        return await _post_local_api_json("/api/viral-video-remix/seedance/start", body, headers=headers)
+    if action == "wecom_poll_reply":
+        return await _post_local_api_json("/api/wecom/poll-and-reply", {}, headers=headers, timeout_seconds=300.0)
+    if action == "publish_content":
+        material = str(source.get("asset_id") or "").strip()
+        source_url = str(source.get("url") or "").strip()
+        save_result: Dict[str, Any] = {}
+        if not material and source_url:
+            save_result = await _post_local_api_json(
+                "/api/assets/save-url",
+                {
+                    "url": source_url,
+                    "media_type": str(source.get("media_type") or "video").strip() or "video",
+                    "name": str(source.get("name") or source.get("title") or "H5安排工作素材").strip(),
+                    "tags": str(source.get("tags") or "H5安排工作").strip(),
+                    "prompt": str(source.get("description") or source.get("title") or "").strip(),
+                },
+                headers=headers,
+                timeout_seconds=1200.0,
+            )
+            material = str(save_result.get("asset_id") or "").strip()
+        if not material:
+            raise RuntimeError("发布中心入库缺少素材 ID 或公网链接")
+        account_nickname = str(source.get("account_nickname") or "").strip()
+        if not account_nickname:
+            raise RuntimeError("发布中心入库缺少发布账号昵称")
+        publish_result = await _post_local_api_json(
+            "/api/publish",
+            {
+                "asset_id": material,
+                "account_nickname": account_nickname,
+                "title": str(source.get("title") or "").strip() or None,
+                "description": str(source.get("description") or "").strip() or None,
+                "tags": str(source.get("tags") or "").strip() or None,
+                "ai_publish_copy": bool(source.get("ai_publish_copy", True)),
+                "options": source.get("options") if isinstance(source.get("options"), dict) else {},
+            },
+            headers=headers,
+            timeout_seconds=7200.0,
+        )
+        return {
+            "ok": True,
+            "asset_id": material,
+            "save_result": save_result,
+            "publish_result": publish_result,
+        }
+    raise RuntimeError(f"暂不支持的客户端工作流：{action}")
+
+
+def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
+    if action.startswith("local_bestseller"):
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        return f"同城爆款任务完成，已生成 {len(items)} 条内容。" if items else "同城爆款任务已完成。"
+    if action == "viral_video_remix_start":
+        task_id = str(result.get("task_id") or result.get("job_id") or "").strip()
+        return "爆款复刻任务已提交到客户端。" + (f" 任务ID：{task_id}" if task_id else "")
+    if action == "wecom_poll_reply":
+        return "企业微信客服已执行一次拉取与自动回复检查。"
+    if action == "publish_content":
+        asset_id = str(result.get("asset_id") or "").strip()
+        publish_result = result.get("publish_result") if isinstance(result.get("publish_result"), dict) else {}
+        status = str(publish_result.get("status") or publish_result.get("state") or "").strip()
+        return "发布中心任务已提交。" + (f" 素材：{asset_id}" if asset_id else "") + (f" 状态：{status}" if status else "")
+    return _compact_result_text(result)
+
+
+async def _run_client_workflow(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+) -> None:
+    run_id = str(item.get("id") or "").strip()
+    payload = _scheduled_payload(item)
+    action = str(payload.get("action") or "").strip()
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if not run_id or not action:
+        return
+    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行客户端工作流：{action}"})
+    try:
+        result = await _run_client_workflow_action(action, params, headers=headers, run_id=run_id)
+        await _complete_task_run(
+            cloud,
+            base,
+            headers,
+            run_id,
+            result_text=_client_workflow_result_text(action, result),
+            result_payload={
+                "task_kind": "client_workflow",
+                "action": action,
+                "params": params,
+                "local_result": result,
+            },
+        )
+    except Exception as exc:
+        logger.exception("[SCHEDULED-TASK] client workflow failed run_id=%s action=%s", run_id, action)
+        await _complete_task_run(cloud, base, headers, run_id, error=(str(exc).strip() or "client workflow failed")[:500])
+
+
 async def _process_scheduled_task(
     client: httpx.AsyncClient,
     base: str,
@@ -3632,6 +3814,8 @@ async def _process_scheduled_task(
             jwt_token=jwt_token,
             installation_id=installation_id,
         )
+    elif kind == "client_workflow":
+        await _run_client_workflow(client, base, headers, item)
     elif kind == "douyin_leads":
         await _run_scheduled_douyin_leads(
             client,
