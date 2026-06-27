@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>必火AI获客 · 抖音视频评论</title>
     <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
-    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css?v=20260626-comment-image-picker">
     <style>
         .sidebar-group-header,
         .sidebar-subbtn { text-decoration: none; }
@@ -96,6 +96,18 @@
                                     </span>
                                     <span class="sidebar-group-copy">
                                         <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="self-comments" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="self-comments" href="/static/douyin-origin/douyin-self-comments.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M6 6.5h12a2.5 2.5 0 0 1 2.5 2.5v5.2a2.5 2.5 0 0 1-2.5 2.5h-5.4l-4.1 3.1v-3.1H6A2.5 2.5 0 0 1 3.5 14.2V9A2.5 2.5 0 0 1 6 6.5Z"></path><path d="M8 10h8"></path><path d="M8 13h5"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">我的评论区</span>
                                     </span>
                                 </span>
                             </a>
@@ -357,6 +369,23 @@
                                                 <div class="video-comment-hint">不填也可以，系统会结合视频标题和作者自动生成自然评论。这里如果你填了明确观点，系统会优先按这个观点来生成，不应该再跑到别的方向去。这个模式是重新生成一条新评论，不会按固定文案去改写。</div>
                                             </div>
                                         </div>
+                                        <div class="video-comment-panel active">
+                                            <div class="video-comment-field">
+                                                <label for="douyin-video-comment-image">评论图片（可选）</label>
+                                                <div class="comment-image-upload">
+                                                    <input type="file" id="douyin-video-comment-image" class="comment-image-input" accept="image/png,image/jpeg,image/webp,image/gif" onchange="syncDouyinCommentImageName(this)">
+                                                    <div class="comment-image-upload-main">
+                                                        <span class="comment-image-upload-icon" aria-hidden="true">图</span>
+                                                        <span class="comment-image-upload-copy">
+                                                            <span class="comment-image-upload-title">选择图片</span>
+                                                            <span class="comment-image-upload-name" id="douyin-video-comment-image-name">未选择图片</span>
+                                                        </span>
+                                                    </div>
+                                                    <span class="comment-image-upload-format">PNG / JPG / WEBP / GIF</span>
+                                                </div>
+                                                <div class="video-comment-hint">选择图片后，系统会把视频链接改成 user/self?from_tab_name=main&modal_id=视频ID 打开，再从评论面板的图片按钮上传发送。留空则保持原来的纯文字评论。</div>
+                                            </div>
+                                        </div>
                                         <div id="douyin-video-comment-rewrite-wrap" class="video-comment-panel">
                                             <div class="video-comment-field">
                                                 <label for="douyin-video-comment-seed-text">基准文案</label>
@@ -488,7 +517,7 @@
 
     <script src="/static/douyin-origin/libs/echarts-5.3.3.min.js"></script>
     <script src="/static/douyin-origin/geojson/china.js"></script>
-    <script src="/static/douyin-origin/douyin-workbench-shared.js?v=20260608-direct-routes"></script>
+    <script src="/static/douyin-origin/douyin-workbench-shared.js?v=20260626-comment-image-picker"></script>
 
 </body>
 </html>

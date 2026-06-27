@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import json
 import os
@@ -16,13 +17,13 @@ from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 import requests
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from ai_client import AIClient
 from console_safe import safe_print
 from douyin_account_nurture import DouyinAccountNurtureScheduler
 from douyin_client import DouyinClient, is_port_open
-from douyin_comment_scraper import DouyinCommentScraper, DouyinMentionCommentStopped
+from douyin_comment_scraper import DouyinCommentScraper, DouyinMentionCommentStopped, extract_aweme_id
 from runtime_paths import resolve_install_dir, resolve_runtime_root
 from state_store import RuntimeStateStore
 
@@ -53,6 +54,8 @@ DOUYIN_DATA_DIR = ROOT_DATA_DIR / "douyin"
 DOUYIN_DATA_DIR.mkdir(exist_ok=True)
 DOUYIN_DAILY_DIR = DOUYIN_DATA_DIR / "daily"
 DOUYIN_DAILY_DIR.mkdir(exist_ok=True)
+DOUYIN_COMMENT_IMAGE_DIR = DOUYIN_DATA_DIR / "comment_images"
+DOUYIN_COMMENT_IMAGE_DIR.mkdir(exist_ok=True)
 GLOBAL_CONFIG_FILE = ROOT_DATA_DIR / "config.json"
 CUSTOM_CONFIGS_FILE = BASE_DIR / "custom_configs.json"
 SEARCH_HISTORY_FILE = DOUYIN_DATA_DIR / "search_history.json"
@@ -182,6 +185,9 @@ douyin_inbox_state: Dict[str, object] = {
 douyin_inbox_monitor_states: Dict[str, Dict[str, object]] = {}
 douyin_inbox_monitor_tasks_by_account: Dict[int, asyncio.Task] = {}
 douyin_inbox_page_workers: Dict[int, "DouyinInboxPageWorker"] = {}
+douyin_self_comment_monitor_results: List[Dict] = []
+douyin_self_comment_monitor_states: Dict[str, Dict[str, object]] = {}
+douyin_self_comment_monitor_tasks_by_account: Dict[int, asyncio.Task] = {}
 douyin_video_comment_state: Dict[str, object] = {
     "running": False,
     "message": "",
@@ -283,6 +289,8 @@ DOUYIN_STRANGER_MESSAGE_SEEN_RECORDS_BLOB_KEY = "douyin_stranger_message_seen_re
 DOUYIN_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT = 5000
 DOUYIN_INBOX_RESULTS_BLOB_KEY = "douyin_inbox_messages"
 DOUYIN_INBOX_MONITOR_CONFIG_BLOB_KEY = "douyin_inbox_monitor_config"
+DOUYIN_SELF_COMMENT_MONITOR_RESULTS_BLOB_KEY = "douyin_self_comment_monitor_results"
+DOUYIN_SELF_COMMENT_MONITOR_CONFIG_BLOB_KEY = "douyin_self_comment_monitor_config"
 DOUYIN_INTENT_DIRECTION_DEFAULT = (
     "请筛选评论中是否属于精准客户。这里的精准客户指：有真实需求、了解意愿、"
     "咨询意愿、联系意愿的人。优先保留想了解、想咨询、感兴趣、想试试、想做、"
@@ -562,6 +570,16 @@ def save_douyin_inbox_results():
         pass
 
 
+def save_douyin_self_comment_monitor_results():
+    try:
+        douyin_state_store.save_blob_json(
+            DOUYIN_SELF_COMMENT_MONITOR_RESULTS_BLOB_KEY,
+            douyin_self_comment_monitor_results or [],
+        )
+    except Exception:
+        pass
+
+
 def save_douyin_stranger_message_monitor_config():
     try:
         payload = []
@@ -606,6 +624,33 @@ def save_douyin_inbox_monitor_config():
             )
         douyin_state_store.save_blob_json(
             DOUYIN_INBOX_MONITOR_CONFIG_BLOB_KEY,
+            payload,
+        )
+    except Exception:
+        pass
+
+
+def save_douyin_self_comment_monitor_config():
+    try:
+        payload = []
+        for state in list_douyin_self_comment_monitor_states():
+            payload.append(
+                {
+                    "enabled": bool(state.get("enabled")),
+                    "interval_minutes": max(1, min(int(state.get("interval_minutes", 30) or 30), 1440)),
+                    "account_id": int(state.get("account_id", 0) or 0),
+                    "max_videos": max(1, min(int(state.get("max_videos", 20) or 20), 100)),
+                    "max_comments_per_video": max(5, min(int(state.get("max_comments_per_video", 80) or 80), 500)),
+                    "auto_reply_enabled": bool(state.get("auto_reply_enabled", False)),
+                    "reply_mode": normalize_douyin_inbox_reply_mode(state.get("reply_mode", "fixed")),
+                    "reply_message": str(state.get("reply_message", "") or "").strip(),
+                    "reply_prompt": str(state.get("reply_prompt", "") or "").strip(),
+                    "contact_value": str(state.get("contact_value", "") or "").strip(),
+                    "reply_image_path": str(state.get("reply_image_path", "") or "").strip(),
+                }
+            )
+        douyin_state_store.save_blob_json(
+            DOUYIN_SELF_COMMENT_MONITOR_CONFIG_BLOB_KEY,
             payload,
         )
     except Exception:
@@ -862,6 +907,325 @@ def restore_douyin_inbox_results():
             ]
     except Exception:
         douyin_inbox_results = []
+
+
+def normalize_douyin_self_comment_monitor_state(
+    payload: Optional[Dict[str, object]] = None,
+    *,
+    account_id: int = 0,
+) -> Dict[str, object]:
+    source = payload if isinstance(payload, dict) else {}
+    raw_reply_mode = str(source.get("reply_mode", "fixed") or "fixed").strip().lower()
+    reply_mode = raw_reply_mode if raw_reply_mode in {"fixed", "rewrite", "ai"} else "fixed"
+    base = {
+        "enabled": False,
+        "running": False,
+        "interval_minutes": 30,
+        "account_id": int(account_id or source.get("account_id", 0) or 0) or None,
+        "max_videos": 20,
+        "max_comments_per_video": 80,
+        "message": "",
+        "last_run_at": "",
+        "next_run_at": "",
+        "last_error": "",
+        "last_skip_reason": "",
+        "last_cycle_status": "idle",
+        "last_video_count": 0,
+        "last_comment_count": 0,
+        "last_new_comment_count": 0,
+        "last_precise_count": 0,
+        "auto_reply_enabled": False,
+        "reply_mode": "fixed",
+        "reply_message": "",
+        "reply_prompt": "",
+        "contact_value": "",
+        "reply_image_path": "",
+        "last_auto_reply_total": 0,
+        "last_auto_reply_success": 0,
+        "last_auto_reply_failed": 0,
+    }
+    base.update(
+        {
+            "enabled": bool(source.get("enabled", base["enabled"])),
+            "running": bool(source.get("running", base["running"])),
+            "interval_minutes": max(1, min(int(source.get("interval_minutes", base["interval_minutes"]) or 30), 1440)),
+            "account_id": int(source.get("account_id", base["account_id"]) or base["account_id"] or 0) or None,
+            "max_videos": max(1, min(int(source.get("max_videos", base["max_videos"]) or 20), 100)),
+            "max_comments_per_video": max(5, min(int(source.get("max_comments_per_video", base["max_comments_per_video"]) or 80), 500)),
+            "message": normalize_douyin_text(source.get("message", base["message"])),
+            "last_run_at": normalize_douyin_text(source.get("last_run_at", base["last_run_at"])),
+            "next_run_at": normalize_douyin_text(source.get("next_run_at", base["next_run_at"])),
+            "last_error": normalize_douyin_text(source.get("last_error", base["last_error"])),
+            "last_skip_reason": normalize_douyin_text(source.get("last_skip_reason", base["last_skip_reason"])),
+            "last_cycle_status": normalize_douyin_text(source.get("last_cycle_status", base["last_cycle_status"])) or "idle",
+            "last_video_count": max(0, int(source.get("last_video_count", base["last_video_count"]) or 0)),
+            "last_comment_count": max(0, int(source.get("last_comment_count", base["last_comment_count"]) or 0)),
+            "last_new_comment_count": max(0, int(source.get("last_new_comment_count", base["last_new_comment_count"]) or 0)),
+            "last_precise_count": max(0, int(source.get("last_precise_count", base["last_precise_count"]) or 0)),
+            "auto_reply_enabled": bool(source.get("auto_reply_enabled", base["auto_reply_enabled"])),
+            "reply_mode": reply_mode,
+            "reply_message": str(source.get("reply_message", base["reply_message"]) or "").strip(),
+            "reply_prompt": str(source.get("reply_prompt", base["reply_prompt"]) or "").strip(),
+            "contact_value": str(source.get("contact_value", base["contact_value"]) or "").strip(),
+            "reply_image_path": str(source.get("reply_image_path", source.get("comment_image_path", base["reply_image_path"])) or "").strip(),
+            "last_auto_reply_total": max(0, int(source.get("last_auto_reply_total", base["last_auto_reply_total"]) or 0)),
+            "last_auto_reply_success": max(0, int(source.get("last_auto_reply_success", base["last_auto_reply_success"]) or 0)),
+            "last_auto_reply_failed": max(0, int(source.get("last_auto_reply_failed", base["last_auto_reply_failed"]) or 0)),
+        }
+    )
+    return base
+
+
+def get_douyin_self_comment_monitor_state(account_id: int, create: bool = False) -> Dict[str, object]:
+    key = str(int(account_id or 0) or 0)
+    if key == "0":
+        return normalize_douyin_self_comment_monitor_state({})
+    existing = douyin_self_comment_monitor_states.get(key)
+    if existing is None and create:
+        existing = normalize_douyin_self_comment_monitor_state({}, account_id=int(key))
+        douyin_self_comment_monitor_states[key] = existing
+    return existing or normalize_douyin_self_comment_monitor_state({}, account_id=int(key))
+
+
+def list_douyin_self_comment_monitor_states() -> List[Dict[str, object]]:
+    states: List[Dict[str, object]] = []
+    for key, raw_state in douyin_self_comment_monitor_states.items():
+        account_id = int(key or 0) or 0
+        if account_id <= 0:
+            continue
+        states.append(normalize_douyin_self_comment_monitor_state(raw_state, account_id=account_id))
+    states.sort(key=lambda item: int(item.get("account_id", 0) or 0))
+    return states
+
+
+def normalize_douyin_self_comment_row(row: Dict) -> Dict:
+    source = row if isinstance(row, dict) else {}
+    normalized = normalize_high_intent_user(source)
+    normalized["profile_url"] = ensure_douyin_profile_url(normalized)
+    normalized["account_id"] = int(source.get("account_id", 0) or 0)
+    normalized["aweme_id"] = normalize_douyin_text(source.get("aweme_id", ""))
+    normalized["video_url"] = str(source.get("video_url", "") or "").strip()
+    normalized["video_title"] = normalize_douyin_text(source.get("video_title", "") or source.get("title", ""))
+    normalized["video_cover_image"] = str(source.get("video_cover_image", "") or source.get("cover_image", "") or "").strip()
+    normalized["comment"] = normalize_douyin_text(source.get("comment", "") or source.get("content", ""))
+    normalized["content"] = normalized["comment"]
+    normalized["comment_time"] = normalize_douyin_text(source.get("comment_time", ""))
+    normalized["comment_key"] = normalize_douyin_text(source.get("comment_key", "")) or build_douyin_self_comment_comment_key(normalized)
+    normalized["row_key"] = normalize_douyin_text(source.get("row_key", ""))
+    if not normalized["row_key"]:
+        normalized["row_key"] = build_douyin_self_comment_row_key(normalized)
+    normalized["is_high_intent"] = bool(source.get("is_high_intent", False))
+    normalized["intent_level"] = normalize_douyin_text(source.get("intent_level", ""))
+    normalized["score"] = source.get("score", "")
+    normalized["reason"] = normalize_douyin_text(source.get("reason", ""))
+    normalized["first_seen_at"] = normalize_douyin_text(source.get("first_seen_at", ""))
+    normalized["last_seen_at"] = normalize_douyin_text(source.get("last_seen_at", ""))
+    normalized["reply_status"] = normalize_douyin_text(source.get("reply_status", "pending")).lower() or "pending"
+    normalized["reply_error"] = normalize_douyin_text(source.get("reply_error", ""))
+    normalized["reply_message"] = normalize_douyin_text(source.get("reply_message", ""))
+    raw_reply_mode = str(source.get("reply_mode", "fixed") or "fixed").strip().lower()
+    normalized["reply_mode"] = raw_reply_mode if raw_reply_mode in {"fixed", "rewrite", "ai"} else "fixed"
+    normalized["reply_account_id"] = str(source.get("reply_account_id", "") or "").strip()
+    normalized["reply_started_at"] = normalize_douyin_text(source.get("reply_started_at", ""))
+    normalized["reply_finished_at"] = normalize_douyin_text(source.get("reply_finished_at", ""))
+    normalized["reply_updated_at"] = normalize_douyin_text(source.get("reply_updated_at", ""))
+    normalized["source"] = "douyin_self_comment_monitor"
+    return normalized
+
+
+def build_douyin_self_comment_row_key(row: Dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    account_id = int(row.get("account_id", 0) or 0)
+    aweme_id = normalize_douyin_text(row.get("aweme_id", ""))
+    comment_key = normalize_douyin_text(row.get("comment_key", "")) or build_douyin_self_comment_comment_key(row)
+    if account_id and aweme_id and comment_key:
+        return f"{account_id}|{aweme_id}|{comment_key}"
+    video_url = normalize_douyin_text(row.get("video_url", ""))
+    username = normalize_douyin_text(row.get("username", ""))
+    comment = normalize_douyin_text(row.get("comment", row.get("content", "")))
+    comment_time = normalize_douyin_text(row.get("comment_time", ""))
+    return "|".join([str(account_id), aweme_id or video_url, username, comment, comment_time])
+
+
+def build_douyin_self_comment_comment_key(row: Dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    comment_id = normalize_douyin_text(row.get("comment_id", ""))
+    if comment_id:
+        return f"id:{comment_id}"
+    return "|".join(
+        [
+            normalize_douyin_text(row.get("user_id", "")),
+            normalize_douyin_text(row.get("username", "")),
+            normalize_douyin_text(row.get("comment", row.get("content", ""))),
+            normalize_douyin_text(row.get("comment_time", "")),
+        ]
+    )
+
+
+def collect_douyin_self_comment_monitor_results(account_id: int = 0) -> List[Dict]:
+    target_account_id = int(account_id or 0)
+    rows: List[Dict] = []
+    for row in douyin_self_comment_monitor_results:
+        normalized = normalize_douyin_self_comment_row(row if isinstance(row, dict) else {})
+        if target_account_id > 0 and int(normalized.get("account_id", 0) or 0) != target_account_id:
+            continue
+        rows.append(normalized)
+    rows.sort(key=lambda item: (str(item.get("last_seen_at", "") or ""), str(item.get("comment_time", "") or "")), reverse=True)
+    return rows
+
+
+def merge_douyin_self_comment_monitor_results(account_id: int, rows: List[Dict]) -> int:
+    global douyin_self_comment_monitor_results
+
+    target_account_id = int(account_id or 0)
+    if target_account_id <= 0:
+        return 0
+
+    account_rows = [
+        normalize_douyin_self_comment_row(row)
+        for row in douyin_self_comment_monitor_results
+        if int((row or {}).get("account_id", 0) or 0) == target_account_id
+    ]
+    other_rows = [
+        normalize_douyin_self_comment_row(row)
+        for row in douyin_self_comment_monitor_results
+        if int((row or {}).get("account_id", 0) or 0) != target_account_id
+    ]
+    account_map = {
+        build_douyin_self_comment_row_key(row): row
+        for row in account_rows
+        if build_douyin_self_comment_row_key(row)
+    }
+    incoming_keys: List[str] = []
+    changed = 0
+    for raw_row in rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_douyin_self_comment_row({**raw_row, "account_id": target_account_id})
+        key = build_douyin_self_comment_row_key(normalized)
+        if not key:
+            continue
+        existing = account_map.get(key)
+        if existing:
+            for keep_key in (
+                "reply_status",
+                "reply_error",
+                "reply_message",
+                "reply_mode",
+                "reply_account_id",
+                "reply_started_at",
+                "reply_finished_at",
+                "reply_updated_at",
+                "first_seen_at",
+            ):
+                if existing.get(keep_key):
+                    normalized[keep_key] = existing.get(keep_key)
+            if existing.get("is_high_intent"):
+                normalized["is_high_intent"] = True
+                for keep_key in ("intent_level", "score", "reason"):
+                    if existing.get(keep_key) not in (None, ""):
+                        normalized[keep_key] = existing.get(keep_key)
+            if existing != normalized:
+                changed += 1
+        else:
+            changed += 1
+        account_map[key] = normalized
+        if key not in incoming_keys:
+            incoming_keys.append(key)
+
+    if not changed:
+        return 0
+
+    preserved_keys = [key for key in account_map.keys() if key not in incoming_keys]
+    ordered_keys = incoming_keys + preserved_keys
+    douyin_self_comment_monitor_results = other_rows + [account_map[key] for key in ordered_keys if key in account_map]
+    save_douyin_self_comment_monitor_results()
+    return changed
+
+
+def update_douyin_self_comment_monitor_rows(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    message: Optional[str] = None,
+    reply_mode: Optional[str] = None,
+    account_id: Optional[int] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    keys = {build_douyin_self_comment_row_key(row) for row in target_rows if build_douyin_self_comment_row_key(row)}
+    if not keys:
+        return 0
+    changed = 0
+    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    next_rows: List[Dict] = []
+    for raw_row in douyin_self_comment_monitor_results:
+        normalized = normalize_douyin_self_comment_row(raw_row if isinstance(raw_row, dict) else {})
+        if build_douyin_self_comment_row_key(normalized) in keys:
+            normalized["reply_status"] = str(status or "").strip() or normalized.get("reply_status", "pending")
+            if error is not None:
+                normalized["reply_error"] = str(error or "")
+            if message is not None:
+                normalized["reply_message"] = str(message or "")
+            if reply_mode is not None:
+                normalized["reply_mode"] = normalize_douyin_inbox_reply_mode(reply_mode)
+            if account_id is not None:
+                normalized["reply_account_id"] = str(account_id or "")
+            if started_at is not None:
+                normalized["reply_started_at"] = str(started_at or "")
+            if finished_at is not None:
+                normalized["reply_finished_at"] = str(finished_at or "")
+            normalized["reply_updated_at"] = updated_at
+            changed += 1
+        next_rows.append(normalized)
+    if changed:
+        douyin_self_comment_monitor_results[:] = next_rows
+        save_douyin_self_comment_monitor_results()
+    return changed
+
+
+def restore_douyin_self_comment_monitor_results():
+    global douyin_self_comment_monitor_results
+    try:
+        loaded = douyin_state_store.load_blob_json(
+            DOUYIN_SELF_COMMENT_MONITOR_RESULTS_BLOB_KEY,
+            default=[],
+        )
+        if isinstance(loaded, list):
+            douyin_self_comment_monitor_results = [
+                normalize_douyin_self_comment_row(row)
+                for row in loaded
+                if isinstance(row, dict)
+            ]
+    except Exception:
+        douyin_self_comment_monitor_results = []
+
+
+def restore_douyin_self_comment_monitor_config():
+    global douyin_self_comment_monitor_states
+    try:
+        loaded = douyin_state_store.load_blob_json(
+            DOUYIN_SELF_COMMENT_MONITOR_CONFIG_BLOB_KEY,
+            default=[],
+        )
+        next_states: Dict[str, Dict[str, object]] = {}
+        items = loaded if isinstance(loaded, list) else [loaded] if isinstance(loaded, dict) else []
+        for raw_state in items:
+            if not isinstance(raw_state, dict):
+                continue
+            account_id = int(raw_state.get("account_id", 0) or 0)
+            if account_id <= 0:
+                continue
+            next_states[str(account_id)] = normalize_douyin_self_comment_monitor_state(
+                raw_state,
+                account_id=account_id,
+            )
+        douyin_self_comment_monitor_states = next_states
+    except Exception:
+        douyin_self_comment_monitor_states = {}
 
 
 def restore_douyin_stranger_message_monitor_config():
@@ -4385,8 +4749,10 @@ restore_douyin_mention_comment_history()
 restore_douyin_manual_interaction_users()
 restore_douyin_stranger_message_results()
 restore_douyin_inbox_results()
+restore_douyin_self_comment_monitor_results()
 restore_douyin_stranger_message_monitor_config()
 restore_douyin_inbox_monitor_config()
+restore_douyin_self_comment_monitor_config()
 restore_douyin_stranger_message_seen_records()
 bootstrap_douyin_stranger_message_seen_records()
 restore_douyin_mention_self_video_cache()
@@ -4502,7 +4868,35 @@ def is_douyin_inbox_monitor_busy(account_id: int = 0) -> tuple[bool, str]:
         return busy, reason
     if douyin_inbox_running and int(douyin_inbox_state.get("account_id", 0) or 0) == int(account_id or 0):
         return True, "消息聚合采集任务正在执行"
+    task = douyin_self_comment_monitor_tasks_by_account.get(int(account_id or 0))
+    if task and not task.done():
+        return True, "我的评论区监控正在执行"
     return False, ""
+
+
+def set_douyin_self_comment_monitor_idle_message(account_id: int, message: str = ""):
+    state = get_douyin_self_comment_monitor_state(account_id, create=True)
+    next_run_text = normalize_douyin_text(state.get("next_run_at", ""))
+    fallback = f"我的评论区监控已开启，下一轮检查时间 {next_run_text}。" if next_run_text else "我的评论区监控已开启，等待下一轮检查。"
+    state.update(
+        {
+            "running": False,
+            "message": normalize_douyin_text(message) or fallback,
+        }
+    )
+
+
+def schedule_next_douyin_self_comment_monitor_run(account_id: int, base_time: Optional[datetime] = None) -> str:
+    state = get_douyin_self_comment_monitor_state(account_id, create=True)
+    current = base_time or datetime.now()
+    interval_minutes = max(
+        1,
+        min(int(state.get("interval_minutes", 30) or 30), 1440),
+    )
+    next_run = current + timedelta(minutes=interval_minutes)
+    next_run_text = next_run.strftime("%Y-%m-%d %H:%M:%S")
+    state["next_run_at"] = next_run_text
+    return next_run_text
 
 
 def set_douyin_inbox_monitor_idle_message(account_id: int, message: str = ""):
@@ -5382,6 +5776,68 @@ def generate_douyin_inbox_reply_message(
     return append_douyin_contact_lines("\n".join(ai_lines), cleaned_contact)
 
 
+def generate_douyin_self_comment_reply_message(
+    row: Dict,
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    contact_value: str = "",
+) -> str:
+    normalized = normalize_douyin_inbox_reply_mode(mode)
+    username = str(row.get("username", "") or "").strip()
+    comment_text = clean_douyin_video_comment_text(
+        row.get("comment", "") or row.get("content", ""),
+        limit=120,
+    )
+    video_title = clean_douyin_video_comment_text(row.get("video_title", "") or row.get("title", ""), limit=120)
+    prompt_seed = clean_douyin_video_comment_text(prompt_text, limit=120)
+
+    if normalized == "fixed":
+        final_text = str(fixed_text or "").strip()
+        if not final_text:
+            raise RuntimeError("固定回复文案为空，无法回复评论。")
+        return append_douyin_contact_lines(final_text, contact_value)
+
+    cleaned_contact = normalize_douyin_text(contact_value)
+    if not cleaned_contact:
+        raise RuntimeError("请先填写联系方式。")
+
+    system_prompt = (
+        "你正在以抖音作者的身份回复自己作品评论区里的潜在客户。\n"
+        "要求：\n"
+        "1. 只输出一条可直接发送的评论回复，不要解释。\n"
+        "2. 语气自然、像真人，先回应对方评论，再轻轻引导继续沟通。\n"
+        "3. 不要显得像客服或群发，不要夸张营销。\n"
+        "4. 前半段不要直接输出联系方式；系统会在末尾补充联系方式。\n"
+        "5. 控制在 1 到 2 句，尽量短。"
+    )
+    if normalized == "rewrite":
+        if not prompt_seed:
+            raise RuntimeError("请先填写 AI 同方向回复的方向或基准文案。")
+        user_prompt = (
+            f"评论用户：{username or '未知'}\n"
+            f"用户评论：{comment_text or '未知'}\n"
+            f"来源作品：{video_title or '未知'}\n"
+            f"回复方向 / 基准意图：{prompt_seed}\n\n"
+            "请按这个方向改写成一条自然的评论回复。"
+        )
+    else:
+        user_prompt = (
+            f"评论用户：{username or '未知'}\n"
+            f"用户评论：{comment_text or '未知'}\n"
+            f"来源作品：{video_title or '未知'}\n"
+            f"补充方向：{prompt_seed or '自然回应需求，引导对方继续沟通'}\n\n"
+            "请生成一条适合回复在评论区的短回复。"
+        )
+
+    ai_text = request_douyin_ai_comment(system_prompt, user_prompt, max_tokens=120)
+    clean_text = clean_douyin_video_comment_text(ai_text, limit=80)
+    if not clean_text:
+        clean_text = "可以的，我发你看看"
+    return append_douyin_contact_lines(clean_text, cleaned_contact)
+
+
 def validate_douyin_inbox_reply_settings(
     *,
     auto_reply_enabled: bool,
@@ -5389,12 +5845,13 @@ def validate_douyin_inbox_reply_settings(
     reply_message: str = "",
     reply_prompt: str = "",
     contact_value: str = "",
+    reply_image_path: str = "",
 ) -> Optional[str]:
     if not auto_reply_enabled:
         return None
     normalized_mode = normalize_douyin_inbox_reply_mode(reply_mode)
     if normalized_mode == "fixed":
-        if not str(reply_message or "").strip():
+        if not str(reply_message or "").strip() and not str(reply_image_path or "").strip():
             return "开启私信聚合自动回复前，请先填写固定回复文案。"
         return None
     if normalized_mode == "rewrite" and not str(reply_prompt or "").strip():
@@ -7565,6 +8022,7 @@ async def run_douyin_video_comments(
     account: Dict,
     interval_seconds_min: int,
     interval_seconds_max: int,
+    image_path: str = "",
 ):
     global douyin_video_comment_running, douyin_video_comment_stop_requested, douyin_video_comment_background_task
 
@@ -7576,12 +8034,15 @@ async def run_douyin_video_comments(
     failed = 0
     mode = normalize_douyin_video_comment_mode(comment_mode)
     mode_label = douyin_video_comment_mode_label(mode)
+    image_path = str(image_path or "").strip()
     comment_summary = summarize_douyin_video_comment_settings(
         mode,
         fixed_text=comment_text,
         prompt_text=comment_prompt,
         seed_text=comment_seed_text,
     )
+    if image_path:
+        comment_summary = f"{comment_summary} + 图片"
     douyin_video_comment_state.update(
         {
             "running": True,
@@ -7648,6 +8109,7 @@ async def run_douyin_video_comments(
             task["video_comment_seed_text"] = comment_seed_text
             task["video_comment_summary"] = comment_summary
             task["video_comment_text"] = ""
+            task["video_comment_image_path"] = image_path
             task["video_comment_account_id"] = account["id"]
             task["video_comment_started_at"] = started_at
             task["video_comment_finished_at"] = ""
@@ -7674,10 +8136,12 @@ async def run_douyin_video_comments(
                         task.get("url", ""),
                         final_comment_text,
                         expected_title=str(task.get("title", "") or ""),
+                        image_path=image_path,
+                        use_modal_entry=bool(image_path),
                         logger=douyin_log,
                     )
                 except Exception as dom_exc:
-                    if protocol_client is None or protocol_auth is None:
+                    if image_path or protocol_client is None or protocol_auth is None:
                         raise
                     douyin_log(
                         f"[抖音视频评论] 页面 DOM 发送失败，尝试协议发布备选：{dom_exc}",
@@ -8154,12 +8618,14 @@ async def run_douyin_follow_comment_worker(
     comment_text: str,
     comment_prompt: str,
     comment_seed_text: str,
+    image_path: str,
     account: Dict,
     interval_seconds_min: int,
     interval_seconds_max: int,
     worker_state: Dict,
     state_lock: asyncio.Lock,
 ):
+    image_path = str(image_path or "").strip()
     scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
     protocol_client = None
     protocol_auth = None
@@ -8241,10 +8707,11 @@ async def run_douyin_follow_comment_worker(
                         user.get("profile_url", ""),
                         final_comment_text,
                         expected_username=str(user.get("username", "") or ""),
+                        image_path=image_path,
                         logger=douyin_log,
                     )
                 except Exception as dom_exc:
-                    if protocol_client is None or protocol_auth is None:
+                    if image_path or protocol_client is None or protocol_auth is None:
                         raise
                     profile_result = await scraper.follow_user_and_find_first_post(
                         user.get("profile_url", ""),
@@ -8384,9 +8851,11 @@ async def run_douyin_follow_comments(
     accounts: List[Dict],
     interval_seconds_min: int,
     interval_seconds_max: int,
+    image_path: str = "",
 ):
     global douyin_follow_comment_running, douyin_follow_comment_stop_requested, douyin_follow_comment_background_task
 
+    image_path = str(image_path or "").strip()
     total = len(users)
     batches = distribute_interaction_users(users, accounts)
     workers = [build_follow_comment_worker_state(item["account"], len(item["users"])) for item in batches]
@@ -8396,6 +8865,8 @@ async def run_douyin_follow_comments(
         prompt_text=comment_prompt,
         seed_text=comment_seed_text,
     )
+    if image_path:
+        comment_summary = f"{comment_summary} + 图片"
     douyin_follow_comment_state.update(
         {
             "running": True,
@@ -8419,6 +8890,7 @@ async def run_douyin_follow_comments(
             "finished_at": "",
             "last_error": "",
             "current_comment_text": "",
+            "comment_image_path": image_path,
             "workers": workers,
         }
     )
@@ -8443,6 +8915,7 @@ async def run_douyin_follow_comments(
                     comment_text,
                     comment_prompt,
                     comment_seed_text,
+                    image_path,
                     item["account"],
                     interval_seconds_min,
                     interval_seconds_max,
@@ -9515,6 +9988,493 @@ async def ensure_douyin_inbox_monitor_scheduler():
             continue
         douyin_inbox_monitor_tasks_by_account[account_id] = asyncio.create_task(
             run_douyin_inbox_monitor_cycle(account_id, trigger_type="scheduled")
+        )
+
+
+def build_douyin_self_comment_rows(
+    account: Dict,
+    video: Dict,
+    comments: List[Dict],
+    precise_users: List[Dict],
+    existing_rows: Optional[List[Dict]] = None,
+) -> List[Dict]:
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    account_id = int((account or {}).get("id", 0) or 0)
+    aweme_id = normalize_douyin_text((video or {}).get("aweme_id", "")) or normalize_douyin_text(extract_aweme_id(str((video or {}).get("url", "") or "")))
+    video_url = str((video or {}).get("url", "") or "").strip()
+    video_title = str((video or {}).get("title", "") or "").strip()
+    precise_index = build_monitor_precise_user_index(precise_users or [])
+    existing_map = {
+        build_douyin_self_comment_row_key(row): normalize_douyin_self_comment_row(row)
+        for row in (existing_rows or [])
+        if isinstance(row, dict) and build_douyin_self_comment_row_key(row)
+    }
+    rows: List[Dict] = []
+    for comment in comments or []:
+        if not isinstance(comment, dict):
+            continue
+        normalized = normalize_high_intent_user(comment)
+        normalized["profile_url"] = ensure_douyin_profile_url(normalized)
+        comment_key = build_douyin_self_comment_comment_key(normalized)
+        row = normalize_douyin_self_comment_row(
+            {
+                **normalized,
+                "account_id": account_id,
+                "aweme_id": aweme_id,
+                "video_url": video_url,
+                "video_title": video_title,
+                "video_cover_image": str((video or {}).get("cover_image", "") or ""),
+                "comment_key": comment_key,
+                "first_seen_at": now_text,
+                "last_seen_at": now_text,
+                "reply_status": "pending",
+                "source": "douyin_self_comment_monitor",
+            }
+        )
+        precise_match = find_monitor_precise_match(row, precise_index)
+        if precise_match:
+            row["is_high_intent"] = True
+            for key in ("intent_level", "score", "reason"):
+                value = precise_match.get(key, "")
+                if value not in (None, ""):
+                    row[key] = value
+        existing = existing_map.get(build_douyin_self_comment_row_key(row))
+        if existing:
+            row["first_seen_at"] = existing.get("first_seen_at") or row["first_seen_at"]
+            for key in (
+                "reply_status",
+                "reply_error",
+                "reply_message",
+                "reply_mode",
+                "reply_account_id",
+                "reply_started_at",
+                "reply_finished_at",
+                "reply_updated_at",
+            ):
+                if existing.get(key):
+                    row[key] = existing.get(key)
+            if existing.get("is_high_intent"):
+                row["is_high_intent"] = True
+                for key in ("intent_level", "score", "reason"):
+                    if existing.get(key) not in (None, ""):
+                        row[key] = existing.get(key)
+        rows.append(row)
+    return rows
+
+
+def collect_pending_douyin_self_comment_auto_reply_rows(account_id: int, rows: Optional[List[Dict]] = None) -> List[Dict]:
+    source_rows = rows if isinstance(rows, list) else collect_douyin_self_comment_monitor_results(account_id)
+    pending: List[Dict] = []
+    seen = set()
+    for raw_row in source_rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        row = normalize_douyin_self_comment_row({**raw_row, "account_id": int(account_id or 0)})
+        key = build_douyin_self_comment_row_key(row)
+        if not key or key in seen:
+            continue
+        if not row.get("is_high_intent"):
+            continue
+        if str(row.get("reply_status", "pending") or "pending").lower() in {"sent", "completed", "processing"}:
+            continue
+        pending.append(row)
+        seen.add(key)
+    return pending
+
+
+async def send_douyin_self_comment_replies_for_monitor(
+    account: Dict,
+    rows: List[Dict],
+    *,
+    reply_mode: str = "fixed",
+    reply_message: str = "",
+    reply_prompt: str = "",
+    contact_value: str = "",
+    image_path: str = "",
+) -> Dict[str, int]:
+    account_id = int((account or {}).get("id", 0) or 0)
+    image_path = str(image_path or "").strip()
+    result = {"total": len(rows or []), "processed": 0, "success": 0, "failed": 0}
+    scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    try:
+        for raw_row in rows or []:
+            row = normalize_douyin_self_comment_row({**raw_row, "account_id": account_id})
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            final_message = ""
+            try:
+                if normalize_douyin_inbox_reply_mode(reply_mode) == "fixed" and not str(reply_message or "").strip() and image_path:
+                    final_message = ""
+                else:
+                    final_message = generate_douyin_self_comment_reply_message(
+                        row,
+                        mode=reply_mode,
+                        fixed_text=reply_message,
+                        prompt_text=reply_prompt,
+                        contact_value=contact_value,
+                    )
+                update_douyin_self_comment_monitor_rows(
+                    [row],
+                    status="processing",
+                    error="",
+                    message=final_message,
+                    reply_mode=reply_mode,
+                    account_id=account_id,
+                    started_at=started_at,
+                    finished_at="",
+                )
+                await scraper.reply_to_video_comment(
+                    str(row.get("video_url", "") or ""),
+                    final_message,
+                    row,
+                    expected_title=str(row.get("video_title", "") or ""),
+                    image_path=image_path,
+                    logger=douyin_log,
+                )
+                finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                update_douyin_self_comment_monitor_rows(
+                    [row],
+                    status="sent",
+                    error="",
+                    message=final_message,
+                    reply_mode=reply_mode,
+                    account_id=account_id,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                result["success"] += 1
+            except Exception as exc:
+                update_douyin_self_comment_monitor_rows(
+                    [row],
+                    status="failed",
+                    error=str(exc),
+                    message=final_message,
+                    reply_mode=reply_mode,
+                    account_id=account_id,
+                    started_at=started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                result["failed"] += 1
+                douyin_log(f"[抖音我的评论区] 自动回复失败：{row.get('username') or '-'}，原因：{exc}", "error")
+            finally:
+                result["processed"] += 1
+    finally:
+        await scraper.close()
+    return result
+
+
+async def send_douyin_self_comment_replies_on_loaded_page(
+    scraper: DouyinCommentScraper,
+    page,
+    account: Dict,
+    rows: List[Dict],
+    *,
+    reply_mode: str = "fixed",
+    reply_message: str = "",
+    reply_prompt: str = "",
+    contact_value: str = "",
+    image_path: str = "",
+) -> Dict[str, int]:
+    account_id = int((account or {}).get("id", 0) or 0)
+    image_path = str(image_path or "").strip()
+    result = {"total": len(rows or []), "processed": 0, "success": 0, "failed": 0}
+    for raw_row in rows or []:
+        row = normalize_douyin_self_comment_row({**raw_row, "account_id": account_id})
+        started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        final_message = ""
+        try:
+            if normalize_douyin_inbox_reply_mode(reply_mode) == "fixed" and not str(reply_message or "").strip() and image_path:
+                final_message = ""
+            else:
+                final_message = generate_douyin_self_comment_reply_message(
+                    row,
+                    mode=reply_mode,
+                    fixed_text=reply_message,
+                    prompt_text=reply_prompt,
+                    contact_value=contact_value,
+                )
+            update_douyin_self_comment_monitor_rows(
+                [row],
+                status="processing",
+                error="",
+                message=final_message,
+                reply_mode=reply_mode,
+                account_id=account_id,
+                started_at=started_at,
+                finished_at="",
+            )
+            await scraper.reply_to_loaded_video_comment(
+                page,
+                final_message,
+                row,
+                image_path=image_path,
+                logger=douyin_log,
+                allow_scroll=False,
+            )
+            update_douyin_self_comment_monitor_rows(
+                [row],
+                status="sent",
+                error="",
+                message=final_message,
+                reply_mode=reply_mode,
+                account_id=account_id,
+                started_at=started_at,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            result["success"] += 1
+        except Exception as exc:
+            update_douyin_self_comment_monitor_rows(
+                [row],
+                status="failed",
+                error=str(exc),
+                message=final_message,
+                reply_mode=reply_mode,
+                account_id=account_id,
+                started_at=started_at,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            result["failed"] += 1
+            douyin_log(f"[抖音我的评论区] 当前批次自动回复失败：{row.get('username') or '-'}，原因：{exc}", "error")
+        finally:
+            result["processed"] += 1
+    return result
+
+
+async def run_douyin_self_comment_monitor_cycle(account_id: int, trigger_type: str = "scheduled") -> Dict[str, object]:
+    state = get_douyin_self_comment_monitor_state(account_id, create=True)
+    started_at = datetime.now()
+    started_at_text = started_at.strftime("%Y-%m-%d %H:%M:%S")
+    state["last_run_at"] = started_at_text
+    state["last_error"] = ""
+    state["last_skip_reason"] = ""
+
+    if not bool(state.get("enabled")):
+        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        set_douyin_self_comment_monitor_idle_message(account_id, "我的评论区监控未开启。")
+        state["last_cycle_status"] = "disabled"
+        return {"status": "disabled", "message": "我的评论区监控未开启。"}
+
+    config = load_global_config()
+    account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
+    if not account:
+        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        message = "本轮跳过：当前没有可用的抖音在线账号。"
+        state.update({"last_cycle_status": "skipped", "last_skip_reason": "no_online_account", "message": message})
+        douyin_log(f"[抖音我的评论区] {message}", "warning")
+        return {"status": "skipped", "message": message}
+    if str(account.get("status", "") or "").strip() != "online":
+        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        message = f"本轮跳过：账号 {account.get('id')} 还没有完成登录。"
+        state.update({"account_id": int(account.get("id", 0) or 0) or None, "last_cycle_status": "skipped", "last_skip_reason": "account_waiting_login", "message": message})
+        douyin_log(f"[抖音我的评论区] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    busy, busy_reason = is_douyin_stranger_message_monitor_busy(int(account.get("id", 0) or 0))
+    if not busy and douyin_inbox_running and int(douyin_inbox_state.get("account_id", 0) or 0) == int(account.get("id", 0) or 0):
+        busy, busy_reason = True, "消息聚合采集任务正在执行"
+    if busy:
+        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        message = f"本轮跳过：{busy_reason}，等待下一次。"
+        state.update({"account_id": int(account.get("id", 0) or 0) or None, "last_cycle_status": "skipped", "last_skip_reason": normalize_douyin_text(busy_reason), "message": message})
+        douyin_log(f"[抖音我的评论区] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    max_videos = max(1, min(int(state.get("max_videos", 20) or 20), 100))
+    max_comments = max(5, min(int(state.get("max_comments_per_video", 80) or 80), 500))
+    auto_reply_enabled = bool(state.get("auto_reply_enabled"))
+    reply_mode = normalize_douyin_inbox_reply_mode(state.get("reply_mode", "fixed"))
+    reply_message = str(state.get("reply_message", "") or "").strip()
+    reply_prompt = str(state.get("reply_prompt", "") or "").strip()
+    contact_value = str(state.get("contact_value", "") or "").strip()
+    reply_image_path = str(state.get("reply_image_path", "") or state.get("comment_image_path", "") or "").strip()
+    ai_client = create_ai_client()
+    scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    state.update(
+        {
+            "running": True,
+            "account_id": account["id"],
+            "message": f"正在检查我的评论区：账号 {account['id']}，作品 {max_videos} 个，每个最多 {max_comments} 条评论。",
+            "last_cycle_status": "running",
+        }
+    )
+    douyin_log(f"[抖音我的评论区] 开始检查账号 {account['id']} 的作品评论区。", "info")
+    try:
+        profile_payload = await scraper.scrape_self_videos(max_videos=max_videos, logger=douyin_log)
+        videos = (profile_payload.get("videos", []) if isinstance(profile_payload, dict) else []) or []
+        total_comments = 0
+        new_comments_total = 0
+        precise_total = 0
+        auto_reply_result = {"total": 0, "processed": 0, "success": 0, "failed": 0}
+        merged_rows_all: List[Dict] = []
+        existing_rows_all = collect_douyin_self_comment_monitor_results(account["id"])
+        existing_keys = {build_douyin_self_comment_row_key(row) for row in existing_rows_all if build_douyin_self_comment_row_key(row)}
+        for video in videos[:max_videos]:
+            try:
+                if not isinstance(video, dict):
+                    continue
+                video_url = str(video.get("url", "") or "").strip()
+                if not video_url:
+                    continue
+                batch_comments_for_video: List[Dict] = []
+
+                async def handle_self_comment_batch(page, batch_comments: List[Dict], batch_index: int):
+                    nonlocal new_comments_total, precise_total, auto_reply_result, existing_rows_all, batch_comments_for_video
+                    if not batch_comments:
+                        return
+                    batch_comments_for_video.extend(batch_comments)
+                    candidate_rows = build_douyin_self_comment_rows(account, video, batch_comments, [], existing_rows_all)
+                    fresh_comments = [
+                        row
+                        for row in candidate_rows
+                        if build_douyin_self_comment_row_key(row) and build_douyin_self_comment_row_key(row) not in existing_keys
+                    ]
+                    precise_users: List[Dict] = []
+                    if fresh_comments:
+                        _filter_prompt = get_douyin_comment_direction(config)
+                        _filter_strategy = get_douyin_comment_filter_strategy(config)
+                        _filter_started_at = time.time()
+                        log_douyin_filter_event(
+                            "start",
+                            scope="self_comment_monitor_batch",
+                            aweme_id=str(video.get("aweme_id", "") or ""),
+                            title=video.get("title", ""),
+                            comments_in=len(fresh_comments),
+                            strategy=_filter_strategy,
+                            prompt=_filter_prompt,
+                        )
+                        douyin_log(
+                            f"[抖音我的评论区] 当前作品第 {batch_index} 批采集 {len(batch_comments)} 条，新评论 {len(fresh_comments)} 条，开始 AI 筛选。",
+                            "info",
+                        )
+                        precise_users = await asyncio.to_thread(
+                            lambda: ai_client.filter_comments(
+                                str(video.get("title", "") or ""),
+                                fresh_comments,
+                                _filter_prompt,
+                                "douyin_transactional",
+                                "",
+                                _filter_strategy,
+                                event_logger=log_douyin_filter_event,
+                            )
+                        )
+                        log_douyin_filter_event(
+                            "done",
+                            scope="self_comment_monitor_batch",
+                            aweme_id=str(video.get("aweme_id", "") or ""),
+                            title=video.get("title", ""),
+                            comments_in=len(fresh_comments),
+                            precise_out=len(precise_users or []),
+                            strategy=_filter_strategy,
+                            duration_ms=int((time.time() - _filter_started_at) * 1000),
+                        )
+                    rows = build_douyin_self_comment_rows(account, video, batch_comments, precise_users, existing_rows_all)
+                    merge_douyin_self_comment_monitor_results(account["id"], rows)
+                    merged_rows_all.extend(rows)
+                    existing_rows_all = collect_douyin_self_comment_monitor_results(account["id"])
+                    new_comments_total += len(fresh_comments)
+                    precise_total += len(precise_users or [])
+                    if auto_reply_enabled:
+                        reply_rows = collect_pending_douyin_self_comment_auto_reply_rows(account["id"], rows)
+                        if reply_rows:
+                            douyin_log(
+                                f"[抖音我的评论区] 当前作品第 {batch_index} 批命中 {len(reply_rows)} 条待回复高意向评论，原地自动回复。",
+                                "info",
+                            )
+                            current_reply_result = await send_douyin_self_comment_replies_on_loaded_page(
+                                scraper,
+                                page,
+                                account,
+                                reply_rows,
+                                reply_mode=reply_mode,
+                                reply_message=reply_message,
+                                reply_prompt=reply_prompt,
+                                contact_value=contact_value,
+                                image_path=reply_image_path,
+                            )
+                            for key in ("total", "processed", "success", "failed"):
+                                auto_reply_result[key] = int(auto_reply_result.get(key, 0) or 0) + int(current_reply_result.get(key, 0) or 0)
+                    for row in rows:
+                        key = build_douyin_self_comment_row_key(row)
+                        if key:
+                            existing_keys.add(key)
+
+                comments = await scraper.process_video_comment_batches(
+                    video_url,
+                    max_comments=max_comments,
+                    batch_size=1,
+                    max_scroll_rounds=max(10, min(int(config.get("comment_scroll_rounds", 80) or 80), 300)),
+                    logger=douyin_log,
+                    on_batch=handle_self_comment_batch,
+                )
+                total_comments += len(comments or [])
+            except Exception as video_exc:
+                douyin_log(
+                    f"[抖音我的评论区] 当前作品评论采集跳过：{video.get('title') if isinstance(video, dict) else '-'}，原因：{video_exc}",
+                    "warning",
+                )
+                continue
+
+        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        message = f"本轮完成：检查 {len(videos)} 个作品，读取 {total_comments} 条评论，新增 {new_comments_total} 条，高意向 {precise_total} 条。"
+        if auto_reply_enabled and int(auto_reply_result.get("processed", 0) or 0) > 0:
+            message += f" 自动回复 {int(auto_reply_result.get('success', 0) or 0)} 成功，{int(auto_reply_result.get('failed', 0) or 0)} 失败。"
+        state.update(
+            {
+                "running": False,
+                "message": message,
+                "last_video_count": len(videos),
+                "last_comment_count": total_comments,
+                "last_new_comment_count": new_comments_total,
+                "last_precise_count": precise_total,
+                "last_auto_reply_total": int(auto_reply_result.get("processed", 0) or 0),
+                "last_auto_reply_success": int(auto_reply_result.get("success", 0) or 0),
+                "last_auto_reply_failed": int(auto_reply_result.get("failed", 0) or 0),
+                "last_skip_reason": "",
+                "last_cycle_status": "completed",
+            }
+        )
+        douyin_log(f"[抖音我的评论区] {message}", "success")
+        return {"status": "completed", "message": message}
+    except Exception as exc:
+        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        state.update(
+            {
+                "running": False,
+                "last_error": str(exc),
+                "message": f"我的评论区监控失败：{exc}",
+                "last_cycle_status": "failed",
+            }
+        )
+        douyin_log(f"[抖音我的评论区] 监控失败：{exc}", "error")
+        return {"status": "failed", "message": str(exc)}
+    finally:
+        await scraper.close()
+        state["running"] = False
+        douyin_self_comment_monitor_tasks_by_account.pop(int(account_id or 0), None)
+        if bool(state.get("enabled")):
+            set_douyin_self_comment_monitor_idle_message(account_id, state.get("message", ""))
+
+
+async def ensure_douyin_self_comment_monitor_scheduler():
+    now = datetime.now()
+    for state in list_douyin_self_comment_monitor_states():
+        account_id = int(state.get("account_id", 0) or 0)
+        if account_id <= 0 or not bool(state.get("enabled")):
+            continue
+        next_run_text = normalize_douyin_text(state.get("next_run_at", ""))
+        if not next_run_text:
+            schedule_next_douyin_self_comment_monitor_run(account_id, now)
+            next_run_text = normalize_douyin_text(state.get("next_run_at", ""))
+        try:
+            next_run_at = datetime.strptime(next_run_text, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            next_run_at = now
+        if next_run_at > now:
+            continue
+        task = douyin_self_comment_monitor_tasks_by_account.get(account_id)
+        if task and not task.done():
+            continue
+        douyin_self_comment_monitor_tasks_by_account[account_id] = asyncio.create_task(
+            run_douyin_self_comment_monitor_cycle(account_id, trigger_type="scheduled")
         )
 
 async def run_douyin_stranger_message_send(
@@ -12288,6 +13248,80 @@ async def douyin_video_comment_status():
     }
 
 
+@router.post("/video-comment/upload-image")
+async def douyin_upload_video_comment_image(request: Request, file: Optional[UploadFile] = File(None)):
+    upload = file
+    filename = ""
+    content = b""
+    content_type = str(request.headers.get("content-type") or "").lower()
+
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            return {"code": 400, "msg": f"读取上传 JSON 失败：{exc}"}
+        if not isinstance(payload, dict):
+            return {"code": 400, "msg": "上传图片参数格式不正确。"}
+        filename = str(payload.get("filename") or payload.get("name") or "").strip()
+        encoded = str(
+            payload.get("data_base64")
+            or payload.get("base64")
+            or payload.get("dataUrl")
+            or payload.get("data_url")
+            or ""
+        ).strip()
+        if "," in encoded and encoded.lower().startswith("data:"):
+            encoded = encoded.split(",", 1)[1]
+        if not encoded:
+            return {"code": 400, "msg": "没有收到评论图片内容，请重新选择图片后再试。"}
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            return {"code": 400, "msg": f"评论图片内容解析失败：{exc}"}
+
+    if not content and upload is None:
+        try:
+            form = await request.form()
+        except Exception as exc:
+            return {"code": 400, "msg": f"读取上传表单失败：{exc}"}
+        for value in form.values():
+            if hasattr(value, "filename") and hasattr(value, "read"):
+                upload = value
+                break
+    if not content and upload is None:
+        return {"code": 400, "msg": "没有收到评论图片文件，请重新选择图片后再试。"}
+
+    if not content and upload is not None:
+        filename = str(upload.filename or "").strip()
+        content = await upload.read()
+
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return {"code": 400, "msg": "请上传 png、jpg、jpeg、webp 或 gif 图片"}
+
+    max_bytes = 15 * 1024 * 1024
+    if not content:
+        return {"code": 400, "msg": "图片文件为空"}
+    if len(content) > max_bytes:
+        return {"code": 400, "msg": "图片不能超过 15MB"}
+
+    DOUYIN_COMMENT_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = f"video_comment_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}{suffix}"
+    target_path = (DOUYIN_COMMENT_IMAGE_DIR / safe_name).resolve()
+    try:
+        target_path.write_bytes(content)
+    except Exception as exc:
+        return {"code": 500, "msg": f"保存评论图片失败：{exc}"}
+
+    return {
+        "code": 200,
+        "msg": "评论图片已上传",
+        "image_path": str(target_path),
+        "filename": safe_name,
+        "size": len(content),
+    }
+
+
 @router.post("/video-comment/start")
 async def douyin_start_video_comment(http_request: Request = None, request: Optional[dict] = None):
     nurture_conflict = build_douyin_nurture_conflict("执行视频评论")
@@ -12324,6 +13358,7 @@ async def douyin_start_video_comment(http_request: Request = None, request: Opti
     comment_text = str(payload.get("comment_text", "") or "").strip()
     comment_prompt = str(payload.get("comment_prompt", "") or "").strip()
     comment_seed_text = str(payload.get("comment_seed_text", "") or "").strip()
+    comment_image_path = str(payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
     raw_selected_ids = payload.get("selected_task_ids")
     raw_interval_min = payload.get("interval_minutes_min", payload.get("interval_minutes", 4))
     raw_interval_max = payload.get("interval_minutes_max", payload.get("interval_minutes", 6))
@@ -12334,7 +13369,9 @@ async def douyin_start_video_comment(http_request: Request = None, request: Opti
     interval_seconds_min = max(0, min(int(interval_minutes_min * 60), 24 * 60 * 60))
     interval_seconds_max = max(interval_seconds_min, min(int(interval_minutes_max * 60), 24 * 60 * 60))
 
-    if comment_mode == "fixed" and not comment_text:
+    if comment_image_path and not os.path.isfile(comment_image_path):
+        return {"code": 400, "msg": f"评论图片不存在：{comment_image_path}"}
+    if comment_mode == "fixed" and not comment_text and not comment_image_path:
         return {"code": 400, "msg": "请先填写视频评论内容。"}
     if comment_mode == "rewrite" and not comment_seed_text:
         return {"code": 400, "msg": "请先填写用于 AI 改编的基准文案。"}
@@ -12384,6 +13421,7 @@ async def douyin_start_video_comment(http_request: Request = None, request: Opti
             account,
             interval_seconds_min,
             interval_seconds_max,
+            comment_image_path,
         )
     )
     return {
@@ -12469,6 +13507,7 @@ async def douyin_start_follow_comment(http_request: Request = None, request: Opt
     comment_text = str(payload.get("comment_text", "") or "").strip()
     comment_prompt = str(payload.get("comment_prompt", "") or "").strip()
     comment_seed_text = str(payload.get("comment_seed_text", "") or "").strip()
+    comment_image_path = str(payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
     raw_users = payload.get("users", [])
     raw_interval_min = payload.get("interval_minutes_min", payload.get("interval_minutes", 4))
     raw_interval_max = payload.get("interval_minutes_max", payload.get("interval_minutes", 6))
@@ -12478,7 +13517,9 @@ async def douyin_start_follow_comment(http_request: Request = None, request: Opt
         interval_minutes_min, interval_minutes_max = interval_minutes_max, interval_minutes_min
     interval_seconds_min = max(0, min(int(interval_minutes_min * 60), 24 * 60 * 60))
     interval_seconds_max = max(interval_seconds_min, min(int(interval_minutes_max * 60), 24 * 60 * 60))
-    if comment_mode == "fixed" and not comment_text:
+    if comment_image_path and not os.path.isfile(comment_image_path):
+        return {"code": 400, "msg": f"评论图片不存在：{comment_image_path}"}
+    if comment_mode == "fixed" and not comment_text and not comment_image_path:
         return {"code": 400, "msg": "请先填写主页首作品评论内容。"}
     if comment_mode == "rewrite" and not comment_seed_text:
         return {"code": 400, "msg": "请先填写基准文案后再执行 AI 改编。"}
@@ -12550,6 +13591,7 @@ async def douyin_start_follow_comment(http_request: Request = None, request: Opt
             accounts,
             interval_seconds_min,
             interval_seconds_max,
+            comment_image_path,
         )
     )
     account_ids = [item["account"]["id"] for item in batches]
@@ -12580,6 +13622,7 @@ async def douyin_start_follow_comment(http_request: Request = None, request: Opt
         "interval_seconds_min": interval_seconds_min,
         "interval_seconds_max": interval_seconds_max,
         "comment_mode": comment_mode,
+        "comment_image_path": comment_image_path,
     }
 
 
@@ -12845,12 +13888,229 @@ async def douyin_reset_interaction(request: Optional[dict] = None):
 async def douyin_inbox_status():
     reconcile_douyin_inbox_runtime_state()
     await ensure_douyin_inbox_monitor_scheduler()
+    await ensure_douyin_self_comment_monitor_scheduler()
     return {
         "code": 200,
         "running": bool(douyin_inbox_state.get("running")),
         "state": douyin_inbox_state,
         "results": collect_douyin_inbox_results(),
         "monitors": list_douyin_inbox_monitor_states(),
+    }
+
+
+@router.get("/self-comment-monitor/status")
+async def douyin_self_comment_monitor_status(account_id: int = 0):
+    await ensure_douyin_self_comment_monitor_scheduler()
+    config = load_global_config()
+    account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
+    target_account_id = int((account or {}).get("id", 0) or account_id or 0)
+    state = get_douyin_self_comment_monitor_state(target_account_id) if target_account_id > 0 else normalize_douyin_self_comment_monitor_state({})
+    return {
+        "code": 200,
+        "running": bool(state.get("running")),
+        "state": state,
+        "results": collect_douyin_self_comment_monitor_results(target_account_id),
+        "monitors": list_douyin_self_comment_monitor_states(),
+        "account_id": target_account_id or None,
+    }
+
+
+@router.post("/self-comment-monitor/config")
+async def douyin_save_self_comment_monitor_config_endpoint(http_request: Request = None, request: Optional[dict] = None):
+    set_douyin_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
+    target_account_id = int((account or {}).get("id", 0) or account_id or 0)
+    if target_account_id <= 0:
+        return {"code": 400, "msg": "请先选择要保存默认回复配置的抖音账号。"}
+
+    interval_minutes = max(1, min(int(payload.get("interval_minutes", 30) or 30), 1440))
+    max_videos = max(1, min(int(payload.get("max_videos", 20) or 20), 100))
+    max_comments_per_video = max(5, min(int(payload.get("max_comments_per_video", 80) or 80), 500))
+    auto_reply_enabled = bool(payload.get("auto_reply_enabled", False))
+    reply_mode = normalize_douyin_inbox_reply_mode(payload.get("reply_mode", "fixed"))
+    reply_message = str(payload.get("reply_message", "") or payload.get("message", "") or "").strip()
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    reply_image_path = str(payload.get("reply_image_path", "") or payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
+    if reply_image_path and not os.path.isfile(reply_image_path):
+        return {"code": 400, "msg": f"评论回复图片不存在：{reply_image_path}"}
+
+    validation_error = validate_douyin_inbox_reply_settings(
+        auto_reply_enabled=auto_reply_enabled,
+        reply_mode=reply_mode,
+        reply_message=reply_message,
+        reply_prompt=reply_prompt,
+        contact_value=contact_value,
+        reply_image_path=reply_image_path,
+    )
+    if validation_error:
+        return {"code": 400, "msg": validation_error}
+    if auto_reply_enabled and reply_mode in {"ai", "rewrite"} and not douyin_ai_available(config, http_request):
+        return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能保存 AI 自动回复配置。"}
+
+    existing = get_douyin_self_comment_monitor_state(target_account_id, create=True)
+    state = normalize_douyin_self_comment_monitor_state(
+        {
+            **existing,
+            "interval_minutes": interval_minutes,
+            "account_id": target_account_id,
+            "max_videos": max_videos,
+            "max_comments_per_video": max_comments_per_video,
+            "auto_reply_enabled": auto_reply_enabled,
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": reply_prompt,
+            "contact_value": contact_value,
+            "reply_image_path": reply_image_path,
+            "message": existing.get("message") or "我的评论区默认回复配置已保存。",
+        },
+        account_id=target_account_id,
+    )
+    douyin_self_comment_monitor_states[str(target_account_id)] = state
+    save_douyin_self_comment_monitor_config()
+    douyin_log(f"[抖音我的评论区] 已保存账号 {target_account_id} 默认回复配置。", "success")
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的默认回复配置已保存。",
+        "monitor": state,
+        "monitors": list_douyin_self_comment_monitor_states(),
+    }
+
+
+@router.post("/self-comment-monitor/start")
+async def douyin_start_self_comment_monitor(http_request: Request = None, request: Optional[dict] = None):
+    set_douyin_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
+    if not account:
+        return {"code": 400, "type": "no_online_account", "msg": "当前没有可用的抖音在线账号，请先登录。"}
+    if str(account.get("status", "") or "").strip() != "online":
+        return {"code": 400, "type": "account_waiting_login", "msg": f"账号 {account.get('id')} 还没有完成登录，请先检查或登录。"}
+
+    interval_minutes = max(1, min(int(payload.get("interval_minutes", 30) or 30), 1440))
+    max_videos = max(1, min(int(payload.get("max_videos", 20) or 20), 100))
+    max_comments_per_video = max(5, min(int(payload.get("max_comments_per_video", 80) or 80), 500))
+    auto_reply_enabled = bool(payload.get("auto_reply_enabled", False))
+    reply_mode = normalize_douyin_inbox_reply_mode(payload.get("reply_mode", "fixed"))
+    reply_message = str(payload.get("reply_message", "") or payload.get("message", "") or "").strip()
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    reply_image_path = str(payload.get("reply_image_path", "") or payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
+    if reply_image_path and not os.path.isfile(reply_image_path):
+        return {"code": 400, "msg": f"评论回复图片不存在：{reply_image_path}"}
+    validation_error = validate_douyin_inbox_reply_settings(
+        auto_reply_enabled=auto_reply_enabled,
+        reply_mode=reply_mode,
+        reply_message=reply_message,
+        reply_prompt=reply_prompt,
+        contact_value=contact_value,
+        reply_image_path=reply_image_path,
+    )
+    if validation_error:
+        return {"code": 400, "msg": validation_error}
+    if auto_reply_enabled and reply_mode in {"ai", "rewrite"} and not douyin_ai_available(config, http_request):
+        return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能开启 AI 自动回复。"}
+
+    target_account_id = int(account.get("id", 0) or 0)
+    task = douyin_self_comment_monitor_tasks_by_account.get(target_account_id)
+    if task and not task.done():
+        return {"code": 400, "msg": f"账号 {target_account_id} 的我的评论区监控正在执行中，请稍后再试。"}
+
+    state = normalize_douyin_self_comment_monitor_state(
+        {
+            "enabled": True,
+            "running": False,
+            "interval_minutes": interval_minutes,
+            "account_id": target_account_id,
+            "max_videos": max_videos,
+            "max_comments_per_video": max_comments_per_video,
+            "auto_reply_enabled": auto_reply_enabled,
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": reply_prompt,
+            "contact_value": contact_value,
+            "reply_image_path": reply_image_path,
+            "last_error": "",
+            "last_skip_reason": "",
+            "message": "我的评论区监控已开启，准备立即检查一轮。",
+        },
+        account_id=target_account_id,
+    )
+    state["next_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    douyin_self_comment_monitor_states[str(target_account_id)] = state
+    save_douyin_self_comment_monitor_config()
+    douyin_self_comment_monitor_tasks_by_account[target_account_id] = asyncio.create_task(
+        run_douyin_self_comment_monitor_cycle(target_account_id, trigger_type="manual")
+    )
+    douyin_log(
+        f"[抖音我的评论区] 已开启账号 {target_account_id} 监控：作品 {max_videos} 个，每个最多 {max_comments_per_video} 条，间隔 {interval_minutes} 分钟，自动回复={'开启' if auto_reply_enabled else '关闭'}。",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的我的评论区监控已开启，并会立即检查一轮。",
+        "monitor": state,
+        "monitors": list_douyin_self_comment_monitor_states(),
+    }
+
+
+@router.post("/self-comment-monitor/stop")
+async def douyin_stop_self_comment_monitor(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    account_id = int(payload.get("account_id", 0) or 0)
+    config = load_global_config()
+    account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
+    target_account_id = int((account or {}).get("id", 0) or account_id or 0)
+    if target_account_id <= 0:
+        return {"code": 400, "msg": "请先指定要停止监控的抖音账号。"}
+    state = get_douyin_self_comment_monitor_state(target_account_id)
+    if not state.get("enabled"):
+        return {"code": 200, "msg": f"账号 {target_account_id} 当前没有开启我的评论区监控。", "monitor": state, "monitors": list_douyin_self_comment_monitor_states()}
+    state["enabled"] = False
+    state["running"] = False
+    state["next_run_at"] = ""
+    state["message"] = "我的评论区监控已关闭。"
+    task = douyin_self_comment_monitor_tasks_by_account.get(target_account_id)
+    if task and not task.done():
+        task.cancel()
+    save_douyin_self_comment_monitor_config()
+    douyin_log(f"[抖音我的评论区] 已关闭账号 {target_account_id} 的监控。", "warning")
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的我的评论区监控已关闭。",
+        "monitor": state,
+        "monitors": list_douyin_self_comment_monitor_states(),
+    }
+
+
+@router.post("/self-comment-monitor/run-once")
+async def douyin_run_self_comment_monitor_once(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
+    if not account:
+        return {"code": 400, "type": "no_online_account", "msg": "当前没有可用的抖音在线账号，请先登录。"}
+    target_account_id = int(account.get("id", 0) or 0)
+    state = get_douyin_self_comment_monitor_state(target_account_id, create=True)
+    if not state.get("enabled"):
+        state["enabled"] = True
+        state["account_id"] = target_account_id
+    task = douyin_self_comment_monitor_tasks_by_account.get(target_account_id)
+    if task and not task.done():
+        return {"code": 400, "msg": f"账号 {target_account_id} 的我的评论区监控正在执行中，请稍后再试。"}
+    result = await run_douyin_self_comment_monitor_cycle(target_account_id, trigger_type="manual")
+    return {
+        "code": 200 if result.get("status") != "failed" else 400,
+        "msg": result.get("message", "我的评论区检查完成。"),
+        "result": result,
+        "monitor": get_douyin_self_comment_monitor_state(target_account_id),
+        "results": collect_douyin_self_comment_monitor_results(target_account_id),
     }
 
 

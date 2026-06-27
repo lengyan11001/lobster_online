@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>必火AI获客 · 抖音关注评论</title>
     <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
-    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css?v=20260626-comment-image-picker">
     <style>
         .sidebar-group-header,
         .sidebar-subbtn { text-decoration: none; }
@@ -96,6 +96,18 @@
                                     </span>
                                     <span class="sidebar-group-copy">
                                         <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="self-comments" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="self-comments" href="/static/douyin-origin/douyin-self-comments.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M6 6.5h12a2.5 2.5 0 0 1 2.5 2.5v5.2a2.5 2.5 0 0 1-2.5 2.5h-5.4l-4.1 3.1v-3.1H6A2.5 2.5 0 0 1 3.5 14.2V9A2.5 2.5 0 0 1 6 6.5Z"></path><path d="M8 10h8"></path><path d="M8 13h5"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">我的评论区</span>
                                     </span>
                                 </span>
                             </a>
@@ -362,6 +374,23 @@
                                                 <div class="video-comment-hint">AI 会围绕这条文案做同方向改编，每次换个表达，但不会把原来的意思改掉。</div>
                                             </div>
                                         </div>
+                                        <div class="video-comment-panel active">
+                                            <div class="video-comment-field">
+                                                <label for="douyin-follow-comment-image">评论图片（可选）</label>
+                                                <div class="comment-image-upload">
+                                                    <input type="file" id="douyin-follow-comment-image" class="comment-image-input" accept="image/png,image/jpeg,image/webp,image/gif" onchange="syncDouyinCommentImageName(this)">
+                                                    <div class="comment-image-upload-main">
+                                                        <span class="comment-image-upload-icon" aria-hidden="true">图</span>
+                                                        <span class="comment-image-upload-copy">
+                                                            <span class="comment-image-upload-title">选择图片</span>
+                                                            <span class="comment-image-upload-name" id="douyin-follow-comment-image-name">未选择图片</span>
+                                                        </span>
+                                                    </div>
+                                                    <span class="comment-image-upload-format">PNG / JPG / WEBP / GIF</span>
+                                                </div>
+                                                <div class="video-comment-hint">选择图片后，关注评论会在找到客户首个作品后，使用 modal_id 页面入口发送图文评论。留空则保持原来的纯文字关注评论。</div>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="interaction-runtime" style="margin-bottom:14px"><strong>执行状态</strong><p id="douyin-follow-comment-status" class="subtle">尚未开始关注评论任务。</p></div>
                                     <div class="table-tools" style="margin-bottom:14px"><div id="douyin-follow-selection-summary" class="subtle">已勾选 0 / 0 人</div><div class="tools"><button type="button" class="btn" onclick="toggleAllFollowUsers(true)">全选当前关键词</button><button type="button" class="btn" onclick="toggleAllFollowUsers(false)">清空当前关键词</button><label class="subtle" for="douyin-follow-comment-interval-minutes-min">间隔（分钟，随机）</label><input type="number" id="douyin-follow-comment-interval-minutes-min" min="0" max="1440" step="1" value="4" style="width:92px;min-width:92px"><span class="subtle">到</span><input type="number" id="douyin-follow-comment-interval-minutes-max" min="0" max="1440" step="1" value="6" style="width:92px;min-width:92px"><button type="button" class="btn btn-primary" id="douyin-follow-comment-start-btn" onclick="startDouyinFollowComment()">开始关注评论</button><button type="button" class="btn btn-warning" id="douyin-follow-comment-stop-btn" onclick="stopDouyinFollowComment()" disabled>停止关注评论</button><select id="follow-page-size" style="width:auto;min-width:120px" onchange="changeFollowPageSize()"><option value="10">10 / 页</option><option value="20">20 / 页</option><option value="50">50 / 页</option><option value="100">100 / 页</option></select></div></div>
@@ -486,7 +515,7 @@
 
     <script src="/static/douyin-origin/libs/echarts-5.3.3.min.js"></script>
     <script src="/static/douyin-origin/geojson/china.js"></script>
-    <script src="/static/douyin-origin/douyin-workbench-shared.js?v=20260608-direct-routes"></script>
+    <script src="/static/douyin-origin/douyin-workbench-shared.js?v=20260626-comment-image-picker"></script>
 
 </body>
 </html>

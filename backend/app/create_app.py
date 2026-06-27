@@ -996,6 +996,47 @@ def create_app() -> FastAPI:
     if static_dir.exists():
         app.mount("/static", NoStoreStaticFiles(directory=str(static_dir)), name="static")
 
+        douyin_route_pages = {
+            "/douyin": "douyin-origin/douyin.html",
+            "/douyin/workbench": "douyin-origin/douyin.html",
+            "/douyin/search": "douyin-origin/douyin-search.html",
+            "/douyin/monitor": "douyin-origin/douyin-monitor.html",
+            "/douyin/self-comments": "douyin-origin/douyin-self-comments.html",
+            "/douyin/collect": "douyin-origin/douyin-collect.html",
+            "/douyin/mention": "douyin-origin/douyin-mention.html",
+            "/douyin/follow": "douyin-origin/douyin-follow.html",
+            "/douyin/customers": "douyin-origin/douyin-customer-pools.html",
+            "/douyin/intent": "douyin-origin/douyin-customer-pools.html",
+            "/douyin/interaction": "douyin-origin/douyin-interaction.html",
+            "/douyin/stranger-leads": "douyin-origin/douyin-stranger-leads.html",
+            "/douyin/inbox": "douyin-origin/douyin-inbox.html",
+            "/douyin/scheduler": "douyin-origin/douyin-scheduler.html",
+            "/douyin/nurture": "douyin-origin/douyin-nurture.html",
+            "/douyin/groups": "douyin-origin/douyin-groups.html",
+            "/douyin/logs": "douyin-origin/douyin-logs.html",
+            "/douyin/config": "douyin-origin/douyin-config.html",
+            "/douyin/guide": "douyin-origin/douyin-guide.html",
+        }
+
+        async def serve_douyin_route(request: Request):
+            html_file = douyin_route_pages.get(request.url.path, "douyin-origin/douyin.html")
+            return FileResponse(
+                static_dir / html_file,
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
+
+        for route_path in douyin_route_pages:
+            app.add_api_route(
+                route_path,
+                serve_douyin_route,
+                methods=["GET"],
+                include_in_schema=False,
+            )
+
         @app.get("/", include_in_schema=False)
         def index():
             return FileResponse(

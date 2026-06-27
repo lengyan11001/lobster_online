@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI获客 · 抖音我的评论区</title>
+    <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
+    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css?v=20260627-self-comments-layout">
+    <style>
+        .sidebar-group-header,
+        .sidebar-subbtn { text-decoration: none; }
+        #console-page.page.active { display: contents; }
+        #config-page { display: none !important; }
+        .douyin-native-hidden { display: none !important; }
+        .self-comment-status-line {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        .self-comment-status-line span,
+        .self-comment-status-line strong {
+            display: inline-flex;
+            min-height: 30px;
+            align-items: center;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 8px;
+            padding: 0 10px;
+            background: rgba(255, 255, 255, 0.76);
+            color: var(--text);
+            font-size: 12px;
+        }
+        .self-comment-form-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(140px, 1fr));
+            gap: 12px;
+        }
+        .self-comment-field {
+            display: grid;
+            gap: 6px;
+        }
+        .self-comment-field.full {
+            grid-column: 1 / -1;
+        }
+        .self-comment-panel {
+            display: none;
+            grid-column: 1 / -1;
+        }
+        .self-comment-panel.active {
+            display: grid;
+            gap: 10px;
+        }
+        .self-comment-result-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+        .self-comment-result-filters {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .self-comment-result-filters select {
+            width: 158px;
+            min-width: 0;
+        }
+        .self-comment-result-filters #self-comment-page-size {
+            width: 104px;
+        }
+        .self-comment-results-shell {
+            overflow-x: auto;
+        }
+        .self-comment-results-table {
+            table-layout: fixed;
+            min-width: 1120px;
+        }
+        .self-comment-results-table th,
+        .self-comment-results-table td {
+            vertical-align: top;
+        }
+        .self-comment-results-table .intent-user-cell {
+            min-width: 0;
+        }
+        .self-comment-results-table .intent-user-meta {
+            min-width: 0;
+        }
+        .self-comment-results-table .intent-user-name,
+        .self-comment-results-table .intent-user-subtle {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .self-comment-line-clamp {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
+            line-height: 1.45;
+        }
+        .self-comment-line-clamp.two {
+            -webkit-line-clamp: 2;
+        }
+        .self-comment-line-clamp.one {
+            -webkit-line-clamp: 1;
+        }
+        .self-comment-content-cell {
+            color: var(--text);
+            font-weight: 600;
+        }
+        .self-comment-time-cell {
+            color: var(--muted);
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .self-comment-intent-cell .tag,
+        .self-comment-reply-cell .tag {
+            white-space: nowrap;
+        }
+        .self-comment-intent-cell .subtle,
+        .self-comment-reply-cell .subtle {
+            margin-top: 6px;
+            line-height: 1.45;
+        }
+        .self-comment-source-cell a,
+        .self-comment-profile-cell a {
+            display: inline-block;
+            max-width: 100%;
+        }
+        .self-comment-source-cell a.self-comment-line-clamp {
+            display: -webkit-box;
+        }
+        .self-comment-profile-cell {
+            white-space: nowrap;
+        }
+        @media (max-width: 980px) {
+            .self-comment-form-grid {
+                grid-template-columns: repeat(2, minmax(140px, 1fr));
+            }
+            .self-comment-result-toolbar {
+                align-items: stretch;
+                flex-direction: column;
+            }
+            .self-comment-result-filters {
+                justify-content: flex-start;
+            }
+        }
+        @media (max-width: 680px) {
+            .self-comment-form-grid {
+                grid-template-columns: 1fr;
+            }
+            .self-comment-result-filters select,
+            .self-comment-result-filters #self-comment-page-size {
+                width: 100%;
+            }
+        }
+    </style>
+    <script src="/static/douyin-origin/lobster-bridge.js?v=20260606"></script>
+</head>
+<body>
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">必火AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">Douyin Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-group="overview" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="overview" href="/static/douyin-origin/douyin.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5"></path><path d="M6.5 10.5V19h11v-8.5"></path><path d="M10 19v-4.5h4V19"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">数据大屏</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="scheduler" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="scheduler" href="/static/douyin-origin/douyin-scheduler.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect><path d="M8 3.5v3"></path><path d="M16 3.5v3"></path><path d="M4.5 9.5h15"></path><path d="M8.5 13h2"></path><path d="M13.5 13h2"></path><path d="M8.5 16h2"></path><path d="M13.5 16h2"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">排期中心</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/douyin-origin/douyin-search.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="5.25"></circle><path d="m13.8 13.8 5 5"></path><path d="M7.8 10h4.4"></path><path d="M10 7.8v4.4"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">搜索采集</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/douyin-origin/douyin-monitor.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path><circle cx="12" cy="12.5" r="2.4"></circle><path d="M18.5 5.5 20 4"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">监控同行</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group is-active" data-group="self-comments" data-collapsible="false">
+                            <a class="sidebar-group-header active" data-sidebar="self-comments" href="/static/douyin-origin/douyin-self-comments.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6.5h12a2.5 2.5 0 0 1 2.5 2.5v5.2a2.5 2.5 0 0 1-2.5 2.5h-5.4l-4.1 3.1v-3.1H6A2.5 2.5 0 0 1 3.5 14.2V9A2.5 2.5 0 0 1 6 6.5Z"></path><path d="M8 10h8"></path><path d="M8 13h5"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">我的评论区</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/douyin-origin/douyin-collect.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path><path d="m10 10 3.2 2-3.2 2Z"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">视频评论</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/douyin-origin/douyin-interaction.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path><path d="M8 9.5h8"></path><path d="M8 12.5h5"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">私信互动</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/douyin-origin/douyin-follow.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path><circle cx="11" cy="8.6" r="3.1"></circle><path d="M17.5 8.5h3"></path><path d="M19 7v3"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">关注评论</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="inbox" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="inbox" href="/static/douyin-origin/douyin-inbox.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4.5 6.5a2.5 2.5 0 0 1 2.5-2.5h10a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5H7a2.5 2.5 0 0 1-2.5-2.5Z"></path><path d="m7 8.5 5 4 5-4"></path><path d="M7 15.5h4.5"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">私信聚合</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/douyin-origin/douyin-stranger-leads.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path><path d="M9 9h6"></path><path d="M9 12h3.5"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">私信引流</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/douyin-origin/douyin-mention.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 1 7.5-5.2"></path><path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path><path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">评论@客户</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="customers" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('customers')" aria-expanded="false" aria-controls="sidebar-group-customers">
+                                <span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path><circle cx="10.7" cy="8.7" r="3.2"></circle><path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path><path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">客户仓库</span></span></span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-customers">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html">全部客户</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-customer-pools.html#precise">精准客户</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-group="nurture" data-collapsible="true">
+                            <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('nurture')" aria-expanded="false" aria-controls="sidebar-group-nurture">
+                                <span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path><path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">养号仓库</span></span></span>
+                                <span class="sidebar-group-tail"><span class="sidebar-group-arrow" aria-hidden="true"></span></span>
+                            </button>
+                            <div class="sidebar-subnav" id="sidebar-group-nurture">
+                                <div class="sidebar-subnav-inner">
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-nurture.html">账号养号</a>
+                                    <a class="sidebar-subbtn" href="/static/douyin-origin/douyin-groups.html">群成员提取</a>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="sidebar-group" data-group="logs" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="logs" href="/static/douyin-origin/douyin-logs.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 5.5h10"></path><path d="M7 10.5h10"></path><path d="M7 15.5h6"></path><path d="M5 4.5h.01"></path><path d="M5 9.5h.01"></path><path d="M5 14.5h.01"></path><path d="M4.5 19.5h15"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">执行日志</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="config" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="config" href="/static/douyin-origin/douyin-config.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.6"></circle><path d="M12 4.5v2"></path><path d="M12 17.5v2"></path><path d="m6.7 6.7 1.4 1.4"></path><path d="m15.9 15.9 1.4 1.4"></path><path d="M4.5 12h2"></path><path d="M17.5 12h2"></path><path d="m6.7 17.3 1.4-1.4"></path><path d="m15.9 8.1 1.4-1.4"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">配置中心</span></span></span></a>
+                        </section>
+                        <section class="sidebar-group" data-group="guide" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="guide" href="/static/douyin-origin/douyin-guide.html"><span class="sidebar-group-main"><span class="sidebar-group-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.5 5.5h9A3.5 3.5 0 0 1 18 9v9.5h-9A3.5 3.5 0 0 1 5.5 15Z"></path><path d="M8.5 9h6"></path><path d="M8.5 12h5"></path><path d="M18 9.5h1.5v9H18"></path></svg></span><span class="sidebar-group-copy"><span class="sidebar-group-title">使用说明</span></span></span></a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div id="console-page" class="page active">
+                    <div id="self-comments-workspace-page" class="workspace-panel-page active">
+                        <div class="stack">
+                            <section class="card">
+                                <div class="panel-head">
+                                    <div>
+                                        <h3>我的评论区监控</h3>
+                                        <p class="subtle">读取当前登录账号自己的作品评论，新增评论会走精准客户 AI 筛选；命中高意向后，可自动在目标评论下回复。</p>
+                                    </div>
+                                    <div class="tools">
+                                        <button type="button" class="btn" onclick="updateSelfCommentMonitorStatus(false)">刷新状态</button>
+                                        <button type="button" class="btn btn-info" id="self-comment-run-once-btn" onclick="runSelfCommentMonitorOnce()">立即检查</button>
+                                    </div>
+                                </div>
+                                <div id="self-comment-status" class="self-comment-status-line">
+                                    <strong>监控未开启</strong><span>等待加载状态。</span>
+                                </div>
+                                <div class="metrics" style="margin-top:14px">
+                                    <div class="stat"><div class="label">本轮作品</div><div class="value" id="self-comment-video-count">0</div><div class="hint">最近一次检查读取的作品数</div></div>
+                                    <div class="stat"><div class="label">新增评论</div><div class="value" id="self-comment-new-count">0</div><div class="hint">未处理过的新评论</div></div>
+                                    <div class="stat"><div class="label">高意向</div><div class="value" id="self-comment-precise-count">0</div><div class="hint">AI 本轮筛出的客户</div></div>
+                                    <div class="stat"><div class="label">已回复</div><div class="value" id="self-comment-reply-count">0</div><div class="hint">本轮自动回复成功数</div></div>
+                                </div>
+                            </section>
+                            <section class="card">
+                                <div class="panel-head"><div><h3>监控设置</h3><p class="subtle">启动后会先立即检查一轮，之后按间隔继续检查；系统会跳过已处理过的评论，避免重复回复。</p></div></div>
+                                <div class="self-comment-form-grid">
+                                    <div class="self-comment-field">
+                                        <label for="self-comment-account-id">执行账号</label>
+                                        <select id="self-comment-account-id" onchange="updateSelfCommentMonitorStatus(true)"></select>
+                                    </div>
+                                    <div class="self-comment-field">
+                                        <label for="self-comment-interval-minutes">检查间隔（分钟）</label>
+                                        <input type="number" id="self-comment-interval-minutes" min="1" max="1440" step="1" value="30">
+                                    </div>
+                                    <div class="self-comment-field">
+                                        <label for="self-comment-max-videos">每轮作品数</label>
+                                        <input type="number" id="self-comment-max-videos" min="1" max="100" step="1" value="20">
+                                    </div>
+                                    <div class="self-comment-field">
+                                        <label for="self-comment-max-comments">每个作品评论数</label>
+                                        <input type="number" id="self-comment-max-comments" min="5" max="500" step="5" value="80">
+                                    </div>
+                                    <div class="self-comment-field">
+                                        <label for="self-comment-auto-reply">自动回复</label>
+                                        <select id="self-comment-auto-reply">
+                                            <option value="true" selected>开启</option>
+                                            <option value="false">只筛选不回复</option>
+                                        </select>
+                                    </div>
+                                    <div class="self-comment-field">
+                                        <label for="self-comment-reply-mode">回复方式</label>
+                                        <select id="self-comment-reply-mode" onchange="toggleSelfCommentReplyOptions()">
+                                            <option value="fixed" selected>固定回复</option>
+                                            <option value="ai">AI 自动回复</option>
+                                            <option value="rewrite">AI 同方向回复</option>
+                                        </select>
+                                    </div>
+                                    <div id="self-comment-contact-wrap" class="self-comment-field" style="display:none">
+                                        <label for="self-comment-contact">联系方式</label>
+                                        <input type="text" id="self-comment-contact" placeholder="例如微信号或绿泡泡">
+                                    </div>
+                                    <div class="self-comment-field full">
+                                        <label for="self-comment-reply-image">回复图片</label>
+                                        <label class="comment-image-upload" for="self-comment-reply-image">
+                                            <input class="comment-image-input" type="file" id="self-comment-reply-image" accept="image/png,image/jpeg,image/webp,image/gif" onchange="syncDouyinCommentImageName(this)">
+                                            <span class="comment-image-upload-main">
+                                                <span class="comment-image-upload-icon" aria-hidden="true">
+                                                    <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2.5"></rect><path d="m7.5 16 3.2-3.2 2.3 2.3 2.1-2.1 2.9 3"></path><circle cx="9" cy="9" r="1.2"></circle></svg>
+                                                </span>
+                                                <span class="comment-image-upload-copy">
+                                                    <span class="comment-image-upload-title">选择回复图片</span>
+                                                    <span class="comment-image-upload-name" id="self-comment-reply-image-name">未选择图片</span>
+                                                </span>
+                                            </span>
+                                            <span class="comment-image-upload-format">PNG / JPG / WEBP / GIF</span>
+                                        </label>
+                                    </div>
+                                    <div class="self-comment-panel active" id="self-comment-fixed-wrap">
+                                        <div class="self-comment-field full">
+                                            <label for="self-comment-reply-text">固定回复文案</label>
+                                            <textarea id="self-comment-reply-text" rows="3" placeholder="例如：可以的，我发你看看，方便的话留意一下私信"></textarea>
+                                        </div>
+                                    </div>
+                                    <div class="self-comment-panel" id="self-comment-ai-wrap">
+                                        <div class="self-comment-field full">
+                                            <label for="self-comment-ai-prompt">AI 回复方向</label>
+                                            <textarea id="self-comment-ai-prompt" rows="3" placeholder="例如：先自然回应对方问题，再引导继续沟通，语气轻一点"></textarea>
+                                        </div>
+                                    </div>
+                                    <div class="self-comment-panel" id="self-comment-rewrite-wrap">
+                                        <div class="self-comment-field full">
+                                            <label for="self-comment-rewrite-prompt">基准回复文案</label>
+                                            <textarea id="self-comment-rewrite-prompt" rows="3" placeholder="例如：可以的，这个确实要看具体情况，我发你详细看看"></textarea>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="table-tools" style="margin-top:14px">
+                                    <div class="subtle">自动回复会回复到目标评论下面，不会重新发一级评论。</div>
+                                    <div class="tools">
+                                        <button type="button" class="btn" id="self-comment-save-default-btn" onclick="saveSelfCommentDefaultReplyConfig()">保存默认配置</button>
+                                        <button type="button" class="btn btn-primary" id="self-comment-start-btn" onclick="startSelfCommentMonitor()">开启监控</button>
+                                        <button type="button" class="btn btn-warning" id="self-comment-stop-btn" onclick="stopSelfCommentMonitor()">停止监控</button>
+                                    </div>
+                                </div>
+                            </section>
+                            <section class="card">
+                                <div class="panel-head"><div><h3>评论结果</h3><p class="subtle">这里展示已沉淀的评论、AI 意向判断和回复状态。</p></div></div>
+                                <div class="self-comment-result-toolbar">
+                                    <div id="self-comment-page-info" class="subtle">暂无评论数据</div>
+                                    <div class="self-comment-result-filters">
+                                        <select id="self-comment-intent-filter" onchange="changeSelfCommentFilter()">
+                                            <option value="all">全部意向</option>
+                                            <option value="precise">只看高意向</option>
+                                            <option value="normal">只看普通</option>
+                                        </select>
+                                        <select id="self-comment-reply-filter" onchange="changeSelfCommentFilter()">
+                                            <option value="all">全部回复状态</option>
+                                            <option value="pending">待回复</option>
+                                            <option value="sent">已回复</option>
+                                            <option value="failed">失败</option>
+                                        </select>
+                                        <select id="self-comment-page-size" onchange="douyinSelfCommentCurrentPage=1;renderSelfCommentMonitorWorkspace()">
+                                            <option value="10">10 / 页</option>
+                                            <option value="20">20 / 页</option>
+                                            <option value="50">50 / 页</option>
+                                            <option value="100">100 / 页</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="table-shell self-comment-results-shell">
+                                    <table class="table self-comment-results-table">
+                                        <colgroup>
+                                            <col style="width:210px">
+                                            <col>
+                                            <col style="width:86px">
+                                            <col style="width:116px">
+                                            <col style="width:230px">
+                                            <col style="width:126px">
+                                            <col style="width:82px">
+                                        </colgroup>
+                                        <thead><tr><th>用户</th><th>评论内容</th><th class="nowrap">时间</th><th>意向</th><th>来源作品</th><th>回复状态</th><th>主页</th></tr></thead>
+                                        <tbody id="self-comment-tbody"><tr><td colspan="7" class="empty">暂无我的评论区监控结果。</td></tr></tbody>
+                                    </table>
+                                </div>
+                                <div id="self-comment-pagination" class="table-tools" style="margin-top:12px"></div>
+                            </section>
+                            <section class="card">
+                                <div class="panel-head"><div><h3>执行日志</h3><p class="subtle">监控、筛选和自动回复过程会写到这里。</p></div></div>
+                                <div id="log-content" class="logs"></div>
+                            </section>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <div id="task-user-modal" class="overlay"></div>
+    <div id="search-capture-modal" class="overlay"></div>
+    <div id="search-task-refilter-modal" class="overlay"></div>
+    <div id="confirm-modal" class="overlay"></div>
+    <script src="/static/douyin-origin/libs/echarts-5.3.3.min.js"></script>
+    <script src="/static/douyin-origin/geojson/china.js"></script>
+    <script src="/static/douyin-origin/douyin-workbench-shared.js?v=20260627-self-comments-layout"></script>
+</body>
+</html>

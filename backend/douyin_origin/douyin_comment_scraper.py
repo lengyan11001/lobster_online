@@ -5,7 +5,7 @@ import os
 import random
 import re
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
 import requests
@@ -75,7 +75,17 @@ def extract_aweme_id(video_url: str) -> str:
         idx = parts.index("video")
         if idx + 1 < len(parts):
             return parts[idx + 1]
+    query_match = re.search(r"(?:^|[?&])modal_id=(\d+)", parsed.query or "")
+    if query_match:
+        return query_match.group(1)
     return ""
+
+
+def build_douyin_modal_video_url(video_url: str) -> str:
+    aweme_id = extract_aweme_id(video_url)
+    if not aweme_id:
+        return str(video_url or "").strip()
+    return f"https://www.douyin.com/user/self?from_tab_name=main&modal_id={aweme_id}"
 
 
 def extract_sec_user_id(profile_url: str) -> str:
@@ -504,6 +514,8 @@ class DouyinCommentScraper:
         expected_fragments: List[str],
         logger: Optional[Callable[[str, str], None]] = None,
         action_label: str = "评论",
+        use_send_button: bool = True,
+        enter_first: bool = False,
     ) -> None:
         before_snapshot = await self._read_comment_submission_snapshot(page)
         before_comments = "\n".join(
@@ -519,7 +531,15 @@ class DouyinCommentScraper:
 
         send_attempts: List[str] = []
         send_locator = page.locator(self._comment_send_button_selector()).first
-        if bool(before_snapshot.get("send_button_visible")) and not bool(before_snapshot.get("send_button_disabled")):
+        if enter_first:
+            try:
+                await input_locator.click(timeout=5000, force=True)
+            except Exception:
+                pass
+            await page.keyboard.press("Enter")
+            send_attempts.append("回复框回车发送")
+            await page.wait_for_timeout(1200)
+        if use_send_button and bool(before_snapshot.get("send_button_visible")) and not bool(before_snapshot.get("send_button_disabled")):
             try:
                 await send_locator.click(timeout=5000, force=True)
                 send_attempts.append("点击发送按钮")
@@ -528,7 +548,7 @@ class DouyinCommentScraper:
                 self._emit(logger, f"[抖音{action_label}] 点击发送按钮失败，准备回退键盘发送：{exc}", "warning")
 
         after_snapshot = await self._read_comment_submission_snapshot(page)
-        if str(after_snapshot.get("editor_text", "") or "").strip():
+        if not enter_first and str(after_snapshot.get("editor_text", "") or "").strip():
             try:
                 await input_locator.click(timeout=5000, force=True)
             except Exception:
@@ -743,6 +763,73 @@ class DouyinCommentScraper:
                 "commentEntrySelectors": '[data-e2e="feed-comment-icon"], .comment-title, [class*="comment-title"]',
             },
         )
+
+    async def _wait_for_comment_collection_surface(
+        self,
+        page: Page,
+        logger: Optional[Callable[[str, str], None]] = None,
+        timeout_ms: int = 12000,
+    ) -> Dict:
+        deadline = asyncio.get_event_loop().time() + max(2.0, float(timeout_ms or 12000) / 1000.0)
+        last_state: Dict = {}
+        while asyncio.get_event_loop().time() < deadline:
+            state = await page.evaluate(
+                """
+                () => {
+                    const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                    const isVisible = (node) => {
+                        if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+                        const style = window.getComputedStyle(node);
+                        if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    const bodyText = normalize(document.body?.innerText || '');
+                    const listNodes = Array.from(document.querySelectorAll('[data-e2e="comment-list"], .comment-mainContent, [class*="comment-mainContent"]'));
+                    const visibleList = listNodes.find(isVisible);
+                    const hiddenList = listNodes.find((node) => !isVisible(node));
+                    const commentItems = Array.from(document.querySelectorAll('.comment-item-info-wrap, [data-e2e="comment-item"], .comment-item'))
+                        .filter((node) => isVisible(node) && !node.closest('.replyContainer'));
+                    const emptyHints = ['暂无评论', '还没有评论', '抢首评', '暂无更多评论', '没有更多评论', '评论加载失败'];
+                    const unavailableHints = ['评论功能已关闭', '暂不支持评论', '作者已关闭评论', '仅互关朋友可评论', '仅允许互关朋友评论'];
+                    const loginHints = ['请先登录后发表评论', '登录后即可参与互动讨论', '立即登录'];
+                    const emptyHint = emptyHints.find((item) => bodyText.includes(item)) || '';
+                    const unavailableHint = unavailableHints.find((item) => bodyText.includes(item)) || '';
+                    const loginHint = loginHints.find((item) => bodyText.includes(item)) || '';
+                    const visibleEditor = Array.from(document.querySelectorAll(
+                        '[contenteditable="true"], textarea, input, [class*="comment-input"], [class*="DraftEditor"]'
+                    )).some(isVisible);
+                    return {
+                        hasVisibleList: !!visibleList,
+                        hasHiddenList: !!hiddenList,
+                        visibleCommentCount: commentItems.length,
+                        emptyHint,
+                        unavailableHint,
+                        loginHint,
+                        visibleEditor,
+                    };
+                }
+                """
+            )
+            last_state = state if isinstance(state, dict) else {}
+            if last_state.get("loginHint"):
+                raise RuntimeError(f"当前抖音账号未处于可采集评论状态：{last_state.get('loginHint')}")
+            if last_state.get("unavailableHint"):
+                self._emit(logger, f"[抖音评论] 当前作品评论不可用：{last_state.get('unavailableHint')}", "warning")
+                return {**last_state, "ready": True, "empty": True}
+            if last_state.get("visibleCommentCount", 0) > 0 or last_state.get("hasVisibleList") or last_state.get("visibleEditor"):
+                return {**last_state, "ready": True, "empty": False}
+            if last_state.get("emptyHint"):
+                self._emit(logger, f"[抖音评论] 当前作品暂无可采集评论：{last_state.get('emptyHint')}", "info")
+                return {**last_state, "ready": True, "empty": True}
+            await page.wait_for_timeout(600)
+
+        if last_state.get("hasHiddenList") and not last_state.get("visibleCommentCount"):
+            self._emit(logger, "[抖音评论] 评论列表存在但未显示，按空评论作品跳过", "warning")
+            return {**last_state, "ready": True, "empty": True}
+        raise RuntimeError("评论区打开超时，未检测到评论列表、输入框或空评论提示")
 
     async def _read_like_surface_state(self, page: Page) -> Dict:
         return await page.evaluate(
@@ -987,57 +1074,61 @@ class DouyinCommentScraper:
         page: Page,
         input_locator,
         logger: Optional[Callable[[str, str], None]] = None,
+        click_generic_helpers: bool = True,
     ) -> None:
-        placeholder_locator = page.locator(self._visible_comment_placeholder_selector()).first
-        try:
-            await placeholder_locator.wait_for(state="visible", timeout=1200)
-            label = str((await placeholder_locator.text_content()) or "").strip() or "评论占位提示"
-            await placeholder_locator.click(timeout=5000, force=True)
-            self._emit(logger, f"[抖音视频评论] 已点击评论占位提示：{label}", "info")
-            await page.wait_for_timeout(500)
-        except Exception:
-            pass
+        if click_generic_helpers:
+            placeholder_locator = page.locator(self._visible_comment_placeholder_selector()).first
+            try:
+                await placeholder_locator.wait_for(state="visible", timeout=1200)
+                label = str((await placeholder_locator.text_content()) or "").strip() or "评论占位提示"
+                await placeholder_locator.click(timeout=5000, force=True)
+                self._emit(logger, f"[抖音视频评论] 已点击评论占位提示：{label}", "info")
+                await page.wait_for_timeout(500)
+            except Exception:
+                pass
 
-        draft_locator = page.locator(
-            '.comment-input-inner-container .DraftEditor-root:visible, '
-            '.comment-input-inner-container .DraftEditor-editorContainer:visible, '
-            '.comment-input-inner-container .richtext-container:visible, '
-            '.comment-input-outer-container .DraftEditor-root:visible, '
-            '.comment-input-outer-container .DraftEditor-editorContainer:visible, '
-            '.comment-input-outer-container .richtext-container:visible, '
-            '[class*="comment-input-inner-container"] .DraftEditor-root:visible, '
-            '[class*="comment-input-inner-container"] .DraftEditor-editorContainer:visible, '
-            '[class*="comment-input-inner-container"] .richtext-container:visible, '
-            '[class*="comment-input-outer-container"] .DraftEditor-root:visible, '
-            '[class*="comment-input-outer-container"] .DraftEditor-editorContainer:visible, '
-            '[class*="comment-input-outer-container"] .richtext-container:visible'
-        ).first
-        try:
-            await draft_locator.wait_for(state="visible", timeout=1200)
-            await draft_locator.click(timeout=5000, force=True)
-            self._emit(logger, "[抖音视频评论] 已点击 DraftEditor 输入层", "info")
-            await page.wait_for_timeout(500)
-        except Exception:
-            pass
+        if click_generic_helpers:
+            draft_locator = page.locator(
+                '.comment-input-inner-container .DraftEditor-root:visible, '
+                '.comment-input-inner-container .DraftEditor-editorContainer:visible, '
+                '.comment-input-inner-container .richtext-container:visible, '
+                '.comment-input-outer-container .DraftEditor-root:visible, '
+                '.comment-input-outer-container .DraftEditor-editorContainer:visible, '
+                '.comment-input-outer-container .richtext-container:visible, '
+                '[class*="comment-input-inner-container"] .DraftEditor-root:visible, '
+                '[class*="comment-input-inner-container"] .DraftEditor-editorContainer:visible, '
+                '[class*="comment-input-inner-container"] .richtext-container:visible, '
+                '[class*="comment-input-outer-container"] .DraftEditor-root:visible, '
+                '[class*="comment-input-outer-container"] .DraftEditor-editorContainer:visible, '
+                '[class*="comment-input-outer-container"] .richtext-container:visible'
+            ).first
+            try:
+                await draft_locator.wait_for(state="visible", timeout=1200)
+                await draft_locator.click(timeout=5000, force=True)
+                self._emit(logger, "[抖音视频评论] 已点击 DraftEditor 输入层", "info")
+                await page.wait_for_timeout(500)
+            except Exception:
+                pass
 
-        container_locator = page.locator(self._visible_comment_container_selector()).first
-        try:
-            await container_locator.wait_for(state="visible", timeout=1200)
-            box = await container_locator.bounding_box()
-            if box:
-                click_x = max(20, min(box["width"] - 20, 54))
-                click_y = max(12, min(box["height"] - 12, box["height"] / 2))
-                await container_locator.click(
-                    position={"x": click_x, "y": click_y},
-                    timeout=5000,
-                    force=True,
-                )
-            else:
-                await container_locator.click(timeout=5000, force=True)
-            self._emit(logger, "[抖音视频评论] 已点击评论输入容器", "info")
-            await page.wait_for_timeout(500)
-        except Exception:
-            pass
+        if click_generic_helpers:
+            container_locator = page.locator(self._visible_comment_container_selector()).first
+            try:
+                await container_locator.wait_for(state="visible", timeout=1200)
+                box = await container_locator.bounding_box()
+                if box:
+                    click_x = max(20, min(box["width"] - 20, 54))
+                    click_y = max(12, min(box["height"] - 12, box["height"] / 2))
+                    await container_locator.click(
+                        position={"x": click_x, "y": click_y},
+                        timeout=5000,
+                        force=True,
+                    )
+                else:
+                    await container_locator.click(timeout=5000, force=True)
+                self._emit(logger, "[抖音视频评论] 已点击评论输入容器", "info")
+                await page.wait_for_timeout(500)
+            except Exception:
+                pass
 
         await input_locator.scroll_into_view_if_needed()
         try:
@@ -2537,6 +2628,130 @@ class DouyinCommentScraper:
             details.append(f"可见提示：{placeholder_text[:40]}")
         detail_text = "；".join(details) if details else "未识别到评论输入区域"
         raise RuntimeError(f"已打开评论区，但未检测到可用评论输入框：{detail_text}")
+
+    async def _click_video_center_for_shortcuts(
+        self,
+        page: Page,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict:
+        target = await page.evaluate(
+            """
+            () => {
+                const isVisible = (node) => {
+                    if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+                    const style = window.getComputedStyle(node);
+                    const rect = node.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'
+                        && rect.width > 40 && rect.height > 40;
+                };
+                const toItem = (node, label) => {
+                    const rect = node.getBoundingClientRect();
+                    return {
+                        label,
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                        width: rect.width,
+                        height: rect.height,
+                        area: rect.width * rect.height,
+                    };
+                };
+                const selectors = [
+                    ['video', 'video'],
+                    ['[data-e2e="player-container"]', 'player-container'],
+                    ['[data-e2e="video-detail"]', 'video-detail'],
+                    ['.basePlayerContainer', 'basePlayerContainer'],
+                    ['[class*="Player"]', 'class*Player'],
+                    ['[class*="player"]', 'class*player'],
+                ];
+                const items = [];
+                const seen = new Set();
+                for (const [selector, label] of selectors) {
+                    for (const node of Array.from(document.querySelectorAll(selector))) {
+                        if (!isVisible(node) || seen.has(node)) continue;
+                        seen.add(node);
+                        const item = toItem(node, label);
+                        const inViewport = item.x > 0 && item.x < window.innerWidth && item.y > 0 && item.y < window.innerHeight;
+                        if (inViewport) items.push(item);
+                    }
+                }
+                items.sort((a, b) => b.area - a.area);
+                const best = items[0];
+                if (best) {
+                    return best;
+                }
+                return {
+                    label: 'viewport-fallback',
+                    x: Math.max(80, Math.min(window.innerWidth * 0.45, window.innerWidth - 80)),
+                    y: Math.max(80, Math.min(window.innerHeight * 0.50, window.innerHeight - 80)),
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    area: window.innerWidth * window.innerHeight,
+                };
+            }
+            """
+        )
+        click_x = float((target or {}).get("x", 0) or 0)
+        click_y = float((target or {}).get("y", 0) or 0)
+        label = str((target or {}).get("label", "") or "video-center")
+        if click_x <= 0 or click_y <= 0:
+            raise RuntimeError("未能计算视频中心点击坐标")
+        await page.mouse.move(click_x, click_y)
+        await page.wait_for_timeout(120)
+        await page.mouse.click(click_x, click_y, button="left")
+        await page.wait_for_timeout(450)
+        self._emit(logger, f"[抖音视频评论] 已点击视频中心以激活快捷键：{label} ({int(click_x)}, {int(click_y)})", "info")
+        return target or {}
+
+    async def _open_video_comment_panel_by_shortcuts(
+        self,
+        page: Page,
+        logger: Optional[Callable[[str, str], None]] = None,
+        like_before_open: bool = True,
+    ) -> None:
+        await self._click_video_center_for_shortcuts(page, logger=logger)
+
+        if like_before_open:
+            liked = False
+            try:
+                surface_before = await self._read_like_surface_state(page)
+                state_before = str((surface_before or {}).get("state", "") or "").strip()
+                color_before = str((surface_before or {}).get("iconColor", "") or "").strip().lower()
+                liked = bool(
+                    (state_before and "no-digged" not in state_before)
+                    or "#fe2c55" in color_before
+                    or "254, 44, 85" in color_before
+                )
+            except Exception:
+                liked = False
+
+            if liked:
+                self._emit(logger, "[抖音视频评论] 当前作品已点赞，跳过快捷键 z，避免取消点赞", "info")
+            else:
+                await page.keyboard.press("z")
+                await page.wait_for_timeout(900)
+                self._emit(logger, "[抖音视频评论] 已按快捷键 z 执行点赞", "success")
+        else:
+            self._emit(logger, "[抖音评论区监控] 已跳过点赞，直接准备打开评论区", "info")
+
+        for attempt in range(1, 3):
+            await page.keyboard.press("x")
+            await page.wait_for_timeout(1600)
+            self._emit(logger, f"[抖音视频评论] 已按快捷键 x 打开评论区，第 {attempt}/2 次", "info")
+            try:
+                await self._wait_for_visible_comment_editor(page, timeout=1200)
+                return
+            except Exception:
+                pass
+            try:
+                state = await self._read_comment_surface_state(page)
+                if (
+                    (state or {}).get("hasVisibleContainer")
+                    or (state or {}).get("hasCommentList")
+                    or str((state or {}).get("placeholderText", "") or "").strip()
+                ):
+                    return
+            except Exception:
+                pass
 
     async def _like_current_work_if_needed(
         self,
@@ -6122,13 +6337,15 @@ class DouyinCommentScraper:
         profile_url: str,
         comment_text: str,
         expected_username: str = "",
+        image_path: str = "",
         logger: Optional[Callable[[str, str], None]] = None,
     ) -> Dict:
         profile_url = str(profile_url or "").strip()
         comment_text = str(comment_text or "").strip()
+        image_path = str(image_path or "").strip()
         if not profile_url:
             raise ValueError("缺少用户主页地址")
-        if not comment_text:
+        if not comment_text and not image_path:
             raise ValueError("评论内容不能为空")
 
         profile_result = await self.follow_user_and_find_first_post(
@@ -6144,6 +6361,8 @@ class DouyinCommentScraper:
             video_url,
             comment_text,
             expected_title=f"{expected_username or '该用户'}的首个作品",
+            image_path=image_path,
+            use_modal_entry=bool(image_path),
             logger=logger,
         )
         summary = "已关注并完成首作品评论" if profile_result.get("followed") else "已是关注状态，并完成首作品评论"
@@ -6164,22 +6383,31 @@ class DouyinCommentScraper:
         video_url: str,
         comment_text: str,
         expected_title: str = "",
+        image_path: str = "",
+        use_modal_entry: bool = False,
         logger: Optional[Callable[[str, str], None]] = None,
     ) -> Dict:
         video_url = str(video_url or "").strip()
         comment_text = str(comment_text or "").strip()
+        image_path = str(image_path or "").strip()
+        target_url = build_douyin_modal_video_url(video_url) if use_modal_entry or image_path else video_url
+        if image_path and not os.path.isfile(image_path):
+            raise ValueError(f"评论图片不存在：{image_path}")
         if not video_url:
             raise ValueError("缺少作品地址")
-        if not comment_text:
+        if not comment_text and not image_path:
             raise ValueError("评论内容不能为空")
 
         page = await self._new_page(logger=logger)
         try:
             self._emit(logger, f"[抖音视频评论] 打开视频：{expected_title or video_url}")
-            await page.goto(video_url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(4000)
             await self._raise_if_login_intercept(page)
-            await self._like_current_work_if_needed(page, logger=logger)
+            if image_path or use_modal_entry:
+                await self._open_video_comment_panel_by_shortcuts(page, logger=logger)
+            else:
+                await self._like_current_work_if_needed(page, logger=logger)
 
             await self._ensure_comment_panel_ready(page, logger=logger)
             input_locator = await self._ensure_comment_input_ready(page, logger=logger)
@@ -6207,18 +6435,23 @@ class DouyinCommentScraper:
                     await input_locator.fill("", timeout=5000)
                 except Exception:
                     pass
-                await input_locator.type(comment_text, delay=35, timeout=10000)
+                if comment_text:
+                    await input_locator.type(comment_text, delay=35, timeout=10000)
             else:
                 await input_locator.click(timeout=5000, force=True)
                 await page.keyboard.press("Control+A")
                 await page.keyboard.press("Backspace")
-                await page.keyboard.type(comment_text, delay=35)
+                if comment_text:
+                    await page.keyboard.type(comment_text, delay=35)
+
+            if image_path:
+                await self._attach_comment_image(page, image_path, logger=logger)
 
             self._emit(logger, f"[抖音视频评论] 已输入评论内容：{comment_text[:30]}")
             await self._submit_comment_and_confirm(
                 page,
                 input_locator,
-                [comment_text],
+                [comment_text] if comment_text else [],
                 logger=logger,
                 action_label="视频评论",
             )
@@ -6227,11 +6460,820 @@ class DouyinCommentScraper:
             return {
                 "success": True,
                 "video_url": video_url,
+                "target_url": target_url,
                 "comment_text": comment_text,
+                "image_path": image_path,
                 "title": expected_title,
             }
         finally:
             await page.close()
+
+    async def _type_and_submit_comment_reply(
+        self,
+        page: Page,
+        reply_text: str,
+        image_path: str = "",
+        logger: Optional[Callable[[str, str], None]] = None,
+        reply_marker: str = "",
+    ) -> None:
+        reply_text = str(reply_text or "").strip()
+        image_path = str(image_path or "").strip()
+        reply_marker = str(reply_marker or "").strip()
+        if not reply_text and not image_path:
+            raise ValueError("回复内容不能为空")
+
+        if not reply_marker:
+            reply_marker = await self._find_visible_reply_editor(page)
+        if not reply_marker:
+            raise RuntimeError("未识别到回复态输入框，已取消发送以避免发成一级评论")
+
+        input_locator = page.locator(f'[data-douyin-reply-editor-target="{reply_marker}"]').first
+        if await input_locator.count() <= 0:
+            raise RuntimeError("回复输入框已失效，已取消发送以避免发成一级评论")
+
+        await self._focus_comment_editor(page, input_locator, logger=logger, click_generic_helpers=False)
+        input_locator = page.locator(f'[data-douyin-reply-editor-target="{reply_marker}"]').first
+        if await input_locator.count() <= 0:
+            raise RuntimeError("回复输入框聚焦后已失效，已取消发送以避免发成一级评论")
+
+        editor_meta = {"tag": "", "isContentEditable": False}
+        try:
+            editor_meta = await input_locator.evaluate(
+                """
+                (el) => ({
+                    tag: String(el?.tagName || '').toLowerCase(),
+                    isContentEditable: !!el?.isContentEditable,
+                })
+                """
+            )
+        except Exception:
+            editor_meta = {"tag": "", "isContentEditable": False}
+
+        tag_name = str((editor_meta or {}).get("tag", "") or "").lower()
+        is_contenteditable = bool((editor_meta or {}).get("isContentEditable"))
+        if tag_name in {"input", "textarea"} and not is_contenteditable:
+            try:
+                await input_locator.fill("", timeout=5000)
+            except Exception:
+                pass
+            if reply_text:
+                await input_locator.type(reply_text, delay=35, timeout=10000)
+        else:
+            await input_locator.click(timeout=5000, force=True)
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            if reply_text:
+                await page.keyboard.type(reply_text, delay=35)
+
+        if image_path:
+            await self._attach_comment_image(page, image_path, logger=logger)
+
+        await self._submit_comment_and_confirm(
+            page,
+            input_locator,
+            [reply_text] if reply_text else [],
+            logger=logger,
+            action_label="评论区回复",
+            use_send_button=False,
+            enter_first=True,
+        )
+
+    async def _find_visible_reply_editor(self, page: Page, target_username: str = "") -> str:
+        marker = await page.evaluate(
+            """
+            (targetUsernameValue) => {
+                const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                const targetUsername = normalize(targetUsernameValue);
+                const isVisible = (node) => {
+                    if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+                    const style = window.getComputedStyle(node);
+                    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+                    const rect = node.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                };
+                const editorSelectors = [
+                    '[contenteditable="true"]',
+                    'textarea',
+                    'input'
+                ];
+                const inputShellSelectors = [
+                    '.comment-input-inner-container',
+                    '.comment-input-outer-container',
+                    '.comment-input-container',
+                    '[class*="comment-input-inner-container"]',
+                    '[class*="comment-input-outer-container"]',
+                    '[class*="comment-input-container"]'
+                ].join(',');
+                const editorSet = new Set();
+                for (const selector of editorSelectors) {
+                    for (const editor of Array.from(document.querySelectorAll(selector))) {
+                        if (isVisible(editor)) editorSet.add(editor);
+                    }
+                }
+                const scored = [];
+                for (const editor of Array.from(editorSet)) {
+                    const container = editor.closest(inputShellSelectors) || editor.parentElement;
+                    if (!container || !isVisible(container)) continue;
+                    let context = container.parentElement || container;
+                    for (let current = container.parentElement; current && current !== document.body; current = current.parentElement) {
+                        const hasInputShell = current.querySelector?.(inputShellSelectors);
+                        const contextText = normalize(current.innerText || current.textContent || '');
+                        if (hasInputShell && (/回复\\s*@|回复@|回復\\s*@|回復@/.test(contextText) || (targetUsername && contextText.includes(targetUsername)))) {
+                            context = current;
+                            break;
+                        }
+                    }
+                    const text = normalize(`${container.innerText || container.textContent || ''} ${context.innerText || context.textContent || ''}`);
+                    const attrs = normalize(`${container.getAttribute('aria-label') || ''} ${container.getAttribute('placeholder') || ''} ${container.className || ''} ${context.className || ''}`);
+                    const haystack = `${text} ${attrs} ${normalize(editor.getAttribute('aria-label') || '')} ${normalize(editor.getAttribute('placeholder') || '')}`;
+                    const hasReplyHint = /回复|回復/.test(haystack);
+                    const hasTargetHint = !!targetUsername && haystack.includes(targetUsername);
+                    const hasReplyAtHint = /回复\\s*@|回复@|回復\\s*@|回復@/.test(haystack);
+                    const active = document.activeElement === editor || !!editor.contains?.(document.activeElement) || !!container.contains?.(document.activeElement);
+                    let score = 0;
+                    if (hasReplyHint) score += 12;
+                    if (hasReplyAtHint) score += 12;
+                    if (hasTargetHint) score += 8;
+                    if (active) score += 4;
+                    if (!hasReplyHint && !hasTargetHint && /评论|留言|说点什么|精彩评论|留下你的精彩评论/.test(haystack)) score -= 6;
+                    const rect = container.getBoundingClientRect();
+                    if (rect.top < window.innerHeight * 0.82) score += 2;
+                    if (!hasReplyHint && !hasTargetHint && rect.top > window.innerHeight * 0.86) score -= 2;
+                    scored.push({ container, editor, score, top: rect.top, text: haystack.slice(0, 120), hasReplyHint, hasTargetHint, hasReplyAtHint, active });
+                }
+                scored.sort((a, b) => b.score - a.score || a.top - b.top);
+                const best = scored[0];
+                if (!best || best.score < 8 || (!best.hasReplyHint && !best.hasTargetHint && !best.hasReplyAtHint)) return '';
+                const marker = `reply-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+                best.editor.setAttribute('data-douyin-reply-editor-target', marker);
+                return marker;
+            }
+            """,
+            str(target_username or "").strip(),
+        )
+        return str(marker or "").strip()
+
+    async def reply_to_loaded_video_comment(
+        self,
+        page: Page,
+        reply_text: str,
+        target_comment: Dict,
+        image_path: str = "",
+        logger: Optional[Callable[[str, str], None]] = None,
+        allow_scroll: bool = False,
+    ) -> Dict:
+        reply_text = str(reply_text or "").strip()
+        image_path = str(image_path or "").strip()
+        if image_path and not os.path.isfile(image_path):
+            raise ValueError(f"评论图片不存在：{image_path}")
+        if not reply_text and not image_path:
+            raise ValueError("回复内容不能为空")
+
+        click_result = await self._find_and_click_comment_reply_button(
+            page,
+            target_comment,
+            logger=logger,
+            max_scroll_rounds=1 if not allow_scroll else 10,
+            allow_scroll=allow_scroll,
+        )
+        await page.wait_for_timeout(500)
+        reply_marker = str((click_result or {}).get("reply_marker", "") or "").strip()
+        if not reply_marker:
+            reply_marker = await self._find_visible_reply_editor(page, target_username=target_username)
+        if not reply_marker:
+            raise RuntimeError("已点击目标评论回复按钮，但未检测到回复输入框，已取消发送以避免发成一级评论")
+        self._emit(logger, "[抖音评论区监控] 已确认进入目标评论回复输入框", "info")
+        try:
+            await page.locator(f'[data-douyin-reply-editor-target="{reply_marker}"]').first.click(timeout=3000, force=True)
+        except Exception:
+            pass
+        await self._type_and_submit_comment_reply(page, reply_text, image_path=image_path, logger=logger, reply_marker=reply_marker)
+        self._emit(logger, f"[抖音评论区监控] 已原地回复评论：{reply_text[:30]}", "success")
+        return {"success": True, "reply_text": reply_text, "image_path": image_path, "target_comment": target_comment}
+
+    async def _find_and_click_comment_reply_button(
+        self,
+        page: Page,
+        target_comment: Dict,
+        logger: Optional[Callable[[str, str], None]] = None,
+        max_scroll_rounds: int = 10,
+        allow_scroll: bool = True,
+    ) -> Dict:
+        target_username = str((target_comment or {}).get("username", "") or "").strip()
+        target_profile_url = str((target_comment or {}).get("profile_url", "") or "").strip()
+        target_content = str(
+            (target_comment or {}).get("comment", "")
+            or (target_comment or {}).get("content", "")
+            or ""
+        ).strip()
+        if not target_username and not target_content:
+            raise RuntimeError("缺少可定位的目标评论信息")
+
+        target_payload = {
+            "username": target_username,
+            "profileUrl": target_profile_url,
+            "content": target_content,
+            "allowScroll": bool(allow_scroll),
+        }
+
+        for round_index in range(max(1, int(max_scroll_rounds or 10))):
+            result = await page.evaluate(
+                """
+                (target) => {
+                    const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                    const targetUsername = normalize(target.username);
+                    const targetProfileUrl = normalize(target.profileUrl);
+                    const targetContent = normalize(target.content);
+                    const isVisible = (node) => {
+                        if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+                        const style = window.getComputedStyle(node);
+                        if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    const itemSet = new Set();
+                    for (const item of Array.from(document.querySelectorAll('[data-e2e="comment-item"]'))) {
+                        if (!item.closest('.replyContainer') && item.querySelector('a[href*="/user/"]')) itemSet.add(item);
+                    }
+                    for (const infoWrap of Array.from(document.querySelectorAll('.comment-item-info-wrap'))) {
+                        if (infoWrap.closest('.replyContainer')) continue;
+                        const item = infoWrap.closest('[data-e2e="comment-item"], .comment-item, li, [data-e2e*="comment"]') || infoWrap.parentElement;
+                        if (item && item.querySelector('a[href*="/user/"]')) itemSet.add(item);
+                    }
+                    for (const link of Array.from(document.querySelectorAll('a[href*="/user/"]'))) {
+                        const item = link.closest('[data-e2e*="comment"], li, article, [role="listitem"]');
+                        if (item && !item.closest('.replyContainer')) itemSet.add(item);
+                    }
+
+                    const items = Array.from(itemSet).filter(isVisible);
+                    const scoreItem = (item) => {
+                        const authorLink =
+                            item.querySelector('.comment-item-info-wrap a[href*="/user/"]') ||
+                            item.querySelector('a[href*="/user/"]');
+                        const username = normalize(authorLink?.innerText || authorLink?.textContent || '');
+                        const profileUrl = normalize(authorLink?.href || '');
+                        const text = normalize(item.innerText || item.textContent || '');
+                        let score = 0;
+                        if (targetUsername && username === targetUsername) score += 6;
+                        else if (targetUsername && username && (username.includes(targetUsername) || targetUsername.includes(username))) score += 3;
+                        if (targetProfileUrl && profileUrl && profileUrl === targetProfileUrl) score += 7;
+                        if (targetContent && text.includes(targetContent)) score += 10;
+                        else if (targetContent) {
+                            const compactTarget = targetContent.replace(/\\s+/g, '');
+                            const compactText = text.replace(/\\s+/g, '');
+                            if (compactTarget && compactText.includes(compactTarget.slice(0, Math.min(compactTarget.length, 32)))) score += 5;
+                        }
+                        return { item, score, username, profileUrl, text };
+                    };
+                    const scored = items.map(scoreItem).filter((entry) => entry.score >= 8);
+                    scored.sort((a, b) => b.score - a.score);
+                    const best = scored[0];
+                    if (best) {
+                        best.item.scrollIntoView({ block: 'center', inline: 'nearest' });
+                        const allActionNodes = Array.from(best.item.querySelectorAll('button, span, div, a, [tabindex], [data-popupid]'))
+                            .filter(isVisible)
+                            .filter((node) => !node.closest('.replyContainer'));
+                        const nodeText = (node) => normalize(node.innerText || node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || '');
+                        const isReplyText = (text) => {
+                            if (!text) return false;
+                            if (/展开|收起|条回复|条回復|查看|前往西瓜视频/.test(text)) return false;
+                            return text === '回复' || text === '回復' || /(^|\\s)(回复|回復)(\\s|$)/.test(text);
+                        };
+                        const actionNodes = allActionNodes
+                            .map((node) => {
+                                const replyShell = node.matches?.('[tabindex], [data-popupid]')
+                                    && Array.from(node.querySelectorAll('span, div')).some((child) => isVisible(child) && isReplyText(nodeText(child)));
+                                const hasPopup = node.hasAttribute?.('data-popupid') || node.getAttribute?.('aria-describedby');
+                                const text = nodeText(node);
+                                const rect = node.getBoundingClientRect();
+                                return { node, text, rect, replyShell, hasPopup };
+                            })
+                            .filter((entry) => entry.replyShell || isReplyText(entry.text))
+                            .sort((a, b) => {
+                                const shellDelta = (a.replyShell ? 0 : 1) - (b.replyShell ? 0 : 1);
+                                if (shellDelta) return shellDelta;
+                                const popupDelta = (a.hasPopup ? 0 : 1) - (b.hasPopup ? 0 : 1);
+                                if (popupDelta) return popupDelta;
+                                const exactDelta = ((a.text === '回复' || a.text === '回復') ? 0 : 1) - ((b.text === '回复' || b.text === '回復') ? 0 : 1);
+                                if (exactDelta) return exactDelta;
+                                return (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height);
+                            });
+                        const action = actionNodes[0]?.node;
+                        if (action) {
+                            const clickTarget = action.closest('[data-popupid], [tabindex="0"], button, a, [role="button"]') || action;
+                            const pointNodes = [clickTarget, action, action.parentElement, clickTarget.parentElement]
+                                .filter(Boolean)
+                                .filter((node, index, arr) => arr.indexOf(node) === index)
+                                .filter(isVisible);
+                            const clickPoints = pointNodes.map((node) => {
+                                const rect = node.getBoundingClientRect();
+                                return {
+                                    x: rect.left + rect.width / 2,
+                                    y: rect.top + rect.height / 2,
+                                    width: rect.width,
+                                    height: rect.height,
+                                    text: normalize(node.innerText || node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || ''),
+                                    tag: String(node.tagName || '').toLowerCase(),
+                                    class_name: String(node.className || '').slice(0, 120),
+                                };
+                            });
+                            return {
+                                found: true,
+                                clicked: true,
+                                click_points: clickPoints,
+                                score: best.score,
+                                username: best.username,
+                                profile_url: best.profileUrl,
+                                content_preview: best.text.slice(0, 120),
+                            };
+                        }
+                        return {
+                            found: true,
+                            clicked: false,
+                            score: best.score,
+                            username: best.username,
+                            profile_url: best.profileUrl,
+                            content_preview: best.text.slice(0, 120),
+                            reason: '未找到回复按钮',
+                        };
+                    }
+
+                    if (!target.allowScroll) {
+                        return { found: false, clicked: false, visible_count: items.length, skipped_scroll: true };
+                    }
+
+                    const main = document.querySelector('.comment-mainContent');
+                    if (main) {
+                        let scroller = main;
+                        while (scroller && scroller.parentElement) {
+                            if (scroller.scrollHeight > scroller.clientHeight + 60) break;
+                            scroller = scroller.parentElement;
+                        }
+                        if (scroller && scroller.scrollHeight > scroller.clientHeight + 60) {
+                            scroller.scrollTop += Math.max(scroller.clientHeight * 0.88, 650);
+                        } else {
+                            window.scrollBy(0, 800);
+                        }
+                    } else {
+                        window.scrollBy(0, 800);
+                    }
+                    return { found: false, clicked: false, visible_count: items.length };
+                }
+                """,
+                target_payload,
+            )
+            if result and result.get("clicked"):
+                click_points = result.get("click_points") if isinstance(result.get("click_points"), list) else []
+                last_error = ""
+                for point in click_points[:4]:
+                    try:
+                        before_url = page.url
+                        x = float((point or {}).get("x", 0) or 0)
+                        y = float((point or {}).get("y", 0) or 0)
+                        if x <= 0 or y <= 0:
+                            continue
+                        await page.mouse.move(x, y)
+                        await page.wait_for_timeout(120)
+                        await page.mouse.click(x, y)
+                        self._emit(
+                            logger,
+                            f"[抖音评论区监控] 已鼠标点击目标评论回复入口：{target_username or target_content[:20]}，点击点=({int(x)},{int(y)})",
+                            "info",
+                        )
+                        await page.wait_for_timeout(1500)
+                        reply_marker = await self._find_visible_reply_editor(page, target_username=target_username)
+                        if reply_marker:
+                            result["reply_marker"] = reply_marker
+                            return result
+                        if page.url != before_url:
+                            self._emit(logger, f"[抖音评论区监控] 点击回复后页面地址变化：{page.url}", "warning")
+                    except Exception as exc:
+                        last_error = str(exc)
+                        continue
+                raise RuntimeError(
+                    f"已找到目标评论的回复入口，但点击后未出现回复输入框"
+                    + (f"：{last_error}" if last_error else "")
+                )
+            if result and result.get("found") and not result.get("clicked"):
+                raise RuntimeError(str(result.get("reason") or "已找到目标评论，但未找到回复按钮"))
+            await page.wait_for_timeout(900)
+
+        raise RuntimeError(f"未在评论列表中找到目标评论：{target_username or ''} {target_content[:30]}")
+
+    async def reply_to_video_comment(
+        self,
+        video_url: str,
+        reply_text: str,
+        target_comment: Dict,
+        expected_title: str = "",
+        image_path: str = "",
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict:
+        video_url = str(video_url or "").strip()
+        reply_text = str(reply_text or "").strip()
+        image_path = str(image_path or "").strip()
+        if not video_url:
+            raise ValueError("缺少作品地址")
+        if image_path and not os.path.isfile(image_path):
+            raise ValueError(f"评论图片不存在：{image_path}")
+        if not reply_text and not image_path:
+            raise ValueError("回复内容不能为空")
+
+        target_url = build_douyin_modal_video_url(video_url)
+        page = await self._new_page(logger=logger)
+        try:
+            self._emit(logger, f"[抖音评论区监控] 打开自己的作品评论区：{expected_title or video_url}", "info")
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(4000)
+            await self._raise_if_login_intercept(page)
+            await self._open_video_comment_panel_by_shortcuts(page, logger=logger, like_before_open=False)
+            await self._ensure_comment_panel_ready(page, logger=logger)
+
+            await self.reply_to_loaded_video_comment(
+                page,
+                reply_text,
+                target_comment,
+                image_path=image_path,
+                logger=logger,
+                allow_scroll=True,
+            )
+            self._emit(logger, f"[抖音评论区监控] 已回复评论：{reply_text[:30]}", "success")
+            return {
+                "success": True,
+                "video_url": video_url,
+                "target_url": target_url,
+                "reply_text": reply_text,
+                "image_path": image_path,
+                "title": expected_title,
+                "target_comment": target_comment,
+            }
+        finally:
+            await page.close()
+
+    async def _extract_visible_comment_batch(
+        self,
+        page: Page,
+        seen_keys: set,
+        *,
+        batch_size: int = 10,
+        max_total: int = 80,
+        mark_seen: bool = True,
+    ) -> List[Dict]:
+        raw_comments = await page.evaluate(
+            """
+            () => {
+                const rows = [];
+                const normalizeText = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+                const isVisible = (el) => {
+                    if (!el || !(el instanceof Element)) return false;
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+                    return Boolean(el.getClientRects().length || el.offsetWidth || el.offsetHeight);
+                };
+                const isActionText = (text) => {
+                    const value = normalizeText(text);
+                    if (!value) return true;
+                    if (/^\\.{2,}$/.test(value)) return true;
+                    const exactActions = ['回复', '分享', '举报', '删除', '置顶', '取消置顶', '作者赞过'];
+                    if (exactActions.includes(value)) return true;
+                    if ((value.startsWith('展开') || value.startsWith('收起')) && (value.includes('回复') || value.includes('回覆') || value.includes('条'))) return true;
+                    if (value.startsWith('加载中') || value.startsWith('正在加载') || value.startsWith('没有更多')) return true;
+                    return false;
+                };
+                const isMetaText = (text) => {
+                    const value = normalizeText(text);
+                    if (!value || value.length > 60) return false;
+                    const timeWords = ['刚刚', '分钟前', '小时前', '天前', '周前', '月前', '年前', '昨天', '今天', '前天'];
+                    if (timeWords.some((word) => value.includes(word))) return true;
+                    if (/\\d{4}[-/.]\\d{1,2}([-/.]\\d{1,2})?/.test(value)) return true;
+                    if (value.includes('年') && value.includes('月') && /\\d/.test(value)) return true;
+                    return false;
+                };
+                const getText = (el) => normalizeText(el?.innerText || el?.textContent || '');
+                const firstUsefulText = (elements, username) => {
+                    for (const el of elements) {
+                        if (!el || !isVisible(el)) continue;
+                        const text = getText(el);
+                        if (!text || text === username || isActionText(text) || isMetaText(text)) continue;
+                        return text;
+                    }
+                    return '';
+                };
+                const extractContentByOrder = (itemRoot, authorLink, username) => {
+                    const texts = [];
+                    let afterAuthor = false;
+                    const walker = document.createTreeWalker(itemRoot, NodeFilter.SHOW_TEXT);
+                    while (walker.nextNode()) {
+                        const node = walker.currentNode;
+                        const parent = node.parentElement;
+                        if (!parent || !isVisible(parent)) continue;
+                        if (parent.closest('svg, style, script, noscript')) continue;
+                        const text = normalizeText(node.nodeValue);
+                        if (!text) continue;
+                        if (!afterAuthor) {
+                            if (authorLink.contains(parent) || parent === authorLink) afterAuthor = true;
+                            continue;
+                        }
+                        if (parent.closest('a[href*="/user/"]')) continue;
+                        if (text === username || isActionText(text)) {
+                            if (texts.length) break;
+                            continue;
+                        }
+                        if (isMetaText(text)) {
+                            if (texts.length) break;
+                            continue;
+                        }
+                        texts.push(text);
+                    }
+                    return normalizeText(texts.join(' '));
+                };
+                const extractMetaText = (itemRoot, root) => {
+                    const fixedMeta = itemRoot.querySelector('.vo4kEeuY, .fJhvAqos, [class*="comment-item-time"], [class*="time"]');
+                    const fixedText = getText(fixedMeta);
+                    if (isMetaText(fixedText)) return fixedText;
+                    const textEls = Array.from(itemRoot.querySelectorAll('span, div, p'));
+                    for (const el of textEls) {
+                        if (!isVisible(el)) continue;
+                        const text = getText(el);
+                        if (isMetaText(text)) return text;
+                    }
+                    return getText(root.querySelector('[class*="time"]'));
+                };
+                const itemSet = new Set();
+                for (const item of Array.from(document.querySelectorAll('[data-e2e="comment-item"]'))) {
+                    if (!item.closest('.replyContainer') && item.querySelector('a[href*="/user/"]')) itemSet.add(item);
+                }
+                for (const infoWrap of Array.from(document.querySelectorAll('.comment-item-info-wrap'))) {
+                    if (infoWrap.closest('.replyContainer')) continue;
+                    const item = infoWrap.closest('[data-e2e="comment-item"], .comment-item, li, [data-e2e*="comment"]') || infoWrap.parentElement;
+                    if (item && item.querySelector('a[href*="/user/"]')) itemSet.add(item);
+                }
+                if (!itemSet.size) {
+                    for (const link of Array.from(document.querySelectorAll('a[href*="/user/"]'))) {
+                        const item = link.closest('[data-e2e*="comment"], li, article, [role="listitem"]');
+                        if (item && !item.closest('.replyContainer')) itemSet.add(item);
+                    }
+                }
+                for (const itemRoot of Array.from(itemSet).filter(isVisible)) {
+                    const root = itemRoot.querySelector('.comment-item-info-wrap')?.parentElement || itemRoot;
+                    if (!root) continue;
+                    const authorLink = itemRoot.querySelector('.comment-item-info-wrap a[href*="/user/"]') || itemRoot.querySelector('a[href*="/user/"]');
+                    if (!authorLink || !authorLink.href) continue;
+                    const username = (authorLink.innerText || '').trim();
+                    const profileUrl = authorLink.href;
+                    if (!username) continue;
+                    const contentEl = itemRoot.querySelector('.gD6hDm2O .JrWL1Ykc') || itemRoot.querySelector('.gD6hDm2O') || root.querySelector('.C7LroK_h .WFJiGxr7') || root.querySelector('.C7LroK_h') || itemRoot.querySelector('[class*="comment-content"]') || root.querySelector('[class*="comment-content"]');
+                    const avatarImg = itemRoot.querySelector('span[data-e2e="live-avatar"] img, .avatar-component-avatar-container img, img[alt*="头像"]');
+                    const statsEl = itemRoot.querySelector('.vXZJEXVc') || itemRoot.querySelector('.comment-item-stats-container') || root.querySelector('.vXZJEXVc') || root.querySelector('.comment-item-stats-container') || itemRoot.querySelector('[class*="stats"]') || root.querySelector('[class*="stats"]');
+                    const content = firstUsefulText([contentEl], username) || extractContentByOrder(itemRoot, authorLink, username);
+                    const rawMetaText = extractMetaText(itemRoot, root);
+                    const metaParts = rawMetaText.split(/[·•・]/).map((part) => part.trim()).filter(Boolean);
+                    const commentTime = metaParts.length ? metaParts[0] : rawMetaText;
+                    const location = metaParts.length > 1 ? metaParts.slice(1).join(' · ') : '';
+                    const statsLines = (statsEl?.innerText || '').split(/\\n+/).map((part) => part.replace(/\\s+/g, ' ').trim()).filter(Boolean);
+                    const statNumbers = statsLines.filter((part) => /\\d/.test(part));
+                    rows.push({
+                        username,
+                        profile_url: profileUrl,
+                        content,
+                        comment_time: commentTime,
+                        location,
+                        avatar_url: (avatarImg?.getAttribute('src') || avatarImg?.src || '').trim(),
+                        like_text: statNumbers[0] || '',
+                        reply_text: statNumbers[1] || '',
+                    });
+                }
+                return rows;
+            }
+            """
+        )
+        batch: List[Dict] = []
+        for item in raw_comments or []:
+            username = str(item.get("username", "")).strip()
+            profile_url = str(item.get("profile_url", "")).strip()
+            content = str(item.get("content", "")).strip()
+            comment_time = str(item.get("comment_time", "")).strip()
+            avatar_url = str(item.get("avatar_url", "")).strip()
+            location = str(item.get("location", "")).strip()
+            if not username or not profile_url or not content:
+                continue
+            user_id = extract_sec_user_id(profile_url)
+            key = f"{user_id}|{content}|{comment_time}"
+            if key in seen_keys:
+                continue
+            if mark_seen:
+                seen_keys.add(key)
+            batch.append(
+                {
+                    "comment_index": len(seen_keys) if mark_seen else len(seen_keys) + len(batch) + 1,
+                    "comment_id": "",
+                    "username": username,
+                    "user_id": user_id,
+                    "user_xsec_token": "",
+                    "platform": "douyin",
+                    "content": content,
+                    "comment": content,
+                    "comment_time": comment_time,
+                    "region": location,
+                    "location": location,
+                    "ip_location": location,
+                    "like_count": parse_count_text(item.get("like_text", "")),
+                    "reply_count": parse_count_text(item.get("reply_text", "")),
+                    "profile_url": profile_url,
+                    "avatar_url": avatar_url,
+                }
+            )
+            if len(batch) >= max(1, int(batch_size or 10)) or len(seen_keys) >= max(1, int(max_total or 80)):
+                break
+        return batch
+
+    async def _scroll_comment_panel_once(self, page: Page) -> Dict:
+        return await page.evaluate(
+            """
+            () => {
+                const main = document.querySelector('.comment-mainContent');
+                let scroller = main;
+                while (scroller && scroller.parentElement) {
+                    if (scroller.scrollHeight > scroller.clientHeight + 60) break;
+                    scroller = scroller.parentElement;
+                }
+                if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 60) {
+                    const beforeY = window.scrollY;
+                    window.scrollBy(0, 900);
+                    return { top: window.scrollY, before: beforeY, height: document.body.scrollHeight, client: window.innerHeight };
+                }
+                const before = scroller.scrollTop;
+                scroller.scrollTop += Math.max(scroller.clientHeight * 0.92, 700);
+                return { top: scroller.scrollTop, before, height: scroller.scrollHeight, client: scroller.clientHeight };
+            }
+            """
+        )
+
+    async def process_video_comment_batches(
+        self,
+        video_url: str,
+        *,
+        max_comments: int = 80,
+        batch_size: int = 10,
+        max_scroll_rounds: int = 18,
+        logger: Optional[Callable[[str, str], None]] = None,
+        on_batch: Optional[Callable[[Page, List[Dict], int], Awaitable[None]]] = None,
+    ) -> List[Dict]:
+        page = await self._new_page(logger=logger)
+        seen_keys: set = set()
+        collected: List[Dict] = []
+        try:
+            self._emit(logger, f"[抖音评论] 打开视频：{video_url}")
+            target_url = build_douyin_modal_video_url(video_url)
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(4000)
+            await self._raise_if_login_intercept(page)
+            await self._open_video_comment_panel_by_shortcuts(page, logger=logger, like_before_open=False)
+            surface = await self._wait_for_comment_collection_surface(page, logger=logger, timeout_ms=16000)
+            if surface.get("empty"):
+                self._emit(logger, f"[抖音评论] 当前作品无可采集评论，已跳过：{video_url}", "info")
+                return []
+
+            max_comments = max(1, min(int(max_comments or 80), 500))
+            batch_size = max(1, min(int(batch_size or 10), max_comments))
+            max_scroll_rounds = max(1, min(int(max_scroll_rounds or 18), 300))
+            stable_rounds = 0
+            for round_index in range(max_scroll_rounds):
+                batch = await self._extract_visible_comment_batch(page, seen_keys, batch_size=batch_size, max_total=max_comments)
+                if batch:
+                    collected.extend(batch)
+                    stable_rounds = 0
+                    self._emit(logger, f"[抖音评论] 当前批次提取 {len(batch)} 条评论，累计 {len(collected)}/{max_comments}", "info")
+                    if on_batch:
+                        await on_batch(page, batch, round_index + 1)
+                else:
+                    stable_rounds += 1
+                if len(collected) >= max_comments:
+                    break
+                if stable_rounds >= 4:
+                    break
+                next_visible_batch = await self._extract_visible_comment_batch(
+                    page,
+                    seen_keys,
+                    batch_size=batch_size,
+                    max_total=max_comments,
+                    mark_seen=False,
+                )
+                if next_visible_batch:
+                    continue
+                scroll_state = await self._scroll_comment_panel_once(page)
+                await page.wait_for_timeout(1200)
+                if scroll_state and scroll_state.get("top") == scroll_state.get("before"):
+                    stable_rounds += 1
+            self._emit(logger, f"[抖音评论] 共分批提取 {len(collected)} 条一级评论用户", "success")
+            return collected[:max_comments]
+        finally:
+            await page.close()
+
+    async def _attach_comment_image(
+        self,
+        page: Page,
+        image_path: str,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> None:
+        image_path = os.path.abspath(str(image_path or "").strip())
+        if not os.path.isfile(image_path):
+            raise ValueError(f"评论图片不存在：{image_path}")
+
+        async def file_inputs():
+            return page.locator(
+                'input[type="file"], '
+                'input[accept*="image"], '
+                'input[accept*="png"], '
+                'input[accept*="jpg"], '
+                'input[accept*="jpeg"], '
+                'input[accept*="webp"]'
+            )
+
+        inputs = await file_inputs()
+        if await inputs.count() <= 0:
+            clicked = await page.evaluate(
+                """
+                () => {
+                    const visible = (node) => {
+                        if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+                        const style = window.getComputedStyle(node);
+                        const rect = node.getBoundingClientRect();
+                        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'
+                            && rect.width > 0 && rect.height > 0;
+                    };
+                    const looksLikeImage = (item) => {
+                        const haystack = `${item.text} ${item.attrs}`.toLowerCase();
+                        return /image|photo|album|picture|upload|file|media/.test(haystack);
+                    };
+                    const nodes = Array.from(document.querySelectorAll('button, div, span, a, svg'))
+                        .filter(visible)
+                        .map((node) => {
+                            const rect = node.getBoundingClientRect();
+                            return {
+                                node,
+                                rect,
+                                text: String(node.innerText || node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || ''),
+                                attrs: `${String(node.className || '')} ${String(node.id || '')}`,
+                            };
+                        })
+                        .filter((item) => {
+                            const inBottomToolbar = item.rect.y > window.innerHeight * 0.70 && item.rect.x > window.innerWidth * 0.45;
+                            return looksLikeImage(item) || inBottomToolbar;
+                        })
+                        .sort((a, b) => {
+                            const imageDelta = (looksLikeImage(a) ? 0 : 1) - (looksLikeImage(b) ? 0 : 1);
+                            if (imageDelta) return imageDelta;
+                            return Math.abs(a.rect.y - window.innerHeight * 0.90) - Math.abs(b.rect.y - window.innerHeight * 0.90);
+                        });
+                    const target = nodes[0];
+                    if (!target) return false;
+                    const clickTarget = target.node.closest('button, a, [role="button"]') || target.node;
+                    clickTarget.click();
+                    return true;
+                }
+                """
+            )
+            if clicked:
+                self._emit(logger, "[抖音视频评论] 已点击图片按钮，准备上传评论图片", "info")
+            await page.wait_for_timeout(800)
+            inputs = await file_inputs()
+
+        count = await inputs.count()
+        if count <= 0:
+            raise RuntimeError("未找到评论图片上传控件，请确认当前页面是 modal_id 入口打开的评论面板")
+
+        await inputs.nth(count - 1).set_input_files(image_path)
+        await page.wait_for_timeout(1800)
+
+        preview_ready = await page.evaluate(
+            """
+            () => {
+                const visible = (node) => {
+                    if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+                    const style = window.getComputedStyle(node);
+                    const rect = node.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'
+                        && rect.width > 0 && rect.height > 0;
+                };
+                const bottomPreview = Array.from(document.querySelectorAll('img, canvas, video'))
+                    .filter(visible)
+                    .some((node) => node.getBoundingClientRect().y > window.innerHeight * 0.55);
+                const enabledSend = Array.from(document.querySelectorAll('button, div, span'))
+                    .filter(visible)
+                    .some((node) => {
+                        const text = String(node.innerText || node.textContent || '').trim();
+                        const disabled = node.hasAttribute('disabled') || node.getAttribute('aria-disabled') === 'true';
+                        return text === '发送' && !disabled;
+                    });
+                return bottomPreview || enabledSend;
+            }
+            """
+        )
+        if not preview_ready:
+            raise RuntimeError("图片已尝试上传，但未检测到评论图片预览或可用发送按钮")
 
     async def _pick_visible_mention_candidate(
         self,
@@ -6908,9 +7950,15 @@ class DouyinCommentScraper:
         page = await self._new_page(logger=logger)
         try:
             self._emit(logger, f"[抖音评论] 打开视频：{video_url}")
-            await page.goto(video_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(5000)
-            await page.wait_for_selector(".comment-mainContent", timeout=30000)
+            target_url = build_douyin_modal_video_url(video_url)
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(4000)
+            await self._raise_if_login_intercept(page)
+            await self._open_video_comment_panel_by_shortcuts(page, logger=logger, like_before_open=False)
+            surface = await self._wait_for_comment_collection_surface(page, logger=logger, timeout_ms=16000)
+            if surface.get("empty"):
+                self._emit(logger, f"[抖音评论] 当前作品无可采集评论，已跳过：{video_url}", "info")
+                return []
             if progress_callback:
                 try:
                     progress_callback(
