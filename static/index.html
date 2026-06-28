@@ -204,6 +204,14 @@
                         <span class="chat-sidebar-entry-copy">发布中心入库</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
+                      <button type="button" class="chat-sidebar-entry chat-sidebar-entry-disabled" aria-disabled="true">
+                        <span class="chat-sidebar-entry-icon">店</span>
+                        <span class="chat-sidebar-entry-copy">AI店铺诊断（敬请期待）</span>
+                      </button>
+                      <button type="button" class="chat-sidebar-entry chat-sidebar-entry-disabled" aria-disabled="true">
+                        <span class="chat-sidebar-entry-icon">品</span>
+                        <span class="chat-sidebar-entry-copy">AI选品（敬请期待）</span>
+                      </button>
                     </div>
                   </details>
                 </div>
@@ -1792,7 +1800,7 @@
               <div id="wecomTabSystem" class="wecom-tab-panel" style="display:none;margin-top:1rem;">
                 <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.75rem;">企业与产品资料、资料模板。绑定到企微应用后，客服回复将严格基于这些资料。</p>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;">
-                  <a href="#" id="wecomDownloadTemplateBtn" class="btn btn-ghost btn-sm">下载资料模板</a>
+                  <a href="/api/wecom/material-template" id="wecomDownloadTemplateBtn" class="btn btn-ghost btn-sm" download="wecom_materials_template.csv">下载资料模板</a>
                   <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;">上传资料 CSV<input type="file" id="wecomUploadMaterialsInput" accept=".csv" style="display:none;"></label>
                   <span id="wecomUploadResult" class="msg" style="display:none;font-size:0.8rem;"></span>
                 </div>
@@ -2490,12 +2498,12 @@
   </div>
 
   <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
-  <script src="/static/js/view-loader.js?v=20260612-cache-bust"></script>
-  <script src="/static/js/view-registry.js?v=20260616-linkedin-workbench"></script>
+  <script src="/static/js/view-loader.js?v=20260624-reload-existing-views"></script>
+  <script src="/static/js/view-registry.js?v=20260626-wct-entry-cache"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
   <script src="/static/js/chat.js?v=20260611-memory-dropdown-fix"></script>
-  <script src="/static/js/skill.js?v=20260616-linkedin-workbench"></script>
+  <script src="/static/js/skill.js?v=20260626-wct-entry-cache"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>

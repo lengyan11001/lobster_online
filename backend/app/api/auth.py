@@ -237,7 +237,19 @@ async def get_captcha():
                 raise HTTPException(status_code=503, detail="认证中心不可达") from e
         if resp.status_code >= 400:
             _raise_auth_server_response(resp)
-        return resp.json()
+        data = resp.json()
+        try:
+            uid = data.get("id") if isinstance(data, dict) else None
+            if uid is not None:
+                persist_channel_fallback_for_login(
+                    jwt_token=token,
+                    request=request,
+                    user_id=int(uid),
+                    db=None,
+                )
+        except Exception as exc:
+            logger.debug("[auth-proxy] persist channel fallback from /auth/me skipped: %s", exc)
+        return data
     captcha_id, image_data_uri = create_captcha()
     return {"captcha_id": captcha_id, "image": image_data_uri}
 
@@ -370,6 +382,12 @@ async def get_current_user_for_local(
                 if uid is None:
                     raise HTTPException(status_code=401, detail="无法验证凭证")
                 uid_int = int(uid)
+                persist_channel_fallback_for_login(
+                    jwt_token=token,
+                    request=request,
+                    user_id=uid_int,
+                    db=None,
+                )
                 if cache_key is not None and ttl_s > 0:
                     exp = time.monotonic() + float(ttl_s)
                     async with _AUTH_ME_CACHE_LOCK:

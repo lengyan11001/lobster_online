@@ -6,8 +6,11 @@ import csv
 import io
 import json
 import logging
+import os
 import random
 import string
+import subprocess
+import sys
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -15,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -33,6 +36,7 @@ from ..models import (
     WecomMessage,
     WecomScheduledMessage,
 )
+from ..services.asset_storage_paths import get_asset_export_dir_for_media
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -169,6 +173,10 @@ def _mask_secret(s: str) -> str:
 class WecomCloudConfigUpdate(BaseModel):
     wecom_cloud_url: Optional[str] = None
     wecom_forward_secret: Optional[str] = None
+
+
+class WecomAutoReplyUpdate(BaseModel):
+    enabled: Optional[bool] = None
 
 
 @router.get("/api/wecom/cloud-config", summary="读取企微云端配置（界面配置）")
@@ -366,13 +374,17 @@ def update_wecom_config(
 @router.put("/api/wecom/configs/{config_id:int}/auto-reply", summary="切换自动回复开关")
 def toggle_auto_reply(
     config_id: int,
+    body: Optional[WecomAutoReplyUpdate] = Body(default=None),
     current_user = Depends(get_current_user_media_edit),
     db: Session = Depends(get_db),
 ):
     row = db.query(WecomConfig).filter(WecomConfig.id == config_id, WecomConfig.user_id == current_user.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="配置不存在")
-    row.auto_reply_enabled = not row.auto_reply_enabled
+    if body is not None and body.enabled is not None:
+        row.auto_reply_enabled = bool(body.enabled)
+    else:
+        row.auto_reply_enabled = not row.auto_reply_enabled
     db.commit()
     db.refresh(row)
     logger.info("[WeCom] config_id=%s auto_reply_enabled=%s", config_id, row.auto_reply_enabled)
@@ -960,11 +972,26 @@ async def _do_poll_and_reply(user_id: int, db: Session) -> Dict[str, Any]:
     headers = {}
     if secret:
         headers["X-Forward-Secret"] = secret
+    poll_targets = [
+        (cfg.callback_path or "").strip()
+        for cfg in db.query(WecomConfig).filter(WecomConfig.user_id == user_id).all()
+        if (cfg.callback_path or "").strip()
+    ]
+    # When a user has local WeCom apps, pull each callback queue explicitly so
+    # pending messages from other apps cannot hide this app's messages.
+    if not poll_targets:
+        poll_targets = [""]
+    items = []
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{base}/api/wecom/pending", params={"limit": 20}, headers=headers)
-            r.raise_for_status()
-            data = r.json()
+            for callback_path in poll_targets:
+                params = {"limit": 20}
+                if callback_path:
+                    params["callback_path"] = callback_path
+                r = await client.get(f"{base}/api/wecom/pending", params=params, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                items.extend(data.get("items") or [])
     except Exception as e:
         logger.exception("[WeCom] 拉取 pending 失败 user_id=%s: %s", user_id, e)
         err_msg = str(e)
@@ -979,8 +1006,8 @@ async def _do_poll_and_reply(user_id: int, db: Session) -> Dict[str, Any]:
             else:
                 err_msg = "与云端 TLS 协议不匹配，请确认云端地址协议（http/https）与云端实际服务一致。"
         return {"processed": 0, "errors": [err_msg]}
-    items = data.get("items") or []
     processed = 0
+    replied = 0
     errors = []
     for it in items:
         msg_id = it.get("id")
@@ -1017,6 +1044,17 @@ async def _do_poll_and_reply(user_id: int, db: Session) -> Dict[str, Any]:
         db.add(WecomMessage(wecom_config_id=cfg.id, customer_id=customer.id, direction="in", content=content_stored, msg_type=msg_type_in, external_user_id=from_user, to_user=to_user))
         db.commit()
         await _check_purchase_intent_keyword(cfg, from_user, content_raw, base, headers)
+        if not bool(getattr(cfg, "auto_reply_enabled", False)):
+            try:
+                ack_body = {"message_id": msg_id, "reply_text": "", "skip_send": True}
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    r2 = await client.post(f"{base}/api/wecom/submit-reply", json=ack_body, headers=headers)
+                    r2.raise_for_status()
+                processed += 1
+            except Exception as e:
+                logger.exception("[WeCom] 入库后标记已处理失败 message_id=%s: %s", msg_id, e)
+                errors.append(f"message_id={msg_id} 标记已处理失败: {e}")
+            continue
         history = []
         recent = db.query(WecomMessage).filter(WecomMessage.wecom_config_id == cfg.id, WecomMessage.external_user_id == from_user).order_by(WecomMessage.created_at.desc()).limit(10).all()
         for m in reversed(recent):
@@ -1045,7 +1083,8 @@ async def _do_poll_and_reply(user_id: int, db: Session) -> Dict[str, Any]:
             errors.append(f"message_id={msg_id} 提交失败: {e}")
             continue
         processed += 1
-    return {"processed": processed, "errors": errors}
+        replied += 1
+    return {"processed": processed, "replied": replied, "errors": errors}
 
 
 @router.post("/api/wecom/poll-and-reply", summary="拉取云端待处理消息并回复（轮询一次，后台每2s自动调用）")
@@ -1064,7 +1103,7 @@ async def wecom_poll_and_reply(
 
 
 async def wecom_poll_loop():
-    """后台每 2 秒拉取云端待处理消息并 AI 回复（仅 auto_reply_enabled 的配置）。"""
+    """后台拉取云端待处理消息：总开关控制是否拉取，auto_reply_enabled 只控制是否 AI 回复。"""
     import asyncio
     from ..db import SessionLocal
     while True:
@@ -1078,7 +1117,6 @@ async def wecom_poll_loop():
             enabled_uids = [
                 r[0] for r in
                 db.query(WecomConfig.user_id)
-                .filter(WecomConfig.auto_reply_enabled == True)
                 .distinct()
                 .all()
             ]
@@ -1394,22 +1432,109 @@ async def wecom_send_group_message(
 # ---------------------------------------------------------------------------
 MATERIAL_TEMPLATE_HEADERS = ["企业名称", "公司介绍", "产品名称", "产品介绍", "常用话术"]
 
+ONLINE_DEMO_COMPANY_INFO = """必火AI龙虾 Online 是面向中小企业、门店老板、市场销售团队的一套岗位级 AI 员工系统。它不是单一聊天机器人，而是把内容生产、获客、客服、资料记忆、定时任务、素材库、视频/图文生成、发布协同整合到一个本地化工作台里。核心目标是让老板用更少的人完成更多日常执行：写文案、做图、做视频、整理素材、自动回复客户、沉淀客户资料，并把过程结果留痕。"""
 
-@router.get("/api/wecom/material-template", summary="下载资料填写模板（CSV）")
-def download_material_template(
-    current_user = Depends(get_current_user_media_edit),
-):
-    """返回 CSV 模板，表头：企业名称、公司介绍、产品名称、产品介绍、常用话术。多行表示多产品（同一企业可多行）。"""
+ONLINE_DEMO_PRODUCT_INTRO = """【核心能力】
+1. 智能对话：根据企业资料、个人记忆和已配置技能理解用户需求，协助生成文案、图片、视频、公众号文章等内容。
+2. 技能商店：按业务场景开放技能，例如爆款TVC、创意分镜头视频、文案+创意图片、IP日更文案、视频号文案提取、企业微信客服等。
+3. 企业微信客服：接收客户消息后，可基于上传的公司资料、产品资料和常用话术进行自动回复；支持多轮上下文，不知道时会引导人工接管，避免乱答。
+4. 资料记忆：支持上传业务资料，让 AI 回复和内容生成围绕企业真实信息展开。
+5. 素材库：保存用户上传和 AI 生成的图片、视频、文档素材，便于后续复用。
+6. 定时任务：支持按计划生成内容，适合日更、朋友圈、口播文案等稳定执行场景。
+7. 生成记录：生成过程和结果可追踪，便于复盘、复制、下载和再次使用。
+
+【适合客户】
+门店老板、工厂老板、品牌商家、销售团队、私域运营团队、短视频运营团队、企业客服团队。
+
+【价值表达】
+减少重复沟通和内容制作成本，让 AI 先完成 70% 的执行工作，人工负责确认、优化和成交。"""
+
+ONLINE_DEMO_COMMON_PHRASES = """客户问：这个系统主要能帮我做什么？
+回复：它主要帮你把日常重复执行交给 AI，例如写朋友圈、写口播、生成图片视频、整理素材、做定时任务、企业微信客服自动回复。你可以把它理解成一套能落地干活的 AI 员工工作台。
+
+客户问：企业微信自动回复会不会乱答？
+回复：我们建议先上传公司介绍、产品介绍和常用话术。AI 回复会优先基于这些资料，不确定的问题会提示人工介入，不会为了回答而乱编承诺。
+
+客户问：需要我会技术吗？
+回复：不需要。日常使用就是选择技能、填写主题或选择资料，系统会自动生成内容。配置类工作我们可以协助初始化。
+
+客户问：生成的内容在哪里看？
+回复：生成结果会进入对应的生成记录和素材库。图片、视频、文案都可以查看、复制、下载或继续用于后续发布流程。
+
+客户问：适合什么行业？
+回复：适合需要持续获客、持续发内容、持续回复客户的行业，例如门店服务、本地生活、工厂制造、品牌零售、招商加盟、教育培训、企业服务等。
+
+客户问：企业微信客服怎么演示？
+回复：可以先上传这份客服资料模板，绑定到企微应用，打开消息拉取，再给企业微信发一个问题，例如“这个系统主要能帮我做什么”，就能看到基于资料的回复效果。
+
+客户问：价格怎么说？
+回复：价格会根据部署版本、开通技能和服务范围不同而不同。可以先确认你的使用场景：主要做内容生成、客服回复、还是获客发布，再给你匹配方案。
+
+禁止回答：不要承诺百分百涨粉、百分百成交、违法采集隐私、绕过平台规则、保证平台审核通过。遇到不确定报价、合同、售后边界时，引导联系人工。"""
+
+
+def _build_wecom_material_template_bytes() -> bytes:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(MATERIAL_TEMPLATE_HEADERS)
-    writer.writerow(["示例企业", "本公司主营……", "产品A", "产品A介绍……", "您好，请问有什么可以帮您？"])
+    writer.writerow([
+        "必火AI龙虾 Online",
+        ONLINE_DEMO_COMPANY_INFO,
+        "岗位级AI员工工作台",
+        ONLINE_DEMO_PRODUCT_INTRO,
+        ONLINE_DEMO_COMMON_PHRASES,
+    ])
     buf.seek(0)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def _open_folder_for_file(path: Path) -> bool:
+    try:
+        if sys.platform.startswith("win"):
+            subprocess.Popen(["explorer", "/select,", str(path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path.parent)])
+        return True
+    except Exception:
+        logger.warning("[WeCom] open material template folder failed path=%s", path, exc_info=True)
+        return False
+
+
+@router.get("/api/wecom/material-template", summary="下载资料填写模板（CSV）")
+def download_material_template():
+    """返回 CSV 模板，表头：企业名称、公司介绍、产品名称、产品介绍、常用话术。多行表示多产品（同一企业可多行）。"""
     return StreamingResponse(
-        iter([buf.getvalue().encode("utf-8-sig")]),
+        iter([_build_wecom_material_template_bytes()]),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=wecom_materials_template.csv"},
     )
+
+
+@router.post("/api/wecom/material-template/save", summary="保存资料模板到本机下载目录")
+def save_material_template_to_downloads(
+    current_user = Depends(get_current_user_media_edit),
+):
+    export_dir = get_asset_export_dir_for_media("document")
+    target = export_dir / "wecom_materials_template.csv"
+    if target.exists():
+        stem = target.stem
+        suffix = target.suffix
+        for idx in range(1, 1000):
+            candidate = export_dir / f"{stem} ({idx}){suffix}"
+            if not candidate.exists():
+                target = candidate
+                break
+    target.write_bytes(_build_wecom_material_template_bytes())
+    opened = _open_folder_for_file(target)
+    return {
+        "ok": True,
+        "filename": target.name,
+        "path": str(target),
+        "directory": str(target.parent),
+        "opened_folder": opened,
+    }
 
 
 @router.post("/api/wecom/upload-materials", summary="上传已填写的资料 CSV，导入企业/产品")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 精简包 zip：解决 Windows 解压后中文文件名乱码、.bat 需 GBK 问题。
-- 产物名：lobster_online_slim_<品牌>_<时间戳>.zip（品牌来自 LOBSTER_BRAND_MARK，默认 yingshi；仅 ASCII）
+- 产物名：lobster_online_slim_<品牌>_<时间戳>.zip（品牌来自 LOBSTER_BRAND_MARK，默认 bihuo；仅 ASCII）
 - zip 内路径：关键中文文件改为 ASCII 别名（内容不变，仅改名）
 - 所有 .bat：UTF-8 源码 → GBK + CRLF 写入 zip（cmd 兼容）
 其余文件：原样二进制写入。
@@ -116,10 +116,10 @@ def bat_payload_gbk(path: Path) -> bytes:
 
 
 def _brand_slug() -> str:
-    """与 pack_slim.sh 一致：LOBSTER_BRAND_MARK → 文件名安全片段（默认 yingshi）。"""
-    raw = (os.environ.get("LOBSTER_BRAND_MARK") or "yingshi").strip().lower()
+    """与 pack_slim.sh 一致：LOBSTER_BRAND_MARK → 文件名安全片段（默认 bihuo）。"""
+    raw = (os.environ.get("LOBSTER_BRAND_MARK") or "bihuo").strip().lower()
     s = re.sub(r"[^a-z0-9_-]+", "", raw)
-    return s or "yingshi"
+    return s or "bihuo"
 
 
 def main() -> int:

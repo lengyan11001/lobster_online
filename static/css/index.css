@@ -952,6 +952,274 @@
     .store-tab, .pub-tab, .sys-tab, .wecom-detail-tab, .account-type-tab { background: none; border: none; padding: 0.6rem 1.25rem; font-size: 0.9rem; font-weight: 500; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
     .store-tab:hover, .pub-tab:hover, .sys-tab:hover, .wecom-detail-tab:hover, .account-type-tab:hover { color: var(--text); }
     .store-tab.active, .pub-tab.active, .sys-tab.active, .wecom-detail-tab.active, .account-type-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    #content-wecom-detail {
+      --wecom-blue: #2563eb;
+      --wecom-cyan: #0891b2;
+      --wecom-green: #10b981;
+      --wecom-panel: #ffffff;
+      --wecom-soft: #f6f8fc;
+      --wecom-line: rgba(148, 163, 184, 0.22);
+      --wecom-muted: #64748b;
+      --wecom-text: #0f172a;
+    }
+    #content-wecom-detail > .card {
+      padding: 1rem 1.1rem;
+      background: rgba(255, 255, 255, 0.96);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      box-shadow: 0 16px 42px rgba(15, 23, 42, 0.06);
+    }
+    #content-wecom-detail h3 {
+      color: var(--wecom-text);
+      letter-spacing: 0;
+    }
+    #content-wecom-detail .store-tabs {
+      gap: 0.35rem;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      margin-top: 0.85rem !important;
+      padding: 0 0.15rem;
+    }
+    #content-wecom-detail .wecom-detail-tab {
+      min-height: 38px;
+      border-radius: 10px 10px 0 0;
+      padding: 0.55rem 1rem;
+      color: #52637a;
+      border-bottom-width: 2px;
+    }
+    #content-wecom-detail .wecom-detail-tab:hover {
+      background: rgba(37, 99, 235, 0.06);
+      color: var(--wecom-blue);
+    }
+    #content-wecom-detail .wecom-detail-tab.active {
+      color: var(--wecom-blue);
+      background: linear-gradient(180deg, rgba(37, 99, 235, 0.1), rgba(37, 99, 235, 0.02));
+      border-bottom-color: var(--wecom-blue);
+    }
+    #content-wecom-detail #wecomTabMessages > div[style*="display:flex"] {
+      min-height: 560px !important;
+      height: calc(100vh - 250px) !important;
+      max-height: 760px !important;
+      overflow: hidden !important;
+      border: 1px solid var(--wecom-line);
+      border-radius: 14px;
+      background: var(--wecom-panel);
+      box-shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
+    }
+    #content-wecom-detail #wecomSessionListWrap {
+      width: 300px !important;
+      border: 0 !important;
+      border-right: 1px solid var(--wecom-line) !important;
+      border-radius: 0 !important;
+      background: linear-gradient(180deg, #f9fbff, #f2f6fb) !important;
+    }
+    #content-wecom-detail #wecomSessionListWrap > div:first-child {
+      min-height: 56px;
+      padding: 0.72rem 0.9rem !important;
+      color: var(--wecom-text) !important;
+      background: rgba(255, 255, 255, 0.88);
+      border-bottom: 1px solid var(--wecom-line) !important;
+    }
+    #content-wecom-detail #wecomRefreshMessagesBtn,
+    #content-wecom-detail #wecomEditCustomerTopBtn {
+      min-height: 30px;
+      padding: 0.25rem 0.62rem !important;
+      border-radius: 999px;
+      border: 1px solid rgba(37, 99, 235, 0.14);
+      background: rgba(37, 99, 235, 0.06);
+      color: var(--wecom-blue);
+    }
+    #content-wecom-detail #wecomRefreshMessagesBtn:hover,
+    #content-wecom-detail #wecomEditCustomerTopBtn:hover {
+      border-color: rgba(37, 99, 235, 0.24);
+      background: rgba(37, 99, 235, 0.1);
+    }
+    #content-wecom-detail #wecomSessionList {
+      padding: 0.5rem;
+    }
+    #content-wecom-detail .wecom-session-item {
+      margin-bottom: 0.38rem;
+      padding: 0.68rem 0.72rem !important;
+      border: 1px solid transparent !important;
+      border-radius: 12px;
+      background: transparent !important;
+      color: var(--wecom-text);
+      transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+    }
+    #content-wecom-detail .wecom-session-item:hover {
+      background: rgba(255, 255, 255, 0.86) !important;
+      border-color: rgba(37, 99, 235, 0.12) !important;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+      transform: translateY(-1px);
+    }
+    #content-wecom-detail .wecom-session-item.is-active,
+    #content-wecom-detail .wecom-session-item[style*="6,182,212"] {
+      background: #ffffff !important;
+      border-color: rgba(37, 99, 235, 0.2) !important;
+      box-shadow: 0 10px 28px rgba(37, 99, 235, 0.12);
+    }
+    #content-wecom-detail .wecom-session-item span:first-child {
+      color: var(--wecom-text) !important;
+      font-size: 0.9rem !important;
+      font-weight: 700 !important;
+    }
+    #content-wecom-detail .wecom-session-item span:last-child,
+    #content-wecom-detail .wecom-session-item > div:last-child {
+      color: var(--wecom-muted) !important;
+    }
+    #content-wecom-detail #wecomMessageListWrap {
+      border: 0 !important;
+      border-radius: 0 !important;
+      background: #ffffff !important;
+    }
+    #content-wecom-detail #wecomMessageListTitle {
+      min-height: 56px;
+      padding: 0.72rem 1rem !important;
+      background: rgba(255, 255, 255, 0.95);
+      border-bottom: 1px solid var(--wecom-line) !important;
+      color: var(--wecom-text) !important;
+      font-size: 0.95rem !important;
+    }
+    #content-wecom-detail #wecomMessageListTitle > span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #content-wecom-detail #wecomMessageList {
+      padding: 1rem 1.15rem !important;
+      background:
+        radial-gradient(circle at 16px 16px, rgba(37, 99, 235, 0.045) 0 1px, transparent 1px 100%),
+        linear-gradient(180deg, #f7faff 0%, #eef4f8 100%) !important;
+      background-size: 18px 18px, auto !important;
+    }
+    #content-wecom-detail #wecomMessageList > div {
+      margin-bottom: 0.78rem !important;
+    }
+    #content-wecom-detail #wecomMessageList > div > div {
+      max-width: min(72%, 660px) !important;
+    }
+    #content-wecom-detail #wecomMessageList > div > div > div:first-child {
+      padding: 0.62rem 0.82rem !important;
+      border-radius: 14px 14px 14px 4px !important;
+      background: #ffffff !important;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      color: var(--wecom-text);
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+      font-size: 0.9rem !important;
+      line-height: 1.58 !important;
+    }
+    #content-wecom-detail #wecomMessageList > div[style*="row-reverse"] > div > div:first-child {
+      border: 0;
+      border-radius: 14px 14px 4px 14px !important;
+      background: linear-gradient(135deg, #2563eb, #0891b2) !important;
+      color: #ffffff !important;
+      box-shadow: 0 12px 26px rgba(37, 99, 235, 0.2);
+    }
+    #content-wecom-detail #wecomMessageList > div > div > div:last-child {
+      color: var(--wecom-muted) !important;
+      font-size: 0.72rem !important;
+      margin-top: 0.22rem !important;
+    }
+    #content-wecom-detail #wecomMessageList img,
+    #content-wecom-detail #wecomMessageList video {
+      border-radius: 10px !important;
+      max-height: 280px !important;
+    }
+    #content-wecom-detail #wecomSendBar {
+      padding: 0.78rem 0.9rem !important;
+      background: rgba(255, 255, 255, 0.96) !important;
+      border-top: 1px solid var(--wecom-line) !important;
+      box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.04);
+    }
+    #content-wecom-detail #wecomAttachPreview {
+      margin-bottom: 0.55rem !important;
+      padding: 0.55rem !important;
+      border-radius: 12px !important;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      background: #f8fafc !important;
+    }
+    #content-wecom-detail #wecomAttachImg {
+      max-width: 150px !important;
+      max-height: 96px !important;
+      border-radius: 8px !important;
+    }
+    #content-wecom-detail #wecomAttachBtn {
+      width: 38px;
+      height: 38px;
+      padding: 0 !important;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(148, 163, 184, 0.26) !important;
+      border-radius: 11px;
+      background: #f8fafc !important;
+      color: #475569 !important;
+      font-size: 1rem !important;
+      transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+    }
+    #content-wecom-detail #wecomAttachBtn:hover {
+      border-color: rgba(37, 99, 235, 0.25) !important;
+      background: rgba(37, 99, 235, 0.08) !important;
+      transform: translateY(-1px);
+    }
+    #content-wecom-detail #wecomSendInput {
+      min-height: 42px;
+      max-height: 110px;
+      padding: 0.62rem 0.78rem !important;
+      border: 1px solid rgba(148, 163, 184, 0.28) !important;
+      border-radius: 12px !important;
+      background: #ffffff !important;
+      color: var(--wecom-text) !important;
+      font-size: 0.9rem !important;
+      line-height: 1.5 !important;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+    #content-wecom-detail #wecomSendInput:focus {
+      outline: none;
+      border-color: rgba(37, 99, 235, 0.42) !important;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    #content-wecom-detail #wecomChatSendBtn {
+      height: 42px !important;
+      min-width: 76px;
+      padding: 0 1rem !important;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #2563eb, #0891b2);
+      border: 0;
+      box-shadow: 0 10px 22px rgba(37, 99, 235, 0.22);
+    }
+    #content-wecom-detail #wecomChatSendBtn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 28px rgba(37, 99, 235, 0.28);
+    }
+    #content-wecom-detail #wecomSendMsg {
+      margin-top: 0.45rem !important;
+      color: var(--wecom-green);
+    }
+    #content-wecom-detail #wecomSendMsg.err {
+      color: #dc2626;
+    }
+    @media (max-width: 900px) {
+      #content-wecom-detail #wecomTabMessages > div[style*="display:flex"] {
+        min-height: 620px !important;
+        height: auto !important;
+        flex-direction: column;
+      }
+      #content-wecom-detail #wecomSessionListWrap {
+        width: 100% !important;
+        max-height: 220px;
+        border-right: 0 !important;
+        border-bottom: 1px solid var(--wecom-line) !important;
+      }
+      #content-wecom-detail #wecomMessageList {
+        min-height: 360px;
+      }
+      #content-wecom-detail #wecomMessageList > div > div {
+        max-width: 86% !important;
+      }
+    }
     #content-scheduled-tasks {
       --scheduled-blue: var(--accent);
       --scheduled-text: var(--text);
@@ -6167,6 +6435,15 @@
       background: rgba(91, 124, 255, 0.12);
       color: #3656d6;
       box-shadow: inset 0 0 0 1px rgba(91, 124, 255, 0.12);
+    }
+    .chat-sidebar-entry.chat-sidebar-entry-disabled {
+      color: #8a96ad;
+      cursor: default;
+      opacity: 0.82;
+    }
+    .chat-sidebar-entry.chat-sidebar-entry-disabled:hover {
+      background: transparent;
+      transform: none;
     }
     .chat-sidebar-entry-icon {
       width: 18px;

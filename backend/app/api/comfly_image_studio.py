@@ -34,12 +34,35 @@ _ASPECT_TO_SIZE = {
     "9:16": "1080x1920",
 }
 
+_TRANSIENT_IMAGE_ERRORS = (
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.PoolTimeout,
+)
+
 
 def _normalize_image_aspect_ratio(value: str) -> str:
     ratio = str(value or "").strip()
     if ratio in _ASPECT_TO_SIZE:
         return ratio
     return "1:1"
+
+
+def _gpt_image2_resolution_level(size: str, quality: str) -> str:
+    parts = (size or "").lower().replace(" ", "").split("x", 1)
+    if len(parts) == 2:
+        try:
+            longest = max(int(parts[0]), int(parts[1]))
+            if longest >= 3000:
+                return "4K"
+            if longest >= 1800:
+                return "2K"
+        except Exception:
+            pass
+    return "4K" if (quality or "").strip().lower() == "high" else "1K"
 
 _FALLBACK_EXAMPLES = [
     {
@@ -182,14 +205,17 @@ async def _generate_image_studio_core(
     background: str,
     upload_payloads: List[Dict[str, Any]],
     reference_image_urls: List[str] | None = None,
+    size_override: str | None = None,
     auto_save: bool = True,
+    timeout_seconds: float = 180.0,
+    max_attempts: int = 1,
 ) -> Dict[str, Any]:
     prompt = (prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="请输入图片提示词")
 
     normalized_ratio = _normalize_image_aspect_ratio(aspect_ratio)
-    size = _ASPECT_TO_SIZE.get(normalized_ratio, "1024x1024")
+    size = (size_override or "").strip() or _ASPECT_TO_SIZE.get(normalized_ratio, "1024x1024")
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
     model_id = (model or "gpt-image-2").strip() or "gpt-image-2"
     quality_id = (quality or "high").strip() or "high"
@@ -207,6 +233,12 @@ async def _generate_image_studio_core(
     if "gpt-image-2" in model_id or "gptimage2" in model_id.replace("-", ""):
         body["aspect_ratio"] = normalized_ratio
         body["image_size"] = normalized_ratio
+        if size_override:
+            body["resolution"] = _gpt_image2_resolution_level(size, quality_id)
+            body["pixel_size"] = size
+            body["quality_preset"] = "highest"
+            body["render_quality"] = "production"
+            body["output_quality"] = 100
     if background and background != "auto":
         body["background"] = background
     refs = [
@@ -234,23 +266,40 @@ async def _generate_image_studio_core(
         )
 
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            if files:
-                url = _comfly_endpoint(api_base, "/v1/images/edits")
-                data = {k: str(v) for k, v in body.items() if k != "response_format"}
-                if refs:
-                    data["image"] = json.dumps(refs, ensure_ascii=False)
-                resp = await client.post(url, headers=headers, data=data, files=files)
-            else:
-                url = _comfly_endpoint(api_base, "/v1/images/generations")
-                resp = await client.post(url, headers={**headers, "Content-Type": "application/json"}, json=body)
-    except httpx.TimeoutException as exc:
-        logger.warning("[comfly_image_studio] timeout user_id=%s", current_user.id)
-        raise HTTPException(status_code=504, detail="图片生成超时，请稍后重试") from exc
-    except Exception as exc:
-        logger.exception("[comfly_image_studio] request failed user_id=%s", current_user.id)
-        raise HTTPException(status_code=500, detail=f"图片生成请求失败: {exc}") from exc
+    attempts = max(1, min(5, int(max_attempts or 1)))
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=max(30.0, float(timeout_seconds or 180.0))) as client:
+                if files:
+                    url = _comfly_endpoint(api_base, "/v1/images/edits")
+                    data = {k: str(v) for k, v in body.items() if k != "response_format"}
+                    if refs:
+                        data["image"] = json.dumps(refs, ensure_ascii=False)
+                    resp = await client.post(url, headers=headers, data=data, files=files)
+                else:
+                    url = _comfly_endpoint(api_base, "/v1/images/generations")
+                    resp = await client.post(url, headers={**headers, "Content-Type": "application/json"}, json=body)
+            break
+        except _TRANSIENT_IMAGE_ERRORS as exc:
+            last_exc = exc
+            logger.warning(
+                "[comfly_image_studio] transient failure user_id=%s attempt=%s/%s error=%s",
+                current_user.id,
+                attempt,
+                attempts,
+                exc,
+            )
+            if attempt >= attempts:
+                if isinstance(exc, httpx.TimeoutException):
+                    raise HTTPException(status_code=504, detail=f"图片生成超时，已等待 {int(timeout_seconds or 180)} 秒，请稍后重试") from exc
+                raise HTTPException(status_code=502, detail=f"图片生成连接中断，已自动重试 {attempts} 次：{exc}") from exc
+            await asyncio.sleep(min(2.0 * attempt, 6.0))
+        except Exception as exc:
+            logger.exception("[comfly_image_studio] request failed user_id=%s", current_user.id)
+            raise HTTPException(status_code=500, detail=f"图片生成请求失败: {exc}") from exc
+    else:
+        raise HTTPException(status_code=502, detail=f"图片生成请求失败: {last_exc}")
 
     if resp.status_code >= 400:
         detail = _pick_error_detail(resp)

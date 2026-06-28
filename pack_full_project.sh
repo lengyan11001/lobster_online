@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # 在线客户端 - 完整项目包：仅 zip；不修改 install.bat、start.bat、run_*.bat。
 # 排除使用说明、打包脚本等（与 pack_full 排除项类似，更严）。
-# LOBSTER_BRAND_MARK（默认 yingshi）写入产物名，且仅删除同品牌旧 zip，避免 yingshi/bihuo 互相覆盖。
+# LOBSTER_BRAND_MARK（默认 bihuo）写入产物名，且仅删除同品牌旧 zip，避免不同品牌互相覆盖。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PARENT="$(dirname "$SCRIPT_DIR")"
 PROJ=$(basename "$SCRIPT_DIR")
-LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-yingshi}"
+LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-bihuo}"
 BM_SAFE=$(printf '%s' "$LOBSTER_BRAND_MARK" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
-[ -z "$BM_SAFE" ] && BM_SAFE=yingshi
+[ -z "$BM_SAFE" ] && BM_SAFE=bihuo
 BUILD_ID=$(date +%Y%m%d_%H%M%S)
 OUT_NAME="${PROJ}_完整项目包_${BM_SAFE}_${BUILD_ID}.zip"
 OUT_PATH="$PARENT/$OUT_NAME"

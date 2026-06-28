@@ -75,17 +75,14 @@
           var hasKnowledge = c.has_product_knowledge ? '有' : '无';
           var hasSecret = c.has_secret ? '已配置' : '未配置';
           var secretColor = c.has_secret ? 'color:#4ade80;' : 'color:#f87171;';
+          var aiReplyOn = !!c.auto_reply_enabled;
           return '<div class="skill-store-card wecom-config-card" data-config-id="' + escapeAttr(String(c.id)) + '">' +
             '<div class="card-label">应用</div>' +
             '<div class="card-value">' + escapeHtml(name) + '</div>' +
             '<div class="card-desc">CorpID: ' + escapeHtml(corp) + ' · Secret: <span style="' + secretColor + '">' + hasSecret + '</span> · 知识库: ' + hasKnowledge + '</div>' +
             '<div style="display:flex;align-items:center;gap:0.5rem;margin:0.4rem 0;">' +
               '<span style="font-size:0.82rem;">自动AI回复：</span>' +
-              '<label class="wecom-toggle-wrap" style="position:relative;display:inline-block;width:40px;height:22px;cursor:pointer;">' +
-                '<input type="checkbox" class="wecom-auto-reply-toggle" data-id="' + escapeAttr(String(c.id)) + '"' + (c.auto_reply_enabled ? ' checked' : '') + ' style="opacity:0;width:0;height:0;">' +
-                '<span style="position:absolute;inset:0;border-radius:11px;transition:background .2s;background:' + (c.auto_reply_enabled ? '#4ade80' : 'rgba(255,255,255,0.15)') + ';"></span>' +
-                '<span style="position:absolute;top:2px;left:' + (c.auto_reply_enabled ? '20px' : '2px') + ';width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s;"></span>' +
-              '</label>' +
+              '<button type="button" class="wecom-auto-reply-toggle btn btn-sm ' + (aiReplyOn ? 'btn-primary' : 'btn-ghost') + '" data-id="' + escapeAttr(String(c.id)) + '" data-enabled="' + (aiReplyOn ? '1' : '0') + '" style="padding:0.25rem 0.65rem;">' + (aiReplyOn ? '已开启' : '已关闭') + '</button>' +
             '</div>' +
             '<div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">回调 URL（填入企微后台）</div>' +
             '<div style="display:flex;align-items:center;gap:0.5rem;margin:0.2rem 0 0.5rem 0;">' +
@@ -106,25 +103,25 @@
             openEdit(parseInt(id, 10));
           });
         });
-        listEl.querySelectorAll('.wecom-auto-reply-toggle').forEach(function(cb) {
-          cb.addEventListener('click', function(e) { e.stopPropagation(); });
-          cb.addEventListener('change', function(e) {
+        listEl.querySelectorAll('.wecom-auto-reply-toggle').forEach(function(btn) {
+          btn.addEventListener('click', function(e) {
             e.stopPropagation();
-            var configId = parseInt(cb.getAttribute('data-id'), 10);
+            var configId = parseInt(btn.getAttribute('data-id'), 10);
+            var nextEnabled = btn.getAttribute('data-enabled') !== '1';
             var base = localApiBase();
+            btn.disabled = true;
             fetch(base + '/api/wecom/configs/' + configId + '/auto-reply', {
               method: 'PUT',
-              headers: typeof authHeaders === 'function' ? authHeaders() : {}
+              headers: Object.assign({ 'Content-Type': 'application/json' }, typeof authHeaders === 'function' ? authHeaders() : {}),
+              body: JSON.stringify({ enabled: nextEnabled })
             }).then(function(r) { return r.json(); }).then(function(d) {
               if (d && d.auto_reply_enabled != null) {
-                var wrap = cb.closest('.wecom-toggle-wrap');
-                var track = wrap && wrap.querySelectorAll('span')[0];
-                var thumb = wrap && wrap.querySelectorAll('span')[1];
-                if (track) track.style.background = d.auto_reply_enabled ? '#4ade80' : 'rgba(255,255,255,0.15)';
-                if (thumb) thumb.style.left = d.auto_reply_enabled ? '20px' : '2px';
-                cb.checked = d.auto_reply_enabled;
+                btn.setAttribute('data-enabled', d.auto_reply_enabled ? '1' : '0');
+                btn.textContent = d.auto_reply_enabled ? '已开启' : '已关闭';
+                btn.classList.toggle('btn-primary', !!d.auto_reply_enabled);
+                btn.classList.toggle('btn-ghost', !d.auto_reply_enabled);
               }
-            }).catch(function() { cb.checked = !cb.checked; });
+            }).finally(function() { btn.disabled = false; });
           });
         });
         listEl.querySelectorAll('.wecom-copy-url').forEach(function(btn) {

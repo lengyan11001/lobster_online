@@ -57,7 +57,7 @@ echo [OK] Using Python Launcher py -%~1: %PYTHON%
 exit /b 0
 
 :python_ok
-%PYTHON% --version
+"%PYTHON%" --version
 echo.
 
 REM For embedded Python: enable import site in python*._pth
@@ -66,7 +66,7 @@ if exist "python\python.exe" (
         findstr /C:"#import site" "%%f" >nul 2>&1
         if not errorlevel 1 (
             echo   Enabling site-packages in %%f ...
-            %PYTHON% -c "p=r'%%f'; t=open(p).read().replace('#import site','import site'); open(p,'w').write(t)"
+            "%PYTHON%" -c "p=r'%%f'; t=open(p).read().replace('#import site','import site'); open(p,'w').write(t)"
         )
     )
     if not exist "python\Lib\site-packages" mkdir "python\Lib\site-packages"
@@ -74,7 +74,7 @@ if exist "python\python.exe" (
 
 REM Step 1b: Ensure pip
 echo [1/7] Checking pip...
-%PYTHON% -m pip --version >nul 2>&1
+"%PYTHON%" -m pip --version >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] pip already installed
     goto :pip_ready
@@ -86,9 +86,9 @@ REM Method 0: Bootstrap pip via scripts/pip_bootstrap_from_wheel.py when embedde
 if exist "scripts\pip_bootstrap_from_wheel.py" (
     echo   Trying scripts\pip_bootstrap_from_wheel.py ...
     set "LOBSTER_ROOT=%CD%"
-    %PYTHON% "%CD%\scripts\pip_bootstrap_from_wheel.py" 2>&1
+    "%PYTHON%" "%CD%\scripts\pip_bootstrap_from_wheel.py" 2>&1
     if not errorlevel 1 (
-        %PYTHON% -m pip --version >nul 2>&1
+        "%PYTHON%" -m pip --version >nul 2>&1
         if not errorlevel 1 (
             echo   [OK] pip bootstrapped via pip_bootstrap_from_wheel.py
             goto :pip_ready
@@ -103,9 +103,9 @@ if not defined PIP_WHL goto :try_getpip
 
 echo   Using pip wheel: %PIP_WHL%
 set "PYTHONPATH=%PIP_WHL%"
-%PYTHON% -m pip install --no-index --find-links deps\wheels pip setuptools wheel 2>&1
+"%PYTHON%" -m pip install --no-index --find-links deps\wheels pip setuptools wheel 2>&1
 set "PYTHONPATH="
-%PYTHON% -m pip --version >nul 2>&1
+"%PYTHON%" -m pip --version >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] pip bootstrapped from wheel
     goto :pip_ready
@@ -116,8 +116,8 @@ echo   Wheel bootstrap failed, trying next method...
 REM Method 2: get-pip.py online
 if not exist "deps\get-pip.py" goto :try_ensurepip
 echo   Trying get-pip.py - may need internet...
-%PYTHON% deps\get-pip.py 2>&1
-%PYTHON% -m pip --version >nul 2>&1
+"%PYTHON%" "deps\get-pip.py" 2>&1
+"%PYTHON%" -m pip --version >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] pip installed via get-pip.py
     goto :pip_ready
@@ -127,8 +127,8 @@ echo   get-pip.py failed, trying next method...
 :try_ensurepip
 REM Method 3: ensurepip
 echo   Trying ensurepip...
-%PYTHON% -m ensurepip --default-pip 2>nul
-%PYTHON% -m pip --version >nul 2>&1
+"%PYTHON%" -m ensurepip --default-pip 2>nul
+"%PYTHON%" -m pip --version >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] pip installed via ensurepip
     goto :pip_ready
@@ -209,7 +209,7 @@ set "REQ_FILE=requirements.runtime.txt"
 REM Offline first if deps\wheels exists (same as standalone; empty dir falls through to online after pip error)
 if not exist "deps\wheels" goto :try_online_pkgs
 echo   Installing from offline wheels...
-%PYTHON% -m pip install --no-index --find-links deps\wheels -r "%REQ_FILE%" 2>&1
+"%PYTHON%" -m pip install --no-index --find-links deps\wheels -r "%REQ_FILE%" 2>&1
 if errorlevel 1 (
     if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
         echo   [ERR] Offline install failed and LOBSTER_OFFLINE_ONLY=1 - no network fallback.
@@ -218,7 +218,7 @@ if errorlevel 1 (
     echo   Offline install command failed, trying online...
     goto :try_online_pkgs
 )
-%PYTHON% -c "%PKG_IMPORT_CHECK%" >nul 2>&1
+"%PYTHON%" -c "%PKG_IMPORT_CHECK%" >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Python packages installed - offline
     goto :packages_done
@@ -235,9 +235,9 @@ if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
     goto :packages_failed
 )
 echo   Installing packages online...
-%PYTHON% -m pip install -r "%REQ_FILE%" 2>&1
+"%PYTHON%" -m pip install -r "%REQ_FILE%" 2>&1
 if errorlevel 1 goto :packages_failed
-%PYTHON% -c "%PKG_IMPORT_CHECK%" >nul 2>&1
+"%PYTHON%" -c "%PKG_IMPORT_CHECK%" >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Python packages installed
     goto :packages_done
@@ -249,7 +249,7 @@ echo   Check:
 echo     %PYTHON% -m pip install -r "%REQ_FILE%"
 echo     %PYTHON% -c "%PKG_IMPORT_CHECK%"
 echo ----- import check output -----
-%PYTHON% -c "%PKG_IMPORT_CHECK%"
+"%PYTHON%" -c "%PKG_IMPORT_CHECK%"
 echo -----
 pause
 exit /b 1
@@ -262,12 +262,12 @@ REM Step 2b: Skill extra deps - WeCom pycryptodome, Volcano tos
 echo   [2b/7] Skill dependencies - WeCom pycryptodome, Volcano tos...
 set "PYCRYPTO_OK=0"
 if exist "deps\wheels" (
-    %PYTHON% -m pip install --no-index --find-links deps\wheels pycryptodome 2>nul
+    "%PYTHON%" -m pip install --no-index --find-links deps\wheels pycryptodome 2>nul
     if not errorlevel 1 set "PYCRYPTO_OK=1"
 )
 if "%PYCRYPTO_OK%"=="0" (
     if /i not "%LOBSTER_OFFLINE_ONLY%"=="1" (
-        %PYTHON% -m pip install pycryptodome 2>nul
+        "%PYTHON%" -m pip install pycryptodome 2>nul
         if not errorlevel 1 set "PYCRYPTO_OK=1"
     )
 )
@@ -278,22 +278,22 @@ if "%PYCRYPTO_OK%"=="1" (
 )
 set "TOS_OK=0"
 if exist "deps\wheels\tos-*.whl" (
-    %PYTHON% -m pip install --no-index --find-links deps\wheels tos 2>nul
+    "%PYTHON%" -m pip install --no-index --find-links deps\wheels tos 2>nul
     if not errorlevel 1 set "TOS_OK=1"
 )
 if "%TOS_OK%"=="0" (
     if exist "deps\wheels\tos-*.tar.gz" (
         REM tar.gz install needs setuptools first
-        %PYTHON% -m pip install setuptools wheel 2>nul
+        "%PYTHON%" -m pip install setuptools wheel 2>nul
         for %%f in (deps\wheels\tos-*.tar.gz) do (
-            %PYTHON% -m pip install "%%f" 2>nul
+            "%PYTHON%" -m pip install "%%f" 2>nul
             if not errorlevel 1 set "TOS_OK=1"
         )
     )
 )
 if "%TOS_OK%"=="0" (
     if /i not "%LOBSTER_OFFLINE_ONLY%"=="1" (
-        %PYTHON% -m pip install tos 2>nul
+        "%PYTHON%" -m pip install tos 2>nul
         if not errorlevel 1 set "TOS_OK=1"
     )
 )
@@ -377,7 +377,7 @@ echo.
 
 REM Step 5: Configure OpenClaw Gateway
 echo [5/7] Configuring OpenClaw Gateway...
-%PYTHON% scripts\setup_openclaw.py
+"%PYTHON%" "scripts\setup_openclaw.py"
 echo.
 
 REM Step 6: Install Playwright Chromium
@@ -391,12 +391,12 @@ if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
     echo   [SKIP] LOBSTER_OFFLINE_ONLY=1 - Playwright Chromium must be in browser_chromium\
     goto :pw_done
 )
-%PYTHON% -m playwright install chromium 2>nul
+"%PYTHON%" -m playwright install chromium 2>nul
 if not errorlevel 1 (
     echo   [OK] Chromium installed
 ) else (
     echo   [WARN] Playwright chromium not installed - publish features need manual install
-    echo          Run: %PYTHON% -m playwright install chromium
+    echo          Run: "%PYTHON%" -m playwright install chromium
 )
 :pw_done
 echo.
@@ -429,7 +429,7 @@ if not exist "scripts\ensure_ffmpeg_windows.py" (
     exit /b 1
 )
 echo   Downloading ffmpeg ^(media.edit, needs network^)...
-%PYTHON% "%~dp0scripts\ensure_ffmpeg_windows.py"
+"%PYTHON%" "%~dp0scripts\ensure_ffmpeg_windows.py"
 if errorlevel 1 (
     echo   [ERR] ffmpeg download failed. Fix network or place ffmpeg.exe in deps\ffmpeg\
     pause
@@ -540,7 +540,7 @@ if exist ".env" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do (
 if not defined LOBSTER_BRAND_MARK if exist ".env.example" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env.example") do (
   if /i "%%~a"=="LOBSTER_BRAND_MARK" set "LOBSTER_BRAND_MARK=%%b"
 )
-if not defined LOBSTER_BRAND_MARK set "LOBSTER_BRAND_MARK=yingshi"
+if not defined LOBSTER_BRAND_MARK set "LOBSTER_BRAND_MARK=bihuo"
 :brand_mark_done
 if /i "%LOBSTER_SKIP_DESKTOP_SHORTCUT%"=="1" goto :after_desktop_shortcut
 if not exist "static\branding\brands.json" (

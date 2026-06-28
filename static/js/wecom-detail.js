@@ -69,6 +69,7 @@
   }
 
   var selectedWecomCustomerId = null;
+  var selectedWecomCustomerName = '';
 
   function showWecomDetailView(configId) {
     if (configId != null) window._wecomDetailConfigId = configId;
@@ -148,16 +149,21 @@
   // 总开关
   var masterSwitch = document.getElementById('wecomMasterSwitch');
   var masterLabel = document.getElementById('wecomMasterSwitchLabel');
+  var _masterEnabled = false;
+  function _setMasterUi(enabled) {
+    _masterEnabled = !!enabled;
+    if (masterSwitch) masterSwitch.checked = !!enabled;
+    if (masterLabel) {
+      masterLabel.textContent = enabled ? '已启用' : '已关闭';
+      masterLabel.style.color = enabled ? 'var(--accent)' : 'var(--text-muted)';
+    }
+  }
   function _loadMasterSwitch() {
     fetch(wecomApiBase() + '/api/wecom/master-switch', { headers: typeof authHeaders === 'function' ? authHeaders() : {} })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (!d) return;
-        if (masterSwitch) masterSwitch.checked = d.enabled;
-        if (masterLabel) {
-          masterLabel.textContent = d.enabled ? '已启用' : '已关闭';
-          masterLabel.style.color = d.enabled ? 'var(--accent)' : 'var(--text-muted)';
-        }
+        _setMasterUi(d.enabled);
       });
   }
   if (masterSwitch) {
@@ -169,10 +175,9 @@
         headers: Object.assign({ 'Content-Type': 'application/json' }, typeof authHeaders === 'function' ? authHeaders() : {}),
         body: JSON.stringify({ enabled: enabled })
       }).then(function () {
-        if (masterLabel) {
-          masterLabel.textContent = enabled ? '已启用' : '已关闭';
-          masterLabel.style.color = enabled ? 'var(--accent)' : 'var(--text-muted)';
-        }
+        _setMasterUi(enabled);
+      }).catch(function () {
+        _setMasterUi(_masterEnabled);
       });
     });
   }
@@ -205,8 +210,8 @@
         var previewRaw = (s.last_preview || '').trim();
         var preview = (previewRaw || '[无正文]').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         var time = (s.last_at || '').substring(11, 16);
-        var active = selectedWecomCustomerId === s.customer_id ? 'background:rgba(6,182,212,0.15);' : '';
-        return '<div class="wecom-session-item" data-customer-id="' + s.customer_id + '" style="padding:0.55rem 0.75rem;border-bottom:1px solid rgba(255,255,255,0.06);cursor:pointer;' + active + '">' +
+        var activeClass = selectedWecomCustomerId === s.customer_id ? ' is-active' : '';
+        return '<div class="wecom-session-item' + activeClass + '" data-customer-id="' + s.customer_id + '" style="padding:0.55rem 0.75rem;border-bottom:1px solid rgba(255,255,255,0.06);cursor:pointer;">' +
           '<div style="display:flex;justify-content:space-between;align-items:baseline;">' +
             '<span style="font-size:0.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">' + escapeHtml(name) + '</span>' +
             '<span style="font-size:0.68rem;color:var(--text-muted);margin-left:0.5rem;flex-shrink:0;">' + escapeHtml(time) + '</span>' +
@@ -217,8 +222,9 @@
       listEl.querySelectorAll('.wecom-session-item').forEach(function(el) {
         el.addEventListener('click', function() {
           selectedWecomCustomerId = parseInt(el.getAttribute('data-customer-id'), 10);
-          listEl.querySelectorAll('.wecom-session-item').forEach(function(e) { e.style.background = ''; });
-          el.style.background = 'rgba(6,182,212,0.15)';
+          selectedWecomCustomerName = (el.querySelector('span') || {}).textContent || '';
+          listEl.querySelectorAll('.wecom-session-item').forEach(function(e) { e.classList.remove('is-active'); });
+          el.classList.add('is-active');
           var titleEl = document.getElementById('wecomMessageListTitle');
           if (titleEl) {
             var spanEl = titleEl.querySelector('span');
@@ -244,6 +250,10 @@
       if (sendBar) sendBar.style.display = 'none';
       if (editBtn) editBtn.style.display = 'none';
       return;
+    }
+    if (titleEl && selectedWecomCustomerName) {
+      var selectedTitleSpan = titleEl.querySelector('span');
+      if (selectedTitleSpan) selectedTitleSpan.textContent = selectedWecomCustomerName;
     }
     if (sendBar) sendBar.style.display = 'block';
     if (editBtn) {
@@ -534,23 +544,44 @@
 
   document.getElementById('wecomDownloadTemplateBtn') && document.getElementById('wecomDownloadTemplateBtn').addEventListener('click', function(e) {
     e.preventDefault();
+    var resultEl = document.getElementById('wecomUploadResult');
     var url = wecomApiBase() + '/api/wecom/material-template';
     var headers = typeof authHeaders === 'function' ? authHeaders() : {};
-    fetch(url, { headers: headers }).then(function(r) {
+    showMsg(resultEl, '正在保存模板到本机...');
+    fetch(wecomApiBase() + '/api/wecom/material-template/save', {
+      method: 'POST',
+      headers: headers
+    }).then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, data: d }; });
+    }).then(function(x) {
+      if (!x.ok) throw new Error((x.data && x.data.detail) || '保存失败');
+      showMsg(resultEl, '模板已保存到：' + (x.data.path || x.data.directory || x.data.filename || '本机下载目录'));
+    }).catch(function(saveErr) {
+      showMsg(resultEl, ((saveErr && saveErr.message) ? saveErr.message : '保存失败') + '，正在改用浏览器下载...', true);
+      return fetch(url, { headers: headers });
+    }).then(function(r) {
+      if (!r) return null;
       if (!r.ok) {
         return r.json().then(function(j) { throw new Error((j && j.detail) ? String(j.detail) : ('HTTP ' + r.status)); });
       }
       return r.blob();
     }).then(function(blob) {
+      if (!blob) return;
       var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
+      var objectUrl = URL.createObjectURL(blob);
+      a.href = objectUrl;
       a.download = 'wecom_materials_template.csv';
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(a.href);
+      setTimeout(function() {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(objectUrl);
+      }, 1500);
+      showMsg(resultEl, '模板已下载，请到浏览器或系统默认下载目录查看。');
     }).catch(function(err) {
-      alert((err && err.message) ? err.message : '下载失败');
+      showMsg(resultEl, ((err && err.message) ? err.message : '下载失败') + '，已改用直链下载。', true);
+      window.open(url, '_blank');
     });
   });
 

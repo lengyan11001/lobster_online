@@ -867,6 +867,7 @@ var LOBSTER_HIDDEN_VIEWS = {
   'hifly-digital-human': true,
   'douyin-workbench': true,
   'shanjian-smart-clip': true,
+  'ai-3d-model': true,
   'openclaw-skill-chat': true
 };
 var _restoringDashboardView = false;

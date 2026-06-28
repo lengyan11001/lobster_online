@@ -100,13 +100,26 @@
 
   function appendViewHtml(view, html, config) {
     var existing = findLoadedView(view);
-    if (existing) return existing;
+    if (existing && !(config && config.reloadExisting)) return existing;
 
     var id = viewContentId(view);
     var template = document.createElement('template');
     template.innerHTML = html || '';
     var embeddedHost = template.content.querySelector('#' + id);
     var mount = getViewMount(config);
+
+    if (existing) {
+      if (embeddedHost) {
+        existing.replaceWith(template.content);
+        var replaced = document.getElementById(id);
+        if (replaced && !replaced.classList.contains('content-block')) replaced.classList.add('content-block');
+        return replaced || existing;
+      }
+      existing.innerHTML = '';
+      existing.appendChild(template.content);
+      if (!existing.classList.contains('content-block')) existing.classList.add('content-block');
+      return existing;
+    }
 
     if (embeddedHost) {
       mount.appendChild(template.content);
@@ -143,14 +156,14 @@
     if (!view) return Promise.resolve(null);
 
     var existing = findLoadedView(view);
-    if (existing) {
+    var config = registry[view] || {};
+    if (existing && !config.reloadExisting) {
       state.loaded[view] = true;
       return Promise.resolve(existing);
     }
 
     if (state.loading[view]) return state.loading[view];
 
-    var config = registry[view] || {};
     var htmlUrl = cacheBustUrl(config.html || config.url);
     if (!htmlUrl) return Promise.resolve(null);
 

@@ -57,6 +57,7 @@ from .api.create_ppt import router as create_ppt_router
 from .api.viral_video_remix import router as viral_video_remix_router
 from .api.hifly_digital_human import router as hifly_digital_human_router
 from .api.shanjian_smart_clip import router as shanjian_smart_clip_router
+from .api.ai_3d_model import router as ai_3d_model_router
 from .api.douyin_origin import router as douyin_origin_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
@@ -567,6 +568,23 @@ def _migrate_user_brand_mark():
         logger.warning("Migration user brand_mark skipped: %s", e)
 
 
+def _migrate_user_is_overseas_user():
+    """Add is_overseas_user for older local SQLite databases."""
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        if not insp.has_table("users"):
+            return
+        cols = [c["name"] for c in insp.get_columns("users")]
+        if "is_overseas_user" in cols:
+            return
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_overseas_user BOOLEAN NOT NULL DEFAULT 0"))
+    except Exception as e:
+        logger.warning("Migration user is_overseas_user skipped: %s", e)
+
+
 def _migrate_user_client_installation_id():
     """Add client_installation_id for OpenClaw 渠道凭证（与 X-Installation-Id 一致，免用户改 .env）。"""
     from sqlalchemy import inspect, text
@@ -881,6 +899,7 @@ def create_app() -> FastAPI:
     _migrate_user_comfly_configs_table()
     _migrate_user_wechat_openid()
     _migrate_user_brand_mark()
+    _migrate_user_is_overseas_user()
     _migrate_user_client_installation_id()
     _migrate_assets_meta_column()
     _migrate_publish_account_creator_schedule_v2()
@@ -967,6 +986,7 @@ def create_app() -> FastAPI:
     app.include_router(viral_video_remix_router, prefix="")
     app.include_router(hifly_digital_human_router, prefix="")
     app.include_router(shanjian_smart_clip_router, prefix="")
+    app.include_router(ai_3d_model_router, prefix="")
     if ecommerce_publish_router is not None:
         app.include_router(ecommerce_publish_router, prefix="")
     else:

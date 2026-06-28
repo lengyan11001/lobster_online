@@ -28,17 +28,6 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
 
     icon = root / "static" / "bihu_box.ico"
-    env_path = root / ".env"
-    if env_path.is_file():
-        for raw in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if not raw or raw.lstrip().startswith("#") or "=" not in raw:
-                continue
-            key, value = raw.split("=", 1)
-            if key.strip().upper() == "LOBSTER_BRAND_MARK" and value.strip().lower() == "yingshi":
-                yingshi_icon = root / "static" / "yingshi_box.ico"
-                if yingshi_icon.is_file():
-                    icon = yingshi_icon
-                break
 
     dist = root / "dist"
     dist.mkdir(exist_ok=True)

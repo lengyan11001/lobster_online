@@ -1,0 +1,1380 @@
+.ai3d-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.ai3d-head,
+.ai3d-panel {
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+.ai3d-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+}
+
+.ai3d-subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.ai3d-head-actions,
+.ai3d-status-row,
+.ai3d-result-head,
+.ai3d-checks {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.ai3d-page .btn {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #fff;
+  color: #1e293b;
+  padding: 0.34rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 850;
+  line-height: 1.1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.ai3d-page .btn:hover {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: #eff6ff;
+}
+
+.ai3d-page .btn-primary {
+  border-color: rgba(37, 99, 235, 0.72);
+  background: #2563eb;
+  color: #fff;
+}
+
+.ai3d-page .btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.ai3d-page .btn-ghost {
+  background: #fff;
+}
+
+.ai3d-page .btn-sm {
+  min-height: 30px;
+  padding: 0.3rem 0.56rem;
+  font-size: 0.75rem;
+}
+
+.ai3d-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.72fr) minmax(520px, 1.28fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.ai3d-panel {
+  padding: 1rem;
+}
+
+.ai3d-form,
+.ai3d-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.ai3d-control {
+  gap: 0;
+  overflow: hidden;
+}
+
+.ai3d-panel.ai3d-control {
+  padding: 0;
+}
+
+.ai3d-control .ai3d-status-row {
+  padding: 0.88rem 1rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+  background: #f8fafc;
+}
+
+.ai3d-history-block {
+  position: relative;
+  padding: 1rem 1rem 1rem 1.18rem;
+}
+
+.ai3d-history-block + .ai3d-history-block {
+  border-top: 1px solid rgba(203, 213, 225, 0.92);
+}
+
+.ai3d-history-block::before {
+  content: "";
+  position: absolute;
+  left: 0.68rem;
+  top: 1rem;
+  bottom: 1rem;
+  width: 3px;
+  border-radius: 999px;
+  background: #2563eb;
+}
+
+.ai3d-steps-inline {
+  background: #fbfdff;
+  min-height: 520px;
+}
+
+.ai3d-steps-inline::before {
+  background: #0f766e;
+}
+
+.ai3d-result-head.compact {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai3d-history-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ai3d-download-current.disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.ai3d-job-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  max-height: none;
+  overflow: visible;
+}
+
+.ai3d-job-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  margin-top: 0.6rem;
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.ai3d-page-btn {
+  min-height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.52);
+  background: #fff;
+  color: #1e293b;
+  padding: 0.28rem 0.55rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ai3d-page-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.ai3d-job-card {
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ai3d-job-card:hover,
+.ai3d-job-card.active {
+  border-color: rgba(37, 99, 235, 0.62);
+  background: #eff6ff;
+}
+
+.ai3d-job-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 0.62rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  cursor: pointer;
+}
+
+.ai3d-job-item:hover,
+.ai3d-job-item.active {
+  background: transparent;
+}
+
+.ai3d-job-item strong {
+  color: #0f172a;
+  font-size: 0.82rem;
+}
+
+.ai3d-job-item span {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.ai3d-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0 0.65rem 0.65rem;
+}
+
+.ai3d-job-download {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #fff;
+  color: #1e293b;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.ai3d-job-download {
+  border-color: rgba(15, 118, 110, 0.36);
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.ai3d-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.ai3d-step-action {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #fff;
+  color: #1e293b;
+  padding: 0.34rem 0.65rem;
+  font-size: 0.76rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.ai3d-step-action.primary {
+  border-color: rgba(37, 99, 235, 0.72);
+  background: #2563eb;
+  color: #fff;
+}
+
+.ai3d-step-action:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.ai3d-steps-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ai3d-steps-inline .ai3d-step-timeline {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.ai3d-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.ai3d-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+}
+
+.ai3d-field label {
+  font-size: 0.82rem;
+  color: #475569;
+  font-weight: 700;
+}
+
+.ai3d-field input[type="text"],
+.ai3d-field textarea,
+.ai3d-field select {
+  min-height: 40px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  padding: 0 0.72rem;
+  box-sizing: border-box;
+}
+
+.ai3d-field textarea {
+  min-height: 110px;
+  padding-top: 0.62rem;
+  padding-bottom: 0.62rem;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.ai3d-field input[type="text"]:focus,
+.ai3d-field textarea:focus,
+.ai3d-field select:focus {
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  outline: none;
+}
+
+.ai3d-dropzone {
+  min-height: 132px;
+  border: 1px dashed rgba(37, 99, 235, 0.5);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.9), rgba(248, 250, 252, 0.94));
+  color: #1e293b;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 0.4rem;
+  padding: 1rem;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.ai3d-dropzone:hover {
+  border-color: rgba(37, 99, 235, 0.9);
+  background: #eff6ff;
+}
+
+.ai3d-dropzone input {
+  display: none;
+}
+
+.ai3d-dropzone span {
+  font-weight: 800;
+}
+
+.ai3d-dropzone small,
+.ai3d-muted,
+.ai3d-file-item small,
+.ai3d-output-link small,
+.ai3d-note-grid span,
+.ai3d-steps span {
+  color: #64748b;
+}
+
+.ai3d-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ai3d-file-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: #f8fafc;
+  font-size: 0.82rem;
+}
+
+.ai3d-checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.42rem 0.62rem;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.ai3d-toggle {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.7rem;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai3d-toggle input {
+  margin-top: 0.18rem;
+}
+
+.ai3d-toggle span,
+.ai3d-toggle small {
+  display: block;
+}
+
+.ai3d-toggle strong {
+  color: #0f172a;
+  font-size: 0.86rem;
+}
+
+.ai3d-toggle small {
+  margin-top: 0.16rem;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.ai3d-param-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.72rem;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai3d-param-summary div {
+  min-width: 0;
+}
+
+.ai3d-param-summary strong,
+.ai3d-param-summary span {
+  display: block;
+}
+
+.ai3d-param-summary strong {
+  color: #0f172a;
+  font-size: 0.84rem;
+}
+
+.ai3d-param-summary span {
+  color: #64748b;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai3d-modal[hidden] {
+  display: none;
+}
+
+.ai3d-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2147482500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.ai3d-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.ai3d-modal-panel {
+  position: relative;
+  width: min(760px, 96vw);
+  max-height: min(720px, 92vh);
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35);
+  overflow: hidden;
+}
+
+.ai3d-create-modal-panel {
+  width: min(860px, 96vw);
+}
+
+.ai3d-create-modal-panel .ai3d-form {
+  min-height: 0;
+  gap: 0;
+}
+
+.ai3d-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+}
+
+.ai3d-modal-head strong,
+.ai3d-modal-head span {
+  display: block;
+}
+
+.ai3d-modal-head strong {
+  color: #0f172a;
+}
+
+.ai3d-modal-head span {
+  margin-top: 0.18rem;
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.ai3d-modal-close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: #fff;
+  color: #1e293b;
+  cursor: pointer;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.ai3d-modal-body {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.ai3d-create-modal-panel .ai3d-modal-body {
+  max-height: min(640px, calc(92vh - 132px));
+}
+
+.ai3d-history-modal-panel {
+  width: min(720px, 96vw);
+}
+
+.ai3d-history-modal-panel .ai3d-modal-body {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.ai3d-history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+  background: #f8fafc;
+}
+
+.ai3d-job-list-modal {
+  max-height: min(560px, calc(92vh - 190px));
+  overflow: auto;
+  margin-top: 0;
+  padding: 0.85rem 1rem;
+}
+
+.ai3d-job-list-modal .ai3d-job-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.ai3d-job-list-modal .ai3d-job-item {
+  min-height: 58px;
+}
+
+.ai3d-job-list-modal .ai3d-job-actions {
+  padding: 0.65rem;
+  justify-content: flex-end;
+}
+
+.ai3d-job-list-modal .ai3d-job-download {
+  white-space: nowrap;
+}
+
+.ai3d-history-modal-panel .ai3d-job-pager {
+  margin-top: 0;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid rgba(226, 232, 240, 0.95);
+  background: #fff;
+}
+
+.ai3d-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.8rem 1rem;
+  border-top: 1px solid rgba(226, 232, 240, 0.95);
+  background: #f8fafc;
+}
+
+.ai3d-main-btn {
+  width: 100%;
+  min-height: 42px;
+}
+
+.ai3d-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 0.62rem;
+  border-radius: 999px;
+  border: 1px solid rgba(14, 116, 144, 0.22);
+  color: #0e7490;
+  background: rgba(6, 182, 212, 0.1);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.ai3d-badge.ok {
+  color: #15803d;
+  border-color: rgba(22, 163, 74, 0.24);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.ai3d-badge.bad {
+  color: #b91c1c;
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 226, 226, 0.86);
+}
+
+.ai3d-badge.muted {
+  color: #64748b;
+  border-color: rgba(148, 163, 184, 0.28);
+  background: #f1f5f9;
+}
+
+.ai3d-result {
+  min-height: 480px;
+}
+
+.ai3d-result-head {
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.ai3d-card-title {
+  color: #0f172a;
+  font-weight: 900;
+}
+
+.ai3d-progress {
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 0.85rem;
+}
+
+.ai3d-progress > div {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #2563eb, #0f766e);
+  transition: width 0.25s ease;
+}
+
+.ai3d-preview {
+  min-height: 320px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 8px;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.ai3d-preview img {
+  width: 100%;
+  height: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  display: block;
+}
+
+.ai3d-model-viewer-wrap {
+  width: 100%;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  background: #111827;
+}
+
+.ai3d-model-viewer {
+  width: 100%;
+  min-height: 480px;
+  flex: 1;
+  background: radial-gradient(circle at center, #334155 0, #111827 58%, #020617 100%);
+}
+
+.ai3d-model-switcher {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: #0f172a;
+}
+
+.ai3d-model-switch-btn {
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 8px;
+  background: #1e293b;
+  color: #cbd5e1;
+  padding: 0.42rem 0.62rem;
+  font-size: 0.76rem;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ai3d-model-switch-btn:hover,
+.ai3d-model-switch-btn.active {
+  border-color: rgba(34, 197, 94, 0.65);
+  background: #064e3b;
+  color: #ecfdf5;
+}
+
+.ai3d-model-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.62rem 0.75rem;
+  color: #cbd5e1;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 0.78rem;
+}
+
+.ai3d-model-viewer-bar a {
+  color: #93c5fd;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.ai3d-input-wrap {
+  width: 100%;
+  height: 100%;
+  align-self: stretch;
+  padding: 0.8rem;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.ai3d-input-head,
+.ai3d-plan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.ai3d-input-head strong,
+.ai3d-plan strong {
+  color: #0f172a;
+}
+
+.ai3d-input-head span,
+.ai3d-plan span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.ai3d-input-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 0.65rem;
+}
+
+.ai3d-input-thumb {
+  margin: 0;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ai3d-previewable {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  display: block;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.ai3d-previewable img,
+.ai3d-input-thumb img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: #202020;
+  display: block;
+}
+
+.ai3d-input-thumb figcaption {
+  padding: 0.48rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.ai3d-input-thumb figcaption strong {
+  color: #0f172a;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai3d-input-thumb figcaption span {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.ai3d-plan {
+  margin: 0.8rem 0 0;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.ai3d-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+}
+
+.ai3d-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.ai3d-empty.slim {
+  padding: 0.7rem;
+  font-size: 0.82rem;
+}
+
+.ai3d-empty ul {
+  text-align: left;
+  margin: 0.75rem auto 0;
+  max-width: 520px;
+}
+
+.ai3d-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.ai3d-metrics div {
+  padding: 0.6rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: #f8fafc;
+}
+
+.ai3d-metrics strong,
+.ai3d-metrics span {
+  display: block;
+}
+
+.ai3d-metrics strong {
+  color: #0f172a;
+  font-size: 0.95rem;
+}
+
+.ai3d-metrics span {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.ai3d-outputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.ai3d-output-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  background: #eff6ff;
+  color: #1d4ed8;
+  text-decoration: none;
+}
+
+.ai3d-output-link.primary {
+  border-color: rgba(15, 118, 110, 0.3);
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.ai3d-output-link span {
+  font-weight: 800;
+}
+
+.ai3d-output-link.primary {
+  gap: 0.45rem;
+}
+
+.ai3d-output-preview-btn {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.ai3d-output-preview-btn.active span,
+.ai3d-output-preview-btn:hover span {
+  text-decoration: underline;
+}
+
+.ai3d-output-download {
+  align-self: flex-start;
+  color: #0f766e;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.ai3d-guide {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 1rem;
+}
+
+.ai3d-steps-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai3d-step-timeline {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.ai3d-step-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 0.7rem;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.72rem;
+}
+
+.ai3d-step-row.running {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: #eff6ff;
+}
+
+.ai3d-step-row.failed {
+  border-color: rgba(220, 38, 38, 0.32);
+  background: #fff1f2;
+}
+
+.ai3d-step-row.blocked {
+  border-color: rgba(217, 119, 6, 0.34);
+  background: #fffbeb;
+}
+
+.ai3d-step-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.ai3d-step-row.ok .ai3d-step-index {
+  background: #10b981;
+  color: #fff;
+}
+
+.ai3d-step-row.running .ai3d-step-index {
+  background: #2563eb;
+  color: #fff;
+}
+
+.ai3d-step-row.failed .ai3d-step-index {
+  background: #dc2626;
+  color: #fff;
+}
+
+.ai3d-step-row.blocked .ai3d-step-index {
+  background: #d97706;
+  color: #fff;
+}
+
+.ai3d-step-body {
+  min-width: 0;
+}
+
+.ai3d-step-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ai3d-step-title strong {
+  color: #0f172a;
+}
+
+.ai3d-step-badge {
+  border-radius: 999px;
+  padding: 0.16rem 0.48rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.ai3d-step-badge.ok {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.ai3d-step-badge.running {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.ai3d-step-badge.failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.ai3d-step-badge.skip {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.ai3d-step-badge.blocked {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.ai3d-step-summary {
+  color: #64748b;
+  font-size: 0.8rem;
+  margin-top: 0.22rem;
+}
+
+.ai3d-step-groups {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.7rem;
+}
+
+.ai3d-step-group {
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 8px;
+  padding: 0.65rem;
+  background: #f8fafc;
+}
+
+.ai3d-step-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.ai3d-step-group-head strong {
+  color: #0f172a;
+  font-size: 0.86rem;
+}
+
+.ai3d-step-group-head span {
+  color: #64748b;
+  font-size: 0.76rem;
+  text-align: right;
+}
+
+.ai3d-step-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.ai3d-step-thumbs figure {
+  margin: 0;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.ai3d-step-thumbs .ai3d-previewable img,
+.ai3d-step-thumbs img,
+.ai3d-step-file-icon {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: #202020;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 900;
+}
+
+.ai3d-step-thumbs figcaption {
+  padding: 0.35rem 0.42rem;
+  color: #475569;
+  font-size: 0.72rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.ai3d-step-thumbs figcaption strong {
+  color: #0f172a;
+  font-size: 0.73rem;
+}
+
+.ai3d-step-thumbs figcaption em {
+  color: #047857;
+  font-size: 0.66rem;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.ai3d-step-thumbs figcaption small {
+  color: #64748b;
+  font-size: 0.66rem;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.ai3d-step-thumbs figcaption small.risk {
+  color: #b45309;
+}
+
+.ai3d-candidate-select {
+  width: 100%;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 0.28rem 0.35rem;
+  cursor: pointer;
+}
+
+.ai3d-candidate-select:hover {
+  background: #dbeafe;
+}
+
+.ai3d-hero-preview img {
+  max-height: 420px;
+  object-fit: contain;
+  background: #111827;
+}
+
+.ai3d-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai3d-lightbox-panel {
+  position: relative;
+  width: min(1120px, 96vw);
+  max-height: 94vh;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.45);
+}
+
+.ai3d-lightbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.9rem;
+  color: #f8fafc;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.ai3d-lightbox-close {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.8);
+  color: #f8fafc;
+  cursor: pointer;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.ai3d-lightbox-floating-close {
+  position: fixed;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  z-index: 2147483001;
+  width: 38px;
+  height: 38px;
+  background: #0f172a;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.32);
+}
+
+.ai3d-lightbox-body {
+  padding: 1rem;
+  max-height: calc(94vh - 58px);
+  overflow: auto;
+}
+
+.ai3d-lightbox-body img {
+  width: 100%;
+  height: auto;
+  max-height: calc(94vh - 90px);
+  object-fit: contain;
+  display: block;
+  background: #111827;
+}
+
+.ai3d-step-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+.ai3d-step-file {
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  background: #f8fafc;
+}
+
+.ai3d-step-file strong,
+.ai3d-step-file span {
+  display: block;
+}
+
+.ai3d-step-file strong {
+  color: #0f172a;
+}
+
+.ai3d-step-file span {
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.ai3d-steps,
+.ai3d-note-grid {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.ai3d-steps {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.ai3d-note-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ai3d-steps div,
+.ai3d-note-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: #f8fafc;
+}
+
+.ai3d-steps strong,
+.ai3d-note-grid strong {
+  color: #0f172a;
+}
+
+@media (max-width: 1100px) {
+  .ai3d-layout,
+  .ai3d-guide,
+  .ai3d-steps,
+  .ai3d-note-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .ai3d-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai3d-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ai3d-preview {
+    min-height: 240px;
+  }
+
+  .ai3d-model-viewer {
+    min-height: 320px;
+  }
+}

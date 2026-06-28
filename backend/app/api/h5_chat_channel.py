@@ -28,7 +28,7 @@ from sqlalchemy import func
 from ..core.config import settings
 from ..db import SessionLocal
 from ..models import Asset, PublishAccount
-from ..services.openclaw_channel_auth_store import read_channel_fallback
+from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
 from .auth import get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
 from .chat import _get_default_image_generate_model
@@ -4045,11 +4045,18 @@ async def h5_chat_poll_loop() -> None:
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 now_loop = asyncio.get_event_loop().time()
                 if now_loop - last_heartbeat_at >= heartbeat_interval:
-                    await client.post(
+                    heartbeat_resp = await client.post(
                         f"{base}/api/h5-chat/device-heartbeat",
                         json={"display_name": "local-online"},
                         headers=headers,
                     )
+                    if heartbeat_resp.status_code == 401:
+                        logger.warning("[H5-CHAT] heartbeat auth rejected; clearing stale channel token")
+                        clear_channel_fallback("h5_heartbeat_401")
+                        last_heartbeat_at = 0.0
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
+                    heartbeat_resp.raise_for_status()
                     last_heartbeat_at = now_loop
                     try:
                         await _report_douyin_dashboard_status(
@@ -4068,10 +4075,13 @@ async def h5_chat_poll_loop() -> None:
                     resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers)
                     if resp.status_code == 401:
                         logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
+                        clear_channel_fallback("h5_pending_401")
+                        last_heartbeat_at = 0.0
                         await asyncio.sleep(sleep_missing_auth)
                         continue
-                    resp.raise_for_status()
-                    items = (resp.json() or {}).get("items") or []
+                    else:
+                        resp.raise_for_status()
+                        items = (resp.json() or {}).get("items") or []
                 task_items: list[Dict[str, Any]] = []
                 task_slots = max(0, max_task_concurrency - len(active_task_runs))
                 if task_slots > 0 and now_loop - last_task_poll_at >= task_poll_interval:

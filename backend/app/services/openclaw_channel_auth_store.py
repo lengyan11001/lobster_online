@@ -54,6 +54,17 @@ def read_channel_fallback() -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
+def clear_channel_fallback(reason: str = "") -> None:
+    """Remove the persisted channel token so background workers stop retrying a stale JWT."""
+    path = _channel_file()
+    try:
+        with _lock:
+            path.unlink(missing_ok=True)
+        logger.info("openclaw channel fallback cleared reason=%s", reason or "-")
+    except OSError as e:
+        logger.warning("clear_channel_fallback failed: %s", e)
+
+
 def persist_channel_fallback_for_login(
     *,
     jwt_token: str,

@@ -23,6 +23,39 @@
         "image_size": {
           "type": "string",
           "description": "可选，速推比例枚举：1:1、4:3、3:4、16:9、9:16、3:2、2:3；默认可省略"
+        },
+        "resolution": {
+          "type": "string",
+          "enum": [
+            "1K",
+            "2K",
+            "4K"
+          ],
+          "description": "Optional output resolution level for openai/gpt-image-2."
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "description": "Optional generation quality for openai/gpt-image-2."
+        },
+        "num_images": {
+          "type": "integer",
+          "description": "Number of images. openai/gpt-image-2 is normalized to 1.",
+          "default": 1
+        },
+        "output_format": {
+          "type": "string",
+          "enum": [
+            "png",
+            "jpeg",
+            "webp"
+          ],
+          "description": "Optional output image format.",
+          "default": "png"
         }
       },
       "required": [

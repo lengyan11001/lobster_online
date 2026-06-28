@@ -1,6 +1,6 @@
 {
-  "version": "1.0.81",
-  "build": 119,
-  "applied_at": "2026-06-23T12:45:00+08:00",
-  "note": "Encrypted OTA build"
+  "version": "1.0.89",
+  "build": 127,
+  "applied_at": "2026-06-26T15:50:28+08:00",
+  "note": "Bump skill store cache for WeChat Channels transcript entry"
 }

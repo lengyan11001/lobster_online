@@ -19,8 +19,7 @@
     .wct-item-title { font-weight:900; line-height:1.35; word-break:break-word; }
     .wct-meta { color:#64748b; font-size:12px; line-height:1.45; margin-top:3px; word-break:break-all; }
     .wct-empty { color:#64748b; border:1px dashed #cbd5e1; border-radius:8px; padding:22px; text-align:center; background:#fff; }
-    .wct-video-row { display:grid; grid-template-columns:24px 86px minmax(0,1fr); gap:10px; align-items:start; }
-    .wct-cover { width:86px; aspect-ratio:16/10; object-fit:cover; border-radius:6px; background:#e2e8f0; }
+    .wct-video-row { display:grid; grid-template-columns:24px minmax(0,1fr); gap:10px; align-items:start; }
     .wct-output { border:1px solid #dfe7f2; border-radius:8px; padding:10px; background:#fbfdff; margin-bottom:10px; }
     .wct-output textarea { width:100%; min-height:130px; border:1px solid #cbd5e1; border-radius:8px; padding:10px; resize:vertical; box-sizing:border-box; font-size:13px; line-height:1.6; }
     .wct-status { display:inline-flex; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:800; background:#eef2ff; color:#3730a3; white-space:nowrap; }
@@ -38,7 +37,7 @@
     <header class="wct-hero">
       <div>
         <h2 class="wct-title">视频号文案提取</h2>
-        <div class="wct-sub">输入视频号昵称，确认账号后拉取作品，选择视频批量提取口播文本。</div>
+        <div class="wct-sub">粘贴视频分享链接、视频号 ID 或 finder username，确认账号后拉取作品，批量提取口播文本。</div>
       </div>
       <div class="wct-actions">
         <button type="button" class="btn btn-ghost btn-sm" id="wctRefreshJobsBtn">刷新记录</button>
@@ -53,8 +52,8 @@
         <h3>账号查询</h3>
       </div>
       <div class="wct-row">
-        <input id="wctKeywordInput" class="wct-input" placeholder="输入视频号昵称或 username">
-        <button type="button" class="btn btn-primary btn-sm" id="wctSearchBtn">查询账号</button>
+        <input id="wctKeywordInput" class="wct-input" placeholder="粘贴分享链接 / sph... / v2_...@finder / 昵称">
+        <button type="button" class="btn btn-primary btn-sm" id="wctSearchBtn">解析账号</button>
       </div>
       <div id="wctAccountList" class="wct-list" style="margin-top:12px; max-height:220px;"></div>
     </section>

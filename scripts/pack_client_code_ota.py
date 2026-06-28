@@ -248,6 +248,26 @@ def _norm(p: str) -> str:
 
 _INCLUDE_RUNTIME_WHEEL_DIRS: set[str] = set()
 _INCLUDE_PYC_FILES = False
+_PACK_OVERSEAS = False
+
+
+def _env_text_for_pack(path: Path) -> str:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+    found = False
+    out: list[str] = []
+    desired = "true" if _PACK_OVERSEAS else "false"
+    for line in lines:
+        if line.strip().startswith("LOBSTER_IS_OVERSEAS_USER="):
+            out.append(f"LOBSTER_IS_OVERSEAS_USER={desired}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"LOBSTER_IS_OVERSEAS_USER={desired}")
+    return "\n".join(out) + "\n"
 
 
 def _skip_file(rel: str) -> bool:
@@ -291,7 +311,10 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
         if _skip_file(rel_dir):
             return
         if rel_dir not in zf.NameToInfo:
-            zf.write(base, rel_dir)
+            if _norm(rel_dir) == ".env":
+                zf.writestr(rel_dir, _env_text_for_pack(base))
+            else:
+                _zip_write_file(zf, base, rel_dir)
         return
     for dirpath, dirnames, filenames in os.walk(base):
         rel_here = _norm(os.path.relpath(dirpath, str(root)))
@@ -327,7 +350,10 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
                 if full.is_symlink() and not full.exists():
                     print(f"[WARN] 跳过断链: {rel}")
                     continue
-                zf.write(full, rel)
+                if rel == ".env":
+                    zf.writestr(rel, _env_text_for_pack(full))
+                else:
+                    _zip_write_file(zf, full, rel)
             except OSError as e:
                 print(f"[WARN] 跳过无法读取的路径: {rel} ({e})")
 
@@ -357,7 +383,7 @@ def _add_openclaw_bundled_defaults(zf: zipfile.ZipFile, root: Path) -> None:
         if src is None:
             print(f"[WARN] missing OpenClaw bundled workspace default: {filename}")
             continue
-        zf.write(src, arcname)
+        _zip_write_file(zf, src, arcname)
         written.add(arcname)
 
 
@@ -381,7 +407,7 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
             rel = _norm(os.path.relpath(str(full), str(root)))
             if _skip_file(rel):
                 continue
-            zf.write(full, rel)
+            _zip_write_file(zf, full, rel)
 
     for rel in _OTA_OPENCLAW_POLICY_RELS:
         src_pol = root / rel.replace("/", os.sep)
@@ -397,7 +423,7 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
                 continue
             src_pol = fallback
             print(f"[WARN] {rel} 缺失，已用 {src_pol.relative_to(root).as_posix()} 兜底打包")
-        zf.write(src_pol, rel)
+        _zip_write_file(zf, src_pol, rel)
 
     _add_openclaw_bundled_defaults(zf, root)
 
@@ -420,9 +446,41 @@ def _prepare_runtime_wheels(root: Path, out_rel: str, patterns: tuple[str, ...])
     copied: list[str] = []
     for src in sorted(set(picked.values()), key=lambda p: p.name.lower()):
         dst = out_dir / src.name
-        shutil.copy2(src, dst)
+        _copy2_safe(src, dst)
         copied.append(dst.relative_to(root).as_posix())
     return copied
+
+
+def _win_long_path(path: Path) -> str:
+    raw = str(path.resolve())
+    if os.name != "nt" or raw.startswith("\\\\?\\"):
+        return raw
+    if raw.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + raw.lstrip("\\")
+    return "\\\\?\\" + raw
+
+
+def _copy2_safe(src: Path, dst: Path) -> None:
+    _mkdir_safe(dst.parent)
+    shutil.copy2(_win_long_path(src), _win_long_path(dst))
+
+
+def _zip_write_file(zf: zipfile.ZipFile, src: Path, arcname: str) -> None:
+    st = os.stat(_win_long_path(src))
+    info = zipfile.ZipInfo(arcname)
+    info.date_time = datetime.datetime.fromtimestamp(st.st_mtime).timetuple()[:6]
+    info.compress_type = zipfile.ZIP_DEFLATED
+    if os.name != "nt":
+        info.external_attr = (st.st_mode & 0xFFFF) << 16
+    with open(_win_long_path(src), "rb") as fsrc, zf.open(info, "w") as fdst:
+        shutil.copyfileobj(fsrc, fdst, length=1024 * 1024)
+
+
+def _mkdir_safe(path: Path) -> None:
+    if os.name != "nt":
+        path.mkdir(parents=True, exist_ok=True)
+        return
+    os.makedirs(_win_long_path(path), exist_ok=True)
 
 
 def _prepare_ppt_runtime_wheels(root: Path) -> list[str]:
@@ -467,8 +525,8 @@ def _bundled_python(root: Path) -> Path:
 def _copy_tree_for_encrypted_ota(src: Path, dst: Path, rel: str) -> None:
     if src.is_file():
         if not _skip_file(rel):
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            _mkdir_safe(dst.parent)
+            _copy2_safe(src, dst)
         return
     for dirpath, dirnames, filenames in os.walk(src):
         rel_here = _norm(os.path.relpath(dirpath, str(src)))
@@ -507,8 +565,8 @@ def _copy_tree_for_encrypted_ota(src: Path, dst: Path, rel: str) -> None:
             if _skip_file(package_rel):
                 continue
             out = dst / child_rel.replace("/", os.sep)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(full, out)
+            _mkdir_safe(out.parent)
+            _copy2_safe(full, out)
 
 
 def _compile_tree_to_pyc(root: Path, target_dirs: tuple[str, ...], python_exe: Path) -> None:
@@ -572,7 +630,8 @@ print(count)
 
 
 def _prepare_encrypted_ota_root(root: Path, paths_tuple: tuple[str, ...]) -> tuple[Path, tempfile.TemporaryDirectory[str]]:
-    tmp = tempfile.TemporaryDirectory(prefix="lobster_encrypted_ota_")
+    tmp_parent = root.drive + os.sep if os.name == "nt" and root.drive else None
+    tmp = tempfile.TemporaryDirectory(prefix="loe_", dir=tmp_parent)
     enc_root = Path(tmp.name) / root.name
     enc_root.mkdir(parents=True, exist_ok=True)
     for rel in paths_tuple:
@@ -615,7 +674,7 @@ def _prepare_encrypted_ota_root(root: Path, paths_tuple: tuple[str, ...]) -> tup
 
 
 def main() -> int:
-    global _INCLUDE_RUNTIME_WHEEL_DIRS, _INCLUDE_PYC_FILES
+    global _INCLUDE_RUNTIME_WHEEL_DIRS, _INCLUDE_PYC_FILES, _PACK_OVERSEAS
     ap = argparse.ArgumentParser(description="Pack client-code OTA zip")
     ap.add_argument(
         "--root",
@@ -649,7 +708,13 @@ def main() -> int:
         action="store_true",
         help="Pack encrypted OTA: ship .py loader stubs plus sibling .pyc files compiled by bundled Python",
     )
+    ap.add_argument(
+        "--overseas",
+        action="store_true",
+        help="Pack overseas edition OTA; default false keeps LOBSTER_IS_OVERSEAS_USER=false in bundled .env",
+    )
     args = ap.parse_args()
+    _PACK_OVERSEAS = bool(args.overseas)
     root: Path = args.root.resolve()
     parent = root.parent
     paths_tuple: tuple[str, ...] = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
@@ -728,7 +793,10 @@ def main() -> int:
             packed_manifest_paths.append(rel)
 
     if encrypted_tmp is not None:
-        encrypted_tmp.cleanup()
+        try:
+            encrypted_tmp.cleanup()
+        except OSError as exc:
+            print(f"[WARN] encrypted staging cleanup failed: {exc}")
 
     h = hashlib.sha256()
     with out.open("rb") as f:
@@ -755,6 +823,7 @@ def main() -> int:
     }
     if args.encrypted:
         snippet["encrypted"] = True
+    snippet["overseas"] = bool(args.overseas)
     hint = (
         "paths 与 DEFAULT_PATHS_WITH_NODEJS_DEPS 对齐（含整包 node 依赖）"
         if args.with_nodejs_deps

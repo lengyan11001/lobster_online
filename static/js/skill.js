@@ -1396,8 +1396,9 @@ window._openLinkedinMiningView = function() {
 window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
-      html: '/static/views/wechat-channels-transcript.html?v=20260622-wct-db',
-      scripts: '/static/js/wechat-channels-transcript.js?v=20260622-wct-db',
+      html: '/static/views/wechat-channels-transcript.html?v=20260626-wct-entry-cache',
+      scripts: '/static/js/wechat-channels-transcript.js?v=20260626-wct-entry-cache',
+      init: 'initWechatChannelsTranscriptView',
       cache: 'reload'
     });
   }
@@ -1415,6 +1416,31 @@ window._openWechatChannelsTranscriptView = function() {
   _switchToHiddenView('wechat-channels-transcript');
   if (typeof window.initWechatChannelsTranscriptView === 'function') window.initWechatChannelsTranscriptView();
   try { location.hash = 'wechat-channels-transcript'; } catch (e1) {}
+};
+
+window._openAi3dModelView = function() {
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('ai-3d-model', {
+      html: '/static/views/ai-3d-model.html?v=20260626-ai3d-pagination-preview',
+      scripts: '/static/js/ai-3d-model.js?v=20260626-ai3d-pagination-preview',
+      init: 'initAi3dModelView',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('ai-3d-model', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .then(function() {
+        if (typeof window.initAi3dModelView === 'function') window.initAi3dModelView();
+      })
+      .catch(function(err) {
+        console.error('Failed to open ai-3d-model', err);
+        alert('\u9ad8\u8d28\u91cf 3D \u6a21\u578b\u9875\u9762\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\u3002' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('ai-3d-model');
+  if (typeof window.initAi3dModelView === 'function') window.initAi3dModelView();
+  try { location.hash = 'ai-3d-model'; } catch (e1) {}
 };
 
 window._openHiddenWorkspaceView = function(view) {
@@ -1818,6 +1844,24 @@ function _renderWechatChannelsTranscriptCard(pkg, showDebug) {
     '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '查询视频号账号作品，批量下载视频并提取口播文案，可复制和导出。')) + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-channels-transcript-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _renderAi3dModelCard(pkg, showDebug) {
+  pkg = pkg || {};
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">\u8c03\u8bd5</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['3D', 'Meshy', '\u591a\u89c6\u89d2', '\u62c6\u4ef6']);
+  var title = escapeHtml(_skillStoreBrandSafeText(pkg.name || '\u9ad8\u8d28\u91cf 3D \u6a21\u578b'));
+  var desc = escapeHtml(_skillStoreBrandSafeText(pkg.description || '\u4e0a\u4f20\u5355\u56fe\u3001\u591a\u89c6\u89d2\u56fe\u6216 zip \u62c6\u4ef6\u5305\uff0c\u81ea\u52a8\u8c03\u7528 Meshy \u751f\u6210 GLB/FBX/OBJ/USDZ\uff0c\u5f00\u542f\u8d34\u56fe\u3001PBR \u548c\u91cd\u62d3\u6251\u3002'));
+  return '<div class="skill-store-card ai3d-model-card" data-skill-package-id="' + escapeAttr(pkg.id || 'ai_3d_model_skill') + '" style="cursor:pointer;border-color:rgba(34,197,94,0.34);background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(14,165,233,0.06));">' +
+    '<div class="card-label">' + debugBadge + 'AI 3D <span class="badge-installed">\u53ef\u7528</span></div>' +
+    '<div class="card-value">' + title + '</div>' +
+    '<div class="card-desc">' + desc + '</div>' +
+    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">\u590d\u6742\u5934\u76d4\u3001\u7fc5\u8180\u3001\u9542\u7a7a\u91d1\u5c5e\u4ef6\u5efa\u8bae\u4f7f\u7528 zip \u62c6\u4ef6\u5305\u3002\u5355\u56fe\u4e5f\u80fd\u8dd1\uff0c\u4f46\u9ad8\u8d28\u91cf\u8981\u9760\u591a\u89c6\u89d2\u548c\u90e8\u4ef6\u7ea7\u751f\u6210\u3002</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ai3d-model-entry-btn">\u8fdb\u5165 3D \u5de5\u4f5c\u53f0</button></div>' +
   '</div>';
 }
 
@@ -2915,6 +2959,7 @@ function loadSkillStore() {
       var linkedinMiningPkg = pkgById('linkedin_mining_skill');
       var juheWechatPkg = pkgById('juhe_wechat_skill');
       var wechatTranscriptPkg = pkgById('wechat_channels_transcript_skill');
+      var ai3dPkg = pkgById('ai_3d_model_skill');
 
       function paintSkillStoreList() {
         var html = '';
@@ -2930,6 +2975,7 @@ function loadSkillStore() {
         if (linkedinMiningPkg) html += _renderLinkedinMiningCard(linkedinMiningPkg, !!(isSkillAdmin && linkedinMiningPkg.store_visibility === 'debug'));
         if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
         if (wechatTranscriptPkg) html += _renderWechatChannelsTranscriptCard(wechatTranscriptPkg, !!(isSkillAdmin && wechatTranscriptPkg.store_visibility === 'debug'));
+        if (ai3dPkg) html += _renderAi3dModelCard(ai3dPkg, !!(isSkillAdmin && ai3dPkg.store_visibility === 'debug'));
         if (browserUsePkg) {
           html += _renderOpenclawSkillWorkspaceCard(browserUsePkg, {
             skillId: 'browser_use_skill',
@@ -2978,6 +3024,7 @@ function loadSkillStore() {
           if (pkg.id === 'juhe_wechat_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
+          if (pkg.id === 'ai_3d_model_skill') return '';
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
           if (pkg.id === 'meta_social') return '';
@@ -3073,6 +3120,7 @@ function loadSkillStore() {
         _bindLinkedinMiningCardEntry();
         _bindJuheWechatCardEntry();
         _bindWechatChannelsTranscriptCardEntry();
+        _bindAi3dModelCardEntry();
         _bindWechatArticleCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
@@ -3494,6 +3542,26 @@ function _bindWechatChannelsTranscriptCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openWechatChannelsTranscriptView === 'function') window._openWechatChannelsTranscriptView();
+    });
+  });
+}
+
+function _bindAi3dModelCardEntry() {
+  document.querySelectorAll('.ai3d-model-card, [data-skill-package-id="ai_3d_model_skill"]').forEach(function(card) {
+    if (card.dataset.ai3dEntryBound === '1') return;
+    card.dataset.ai3dEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openAi3dModelView === 'function') window._openAi3dModelView();
+    });
+  });
+  document.querySelectorAll('.ai3d-model-entry-btn').forEach(function(btn) {
+    if (btn.dataset.ai3dEntryBound === '1') return;
+    btn.dataset.ai3dEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openAi3dModelView === 'function') window._openAi3dModelView();
     });
   });
 }

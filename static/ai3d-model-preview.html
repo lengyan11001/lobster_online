@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 3D Model Preview</title>
+  <script src="/static/vendor/model-viewer/model-viewer-umd.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      background: #0f172a;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(15, 23, 42, 0.92);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .hint {
+      color: #94a3b8;
+      font-size: 13px;
+    }
+
+    a {
+      color: #93c5fd;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    main {
+      min-height: 0;
+      display: grid;
+      background: radial-gradient(circle at center, #334155 0, #111827 58%, #020617 100%);
+    }
+
+    model-viewer {
+      width: 100%;
+      height: 100%;
+      min-height: 620px;
+      background: transparent;
+    }
+
+    .empty {
+      align-self: center;
+      justify-self: center;
+      padding: 20px;
+      color: #cbd5e1;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>AI 3D Model Preview</h1>
+      <div class="hint">Drag to rotate, mouse wheel to zoom.</div>
+    </div>
+    <a id="downloadLink" href="#" target="_blank" rel="noopener">Download GLB</a>
+  </header>
+  <main id="stage">
+    <div class="empty">Missing model query parameter.</div>
+  </main>
+  <script>
+    (function() {
+      var params = new URLSearchParams(location.search);
+      var model = params.get('model') || '';
+      var poster = params.get('poster') || '';
+      var stage = document.getElementById('stage');
+      var link = document.getElementById('downloadLink');
+      if (!model) return;
+      link.href = model;
+      stage.innerHTML = '';
+      var viewer = document.createElement('model-viewer');
+      viewer.setAttribute('src', model);
+      if (poster) viewer.setAttribute('poster', poster);
+      viewer.setAttribute('camera-controls', '');
+      viewer.setAttribute('touch-action', 'pan-y');
+      viewer.setAttribute('auto-rotate', '');
+      viewer.setAttribute('rotation-per-second', '18deg');
+      viewer.setAttribute('shadow-intensity', '0.75');
+      viewer.setAttribute('exposure', '1');
+      viewer.setAttribute('environment-image', 'neutral');
+      stage.appendChild(viewer);
+    })();
+  </script>
+</body>
+</html>

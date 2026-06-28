@@ -106,6 +106,26 @@
     return String(video && (video.item_key || video.public_url || video.video_url) || '');
   }
 
+  function videoTitle(video, fallback) {
+    var value = video && video.title;
+    if (Array.isArray(value)) {
+      for (var i = 0; i < value.length; i += 1) {
+        var nested = videoTitle({ title: value[i] }, '');
+        if (nested) return nested;
+      }
+      return fallback || '';
+    }
+    if (value && typeof value === 'object') {
+      return videoTitle({
+        title: value.shortTitle || value.title || value.desc || value.description || value.content || value.text
+      }, fallback);
+    }
+    var text = String(value || '').trim();
+    var m = text.match(/['"]shortTitle['"]\s*:\s*['"]([^'"]+)/);
+    if (m && m[1]) return m[1].trim();
+    return text || fallback || '';
+  }
+
   function getPath(obj, path) {
     var cur = obj;
     var parts = String(path || '').split('.');
@@ -154,7 +174,7 @@
   function compactVideo(video) {
     return {
       item_key: videoKey(video),
-      title: video.title || '',
+      title: videoTitle(video, ''),
       publish_time: video.publish_time || '',
       video_url: video.video_url || '',
       public_url: video.public_url || '',
@@ -320,7 +340,7 @@
       return item.status === 'completed' || item.status === 'failed';
     }).length;
     job.progress = Math.round(done / total * 100);
-    var completed = (job.items || []).filter(function(item) { return item.status === 'completed'; }).length;
+    var completed = (job.items || []).filter(function(item) { return item.status === 'completed' && String(item.transcript || '').trim(); }).length;
     var failed = (job.items || []).filter(function(item) { return item.status === 'failed'; }).length;
     if (done >= total) {
       job.status = completed > 0 ? 'completed' : 'failed';
@@ -376,13 +396,10 @@
     list.innerHTML = state.videos.map(function(video, idx) {
       var key = videoKey(video);
       var checked = state.selectedKeys.has(key);
-      var canDecode = !!decodeKey(video);
-      return '<label class="wct-item wct-video-row" style="cursor:pointer;">' +
+      var title = videoTitle(video, '视频 ' + (idx + 1));
+      return '<label class="wct-item wct-video-row" style="grid-template-columns:24px minmax(0,1fr);cursor:pointer;">' +
         '<input type="checkbox" data-wct-video="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
-        (video.cover_url ? '<img class="wct-cover" src="' + esc(video.cover_url) + '">' : '<div class="wct-cover"></div>') +
-        '<div><div class="wct-item-title">' + esc(video.title || ('视频 ' + (idx + 1))) + '</div>' +
-        '<div class="wct-meta">' + esc(video.publish_time || '') + (canDecode ? '' : ' · 缺少 decode_key') + '</div>' +
-        '<div class="wct-meta">' + esc(video.video_url || video.public_url || '') + '</div></div>' +
+        '<div class="wct-item-title">' + esc(title) + '</div>' +
       '</label>';
     }).join('');
   }
@@ -559,7 +576,7 @@
     var chain = Promise.resolve();
     (job.items || []).forEach(function(item, idx) {
       chain = chain.then(function() {
-        if (item.status === 'completed') return null;
+        if (item.status === 'completed' && String(item.transcript || '').trim()) return null;
         item.status = 'running';
         item.stage = '生成解密参数';
         item.error = '';
@@ -574,9 +591,11 @@
             keystream_b64: keystream
           });
         }).then(function(data) {
+          var transcript = String(data.transcript || '').trim();
+          if (!transcript) throw new Error('转写完成但没有返回文案，请重试或换一个视频');
           item.status = 'completed';
           item.stage = '转写完成';
-          item.transcript = data.transcript || '';
+          item.transcript = transcript;
           item.audio_url = data.audio_url || '';
           item.stt_task_id = data.task_id || '';
           item.error = '';
@@ -599,8 +618,8 @@
 
   function searchAccounts() {
     var q = (($('wctKeywordInput') || {}).value || '').trim();
-    if (!q) return setMsg('请输入视频号昵称或 username', true);
-    setMsg('正在查询账号...', false);
+    if (!q) return setMsg('请输入视频分享链接、视频号 ID、finder username 或昵称', true);
+    setMsg('正在解析账号...', false);
     apiJson('/api/wechat-channels-transcript/users/search?q=' + encodeURIComponent(q)).then(function(data) {
       state.accounts = data.items || [];
       state.selectedAccount = null;
@@ -609,9 +628,9 @@
       renderAccounts();
       renderSelectedAccount();
       renderVideos();
-      setMsg(state.accounts.length ? '请选择要分析的视频号账号' : '没有搜到匹配账号', !state.accounts.length);
+      setMsg(state.accounts.length ? '请选择要分析的视频号账号' : '没有解析到账号，请换分享链接、视频号 ID 或昵称再试', !state.accounts.length);
     }).catch(function(err) {
-      setMsg(err.message || '账号查询失败', true);
+      setMsg(err.message || '账号解析失败', true);
     });
   }
 
@@ -661,7 +680,7 @@
     if (!job) return setMsg('请先选择一个任务', true);
     if (state.processing) return setMsg('当前已有任务处理中', true);
     (job.items || []).forEach(function(item) {
-      if (item.status !== 'completed') {
+      if (item.status !== 'completed' || !String(item.transcript || '').trim()) {
         item.status = 'pending';
         item.stage = '待重试';
         item.error = '';
@@ -679,28 +698,47 @@
     }).join('\n');
   }
 
-  function downloadText(filename, text, type) {
-    var blob = new Blob([text], { type: type || 'text/plain;charset=utf-8' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 1000);
+  function exportToLocalFile(format) {
+    var job = activeJob();
+    if (!job) {
+      setMsg('请先选择一个任务', true);
+      return Promise.resolve();
+    }
+    var rows = (job.items || []).map(function(item) {
+      return {
+        title: item.title || item.item_key || '',
+        publish_time: item.publish_time || '',
+        status: statusLabel(item.status),
+        public_url: item.public_url || '',
+        video_url: item.video_url || '',
+        transcript: item.transcript || '',
+        error: item.error || ''
+      };
+    });
+    var text = allText(job);
+    if (format === 'txt' && !text.trim()) {
+      setMsg('暂无可导出文本', true);
+      return Promise.resolve();
+    }
+    if (format === 'csv' && !rows.length) {
+      setMsg('暂无可导出记录', true);
+      return Promise.resolve();
+    }
+    setMsg('正在导出...', false);
+    return localJson('/api/wechat-channels-transcript/export', {
+      format: format,
+      filename: 'wechat-channels-transcripts',
+      text: text,
+      rows: rows
+    }).then(function(data) {
+      setMsg('导出成功：' + (data.path || data.filename || ''), false);
+    }).catch(function(err) {
+      setMsg((err && err.message) || '导出失败', true);
+    });
   }
 
   function exportCsv() {
-    var job = activeJob();
-    if (!job) return setMsg('请先选择一个任务', true);
-    var rows = [['标题', '发布时间', '状态', '原链接', '视频链接', '转写文本']];
-    (job.items || []).forEach(function(item) {
-      rows.push([item.title || '', item.publish_time || '', statusLabel(item.status), item.public_url || '', item.video_url || '', item.transcript || item.error || '']);
-    });
-    var csv = rows.map(function(row) {
-      return row.map(function(cell) { return '"' + String(cell || '').replace(/"/g, '""') + '"'; }).join(',');
-    }).join('\r\n');
-    downloadText('wechat-channels-transcripts.csv', '\ufeff' + csv, 'text/csv;charset=utf-8');
+    return exportToLocalFile('csv');
   }
 
   function bind(root) {
@@ -739,9 +777,7 @@
     });
     var exportTxt = $('wctExportTxtBtn');
     if (exportTxt) exportTxt.addEventListener('click', function() {
-      var text = allText();
-      if (!text) return setMsg('暂无可导出文本', true);
-      downloadText('wechat-channels-transcripts.txt', text, 'text/plain;charset=utf-8');
+      exportToLocalFile('txt');
     });
     var exportCsvBtn = $('wctExportCsvBtn');
     if (exportCsvBtn) exportCsvBtn.addEventListener('click', exportCsv);

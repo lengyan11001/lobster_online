@@ -2,13 +2,13 @@
 # 一键：先检查缺口 → 只向 lobster_online 内下载补齐依赖 → 复检 → 再 zip。
 # 绝不修改、不覆盖：install.bat、start.bat、run_backend.bat、run_mcp.bat（打包脚本只 zip）。
 # 强制全量重下 wheel：FORCE_PREPARE_OFFLINE=1
-# 制包默认品牌：yingshi（InsClaw）；必火包可 export LOBSTER_BRAND_MARK=bihuo
+# 制包默认品牌：bihuo（必火）；如需其它品牌可显式 export LOBSTER_BRAND_MARK=<mark>
 # 用法：bash scripts/build_result_package.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export ROOT
-export LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-yingshi}"
+export LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-bihuo}"
 
 # Git Bash / Windows：python3 常为 Store 占位（无法运行脚本）；回退到 python
 PY="python3"
@@ -83,7 +83,7 @@ _restore_pack_config_files() {
     rm -f "$_ENV_BACKUP"
   fi
 }
-if [ "${LOBSTER_BRAND_MARK}" != "yingshi" ]; then
+if [ -n "${LOBSTER_BRAND_MARK}" ]; then
   echo ">>> [6b/7] 将 LOBSTER_BRAND_MARK=${LOBSTER_BRAND_MARK} 写入 .env / .env.example（打包后自动恢复）"
   _ENV_EXAMPLE_BACKUP="$(mktemp "${TMPDIR:-/tmp}/lobster_env_example.XXXXXX")"
   cp "$ROOT/.env.example" "$_ENV_EXAMPLE_BACKUP"
@@ -97,7 +97,7 @@ if [ "${LOBSTER_BRAND_MARK}" != "yingshi" ]; then
   "$PY" -c "
 import pathlib, os
 root = pathlib.Path(os.environ['ROOT'])
-mark = os.environ.get('LOBSTER_BRAND_MARK', 'yingshi')
+mark = os.environ.get('LOBSTER_BRAND_MARK', 'bihuo')
 for name in ('.env.example', '.env'):
     p = root / name
     if not p.exists():

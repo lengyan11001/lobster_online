@@ -62,10 +62,18 @@
   });
 
   window.registerLobsterView('wechat-channels-transcript', {
-    html: '/static/views/wechat-channels-transcript.html?v=20260622-wct-db',
-    scripts: '/static/js/wechat-channels-transcript.js?v=20260622-wct-db',
+    html: '/static/views/wechat-channels-transcript.html?v=20260626-wct-entry-cache',
+    scripts: '/static/js/wechat-channels-transcript.js?v=20260626-wct-entry-cache',
     init: 'initWechatChannelsTranscriptView',
     cache: 'reload'
+  });
+
+  window.registerLobsterView('ai-3d-model', {
+    html: '/static/views/ai-3d-model.html?v=20260628-ai-subject-understanding-v1',
+    scripts: '/static/js/ai-3d-model.js?v=20260628-ai-subject-understanding-v1',
+    init: 'initAi3dModelView',
+    cache: 'reload',
+    reloadExisting: true
   });
 
   window.registerLobsterView('assets', {

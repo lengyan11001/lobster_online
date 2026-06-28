@@ -2,11 +2,11 @@
   "default_mark": "bihuo",
   "marks": {
     "bihuo": {
-      "document_title": "必火AI员工",
-      "logo_primary": "必火",
-      "logo_accent": "AI员工",
-      "hero_title": "龙虾 - 您的私人 AI 助手",
-      "hero_subtitle": "必火智能的远景：\n成为全球领先的企业AI员工解决方案服务商",
+      "document_title": "\u5fc5\u706bAI\u5458\u5de5",
+      "logo_primary": "\u5fc5\u706b",
+      "logo_accent": "AI\u5458\u5de5",
+      "hero_title": "\u9f99\u867e - \u60a8\u7684\u79c1\u4eba AI \u52a9\u624b",
+      "hero_subtitle": "\u5fc5\u706b\u667a\u80fd\u7684\u8fdc\u666f\uff1a\n\u6210\u4e3a\u5168\u7403\u9886\u5148\u7684\u4f01\u4e1aAI\u5458\u5de5\u89e3\u51b3\u65b9\u6848\u670d\u52a1\u5546",
       "icons": {
         "favicon_32": "/static/bihu_32.png",
         "apple_touch": "/static/bihu_128.png",
@@ -16,29 +16,9 @@
       },
       "install": {
         "desktop_ico": "static/bihu_box.ico",
-        "shortcut_lnk_name": "必火智能AI.lnk",
-        "shortcut_description": "必火智能AI - 本地客户端",
-        "install_complete_hint": "双击桌面 必火智能AI.lnk 或本目录 start.bat 启动"
-      }
-    },
-    "yingshi": {
-      "document_title": "InsClaw",
-      "logo_primary": "Ins",
-      "logo_accent": "Claw",
-      "hero_title": "InsClaw - 您的私人 AI 助手",
-      "hero_subtitle": "必火智能的远景：\n成为全球领先的企业AI员工解决方案服务商",
-      "icons": {
-        "favicon_32": "/static/yingshi_32.png",
-        "apple_touch": "/static/yingshi_128.png",
-        "logo_mark": "/static/yingshi_32.png",
-        "logo_mark_width": 32,
-        "logo_mark_height": 32
-      },
-      "install": {
-        "desktop_ico": "static/yingshi_box.ico",
-        "shortcut_lnk_name": "InsClaw.lnk",
-        "shortcut_description": "InsClaw - Lobster local server",
-        "install_complete_hint": "Double-click desktop InsClaw.lnk or start.bat in this folder"
+        "shortcut_lnk_name": "\u5fc5\u706b\u667a\u80fdAI.lnk",
+        "shortcut_description": "\u5fc5\u706b\u667a\u80fdAI - \u672c\u5730\u5ba2\u6237\u7aef",
+        "install_complete_hint": "\u53cc\u51fb\u684c\u9762 \u5fc5\u706b\u667a\u80fdAI.lnk \u6216\u672c\u76ee\u5f55 start.bat \u542f\u52a8"
       }
     }
   }

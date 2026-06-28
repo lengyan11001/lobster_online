@@ -30,7 +30,6 @@ IMAGE_MODEL_IDS = frozenset(
         "jimeng-4.6",
         "jimeng-5.0",
         "jimeng-agent",
-        "kapon/gemini-3-pro-image-preview",
         "openrouter/router/vision",
     }
 )

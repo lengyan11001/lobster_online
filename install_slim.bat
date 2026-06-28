@@ -327,7 +327,7 @@ if exist ".env" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do (
 if not defined LOBSTER_BRAND_MARK if exist ".env.example" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env.example") do (
   if /i "%%~a"=="LOBSTER_BRAND_MARK" set "LOBSTER_BRAND_MARK=%%b"
 )
-if not defined LOBSTER_BRAND_MARK set "LOBSTER_BRAND_MARK=yingshi"
+if not defined LOBSTER_BRAND_MARK set "LOBSTER_BRAND_MARK=bihuo"
 :brand_mark_done
 if /i "%LOBSTER_SKIP_DESKTOP_SHORTCUT%"=="1" goto :after_shortcut
 if exist "scripts\create_desktop_shortcut.ps1" if exist "static\branding\brands.json" (

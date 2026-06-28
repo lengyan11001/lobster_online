@@ -2866,6 +2866,111 @@ def _sanitize_video_generate_prompt_for_publish_copy(prompt: str) -> str:
     return cleaned
 
 
+def _string_param(value: Any) -> str:
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return str(value).strip()
+
+
+def _int_param(value: Any) -> int:
+    try:
+        return int(float(value))
+    except Exception:
+        return 0
+
+
+def _ratio_from_dimensions(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    width = _int_param(value.get("width") or value.get("w"))
+    height = _int_param(value.get("height") or value.get("h"))
+    if width <= 0 or height <= 0:
+        return ""
+    candidates = {
+        "1:1": 1 / 1,
+        "4:3": 4 / 3,
+        "3:4": 3 / 4,
+        "16:9": 16 / 9,
+        "9:16": 9 / 16,
+        "3:2": 3 / 2,
+        "2:3": 2 / 3,
+    }
+    actual = width / height
+    return min(candidates, key=lambda key: abs(candidates[key] - actual))
+
+
+def _gpt_image2_resolution_from_value(value: Any) -> str:
+    raw = _string_param(value)
+    if not raw:
+        return ""
+    upper = raw.upper().replace(" ", "")
+    if upper in {"1K", "2K", "4K"}:
+        return upper
+    match = re.match(r"^(\d{3,5})\s*[xX]\s*(\d{3,5})$", raw)
+    if match:
+        longest = max(int(match.group(1)), int(match.group(2)))
+        if longest >= 3000:
+            return "4K"
+        if longest >= 1800:
+            return "2K"
+        return "1K"
+    lowered = raw.lower()
+    if "4k" in lowered or any(token in lowered for token in ("highest", "production", "ultra", "best")):
+        return "4K"
+    if "2k" in lowered:
+        return "2K"
+    if "1k" in lowered:
+        return "1K"
+    return ""
+
+
+def _normalize_gpt_image2_quality(payload: Dict[str, Any]) -> str:
+    aliases = {
+        "standard": "medium",
+        "normal": "medium",
+        "hd": "high",
+        "best": "high",
+        "highest": "high",
+        "production": "high",
+        "ultra": "high",
+    }
+
+    def _quality_from_value(value: Any) -> str:
+        if isinstance(value, (int, float)):
+            if float(value) >= 90:
+                return "high"
+            if float(value) >= 60:
+                return "medium"
+            return "low"
+        raw = _string_param(value).lower()
+        raw = aliases.get(raw, raw)
+        return raw if raw in {"low", "medium", "high"} else ""
+
+    for key in ("quality_preset", "render_quality", "output_quality"):
+        if _quality_from_value(payload.get(key)) == "high":
+            return "high"
+
+    explicit = _quality_from_value(payload.get("quality") or payload.get("image_quality"))
+    return explicit or "high"
+
+
+def _normalize_gpt_image2_resolution(payload: Dict[str, Any], quality: str) -> str:
+    for key in ("resolution", "resolution_level", "size", "pixel_size"):
+        resolved = _gpt_image2_resolution_from_value(payload.get(key))
+        if resolved:
+            return resolved
+    if quality == "high":
+        return "4K"
+    return "1K"
+
+
+def _normalize_gpt_image2_output_format(payload: Dict[str, Any]) -> str:
+    raw = _string_param(payload.get("output_format") or payload.get("format")).lower()
+    aliases = {"jpg": "jpeg"}
+    raw = aliases.get(raw, raw)
+    return raw if raw in {"png", "jpeg", "webp"} else "png"
+
+
 def _normalize_image_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     按图片模型把「统一 payload」转成该模型 API 需要的参数；发布账号/文案类信息会先从生图 prompt 中剥离。
@@ -2887,8 +2992,8 @@ def _normalize_image_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
             prompt[:160],
         )
         payload["prompt"] = prompt
-    image_url = (payload.get("image_url") or "").strip()
-    image_size = (payload.get("image_size") or "").strip()
+    image_url = _string_param(payload.get("image_url"))
+    image_size = _string_param(payload.get("image_size"))
     image_ratio_aliases = {
         "portrait_9_16": "9:16",
         "landscape_16_9": "16:9",
@@ -2908,11 +3013,29 @@ def _normalize_image_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     # openai/gpt-image-2 在速推侧的 image_size 是比例枚举，不接受旧的
     # portrait_9_16 / landscape_16_9 / square_hd 字符串。
     if "gpt-image-2" in model or "gpt-image2" in model or "gptimage2" in model:
-        ratio = str(payload.get("aspect_ratio") or payload.get("ratio") or normalized_image_size or "1:1").strip()
+        ratio = (
+            _string_param(payload.get("aspect_ratio") or payload.get("ratio"))
+            or normalized_image_size
+            or _ratio_from_dimensions(payload.get("image_size"))
+            or _ratio_from_dimensions(payload.get("size"))
+            or _ratio_from_dimensions(payload.get("pixel_size"))
+            or "1:1"
+        )
         ratio = image_ratio_aliases.get(ratio.lower(), ratio)
         if ratio not in image_ratio_values:
             ratio = "1:1"
-        out = {"model": model, "prompt": prompt, "image_size": ratio, "num_images": num_images}
+        quality = _normalize_gpt_image2_quality(payload)
+        resolution = _normalize_gpt_image2_resolution(payload, quality)
+        output_format = _normalize_gpt_image2_output_format(payload)
+        out = {
+            "model": model,
+            "prompt": prompt,
+            "image_size": ratio,
+            "resolution": resolution,
+            "quality": quality,
+            "num_images": 1,
+            "output_format": output_format,
+        }
         if image_url:
             out["image_url"] = image_url
         image_urls = payload.get("image_urls")

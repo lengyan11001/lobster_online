@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # 在线客户端一键安装包：打包整个项目目录，解压后进入该目录运行 install.bat 再 start.bat
-# LOBSTER_BRAND_MARK（默认 yingshi）写入产物名；仅删除同品牌旧 zip。
+# LOBSTER_BRAND_MARK（默认 bihuo）写入产物名；仅删除同品牌旧 zip。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PARENT="$(dirname "$SCRIPT_DIR")"
 PROJ=$(basename "$SCRIPT_DIR")
 
-LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-yingshi}"
+LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-bihuo}"
 BM_SAFE=$(printf '%s' "$LOBSTER_BRAND_MARK" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
-[ -z "$BM_SAFE" ] && BM_SAFE=yingshi
+[ -z "$BM_SAFE" ] && BM_SAFE=bihuo
 BUILD_ID=$(date +%Y%m%d_%H%M%S)
 OUT_NAME="${PROJ}_一键安装包_${BM_SAFE}_${BUILD_ID}.zip"
 OUT_PATH="$PARENT/$OUT_NAME"

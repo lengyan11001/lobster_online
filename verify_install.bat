@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 cd /d "%~dp0"
 chcp 65001 >nul 2>&1
 title Lobster Verify Minimal
@@ -22,7 +22,7 @@ for %%f in (python\python*._pth) do (
     findstr /C:"#import site" "%%f" >nul 2>&1
     if not errorlevel 1 (
         echo   Enabling site-packages in %%f ...
-        %PYTHON% -c "p=r'%%f'; t=open(p).read().replace('#import site','import site'); open(p,'w').write(t)"
+        "%PYTHON%" -c "p=r'%%f'; t=open(p).read().replace('#import site','import site'); open(p,'w').write(t)"
     )
 )
 if not exist "python\Lib\site-packages" mkdir "python\Lib\site-packages"
@@ -41,22 +41,22 @@ if not defined PIP_WHL (
 )
 
 echo [2] 检查 pip ...
-%PYTHON% -m pip --version >nul 2>&1
+"%PYTHON%" -m pip --version >nul 2>&1
 if not errorlevel 1 (
-    %PYTHON% -m pip --version
+    "%PYTHON%" -m pip --version
     echo [OK] pip 已存在
     goto :done
 )
 
 echo [3] 运行 pip_bootstrap_from_wheel.py （仅离线 wheel）...
 set "LOBSTER_ROOT=%CD%"
-%PYTHON% "%CD%\scripts\pip_bootstrap_from_wheel.py" 2>&1
+"%PYTHON%" "%CD%\scripts\pip_bootstrap_from_wheel.py" 2>&1
 if errorlevel 1 (
     echo [ERR] pip 引导失败
     pause
     exit /b 1
 )
-%PYTHON% -m pip --version 2>&1
+"%PYTHON%" -m pip --version 2>&1
 if errorlevel 1 (
     echo [ERR] 引导后仍无法执行 python -m pip
     pause

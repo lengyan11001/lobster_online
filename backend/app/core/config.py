@@ -169,6 +169,8 @@ class Settings(BaseSettings):
     comfly_daihuo_video_channel: str = "openmind"
     comfly_daihuo_grok_video_model: str = "grok-imagine-video-1.5-preview"
     comfly_daihuo_yunwu_video_model: str = "veo3.1"
+    """Meshy API Key for AI 3D model generation. Set MESHY_API_KEY in .env."""
+    meshy_api_key: Optional[str] = None
 
     def cors_origins_list(self) -> List[str]:
         if self.cors_origins.strip() == "*":

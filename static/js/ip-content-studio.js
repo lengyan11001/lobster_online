@@ -734,6 +734,7 @@
       name: name,
       keyword_ids: cleanTemplateIds(snapshot.keyword_ids, false),
       competitor_ids: cleanTemplateIds(snapshot.competitor_ids, false),
+      memory_doc_ids: cleanTemplateIds(snapshot.memory_doc_ids, true),
       memory_docs: memoryDocs || [],
       requirements: {
         oral: snapshot.task1_extra || '',

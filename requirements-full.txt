@@ -93,6 +93,9 @@ svglib==1.6.0
 tinycss2==1.5.1
 tos==2.9.0
 tqdm==4.67.3
+trimesh==4.12.2
+pymeshfix==0.18.1
+shapely==2.1.2
 twilio==9.10.4
 typer==0.26.3
 typing_extensions==4.15.0

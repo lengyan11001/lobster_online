@@ -1,0 +1,273 @@
+<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260628-ai-subject-understanding-v1">
+<div id="content-ai-3d-model" class="content-block">
+  <div class="ai3d-page">
+    <header class="ai3d-head">
+      <div>
+        <div class="page-section-kicker">AI 3D ASSET</div>
+        <h3 class="page-section-title">高质量 3D 模型生成</h3>
+        <p class="ai3d-subtitle">上传单张原画、参考图或拆件包；角色优先生成高清多视角底模，部件输入图只用于后续生成 3D 部件并合成。</p>
+      </div>
+      <div class="ai3d-head-actions">
+        <button type="button" id="ai3dCreateJobBtn" class="btn btn-primary btn-sm">创建任务</button>
+        <button type="button" id="ai3dHistoryBtn" class="btn btn-ghost btn-sm">历史任务</button>
+        <button type="button" id="ai3dBackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+        <button type="button" id="ai3dRefreshConfigBtn" class="btn btn-ghost btn-sm">刷新状态</button>
+      </div>
+    </header>
+
+    <div id="ai3dMsg" class="msg" style="display:none;"></div>
+
+    <div id="ai3dCreateModal" class="ai3d-modal" hidden>
+      <div class="ai3d-modal-backdrop" data-ai3d-create-close></div>
+      <div class="ai3d-modal-panel ai3d-create-modal-panel" role="dialog" aria-modal="true" aria-labelledby="ai3dCreateModalTitle">
+        <form id="ai3dForm" class="ai3d-form">
+          <div class="ai3d-modal-head">
+            <div>
+              <strong id="ai3dCreateModalTitle">创建 2D 转 3D 任务</strong>
+              <span>上传原图或拆件包；多视角和部件输入图固定走 4K/high/png。</span>
+            </div>
+            <button type="button" id="ai3dCreateModalClose" class="ai3d-modal-close" aria-label="关闭">×</button>
+          </div>
+          <div class="ai3d-modal-body">
+            <div class="ai3d-field">
+              <label for="ai3dTitle">任务名称</label>
+              <input id="ai3dTitle" name="title" type="text" placeholder="例如：银色机甲头盔拆件生成">
+            </div>
+
+            <div class="ai3d-field">
+              <label for="ai3dFiles">参考素材</label>
+              <label class="ai3d-dropzone" for="ai3dFiles">
+                <input id="ai3dFiles" name="files" type="file" accept="image/*,.zip" multiple>
+                <span>点击上传图片或 zip 拆件包</span>
+                <small>单张手机截图也可以上传，系统会先自动裁掉黑边和 UI，再生成区域裁切候选图。</small>
+              </label>
+              <div id="ai3dFileList" class="ai3d-file-list"></div>
+            </div>
+
+            <div class="ai3d-field">
+              <label for="ai3dDescription">角色/资产描述</label>
+              <textarea id="ai3dDescription" name="description" rows="5" placeholder="可直接粘贴客户发来的角色设定；不填写也会按图片模板处理。"></textarea>
+            </div>
+
+            <div class="ai3d-param-summary">
+              <div>
+                <strong>图片与生成参数</strong>
+                <span id="ai3dParamSummary">GPT Image 2 · 4K · high · PNG</span>
+              </div>
+            </div>
+
+            <div class="ai3d-grid">
+              <div class="ai3d-field">
+                <label for="ai3dTemplate">资产模板</label>
+                <select id="ai3dTemplate" name="asset_template">
+                  <option value="auto" selected>自动识别</option>
+                  <option value="character_realistic">写实角色/人物</option>
+                  <option value="character_stylized">风格化角色</option>
+                  <option value="hard_surface">机甲/硬表面道具</option>
+                  <option value="ornament_prop">头盔/饰品/复杂道具</option>
+                </select>
+              </div>
+              <div class="ai3d-field">
+                <label for="ai3dReferenceStrength">参考图强度</label>
+                <select id="ai3dReferenceStrength" name="reference_strength">
+                  <option value="strict">极高：尽量锁定原画</option>
+                  <option value="high" selected>高：保持设定补角度</option>
+                  <option value="balanced">中：允许合理补结构</option>
+                  <option value="creative">低：允许重新设计</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="ai3d-grid">
+              <div class="ai3d-field">
+                <label for="ai3dStrategy">生成策略</label>
+                <select id="ai3dStrategy" name="strategy">
+                  <option value="auto">自动判断</option>
+                  <option value="multi_view">多视角同一物体</option>
+                  <option value="part_batch">拆件包/硬表面逐个生成</option>
+                </select>
+              </div>
+              <div class="ai3d-field">
+                <label for="ai3dQuality">质量模式</label>
+                <select id="ai3dQuality" name="quality">
+                  <option value="production">生产质量</option>
+                  <option value="high">高质量</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="ai3d-grid">
+              <label class="ai3d-toggle">
+                <input id="ai3dAutoDecompose" type="checkbox" checked>
+                <span><strong>生成区域裁切候选</strong><small>这是定位和预览，不等于真正语义拆件。</small></span>
+              </label>
+              <input id="ai3dMaxParts" type="hidden" value="24">
+            </div>
+
+            <div class="ai3d-grid">
+              <label class="ai3d-toggle">
+                <input id="ai3dPreprocessOnly" type="checkbox" checked>
+                <span><strong>先预处理预览</strong><small>先看主体裁切和区域候选，不消耗 Meshy 3D credits。</small></span>
+              </label>
+              <div class="ai3d-field">
+                <label for="ai3dImageModel">前置图片模型</label>
+                <select id="ai3dImageModel">
+                  <option value="openai/gpt-image-2" selected>GPT Image 2（速推）</option>
+                  <option value="nano-banana-pro">Nano Banana Pro</option>
+                </select>
+                <small>用于生成高清多视角；硬表面/饰件才会进入拆件流程，角色默认不强行拆衣服和袖子。</small>
+              </div>
+            </div>
+
+            <div class="ai3d-field">
+              <label>导出格式</label>
+              <div class="ai3d-checks">
+                <label><input type="checkbox" name="format" value="glb" checked> GLB</label>
+                <label><input type="checkbox" name="format" value="fbx" checked> FBX</label>
+                <label><input type="checkbox" name="format" value="obj" checked> OBJ</label>
+                <label><input type="checkbox" name="format" value="usdz" checked> USDZ</label>
+                <label><input type="checkbox" name="format" value="3mf" checked> 3MF</label>
+              </div>
+            </div>
+          </div>
+          <div class="ai3d-modal-actions">
+            <button type="button" id="ai3dCreateModalCancel" class="btn btn-ghost btn-sm">取消</button>
+            <button type="submit" id="ai3dSubmitBtn" class="btn btn-primary btn-sm">提交任务</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="ai3dHistoryModal" class="ai3d-modal" hidden>
+      <div class="ai3d-modal-backdrop" data-ai3d-history-close></div>
+      <div class="ai3d-modal-panel ai3d-history-modal-panel" role="dialog" aria-modal="true" aria-labelledby="ai3dHistoryModalTitle">
+        <div class="ai3d-modal-head">
+          <div>
+            <strong id="ai3dHistoryModalTitle">历史任务</strong>
+            <span>选择一个任务查看步骤和预览；列表每页最多 10 个。</span>
+          </div>
+          <button type="button" id="ai3dHistoryModalClose" class="ai3d-modal-close" aria-label="关闭">×</button>
+        </div>
+        <div class="ai3d-modal-body">
+          <div class="ai3d-history-toolbar">
+            <a id="ai3dDownloadCurrentBtn" class="btn btn-ghost btn-sm ai3d-download-current" href="/api/ai-3d-model/jobs/latest/download" target="_blank" rel="noopener" download="ai3d-latest-outputs.zip" aria-disabled="false">下载当前任务资源</a>
+            <button type="button" id="ai3dRefreshJobsBtn" class="btn btn-ghost btn-sm">刷新任务</button>
+          </div>
+          <div id="ai3dJobList" class="ai3d-job-list ai3d-job-list-modal">
+            <div class="ai3d-empty slim">正在恢复历史任务...</div>
+          </div>
+          <div id="ai3dJobPager" class="ai3d-job-pager"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ai3d-layout">
+      <section class="ai3d-panel ai3d-control">
+        <div class="ai3d-status-row">
+          <span id="ai3dProviderBadge" class="ai3d-badge">Meshy</span>
+          <span id="ai3dBalanceText" class="ai3d-muted">正在检查 3D 引擎配置</span>
+          <span class="ai3d-muted">角色：多视角优先；部件输入图：最终合成时才生成 3D 部件</span>
+        </div>
+
+        <div class="ai3d-history-block ai3d-steps-inline">
+          <div class="ai3d-card-title">执行步骤</div>
+          <div class="ai3d-muted">点击顶部“历史任务”选择任务后显示该任务步骤。</div>
+          <div id="ai3dStepTimeline" class="ai3d-step-timeline">
+            <div class="ai3d-empty slim">提交任务后显示步骤进度。</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ai3d-panel ai3d-result">
+        <div class="ai3d-result-head">
+          <div>
+            <div class="ai3d-card-title">任务结果</div>
+            <div id="ai3dJobMeta" class="ai3d-muted">等待提交</div>
+          </div>
+          <span id="ai3dJobBadge" class="ai3d-badge muted">idle</span>
+        </div>
+        <div class="ai3d-progress">
+          <div id="ai3dProgressBar"></div>
+        </div>
+        <div id="ai3dPreview" class="ai3d-preview">
+          <div class="ai3d-empty">生成完成后显示预览图和模型下载</div>
+        </div>
+        <div id="ai3dMetrics" class="ai3d-metrics"></div>
+      </section>
+    </div>
+
+  </div>
+</div>
+<script src="/static/js/ai-3d-model.js?v=20260628-ai-subject-understanding-v1"></script>
+<script>
+  (function() {
+    window.ai3dDirectBootstrapRan = true;
+
+    function showMessage(text, bad) {
+      var msg = document.getElementById('ai3dMsg');
+      if (!msg) return;
+      msg.style.display = 'block';
+      msg.className = 'msg' + (bad ? ' bad' : '');
+      msg.textContent = text;
+    }
+
+    function setDownloadJob(jobId) {
+      var btn = document.getElementById('ai3dDownloadCurrentBtn');
+      if (!btn || !jobId) return;
+      var href = '/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/download';
+      btn.href = href;
+      btn.target = '_blank';
+      btn.rel = 'noopener';
+      btn.download = jobId + '-ai3d-outputs.zip';
+      btn.setAttribute('aria-disabled', 'false');
+      btn.classList.remove('disabled');
+    }
+
+    async function hydrateDownloadFallback() {
+      var btn = document.getElementById('ai3dDownloadCurrentBtn');
+      if (!btn) return;
+      var jobId = '';
+      try {
+        jobId = window.localStorage ? (window.localStorage.getItem('lobster.ai3d.lastJobId') || '') : '';
+      } catch (e) {}
+      if (!jobId && window.fetch) {
+        try {
+          var resp = await fetch('/api/ai-3d-model/jobs?limit=1', { credentials: 'same-origin' });
+          var data = await resp.json();
+          var jobs = data && Array.isArray(data.jobs) ? data.jobs : [];
+          if (jobs[0] && jobs[0].job_id) jobId = jobs[0].job_id;
+        } catch (e) {}
+      }
+      if (jobId) setDownloadJob(jobId);
+    }
+
+    function boot() {
+      if (window.initAi3dModelView) {
+        window.initAi3dModelView();
+      }
+      var btn = document.getElementById('ai3dDownloadCurrentBtn');
+      if (btn && !btn._ai3dDirectDownloadBound) {
+        btn._ai3dDirectDownloadBound = true;
+        btn.addEventListener('click', function(evt) {
+          var disabled = btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled') || !btn.href || btn.getAttribute('href') === '#';
+          if (disabled) {
+            evt.preventDefault();
+            showMessage('正在恢复最近任务，请稍后再试一次。', false);
+            hydrateDownloadFallback();
+            return;
+          }
+          showMessage('正在准备下载资源包，首次打包大任务会稍等一会。', false);
+        });
+      }
+      setTimeout(function() {
+        if (!window.initAi3dModelView) hydrateDownloadFallback();
+      }, 0);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot, { once: true });
+    } else {
+      boot();
+    }
+  })();
+</script>

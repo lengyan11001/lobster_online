@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import csv
+import io
 import json
 import logging
 import re
@@ -22,6 +24,7 @@ from .auth import _ServerUser, get_current_user_for_local
 from ..core.config import settings
 from ..db import get_db
 from ..models import WechatChannelsTranscriptAccount, WechatChannelsTranscriptJob, WechatChannelsTranscriptVideo
+from ..services.asset_storage_paths import get_asset_export_dir
 from ..services.media_edit_exec import find_ffmpeg
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,13 @@ class VideoCacheSelectionBody(BaseModel):
 
 class TranscriptJobsSaveBody(BaseModel):
     jobs: list[Dict[str, Any]] = Field(default_factory=list, max_length=50)
+
+
+class TranscriptExportBody(BaseModel):
+    filename: str = Field(default="wechat-channels-transcripts", max_length=160)
+    format: str = Field(default="txt", max_length=16)
+    text: str = Field(default="", max_length=5_000_000)
+    rows: list[Dict[str, Any]] = Field(default_factory=list, max_length=500)
 
 
 def _safe_error(value: Any, limit: int = 1200) -> str:
@@ -96,6 +106,53 @@ def _clean_url(value: Any) -> str:
     if not text.startswith(("http://", "https://")):
         return ""
     return text
+
+
+def _video_title_text(value: Any, fallback: str = "") -> str:
+    if isinstance(value, list):
+        for item in value:
+            text = _video_title_text(item, "")
+            if text:
+                return text
+        return fallback
+    if isinstance(value, dict):
+        return _video_title_text(
+            value.get("shortTitle")
+            or value.get("title")
+            or value.get("desc")
+            or value.get("description")
+            or value.get("content")
+            or value.get("text"),
+            fallback,
+        )
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    match = re.search(r"['\"]shortTitle['\"]\s*:\s*['\"]([^'\"]+)", text)
+    if match:
+        return match.group(1).strip() or fallback
+    return text
+
+
+def _safe_export_filename(name: str, suffix: str) -> str:
+    stem = Path(str(name or "")).stem.strip() or "wechat-channels-transcripts"
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem).strip(" .")
+    if not stem:
+        stem = "wechat-channels-transcripts"
+    return f"{stem}.{suffix.lstrip('.')}"
+
+
+def _unique_export_path(directory: Path, filename: str) -> Path:
+    target = directory / filename
+    if not target.exists():
+        return target
+    stem = target.stem or "wechat-channels-transcripts"
+    suffix = target.suffix
+    for idx in range(1, 1000):
+        candidate = directory / f"{stem} ({idx}){suffix}"
+        if not candidate.exists():
+            return candidate
+    return directory / f"{stem}-{int(datetime.utcnow().timestamp())}{suffix}"
 
 
 def _first(obj: Any, paths: list[str]) -> Any:
@@ -257,11 +314,63 @@ def _extract_stt_output(stt_data: Any) -> Dict[str, Any]:
     for key in ("output", "result"):
         value = stt_data.get(key)
         if isinstance(value, dict):
-            return value
+            return _extract_stt_output(value)
+        if isinstance(value, str) and value.strip():
+            text = value.strip()
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return _extract_stt_output(parsed)
+                if isinstance(parsed, list):
+                    return {"utterances": parsed}
+            except Exception:
+                pass
+            return {"text": text}
     data = stt_data.get("data")
     if isinstance(data, dict):
         return _extract_stt_output(data)
+    if isinstance(data, str) and data.strip():
+        try:
+            parsed = json.loads(data.strip())
+            if isinstance(parsed, dict):
+                return _extract_stt_output(parsed)
+            if isinstance(parsed, list):
+                return {"utterances": parsed}
+        except Exception:
+            pass
+        return {"text": data.strip()}
+    nested = stt_data.get("stt_data")
+    if isinstance(nested, dict):
+        return _extract_stt_output(nested)
     return stt_data
+
+
+def _extract_text_from_jsonish(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            direct = parsed.get("text")
+            if isinstance(direct, str) and direct.strip():
+                return direct.strip()
+        if isinstance(parsed, list):
+            parts = [
+                str(item.get("text") or "").strip()
+                for item in parsed
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ]
+            return "\n".join(parts).strip()
+    except Exception:
+        pass
+    match = re.search(r'"text"\s*:\s*"(.*?)"\s*,\s*"(?:duration_ms|duration|audio_info|utterances)"', text, re.S)
+    if match:
+        try:
+            return json.loads('"' + match.group(1) + '"').strip()
+        except Exception:
+            return match.group(1).strip()
+    return text
 
 
 def _transcript_text(stt_data: Any) -> str:
@@ -269,7 +378,7 @@ def _transcript_text(stt_data: Any) -> str:
     for key in ("text", "transcript", "content", "result_text"):
         value = output.get(key) if isinstance(output, dict) else None
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _extract_text_from_jsonish(value)
     utterances = output.get("utterances") if isinstance(output, dict) else None
     if isinstance(utterances, list):
         parts = []
@@ -301,7 +410,7 @@ def _compact_video_for_db(video: Dict[str, Any]) -> Dict[str, Any]:
     raw = video.get("raw") if isinstance(video.get("raw"), dict) else {}
     return {
         "item_key": _video_item_key(video),
-        "title": str(video.get("title") or "")[:4000],
+        "title": _video_title_text(video.get("title"))[:4000],
         "publish_time": str(video.get("publish_time") or "")[:128],
         "video_url": _clean_url(video.get("video_url")),
         "public_url": _clean_url(video.get("public_url")),
@@ -315,7 +424,7 @@ def _compact_video_for_db(video: Dict[str, Any]) -> Dict[str, Any]:
 def _video_payload(row: WechatChannelsTranscriptVideo) -> Dict[str, Any]:
     return {
         "item_key": row.item_key,
-        "title": row.title or "",
+        "title": _video_title_text(row.title or ""),
         "publish_time": row.publish_time or "",
         "video_url": row.video_url or "",
         "public_url": row.public_url or "",
@@ -525,6 +634,51 @@ def get_wechat_channels_transcript_jobs(
     return {"ok": True, "jobs": [row.payload or {} for row in rows if isinstance(row.payload, dict)]}
 
 
+@router.post("/api/wechat-channels-transcript/export", summary="Export WeChat Channels transcripts to local file")
+def export_wechat_channels_transcripts(
+    body: TranscriptExportBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    fmt = (body.format or "txt").strip().lower()
+    if fmt not in {"txt", "csv"}:
+        raise HTTPException(status_code=400, detail="format must be txt or csv")
+    export_dir = get_asset_export_dir() / "视频号文案"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    filename = _safe_export_filename(body.filename, fmt)
+    target = _unique_export_path(export_dir, filename)
+
+    if fmt == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["标题", "发布时间", "状态", "原链接", "视频链接", "转写文本"])
+        for row in body.rows or []:
+            if not isinstance(row, dict):
+                continue
+            writer.writerow(
+                [
+                    str(row.get("title") or ""),
+                    str(row.get("publish_time") or ""),
+                    str(row.get("status") or ""),
+                    str(row.get("public_url") or ""),
+                    str(row.get("video_url") or ""),
+                    str(row.get("transcript") or row.get("error") or ""),
+                ]
+            )
+        content = "\ufeff" + output.getvalue()
+    else:
+        content = body.text or ""
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="暂无可导出内容")
+    target.write_text(content, encoding="utf-8", newline="")
+    return {
+        "ok": True,
+        "path": str(target),
+        "directory": str(target.parent),
+        "filename": target.name,
+        "format": fmt,
+    }
+
+
 @router.get("/api/wechat-channels-transcript/local-cache", summary="Load queried WeChat Channels videos from local DB")
 def get_wechat_channels_video_cache(
     account_key: str,
@@ -618,6 +772,12 @@ async def local_transcribe_wechat_channels_video(
             raise RuntimeError("audio upload failed: " + _safe_error(diag))
         stt_result = await asyncio.to_thread(_call_server_stt, audio_url, auth_headers)
         stt_data = stt_result.get("stt_data") if isinstance(stt_result.get("stt_data"), dict) else stt_result
+        transcript = _transcript_text(stt_data)
+        if not transcript:
+            raise RuntimeError(
+                "STT completed but returned empty transcript: "
+                + _safe_error(stt_data, 1000)
+            )
         return {
             "ok": True,
             "audio_url": audio_url,
@@ -626,7 +786,7 @@ async def local_transcribe_wechat_channels_video(
             "task_id": stt_result.get("task_id"),
             "stt_model": stt_result.get("stt_model"),
             "token_source": stt_result.get("token_source"),
-            "transcript": _transcript_text(stt_data),
+            "transcript": transcript,
             "stt_data": stt_data,
         }
     except HTTPException:

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # 在线客户端 - 完整包：仅把 lobster_online 打成 zip；不修改 install.bat、start.bat、run_*.bat。
 # 用户说明见 使用说明-完整包.txt（本脚本会临时复制为 使用说明.txt 打入 zip）。
-# LOBSTER_BRAND_MARK（默认 yingshi）写入产物名；仅删除同品牌旧 zip。
+# LOBSTER_BRAND_MARK（默认 bihuo）写入产物名；仅删除同品牌旧 zip。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PARENT="$(dirname "$SCRIPT_DIR")"
 PROJ=$(basename "$SCRIPT_DIR")
-LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-yingshi}"
+LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-bihuo}"
 BM_SAFE=$(printf '%s' "$LOBSTER_BRAND_MARK" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
-[ -z "$BM_SAFE" ] && BM_SAFE=yingshi
+[ -z "$BM_SAFE" ] && BM_SAFE=bihuo
 BUILD_ID=$(date +%Y%m%d_%H%M%S)
 OUT_NAME="${PROJ}_完整包_${BM_SAFE}_${BUILD_ID}.zip"
 OUT_PATH="$PARENT/$OUT_NAME"
