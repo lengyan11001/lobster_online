@@ -1445,11 +1445,12 @@ function syncWechatArticleChatEntry() {
   var chip = document.getElementById('chatSuggestionChipWechatArticle');
   if (!chip) return;
   chip.setAttribute('data-chip-tone', 'content');
-  chip.setAttribute('data-chat-prompt', WECHAT_ARTICLE_CHAT_PROMPT);
+  chip.removeAttribute('data-chat-prompt');
   chip.removeAttribute('data-open-hidden-view');
-  chip.title = '单击在对话中生成；双击打开公众号文章页面';
+  chip.setAttribute('data-jump-view', 'wechat-article');
+  chip.title = '打开公众号文章页面';
   var desc = chip.querySelector('.chat-suggestion-chip-desc');
-  if (desc) desc.textContent = '输入主题后推草稿';
+  if (desc) desc.textContent = '进入文章创作页面';
 }
 window.WECHAT_ARTICLE_CHAT_PROMPT = WECHAT_ARTICLE_CHAT_PROMPT;
 window.fillChatPromptInput = fillChatPromptInput;
@@ -1850,7 +1851,8 @@ function updateChatModeUi(mode) {
       _setChatSuggestionAction(chip4, 'data-open-hidden-view', 'image-composer-studio');
     }
     if (chip5) {
-      _renderChatSuggestionChip(chip5, '爆款TVC', '用爆款tvc帮我生成一个视频。');
+      _renderChatSuggestionChip(chip5, '爆款TVC');
+      _setChatSuggestionAction(chip5, 'data-jump-view', 'viral-tvc-studio');
     }
     syncWechatArticleChatEntry();
     if (chip6) {
@@ -1858,7 +1860,8 @@ function updateChatModeUi(mode) {
       _setChatSuggestionAction(chip6, 'data-open-hidden-view', 'seedance-tvc-studio');
     }
     if (chipPpt) {
-      _renderChatSuggestionChip(chipPpt, 'PPT\u5236\u4f5c', '\u7528 AI \u6a21\u5f0f\u5e2e\u6211\u505a\u4e00\u4e2a PPT\uff0c\u4e3b\u9898\u662f\uff1a');
+      _renderChatSuggestionChip(chipPpt, 'PPT制作');
+      _setChatSuggestionAction(chipPpt, 'data-jump-view', 'ppt-studio');
     }
     if (chip7) {
       _renderChatSuggestionChip(chip7, '发布中心');
@@ -2459,6 +2462,8 @@ function savedAssetPrimaryHttpUrl(a) {
 }
 
 function savedAssetFilename(a) {
+  var directName = ((a && (a.filename || a.name || a.original_filename)) || '').trim();
+  if (directName) return directName;
   var id = ((a && a.asset_id) || '').trim();
   var mediaType = ((a && a.media_type) || '').toLowerCase();
   var url = savedAssetPrimaryHttpUrl(a);
@@ -2471,9 +2476,48 @@ function savedAssetFilename(a) {
   if (!ext) {
     if (mediaType === 'video') ext = '.mp4';
     else if (mediaType === 'audio') ext = '.mp3';
+    else if (mediaType === 'document') {
+      var contentType = String((a && a.content_type) || '').toLowerCase();
+      if (contentType.indexOf('presentation') >= 0) ext = '.pptx';
+      else if (contentType.indexOf('pdf') >= 0) ext = '.pdf';
+      else if (contentType.indexOf('word') >= 0) ext = '.docx';
+      else if (contentType.indexOf('sheet') >= 0 || contentType.indexOf('excel') >= 0 || contentType.indexOf('csv') >= 0) ext = '.xlsx';
+      else if (contentType.indexOf('text') >= 0 || contentType.indexOf('markdown') >= 0) ext = '.txt';
+      else ext = '.bin';
+    }
     else ext = '.png';
   }
   return (id || 'lobster-asset') + ext;
+}
+
+function savedAssetDocumentKind(a) {
+  var contentType = String((a && a.content_type) || '').toLowerCase();
+  var probe = (savedAssetFilename(a) || savedAssetPrimaryHttpUrl(a) || '').toLowerCase();
+  if (/\.pptx?(\?|$)/.test(probe) || contentType.indexOf('presentation') >= 0) return 'ppt';
+  if (/\.pdf(\?|$)/.test(probe) || contentType.indexOf('pdf') >= 0) return 'pdf';
+  if (/\.docx?(\?|$)/.test(probe) || contentType.indexOf('word') >= 0) return 'doc';
+  if (/\.xlsx?(\?|$)|\.csv(\?|$)/.test(probe) || contentType.indexOf('sheet') >= 0 || contentType.indexOf('excel') >= 0 || contentType.indexOf('csv') >= 0) return 'sheet';
+  if (/\.txt(\?|$)|\.md(\?|$)/.test(probe) || contentType.indexOf('text') >= 0 || contentType.indexOf('markdown') >= 0) return 'text';
+  return 'file';
+}
+
+function savedAssetDocumentPreset(a) {
+  var kind = savedAssetDocumentKind(a);
+  if (kind === 'ppt') return { icon: 'PPT', accent: '#c2410c', border: 'rgba(194,65,12,0.25)', bg: '#fff7ed', title: '演示文稿已生成', subtitle: '可直接打开或另存到本机' };
+  if (kind === 'pdf') return { icon: 'PDF', accent: '#b91c1c', border: 'rgba(185,28,28,0.22)', bg: '#fef2f2', title: 'PDF 已生成', subtitle: '可直接打开或另存到本机' };
+  if (kind === 'doc') return { icon: 'DOC', accent: '#1d4ed8', border: 'rgba(29,78,216,0.22)', bg: '#eff6ff', title: '文档已生成', subtitle: '可直接打开或另存到本机' };
+  if (kind === 'sheet') return { icon: '表格', accent: '#047857', border: 'rgba(4,120,87,0.22)', bg: '#ecfdf5', title: '表格文件已生成', subtitle: '可直接打开或另存到本机' };
+  if (kind === 'text') return { icon: 'TXT', accent: '#475569', border: 'rgba(71,85,105,0.22)', bg: '#f8fafc', title: '文本文件已生成', subtitle: '可直接打开或另存到本机' };
+  return { icon: '文件', accent: '#475569', border: 'rgba(71,85,105,0.22)', bg: '#f8fafc', title: '文件已生成', subtitle: '可直接打开或另存到本机' };
+}
+
+function savedAssetDocumentHeadline(a) {
+  var title = ((a && (a.title || a.label || a.caption)) || '').trim();
+  if (title) return title;
+  var disp = savedAssetDisplayText(a);
+  var url = savedAssetPrimaryHttpUrl(a);
+  if (disp && disp !== url) return disp;
+  return savedAssetFilename(a) || savedAssetDocumentPreset(a).title;
 }
 
 function chatCopyText(text) {
@@ -2747,22 +2791,31 @@ function appendSavedAssetDom(parent, a, opts) {
 
   function appendDocumentPreview(url) {
     removeLoading();
+    var preset = savedAssetDocumentPreset(a);
+    var headline = savedAssetDocumentHeadline(a);
+    var filename = savedAssetFilename(a) || '';
     var card = document.createElement('div');
     card.className = 'chat-generated-asset-file';
-    card.style.cssText = 'display:flex;align-items:center;gap:0.6rem;padding:0.75rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-muted,rgba(148,163,184,0.08));';
+    card.style.cssText = 'display:flex;align-items:flex-start;gap:0.7rem;padding:0.82rem;border:1px solid ' + preset.border + ';border-radius:10px;background:' + preset.bg + ';';
     var icon = document.createElement('div');
-    icon.textContent = 'PPT';
-    icon.style.cssText = 'min-width:2.5rem;height:2.5rem;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;background:#fff;color:#c2410c;border:1px solid rgba(194,65,12,0.25);';
+    icon.textContent = preset.icon;
+    icon.style.cssText = 'min-width:2.75rem;height:2.75rem;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:0.78rem;font-weight:800;background:#fff;color:' + preset.accent + ';border:1px solid ' + preset.border + ';';
     var copy = document.createElement('div');
     copy.style.cssText = 'min-width:0;flex:1;';
     var name = document.createElement('div');
-    name.textContent = savedAssetFilename(a) || 'PPT 文件';
-    name.style.cssText = 'font-size:0.86rem;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    name.textContent = headline || preset.title;
+    name.style.cssText = 'font-size:0.88rem;font-weight:700;line-height:1.45;color:var(--text-primary,#0f172a);';
     var sub = document.createElement('div');
-    sub.textContent = '已保存到素材库，可打开或另存';
-    sub.style.cssText = 'font-size:0.76rem;color:var(--text-muted);margin-top:0.15rem;';
+    sub.textContent = filename && headline !== filename ? ('文件 · ' + filename) : preset.subtitle;
+    sub.style.cssText = 'font-size:0.76rem;color:var(--text-muted);margin-top:0.18rem;line-height:1.45;';
     copy.appendChild(name);
     copy.appendChild(sub);
+    if (assetId) {
+      var aid = document.createElement('div');
+      aid.textContent = '素材 ID · ' + assetId;
+      aid.style.cssText = 'margin-top:0.28rem;font-size:0.72rem;color:' + preset.accent + ';font-weight:700;';
+      copy.appendChild(aid);
+    }
     card.appendChild(icon);
     card.appendChild(copy);
     mediaWrap.appendChild(card);
@@ -4095,15 +4148,6 @@ function bindChatHomeActions() {
       openH5ChatMirrorSession();
       return;
     }
-    var wechatArticleChatBtn = e.target.closest('#chatSuggestionChipWechatArticle');
-    if (wechatArticleChatBtn) {
-      if (typeof _isH5MirrorSession === 'function' && _isH5MirrorSession(getSessionById(currentSessionId)) && typeof openDefaultChatSession === 'function') {
-        openDefaultChatSession();
-      }
-      syncWechatArticleChatEntry();
-      fillChatPromptInput(WECHAT_ARTICLE_CHAT_PROMPT);
-      return;
-    }
     var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
     if (hiddenViewBtn) {
       var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
@@ -4124,6 +4168,8 @@ function bindChatHomeActions() {
       var navBtn = document.querySelector('.nav-left-item[data-view="' + view + '"]');
       if (navBtn) {
         navBtn.click();
+      } else if (view && typeof window.showAppView === 'function') {
+        window.showAppView(view, jumpBtn).catch(function() {});
       } else if (view === 'wecom-config' && typeof showWecomConfigView === 'function') {
         showWecomConfigView();
       } else if (view && view.indexOf('wecom-detail') === 0 && typeof showWecomDetailView === 'function') {
@@ -4139,13 +4185,6 @@ function bindChatHomeActions() {
       }
       fillChatPromptInput(promptBtn.getAttribute('data-chat-prompt') || '');
     }
-  });
-  document.addEventListener('dblclick', function(e) {
-    var wechatArticleChatBtn = e.target.closest('#chatSuggestionChipWechatArticle');
-    if (!wechatArticleChatBtn) return;
-    e.preventDefault();
-    e.stopPropagation();
-    openWechatArticlePage();
   });
 }
 

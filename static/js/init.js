@@ -849,7 +849,9 @@ var LOBSTER_MAIN_VIEWS = {
   logs: true,
   agent: true,
   'openclaw-memory': true,
-  'creative-film-studio': true
+  'creative-film-studio': true,
+  'ppt-studio': true,
+  'viral-tvc-studio': true
 };
 var LOBSTER_HIDDEN_VIEWS = {
   'wecom-config': true,

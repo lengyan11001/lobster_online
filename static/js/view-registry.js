@@ -40,6 +40,20 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('ppt-studio', {
+    html: '/static/views/ppt-studio.html?v=20260629-ppt-entry-page',
+    scripts: '/static/js/ppt-studio.js?v=20260629-ppt-entry-page',
+    init: 'initPptStudioView',
+    cache: 'reload'
+  });
+
+  window.registerLobsterView('viral-tvc-studio', {
+    html: '/static/views/viral-tvc-studio.html?v=20260629-viral-tvc-entry-page',
+    scripts: '/static/js/viral-tvc-studio.js?v=20260629-viral-tvc-entry-page',
+    init: 'initViralTvcStudioView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('ip-content-studio', {
     html: '/static/views/ip-content-studio.html?v=20260615-ip-content-batch',
     scripts: '/static/js/ip-content-studio.js?v=20260615-ip-content-batch',

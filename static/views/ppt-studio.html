@@ -1,0 +1,551 @@
+<div id="content-ppt-studio" class="content-block">
+  <div class="ppt-studio-page">
+    <style>
+      .ppt-studio-page {
+        --ppt-accent: #f97316;
+        --ppt-accent-2: #fb923c;
+        --ppt-ink: #0f172a;
+        --ppt-muted: #64748b;
+        --ppt-border: rgba(15, 23, 42, 0.12);
+        --ppt-panel: #ffffff;
+        min-height: calc(100vh - 72px);
+        padding: 1rem;
+        background:
+          radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 32%),
+          radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 28%),
+          #f6f8fb;
+        color: var(--ppt-ink);
+      }
+      .ppt-studio-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.9rem;
+      }
+      .ppt-studio-kicker {
+        color: var(--ppt-accent);
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+      .ppt-studio-title {
+        margin: 0.12rem 0 0;
+        font-size: 1.42rem;
+        line-height: 1.2;
+      }
+      .ppt-studio-subtitle {
+        margin: 0.34rem 0 0;
+        color: var(--ppt-muted);
+        font-size: 0.92rem;
+        line-height: 1.55;
+        max-width: 760px;
+      }
+      .ppt-studio-head-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+      }
+      .ppt-studio-msg {
+        display: none;
+        margin-bottom: 0.85rem;
+        padding: 0.72rem 0.82rem;
+        border-radius: 8px;
+        border: 1px solid rgba(249, 115, 22, 0.22);
+        background: rgba(249, 115, 22, 0.08);
+        color: #c2410c;
+        white-space: pre-line;
+      }
+      .ppt-studio-msg.err {
+        border-color: rgba(225, 29, 72, 0.22);
+        background: rgba(225, 29, 72, 0.08);
+        color: #be123c;
+      }
+      .ppt-studio-layout {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.92fr) minmax(340px, 1.08fr);
+        gap: 0.9rem;
+        align-items: start;
+      }
+      .ppt-studio-panel {
+        background: var(--ppt-panel);
+        border: 1px solid var(--ppt-border);
+        border-radius: 8px;
+        padding: 0.95rem;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+      }
+      .ppt-studio-panel-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        margin-bottom: 0.7rem;
+        font-size: 1rem;
+        font-weight: 900;
+      }
+      .ppt-studio-panel-hint {
+        margin: -0.15rem 0 0.8rem;
+        color: var(--ppt-muted);
+        font-size: 0.84rem;
+        line-height: 1.5;
+      }
+      .ppt-studio-field {
+        display: grid;
+        gap: 0.36rem;
+        margin-bottom: 0.75rem;
+      }
+      .ppt-studio-field label {
+        color: #334155;
+        font-size: 0.8rem;
+        font-weight: 800;
+      }
+      .ppt-studio-field input,
+      .ppt-studio-field textarea,
+      .ppt-studio-field select {
+        width: 100%;
+        border: 1px solid rgba(15, 23, 42, 0.14);
+        border-radius: 7px;
+        padding: 0.62rem 0.72rem;
+        background: #fff;
+        color: var(--ppt-ink);
+        font-size: 0.92rem;
+        outline: none;
+      }
+      .ppt-studio-field textarea {
+        min-height: 112px;
+        resize: vertical;
+        line-height: 1.6;
+      }
+      .ppt-studio-inline {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.72rem;
+      }
+      .ppt-studio-main-btn {
+        width: 100%;
+        min-height: 42px;
+        font-size: 0.95rem;
+        font-weight: 800;
+      }
+      .ppt-studio-tips {
+        display: grid;
+        gap: 0.5rem;
+        margin-top: 0.85rem;
+      }
+      .ppt-studio-tip {
+        border-radius: 8px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
+        padding: 0.7rem 0.78rem;
+      }
+      .ppt-studio-tip strong {
+        display: block;
+        font-size: 0.86rem;
+        margin-bottom: 0.22rem;
+      }
+      .ppt-studio-tip span {
+        color: var(--ppt-muted);
+        font-size: 0.8rem;
+        line-height: 1.5;
+      }
+      .ppt-studio-result-empty {
+        min-height: 420px;
+        border: 1px dashed rgba(15, 23, 42, 0.12);
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        color: var(--ppt-muted);
+        background: rgba(248, 250, 252, 0.78);
+        text-align: center;
+        padding: 1.2rem;
+        line-height: 1.7;
+      }
+      .ppt-studio-result-card {
+        display: grid;
+        gap: 0.9rem;
+      }
+      .ppt-studio-result-cover {
+        position: relative;
+        overflow: hidden;
+        border-radius: 8px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        min-height: 220px;
+        background: linear-gradient(135deg, rgba(249, 115, 22, 0.92), rgba(59, 130, 246, 0.92));
+        padding: 1rem;
+        color: #fff;
+      }
+      .ppt-studio-result-cover-kicker {
+        font-size: 0.78rem;
+        font-weight: 800;
+        opacity: 0.86;
+      }
+      .ppt-studio-result-cover-title {
+        margin: 0.38rem 0 0;
+        font-size: 1.44rem;
+        line-height: 1.24;
+        max-width: 88%;
+      }
+      .ppt-studio-result-cover-subtitle {
+        margin: 0.46rem 0 0;
+        max-width: 84%;
+        font-size: 0.9rem;
+        line-height: 1.6;
+        opacity: 0.94;
+      }
+      .ppt-studio-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.55rem;
+      }
+      .ppt-studio-metric {
+        border-radius: 8px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: #fff;
+        padding: 0.72rem;
+      }
+      .ppt-studio-metric strong {
+        display: block;
+        font-size: 1rem;
+      }
+      .ppt-studio-metric span {
+        display: block;
+        margin-top: 0.18rem;
+        color: var(--ppt-muted);
+        font-size: 0.78rem;
+      }
+      .ppt-studio-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.52rem;
+      }
+      .ppt-studio-outline {
+        border-radius: 8px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: #fff;
+        padding: 0.82rem 0.86rem;
+      }
+      .ppt-studio-outline-title {
+        font-weight: 800;
+        margin-bottom: 0.55rem;
+      }
+      .ppt-studio-outline-list {
+        margin: 0;
+        padding-left: 1.15rem;
+        color: #334155;
+        line-height: 1.7;
+      }
+      .ppt-studio-outline-list li + li {
+        margin-top: 0.28rem;
+      }
+      .ppt-studio-deck {
+        display: grid;
+        gap: 0.8rem;
+      }
+      .ppt-studio-deck-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+      .ppt-studio-deck-title {
+        font-size: 1rem;
+        font-weight: 900;
+      }
+      .ppt-studio-deck-subtitle {
+        color: var(--ppt-muted);
+        font-size: 0.82rem;
+      }
+      .ppt-studio-slide-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.8rem;
+      }
+      .ppt-studio-slide-card {
+        border-radius: 10px;
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        background: linear-gradient(180deg, #ffffff, #f8fafc);
+        overflow: hidden;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+      }
+      .ppt-studio-slide-frame {
+        aspect-ratio: 16 / 9;
+        padding: 0.9rem;
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 0.45rem;
+        background:
+          radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 26%),
+          radial-gradient(circle at top left, rgba(249, 115, 22, 0.12), transparent 30%),
+          linear-gradient(180deg, #ffffff, #f8fafc);
+      }
+      .ppt-studio-slide-frame[data-slide-kind="title"] {
+        background: linear-gradient(135deg, rgba(249, 115, 22, 0.96), rgba(59, 130, 246, 0.92));
+        color: #fff;
+      }
+      .ppt-studio-slide-frame[data-slide-kind="section"] {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(59, 130, 246, 0.88));
+        color: #fff;
+      }
+      .ppt-studio-slide-chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: fit-content;
+        min-height: 22px;
+        padding: 0 0.55rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        color: #1d4ed8;
+        background: rgba(37, 99, 235, 0.08);
+        border: 1px solid rgba(37, 99, 235, 0.12);
+      }
+      .ppt-studio-slide-frame[data-slide-kind="title"] .ppt-studio-slide-chip,
+      .ppt-studio-slide-frame[data-slide-kind="section"] .ppt-studio-slide-chip {
+        color: rgba(255,255,255,0.96);
+        background: rgba(255,255,255,0.12);
+        border-color: rgba(255,255,255,0.18);
+      }
+      .ppt-studio-slide-title {
+        font-size: 1.02rem;
+        line-height: 1.35;
+        font-weight: 900;
+      }
+      .ppt-studio-slide-subtitle {
+        font-size: 0.78rem;
+        line-height: 1.5;
+        color: var(--ppt-muted);
+      }
+      .ppt-studio-slide-frame[data-slide-kind="title"] .ppt-studio-slide-subtitle,
+      .ppt-studio-slide-frame[data-slide-kind="section"] .ppt-studio-slide-subtitle {
+        color: rgba(255,255,255,0.82);
+      }
+      .ppt-studio-slide-claim {
+        align-self: start;
+        font-size: 0.82rem;
+        line-height: 1.5;
+        font-weight: 700;
+        color: #0f172a;
+      }
+      .ppt-studio-slide-frame[data-slide-kind="title"] .ppt-studio-slide-claim,
+      .ppt-studio-slide-frame[data-slide-kind="section"] .ppt-studio-slide-claim {
+        color: rgba(255,255,255,0.92);
+      }
+      .ppt-studio-slide-bullets {
+        margin: 0;
+        padding-left: 1rem;
+        display: grid;
+        gap: 0.2rem;
+        color: #334155;
+        font-size: 0.75rem;
+        line-height: 1.45;
+      }
+      .ppt-studio-slide-frame[data-slide-kind="title"] .ppt-studio-slide-bullets,
+      .ppt-studio-slide-frame[data-slide-kind="section"] .ppt-studio-slide-bullets {
+        color: rgba(255,255,255,0.88);
+      }
+      .ppt-studio-slide-metrics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.28rem;
+        align-self: end;
+      }
+      .ppt-studio-slide-metric-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 20px;
+        padding: 0 0.45rem;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        color: #475569;
+        background: rgba(15, 23, 42, 0.06);
+      }
+      .ppt-studio-slide-frame[data-slide-kind="title"] .ppt-studio-slide-metric-pill,
+      .ppt-studio-slide-frame[data-slide-kind="section"] .ppt-studio-slide-metric-pill {
+        color: rgba(255,255,255,0.92);
+        background: rgba(255,255,255,0.12);
+      }
+      .ppt-studio-slide-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.66rem 0.78rem 0.75rem;
+        border-top: 1px solid rgba(15, 23, 42, 0.08);
+        background: #fff;
+      }
+      .ppt-studio-slide-index {
+        font-size: 0.76rem;
+        font-weight: 800;
+        color: #0f172a;
+      }
+      .ppt-studio-slide-type {
+        font-size: 0.72rem;
+        color: var(--ppt-muted);
+      }
+      .ppt-studio-meta-list {
+        display: grid;
+        gap: 0.48rem;
+      }
+      .ppt-studio-meta-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding-bottom: 0.48rem;
+        border-bottom: 1px dashed rgba(15, 23, 42, 0.08);
+      }
+      .ppt-studio-meta-row:last-child {
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+      .ppt-studio-meta-row dt {
+        color: var(--ppt-muted);
+        font-size: 0.8rem;
+        font-weight: 700;
+      }
+      .ppt-studio-meta-row dd {
+        margin: 0;
+        text-align: right;
+        color: #0f172a;
+        font-size: 0.84rem;
+        line-height: 1.55;
+        word-break: break-word;
+      }
+      @media (max-width: 1100px) {
+        .ppt-studio-layout { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 640px) {
+        .ppt-studio-page { padding: 0.8rem; }
+        .ppt-studio-head { flex-direction: column; }
+        .ppt-studio-head-actions { width: 100%; }
+        .ppt-studio-head-actions .btn { flex: 1 1 0; }
+        .ppt-studio-inline,
+        .ppt-studio-metrics,
+        .ppt-studio-slide-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+    <header class="ppt-studio-head">
+      <div>
+        <div class="ppt-studio-kicker">演示文稿工作台</div>
+        <h3 class="ppt-studio-title">PPT 专属页面</h3>
+        <p class="ppt-studio-subtitle">首页点进来就是这里。输入主题、页数和风格后，直接生成可下载的 PPT，结果会在右侧集中展示。</p>
+      </div>
+      <div class="ppt-studio-head-actions">
+        <button type="button" id="pptStudioBackBtn" class="btn btn-ghost btn-sm">返回首页</button>
+        <button type="button" id="pptStudioResetBtn" class="btn btn-ghost btn-sm">清空参数</button>
+      </div>
+    </header>
+    <div id="pptStudioMsg" class="ppt-studio-msg"></div>
+    <div class="ppt-studio-layout">
+      <section class="ppt-studio-panel">
+        <div class="ppt-studio-panel-title">生成设置</div>
+        <p class="ppt-studio-panel-hint">适合直接做汇报、方案、招商介绍、培训内容。没有完整大纲时，直接写主题和要求就行。</p>
+        <div class="ppt-studio-field">
+          <label for="pptStudioTopic">PPT 主题</label>
+          <input id="pptStudioTopic" type="text" placeholder="例如：医美门店 2026 年抖音获客方案">
+        </div>
+        <div class="ppt-studio-field">
+          <label for="pptStudioPrompt">补充要求</label>
+          <textarea id="pptStudioPrompt" placeholder="例如：偏商务高级感，适合老板汇报，重点讲客户增长路径、案例、执行节奏。"></textarea>
+        </div>
+        <div class="ppt-studio-inline">
+          <div class="ppt-studio-field">
+            <label for="pptStudioSlideCount">页数</label>
+            <select id="pptStudioSlideCount">
+              <option value="8">8 页</option>
+              <option value="10" selected>10 页</option>
+              <option value="12">12 页</option>
+              <option value="15">15 页</option>
+              <option value="18">18 页</option>
+            </select>
+          </div>
+          <div class="ppt-studio-field">
+            <label for="pptStudioTheme">风格</label>
+            <select id="pptStudioTheme">
+              <option value="business" selected>商务汇报</option>
+              <option value="marketing">营销提案</option>
+              <option value="training">培训课件</option>
+              <option value="product">产品介绍</option>
+            </select>
+          </div>
+        </div>
+        <div class="ppt-studio-inline">
+          <div class="ppt-studio-field">
+            <label for="pptStudioAudience">受众</label>
+            <select id="pptStudioAudience">
+              <option value="business" selected>老板 / 管理层</option>
+              <option value="client">客户提案</option>
+              <option value="team">团队内部</option>
+              <option value="training">培训学员</option>
+            </select>
+          </div>
+          <div class="ppt-studio-field">
+            <label for="pptStudioImageMode">配图策略</label>
+            <select id="pptStudioImageMode">
+              <option value="true" selected>自动补配图</option>
+              <option value="false">先只出内容结构</option>
+            </select>
+          </div>
+        </div>
+        <div class="ppt-studio-inline">
+          <div class="ppt-studio-field">
+            <label for="pptStudioPlanningModel">规划模型</label>
+            <select id="pptStudioPlanningModel">
+              <option value="gpt-5.4" selected>GPT-5.4</option>
+              <option value="gpt-5.3">GPT-5.3</option>
+            </select>
+          </div>
+          <div class="ppt-studio-field">
+            <label for="pptStudioAspectRatio">页面比例</label>
+            <select id="pptStudioAspectRatio">
+              <option value="16:9" selected>16:9 宽屏</option>
+              <option value="4:3">4:3 标准</option>
+            </select>
+          </div>
+        </div>
+        <div class="ppt-studio-inline">
+          <div class="ppt-studio-field">
+            <label for="pptStudioImageModel">配图模型</label>
+            <select id="pptStudioImageModel">
+              <option value="gpt-image-2" selected>GPT Image 2</option>
+              <option value="gpt-image-2-yunwu">GPT Image 2 云雾</option>
+            </select>
+          </div>
+          <div class="ppt-studio-field">
+            <label for="pptStudioImageQuality">配图质量</label>
+            <select id="pptStudioImageQuality">
+              <option value="high" selected>高质量</option>
+              <option value="medium">标准</option>
+              <option value="low">快速</option>
+            </select>
+          </div>
+        </div>
+        <div class="ppt-studio-field">
+          <label for="pptStudioImageBackground">配图背景</label>
+          <select id="pptStudioImageBackground">
+            <option value="opaque" selected>实底背景</option>
+            <option value="transparent">透明背景</option>
+          </select>
+        </div>
+        <button type="button" id="pptStudioGenerateBtn" class="btn btn-primary ppt-studio-main-btn">生成 PPT</button>
+        <div class="ppt-studio-tips">
+          <div class="ppt-studio-tip">
+            <strong>适合直接生成</strong>
+            <span>融资路演、项目汇报、门店方案、抖音获客方案、招商介绍。</span>
+          </div>
+          <div class="ppt-studio-tip">
+            <strong>你可以这样写</strong>
+            <span>“做一版 10 页 PPT，面向老板汇报，主题是医美门店私域转化方案。”</span>
+          </div>
+        </div>
+      </section>
+      <section class="ppt-studio-panel">
+        <div class="ppt-studio-panel-title">生成结果</div>
+        <div id="pptStudioResult" class="ppt-studio-result-empty">还没有生成结果。<br>左侧填好主题后，直接点“生成 PPT” 就可以了。</div>
+      </section>
+    </div>
+  </div>
+</div>
