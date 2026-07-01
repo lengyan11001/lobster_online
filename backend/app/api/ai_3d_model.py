@@ -5,8 +5,11 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import os
+import subprocess
 import re
+import sys
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageStat
 
 from ..db import SessionLocal
 from .auth import _ServerUser
@@ -64,7 +67,7 @@ _LANCZOS = getattr(_RESAMPLING, "LANCZOS", getattr(Image, "LANCZOS", 1))
 _BILINEAR = getattr(_RESAMPLING, "BILINEAR", getattr(Image, "BILINEAR", 2))
 _SUTUI_GPT_IMAGE_2_MODEL = "openai/gpt-image-2"
 _SUTUI_IMAGE_UNDERSTAND_MODEL = "openai/gpt-5.5"
-_VIEW_PROMPT_VERSION = "hd-multiview-v18-hard-surface-3plus2"
+_VIEW_PROMPT_VERSION = "hd-triview-v24-front45-only"
 _AI3D_DEFAULT_MAX_PARTS = 24
 _AI3D_ABSOLUTE_MAX_PARTS = 24
 _AI3D_IMAGE_STAGE_QUALITY = "high"
@@ -79,10 +82,10 @@ _AI3D_IMAGE_STAGE_PIXEL_SIZES = {
     "16:9": "3840x2160",
     "9:16": "2160x3840",
 }
-_STANDARD_MULTI_VIEW_SHEET_VIEWS = ["front", "front_left_45", "front_right_45", "side", "back"]
-_CHARACTER_MULTI_VIEW_SHEET_VIEWS = ["front", "front_left_45", "front_right_45", "side", "back"]
-_MESHY_MULTI_IMAGE_MAX = 4
-_MESHY_BASE_VIEW_ROLES = ["front", "front_right_45", "front_left_45", "side", "back"]
+_STANDARD_MULTI_VIEW_SHEET_VIEWS = ["front", "front_left_45", "front_right_45"]
+_CHARACTER_MULTI_VIEW_SHEET_VIEWS = ["front", "front_left_45", "front_right_45"]
+_MESHY_MULTI_IMAGE_MAX = 3
+_MESHY_BASE_VIEW_ROLES = ["front", "front_right_45", "front_left_45"]
 _VIEW_ROLE_LABELS = {
     "front": "正视图",
     "front_left_45": "左前45°视图",
@@ -524,6 +527,192 @@ def _save_square_crop(source: Image.Image, box: Tuple[int, int, int, int], dest:
     return {"width": canvas.width, "height": canvas.height, "source_box": list(box)}
 
 
+def _canonical_reference_sheet_view_role(role: Any, label: Any = "") -> str:
+    text = f"{role or ''} {label or ''}".strip().lower()
+    if not text:
+        return ""
+    text = text.replace("-", "_").replace(" ", "_")
+    if "front_left" in text or "left_front" in text or "left_45" in text or "45_left" in text or "左前" in text:
+        return "front_left_45"
+    if "front_right" in text or "right_front" in text or "right_45" in text or "45_right" in text or "右前" in text:
+        return "front_right_45"
+    if "back" in text or "rear" in text or "背" in text or "后" in text:
+        return "back"
+    if "side" in text or "profile" in text or "lateral" in text or "侧" in text:
+        return "side"
+    if "front" in text or "primary" in text or "main" in text or "anchor" in text or "source" in text or "正" in text or "主" in text:
+        return "front"
+    return ""
+
+
+def _normalize_reference_sheet_detection(data: Dict[str, Any]) -> Dict[str, Any]:
+    sheet = data.get("reference_sheet") if isinstance(data.get("reference_sheet"), dict) else {}
+    if not sheet:
+        sheet = data
+    is_sheet = bool(
+        sheet.get("is_multiview_reference_sheet")
+        or sheet.get("is_reference_sheet")
+        or sheet.get("is_turnaround_sheet")
+        or data.get("is_multiview_reference_sheet")
+    )
+    confidence_raw = sheet.get("confidence") or sheet.get("score") or data.get("reference_sheet_confidence")
+    try:
+        confidence = int(float(confidence_raw if confidence_raw is not None else (75 if is_sheet else 0)))
+    except Exception:
+        confidence = 75 if is_sheet else 0
+    views_raw = (
+        sheet.get("views")
+        if isinstance(sheet.get("views"), list)
+        else sheet.get("view_slots")
+        if isinstance(sheet.get("view_slots"), list)
+        else data.get("views")
+        if isinstance(data.get("views"), list)
+        else []
+    )
+    by_role: Dict[str, Dict[str, Any]] = {}
+    for idx, item in enumerate(views_raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        role = _canonical_reference_sheet_view_role(item.get("role") or item.get("view"), item.get("label") or item.get("name"))
+        if role not in _VIEW_ROLE_ORDER:
+            continue
+        box = item.get("box") or item.get("bbox")
+        if not isinstance(box, list) or len(box) != 4:
+            continue
+        try:
+            vals = [max(0.0, min(1.0, float(value))) for value in box[:4]]
+        except Exception:
+            continue
+        if vals[2] - vals[0] < 0.035 or vals[3] - vals[1] < 0.035:
+            continue
+        try:
+            quality_score = int(float(item.get("quality_score") or item.get("score") or 70))
+        except Exception:
+            quality_score = 70
+        usable = item.get("usable_for_3d")
+        if usable is None:
+            usable = item.get("usable")
+        view = {
+            "index": idx,
+            "role": role,
+            "label": str(item.get("label") or item.get("name") or _VIEW_ROLE_LABELS.get(role, role)).strip()[:60],
+            "box": tuple(vals),  # type: ignore[arg-type]
+            "usable_for_3d": False if usable is False else True,
+            "quality_score": max(0, min(100, quality_score)),
+            "reason": str(item.get("reason") or "").strip()[:240],
+        }
+        area = (vals[2] - vals[0]) * (vals[3] - vals[1])
+        rank = int(view["quality_score"]) * 1000 + int(area * 1000)
+        previous = by_role.get(role)
+        previous_box = previous.get("box") if isinstance(previous, dict) else None
+        previous_area = (
+            (float(previous_box[2]) - float(previous_box[0])) * (float(previous_box[3]) - float(previous_box[1]))
+            if isinstance(previous_box, tuple) and len(previous_box) == 4
+            else 0.0
+        )
+        previous_rank = int(previous.get("quality_score") or 0) * 1000 + int(previous_area * 1000) if previous else -1
+        if rank >= previous_rank:
+            by_role[role] = view
+    views = sorted(by_role.values(), key=lambda item: _VIEW_ROLE_ORDER.get(str(item.get("role") or ""), 99))
+    if len([item for item in views if item.get("usable_for_3d")]) < 2:
+        is_sheet = False
+    return {
+        "is_multiview_reference_sheet": bool(is_sheet and confidence >= 55),
+        "confidence": max(0, min(100, confidence)),
+        "reason": _compact_text_value(sheet.get("reason") or data.get("reference_sheet_reason"), max_chars=360),
+        "views": views,
+        "raw": sheet if sheet is not data else data,
+    }
+
+
+def _relative_view_box_to_abs(width: int, height: int, box: Tuple[float, float, float, float]) -> Tuple[int, int, int, int]:
+    left = int(round(width * box[0]))
+    top = int(round(height * box[1]))
+    right = int(round(width * box[2]))
+    bottom = int(round(height * box[3]))
+    crop_w = max(1, right - left)
+    crop_h = max(1, bottom - top)
+    pad = max(4, int(max(crop_w, crop_h) * 0.025))
+    return (
+        max(0, left - pad),
+        max(0, top - pad),
+        min(width, right + pad),
+        min(height, bottom + pad),
+    )
+
+
+def _save_reference_view_crop(source: Image.Image, box: Tuple[int, int, int, int], dest: Path) -> Dict[str, Any]:
+    crop = source.crop(box)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    crop.save(dest, "JPEG", quality=95, optimize=True)
+    return {
+        "width": crop.width,
+        "height": crop.height,
+        "source_box": list(box),
+        "crop_applied": True,
+    }
+
+
+def _triview_inputs_from_reference_sheet_plan(
+    *,
+    job_id: str,
+    source_input: Dict[str, Any],
+    src: Path,
+    out_dir: Path,
+    detection: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if not detection.get("is_multiview_reference_sheet"):
+        return []
+    views = detection.get("views") if isinstance(detection.get("views"), list) else []
+    usable_views = [
+        item for item in views
+        if isinstance(item, dict) and item.get("usable_for_3d") is not False and str(item.get("role") or "") in _VIEW_ROLE_ORDER
+    ]
+    if len(usable_views) < 2:
+        return []
+    generated: List[Dict[str, Any]] = []
+    with Image.open(src) as im:
+        source = ImageOps.exif_transpose(im).convert("RGB")
+        for item in usable_views:
+            role = str(item.get("role") or "")
+            box = item.get("box")
+            if not isinstance(box, tuple) and not isinstance(box, list):
+                continue
+            try:
+                rel_box = tuple(float(value) for value in list(box)[:4])
+            except Exception:
+                continue
+            abs_box = _relative_view_box_to_abs(source.width, source.height, rel_box)  # type: ignore[arg-type]
+            if abs_box[2] - abs_box[0] < 32 or abs_box[3] - abs_box[1] < 32:
+                continue
+            dest = out_dir / f"{len(generated) + 1:02d}_{role}.jpg"
+            meta = _save_reference_view_crop(source, abs_box, dest)
+            public = _public_input(
+                job_id=job_id,
+                index=len(generated) + 1,
+                filename=dest.name,
+                normalized_path=dest,
+                meta={
+                    "width": meta["width"],
+                    "height": meta["height"],
+                    "source_box": meta.get("source_box"),
+                    "crop_applied": True,
+                    "source_width": source.width,
+                    "source_height": source.height,
+                    "relative_source_box": list(rel_box),
+                },
+                role=role,
+                label=str(item.get("label") or _VIEW_ROLE_LABELS.get(role, role)),
+                source_filename=str(source_input.get("filename") or src.name),
+                generated=False,
+            )
+            public["reference_sheet_view"] = True
+            public["reference_sheet_quality_score"] = item.get("quality_score")
+            public["reference_sheet_reason"] = str(item.get("reason") or "")
+            generated.append(public)
+    return generated
+
+
 def _decompose_character_image(src: Path, out_dir: Path, *, max_parts: int = _AI3D_DEFAULT_MAX_PARTS) -> List[Dict[str, Any]]:
     max_parts = max(1, min(_AI3D_ABSOLUTE_MAX_PARTS, int(max_parts or _AI3D_DEFAULT_MAX_PARTS)))
     parts: List[Dict[str, Any]] = []
@@ -824,7 +1013,13 @@ def _make_identity_reference_board(job_id: str, preprocessing: Dict[str, Any], d
     return {"width": canvas.width, "height": canvas.height, "reference_count": len(chosen)}
 
 
-def _view_generation_plan(*, asset_template: str, reference_strength: str, description: str = "") -> Dict[str, Any]:
+def _view_generation_plan(
+    *,
+    asset_template: str,
+    reference_strength: str,
+    description: str = "",
+    target_formats: Any = None,
+) -> Dict[str, Any]:
     template = (asset_template or "auto").strip().lower()
     template = _canonical_asset_template(template)
     base = _VIEW_TEMPLATE_COPY.get(template, _VIEW_TEMPLATE_COPY["auto"])
@@ -833,54 +1028,56 @@ def _view_generation_plan(*, asset_template: str, reference_strength: str, descr
     strength_copy = {
         "strict": "参考图强度极高，除不可见角度补全外，不允许改性别、年龄、脸型、体型、服饰、配色、材质或身份设定",
         "high": "参考图强度高，保持原画主体设定，只补全不可见角度，不改性别、年龄、脸型、体型和服装",
-        "balanced": "参考图强度中等，允许为多视角补合理结构，但必须保持同一主体身份和可见性别表达",
+        "balanced": "参考图强度中等，允许为左右45°补合理结构，但必须保持同一主体身份和可见性别表达",
         "creative": "参考图强度较低，允许更强的设计整理，但仍必须保持同一主体，不得改性别或换角色",
     }.get(strength, "参考图强度高，保持原画主体设定，只补全不可见角度，不改性别、年龄、脸型、体型和服装")
     desc = (description or "").strip()
     prompt_seed = f"{base}。{strength_copy}。{lock_copy}"
     if desc:
         prompt_seed += f"角色/资产描述：{desc[:1200]}。"
-    sheet_views = _sheet_views_for_template(template)
+    printable_rule = _print_geometry_detail_rule(target_formats=target_formats, description=desc)
+    if printable_rule:
+        prompt_seed += printable_rule
+    sheet_views = ["front", "front_left_45", "front_right_45"]
     if _is_character_template(template):
         prompt_seed += (
-            "多视角一致性规则：正面、左前45°、右前45°、侧面、背面必须是同一角色/同一机器人/同一资产、同一身高比例、"
+            "三视图一致性规则：正面、左前45°、右前45°必须是同一角色/同一机器人/同一资产、同一身高比例、"
             "同一头部/脸部/屏幕、同一服装或外壳结构、同一材质、同一配色、同一磨损和同一配件；只改变观察角度，不改变设计。"
             "参考图中可见的帽子、头部、脸/屏幕、衣服/外壳、腰带、手套、靴子、武器或道具必须逐项保留；"
             "参考图没有的大型配件、花纹、颜色、盔甲、建筑结构或新风格不得新增。"
             "角色必须使用 neutral A-pose：双脚平行落地，双臂自然略离躯干，手掌完整可见，手部不要贴住腰带、衣摆、腿部或身体，"
             "便于绑定和 3D 重建。白底或中性灰底，正交视角，无遮挡，全身完整，避免文字、水印、UI。"
         )
-        sheet_label = "高清角色五视角板"
-        stage_note = "角色五视角由图片模型生成，确认 3D 后才调用 Meshy。"
+        sheet_label = "高清角色三视图板"
+        stage_note = "角色三视图由图片模型生成，确认 3D 后才调用 Meshy。"
         sheet_prompt = (
             prompt_seed
-            + " 参考图是唯一身份来源；先理解参考图里的主体类型、轮廓、结构、材质、配色、服装/配件/道具，再补齐不可见角度。"
-            "生成完整五视角角色板：从左到右依次为正视图、左前45°视图、右前45°视图、标准侧视图、背视图。"
+            + " 参考图是唯一身份来源；先理解参考图里的主体类型、轮廓、结构、材质、配色、服装/配件/道具，再生成稳定三视图。"
+            "生成完整三视图角色板：从左到右依次为正视图、左前45°视图、右前45°视图。不要生成侧视图，不要生成背视图。"
             "这是保真视角补全，不是重新设计概念图；不得把主体改成其他时代、物种、职业、服装体系、机械结构、建筑结构或风格。"
             "不得添加参考图不存在的关键配件，不得删除参考图里的关键配件，不得改变主色、材质、磨损、脸部/屏幕表情或轮廓。"
-            "五栏主体等高、居中、完整全身、正交视角；同一比例、同一结构、同一材质、同一配色，只改变观察角度。"
+            "三栏主体等高、居中、完整全身、正交/转台视角；同一比例、同一结构、同一材质、同一配色，只改变观察角度。"
             "A-pose 要稳定一致，手臂与身体保持清晰缝隙，左右手完整、对称、不要残缺或融合。"
-            "中性浅灰或白色背景，五栏之间留清晰空白，避免文字、水印、UI。"
+            "中性浅灰或白色背景，三栏之间留清晰空白，避免文字、水印、UI。"
         )
     else:
         prompt_seed += (
-            "五视角推断一致性规则：参考图主视角、左前45°、右前45°、侧面、背面必须是同一资产、同一比例、同一结构、"
-            "同一材质和配色；侧面和背面允许基于主图合理推断，但只能延续主图已经可见的屋顶层级、墙体、管线、机械件、材质和美术风格。"
+            "三视图推断一致性规则：参考图主视角、左前45°、右前45°必须是同一资产、同一比例、同一结构、"
+            "同一材质和配色；不要补侧视图和背视图，避免图片模型猜测隐藏面导致换设计。"
             "必须保持参考图的美术风格和渲染方式：参考图是风格化概念图就保持风格化概念图，参考图是写实照片才保持写实；"
             "禁止把风格化资产写实化、摄影化、翻新或重做材质。"
             "白底或中性灰底，正交视角，无遮挡，物体完整，避免文字、水印、UI。"
         )
-        sheet_label = "高清资产五视角板"
-        stage_note = "资产五视角由图片模型基于主图推断生成；确认 3D 后才调用 Meshy。"
+        sheet_label = "高清资产三视图板"
+        stage_note = "资产三视图由图片模型基于主图推断生成；确认 3D 后才调用 Meshy。"
         sheet_prompt = (
             prompt_seed
-            + " 参考图是唯一身份来源；先理解参考图里的主体类型、轮廓、结构、材质、配色、配件/道具，再做完整转台视角补全。"
-            "生成资产五视角板：从左到右依次为参考图主视角、左前45°视图、右前45°视图、标准侧视图、背视图。"
+            + " 参考图是唯一身份来源；先理解参考图里的主体类型、轮廓、结构、材质、配色、配件/道具，再做稳定三视图补全。"
+            "生成资产三视图板：从左到右依次为参考图主视角、左前45°视图、右前45°视图。不要生成侧视图，不要生成背视图。"
             "这是保真视角补全，不是重新设计概念图；不得把主体改成其他物种、职业、建筑类型、机械结构或风格；"
             "不得添加参考图不存在的大型配件、底座、岩石、管线、花纹或材质，不得删除图片理解结果中识别出的可见标志性结构和小细节。"
-            "五栏主体等高、居中、完整物体视图、正交或等距转台视角；同一比例、同一结构、同一材质、同一配色、同一美术风格，只改变观察角度。"
-            "侧面和背面可以推断隐藏结构，但必须像主图这栋资产转过去看到的合理延续；不要编出另一栋宽矩形工厂、新锅炉门、巨型罐体、新底座或新立面。"
-            "中性浅灰或白色背景，五栏之间留清晰空白，避免文字、水印、UI。"
+            "三栏主体等高、居中、完整物体视图、正交或等距转台视角；同一比例、同一结构、同一材质、同一配色、同一美术风格，只改变观察角度。"
+            "中性浅灰或白色背景，三栏之间留清晰空白，避免文字、水印、UI。"
         )
     views = [{
         "view": "triview_sheet",
@@ -909,6 +1106,72 @@ def _view_generation_plan(*, asset_template: str, reference_strength: str, descr
     }
 
 
+def _text_prompt_view_generation_plan(
+    *,
+    asset_template: str,
+    description: str,
+    image_model: str = "",
+    target_formats: Any = None,
+) -> Dict[str, Any]:
+    template = _canonical_asset_template(asset_template)
+    if template == "auto":
+        template = "ornament_prop"
+    desc = (description or "").strip()
+    sheet_views = _sheet_views_for_template(template)
+    asset_hint = {
+        "character_realistic": "realistic game-ready character asset",
+        "character_stylized": "stylized game-ready character asset",
+        "hard_surface": "hard-surface game prop asset",
+        "ornament_prop": "ornamental PBR prop asset",
+    }.get(template, "game-ready PBR asset")
+    prompt_core = (
+        f"Create a production-quality 3A console game {asset_hint} multi-view model sheet from this text specification only. "
+        f"Asset specification: {desc[:2400]}. "
+        f"{_print_geometry_detail_rule(target_formats=target_formats, description=desc)}"
+        "The sheet is for downstream 3D reconstruction, not a marketing render. "
+        "Use one single coherent asset design across every view: identical silhouette, proportions, volume, material layout, color palette, ornaments, relief details, surface finish, edge bevels, seams, strings, tassels, hanging parts, and PBR material behavior. "
+        "No text labels, no UI, no watermark, no arrows, no rulers, no decorative background. "
+        "Neutral white or light gray studio background, orthographic/product turntable camera, full object visible, centered, equal scale in every column, soft even lighting, crisp sharp edges, high-detail PBR, normal-map-like relief clarity. "
+        "Do not invent extra large parts not in the specification; do not omit specified small details."
+    )
+    sheet_prompt = (
+        prompt_core
+        + " Output one 3:2 image containing exactly three views left to right: front view, front-left 45 degree view, front-right 45 degree view. "
+        "Do not generate side view or back view. "
+        "Keep all three views visually consistent as the same physical asset rotated on a turntable, but do not copy the front view into the 45-degree columns. "
+        "The front-left and front-right 45-degree views must visibly prove rotation: center ornaments shift toward the far side, side rim thickness becomes visible, side seam lines curve around the body, highlights move laterally, ropes/knots/tassels hang from a slightly different perspective, and relief patterns wrap around the rounded surface. "
+        "For symmetrical ornamental props, the outer silhouette may remain similar, but the two 45-degree views must still reveal thickness, side curvature, offset decorative relief, shifted hanging elements, and opposite left/right side information."
+    )
+    views = [{
+        "view": "triview_sheet",
+        "label": "文本生成高清三视图板",
+        "prompt": sheet_prompt,
+        "sheet_views": sheet_views,
+    }]
+    for role in sheet_views:
+        views.append({
+            "view": role,
+            "label": _VIEW_ROLE_LABELS.get(role, role),
+            "prompt": prompt_core + f" Single {role} view extracted from the same text-defined asset.",
+        })
+    return {
+        "asset_template": template,
+        "reference_strength": "text_prompt",
+        "image_model": _canonical_image_model(image_model or _SUTUI_GPT_IMAGE_2_MODEL),
+        "image_resolution": _AI3D_IMAGE_STAGE_RESOLUTION,
+        "image_quality": _AI3D_IMAGE_STAGE_QUALITY,
+        "output_format": _AI3D_IMAGE_STAGE_OUTPUT_FORMAT,
+        "prompt_version": _VIEW_PROMPT_VERSION,
+        "stage_provider": "image_model",
+        "uses_meshy": False,
+        "stage_note": "纯文本三视图由图片模型生成，确认 3D 后才调用 Meshy。",
+        "view_generation_mode": "sheet",
+        "front_view_policy": "generated_from_text",
+        "text_prompt_only": True,
+        "views": views,
+    }
+
+
 def _apply_generic_reference_triview_prompts(
     plan: Dict[str, Any],
     *,
@@ -916,6 +1179,7 @@ def _apply_generic_reference_triview_prompts(
     reference_strength: str,
     description: str = "",
     view_understanding: Optional[Dict[str, Any]] = None,
+    target_formats: Any = None,
 ) -> None:
     template = _canonical_asset_template(asset_template)
     if template == "auto":
@@ -926,7 +1190,7 @@ def _apply_generic_reference_triview_prompts(
     strength_rule = {
         "strict": "Reference strength is strict: only infer hidden sides; do not redesign visible identity, silhouette, colors, materials, or outfit.",
         "high": "Reference strength is high: keep the source design, only complete the unseen views in a physically consistent way.",
-        "balanced": "Reference strength is balanced: complete missing side/back structure while keeping the same asset identity.",
+        "balanced": "Reference strength is balanced: complete only plausible 45-degree visible structure while keeping the same asset identity.",
         "creative": "Reference strength is creative but must still keep the same primary subject and recognizable design.",
     }.get(strength, "Reference strength is high: keep the source design, only complete the unseen views in a physically consistent way.")
     asset_hint = {
@@ -938,6 +1202,11 @@ def _apply_generic_reference_triview_prompts(
     }.get(template, "asset in the reference image")
     desc = (description or "").strip()
     desc_rule = f" User description, if present, is secondary to the image: {desc[:1200]}." if desc else ""
+    printable_rule = _print_geometry_detail_rule(
+        target_formats=target_formats,
+        description=desc,
+        view_understanding=view_understanding,
+    )
     understood_rule = ""
     if isinstance(view_understanding, dict) and view_understanding:
         understood_parts = []
@@ -974,6 +1243,20 @@ def _apply_generic_reference_triview_prompts(
                 + " | ".join(detail_candidates[:6])
                 + ". Do not add detail categories that are not present in the reference. "
             )
+    view_contract_rule = ""
+    if isinstance(view_understanding, dict):
+        contract = view_understanding.get("view_contract") if isinstance(view_understanding.get("view_contract"), dict) else {}
+        contract_parts = []
+        for key in ("front", "front_left_45", "front_right_45", "left_right_disambiguation"):
+            value = _compact_text_value(contract.get(key), max_chars=360)
+            if value:
+                contract_parts.append(f"{key}: {value}")
+        if contract_parts:
+            view_contract_rule = (
+                "Camera/view contract that must be obeyed exactly: "
+                + " | ".join(contract_parts)
+                + ". The front-left 45 and front-right 45 views must reveal opposite side surfaces and opposite left/right landmarks; they must not be same-side duplicates, same crop, or merely zoomed variants. "
+            )
     if is_character:
         detail_lock = (
             "Preserve the exact visible character or humanoid asset: species or robot type, head/face/screen, hat or headwear, hairstyle if any, "
@@ -990,41 +1273,41 @@ def _apply_generic_reference_triview_prompts(
             "Do not add large new bases, rocks, vegetation, ornaments, pipes, panels, structural tiers, or accessories that are absent from the reference. "
         )
     seed = (
-        f"Create a high fidelity 4K orthographic multi-view reference sheet for the same {asset_hint} shown in the reference image. "
+        f"Create a high fidelity 4K multi-view turntable reference sheet for the same {asset_hint} shown in the reference image. "
         "The reference image is the only source of identity. "
         f"{detail_lock}"
         f"{strength_rule} "
         "Use only neutral white or light gray background, no text, no watermark, no UI, no arrows, no labels. "
-        f"{understood_rule}{desc_rule}"
+        f"{printable_rule}{understood_rule}{desc_rule}"
     )
     if is_character:
         sheet_prompt = (
             seed
-            + " Output one 16:9 image containing exactly five full-body views of the same character or humanoid asset, left to right: "
-            "front view, front-left 45 degree three-quarter view, front-right 45 degree three-quarter view, strict side view, back view. "
+            + " Output one 3:2 image containing exactly three full-body views of the same character or humanoid asset, left to right: "
+            "front view, front-left 45 degree three-quarter view, front-right 45 degree three-quarter view. Do not generate side view or back view. "
             "This is a faithful view-completion sheet, not a redesign or concept variant. Do not add large accessories, patterns, armor, building parts, colors, or style elements that are absent from the reference image. "
             "Do not remove distinctive visible parts from the reference image. Preserve the exact subject class, silhouette, color palette, materials, weathering, face or screen expression, clothing or shell structure, belt, gloves, boots, weapons, props, and all distinctive details. "
             "Use a neutral A-pose suitable for rigging: feet planted and parallel, arms slightly away from the torso, hands fully visible and separated from belt, hips, clothes, thighs, and body. "
-            "All five views must have the same height, same scale, same silhouette, same head/face/screen, same outfit/structure, same materials, same colors, same weathering, and consistent proportions. "
-            "Keep left and right limbs symmetrical and intact. The subject must be centered in each column, fully visible from hat/head to boots/feet, with clear empty spacing between columns."
+            "All three views must have the same height, same scale, same silhouette, same head/face/screen, same outfit/structure, same materials, same colors, same weathering, and consistent proportions. "
+            "Keep left and right limbs symmetrical and intact. The subject must be centered in each column, fully visible from hat/head to boots/feet, with clear empty spacing between the three columns."
         )
-        split_prompt = seed + " This view will be obtained by splitting the generated five-view A-pose sheet; keep it consistent with the sheet."
+        split_prompt = seed + " This view will be obtained by splitting the generated three-view A-pose sheet; keep it consistent with the sheet."
     else:
         sheet_prompt = (
             seed
-            + " Output one 16:9 image containing exactly five inferred turntable views of the same asset, left to right: source/front anchor view, front-left 45 degree view, front-right 45 degree view, strict side view, inferred back view. "
+            + " Output one 3:2 image containing exactly three inferred turntable views of the same asset, left to right: reference-facing source anchor view, front-left 45 degree view, front-right 45 degree view. Do not generate side view or back view. "
+            "The first column is the identity anchor: recreate the input reference camera/perspective, silhouette, footprint, width-to-height relationship, visible layout, and style as closely as possible. If the reference is oblique, isometric, or three-quarter, do not straighten it into a new orthographic front facade. "
             "This is a faithful view-completion sheet based on the reference image, not a redesign, not a photorealistic remake, and not a new asset inspired by the reference. "
-            "Front and 45 degree views must preserve the visible design very closely. Side and back views may infer hidden structure, but must look like the same asset turned around: same compact footprint, same stacked silhouette, same construction logic, same material language, same colors, same weathering, and same stylized art style. "
+            "Front and 45 degree views must preserve the visible design very closely. Do not infer side/back hidden structure in this sheet because it tends to redesign the asset. "
+            f"{view_contract_rule}"
             f"{dynamic_detail_rule}"
-            "Do not invent a different rear facade, broad rectangular factory wall, boiler door, giant tank, new base, or new industrial layout. Continue only the visible reference structures around the hidden sides. "
+            "Do not invent a different rear facade, broad rectangular factory wall, boiler door, giant tank, new base, or new industrial layout. "
             "The asset should be centered in each column, fully visible, with clear spacing between columns."
         )
         single_view_prompts = {
-            "front": "source/front anchor view",
+            "front": "reference-facing source anchor view",
             "front_left_45": "front-left 45 degree inferred turntable view",
             "front_right_45": "front-right 45 degree inferred turntable view",
-            "side": "strict side inferred turntable view",
-            "back": "inferred back turntable view",
         }
     for view in plan.get("views") if isinstance(plan.get("views"), list) else []:
         if not isinstance(view, dict):
@@ -1043,6 +1326,7 @@ def _apply_generic_reference_triview_prompts(
                     + f" Output one single 4:3 image showing only the {view_name} of this exact same asset. "
                     "Do not create a multi-column sheet. Do not crop the asset. Keep the entire asset fully visible with generous white margin on all sides. "
                     "This is a turntable continuation from the reference. Hidden sides may be inferred, but the result must still look like the same asset turned around. "
+                    f"{view_contract_rule}"
                     f"{dynamic_detail_rule}"
                     "Do not introduce a different rear facade, broad rectangular factory wall, boiler door, giant tank, new base, new machinery layout, or new building proportions. "
                     "Center the asset in the frame. Preserve the exact same compact stacked silhouette, proportions, materials, colors, weathering, distinctive details, and original art style from the reference."
@@ -1064,6 +1348,7 @@ def _fresh_view_generation_plan(
         asset_template=asset_template,
         reference_strength=reference_strength,
         description=description,
+        target_formats=job.get("target_formats") or [],
     )
     _apply_generic_reference_triview_prompts(
         plan,
@@ -1071,6 +1356,7 @@ def _fresh_view_generation_plan(
         reference_strength=reference_strength,
         description=description,
         view_understanding=view_understanding,
+        target_formats=job.get("target_formats") or [],
     )
     # One sheet keeps all inferred views in the same design space. Generating
     # hard-surface side/back views independently drifts into unrelated assets.
@@ -1651,6 +1937,7 @@ def _normalize_ai_subject_candidates(data: Dict[str, Any], *, max_candidates: in
             "risk": str(item.get("risk") or item.get("warning") or "").strip()[:240],
             "must_keep": item.get("must_keep") if isinstance(item.get("must_keep"), list) else [],
             "forbidden_changes": item.get("forbidden_changes") if isinstance(item.get("forbidden_changes"), list) else [],
+            "view_contract": item.get("view_contract") if isinstance(item.get("view_contract"), dict) else {},
             "triview_prompt": str(item.get("triview_prompt") or "").strip()[:1000],
         })
     recommended_index = int(float(data.get("recommended_index") or 0)) if str(data.get("recommended_index") or "").strip() else 0
@@ -1662,6 +1949,7 @@ def _normalize_ai_subject_candidates(data: Dict[str, Any], *, max_candidates: in
             recommended_index = int(max(out, key=lambda item: int(item.get("suitability_score") or 0))["index"])
     return {
         "scene_summary": _compact_text_value(data.get("scene_summary"), max_chars=500),
+        "reference_sheet": _normalize_reference_sheet_detection(data),
         "recommended_index": recommended_index,
         "candidates": out,
         "raw": data,
@@ -1689,9 +1977,20 @@ def _normalize_ai_view_understanding(data: Dict[str, Any]) -> Dict[str, Any]:
         "props",
         "must_keep",
         "forbidden_changes",
+        "view_contract",
         "triview_prompt",
     ]
-    out = {key: _compact_text_value(data.get(key), max_chars=420 if key in {"visual_summary", "triview_prompt"} else 240) for key in keys}
+    out = {}
+    for key in keys:
+        if key == "view_contract":
+            contract = data.get("view_contract") if isinstance(data.get("view_contract"), dict) else {}
+            out[key] = {
+                str(k): _compact_text_value(v, max_chars=360)
+                for k, v in contract.items()
+                if str(k).strip() and str(v or "").strip()
+            }
+        else:
+            out[key] = _compact_text_value(data.get(key), max_chars=420 if key in {"visual_summary", "triview_prompt"} else 240)
     details = []
     for key in keys[:-1]:
         if out.get(key):
@@ -1728,6 +2027,7 @@ def _view_understanding_from_subject_candidate(subject_plan: Dict[str, Any], can
         "must_keep": must_keep,
         "forbidden_changes": forbidden,
         "triview_prompt": prompt,
+        "view_contract": candidate.get("view_contract") if isinstance(candidate.get("view_contract"), dict) else {},
     }
     out = _normalize_ai_view_understanding(data)
     out.update({
@@ -1779,7 +2079,7 @@ async def _ai_triview_understanding(
         "Analyze the single main subject in the reference image. Do not invent a new character, costume, era, species, or style. "
         "Describe only what is visible, and mark uncertain hidden-side details as inferred rather than redesigning them. "
         "Do not translate clothing, accessories, props, architecture, or cultural cues into an unrelated archetype, profession, dynasty, fantasy class, or game faction. "
-        "For character assets, the downstream image model will generate five views: front, front-left 45 degree, front-right 45 degree, side, and back. "
+        "The downstream image model will generate exactly three views only: front, front-left 45 degree, and front-right 45 degree. It will not generate side or back views. "
         "Return strict JSON only, no Markdown. Use concise but specific visual words. "
         "JSON schema: {"
         "\"asset_type\":\"humanoid_robot|human_character|creature|hard_surface_prop|ornament|other\","
@@ -1794,6 +2094,12 @@ async def _ai_triview_understanding(
         "\"props\":\"held or attached props\","
         "\"must_keep\":[\"specific visible features that must remain identical\"],"
         "\"forbidden_changes\":[\"changes that would break identity\"],"
+        "\"view_contract\":{"
+        "\"front\":\"what the source/front anchor must show\","
+        "\"front_left_45\":\"camera rule for a real front-left 45 view: which side surfaces/details become visible and which details move farther away\","
+        "\"front_right_45\":\"camera rule for a real front-right 45 view: which opposite side surfaces/details become visible and which details move farther away\","
+        "\"left_right_disambiguation\":\"visible left/right landmarks that prove front-left and front-right are not the same camera side\""
+        "},"
         "\"triview_prompt\":\"a compact multi-view prompt fragment that should be inserted into image generation to keep this exact subject\""
         "}. "
         f"Asset template selected by user: {asset_template or 'auto'}. "
@@ -1823,6 +2129,64 @@ async def _ai_triview_understanding(
     return out
 
 
+async def _ai_reference_sheet_detection(
+    *,
+    job_id: str,
+    request: Request,
+    reference_path: Path,
+    preprocessing: Dict[str, Any],
+    asset_template: str,
+    description: str,
+) -> Dict[str, Any]:
+    reference_url = await _reference_image_public_url(
+        job_id=job_id,
+        request=request,
+        reference_path=reference_path,
+        preprocessing=preprocessing,
+    )
+    prompt = (
+        "You are the routing layer for an automated 2D-to-3D pipeline. "
+        "Decide whether the uploaded image is already a multi-view / turnaround / reference sheet containing the same asset in multiple viewpoints. "
+        "If yes, identify only the views that are useful as direct 3D reconstruction inputs. Do not include unrelated detail callouts, logos, UI, text blocks, or texture swatches as views. "
+        "Return strict JSON only: {"
+        "\"is_multiview_reference_sheet\":true|false,"
+        "\"confidence\":0-100,"
+        "\"reason\":\"short routing reason\","
+        "\"views\":[{\"role\":\"front|front_left_45|front_right_45|side|back\","
+        "\"label\":\"Chinese short label\","
+        "\"box\":[x1,y1,x2,y2],"
+        "\"usable_for_3d\":true|false,"
+        "\"quality_score\":0-100,"
+        "\"reason\":\"what this view shows\"}]"
+        "}. Coordinates are relative 0-1 in the uploaded image. "
+        "A good sheet usually has at least two usable views of the same subject. "
+        f"Asset template hint: {asset_template or 'auto'}. "
+    )
+    desc = (description or "").strip()
+    if desc:
+        prompt += f"User description, secondary to image: {desc[:1000]}"
+    args = {
+        "capability_id": "image.understand",
+        "payload": {
+            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
+            "prompt": prompt,
+            "image_url": reference_url,
+        },
+    }
+    text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
+    text = await _poll_understand_result(request, text)
+    data = _extract_understand_output_json(text, expected_keys=("is_multiview_reference_sheet", "views"))
+    if not data:
+        raise RuntimeError(f"参考板识别未返回可用 JSON：{text[:500]}")
+    out = _normalize_reference_sheet_detection(data)
+    out.update({
+        "provider": "image.understand",
+        "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
+        "reference_url": reference_url,
+    })
+    return out
+
+
 async def _ai_subject_candidates(
     *,
     job_id: str,
@@ -1843,12 +2207,25 @@ async def _ai_subject_candidates(
         "You are the visual decision layer for an automated 2D-to-3D pipeline. "
         "Analyze the uploaded image as Codex would: identify every plausible 3D-generation subject, decide the best default subject, and extract the details that downstream multi-view generation must preserve. "
         "Do not make the user choose by guesswork. Prefer one complete, coherent subject over random crop regions. "
-        "If the image is a concept sheet with insets, recommend the main complete asset panel, not detail insets. "
+        "First decide whether the uploaded image is already a multi-view / turnaround / reference sheet: one canvas containing the same asset from multiple viewpoints, orthographic views, sketches, clay views, or technical side views. "
+        "If it is a reference sheet, return the view boxes explicitly so the pipeline can skip subject-candidate crop preview and skip AI multi-view generation. "
+        "If the image is a concept sheet with insets, recommend the main complete asset panel, not detail insets, unless the insets are true usable alternate views of the same subject. "
         "If the image contains a large environment plus smaller vehicles/props, list them separately and recommend the subject that appears most central/complete unless the smaller subject is clearly the intended standalone asset. "
         "For each candidate, give a tight but complete bbox around the visible subject, a suitability score for single-image-to-3D, and risks such as occlusion, hidden backside uncertainty, too small, embedded in scene, or likely to be misread. "
         "Extract type-specific identity locks: shape, silhouette, materials, colors, markings/text/signs, small details, accessories, pipes, antennas, flags, weapons, clothing, face/screen, etc. Do not hard-code any object type; describe what is actually visible. "
         "Return strict JSON only, no Markdown. Schema: {"
         "\"scene_summary\":\"short description of the whole image\","
+        "\"reference_sheet\":{"
+        "\"is_multiview_reference_sheet\":true|false,"
+        "\"confidence\":0-100,"
+        "\"reason\":\"why it is or is not an already usable multi-view sheet\","
+        "\"views\":[{\"role\":\"front|front_left_45|front_right_45|side|back\","
+        "\"label\":\"Chinese short label\","
+        "\"box\":[x1,y1,x2,y2],"
+        "\"usable_for_3d\":true|false,"
+        "\"quality_score\":0-100,"
+        "\"reason\":\"view quality and what it shows\"}]"
+        "},"
         "\"recommended_index\":1,"
         "\"candidates\":[{"
         "\"role\":\"english_snake_case_subject\","
@@ -1861,6 +2238,12 @@ async def _ai_subject_candidates(
         "\"risk\":\"main risk for faithful multiview/3D\","
         "\"must_keep\":[\"visible details that must remain identical\"],"
         "\"forbidden_changes\":[\"changes that would break identity\"],"
+        "\"view_contract\":{"
+        "\"front\":\"front/source view identity lock\","
+        "\"front_left_45\":\"real front-left 45 camera rule: visible side surfaces and landmarks\","
+        "\"front_right_45\":\"real front-right 45 camera rule: opposite visible side surfaces and landmarks\","
+        "\"left_right_disambiguation\":\"landmarks proving left45 and right45 are opposite camera sides, not duplicates\""
+        "},"
         "\"triview_prompt\":\"compact prompt fragment for generating faithful multiviews of exactly this candidate\""
         "}]} "
         "Coordinates are relative 0-1 in the uploaded image. Include 1-6 candidates only. "
@@ -1880,9 +2263,13 @@ async def _ai_subject_candidates(
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
-    data = _extract_understand_output_json(text, expected_keys=("candidates", "recommended_index", "scene_summary"))
+    data = _extract_understand_output_json(
+        text,
+        expected_keys=("candidates", "recommended_index", "scene_summary", "reference_sheet", "is_multiview_reference_sheet", "views"),
+    )
     plan = _normalize_ai_subject_candidates(data, max_candidates=max_candidates)
-    if not plan.get("candidates"):
+    reference_sheet = plan.get("reference_sheet") if isinstance(plan.get("reference_sheet"), dict) else {}
+    if not plan.get("candidates") and not reference_sheet.get("is_multiview_reference_sheet"):
         raise RuntimeError(f"视觉理解未返回可用主体候选 JSON：{text[:500]}")
     plan.update({
         "provider": "image.understand",
@@ -2063,14 +2450,16 @@ async def _ai_verify_multiview_consistency(
         prompt = (
             "You are a production QA reviewer for a 2D-to-3D hard-surface/prop/architecture pipeline. "
             "The image is a review board: the top row is the original reference / primary visible design, and the lower cells are AI-generated candidate views. "
-            "The side and back views are allowed to be inferred from a single reference image; do not fail only because hidden rear details differ from the unseen original. "
+            "Only the source/front anchor and the two 45-degree views are generated; do not require side or back views. "
             "Pass only if the generated views still look like the same asset turned around: same primary subject type, compact footprint, major silhouette, construction logic, material language, color palette, weathering, and original art/rendering style. "
+            "Critically verify camera separation: front-left 45 and front-right 45 must be opposite three-quarter views. Fail if they show the same camera side, the same side landmarks in the same positions, near-duplicate silhouettes, or only zoom/crop differences. "
+            "For rotationally symmetric props such as gourds, bottles, vases, lanterns, beads, cylinders, or round ornaments, do not fail merely because the outer silhouette remains similar; instead verify shifted highlights, side rim thickness, seam curvature, offset relief patterns, and rope/tassel perspective. "
             "Fail if a view becomes a different asset, a broad rectangular factory facade, a different building/prop class, a new base, a new large machinery layout, or a different art style. "
             "Check that visible key details identified from the reference are preserved when they should remain visible or plausibly continue around the form; do not require object categories that were not present in the reference. "
             f"{detail_context}"
             "For concept sheets with detail insets, preserve the primary subject instead of recombining inset details into a new design. "
             "Return strict JSON only: "
-            "{\"passed\":true|false,\"score\":0-100,\"issues\":[\"issue\"],\"identity_changed\":true|false,\"design_changed\":true|false,\"style_changed\":true|false,\"missing_key_details\":[\"detail\"],\"recommended_action\":\"accept|regenerate|use_source_only|need_real_multiview\"}. "
+            "{\"passed\":true|false,\"score\":0-100,\"issues\":[\"issue\"],\"view_separation_failed\":true|false,\"identity_changed\":true|false,\"design_changed\":true|false,\"style_changed\":true|false,\"missing_key_details\":[\"detail\"],\"recommended_action\":\"accept|regenerate|use_source_only|need_real_multiview\"}. "
             f"Only pass when score>={threshold}, identity_changed=false, design_changed=false, and style_changed=false."
         )
     args = {
@@ -2090,17 +2479,38 @@ async def _ai_verify_multiview_consistency(
     identity_changed = bool(data.get("identity_changed"))
     design_changed = bool(data.get("design_changed"))
     style_changed = bool(data.get("style_changed"))
-    passed = bool(data.get("passed")) and score >= threshold and not identity_changed and not design_changed and not style_changed
+    view_separation_failed = bool(data.get("view_separation_failed"))
+    local_geometry = _local_multiview_geometry_check(
+        generated_inputs,
+        is_character=is_character,
+        reference_path=reference_path,
+    )
+    local_issues = local_geometry.get("issues") if isinstance(local_geometry.get("issues"), list) else []
+    issues = data.get("issues") if isinstance(data.get("issues"), list) else []
+    if local_issues:
+        issues = list(issues) + [str(issue) for issue in local_issues]
+        view_separation_failed = True
+    passed = (
+        bool(data.get("passed"))
+        and score >= threshold
+        and not identity_changed
+        and not design_changed
+        and not style_changed
+        and not view_separation_failed
+        and bool(local_geometry.get("passed"))
+    )
     return {
         "provider": "image.understand",
         "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
         "review_url": review_url,
         "review_sheet_path": str(review_sheet_path),
         "review_sheet_meta": review_meta,
+        "local_geometry_check": local_geometry,
         "passed": passed,
         "score": score,
         "threshold": threshold,
-        "issues": data.get("issues") if isinstance(data.get("issues"), list) else [],
+        "issues": issues,
+        "view_separation_failed": view_separation_failed,
         "identity_changed": identity_changed,
         "design_changed": design_changed,
         "style_changed": style_changed,
@@ -2228,21 +2638,22 @@ async def _generate_sutui_image_stage(
     prompt: str,
     model: str,
     aspect_ratio: str,
-    reference_path: Path,
+    reference_path: Optional[Path],
     preprocessing: Dict[str, Any],
 ) -> Dict[str, Any]:
-    reference_url = await _reference_image_public_url(
-        job_id=job_id,
-        request=request,
-        reference_path=reference_path,
-        preprocessing=preprocessing,
-    )
+    reference_url = ""
+    if reference_path is not None and reference_path.exists():
+        reference_url = await _reference_image_public_url(
+            job_id=job_id,
+            request=request,
+            reference_path=reference_path,
+            preprocessing=preprocessing,
+        )
     ratio = _image_size_for_sutui(aspect_ratio)
     pixel_size = _image_pixel_size_for_stage(aspect_ratio)
     payload = {
         "prompt": _highest_quality_image_prompt(prompt, aspect_ratio=aspect_ratio),
         "model": _canonical_image_model(model),
-        "image_url": reference_url,
         "image_size": ratio,
         "aspect_ratio": ratio,
         "size": pixel_size,
@@ -2257,6 +2668,8 @@ async def _generate_sutui_image_stage(
         "num_images": 1,
         "output_format": _AI3D_IMAGE_STAGE_OUTPUT_FORMAT,
     }
+    if reference_url:
+        payload["image_url"] = reference_url
     submit_args = {"capability_id": "image.generate", "payload": payload}
     submit_text = await _call_mcp_tool(request, "invoke_capability", submit_args, timeout_seconds=25 * 60.0)
     preview = _extract_generated_image_preview(submit_text)
@@ -2317,8 +2730,8 @@ async def _generate_image_stage_core(
     prompt: str,
     model: str,
     aspect_ratio: str,
-    ref_payload: Dict[str, Any],
-    reference_path: Path,
+    ref_payload: Optional[Dict[str, Any]],
+    reference_path: Optional[Path],
     preprocessing: Dict[str, Any],
 ) -> Dict[str, Any]:
     model_id = _canonical_image_model(model)
@@ -2342,7 +2755,7 @@ async def _generate_image_stage_core(
         aspect_ratio=aspect_ratio,
         quality=_AI3D_IMAGE_STAGE_QUALITY,
         background="auto",
-        upload_payloads=[ref_payload],
+        upload_payloads=[ref_payload] if ref_payload else [],
         reference_image_urls=[],
         size_override=_image_pixel_size_for_stage(aspect_ratio),
         auto_save=False,
@@ -2499,13 +2912,405 @@ def _make_multiview_review_sheet(reference_path: Path, generated_inputs: List[Di
         row = 1 + idx // cols
         col = idx % cols
         role = str(item.get("role") or "")
-        paste_fit(Path(str(item.get("normalized_path") or "")), col * cell_w, row * cell_h, f"GENERATED {role}")
+        prefix = "FIXED SOURCE ANCHOR" if role == "front" and item.get("generated") is False else "GENERATED"
+        paste_fit(Path(str(item.get("normalized_path") or "")), col * cell_w, row * cell_h, f"{prefix} {role}")
     canvas.save(dest, "JPEG", quality=94, optimize=True)
     return {
         "width": canvas.width,
         "height": canvas.height,
         "generated_count": len(items),
         "roles": [str(item.get("role") or "") for item in items],
+    }
+
+
+def _multiview_dark_bbox(im: Image.Image, *, threshold: int = 245) -> Optional[Tuple[int, int, int, int]]:
+    gray = ImageOps.grayscale(im.convert("RGB"))
+    mask = gray.point(lambda p: 255 if p < threshold else 0)
+    return mask.getbbox()
+
+
+def _multiview_background_color(im: Image.Image) -> Tuple[int, int, int]:
+    rgb = im.convert("RGB")
+    width, height = rgb.size
+    if width <= 0 or height <= 0:
+        return (255, 255, 255)
+    step = max(1, min(width, height) // 160)
+    samples: List[Tuple[int, int, int]] = []
+    for x in range(0, width, step):
+        samples.append(rgb.getpixel((x, 0)))
+        samples.append(rgb.getpixel((x, height - 1)))
+    for y in range(0, height, step):
+        samples.append(rgb.getpixel((0, y)))
+        samples.append(rgb.getpixel((width - 1, y)))
+    if not samples:
+        return (255, 255, 255)
+    channels = []
+    for idx in range(3):
+        values = sorted(pixel[idx] for pixel in samples)
+        channels.append(int(values[len(values) // 2]))
+    return (channels[0], channels[1], channels[2])
+
+
+def _multiview_foreground_bbox(im: Image.Image, *, threshold: int = 18) -> Optional[Tuple[int, int, int, int]]:
+    rgb = im.convert("RGB")
+    bg = _multiview_background_color(rgb)
+    diff = ImageChops.difference(rgb, Image.new("RGB", rgb.size, bg))
+    mask = ImageOps.grayscale(diff).point(lambda p: 255 if p > threshold else 0)
+    bbox = mask.getbbox()
+    salient = _multiview_salient_bbox(rgb)
+    if bbox and salient:
+        width, height = rgb.size
+        box_w = max(1, bbox[2] - bbox[0])
+        box_h = max(1, bbox[3] - bbox[1])
+        salient_w = max(1, salient[2] - salient[0])
+        salient_h = max(1, salient[3] - salient[1])
+        box_area = box_w * box_h
+        salient_area = salient_w * salient_h
+        # Gradient or off-white backgrounds can make the whole canvas look
+        # foreground. Prefer the color/line-art mask when it is meaningfully
+        # tighter while still covering the visible object.
+        if (
+            (box_w / max(1, width) > 0.97 and box_h / max(1, height) > 0.94)
+            or salient_area < box_area * 0.82
+        ):
+            return salient
+    return bbox or salient or _multiview_dark_bbox(rgb)
+
+
+def _multiview_salient_bbox(im: Image.Image) -> Optional[Tuple[int, int, int, int]]:
+    rgb = im.convert("RGB")
+    width, height = rgb.size
+    pixels = rgb.load()
+    min_x, min_y = width, height
+    max_x = max_y = -1
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            mx = max(r, g, b)
+            mn = min(r, g, b)
+            saturation = mx - mn
+            luminance = 0.299 * r + 0.587 * g + 0.114 * b
+            if (saturation > 22 and luminance < 248) or luminance < 96:
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+    if max_x < 0:
+        return None
+    pad_x = max(4, int((max_x - min_x + 1) * 0.015))
+    pad_y = max(4, int((max_y - min_y + 1) * 0.015))
+    return (
+        max(0, min_x - pad_x),
+        max(0, min_y - pad_y),
+        min(width, max_x + 1 + pad_x),
+        min(height, max_y + 1 + pad_y),
+    )
+
+
+def _multiview_shape_metrics(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    with Image.open(path) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        bbox = _multiview_foreground_bbox(im)
+        if not bbox:
+            return None
+        width, height = im.size
+        box_w = max(1, bbox[2] - bbox[0])
+        box_h = max(1, bbox[3] - bbox[1])
+        return {
+            "image_width": width,
+            "image_height": height,
+            "bbox": [int(value) for value in bbox],
+            "bbox_width": box_w,
+            "bbox_height": box_h,
+            "bbox_ratio": round(box_w / max(1, box_h), 4),
+            "bbox_width_fraction": round(box_w / max(1, width), 4),
+            "bbox_height_fraction": round(box_h / max(1, height), 4),
+            "bbox_area_fraction": round((box_w * box_h) / max(1, width * height), 4),
+        }
+
+
+def _source_shape_prompt_rule(reference_path: Path) -> str:
+    metrics = _multiview_shape_metrics(reference_path)
+    if not metrics:
+        return ""
+    ratio = float(metrics.get("bbox_ratio") or 0.0)
+    width_fraction = float(metrics.get("bbox_width_fraction") or 0.0)
+    height_fraction = float(metrics.get("bbox_height_fraction") or 0.0)
+    if ratio >= 1.22:
+        shape = "broad, low, horizontally spread"
+        forbidden = "Do not turn it into a tall vertical tower, upright stacked house, narrow facade, or high-rise building."
+    elif ratio <= 0.82:
+        shape = "tall, narrow, vertically dominant"
+        forbidden = "Do not widen it into a squat horizontal block or broad flat facade."
+    else:
+        shape = "roughly balanced in width and height"
+        forbidden = "Do not substantially change its width-to-height relationship."
+    return (
+        f"Source silhouette geometry lock: foreground bbox ratio width/height is about {ratio:.2f}; "
+        f"the asset reads as {shape}; bbox fills about {width_fraction:.2f} of image width and {height_fraction:.2f} of image height. "
+        "All generated views must preserve this overall massing family, footprint scale, and silhouette attitude even when rotated. "
+        f"{forbidden} "
+    )
+
+
+def _single_view_generation_prompt(
+    base_prompt: str,
+    *,
+    role: str,
+    reference_path: Path,
+    view_understanding: Dict[str, Any],
+) -> str:
+    contract = view_understanding.get("view_contract") if isinstance(view_understanding.get("view_contract"), dict) else {}
+    role_rule = _compact_text_value(contract.get(role), max_chars=520)
+    disambiguation = _compact_text_value(contract.get("left_right_disambiguation"), max_chars=520)
+    body_structure = _compact_text_value(view_understanding.get("body_structure"), max_chars=520)
+    must_keep = _compact_text_value(view_understanding.get("must_keep"), max_chars=520)
+    forbidden_changes = _compact_text_value(view_understanding.get("forbidden_changes"), max_chars=420)
+    shape_rule = _source_shape_prompt_rule(reference_path)
+    label = {
+        "front_left_45": "front-left 45 degree view",
+        "front_right_45": "front-right 45 degree view",
+        "side": "strict side view",
+        "back": "inferred back view",
+    }.get(role, _VIEW_ROLE_LABELS.get(role, role))
+    opposite = ""
+    if role == "front_left_45":
+        opposite = (
+            "This must be the physical left-front side, not a copied front view and not the right-front side. "
+            "Viewer-left landmarks from the source should become more visible; viewer-right landmarks should recede or overlap according to rotation. "
+        )
+    elif role == "front_right_45":
+        opposite = (
+            "This must be the physical right-front side, not a copied front view and not the left-front side. "
+            "Viewer-right landmarks from the source should become more visible; viewer-left landmarks should recede or overlap according to rotation. "
+        )
+    elif role == "side":
+        opposite = "This must be a strict side profile; do not show a frontal spread or both front faces equally. "
+    elif role == "back":
+        opposite = "This must be the rear continuation of the same asset; do not invent a new decorative front facade. "
+    return (
+        base_prompt
+        + f" Generate one single 4:3 image showing only the {label} of the exact same source asset. "
+        "Do not create a multi-column sheet. Do not include the source/front anchor in this output. "
+        "Use the uploaded reference image as the fixed identity anchor and rotate the same object; do not redesign, regularize, beautify, or rebuild it as a new complete building. "
+        f"{shape_rule}"
+        + (f"Binding massing description from image understanding: {body_structure}. " if body_structure else "")
+        + (f"Binding must-keep details: {must_keep}. " if must_keep else "")
+        + (f"Forbidden changes: {forbidden_changes}. " if forbidden_changes else "")
+        + "Treat dominant source masses as fixed: large roof/shell volumes, base footprint, main body proportions, sails/masts/antennae/rails/props if present, and their left-right arrangement must remain the same physical design after rotation. "
+        "Do not convert a broad low asset into a tall stacked building, and do not convert a tall asset into a broad flat block. Decorative vertical elements such as masts, antennae, chimneys, flags, or sails must not become the main building body. "
+        f"{opposite}"
+        + (f"Specific camera contract for this view: {role_rule}. " if role_rule else "")
+        + (f"Left/right landmark contract: {disambiguation}. " if disambiguation else "")
+        + "Preserve the source-visible roof/shell masses, sails or antennae if present, props, waterline/base, asymmetry, materials, colors, painted symbols, weathering, and original art style. "
+        "Keep the entire asset visible with generous neutral margin, no text, no watermark, no UI, no arrows, no labels."
+    )
+
+
+def _early_front45_geometry_check(generated_inputs: List[Dict[str, Any]], *, reference_path: Path) -> Dict[str, Any]:
+    return _local_multiview_geometry_check(generated_inputs, is_character=False, reference_path=reference_path)
+
+
+async def _ai_verify_front45_pair(
+    *,
+    job_id: str,
+    request: Request,
+    reference_path: Path,
+    generated_inputs: List[Dict[str, Any]],
+    review_sheet_path: Path,
+    preprocessing: Dict[str, Any],
+) -> Dict[str, Any]:
+    front45_inputs = [
+        item for item in generated_inputs
+        if isinstance(item, dict) and str(item.get("role") or "") in {"front", "front_left_45", "front_right_45"}
+    ]
+    review_meta = _make_multiview_review_sheet(reference_path, front45_inputs, review_sheet_path)
+    review_url = await _reference_image_public_url(
+        job_id=job_id,
+        request=request,
+        reference_path=review_sheet_path,
+        preprocessing=preprocessing,
+    )
+    view_understanding = preprocessing.get("triview_ai_understanding") if isinstance(preprocessing.get("triview_ai_understanding"), dict) else {}
+    detail_parts = []
+    for key in ("subject", "visual_summary", "body_structure", "props", "must_keep", "forbidden_changes"):
+        value = _compact_text_value(view_understanding.get(key), max_chars=320)
+        if value:
+            detail_parts.append(f"{key}: {value}")
+    detail_context = " Image understanding context: " + " | ".join(detail_parts[:8]) + ". " if detail_parts else ""
+    prompt = (
+        "You are a strict QA gate for a 2D-to-3D multi-view pipeline. "
+        "The review board shows the original/fixed source anchor plus generated front-left 45 and front-right 45 views. "
+        "Decide whether the two generated 45-degree views should be allowed before sending the three-view set into 3D reconstruction. "
+        "Pass only if both generated views preserve the same asset identity, dominant massing, footprint, silhouette attitude, proportions, materials, colors, distinctive props, and original art style from the source. "
+        "Fail if the asset is redesigned, regularized into a different building/vehicle/prop, becomes much taller/shorter/broader/narrower, or if decorative masts/sails/chimneys/antennae become the main body. "
+        "Fail if front-left and front-right are near-duplicates, same-side views, front-facing variants, mirror-confused, or do not reveal opposite side landmarks. "
+        "For rotationally symmetric props, similar outer silhouettes are acceptable only if details, seams, highlights, thickness, and attachments shift as a real 45-degree rotation. "
+        f"{detail_context}"
+        "Return strict JSON only: "
+        "{\"passed\":true|false,\"score\":0-100,\"issues\":[\"issue\"],\"view_separation_failed\":true|false,\"design_changed\":true|false,\"massing_changed\":true|false,\"recommended_action\":\"continue|regenerate_45|need_real_multiview\"}. "
+        "Only pass when score>=82, view_separation_failed=false, design_changed=false, and massing_changed=false."
+    )
+    args = {
+        "capability_id": "image.understand",
+        "payload": {
+            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
+            "prompt": prompt,
+            "image_url": review_url,
+        },
+    }
+    text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
+    text = await _poll_understand_result(request, text)
+    data = _extract_understand_output_json(text, expected_keys=("passed", "score", "issues"))
+    if not isinstance(data, dict):
+        raise RuntimeError(f"左右45°复核未返回可用 JSON：{text[:500]}")
+    score = int(float(data.get("score") or 0))
+    view_separation_failed = bool(data.get("view_separation_failed"))
+    design_changed = bool(data.get("design_changed"))
+    massing_changed = bool(data.get("massing_changed"))
+    passed = bool(data.get("passed")) and score >= 82 and not view_separation_failed and not design_changed and not massing_changed
+    return {
+        "provider": "image.understand",
+        "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
+        "review_url": review_url,
+        "review_sheet_path": str(review_sheet_path),
+        "review_sheet_meta": review_meta,
+        "passed": passed,
+        "score": score,
+        "issues": data.get("issues") if isinstance(data.get("issues"), list) else [],
+        "view_separation_failed": view_separation_failed,
+        "design_changed": design_changed,
+        "massing_changed": massing_changed,
+        "recommended_action": str(data.get("recommended_action") or ("continue" if passed else "regenerate_45")),
+        "raw": data,
+    }
+
+
+def _normalized_view_image(path: Path, *, size: Tuple[int, int] = (512, 512), flip: bool = False) -> Optional[Image.Image]:
+    if not path.exists():
+        return None
+    with Image.open(path) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        if flip:
+            im = ImageOps.mirror(im)
+        bbox = _multiview_foreground_bbox(im)
+        crop = im.crop(bbox) if bbox else im
+        crop.thumbnail(size, _LANCZOS)
+        canvas = Image.new("RGB", size, "white")
+        canvas.paste(crop, ((size[0] - crop.width) // 2, (size[1] - crop.height) // 2))
+        return ImageOps.grayscale(canvas)
+
+
+def _image_rmse(a: Image.Image, b: Image.Image) -> float:
+    diff = ImageChops.difference(a, b)
+    stat = ImageStat.Stat(diff)
+    return math.sqrt(sum(value * value for value in stat.rms) / max(1, len(stat.rms)))
+
+
+def _image_ahash_bits(im: Image.Image, *, size: int = 16) -> List[int]:
+    small = im.resize((size, size), _LANCZOS)
+    vals = list(small.getdata())
+    if not vals:
+        return []
+    avg = sum(vals) / len(vals)
+    return [1 if value > avg else 0 for value in vals]
+
+
+def _hamming_distance(a: List[int], b: List[int]) -> int:
+    return sum(1 for left, right in zip(a, b) if left != right)
+
+
+def _local_multiview_geometry_check(
+    generated_inputs: List[Dict[str, Any]],
+    *,
+    is_character: bool,
+    reference_path: Optional[Path] = None,
+    allow_axisymmetric_similarity: bool = False,
+) -> Dict[str, Any]:
+    by_role: Dict[str, Dict[str, Any]] = {
+        str(item.get("role") or ""): item
+        for item in generated_inputs
+        if isinstance(item, dict) and str(item.get("role") or "")
+    }
+    issues: List[str] = []
+    metrics: Dict[str, Any] = {}
+
+    left_item = by_role.get("front_left_45")
+    right_item = by_role.get("front_right_45")
+    if isinstance(left_item, dict) and isinstance(right_item, dict):
+        left_path = Path(str(left_item.get("normalized_path") or ""))
+        right_path = Path(str(right_item.get("normalized_path") or ""))
+        left_img = _normalized_view_image(left_path)
+        right_img = _normalized_view_image(right_path)
+        right_flip = _normalized_view_image(right_path, flip=True)
+        if left_img and right_img and right_flip:
+            lr_rmse = _image_rmse(left_img, right_img)
+            lr_flip_rmse = _image_rmse(left_img, right_flip)
+            lr_hash = _hamming_distance(_image_ahash_bits(left_img), _image_ahash_bits(right_img))
+            lr_flip_hash = _hamming_distance(_image_ahash_bits(left_img), _image_ahash_bits(right_flip))
+            metrics.update({
+                "front_left_right_rmse": round(lr_rmse, 2),
+                "front_left_right_flipped_rmse": round(lr_flip_rmse, 2),
+                "front_left_right_ahash_distance": lr_hash,
+                "front_left_right_flipped_ahash_distance": lr_flip_hash,
+            })
+            if lr_hash <= 16 and lr_rmse <= 48 and (lr_flip_hash - lr_hash) >= 10:
+                issues.append("左前45°和右前45°过于相似，且不是镜像对应关系，疑似生成成同一侧前45°视角。")
+
+    front_item = by_role.get("front")
+    if isinstance(front_item, dict):
+        front_path = Path(str(front_item.get("normalized_path") or ""))
+        front_img = _normalized_view_image(front_path)
+        if reference_path and reference_path.exists() and not is_character:
+            reference_shape = _multiview_shape_metrics(reference_path)
+            front_shape = _multiview_shape_metrics(front_path)
+            if reference_shape and front_shape:
+                ref_ratio = float(reference_shape.get("bbox_ratio") or 0.0)
+                front_ratio = float(front_shape.get("bbox_ratio") or 0.0)
+                metrics["reference_bbox_ratio"] = round(ref_ratio, 3)
+                metrics["front_bbox_ratio"] = round(front_ratio, 3)
+                metrics["reference_bbox_width_fraction"] = reference_shape.get("bbox_width_fraction")
+                metrics["front_bbox_width_fraction"] = front_shape.get("bbox_width_fraction")
+                metrics["reference_bbox_height_fraction"] = reference_shape.get("bbox_height_fraction")
+                metrics["front_bbox_height_fraction"] = front_shape.get("bbox_height_fraction")
+                if ref_ratio > 0 and front_ratio > 0:
+                    ratio_delta = abs(math.log(front_ratio / ref_ratio))
+                    metrics["reference_front_bbox_log_delta"] = round(ratio_delta, 3)
+                    if ratio_delta > 0.42:
+                        issues.append(
+                            "生成正视图与原始参考主体的轮廓宽高比例差异过大，疑似把源图重新拉成了另一种正立面/新物体。"
+                        )
+        for role in ("front_left_45", "front_right_45"):
+            item = by_role.get(role)
+            if not isinstance(item, dict) or front_img is None:
+                continue
+            view_img = _normalized_view_image(Path(str(item.get("normalized_path") or "")))
+            if view_img is None:
+                continue
+            dist = _hamming_distance(_image_ahash_bits(front_img), _image_ahash_bits(view_img))
+            rmse = _image_rmse(front_img, view_img)
+            metrics[f"front_{role}_ahash_distance"] = dist
+            metrics[f"front_{role}_rmse"] = round(rmse, 2)
+            too_close = False
+            if dist <= (8 if is_character else 8) and rmse <= (48 if is_character else 58):
+                too_close = True
+            elif dist <= (10 if is_character else 14) and rmse <= 42:
+                too_close = True
+            if allow_axisymmetric_similarity and not is_character and too_close:
+                # Rotationally symmetric props (gourds, bottles, vases, lanterns, beads, cylinders)
+                # can keep nearly identical outer silhouettes at 45 degrees. Treat them as failed
+                # only when the crop is almost a literal duplicate, not merely silhouette-similar.
+                metrics[f"front_{role}_axisymmetric_similarity_allowed"] = True
+                too_close = dist <= 2 and rmse <= 12
+            if too_close:
+                issues.append(f"{_VIEW_ROLE_LABELS.get(role, role)}与正视图过于接近，未形成有效45°转向。")
+
+    return {
+        "passed": not issues,
+        "issues": issues,
+        "metrics": metrics,
     }
 
 
@@ -3102,11 +3907,11 @@ def _job_file_url(job_id: str, path: Path) -> str:
 def _quality_notes(*, strategy: str, image_count: int, quality: str) -> List[str]:
     notes = []
     if image_count == 1:
-        notes.append("单图会补猜背面和厚度，复杂镂空/翅膀/反光金属建议改用多视角或拆件包。")
+        notes.append("单图会补猜厚度和隐藏结构，复杂镂空/翅膀/反光金属建议改用三视图或拆件包。")
     if strategy == "part_batch":
         notes.append("拆件包会逐个部件生成模型，适合头盔、翅膀、饰件等复杂组合资产，后续需要在 Blender/ZBrush 拼装修形。")
     elif image_count >= 2:
-        notes.append("多视角同一物体会比单图更稳定，建议图片分别覆盖正面、侧面、背面或顶部。")
+        notes.append("三视图同一物体会比单图更稳定；当前默认只使用正面、左前45°、右前45°。")
     if quality == "production":
         notes.append("生产质量模式默认开启贴图、PBR 和重拓扑；本流程不提供低精度 3D 分支。")
     return notes
@@ -3127,13 +3932,13 @@ def _preprocess_notes(
             notes.append("主体裁切后的有效分辨率偏低，高清还原会依赖模型补细节；建议尽量提供原图、高清图或多角度图。")
             break
     if source_count == 1 and generated_part_count:
-        notes.append("已从单张图生成区域裁切候选图；这不是语义拆件，仅用于选择主体、定位和辅助生成。")
-        notes.append("如需高质量自动流程，优先生成高清多视角后走 Multi-Image to 3D。")
-        notes.append("复杂场景请先选择真正要生成的主体；不要直接用整张场景图生成多视角。")
-        notes.append("真正拆件必须来自用户拆件包、硬表面/饰件拆件板或高质量分割模型；角色服装默认走多视角，不强行拆袖子和下摆。")
+        notes.append("已从单张图生成 AI 主体理解候选；这不是语义拆件，只用于定位、风险诊断和约束三视图。")
+        notes.append("如需高质量自动流程，优先生成高清三视图后走 Multi-Image to 3D。")
+        notes.append("复杂场景会由 AI 默认锁定最适合 3D 的主体；第三步会使用主参考图和主体理解约束生成三视图。")
+        notes.append("真正拆件必须来自用户拆件包、硬表面/饰件拆件板或高质量分割模型；角色服装默认走三视图，不强行拆袖子和下摆。")
     if preprocess_only:
         notes.append("当前为仅预处理预览，不会调用 3D 生成模型，也不会消耗 Meshy credits。")
-        notes.append("多视角和 AI 部件分离属于图片模型阶段；只有点击“确认输入并生成 3D”后才调用 Meshy。")
+        notes.append("三视图和 AI 部件分离属于图片模型阶段；只有点击“确认输入并生成 3D”后才调用 Meshy。")
     return notes
 
 
@@ -3165,10 +3970,10 @@ def _multiview_quality_gate_error(job: Dict[str, Any]) -> str:
     verification = preprocessing.get("triview_consistency_verification")
     if isinstance(verification, dict):
         return (
-            f"多视角一致性复核未通过：score={verification.get('score')}, "
-            f"issues={verification.get('issues')}。请重新生成多视角或提供真实多视角图。"
+            f"三视图一致性复核未通过：score={verification.get('score')}, "
+            f"issues={verification.get('issues')}。请重新生成三视图或提供真实三视图图。"
         )
-    return "当前多视角由旧流程生成，未经过一致性复核；请重新生成多视角后再生成 3D。"
+    return "当前三视图由旧流程生成，未经过一致性复核；请重新生成三视图后再生成 3D。"
 
 
 def _has_crop_reference_components(job: Dict[str, Any]) -> bool:
@@ -3313,8 +4118,14 @@ def _step_status(job: Dict[str, Any], step: str) -> str:
     preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
     outputs = job.get("outputs") if isinstance(job.get("outputs"), dict) else {}
     if step == "upload":
+        if preprocessing.get("text_prompt_only"):
+            return "done"
         return "done" if preprocessing.get("source_inputs") or job.get("inputs") else "pending"
     if step == "candidates":
+        if preprocessing.get("text_prompt_only"):
+            return "skipped"
+        if preprocessing.get("triview_from_reference_sheet"):
+            return "skipped"
         if int(preprocessing.get("generated_part_count") or 0) > 0:
             return "done"
         if len(preprocessing.get("source_inputs") or []) == 1:
@@ -3323,6 +4134,8 @@ def _step_status(job: Dict[str, Any], step: str) -> str:
     if step == "triview":
         if preprocessing.get("triview_generated") or stage == "triview_completed":
             return "done"
+        if preprocessing.get("triview_unsuitable_reason"):
+            return "blocked"
         if stage == "triview_failed":
             return "failed"
         if status == "generating_views" or stage.startswith("generating_") or stage == "queued_triview":
@@ -3375,7 +4188,7 @@ def _step_status(job: Dict[str, Any], step: str) -> str:
             return "done"
         if status == "failed":
             return "failed"
-        if status == "running" or stage.startswith("generating_mesh") or stage.startswith("generating_part_") or stage.startswith("assembling"):
+        if stage == "submitting" or stage.startswith("generating_mesh"):
             return "running"
         if outputs.get("files") or outputs.get("parts"):
             return "done"
@@ -3400,13 +4213,33 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
     component_reference_sheet = preprocessing.get("component_reference_sheet") if isinstance(preprocessing.get("component_reference_sheet"), dict) else None
     see_through_result = preprocessing.get("see_through_result") if isinstance(preprocessing.get("see_through_result"), dict) else {}
     see_through_artifacts = see_through_result.get("artifacts") if isinstance(see_through_result.get("artifacts"), list) else []
+    text_prompt_only = bool(preprocessing.get("text_prompt_only"))
+    text_prompt_item = None
+    if text_prompt_only:
+        text_prompt_item = {
+            "kind": "prompt",
+            "format": "text",
+            "filename": "text_prompt.txt",
+            "label": "纯文本资产提示词",
+            "role": "text_prompt",
+            "generated": False,
+            "prompt": str(preprocessing.get("text_prompt") or job.get("description") or "")[:2400],
+        }
     component_status = _step_status(job, "components")
     triview_roles = [str(item.get("role") or "") for item in triview_inputs if isinstance(item, dict)]
     triview_summary = (
         f"{_sheet_view_names(triview_roles)}；这一步不调用 Meshy"
         if triview_roles
-        else "角色五视角；硬表面/建筑默认参考主视角、左前45°、右前45°近邻视角；这一步不调用 Meshy"
+        else "默认生成正视图、左前45°、右前45°；不生成侧视图和背视图；这一步不调用 Meshy"
     )
+    if text_prompt_only and not triview_roles:
+        triview_summary = "从文本提示词直接生成三视图；不生成侧视图和背视图；这一步不调用 Meshy"
+    elif text_prompt_only and triview_roles:
+        triview_summary = f"文本生成：{_sheet_view_names(triview_roles)}；这一步不调用 Meshy"
+    if preprocessing.get("triview_from_reference_sheet"):
+        triview_summary = f"AI 已识别原图是多视角参考板，已直接提取：{_sheet_view_names(triview_roles)}；不再调用 image-2 重画"
+    if preprocessing.get("triview_unsuitable_reason"):
+        triview_summary = str(preprocessing.get("triview_unsuitable_reason") or "")
     components_passed = bool(
         preprocessing.get("component_split_generated")
         or str(job.get("stage") or "") == "component_split_completed"
@@ -3465,16 +4298,20 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
     steps = [
         {
             "key": "upload",
-            "title": "上传与主体裁切",
+            "title": "文本设定" if text_prompt_only else "上传与主体裁切",
             "status": _step_status(job, "upload"),
-            "summary": f"已保存 {len(source_inputs or job.get('inputs') or [])} 张参考图",
-            "items": source_inputs or job.get("inputs") or [],
+            "summary": "已保存纯文本资产提示词" if text_prompt_only else f"已保存 {len(source_inputs or job.get('inputs') or [])} 张参考图",
+            "items": [text_prompt_item] if text_prompt_item else (source_inputs or job.get("inputs") or []),
         },
         {
             "key": "candidates",
-            "title": "区域裁切候选",
+            "title": "AI 主体理解",
             "status": _step_status(job, "candidates"),
-            "summary": "仅用于定位和预览，不会直接当作真实部件进 3D",
+            "summary": (
+                "AI 判断这是多视角参考板，已跳过主体候选裁切"
+                if preprocessing.get("triview_from_reference_sheet")
+                else "系统自动识别主体、保留要点和风险；不用手选，第三步会直接使用这些约束"
+            ),
             "items": region_inputs,
         },
         {
@@ -3488,7 +4325,7 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
             "key": "base_model",
             "title": "多视角 3D 底模",
             "status": _step_status(job, "base_model"),
-            "summary": "先用多视角生成完整底模；拆件只作为后续增强，不再 parts-only 拼装",
+            "summary": "先用三视图生成完整底模；拆件只作为后续增强，不再 parts-only 拼装",
             "items": base_files,
         },
         {
@@ -3514,11 +4351,11 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "key": "assembly",
                 "title": "底模替换合成",
                 "status": _step_status(job, "assembly"),
-                "summary": f"输出 {len(output_files)} 个最终文件" if output_files else "只读取多视角底模和已有 3D 部件，不重新消耗 Meshy 生成额度",
+                "summary": f"输出 {len(output_files)} 个最终文件" if output_files else "只读取三视图底模和已有 3D 部件，不重新消耗 Meshy 生成额度",
                 "items": output_files,
             },
         ])
-    else:
+    elif not triview_inputs and not base_files:
         steps.append({
             "key": "mesh",
             "title": "Meshy 3D 生成",
@@ -3664,6 +4501,58 @@ def _wants_3mf(target_formats: Any) -> bool:
     return any(str(fmt or "").strip().lower().lstrip(".") == "3mf" for fmt in (target_formats or []))
 
 
+_PRINT_GEOMETRY_DETAIL_RE = re.compile(
+    r"(3mf|打印|3d打印|可打印|浮雕|雕刻|镂刻|刻线|刻纹|凹槽|凸起|凸雕|纹样|花纹|纹路|卷云|火焰纹|铭文|符文|"
+    r"relief|engraving|engraved|carved|raised|embossed|debossed|groove|ornament|motif|pattern|normal[- ]?map|normal structure)",
+    re.IGNORECASE,
+)
+
+
+def _print_geometry_detail_required(
+    *,
+    target_formats: Any = None,
+    description: str = "",
+    view_understanding: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if _wants_3mf(target_formats):
+        return True
+    texts = [description or ""]
+    if isinstance(view_understanding, dict):
+        for key in (
+            "subject",
+            "visual_summary",
+            "body_structure",
+            "mechanical_parts",
+            "materials",
+            "props",
+            "must_keep",
+            "triview_prompt",
+        ):
+            texts.append(_compact_text_value(view_understanding.get(key), max_chars=800))
+    return bool(_PRINT_GEOMETRY_DETAIL_RE.search(" ".join(texts)))
+
+
+def _print_geometry_detail_rule(
+    *,
+    target_formats: Any = None,
+    description: str = "",
+    view_understanding: Optional[Dict[str, Any]] = None,
+) -> str:
+    if not _print_geometry_detail_required(
+        target_formats=target_formats,
+        description=description,
+        view_understanding=view_understanding,
+    ):
+        return ""
+    return (
+        "Printable geometry detail rule: all visible ornamental patterns, reliefs, grooves, engravings, raised lines, "
+        "decorative borders, symbols, seams, carved motifs, and structural surface details that should physically exist "
+        "on the object must be modeled as real 3D geometry with printable depth/height, not only color, texture, decals, "
+        "paint, or normal-map details. Keep dirt, weathering, stains, gradients, shadows, fabric color, and photographic "
+        "texture noise as material/texture only; do not turn them into random geometry. "
+    )
+
+
 def _meshy_target_formats_for_request(target_formats: Any) -> List[str]:
     out: List[str] = []
     wants_3mf = _wants_3mf(target_formats)
@@ -3676,6 +4565,18 @@ def _meshy_target_formats_for_request(target_formats: Any) -> List[str]:
     if wants_3mf and "stl" not in out:
         out.append("stl")
     return out or ["glb"]
+
+
+def _meshy_texture_prompt_for_job(job: Dict[str, Any], *, target_formats: Any) -> str:
+    preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
+    view_understanding = preprocessing.get("triview_ai_understanding") if isinstance(preprocessing.get("triview_ai_understanding"), dict) else {}
+    base = "PBR material, preserve the uploaded references, clean topology, production-ready hard-surface asset"
+    printable_rule = _print_geometry_detail_rule(
+        target_formats=target_formats,
+        description=str(job.get("description") or preprocessing.get("text_prompt") or ""),
+        view_understanding=view_understanding,
+    )
+    return base + (". " + printable_rule if printable_rule else "")
 
 
 def _model_label_without_format(file: Dict[str, Any], fallback: str = "3D 模型") -> str:
@@ -3705,11 +4606,13 @@ def _remove_file_entry_by_url(files: List[Dict[str, Any]], url: str) -> None:
     files[:] = [item for item in files if not (isinstance(item, dict) and str(item.get("url") or "") == url)]
 
 
-def _cached_3mf_report(source_path: Path, report_path: Path) -> Optional[Dict[str, Any]]:
+def _cached_3mf_report(source_path: Path, report_path: Path, *, texture_reference_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     if not source_path.is_file() or not report_path.is_file():
         return None
     try:
         if report_path.stat().st_mtime < source_path.stat().st_mtime:
+            return None
+        if texture_reference_path and texture_reference_path.is_file() and report_path.stat().st_mtime < texture_reference_path.stat().st_mtime:
             return None
         data = json.loads(report_path.read_text(encoding="utf-8"))
     except Exception:
@@ -3722,7 +4625,28 @@ def _cached_3mf_report(source_path: Path, report_path: Path) -> Optional[Dict[st
             return None
     except Exception:
         return None
+    color_export = data.get("color_export") if isinstance(data.get("color_export"), dict) else {}
+    if color_export.get("colored"):
+        return None
     return data
+
+
+def _texture_reference_for_3mf_source(files: List[Dict[str, Any]], source_path: Path, source_format: str) -> Optional[Path]:
+    if source_format == "glb":
+        return source_path
+    sibling = source_path.with_suffix(".glb")
+    if sibling.is_file():
+        return sibling
+    for file in files:
+        if not isinstance(file, dict):
+            continue
+        fmt = str(file.get("format") or "").lower()
+        filename = str(file.get("filename") or "").lower()
+        if fmt == "glb" or filename.endswith(".glb"):
+            candidate = source_path.with_name(str(file.get("filename") or ""))
+            if candidate.is_file():
+                return candidate
+    return None
 
 
 def _append_3mf_export_for_model(
@@ -3734,17 +4658,22 @@ def _append_3mf_export_for_model(
 ) -> Optional[Dict[str, Any]]:
     if not source_path.is_file():
         return None
-    dest_3mf = source_path.with_suffix(".3mf")
+    dest_3mf = source_path.with_name(f"{source_path.stem}_print_geometry_only.3mf")
     report_path = _report_path_for_3mf(dest_3mf)
     source_format = str(source_file.get("format") or source_path.suffix.lstrip(".") or "").lower()
     label_base = _model_label_without_format(source_file)
-    report = _cached_3mf_report(source_path, report_path)
+    # 3MF in slicers such as Bambu Studio is a manufacturing package, not a
+    # high-fidelity textured preview format. Export geometry-only 3MF here;
+    # keep GLB/OBJ as the color/texture preview source.
+    texture_reference_path = None
+    report = _cached_3mf_report(source_path, report_path, texture_reference_path=texture_reference_path)
     if report is None or (report.get("passed") and not dest_3mf.is_file()):
         report = model_3mf.export_glb_to_3mf(
             source_path,
             dest_3mf,
             report_path=report_path,
             label=f"{label_base} 3MF",
+            texture_reference_path=texture_reference_path,
         )
     report_entry = {
         "kind": "validation",
@@ -3876,7 +4805,7 @@ def _export_3mf_for_scope(job_id: str, job: Dict[str, Any], scope: str) -> Dict[
     touched = False
 
     if scope in {"base", "all"}:
-        base_outputs = _base_outputs_for_current_triview(job_id, job, outputs)
+        base_outputs = _base_outputs_for_current_triview(job_id, job, outputs, allow_stale_disk_base=True)
         if not _base_glb_path(job_id, base_outputs):
             if scope == "base":
                 raise HTTPException(status_code=409, detail="当前任务还没有可导出 3MF 的多视角 3D 底模")
@@ -3964,6 +4893,32 @@ def _3mf_download_paths_for_scope(job_id: str, job: Dict[str, Any], scope: str) 
             seen.add(key)
             paths.append(path)
     return paths
+
+
+def _3mf_export_directory_for_scope(job_id: str, job: Dict[str, Any], scope: str) -> Path:
+    paths = _3mf_download_paths_for_scope(job_id, job, scope)
+    if paths:
+        model_paths = [path for path in paths if path.suffix.lower() == ".3mf"]
+        chosen = model_paths[0] if model_paths else paths[0]
+        return chosen.parent.resolve()
+    return store.job_dir(job_id).resolve()
+
+
+def _open_local_directory(path: Path) -> None:
+    path = path.resolve()
+    if not path.is_dir():
+        raise HTTPException(status_code=404, detail="本地目录不存在")
+    if os.name == "nt":
+        try:
+            os.startfile(str(path))  # type: ignore[attr-defined]
+            return
+        except Exception:
+            subprocess.Popen(["explorer.exe", str(path)])
+            return
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
 
 
 def _path_from_job_file_url(job_id: str, url: str) -> Optional[Path]:
@@ -4374,7 +5329,7 @@ def _base_model_outputs_from_disk(job_id: str, *, expected_signature: str = "") 
         "kind": "model",
         "format": "glb",
         "filename": glb.name,
-        "label": "完整多视角底模 GLB",
+        "label": "完整三视图底模 GLB",
         "base_model": True,
         "size": glb.stat().st_size,
         "url": _job_file_url(job_id, glb),
@@ -4385,7 +5340,7 @@ def _base_model_outputs_from_disk(job_id: str, *, expected_signature: str = "") 
             "kind": "model",
             "format": "stl",
             "filename": stl.name,
-            "label": "完整多视角底模 STL",
+            "label": "完整三视图底模 STL",
             "base_model": True,
             "size": stl.stat().st_size,
             "url": _job_file_url(job_id, stl),
@@ -4396,7 +5351,7 @@ def _base_model_outputs_from_disk(job_id: str, *, expected_signature: str = "") 
             "kind": "model",
             "format": "3mf",
             "filename": three_mf.name,
-            "label": "完整多视角底模 3MF",
+            "label": "完整三视图底模 3MF",
             "base_model": True,
             "three_mf_export": True,
             "size": three_mf.stat().st_size,
@@ -4408,7 +5363,7 @@ def _base_model_outputs_from_disk(job_id: str, *, expected_signature: str = "") 
             "kind": "validation",
             "format": "json",
             "filename": three_mf_report.name,
-            "label": "完整多视角底模 3MF 检查报告",
+            "label": "完整三视图底模 3MF 检查报告",
             "base_model": True,
             "three_mf_report": True,
             "size": three_mf_report.stat().st_size,
@@ -4420,7 +5375,7 @@ def _base_model_outputs_from_disk(job_id: str, *, expected_signature: str = "") 
             "kind": "preview",
             "format": "png",
             "filename": preview.name,
-            "label": "完整多视角底模预览",
+            "label": "完整三视图底模预览",
             "base_model": True,
             "size": preview.stat().st_size,
             "url": _job_file_url(job_id, preview),
@@ -4441,6 +5396,8 @@ def _base_outputs_for_current_triview(
     job_id: str,
     job: Dict[str, Any],
     outputs: Optional[Dict[str, Any]] = None,
+    *,
+    allow_stale_disk_base: bool = False,
 ) -> Optional[Dict[str, Any]]:
     fingerprint = _triview_input_fingerprint(job)
     expected_signature = str((fingerprint or {}).get("signature") or "")
@@ -4448,7 +5405,12 @@ def _base_outputs_for_current_triview(
         base_outputs = outputs.get("base") if isinstance(outputs.get("base"), dict) else None
         if base_outputs and (not expected_signature or str(base_outputs.get("input_signature") or "") == expected_signature):
             return base_outputs
-    return _base_model_outputs_from_disk(job_id, expected_signature=expected_signature)
+    disk_outputs = _base_model_outputs_from_disk(job_id, expected_signature=expected_signature)
+    if disk_outputs:
+        return disk_outputs
+    if allow_stale_disk_base:
+        return _base_model_outputs_from_disk(job_id, expected_signature="")
+    return None
 
 
 async def _run_or_reuse_base_model(
@@ -4479,7 +5441,7 @@ async def _run_or_reuse_base_model(
                 existing["three_mf_exports"] = three_mf_reports
             return existing, 0
     if len(meshy_paths) < 2:
-        raise RuntimeError("高精度 3D 必须先生成多视角图；没有多视角图时不会进入低精度 parts-only 拼装。")
+        raise RuntimeError("高精度 3D 必须先生成三视图；没有三视图时不会进入低精度 parts-only 拼装。")
     out_dir = store.job_dir(job_id) / "outputs" / "base"
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs = await _run_single_meshy_task(
@@ -4490,6 +5452,7 @@ async def _run_or_reuse_base_model(
         target_formats=target_formats,
         out_dir=out_dir,
         prefix="base_",
+        texture_prompt=_meshy_texture_prompt_for_job(job, target_formats=target_formats),
     )
     if fingerprint:
         meta_path = out_dir / "base_model.meta.json"
@@ -4511,9 +5474,9 @@ async def _run_or_reuse_base_model(
             continue
         file["base_model"] = True
         if file.get("kind") == "model":
-            file["label"] = f"完整多视角底模 {str(file.get('format') or '').upper()}".strip()
+            file["label"] = f"完整三视图底模 {str(file.get('format') or '').upper()}".strip()
         elif file.get("kind") == "preview":
-            file["label"] = "完整多视角底模预览"
+            file["label"] = "完整三视图底模预览"
     return outputs, int(outputs.get("consumed_credits") or 0)
 
 
@@ -4542,7 +5505,7 @@ def _assemble_part_outputs(
     parts, frame_width, frame_height, missing = _assembly_part_inputs(job_id, job, subtasks)
     base_path = _base_glb_path(job_id, base_outputs)
     if not base_path:
-        raise RuntimeError("高精度拼装缺少完整多视角底模；请先生成多视角图并生成 base_model.glb。")
+        raise RuntimeError("高精度拼装缺少完整三视图底模；请先生成三视图并生成 base_model.glb。")
     if len(parts) < 1:
         outputs["assembly"] = {"status": "skipped", "reason": "not_enough_part_glbs", "missing_parts": missing}
         return outputs, metrics
@@ -4620,6 +5583,7 @@ async def _run_single_meshy_task(
     target_formats: List[str],
     out_dir: Path,
     prefix: str = "",
+    texture_prompt: str = "",
 ) -> Dict[str, Any]:
     meshy_target_formats = _meshy_target_formats_for_request(target_formats)
     if mode == "multi-image-to-3d":
@@ -4627,12 +5591,14 @@ async def _run_single_meshy_task(
             image_paths,
             quality=quality,
             target_formats=meshy_target_formats,
+            texture_prompt=texture_prompt,
         )
     else:
         create_resp = await meshy.create_image_to_3d_task(
             image_paths[0],
             quality=quality,
             target_formats=meshy_target_formats,
+            texture_prompt=texture_prompt,
         )
     provider_task_id = str(create_resp.get("result") or create_resp.get("id") or "").strip()
     if not provider_task_id:
@@ -4665,7 +5631,7 @@ async def _run_job_background(job_id: str) -> None:
     base_outputs: Optional[Dict[str, Any]] = None
     try:
         if strategy == "part_batch" and not _has_true_component_source(job):
-            raise RuntimeError("当前输入只是区域裁切/参考候选，不是真实可进 3D 的拆件包。角色请先生成高清多视角走 Multi-Image to 3D；硬表面/饰件请上传拆件包或使用拆件流程。")
+            raise RuntimeError("当前输入只是区域裁切/参考候选，不是真实可进 3D 的拆件包。角色请先生成高清三视图走 Multi-Image to 3D；硬表面/饰件请上传拆件包或使用拆件流程。")
         store.update_job(job_id, status="running", stage="submitting", started_at=store.now_iso(), progress=8)
         image_paths = [Path(item["normalized_path"]) for item in job.get("inputs", []) if item.get("normalized_path")]
         if not image_paths:
@@ -4678,7 +5644,7 @@ async def _run_job_background(job_id: str) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         if strategy == "part_batch":
             if len(_triview_image_paths(job)) < 2:
-                raise RuntimeError("高精度拆件增强必须先生成多视角图；系统不会走低精度 parts-only 拼装。")
+                raise RuntimeError("高精度拆件增强必须先生成三视图；系统不会走低精度 parts-only 拼装。")
             store.update_job(job_id, stage="generating_base_model", progress=10, consumed_credits=total_credits)
             base_outputs, base_credits = await _run_or_reuse_base_model(
                 job_id=job_id,
@@ -4743,6 +5709,7 @@ async def _run_job_background(job_id: str) -> None:
                     target_formats=target_formats,
                     out_dir=part_dir,
                     prefix=f"part_{idx:02d}_",
+                    texture_prompt=_meshy_texture_prompt_for_job(job, target_formats=target_formats),
                 )
                 total_credits += int(outputs.get("consumed_credits") or 0)
                 subtasks.append({
@@ -4772,6 +5739,7 @@ async def _run_job_background(job_id: str) -> None:
                 quality=quality,
                 target_formats=target_formats,
                 out_dir=out_dir,
+                texture_prompt=_meshy_texture_prompt_for_job(job, target_formats=target_formats),
             )
             total_credits = int(outputs.get("consumed_credits") or 0)
             metrics = outputs.get("mesh_metrics") or {}
@@ -4841,7 +5809,7 @@ async def _run_part_models_background(job_id: str) -> None:
         outputs_before = job.get("outputs") if isinstance(job.get("outputs"), dict) else {}
         base_outputs = _base_outputs_for_current_triview(job_id, job, outputs_before)
         if not _base_glb_path(job_id, base_outputs):
-            raise RuntimeError("缺少完整多视角 3D 底模。请先生成多视角底模，再生成 3D 部件。")
+            raise RuntimeError("缺少完整三视图 3D 底模。请先生成三视图底模，再生成 3D 部件。")
         image_paths = [Path(item["normalized_path"]) for item in job.get("inputs", []) if isinstance(item, dict) and item.get("normalized_path")]
         image_paths = [path for path in image_paths if path.is_file()]
         if not image_paths:
@@ -4907,6 +5875,7 @@ async def _run_part_models_background(job_id: str) -> None:
                 target_formats=target_formats,
                 out_dir=part_dir,
                 prefix=f"part_{idx:02d}_",
+                texture_prompt=_meshy_texture_prompt_for_job(job, target_formats=target_formats),
             )
             subtask = {
                 "part_index": idx,
@@ -5104,6 +6073,131 @@ async def _run_triview_background(
             raise RuntimeError("多视角模板为空")
         preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
         source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
+        text_prompt_only = bool(preprocessing.get("text_prompt_only"))
+        if text_prompt_only:
+            out_dir = store.job_dir(job_id) / "triview"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            plan = _text_prompt_view_generation_plan(
+                asset_template=str(job.get("asset_template") or "ornament_prop"),
+                description=str(job.get("description") or preprocessing.get("text_prompt") or ""),
+                image_model=model_id,
+                target_formats=job.get("target_formats") or [],
+            )
+            _apply_retry_feedback_to_view_plan(plan, preprocessing)
+            views = plan.get("views") if isinstance(plan.get("views"), list) else []
+            sheet_item = next((item for item in views if str(item.get("view") or "") == "triview_sheet"), None)
+            if not sheet_item:
+                raise RuntimeError("文本多视角模板为空")
+            sheet_views = _valid_sheet_views(sheet_item.get("sheet_views"), fallback=_sheet_views_for_template(str(plan.get("asset_template") or "")))
+            sheet_dest = out_dir / "triview_sheet.jpg"
+            store.update_job(job_id, status="generating_views", stage="generating_text_prompt_triview_sheet", progress=12, preprocessing=preprocessing, error=None)
+            result = await _generate_image_stage_core(
+                job_id=job_id,
+                request=request,
+                current_user=current_user,
+                db=db,
+                prompt=str(sheet_item.get("prompt") or ""),
+                model=model_id,
+                aspect_ratio="3:2",
+                ref_payload=None,
+                reference_path=None,
+                preprocessing=preprocessing,
+            )
+            images = result.get("images") if isinstance(result.get("images"), list) else []
+            if not images:
+                raise RuntimeError("文本三视图生成没有返回图片")
+            sheet_meta = await _save_generated_preview_image(images[0], sheet_dest)
+            sheet_input = _public_input(
+                job_id=job_id,
+                index=0,
+                filename=sheet_dest.name,
+                normalized_path=sheet_dest,
+                meta=sheet_meta,
+                role="triview_sheet",
+                label="文本生成高清三视图板",
+                source_filename="text_prompt",
+                generated=True,
+            )
+            preprocessing["triview_sheet"] = sheet_input
+            store.update_job(job_id, status="generating_views", stage="splitting_text_prompt_triview_sheet", progress=72, preprocessing=preprocessing)
+            generated: List[Dict[str, Any]] = []
+            for part in _split_side_back_sheet(sheet_dest, out_dir, sheet_views=sheet_views):
+                part_path = Path(str(part["path"]))
+                generated.append(_public_input(
+                    job_id=job_id,
+                    index=int(part["index"]),
+                    filename=part_path.name,
+                    normalized_path=part_path,
+                    meta={
+                        "width": part.get("width"),
+                        "height": part.get("height"),
+                        "source_box": part.get("source_box"),
+                    },
+                    role=str(part.get("role") or ""),
+                    label=str(part.get("label") or ""),
+                    source_filename="text_prompt",
+                    generated=True,
+                ))
+            text_asset_template = str(plan.get("asset_template") or "")
+            local_geometry = _local_multiview_geometry_check(
+                generated,
+                is_character=_is_character_template(text_asset_template),
+                reference_path=None,
+                allow_axisymmetric_similarity=_canonical_asset_template(text_asset_template) in {"ornament_prop", "hard_surface"},
+            )
+            preprocessing["text_prompt_multiview_local_check"] = local_geometry
+            if not local_geometry.get("passed"):
+                preprocessing["triview_inputs_partial"] = generated
+                preprocessing["triview_quality_gate"] = "failed"
+                store.update_job(
+                    job_id,
+                    status="preprocessed",
+                    stage="triview_failed",
+                    progress=100,
+                    inputs=generated,
+                    preprocessing=preprocessing,
+                    view_generation_plan=plan,
+                    image_model=model_id,
+                    error=f"文本三视图本地复核未通过：issues={local_geometry.get('issues')}",
+                )
+                raise RuntimeError(f"文本三视图本地复核未通过：issues={local_geometry.get('issues')}")
+            for item in generated:
+                for view in views:
+                    if isinstance(view, dict) and str(view.get("view") or "") == str(item.get("role") or ""):
+                        view["preview_url"] = item["preview_url"]
+                        view["filename"] = item["filename"]
+            plan["generated_inputs"] = generated
+            generated_roles = [str(item.get("role") or "") for item in generated if isinstance(item, dict)]
+            preprocessing.pop("force_regenerate_triview", None)
+            preprocessing["triview_generated"] = True
+            preprocessing["triview_inputs"] = generated
+            preprocessing["triview_inputs_partial"] = generated
+            preprocessing["triview_sheet_views"] = generated_roles
+            preprocessing["triview_quality_gate"] = "passed"
+            preprocessing["triview_source"] = "text_prompt"
+            meshy_roles = [role for role, _ in _meshy_base_image_items({"preprocessing": {"triview_inputs": generated}})]
+            notes = list(job.get("quality_notes") or [])
+            notes.append("已由纯文本提示词生成三视图；这一步未调用 Meshy。")
+            notes.append(f"确认生成 3D 时将使用：{_sheet_view_names(meshy_roles)}。")
+            store.update_job(
+                job_id,
+                status="preprocessed",
+                stage="triview_completed",
+                progress=100,
+                inputs=generated,
+                mode="multi-image-to-3d",
+                strategy="multi_view",
+                provider="meshy",
+                final_3d_provider="meshy",
+                image_stage_provider="image_model",
+                preprocessing=preprocessing,
+                view_generation_plan=plan,
+                asset_template=str(plan.get("asset_template") or job.get("asset_template") or "ornament_prop"),
+                image_model=model_id,
+                quality_notes=notes,
+                error=None,
+            )
+            return
         reference_input = source_inputs[0] if source_inputs else (job.get("inputs") or [{}])[0]
         reference_path = Path(str(reference_input.get("normalized_path") or ""))
         if not reference_path.exists():
@@ -5111,9 +6205,10 @@ async def _run_triview_background(
         ref_payload = _image_file_payload(reference_path)
         out_dir = store.job_dir(job_id) / "triview"
         out_dir.mkdir(parents=True, exist_ok=True)
-        regenerate_for_understanding = bool(preprocessing.get("force_regenerate_triview"))
+        force_regenerate_triview = bool(preprocessing.get("force_regenerate_triview"))
         view_understanding = preprocessing.get("triview_ai_understanding") if isinstance(preprocessing.get("triview_ai_understanding"), dict) else {}
-        if regenerate_for_understanding or not view_understanding or view_understanding.get("prompt_version") != _VIEW_PROMPT_VERSION:
+        prompt_version_mismatch = not view_understanding or view_understanding.get("prompt_version") != _VIEW_PROMPT_VERSION
+        if force_regenerate_triview or prompt_version_mismatch:
             store.update_job(job_id, status="generating_views", stage="planning_triview_with_ai", progress=6, preprocessing=preprocessing, error=None)
             view_understanding = await _ai_triview_understanding(
                 job_id=job_id,
@@ -5172,7 +6267,7 @@ async def _run_triview_background(
         else:
             triview_reference_path = primary_reference_path
             triview_ref_payload = primary_ref_payload
-        regenerate_all = bool(preprocessing.get("force_regenerate_triview"))
+        regenerate_all = force_regenerate_triview or prompt_version_mismatch
         existing_generated = [] if regenerate_all else preprocessing.get("triview_inputs")
         generated: List[Dict[str, Any]] = list(existing_generated) if isinstance(existing_generated, list) else []
         if regenerate_all:
@@ -5182,130 +6277,245 @@ async def _run_triview_background(
         if not generated or regenerate_all:
             sheet_item = next((item for item in views if str(item.get("view") or "") == "triview_sheet"), None)
             if not sheet_item:
-                raise RuntimeError("高清多视角模板为空")
+                raise RuntimeError("高清三视图模板为空")
             sheet_views = _valid_sheet_views(sheet_item.get("sheet_views"), fallback=_sheet_views_for_template(str(plan.get("asset_template") or "")))
-            sheet_label = str(sheet_item.get("label") or "高清多视角板")
+            sheet_label = str(sheet_item.get("label") or "高清三视图板")
             generated = []
             use_sheet_generation = str(plan.get("view_generation_mode") or "sheet") == "sheet"
-            hard_surface_grouped_sheet = use_sheet_generation and not _is_character_template(str(plan.get("asset_template") or ""))
+            hard_surface_grouped_sheet = (
+                use_sheet_generation
+                and not _is_character_template(str(plan.get("asset_template") or ""))
+                and any(role in sheet_views for role in ("side", "back"))
+            )
             if hard_surface_grouped_sheet:
-                first_roles = [role for role in ("front", "front_left_45", "front_right_45") if role in sheet_views]
+                first_roles = [role for role in ("front_left_45", "front_right_45") if role in sheet_views]
                 second_roles = [role for role in ("side", "back") if role in sheet_views]
                 if len(first_roles) < 2 or not second_roles:
                     raise RuntimeError("硬表面多视角分组模板为空")
-                first_prompt = (
-                    str(sheet_item.get("prompt") or "")
-                    + " Generate only the first grouped sheet now: exactly three large views, left to right: source/front view, front-left 45 degree view, front-right 45 degree view. "
-                    "Do not include side or back in this image. Use the full canvas space; each view must be large, not narrow, not squeezed, and not a tiny strip. "
-                    "Keep all three views in the same generated style, scale, projection, and design."
-                )
-                second_prompt = (
-                    str(sheet_item.get("prompt") or "")
-                    + " Generate only the second grouped sheet now: exactly two large views, left to right: strict side view and inferred back view. "
-                    "Use the provided reference board, which contains the original source and the approved front/45-degree sheet. "
-                    "Do not include front or 45-degree views in this image. Use the full canvas space; each view must be large, not narrow, not squeezed, and not a tiny strip. "
-                    "The side/back must look like the same asset from the first grouped sheet turned around, not a new wider facade or another construction."
-                )
+                if isinstance(primary_reference_input, dict):
+                    generated.append(dict(primary_reference_input, index=1, role="front", label="原图主视角锚点", generated=False))
+                else:
+                    front_dest = out_dir / "01_front_reference_anchor.jpg"
+                    front_meta = _copy_reference_front_view(primary_reference_path, front_dest)
+                    front_meta["source_box"] = [0, 0, front_meta.get("width"), front_meta.get("height")]
+                    front_meta["reference_front_anchor"] = True
+                    generated.append(_public_input(
+                        job_id=job_id,
+                        index=1,
+                        filename=front_dest.name,
+                        normalized_path=front_dest,
+                        meta=front_meta,
+                        role="front",
+                        label="原图主视角锚点",
+                        source_filename=str(reference_input.get("filename") or ""),
+                        generated=False,
+                    ))
 
-                store.update_job(job_id, status="generating_views", stage="generating_front_45_sheet", progress=10, preprocessing=preprocessing)
-                first_sheet_dest = out_dir / "triview_sheet_front45.jpg"
-                first_result = await _generate_image_stage_core(
-                    job_id=job_id,
-                    request=request,
-                    current_user=current_user,
-                    db=db,
-                    prompt=first_prompt,
-                    model=model_id,
-                    aspect_ratio="16:9",
-                    ref_payload=triview_ref_payload,
-                    reference_path=triview_reference_path,
-                    preprocessing=preprocessing,
-                )
-                first_images = first_result.get("images") if isinstance(first_result.get("images"), list) else []
-                if not first_images:
-                    raise RuntimeError("前三视角板生成没有返回图片")
-                first_sheet_meta = await _save_generated_preview_image(first_images[0], first_sheet_dest)
-                preprocessing["triview_front45_sheet"] = _public_input(
-                    job_id=job_id,
-                    index=0,
-                    filename=first_sheet_dest.name,
-                    normalized_path=first_sheet_dest,
-                    meta=first_sheet_meta,
-                    role="triview_front45_sheet",
-                    label="前三视角板",
-                    source_filename=str(reference_input.get("filename") or ""),
-                    generated=True,
-                )
-                store.update_job(job_id, status="generating_views", stage="splitting_front_45_sheet", progress=42, preprocessing=preprocessing)
-                split_first = _split_side_back_sheet(first_sheet_dest, out_dir, sheet_views=first_roles)
-
-                sideback_reference_dest = out_dir / "side_back_reference_board.jpg"
-                sideback_reference_meta = _make_unlabeled_reference_board(
-                    [primary_reference_path, first_sheet_dest],
-                    sideback_reference_dest,
-                    cell=(1200, 900),
-                )
-                if not sideback_reference_meta:
-                    raise RuntimeError("侧背视角参考板生成失败")
-                preprocessing["side_back_reference_board"] = _public_input(
-                    job_id=job_id,
-                    index=0,
-                    filename=sideback_reference_dest.name,
-                    normalized_path=sideback_reference_dest,
-                    meta=sideback_reference_meta,
-                    role="side_back_reference_board",
-                    label="侧背视角参考板",
-                    source_filename=str(reference_input.get("filename") or ""),
-                    generated=True,
-                )
-
-                store.update_job(job_id, status="generating_views", stage="generating_side_back_sheet", progress=52, preprocessing=preprocessing)
-                sideback_dest = out_dir / "triview_sheet_side_back.jpg"
-                sideback_result = await _generate_image_stage_core(
-                    job_id=job_id,
-                    request=request,
-                    current_user=current_user,
-                    db=db,
-                    prompt=second_prompt,
-                    model=model_id,
-                    aspect_ratio="16:9",
-                    ref_payload=_image_file_payload(sideback_reference_dest),
-                    reference_path=sideback_reference_dest,
-                    preprocessing=preprocessing,
-                )
-                sideback_images = sideback_result.get("images") if isinstance(sideback_result.get("images"), list) else []
-                if not sideback_images:
-                    raise RuntimeError("侧背视角板生成没有返回图片")
-                sideback_meta = await _save_generated_preview_image(sideback_images[0], sideback_dest)
-                preprocessing["triview_side_back_sheet"] = _public_input(
-                    job_id=job_id,
-                    index=0,
-                    filename=sideback_dest.name,
-                    normalized_path=sideback_dest,
-                    meta=sideback_meta,
-                    role="triview_side_back_sheet",
-                    label="侧背视角板",
-                    source_filename=str(reference_input.get("filename") or ""),
-                    generated=True,
-                )
-                store.update_job(job_id, status="generating_views", stage="splitting_side_back_sheet", progress=76, preprocessing=preprocessing)
-                split_second = _split_side_back_sheet(sideback_dest, out_dir, sheet_views=second_roles)
-                grouped_parts = list(split_first) + list(split_second)
-                for idx, part in enumerate(grouped_parts, start=1):
-                    role = str(part.get("role") or "")
-                    part_path = Path(str(part["path"]))
+                view_lookup = {str(item.get("view") or ""): item for item in views if isinstance(item, dict)}
+                for idx, role in enumerate(first_roles, start=2):
+                    view_item = view_lookup.get(role) or {}
+                    prompt = _single_view_generation_prompt(
+                        str(view_item.get("prompt") or sheet_item.get("prompt") or ""),
+                        role=role,
+                        reference_path=primary_reference_path,
+                        view_understanding=view_understanding,
+                    )
+                    store.update_job(
+                        job_id,
+                        status="generating_views",
+                        stage=f"generating_view_{role}",
+                        progress=12 + int((idx - 2) / max(1, len(first_roles)) * 28),
+                        preprocessing=preprocessing,
+                    )
+                    result = await _generate_image_stage_core(
+                        job_id=job_id,
+                        request=request,
+                        current_user=current_user,
+                        db=db,
+                        prompt=prompt,
+                        model=model_id,
+                        aspect_ratio="4:3",
+                        ref_payload=triview_ref_payload,
+                        reference_path=triview_reference_path,
+                        preprocessing=preprocessing,
+                    )
+                    images = result.get("images") if isinstance(result.get("images"), list) else []
+                    if not images:
+                        raise RuntimeError(f"{_VIEW_ROLE_LABELS.get(role, role)}生成没有返回图片")
+                    view_dest = out_dir / f"{idx:02d}_{role}.jpg"
+                    view_meta = await _save_generated_preview_image(images[0], view_dest)
                     generated.append(_public_input(
                         job_id=job_id,
                         index=idx,
-                        filename=part_path.name,
-                        normalized_path=part_path,
-                        meta={
-                            "width": part.get("width"),
-                            "height": part.get("height"),
-                            "source_box": part.get("source_box"),
-                        },
+                        filename=view_dest.name,
+                        normalized_path=view_dest,
+                        meta=view_meta,
                         role=role,
-                        label=str(part.get("label") or _VIEW_ROLE_LABELS.get(role, role)),
+                        label=str(view_item.get("label") or _VIEW_ROLE_LABELS.get(role, role)),
+                        source_filename=str(reference_input.get("filename") or ""),
+                        generated=True,
+                    ))
+
+                early_geometry = _early_front45_geometry_check(generated, reference_path=primary_reference_path)
+                preprocessing["front45_geometry_check"] = early_geometry
+                if not early_geometry.get("passed"):
+                    preprocessing["triview_inputs_partial"] = generated
+                    preprocessing["triview_quality_gate"] = "failed"
+                    store.update_job(
+                        job_id,
+                        status="preprocessed",
+                        stage="triview_failed",
+                        progress=100,
+                        inputs=generated,
+                        preprocessing=preprocessing,
+                        view_generation_plan=plan,
+                        asset_template=resolved_asset_template,
+                        image_model=model_id,
+                        error=f"左右45°视角本地复核未通过：issues={early_geometry.get('issues')}。系统不会继续生成侧/背或送入 3D。",
+                    )
+                    raise RuntimeError(f"左右45°视角本地复核未通过：issues={early_geometry.get('issues')}。系统不会继续生成侧/背或送入 3D。")
+
+                store.update_job(job_id, status="generating_views", stage="verifying_front_45_views", progress=44, preprocessing=preprocessing)
+                front45_review = await _ai_verify_front45_pair(
+                    job_id=job_id,
+                    request=request,
+                    reference_path=primary_reference_path,
+                    generated_inputs=generated,
+                    review_sheet_path=out_dir / "front45_review_sheet.jpg",
+                    preprocessing=preprocessing,
+                )
+                preprocessing["front45_consistency_verification"] = front45_review
+                if not front45_review.get("passed"):
+                    preprocessing["triview_inputs_partial"] = generated
+                    preprocessing["triview_quality_gate"] = "failed"
+                    if front45_review.get("design_changed") or front45_review.get("massing_changed"):
+                        preprocessing["triview_unsuitable_reason"] = (
+                            "单张参考图补多视角不适合此资产：左右45°已经发生换设计/主体体量变化。"
+                            "建议上传真实三视图图，或直接用原图走单图 3D 试底模；继续让图片模型补角度大概率会重设计。"
+                        )
+                    store.update_job(
+                        job_id,
+                        status="preprocessed",
+                        stage="triview_failed",
+                        progress=100,
+                        inputs=generated,
+                        preprocessing=preprocessing,
+                        view_generation_plan=plan,
+                        asset_template=resolved_asset_template,
+                        image_model=model_id,
+                        error=(
+                            f"左右45°一致性复核未通过：score={front45_review.get('score')}, "
+                            f"issues={front45_review.get('issues')}。系统不会继续生成侧/背或送入 3D。"
+                        ),
+                    )
+                    raise RuntimeError(
+                        f"左右45°一致性复核未通过：score={front45_review.get('score')}, "
+                        f"issues={front45_review.get('issues')}。系统不会继续生成侧/背或送入 3D。"
+                    )
+
+                generated_roles = [str(item.get("role") or "") for item in generated if isinstance(item, dict)]
+                front45_roles = [role for role in ("front", "front_left_45", "front_right_45") if role in generated_roles]
+                preprocessing.pop("force_regenerate_triview", None)
+                preprocessing.pop("triview_unsuitable_reason", None)
+                preprocessing["triview_generated"] = True
+                preprocessing["triview_quality_gate"] = "passed"
+                preprocessing["triview_inputs"] = generated
+                preprocessing["triview_inputs_partial"] = generated
+                preprocessing["triview_sheet_views"] = generated_roles
+                preprocessing["triview_usable_roles"] = front45_roles
+                preprocessing["triview_side_back_policy"] = "skip_generated_side_back_use_front45_only"
+                plan["generated_inputs"] = generated
+                plan["usable_roles_for_3d"] = front45_roles
+                plan["excluded_roles_for_3d"] = [role for role in ("side", "back") if role not in front45_roles]
+                meshy_roles = [role for role, _ in _meshy_base_image_items({"preprocessing": preprocessing})]
+                notes = list(job.get("quality_notes") or [])
+                notes.append("左右45°已通过早期复核；侧视/背视属于高风险猜测，系统已跳过，Meshy 将使用原图主视角 + 左右45°。")
+                notes.append(f"确认生成 3D 时将使用：{_sheet_view_names(meshy_roles)}。")
+                store.update_job(
+                    job_id,
+                    status="preprocessed",
+                    stage="triview_completed",
+                    progress=100,
+                    inputs=generated,
+                    mode="multi-image-to-3d",
+                    strategy="multi_view",
+                    provider="meshy",
+                    final_3d_provider="meshy",
+                    image_stage_provider="image_model",
+                    preprocessing=preprocessing,
+                    view_generation_plan=plan,
+                    asset_template=resolved_asset_template,
+                    image_model=model_id,
+                    quality_notes=notes,
+                    error=None,
+                )
+                return
+
+                sideback_reference_dest = out_dir / "side_back_reference_board.jpg"
+                sideback_reference_paths = [primary_reference_path] + [
+                    Path(str(item.get("normalized_path") or ""))
+                    for item in generated
+                    if str(item.get("role") or "") in {"front_left_45", "front_right_45"}
+                ]
+                sideback_reference_meta = _make_unlabeled_reference_board(sideback_reference_paths, sideback_reference_dest, cell=(900, 760))
+                if sideback_reference_meta:
+                    preprocessing["side_back_reference_board"] = _public_input(
+                        job_id=job_id,
+                        index=0,
+                        filename=sideback_reference_dest.name,
+                        normalized_path=sideback_reference_dest,
+                        meta=sideback_reference_meta,
+                        role="side_back_reference_board",
+                        label="侧背视角参考板",
+                        source_filename=str(reference_input.get("filename") or ""),
+                        generated=True,
+                    )
+                    sideback_ref_payload = _image_file_payload(sideback_reference_dest)
+                    sideback_ref_path = sideback_reference_dest
+                else:
+                    sideback_ref_payload = triview_ref_payload
+                    sideback_ref_path = triview_reference_path
+
+                for idx, role in enumerate(second_roles, start=2 + len(first_roles)):
+                    view_item = view_lookup.get(role) or {}
+                    prompt = _single_view_generation_prompt(
+                        str(view_item.get("prompt") or sheet_item.get("prompt") or ""),
+                        role=role,
+                        reference_path=primary_reference_path,
+                        view_understanding=view_understanding,
+                    )
+                    store.update_job(
+                        job_id,
+                        status="generating_views",
+                        stage=f"generating_view_{role}",
+                        progress=48 + int((idx - 2 - len(first_roles)) / max(1, len(second_roles)) * 32),
+                        preprocessing=preprocessing,
+                    )
+                    result = await _generate_image_stage_core(
+                        job_id=job_id,
+                        request=request,
+                        current_user=current_user,
+                        db=db,
+                        prompt=prompt,
+                        model=model_id,
+                        aspect_ratio="4:3",
+                        ref_payload=sideback_ref_payload,
+                        reference_path=sideback_ref_path,
+                        preprocessing=preprocessing,
+                    )
+                    images = result.get("images") if isinstance(result.get("images"), list) else []
+                    if not images:
+                        raise RuntimeError(f"{_VIEW_ROLE_LABELS.get(role, role)}生成没有返回图片")
+                    view_dest = out_dir / f"{idx:02d}_{role}.jpg"
+                    view_meta = await _save_generated_preview_image(images[0], view_dest)
+                    generated.append(_public_input(
+                        job_id=job_id,
+                        index=idx,
+                        filename=view_dest.name,
+                        normalized_path=view_dest,
+                        meta=view_meta,
+                        role=role,
+                        label=str(view_item.get("label") or _VIEW_ROLE_LABELS.get(role, role)),
                         source_filename=str(reference_input.get("filename") or ""),
                         generated=True,
                     ))
@@ -5318,14 +6528,14 @@ async def _run_triview_background(
                     db=db,
                     prompt=str(sheet_item.get("prompt") or ""),
                     model=model_id,
-                    aspect_ratio="16:9",
+                    aspect_ratio="3:2",
                     ref_payload=triview_ref_payload,
                     reference_path=triview_reference_path,
                     preprocessing=preprocessing,
                 )
                 images = result.get("images") if isinstance(result.get("images"), list) else []
                 if not images:
-                    raise RuntimeError("高清多视角生成没有返回图片")
+                    raise RuntimeError("高清三视图生成没有返回图片")
                 sheet_meta = await _save_generated_preview_image(images[0], sheet_dest)
                 sheet_input = _public_input(
                     job_id=job_id,
@@ -5463,7 +6673,14 @@ async def _run_triview_background(
         if not verification.get("passed"):
             generated_roles_for_gate = [str(item.get("role") or "") for item in generated if isinstance(item, dict)]
             reliable_roles = [role for role in ("front", "front_left_45", "front_right_45") if role in generated_roles_for_gate]
-            if not _is_character_template(resolved_asset_template) and len(reliable_roles) >= 2:
+            local_geometry = verification.get("local_geometry_check") if isinstance(verification.get("local_geometry_check"), dict) else {}
+            allow_partial_pass = (
+                not _is_character_template(resolved_asset_template)
+                and len(reliable_roles) >= 2
+                and not bool(local_geometry.get("issues"))
+                and not bool(verification.get("view_separation_failed"))
+            )
+            if allow_partial_pass:
                 preprocessing["triview_quality_gate"] = "partial_pass"
                 preprocessing["triview_usable_roles"] = reliable_roles
                 preprocessing["triview_excluded_roles"] = [
@@ -5471,7 +6688,7 @@ async def _run_triview_background(
                     if role in _VIEW_ROLE_ORDER and role not in reliable_roles
                 ]
                 preprocessing["triview_partial_pass_reason"] = (
-                    "侧面/背面一致性不足，已自动排除；Meshy 只使用通过保真度更高的主视角/45度视角。"
+                    "系统已自动排除保真度不足的坏视角；Meshy 只使用通过复核的主视角/45度视角。"
                 )
                 plan["generated_inputs"] = generated
                 plan["usable_roles_for_3d"] = reliable_roles
@@ -5484,7 +6701,7 @@ async def _run_triview_background(
                 preprocessing["triview_sheet_views"] = generated_roles
                 meshy_roles = [role for role, _ in _meshy_base_image_items({"preprocessing": preprocessing})]
                 notes = list(job.get("quality_notes") or [])
-                notes.append("已生成五个候选视角；侧面/背面复核未通过，系统会自动排除坏视角，不送入 Meshy。")
+                notes.append("已生成三视图候选；系统会自动排除保真度不足的坏视角，不送入 Meshy。")
                 notes.append(f"确认生成 3D 时将使用：{_sheet_view_names(meshy_roles)}。")
                 store.update_job(
                     job_id,
@@ -5505,6 +6722,8 @@ async def _run_triview_background(
                     error=None,
                 )
                 return
+            if local_geometry.get("issues") or verification.get("view_separation_failed"):
+                preprocessing["triview_partial_pass_blocked_reason"] = "前三视角视角分离度不足，不能部分放行给 Meshy。"
             store.update_job(
                 job_id,
                 status="preprocessed",
@@ -5537,7 +6756,7 @@ async def _run_triview_background(
         preprocessing["triview_sheet_views"] = generated_roles
         meshy_roles = [role for role, _ in _meshy_base_image_items({"preprocessing": {"triview_inputs": generated}})]
         notes = list(job.get("quality_notes") or [])
-        notes.append("多视角图已由图片模型生成；这一步未调用 Meshy，也未消耗 Meshy 3D credits。")
+        notes.append("三视图已由图片模型生成；这一步未调用 Meshy，也未消耗 Meshy 3D credits。")
         notes.append(
             f"已生成{_sheet_view_names(generated_roles)}；确认后将按 Meshy 多图接口限制，"
             f"使用{_sheet_view_names(meshy_roles)}生成 3D 底模。"
@@ -5568,7 +6787,7 @@ async def _run_triview_background(
         latest_preprocessing.pop("force_regenerate_triview", None)
         notes = list(latest.get("quality_notes") or [])
         notes.append(
-            f"多视角生成失败：{detail}。任务和已生成视图已保留"
+            f"三视图生成失败：{detail}。任务和已生成视图已保留"
             f"{f'（已生成 {partial_count} 张）' if partial_count else ''}；为保证一致性，系统不会自动切换模型或改用低参考强度生成。"
         )
         store.update_job(
@@ -5606,7 +6825,7 @@ async def _run_component_split_background(
                 source_for_plan = item
                 break
         if not isinstance(source_for_plan, dict):
-            raise RuntimeError("高精度拆件必须先生成多视角图；拆件规划只使用正面锚点图，不回退到单图低精度裁切。")
+            raise RuntimeError("高精度拆件必须先生成三视图；拆件规划只使用正面锚点图，不回退到单图低精度裁切。")
         reference_path = Path(str(source_for_plan.get("normalized_path") or ""))
         if not reference_path.exists():
             raise RuntimeError("找不到可用于生成拆件板的参考图。")
@@ -5870,7 +7089,7 @@ async def _run_component_split_background(
         preprocessing["component_split_generated"] = True
         notes = list(job.get("quality_notes") or [])
         notes.append("已使用 GPT Image 2 根据红框参考生成干净孤立部件输入图；裁剪图只用于定位参考，不直接送入 3D。")
-        notes.append("当前步骤只生成 2D 部件输入图；下一步可单独生成 Meshy 3D 部件，确认后再与多视角底模合成。")
+        notes.append("当前步骤只生成 2D 部件输入图；下一步可单独生成 Meshy 3D 部件，确认后再与三视图底模合成。")
         store.update_job(
             job_id,
             status="preprocessed",
@@ -5986,7 +7205,64 @@ async def ai_3d_model_create_job(
     character_template = _is_character_template(asset_template)
     upload_files = [f for f in (files or []) if f and f.filename]
     if not upload_files:
-        raise HTTPException(status_code=400, detail="请上传至少一张图片或一个 zip 压缩包")
+        desc = description.strip()
+        if not desc:
+            raise HTTPException(status_code=400, detail="请上传至少一张图片/zip，或填写用于生成三视图的资产提示词")
+        job_id = store.new_job_id()
+        root = store.job_dir(job_id)
+        root.mkdir(parents=True, exist_ok=True)
+        resolved_template = asset_template if asset_template != "auto" else "ornament_prop"
+        view_plan = _text_prompt_view_generation_plan(
+            asset_template=resolved_template,
+            description=desc,
+            image_model=image_model,
+            target_formats=target_formats,
+        )
+        preprocessing = {
+            "auto_crop": False,
+            "auto_decompose": False,
+            "generated_part_count": 0,
+            "max_parts": max_parts,
+            "source_inputs": [],
+            "region_candidate_inputs": [],
+            "requires_image_stage_for_quality": True,
+            "preprocess_only": True,
+            "text_prompt_only": True,
+            "text_prompt": desc,
+            "component_policy": "text_prompt_triview_first",
+        }
+        job = {
+            "job_id": job_id,
+            "status": "preprocessed",
+            "stage": "text_prompt_ready",
+            "progress": 100,
+            "provider": "meshy",
+            "final_3d_provider": "meshy",
+            "image_stage_provider": "image_model",
+            "image_stage_models": [_SUTUI_GPT_IMAGE_2_MODEL, "nano-banana-2"],
+            "mode": "text-to-multiview",
+            "strategy": "multi_view",
+            "quality": quality,
+            "title": title.strip() or f"Text 3D job {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "created_at": store.now_iso(),
+            "updated_at": store.now_iso(),
+            "inputs": [],
+            "target_formats": target_formats,
+            "outputs": {},
+            "preprocessing": preprocessing,
+            "view_generation_plan": view_plan,
+            "asset_template": resolved_template,
+            "reference_strength": "text_prompt",
+            "image_model": image_model,
+            "description": desc,
+            "quality_notes": [
+                "这是纯提示词任务：不需要上传图片，系统会先用图片模型生成高质量三视图参考图。",
+                "文本生成三视图适合硬表面、饰品、道具、PBR 资产；默认不生成侧视图和背视图，避免换设计。",
+                "这一步不会调用 Meshy；只有确认三视图后生成 3D 底模才会消耗 Meshy credits。",
+            ],
+        }
+        store.save_job(job)
+        return {"ok": True, "job": _public_job(job)}
 
     job_id = store.new_job_id()
     root = store.job_dir(job_id)
@@ -6032,9 +7308,11 @@ async def ai_3d_model_create_job(
     source_inputs = list(inputs)
     generated_part_count = 0
     region_candidate_inputs: List[Dict[str, Any]] = []
+    reference_sheet_triview_inputs: List[Dict[str, Any]] = []
+    reference_sheet_detection: Dict[str, Any] = {}
     subject_candidate_plan: Dict[str, Any] = {}
     subject_understanding_error = ""
-    selected_source_input: Optional[Dict[str, Any]] = None
+    recommended_subject_candidate: Optional[Dict[str, Any]] = None
     if len(source_inputs) == 1 and auto_decompose:
         part_dir = norm_dir / "parts"
         try:
@@ -6049,17 +7327,33 @@ async def ai_3d_model_create_job(
                     description=description,
                     max_candidates=max_parts,
                 )
-                region_candidate_inputs = _region_inputs_from_subject_plan(
-                    job_id=job_id,
-                    source_input=source_inputs[0],
-                    src=source_path,
-                    out_dir=part_dir,
-                    subject_plan=subject_candidate_plan,
+                reference_sheet_detection = (
+                    subject_candidate_plan.get("reference_sheet")
+                    if isinstance(subject_candidate_plan.get("reference_sheet"), dict)
+                    else {}
                 )
+                if reference_sheet_detection.get("is_multiview_reference_sheet"):
+                    reference_sheet_triview_inputs = _triview_inputs_from_reference_sheet_plan(
+                        job_id=job_id,
+                        source_input=source_inputs[0],
+                        src=source_path,
+                        out_dir=norm_dir / "reference_sheet_views",
+                        detection=reference_sheet_detection,
+                    )
+                if not reference_sheet_triview_inputs:
+                    region_candidate_inputs = _region_inputs_from_subject_plan(
+                        job_id=job_id,
+                        source_input=source_inputs[0],
+                        src=source_path,
+                        out_dir=part_dir,
+                        subject_plan=subject_candidate_plan,
+                    )
             except Exception as exc:
                 subject_understanding_error = str(exc)
                 logger.warning("[ai_3d_model] subject understanding fallback job_id=%s error=%s", job_id, exc)
-            if not region_candidate_inputs and character_template:
+            if reference_sheet_triview_inputs:
+                pass
+            elif not region_candidate_inputs and character_template:
                 parts = _decompose_character_image(source_path, part_dir, max_parts=max_parts)
                 generated_part_count = len(parts)
                 part_inputs: List[Dict[str, Any]] = []
@@ -6110,41 +7404,32 @@ async def ai_3d_model_create_job(
             else:
                 generated_part_count = len(region_candidate_inputs)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"区域裁切候选生成失败：{exc}") from exc
+            raise HTTPException(status_code=400, detail=f"AI 主体理解候选生成失败：{exc}") from exc
         if subject_candidate_plan and region_candidate_inputs:
             recommended_index = int(subject_candidate_plan.get("recommended_index") or 0)
-            recommended_input = next(
-                (
-                    item for item in region_candidate_inputs
-                    if int(item.get("subject_candidate_index") or item.get("index") or -1) == recommended_index
-                ),
-                None,
-            )
-            recommended_candidate = next(
+            recommended_subject_candidate = next(
                 (
                     item for item in (subject_candidate_plan.get("candidates") or [])
                     if isinstance(item, dict) and int(item.get("index") or -1) == recommended_index
                 ),
                 None,
             )
-            if isinstance(recommended_input, dict) and isinstance(recommended_candidate, dict):
-                selected_source_input = _copy_selected_candidate_as_source(
-                    job_id=job_id,
-                    candidate=recommended_input,
-                    source_input=source_inputs[0],
-                    index=recommended_index,
-                )
-                source_inputs = [selected_source_input]
 
-    requires_image_stage_for_quality = bool(len(source_inputs) == 1)
+    reference_sheet_ready = bool(reference_sheet_triview_inputs)
+    if reference_sheet_ready:
+        inputs = reference_sheet_triview_inputs
+    requires_image_stage_for_quality = bool(len(source_inputs) == 1 and not reference_sheet_ready)
     hold_for_preprocess = bool(preprocess_only or requires_image_stage_for_quality)
     if region_candidate_inputs and hold_for_preprocess:
-        inputs = source_inputs if selected_source_input else region_candidate_inputs
+        inputs = source_inputs
     elif region_candidate_inputs:
         inputs = source_inputs
 
     effective_strategy = strategy
-    if hold_for_preprocess and generated_part_count:
+    if reference_sheet_ready:
+        effective_strategy = "multi_view"
+        hold_for_preprocess = True
+    elif hold_for_preprocess and generated_part_count:
         effective_strategy = "candidate_preview"
     elif hold_for_preprocess and effective_strategy == "auto":
         effective_strategy = "multi_view"
@@ -6168,25 +7453,33 @@ async def ai_3d_model_create_job(
         "preprocess_only": hold_for_preprocess,
         "component_policy": "triview_first_for_character" if character_template else "parts_allowed_for_hard_surface",
     }
+    if reference_sheet_detection:
+        preprocessing["reference_sheet_detection"] = reference_sheet_detection
+    if reference_sheet_ready:
+        reference_roles = [str(item.get("role") or "") for item in reference_sheet_triview_inputs if isinstance(item, dict)]
+        preprocessing.update({
+            "reference_sheet_detected": True,
+            "triview_from_reference_sheet": True,
+            "triview_generated": True,
+            "triview_generation_skipped": True,
+            "triview_quality_gate": "passed",
+            "triview_inputs": reference_sheet_triview_inputs,
+            "triview_inputs_partial": reference_sheet_triview_inputs,
+            "triview_sheet_views": reference_roles,
+            "triview_usable_roles": reference_roles,
+            "triview_source": "reference_sheet",
+        })
     if subject_candidate_plan:
         preprocessing["subject_candidate_plan"] = subject_candidate_plan
     if subject_understanding_error:
         preprocessing["subject_understanding_error"] = subject_understanding_error
-    if selected_source_input and subject_candidate_plan:
+    if subject_candidate_plan:
         recommended_index = int(subject_candidate_plan.get("recommended_index") or 0)
-        recommended_candidate = next(
-            (
-                item for item in (subject_candidate_plan.get("candidates") or [])
-                if isinstance(item, dict) and int(item.get("index") or -1) == recommended_index
-            ),
-            None,
-        )
-        preprocessing["selected_region_candidate_index"] = recommended_index
-        preprocessing["selected_region_candidate_role"] = str(selected_source_input.get("selected_from_candidate_role") or "")
-        preprocessing["selected_region_candidate_label"] = str(selected_source_input.get("selected_from_candidate_label") or "")
-        preprocessing["selected_by_ai"] = True
-        if isinstance(recommended_candidate, dict):
-            preprocessing["triview_ai_understanding"] = _view_understanding_from_subject_candidate(subject_candidate_plan, recommended_candidate)
+        preprocessing["ai_recommended_region_candidate_index"] = recommended_index
+        if isinstance(recommended_subject_candidate, dict):
+            preprocessing["ai_recommended_region_candidate_role"] = str(recommended_subject_candidate.get("role") or "")
+            preprocessing["ai_recommended_region_candidate_label"] = str(recommended_subject_candidate.get("label") or "")
+            preprocessing["triview_ai_understanding"] = _view_understanding_from_subject_candidate(subject_candidate_plan, recommended_subject_candidate)
             preprocessing["triview_ai_understanding"]["prompt_version"] = _VIEW_PROMPT_VERSION
     if not hold_for_preprocess and effective_strategy == "part_batch" and len(source_inputs) >= 2 and not region_candidate_inputs:
         preprocessing["component_source_mode"] = "user_part_package"
@@ -6196,12 +7489,14 @@ async def ai_3d_model_create_job(
         asset_template=asset_template,
         reference_strength=reference_strength,
         description=description,
+        target_formats=target_formats,
     )
     _apply_generic_reference_triview_prompts(
         view_plan,
         asset_template=asset_template,
         reference_strength=reference_strength,
         description=description,
+        target_formats=target_formats,
     )
     view_plan["image_model"] = image_model
     job = {
@@ -6280,11 +7575,11 @@ async def ai_3d_model_start_generation(
         and not preprocessing.get("triview_generated")
         and not preprocessing.get("component_split_generated")
     ):
-        raise HTTPException(status_code=409, detail="当前只有区域裁切候选，不是真实拆件。请先生成高清多视角后走 Multi-Image to 3D，或上传真实拆件包/接入语义分割后再生成 3D。")
+        raise HTTPException(status_code=409, detail="单图任务需要先生成高清三视图，再走 Multi-Image to 3D；第二步只是 AI 主体理解和定位诊断，不需要手动选择。")
     if str(job.get("strategy") or "") == "part_batch" and not _has_true_component_source(job):
-        raise HTTPException(status_code=409, detail="当前输入不是可用于 part_batch 的真实拆件包。矩形裁切和参考候选不会送入 Meshy；角色请改用高清多视角，硬表面/饰件请上传拆件包或使用拆件流程。")
+        raise HTTPException(status_code=409, detail="当前输入不是可用于 part_batch 的真实拆件包。矩形裁切和参考候选不会送入 Meshy；角色请改用高清三视图，硬表面/饰件请上传拆件包或使用拆件流程。")
     if str(job.get("strategy") or "") == "part_batch" and len(_triview_image_paths(job)) < 2:
-        raise HTTPException(status_code=409, detail="高精度拆件增强必须先生成多视角图。请先点击“用图片模型生成多视角”，系统不会走低精度 parts-only 拼装。")
+        raise HTTPException(status_code=409, detail="高精度拆件增强必须先生成三视图。请先点击“用图片模型生成三视图”，系统不会走低精度 parts-only 拼装。")
     if not meshy.is_configured():
         raise HTTPException(status_code=503, detail="Meshy API Key 未配置，请在 .env 中设置 MESHY_API_KEY")
     preprocessing["preprocess_only"] = False
@@ -6325,9 +7620,9 @@ async def ai_3d_model_generate_base_model(
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
-        raise HTTPException(status_code=409, detail="当前任务状态不能生成多视角底模")
+        raise HTTPException(status_code=409, detail="当前任务状态不能生成三视图底模")
     if len(_triview_image_paths(job)) < 2:
-        raise HTTPException(status_code=409, detail="必须先生成多视角图，才能生成多视角 3D 底模")
+        raise HTTPException(status_code=409, detail="必须先生成三视图，才能生成三视图 3D 底模")
     gate_error = _multiview_quality_gate_error(job)
     if gate_error:
         raise HTTPException(status_code=409, detail=gate_error)
@@ -6435,8 +7730,66 @@ async def ai_3d_model_generate_triview(
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
-        raise HTTPException(status_code=409, detail="当前任务状态不能生成多视角")
+        raise HTTPException(status_code=409, detail="当前任务状态不能生成三视图")
     selected_model = _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
+    preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
+    if preprocessing.get("triview_from_reference_sheet"):
+        return {"ok": True, "job": _public_job(job), "skipped": True, "reason": "已从多视角参考板提取视角，不再调用 image-2 重画。"}
+    source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
+    if len(source_inputs) == 1:
+        source_path = Path(str(source_inputs[0].get("normalized_path") or ""))
+        if source_path.is_file():
+            try:
+                detection = await _ai_reference_sheet_detection(
+                    job_id=job_id,
+                    request=request,
+                    reference_path=source_path,
+                    preprocessing=preprocessing,
+                    asset_template=str(job.get("asset_template") or "auto"),
+                    description=str(job.get("description") or ""),
+                )
+                extracted = _triview_inputs_from_reference_sheet_plan(
+                    job_id=job_id,
+                    source_input=source_inputs[0],
+                    src=source_path,
+                    out_dir=store.job_dir(job_id) / "normalized" / "reference_sheet_views",
+                    detection=detection,
+                )
+                if extracted:
+                    roles = [str(item.get("role") or "") for item in extracted if isinstance(item, dict)]
+                    preprocessing = dict(preprocessing)
+                    preprocessing.update({
+                        "reference_sheet_detection": detection,
+                        "reference_sheet_detected": True,
+                        "triview_from_reference_sheet": True,
+                        "triview_generated": True,
+                        "triview_generation_skipped": True,
+                        "triview_quality_gate": "passed",
+                        "triview_inputs": extracted,
+                        "triview_inputs_partial": extracted,
+                        "triview_sheet_views": roles,
+                        "triview_usable_roles": roles,
+                        "triview_source": "reference_sheet",
+                        "requires_image_stage_for_quality": False,
+                        "generated_part_count": 0,
+                    })
+                    notes = list(job.get("quality_notes") or [])
+                    notes.append("AI 判断原图已是三视图/参考板，已直接提取视角；跳过 image-2 三视图生成。")
+                    store.update_job(
+                        job_id,
+                        status="preprocessed",
+                        stage="triview_completed",
+                        progress=100,
+                        error=None,
+                        preprocessing=preprocessing,
+                        inputs=extracted,
+                        strategy="multi_view",
+                        mode="multi-image-to-3d",
+                        quality_notes=notes,
+                    )
+                    return {"ok": True, "job": _public_job(store.load_job(job_id) or job), "skipped": True, "reason": "AI 识别为多视角参考板，已直接提取视角。"}
+            except Exception as exc:
+                logger.info("[ai_3d_model] reference sheet routing not applied job_id=%s error=%s", job_id, exc)
     patch: Dict[str, Any] = {
         "status": "generating_views",
         "stage": "queued_triview",
@@ -6450,18 +7803,6 @@ async def ai_3d_model_generate_triview(
         "provider_task_id": None,
         "consumed_credits": 0,
     }
-    preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
-    candidate_inputs = preprocessing.get("region_candidate_inputs") if isinstance(preprocessing.get("region_candidate_inputs"), list) else []
-    has_generic_subject_candidates = any(
-        isinstance(item, dict) and str(item.get("role") or "").endswith("_subject")
-        for item in candidate_inputs
-    )
-    if (
-        has_generic_subject_candidates
-        and not preprocessing.get("selected_region_candidate_index")
-        and str(job.get("stage") or "") == "preprocessed"
-    ):
-        raise HTTPException(status_code=409, detail="请先在区域裁切候选中选择要生成的主体，再生成多视角。")
     if preprocessing.get("triview_generated") or job.get("stage") == "triview_completed":
         preprocessing = dict(preprocessing)
         preprocessing.pop("triview_generated", None)
@@ -6698,10 +8039,8 @@ async def ai_3d_model_export_3mf(
         file for file in result.get("files") or []
         if isinstance(file, dict) and str(file.get("format") or "").lower() == "3mf"
     ]
-    if len(model_files) == 1 and scope_safe in {"base", "final", "assembled", "assembly"}:
-        download_url = str(model_files[0].get("url") or "")
-    else:
-        download_url = f"/api/ai-3d-model/jobs/{job_id}/3mf/download?scope={scope_safe}"
+    download_url = f"/api/ai-3d-model/jobs/{job_id}/3mf/download?scope={scope_safe}"
+    local_dir = _3mf_export_directory_for_scope(job_id, result.get("job") or job, scope_safe)
     return {
         "ok": True,
         "scope": scope_safe,
@@ -6709,10 +8048,29 @@ async def ai_3d_model_export_3mf(
         "passed_count": result.get("passed_count") or 0,
         "failed_count": result.get("failed_count") or 0,
         "download_url": download_url,
+        "open_dir_url": f"/api/ai-3d-model/jobs/{job_id}/3mf/open-dir?scope={scope_safe}",
+        "local_dir": str(local_dir),
         "files": result.get("files") or [],
         "reports": result.get("reports") or [],
         "job": _public_job(result.get("job") or store.load_job(job_id) or job),
     }
+
+
+@router.post("/api/ai-3d-model/jobs/{job_id}/3mf/open-dir")
+def ai_3d_model_open_3mf_dir(
+    job_id: str,
+    scope: str = Form("all"),
+    _: _ServerUser = Depends(_ai3d_local_user),
+):
+    job = store.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    scope_safe = (scope or "all").strip().lower()
+    if scope_safe not in {"base", "parts", "final", "assembled", "assembly", "all"}:
+        raise HTTPException(status_code=400, detail="scope must be base, parts, final or all")
+    folder = _3mf_export_directory_for_scope(job_id, job, scope_safe)
+    _open_local_directory(folder)
+    return {"ok": True, "local_dir": str(folder)}
 
 
 @router.get("/api/ai-3d-model/jobs/{job_id}/3mf/download")

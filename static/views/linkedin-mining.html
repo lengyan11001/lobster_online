@@ -148,6 +148,21 @@
         overflow: auto;
         padding-right: 0.2rem;
       }
+      .li-template-list {
+        display: grid;
+        gap: 0.55rem;
+      }
+      .li-template-item {
+        border: 1px solid rgba(15,23,42,0.1);
+        border-radius: 8px;
+        background: #fff;
+        padding: 0.72rem;
+      }
+      .li-template-item strong {
+        display: block;
+        line-height: 1.45;
+        word-break: break-word;
+      }
       .li-item {
         border: 1px solid rgba(15,23,42,0.1);
         border-radius: 8px;
@@ -620,10 +635,18 @@
           </div>
           <div class="li-copy-row">
             <button type="button" id="liStartJobBtn" class="btn btn-primary">开始一键挖掘</button>
+            <button type="button" id="liCreateTemplateBtn" class="btn btn-ghost">创建模板</button>
             <button type="button" id="liSaveDraftBtn" class="btn btn-ghost">保存输入</button>
             <button type="button" id="liLoadDraftBtn" class="btn btn-ghost">读取上次输入</button>
           </div>
         </div>
+      </div>
+      <div class="li-card" style="margin-top:0.85rem;">
+        <div class="li-card-title">
+          <span>采集模板</span>
+          <button type="button" id="liRefreshTemplatesBtn" class="btn btn-ghost btn-sm">刷新</button>
+        </div>
+        <div id="liTemplateList" class="li-template-list"></div>
       </div>
     </section>
 

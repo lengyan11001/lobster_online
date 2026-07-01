@@ -1,6 +1,6 @@
 {
-  "version": "1.0.89",
-  "build": 127,
-  "applied_at": "2026-06-26T15:50:28+08:00",
-  "note": "Bump skill store cache for WeChat Channels transcript entry"
+  "version": "1.0.90",
+  "build": 128,
+  "applied_at": "2026-06-30T16:06:25+08:00",
+  "note": "Social leads platform isolation and current skill updates"
 }

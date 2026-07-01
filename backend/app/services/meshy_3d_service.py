@@ -120,6 +120,7 @@ async def create_image_to_3d_task(
     *,
     quality: str = "high",
     target_formats: Optional[Iterable[str]] = None,
+    texture_prompt: str = "",
 ) -> Dict[str, Any]:
     body = {
         "image_url": image_path_to_data_url(image_path),
@@ -132,7 +133,7 @@ async def create_image_to_3d_task(
         "image_enhancement": True,
     }
     if quality == "production":
-        body["texture_prompt"] = "PBR material, preserve original surface colors and fine details"
+        body["texture_prompt"] = texture_prompt or "PBR material, preserve original surface colors and fine details"
     resp = await _request_with_retries(
         "POST",
         f"{MESHY_API_BASE}/image-to-3d",
@@ -150,9 +151,10 @@ async def create_multi_image_to_3d_task(
     *,
     quality: str = "high",
     target_formats: Optional[Iterable[str]] = None,
+    texture_prompt: str = "",
 ) -> Dict[str, Any]:
     if len(image_paths) < 2:
-        return await create_image_to_3d_task(image_paths[0], quality=quality, target_formats=target_formats)
+        return await create_image_to_3d_task(image_paths[0], quality=quality, target_formats=target_formats, texture_prompt=texture_prompt)
     image_urls = [image_path_to_data_url(path) for path in image_paths[:4]]
     body = {
         "image_urls": image_urls,
@@ -164,7 +166,7 @@ async def create_multi_image_to_3d_task(
         "target_formats": _coerce_target_formats(target_formats),
     }
     if quality == "production":
-        body["texture_prompt"] = "PBR material, preserve the uploaded references, clean topology, production-ready hard-surface asset"
+        body["texture_prompt"] = texture_prompt or "PBR material, preserve the uploaded references, clean topology, production-ready hard-surface asset"
     resp = await _request_with_retries(
         "POST",
         f"{MESHY_API_BASE}/multi-image-to-3d",

@@ -7,7 +7,8 @@
     jobsLoadSeq: 0,
     jobPage: 1,
     jobPageSize: 10,
-    previewModelByJob: {}
+    previewModelByJob: {},
+    infoBubblePinned: false
   };
   var LAST_JOB_KEY = 'lobster.ai3d.lastJobId';
 
@@ -61,7 +62,7 @@
     var link = document.createElement('link');
     link.id = 'ai3dModelCss';
     link.rel = 'stylesheet';
-    link.href = '/static/css/ai-3d-model.css?v=20260628-subject-candidates-v1';
+    link.href = '/static/css/ai-3d-model.css?v=20260629-triview-v1';
     document.head.appendChild(link);
   }
 
@@ -79,7 +80,7 @@
     if (!root) return;
     var subtitle = root.querySelector('.ai3d-subtitle');
     if (subtitle) {
-      subtitle.textContent = '上传单张原画、参考图或拆件包；角色优先生成高清多视角底模，部件输入图只用于后续生成 3D 部件并合成。';
+      subtitle.textContent = '可上传原画/参考图/拆件包，也可只填资产提示词直接生成高清三视图；确认后再生成 3D 底模。';
     }
     var imageLabel = root.querySelector('label[for="ai3dImageModel"]');
     if (imageLabel) imageLabel.textContent = '前置图片模型';
@@ -103,6 +104,14 @@
     node.textContent = text || '';
     node.className = 'msg' + (isErr ? ' err' : '');
     node.style.display = text ? 'block' : 'none';
+  }
+
+  function setMsgHtml(html, isErr) {
+    var node = el('ai3dMsg');
+    if (!node) return;
+    node.innerHTML = html || '';
+    node.className = 'msg' + (isErr ? ' err' : '');
+    node.style.display = html ? 'block' : 'none';
   }
 
   function rememberJob(jobId) {
@@ -162,9 +171,9 @@
           badge.className = 'ai3d-badge ' + (state.configured ? 'ok' : 'bad');
         }
         if (balance) {
-          if (!state.configured) balance.textContent = '最终 3D 需在本机 .env 配置 MESHY_API_KEY；角色走多视角，硬表面/饰件才走拆件。';
+          if (!state.configured) balance.textContent = '最终 3D 需在本机 .env 配置 MESHY_API_KEY；角色走三视图，硬表面/饰件才走拆件。';
           else if (x.data.balance_error) balance.textContent = '余额读取失败：' + x.data.balance_error;
-          else balance.textContent = 'Meshy 3D 余额：' + (x.data.balance == null ? '未知' : x.data.balance + ' credits') + '；角色走多视角，硬表面/饰件才走拆件';
+          else balance.textContent = 'Meshy 3D 余额：' + (x.data.balance == null ? '未知' : x.data.balance + ' credits') + '；角色走三视图，硬表面/饰件才走拆件';
         }
       })
       .catch(function(err) {
@@ -266,8 +275,10 @@
   function submitJob(evt) {
     if (evt) evt.preventDefault();
     var input = el('ai3dFiles');
-    if (!input || !input.files || !input.files.length) {
-      setMsg('请先上传图片或 zip 压缩包。', true);
+    var description = el('ai3dDescription') ? el('ai3dDescription').value.trim() : '';
+    var hasFiles = !!(input && input.files && input.files.length);
+    if (!hasFiles && !description) {
+      setMsg('请上传图片/zip，或填写资产提示词。', true);
       return;
     }
     var formats = selectedFormats();
@@ -276,9 +287,11 @@
       return;
     }
     var fd = new FormData();
-    Array.prototype.slice.call(input.files).forEach(function(file) {
-      fd.append('files', file, file.name);
-    });
+    if (hasFiles) {
+      Array.prototype.slice.call(input.files).forEach(function(file) {
+        fd.append('files', file, file.name);
+      });
+    }
     fd.append('strategy', el('ai3dStrategy') ? el('ai3dStrategy').value : 'auto');
     fd.append('quality', el('ai3dQuality') ? el('ai3dQuality').value : 'production');
     fd.append('formats', formats.join(','));
@@ -288,7 +301,7 @@
     fd.append('preprocess_only', el('ai3dPreprocessOnly') && el('ai3dPreprocessOnly').checked ? 'true' : 'false');
     fd.append('asset_template', el('ai3dTemplate') ? el('ai3dTemplate').value : 'auto');
     fd.append('reference_strength', el('ai3dReferenceStrength') ? el('ai3dReferenceStrength').value : 'high');
-    fd.append('description', el('ai3dDescription') ? el('ai3dDescription').value.trim() : '');
+    fd.append('description', description);
     fd.append('image_model', el('ai3dImageModel') ? el('ai3dImageModel').value : 'openai/gpt-image-2');
     var btn = el('ai3dSubmitBtn');
     setBusy(btn, true, '提交中...');
@@ -306,7 +319,11 @@
         loadJobs(false);
         closeCreateModal();
         if (x.data.job && x.data.job.status === 'preprocessed') {
-          setMsg('已完成预处理，请检查主体裁切和区域候选；角色请先生成多视角，确认生成 3D 时才调用 Meshy。', false);
+          if (x.data.job.preprocessing && x.data.job.preprocessing.text_prompt_only) {
+            setMsg('纯文本任务已创建，请点击步骤里的“生成三视图”；这一步不调用 Meshy。', false);
+          } else {
+            setMsg('已完成预处理，请检查主体裁切和区域候选；角色请先生成三视图，确认生成 3D 时才调用 Meshy。', false);
+          }
         } else {
           setMsg('任务已提交，正在调用 Meshy 生成 3D。复杂资产可能需要数分钟。', false);
           startPolling();
@@ -345,7 +362,7 @@
             loadConfig();
           } else if (job.status === 'preprocessed') {
             if (job.stage === 'triview_completed') {
-              setMsg('多视角已由图片模型生成，请检查后确认生成 3D。', false);
+              setMsg('三视图已由图片模型生成，请检查后确认生成 3D。', false);
             } else if (job.stage === 'base_model_ready') {
               setMsg('完整 3D 模型已生成。满意就到这里结束；不满意再生成部件输入图做局部增强。', false);
             } else if (job.stage === 'component_split_completed') {
@@ -353,11 +370,11 @@
             } else if (job.stage === 'parts_3d_ready') {
               setMsg('3D 部件已生成/复用完成。现在可以点击“合成最终模型”。', false);
             } else if (job.stage === 'triview_failed') {
-              setMsg('多视角生成失败：' + (job.error || '图片模型暂时没有返回结果') + '。任务进度已保留；为保证一致性，系统不会自动切换模型。', true);
+              setMsg('三视图生成失败：' + (job.error || '图片模型暂时没有返回结果') + '。任务进度已保留；为保证一致性，系统不会自动切换模型。', true);
             } else if (job.stage === 'component_split_failed') {
               setMsg('AI 部件分离失败：' + (job.error || '图片模型暂时没有返回结果') + '。任务进度已保留；为保证一致性，系统不会自动切换模型。', true);
             } else {
-              setMsg('预处理已完成，请检查主体裁切和区域候选图；下一步可用图片模型生成多视角或独立部件板。', false);
+              setMsg('预处理已完成，请检查主体裁切和区域候选图；下一步可用图片模型生成三视图或独立部件板。', false);
             }
           } else {
             setMsg(job.error || '3D 生成失败', true);
@@ -641,6 +658,37 @@
     document.querySelectorAll('.ai3d-lightbox').forEach(function(node) { node.remove(); });
   }
 
+  function closeInfoBubble() {
+    state.infoBubblePinned = false;
+    document.querySelectorAll('.ai3d-info-bubble').forEach(function(node) { node.remove(); });
+    document.querySelectorAll('.ai3d-info-dot.active').forEach(function(node) { node.classList.remove('active'); });
+  }
+
+  function openInfoBubble(btn, pinned) {
+    if (!btn) return;
+    var text = btn.getAttribute('data-ai3d-info') || '';
+    if (!text) return;
+    closeInfoBubble();
+    state.infoBubblePinned = !!pinned;
+    btn.classList.add('active');
+    var bubble = document.createElement('div');
+    bubble.className = 'ai3d-info-bubble';
+    bubble.setAttribute('role', 'tooltip');
+    bubble.textContent = text;
+    document.body.appendChild(bubble);
+    var rect = btn.getBoundingClientRect();
+    var bubbleRect = bubble.getBoundingClientRect();
+    var margin = 12;
+    var left = rect.left + rect.width / 2 - bubbleRect.width / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - bubbleRect.width - margin));
+    var top = rect.bottom + 8;
+    if (top + bubbleRect.height + margin > window.innerHeight) {
+      top = Math.max(margin, rect.top - bubbleRect.height - 8);
+    }
+    bubble.style.left = left + 'px';
+    bubble.style.top = top + 'px';
+  }
+
   function displayJobTitle(job) {
     var title = String((job && job.title) || '').trim();
     if (!title || /^\?+$/.test(title)) return '3D 任务 ' + String((job && job.job_id) || '').slice(0, 8);
@@ -667,17 +715,21 @@
     return '<div class="ai3d-step-thumbs">' + items.slice(0, limit || 12).map(function(item) {
       var url = item.preview_url || item.url || '';
       var isImage = item.preview_url || /\.(png|jpe?g|webp)$/i.test(url);
-      var title = item.label || item.filename || item.format || '结果';
-      var candidateRole = String(item.role || '');
-      var selectAction = /(_subject$|^primary_subject$|^center_subject$|^upper_subject$|^lower_subject$|^left_subject$|^right_subject$|^wide_base_subject$|^full_body$)/.test(candidateRole) ?
-        '<button type="button" class="ai3d-candidate-select" data-ai3d-candidate-index="' + escAttr(item.index || '') + '">Use as subject</button>' : '';
+      var title = item.label || item.filename || item.format || '??';
+      if (item && item.kind === 'prompt') {
+        var promptText = String(item.prompt || '');
+        return '<figure class="ai3d-prompt-thumb"><div class="ai3d-step-file-icon">TXT</div>' +
+          '<figcaption><strong>' + esc(title) + '</strong><span class="ai3d-card-meta">' +
+          esc(promptText.length > 180 ? promptText.slice(0, 180) + '...' : promptText) +
+          '</span></figcaption></figure>';
+      }
       var meta = '';
-      if (item.ai_recommended) meta += '<em>AI recommended</em>';
+      var detailText = [item.subject_reason || '', item.subject_risk ? ('Risk: ' + item.subject_risk) : ''].filter(Boolean).join('\n');
+      if (item.ai_recommended) meta += '<em>AI</em>';
       if (item.suitability_score) meta += '<small>score ' + esc(item.suitability_score) + '</small>';
-      if (item.subject_reason) meta += '<small>' + esc(item.subject_reason) + '</small>';
-      if (item.subject_risk) meta += '<small class="risk">' + esc(item.subject_risk) + '</small>';
+      if (detailText) meta += '<button type="button" class="ai3d-info-dot" data-ai3d-info="' + escAttr(detailText) + '" aria-label="Show AI analysis">i</button>';
       return '<figure>' + (isImage && url ? previewImg(url, title, 'ai3d-previewable ai3d-step-preview') : '<div class="ai3d-step-file-icon">3D</div>') +
-        '<figcaption><strong>' + esc(item.label || item.filename || item.format || '结果') + '</strong>' + meta + selectAction + '</figcaption></figure>';
+        '<figcaption><strong>' + esc(item.label || item.filename || item.format || '??') + '</strong><span class="ai3d-card-meta">' + meta + '</span></figcaption></figure>';
     }).join('') + '</div>';
   }
 
@@ -714,10 +766,13 @@
     var f = actionFacts(job);
     var key = step.key || '';
     if (key === 'triview') {
+      if (f.triviewFromReferenceSheet) {
+        return [{ action: 'triview', text: '已提取参考板视角', disabled: true, primary: false }];
+      }
       if (f.canRegenerateTriview) {
         return [{
           action: 'triview',
-          text: job.stage === 'triview_completed' ? '重新生成多视角' : '生成多视角',
+          text: job.stage === 'triview_completed' ? '重新生成三视图' : '生成三视图',
           disabled: false,
           primary: !f.hasTriview
         }];
@@ -737,7 +792,7 @@
         disabled: !f.canPreprocessed,
         primary: false
       }];
-      if (!f.hasTriview) return [{ action: 'base', text: '先生成多视角', disabled: true, primary: false }];
+      if (!f.hasTriview) return [{ action: 'base', text: '先生成三视图', disabled: true, primary: false }];
       return [{
         action: 'base',
         text: '生成 3D 底模',
@@ -746,7 +801,7 @@
       }];
     }
     if (key === 'components') {
-      if (!f.hasTriview) return [{ action: 'components', text: '先生成多视角', disabled: true, primary: false }];
+      if (!f.hasTriview) return [{ action: 'components', text: '先生成三视图', disabled: true, primary: false }];
       if (!f.baseReady) return [{ action: 'components', text: '先生成 3D 底模', disabled: true, primary: false }];
       return [{
         action: 'components',
@@ -829,6 +884,7 @@
     var preprocessing = job && job.preprocessing ? job.preprocessing : {};
     var isCharacter = !!(job && ['character_realistic', 'character_stylized'].indexOf(String(job.asset_template || '')) >= 0);
     var hasTriview = !!(preprocessing.triview_generated || (Array.isArray(preprocessing.triview_inputs) && preprocessing.triview_inputs.length >= 2));
+    var triviewFromReferenceSheet = !!preprocessing.triview_from_reference_sheet;
     var requiresImageStage = !!(preprocessing.requires_image_stage_for_quality && !preprocessing.triview_generated && !preprocessing.component_split_generated);
     var cropReferenceOnly = preprocessing.component_reference_mode === 'crop_reference_only' || preprocessing.component_reference_mode === 'fidelity_crop';
     var failedComponents = !!((job && job.stage === 'component_split_failed') || preprocessing.component_quality_gate === 'failed');
@@ -847,6 +903,7 @@
       canRegenerateTriview: canRegenerateTriview,
       canRegenerateComponents: canRegenerateComponents,
       hasTriview: hasTriview,
+      triviewFromReferenceSheet: triviewFromReferenceSheet,
       baseReady: baseReady,
       partFlowReady: partFlowReady,
       partsReady: partsReady,
@@ -987,11 +1044,29 @@
       host.innerHTML = previewImg(preview.url, '3D 预览', 'ai3d-previewable ai3d-hero-preview');
       return;
     }
+    if (job.preprocessing && job.preprocessing.text_prompt_only && !(job.inputs && job.inputs.length)) {
+      var promptText = String(job.preprocessing.text_prompt || job.description || '');
+      var textPlan = job.view_generation_plan || {};
+      var textSpec = [
+        textPlan.image_model || job.image_model || 'openai/gpt-image-2',
+        textPlan.image_resolution || '4K',
+        textPlan.image_quality || 'high',
+        textPlan.output_format || 'png',
+        'text prompt',
+        'no Meshy'
+      ].join(' · ');
+      host.innerHTML = '<div class="ai3d-input-wrap">' +
+        '<div class="ai3d-input-head"><strong>纯文本资产设定</strong><span>待生成三视图</span></div>' +
+        '<div class="ai3d-plan"><strong>Image stage</strong><span>' + esc(textSpec) + '</span></div>' +
+        '<div class="ai3d-text-prompt-preview">' + esc(promptText) + '</div>' +
+        '</div>';
+      return;
+    }
     if (job.inputs && job.inputs.length) {
       var plan = job.view_generation_plan || {};
       var planHtml = '';
       if (plan.views && plan.views.length) {
-        planHtml = '<div class="ai3d-plan"><strong>图片模型多视角模板已准备</strong><span>' +
+        planHtml = '<div class="ai3d-plan"><strong>图片模型三视图模板已准备</strong><span>' +
           esc((plan.image_model || 'openai/gpt-image-2') + ' · ' + (plan.reference_strength || 'high') + ' · 不使用 Meshy') +
           '</span></div>';
         var specText = [
@@ -1023,17 +1098,17 @@
     if (job && job.strategy === 'part_batch' && job.preprocessing && job.preprocessing.component_split_generated) return '2D 部件输入图';
     if (job && job.stage === 'component_split_completed') return '2D 部件输入图';
     if (job && job.stage === 'component_references_ready') return '当前可生成输入';
-    if (job && job.stage === 'triview_completed') return '多视角输入';
-    return '区域裁切候选';
+    if (job && job.stage === 'triview_completed') return '三视图输入';
+    return '当前主参考图';
   }
 
   function inputKindLabel(job, item) {
     if (job && job.strategy === 'part_batch' && job.preprocessing && job.preprocessing.component_split_generated) return '2D 部件输入图';
     if (job && job.stage === 'component_split_completed') return '2D 部件输入图';
-    if (job && job.stage === 'component_references_ready') return (item && ['front', 'front_left_45', 'front_right_45', 'side', 'back'].indexOf(item.role) >= 0) ? 'AI 多视角' : '当前参考';
-    if (job && job.stage === 'triview_completed') return 'AI 多视角';
+    if (job && job.stage === 'component_references_ready') return (item && ['front', 'front_left_45', 'front_right_45', 'side', 'back'].indexOf(item.role) >= 0) ? 'AI 三视图' : '当前参考';
+    if (job && job.stage === 'triview_completed') return 'AI 三视图';
     if (item && item.crop_applied) return '主体裁切';
-    if (item && item.generated) return '区域候选';
+    if (item && item.generated) return 'AI 理解候选';
     return '原始参考';
   }
 
@@ -1047,8 +1122,8 @@
     var isPartFinal = !!(current.strategy === 'part_batch' && prep.component_split_generated);
     setBusy(btn, true, '启动中...');
     setMsg(isPartFinal ?
-      '正在读取多视角底模和已有 3D 部件，合成最终模型；这一步不重新生成部件。' :
-      '正在启动 Meshy 3D 生成：多视角会走 Multi-Image to 3D。',
+      '正在读取三视图底模和已有 3D 部件，合成最终模型；这一步不重新生成部件。' :
+      '正在启动 Meshy 3D 生成：三视图会走 Multi-Image to 3D。',
       false);
     var endpoint = isPartFinal ? '/assemble' : '/generate';
     fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + endpoint), {
@@ -1078,7 +1153,7 @@
     var jobId = ctx.jobId;
     if (!jobId) return;
     setBusy(btn, true, '生成中...');
-    setMsg('正在用多视角生成完整 3D 模型；如果后续需要增强局部，再进入部件生成和底模替换。', false);
+    setMsg('正在用三视图生成完整 3D 模型；如果后续需要增强局部，再进入部件生成和底模替换。', false);
     fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/base-model'), {
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
@@ -1086,14 +1161,14 @@
     })
       .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
       .then(function(x) {
-        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '多视角底模生成启动失败'));
+        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '三视图底模生成启动失败'));
         rememberJob(x.data.job && x.data.job.job_id);
         renderJob(x.data.job || {});
         loadJobs(false);
         startPolling();
       })
       .catch(function(err) {
-        setMsg(err && err.message ? err.message : '多视角底模生成启动失败', true);
+        setMsg(err && err.message ? err.message : '三视图底模生成启动失败', true);
       })
       .finally(function() {
         setBusy(btn, false);
@@ -1139,7 +1214,7 @@
     fd.append('quality', 'high');
     fd.append('output_format', 'png');
     setBusy(btn, true, '生成中...');
-    setMsg('正在用图片模型生成正视图、左前45°、右前45°、侧视图、背视图；复杂角色可能要等几分钟，这一步不调用 Meshy。', false);
+    setMsg('正在用图片模型生成正视图、左前45°、右前45°；不生成侧视图和背视图，这一步不调用 Meshy。', false);
     fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/triview'), {
       method: 'POST',
       headers: formHeaders(),
@@ -1147,46 +1222,16 @@
     })
       .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
       .then(function(x) {
-        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '多视角生成启动失败'));
+        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '三视图生成启动失败'));
         rememberJob(x.data.job && x.data.job.job_id);
         renderJob(x.data.job || {});
         loadJobs(false);
         startPolling();
       })
       .catch(function(err) {
-        var msg = err && err.message ? err.message : '多视角生成启动失败';
+        var msg = err && err.message ? err.message : '三视图生成启动失败';
         if (/超时|timeout|504/i.test(msg)) msg += '。任务进度已保留，可稍后用当前模型重试。';
         setMsg(msg, true);
-      })
-      .finally(function() {
-        setBusy(btn, false);
-      });
-  }
-
-  function selectCandidateSubject(trigger) {
-    var btn = trigger && trigger.closest ? trigger.closest('[data-ai3d-candidate-index]') : trigger;
-    var jobId = state.jobId;
-    var idx = btn ? btn.getAttribute('data-ai3d-candidate-index') : '';
-    if (!jobId || !idx) return;
-    var fd = new FormData();
-    fd.append('candidate_index', idx);
-    setBusy(btn, true, 'Selecting...');
-    setMsg('Selecting this crop as the multiview subject...', false);
-    fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/select-candidate'), {
-      method: 'POST',
-      headers: formHeaders(),
-      body: fd
-    })
-      .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
-      .then(function(x) {
-        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, 'Failed to select subject'));
-        rememberJob(x.data.job && x.data.job.job_id);
-        renderJob(x.data.job || {});
-        loadJobs(false);
-        setMsg('Subject selected. Now generate multiview from this crop.', false);
-      })
-      .catch(function(err) {
-        setMsg(err && err.message ? err.message : 'Failed to select subject', true);
       })
       .finally(function() {
         setBusy(btn, false);
@@ -1252,14 +1297,29 @@
           renderJob(job);
           upsertJob(job);
         }
-        if (x.data.download_url) {
-          downloadHref(x.data.download_url, String(jobId) + '-3mf.zip');
+        var localDir = x.data.local_dir || '';
+        var openDir = Promise.resolve();
+        if (x.data.open_dir_url) {
+          var openFd = new FormData();
+          openFd.append('scope', scopeValue);
+          openDir = fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/3mf/open-dir'), {
+            method: 'POST',
+            headers: formHeaders(),
+            body: openFd
+          }).then(function(openResp) {
+            return openResp.json().then(function(openData) {
+              if (!openResp.ok || !openData || openData.ok === false) throw new Error(parseError(openData, '打开 3MF 目录失败'));
+              return openData;
+            });
+          });
         }
-        if (x.data.passed) {
-          setMsg('3MF 已导出，正在下载。', false);
-        } else {
-          setMsg('3MF 检查未通过，已下载检查报告；模型需要修复封闭性/厚度/非流形问题后再作为 3MF 使用。', true);
-        }
+        return openDir.then(function() {
+          if (x.data.passed) {
+            setMsg('3MF 已导出，已打开本地目录：' + localDir, false);
+          } else {
+            setMsg('3MF 检查未通过，已打开检查报告所在目录：' + localDir, true);
+          }
+        });
       })
       .catch(function(err) {
         setMsg(err && err.message ? err.message : '3MF 导出失败', true);
@@ -1412,10 +1472,11 @@
     if (stepTimeline && !stepTimeline._ai3dBound) {
       stepTimeline._ai3dBound = true;
       stepTimeline.addEventListener('click', function(evt) {
-        var candidateBtn = evt.target.closest('[data-ai3d-candidate-index]');
-        if (candidateBtn) {
+        var infoBtn = evt.target.closest('[data-ai3d-info]');
+        if (infoBtn) {
           evt.preventDefault();
-          selectCandidateSubject(candidateBtn);
+          if (infoBtn.classList.contains('active')) closeInfoBubble();
+          else openInfoBubble(infoBtn, true);
           return;
         }
         var actionBtn = evt.target.closest('[data-ai3d-action]');
@@ -1431,6 +1492,17 @@
         else if (action === '3mf_base') start3mfExport(actionBtn, jobId, 'base');
         else if (action === '3mf_parts') start3mfExport(actionBtn, jobId, 'parts');
         else if (action === '3mf_final') start3mfExport(actionBtn, jobId, 'final');
+      });
+      stepTimeline.addEventListener('mouseover', function(evt) {
+        var infoBtn = evt.target.closest('[data-ai3d-info]');
+        if (infoBtn && !state.infoBubblePinned) openInfoBubble(infoBtn, false);
+      });
+      stepTimeline.addEventListener('mouseout', function(evt) {
+        if (!state.infoBubblePinned && evt.target.closest('[data-ai3d-info]')) closeInfoBubble();
+      });
+      stepTimeline.addEventListener('focusin', function(evt) {
+        var infoBtn = evt.target.closest('[data-ai3d-info]');
+        if (infoBtn && !state.infoBubblePinned) openInfoBubble(infoBtn, false);
       });
     }
     var gen = el('ai3dGenerateBtn');
@@ -1462,6 +1534,9 @@
       document._ai3dLightboxBound = true;
       document.addEventListener('click', function(evt) {
         var target = evt.target;
+        if (!(target && target.closest && (target.closest('[data-ai3d-info]') || target.closest('.ai3d-info-bubble')))) {
+          closeInfoBubble();
+        }
         var modelBtn = target && target.closest ? target.closest('[data-ai3d-model-url]') : null;
         if (modelBtn) {
           evt.preventDefault();
@@ -1501,6 +1576,7 @@
       });
       document.addEventListener('keydown', function(evt) {
         if (evt.key === 'Escape') {
+          closeInfoBubble();
           closeLightbox();
           closeParamModal();
           closeCreateModal();

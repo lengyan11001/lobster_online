@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from xml.sax.saxutils import escape
 
 
 class Model3MFError(RuntimeError):
@@ -53,6 +56,20 @@ def _utc_now() -> str:
 def _load_mesh(source_path: Path):
     trimesh, _np = _import_trimesh()
     loaded = trimesh.load(source_path, force="scene", process=True)
+    if isinstance(loaded, trimesh.Scene):
+        if not loaded.geometry:
+            raise Model3MFError("模型场景里没有可导出的网格")
+        mesh = loaded.dump(concatenate=True)
+    else:
+        mesh = loaded
+    if not isinstance(mesh, trimesh.Trimesh):
+        raise Model3MFError("无法把模型转换为三角网格")
+    return mesh
+
+
+def _load_scene_mesh(source_path: Path, *, process: bool = False):
+    trimesh, _np = _import_trimesh()
+    loaded = trimesh.load(source_path, force="scene", process=process)
     if isinstance(loaded, trimesh.Scene):
         if not loaded.geometry:
             raise Model3MFError("模型场景里没有可导出的网格")
@@ -354,12 +371,235 @@ def _slice_printability_report(mesh: Any) -> Dict[str, Any]:
     }
 
 
+def _texture_face_colors_from_reference(reference_path: Path) -> Tuple[Optional[Any], Dict[str, Any]]:
+    trimesh, np = _import_trimesh()
+    if not reference_path or not reference_path.is_file():
+        return None, {"available": False, "reason": "missing_texture_reference"}
+    try:
+        mesh = _load_scene_mesh(reference_path, process=False)
+        visual = getattr(mesh, "visual", None)
+        uv = getattr(visual, "uv", None)
+        material = getattr(visual, "material", None)
+        image = getattr(material, "baseColorTexture", None) or getattr(material, "image", None)
+        if uv is None or image is None:
+            return None, {"available": False, "reason": "reference_has_no_texture_uv"}
+        image = image.convert("RGBA")
+        tex = np.asarray(image, dtype=np.uint8)
+        faces = getattr(mesh, "faces", None)
+        vertices = getattr(mesh, "vertices", None)
+        if faces is None or vertices is None or len(faces) <= 0:
+            return None, {"available": False, "reason": "reference_has_no_faces"}
+        face_uv = uv[faces].mean(axis=1)
+        u = np.clip(face_uv[:, 0], 0.0, 1.0)
+        v = np.clip(face_uv[:, 1], 0.0, 1.0)
+        px = np.clip((u * (image.width - 1)).round().astype(int), 0, image.width - 1)
+        py = np.clip(((1.0 - v) * (image.height - 1)).round().astype(int), 0, image.height - 1)
+        colors = tex[py, px, :4]
+        centroids = vertices[faces].mean(axis=1)
+        return (centroids, colors), {
+            "available": True,
+            "reference": str(reference_path),
+            "method": "uv_texture_face_centroid_sampling",
+            "texture_size": [image.width, image.height],
+            "reference_face_count": int(len(faces)),
+        }
+    except Exception as exc:
+        return None, {"available": False, "reason": str(exc)}
+
+
+def _map_reference_colors_to_mesh(print_mesh: Any, reference_path: Optional[Path]) -> Tuple[Optional[Any], Dict[str, Any]]:
+    _trimesh, np = _import_trimesh()
+    if not reference_path:
+        return None, {"available": False, "reason": "missing_texture_reference"}
+    reference, meta = _texture_face_colors_from_reference(reference_path)
+    if reference is None:
+        return None, meta
+    ref_centroids, ref_colors = reference
+    try:
+        from scipy.spatial import cKDTree  # type: ignore
+    except Exception as exc:
+        return None, {"available": False, "reason": f"scipy cKDTree unavailable: {exc}"}
+    faces = getattr(print_mesh, "faces", None)
+    vertices = getattr(print_mesh, "vertices", None)
+    if faces is None or vertices is None or len(faces) <= 0:
+        return None, {"available": False, "reason": "print_mesh_has_no_faces"}
+    target_centroids = vertices[faces].mean(axis=1)
+    ref_min = ref_centroids.min(axis=0)
+    ref_span = ref_centroids.max(axis=0) - ref_min
+    tgt_min = target_centroids.min(axis=0)
+    tgt_span = target_centroids.max(axis=0) - tgt_min
+    ref_norm = (ref_centroids - ref_min) / np.where(ref_span == 0, 1.0, ref_span)
+    tgt_norm = (target_centroids - tgt_min) / np.where(tgt_span == 0, 1.0, tgt_span)
+    tree = cKDTree(ref_norm)
+    dist, idx = tree.query(tgt_norm, k=1)
+    colors = ref_colors[idx].astype(np.uint8)
+    meta.update({
+        "mapped": True,
+        "target_face_count": int(len(faces)),
+        "unique_color_count": int(len({tuple(int(v) for v in color[:4]) for color in colors[::max(1, len(colors)//5000)]})),
+        "nearest_distance_mean": float(np.mean(dist)) if len(dist) else 0.0,
+        "nearest_distance_max": float(np.max(dist)) if len(dist) else 0.0,
+    })
+    return colors, meta
+
+
+def _write_colored_3mf(mesh: Any, dest_3mf: Path, face_colors: Any, *, object_name: str = "geometry_0") -> Dict[str, Any]:
+    _trimesh, np = _import_trimesh()
+    vertices = np.asarray(mesh.vertices, dtype=float)
+    faces = np.asarray(mesh.faces, dtype=int)
+    colors = np.asarray(face_colors, dtype=np.uint8)
+    if len(colors) != len(faces):
+        raise Model3MFError("颜色数量与三角面数量不一致")
+    color_to_id: Dict[Tuple[int, int, int, int], int] = {}
+    color_ids: List[int] = []
+    for color in colors:
+        rgba = tuple(int(v) for v in color[:4])
+        if rgba not in color_to_id:
+            color_to_id[rgba] = len(color_to_id)
+        color_ids.append(color_to_id[rgba])
+    id_to_color = [None] * len(color_to_id)
+    for rgba, idx in color_to_id.items():
+        id_to_color[idx] = rgba
+
+    def color_hex(rgba: Tuple[int, int, int, int]) -> str:
+        r, g, b, a = rgba
+        return f"#{r:02X}{g:02X}{b:02X}{a:02X}"
+
+    model_uuid = str(uuid.uuid4())
+    model_lines: List[str] = [
+        "<?xml version='1.0' encoding='utf-8'?>",
+        '<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        'xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02" '
+        'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" unit="millimeter">',
+        "<resources>",
+        '<m:colorgroup id="2">',
+    ]
+    for rgba in id_to_color:
+        model_lines.append(f'<m:color color="{color_hex(rgba)}" />')
+    model_lines.extend([
+        "</m:colorgroup>",
+        f'<object id="1" name="{escape(object_name)}" type="model" p:UUID="{model_uuid}">',
+        "<mesh>",
+        "<vertices>",
+    ])
+    for vertex in vertices:
+        model_lines.append(f'<vertex x="{float(vertex[0])}" y="{float(vertex[1])}" z="{float(vertex[2])}" />')
+    model_lines.extend(["</vertices>", "<triangles>"])
+    for face, color_id in zip(faces, color_ids):
+        model_lines.append(
+            f'<triangle v1="{int(face[0])}" v2="{int(face[1])}" v3="{int(face[2])}" pid="2" p1="{int(color_id)}" />'
+        )
+    model_lines.extend([
+        "</triangles>",
+        "</mesh>",
+        "</object>",
+        "</resources>",
+        "<build>",
+        '<item objectid="1" />',
+        "</build>",
+        "</model>",
+    ])
+    rels = (
+        "<?xml version='1.0' encoding='utf-8'?>"
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Target="/3D/3dmodel.model" Id="rel0" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" />'
+        "</Relationships>"
+    )
+    content_types = (
+        "<?xml version='1.0' encoding='utf-8'?>"
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />'
+        '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />'
+        "</Types>"
+    )
+    dest_3mf.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest_3mf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=5) as zf:
+        zf.writestr("3D/3dmodel.model", "\n".join(model_lines).encode("utf-8"))
+        zf.writestr("_rels/.rels", rels.encode("utf-8"))
+        zf.writestr("[Content_Types].xml", content_types.encode("utf-8"))
+    return {
+        "colored": True,
+        "color_group_count": 1,
+        "unique_color_count": len(id_to_color),
+    }
+
+
+def _write_single_material_3mf(
+    mesh: Any,
+    dest_3mf: Path,
+    *,
+    object_name: str = "geometry_0",
+    material_name: str = "PLA",
+    display_color: str = "#D9D0B5FF",
+) -> Dict[str, Any]:
+    _trimesh, np = _import_trimesh()
+    vertices = np.asarray(mesh.vertices, dtype=float)
+    faces = np.asarray(mesh.faces, dtype=int)
+    model_uuid = str(uuid.uuid4())
+    build_uuid = str(uuid.uuid4())
+    item_uuid = str(uuid.uuid4())
+    model_lines: List[str] = [
+        "<?xml version='1.0' encoding='utf-8'?>",
+        '<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" unit="millimeter">',
+        "<resources>",
+        '<basematerials id="2">',
+        f'<base name="{escape(material_name)}" displaycolor="{display_color}" />',
+        "</basematerials>",
+        f'<object id="1" name="{escape(object_name)}" type="model" pid="2" pindex="0" p:UUID="{model_uuid}">',
+        "<mesh>",
+        "<vertices>",
+    ]
+    for vertex in vertices:
+        model_lines.append(f'<vertex x="{float(vertex[0])}" y="{float(vertex[1])}" z="{float(vertex[2])}" />')
+    model_lines.extend(["</vertices>", "<triangles>"])
+    for face in faces:
+        model_lines.append(f'<triangle v1="{int(face[0])}" v2="{int(face[1])}" v3="{int(face[2])}" />')
+    model_lines.extend([
+        "</triangles>",
+        "</mesh>",
+        "</object>",
+        "</resources>",
+        f'<build p:UUID="{build_uuid}">',
+        f'<item objectid="1" p:UUID="{item_uuid}" />',
+        "</build>",
+        "</model>",
+    ])
+    rels = (
+        "<?xml version='1.0' encoding='utf-8'?>"
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Target="/3D/3dmodel.model" Id="rel0" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" />'
+        "</Relationships>"
+    )
+    content_types = (
+        "<?xml version='1.0' encoding='utf-8'?>"
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />'
+        '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />'
+        "</Types>"
+    )
+    dest_3mf.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest_3mf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=5) as zf:
+        zf.writestr("3D/3dmodel.model", "\n".join(model_lines).encode("utf-8"))
+        zf.writestr("_rels/.rels", rels.encode("utf-8"))
+        zf.writestr("[Content_Types].xml", content_types.encode("utf-8"))
+    return {
+        "single_material": True,
+        "base_material_count": 1,
+        "material_name": material_name,
+        "display_color": display_color,
+    }
+
+
 def export_glb_to_3mf(
     source_glb: Path,
     dest_3mf: Path,
     *,
     report_path: Optional[Path] = None,
     label: str = "",
+    texture_reference_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     report_path = report_path or dest_3mf.with_name(dest_3mf.name + ".check.json")
     report: Dict[str, Any] = {
@@ -416,13 +656,21 @@ def export_glb_to_3mf(
                 dest_3mf.unlink(missing_ok=True)
             return report
         dest_3mf.parent.mkdir(parents=True, exist_ok=True)
-        print_mesh.export(dest_3mf)
+        color_meta: Dict[str, Any] = {"available": False, "reason": "not_requested"}
+        face_colors = None
+        if texture_reference_path is not None:
+            face_colors, color_meta = _map_reference_colors_to_mesh(print_mesh, texture_reference_path)
+        if face_colors is not None:
+            color_meta.update(_write_colored_3mf(print_mesh, dest_3mf, face_colors, object_name=label or dest_3mf.stem))
+        else:
+            color_meta.update(_write_single_material_3mf(print_mesh, dest_3mf, object_name=label or dest_3mf.stem))
         if not dest_3mf.is_file() or dest_3mf.stat().st_size <= 0:
             raise Model3MFError("3MF 导出后文件为空")
         report.update({
             "status": "exported",
             "passed": True,
             "file_size": dest_3mf.stat().st_size,
+            "color_export": color_meta,
         })
         return report
     except Exception as exc:

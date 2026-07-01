@@ -19,6 +19,10 @@
     'ip_content_daily': {
       label: 'IP日更文案',
       description: '服务器定时同步关键词和同行数据，生成行业口播、专业IP口播、朋友圈文案。'
+    },
+    'lead_collection_templates': {
+      label: '线索采集模板',
+      description: '按选中的 Reddit、X、TikTok、LinkedIn 模板定时采集公开信息并汇总结果。'
     }
   };
 
@@ -33,6 +37,9 @@
     ipTemplates: [],
     ipTemplatesLoaded: false,
     ipTemplatesLoading: false,
+    leadTemplates: [],
+    leadTemplatesLoaded: false,
+    leadTemplatesLoading: false,
     hiflyLoaded: false,
     hiflyLoading: false,
     runsById: {}
@@ -894,6 +901,105 @@
     loadIpTemplates(true);
   }
 
+  function leadPlatformLabel(platform) {
+    var p = String(platform || '').toLowerCase();
+    if (p === 'reddit') return 'Reddit';
+    if (p === 'x') return 'X';
+    if (p === 'tiktok') return 'TikTok';
+    if (p === 'linkedin') return 'LinkedIn';
+    return p || '-';
+  }
+
+  function leadTemplateSummary(row) {
+    var payload = (row && row.request_payload) || {};
+    var parts = [];
+    if ((payload.keywords || []).length) parts.push('关键词 ' + payload.keywords.length);
+    if ((payload.accounts || []).length) parts.push('账号 ' + payload.accounts.length);
+    if ((payload.communities || []).length) parts.push('社区 ' + payload.communities.length);
+    if ((payload.source_keywords || []).length) parts.push('来源 ' + payload.source_keywords.length);
+    if ((payload.seed_profile_urls || []).length) parts.push('个人 ' + payload.seed_profile_urls.length);
+    if ((payload.seed_company_urls || []).length) parts.push('公司 ' + payload.seed_company_urls.length);
+    if ((payload.hashtags || []).length) parts.push('话题 ' + payload.hashtags.length);
+    return parts.join(' · ') || '未配置条件';
+  }
+
+  function selectedLeadTemplateIds() {
+    return Array.prototype.slice.call(document.querySelectorAll('[data-lead-template-id]'))
+      .filter(function (el) { return !!el.checked; })
+      .map(function (el) { return parseInt(el.getAttribute('data-lead-template-id') || '0', 10); })
+      .filter(function (id) { return id > 0; });
+  }
+
+  function renderLeadTemplatePicker() {
+    var host = document.getElementById('scheduledTaskLeadTemplates');
+    if (!host) return;
+    if (state.leadTemplatesLoading) {
+      host.innerHTML = '<p class="scheduled-inline-hint">模板加载中...</p>';
+      return;
+    }
+    var rows = state.leadTemplates || [];
+    if (!rows.length) {
+      host.innerHTML = '<p class="scheduled-inline-hint">暂无采集模板，请先到对应采集技能里创建模板。</p>';
+      return;
+    }
+    var grouped = {};
+    rows.forEach(function (row) {
+      var p = String(row.platform || '').toLowerCase();
+      (grouped[p] = grouped[p] || []).push(row);
+    });
+    var order = ['reddit', 'x', 'tiktok', 'linkedin'];
+    host.innerHTML = order.map(function (platform) {
+      var items = grouped[platform] || [];
+      if (!items.length) return '';
+      return '<div class="scheduled-lead-template-group">'
+        + '<strong>' + html(leadPlatformLabel(platform)) + '</strong>'
+        + items.map(function (row) {
+          return '<label class="scheduled-lead-template-row">'
+            + '<input type="checkbox" data-lead-template-id="' + html(row.id) + '">'
+            + '<span><b>' + html(row.name || ('模板 #' + row.id)) + '</b><small>' + html(leadTemplateSummary(row)) + '</small></span>'
+            + '</label>';
+        }).join('')
+        + '</div>';
+    }).join('');
+  }
+
+  function loadLeadTemplates(force) {
+    if (!force && (state.leadTemplatesLoaded || state.leadTemplatesLoading)) {
+      renderLeadTemplatePicker();
+      return Promise.resolve(state.leadTemplates);
+    }
+    state.leadTemplatesLoading = true;
+    renderLeadTemplatePicker();
+    return getCloud('/api/lead-collection/templates')
+      .then(function (d) {
+        state.leadTemplates = Array.isArray(d.items) ? d.items : [];
+        state.leadTemplatesLoaded = true;
+        return state.leadTemplates;
+      })
+      .catch(function (e) {
+        state.leadTemplates = [];
+        showMsg('scheduledTaskMsg', e.message || '线索采集模板加载失败', true);
+        return [];
+      })
+      .then(function (rows) {
+        state.leadTemplatesLoading = false;
+        renderLeadTemplatePicker();
+        return rows;
+      }, function (e) {
+        state.leadTemplatesLoading = false;
+        renderLeadTemplatePicker();
+        throw e;
+      });
+  }
+
+  function renderLeadCollectionTemplateFields(host) {
+    host.innerHTML = compactGrid(
+      fieldHtml('采集模板', '<div id="scheduledTaskLeadTemplates"></div>', true)
+      + fieldHtml('模板维护', '<button type="button" class="btn btn-ghost btn-sm scheduled-refresh-lead-templates-btn">刷新模板</button>', true)
+    );
+    loadLeadTemplates(true);
+  }
+
   function updateGoalVideoSourceMode() {
     var mode = val('scheduledTaskVideoSourceMode') || 'asset_random';
     var groupField = document.getElementById('scheduledTaskCandidateGroupField');
@@ -1089,6 +1195,7 @@
     if (!host) return;
     var capabilityId = val('scheduledTaskCapability') || 'goal.video.pipeline';
     if (capabilityId === 'ip_content_daily') renderIpContentDailyFields(host);
+    else if (capabilityId === 'lead_collection_templates') renderLeadCollectionTemplateFields(host);
     else if (capabilityId === 'hifly.video.create_by_tts') renderHiflyFields(host);
     else if (capabilityId === 'goal.image.pipeline') renderImageFields(host);
     else renderGoalFields(host);
@@ -1100,6 +1207,7 @@
     var current = sel.value;
     sel.innerHTML = [
       'goal.image.pipeline',
+      'lead_collection_templates',
       'ip_content_daily',
       'goal.video.pipeline',
       'hifly.video.create_by_tts'
@@ -1162,6 +1270,14 @@
         industry_count: 5,
         ip_count: 5,
         moments_count: 20
+      };
+    }
+    if (capabilityId === 'lead_collection_templates') {
+      var templateIds = selectedLeadTemplateIds();
+      if (!templateIds.length) throw new Error('请选择至少一个线索采集模板');
+      return {
+        template_ids: templateIds,
+        title: val('scheduledTaskTitle') || '线索采集模板定时任务'
       };
     }
     if (capabilityId === 'hifly.video.create_by_tts') {
@@ -1236,11 +1352,19 @@
       kind = 'ip_content_daily';
       installationIds = [];
     }
+    if (capabilityId === 'lead_collection_templates') {
+      kind = 'lead_collection_templates';
+      installationIds = [];
+    }
     var body = {
       title: title,
       task_kind: kind,
-      content: capabilityId === 'ip_content_daily' ? '定时生成 IP日更文案' : '定时调用能力 ' + capabilityId,
-      payload: capabilityId === 'ip_content_daily' ? capPayload : { capability_id: capabilityId, payload: capPayload },
+      content: capabilityId === 'ip_content_daily'
+        ? '定时生成 IP日更文案'
+        : (capabilityId === 'lead_collection_templates' ? '定时执行线索采集模板' : '定时调用能力 ' + capabilityId),
+      payload: capabilityId === 'ip_content_daily' || capabilityId === 'lead_collection_templates'
+        ? capPayload
+        : { capability_id: capabilityId, payload: capPayload },
       schedule_type: scheduleType,
       timezone_offset_minutes: timezoneOffsetMinutes(),
       installation_ids: installationIds
@@ -1494,7 +1618,7 @@
       if (btn) { btn.disabled = false; btn.textContent = '添加并下发'; }
       return;
     }
-    if (body.task_kind !== 'ip_content_daily' && (!body.installation_ids || !body.installation_ids.length)) {
+    if (body.task_kind !== 'ip_content_daily' && body.task_kind !== 'lead_collection_templates' && (!body.installation_ids || !body.installation_ids.length)) {
       showMsg('scheduledTaskMsg', '未获取到本机设备标识，请刷新页面或重启本机盒子后再试。', true);
       if (btn) { btn.disabled = false; btn.textContent = '添加并下发'; }
       return;
@@ -1573,6 +1697,11 @@
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-open-ip-studio-btn') : null;
       if (!btn) return;
       openIpContentStudio();
+    });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-refresh-lead-templates-btn') : null;
+      if (!btn) return;
+      loadLeadTemplates(true);
     });
     var kind = document.getElementById('scheduledTaskKind');
     if (kind) kind.value = 'capability';

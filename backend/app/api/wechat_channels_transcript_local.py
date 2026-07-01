@@ -6,10 +6,12 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -62,6 +64,11 @@ class TranscriptExportBody(BaseModel):
     rows: list[Dict[str, Any]] = Field(default_factory=list, max_length=500)
 
 
+class SocialLeadsExportBody(BaseModel):
+    filename: str = Field(default="social-leads", max_length=160)
+    rows: list[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
+
+
 def _safe_error(value: Any, limit: int = 1200) -> str:
     if isinstance(value, dict):
         for key in ("message", "detail", "error", "code"):
@@ -99,6 +106,111 @@ def _auth_headers(request: Request) -> Dict[str, str]:
     if installation_id:
         headers["X-Installation-Id"] = installation_id
     return headers
+
+
+def _xml_escape(value: Any) -> str:
+    text = str(value if value is not None else "")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _xlsx_col_name(index: int) -> str:
+    name = ""
+    index = max(1, int(index))
+    while index:
+        index, rem = divmod(index - 1, 26)
+        name = chr(65 + rem) + name
+    return name
+
+
+def _xlsx_cell(row_idx: int, col_idx: int, value: Any) -> str:
+    ref = f"{_xlsx_col_name(col_idx)}{row_idx}"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f'<c r="{ref}"><v>{value}</v></c>'
+    return f'<c r="{ref}" t="inlineStr"><is><t>{_xml_escape(value)}</t></is></c>'
+
+
+def _xlsx_bytes(rows: list[Dict[str, Any]]) -> bytes:
+    headers: list[str] = []
+    for row in rows:
+        for key in row.keys():
+            text = str(key)
+            if text not in headers:
+                headers.append(text)
+    headers = headers or ["结果"]
+    sheet_rows = []
+    sheet_rows.append(
+        '<row r="1">' + "".join(_xlsx_cell(1, idx, header) for idx, header in enumerate(headers, start=1)) + "</row>"
+    )
+    for row_idx, row in enumerate(rows, start=2):
+        sheet_rows.append(
+            f'<row r="{row_idx}">'
+            + "".join(_xlsx_cell(row_idx, col_idx, row.get(header, "")) for col_idx, header in enumerate(headers, start=1))
+            + "</row>"
+        )
+    max_col = _xlsx_col_name(len(headers))
+    max_row = max(1, len(rows) + 1)
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<dimension ref="A1:{max_col}{max_row}"/>'
+        '<sheetData>'
+        + "".join(sheet_rows)
+        + "</sheetData></worksheet>"
+    )
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="线索名单" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    )
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        "</Relationships>"
+    )
+    workbook_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        "</Relationships>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", rels_xml)
+        zf.writestr("xl/workbook.xml", workbook_xml)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    return output.getvalue()
+
+
+def _open_folder_for_file(path: Path) -> bool:
+    try:
+        target = Path(path).resolve()
+        if os.name == "nt":
+            subprocess.Popen(["explorer", "/select,", str(target)])
+            return True
+        if shutil.which("xdg-open"):
+            subprocess.Popen(["xdg-open", str(target.parent)])
+            return True
+    except Exception:
+        logger.warning("[social-leads-export] open folder failed path=%s", path, exc_info=True)
+    return False
 
 
 def _clean_url(value: Any) -> str:
@@ -676,6 +788,30 @@ def export_wechat_channels_transcripts(
         "directory": str(target.parent),
         "filename": target.name,
         "format": fmt,
+    }
+
+
+@router.post("/api/social-leads/export", summary="Export social leads to local Excel file")
+def export_social_leads(
+    body: SocialLeadsExportBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    rows = [row for row in (body.rows or []) if isinstance(row, dict)]
+    if not rows:
+        raise HTTPException(status_code=400, detail="暂无可导出线索")
+    export_dir = get_asset_export_dir() / "社媒线索"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    filename = _safe_export_filename(body.filename or "social-leads", "xlsx")
+    target = _unique_export_path(export_dir, filename)
+    target.write_bytes(_xlsx_bytes(rows))
+    opened = _open_folder_for_file(target)
+    return {
+        "ok": True,
+        "path": str(target),
+        "directory": str(target.parent),
+        "filename": target.name,
+        "format": "xlsx",
+        "opened_folder": opened,
     }
 
 

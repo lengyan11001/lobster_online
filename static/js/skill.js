@@ -1393,6 +1393,36 @@ window._openLinkedinMiningView = function() {
   try { location.hash = 'linkedin-mining'; } catch (e1) {}
 };
 
+window._openSocialLeadsView = function(platform) {
+  var nextPlatform = String(platform || window.__socialLeadsPlatform || 'reddit').toLowerCase();
+  if (nextPlatform === 'twitter' || nextPlatform === 'x_leads') nextPlatform = 'x';
+  if (nextPlatform === 'tiktok_leads' || nextPlatform === 'tik_tok') nextPlatform = 'tiktok';
+  if (['reddit', 'x', 'tiktok'].indexOf(nextPlatform) < 0) nextPlatform = 'reddit';
+  window.__socialLeadsPlatform = nextPlatform;
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('social-leads', {
+      html: '/static/views/social-leads.html?v=20260630-social-leads-platform-isolation',
+      scripts: '/static/js/social-leads.js?v=20260630-social-leads-platform-isolation',
+      init: 'initSocialLeadsView',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('social-leads', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .then(function() {
+        if (typeof window.initSocialLeadsView === 'function') window.initSocialLeadsView(nextPlatform);
+      })
+      .catch(function(err) {
+        console.error('Failed to open social-leads', err);
+        alert('线索采集页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('social-leads');
+  if (typeof window.initSocialLeadsView === 'function') window.initSocialLeadsView(nextPlatform);
+  try { location.hash = 'social-leads'; } catch (e1) {}
+};
+
 window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
@@ -1514,6 +1544,11 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'linkedin-mining' && typeof window._openLinkedinMiningView === 'function') {
     window._openLinkedinMiningView();
+    return;
+  }
+  if ((target === 'social-leads' || target === 'reddit-leads' || target === 'x-leads' || target === 'tiktok-leads') && typeof window._openSocialLeadsView === 'function') {
+    var socialPlatform = target === 'x-leads' ? 'x' : (target === 'tiktok-leads' ? 'tiktok' : (target === 'reddit-leads' ? 'reddit' : window.__socialLeadsPlatform));
+    window._openSocialLeadsView(socialPlatform);
     return;
   }
   if (target === 'meta-social' && typeof window._openMetaSocialView === 'function') {
@@ -1813,6 +1848,30 @@ function _renderLinkedinMiningCard(pkg, showDebug) {
     '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '输入LinkedIn主页、公司、关键词或话题，自动同步数据并生成线索分析报告。')) + cap + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm linkedin-mining-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _renderSocialLeadsCard(pkg, platform, showDebug) {
+  pkg = pkg || {};
+  platform = platform === 'x' ? 'x' : (platform === 'tiktok' ? 'tiktok' : 'reddit');
+  var isX = platform === 'x';
+  var isTikTok = platform === 'tiktok';
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var fallbackName = isTikTok ? 'TikTok线索采集' : (isX ? 'X线索采集' : 'Reddit线索采集');
+  var fallbackDesc = isTikTok ? '采集TikTok公开视频、账号和评论数据；按关键词方向筛选精准用户。' : (isX ? '采集X公开搜索、趋势、账号和评论数据；不执行评论、发布或私信。' : '采集Reddit公开帖子、社区、账号和评论数据；不执行评论、发布或私信。');
+  var fallbackTags = isTikTok ? ['TikHub', 'TikTok', '采集'] : (isX ? ['TikHub', 'X', '采集'] : ['TikHub', 'Reddit', '采集']);
+  var tags = _skillStoreTagHtml(pkg.tags || fallbackTags);
+  var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+  var border = isTikTok ? 'rgba(20,20,20,0.36)' : (isX ? 'rgba(15,23,42,0.36)' : 'rgba(234,88,12,0.36)');
+  var bg = isTikTok ? 'linear-gradient(135deg,rgba(15,23,42,0.08),rgba(236,72,153,0.06))' : (isX ? 'linear-gradient(135deg,rgba(15,23,42,0.08),rgba(37,99,235,0.06))' : 'linear-gradient(135deg,rgba(234,88,12,0.08),rgba(20,184,166,0.05))');
+  return '<div class="skill-store-card social-leads-card ' + (isTikTok ? 'tiktok-leads-card' : (isX ? 'x-leads-card' : 'reddit-leads-card')) + '" data-social-leads-platform="' + escapeAttr(platform) + '" data-skill-package-id="' + escapeAttr(pkg.id || (isTikTok ? 'tiktok_leads' : (isX ? 'x_leads' : 'reddit_leads'))) + '" style="cursor:pointer;border-color:' + border + ';background:' + bg + ';">' +
+    '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || fallbackName)) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || fallbackDesc)) + cap + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm social-leads-entry-btn" data-social-leads-platform="' + escapeAttr(platform) + '">进入工作台</button></div>' +
   '</div>';
 }
 
@@ -2807,6 +2866,18 @@ function _isLinkedinMiningSkillCard(card) {
     card.classList.contains('linkedin-mining-card');
 }
 
+function _isSocialLeadsSkillCard(card) {
+  if (!card) return false;
+  var packageId = card.getAttribute('data-skill-package-id') || '';
+  return packageId === 'reddit_leads' ||
+    packageId === 'x_leads' ||
+    packageId === 'tiktok_leads' ||
+    card.classList.contains('social-leads-card') ||
+    card.classList.contains('reddit-leads-card') ||
+    card.classList.contains('x-leads-card') ||
+    card.classList.contains('tiktok-leads-card');
+}
+
 function _isJuheWechatSkillCard(card) {
   if (!card) return false;
   var packageId = card.getAttribute('data-skill-package-id') || '';
@@ -2826,6 +2897,7 @@ function _simplifySkillStoreCards(el) {
   el.querySelectorAll('.skill-store-card').forEach(function(card) {
     if (_isCreativeFilmSkillCard(card)) return;
     if (_isLinkedinMiningSkillCard(card)) return;
+    if (_isSocialLeadsSkillCard(card)) return;
     if (_isJuheWechatSkillCard(card)) return;
     if (_isWechatChannelsTranscriptSkillCard(card)) return;
     var copy = _skillStoreSimpleCopyFor(card) || {};
@@ -2910,6 +2982,7 @@ function _decorateSkillImageCards(el) {
     if (_isCreativeFilmSkillCard(card)) return;
     if (_isIpContentSkillCard(card)) return;
     if (_isLinkedinMiningSkillCard(card)) return;
+    if (_isSocialLeadsSkillCard(card)) return;
     if (_isJuheWechatSkillCard(card)) return;
     if (_isWechatChannelsTranscriptSkillCard(card)) return;
     if (hasCardClick || card.dataset.imageCardProxyBound === '1') return;
@@ -2957,6 +3030,9 @@ function loadSkillStore() {
       var cutcliPkg = pkgById('cutcli_template_skill') || pkgById('cutcli_templates_skill') || pkgById('cutcli_template_studio');
       var ipContentPkg = pkgById('ip_content_daily_skill');
       var linkedinMiningPkg = pkgById('linkedin_mining_skill');
+      var redditLeadsPkg = pkgById('reddit_leads');
+      var xLeadsPkg = pkgById('x_leads');
+      var tiktokLeadsPkg = pkgById('tiktok_leads');
       var juheWechatPkg = pkgById('juhe_wechat_skill');
       var wechatTranscriptPkg = pkgById('wechat_channels_transcript_skill');
       var ai3dPkg = pkgById('ai_3d_model_skill');
@@ -2973,6 +3049,9 @@ function loadSkillStore() {
         if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
         if (ipContentPkg) html += _renderIpContentStudioCard(ipContentPkg, !!(isSkillAdmin && ipContentPkg.store_visibility === 'debug'));
         if (linkedinMiningPkg) html += _renderLinkedinMiningCard(linkedinMiningPkg, !!(isSkillAdmin && linkedinMiningPkg.store_visibility === 'debug'));
+        if (redditLeadsPkg) html += _renderSocialLeadsCard(redditLeadsPkg, 'reddit', !!(isSkillAdmin && redditLeadsPkg.store_visibility === 'debug'));
+        if (xLeadsPkg) html += _renderSocialLeadsCard(xLeadsPkg, 'x', !!(isSkillAdmin && xLeadsPkg.store_visibility === 'debug'));
+        if (tiktokLeadsPkg) html += _renderSocialLeadsCard(tiktokLeadsPkg, 'tiktok', !!(isSkillAdmin && tiktokLeadsPkg.store_visibility === 'debug'));
         if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
         if (wechatTranscriptPkg) html += _renderWechatChannelsTranscriptCard(wechatTranscriptPkg, !!(isSkillAdmin && wechatTranscriptPkg.store_visibility === 'debug'));
         if (ai3dPkg) html += _renderAi3dModelCard(ai3dPkg, !!(isSkillAdmin && ai3dPkg.store_visibility === 'debug'));
@@ -3021,6 +3100,9 @@ function loadSkillStore() {
           if (pkg.id === 'comfly_ecommerce_detail_skill') return '';
           if (pkg.id === 'ip_content_daily_skill') return '';
           if (pkg.id === 'linkedin_mining_skill') return '';
+          if (pkg.id === 'reddit_leads') return '';
+          if (pkg.id === 'x_leads') return '';
+          if (pkg.id === 'tiktok_leads') return '';
           if (pkg.id === 'juhe_wechat_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
@@ -3118,6 +3200,7 @@ function loadSkillStore() {
         _bindGoalVideoPipelineCardEntry();
         _bindIpContentStudioCardEntry();
         _bindLinkedinMiningCardEntry();
+        _bindSocialLeadsCardEntry();
         _bindJuheWechatCardEntry();
         _bindWechatChannelsTranscriptCardEntry();
         _bindAi3dModelCardEntry();
@@ -3502,6 +3585,29 @@ function _bindLinkedinMiningCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openLinkedinMiningView === 'function') window._openLinkedinMiningView();
+    });
+  });
+}
+
+function _bindSocialLeadsCardEntry() {
+  document.querySelectorAll('.social-leads-card, [data-skill-package-id="reddit_leads"], [data-skill-package-id="x_leads"], [data-skill-package-id="tiktok_leads"]').forEach(function(card) {
+    if (card.dataset.socialLeadsEntryBound === '1') return;
+    card.dataset.socialLeadsEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      var packageId = card.getAttribute('data-skill-package-id') || '';
+      var platform = card.getAttribute('data-social-leads-platform') || (packageId === 'x_leads' ? 'x' : (packageId === 'tiktok_leads' ? 'tiktok' : 'reddit'));
+      if (typeof window._openSocialLeadsView === 'function') window._openSocialLeadsView(platform);
+    });
+  });
+  document.querySelectorAll('.social-leads-entry-btn').forEach(function(btn) {
+    if (btn.dataset.socialLeadsEntryBound === '1') return;
+    btn.dataset.socialLeadsEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var platform = btn.getAttribute('data-social-leads-platform') || 'reddit';
+      if (typeof window._openSocialLeadsView === 'function') window._openSocialLeadsView(platform);
     });
   });
 }

@@ -1,11 +1,11 @@
-<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260628-ai-subject-understanding-v1">
+<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260629-triview-v1">
 <div id="content-ai-3d-model" class="content-block">
   <div class="ai3d-page">
     <header class="ai3d-head">
       <div>
         <div class="page-section-kicker">AI 3D ASSET</div>
         <h3 class="page-section-title">高质量 3D 模型生成</h3>
-        <p class="ai3d-subtitle">上传单张原画、参考图或拆件包；角色优先生成高清多视角底模，部件输入图只用于后续生成 3D 部件并合成。</p>
+        <p class="ai3d-subtitle">上传单张原画、参考图或拆件包；默认生成高清三视图底模，部件输入图只用于后续生成 3D 部件并合成。</p>
       </div>
       <div class="ai3d-head-actions">
         <button type="button" id="ai3dCreateJobBtn" class="btn btn-primary btn-sm">创建任务</button>
@@ -24,7 +24,7 @@
           <div class="ai3d-modal-head">
             <div>
               <strong id="ai3dCreateModalTitle">创建 2D 转 3D 任务</strong>
-              <span>上传原图或拆件包；多视角和部件输入图固定走 4K/high/png。</span>
+              <span>上传原图或拆件包；三视图和部件输入图固定走 4K/high/png。</span>
             </div>
             <button type="button" id="ai3dCreateModalClose" class="ai3d-modal-close" aria-label="关闭">×</button>
           </div>
@@ -38,15 +38,15 @@
               <label for="ai3dFiles">参考素材</label>
               <label class="ai3d-dropzone" for="ai3dFiles">
                 <input id="ai3dFiles" name="files" type="file" accept="image/*,.zip" multiple>
-                <span>点击上传图片或 zip 拆件包</span>
-                <small>单张手机截图也可以上传，系统会先自动裁掉黑边和 UI，再生成区域裁切候选图。</small>
+                <span>点击上传图片或 zip 拆件包（可选）</span>
+                <small>也可以不上传图片，只在下方填写资产提示词，直接生成高清三视图参考图。</small>
               </label>
               <div id="ai3dFileList" class="ai3d-file-list"></div>
             </div>
 
             <div class="ai3d-field">
-              <label for="ai3dDescription">角色/资产描述</label>
-              <textarea id="ai3dDescription" name="description" rows="5" placeholder="可直接粘贴客户发来的角色设定；不填写也会按图片模板处理。"></textarea>
+              <label for="ai3dDescription">角色/资产描述 / 纯文本生成提示词</label>
+              <textarea id="ai3dDescription" name="description" rows="5" placeholder="可上传图片后补充设定；也可不上传图片，直接粘贴如 3A 主机游戏 PBR 道具资产、材质、纹样、结构、渲染要求等提示词。"></textarea>
             </div>
 
             <div class="ai3d-param-summary">
@@ -83,7 +83,7 @@
                 <label for="ai3dStrategy">生成策略</label>
                 <select id="ai3dStrategy" name="strategy">
                   <option value="auto">自动判断</option>
-                  <option value="multi_view">多视角同一物体</option>
+                  <option value="multi_view">三视图同一物体</option>
                   <option value="part_batch">拆件包/硬表面逐个生成</option>
                 </select>
               </div>
@@ -115,7 +115,7 @@
                   <option value="openai/gpt-image-2" selected>GPT Image 2（速推）</option>
                   <option value="nano-banana-pro">Nano Banana Pro</option>
                 </select>
-                <small>用于生成高清多视角；硬表面/饰件才会进入拆件流程，角色默认不强行拆衣服和袖子。</small>
+                <small>用于生成高清三视图；硬表面/饰件才会进入拆件流程，角色默认不强行拆衣服和袖子。</small>
               </div>
             </div>
 
@@ -166,7 +166,7 @@
         <div class="ai3d-status-row">
           <span id="ai3dProviderBadge" class="ai3d-badge">Meshy</span>
           <span id="ai3dBalanceText" class="ai3d-muted">正在检查 3D 引擎配置</span>
-          <span class="ai3d-muted">角色：多视角优先；部件输入图：最终合成时才生成 3D 部件</span>
+          <span class="ai3d-muted">角色：三视图优先；部件输入图：最终合成时才生成 3D 部件</span>
         </div>
 
         <div class="ai3d-history-block ai3d-steps-inline">
@@ -198,7 +198,7 @@
 
   </div>
 </div>
-<script src="/static/js/ai-3d-model.js?v=20260628-ai-subject-understanding-v1"></script>
+<script src="/static/js/ai-3d-model.js?v=20260629-triview-v1"></script>
 <script>
   (function() {
     window.ai3dDirectBootstrapRan = true;

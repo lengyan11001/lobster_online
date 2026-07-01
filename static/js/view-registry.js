@@ -68,6 +68,13 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('social-leads', {
+    html: '/static/views/social-leads.html?v=20260630-social-leads-platform-isolation',
+    scripts: '/static/js/social-leads.js?v=20260630-social-leads-platform-isolation',
+    init: 'initSocialLeadsView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('juhe-wechat', {
     html: '/static/views/juhe-wechat.html?v=20260618-user-actions-only',
     scripts: '/static/js/juhe-wechat.js?v=20260618-user-actions-only',
@@ -83,8 +90,8 @@
   });
 
   window.registerLobsterView('ai-3d-model', {
-    html: '/static/views/ai-3d-model.html?v=20260628-ai-subject-understanding-v1',
-    scripts: '/static/js/ai-3d-model.js?v=20260628-ai-subject-understanding-v1',
+    html: '/static/views/ai-3d-model.html?v=20260628-ai-subject-understanding-v3',
+    scripts: '/static/js/ai-3d-model.js?v=20260628-ai-subject-understanding-v3',
     init: 'initAi3dModelView',
     cache: 'reload',
     reloadExisting: true

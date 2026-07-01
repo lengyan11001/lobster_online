@@ -1397,6 +1397,34 @@
     #content-scheduled-tasks .scheduled-param-fields p.meta {
       display: none;
     }
+    #content-scheduled-tasks .scheduled-lead-template-group {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid rgba(17, 24, 39, 0.1);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.72);
+    }
+    #content-scheduled-tasks .scheduled-lead-template-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 8px;
+      border-radius: 10px;
+      background: #fff;
+      cursor: pointer;
+    }
+    #content-scheduled-tasks .scheduled-lead-template-row b,
+    #content-scheduled-tasks .scheduled-lead-template-row small {
+      display: block;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    #content-scheduled-tasks .scheduled-lead-template-row small {
+      color: var(--muted);
+      margin-top: 2px;
+    }
     #content-scheduled-tasks .scheduled-asset-field {
       margin-top: 18px;
       margin-bottom: 0;

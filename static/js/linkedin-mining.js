@@ -7,7 +7,9 @@
     activeLeadKey: '',
     activeLeadSegment: 'all',
     docs: [],
-    pollTimer: null
+    pollTimer: null,
+    templates: [],
+    templatesLoading: false
   };
   var DRAFT_KEY = 'linkedinMining.inputDraft.v1';
   var LEAD_STATE_PREFIX = 'linkedinMining.leadState.';
@@ -128,6 +130,111 @@
     var selected = (data.memory_docs || []).map(function(doc) { return String(doc.id || doc.doc_id || doc.filename || doc.name || ''); });
     var sel = $('liMemorySelect');
     if (sel) Array.prototype.slice.call(sel.options || []).forEach(function(opt) { opt.selected = selected.indexOf(opt.value) >= 0; });
+  }
+
+  function templateSummary(payload) {
+    payload = payload || {};
+    var parts = [];
+    if ((payload.seed_profile_urls || []).length) parts.push('个人 ' + payload.seed_profile_urls.length);
+    if ((payload.seed_company_urls || []).length) parts.push('公司 ' + payload.seed_company_urls.length);
+    if ((payload.keywords || []).length) parts.push('关键词 ' + payload.keywords.length);
+    if ((payload.hashtags || []).length) parts.push('话题 ' + payload.hashtags.length);
+    return parts.join(' · ') || '未配置采集条件';
+  }
+
+  function fillInputsFromTemplate(row) {
+    var data = (row && row.request_payload) || {};
+    if ($('liJobTitleInput')) $('liJobTitleInput').value = data.title || row.name || '';
+    if ($('liSeedProfilesInput')) $('liSeedProfilesInput').value = (data.seed_profile_urls || []).join('\n');
+    if ($('liSeedCompaniesInput')) $('liSeedCompaniesInput').value = (data.seed_company_urls || []).join('\n');
+    if ($('liKeywordsInput')) $('liKeywordsInput').value = (data.keywords || []).join('\n');
+    if ($('liHashtagsInput')) $('liHashtagsInput').value = (data.hashtags || []).join('\n');
+    if ($('liTargetProfileInput')) $('liTargetProfileInput').value = data.target_profile || '';
+    if ($('liMaxPeopleInput')) $('liMaxPeopleInput').value = data.max_people || 30;
+    if ($('liMaxEmployeesInput')) $('liMaxEmployeesInput').value = data.max_company_employees || 20;
+    if ($('liMaxInteractionsInput')) $('liMaxInteractionsInput').value = data.max_interactions_per_post || 20;
+    var selected = (data.memory_docs || []).map(function(doc) { return String(doc.id || doc.doc_id || doc.filename || doc.name || ''); });
+    var sel = $('liMemorySelect');
+    if (sel) Array.prototype.slice.call(sel.options || []).forEach(function(opt) { opt.selected = selected.indexOf(opt.value) >= 0; });
+    setMsg('已填入模板：' + (row.name || ''), false);
+  }
+
+  function renderTemplates() {
+    var host = $('liTemplateList');
+    if (!host) return;
+    if (state.templatesLoading) {
+      host.innerHTML = '<div class="li-meta">加载中...</div>';
+      return;
+    }
+    if (!state.templates.length) {
+      host.innerHTML = '<div class="li-meta">暂无模板</div>';
+      return;
+    }
+    host.innerHTML = state.templates.map(function(row) {
+      return '<article class="li-template-item" data-template-id="' + esc(row.id) + '">'
+        + '<strong>' + esc(row.name || ('模板 #' + row.id)) + '</strong>'
+        + '<span class="li-meta">' + esc(templateSummary(row.request_payload || {})) + '</span>'
+        + '<div class="li-copy-row" style="margin-top:0.55rem;">'
+        + '<button type="button" class="btn btn-primary btn-sm" data-template-action="use">使用</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-template-action="delete">删除</button>'
+        + '</div>'
+        + '</article>';
+    }).join('');
+  }
+
+  function loadTemplates(silent) {
+    state.templatesLoading = true;
+    renderTemplates();
+    return apiJson('/api/lead-collection/templates?platform=linkedin')
+      .then(function(data) {
+        state.templates = data.items || [];
+        renderTemplates();
+      })
+      .catch(function(err) {
+        state.templates = [];
+        renderTemplates();
+        if (!silent) setMsg(err.message || '模板加载失败', true);
+      })
+      .then(function() {
+        state.templatesLoading = false;
+        renderTemplates();
+      });
+  }
+
+  function createTemplate() {
+    var body = readInputs();
+    var name = (body.title || '').trim() || window.prompt('模板名称', 'LinkedIn采集模板');
+    if (!name) return;
+    apiJson('/api/lead-collection/templates', {
+      method: 'POST',
+      body: {
+        platform: 'linkedin',
+        name: name,
+        title: body.title || name,
+        request_payload: body
+      }
+    }).then(function(data) {
+      setMsg('模板已创建', false);
+      if (data.template) {
+        state.templates = [data.template].concat((state.templates || []).filter(function(row) { return String(row.id) !== String(data.template.id); }));
+        renderTemplates();
+      } else {
+        loadTemplates(true);
+      }
+    }).catch(function(err) {
+      setMsg(err.message || '模板创建失败', true);
+    });
+  }
+
+  function deleteTemplate(templateId) {
+    if (!templateId) return;
+    apiJson('/api/lead-collection/templates/' + encodeURIComponent(templateId), { method: 'DELETE', body: {} })
+      .then(function() {
+        state.templates = (state.templates || []).filter(function(row) { return String(row.id) !== String(templateId); });
+        renderTemplates();
+        setMsg('模板已删除', false);
+      })
+      .catch(function(err) { setMsg(err.message || '模板删除失败', true); });
   }
 
   function statusBadge(status) {
@@ -968,6 +1075,22 @@
     if (refresh) refresh.addEventListener('click', function() { loadJobs(false); });
     var start = $('liStartJobBtn');
     if (start) start.addEventListener('click', startJob);
+    var createTemplateBtn = $('liCreateTemplateBtn');
+    if (createTemplateBtn) createTemplateBtn.addEventListener('click', createTemplate);
+    var refreshTemplatesBtn = $('liRefreshTemplatesBtn');
+    if (refreshTemplatesBtn) refreshTemplatesBtn.addEventListener('click', function() { loadTemplates(false); });
+    var templateList = $('liTemplateList');
+    if (templateList) {
+      templateList.addEventListener('click', function(evt) {
+        var btn = evt.target && evt.target.closest ? evt.target.closest('[data-template-action]') : null;
+        if (!btn) return;
+        var card = btn.closest('[data-template-id]');
+        var id = card ? card.getAttribute('data-template-id') : '';
+        var row = (state.templates || []).filter(function(item) { return String(item.id) === String(id); })[0];
+        if (btn.getAttribute('data-template-action') === 'use') fillInputsFromTemplate(row);
+        else if (btn.getAttribute('data-template-action') === 'delete') deleteTemplate(id);
+      });
+    }
     var save = $('liSaveDraftBtn');
     if (save) save.addEventListener('click', saveDraft);
     var load = $('liLoadDraftBtn');
@@ -1028,6 +1151,7 @@
     root.dataset.bound = '1';
     bind();
     loadDocs();
+    loadTemplates(true);
     loadJobs(true);
     startPolling();
   };
