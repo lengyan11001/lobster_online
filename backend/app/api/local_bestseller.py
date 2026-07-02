@@ -525,7 +525,6 @@ def _seedance_grok_model(model: str) -> str:
 
 def _seedance_grok_video_fallbacks() -> List[Dict[str, str]]:
     return [
-        {"channel": "openmind", "model": "grok-imagine-video-1.5-preview"},
         {"channel": "yunwu", "model": "grok-video-3"},
         {"channel": "comfly", "model": "veo3.1-fast"},
     ]
@@ -558,7 +557,7 @@ async def _submit_card_video_via_seedance(
         auto_save=True,
         task_text=prompt,
         video_model=_seedance_grok_model(video_model),
-        video_channel="comfly",
+        video_channel="openmind",
         video_fallbacks=_seedance_grok_video_fallbacks(),
         aspect_ratio="9:16",
         generate_audio=True,

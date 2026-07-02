@@ -224,13 +224,12 @@ async def _prepare_pipeline_input(
     if not video_channel:
         video_channel = "openmind"
     if _is_grok_video_request(video_channel, video_model):
-        video_channel = "comfly"
+        video_channel = "openmind"
         video_base_url = video_base_url or pipe_base
-        video_model = video_model or (getattr(settings, "comfly_daihuo_grok_video_model", None) or "grok-video-3")
+        video_model = video_model or (getattr(settings, "comfly_daihuo_grok_video_model", None) or "grok-imagine-video-1.5-preview")
         if not video_fallbacks:
             video_fallbacks = [
                 {"channel": "yunwu", "model": "grok-video-3", "base_url": pipe_base},
-                {"channel": "openmind", "model": "grok-imagine-video-1.5-preview", "base_url": pipe_base},
                 {"channel": "comfly", "model": "veo3.1-fast", "base_url": pipe_base},
                 {"channel": "yunwu", "model": "veo3.1", "base_url": pipe_base},
             ]
