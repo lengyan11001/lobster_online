@@ -678,6 +678,22 @@ def _ass_event(style: str, text: str, *, start: str = "0:00:00.00", end: str = "
     return f"Dialogue: 0,{start},{end},{style},,0,0,{int(margin_v)},,{text}"
 
 
+def _rank_list_events(style: str, items: List[str], *, x: int, start_y: int, step_y: int) -> List[str]:
+    events: List[str] = []
+    for idx, item in enumerate(items):
+        y = start_y + idx * step_y
+        events.append(_ass_event(style, rf"{{\pos({x},{y})}}" + _escape_ass_text(item)))
+    return events
+
+
+def _stacked_center_events(style: str, items: List[str], *, x: int, start_y: int, step_y: int) -> List[str]:
+    events: List[str] = []
+    for idx, item in enumerate(items):
+        y = start_y + idx * step_y
+        events.append(_ass_event(style, rf"{{\pos({x},{y})}}" + _escape_ass_text(item)))
+    return events
+
+
 def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = None) -> str:
     lines = _local_bestseller_caption_lines(subtitle_text)
     title = lines[0] if lines else "我国南北城市分布"
@@ -689,8 +705,8 @@ def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = N
         _ass_event("RankTitleYellow", _escape_ass_text(subtitle), margin_v=172),
         _ass_event("RankHeader", r"{\pos(328,336)}南方"),
         _ass_event("RankHeader", r"{\pos(752,336)}北方"),
-        _ass_event("RankList", r"{\pos(328,430)}" + _escape_ass_text("\n".join(south))),
-        _ass_event("RankList", r"{\pos(752,430)}" + _escape_ass_text("\n".join(north))),
+        *_rank_list_events("RankList", south, x=328, start_y=462, step_y=100),
+        *_rank_list_events("RankList", north, x=752, start_y=462, step_y=100),
     ]
     return "\n".join([
         "[Script Info]",
@@ -704,7 +720,7 @@ def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = N
         f"Style: RankTitleRed,Microsoft YaHei,96,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,8,2,8,54,54,64,1",
         f"Style: RankTitleYellow,Microsoft YaHei,88,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,8,2,8,54,54,150,1",
         f"Style: RankHeader,Microsoft YaHei,90,{_ass_color('#ffffff')},{_ass_color('#ffffff')},{_ass_color('#d91f1f')},{_ass_color('#d91f1f')},-1,0,0,0,100,100,0,0,3,15,0,5,54,54,0,1",
-        f"Style: RankList,Microsoft YaHei,54,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,100,0,0,1,6,1,8,36,36,0,1",
+        f"Style: RankList,Microsoft YaHei,90,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H00000000,-1,0,0,0,100,112,0,0,1,6,1,8,36,36,0,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -715,19 +731,22 @@ def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = N
 
 def _local_bestseller_ass_content(subtitle_text: str, subtitle_style: Optional[Dict[str, Any]] = None, *, day: Any = None) -> str:
     style = subtitle_style if isinstance(subtitle_style, dict) else {}
-    if str(style.get("variant") or "").strip() == "rank_table" and int(day or 0) == 1:
+    variant = str(style.get("variant") or "").strip()
+    if variant == "rank_table":
         return _local_bestseller_rank_table_ass_content(subtitle_text, day=day)
     lines = _local_bestseller_caption_lines(subtitle_text)
     title = lines[0] if lines else ""
     body = lines[1:] if len(lines) > 1 else []
     events: List[str] = []
     if title:
-        events.append(f"Dialogue: 0,0:00:00.00,0:00:10.00,Title,,0,72,0,,{_escape_ass_text(title)}")
+        events.append(_ass_event("Title", rf"{{\pos(540,132)}}" + _escape_ass_text(title)))
     if body:
-        body_text = "\n".join(body)
-        events.append(f"Dialogue: 0,0:00:00.00,0:00:10.00,Body,,0,112,0,,{_escape_ass_text(body_text)}")
+        if variant == "large_center_stack":
+            events.extend(_stacked_center_events("Body", body[:4], x=540, start_y=288, step_y=102))
+        else:
+            events.extend(_stacked_center_events("Body", body[:4], x=540, start_y=312, step_y=88))
     if not events:
-        events.append("Dialogue: 0,0:00:00.00,0:00:10.00,Body,,0,112,0,,")
+        events.append(_ass_event("Body", rf"{{\pos(540,288)}}"))
     return "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -737,8 +756,8 @@ def _local_bestseller_ass_content(subtitle_text: str, subtitle_style: Optional[D
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Title,Microsoft YaHei,82,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,7,2,8,72,72,72,1",
-        f"Style: Body,Microsoft YaHei,74,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H99000000,-1,0,0,0,100,100,0,0,1,7,2,8,80,80,118,1",
+        f"Style: Title,Microsoft YaHei,94,{_ass_color('#ff2d2d')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H66000000,-1,0,0,0,100,104,0,0,1,8,2,8,48,48,0,1",
+        f"Style: Body,Microsoft YaHei,88,{_ass_color('#fff200')},{_ass_color('#ffffff')},{_ass_color('#101010')},&H66000000,-1,0,0,0,100,108,0,0,1,7,2,8,52,52,0,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
