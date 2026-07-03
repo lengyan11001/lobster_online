@@ -1197,15 +1197,26 @@ def _redact_progress_for_client(prog: Any) -> Any:
 
 def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str, Any]:
     st = (job.get("status") or "").strip()
+    meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+    subtitle_text = str(meta.get("subtitle_text") or "").strip()
+    requires_caption = meta.get("feature") == "local_bestseller" and bool(subtitle_text)
+    post_status = job.get("post_status")
+    post_stage = job.get("post_stage")
+    caption_ready = bool(post_stage == "completed" and post_status == "completed") or bool(
+        isinstance(job.get("result"), dict) and isinstance(job.get("result", {}).get("captioned_video"), dict)
+    )
     out: Dict[str, Any] = {
         "ok": True,
         "job_id": job.get("job_id"),
         "status": st,
-        "post_status": job.get("post_status"),
-        "post_stage": job.get("post_stage"),
+        "post_status": post_status,
+        "post_stage": post_stage,
+        "post_error": job.get("post_error"),
         "auto_save": job.get("auto_save"),
         "created_at_ts": job.get("created_at_ts"),
         "updated_at_ts": job.get("updated_at_ts"),
+        "requires_caption": requires_caption,
+        "caption_ready": caption_ready,
     }
     job_out = job.get("job_output_dir") or ""
     prog = read_manifest_progress(str(job_out))

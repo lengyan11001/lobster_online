@@ -213,6 +213,7 @@
     item.scene_url = asset.url || asset.preview_url || '';
     item.scene_preview_url = asset.preview_url || asset.url || '';
     item.scene_name = asset.name || asset.asset_id || '场景底图';
+    item.prefer_scene_for_video = true;
   }
 
   function applySceneAssetsToPlan(assets) {
@@ -224,6 +225,7 @@
       item.scene_url = asset.url || asset.preview_url || '';
       item.scene_preview_url = asset.preview_url || asset.url || '';
       item.scene_name = asset.name || asset.asset_id || '场景底图';
+      item.prefer_scene_for_video = true;
     });
   }
 
@@ -597,6 +599,7 @@
       scene_url: item.scene_url || '',
       scene_preview_url: item.scene_preview_url || '',
       scene_name: item.scene_name || '',
+      prefer_scene_for_video: !!item.prefer_scene_for_video,
       image_url: item.image_url || '',
       image_asset_id: item.image_asset_id || '',
       video_url: item.video_url || '',
@@ -740,15 +743,20 @@
   function updateVideoItemFromJob(item, data) {
     if (!item || !data) return;
     var status = String(data.status || '').toLowerCase();
+    var postStatus = String(data.post_status || '').toLowerCase();
+    var postStage = String(data.post_stage || '').toLowerCase();
+    var requiresCaption = !!data.requires_caption;
+    var captionReady = !!data.caption_ready;
     var label = data.progress_label || data.progress_detail || '';
-    if (data.post_status === 'captioning' || (data.requires_caption && !data.caption_ready)) label = '字幕合成中';
-    if (data.requires_caption && !data.caption_ready && status === 'completed') {
+    var captioning = requiresCaption && !captionReady && (status === 'completed' || postStatus === 'captioning' || postStage === 'burn_subtitle');
+    if (captioning) label = '字幕合成中';
+    if (captioning && status === 'completed') {
       status = 'running';
     }
     if (status === 'completed') {
       item.video_status = 'completed';
       item.status = 'video_completed';
-      item.video_progress_label = data.caption_ready ? '字幕成片已完成' : '视频已完成';
+      item.video_progress_label = captionReady ? '字幕成片已完成' : '视频已完成';
       var url = finalVideoUrlFromJob(data);
       if (url) item.video_url = url;
       return;
@@ -1188,6 +1196,7 @@
           clearItem.scene_url = '';
           clearItem.scene_preview_url = '';
           clearItem.scene_name = '';
+          clearItem.prefer_scene_for_video = false;
           renderPlan();
           updateButtons();
         }

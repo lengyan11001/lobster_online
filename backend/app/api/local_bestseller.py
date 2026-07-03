@@ -61,6 +61,7 @@ class LocalBestsellerCardOverride(BaseModel):
     scene_url: str = ""
     scene_preview_url: str = ""
     scene_name: str = ""
+    prefer_scene_for_video: bool = False
     image_url: str = ""
     image_asset_id: str = ""
     video_url: str = ""
@@ -216,6 +217,16 @@ def _caption_style(row: Dict[str, Any], platform: str) -> Dict[str, Any]:
             "font_weight": 900,
             "reference": "顶部红黄大标题 + 中间密集榜单/分栏，字要像截图里短视频模板那样压在画面上。",
         }
+    if platform == "douyin":
+        return {
+            "placement": "top_center",
+            "variant": "large_center_stack",
+            "primary_color": "#fff200",
+            "accent_color": "#ff2d2d",
+            "stroke_color": "#101010",
+            "font_weight": 900,
+            "reference": "????? + ?????????????????????????????????????",
+        }
     return {
         "placement": "top_center",
         "variant": "yellow_black_stroke",
@@ -258,6 +269,63 @@ def _real_life_prompt() -> str:
         "允许灯光不完美、角度随意、构图不完美、背景有一点杂乱、轻微噪点、轻微运动模糊和真实透视；"
         "使用自然光、路灯、店内普通灯或混合光，皮肤有真实纹理，衣服和环境有生活痕迹，去除AI味。"
     )
+
+
+def _city_scene_only_days() -> set[int]:
+    return {1, 3, 4, 5, 8}
+
+
+def _is_city_scene_only_day(day: int) -> bool:
+    return int(day or 0) in _city_scene_only_days()
+
+
+def _real_life_scene_prompt() -> str:
+    return (
+        "画面必须像本地生活中朋友拿手机随手拍到的真实城市场景，不要商业棚拍，不要AI大片感；"
+        "重点展示城市街景、门店、商圈、社区、办公区、交通动线或生活空间本身，保留真实现场感；"
+        "允许路人、车辆、树影、灯光、招牌、天气和生活痕迹自然出现，但不要突出单个人物，更不要做人物特写主角；"
+        "允许灯光不完美、角度随意、构图不完美、背景略杂、轻微噪点、轻微运动模糊和真实透视，整体去除AI味。"
+    )
+
+
+def _scene_only_city_prompt(scene_prompt: str) -> str:
+    out = str(scene_prompt or "").strip()
+    if not out:
+        return "展示当前城市真实街景、门店、商圈、社区或工作环境的生活化场景。"
+    out = out.replace("站在", "在")
+    out = out.replace("停下脚步", "")
+    out = out.replace("自然站着", "")
+    out = out.replace("自然走路", "")
+    out = out.replace("自然走动", "")
+    out = out.replace("做事", "")
+    out = out.replace("表情真实亲切", "")
+    out = out.replace("表情自然", "")
+    out = out.replace("看镜头", "")
+    out = out.replace("正脸", "")
+    out = out.replace("人物", "")
+    if "在" in out:
+        out = out.split("在", 1)[1]
+    replacements = [
+        ("自然转头或继续做自己的事，不必正脸", ""),
+        ("自然转头或继续做自己的事，不必", ""),
+        ("或继续走动，神态自然，不必", ""),
+        ("像被同事随手拍到", "像朋友随手拍到的真实现场"),
+        ("像朋友用手机随手拍到的生活画面", "像朋友随手拍到的真实生活现场"),
+        ("像日常短视频随手拍", "像朋友随手拍到的日常现场"),
+        ("被手机从侧面随手拍到", "被朋友随手拍到"),
+    ]
+    for old, new in replacements:
+        out = out.replace(old, new)
+    out = re.sub(r"[，、\s]*(像朋友随手拍到的真实现场|像朋友随手拍到的真实生活现场|像朋友随手拍到的日常现场)", r"，\1", out)
+    out = re.sub(r"[，、\s]{2,}", "，", out)
+    out = out.strip("，。 ")
+    if not out:
+        return "展示当前城市真实街景、门店、商圈、社区或工作环境的生活化场景。"
+    if "场景" not in out and "现场" not in out and "氛围" not in out:
+        out = f"{out}的真实城市场景"
+    if not out.endswith(("。", "；", ";", ".")):
+        out += "。"
+    return out
 
 
 def _naturalize_scene_prompt(text: str) -> str:
@@ -342,6 +410,7 @@ def _sanitize_video_prompt_no_speech(prompt: str) -> str:
 
 def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
     day = int(row.get("day") or 0)
+    scene_only_day = _is_city_scene_only_day(day)
     stage = str(row.get("stage") or "").strip()
     douyin_copy = _format_template(str(row.get("douyin_copy") or ""), profile)
     videohao_copy = _format_template(str(row.get("videohao_copy") or ""), profile)
@@ -355,19 +424,44 @@ def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
         "如当前Day卡片提供了场景底图参考，第二张参考图只用于保持环境、空间、光线、街景/门店/室内结构和生活现场感；"
         "人物身份必须仍以用户人物照片为准，不要把场景图里的人当成主角。"
     )
-    base_scene_prompt = (
-        f"{scene_prompt} 行业/人设：{profile.get('industry')}，{profile.get('identity')}，风格：{style}。"
-        f"{_photo_identity_prompt(profile)}{scene_reference_prompt}{_real_life_prompt()}"
-        "输出9:16竖屏生活场景照片；画面本身不要生成字幕、不要水印、不要海报排版，字幕由前端/后期叠加。"
+    scene_only_reference_prompt = (
+        "如当前Day卡片提供了场景底图参考，参考图只用于保持当前城市的环境氛围、空间结构、街景元素、门店外观、室内布局和生活现场感；"
+        "不要把参考图里的任何人物当成主角，也不要强绑定固定人脸。"
     )
-    video_prompt = (
-        f"基于合成出的场景照片生成10秒竖屏视频。人物身份保持不变，衣服可随场景自然变化；"
-        "人物正常走动，步伐和手臂摆动自然，可以停下、转身、低头整理东西、侧身工作或与环境自然互动；"
-        "视频中间约第4-6秒，人物要自然抬头看向镜头或自然扫视镜头，像刚好发现朋友在拍；"
-        "镜头像朋友拿手机边走边拍，轻微跟拍、轻微晃动、轻微推近或侧向视角变化，视角不完美但真实，像真的现场拍摄。"
-        f"{_real_life_prompt()}"
-        "不要出现AI感运镜，不要过度电影光，不要文字水印。"
-    )
+    if scene_only_day:
+        city_name = (profile.get("city") or "").strip()
+        province_name = (profile.get("province") or "").strip()
+        city_scope = " / ".join([item for item in [province_name, city_name] if item]) or "当前城市"
+        scene_only_prompt = _scene_only_city_prompt(scene_prompt)
+        base_scene_prompt = (
+            f"{scene_only_prompt} 城市范围：{city_scope}。行业/赛道：{profile.get('industry')}，风格：{style}。"
+            "这一天直接生成符合当地气质的真实同城场景图，不需要固定人物主角，不要绑定用户照片身份；"
+            "可以表现与主题匹配的街道、门店、商圈、社区、写字楼、电梯口、停车场、咖啡店、夜景、住宅区、地标附近或生活化室内场景；"
+            "如果画面里出现行人，只能作为背景点缀或远景经过，不要突出单个人物，不要半身特写，不要摆拍。"
+            f"{scene_only_reference_prompt}{_real_life_scene_prompt()}"
+            "输出9:16竖屏生活场景照片；画面本身不要生成字幕、不要水印、不要海报排版，字幕由前端/后期叠加。"
+        )
+        video_prompt = (
+            "基于合成出的城市场景图生成10秒竖屏视频，不要固定人物主角，不要人物口播，不要怼脸特写；"
+            "镜头像朋友拿手机在当地真实场景里边走边拍，轻微跟拍、轻微晃动、轻微推近、横移或扫街即可；"
+            "重点表现街景、门店、商圈、社区、办公区或生活空间的动态现场感，可以自然出现路人经过、车辆移动、招牌灯光、树影风感、门店进出或环境细节变化；"
+            "不要让任何单个人物成为主角，不要AI感运镜，不要过度电影光，不要文字水印。"
+            f"{_real_life_scene_prompt()}"
+        )
+    else:
+        base_scene_prompt = (
+            f"{scene_prompt} 行业/人设：{profile.get('industry')}，{profile.get('identity')}，风格：{style}。"
+            f"{_photo_identity_prompt(profile)}{scene_reference_prompt}{_real_life_prompt()}"
+            "输出9:16竖屏生活场景照片；画面本身不要生成字幕、不要水印、不要海报排版，字幕由前端/后期叠加。"
+        )
+        video_prompt = (
+            f"基于合成出的场景照片生成10秒竖屏视频。人物身份保持不变，衣服可随场景自然变化；"
+            "人物正常走动，步伐和手臂摆动自然，可以停下、转身、低头整理东西、侧身工作或与环境自然互动；"
+            "视频中间约第4-6秒，人物要自然抬头看向镜头或自然扫视镜头，像刚好发现朋友在拍；"
+            "镜头像朋友拿手机边走边拍，轻微跟拍、轻微晃动、轻微推近或侧向视角变化，视角不完美但真实，像真的现场拍摄。"
+            f"{_real_life_prompt()}"
+            "不要出现AI感运镜，不要过度电影光，不要文字水印。"
+        )
     video_prompt = _sanitize_video_prompt_no_speech(video_prompt)
     return {
         "id": f"local-day-{day:02d}",
@@ -405,6 +499,7 @@ def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
         "scene_url": "",
         "scene_preview_url": "",
         "scene_name": "",
+        "prefer_scene_for_video": False,
         "status": "ready",
         "scene_status": "ready",
         "image_url": "",
@@ -424,6 +519,8 @@ def _merge_card_override(card: Dict[str, Any], override: Optional[LocalBestselle
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = value.strip()
+    if "prefer_scene_for_video" in data:
+        merged["prefer_scene_for_video"] = bool(data.get("prefer_scene_for_video"))
     if isinstance(data.get("douyin"), dict):
         merged_douyin = dict(merged.get("douyin") or {})
         incoming = data["douyin"]
@@ -488,6 +585,7 @@ def _card_with_scene_result(card: Dict[str, Any], result: Dict[str, Any]) -> Dic
     card = dict(card)
     card["status"] = "scene_completed"
     card["scene_status"] = "completed"
+    card["prefer_scene_for_video"] = False
     card["image_url"] = source_url or image_url
     card["image_asset_id"] = asset_id
     return card
@@ -495,11 +593,18 @@ def _card_with_scene_result(card: Dict[str, Any], result: Dict[str, Any]) -> Dic
 
 def _scene_generation_prompt(card: Dict[str, Any]) -> str:
     prompt = str(card.get("scene_prompt") or card.get("image_prompt") or "").strip()
-    if str(card.get("scene_url") or card.get("scene_asset_id") or "").strip() and "第二张参考图只用于保持环境" not in prompt:
-        prompt += (
-            "如当前Day卡片提供了场景底图参考，第二张参考图只用于保持环境、空间、光线、街景/门店/室内结构和生活现场感；"
-            "人物身份必须仍以用户人物照片为准，不要把场景图里的人当成主角。"
-        )
+    if str(card.get("scene_url") or card.get("scene_asset_id") or "").strip():
+        if _is_city_scene_only_day(int(card.get("day") or 0)):
+            if "参考图只用于保持当前城市的环境氛围" not in prompt:
+                prompt += (
+                    "如当前Day卡片提供了场景底图参考，参考图只用于保持当前城市的环境氛围、空间结构、街景元素、门店外观、室内布局和生活现场感；"
+                    "不要把参考图里的任何人物当成主角，也不要强绑定固定人脸。"
+                )
+        elif "第二张参考图只用于保持环境" not in prompt:
+            prompt += (
+                "如当前Day卡片提供了场景底图参考，第二张参考图只用于保持环境、空间、光线、街景/门店/室内结构和生活现场感；"
+                "人物身份必须仍以用户人物照片为准，不要把场景图里的人当成主角。"
+            )
     return prompt
 
 
@@ -587,6 +692,17 @@ def _resolve_card_image_url(
     request: Request,
     db: Session,
 ) -> str:
+    prefer_scene_for_video = bool(card.get("prefer_scene_for_video"))
+    if prefer_scene_for_video:
+        scene_url = str(card.get("scene_url") or card.get("scene_preview_url") or "").strip()
+        if scene_url.startswith(("http://", "https://")):
+            return scene_url
+        scene_aid = str(card.get("scene_asset_id") or "").strip()
+        if scene_aid:
+            public = get_asset_public_url(scene_aid, current_user.id, request, db)
+            if public:
+                return public
+
     image_url = str(card.get("image_url") or "").strip()
     if image_url.startswith(("http://", "https://")):
         return image_url
@@ -614,6 +730,21 @@ def _resolve_reference_urls(
     request: Request,
     db: Session,
 ) -> List[str]:
+    card = card or {}
+    if _is_city_scene_only_day(int(card.get("day") or 0)):
+        urls: List[str] = []
+        scene_url = str(card.get("scene_url") or "").strip()
+        if scene_url.startswith(("http://", "https://")):
+            urls.append(scene_url)
+        scene_aid = str(card.get("scene_asset_id") or "").strip()
+        if scene_aid:
+            public = get_asset_public_url(scene_aid, current_user.id, request, db)
+            if not public:
+                raise HTTPException(status_code=400, detail=f"场景底图素材 {scene_aid} 暂无可用于云端合成的公网地址")
+            if public not in urls:
+                urls.append(public)
+        return urls[:2]
+
     urls: List[str] = []
     photo_url = str(profile.get("photo_url") or "").strip()
     if photo_url.startswith(("http://", "https://")):
@@ -627,7 +758,6 @@ def _resolve_reference_urls(
             urls.append(public)
     if not urls:
         raise HTTPException(status_code=400, detail="请先上传人物照片，或从素材库选择一张人物照片")
-    card = card or {}
     scene_url = str(card.get("scene_url") or "").strip()
     if scene_url.startswith(("http://", "https://")) and scene_url not in urls:
         urls.append(scene_url)
