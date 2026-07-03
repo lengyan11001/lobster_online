@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -63,7 +64,9 @@ BROWSER_DATA_DIR = _BASE_DIR / "browser_data"
 BROWSER_DATA_DIR.mkdir(exist_ok=True)
 DATA_DIR = _BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
+DOUYIN_ORIGIN_CONFIG_PATH = DATA_DIR / "config.json"
 DOUYIN_WORKBENCH_CONFIG_PATH = DATA_DIR / "douyin_workbench_config.json"
+DOUYIN_ORIGIN_SLOT_ID_BASE = -1000
 DOUYIN_INTENT_DIRECTION_DEFAULT = (
     "请筛选评论中是否属于精准客户。这里的精准客户指：有真实需求、了解意愿、"
     "咨询意愿、联系意愿的人。优先保留想了解、想咨询、感兴趣、想试试、想做、"
@@ -80,6 +83,293 @@ def _normalize_douyin_comment_filter_strategy(value: object) -> str:
 
 
 DOUYIN_SEARCH_MODES = {"api", "script"}
+
+
+def _int_or_default(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _normalize_origin_douyin_accounts(raw: object) -> List[Dict[str, Any]]:
+    defaults = [{"id": account_id, "status": "offline", "port": 9331 + account_id} for account_id in range(1, 4)]
+    by_id: Dict[int, Dict[str, Any]] = {}
+    rows = raw if isinstance(raw, list) else []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        account_id = _int_or_default(item.get("id"), 0)
+        if account_id <= 0:
+            continue
+        port = _int_or_default(item.get("port"), 9331 + account_id)
+        by_id[account_id] = {
+            **item,
+            "id": account_id,
+            "status": str(item.get("status") or "offline"),
+            "port": port if port > 0 else 9331 + account_id,
+        }
+    for item in defaults:
+        by_id.setdefault(int(item["id"]), dict(item))
+    return [by_id[key] for key in sorted(by_id)]
+
+
+def _load_origin_douyin_config() -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    try:
+        if DOUYIN_ORIGIN_CONFIG_PATH.exists():
+            raw = json.loads(DOUYIN_ORIGIN_CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                payload.update(raw)
+    except Exception as exc:
+        logger.warning("[PUBLISH][DOUYIN] load origin config failed: %s", exc)
+    payload["douyin_accounts"] = _normalize_origin_douyin_accounts(payload.get("douyin_accounts"))
+    default_id = _int_or_default(payload.get("douyin_default_account_id"), 1)
+    payload["douyin_default_account_id"] = default_id if default_id > 0 else 1
+    return payload
+
+
+def _save_origin_douyin_config(config: Dict[str, Any]) -> None:
+    payload = dict(config or {})
+    payload["douyin_accounts"] = _normalize_origin_douyin_accounts(payload.get("douyin_accounts"))
+    DOUYIN_ORIGIN_CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _origin_slot_publish_id(origin_account_id: int) -> int:
+    return DOUYIN_ORIGIN_SLOT_ID_BASE - int(origin_account_id or 0)
+
+
+def _origin_account_id_from_slot_id(account_id: object) -> int:
+    value = _int_or_default(account_id, 0)
+    if value >= DOUYIN_ORIGIN_SLOT_ID_BASE:
+        return 0
+    origin_id = DOUYIN_ORIGIN_SLOT_ID_BASE - value
+    return origin_id if 1 <= origin_id <= 3 else 0
+
+
+def _origin_account_id_from_publish_acct(acct: PublishAccount) -> int:
+    meta = acct.meta if isinstance(acct.meta, dict) else {}
+    is_origin_meta = (
+        str(meta.get("source") or "") == "douyin_origin"
+        or bool(meta.get("is_origin_slot"))
+        or meta.get("douyin_origin_account_id") is not None
+    )
+    origin_id = _int_or_default(
+        meta.get("douyin_origin_account_id") or (meta.get("douyin_account_id") if is_origin_meta else 0),
+        0,
+    )
+    if is_origin_meta and 1 <= origin_id <= 3:
+        return origin_id
+    return _origin_account_id_from_slot_id(getattr(acct, "id", 0))
+
+
+def _is_douyin_origin_publish_account(acct: PublishAccount) -> bool:
+    return getattr(acct, "platform", "") == "douyin" and _origin_account_id_from_publish_acct(acct) > 0
+
+
+def _douyin_origin_account_by_id(origin_account_id: int) -> Optional[Dict[str, Any]]:
+    if not 1 <= int(origin_account_id or 0) <= 3:
+        return None
+    config = _load_origin_douyin_config()
+    for account in config.get("douyin_accounts") or []:
+        if _int_or_default(account.get("id"), 0) == int(origin_account_id or 0):
+            return account
+    return None
+
+
+def _make_douyin_origin_publish_account(user_id: int, origin_account: Dict[str, Any]) -> PublishAccount:
+    origin_id = _int_or_default(origin_account.get("id"), 1)
+    port = _int_or_default(origin_account.get("port"), 9331 + origin_id)
+    status = str(origin_account.get("status") or "offline").strip().lower() or "offline"
+    acct = PublishAccount(
+        user_id=user_id,
+        platform="douyin",
+        nickname=f"抖音账号{origin_id}",
+        status=status,
+        browser_profile=None,
+        meta={
+            "source": "douyin_origin",
+            "is_origin_slot": True,
+            "douyin_origin_account_id": origin_id,
+            "douyin_account_id": origin_id,
+            "browser": {
+                "douyin_origin_account_id": origin_id,
+                "douyin_account_id": origin_id,
+                "douyin_cdp_port": port,
+            },
+        },
+    )
+    acct.id = _origin_slot_publish_id(origin_id)
+    acct.created_at = datetime.utcnow()
+    return acct
+
+
+def _douyin_origin_publish_accounts(user_id: int) -> List[PublishAccount]:
+    config = _load_origin_douyin_config()
+    return [
+        _make_douyin_origin_publish_account(user_id, account)
+        for account in (config.get("douyin_accounts") or [])
+        if 1 <= _int_or_default(account.get("id"), 0) <= 3
+    ]
+
+
+def _update_douyin_origin_slot_status(acct: PublishAccount, status: str) -> None:
+    origin_id = _origin_account_id_from_publish_acct(acct)
+    if origin_id <= 0:
+        return
+    config = _load_origin_douyin_config()
+    changed = False
+    for account in config.get("douyin_accounts") or []:
+        if _int_or_default(account.get("id"), 0) == origin_id:
+            account["status"] = status
+            changed = True
+            break
+    if changed:
+        try:
+            _save_origin_douyin_config(config)
+        except Exception as exc:
+            logger.warning("[PUBLISH][DOUYIN] update origin slot status failed: %s", exc)
+
+
+def _publish_meta_browser(acct: PublishAccount) -> Dict[str, Any]:
+    meta = acct.meta if isinstance(acct.meta, dict) else {}
+    browser = meta.get("browser") if isinstance(meta.get("browser"), dict) else {}
+    return dict(browser or {})
+
+
+def _douyin_origin_candidate_ids(acct: PublishAccount) -> List[int]:
+    meta = acct.meta if isinstance(acct.meta, dict) else {}
+    browser = _publish_meta_browser(acct)
+    raw_values: List[object] = [
+        meta.get("douyin_account_id"),
+        meta.get("douyin_origin_account_id"),
+        browser.get("douyin_account_id"),
+        browser.get("douyin_origin_account_id"),
+        browser.get("account_id"),
+        acct.nickname,
+    ]
+    ids: List[int] = []
+    for raw in raw_values:
+        if raw is None:
+            continue
+        direct = _int_or_default(raw, 0)
+        if direct > 0:
+            ids.append(direct)
+            continue
+        text = str(raw or "")
+        for match in re.findall(r"\d+", text):
+            parsed = _int_or_default(match, 0)
+            if parsed > 0:
+                ids.append(parsed)
+                break
+    seen = set()
+    result: List[int] = []
+    for account_id in ids:
+        if account_id not in seen:
+            seen.add(account_id)
+            result.append(account_id)
+    return result
+
+
+def _select_origin_douyin_account(acct: PublishAccount) -> Dict[str, Any]:
+    config = _load_origin_douyin_config()
+    accounts = list(config.get("douyin_accounts") or [])
+    by_id = {_int_or_default(item.get("id"), 0): item for item in accounts}
+    by_port = {_int_or_default(item.get("port"), 0): item for item in accounts}
+    browser = _publish_meta_browser(acct)
+
+    for raw_port in (browser.get("douyin_cdp_port"), browser.get("cdp_port")):
+        port = _int_or_default(raw_port, 0)
+        if port in by_port:
+            return by_port[port]
+
+    for account_id in _douyin_origin_candidate_ids(acct):
+        if account_id in by_id:
+            return by_id[account_id]
+
+    default_id = _int_or_default(config.get("douyin_default_account_id"), 1)
+    default_account = by_id.get(default_id)
+    if default_account and str(default_account.get("status") or "") == "online":
+        return default_account
+
+    online = [item for item in accounts if str(item.get("status") or "") == "online"]
+    if online:
+        online.sort(key=lambda item: (_int_or_default(item.get("id"), 0) != default_id, _int_or_default(item.get("id"), 0)))
+        return online[0]
+    if default_account:
+        return default_account
+    if accounts:
+        return accounts[0]
+    return {"id": 1, "status": "offline", "port": 9332}
+
+
+def _resolve_origin_douyin_profile_dir(account: Dict[str, Any]) -> str:
+    account_id = _int_or_default(account.get("id"), 1)
+    port = _int_or_default(account.get("port"), 9331 + account_id)
+    origin_dir = _BASE_DIR / "backend" / "douyin_origin"
+    try:
+        origin_dir_s = str(origin_dir)
+        if origin_dir_s not in sys.path:
+            sys.path.insert(0, origin_dir_s)
+        from douyin_client import DouyinClient  # type: ignore
+
+        return DouyinClient(port, account_id=account_id).resolve_profile_dir()
+    except Exception as exc:
+        logger.warning("[PUBLISH][DOUYIN] resolve origin profile via DouyinClient failed: %s", exc)
+
+    explicit = os.environ.get("DOUYIN_PROFILE_DIR", "").strip()
+    if explicit:
+        Path(explicit).mkdir(parents=True, exist_ok=True)
+        return explicit
+    local_appdata = os.environ.get("LOCALAPPDATA", "")
+    default_base = os.path.join(local_appdata, "Google", "Chrome", "DouyinProfiles")
+    base = Path(os.environ.get("DOUYIN_PROFILE_BASE", default_base))
+    chosen = base / f"account_{account_id}"
+    chosen.mkdir(parents=True, exist_ok=True)
+    return str(chosen)
+
+
+def _account_browser_profile_and_options(
+    acct: PublishAccount,
+    *,
+    douyin_front: bool = False,
+) -> tuple[str, Dict[str, Any]]:
+    if acct.platform != "douyin" or not _is_douyin_origin_publish_account(acct):
+        profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
+        opts = (
+            douyin_workbench_browser_options_from_publish_meta(acct.meta)
+            if acct.platform == "douyin" and douyin_front
+            else browser_options_from_publish_meta(acct.meta)
+        )
+        if acct.platform == "douyin":
+            logger.info(
+                "[PUBLISH][DOUYIN] use regular publish account id=%s profile=%s front=%s",
+                getattr(acct, "id", None),
+                profile_dir,
+                douyin_front,
+            )
+        return profile_dir, opts
+
+    origin_account = _select_origin_douyin_account(acct)
+    profile_dir = _resolve_origin_douyin_profile_dir(origin_account)
+    opts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+    port = _int_or_default(origin_account.get("port"), 9331 + _int_or_default(origin_account.get("id"), 1))
+    opts = {
+        **opts,
+        "douyin_cdp": True,
+        "douyin_cdp_port": port,
+    }
+    if not opts.get("viewport"):
+        opts["viewport"] = {"width": 1440, "height": 960}
+    logger.info(
+        "[PUBLISH][DOUYIN] use origin account id=%s status=%s port=%s profile=%s front=%s",
+        origin_account.get("id"),
+        origin_account.get("status"),
+        port,
+        profile_dir,
+        douyin_front,
+    )
+    return profile_dir, opts
 
 
 def _normalize_douyin_search_mode(value: object) -> str:
@@ -414,9 +704,35 @@ def _resolve_publish_account_for_request(
     若同时传 account_nickname 与 account_id，优先按昵称解析（与单发时一致）。
     LLM 常在昵称前加平台名（如"抖音123"），精确匹配失败后自动剥离平台前缀重试。
     """
+    origin_id = _origin_account_id_from_slot_id(account_id) if account_id is not None else 0
+    if origin_id:
+        origin_account = _douyin_origin_account_by_id(origin_id)
+        if origin_account:
+            return _make_douyin_origin_publish_account(user_id, origin_account)
+
+    if account_id is not None and int(account_id) > 0:
+        acct = (
+            db.query(PublishAccount)
+            .filter(
+                PublishAccount.id == account_id,
+                PublishAccount.user_id == user_id,
+            )
+            .first()
+        )
+        if acct is not None:
+            return acct
+
     nick = (account_nickname or "").strip()
     if nick:
         candidates, platform_hint = _account_nickname_candidates(nick)
+        if platform_hint == "douyin":
+            for candidate in candidates:
+                origin_match = re.search(r"\d+", candidate)
+                if origin_match:
+                    origin_id = _int_or_default(origin_match.group(0), 0)
+                    origin_account = _douyin_origin_account_by_id(origin_id)
+                    if origin_account:
+                        return _make_douyin_origin_publish_account(user_id, origin_account)
         for candidate in candidates:
             acct = _query_publish_account_by_nickname(db, user_id, candidate, platform_hint)
             if acct is not None:
@@ -453,6 +769,46 @@ def _resolve_publish_account_for_request(
                 return acct
         return None
     return None
+
+
+def _resolve_douyin_account_for_workbench(
+    db: Session,
+    user_id: int,
+    account_id: Optional[int] = None,
+) -> Optional[PublishAccount]:
+    if account_id:
+        acct = _resolve_publish_account_for_request(db, user_id, account_id, None)
+        if acct and acct.platform == "douyin":
+            return acct
+        return None
+
+    config = _load_origin_douyin_config()
+    accounts = list(config.get("douyin_accounts") or [])
+    default_id = _int_or_default(config.get("douyin_default_account_id"), 1)
+    selected = next(
+        (
+            account
+            for account in accounts
+            if _int_or_default(account.get("id"), 0) == default_id
+            and str(account.get("status") or "") == "online"
+        ),
+        None,
+    )
+    if selected is None:
+        selected = next((account for account in accounts if str(account.get("status") or "") == "online"), None)
+    if selected is None:
+        selected = next((account for account in accounts if _int_or_default(account.get("id"), 0) == default_id), None)
+    if selected is None and accounts:
+        selected = accounts[0]
+    if selected is not None:
+        return _make_douyin_origin_publish_account(user_id, selected)
+
+    return (
+        db.query(PublishAccount)
+        .filter(PublishAccount.user_id == user_id, PublishAccount.platform == "douyin")
+        .order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
+        .first()
+    )
 
 
 def _effective_publish_copy_from_asset(
@@ -1015,6 +1371,38 @@ def _merge_douyin_high_intent_into_customers(
     return list(by_key.values())
 
 
+def _serialize_publish_account(
+    a: PublishAccount,
+    last_sync_map: Dict[int, Any],
+    sched_map: Dict[int, Any],
+) -> Dict[str, Any]:
+    origin_id = _origin_account_id_from_publish_acct(a) if a.platform == "douyin" else 0
+    browser = _publish_meta_browser(a) if a.platform == "douyin" else {}
+    row = {
+        "id": a.id,
+        "platform": a.platform,
+        "platform_name": SUPPORTED_PLATFORMS.get(a.platform, {}).get("name", a.platform),
+        "nickname": a.nickname,
+        "status": a.status,
+        "last_login": isoformat_utc(a.last_login),
+        "created_at": a.created_at.isoformat() if a.created_at else "",
+        "last_creator_sync": last_sync_map.get(a.id),
+        "creator_schedule": sched_map.get(a.id),
+    }
+    if origin_id:
+        row.update(
+            {
+                "managed_by": "douyin_origin",
+                "is_origin_slot": True,
+                "origin_account_id": origin_id,
+                "origin_port": _int_or_default(browser.get("douyin_cdp_port") or browser.get("cdp_port"), 0),
+                "last_creator_sync": None,
+                "creator_schedule": None,
+            }
+        )
+    return row
+
+
 @router.get("/api/accounts", summary="列出发布账号")
 def list_accounts(
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -1023,7 +1411,9 @@ def list_accounts(
     rows = db.query(PublishAccount).filter(
         PublishAccount.user_id == current_user.id,
     ).order_by(PublishAccount.created_at.desc()).all()
-    acct_ids = [a.id for a in rows]
+    display_rows = _douyin_origin_publish_accounts(current_user.id)
+    display_rows.extend([a for a in rows if not _is_douyin_origin_publish_account(a)])
+    acct_ids = [a.id for a in display_rows if a.id and a.id > 0]
     last_sync_map = {}
     sched_map = {}
     try:
@@ -1089,20 +1479,7 @@ def list_accounts(
     except OperationalError as e:
         logger.warning("[PUBLISH-API] 创作者快照/定时表不可用，仅返回账号列表（请重启后端以建表）: %s", e)
     return {
-        "accounts": [
-            {
-                "id": a.id,
-                "platform": a.platform,
-                "platform_name": SUPPORTED_PLATFORMS.get(a.platform, {}).get("name", a.platform),
-                "nickname": a.nickname,
-                "status": a.status,
-                "last_login": isoformat_utc(a.last_login),
-                "created_at": a.created_at.isoformat() if a.created_at else "",
-                "last_creator_sync": last_sync_map.get(a.id),
-                "creator_schedule": sched_map.get(a.id),
-            }
-            for a in rows
-        ],
+        "accounts": [_serialize_publish_account(a, last_sync_map, sched_map) for a in display_rows],
         "platforms": [
             {"id": k, "name": v["name"]} for k, v in SUPPORTED_PLATFORMS.items()
         ],
@@ -1175,10 +1552,7 @@ async def start_login(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = db.query(PublishAccount).filter(
-        PublishAccount.id == account_id,
-        PublishAccount.user_id == current_user.id,
-    ).first()
+    acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
 
@@ -1188,16 +1562,18 @@ async def start_login(
     try:
         from publisher.browser_pool import open_login_browser
 
-        bopts = browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=acct.platform == "douyin")
         _ = await open_login_browser(
-            profile_dir=acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}"),
+            profile_dir=profile_dir,
             login_url=login_url,
             platform=acct.platform,
             browser_options=bopts,
         )
         # Don't block/poll here; don't pop interruptive messages.
         acct.status = "pending"
-        db.commit()
+        _update_douyin_origin_slot_status(acct, "waiting")
+        if acct.id > 0:
+            db.commit()
         return {"ok": True, "status": "pending", "message": "已打开浏览器，请扫码登录（完成后手动关闭窗口）"}
     except Exception as e:
         logger.exception("Login browser failed")
@@ -1210,21 +1586,17 @@ async def open_browser(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = db.query(PublishAccount).filter(
-        PublishAccount.id == account_id,
-        PublishAccount.user_id == current_user.id,
-    ).first()
+    acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
 
     platform_info = SUPPORTED_PLATFORMS.get(acct.platform, {})
     login_url = platform_info.get("login_url", "")
-    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
 
     try:
         from publisher.browser_pool import open_and_check_browser
 
-        bopts = browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=acct.platform == "douyin")
         result = await open_and_check_browser(
             profile_dir=profile_dir,
             login_url=login_url,
@@ -1235,6 +1607,8 @@ async def open_browser(
         if logged_in and acct.status != "active":
             acct.status = "active"
             acct.last_login = datetime.utcnow()
+        _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+        if acct.id > 0:
             db.commit()
         return {"ok": True, "logged_in": logged_in, "message": result.get("message", "")}
     except Exception as e:
@@ -1248,25 +1622,24 @@ async def check_login_status(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = db.query(PublishAccount).filter(
-        PublishAccount.id == account_id,
-        PublishAccount.user_id == current_user.id,
-    ).first()
+    acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
 
     try:
         from publisher.browser_pool import check_browser_login
 
-        bopts = browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=acct.platform == "douyin")
         logged_in = await check_browser_login(
-            profile_dir=acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}"),
+            profile_dir=profile_dir,
             platform=acct.platform,
             browser_options=bopts,
         )
         if logged_in and acct.status != "active":
             acct.status = "active"
             acct.last_login = datetime.utcnow()
+        _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+        if acct.id > 0:
             db.commit()
         return {"logged_in": logged_in, "message": "已登录" if logged_in else "未登录，请在浏览器中扫码"}
     except Exception as e:
@@ -1280,20 +1653,16 @@ async def open_douyin_workbench_browser(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = db.query(PublishAccount).filter(
-        PublishAccount.id == account_id,
-        PublishAccount.user_id == current_user.id,
-    ).first()
+    acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     if acct.platform != "douyin":
         raise HTTPException(400, detail="该入口只支持抖音账号")
 
-    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
     try:
         from publisher.browser_pool import open_douyin_front_browser
 
-        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=True)
         result = await open_douyin_front_browser(
             profile_dir=profile_dir,
             url=DOUYIN_WORKBENCH_URL,
@@ -1304,7 +1673,9 @@ async def open_douyin_workbench_browser(
             acct.status = "active" if logged_in else "pending"
             if logged_in:
                 acct.last_login = datetime.utcnow()
-            db.commit()
+            _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+            if acct.id > 0:
+                db.commit()
         return result
     except Exception as e:
         logger.exception("Open douyin workbench browser failed")
@@ -1317,20 +1688,16 @@ async def check_douyin_workbench_login_status(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = db.query(PublishAccount).filter(
-        PublishAccount.id == account_id,
-        PublishAccount.user_id == current_user.id,
-    ).first()
+    acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     if acct.platform != "douyin":
         raise HTTPException(400, detail="该入口只支持抖音账号")
 
-    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
     try:
         from publisher.browser_pool import check_douyin_front_login
 
-        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=True)
         result = await check_douyin_front_login(
             profile_dir=profile_dir,
             url=DOUYIN_WORKBENCH_URL,
@@ -1341,7 +1708,9 @@ async def check_douyin_workbench_login_status(
         acct.status = "active" if logged_in else "pending"
         if logged_in:
             acct.last_login = datetime.utcnow()
-        db.commit()
+        _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+        if acct.id > 0:
+            db.commit()
         return {
             "logged_in": logged_in,
             "status": acct.status,
@@ -1364,6 +1733,8 @@ def delete_account(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
+    if _origin_account_id_from_slot_id(account_id):
+        raise HTTPException(400, detail="抖音固定槽位来自获客中心，不能在发布中心删除")
     acct = db.query(PublishAccount).filter(
         PublishAccount.id == account_id,
         PublishAccount.user_id == current_user.id,
@@ -1414,7 +1785,7 @@ async def douyin_dryrun(
         PublishAccount.platform == "douyin",
         PublishAccount.nickname == account_nickname.strip(),
     ).first()
-    if not acct or not acct.browser_profile:
+    if not acct:
         raise HTTPException(404, detail="抖音账号不存在或未配置浏览器 profile")
 
     # Generate a tiny local MP4 for upload dry-run
@@ -1424,9 +1795,9 @@ async def douyin_dryrun(
     try:
         from publisher.browser_pool import dryrun_douyin_upload_in_context
 
-        bopts = browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct)
         result = await dryrun_douyin_upload_in_context(
-            profile_dir=acct.browser_profile,
+            profile_dir=profile_dir,
             file_path=str(mp4_path),
             browser_options=bopts,
         )
@@ -1482,15 +1853,7 @@ async def douyin_workbench_search_collect(
             logger.exception("Douyin workbench api search collect failed")
             logger.warning("Douyin workbench search falling back to script mode: %s", e)
             search_mode = "script"
-    query = db.query(PublishAccount).filter(
-        PublishAccount.user_id == current_user.id,
-        PublishAccount.platform == "douyin",
-    )
-    if body.account_id:
-        query = query.filter(PublishAccount.id == int(body.account_id))
-    else:
-        query = query.order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
-    acct = query.first()
+    acct = _resolve_douyin_account_for_workbench(db, current_user.id, body.account_id)
     if not acct:
         return {
             "code": 400,
@@ -1500,11 +1863,10 @@ async def douyin_workbench_search_collect(
             "total": 0,
         }
 
-    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
     try:
         from publisher.browser_pool import collect_douyin_search_results
 
-        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=True)
         result = await collect_douyin_search_results(
             profile_dir=profile_dir,
             keyword=keyword,
@@ -1522,7 +1884,9 @@ async def douyin_workbench_search_collect(
             }
         acct.status = "active"
         acct.last_login = datetime.utcnow()
-        db.commit()
+        _update_douyin_origin_slot_status(acct, "online")
+        if acct.id > 0:
+            db.commit()
         return {
             "code": 200,
             "msg": result.get("message") or f"抖音搜索完成，共 {int(result.get('total') or 0)} 条结果。",
@@ -1558,15 +1922,7 @@ async def douyin_workbench_video_customers(
     if not video_url:
         return {"code": 400, "msg": "请选择一个要采集客户的视频", "customers": [], "comments": []}
 
-    query = db.query(PublishAccount).filter(
-        PublishAccount.user_id == current_user.id,
-        PublishAccount.platform == "douyin",
-    )
-    if body.account_id:
-        query = query.filter(PublishAccount.id == int(body.account_id))
-    else:
-        query = query.order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
-    acct = query.first()
+    acct = _resolve_douyin_account_for_workbench(db, current_user.id, body.account_id)
     if not acct:
         return {
             "code": 400,
@@ -1576,7 +1932,6 @@ async def douyin_workbench_video_customers(
             "comments": [],
         }
 
-    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
     try:
         from publisher.browser_pool import collect_douyin_video_customers_protocol
 
@@ -1584,7 +1939,7 @@ async def douyin_workbench_video_customers(
         ai_filter_enabled = bool(body.ai_filter_enabled if body.ai_filter_enabled is not None else default_config.get("ai_filter_enabled", True))
         comment_direction = (body.comment_direction or default_config.get("comment_direction") or DOUYIN_INTENT_DIRECTION_DEFAULT).strip()
         comment_filter_strategy = _normalize_douyin_comment_filter_strategy(body.comment_filter_strategy or default_config.get("comment_filter_strategy"))
-        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=True)
         result = await collect_douyin_video_customers_protocol(
             profile_dir=profile_dir,
             video_url=video_url,
@@ -1602,7 +1957,9 @@ async def douyin_workbench_video_customers(
             }
         acct.status = "active"
         acct.last_login = datetime.utcnow()
-        db.commit()
+        _update_douyin_origin_slot_status(acct, "online")
+        if acct.id > 0:
+            db.commit()
         raw_comments = result.get("comments") if isinstance(result.get("comments"), list) else []
         normalized_comments: List[Dict[str, Any]] = []
         for row in raw_comments:
@@ -1684,15 +2041,7 @@ async def douyin_workbench_message_send(
     if not cleaned_targets:
         return {"code": 400, "msg": "请先选择有主页链接或 sec_user_id 的客户。", "results": []}
 
-    query = db.query(PublishAccount).filter(
-        PublishAccount.user_id == current_user.id,
-        PublishAccount.platform == "douyin",
-    )
-    if body.account_id:
-        query = query.filter(PublishAccount.id == int(body.account_id))
-    else:
-        query = query.order_by(PublishAccount.last_login.desc().nullslast(), PublishAccount.created_at.desc())
-    acct = query.first()
+    acct = _resolve_douyin_account_for_workbench(db, current_user.id, body.account_id)
     if not acct:
         return {
             "code": 400,
@@ -1701,11 +2050,10 @@ async def douyin_workbench_message_send(
             "results": [],
         }
 
-    profile_dir = acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
     try:
         from publisher.browser_pool import send_douyin_private_messages_protocol
 
-        bopts = douyin_workbench_browser_options_from_publish_meta(acct.meta)
+        profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=True)
         result = await send_douyin_private_messages_protocol(
             profile_dir=profile_dir,
             targets=cleaned_targets,
@@ -1727,7 +2075,9 @@ async def douyin_workbench_message_send(
             }
         acct.status = "active"
         acct.last_login = datetime.utcnow()
-        db.commit()
+        _update_douyin_origin_slot_status(acct, "online")
+        if acct.id > 0:
+            db.commit()
         return {
             "code": 200,
             "msg": result.get("message") or "私信发送完成",
@@ -2124,12 +2474,12 @@ async def create_publish_task(
                 ) or Path(file_path).suffix
                 _toutiao_strip_graphic_no_cover_for_image_main(publish_opts, main_suf)
 
+        profile_dir, bopts = _account_browser_profile_and_options(acct)
         logger.info("[PUBLISH-API] calling run_publish_task: platform=%s profile=%s title=%s",
-                     acct.platform, acct.browser_profile, eff_title[:40])
-        bopts = browser_options_from_publish_meta(acct.meta)
+                     acct.platform, profile_dir, eff_title[:40])
         async with publish_lock:
             result = await run_publish_task(
-                profile_dir=acct.browser_profile,
+                profile_dir=profile_dir,
                 platform=acct.platform,
                 file_path=file_path,
                 title=eff_title,

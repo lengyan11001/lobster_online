@@ -497,8 +497,8 @@ async def youtube_account_oauth_start(
 ):
     """返回 Google 授权页 URL。
 
-    默认 **open_chromium=true**：用与发布「打开浏览器」相同的 **Playwright 持久化 Chromium**
-    （`PLAYWRIGHT_CHROMIUM_PATH` / `PLAYWRIGHT_BROWSER_CHANNEL` 与 `browser_data/` 策略一致）打开授权页；
+    默认 **open_chromium=true**：用与发布「打开浏览器」相同的 **系统 Chrome 持久化上下文**
+    （字段名保留 open_chromium 以兼容旧前端）打开授权页；
     代理与账号中填写的 **proxy_server / proxy_username / proxy_password** 对齐到发布侧 `meta.browser.proxy` 规则。
 
     若内置浏览器启动失败，仍返回 **url**，前端可回退 `window.open`。

@@ -555,7 +555,8 @@ function _douyinWorkbenchSetVideoBusy(index, busy) {
 }
 
 function _douyinWorkbenchStatusLabel(status) {
-  if (status === 'active') return '已登录';
+  if (status === 'active' || status === 'online') return '已登录';
+  if (status === 'offline') return '未登录';
   if (status === 'error') return '异常';
   return '待登录';
 }
@@ -592,6 +593,7 @@ function _douyinWorkbenchRenderAccounts() {
     var id = parseInt(acct.id, 10) || 0;
     var active = id === selected;
     var status = String(acct.status || 'pending');
+    var isOriginSlot = !!acct.is_origin_slot || acct.managed_by === 'douyin_origin';
     var lastLogin = acct.last_login ? String(acct.last_login).replace('T', ' ').replace('Z', '') : '未记录';
     return '<div class="douyin-account-card' + (active ? ' is-active' : '') + '" data-douyin-account-id="' + escapeAttr(String(id)) + '">' +
       '<div class="douyin-account-main">' +
@@ -603,7 +605,7 @@ function _douyinWorkbenchRenderAccounts() {
         '<button type="button" class="btn btn-ghost btn-sm" data-douyin-account-action="select">选择</button>' +
         '<button type="button" class="btn btn-primary btn-sm" data-douyin-account-action="open">登录</button>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-douyin-account-action="check">检测</button>' +
-        '<button type="button" class="btn btn-ghost btn-sm" data-douyin-account-action="delete">删除</button>' +
+        (isOriginSlot ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-douyin-account-action="delete">删除</button>') +
       '</div>' +
     '</div>';
   }).join('');
@@ -611,7 +613,7 @@ function _douyinWorkbenchRenderAccounts() {
   var current = _douyinWorkbenchSelectedAccount();
   if (current) {
     _douyinWorkbenchStatus(
-      current.status === 'active'
+      (current.status === 'active' || current.status === 'online')
         ? '当前账号“' + current.nickname + '”已登录，可以继续采集和私信。'
         : '当前账号“' + current.nickname + '”待登录，请点击“打开登录”。'
     );

@@ -53,6 +53,41 @@ async def _human_delay(lo: float = 0.5, hi: float = 1.5):
     await asyncio.sleep(random.uniform(lo, hi))
 
 
+def _douyin_type_delay_ms() -> int:
+    raw = (os.environ.get("DOUYIN_PUBLISH_TYPE_DELAY_MS") or "").strip()
+    try:
+        delay = int(raw) if raw else 55
+    except ValueError:
+        delay = 55
+    return max(0, min(delay, 300))
+
+
+async def _douyin_type_text(page: Any, text: str, limit: int) -> str:
+    value = (text or "")[:limit]
+    if not value:
+        return ""
+    delay = _douyin_type_delay_ms()
+    if delay > 0:
+        await page.keyboard.type(value, delay=delay)
+    else:
+        await page.keyboard.type(value)
+    return value
+
+
+async def _douyin_clear_and_type(page: Any, element: Any, text: str, limit: int) -> str:
+    value = (text or "")[:limit]
+    await element.click()
+    try:
+        await element.fill("")
+    except Exception:
+        await page.keyboard.press("Control+KeyA")
+        await page.keyboard.press("Delete")
+    await _human_delay(0.2, 0.4)
+    if value:
+        await _douyin_type_text(page, value, limit)
+    return value
+
+
 # 避免视频/图片仍在传输或转码时就点「发布」导致无效提交
 _JS_DOUYIN_UPLOAD_BUSY = """
 () => {
@@ -1890,11 +1925,8 @@ class DouyinDriver(BaseDriver):
             'input.semi-input',
         ], "image_title")
         if title_input and title:
-            await title_input.click()
-            await title_input.fill("")
-            await _human_delay(0.2, 0.4)
-            await title_input.fill(title[:20])
-            _step("填写标题", True, value=title[:20])
+            typed_title = await _douyin_clear_and_type(page, title_input, title, 20)
+            _step("填写标题", True, value=typed_title)
         else:
             _step("填写标题", False, found=bool(title_input))
 
@@ -1915,7 +1947,7 @@ class DouyinDriver(BaseDriver):
             await _human_delay(0.2, 0.4)
             await page.keyboard.press("Control+KeyA")
             await page.keyboard.press("Delete")
-            await page.keyboard.type(text[:500])
+            await _douyin_type_text(page, text, 500)
             _step("填写描述/文案", True, length=len(text))
             if "#" in text or (tags and str(tags).strip()):
                 await _douyin_dismiss_hashtag_suggestion(page, "image_after_desc")
@@ -2138,11 +2170,8 @@ class DouyinDriver(BaseDriver):
             'input.semi-input',
         ], "video_title")
         if title_input and title:
-            await title_input.click()
-            await title_input.fill("")
-            await _human_delay(0.2, 0.4)
-            await title_input.fill(title[:30])
-            _step("填写标题", True, value=title[:30])
+            typed_title = await _douyin_clear_and_type(page, title_input, title, 30)
+            _step("填写标题", True, value=typed_title)
         else:
             notranslate = await _scroll_and_find(page, [
                 '.notranslate[contenteditable]',
@@ -2151,8 +2180,8 @@ class DouyinDriver(BaseDriver):
                 await notranslate.click()
                 await page.keyboard.press("Control+KeyA")
                 await page.keyboard.press("Delete")
-                await page.keyboard.type(title[:30])
-                _step("填写标题", True, value=title[:30])
+                typed_title = await _douyin_type_text(page, title, 30)
+                _step("填写标题", True, value=typed_title)
             else:
                 _step("填写标题", False)
 
@@ -2171,7 +2200,7 @@ class DouyinDriver(BaseDriver):
             await _human_delay(0.2, 0.4)
             await page.keyboard.press("Control+KeyA")
             await page.keyboard.press("Delete")
-            await page.keyboard.type(text[:500])
+            await _douyin_type_text(page, text, 500)
             _step("填写描述/文案", True, length=len(text))
         else:
             ce = await _scroll_and_find(page, [
@@ -2180,7 +2209,7 @@ class DouyinDriver(BaseDriver):
             if ce and text:
                 await ce.click()
                 await _human_delay(0.2, 0.4)
-                await page.keyboard.type(text[:500])
+                await _douyin_type_text(page, text, 500)
                 _step("填写描述/文案", True, length=len(text))
             else:
                 _step("填写描述/文案", False)

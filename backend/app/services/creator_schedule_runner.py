@@ -10,8 +10,9 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from ..api.creator_content import SYNC_PLATFORMS, perform_creator_content_sync
+from ..api.publish import _resolve_publish_account_for_request
 from ..db import SessionLocal
-from ..models import PublishAccount, PublishAccountCreatorSchedule
+from ..models import PublishAccountCreatorSchedule
 from .creator_schedule_task_log import (
     compute_final_status,
     finish_task_log,
@@ -74,7 +75,7 @@ async def _run_one_schedule_tick(
             log_row = start_task_log(db, user_id=sch.user_id, account_id=sch.account_id, trigger="tick")
             log_id = log_row.id
 
-            acct = db.query(PublishAccount).filter(PublishAccount.id == sch.account_id).first()
+            acct = _resolve_publish_account_for_request(db, int(sch.user_id), int(sch.account_id), None)
             if not acct:
                 sch.next_run_at = now + timedelta(minutes=iv)
                 db.commit()

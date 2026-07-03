@@ -31,8 +31,8 @@ var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'bilibili', 'xiaohongshu', 'kuaishou'
 var ECOMMERCE_ACCOUNT_PLATFORMS = ['douyin_shop', 'xiaohongshu_shop', 'alibaba1688', 'taobao', 'pinduoduo'];
 var ECOMMERCE_PLATFORMS = { douyin_shop: true, xiaohongshu_shop: true, alibaba1688: true, taobao: true, pinduoduo: true };
 var _currentAccountType = 'publish';
-var STATUS_LABELS = { active: '已登录', pending: '待登录', error: '异常' };
-var STATUS_COLORS = { active: '#34d399', pending: '#fb923c', error: '#f87171' };
+var STATUS_LABELS = { active: '已登录', online: '已登录', pending: '待登录', waiting: '待登录', offline: '未登录', error: '异常' };
+var STATUS_COLORS = { active: '#34d399', online: '#34d399', pending: '#fb923c', waiting: '#fb923c', offline: '#94a3b8', error: '#f87171' };
 
 /** 发布/素材/创作者同步须走本机 lobster_online（LOCAL_API_BASE），勿用公网 API_BASE */
 function publishLocalBase() {
@@ -1145,14 +1145,18 @@ function _renderAccountList(accounts, emptyMessage) {
     var statusColor = STATUS_COLORS[a.status] || '#888';
     var statusLabel = STATUS_LABELS[a.status] || a.status;
     var isEcom = !!ECOMMERCE_PLATFORMS[a.platform];
+    var isOriginSlot = !!a.is_origin_slot || a.managed_by === 'douyin_origin';
     var detailBtn = isEcom ? '' : '<button type="button" class="btn btn-primary btn-sm" data-open-account-detail="' + a.id + '" title="进入账号详情（数据与定时任务）">进入详情</button>';
     var openBtn = '<button type="button" class="btn btn-primary btn-sm" data-open-browser="' + a.id + '">打开浏览器</button>';
     var runsBtn = isEcom ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-schedule-runs-acct="' + a.id + '" title="间隔定时任务的执行记录">执行记录</button>';
     var publishBtn = '<button type="button" class="btn btn-primary btn-sm" data-publish-acct="' + a.id + '" data-publish-nick="' + escapeAttr(a.nickname) + '">发布素材</button>';
-    var deleteBtn = '<button type="button" class="btn btn-ghost btn-sm" data-delete-id="' + a.id + '">删除</button>';
+    var deleteBtn = isOriginSlot ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-delete-id="' + a.id + '">删除</button>';
     var lastLogin = a.last_login ? '上次登录: ' + _formatDateTimeBeijing(a.last_login) : '';
     var lc = a.last_creator_sync;
     var syncLine = '';
+    if (isOriginSlot) {
+      syncLine = '获客中心固定槽位' + (a.origin_account_id ? ' · 账号 ' + a.origin_account_id : '') + (a.origin_port ? ' · 端口 ' + a.origin_port : '');
+    }
     if (!isEcom && lc && lc.fetched_at) {
       syncLine = '作品数据: ' + _formatDateTimeBeijing(lc.fetched_at) +
         (lc.sync_error ? ' (上次同步失败)' : ' · ' + (lc.item_count != null ? lc.item_count : 0) + ' 条');
@@ -1168,7 +1172,7 @@ function _renderAccountList(accounts, emptyMessage) {
       schHint = '<div class="account-card-highlight">定时已开 · ' + escapeHtml(modeShort) +
         ' · ' + escapeHtml(kindL) + ' · ' + escapeHtml(_formatScheduleIntervalMinutes(im)) + vHint + nextL + '</div>';
     }
-    return '<div class="skill-store-card account-card" data-account-card="' + a.id + '" data-platform="' + escapeAttr(a.platform) + '" style="cursor:pointer;" title="点击查看详情">' +
+    return '<div class="skill-store-card account-card" data-account-card="' + a.id + '" data-platform="' + escapeAttr(a.platform) + '" data-origin-slot="' + (isOriginSlot ? '1' : '0') + '" style="cursor:pointer;" title="' + (isOriginSlot ? '抖音获客中心固定槽位' : '点击查看详情') + '">' +
       '<div class="account-card-top">' +
       '<div class="card-label">' + escapeHtml(PLATFORM_NAMES[a.platform] || a.platform) + '</div>' +
       '<span class="account-card-status" style="color:' + statusColor + ';">' + escapeHtml(statusLabel) + '</span></div>' +
@@ -1286,6 +1290,7 @@ function _bindAccountButtons(el) {
       btn.disabled = true; btn.textContent = '发布中…';
       var payload = {
         asset_id: assetId.trim(),
+        account_id: parseInt(id, 10) || undefined,
         account_nickname: nick,
         title: title,
         options: Object.keys(options).length ? options : undefined
@@ -1449,12 +1454,15 @@ function _detailCreatorSetStatus(t, isErr) {
 function _detailLoadCreatorCache() {
   if (!_detailAccountId) return;
   var id = _detailAccountId;
+  var ac0 = _allAccounts.filter(function(a) { return a.id === id; })[0];
   var q = _creatorDefaultTtlSec > 0 ? ('?ttl_seconds=' + encodeURIComponent(String(_creatorDefaultTtlSec))) : '';
   _detailCreatorSetStatus('正在加载缓存…', false);
   fetch(publishLocalBase() + '/api/accounts/' + id + '/creator-content' + q, { headers: authHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      if (d.platform !== 'douyin' && d.platform !== 'xiaohongshu' && d.platform !== 'toutiao') {
+      var platform = d.platform || (ac0 && ac0.platform) || '';
+      if ((ac0 && (ac0.is_origin_slot || ac0.managed_by === 'douyin_origin')) || id < 0) platform = 'douyin';
+      if (platform !== 'douyin' && platform !== 'xiaohongshu' && platform !== 'toutiao') {
         _detailCreatorSetStatus('该账号不是抖音/小红书/今日头条，无此类作品列表同步。', false);
         _creatorRenderItems([], 'detailCreatorItemGrid');
         return;
@@ -1463,11 +1471,11 @@ function _detailLoadCreatorCache() {
       if (d.meta && d.meta.toutiao_insights && typeof d.meta.toutiao_insights === 'object') {
         insCount = Object.keys(d.meta.toutiao_insights).length;
       }
-      var toutiaoExtra = (d.platform === 'toutiao' && insCount) ? (' · 已汇总 ' + insCount + ' 项数据/收益字段') : '';
+      var toutiaoExtra = (platform === 'toutiao' && insCount) ? (' · 已汇总 ' + insCount + ' 项数据/收益字段') : '';
       if (d.sync_error) _detailCreatorSetStatus('上次同步错误: ' + d.sync_error, true);
       else if (!d.has_snapshot) _detailCreatorSetStatus('尚无快照，请点击「从平台同步」。', false);
       else _detailCreatorSetStatus('共 ' + ((d.items && d.items.length) || 0) + ' 条作品' + toutiaoExtra + ' · 更新于（北京时间）' + _formatDateTimeBeijing(d.fetched_at), false);
-      _renderToutiaoInsightsPanel(d.platform, d.meta || null);
+      _renderToutiaoInsightsPanel(platform, d.meta || null);
       _creatorRenderItems(d.items || [], 'detailCreatorItemGrid');
     })
     .catch(function() { _detailCreatorSetStatus('加载失败', true); });

@@ -1,6 +1,9 @@
 """启动后端：根据 LOBSTER_EDITION 决定监听地址；默认同时拉起 MCP(8001) 以提供速推等能力。
 全日志：默认 LOG_LEVEL=debug；要减少输出可设 .env 中 LOG_LEVEL=info。
 系统日志写入 lobster/logs/app.log，可在「日志」Tab 或 GET /api/logs 查看。"""
+import faulthandler
+import asyncio
+import importlib
 import logging
 import os
 import subprocess
@@ -11,6 +14,13 @@ _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
     sys.path.insert(0, _root)
 os.chdir(_root)  # 使 .env 在 lobster 根目录被 pydantic 找到
+
+if os.name == "nt":
+    try:
+        # Playwright needs subprocess support to launch its driver on Windows.
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except Exception:
+        pass
 
 # 将 .env 载入 os.environ，便于 LOG_LEVEL、MCP 子进程继承与第三方读环境变量
 try:
@@ -123,9 +133,42 @@ if __name__ == "__main__":
     # 监听地址：与 edition 无关，统一用配置（.env 或环境变量 HOST）。start.bat 默认 HOST=0.0.0.0 以便局域网访问
     host = (getattr(settings, "host", None) or os.environ.get("HOST") or "0.0.0.0").strip() or "0.0.0.0"
     _logger.info("[启动] Backend 启动 host=%s port=%s edition=%s LOG_LEVEL=%s", host, port, edition, _log_level_name)
-    uvicorn.run(
-        "backend.app.main:app",
-        host=host,
-        port=port,
-        log_level=_log_level_name,
-    )
+    _logger.info("[startup] Import backend.app.main start")
+    try:
+        faulthandler.enable()
+        faulthandler.dump_traceback_later(45, repeat=False)
+    except Exception:
+        pass
+    try:
+        app_module = importlib.import_module("backend.app.main")
+        app = getattr(app_module, "app")
+        _logger.info("[startup] Import backend.app.main done")
+    except Exception:
+        _logger.exception("[startup] Import backend.app.main failed")
+        raise
+    finally:
+        try:
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            pass
+    _logger.info("[startup] Uvicorn start begin host=%s port=%s", host, port)
+    try:
+        if (os.environ.get("LOBSTER_UVICORN_TRACEBACK_TIMER") or "").strip() == "1":
+            faulthandler.dump_traceback_later(30, repeat=True)
+    except Exception:
+        pass
+    try:
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level=_log_level_name,
+            loop="asyncio",
+            http="h11",
+            ws="none",
+        )
+    finally:
+        try:
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            pass

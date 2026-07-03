@@ -20,6 +20,13 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('personal-settings', {
+    html: '/static/views/personal-settings.html?v=20260702-personal-settings',
+    scripts: '/static/js/personal-settings.js?v=20260702-personal-settings',
+    init: 'initPersonalSettingsView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('production', {
     html: '/static/views/production.html',
     scripts: '/static/js/views/production.js?v=20260528-view-split'

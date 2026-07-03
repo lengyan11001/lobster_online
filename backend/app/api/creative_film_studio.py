@@ -11,6 +11,8 @@ import logging
 import os
 import re
 import asyncio
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import httpx
@@ -28,6 +30,7 @@ from .assets import (
 )
 from .openclaw_memory import _load_index, _read_canonical_memory_content
 from .wechat_article import _extract_image_url
+from .chat import _extract_image_urls_from_generate_result, _extract_task_id_from_result, _is_task_result_in_progress
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,10 @@ _SOURCE_MODE = "ai_image"
 _MAX_SELECTED_DOCS = 8
 _MAX_MEMORY_CHARS_PER_DOC = 2400
 _MAX_MEMORY_CHARS_TOTAL = 12000
+_IMAGE_PROXY_TIMEOUT_SECONDS = 900.0
+_SUTUI_GPT_IMAGE_2_MODEL = "openai/gpt-image-2"
+_SUTUI_IMAGE_SUBMIT_TIMEOUT_SECONDS = 180.0
+_SUTUI_IMAGE_POLL_TIMEOUT_SECONDS = 90.0
 _PLATFORM_REQUIREMENTS: Dict[str, Dict[str, str]] = {
     "douyin": {
         "label": "抖音",
@@ -72,7 +79,7 @@ class CreativeFilmImageIn(BaseModel):
     goal: str = ""
     title: str = ""
     direct_prompt: str = ""
-    image_model: str = "gpt-image-2"
+    image_model: str = _SUTUI_GPT_IMAGE_2_MODEL
     aspect_ratio: str = "9:16"
 
 
@@ -82,6 +89,14 @@ class CreativeFilmCopyIn(BaseModel):
     image_prompt: str = ""
     image_url: str = ""
     platform: str = "douyin"
+
+
+class IpMomentImageBatchIn(BaseModel):
+    records: List[Dict[str, Any]] = Field(default_factory=list)
+    batch_id: str = ""
+    batch_created_at: str = ""
+    image_extra: str = ""
+    image_model: str = _SUTUI_GPT_IMAGE_2_MODEL
 
 
 def _raw_token_from_request(request: Request) -> str:
@@ -98,6 +113,114 @@ def _server_proxy_base() -> str:
 def _installation_id_from_request(request: Request, user_id: int) -> str:
     xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
     return xi or f"lobster-internal-{int(user_id)}"
+
+
+def _sutui_image_model(model: str) -> str:
+    raw = (model or _SUTUI_GPT_IMAGE_2_MODEL).strip().lower()
+    if raw in {"openai/gpt-image-2", "gpt-image-2", "gptimage2", "gpt-image2", "gpt-image"}:
+        return _SUTUI_GPT_IMAGE_2_MODEL
+    return (model or "").strip() or _SUTUI_GPT_IMAGE_2_MODEL
+
+
+def _image_size_for_sutui(aspect_ratio: str) -> str:
+    ratio = (aspect_ratio or "").strip()
+    return ratio if ratio in {"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"} else "1:1"
+
+
+def _image_pixel_size_for_sutui(aspect_ratio: str) -> str:
+    sizes = {
+        "1:1": "1024x1024",
+        "3:2": "1536x1024",
+        "16:9": "1920x1080",
+        "2:3": "1024x1536",
+        "9:16": "1080x1920",
+        "4:3": "1536x1152",
+        "3:4": "1152x1536",
+    }
+    return sizes.get(_image_size_for_sutui(aspect_ratio), "1024x1024")
+
+
+def _server_gateway_headers_from_request(request: Request, token: str, user_id: int) -> Dict[str, str]:
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["x-user-authorization"] = f"Bearer {token}"
+    installation_id = _installation_id_from_request(request, user_id)
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    return headers
+
+
+async def _call_server_mcp_gateway(request: Request, user: _ServerUser, name: str, arguments: Dict[str, Any], *, timeout_seconds: float) -> str:
+    token = _raw_token_from_request(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="需要登录后才能调用速推图片生成")
+    body = {
+        "jsonrpc": "2.0",
+        "id": f"ip-moment-img-{uuid.uuid4().hex[:8]}",
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+    timeout = httpx.Timeout(connect=45.0, read=timeout_seconds, write=600.0, pool=60.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        resp = await client.post(
+            f"{_server_proxy_base()}/mcp-gateway",
+            json=body,
+            headers=_server_gateway_headers_from_request(request, token, user.id),
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"MCP HTTP {resp.status_code}: {(resp.text or '')[:800]}")
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        raise RuntimeError(f"MCP 返回非 JSON: {(resp.text or '')[:800]}") from exc
+    if isinstance(payload, dict) and payload.get("error"):
+        raise RuntimeError(f"MCP error: {payload.get('error')}")
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict):
+        return json.dumps(result, ensure_ascii=False)
+    content = result.get("content")
+    if isinstance(content, list):
+        texts = [
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        text = "\n".join(t for t in texts if t).strip()
+        if text:
+            return text
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _extract_sutui_image_url(result_text: str) -> str:
+    for row in _extract_image_urls_from_generate_result(result_text or ""):
+        if not isinstance(row, dict):
+            continue
+        for key in ("url", "source_url", "image_url", "preview_url", "open_url"):
+            value = row.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    raw = (result_text or "").strip()
+    if raw.startswith(("http://", "https://", "data:image/")):
+        return raw
+    candidates: List[str] = []
+    if raw.startswith("{") or raw.startswith("["):
+        candidates.append(raw)
+    for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", raw, re.IGNORECASE):
+        text = (match.group(1) or "").strip()
+        if text:
+            candidates.append(text)
+    idx = raw.find("{")
+    if idx >= 0:
+        candidates.append(raw[idx:])
+    for candidate in candidates:
+        try:
+            found = _extract_image_url(json.loads(candidate))
+        except Exception:
+            continue
+        if found:
+            return found
+    return ""
 
 
 def _image_size_for_aspect_ratio(aspect_ratio: str) -> str:
@@ -271,7 +394,7 @@ async def _call_sutui_chat(request: Request, user: _ServerUser, *, messages: Lis
         return json.dumps(data, ensure_ascii=False)
 
 
-async def _generate_image(request: Request, user: _ServerUser, prompt: str, model: str, aspect_ratio: str) -> str:
+async def _generate_image_comfly_legacy(request: Request, user: _ServerUser, prompt: str, model: str, aspect_ratio: str) -> str:
     token = _raw_token_from_request(request)
     if not token:
         raise HTTPException(status_code=401, detail="需要登录后才能生成图片")
@@ -296,7 +419,14 @@ async def _generate_image(request: Request, user: _ServerUser, prompt: str, mode
     }
     last_error = ""
     data: Dict[str, Any] = {}
-    async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
+    timeout = httpx.Timeout(
+        _IMAGE_PROXY_TIMEOUT_SECONDS,
+        connect=30.0,
+        read=_IMAGE_PROXY_TIMEOUT_SECONDS,
+        write=60.0,
+        pool=30.0,
+    )
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         for attempt in range(1, 3):
             try:
                 resp = await client.post(f"{_server_proxy_base()}/api/comfly-proxy/v1/images/generations", json=payload, headers=headers)
@@ -306,6 +436,13 @@ async def _generate_image(request: Request, user: _ServerUser, prompt: str, mode
                     if attempt < 2 and _is_retryable_image_error_text(last_error):
                         await asyncio.sleep(0.8 * attempt)
                         continue
+                    logger.warning(
+                        "[creative_film_studio] image generation failed user_id=%s model=%s attempt=%s err=%s",
+                        user.id,
+                        payload["model"],
+                        attempt,
+                        last_error[:500],
+                    )
                     raise HTTPException(status_code=502, detail=_public_image_generation_error())
                 data = resp.json() if resp.content else {}
                 image_url = _extract_image_url(data)
@@ -315,12 +452,26 @@ async def _generate_image(request: Request, user: _ServerUser, prompt: str, mode
                 if attempt < 2 and _is_retryable_image_error_text(last_error):
                     await asyncio.sleep(0.8 * attempt)
                     continue
+                logger.warning(
+                    "[creative_film_studio] image generation returned no image user_id=%s model=%s attempt=%s err=%s",
+                    user.id,
+                    payload["model"],
+                    attempt,
+                    last_error[:500],
+                )
                 raise HTTPException(status_code=502, detail=_public_image_generation_error())
             except HTTPException:
                 raise
             except Exception as exc:
                 last_error = str(exc)
                 if attempt >= 2 or not _is_retryable_image_error_text(last_error):
+                    logger.warning(
+                        "[creative_film_studio] image generation exception user_id=%s model=%s attempt=%s err=%s",
+                        user.id,
+                        payload["model"],
+                        attempt,
+                        last_error[:500],
+                    )
                     raise HTTPException(status_code=502, detail=_public_image_generation_error()) from exc
                 await asyncio.sleep(0.8 * attempt)
     image_url = _extract_image_url(data)
@@ -328,6 +479,121 @@ async def _generate_image(request: Request, user: _ServerUser, prompt: str, mode
         logger.warning("[creative_film_studio] image generation failed user_id=%s err=%s", user.id, last_error[:500])
         raise HTTPException(status_code=502, detail=_public_image_generation_error())
     return image_url
+
+
+async def _generate_image(request: Request, user: _ServerUser, prompt: str, model: str, aspect_ratio: str) -> str:
+    token = _raw_token_from_request(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="需要登录后才能生成图片")
+    ratio = _image_size_for_sutui(aspect_ratio)
+    final_prompt = (
+        f"{prompt.strip()}\n\n"
+        f"画面比例：{_image_ratio_instruction(aspect_ratio)}。"
+        "用于内容平台首图或短视频封面，主体明确，商业质感，真实可信，不要文字、不要水印、不要按钮、不要二维码。"
+    )
+    payload = {
+        "prompt": final_prompt,
+        "model": _sutui_image_model(model),
+        "image_size": ratio,
+        "aspect_ratio": ratio,
+        "num_images": 1,
+        "n": 1,
+    }
+    submit_args = {"capability_id": "image.generate", "payload": payload}
+    try:
+        submit_text = await _call_server_mcp_gateway(
+            request,
+            user,
+            "invoke_capability",
+            submit_args,
+            timeout_seconds=_SUTUI_IMAGE_SUBMIT_TIMEOUT_SECONDS,
+        )
+        image_url = _extract_sutui_image_url(submit_text)
+        if image_url:
+            return image_url
+        task_id = _extract_task_id_from_result(submit_text)
+        if not task_id:
+            logger.warning(
+                "[creative_film_studio] sutui image.generate returned no image/task user_id=%s model=%s body=%s",
+                user.id,
+                payload["model"],
+                submit_text[:800],
+            )
+            raise HTTPException(status_code=502, detail=_public_image_generation_error())
+        poll_args = {
+            "capability_id": "task.get_result",
+            "payload": {"task_id": task_id, "capability_id": "image.generate"},
+        }
+        final_text = submit_text
+        waited = 0
+        max_wait = 25 * 60
+        last_poll_error = ""
+        while waited <= max_wait:
+            try:
+                final_text = await _call_server_mcp_gateway(
+                    request,
+                    user,
+                    "invoke_capability",
+                    poll_args,
+                    timeout_seconds=_SUTUI_IMAGE_POLL_TIMEOUT_SECONDS,
+                )
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                last_poll_error = str(exc)
+                logger.warning(
+                    "[creative_film_studio] sutui image.generate poll retry user_id=%s model=%s task_id=%s waited=%ss err=%s",
+                    user.id,
+                    payload["model"],
+                    task_id,
+                    waited,
+                    last_poll_error[:300],
+                )
+                await asyncio.sleep(15)
+                waited += 15
+                continue
+            image_url = _extract_sutui_image_url(final_text)
+            if image_url:
+                return image_url
+            if not _is_task_result_in_progress(final_text):
+                break
+            await asyncio.sleep(15)
+            waited += 15
+        if _is_task_result_in_progress(final_text):
+            logger.warning(
+                "[creative_film_studio] sutui image.generate polling timeout user_id=%s model=%s task_id=%s",
+                user.id,
+                payload["model"],
+                task_id,
+            )
+            if last_poll_error:
+                logger.warning(
+                    "[creative_film_studio] sutui image.generate last poll error user_id=%s model=%s task_id=%s err=%s",
+                    user.id,
+                    payload["model"],
+                    task_id,
+                    last_poll_error[:500],
+                )
+            raise HTTPException(status_code=502, detail=_public_image_generation_error())
+        image_url = _extract_sutui_image_url(final_text)
+        if image_url:
+            return image_url
+        logger.warning(
+            "[creative_film_studio] sutui image.generate terminal without image user_id=%s model=%s task_id=%s body=%s",
+            user.id,
+            payload["model"],
+            task_id,
+            final_text[:800],
+        )
+        raise HTTPException(status_code=502, detail=_public_image_generation_error())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "[creative_film_studio] sutui image generation exception user_id=%s model=%s err=%s",
+            user.id,
+            payload["model"],
+            str(exc)[:500],
+        )
+        raise HTTPException(status_code=502, detail=_public_image_generation_error()) from exc
 
 
 async def _save_generated_image_asset(
@@ -421,6 +687,255 @@ def _compose_direct_image_prompt(direct_prompt: str, memory_context: str) -> str
     ).strip()[:3000]
 
 
+def _clean_ip_moment_records(records: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for raw in (records or [])[:limit]:
+        if not isinstance(raw, dict):
+            continue
+        record_id = str(raw.get("record_id") or raw.get("recordId") or "").strip()
+        if not record_id:
+            continue
+        prompts: List[str] = []
+        for item in raw.get("image_prompts") or raw.get("prompts") or []:
+            text = str(item or "").strip()
+            if text and text not in prompts:
+                prompts.append(text)
+            if len(prompts) >= 3:
+                break
+        memory_doc_ids: List[str] = []
+        for doc_id in raw.get("memory_doc_ids") or raw.get("memoryDocIds") or []:
+            text = re.sub(r"[^a-f0-9]", "", str(doc_id or "").lower())[:32]
+            if text and text not in memory_doc_ids:
+                memory_doc_ids.append(text)
+            if len(memory_doc_ids) >= _MAX_SELECTED_DOCS:
+                break
+        out.append(
+            {
+                "record_id": record_id,
+                "title": str(raw.get("title") or "朋友圈配图").strip()[:120] or "朋友圈配图",
+                "body": str(raw.get("body") or raw.get("content") or "").strip(),
+                "image_prompt": str(raw.get("image_prompt") or "").strip(),
+                "image_prompts": prompts,
+                "memory_doc_ids": memory_doc_ids,
+            }
+        )
+    return out
+
+
+def _ip_moment_image_variants() -> List[Dict[str, str]]:
+    return [
+        {
+            "name": "真实场景纪实",
+            "prompt": "画面方向：真实场景纪实。用自然光、真实空间、人物动作或工作现场表现文案里的场景，强调可信和生活感。",
+        },
+        {
+            "name": "细节特写隐喻",
+            "prompt": "画面方向：细节特写隐喻。选择一个能代表文案观点的物件、手部动作、桌面资料、工具或局部空间做主体，强调情绪和专业细节。",
+        },
+        {
+            "name": "关系与结果场景",
+            "prompt": "画面方向：关系与结果场景。表现人与人沟通、客户反馈、团队讨论、成果交付或前后对比的瞬间，强调业务结果和案例感。",
+        },
+    ]
+
+
+def _ip_moment_prompts(record: Dict[str, Any]) -> List[str]:
+    prompts = [str(item or "").strip() for item in (record.get("image_prompts") or []) if str(item or "").strip()]
+    original = str(record.get("image_prompt") or "").strip()
+    if original and original not in prompts:
+        prompts.append(original)
+    fallback = str(record.get("body") or record.get("title") or "朋友圈配图").strip() or "朋友圈配图"
+    while len(prompts) < 3:
+        prompts.append(fallback if not prompts else prompts[0])
+    return prompts[:3]
+
+
+def _ip_moment_direct_prompt(record: Dict[str, Any], prompt: str, index: int, image_extra: str = "") -> tuple[str, str]:
+    body = str(record.get("body") or "").strip()
+    variants = _ip_moment_image_variants()
+    variant = variants[(max(index, 1) - 1) % len(variants)]
+    base_prompt = "\n\n".join(
+        [
+            f"朋友圈文案：{body}" if body else "",
+            f"出图要求：{image_extra.strip()}" if image_extra and image_extra.strip() else "",
+            "只根据以上已审核文案和当前配图文案生成朋友圈配图。文案里的选题可能来自行业热门或同行新内容，图片要贴合这个新内容；同时必须遵守记忆文件里的账号定位、行业事实、产品/服务特点和表达风格，不要另起主题，不要出现文字、水印、按钮或二维码。",
+        ]
+    ).strip()
+    direct_prompt = "\n\n".join(
+        [
+            f"当前配图文案：{prompt}" if prompt else "",
+            base_prompt,
+            variant["prompt"],
+            f"这是同一条朋友圈文案的一组 3 张备选图中的第 {index} 张。优先执行“当前配图文案”，并保持和朋友圈正文同一个主题。三张图必须明显不同：主体、景别、构图、环境和关键道具至少改变三项；不要只改变色调或角度。",
+            "不要把朋友圈文案或配图提示写成画面里的文字；不要出现文字、水印、按钮、二维码。",
+        ]
+    ).strip()
+    return direct_prompt, variant["name"]
+
+
+def _optional_selected_memory_context(user_id: int, doc_ids: List[str]) -> tuple[str, List[Dict[str, Any]]]:
+    if not doc_ids:
+        return "", []
+    try:
+        return _selected_memory_context(user_id, doc_ids)
+    except HTTPException as exc:
+        logger.warning("[creative_film_studio] skip unavailable moment memory docs user_id=%s detail=%s", user_id, exc.detail)
+        return "", []
+
+
+async def _post_server_ip_moment_image(
+    request: Request,
+    user: _ServerUser,
+    record_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    token = _raw_token_from_request(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="需要登录后才能回写图片记录")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-Installation-Id": _installation_id_from_request(request, user.id),
+    }
+    async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
+        resp = await client.post(
+            f"{_server_proxy_base()}/api/ip-content/draft-records/{record_id}/image",
+            json=payload,
+            headers=headers,
+        )
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"detail": (resp.text or "")[:1000]}
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail=str(data.get("detail") or data.get("message") or resp.text)[:500])
+    return data if isinstance(data, dict) else {"result": data}
+
+
+def _moment_image_writeback_payload(
+    *,
+    batch_id: str,
+    batch_created_at: str,
+    prompts: List[str],
+    images: List[Dict[str, Any]],
+    complete: bool,
+) -> Dict[str, Any]:
+    first = images[0] if images else {}
+    return {
+        "image_url": first.get("image_url") or "",
+        "image_asset_id": first.get("image_asset_id") or "",
+        "image_prompt": first.get("image_prompt") or "",
+        "selected": True,
+        "meta": {
+            "source": "creative-film-studio",
+            "image_batch_id": batch_id,
+            "image_batch_created_at": batch_created_at,
+            "image_prompts": prompts,
+            "image_status": f"{len(images)} 张图片已生成" if complete else f"正在生成图片：{len(images)}/3",
+            "image_progress": f"{len(images)}/3",
+            "image_complete": complete,
+            "images": images,
+        },
+    }
+
+
+@router.post("/api/ip-content/moments/images/generate", summary="Generate images for selected IP moments draft records")
+async def generate_ip_moment_images(
+    body: IpMomentImageBatchIn,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    records = _clean_ip_moment_records(body.records, limit=5)
+    if not records:
+        raise HTTPException(status_code=400, detail="请选择要生成图片的朋友圈文案")
+    batch_id = (body.batch_id or "").strip() or f"moment_img_{uuid.uuid4().hex[:12]}"
+    batch_created_at = (body.batch_created_at or "").strip() or datetime.now(timezone.utc).isoformat()
+    image_model = _sutui_image_model(body.image_model)
+    all_images: List[Dict[str, Any]] = []
+    processed: List[Dict[str, Any]] = []
+    for record in records:
+        record_id = str(record.get("record_id") or "")
+        prompts = _ip_moment_prompts(record)
+        images: List[Dict[str, Any]] = []
+        for index, prompt in enumerate(prompts, start=1):
+            logger.info(
+                "[creative_film_studio] ip moment image start user_id=%s record_id=%s index=%s/3 batch_id=%s",
+                current_user.id,
+                record_id,
+                index,
+                batch_id,
+            )
+            direct_prompt, variant = _ip_moment_direct_prompt(record, prompt, index, body.image_extra or "")
+            memory_context = ""
+            selected_docs: List[Dict[str, Any]] = []
+            if record.get("memory_doc_ids"):
+                memory_context, selected_docs = _optional_selected_memory_context(current_user.id, record.get("memory_doc_ids") or [])
+            plan_prompt = _compose_direct_image_prompt(direct_prompt, memory_context)
+            image_url = await _generate_image(request, current_user, plan_prompt, image_model, "1:1")
+            asset = await _save_generated_image_asset(
+                request=request,
+                current_user=current_user,
+                image_url=image_url,
+                image_prompt=plan_prompt,
+                model=image_model,
+                title=record.get("title") or "朋友圈配图",
+            )
+            preview_url = str(asset.get("source_url") or "").strip() or image_url
+            images.append(
+                {
+                    "image_url": preview_url,
+                    "image_asset_id": str(asset.get("asset_id") or asset.get("id") or "").strip(),
+                    "image_prompt": prompt,
+                    "generated_prompt": plan_prompt,
+                    "variant": variant,
+                    "index": index,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "batch_id": batch_id,
+                    "batch_created_at": batch_created_at,
+                    "selected_documents": selected_docs,
+                }
+            )
+            logger.info(
+                "[creative_film_studio] ip moment image generated user_id=%s record_id=%s index=%s/3 asset_id=%s batch_id=%s",
+                current_user.id,
+                record_id,
+                index,
+                images[-1].get("image_asset_id") or "",
+                batch_id,
+            )
+            await _post_server_ip_moment_image(
+                request,
+                current_user,
+                record_id,
+                _moment_image_writeback_payload(
+                    batch_id=batch_id,
+                    batch_created_at=batch_created_at,
+                    prompts=prompts,
+                    images=images,
+                    complete=index >= len(prompts),
+                ),
+            )
+            logger.info(
+                "[creative_film_studio] ip moment image writeback ok user_id=%s record_id=%s index=%s/3 batch_id=%s",
+                current_user.id,
+                record_id,
+                index,
+                batch_id,
+            )
+        processed.append({"record_id": record.get("record_id") or "", "title": record.get("title") or "", "image_count": len(images), "images": images})
+        all_images.extend(images)
+    return {
+        "ok": True,
+        "batch_id": batch_id,
+        "batch_created_at": batch_created_at,
+        "record_count": len(processed),
+        "image_count": len(all_images),
+        "records": processed,
+        "media_urls": [img["image_url"] for img in all_images if img.get("image_url")],
+    }
+
+
 def _normalize_copy(obj: Dict[str, Any], platform: str, goal: str) -> Dict[str, str]:
     title = str(obj.get("title") or "").strip()
     body = str(obj.get("body") or obj.get("copy") or "").strip()
@@ -484,7 +999,7 @@ async def generate_creative_film_image(
             temperature=0.68,
         )
         plan = _normalize_image_plan(_extract_json_object(plan_text), memory_context, goal)
-    image_model = body.image_model or "gpt-image-2"
+    image_model = _sutui_image_model(body.image_model)
     image_url = await _generate_image(
         request,
         current_user,

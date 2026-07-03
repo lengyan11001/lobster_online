@@ -11,13 +11,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .auth import _ServerUser, get_current_user_for_local
-from .publish import BROWSER_DATA_DIR
+from .publish import (
+    _account_browser_profile_and_options,
+    _douyin_origin_publish_accounts,
+    _is_douyin_origin_publish_account,
+    _resolve_publish_account_for_request,
+)
 from ..core.config import settings
 from ..db import get_db
 from ..datetime_iso import isoformat_utc
 from ..models import CreatorContentSnapshot, PublishAccount
 from ..services.creator_content_sync import sync_account_creator_content
-from publisher.browser_pool import browser_options_from_publish_meta
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +122,22 @@ def _latest_snapshot(
     )
 
 
+def _resolve_creator_account(
+    db: Session,
+    user_id: int,
+    account_id: Optional[int],
+    account_nickname: Optional[str] = None,
+) -> Optional[PublishAccount]:
+    return _resolve_publish_account_for_request(db, user_id, account_id, account_nickname)
+
+
+def _all_creator_accounts(db: Session, user_id: int) -> List[PublishAccount]:
+    rows = db.query(PublishAccount).filter(PublishAccount.user_id == user_id).all()
+    return _douyin_origin_publish_accounts(user_id) + [
+        acct for acct in rows if not _is_douyin_origin_publish_account(acct)
+    ]
+
+
 def _accounts_for_publish_data_query(
     db: Session,
     user_id: int,
@@ -127,27 +147,25 @@ def _accounts_for_publish_data_query(
     account_id: Optional[int],
     account_nickname: Optional[str],
 ) -> List[PublishAccount]:
-    q = db.query(PublishAccount).filter(PublishAccount.user_id == user_id)
     sc = (scope or "all").strip().lower()
     if sc == "account":
-        if account_id is not None:
-            q = q.filter(PublishAccount.id == int(account_id))
-        elif (account_nickname or "").strip():
-            q = q.filter(PublishAccount.nickname == (account_nickname or "").strip())
-        else:
+        if account_id is None and not (account_nickname or "").strip():
             raise HTTPException(status_code=400, detail="scope=account 时需要 account_id 或 account_nickname")
-    elif sc == "platform":
+        acct = _resolve_creator_account(db, user_id, account_id, account_nickname)
+        return [acct] if acct and acct.platform in SYNC_PLATFORMS else []
+
+    accounts = _all_creator_accounts(db, user_id)
+    if sc == "platform":
         p = (platform or "").strip()
         if p not in SYNC_PLATFORMS:
             raise HTTPException(
                 status_code=400,
                 detail=f"scope=platform 时需要 platform 为 {', '.join(sorted(SYNC_PLATFORMS))}",
             )
-        q = q.filter(PublishAccount.platform == p)
+        accounts = [acct for acct in accounts if acct.platform == p]
     elif sc != "all":
         raise HTTPException(status_code=400, detail="scope 须为 all | platform | account")
-    return [a for a in q.all() if a.platform in SYNC_PLATFORMS]
-
+    return [acct for acct in accounts if acct.platform in SYNC_PLATFORMS]
 
 def build_creator_publish_data_payload(
     db: Session,
@@ -197,10 +215,10 @@ async def perform_sync_creator_publish_accounts(
     account_ids: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     """依次同步多个账号的创作者作品（Playwright，可能较久）。account_ids 为 None 表示所有可同步账号。"""
-    q = db.query(PublishAccount).filter(PublishAccount.user_id == user_id)
+    raw = _all_creator_accounts(db, user_id)
     if account_ids:
-        q = q.filter(PublishAccount.id.in_(account_ids))
-    raw = q.all()
+        wanted = {int(aid) for aid in account_ids}
+        raw = [acct for acct in raw if int(acct.id) in wanted]
     if account_ids:
         found = {a.id for a in raw}
         missing = set(account_ids) - found
@@ -269,8 +287,8 @@ class SyncAllCreatorContentBody(BaseModel):
     account_ids: Optional[List[int]] = Field(default=None, description="仅同步这些账号；省略则全部可同步账号")
 
 
-def _profile_dir(acct: PublishAccount) -> str:
-    return acct.browser_profile or str(BROWSER_DATA_DIR / f"{acct.platform}_{acct.nickname}")
+def _profile_and_options(acct: PublishAccount) -> tuple[str, Dict[str, Any]]:
+    return _account_browser_profile_and_options(acct)
 
 
 class SyncCreatorContentBody(BaseModel):
@@ -330,22 +348,14 @@ async def perform_creator_content_sync(
     执行一次创作者作品同步并写入快照。供 HTTP 与定时任务共用。
     headless 为 None 时使用 settings.creator_sync_headless。
     """
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == user_id,
-        )
-        .first()
-    )
+    acct = _resolve_creator_account(db, user_id, account_id, None)
     if not acct:
         raise ValueError("账号不存在")
     if acct.platform not in SYNC_PLATFORMS:
         raise ValueError(f"当前仅支持同步: {', '.join(sorted(SYNC_PLATFORMS))}")
 
-    profile = _profile_dir(acct)
+    profile, bopts = _profile_and_options(acct)
     hl = settings.creator_sync_headless if headless is None else bool(headless)
-    bopts = browser_options_from_publish_meta(acct.meta)
     result: Dict[str, Any] = await sync_account_creator_content(
         profile,
         acct.platform,
@@ -414,14 +424,7 @@ def get_creator_content_latest(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _resolve_creator_account(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
 
@@ -457,7 +460,8 @@ def get_creator_content_latest(
         "has_snapshot": True,
         "snapshot_id": row.id,
         "account_id": account_id,
-        "platform": row.platform,
+        "platform": acct.platform,
+        "snapshot_platform": row.platform,
         "items": row.items or [],
         "meta": row.meta,
         "sync_error": row.sync_error,

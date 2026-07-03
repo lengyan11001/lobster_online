@@ -849,6 +849,7 @@ var LOBSTER_MAIN_VIEWS = {
   logs: true,
   agent: true,
   'openclaw-memory': true,
+  'personal-settings': true,
   'creative-film-studio': true,
   'ppt-studio': true,
   'viral-tvc-studio': true
@@ -1317,7 +1318,11 @@ document.getElementById('logout').addEventListener('click', function() {
       e.stopPropagation();
       var view = item.getAttribute('data-view');
       var navBtn = view ? document.querySelector('.nav-left-item[data-view="' + view + '"]') : null;
-      if (navBtn) navBtn.click();
+      if (navBtn) {
+        navBtn.click();
+      } else if (view && typeof showAppView === 'function') {
+        showAppView(view, item).catch(function() {});
+      }
       if (dropdown) dropdown.classList.remove('open');
     });
   });
@@ -1553,6 +1558,7 @@ function runAppViewInit(view) {
   if (view === 'sys-config') { loadOpenClawConfig(); }
   if (view === 'logs') { if (typeof ensureLogsBindings === 'function') ensureLogsBindings(); }
   if (view === 'openclaw-memory' && typeof window.initOpenclawMemoryManager === 'function') window.initOpenclawMemoryManager();
+  if (view === 'personal-settings' && typeof window.initPersonalSettingsView === 'function') window.initPersonalSettingsView();
   if (view === 'creative-film-studio' && typeof window.initCreativeFilmStudioView === 'function') window.initCreativeFilmStudioView();
   if (view === 'messenger-config' && typeof loadMessengerConfigPage === 'function') loadMessengerConfigPage();
   if (view === 'youtube-accounts' && typeof loadYoutubeAccountsPage === 'function') loadYoutubeAccountsPage();

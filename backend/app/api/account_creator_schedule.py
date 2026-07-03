@@ -111,6 +111,27 @@ class ReviewGenerateAssetsBody(BaseModel):
     slot_indices: Optional[List[int]] = None
 
 
+def _resolve_schedule_account(
+    db: Session,
+    user_id: int,
+    account_id: int,
+) -> Optional[PublishAccount]:
+    from .publish import _resolve_publish_account_for_request
+
+    return _resolve_publish_account_for_request(db, user_id, account_id, None)
+
+
+def _get_schedule_account_or_404(
+    db: Session,
+    user_id: int,
+    account_id: int,
+) -> PublishAccount:
+    acct = _resolve_schedule_account(db, user_id, account_id)
+    if not acct:
+        raise HTTPException(404, detail="账号不存在")
+    return acct
+
+
 def _get_or_create_schedule(
     db: Session, user_id: int, account_id: int
 ) -> PublishAccountCreatorSchedule:
@@ -258,14 +279,7 @@ async def _bootstrap_creator_schedule_sync(account_id: int, user_id: int, interv
         orch_err: Optional[str] = None
 
         if req:
-            acct = (
-                db.query(PublishAccount)
-                .filter(
-                    PublishAccount.id == account_id,
-                    PublishAccount.user_id == user_id,
-                )
-                .first()
-            )
+            acct = _resolve_schedule_account(db, user_id, account_id)
             if acct:
                 had_orch = True
                 update_task_log(
@@ -395,14 +409,7 @@ def list_creator_schedule_runs(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     rows = (
@@ -424,14 +431,7 @@ def get_creator_schedule(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     row = _get_or_create_schedule(db, current_user.id, account_id)
@@ -446,14 +446,7 @@ async def put_creator_schedule(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
 
@@ -596,14 +589,7 @@ async def post_review_generate(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     row = _get_or_create_schedule(db, current_user.id, account_id)
@@ -668,14 +654,7 @@ async def post_review_generate_assets(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     row = _get_or_create_schedule(db, current_user.id, account_id)
@@ -772,14 +751,7 @@ async def post_review_regenerate_slot(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     row = _get_or_create_schedule(db, current_user.id, account_id)
@@ -848,14 +820,7 @@ def list_review_snapshots(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     rows = (
@@ -881,14 +846,7 @@ def get_review_snapshot(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     snap = (
@@ -917,14 +875,7 @@ def restore_review_snapshot(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     snap = (
@@ -960,14 +911,7 @@ async def post_review_confirm(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    acct = (
-        db.query(PublishAccount)
-        .filter(
-            PublishAccount.id == account_id,
-            PublishAccount.user_id == current_user.id,
-        )
-        .first()
-    )
+    acct = _get_schedule_account_or_404(db, current_user.id, account_id)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
     row = _get_or_create_schedule(db, current_user.id, account_id)

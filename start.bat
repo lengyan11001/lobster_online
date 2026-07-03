@@ -152,6 +152,10 @@ if exist "openclaw\.env" (
 
 echo.
 
+echo [Preflight] stopping previous Lobster services if any...
+call :stop_existing_services
+echo.
+
 REM Clear local logs before MCP/Backend start (fresh run for debugging).
 echo [Logs] clearing previous log files...
 if exist "%ROOT%\backend.log" del /f /q "%ROOT%\backend.log" >nul 2>&1
@@ -160,6 +164,7 @@ if exist "%ROOT%\logs\app.log" del /f /q "%ROOT%\logs\app.log" >nul 2>&1
 if exist "%ROOT%\_pack_zip.log" del /f /q "%ROOT%\_pack_zip.log" >nul 2>&1
 if exist "%ROOT%\_pack_run.log" del /f /q "%ROOT%\_pack_run.log" >nul 2>&1
 echo   [OK] Cleared: backend.log, mcp.log, logs\app.log, _pack_*.log
+call :wait_log_files_unlocked
 echo.
 
 echo [MCP] Starting MCP Server on port %MCP_PORT%...
@@ -176,7 +181,7 @@ set "_WAIT_COUNT=0"
 :wait_backend
 timeout /t 1 /nobreak >nul
 set /a _WAIT_COUNT+=1
-netstat -ano 2>nul | findstr ":%PORT% " | findstr "LISTENING" >nul
+"%PYTHON%" -c "import json, sys, urllib.request; url='http://127.0.0.1:%PORT%/api/health?fast=1'; data=json.loads(urllib.request.urlopen(url, timeout=2).read().decode('utf-8')); sys.exit(0 if data.get('status') == 'ok' else 1)" >nul 2>&1
 if not errorlevel 1 goto backend_ready
 if !_WAIT_COUNT! GEQ 60 goto backend_failed
 echo   [..] waiting !_WAIT_COUNT! of 60
@@ -215,6 +220,24 @@ echo.
 :keep_alive
 timeout /t 3600 /nobreak >nul
 goto :keep_alive
+
+:stop_existing_services
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$root='%ROOT%'; $patterns=@('desktop\launcher.py','run_backend.bat','backend\run.py','run_mcp.bat','run_module(''mcp''','openclaw.mjs gateway'); Get-CimInstance Win32_Process | Where-Object { $cmd=$_.CommandLine; if (-not $cmd -or -not $root) { return $false }; if ($cmd.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }; foreach ($p in $patterns) { if ($cmd.IndexOf($p, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true } }; return $false } | ForEach-Object { $pid=[int]$_.ProcessId; try { & taskkill.exe /T /F /PID $pid | Out-Null; Write-Host ('  stopped PID ' + $pid + ' ' + $_.Name) } catch {} }" 2>nul
+call :kill_listening_port "%PORT%"
+call :kill_listening_port "%MCP_PORT%"
+call :kill_listening_port "18789"
+timeout /t 3 /nobreak >nul
+exit /b 0
+
+:wait_log_files_unlocked
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths=@('%ROOT%\backend.log','%ROOT%\mcp.log','%ROOT%\logs\app.log'); $deadline=(Get-Date).AddSeconds(10); do { $locked=$false; foreach($p in $paths){ if(Test-Path -LiteralPath $p){ try { $s=[System.IO.File]::Open($p,[System.IO.FileMode]::OpenOrCreate,[System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::ReadWrite); $s.Close() } catch { $locked=$true } } }; if(-not $locked){ exit 0 }; Start-Sleep -Milliseconds 300 } while((Get-Date) -lt $deadline); Write-Host '  [WARN] log files are still locked; continuing anyway'" 2>nul
+exit /b 0
+
+:kill_listening_port
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":%~1 " ^| findstr "LISTENING"') do (
+    if not "%%p"=="0" taskkill /F /T /PID %%p >nul 2>&1
+)
+exit /b 0
 
 :cleanup
 echo.

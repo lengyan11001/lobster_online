@@ -1875,126 +1875,43 @@
     })).then(function() {
       return loadDraftRecords();
     });
-    var chain = Promise.resolve();
-    selected.forEach(function(rec, recIdx) {
-      chain = chain.then(function() {
-        var preview = document.querySelector('[data-image-preview="' + cssEscape(String(rec.record_id || '')) + '"]');
-        if (preview) preview.innerHTML = '<small>正在出图 0/3...</small>';
-        rec._image_status = '正在出图 0/3...';
-        rec._image_progress = '0/3';
-        rec.meta = Object.assign({}, rec.meta || {}, { image_status: rec._image_status, image_progress: rec._image_progress });
-        refreshMomentBatchProgress(selected);
-        var copyTextValue = (rec.body || rec.content || '').trim();
-        var promptList = recordImagePrompts(rec);
-        var originalImagePrompt = (promptList[0] || rec.image_prompt || '').trim();
-        var imageExtra = (($('ipImageExtra') && $('ipImageExtra').value) || '').trim();
-        var memoryIds = selectedMemoryIdsForRecord(rec);
-        saveGenerationSettings();
-        var basePrompt = [
-          copyTextValue ? '朋友圈文案：' + copyTextValue : '',
-          imageExtra ? '出图要求：' + imageExtra : '',
-          '只根据以上已审核文案和当前配图文案生成朋友圈配图。文案里的选题可能来自行业热门或同行新内容，图片要贴合这个新内容；同时必须遵守记忆文件里的账号定位、行业事实、产品/服务特点和表达风格，不要另起主题，不要出现文字、水印、按钮或二维码。'
-        ].filter(Boolean).join('\n\n');
-        var images = [];
-        var imageVariants = [
-          {
-            name: '真实场景纪实',
-            prompt: '画面方向：真实场景纪实。用自然光、真实空间、人物动作或工作现场表现文案里的场景，强调可信和生活感。'
-          },
-          {
-            name: '细节特写隐喻',
-            prompt: '画面方向：细节特写隐喻。选择一个能代表文案观点的物件、手部动作、桌面资料、工具或局部空间做主体，强调情绪和专业细节。'
-          },
-          {
-            name: '关系与结果场景',
-            prompt: '画面方向：关系与结果场景。表现人与人沟通、客户反馈、团队讨论、成果交付或前后对比的瞬间，强调业务结果和案例感。'
-          }
-        ];
-        var generateOne = function(index) {
-          if (preview) preview.innerHTML = '<small>正在出图 ' + (index - 1) + '/3...</small>';
-          rec._image_status = '正在出图 ' + (index - 1) + '/3...';
-          rec._image_progress = (index - 1) + '/3';
-          rec.meta = Object.assign({}, rec.meta || {}, { image_status: rec._image_status, image_progress: rec._image_progress, images: images });
-          refreshMomentBatchProgress(selected);
-          var variant = imageVariants[(index - 1) % imageVariants.length];
-          var promptForImage = (promptList[index - 1] || originalImagePrompt || variant.prompt).trim();
-          return localJson('/api/creative-film-studio/generate-image', {
-            method: 'POST',
-            body: {
-              memory_doc_ids: memoryIds,
-              title: rec.title || '朋友圈配图',
-              goal: copyTextValue,
-              direct_prompt: [
-                promptForImage ? '当前配图文案：' + promptForImage : '',
-                basePrompt,
-                variant.prompt,
-                '这是同一条朋友圈文案的一组 3 张备选图中的第 ' + index + ' 张。优先执行“当前配图文案”，并保持和朋友圈正文同一个主题。三张图必须明显不同：主体、景别、构图、环境和关键道具至少改变三项；不要只改变色调或角度。',
-                '不要把朋友圈文案或配图提示写成画面里的文字；不要出现文字、水印、按钮、二维码。'
-              ].filter(Boolean).join('\n\n'),
-              aspect_ratio: '1:1',
-              image_model: 'gpt-image-2'
-            }
-          }).then(function(data) {
-            var imageUrl = data.image_url || data.original_image_url || (data.asset && data.asset.source_url) || '';
-            var assetId = data.asset_id || (data.asset && (data.asset.asset_id || data.asset.id)) || '';
-            if (!imageUrl) throw new Error('图片生成完成但没有返回公网链接');
-            images.push({
-              image_url: imageUrl,
-              image_asset_id: assetId,
-              image_prompt: promptForImage,
-              generated_prompt: data.image_prompt || '',
-              variant: variant.name,
-              index: index,
-              created_at: new Date().toISOString()
-            });
-            rec.images = images.slice();
-            rec._image_status = index < 3 ? '正在出图 ' + index + '/3...' : '正在回写记录';
-            rec._image_progress = index + '/3';
-            rec.meta = Object.assign({}, rec.meta || {}, { image_status: rec._image_status, image_progress: rec._image_progress, images: rec.images });
-            refreshMomentBatchProgress(selected);
-            if (preview) preview.innerHTML = '<small>正在出图 ' + index + '/3...</small>';
-          });
-        };
-        return generateOne(1).then(function() { return generateOne(2); }).then(function() { return generateOne(3); }).then(function() {
-          rec.images = images;
-          rec.image_url = images[0].image_url;
-          rec.image_asset_id = images[0].image_asset_id;
-          rec.image_prompt = originalImagePrompt;
-          rec.selected = true;
-          rec._selected = false;
-          rec._image_status = '3 张图片已生成';
-          rec._image_progress = '3/3';
-          rec.meta = Object.assign({}, rec.meta || {}, {
-            image_batch_id: batchId,
-            image_batch_created_at: batchCreatedAt,
-            image_status: rec._image_status,
-            image_progress: rec._image_progress,
-            images: images
-          });
-          refreshMomentBatchProgress(selected);
-          return persistMomentRecordProgress(rec, images, batchId, batchCreatedAt).then(function() {
-            return images;
-          });
-        }).then(function() {
-          if (preview) {
-            preview.innerHTML = '<div class="ip-image-grid">' + images.map(function(img, idx) {
-              return '<div class="ip-image-tile"><img src="' + escAttr(img.image_url) + '" alt="朋友圈图片 ' + escAttr(idx + 1) + '">' +
-                '<a class="btn btn-ghost btn-sm" href="' + escAttr(img.image_url) + '" target="_blank" rel="noopener">打开图片</a></div>';
-            }).join('') + '</div>';
-          }
-            if (selected[recIdx + 1]) {
-              selected[recIdx + 1]._image_status = '准备生成';
-              selected[recIdx + 1]._image_progress = '0/3';
-              selected[recIdx + 1].meta = Object.assign({}, selected[recIdx + 1].meta || {}, {
-                image_status: selected[recIdx + 1]._image_status,
-                image_progress: selected[recIdx + 1]._image_progress
-              });
-            }
-            refreshMomentBatchProgress(selected);
+    saveGenerationSettings();
+    localJson('/api/ip-content/moments/images/generate', {
+      method: 'POST',
+      body: {
+        batch_id: batchId,
+        batch_created_at: batchCreatedAt,
+        image_extra: (($('ipImageExtra') && $('ipImageExtra').value) || '').trim(),
+        records: selected.map(function(rec) {
+          return {
+            record_id: rec.record_id,
+            title: rec.title || '朋友圈配图',
+            body: rec.body || rec.content || '',
+            image_prompt: rec.image_prompt || '',
+            image_prompts: recordImagePrompts(rec),
+            memory_doc_ids: selectedMemoryIdsForRecord(rec)
+          };
+        })
+      }
+    }).then(function(data) {
+      (data.records || []).forEach(function(item) {
+        var rec = selected.find(function(row) { return String(row.record_id || '') === String(item.record_id || ''); });
+        if (!rec) return;
+        rec.images = item.images || [];
+        rec.image_url = rec.images[0] && rec.images[0].image_url || rec.image_url || '';
+        rec.image_asset_id = rec.images[0] && rec.images[0].image_asset_id || rec.image_asset_id || '';
+        rec._selected = false;
+        rec._image_status = rec.images.length + ' 张图片已生成';
+        rec._image_progress = rec.images.length + '/3';
+        rec.meta = Object.assign({}, rec.meta || {}, {
+          image_batch_id: batchId,
+          image_batch_created_at: batchCreatedAt,
+          image_status: rec._image_status,
+          image_progress: rec._image_progress,
+          images: rec.images
         });
       });
-    });
-    chain.then(function() {
+      refreshMomentBatchProgress(selected);
       setMsg('选中的朋友圈文案已各生成 3 张图片并回写生成记录。');
       state.activeMomentImageBatchId = batchId;
       return loadDraftRecords().then(function() { switchTab('moment-images'); });

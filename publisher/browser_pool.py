@@ -48,10 +48,10 @@ def _default_browser_options() -> Dict[str, Any]:
 def _browser_open_error_message(exc: BaseException) -> str:
     raw = str(exc or "")
     if "ERR_EMPTY_RESPONSE" in raw or "accounts.google.com" in raw or "Page.goto" in raw:
-        return "Built-in Chromium could not open the authorization page. Please use the system browser authorization link."
+        return "系统 Chrome 未能打开授权页面，请使用系统浏览器授权链接。"
     if "Executable doesn't exist" in raw or "browserType.launch" in raw or "chromium" in raw.lower():
-        return "Built-in Chromium is unavailable. Please use the system browser authorization link."
-    return raw[:300] if raw else "Built-in Chromium failed to open."
+        return "系统 Chrome 不可用，请先安装 Google Chrome 或设置 CHROME_PATH。"
+    return raw[:300] if raw else "系统 Chrome 打开失败。"
 
 
 def browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
@@ -136,7 +136,7 @@ def browser_options_from_youtube_proxy_fields(
 ) -> Dict[str, Any]:
     """将 YouTube 账号页的代理字段转为与 `browser_options_from_publish_meta` 相同的结构。
 
-    与发布「打开浏览器」共用同一 Playwright 持久化 Chromium（含 PLAYWRIGHT_CHROMIUM_PATH / CHANNEL）。
+    与发布「打开浏览器」共用同一 Playwright 持久化系统 Chrome。
     """
     base = _default_browser_options()
     raw = (proxy_server or "").strip()
@@ -217,8 +217,7 @@ _context_headless: Dict[str, bool] = {}
 _profile_active_key: Dict[str, str] = {}
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
-_CHROMIUM_PATH = os.environ.get("PLAYWRIGHT_CHROMIUM_PATH", "")
-# 例如 chrome：使用本机已安装的 Google Chrome，避免部分环境下 bundled Chromium SIGTRAP。
+# 例如 chrome：使用本机已安装的 Google Chrome；未配置时走 _find_chrome_executable()。
 _BROWSER_CHANNEL = os.environ.get("PLAYWRIGHT_BROWSER_CHANNEL", "").strip()
 
 # CDP attach 模式：用户自己开好 Chrome（--remote-debugging-port=9222），脚本通过 CDP 接管。
@@ -301,15 +300,13 @@ def _find_chrome_executable() -> str:
             ]
         )
     else:
-        candidates.extend(["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium-browser", "/usr/bin/chromium"])
+        candidates.extend(["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"])
     for candidate in candidates:
         if candidate and os.path.isfile(candidate):
             return candidate
     found = (
         shutil.which("google-chrome")
         or shutil.which("google-chrome-stable")
-        or shutil.which("chromium-browser")
-        or shutil.which("chromium")
         or shutil.which("chrome")
         or shutil.which("chrome.exe")
     )
@@ -325,6 +322,10 @@ def _douyin_cdp_port_from_profile(profile_dir: str, browser_options: Optional[Di
         return int(explicit)
     digest = int(hashlib.sha1(str(profile_dir).encode("utf-8", "ignore")).hexdigest()[:6], 16)
     return 9331 + (digest % 500)
+
+
+def _douyin_cdp_storage_key(profile_dir: str, browser_options: Optional[Dict[str, Any]] = None) -> str:
+    return f"douyin-cdp:{profile_dir}\0{_douyin_cdp_port_from_profile(profile_dir, browser_options)}"
 
 
 async def _connect_douyin_cdp_context(profile_dir: str, port: int) -> Any:
@@ -440,18 +441,18 @@ async def _ensure_browser() -> Any:
             from playwright.async_api import async_playwright
         except ImportError:
             raise RuntimeError(
-                "playwright 未安装。请运行: pip install playwright && python -m playwright install chromium"
+                "playwright 未安装。请安装客户端依赖后重试。"
             )
         _pw_instance = await async_playwright().__aenter__()
 
         launch_kwargs: Dict[str, Any] = {"headless": False}
         if _BROWSER_CHANNEL:
             launch_kwargs["channel"] = _BROWSER_CHANNEL
-        elif _CHROMIUM_PATH and Path(_CHROMIUM_PATH).exists():
-            launch_kwargs["executable_path"] = _CHROMIUM_PATH
+        else:
+            launch_kwargs["executable_path"] = _find_chrome_executable()
 
         _browser = await _pw_instance.chromium.launch(**launch_kwargs)
-        logger.info("Playwright Chromium launched (headless=False)")
+        logger.info("Playwright system Chrome launched (headless=False)")
         return _browser
 
 
@@ -484,7 +485,7 @@ async def _acquire_context(
     key = _storage_key(profile_dir, opts)
 
     if opts.get("douyin_cdp"):
-        existing_key = f"douyin-cdp:{profile_dir}\0{_douyin_cdp_port_from_profile(profile_dir, opts)}"
+        existing_key = _douyin_cdp_storage_key(profile_dir, opts)
         old_context: Any = None
         async with _lock:
             old_key = _profile_active_key.get(profile_dir)
@@ -564,7 +565,7 @@ async def _acquire_context(
                 if _profile_active_key.get(profile_dir) == key:
                     _profile_active_key.pop(profile_dir, None)
 
-    # channel 优先级：opts 里显式指定 > 环境变量 > 自定义路径 > 默认 bundled Chromium
+    # 发布中心默认使用系统 Chrome，不再落回 Playwright 自带浏览器。
     channel_override = opts.get("channel") or _BROWSER_CHANNEL or ""
 
     launch_kwargs: Dict[str, Any] = {
@@ -586,8 +587,8 @@ async def _acquire_context(
         launch_kwargs["channel"] = channel_override
     elif opts.get("executable_path") and Path(str(opts.get("executable_path"))).exists():
         launch_kwargs["executable_path"] = str(opts.get("executable_path"))
-    elif _CHROMIUM_PATH and Path(_CHROMIUM_PATH).exists():
-        launch_kwargs["executable_path"] = _CHROMIUM_PATH
+    else:
+        launch_kwargs["executable_path"] = _find_chrome_executable()
 
     # Playwright 默认会带 --disable-extensions，环境过「干净」易与日常 Chrome 指纹不一致。
     # 使用真实 Chrome channel 时去掉该默认项，允许沿用 profile 内扩展（更接近手动浏览器）。
@@ -630,12 +631,17 @@ async def _drop_cached_context(
 ) -> None:
     """Best-effort remove/close cached context for a profile (matched by storage_key 或 ctx 实例)。"""
     to_close: Any = None
+    opts = browser_options or {}
+    douyin_cdp_port: Optional[int] = None
     try:
+        if opts.get("douyin_cdp"):
+            douyin_cdp_port = _douyin_cdp_port_from_profile(profile_dir, opts)
         async with _lock:
             if ctx is not None:
                 for k, c in list(_contexts.items()):
                     pref = k.split("\0", 1)[0]
-                    if c is ctx and pref == profile_dir:
+                    is_douyin_cdp_key = k.startswith(f"douyin-cdp:{profile_dir}\0")
+                    if c is ctx and (pref == profile_dir or is_douyin_cdp_key):
                         to_close = _contexts.pop(k, None)
                         _context_headless.pop(k, None)
                         if _profile_active_key.get(profile_dir) == k:
@@ -644,7 +650,11 @@ async def _drop_cached_context(
             else:
                 sk: Optional[str] = None
                 if browser_options is not None:
-                    sk = _storage_key(profile_dir, browser_options)
+                    sk = (
+                        _douyin_cdp_storage_key(profile_dir, opts)
+                        if opts.get("douyin_cdp")
+                        else _storage_key(profile_dir, browser_options)
+                    )
                 if sk is None:
                     sk = _profile_active_key.get(profile_dir)
                 if sk and sk in _contexts:
@@ -652,6 +662,8 @@ async def _drop_cached_context(
                     _context_headless.pop(sk, None)
                     if _profile_active_key.get(profile_dir) == sk:
                         _profile_active_key.pop(profile_dir, None)
+            if douyin_cdp_port:
+                _douyin_cdp_browsers.pop(douyin_cdp_port, None)
     except Exception:
         pass
     try:
@@ -923,7 +935,7 @@ async def open_url_in_persistent_chromium(
     url: str,
     browser_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """在持久化 Chromium 中打开任意 URL（无平台 driver）。用于 YouTube OAuth 等与发布同源固定浏览器。"""
+    """在发布中心同源持久化系统 Chrome 中打开任意 URL；函数名保留以兼容旧调用。"""
     opts = browser_options if browser_options is not None else _default_browser_options()
     ctx: Any = None
     created_new = False
@@ -943,14 +955,14 @@ async def open_url_in_persistent_chromium(
         except Exception:
             host = ""
         logger.info(
-            "[BROWSER] youtube/oauth persistent Chromium url_host=%s profile=%s",
+            "[BROWSER] youtube/oauth persistent Chrome url_host=%s profile=%s",
             host[:120],
             profile_dir[:100],
         )
         _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
         return {
             "ok": True,
-            "message": "已在龙虾内置 Chromium 中打开（与发布「打开浏览器」相同引擎与可执行文件来源）",
+            "message": "已在系统 Chrome 中打开（与发布「打开浏览器」相同浏览器来源）",
         }
     except Exception as e:
         logger.exception("open_url_in_persistent_chromium failed")

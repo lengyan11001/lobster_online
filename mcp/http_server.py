@@ -1013,6 +1013,9 @@ def _compact_publish_accounts_for_llm(data: Any) -> Dict[str, Any]:
             "match_label": f"{platform_name}/{nickname}" if platform_name or nickname else "",
             "publish_content_account_nickname": nickname,
         }
+        if raw.get("is_origin_slot") or raw.get("managed_by") == "douyin_origin":
+            account["is_origin_slot"] = True
+            account["origin_account_id"] = raw.get("origin_account_id")
         accounts.append(account)
         if platform:
             platform_summary.setdefault(platform, []).append(nickname)
@@ -1023,9 +1026,10 @@ def _compact_publish_accounts_for_llm(data: Any) -> Dict[str, Any]:
         "platform_account_summary": platform_summary,
         "platforms": data.get("platforms") if isinstance(data.get("platforms"), list) else [],
         "matching_rules": [
-            "用户说“抖音账号123”时，匹配 platform='douyin' 且 nickname='123'。",
+            "发布时优先使用每条账号里的 publish_content_account_nickname 原样传给 publish_content.account_nickname。",
+            "抖音固定槽位如“抖音账号1/2/3”时，account_nickname 必须传“抖音账号1/2/3”，不要缩写成数字 1/2/3。",
             "platform='douyin_shop' 是抖店，不等于 platform='douyin' 抖音。",
-            "发布时调用 publish_content，传 account_nickname 为匹配账号的 nickname，不要把 id 当昵称。",
+            "不要把 id 当昵称；id 只是列表展示和内部路由用。",
         ],
     }
 
@@ -2951,7 +2955,7 @@ def _normalize_gpt_image2_quality(payload: Dict[str, Any]) -> str:
             return "high"
 
     explicit = _quality_from_value(payload.get("quality") or payload.get("image_quality"))
-    return explicit or "high"
+    return explicit or "low"
 
 
 def _normalize_gpt_image2_resolution(payload: Dict[str, Any], quality: str) -> str:

@@ -3700,6 +3700,8 @@ async def _run_client_workflow_action(
         return await _post_local_api_json("/api/viral-video-remix/seedance/start", body, headers=headers)
     if action == "wecom_poll_reply":
         return await _post_local_api_json("/api/wecom/poll-and-reply", {}, headers=headers, timeout_seconds=300.0)
+    if action == "ip_moments_generate_images":
+        return await _post_local_api_json("/api/ip-content/moments/images/generate", source, headers=headers, timeout_seconds=7200.0)
     if action == "publish_content":
         material = str(source.get("asset_id") or "").strip()
         source_url = str(source.get("url") or "").strip()
@@ -3755,6 +3757,8 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
         return "爆款复刻任务已提交到客户端。" + (f" 任务ID：{task_id}" if task_id else "")
     if action == "wecom_poll_reply":
         return "企业微信客服已执行一次拉取与自动回复检查。"
+    if action == "ip_moments_generate_images":
+        return f"朋友圈图片生成完成：{int(result.get('record_count') or 0)} 条文案，{int(result.get('image_count') or 0)} 张图片。"
     if action == "publish_content":
         asset_id = str(result.get("asset_id") or "").strip()
         publish_result = result.get("publish_result") if isinstance(result.get("publish_result"), dict) else {}

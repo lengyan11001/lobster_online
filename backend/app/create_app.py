@@ -1,6 +1,9 @@
 import asyncio
 import json
 import logging
+import os
+import subprocess
+import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +25,7 @@ from .api.mcp_gateway import router as mcp_gateway_router
 from .api.openclaw_sutui_llm_proxy import router as openclaw_sutui_llm_proxy_router
 from .api.openclaw_config import router as openclaw_config_router
 from .api.openclaw_memory import router as openclaw_memory_router
+from .api.personal_settings import router as personal_settings_router
 from .api.openclaw_skill_chat import router as openclaw_skill_chat_router
 from .api.h5_chat_channel import router as h5_chat_channel_router
 from .api.custom_config import router as custom_config_router
@@ -57,7 +61,6 @@ from .api.create_ppt import router as create_ppt_router
 from .api.viral_video_remix import router as viral_video_remix_router
 from .api.hifly_digital_human import router as hifly_digital_human_router
 from .api.shanjian_smart_clip import router as shanjian_smart_clip_router
-from .api.ai_3d_model import router as ai_3d_model_router
 from .api.douyin_origin import router as douyin_origin_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
@@ -88,6 +91,50 @@ def _add_no_store_headers(response):
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+def _load_optional_router(module_name: str, label: str, *, timeout_sec: float = 8.0):
+    if str(os.environ.get("LOBSTER_DISABLE_OPTIONAL_ROUTERS") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.warning("[启动] optional router %s skipped by LOBSTER_DISABLE_OPTIONAL_ROUTERS", label)
+        return None
+    root_dir = Path(__file__).resolve().parents[2]
+    try:
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import importlib, sys;"
+                    f"sys.path.insert(0, {str(root_dir)!r});"
+                    f"mod=importlib.import_module({module_name!r});"
+                    "getattr(mod, 'router')"
+                ),
+            ],
+            cwd=str(root_dir),
+            env=os.environ.copy(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=timeout_sec,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if probe.returncode != 0:
+            err = (probe.stderr or b"").decode("utf-8", "replace").strip()
+            logger.warning("[启动] optional router %s probe failed: %s", label, err[-800:])
+            return None
+    except subprocess.TimeoutExpired:
+        logger.warning("[启动] optional router %s probe timed out after %.1fs; skipped", label, timeout_sec)
+        return None
+    except Exception as exc:
+        logger.warning("[启动] optional router %s probe error: %s", label, exc)
+        return None
+    try:
+        module = __import__(module_name, fromlist=["router"])
+        router = getattr(module, "router")
+        logger.info("[启动] optional router %s loaded", label)
+        return router
+    except Exception:
+        logger.exception("[启动] optional router %s import failed; skipped", label)
+        return None
 
 
 class NoStoreStaticFiles(StaticFiles):
@@ -455,6 +502,14 @@ def _auto_start_openclaw():
     )
     _OPENCLAW_AUTOSTART_THREAD.start()
     logger.info("OpenClaw Gateway auto-start scheduled in background")
+
+
+async def _auto_start_openclaw_later(delay_seconds: float = 8.0):
+    try:
+        await asyncio.sleep(max(0.0, float(delay_seconds)))
+        _auto_start_openclaw()
+    except Exception as e:
+        logger.warning("OpenClaw Gateway delayed auto-start skipped: %s", e)
 
 
 def _migrate_kf_customer_group():
@@ -831,6 +886,8 @@ def _sync_global_openclaw_workspace():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _sync_global_openclaw_workspace()
+    asyncio.create_task(_auto_start_openclaw_later())
+    logger.info("OpenClaw Gateway delayed auto-start scheduled")
     if wecom_router is not None:
         try:
             from .api.wecom import wecom_poll_loop
@@ -916,8 +973,6 @@ def create_app() -> FastAPI:
     _ensure_comfly_daihuo_pipeline_capability()
     _ensure_comfly_ecommerce_detail_pipeline_capability()
     _ensure_comfly_seedance_tvc_pipeline_capability()
-    _auto_start_openclaw()
-
     app = FastAPI(
         title="龙虾 (Lobster) API",
         version="0.1.0",
@@ -962,6 +1017,7 @@ def create_app() -> FastAPI:
     app.include_router(openclaw_sutui_llm_proxy_router, prefix="")
     app.include_router(openclaw_config_router, prefix="")
     app.include_router(openclaw_memory_router, prefix="")
+    app.include_router(personal_settings_router, prefix="")
     app.include_router(openclaw_skill_chat_router, prefix="")
     app.include_router(h5_chat_channel_router, prefix="")
     app.include_router(custom_config_router, prefix="")
@@ -986,7 +1042,9 @@ def create_app() -> FastAPI:
     app.include_router(viral_video_remix_router, prefix="")
     app.include_router(hifly_digital_human_router, prefix="")
     app.include_router(shanjian_smart_clip_router, prefix="")
-    app.include_router(ai_3d_model_router, prefix="")
+    ai_3d_model_router = _load_optional_router("backend.app.api.ai_3d_model", "ai_3d_model")
+    if ai_3d_model_router is not None:
+        app.include_router(ai_3d_model_router, prefix="")
     if ecommerce_publish_router is not None:
         app.include_router(ecommerce_publish_router, prefix="")
     else:
