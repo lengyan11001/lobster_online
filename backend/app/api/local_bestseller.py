@@ -20,6 +20,7 @@ router = APIRouter()
 
 _ROOT = Path(__file__).resolve().parents[3]
 _DATA_FILE = _ROOT / "static" / "data" / "local-bestseller-10day.json"
+_BGM_FILE = _ROOT / "static" / "data" / "local-bestseller-bgm.json"
 
 
 class LocalBestsellerProfile(BaseModel):
@@ -52,6 +53,7 @@ class LocalBestsellerCardOverride(BaseModel):
     stage: str = ""
     douyin: Dict[str, Any] = Field(default_factory=dict)
     videohao: Dict[str, Any] = Field(default_factory=dict)
+    bgm: Dict[str, Any] = Field(default_factory=dict)
     subtitle_text: str = ""
     ai_variant: str = ""
     scene_prompt: str = ""
@@ -93,6 +95,95 @@ def _load_templates() -> List[Dict[str, Any]]:
     if not isinstance(rows, list) or not rows:
         raise HTTPException(status_code=500, detail="同城爆款模板为空")
     return [row for row in rows if isinstance(row, dict)]
+
+
+def _load_bgm_map() -> Dict[str, Any]:
+    try:
+        payload = json.loads(_BGM_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _normalize_bgm_option(
+    raw: Any,
+    *,
+    default_url: str = "",
+    default_volume: float = 0.24,
+    fallback_key: str = "",
+    fallback_name: str = "",
+) -> Dict[str, Any]:
+    item = raw if isinstance(raw, dict) else {}
+    key = str(item.get("key") or fallback_key or "").strip()
+    music_name = str(item.get("music_name") or item.get("name") or fallback_name or "").strip()
+    if not key:
+        normalized = re.sub(r"[^a-z0-9]+", "-", music_name.lower()).strip("-")
+        key = normalized or fallback_key or "default-bgm"
+    bgm_url = str(item.get("bgm_url") or item.get("url") or "").strip()
+    try:
+        volume = float(item.get("volume") if item.get("volume") is not None else default_volume)
+    except Exception:
+        volume = default_volume
+    volume = min(1.0, max(0.0, volume))
+    resolved_url = bgm_url or default_url
+    return {
+        "key": key,
+        "music_name": music_name or "默认背景音乐",
+        "note": str(item.get("note") or "").strip(),
+        "bgm_url": resolved_url,
+        "volume": volume,
+        "has_preview": bool(bgm_url),
+        "using_default_url": bool(resolved_url and not bgm_url),
+    }
+
+
+def _bgm_library_options() -> List[Dict[str, Any]]:
+    payload = _load_bgm_map()
+    default_url = str(payload.get("default_url") or "").strip()
+    try:
+        default_volume = float(payload.get("default_volume") if payload.get("default_volume") is not None else 0.24)
+    except Exception:
+        default_volume = 0.24
+    library = payload.get("library") if isinstance(payload.get("library"), list) else []
+    options: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    if library:
+        for idx, raw in enumerate(library, start=1):
+            option = _normalize_bgm_option(raw, default_url=default_url, default_volume=default_volume, fallback_key=f"bgm-{idx}")
+            if option["key"] in seen:
+                continue
+            seen.add(option["key"])
+            options.append(option)
+        return options
+    days = payload.get("days") if isinstance(payload.get("days"), dict) else {}
+    for day in range(1, 31):
+        raw = days.get(str(day)) if isinstance(days, dict) else {}
+        option = _normalize_bgm_option(raw, default_url=default_url, default_volume=default_volume, fallback_key=f"day-{day}", fallback_name=f"Day {day}")
+        signature = option["music_name"] + "|" + option["bgm_url"]
+        if signature in seen:
+            continue
+        seen.add(signature)
+        options.append(option)
+    return options
+
+
+def _bgm_for_day(day: int) -> Dict[str, Any]:
+    payload = _load_bgm_map()
+    days = payload.get("days") if isinstance(payload.get("days"), dict) else {}
+    item = days.get(str(int(day or 0))) if isinstance(days, dict) else {}
+    item = item if isinstance(item, dict) else {}
+    default_url = str(payload.get("default_url") or "").strip()
+    try:
+        default_volume = float(payload.get("default_volume") if payload.get("default_volume") is not None else 0.24)
+    except Exception:
+        default_volume = 0.24
+    return _normalize_bgm_option(
+        item,
+        default_url=default_url,
+        default_volume=default_volume,
+        fallback_key=f"day-{int(day or 0)}",
+        fallback_name=f"Day {int(day or 0)}",
+    )
 
 
 def _clean_profile(profile: LocalBestsellerProfile) -> Dict[str, str]:
@@ -410,6 +501,7 @@ def _sanitize_video_prompt_no_speech(prompt: str) -> str:
 
 def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
     day = int(row.get("day") or 0)
+    bgm = _bgm_for_day(day)
     scene_only_day = _is_city_scene_only_day(day)
     stage = str(row.get("stage") or "").strip()
     douyin_copy = _format_template(str(row.get("douyin_copy") or ""), profile)
@@ -485,6 +577,7 @@ def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
             },
         },
         "subtitle_text": subtitle_text,
+        "bgm": bgm,
         "ai_variant": ai_variant,
         "hashtags": _hashtags(profile, stage),
         "scene_prompt": base_scene_prompt,
@@ -545,6 +638,13 @@ def _merge_card_override(card: Dict[str, Any], override: Optional[LocalBestselle
         if str(incoming.get("reference") or "").strip():
             merged_videohao["reference"] = str(incoming.get("reference") or "").strip()
         merged["videohao"] = merged_videohao
+    if isinstance(data.get("bgm"), dict):
+        current_bgm = merged.get("bgm") if isinstance(merged.get("bgm"), dict) else {}
+        incoming_bgm = data["bgm"]
+        merged["bgm"] = {
+            **current_bgm,
+            **{key: value for key, value in incoming_bgm.items() if value not in (None, "")},
+        }
     merged["image_prompt"] = str(merged.get("scene_prompt") or merged.get("image_prompt") or "")
     return merged
 
@@ -681,6 +781,7 @@ async def _submit_card_video_via_seedance(
             "workflow_mode": "direct_video",
             "subtitle_text": str(card.get("subtitle_text") or "").strip(),
             "subtitle_style": card.get("douyin", {}).get("subtitle", {}).get("style") if isinstance(card.get("douyin"), dict) else {},
+            "bgm": card.get("bgm") if isinstance(card.get("bgm"), dict) else {},
         },
     )
 
@@ -777,6 +878,12 @@ async def local_bestseller_templates(_: _ServerUser = Depends(get_current_user_f
     return {"ok": True, "items": rows[:30], "total": min(len(rows), 30)}
 
 
+@router.get("/api/local-bestseller/bgm-options")
+async def local_bestseller_bgm_options(_: _ServerUser = Depends(get_current_user_for_local)):
+    options = _bgm_library_options()
+    return {"ok": True, "items": options, "total": len(options)}
+
+
 @router.post("/api/local-bestseller/plan")
 async def local_bestseller_plan(
     body: LocalBestsellerPlanBody,
@@ -791,6 +898,7 @@ async def local_bestseller_plan(
         "days": len(cards),
         "profile": profile,
         "items": cards,
+        "bgm_options": _bgm_library_options(),
         "render_hint": f"当前接口先生成{len(cards)}天批量渲染方案；真实图片/Grok视频生成可按每张卡的 image_prompt/video_prompt 继续接入。",
     }
 

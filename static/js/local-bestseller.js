@@ -3,6 +3,11 @@
     initialized: false,
     selectedPhoto: null,
     selectedVideo: null,
+    bgmOptions: [],
+    bgmMenuOpenDay: null,
+    bgmPreviewKey: '',
+    bgmPreviewUrl: '',
+    bgmPlayer: null,
     assetPickerOpen: false,
     assetPickerMode: 'person',
     assetPickerDay: null,
@@ -43,12 +48,154 @@
     });
   }
 
+  function normalizeBgmOption(option, fallbackKey) {
+    option = option && typeof option === 'object' ? option : {};
+    var key = String(option.key || fallbackKey || '').trim();
+    var musicName = String(option.music_name || option.name || '').trim();
+    if (!key) {
+      key = musicName ? musicName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+    }
+    if (!key) key = String(fallbackKey || 'default-bgm');
+    var url = String(option.bgm_url || option.url || '').trim();
+    var volume = Number(option.volume);
+    if (!(volume >= 0)) volume = 1;
+    if (volume > 1) volume = 1;
+    var hasPreview = option.has_preview != null ? !!option.has_preview : !!url;
+    return {
+      key: key,
+      music_name: musicName || '默认背景音乐',
+      note: String(option.note || '').trim(),
+      bgm_url: url,
+      volume: volume,
+      has_preview: hasPreview,
+      using_default_url: !!option.using_default_url
+    };
+  }
+
+  function bgmOptionsForItem(item) {
+    var seen = {};
+    var out = [];
+    var sourceOptions = (state.bgmOptions && state.bgmOptions.length) ? state.bgmOptions : collectBgmOptionsFromPlan();
+    sourceOptions.forEach(function(option, idx) {
+      var normalized = normalizeBgmOption(option, 'bgm-' + idx);
+      if (seen[normalized.key]) return;
+      seen[normalized.key] = true;
+      out.push(normalized);
+    });
+    var current = normalizeBgmOption(item && item.bgm, item && item.day ? ('day-' + item.day) : 'current-bgm');
+    if (current.music_name && !seen[current.key]) out.unshift(current);
+    return out;
+  }
+
+  function collectBgmOptionsFromPlan() {
+    var out = [];
+    var seen = {};
+    (state.plan || []).forEach(function(item, idx) {
+      if (!item || !item.bgm) return;
+      var normalized = normalizeBgmOption(item.bgm, 'plan-bgm-' + idx);
+      var signature = normalized.key + '|' + normalized.music_name + '|' + normalized.bgm_url;
+      if (seen[signature]) return;
+      seen[signature] = true;
+      out.push(normalized);
+    });
+    return out;
+  }
+
+  function ensureBgmOptions() {
+    if (state.bgmOptions && state.bgmOptions.length) return;
+    state.bgmOptions = collectBgmOptionsFromPlan();
+  }
+
+  function applyCurrentBgmOptionsToPlan() {
+    ensureBgmOptions();
+    if (!state.plan.length || !state.bgmOptions.length) return;
+    var byName = {};
+    state.bgmOptions.forEach(function(option) {
+      var name = String(option.music_name || '').trim();
+      if (name && !byName[name]) byName[name] = option;
+    });
+    state.plan.forEach(function(item) {
+      var current = item && item.bgm ? String(item.bgm.music_name || '').trim() : '';
+      if (current && byName[current]) item.bgm = byName[current];
+    });
+  }
+
+  function syncItemBgm(item) {
+    if (!item) return null;
+    var current = normalizeBgmOption(item.bgm, item.day ? ('day-' + item.day) : 'current-bgm');
+    var options = bgmOptionsForItem(item);
+    var matched = null;
+    options.forEach(function(option) {
+      if (!matched && option.key === current.key) matched = option;
+    });
+    item.bgm = matched || current;
+    return item.bgm;
+  }
+
+  function previewButtonLabel(item) {
+    var bgm = syncItemBgm(item);
+    if (!bgm || !bgm.has_preview || !bgm.bgm_url) return '暂无独立试听';
+    if (state.bgmPreviewKey && state.bgmPreviewKey === bgm.key && state.bgmPreviewUrl === bgm.bgm_url) return '暂停试听';
+    return '试听';
+  }
+
+  function bgmMenuOpenForDay(day) {
+    return String(state.bgmMenuOpenDay || '') === String(day || '');
+  }
+
+  function closeBgmMenu() {
+    if (state.bgmMenuOpenDay == null) return;
+    state.bgmMenuOpenDay = null;
+    renderPlan();
+  }
+
+  function toggleBgmMenu(day) {
+    var nextDay = String(day || '').trim();
+    state.bgmMenuOpenDay = bgmMenuOpenForDay(nextDay) ? null : nextDay;
+    renderPlan();
+  }
+
+  function applyBgmSelection(day, nextKey) {
+    var item = findPlanItem(day);
+    if (!item) return;
+    var matched = null;
+    bgmOptionsForItem(item).forEach(function(option) {
+      if (!matched && option.key === String(nextKey || '').trim()) matched = option;
+    });
+    if (!matched) return;
+    item.bgm = matched;
+    state.bgmMenuOpenDay = null;
+    renderPlan();
+    updateButtons();
+  }
+
   function showMessage(text, danger) {
     var el = $('localBestsellerMsg');
     if (!el) return;
     el.style.display = text ? 'block' : 'none';
     el.className = 'msg' + (danger ? ' err' : '');
     el.textContent = text || '';
+  }
+
+  function loadBgmOptions() {
+    var base = localBase();
+    if (!base) return Promise.resolve();
+    return fetch(base + '/api/local-bestseller/bgm-options', { headers: headersUpload() })
+      .then(function(resp) {
+        return resp.json().then(function(data) {
+          return { ok: resp.ok, data: data || {} };
+        });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error((result.data && result.data.detail) || '背景音乐列表加载失败');
+        state.bgmOptions = Array.isArray(result.data.items) ? result.data.items.map(function(option, idx) {
+          return normalizeBgmOption(option, 'bgm-' + idx);
+        }) : [];
+        ensureBgmOptions();
+        applyCurrentBgmOptionsToPlan();
+        renderPlan();
+      })
+      .catch(function() {});
   }
 
   function val(id) {
@@ -575,6 +722,7 @@
     item = item || {};
     item.subtitle_text = compactSubtitle(item.subtitle_text || item.ai_variant || (item.videohao && item.videohao.copy) || (item.douyin && item.douyin.copy) || '');
     item.video_prompt = sanitizeVideoPromptNoSpeech(item.video_prompt || '');
+    item.bgm = syncItemBgm(item);
     return item;
   }
 
@@ -590,6 +738,7 @@
       stage: item.stage || '',
       douyin: item.douyin || {},
       videohao: item.videohao || {},
+      bgm: item.bgm || {},
       subtitle_text: item.subtitle_text || '',
       ai_variant: item.ai_variant || '',
       scene_prompt: item.scene_prompt || item.image_prompt || '',
@@ -613,6 +762,42 @@
 
   function planPayload() {
     return state.plan.map(cardPayload);
+  }
+
+  function renderBgmControls(item) {
+    var bgm = syncItemBgm(item);
+    var options = bgmOptionsForItem(item);
+    var optionHtml = options.map(function(option) {
+      var selected = option.key === bgm.key;
+      return '' +
+        '<button type="button" class="lb-bgm-option' + (selected ? ' is-selected' : '') + '"' +
+          ' data-lb-bgm-option="' + escapeHtml(item.day) + '"' +
+          ' data-lb-bgm-key="' + escapeHtml(option.key) + '">' +
+          '<span class="lb-bgm-option-name">' + escapeHtml(option.music_name) + '</span>' +
+          (option.note ? '<small class="lb-bgm-option-note">' + escapeHtml(option.note) + '</small>' : '') +
+        '</button>';
+    }).join('');
+    var note = bgm.note ? '<small class="lb-bgm-note">' + escapeHtml(bgm.note) + '</small>' : '';
+    var source = bgm.using_default_url ? '<small class="lb-bgm-meta">当前还没有这首歌的独立音频，合成时先走默认背景音乐</small>' : '';
+    var previewDisabled = bgm.has_preview ? '' : ' disabled';
+    var isOpen = bgmMenuOpenForDay(item.day);
+    return '' +
+      '<div class="lb-bgm-row">' +
+        '<label class="lb-bgm-field">' +
+          '<span>背景音乐</span>' +
+          '<div class="lb-bgm-select-wrap">' +
+            '<div class="lb-bgm-picker' + (isOpen ? ' is-open' : '') + '" data-lb-bgm-picker="' + escapeHtml(item.day) + '">' +
+              '<button type="button" class="lb-bgm-select" data-lb-bgm-toggle="' + escapeHtml(item.day) + '" aria-expanded="' + (isOpen ? 'true' : 'false') + '">' +
+                '<span class="lb-bgm-select-label">' + escapeHtml(bgm.music_name) + '</span>' +
+                '<span class="lb-bgm-select-arrow" aria-hidden="true"></span>' +
+              '</button>' +
+              '<div class="lb-bgm-menu">' + optionHtml + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</label>' +
+        '<button type="button" class="btn btn-ghost btn-sm lb-bgm-preview-btn" data-lb-bgm-preview="' + escapeHtml(item.day) + '"' + previewDisabled + '>' + escapeHtml(previewButtonLabel(item)) + '</button>' +
+      '</div>' +
+      '<div class="lb-bgm-meta-row">' + note + source + '</div>';
   }
 
   function renderPlan() {
@@ -641,6 +826,8 @@
       var videoTask = item.video_task_id ? '<small class="lb-task-id">视频任务：' + escapeHtml(item.video_task_id) + '</small>' : '';
       var videoProgress = item.video_progress_label ? '<small class="lb-task-id">' + escapeHtml(item.video_progress_label) + '</small>' : '';
       var clearSceneBtn = sceneRefUrl ? '<button type="button" class="btn btn-ghost btn-sm" data-lb-clear-scene-ref="' + escapeHtml(item.day) + '">清除底图</button>' : '';
+      var sceneRefActions = '<div class="lb-card-actions lb-card-actions-ref"><button type="button" class="btn btn-ghost btn-sm" data-lb-upload-scene-ref="' + escapeHtml(item.day) + '">上传底图</button><button type="button" class="btn btn-ghost btn-sm" data-lb-pick-scene-ref="' + escapeHtml(item.day) + '">选择底图</button>' + clearSceneBtn + '</div>';
+      var renderActions = '<div class="lb-card-actions lb-card-actions-render"><button type="button" class="btn btn-primary btn-sm lb-card-action-main" data-lb-scene="' + escapeHtml(item.day) + '" ' + (sceneBusy ? 'disabled' : '') + '>' + escapeHtml(sceneBtnText) + '</button><button type="button" class="btn btn-primary btn-sm lb-card-action-main lb-card-action-alt" data-lb-video="' + escapeHtml(item.day) + '" ' + (videoBusy || !hasVideoSource ? 'disabled' : '') + '>' + escapeHtml(videoBtnText) + '</button></div>';
       return '<article class="lb-result-card">' +
         '<div class="lb-result-head"><span>Day ' + escapeHtml(item.day) + '</span><strong>' + escapeHtml(item.title) + '</strong><em>' + escapeHtml(item.stage) + '</em></div>' +
         '<div class="lb-result-preview"><div class="lb-phone-frame' + ((previewUrl || hasVideo) ? ' has-image' : '') + (hasVideo ? ' has-video' : '') + '">' + renderEffectPreview(item, previewUrl) + '</div></div>' +
@@ -650,9 +837,10 @@
             textarea(item.day, 'scene_prompt', '场景图片合成提示词', 6) +
             textarea(item.day, 'video_prompt', 'Grok 10秒视频提示词', 5) +
           '</details>' +
+          renderBgmControls(item) +
           '<div class="lb-tags">' + tags + '</div>' +
         '</div>' +
-        '<div class="lb-result-foot"><div class="lb-card-actions"><button type="button" class="btn btn-ghost btn-sm" data-lb-upload-scene-ref="' + escapeHtml(item.day) + '">上传底图</button><button type="button" class="btn btn-ghost btn-sm" data-lb-pick-scene-ref="' + escapeHtml(item.day) + '">选择底图</button>' + clearSceneBtn + '<button type="button" class="btn btn-primary btn-sm" data-lb-scene="' + escapeHtml(item.day) + '" ' + (sceneBusy ? 'disabled' : '') + '>' + escapeHtml(sceneBtnText) + '</button><button type="button" class="btn btn-ghost btn-sm" data-lb-video="' + escapeHtml(item.day) + '" ' + (videoBusy || !hasVideoSource ? 'disabled' : '') + '>' + escapeHtml(videoBtnText) + '</button></div><div class="lb-status-stack"><span data-status="' + escapeHtml(item.scene_status || item.status || 'ready') + '">' + escapeHtml(statusLabel(item.scene_status || item.status)) + '</span><span data-status="' + escapeHtml(item.video_status || 'ready') + '">' + escapeHtml(videoStatusLabel(item.video_status)) + '</span>' + videoTask + videoProgress + '</div></div>' +
+        '<div class="lb-result-foot"><div class="lb-result-actions">' + sceneRefActions + renderActions + '</div><div class="lb-status-stack"><span data-status="' + escapeHtml(item.scene_status || item.status || 'ready') + '">' + escapeHtml(statusLabel(item.scene_status || item.status)) + '</span><span data-status="' + escapeHtml(item.video_status || 'ready') + '">' + escapeHtml(videoStatusLabel(item.video_status)) + '</span>' + videoTask + videoProgress + '</div></div>' +
       '</article>';
     }).join('');
   }
@@ -706,7 +894,11 @@
       })
       .then(function(result) {
         if (!result.ok) throw new Error((result.data && result.data.detail) || '生成失败');
+        state.bgmOptions = Array.isArray(result.data.bgm_options) ? result.data.bgm_options.map(function(option, idx) {
+          return normalizeBgmOption(option, 'bgm-' + idx);
+        }) : [];
         state.plan = normalizePlan(Array.isArray(result.data.items) ? result.data.items : []);
+        ensureBgmOptions();
         renderPlan();
         showMessage(state.plan.length + '天同城爆款方案已生成。下一步可以单张或批量合成场景图片。', false);
       })
@@ -730,14 +922,31 @@
   function finalVideoUrlFromJob(data) {
     var result = data && data.result && typeof data.result === 'object' ? data.result : {};
     var captioned = result.captioned_video && typeof result.captioned_video === 'object' ? result.captioned_video : {};
+    var bgmVideo = result.bgm_video && typeof result.bgm_video === 'object' ? result.bgm_video : {};
     var finalVideo = result.final_video && typeof result.final_video === 'object' ? result.final_video : {};
     var saved = Array.isArray(data.saved_assets) ? data.saved_assets : [];
     var savedUrl = '';
     saved.forEach(function(row) {
       var asset = row && row.asset && typeof row.asset === 'object' ? row.asset : {};
-      if (!savedUrl) savedUrl = asset.source_url || asset.open_url || '';
+      var kind = String((row && row.kind) || asset.kind || '').toLowerCase();
+      var url = asset.source_url || asset.open_url || '';
+      if (!savedUrl && kind === 'local_bestseller_bgm_final' && url) {
+        savedUrl = url;
+        return;
+      }
+      if (!savedUrl && url) savedUrl = url;
     });
-    return captioned.source_url || captioned.open_url || finalVideo.url || savedUrl || '';
+    return (
+      finalVideo.url ||
+      finalVideo.preview_url ||
+      finalVideo.local_preview_url ||
+      bgmVideo.source_url ||
+      bgmVideo.open_url ||
+      captioned.source_url ||
+      captioned.open_url ||
+      savedUrl ||
+      ''
+    );
   }
 
   function updateVideoItemFromJob(item, data) {
@@ -769,6 +978,51 @@
     }
     item.video_status = 'running';
     item.video_progress_label = label || '视频生成中';
+  }
+
+  function toggleBgmPreview(dayOrId) {
+    var item = findPlanItem(dayOrId);
+    if (!item) return;
+    var bgm = syncItemBgm(item);
+    if (!bgm || !bgm.has_preview || !bgm.bgm_url) {
+      showMessage('当前这首歌还没有可试听的音频地址。', true);
+      return;
+    }
+    if (!state.bgmPlayer) {
+      state.bgmPlayer = new Audio();
+      state.bgmPlayer.preload = 'none';
+      state.bgmPlayer.addEventListener('ended', function() {
+        state.bgmPreviewKey = '';
+        state.bgmPreviewUrl = '';
+        renderPlan();
+      });
+      state.bgmPlayer.addEventListener('pause', function() {
+        if (state.bgmPlayer && !state.bgmPlayer.ended) {
+          state.bgmPreviewKey = '';
+          state.bgmPreviewUrl = '';
+          renderPlan();
+        }
+      });
+    }
+    if (state.bgmPreviewKey === bgm.key && state.bgmPreviewUrl === bgm.bgm_url && !state.bgmPlayer.paused) {
+      state.bgmPlayer.pause();
+      return;
+    }
+    state.bgmPlayer.src = bgm.bgm_url;
+    state.bgmPlayer.currentTime = 0;
+    state.bgmPlayer.volume = Math.max(0, Math.min(1, Number(bgm.volume) || 1));
+    state.bgmPreviewKey = bgm.key;
+    state.bgmPreviewUrl = bgm.bgm_url;
+    state.bgmPlayer.play()
+      .then(function() {
+        renderPlan();
+      })
+      .catch(function(err) {
+        state.bgmPreviewKey = '';
+        state.bgmPreviewUrl = '';
+        renderPlan();
+        showMessage((err && err.message) || '背景音乐试听失败', true);
+      });
   }
 
   function pollVideoJob(dayOrId) {
@@ -1053,6 +1307,13 @@
   }
 
   function resetAll() {
+    if (state.bgmPlayer) {
+      state.bgmPlayer.pause();
+      state.bgmPlayer.src = '';
+    }
+    state.bgmPreviewKey = '';
+    state.bgmPreviewUrl = '';
+    state.bgmOptions = [];
     state.selectedPhoto = null;
     state.selectedVideo = null;
     state.plan = [];
@@ -1164,6 +1425,17 @@
       updateButtons();
     });
     document.addEventListener('click', function(event) {
+      var bgmOption = event.target.closest('[data-lb-bgm-option][data-lb-bgm-key]');
+      if (bgmOption) {
+        applyBgmSelection(bgmOption.getAttribute('data-lb-bgm-option'), bgmOption.getAttribute('data-lb-bgm-key'));
+        return;
+      }
+      var bgmToggle = event.target.closest('[data-lb-bgm-toggle]');
+      if (bgmToggle) {
+        toggleBgmMenu(bgmToggle.getAttribute('data-lb-bgm-toggle'));
+        return;
+      }
+      if (!event.target.closest('[data-lb-bgm-picker]')) closeBgmMenu();
       var asset = event.target.closest('[data-lb-asset-id]');
       if (asset) {
         pickAsset(asset.getAttribute('data-lb-asset-id'));
@@ -1205,6 +1477,11 @@
       var video = event.target.closest('[data-lb-video]');
       if (video) {
         generateVideo(video.getAttribute('data-lb-video'));
+        return;
+      }
+      var bgmPreview = event.target.closest('[data-lb-bgm-preview]');
+      if (bgmPreview) {
+        toggleBgmPreview(bgmPreview.getAttribute('data-lb-bgm-preview'));
         return;
       }
       var videoFull = event.target.closest('[data-lb-video-fullscreen]');
@@ -1251,6 +1528,7 @@
     renderSelectedMedia();
     renderPlan();
     updateButtons();
+    loadBgmOptions();
   };
 
   window._openLocalBestsellerView = function() {
@@ -1261,6 +1539,7 @@
     var contentEl = document.getElementById('content-' + target);
     if (contentEl) contentEl.classList.add('visible');
     window.initLocalBestsellerView();
+    loadBgmOptions();
   };
 
   function openFromHashIfNeeded() {

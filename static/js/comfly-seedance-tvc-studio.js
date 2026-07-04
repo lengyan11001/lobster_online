@@ -811,9 +811,9 @@
     if (!meta.assetId && !meta.sourceUrl && !meta.kind) return false;
     var finalAssetId = String((finalVideo && finalVideo.asset_id) || '').trim();
     if (finalAssetId && meta.assetId === finalAssetId) return true;
-    if (meta.kind === 'merged_final' || meta.kind === 'local_bestseller_captioned') return true;
+    if (meta.kind === 'merged_final' || meta.kind === 'local_bestseller_captioned' || meta.kind === 'local_bestseller_bgm_final') return true;
     if (meta.meta && (meta.meta.seedance_final_video || meta.meta.origin === 'daihuo_merged')) return true;
-    if (meta.tags && (meta.tags.indexOf('merged') >= 0 || meta.tags.indexOf('captioned') >= 0)) return true;
+    if (meta.tags && (meta.tags.indexOf('merged') >= 0 || meta.tags.indexOf('captioned') >= 0 || meta.tags.indexOf('bgm') >= 0)) return true;
     return false;
   }
 
@@ -2698,7 +2698,7 @@
       var asset = assets[ids[i]] || {};
       var assetTags = String(asset.tags || '').trim().toLowerCase();
       var src = String(asset.source_url || asset.preview_url || '').trim();
-      if (src && (assetTags.indexOf('merged') >= 0 || assetTags.indexOf('captioned') >= 0)) return src;
+      if (src && (assetTags.indexOf('merged') >= 0 || assetTags.indexOf('captioned') >= 0 || assetTags.indexOf('bgm') >= 0)) return src;
     }
     var saved = Array.isArray(job && job.saved_assets) ? job.saved_assets : [];
     for (var p = 0; p < saved.length; p += 1) {
