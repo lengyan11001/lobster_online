@@ -788,6 +788,17 @@ async def _download_video_to_path(url: str, path: Path) -> None:
     path.write_bytes(resp.content)
 
 
+async def _download_media_to_path(ref: str, path: Path) -> None:
+    value = str(ref or "").strip()
+    if not value:
+        raise RuntimeError("素材下载失败：引用为空")
+    local = Path(value)
+    if not value.startswith(("http://", "https://")) and local.is_file():
+        path.write_bytes(local.read_bytes())
+        return
+    await _download_video_to_path(value, path)
+
+
 def _run_caption_ffmpeg(ffmpeg_path: str, input_path: Path, ass_path: Path, output_path: Path) -> None:
     ass_filter_path = str(ass_path).replace("\\", "/").replace(":", "\\:")
     vf = f"subtitles='{ass_filter_path}'"
@@ -806,6 +817,40 @@ def _run_caption_ffmpeg(ffmpeg_path: str, input_path: Path, ass_path: Path, outp
         "20",
         "-c:a",
         "copy",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        quoted = " ".join(shlex.quote(x) for x in cmd)
+        raise RuntimeError((proc.stderr or proc.stdout or f"ffmpeg failed: {quoted}")[:2000])
+
+
+def _run_bgm_ffmpeg(ffmpeg_path: str, input_path: Path, bgm_path: Path, output_path: Path, volume: float) -> None:
+    gain = f"{min(1.0, max(0.0, float(volume))):.3f}"
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(bgm_path),
+        "-filter_complex",
+        f"[1:a]volume={gain}[bgm]",
+        "-map",
+        "0:v:0",
+        "-map",
+        "[bgm]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
         "-movflags",
         "+faststart",
         str(output_path),
@@ -865,6 +910,62 @@ def _save_local_bestseller_caption_asset(
         db.close()
 
 
+def _save_local_bestseller_post_asset(
+    *,
+    user_id: int,
+    output_path: Path,
+    source_video_url: str,
+    subtitle_text: str,
+    job_id: str,
+    day: Any,
+    bgm_name: str = "",
+    bgm_url: str = "",
+    kind: str = "local_bestseller_postprocessed",
+) -> Dict[str, Any]:
+    data = output_path.read_bytes()
+    aid = _gen_asset_id()
+    fname = f"{aid}.mp4"
+    asset_path = ASSETS_DIR / fname
+    asset_path.write_bytes(data)
+    ct = _content_type_for_asset_filename(fname)
+    tos_url = _upload_to_tos(data, f"assets/{fname}", ct)
+    db = SessionLocal()
+    try:
+        row = Asset(
+            asset_id=aid,
+            user_id=user_id,
+            filename=fname,
+            media_type="video",
+            file_size=len(data),
+            source_url=tos_url,
+            prompt=(subtitle_text or bgm_name)[:500],
+            model="local-bestseller-post-ffmpeg",
+            tags="auto,local_bestseller.postprocessed_video",
+            meta={
+                "source_video_url": source_video_url,
+                "seedance_job_id": job_id,
+                "local_bestseller_day": day,
+                "captioned": bool(subtitle_text),
+                "bgm_added": bool(bgm_url),
+                "bgm_name": bgm_name,
+                "bgm_url": bgm_url,
+                "kind": kind,
+            },
+        )
+        db.add(row)
+        db.commit()
+        return {
+            "asset_id": aid,
+            "filename": fname,
+            "media_type": "video",
+            "file_size": len(data),
+            "source_url": tos_url or "",
+            "path": str(asset_path),
+        }
+    finally:
+        db.close()
+
+
 async def _caption_local_bestseller_video_if_needed(
     *,
     job_id: str,
@@ -902,6 +1003,53 @@ async def _caption_local_bestseller_video_if_needed(
             subtitle_text=subtitle_text,
             job_id=job_id,
             day=meta.get("day"),
+        )
+
+
+async def _mix_local_bestseller_bgm_if_needed(
+    *,
+    job_id: str,
+    job: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+    if meta.get("feature") != "local_bestseller":
+        return None
+    bgm = meta.get("bgm") if isinstance(meta.get("bgm"), dict) else {}
+    bgm_url = str(bgm.get("bgm_url") or bgm.get("url") or "").strip()
+    if not bgm_url:
+        return None
+    try:
+        volume = float(bgm.get("volume") if bgm.get("volume") is not None else 0.24)
+    except Exception:
+        volume = 0.24
+    volume = min(1.0, max(0.0, volume))
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    preferred_ref = _normalize_video_download_ref(str(final_video.get("path") or final_video.get("url") or ""), job=job)
+    video_ref = preferred_ref if _is_usable_video_download_ref(preferred_ref) else _select_pipeline_video_download_ref(result, job=job)
+    if not video_ref:
+        raise RuntimeError("同城爆款背景音乐合成失败：未找到可用视频")
+
+    async with _LOCAL_BESTSELLER_CAPTION_LOCK:
+        update_job(job_id, post_status="mixing_bgm", post_stage="mix_bgm")
+        work_dir = Path(job.get("job_output_dir") or _default_runs_root()) / "caption_post"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        input_path = work_dir / "bgm_input.mp4"
+        bgm_path = work_dir / "bgm_track.m4a"
+        out_path = work_dir / "bgm_final.mp4"
+        await _download_media_to_path(video_ref, input_path)
+        await _download_media_to_path(bgm_url, bgm_path)
+        await asyncio.to_thread(_run_bgm_ffmpeg, _ffmpeg_path_from_job(job), input_path, bgm_path, out_path, volume)
+        return _save_local_bestseller_post_asset(
+            user_id=int(job.get("user_id") or 0),
+            output_path=out_path,
+            source_video_url=video_ref,
+            subtitle_text=str(meta.get("subtitle_text") or "").strip(),
+            job_id=job_id,
+            day=meta.get("day"),
+            bgm_name=str(bgm.get("music_name") or "").strip(),
+            bgm_url=bgm_url,
+            kind="local_bestseller_bgm_final",
         )
 
 
@@ -1088,6 +1236,54 @@ async def _seedance_job_runner(job_id: str) -> None:
                 "hint": "同城爆款字幕成片已完成。",
             },
         }
+
+    bgm_asset: Optional[Dict[str, Any]] = None
+    try:
+        bgm_asset = await _mix_local_bestseller_bgm_if_needed(job_id=job_id, job=job, result=result)
+    except Exception as exc:
+        error = str(exc)[:2000]
+        update_job(
+            job_id,
+            status="completed",
+            error=None,
+            result=result,
+            saved_assets=saved_assets,
+            post_status="failed",
+            post_stage="bgm_failed",
+            post_error=f"bgm failed: {error}",
+        )
+        await sync_creative_job_to_cloud(
+            auth_header=auth_header,
+            installation_id=installation_id,
+            job_id=job_id,
+            feature_type="seedance_tvc",
+            provider="comfly_seedance",
+            status="completed",
+            stage="bgm_failed",
+            title="创意视频任务",
+            prompt=task_text,
+            request_payload=request_payload,
+            result_payload=result,
+            saved_assets=saved_assets,
+            error=f"bgm failed: {error}",
+            meta={"auto_save": auto_save},
+        )
+        return
+    if bgm_asset:
+        saved_assets = [*saved_assets, {"asset": bgm_asset, "kind": "local_bestseller_bgm_final"}]
+        result = {
+            **result,
+            "bgm_video": bgm_asset,
+            "final_video": {
+                **(result.get("final_video") if isinstance(result.get("final_video"), dict) else {}),
+                "url": bgm_asset.get("source_url") or None,
+                "path": bgm_asset.get("path") or "",
+                "asset_id": bgm_asset.get("asset_id") or "",
+                "kind": "local_bestseller_bgm_final",
+                "hint": "同城爆款字幕+BGM成片已完成。",
+            },
+        }
+
     update_job(
         job_id,
         status="completed",
