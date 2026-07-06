@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import logging
 import re
@@ -50,7 +51,30 @@ _DOC_TYPES = (
     ("product_service_faq", "百问百答"),
     ("short_video_scripts", "短视频口播稿"),
 )
+_CUSTOM_MEMORY_DOC_TYPE = "custom_memory"
 _DOC_TYPE_LABELS = {key: label for key, label in _DOC_TYPES}
+_DOC_TYPE_GUIDES = {
+    "brand_product_intro": (
+        "写成一份企业/品牌/产品介绍资料，结构参考：品牌或主体定位、核心优势与商业模式、"
+        "产品/服务线、技术/工艺/能力、服务流程与交付、适用场景与客户价值、可验证案例或背书。"
+        "只沉淀资料事实，不要写营销导流口号。"
+    ),
+    "product_service_faq": (
+        "写成产品与服务百问百答资料，按分类组织常见问题。建议覆盖：基础认知、产品/服务范围、"
+        "价格与预算口径、交付周期、合作流程、质量标准、售后保障、适用场景、客户顾虑、资料不足待补充。"
+        "每条用“问题：... / 回答：...”格式，回答必须可直接给客服或内容生成技能引用。"
+    ),
+    "short_video_scripts": (
+        "写成短视频口播逐字稿资料，按系列分组。每条格式参考："
+        "“1.《标题》（场景/镜头提示）“口播正文””。"
+        "优先沉淀人物口吻、场景、痛点、事实卖点、案例、结果、可选引导动作；"
+        "不要把资料外的品牌、人名、客户名、数字编进去。"
+    ),
+}
+_DOC_TYPE_MARKER_RE = re.compile(
+    r"^<<<(?P<key>[a-z_]+)>>>\s*(?P<body>.*?)(?=^<<<[a-z_]+>>>\s*|\Z)",
+    re.S | re.M,
+)
 
 
 class MemoryDocumentSaveBody(BaseModel):
@@ -97,11 +121,25 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 def _format_generated_memory(documents: dict[str, str]) -> str:
     lines: list[str] = []
+    seen: set[str] = set()
     for key, label in _DOC_TYPES:
         text = _safe_text(documents.get(key), 80_000)
         if text:
             lines.append(f"# {label}\n\n{text}")
+            seen.add(key)
+    for key, raw_text in documents.items():
+        if key in seen:
+            continue
+        text = _safe_text(raw_text, 80_000)
+        if text:
+            lines.append(f"# {_doc_type_label(key)}\n\n{text}")
     return "\n\n---\n\n".join(lines).strip()
+
+
+def _doc_type_label(key: str) -> str:
+    if key == _CUSTOM_MEMORY_DOC_TYPE:
+        return "自定义参考文档"
+    return _DOC_TYPE_LABELS.get(key, key or "自定义记忆")
 
 
 async def _save_single_memory_document(
@@ -177,6 +215,57 @@ def _split_doc_ids(value: str) -> list[str]:
             seen.add(clean_id)
             out.append(clean_id)
     return out[:20]
+
+
+def _split_doc_types(value: str, fallback: str = "brand_product_intro") -> list[str]:
+    raw = _safe_text(value, 5000)
+    items: list[str] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                items = [str(item or "") for item in parsed]
+            else:
+                items = [str(parsed or "")]
+        except Exception:
+            items = re.split(r"[\s,，;；]+", raw)
+    if not items and fallback:
+        items = [fallback]
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = re.sub(r"[^a-z_]", "", str(item or "").strip())[:64]
+        if key in _DOC_TYPE_LABELS and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out[: len(_DOC_TYPES)]
+
+
+def _format_doc_type_requirements(doc_types: list[str]) -> str:
+    lines: list[str] = []
+    for key in doc_types:
+        label = _doc_type_label(key)
+        guide = (
+            "这是用户上传的参考文档形成的自定义生成类型。请把参考文档当成格式模板，学习它的栏目、结构、"
+            "信息颗粒度、表达边界和排版方式；再基于本次新资料生成一份同类型的新记忆文档。"
+            "不要简单复制参考文档里的事实，除非本次业务资料也明确包含。"
+            if key == _CUSTOM_MEMORY_DOC_TYPE
+            else _DOC_TYPE_GUIDES[key]
+        )
+        lines.append(f"- {key}（{label}）：{guide}")
+    return "\n".join(lines)
+
+
+def _parse_generated_sections(reply: str, doc_types: list[str]) -> dict[str, str]:
+    raw = (reply or "").strip()
+    docs: dict[str, str] = {}
+    for match in _DOC_TYPE_MARKER_RE.finditer(raw):
+        key = (match.group("key") or "").strip()
+        if key in doc_types:
+            docs[key] = _safe_text(match.group("body") or "", 100_000)
+    if not docs and len(doc_types) == 1 and raw:
+        docs[doc_types[0]] = _safe_text(raw, 100_000)
+    return {key: docs.get(key, "").strip() for key in doc_types if docs.get(key, "").strip()}
 
 
 async def _update_memory_document(
@@ -488,6 +577,140 @@ async def _describe_video_url(request: Request, user: _ServerUser, url: str) -> 
         )
 
 
+def _normalize_image_for_vision(filename: str, data: bytes) -> tuple[str, bytes, str]:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return filename, data, "image/jpeg"
+    if suffix == ".png":
+        return filename, data, "image/png"
+    if suffix == ".webp":
+        return filename, data, "image/webp"
+    try:
+        from PIL import Image  # type: ignore
+
+        with Image.open(io.BytesIO(data)) as img:
+            if img.mode not in {"RGB", "L"}:
+                img = img.convert("RGB")
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=88)
+            stem = Path(filename or "image").stem or "image"
+            return f"{stem}.jpg", out.getvalue(), "image/jpeg"
+    except Exception:
+        return filename, data, ""
+
+
+def _extract_pdf_embedded_images(data: bytes, filename: str, max_images: int = 8) -> list[tuple[str, bytes, str]]:
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except Exception:
+        return []
+    out: list[tuple[str, bytes, str]] = []
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        for page_idx, page in enumerate(reader.pages, start=1):
+            try:
+                images = list(getattr(page, "images", []) or [])
+            except Exception:
+                images = []
+            for image_idx, image in enumerate(images, start=1):
+                try:
+                    raw = bytes(getattr(image, "data", b"") or b"")
+                except Exception:
+                    raw = b""
+                if not raw:
+                    continue
+                name = getattr(image, "name", "") or f"{Path(filename).stem}-page{page_idx}-{image_idx}.png"
+                norm_name, norm_data, content_type = _normalize_image_for_vision(name, raw)
+                out.append((f"{Path(filename).stem}-p{page_idx}-{image_idx}-{norm_name}", norm_data, content_type))
+                if len(out) >= max_images:
+                    return out
+    except Exception as exc:
+        logger.warning("[personal-settings] pdf embedded image extraction failed filename=%s: %s", filename, exc)
+    return out
+
+
+async def _describe_pdf_images(
+    request: Request,
+    user: _ServerUser,
+    *,
+    filename: str,
+    data: bytes,
+    reason: str = "",
+) -> str:
+    images = _extract_pdf_embedded_images(data, filename, max_images=8)
+    if not images:
+        suffix = f"：{reason}" if reason else ""
+        return (
+            f"PDF {filename} 未抽取到可复制文本，也没有找到可直接理解的嵌入图片{suffix}。"
+            "如果这是扫描件，请转成图片或截图上传；或者补充可复制文本。"
+        )
+    descriptions: list[str] = []
+    for idx, (image_name, image_data, content_type) in enumerate(images, start=1):
+        desc = await _describe_image(
+            request,
+            user,
+            filename=image_name,
+            data=image_data,
+            content_type=content_type,
+        )
+        descriptions.append(f"PDF 页面图片 {idx}：{desc}")
+    return "\n\n".join(descriptions).strip()
+
+
+def _is_upload_file_like(value: Any) -> bool:
+    return hasattr(value, "filename") and callable(getattr(value, "read", None))
+
+
+def _has_upload_filename(value: Any) -> bool:
+    return bool(str(getattr(value, "filename", "") or "").strip())
+
+
+async def _effective_upload_files(request: Request, files: list[UploadFile] | None) -> list[UploadFile]:
+    """Accept files from any multipart field name, not only the canonical `files` key."""
+    out: list[UploadFile] = []
+    seen: set[int] = set()
+    for file in files or []:
+        if not _is_upload_file_like(file) or not _has_upload_filename(file):
+            continue
+        out.append(file)
+        seen.add(id(file))
+    try:
+        form = await request.form()
+    except Exception:
+        return out
+    for _, value in form.multi_items():
+        if id(value) in seen or not _is_upload_file_like(value) or not _has_upload_filename(value):
+            continue
+        out.append(value)  # type: ignore[arg-type]
+        seen.add(id(value))
+    return out
+
+
+async def _read_custom_reference_file(
+    request: Request,
+    user: _ServerUser,
+    file: UploadFile | None,
+) -> tuple[str, dict[str, Any] | None]:
+    if not file or not _has_upload_filename(file):
+        return "", None
+    filename = (file.filename or "custom-reference").strip() or "custom-reference"
+    suffix = Path(filename).suffix.lower()
+    if suffix in _MEDIA_SUFFIXES:
+        raise HTTPException(status_code=400, detail="自定义参考文档请上传文档类文件，不要上传图片或视频")
+    data = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"{filename} 文件过大")
+    try:
+        text = _safe_text(_decode_text_payload(data, filename), 80_000)
+    except HTTPException as exc:
+        if suffix != ".pdf":
+            raise
+        text = _safe_text(await _describe_pdf_images(request, user, filename=filename, data=data, reason=str(exc.detail or "")), 80_000)
+    if not text:
+        raise HTTPException(status_code=400, detail="自定义参考文档没有可读取的文本内容")
+    return text, {"type": "custom_reference_file", "filename": filename, "size": len(data)}
+
+
 async def _collect_sources(
     request: Request,
     user: _ServerUser,
@@ -500,6 +723,7 @@ async def _collect_sources(
 ) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
     source_parts: list[str] = []
     source_meta: list[dict[str, Any]] = []
+    effective_files = await _effective_upload_files(request, files)
     direct_docs = {
         "brand_product_intro": _safe_text(direct_intro, 80_000),
         "product_service_faq": _safe_text(direct_faq, 80_000),
@@ -523,7 +747,11 @@ async def _collect_sources(
                 desc = await _describe_video_url(request, user, url)
                 source_parts.append(f"## 视频链接理解：{url}\n\n{desc}")
                 source_meta.append({"type": "video_url", "url": url})
-    for file in files:
+    ordered_files = sorted(
+        effective_files,
+        key=lambda item: 0 if Path(str(getattr(item, "filename", "") or "")).suffix.lower() in _MEDIA_SUFFIXES else 1,
+    )
+    for file in ordered_files:
         filename = (file.filename or "upload").strip() or "upload"
         suffix = Path(filename).suffix.lower()
         limit = _MAX_VIDEO_BYTES if suffix in _VIDEO_SUFFIXES else _MAX_UPLOAD_BYTES
@@ -539,9 +767,23 @@ async def _collect_sources(
             source_parts.append(f"## 视频理解：{filename}\n\n{desc}")
             source_meta.append({"type": "video", "filename": filename, "size": len(data)})
         else:
-            text = _decode_text_payload(data, filename)
-            source_parts.append(f"## 文档资料：{filename}\n\n{text}")
-            source_meta.append({"type": "document", "filename": filename, "size": len(data)})
+            try:
+                text = _decode_text_payload(data, filename)
+                source_parts.append(f"## 文档资料：{filename}\n\n{text}")
+                source_meta.append({"type": "document", "filename": filename, "size": len(data)})
+            except HTTPException as exc:
+                detail = str(exc.detail or "未抽取到可写文本")
+                if suffix == ".pdf":
+                    desc = await _describe_pdf_images(request, user, filename=filename, data=data, reason=detail)
+                    source_parts.append(f"## PDF视觉理解：{filename}\n\n{desc}")
+                    source_meta.append({"type": "pdf_visual", "filename": filename, "size": len(data), "detail": detail})
+                else:
+                    source_parts.append(
+                        f"## 文档资料：{filename}\n\n"
+                        f"已上传该文件，但未抽取到可写文本：{detail}。"
+                        "如果这是扫描件或图片型 PDF，请补充可复制文本，或上传截图/图片让 AI 理解。"
+                    )
+                    source_meta.append({"type": "document_unreadable", "filename": filename, "size": len(data), "detail": detail})
     source_text = "\n\n".join(source_parts).strip()
     if len(source_text) > _MAX_MEMORY_SOURCE_CHARS:
         source_text = source_text[:_MAX_MEMORY_SOURCE_CHARS].rstrip() + "\n\n[内容过长，已截断用于本次理解]"
@@ -557,16 +799,22 @@ async def generate_memory_documents(
     direct_faq: str = Form(""),
     direct_scripts: str = Form(""),
     doc_type: str = Form("brand_product_intro"),
+    doc_types: str = Form(""),
+    custom_reference_file: UploadFile | None = File(default=None),
     reference_doc_ids: str = Form(""),
     target_doc_id: str = Form(""),
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    doc_type = (doc_type or "brand_product_intro").strip()
-    if doc_type not in _DOC_TYPE_LABELS:
-        raise HTTPException(status_code=400, detail="生成类型无效")
     reference_ids = _split_doc_ids(reference_doc_ids)
     if not reference_ids and target_doc_id:
         reference_ids = _split_doc_ids(target_doc_id)
+    selected_doc_types = _split_doc_types(doc_types, fallback=doc_type or "")
+    custom_reference_text, custom_reference_meta = await _read_custom_reference_file(request, current_user, custom_reference_file)
+    custom_reference_mode = not selected_doc_types and bool(custom_reference_text)
+    if custom_reference_mode:
+        selected_doc_types = [_CUSTOM_MEMORY_DOC_TYPE]
+    if not selected_doc_types:
+        raise HTTPException(status_code=400, detail="请选择一个预置生成类型，或上传一份自定义参考文档")
     reference_contexts: list[str] = []
     for ref_id in reference_ids:
         target = _find_memory_record(current_user.id, ref_id)
@@ -586,24 +834,45 @@ async def generate_memory_documents(
         direct_faq=direct_faq,
         direct_scripts=direct_scripts,
     )
+    source_from_reference_only = False
+    if not source_text and target_context:
+        source_text = target_context
+        source_meta.append({"type": "reference_memory", "count": len(reference_contexts)})
+        source_from_reference_only = True
     if not source_text:
-        raise HTTPException(status_code=400, detail="请上传资料、填写链接，或粘贴资料内容")
+        raise HTTPException(status_code=400, detail="请上传、填写链接或粘贴本次要理解的业务资料")
+    if custom_reference_meta:
+        source_meta.append(custom_reference_meta)
 
     system = (
         "你是企业资料整理助手。你要把用户投喂的资料整理成一份可长期保存的 AI 记忆文档。"
         "只基于资料事实，不要编造价格、案例、参数、客户名。"
         "用户提供的示例只是参考结构和写法，不要把示例里的品牌名、公司名、人名照搬进输出。"
     )
-    label = _DOC_TYPE_LABELS[doc_type]
+    label = "、".join(_doc_type_label(key) for key in selected_doc_types)
+    markers = "\n".join(f"<<<{key}>>>" for key in selected_doc_types)
     user_prompt = (
-        f"请基于下面资料生成「{label}」。\n\n"
+        f"请基于下面资料一次生成这些记忆文档：{label}。\n\n"
+        "生成类型和格式要求：\n"
+        + _format_doc_type_requirements(selected_doc_types)
+        + "\n\n"
         "要求：\n"
-        "1. 只输出正文，不要输出 JSON，不要 Markdown 代码块，不要解释生成过程。\n"
+        "1. 不要输出 JSON，不要 Markdown 代码块，不要解释生成过程。\n"
         "2. 如果资料不足，明确写“资料未提供”，不要猜。\n"
         "3. 保留关键名词、产品卖点、服务流程、客户痛点、禁用或慎用表达。\n"
         "4. 如果提供了参考记忆，请结合参考资料补充、修正和整理，不要简单重复。\n"
         "5. 内容用于每日 IP 日更、获客、客服等技能，不要加入无意义的导流话术。\n\n"
-        + (f"参考记忆原文：\n{target_context}\n\n" if target_context else "")
+        + (
+            "本次没有选择预置类型，用户上传的自定义参考文档就是生成目标格式。"
+            "请优先学习参考文档的结构，而不是把参考文档当成业务资料。\n\n"
+            if custom_reference_mode
+            else ""
+        )
+        + "输出格式必须严格按下面分段标记，每个标记独占一行，标记后输出该类型正文：\n"
+        + markers
+        + "\n\n"
+        + (f"自定义参考文档原文（只学习格式，不当业务资料）：\n{custom_reference_text}\n\n" if custom_reference_mode else "")
+        + (f"参考记忆原文：\n{target_context}\n\n" if target_context and not source_from_reference_only else "")
         + "资料如下：\n"
         + source_text
     )
@@ -615,22 +884,25 @@ async def generate_memory_documents(
             temperature=0.25,
             timeout=240.0,
         )
-        text = _safe_text(reply, 100_000)
-        if not text:
-            text = _safe_text(_fallback_documents(source_text, urls).get(doc_type), 100_000)
+        documents = _parse_generated_sections(reply, selected_doc_types)
+        fallback = _fallback_documents(source_text, urls)
+        for key in selected_doc_types:
+            if not documents.get(key):
+                documents[key] = _safe_text(fallback.get(key) or source_text or urls, 100_000)
     except HTTPException:
         raise
     except Exception as exc:
         logger.warning("[personal-settings] memory doc generation fallback: %s", exc)
-        text = _safe_text(_fallback_documents(source_text, urls).get(doc_type), 100_000)
-    documents = {doc_type: text}
+        fallback = _fallback_documents(source_text, urls)
+        documents = {key: _safe_text(fallback.get(key) or source_text or urls, 100_000) for key in selected_doc_types}
     return {
         "ok": True,
-        "doc_type": doc_type,
+        "doc_type": selected_doc_types[0],
+        "doc_types": selected_doc_types,
         "label": label,
         "documents": documents,
         "sources": source_meta,
-        "raw_text": text,
+        "raw_text": _format_generated_memory(documents),
     }
 
 
@@ -641,7 +913,13 @@ async def save_memory_documents(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     input_docs = body.documents or {}
+    seen_keys = {key for key, _label in _DOC_TYPES}
     rows = [(key, label, _safe_text(input_docs.get(key), 100_000)) for key, label in _DOC_TYPES]
+    for key, raw_text in input_docs.items():
+        clean_key = re.sub(r"[^a-z_]", "", str(key or "").strip())[:64]
+        if not clean_key or clean_key in seen_keys:
+            continue
+        rows.append((clean_key, _doc_type_label(clean_key), _safe_text(raw_text, 100_000)))
     rows = [(key, label, text) for key, label, text in rows if text]
     if not rows:
         raise HTTPException(status_code=400, detail="没有可保存的记忆内容")
@@ -721,7 +999,8 @@ async def save_uploaded_memory_document(
     url_text = _safe_text(urls, 20_000)
     if url_text:
         parts.append("## 资料链接\n\n" + url_text)
-    for file in files or []:
+    effective_files = await _effective_upload_files(request, files or [])
+    for file in effective_files:
         filename = (file.filename or "upload").strip() or "upload"
         suffix = Path(filename).suffix.lower()
         limit = _MAX_VIDEO_BYTES if suffix in _VIDEO_SUFFIXES else _MAX_UPLOAD_BYTES
@@ -731,8 +1010,16 @@ async def save_uploaded_memory_document(
         if suffix in _MEDIA_SUFFIXES:
             parts.append(f"## 媒体文件\n\n已上传：{filename}\n\n如需理解图片或视频内容，请点击 AI 理解后再保存。")
         else:
-            text = _decode_text_payload(data, filename)
-            parts.append(f"## 上传文件：{filename}\n\n{text}")
+            try:
+                text = _decode_text_payload(data, filename)
+                parts.append(f"## 上传文件：{filename}\n\n{text}")
+            except HTTPException as exc:
+                detail = str(exc.detail or "未抽取到可写文本")
+                parts.append(
+                    f"## 上传文件：{filename}\n\n"
+                    f"已上传该文件，但未抽取到可写文本：{detail}。"
+                    "该记录会先保存文件信息；如需理解文件内容，请补充可复制文本，或上传截图/图片后点击 AI 理解。"
+                )
     content = "\n\n---\n\n".join(part for part in parts if part.strip()).strip()
     mode = (mode or "new").strip()
     meta = {"source": "personal_settings", "document_type": "uploaded_raw_memory", "document_label": "上传原始资料", "save_mode": mode}

@@ -61,13 +61,28 @@
     .ps-user-avatar { width: 44px; height: 44px; border-radius: 999px; object-fit: cover; background: rgba(15,143,122,0.12); color: var(--ps-accent); display: grid; place-items: center; font-weight: 900; }
     .ps-empty { color: var(--ps-muted); font-size: 0.86rem; padding: 0.8rem; border: 1px dashed rgba(21,35,64,0.18); border-radius: 14px; background: rgba(255,255,255,0.72); }
     .ps-upload-zone { border: 1px dashed rgba(15,143,122,0.4); background: rgba(15,143,122,0.06); border-radius: 18px; padding: 0.85rem; display: grid; gap: 0.55rem; }
+    .ps-file-list { display: grid; gap: 0.35rem; }
+    .ps-file-chip { border: 1px solid rgba(21,35,64,0.1); border-radius: 12px; background: rgba(255,255,255,0.82); padding: 0.45rem 0.55rem; font-size: 0.78rem; color: var(--ps-muted); word-break: break-all; display: flex; gap: 0.55rem; align-items: center; }
+    .ps-file-thumb { width: 52px; height: 52px; flex: 0 0 52px; border-radius: 10px; overflow: hidden; background: rgba(15,143,122,0.1); color: var(--ps-accent); display: grid; place-items: center; font-size: 0.66rem; font-weight: 900; }
+    .ps-file-thumb img, .ps-file-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ps-file-meta { min-width: 0; flex: 1; }
+    .ps-file-meta span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-file-chip button { border: 0; background: transparent; color: #b42318; font-weight: 800; cursor: pointer; white-space: nowrap; }
+    .ps-doc-type-list { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0.5rem; }
+    .ps-doc-type-list .ps-option { height: 100%; }
+    .ps-generated-list { display: grid; gap: 0.72rem; }
+    .ps-generated-doc { border: 1px solid rgba(21,35,64,0.12); border-radius: 18px; background: #fff; padding: 0.75rem; display: grid; gap: 0.58rem; }
+    .ps-generated-head { display: flex; justify-content: space-between; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+    .ps-generated-head strong { font-size: 0.95rem; }
+    .ps-generated-doc textarea { width: 100%; box-sizing: border-box; min-height: 220px; resize: vertical; border: 1px solid rgba(21,35,64,0.14); border-radius: 14px; padding: 0.72rem; line-height: 1.55; color: var(--ps-ink); background: #fbfcff; }
     .ps-memory-item { border: 1px solid rgba(21,35,64,0.1); background: #fff; border-radius: 18px; padding: 0.78rem; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0.75rem; align-items: start; }
     .ps-memory-item strong { display: block; }
     .ps-memory-item small { display: block; color: var(--ps-muted); margin-top: 0.24rem; word-break: break-all; }
     .ps-memory-preview { white-space: pre-wrap; max-height: 360px; overflow: auto; border-radius: 16px; padding: 0.8rem; background: #101827; color: #eef7f3; font-size: 0.84rem; line-height: 1.55; }
     @media (max-width: 960px) {
       .ps-grid,
-      .ps-inline { grid-template-columns: 1fr; }
+      .ps-inline,
+      .ps-doc-type-list { grid-template-columns: 1fr; }
       .personal-settings-view { padding: 0.75rem; }
     }
   </style>
@@ -190,7 +205,8 @@
               <label for="psMemoryFiles">上传文件</label>
               <input id="psMemoryFiles" type="file" multiple accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.pptx,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.avi,.mkv,.webm">
             </div>
-            <div class="ps-hint">支持文档、表格、PPT、图片、视频和链接。点击 AI 理解会整理成可审核记忆；也可以不理解，直接把原始资料保存入记忆。</div>
+            <div id="psSelectedFiles" class="ps-file-list"></div>
+            <div class="ps-hint">支持一次上传多个不同类型文件。AI 理解会先把图片/视频理解成文字，再和文档、链接、粘贴资料一起整理成可审核记忆；也可以不理解，直接把原始资料保存入记忆。</div>
           </div>
           <div class="ps-field">
             <label for="psMemoryUrls">图片/视频/网页链接</label>
@@ -200,30 +216,44 @@
             <label for="psRawMemoryText">粘贴资料</label>
             <textarea id="psRawMemoryText" class="is-large" placeholder="可以粘贴产品介绍、问答、口播稿、客户资料等。"></textarea>
           </div>
-          <div class="ps-inline">
-            <div class="ps-field">
-              <label for="psGenerateDocType">AI 生成类型</label>
-              <select id="psGenerateDocType">
-                <option value="brand_product_intro">产品介绍</option>
-                <option value="product_service_faq">百问百答</option>
-                <option value="short_video_scripts">短视频口播稿</option>
-              </select>
+          <div class="ps-field">
+            <label>AI 生成目标</label>
+            <div class="ps-hint">下面三个是预置生成类型；也可以三个都不选，改在“自定义参考文档”里上传一份格式参考，让 AI 按参考文档的结构生成。</div>
+            <div id="psGenerateDocTypes" class="ps-doc-type-list">
+              <label class="ps-option">
+                <input type="checkbox" data-ps-doc-type value="brand_product_intro" checked>
+                <span><strong>产品介绍</strong><small>定位、优势、产品线、工艺、服务价值</small></span>
+              </label>
+              <label class="ps-option">
+                <input type="checkbox" data-ps-doc-type value="product_service_faq" checked>
+                <span><strong>百问百答</strong><small>问题/回答，可给客服和内容技能复用</small></span>
+              </label>
+              <label class="ps-option">
+                <input type="checkbox" data-ps-doc-type value="short_video_scripts" checked>
+                <span><strong>短视频口播稿</strong><small>系列分组、标题、场景提示、逐字稿</small></span>
+              </label>
             </div>
           </div>
           <div class="ps-field">
-            <label>AI 理解参考记忆</label>
-            <div class="ps-hint">可不选，也可以选择一个或多个已有记忆文件，作为本次理解的参考资料。</div>
-            <div id="psReferenceMemoryList" class="ps-list"></div>
+            <label for="psCustomReferenceFile">自定义参考文档</label>
+            <input id="psCustomReferenceFile" type="file" accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.pptx">
+            <div id="psCustomReferenceFileInfo" class="ps-file-list"></div>
+            <div class="ps-hint">只用于学习格式、栏目、颗粒度和写法，不作为业务资料内容。需要生成自定义类型时，取消上面三个预置类型，上传这个参考文档。</div>
           </div>
           <div class="ps-actions">
             <button type="button" id="psGenerateMemoryBtn" class="btn btn-primary btn-sm">AI 理解</button>
+            <button type="button" id="psSaveRawMemoryBtn" class="btn btn-ghost btn-sm">不理解，直接存入记忆</button>
           </div>
         </section>
         <section class="ps-card">
           <div class="ps-card-title">审核后存入记忆</div>
           <div class="ps-field">
-            <label for="psMemoryReviewText">记忆内容</label>
-            <textarea id="psMemoryReviewText" class="is-large" placeholder="AI 理解后会生成到这里，也可以手动编辑后保存。"></textarea>
+            <label>AI 理解结果</label>
+            <div id="psGeneratedDocList" class="ps-generated-list">
+              <div class="ps-empty">选择资料和生成类型后，点击“AI 理解”生成预览。</div>
+            </div>
+            <textarea id="psMemoryReviewText" class="is-large" style="display:none;" aria-hidden="true"></textarea>
+            <div class="ps-hint">可以在每个预览框里直接改内容。新建文档会按选中的生成类型分别保存；覆盖已有文档会把选中的内容合并后覆盖目标文档。</div>
           </div>
           <div class="ps-inline">
             <div class="ps-field">
@@ -246,7 +276,6 @@
           </div>
           <div class="ps-actions">
             <button type="button" id="psSaveMemoryBtn" class="btn btn-primary btn-sm">存入记忆</button>
-            <button type="button" id="psSaveRawMemoryBtn" class="btn btn-ghost btn-sm">不理解，直接存入记忆</button>
           </div>
           <div class="ps-card-title">已保存记忆文件</div>
           <div id="psMemoryList" class="ps-list"></div>

@@ -9,8 +9,18 @@
     selectedCompetitors: {},
     selectedMemories: {},
     selectedReferenceMemories: {},
+    generatedDocuments: {},
+    generatedDocOrder: [],
+    uploadFiles: [],
+    customReferenceFile: null,
     defaultItem: null
   };
+
+  var DOC_TYPES = [
+    { key: 'brand_product_intro', label: '产品介绍' },
+    { key: 'product_service_faq', label: '百问百答' },
+    { key: 'short_video_scripts', label: '短视频口播稿' }
+  ];
 
   function $(id) { return document.getElementById(id); }
 
@@ -36,9 +46,18 @@
 
   function headers(json) {
     var h = typeof authHeaders === 'function' ? Object.assign({}, authHeaders() || {}) : {};
-    if (!h.Authorization && typeof token !== 'undefined' && token) h.Authorization = 'Bearer ' + token;
+    if (/^Bearer\s*$/i.test(String(h.Authorization || h.authorization || '').trim())) {
+      delete h.Authorization;
+      delete h.authorization;
+    }
+    if (!h.Authorization && !h.authorization && typeof token !== 'undefined' && token) h.Authorization = 'Bearer ' + token;
     if (typeof getOrCreateInstallationId === 'function') h['X-Installation-Id'] = getOrCreateInstallationId();
-    if (json !== false) h['Content-Type'] = 'application/json';
+    if (json === false) {
+      delete h['Content-Type'];
+      delete h['content-type'];
+    } else {
+      h['Content-Type'] = 'application/json';
+    }
     return h;
   }
 
@@ -144,6 +163,201 @@
 
   function selectedReferenceMemoryIds() {
     return cleanStringIds(state.selectedReferenceMemories);
+  }
+
+  var localPreviewUrls = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+  function filePreviewUrl(file) {
+    if (!file || !file.type || !/^(image|video)\//i.test(file.type) || !window.URL || !URL.createObjectURL) return '';
+    if (localPreviewUrls && localPreviewUrls.has(file)) return localPreviewUrls.get(file);
+    var url = URL.createObjectURL(file);
+    if (localPreviewUrls) localPreviewUrls.set(file, url);
+    return url;
+  }
+
+  function filePreviewHtml(file) {
+    var type = String(file && file.type || '');
+    var url = filePreviewUrl(file);
+    if (url && /^image\//i.test(type)) return '<img src="' + esc(url) + '" alt="">';
+    if (url && /^video\//i.test(type)) return '<video src="' + esc(url) + '" muted playsinline preload="metadata"></video>';
+    var suffix = String((file && file.name || 'FILE').split('.').pop() || 'FILE').slice(0, 5).toUpperCase();
+    return '<span>' + esc(suffix) + '</span>';
+  }
+
+  function hasVisualPreview(file) {
+    return !!(file && file.type && /^(image|video)\//i.test(file.type));
+  }
+
+  function fileChipHtml(file, removeAttr, fallbackName) {
+    var size = file.size ? ' · ' + Math.ceil(file.size / 1024) + 'KB' : '';
+    var metaHtml = hasVisualPreview(file)
+      ? ''
+      : '<div class="ps-file-meta"><span>' + esc(file.name || fallbackName || '未命名文件') + esc(size) + '</span></div>';
+    return '<div class="ps-file-chip">' +
+      '<div class="ps-file-thumb">' + filePreviewHtml(file) + '</div>' +
+      metaHtml +
+      '<button type="button" ' + removeAttr + '>移除</button>' +
+    '</div>';
+  }
+
+  function selectedUploadFiles() {
+    var input = $('psMemoryFiles');
+    var files = state.uploadFiles && state.uploadFiles.length ? state.uploadFiles : (input && input.files ? input.files : []);
+    return Array.prototype.filter.call(files, function(file) {
+      return file && (file.name || file.size > 0);
+    });
+  }
+
+  function uploadFileKey(file) {
+    return [
+      file && file.name || '',
+      file && file.size || 0,
+      file && file.lastModified || 0,
+      file && file.type || ''
+    ].join('|');
+  }
+
+  function handleUploadFileChange() {
+    var input = $('psMemoryFiles');
+    var picked = input && input.files ? Array.prototype.slice.call(input.files) : [];
+    if (!picked.length) {
+      renderSelectedFiles();
+      return;
+    }
+    var seen = {};
+    state.uploadFiles = selectedUploadFiles().concat(picked).filter(function(file) {
+      var key = uploadFileKey(file);
+      if (!key || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+    if (input) input.value = '';
+    renderSelectedFiles();
+  }
+
+  function removeUploadFile(index) {
+    state.uploadFiles = selectedUploadFiles().filter(function(_file, idx) {
+      return idx !== index;
+    });
+    renderSelectedFiles();
+  }
+
+  function docTypeLabel(key) {
+    var row = DOC_TYPES.find(function(item) { return item.key === key; });
+    if (key === 'custom_memory') return '自定义参考文档';
+    return row ? row.label : key;
+  }
+
+  function selectedCustomReferenceFile() {
+    return state.customReferenceFile || null;
+  }
+
+  function handleCustomReferenceFileChange() {
+    var input = $('psCustomReferenceFile');
+    var file = input && input.files && input.files[0] ? input.files[0] : null;
+    state.customReferenceFile = file && (file.name || file.size > 0) ? file : null;
+    if (input) input.value = '';
+    renderCustomReferenceFile();
+  }
+
+  function removeCustomReferenceFile() {
+    state.customReferenceFile = null;
+    renderCustomReferenceFile();
+  }
+
+  function renderCustomReferenceFile() {
+    var box = $('psCustomReferenceFileInfo');
+    if (!box) return;
+    var file = selectedCustomReferenceFile();
+    if (!file) {
+      box.innerHTML = '';
+      return;
+    }
+    box.innerHTML = fileChipHtml(file, 'data-remove-custom-reference', '参考文档');
+    var btn = box.querySelector('[data-remove-custom-reference]');
+    if (btn) btn.addEventListener('click', removeCustomReferenceFile);
+  }
+
+  function selectedGenerateDocTypes() {
+    var values = [];
+    document.querySelectorAll('#psGenerateDocTypes [data-ps-doc-type]').forEach(function(input) {
+      if (input.checked) values.push(input.value);
+    });
+    return values;
+  }
+
+  function renderSelectedFiles() {
+    var box = $('psSelectedFiles');
+    if (!box) return;
+    var files = selectedUploadFiles();
+    if (!files.length) {
+      box.innerHTML = '';
+      return;
+    }
+    box.innerHTML = files.map(function(file, idx) {
+      return fileChipHtml(file, 'data-remove-upload-file="' + idx + '"', '未命名文件');
+    }).join('');
+    box.querySelectorAll('[data-remove-upload-file]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        removeUploadFile(parseInt(btn.getAttribute('data-remove-upload-file') || '-1', 10));
+      });
+    });
+  }
+
+  function formatGeneratedDocs(docs, order) {
+    docs = docs || {};
+    order = order && order.length ? order : DOC_TYPES.map(function(item) { return item.key; }).concat(['custom_memory']);
+    return order.map(function(key) {
+      var text = String(docs[key] || '').trim();
+      return text ? '# ' + docTypeLabel(key) + '\n\n' + text : '';
+    }).filter(Boolean).join('\n\n---\n\n').trim();
+  }
+
+  function generatedDocsFromUi() {
+    var docs = {};
+    var order = [];
+    document.querySelectorAll('[data-ps-generated-text]').forEach(function(textarea) {
+      var key = textarea.getAttribute('data-ps-generated-text') || '';
+      var keep = document.querySelector('[data-ps-save-doc="' + key + '"]');
+      var text = String(textarea.value || '').trim();
+      if (key && text && (!keep || keep.checked)) {
+        docs[key] = text;
+        order.push(key);
+      }
+    });
+    return { documents: docs, order: order };
+  }
+
+  function renderGeneratedDocs() {
+    var box = $('psGeneratedDocList');
+    if (!box) return;
+    var docs = state.generatedDocuments || {};
+    var order = state.generatedDocOrder && state.generatedDocOrder.length
+      ? state.generatedDocOrder
+      : Object.keys(docs);
+    order = order.filter(function(key) { return docs[key]; });
+    if (!order.length) {
+      box.innerHTML = '<div class="ps-empty">选择资料和生成类型后，点击“AI 理解”生成预览。</div>';
+      if ($('psMemoryReviewText')) $('psMemoryReviewText').value = '';
+      return;
+    }
+    box.innerHTML = order.map(function(key) {
+      return '<article class="ps-generated-doc">' +
+        '<div class="ps-generated-head">' +
+          '<strong>' + esc(docTypeLabel(key)) + '</strong>' +
+          '<label class="ps-choice"><input type="checkbox" data-ps-save-doc="' + escAttr(key) + '" checked><span>保存这个结果</span></label>' +
+        '</div>' +
+        '<textarea data-ps-generated-text="' + escAttr(key) + '">' + esc(docs[key]) + '</textarea>' +
+      '</article>';
+    }).join('');
+    box.querySelectorAll('[data-ps-generated-text]').forEach(function(textarea) {
+      textarea.addEventListener('input', function() {
+        var key = textarea.getAttribute('data-ps-generated-text') || '';
+        if (key) state.generatedDocuments[key] = textarea.value || '';
+        if ($('psMemoryReviewText')) $('psMemoryReviewText').value = formatGeneratedDocs(state.generatedDocuments, state.generatedDocOrder);
+      });
+    });
+    if ($('psMemoryReviewText')) $('psMemoryReviewText').value = formatGeneratedDocs(docs, order);
   }
 
   function fetchMemoryContent(doc) {
@@ -309,7 +523,7 @@
     renderTemplateOptions('psReferenceMemoryList', state.memories, {
       kind: 'reference-memory',
       selected: state.selectedReferenceMemories,
-      empty: '暂无记忆文件，可先在右侧保存一个记忆文件。',
+      empty: '暂无记忆文件，可先上传资料并存入记忆。',
       id: memoryId,
       title: memoryTitle,
       subtitle: function(row) { return row.notes || row.filename || row.id || ''; }
@@ -672,9 +886,9 @@
     var urls = (($('psMemoryUrls') || {}).value || '').trim();
     if (raw) parts.push(raw);
     if (urls) parts.push('资料链接：\n' + urls);
-    var files = $('psMemoryFiles') && $('psMemoryFiles').files ? $('psMemoryFiles').files : [];
+    var files = selectedUploadFiles();
     if (files.length) {
-      parts.push('已上传文件：\n' + Array.prototype.map.call(files, function(file) { return '- ' + file.name; }).join('\n'));
+      parts.push('已上传文件：\n' + files.map(function(file) { return '- ' + file.name; }).join('\n'));
     }
     return parts.join('\n\n').trim();
   }
@@ -682,15 +896,29 @@
   function generateMemoryDocs() {
     var btn = $('psGenerateMemoryBtn');
     var fd = new FormData();
-    var files = $('psMemoryFiles') && $('psMemoryFiles').files ? $('psMemoryFiles').files : [];
+    var files = selectedUploadFiles();
     var raw = (($('psRawMemoryText') || {}).value || '').trim();
-    Array.prototype.forEach.call(files, function(file) { fd.append('files', file); });
-    fd.append('urls', (($('psMemoryUrls') || {}).value || '').trim());
+    var urls = (($('psMemoryUrls') || {}).value || '').trim();
+    var referenceIds = [];
+    var docTypes = selectedGenerateDocTypes();
+    var customReferenceFile = selectedCustomReferenceFile();
+    if (!files.length && !raw && !urls) {
+      setMsg('请上传资料、填写链接或粘贴资料内容。自定义参考文档只用于学习格式，不算业务资料。', true);
+      return;
+    }
+    if (!docTypes.length && !customReferenceFile) {
+      setMsg('请选择一个预置生成类型，或上传一份自定义参考文档。', true);
+      return;
+    }
+    files.forEach(function(file) { fd.append('files', file, file.name || 'upload'); });
+    fd.append('urls', urls);
     fd.append('direct_intro', raw);
     fd.append('direct_faq', '');
     fd.append('direct_scripts', '');
-    fd.append('doc_type', (($('psGenerateDocType') || {}).value || 'brand_product_intro'));
-    fd.append('reference_doc_ids', selectedReferenceMemoryIds().join(','));
+    fd.append('doc_type', docTypes[0] || '');
+    fd.append('doc_types', JSON.stringify(docTypes));
+    if (customReferenceFile) fd.append('custom_reference_file', customReferenceFile, customReferenceFile.name || 'custom-reference');
+    fd.append('reference_doc_ids', referenceIds.join(','));
     setBusy(btn, true, '理解中...');
     setMsg('正在理解资料并生成记忆内容...');
     fetch(localBase() + '/api/personal-settings/memory-documents/generate', {
@@ -703,16 +931,10 @@
         return data;
       });
     }).then(function(data) {
-      var text = data.raw_text || '';
-      if (!text && data.documents) {
-        text = [
-          data.documents.brand_product_intro || '',
-          data.documents.product_service_faq || '',
-          data.documents.short_video_scripts || ''
-        ].filter(Boolean).join('\n\n---\n\n');
-      }
-      if ($('psMemoryReviewText')) $('psMemoryReviewText').value = text;
-      setMsg('AI 理解完成，请审核后存入记忆。');
+      state.generatedDocuments = data.documents || {};
+      state.generatedDocOrder = Array.isArray(data.doc_types) && data.doc_types.length ? data.doc_types : docTypes;
+      renderGeneratedDocs();
+      setMsg('AI 理解完成，请审核右侧结果后存入记忆。');
     }).catch(function(err) {
       setMsg(err.message || 'AI 理解失败', true);
     }).finally(function() {
@@ -721,7 +943,7 @@
   }
 
   function saveRawMemory() {
-    var files = $('psMemoryFiles') && $('psMemoryFiles').files ? $('psMemoryFiles').files : [];
+    var files = selectedUploadFiles();
     var raw = (($('psRawMemoryText') || {}).value || '').trim();
     var urls = (($('psMemoryUrls') || {}).value || '').trim();
     var mode = (($('psSaveMode') || {}).value || 'new');
@@ -740,7 +962,7 @@
       return;
     }
     var fd = new FormData();
-    Array.prototype.forEach.call(files, function(file) { fd.append('files', file); });
+    files.forEach(function(file) { fd.append('files', file, file.name || 'upload'); });
     fd.append('title', title);
     fd.append('notes', '个人设置直接保存的原始资料');
     fd.append('raw_text', raw);
@@ -751,7 +973,14 @@
   }
 
   function saveMemory() {
-    var content = (($('psMemoryReviewText') || {}).value || '').trim();
+    var generated = generatedDocsFromUi();
+    var generatedContent = formatGeneratedDocs(generated.documents, generated.order);
+    var hasGeneratedPreview = document.querySelectorAll('[data-ps-generated-text]').length > 0;
+    if (hasGeneratedPreview && !Object.keys(generated.documents || {}).length) {
+      setMsg('请至少勾选一个要保存的 AI 理解结果。', true);
+      return;
+    }
+    var content = generatedContent || (!hasGeneratedPreview ? (($('psMemoryReviewText') || {}).value || '').trim() : '');
     var mode = (($('psSaveMode') || {}).value || 'new');
     var title = mode === 'new' ? memoryFormTitle() : '';
     var targetDocId = (($('psTargetMemorySelect') || {}).value || '');
@@ -771,7 +1000,42 @@
       setMsg('覆盖已有文档需要先选择一个文档。', true);
       return;
     }
+    if (mode === 'new' && Object.keys(generated.documents || {}).length) {
+      saveGeneratedDocuments($('psSaveMemoryBtn'), title, generated.documents);
+      return;
+    }
     saveMemoryContent($('psSaveMemoryBtn'), title, content, '个人设置审核后保存的记忆', mode, targetDocId);
+  }
+
+  function saveGeneratedDocuments(btn, title, documents) {
+    setBusy(btn, true, '保存中...');
+    setMsg('正在按生成类型保存到记忆...');
+    localJson('/api/personal-settings/memory-documents/save', {
+      method: 'POST',
+      body: {
+        title: title,
+        notes: '个人设置 AI 理解后保存的记忆',
+        documents: documents || {}
+      }
+    })
+      .then(function(data) {
+        var docs = Array.isArray(data.documents) ? data.documents : [];
+        if (!docs.length && data.document) docs = [data.document];
+        docs.forEach(function(doc) {
+          if (doc && doc.id) state.selectedMemories[String(doc.id)] = true;
+        });
+        if ($('psMemoryReviewText')) $('psMemoryReviewText').value = data.content_text || formatGeneratedDocs(documents, state.generatedDocOrder);
+        return loadMemories();
+      })
+      .then(saveConfigSilently)
+      .then(function() {
+        setMsg('已按生成类型存入记忆，并写入模板选择。');
+        renderTemplateLists();
+      })
+      .catch(function(err) {
+        setMsg(err.message || '保存记忆失败', true);
+      })
+      .finally(function() { setBusy(btn, false); });
   }
 
   function saveMemoryContent(btn, title, content, notes, mode, targetDocId) {
@@ -818,6 +1082,9 @@
       docs.forEach(function(doc) {
         if (doc && doc.id) state.selectedMemories[String(doc.id)] = true;
       });
+      state.generatedDocuments = {};
+      state.generatedDocOrder = [];
+      renderGeneratedDocs();
       if ($('psMemoryReviewText')) $('psMemoryReviewText').value = data.content_text || memoryInputText();
       return loadMemories();
     }).then(saveConfigSilently)
@@ -879,6 +1146,8 @@
       });
     }
     if ($('psGenerateMemoryBtn')) $('psGenerateMemoryBtn').addEventListener('click', generateMemoryDocs);
+    if ($('psMemoryFiles')) $('psMemoryFiles').addEventListener('change', handleUploadFileChange);
+    if ($('psCustomReferenceFile')) $('psCustomReferenceFile').addEventListener('change', handleCustomReferenceFileChange);
     if ($('psSaveMemoryBtn')) $('psSaveMemoryBtn').addEventListener('click', saveMemory);
     if ($('psSaveRawMemoryBtn')) $('psSaveRawMemoryBtn').addEventListener('click', saveRawMemory);
     if ($('psSaveMode')) $('psSaveMode').addEventListener('change', syncSaveModeState);
@@ -897,6 +1166,9 @@
       bind();
     }
     updateCompetitorPlatformFields();
+    renderSelectedFiles();
+    renderCustomReferenceFile();
+    renderGeneratedDocs();
     loadAll();
   };
 })();

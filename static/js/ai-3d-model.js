@@ -8,7 +8,8 @@
     jobPage: 1,
     jobPageSize: 10,
     previewModelByJob: {},
-    infoBubblePinned: false
+    infoBubblePinned: false,
+    createFiles: []
   };
   var LAST_JOB_KEY = 'lobster.ai3d.lastJobId';
 
@@ -62,7 +63,7 @@
     var link = document.createElement('link');
     link.id = 'ai3dModelCss';
     link.rel = 'stylesheet';
-    link.href = '/static/css/ai-3d-model.css?v=20260629-triview-v1';
+    link.href = '/static/css/ai-3d-model.css?v=20260706-upload-grid-v1';
     document.head.appendChild(link);
   }
 
@@ -80,7 +81,7 @@
     if (!root) return;
     var subtitle = root.querySelector('.ai3d-subtitle');
     if (subtitle) {
-      subtitle.textContent = '可上传原画/参考图/拆件包，也可只填资产提示词直接生成高清三视图；确认后再生成 3D 底模。';
+      subtitle.textContent = '按任务类型上传参考图、实物多角度图或已有多视角图；也可只填资产提示词；确认后生成 3D 模型。';
     }
     var imageLabel = root.querySelector('label[for="ai3dImageModel"]');
     if (imageLabel) imageLabel.textContent = '前置图片模型';
@@ -150,6 +151,87 @@
     return (n / 1024 / 1024).toFixed(2) + ' MB';
   }
 
+  var localPreviewUrls = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+  function localFileFromItem(item) {
+    return item && item.file ? item.file : item;
+  }
+
+  function localFilePreviewUrl(item) {
+    var file = localFileFromItem(item);
+    if (!file || !file.type || !/^(image|video)\//i.test(file.type) || !window.URL || !URL.createObjectURL) return '';
+    if (localPreviewUrls && localPreviewUrls.has(file)) return localPreviewUrls.get(file);
+    var url = URL.createObjectURL(file);
+    if (localPreviewUrls) localPreviewUrls.set(file, url);
+    return url;
+  }
+
+  function localFileThumbHtml(item) {
+    var file = localFileFromItem(item);
+    var type = String(file && file.type || '');
+    var url = localFilePreviewUrl(item);
+    if (url && /^image\//i.test(type)) {
+      return '<img src="' + escAttr(url) + '" alt="">';
+    }
+    if (url && /^video\//i.test(type)) {
+      return '<video src="' + escAttr(url) + '" muted playsinline preload="metadata"></video>';
+    }
+    var suffix = String((file && file.name || 'FILE').split('.').pop() || 'FILE').slice(0, 5).toUpperCase();
+    return '<span>' + esc(suffix) + '</span>';
+  }
+
+  function hasVisualFilePreview(item) {
+    var file = localFileFromItem(item);
+    return !!(file && file.type && /^(image|video)\//i.test(file.type));
+  }
+
+  function setFileInputFiles(input, files) {
+    if (!input) return;
+    files = files || [];
+    if (!files.length) {
+      input.value = '';
+      return;
+    }
+    if (typeof DataTransfer === 'undefined') {
+      input.value = '';
+      return;
+    }
+    var dt = new DataTransfer();
+    files.forEach(function(file) {
+      if (file) dt.items.add(file);
+    });
+    input.files = dt.files;
+  }
+
+  function fileKey(file) {
+    if (!file) return '';
+    return [file.name || '', file.size || 0, file.lastModified || 0, file.type || ''].join('|');
+  }
+
+  function mergeCreateFiles(incoming) {
+    incoming = incoming || [];
+    var merged = Array.isArray(state.createFiles) ? state.createFiles.slice() : [];
+    var seen = {};
+    merged.forEach(function(file) {
+      seen[fileKey(file)] = true;
+    });
+    incoming.forEach(function(file) {
+      var key = fileKey(file);
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      merged.push(file);
+    });
+    state.createFiles = merged;
+    setFileInputFiles(el('ai3dFiles'), state.createFiles);
+  }
+
+  function handleGeneralFileChange() {
+    var input = el('ai3dFiles');
+    if (!input) return;
+    mergeCreateFiles(Array.prototype.slice.call(input.files || []));
+    renderFiles();
+  }
+
   function parseError(data, fallback) {
     if (!data) return fallback || '请求失败';
     var detail = data.detail || data.error || data.message;
@@ -191,13 +273,29 @@
     var input = el('ai3dFiles');
     var list = el('ai3dFileList');
     if (!input || !list) return;
-    var files = Array.prototype.slice.call(input.files || []);
+    var slotFiles = realObjectSlotFiles();
+    var files = workflowMode() === 'real_object'
+      ? slotFiles.map(function(item) {
+          return { name: (item.role || 'view') + ' - ' + item.file.name, size: item.file.size, type: item.file.type, file: item.file, role: item.role, slot: true };
+        })
+      : (Array.isArray(state.createFiles) && state.createFiles.length ? state.createFiles : Array.prototype.slice.call(input.files || []));
     if (!files.length) {
       list.innerHTML = '';
       return;
     }
-    list.innerHTML = files.map(function(file) {
-      return '<div class="ai3d-file-item"><span>' + esc(file.name) + '</span><small>' + esc(formatSize(file.size)) + '</small></div>';
+    list.innerHTML = files.map(function(file, index) {
+      var hasVisual = hasVisualFilePreview(file);
+      var metaHtml = hasVisual
+        ? (formatSize(file.size) ? '<div class="ai3d-file-main compact"><small>' + esc(formatSize(file.size)) + '</small></div>' : '')
+        : '<div class="ai3d-file-main"><span>' + esc(file.name) + '</span><small>' + esc(formatSize(file.size)) + '</small></div>';
+      var removeAttr = file.slot
+        ? 'data-ai3d-remove-slot="' + escAttr(file.role || '') + '"'
+        : 'data-ai3d-remove-file="' + index + '"';
+      return '<div class="ai3d-file-item">' +
+        '<div class="ai3d-file-thumb">' + localFileThumbHtml(file) + '</div>' +
+        metaHtml +
+        '<button type="button" class="ai3d-file-remove" ' + removeAttr + ' aria-label="删除素材">删除</button>' +
+      '</div>';
     }).join('');
   }
 
@@ -212,20 +310,114 @@
     return node.options[node.selectedIndex].textContent || node.value || '';
   }
 
+  function workflowMode() {
+    var node = el('ai3dWorkflowMode');
+    return node && node.value ? node.value : 'custom';
+  }
+
+  function realObjectSlotFiles() {
+    return Array.prototype.slice.call(document.querySelectorAll('#ai3dRealObjectSlots input[type="file"][data-ai3d-role]'))
+      .filter(function(input) { return input.files && input.files[0]; })
+      .map(function(input) {
+        return { role: input.getAttribute('data-ai3d-role') || '', file: input.files[0] };
+      });
+  }
+
+  function removeUploadedFile(index) {
+    var input = el('ai3dFiles');
+    if (!input) return;
+    var files = Array.isArray(state.createFiles) && state.createFiles.length
+      ? state.createFiles.slice()
+      : Array.prototype.slice.call(input.files || []);
+    files.splice(Number(index), 1);
+    state.createFiles = files;
+    setFileInputFiles(input, files);
+    renderFiles();
+  }
+
+  function clearRealObjectSlot(role) {
+    if (!role) return;
+    var input = document.querySelector('#ai3dRealObjectSlots input[type="file"][data-ai3d-role="' + role.replace(/"/g, '\\"') + '"]');
+    if (input) input.value = '';
+    renderFiles();
+  }
+
+  function resetCreateForm() {
+    var form = el('ai3dForm');
+    if (form) form.reset();
+    var files = el('ai3dFiles');
+    state.createFiles = [];
+    if (files) files.value = '';
+    Array.prototype.slice.call(document.querySelectorAll('#ai3dRealObjectSlots input[type="file"]')).forEach(function(input) {
+      input.value = '';
+    });
+    renderFiles();
+    applyWorkflowModeDefaults();
+    setMsg('', false);
+  }
+
+  function applyWorkflowModeDefaults() {
+    var mode = workflowMode();
+    var slots = el('ai3dRealObjectSlots');
+    if (slots) slots.hidden = mode !== 'real_object';
+    var hint = el('ai3dWorkflowHint');
+    var strategy = el('ai3dStrategy');
+    var preprocess = el('ai3dPreprocessOnly');
+    var template = el('ai3dTemplate');
+    var autoDecompose = el('ai3dAutoDecompose');
+    var files = el('ai3dFiles');
+    var dropzone = files && files.closest ? files.closest('.ai3d-dropzone') : null;
+    var dropTitle = dropzone ? dropzone.querySelector('span') : null;
+    var dropHint = dropzone ? dropzone.querySelector('small') : null;
+    if (files) files.setAttribute('accept', 'image/*');
+    if (files) files.disabled = mode === 'real_object';
+    if (mode === 'real_object') {
+      if (strategy) strategy.value = 'multi_view';
+      if (preprocess) preprocess.checked = false;
+      if (autoDecompose) autoDecompose.checked = false;
+      if (hint) hint.textContent = '实物：按固定角度上传真实照片，优先用正面、左右45°、侧面、背面直接生成 3D。';
+      if (dropTitle) dropTitle.textContent = '使用下方固定角度槽位';
+      if (dropHint) dropHint.textContent = '建议 5 个角度；至少正面和一个 45°角度。';
+    } else if (mode === 'game_prop') {
+      if (strategy) strategy.value = 'multi_view';
+      if (preprocess) preprocess.checked = true;
+      if (autoDecompose) autoDecompose.checked = true;
+      if (template && template.value === 'auto') template.value = 'ornament_prop';
+      if (hint) hint.textContent = '游戏道具：可上传多张参考图，第一张作为主图；AI 先理解主体并生成可编辑多视角提示词。';
+      if (dropTitle) dropTitle.textContent = '上传道具参考图（可多张）';
+      if (dropHint) dropHint.textContent = '第一张作为主图，其他图作为造型/材质/细节参考；也可以只填写提示词。';
+    } else if (mode === 'direct_multiview') {
+      if (strategy) strategy.value = 'multi_view';
+      if (preprocess) preprocess.checked = false;
+      if (autoDecompose) autoDecompose.checked = false;
+      if (hint) hint.textContent = '多视图：按上传顺序视为正面、左前45°、右前45°、侧面、背面；系统不裁切不重画，直接送入 3D。';
+      if (dropTitle) dropTitle.textContent = '上传已有多视角图片（可多张）';
+      if (dropHint) dropHint.textContent = '按上传顺序映射视角，不裁切、不重画，直接送入 3D。';
+    } else {
+      if (files) files.disabled = false;
+      if (hint) hint.textContent = '自定义：保留现有自动判断、裁切、多视角和拆件流程。';
+      if (dropTitle) dropTitle.textContent = '上传参考图片（可多张）';
+      if (dropHint) dropHint.textContent = '系统按资产模板自动判断预处理、多视角或拆件流程。';
+    }
+    renderFiles();
+    updateParamSummary();
+  }
+
   function updateParamSummary() {
     var host = el('ai3dParamSummary');
     if (!host) return;
     var model = selectedText('ai3dImageModel').replace(/（.*?）/g, '').trim() || 'GPT Image 2';
     var template = selectedText('ai3dTemplate') || '写实角色/人物';
     var strategy = selectedText('ai3dStrategy') || '自动判断';
+    var workflow = selectedText('ai3dWorkflowMode') || '自定义';
     var formats = selectedFormats().map(function(item) { return item.toUpperCase(); }).join('/');
-    host.textContent = [model, '4K', 'high', 'PNG', template, strategy, formats || '未选格式'].filter(Boolean).join(' · ');
+    host.textContent = [workflow, model, '4K', 'high', 'PNG', template, strategy, formats || '未选格式'].filter(Boolean).join(' · ');
   }
 
   function openCreateModal() {
     var modal = el('ai3dCreateModal');
     if (!modal) return;
-    updateParamSummary();
+    resetCreateForm();
     modal.hidden = false;
     document.body.classList.add('ai3d-modal-open');
   }
@@ -235,7 +427,7 @@
     if (!modal) return;
     modal.hidden = true;
     document.body.classList.remove('ai3d-modal-open');
-    updateParamSummary();
+    applyWorkflowModeDefaults();
   }
 
   function openHistoryModal() {
@@ -262,6 +454,133 @@
     closeCreateModal();
   }
 
+  function openTextEditModal(opts) {
+    opts = opts || {};
+    var modal = el('ai3dTextEditModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'ai3dTextEditModal';
+      modal.className = 'ai3d-modal';
+      modal.hidden = true;
+      modal.innerHTML =
+        '<div class="ai3d-modal-backdrop" data-ai3d-text-close></div>' +
+        '<div class="ai3d-modal-panel ai3d-text-edit-panel" role="dialog" aria-modal="true">' +
+        '<div class="ai3d-modal-head"><div><strong id="ai3dTextEditTitle">编辑</strong><span id="ai3dTextEditSub"></span></div>' +
+        '<button type="button" class="ai3d-modal-close" data-ai3d-text-close aria-label="关闭">×</button></div>' +
+        '<div class="ai3d-modal-body"><div class="ai3d-field"><textarea id="ai3dTextEditValue" rows="12"></textarea></div></div>' +
+        '<div class="ai3d-modal-actions"><button type="button" class="btn btn-ghost btn-sm" data-ai3d-text-close>取消</button>' +
+        '<button type="button" id="ai3dTextEditSubmit" class="btn btn-primary btn-sm">确认</button></div></div>';
+      document.body.appendChild(modal);
+      modal.addEventListener('click', function(evt) {
+        if (evt.target && evt.target.hasAttribute('data-ai3d-text-close')) {
+          modal.hidden = true;
+          document.body.classList.remove('ai3d-modal-open');
+        }
+      });
+    }
+    var title = el('ai3dTextEditTitle');
+    var sub = el('ai3dTextEditSub');
+    var textarea = el('ai3dTextEditValue');
+    var submit = el('ai3dTextEditSubmit');
+    if (title) title.textContent = opts.title || '编辑';
+    if (sub) sub.textContent = opts.subtitle || '';
+    if (textarea) {
+      textarea.value = opts.value || '';
+      textarea.placeholder = opts.placeholder || '';
+    }
+    if (submit) {
+      submit.onclick = function() {
+        if (typeof opts.onSubmit === 'function') opts.onSubmit(textarea ? textarea.value : '', submit, modal);
+      };
+    }
+    modal.hidden = false;
+    document.body.classList.add('ai3d-modal-open');
+    setTimeout(function() { if (textarea) textarea.focus(); }, 30);
+  }
+
+  function currentTriviewPrompt(job) {
+    var preprocessing = job && job.preprocessing ? job.preprocessing : {};
+    if (preprocessing.custom_triview_prompt) return String(preprocessing.custom_triview_prompt || '');
+    var plan = job && job.view_generation_plan ? job.view_generation_plan : {};
+    if (plan.custom_triview_prompt) return String(plan.custom_triview_prompt || '');
+    var views = Array.isArray(plan.views) ? plan.views : [];
+    var sheet = views.filter(function(item) { return item && item.view === 'triview_sheet'; })[0];
+    return sheet && sheet.prompt ? String(sheet.prompt) : '';
+  }
+
+  function editTriviewPrompt(jobId) {
+    var job = state.currentJob || {};
+    openTextEditModal({
+      title: '编辑多视角提示词',
+      subtitle: '保存后再生成多视角，会按这段提示词走 4K/high/png。',
+      value: currentTriviewPrompt(job),
+      placeholder: '写清楚主体、材质、关键细节、禁止变化，以及正面/左右45°要求。',
+      onSubmit: function(value, submitBtn, modal) {
+        var fd = new FormData();
+        fd.append('prompt', String(value || '').trim());
+        setBusy(submitBtn, true, '保存中...');
+        fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/triview-prompt'), {
+          method: 'POST',
+          headers: formHeaders(),
+          body: fd
+        })
+          .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
+          .then(function(x) {
+            if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '提示词保存失败'));
+            modal.hidden = true;
+            document.body.classList.remove('ai3d-modal-open');
+            renderJob(x.data.job || {});
+            setMsg('多视角提示词已保存，可以点击生成多视角。', false);
+          })
+          .catch(function(err) {
+            setMsg(err && err.message ? err.message : '提示词保存失败', true);
+          })
+          .finally(function() { setBusy(submitBtn, false); });
+      }
+    });
+  }
+
+  function regenerateTriviewView(jobId, role) {
+    var labelMap = {
+      front: '正视图',
+      front_left_45: '左前45°视图',
+      front_right_45: '右前45°视图',
+      side: '侧视图',
+      back: '背视图'
+    };
+    openTextEditModal({
+      title: '重生' + (labelMap[role] || role),
+      subtitle: '只重生这一张，原提示词和当前图片会一起传给 AI。',
+      value: '',
+      placeholder: '例如：角度再明显一点；不要拉窄主体；保留顶部旗子和右侧管线；不要改变材质。',
+      onSubmit: function(value, submitBtn, modal) {
+        var fd = new FormData();
+        fd.append('role', role);
+        fd.append('edit_prompt', String(value || '').trim());
+        fd.append('model', el('ai3dImageModel') ? el('ai3dImageModel').value : 'openai/gpt-image-2');
+        setBusy(submitBtn, true, '提交中...');
+        fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/triview/regenerate-view'), {
+          method: 'POST',
+          headers: formHeaders(),
+          body: fd
+        })
+          .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
+          .then(function(x) {
+            if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '视角重生启动失败'));
+            modal.hidden = true;
+            document.body.classList.remove('ai3d-modal-open');
+            renderJob(x.data.job || {});
+            startPolling();
+            setMsg('已开始重生单个视角，完成后会自动刷新并复核。', false);
+          })
+          .catch(function(err) {
+            setMsg(err && err.message ? err.message : '视角重生启动失败', true);
+          })
+          .finally(function() { setBusy(submitBtn, false); });
+      }
+    });
+  }
+
   function actionContext(trigger, fallbackId, explicitJobId) {
     var btn = null;
     if (trigger && trigger.currentTarget) btn = trigger.currentTarget;
@@ -275,10 +594,30 @@
   function submitJob(evt) {
     if (evt) evt.preventDefault();
     var input = el('ai3dFiles');
+    var mode = workflowMode();
+    var slotFiles = realObjectSlotFiles();
+    var generalFiles = Array.isArray(state.createFiles) && state.createFiles.length
+      ? state.createFiles.slice()
+      : Array.prototype.slice.call(input && input.files ? input.files : []);
     var description = el('ai3dDescription') ? el('ai3dDescription').value.trim() : '';
-    var hasFiles = !!(input && input.files && input.files.length);
+    var hasFiles = mode === 'real_object' ? !!slotFiles.length : !!generalFiles.length;
     if (!hasFiles && !description) {
-      setMsg('请上传图片/zip，或填写资产提示词。', true);
+      setMsg('请上传图片，或填写资产提示词。', true);
+      return;
+    }
+    if (mode === 'real_object' && slotFiles.length < 3) {
+      setMsg('实物生 3D 至少上传正面和两个 45°角度；建议补侧面和背面。', true);
+      return;
+    }
+    if (mode === 'real_object') {
+      var slotRoles = slotFiles.map(function(item) { return item.role; });
+      if (slotRoles.indexOf('front') < 0 || (slotRoles.indexOf('front_left_45') < 0 && slotRoles.indexOf('front_right_45') < 0)) {
+        setMsg('实物生 3D 必须至少包含正面和一个 45°角度。', true);
+        return;
+      }
+    }
+    if (mode === 'direct_multiview' && generalFiles.length < 2) {
+      setMsg('多视图直接生成至少需要 2 张不同角度图片。', true);
       return;
     }
     var formats = selectedFormats();
@@ -287,25 +626,37 @@
       return;
     }
     var fd = new FormData();
-    if (hasFiles) {
-      Array.prototype.slice.call(input.files).forEach(function(file) {
+    var inputRoles = [];
+    if (mode === 'real_object') {
+      slotFiles.forEach(function(item) {
+        fd.append('files', item.file, item.role + '-' + item.file.name);
+        inputRoles.push(item.role);
+      });
+    } else if (hasFiles) {
+      generalFiles.forEach(function(file) {
         fd.append('files', file, file.name);
       });
     }
+    fd.append('workflow_mode', mode);
+    fd.append('input_roles', JSON.stringify(inputRoles));
     fd.append('strategy', el('ai3dStrategy') ? el('ai3dStrategy').value : 'auto');
     fd.append('quality', el('ai3dQuality') ? el('ai3dQuality').value : 'production');
     fd.append('formats', formats.join(','));
     fd.append('title', el('ai3dTitle') ? el('ai3dTitle').value.trim() : '');
     fd.append('auto_decompose', el('ai3dAutoDecompose') && el('ai3dAutoDecompose').checked ? 'true' : 'false');
     fd.append('max_parts', el('ai3dMaxParts') ? el('ai3dMaxParts').value : '24');
-    fd.append('preprocess_only', el('ai3dPreprocessOnly') && el('ai3dPreprocessOnly').checked ? 'true' : 'false');
+    var preprocessOnly = el('ai3dPreprocessOnly') && el('ai3dPreprocessOnly').checked;
+    if (mode === 'real_object' || mode === 'direct_multiview') preprocessOnly = false;
+    if (mode === 'game_prop') preprocessOnly = true;
+    fd.append('preprocess_only', preprocessOnly ? 'true' : 'false');
     fd.append('asset_template', el('ai3dTemplate') ? el('ai3dTemplate').value : 'auto');
     fd.append('reference_strength', el('ai3dReferenceStrength') ? el('ai3dReferenceStrength').value : 'high');
     fd.append('description', description);
     fd.append('image_model', el('ai3dImageModel') ? el('ai3dImageModel').value : 'openai/gpt-image-2');
     var btn = el('ai3dSubmitBtn');
     setBusy(btn, true, '提交中...');
-    setMsg('正在提交任务...', false);
+    setMsg('任务已提交，正在创建任务记录...', false);
+    closeCreateModal();
     fetch(api('/api/ai-3d-model/jobs'), {
       method: 'POST',
       headers: formHeaders(),
@@ -316,14 +667,19 @@
         if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '任务提交失败'));
         rememberJob(x.data.job && x.data.job.job_id);
         renderJob(x.data.job || {});
+        upsertJob(x.data.job || {});
         loadJobs(false);
-        closeCreateModal();
         if (x.data.job && x.data.job.status === 'preprocessed') {
-          if (x.data.job.preprocessing && x.data.job.preprocessing.text_prompt_only) {
-            setMsg('纯文本任务已创建，请点击步骤里的“生成三视图”；这一步不调用 Meshy。', false);
+          if (x.data.job.workflow_mode === 'game_prop' || (x.data.job.preprocessing && x.data.job.preprocessing.workflow_mode === 'game_prop')) {
+            setMsg('游戏道具任务已创建：先在第一步检查/编辑提示词，再生成多视图。', false);
+          } else if (x.data.job.preprocessing && x.data.job.preprocessing.text_prompt_only) {
+            setMsg('纯文本任务已创建：先检查/编辑提示词，再生成多视图；这一步不调用 Meshy。', false);
           } else {
-            setMsg('已完成预处理，请检查主体裁切和区域候选；角色请先生成三视图，确认生成 3D 时才调用 Meshy。', false);
+            setMsg('已完成预处理，请检查主体裁切和区域候选；下一步先生成多视图，确认生成 3D 时才调用 Meshy。', false);
           }
+        } else if (x.data.job && x.data.job.status === 'preprocessing') {
+          setMsg('任务已创建，AI 正在后台理解图片；进度会显示在步骤列表里。', false);
+          startPolling();
         } else {
           setMsg('任务已提交，正在调用 Meshy 生成 3D。复杂资产可能需要数分钟。', false);
           startPolling();
@@ -362,11 +718,11 @@
             loadConfig();
           } else if (job.status === 'preprocessed') {
             if (job.stage === 'triview_completed') {
-              setMsg('三视图已由图片模型生成，请检查后确认生成 3D。', false);
+              setMsg('多视图已由图片模型生成，请检查后确认生成 3D。', false);
             } else if (job.stage === 'base_model_ready') {
               setMsg('完整 3D 模型已生成。满意就到这里结束；不满意再生成部件输入图做局部增强。', false);
             } else if (job.stage === 'component_split_completed') {
-              setMsg('2D 部件输入图已完成；这还不是 3D 部件。底模就绪后可单独生成 3D 部件。', false);
+              setMsg('2D 部件输入图已完成；这还不是 3D 部件。完整 3D 模型就绪后可单独生成 3D 部件。', false);
             } else if (job.stage === 'parts_3d_ready') {
               setMsg('3D 部件已生成/复用完成。现在可以点击“合成最终模型”。', false);
             } else if (job.stage === 'triview_failed') {
@@ -374,7 +730,7 @@
             } else if (job.stage === 'component_split_failed') {
               setMsg('AI 部件分离失败：' + (job.error || '图片模型暂时没有返回结果') + '。任务进度已保留；为保证一致性，系统不会自动切换模型。', true);
             } else {
-              setMsg('预处理已完成，请检查主体裁切和区域候选图；下一步可用图片模型生成三视图或独立部件板。', false);
+              setMsg('预处理已完成，请检查主体裁切和区域候选图；下一步可用图片模型生成多视图或独立部件板。', false);
             }
           } else {
             setMsg(job.error || '3D 生成失败', true);
@@ -439,7 +795,7 @@
 
   function isActiveJob(job) {
     var s = job && job.status;
-    return s === 'queued' || s === 'running' || s === 'generating_views' || s === 'splitting_parts';
+    return s === 'preprocessing' || s === 'queued' || s === 'running' || s === 'generating_views' || s === 'splitting_parts';
   }
 
   function loadJobs(restoreLatest) {
@@ -710,7 +1066,7 @@
     return status === 'done' ? 'ok' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : status === 'skipped' ? 'skip' : status === 'blocked' ? 'blocked' : 'muted';
   }
 
-  function renderStepThumbs(items, limit) {
+  function renderStepThumbs(items, limit, stepKey, job) {
     if (!Array.isArray(items) || !items.length) return '';
     return '<div class="ai3d-step-thumbs">' + items.slice(0, limit || 12).map(function(item) {
       var url = item.preview_url || item.url || '';
@@ -718,22 +1074,29 @@
       var title = item.label || item.filename || item.format || '??';
       if (item && item.kind === 'prompt') {
         var promptText = String(item.prompt || '');
+        var promptAction = (stepKey === 'triview' || stepKey === 'prompt') && job && job.job_id
+          ? '<button type="button" class="ai3d-mini-action" data-ai3d-action="triview_prompt" data-ai3d-job-id="' + escAttr(job.job_id) + '">编辑提示词</button>'
+          : '';
         return '<figure class="ai3d-prompt-thumb"><div class="ai3d-step-file-icon">TXT</div>' +
           '<figcaption><strong>' + esc(title) + '</strong><span class="ai3d-card-meta">' +
           esc(promptText.length > 180 ? promptText.slice(0, 180) + '...' : promptText) +
-          '</span></figcaption></figure>';
+          '</span>' + promptAction + '</figcaption></figure>';
       }
       var meta = '';
       var detailText = [item.subject_reason || '', item.subject_risk ? ('Risk: ' + item.subject_risk) : ''].filter(Boolean).join('\n');
       if (item.ai_recommended) meta += '<em>AI</em>';
       if (item.suitability_score) meta += '<small>score ' + esc(item.suitability_score) + '</small>';
       if (detailText) meta += '<button type="button" class="ai3d-info-dot" data-ai3d-info="' + escAttr(detailText) + '" aria-label="Show AI analysis">i</button>';
+      var role = String(item.role || '');
+      var regenAction = stepKey === 'triview' && job && job.job_id && ['front', 'front_left_45', 'front_right_45', 'side', 'back'].indexOf(role) >= 0
+        ? '<button type="button" class="ai3d-mini-action" data-ai3d-action="regen_view" data-ai3d-job-id="' + escAttr(job.job_id) + '" data-ai3d-role="' + escAttr(role) + '">重生此图</button>'
+        : '';
       return '<figure>' + (isImage && url ? previewImg(url, title, 'ai3d-previewable ai3d-step-preview') : '<div class="ai3d-step-file-icon">3D</div>') +
-        '<figcaption><strong>' + esc(item.label || item.filename || item.format || '??') + '</strong><span class="ai3d-card-meta">' + meta + '</span></figcaption></figure>';
+        '<figcaption><strong>' + esc(item.label || item.filename || item.format || '??') + '</strong><span class="ai3d-card-meta">' + meta + '</span>' + regenAction + '</figcaption></figure>';
     }).join('') + '</div>';
   }
 
-  function renderStepItems(step) {
+  function renderStepItems(step, job) {
     var groups = Array.isArray(step.groups) ? step.groups : [];
     if (groups.length) {
       return '<div class="ai3d-step-groups">' + groups.map(function(group) {
@@ -741,7 +1104,7 @@
         return '<div class="ai3d-step-group">' +
           '<div class="ai3d-step-group-head"><strong>' + esc(group.title || '结果分组') + '</strong>' +
           '<span>' + esc(group.summary || '') + '</span></div>' +
-          renderStepThumbs(groupItems, 12) + '</div>';
+          renderStepThumbs(groupItems, 12, step.key || '', job) + '</div>';
       }).join('') + '</div>';
     }
     var items = Array.isArray(step.items) ? step.items : [];
@@ -751,7 +1114,7 @@
         return '<div class="ai3d-step-file"><strong>部件 ' + esc(part.part_index || '') + '</strong><span>' + esc(files.length + ' 个文件') + '</span></div>';
       }).join('') + '</div>';
     }
-    return renderStepThumbs(items, 12);
+    return renderStepThumbs(items, 12, step.key || '', job);
   }
 
   function stepActionButtonHtml(item, jobId) {
@@ -765,14 +1128,36 @@
     if (!step || !job || !job.job_id) return [];
     var f = actionFacts(job);
     var key = step.key || '';
+    if (key === 'prompt') {
+      return [{
+        action: 'triview_prompt',
+        text: '编辑提示词',
+        disabled: !currentTriviewPrompt(job),
+        primary: false
+      }];
+    }
     if (key === 'triview') {
       if (f.triviewFromReferenceSheet) {
         return [{ action: 'triview', text: '已提取参考板视角', disabled: true, primary: false }];
       }
       if (f.canRegenerateTriview) {
+        var mode = (job.workflow_mode || (job.preprocessing && job.preprocessing.workflow_mode) || 'custom');
+        if (mode === 'game_prop' && !f.hasTriview) {
+          return [{
+            action: 'triview_prompt',
+            text: '编辑多视角提示词',
+            disabled: false,
+            primary: false
+          }, {
+            action: 'triview',
+            text: '生成多视角',
+            disabled: false,
+            primary: true
+          }];
+        }
         return [{
           action: 'triview',
-          text: job.stage === 'triview_completed' ? '重新生成三视图' : '生成三视图',
+          text: job.stage === 'triview_completed' ? '重新生成多视图' : '生成多视图',
           disabled: false,
           primary: !f.hasTriview
         }];
@@ -783,26 +1168,26 @@
     if (key === 'base_model') {
       if (f.baseReady) return [{
         action: '3mf_base',
-        text: '下载底模 3MF',
+        text: '下载 3MF',
         disabled: false,
         primary: false
       }, {
         action: 'base',
-        text: '重新生成底模',
+        text: '重新生成 3D 模型',
         disabled: !f.canPreprocessed,
         primary: false
       }];
-      if (!f.hasTriview) return [{ action: 'base', text: '先生成三视图', disabled: true, primary: false }];
+      if (!f.hasTriview) return [{ action: 'base', text: '先生成多视图', disabled: true, primary: false }];
       return [{
         action: 'base',
-        text: '生成 3D 底模',
+        text: '生成 3D 模型',
         disabled: !f.canPreprocessed,
         primary: true
       }];
     }
     if (key === 'components') {
-      if (!f.hasTriview) return [{ action: 'components', text: '先生成三视图', disabled: true, primary: false }];
-      if (!f.baseReady) return [{ action: 'components', text: '先生成 3D 底模', disabled: true, primary: false }];
+      if (!f.hasTriview) return [{ action: 'components', text: '先生成多视图', disabled: true, primary: false }];
+      if (!f.baseReady) return [{ action: 'components', text: '先生成 3D 模型', disabled: true, primary: false }];
       return [{
         action: 'components',
         text: job.stage === 'component_split_completed' ? '重新生成部件输入图' : (f.isCharacter ? 'See-through 分层拆件' : '生成部件输入图'),
@@ -812,7 +1197,7 @@
     }
     if (key === 'parts_3d') {
       if (!f.partFlowReady) return [{ action: 'parts', text: '先生成部件输入图', disabled: true, primary: false }];
-      if (!f.baseReady) return [{ action: 'parts', text: '先生成 3D 底模', disabled: true, primary: false }];
+      if (!f.baseReady) return [{ action: 'parts', text: '先生成 3D 模型', disabled: true, primary: false }];
       if (f.blockedPartBatch) return [{ action: 'parts', text: '拆件未通过质量门', disabled: true, primary: false }];
       var partActions = [{
         action: 'parts',
@@ -866,7 +1251,7 @@
         '<div class="ai3d-step-body"><div class="ai3d-step-title"><strong>' + esc(step.title || '') + '</strong>' +
         '<span class="ai3d-step-badge ' + escAttr(cls) + '">' + esc(stepStatusText(step.status)) + '</span></div>' +
         '<div class="ai3d-step-summary">' + esc(step.error || step.summary || '') + '</div>' +
-        renderStepItems(step) + renderStepActions(step, job) + '</div></div>';
+        renderStepItems(step, job) + renderStepActions(step, job) + '</div></div>';
     }).join('');
   }
 
@@ -1056,7 +1441,7 @@
         'no Meshy'
       ].join(' · ');
       host.innerHTML = '<div class="ai3d-input-wrap">' +
-        '<div class="ai3d-input-head"><strong>纯文本资产设定</strong><span>待生成三视图</span></div>' +
+        '<div class="ai3d-input-head"><strong>纯文本资产设定</strong><span>待生成多视图</span></div>' +
         '<div class="ai3d-plan"><strong>Image stage</strong><span>' + esc(textSpec) + '</span></div>' +
         '<div class="ai3d-text-prompt-preview">' + esc(promptText) + '</div>' +
         '</div>';
@@ -1122,7 +1507,7 @@
     var isPartFinal = !!(current.strategy === 'part_batch' && prep.component_split_generated);
     setBusy(btn, true, '启动中...');
     setMsg(isPartFinal ?
-      '正在读取三视图底模和已有 3D 部件，合成最终模型；这一步不重新生成部件。' :
+      '正在读取完整 3D 模型和已有 3D 部件，合成最终模型；这一步不重新生成部件。' :
       '正在启动 Meshy 3D 生成：三视图会走 Multi-Image to 3D。',
       false);
     var endpoint = isPartFinal ? '/assemble' : '/generate';
@@ -1153,7 +1538,7 @@
     var jobId = ctx.jobId;
     if (!jobId) return;
     setBusy(btn, true, '生成中...');
-    setMsg('正在用三视图生成完整 3D 模型；如果后续需要增强局部，再进入部件生成和底模替换。', false);
+    setMsg('正在用多视图生成完整 3D 模型；如果后续需要增强局部，再进入部件生成和最终合成。', false);
     fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId) + '/base-model'), {
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
@@ -1161,14 +1546,14 @@
     })
       .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
       .then(function(x) {
-        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '三视图底模生成启动失败'));
+        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '3D 模型生成启动失败'));
         rememberJob(x.data.job && x.data.job.job_id);
         renderJob(x.data.job || {});
         loadJobs(false);
         startPolling();
       })
       .catch(function(err) {
-        setMsg(err && err.message ? err.message : '三视图底模生成启动失败', true);
+        setMsg(err && err.message ? err.message : '3D 模型生成启动失败', true);
       })
       .finally(function() {
         setBusy(btn, false);
@@ -1358,8 +1743,33 @@
     var input = el('ai3dFiles');
     if (input && !input._ai3dBound) {
       input._ai3dBound = true;
-      input.addEventListener('change', renderFiles);
+      input.addEventListener('change', handleGeneralFileChange);
     }
+    var fileList = el('ai3dFileList');
+    if (fileList && !fileList._ai3dBound) {
+      fileList._ai3dBound = true;
+      fileList.addEventListener('click', function(evt) {
+        var removeFile = evt.target.closest('[data-ai3d-remove-file]');
+        if (removeFile) {
+          removeUploadedFile(removeFile.getAttribute('data-ai3d-remove-file'));
+          return;
+        }
+        var removeSlot = evt.target.closest('[data-ai3d-remove-slot]');
+        if (removeSlot) {
+          clearRealObjectSlot(removeSlot.getAttribute('data-ai3d-remove-slot') || '');
+        }
+      });
+    }
+    var workflow = el('ai3dWorkflowMode');
+    if (workflow && !workflow._ai3dBound) {
+      workflow._ai3dBound = true;
+      workflow.addEventListener('change', applyWorkflowModeDefaults);
+    }
+    Array.prototype.slice.call(document.querySelectorAll('#ai3dRealObjectSlots input[type="file"]')).forEach(function(slotInput) {
+      if (slotInput._ai3dBound) return;
+      slotInput._ai3dBound = true;
+      slotInput.addEventListener('change', renderFiles);
+    });
     var form = el('ai3dForm');
     if (form && !form._ai3dBound) {
       form._ai3dBound = true;
@@ -1441,7 +1851,7 @@
       });
     }
     Array.prototype.slice.call(document.querySelectorAll(
-      '#ai3dTemplate, #ai3dReferenceStrength, #ai3dStrategy, #ai3dQuality, #ai3dAutoDecompose, #ai3dMaxParts, #ai3dPreprocessOnly, #ai3dImageModel, input[name="format"]'
+      '#ai3dWorkflowMode, #ai3dTemplate, #ai3dReferenceStrength, #ai3dStrategy, #ai3dQuality, #ai3dAutoDecompose, #ai3dMaxParts, #ai3dPreprocessOnly, #ai3dImageModel, input[name="format"]'
     )).forEach(function(inputNode) {
       if (inputNode._ai3dParamBound) return;
       inputNode._ai3dParamBound = true;
@@ -1485,6 +1895,8 @@
         var action = actionBtn.getAttribute('data-ai3d-action') || '';
         var jobId = actionBtn.getAttribute('data-ai3d-job-id') || '';
         if (action === 'triview') startTriviewJob(actionBtn, jobId);
+        else if (action === 'triview_prompt') editTriviewPrompt(jobId);
+        else if (action === 'regen_view') regenerateTriviewView(jobId, actionBtn.getAttribute('data-ai3d-role') || '');
         else if (action === 'base') startBaseModelJob(actionBtn, jobId);
         else if (action === 'components') startComponentsJob(actionBtn, jobId);
         else if (action === 'parts') startPartModelsJob(actionBtn, jobId);
@@ -1584,7 +1996,7 @@
         }
       });
     }
-    updateParamSummary();
+    applyWorkflowModeDefaults();
   }
 
   window.initAi3dModelView = function() {

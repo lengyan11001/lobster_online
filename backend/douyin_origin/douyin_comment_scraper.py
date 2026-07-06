@@ -98,6 +98,11 @@ def extract_sec_user_id(profile_url: str) -> str:
     return ""
 
 
+def is_playwright_target_closed_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}"
+    return "TargetClosedError" in text or "Target page, context or browser has been closed" in text
+
+
 class DouyinCommentScraper:
     def __init__(
         self,
@@ -3028,8 +3033,21 @@ class DouyinCommentScraper:
                 "success" if result else "warning",
             )
             return bool(result)
+        except Exception as exc:
+            if is_playwright_target_closed_error(exc):
+                self._emit(
+                    logger,
+                    f"[抖音登录检测] 账号{self.account_id or '-'} 检测页已关闭，按未登录处理。",
+                    "warning",
+                )
+                return False
+            raise
         finally:
-            await page.close()
+            try:
+                await page.close()
+            except Exception as exc:
+                if not is_playwright_target_closed_error(exc):
+                    raise
 
     async def _extract_profile_summary_from_page(
         self,

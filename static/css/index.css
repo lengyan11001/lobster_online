@@ -1429,6 +1429,50 @@
       margin-top: 18px;
       margin-bottom: 0;
     }
+    #content-scheduled-tasks .scheduled-upload-preview {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+      gap: 0.55rem;
+      margin-top: 0.55rem;
+    }
+    #content-scheduled-tasks .scheduled-upload-thumb {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+      min-width: 0;
+    }
+    #content-scheduled-tasks .scheduled-upload-media {
+      width: 100%;
+      aspect-ratio: 1;
+      background: var(--scheduled-soft);
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      font-size: 0.7rem;
+      font-weight: 800;
+    }
+    #content-scheduled-tasks .scheduled-upload-media img,
+    #content-scheduled-tasks .scheduled-upload-media video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    #content-scheduled-tasks .scheduled-upload-name,
+    #content-scheduled-tasks .scheduled-upload-size {
+      padding: 0.28rem 0.4rem 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.72rem;
+      color: var(--text);
+    }
+    #content-scheduled-tasks .scheduled-upload-size {
+      padding-top: 0.12rem;
+      padding-bottom: 0.34rem;
+      color: var(--muted);
+    }
     #content-scheduled-tasks .scheduled-form-footer {
       display: flex;
       justify-content: flex-end;

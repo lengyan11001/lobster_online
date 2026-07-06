@@ -84,13 +84,6 @@ def main() -> int:
             "剪辑；优先 deps/ffmpeg，缺失时可复用 comfly_veo3_daihuo_video 内置 ffmpeg",
         )
     )
-    rows.append(
-        (
-            "browser_chromium/",
-            BASE.joinpath("browser_chromium").is_dir() and any(BASE.joinpath("browser_chromium").iterdir()),
-            "发布/Playwright 离线",
-        )
-    )
     rows.append(("scripts/pip_bootstrap_from_wheel.py", (BASE / "scripts" / "pip_bootstrap_from_wheel.py").is_file(), ""))
 
     wname = max(len(r[0]) for r in rows)
@@ -121,9 +114,9 @@ def main() -> int:
 
     print("结论: 核心依赖已齐（含 Python/Node 嵌入、OpenClaw、微信插件、离线 wheels）。")
     print(
-        "      大体积常见来源: nodejs/node_modules(OpenClaw 树)、browser_chromium(Playwright)、"
+        "      大体积常见来源: nodejs/node_modules(OpenClaw 树)、"
         "python(嵌入+已装 site-packages)、deps/wheels、deps/ffmpeg；"
-        "其中 Chromium/ffmpeg 仅部分功能必需，见下方 MISSING 项。"
+        "其中 ffmpeg 仅部分功能必需，见下方 MISSING 项。"
     )
     return 0
 

@@ -88,7 +88,7 @@ _pack_exe_test/output/lobster_desktop_YYYYMMDD_HHMMSS.zip
 |------|------|
 | `python/` | 嵌入式 Python。 |
 | `deps/` | ffmpeg、pip wheels 等离线依赖。 |
-| `browser_chromium/` | Playwright Chromium，发布相关功能需要。 |
+| `browser_chromium/` | 不再打入完整依赖加密包；旧 Playwright-Chromium 流程如需使用，另行手动准备。 |
 | `nodejs/` | Node.js 与 OpenClaw 运行环境。 |
 
 如果目标是完整离线交付，仍需参考 `docs/生产打包流程.md` 与 `docs/离线安装依赖清单.md`，确认运行时依赖是否已经随包或随安装目录准备好。

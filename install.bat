@@ -380,11 +380,16 @@ echo [5/7] Configuring OpenClaw Gateway...
 "%PYTHON%" "scripts\setup_openclaw.py"
 echo.
 
-REM Step 6: Install Playwright Chromium
-echo [6/7] Installing Playwright browser...
+REM Step 6: Optional Playwright Chromium
+echo [6/7] Checking optional Playwright browser...
 if exist "browser_chromium" (
     echo   [OK] Chromium already installed - offline
     set "PLAYWRIGHT_BROWSERS_PATH=%CD%\browser_chromium"
+    goto :pw_done
+)
+if /i not "%LOBSTER_INSTALL_CHROMIUM%"=="1" (
+    echo   [SKIP] Chromium is no longer bundled or installed by default.
+    echo          Set LOBSTER_INSTALL_CHROMIUM=1 only if a legacy Playwright-Chromium flow needs it.
     goto :pw_done
 )
 if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (

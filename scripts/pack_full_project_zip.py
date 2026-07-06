@@ -56,6 +56,8 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
         return True
     if rel_posix.startswith("browser_data/"):
         return True
+    if rel_posix.startswith("browser_chromium/"):
+        return True
     if rel_posix.startswith(("_pack_exe_test/", "_lobster_runtime/", "dist/", "build/", "tmp_responsive_check/", "tmp_templates/", ".updates/", "release_updates/")):
         return True
     if rel_posix.startswith("desktop/webview2/fixed-runtime/"):

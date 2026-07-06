@@ -1453,8 +1453,8 @@ window._openWechatChannelsTranscriptView = function() {
 window._openAi3dModelView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ai-3d-model', {
-      html: '/static/views/ai-3d-model.html?v=20260626-ai3d-pagination-preview',
-      scripts: '/static/js/ai-3d-model.js?v=20260626-ai3d-pagination-preview',
+      html: '/static/views/ai-3d-model.html?v=20260706-workflow-steps-v1',
+      scripts: '/static/js/ai-3d-model.js?v=20260706-workflow-steps-v1',
       init: 'initAi3dModelView',
       cache: 'reload'
     });
@@ -1915,12 +1915,12 @@ function _renderAi3dModelCard(pkg, showDebug) {
     : '';
   var tags = _skillStoreTagHtml(pkg.tags || ['3D', 'Meshy', '\u591a\u89c6\u89d2', '\u62c6\u4ef6']);
   var title = escapeHtml(_skillStoreBrandSafeText(pkg.name || '\u9ad8\u8d28\u91cf 3D \u6a21\u578b'));
-  var desc = escapeHtml(_skillStoreBrandSafeText(pkg.description || '\u4e0a\u4f20\u5355\u56fe\u3001\u591a\u89c6\u89d2\u56fe\u6216 zip \u62c6\u4ef6\u5305\uff0c\u81ea\u52a8\u8c03\u7528 Meshy \u751f\u6210 GLB/FBX/OBJ/USDZ\uff0c\u5f00\u542f\u8d34\u56fe\u3001PBR \u548c\u91cd\u62d3\u6251\u3002'));
+  var desc = escapeHtml(_skillStoreBrandSafeText(pkg.description || '\u6309\u4efb\u52a1\u7c7b\u578b\u4e0a\u4f20\u53c2\u8003\u56fe\u3001\u5b9e\u7269\u591a\u89d2\u5ea6\u56fe\u6216\u5df2\u6709\u591a\u89c6\u89d2\u56fe\uff0c\u81ea\u52a8\u8c03\u7528 Meshy \u751f\u6210 GLB/FBX/OBJ/USDZ\uff0c\u652f\u6301\u8d34\u56fe\u3001PBR \u548c\u91cd\u62d3\u6251\u3002'));
   return '<div class="skill-store-card ai3d-model-card" data-skill-package-id="' + escapeAttr(pkg.id || 'ai_3d_model_skill') + '" style="cursor:pointer;border-color:rgba(34,197,94,0.34);background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(14,165,233,0.06));">' +
     '<div class="card-label">' + debugBadge + 'AI 3D <span class="badge-installed">\u53ef\u7528</span></div>' +
     '<div class="card-value">' + title + '</div>' +
     '<div class="card-desc">' + desc + '</div>' +
-    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">\u590d\u6742\u5934\u76d4\u3001\u7fc5\u8180\u3001\u9542\u7a7a\u91d1\u5c5e\u4ef6\u5efa\u8bae\u4f7f\u7528 zip \u62c6\u4ef6\u5305\u3002\u5355\u56fe\u4e5f\u80fd\u8dd1\uff0c\u4f46\u9ad8\u8d28\u91cf\u8981\u9760\u591a\u89c6\u89d2\u548c\u90e8\u4ef6\u7ea7\u751f\u6210\u3002</div>' +
+    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">\u6e38\u620f\u9053\u5177\u53ef\u4e0a\u4f20\u591a\u5f20\u53c2\u8003\u56fe\u6216\u76f4\u63a5\u586b\u63d0\u793a\u8bcd\uff1b\u5b9e\u7269\u751f 3D \u5efa\u8bae\u4e0a\u4f20\u591a\u89d2\u5ea6\u7167\u7247\uff1b\u5df2\u6709\u591a\u89c6\u89d2\u56fe\u53ef\u76f4\u63a5\u9001\u5165 3D\u3002</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ai3d-model-entry-btn">\u8fdb\u5165 3D \u5de5\u4f5c\u53f0</button></div>' +
   '</div>';

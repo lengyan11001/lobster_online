@@ -325,6 +325,17 @@
   font-weight: 700;
 }
 
+.ai3d-inline-hint {
+  min-height: 40px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  padding: 0.55rem 0.72rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .ai3d-field input[type="text"],
 .ai3d-field textarea,
 .ai3d-field select {
@@ -379,6 +390,48 @@
   display: none;
 }
 
+.ai3d-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.ai3d-slot {
+  min-height: 106px;
+  border: 1px dashed rgba(37, 99, 235, 0.45);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1e293b;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 0.65rem;
+  text-align: center;
+  cursor: pointer;
+}
+
+.ai3d-slot:hover {
+  background: #eff6ff;
+  border-color: rgba(37, 99, 235, 0.75);
+}
+
+.ai3d-slot input {
+  max-width: 100%;
+  font-size: 0.68rem;
+}
+
+.ai3d-slot span {
+  font-weight: 900;
+  font-size: 0.78rem;
+}
+
+.ai3d-slot small {
+  color: #64748b;
+  font-size: 0.66rem;
+  line-height: 1.25;
+}
+
 .ai3d-dropzone span {
   font-weight: 800;
 }
@@ -393,20 +446,77 @@
 }
 
 .ai3d-file-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 0.55rem;
 }
 
 .ai3d-file-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.6rem;
-  padding: 0.55rem 0.65rem;
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.28rem;
+  padding: 0.45rem;
   border-radius: 8px;
   border: 1px solid rgba(226, 232, 240, 0.9);
   background: #f8fafc;
-  font-size: 0.82rem;
+  font-size: 0.74rem;
+  min-width: 0;
+}
+
+.ai3d-file-thumb {
+  width: 74px;
+  height: 74px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #e2e8f0;
+  color: #475569;
+  display: grid;
+  place-items: center;
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.ai3d-file-thumb img,
+.ai3d-file-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ai3d-file-main {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  gap: 0.15rem;
+  text-align: center;
+}
+
+.ai3d-file-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai3d-file-remove {
+  position: absolute;
+  top: 0.28rem;
+  right: 0.28rem;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 7px;
+  background: #fff;
+  color: #dc2626;
+  font-size: 0.68rem;
+  font-weight: 850;
+  padding: 0.18rem 0.38rem;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.ai3d-file-remove:hover {
+  background: #fef2f2;
+  border-color: rgba(239, 68, 68, 0.48);
 }
 
 .ai3d-checks label {
@@ -1212,6 +1322,25 @@
   line-height: 1.35;
 }
 
+.ai3d-mini-action {
+  min-height: 24px;
+  border: 1px solid rgba(37, 99, 235, 0.45);
+  border-radius: 7px;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 0.68rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.ai3d-mini-action:hover {
+  background: #eff6ff;
+}
+
+.ai3d-text-edit-panel {
+  width: min(780px, calc(100vw - 28px));
+}
+
 .ai3d-card-meta em {
   border-radius: 999px;
   background: #ecfdf5;
@@ -1410,10 +1539,15 @@
   .ai3d-note-grid {
     grid-template-columns: 1fr;
   }
+
+  .ai3d-slot-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
-  .ai3d-grid {
+  .ai3d-grid,
+  .ai3d-slot-grid {
     grid-template-columns: 1fr;
   }
 

@@ -155,7 +155,7 @@ async def create_multi_image_to_3d_task(
 ) -> Dict[str, Any]:
     if len(image_paths) < 2:
         return await create_image_to_3d_task(image_paths[0], quality=quality, target_formats=target_formats, texture_prompt=texture_prompt)
-    image_urls = [image_path_to_data_url(path) for path in image_paths[:4]]
+    image_urls = [image_path_to_data_url(path) for path in image_paths[:5]]
     body = {
         "image_urls": image_urls,
         "ai_model": "meshy-6",

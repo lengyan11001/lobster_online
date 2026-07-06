@@ -27,15 +27,7 @@ export INCLUDE_FFMPEG=1
 unset FORCE_PREPARE_OFFLINE 2>/dev/null || true
 bash "$ROOT/scripts/ensure_full_pack_deps.sh"
 
-if [ -d "$ROOT/browser_chromium" ] && [ -n "$(ls -A "$ROOT/browser_chromium" 2>/dev/null)" ]; then
-  echo ">>> browser_chromium 已存在，跳过"
-elif python3 -c "import sys; raise SystemExit(0 if sys.platform=='win32' else 1)" 2>/dev/null; then
-  echo ">>> prepare_chromium.py"
-  python3 "$ROOT/scripts/prepare_chromium.py"
-else
-  echo ""
-  echo "[WARN] 非 Windows 且 browser_chromium 为空：请在 Windows 生成后拷回本目录。"
-fi
+echo ">>> Chromium 已取消打入完整依赖包，跳过 browser_chromium 准备"
 
 echo ""
 echo ">>> 补齐后复检"

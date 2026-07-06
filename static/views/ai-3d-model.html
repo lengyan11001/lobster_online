@@ -1,11 +1,11 @@
-<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260629-triview-v1">
+<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260706-upload-grid-v1">
 <div id="content-ai-3d-model" class="content-block">
   <div class="ai3d-page">
     <header class="ai3d-head">
       <div>
         <div class="page-section-kicker">AI 3D ASSET</div>
         <h3 class="page-section-title">高质量 3D 模型生成</h3>
-        <p class="ai3d-subtitle">上传单张原画、参考图或拆件包；默认生成高清三视图底模，部件输入图只用于后续生成 3D 部件并合成。</p>
+        <p class="ai3d-subtitle">按任务类型上传参考图、实物多角度图或已有多视角图；确认后生成 3D 模型。</p>
       </div>
       <div class="ai3d-head-actions">
         <button type="button" id="ai3dCreateJobBtn" class="btn btn-primary btn-sm">创建任务</button>
@@ -24,7 +24,7 @@
           <div class="ai3d-modal-head">
             <div>
               <strong id="ai3dCreateModalTitle">创建 2D 转 3D 任务</strong>
-              <span>上传原图或拆件包；三视图和部件输入图固定走 4K/high/png。</span>
+              <span>不同任务类型需要的参考不同；图片阶段固定走 4K/high/png。</span>
             </div>
             <button type="button" id="ai3dCreateModalClose" class="ai3d-modal-close" aria-label="关闭">×</button>
           </div>
@@ -34,14 +34,41 @@
               <input id="ai3dTitle" name="title" type="text" placeholder="例如：银色机甲头盔拆件生成">
             </div>
 
+            <div class="ai3d-grid">
+              <div class="ai3d-field">
+                <label for="ai3dWorkflowMode">任务类型</label>
+                <select id="ai3dWorkflowMode" name="workflow_mode">
+                  <option value="game_prop" selected>虚拟/游戏道具（参考图理解生成多视角）</option>
+                  <option value="real_object">实物生 3D（固定角度上传）</option>
+                  <option value="direct_multiview">多视图直接生成 3D</option>
+                  <option value="custom">自定义（现有流程）</option>
+                </select>
+              </div>
+              <div class="ai3d-field">
+                <label>当前流程</label>
+                <div id="ai3dWorkflowHint" class="ai3d-inline-hint">游戏道具：可上传多张参考图，第一张作为主图；AI 先理解主体并生成可编辑多视角提示词。</div>
+              </div>
+            </div>
+
             <div class="ai3d-field">
               <label for="ai3dFiles">参考素材</label>
               <label class="ai3d-dropzone" for="ai3dFiles">
-                <input id="ai3dFiles" name="files" type="file" accept="image/*,.zip" multiple>
-                <span>点击上传图片或 zip 拆件包（可选）</span>
-                <small>也可以不上传图片，只在下方填写资产提示词，直接生成高清三视图参考图。</small>
+                <input id="ai3dFiles" name="files" type="file" accept="image/*" multiple>
+                <span>上传参考图片（可多张）</span>
+                <small>不同任务类型需要的参考不同；也可以只填写资产提示词。</small>
               </label>
               <div id="ai3dFileList" class="ai3d-file-list"></div>
+            </div>
+
+            <div id="ai3dRealObjectSlots" class="ai3d-field ai3d-real-slots" hidden>
+              <label>实物固定角度</label>
+              <div class="ai3d-slot-grid">
+                <label class="ai3d-slot"><span>正面</span><input type="file" accept="image/*" data-ai3d-role="front"><small>主体正面，完整入镜</small></label>
+                <label class="ai3d-slot"><span>左前45°</span><input type="file" accept="image/*" data-ai3d-role="front_left_45"><small>左侧结构可见</small></label>
+                <label class="ai3d-slot"><span>右前45°</span><input type="file" accept="image/*" data-ai3d-role="front_right_45"><small>右侧结构可见</small></label>
+                <label class="ai3d-slot"><span>侧面</span><input type="file" accept="image/*" data-ai3d-role="side"><small>严格侧向轮廓</small></label>
+                <label class="ai3d-slot"><span>背面</span><input type="file" accept="image/*" data-ai3d-role="back"><small>背部结构和厚度</small></label>
+              </div>
             </div>
 
             <div class="ai3d-field">
@@ -84,7 +111,7 @@
                 <select id="ai3dStrategy" name="strategy">
                   <option value="auto">自动判断</option>
                   <option value="multi_view">三视图同一物体</option>
-                  <option value="part_batch">拆件包/硬表面逐个生成</option>
+                  <option value="part_batch">硬表面部件逐个生成</option>
                 </select>
               </div>
               <div class="ai3d-field">
@@ -198,7 +225,7 @@
 
   </div>
 </div>
-<script src="/static/js/ai-3d-model.js?v=20260629-triview-v1"></script>
+<script src="/static/js/ai-3d-model.js?v=20260706-workflow-steps-v1"></script>
 <script>
   (function() {
     window.ai3dDirectBootstrapRan = true;

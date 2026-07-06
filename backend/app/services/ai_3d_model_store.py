@@ -143,6 +143,7 @@ def public_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "asset_template",
         "reference_strength",
         "image_model",
+        "workflow_mode",
         "description",
         "steps",
         "subtasks",

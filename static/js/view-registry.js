@@ -97,8 +97,8 @@
   });
 
   window.registerLobsterView('ai-3d-model', {
-    html: '/static/views/ai-3d-model.html?v=20260628-ai-subject-understanding-v3',
-    scripts: '/static/js/ai-3d-model.js?v=20260628-ai-subject-understanding-v3',
+    html: '/static/views/ai-3d-model.html?v=20260706-workflow-steps-v1',
+    scripts: '/static/js/ai-3d-model.js?v=20260706-workflow-steps-v1',
     init: 'initAi3dModelView',
     cache: 'reload',
     reloadExisting: true

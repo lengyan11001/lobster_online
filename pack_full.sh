@@ -26,13 +26,7 @@ if [ ! -d "$SCRIPT_DIR/python" ] || [ ! -f "$SCRIPT_DIR/nodejs/node.exe" ]; then
     echo "      先在本目录执行 ./build_package.sh 生成后再打包。"
 fi
 
-# 检查 browser_chromium（Playwright 离线浏览器）
-if [ -d "$SCRIPT_DIR/browser_chromium" ]; then
-    echo "检测到 browser_chromium/，将包含在完整包中（离线发布功能可用）"
-else
-    echo "提示: 未检测到 browser_chromium/，完整包将不包含 Playwright 浏览器。"
-    echo "      运行 python scripts/prepare_chromium.py 可预下载（需联网）。"
-fi
+echo "browser_chromium/ 已取消打入完整依赖包。"
 
 rm -f "$PARENT/${PROJ}_完整包_${BM_SAFE}_"*.zip 2>/dev/null || true
 if [ -f "$SCRIPT_DIR/使用说明-完整包.txt" ]; then
@@ -41,7 +35,7 @@ fi
 cd "$PARENT"
 zip -r "$OUT_NAME" "$PROJ" \
   -x "${PROJ}/.git/*" "${PROJ}/*.pyc" "${PROJ}/*__pycache__*" "${PROJ}/*.db" \
-  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/browser_data/*" "${PROJ}/assets/*" \
+  -x "${PROJ}/openclaw/workspace/*" "${PROJ}/openclaw/.env" "${PROJ}/browser_data/*" "${PROJ}/browser_chromium" "${PROJ}/browser_chromium/*" "${PROJ}/assets/*" \
   -x "${PROJ}/_pack_exe_test/*" "${PROJ}/_lobster_runtime/*" "${PROJ}/dist/*" "${PROJ}/build/*" "${PROJ}/tmp_responsive_check/*" "${PROJ}/.updates/*" "${PROJ}/chat_storage/*" \
   -x "${PROJ}/desktop/webview2/fixed-runtime/*" \
   -x "${PROJ}/sutui_config.json" \

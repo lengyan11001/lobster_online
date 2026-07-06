@@ -674,6 +674,49 @@
     });
   }
 
+  var localPreviewUrls = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+  function localFilePreviewUrl(file) {
+    if (!file || !file.type || !/^(image|video)\//i.test(file.type) || !window.URL || !URL.createObjectURL) return '';
+    if (localPreviewUrls && localPreviewUrls.has(file)) return localPreviewUrls.get(file);
+    var url = URL.createObjectURL(file);
+    if (localPreviewUrls) localPreviewUrls.set(file, url);
+    return url;
+  }
+
+  function uploadPreviewMediaHtml(file) {
+    var type = String(file && file.type || '');
+    var url = localFilePreviewUrl(file);
+    if (url && /^image\//i.test(type)) return '<img src="' + html(url) + '" alt="">';
+    if (url && /^video\//i.test(type)) return '<video src="' + html(url) + '" muted playsinline preload="metadata"></video>';
+    var suffix = String((file && file.name || 'FILE').split('.').pop() || 'FILE').slice(0, 5).toUpperCase();
+    return '<span>' + html(suffix) + '</span>';
+  }
+
+  function hasVisualUploadPreview(file) {
+    return !!(file && file.type && /^(image|video)\//i.test(file.type));
+  }
+
+  function renderAttachmentPreview(prefix) {
+    var input = document.getElementById(prefix + 'AssetUpload');
+    var host = document.getElementById(prefix + 'AssetPreview');
+    if (!host) return;
+    var files = input && input.files ? Array.prototype.slice.call(input.files) : [];
+    if (!files.length) {
+      host.innerHTML = '';
+      return;
+    }
+    host.innerHTML = files.map(function (file) {
+      var size = file.size ? Math.ceil(file.size / 1024) + 'KB' : '';
+      var visual = hasVisualUploadPreview(file);
+      return '<div class="scheduled-upload-thumb">' +
+        '<div class="scheduled-upload-media">' + uploadPreviewMediaHtml(file) + '</div>' +
+        (visual ? '' : '<div class="scheduled-upload-name" title="' + html(file.name || '') + '">' + html(file.name || '未命名文件') + '</div>') +
+        '<div class="scheduled-upload-size">' + html(size) + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
   function collectAttachmentAssetIds(prefix) {
     var typed = parseAssetIds(((document.getElementById(prefix + 'AssetIds') || {}).value || ''));
     var input = document.getElementById(prefix + 'AssetUpload');
@@ -1630,6 +1673,7 @@
       showMsg('scheduledTaskMsg', '已创建并下发', false);
       var upload = document.getElementById('scheduledTaskAssetUpload');
       if (upload) upload.value = '';
+      renderAttachmentPreview('scheduledTask');
       loadRuns();
       loadTasks();
     }).catch(function (e) {
@@ -1718,6 +1762,8 @@
     });
     var autoFill = document.getElementById('scheduledTaskAutoFillBtn');
     if (autoFill) autoFill.addEventListener('click', autoFillParams);
+    var assetUpload = document.getElementById('scheduledTaskAssetUpload');
+    if (assetUpload) assetUpload.addEventListener('change', function () { renderAttachmentPreview('scheduledTask'); });
     updateScheduleFields('scheduledTask');
     if (!collectDailyTimes('scheduledTask').length) addDailyTime('scheduledTask');
   }

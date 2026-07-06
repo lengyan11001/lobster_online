@@ -352,6 +352,60 @@ def _today_date_text() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def _build_publish_account_snapshot(jwt_token: str) -> List[Dict[str, Any]]:
+    user_id = int(_decode_jwt_sub(jwt_token) or "0")
+    if user_id <= 0:
+        return []
+    try:
+        from .publish import SUPPORTED_PLATFORMS, _douyin_origin_publish_accounts, _is_douyin_origin_publish_account
+    except Exception as exc:
+        logger.debug("[H5-CHAT] publish account snapshot import failed: %s", exc)
+        return []
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(PublishAccount)
+            .filter(PublishAccount.user_id == user_id)
+            .order_by(PublishAccount.created_at.desc())
+            .all()
+        )
+        display_rows = _douyin_origin_publish_accounts(user_id)
+        display_rows.extend([row for row in rows if not _is_douyin_origin_publish_account(row)])
+        accounts: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in display_rows:
+            account_id = str(getattr(row, "id", "") or "").strip()
+            platform = str(getattr(row, "platform", "") or "").strip()
+            nickname = str(getattr(row, "nickname", "") or "").strip()
+            if not account_id or not platform or not nickname:
+                continue
+            key = f"{platform}:{account_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            accounts.append(
+                {
+                    "id": account_id,
+                    "account_id": account_id,
+                    "platform": platform,
+                    "platform_name": SUPPORTED_PLATFORMS.get(platform, {}).get("name", platform),
+                    "nickname": nickname,
+                    "status": str(getattr(row, "status", "") or "").strip(),
+                    "online": str(getattr(row, "status", "") or "").strip().lower() in {"active", "online", "logged_in"},
+                    "managed_by": "douyin_origin" if platform == "douyin" and _is_douyin_origin_publish_account(row) else "",
+                    "is_origin_slot": bool(platform == "douyin" and _is_douyin_origin_publish_account(row)),
+                }
+            )
+            if len(accounts) >= 200:
+                break
+        return accounts
+    except Exception as exc:
+        logger.debug("[H5-CHAT] build publish account snapshot failed: %s", exc)
+        return []
+    finally:
+        db.close()
+
+
 async def _build_douyin_dashboard_snapshot(jwt_token: str, installation_id: str) -> Dict[str, Any]:
     _install_douyin_origin_import_path()
     from douyin_api import (  # type: ignore
@@ -1762,6 +1816,7 @@ def _scheduled_publish_config(cap_payload: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         account_id_int = None
     account_nickname = str(payload.get("publish_account_nickname") or payload.get("account_nickname") or "").strip()
+    installation_id = str(payload.get("publish_installation_id") or payload.get("installation_id") or "").strip()
     auto_publish = str(payload.get("publish_auto") or payload.get("auto_publish") or "").strip().lower() in {
         "1",
         "true",
@@ -1776,6 +1831,7 @@ def _scheduled_publish_config(cap_payload: Dict[str, Any]) -> Dict[str, Any]:
         "platform_name": str(payload.get("publish_platform_name") or "").strip(),
         "account_id": account_id_int,
         "account_nickname": account_nickname,
+        "installation_id": installation_id,
         "auto_publish": auto_publish,
     }
 
@@ -3492,6 +3548,7 @@ async def _run_scheduled_capability(
                     "platform_name": publish_cfg.get("platform_name") or _platform_publish_rules(str(publish_cfg.get("platform") or "")).split("：", 1)[0],
                     "account_id": publish_cfg.get("account_id"),
                     "account_nickname": publish_cfg.get("account_nickname"),
+                    "installation_id": publish_cfg.get("installation_id"),
                     "asset_id": asset_id,
                     "title": copy.get("title") or "",
                     "description": copy.get("description") or "",
@@ -4051,7 +4108,10 @@ async def h5_chat_poll_loop() -> None:
                 if now_loop - last_heartbeat_at >= heartbeat_interval:
                     heartbeat_resp = await client.post(
                         f"{base}/api/h5-chat/device-heartbeat",
-                        json={"display_name": "local-online"},
+                        json={
+                            "display_name": "local-online",
+                            "publish_accounts": _build_publish_account_snapshot(jwt_token),
+                        },
                         headers=headers,
                     )
                     if heartbeat_resp.status_code == 401:
