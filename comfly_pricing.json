@@ -1,0 +1,194 @@
+{
+  "_doc": "Comfly 定价表。price_per_unit: Comfly 采购价。sutui_price_per_unit: 速推同模型采购价（可选，填写后会自动比价选便宜的）。user_price_multiplier: 用户消耗 = 采购价 × 倍率（默认用 user_price_multiplier_default）。price_type: per_call / per_second / per_token。per_token 类型需填 input_price_per_1k_tokens 与 output_price_per_1k_tokens（采购价，单位：积分/千 token）。api_format: dalle / unified_video / seedance_legacy / veo / grok / sora2 / chat。comfly_model: Comfly 侧模型名（不填用原值）。sutui_equivalent: 速推侧对应的模型 ID（列表），用于 dry_run 比价时从速推名反查 Comfly 价格。token_group: 指定使用哪个 token 分组（对应环境变量 COMFLY_API_KEY_<GROUP>），不填则用默认 COMFLY_API_KEY。",
+  "user_price_multiplier_default": 2,
+  "models": {
+    "gpt-image-2": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "dalle",
+      "comfly_model": "gpt-image-2",
+      "sutui_equivalent": ["gpt-image2", "gpt-image-2", "gpt-image"]
+    },
+    "gpt-image-2-official": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "openai_official",
+      "comfly_model": "gpt-image-2",
+      "sutui_equivalent": ["gpt-image2", "gpt-image-2", "gpt-image"],
+      "note": "Preferred official OpenAI image channel for GPT Image 2 requests."
+    },
+    "gpt-image-2-vip": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "dalle",
+      "comfly_model": "gpt-image-2-vip",
+      "token_group": "premium",
+      "sutui_equivalent": ["gpt-image2", "gpt-image-2", "gpt-image"],
+      "note": "Preferred Comfly premium channel for GPT Image 2 generation."
+    },
+    "gpt-image-2-yunwu": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "dalle",
+      "comfly_model": "gpt-image-2",
+      "token_group": "yunwu",
+      "sutui_equivalent": ["gpt-image2", "gpt-image-2", "gpt-image"],
+      "note": "Same image model routed through Yunwu token/base as a fallback channel."
+    },
+    "gpt-image-2-openmindapi": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "dalle",
+      "comfly_model": "gpt-image-2",
+      "token_group": "openmindapi",
+      "sutui_equivalent": ["gpt-image2", "gpt-image-2", "gpt-image"],
+      "note": "Same image model routed through OpenMind API token/base as a fallback channel."
+    },
+    "doubao-seedream-5-0-260128": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "seedream_large",
+      "comfly_model": "doubao-seedream-5-0-260128",
+      "note": "Large-size Seedream 5 fallback channel for GPT Image 2 generation."
+    },
+    "gpt-4.1-mini": {
+      "price_type": "per_token",
+      "input_price_per_1k_tokens": 0.125,
+      "output_price_per_1k_tokens": 1.0,
+      "api_format": "chat",
+      "comfly_model": "gpt-4.1-mini",
+      "note": "For Comfly Seedance storyboard analysis; temporary price aligned with existing chat proxy estimate."
+    },
+    "gpt-5.4": {
+      "price_type": "per_token",
+      "input_price_per_1k_tokens": 0.125,
+      "output_price_per_1k_tokens": 1.0,
+      "api_format": "chat",
+      "comfly_model": "gpt-5.4",
+      "note": "For Comfly storyboard analysis; temporary price aligned with existing chat proxy estimate."
+    },
+    "gpt-4o-mini": {
+      "price_type": "per_call",
+      "price_per_unit": 1,
+      "api_format": "chat",
+      "comfly_model": "gpt-4o-mini",
+      "note": "For viral video remix narration split; purchase price is 1 credit per call."
+    },
+    "doubao-seedance-2-0-260128": {
+      "price_type": "per_second",
+      "price_per_unit": 100,
+      "api_format": "seedance_legacy",
+      "comfly_model": "doubao-seedance-2-0-260128",
+      "sutui_equivalent": ["seedance-2-0-pro-250528", "seedance-2-0-260128"]
+    },
+    "doubao-seedance-2-0-fast-260128": {
+      "price_type": "per_second",
+      "price_per_unit": 100,
+      "api_format": "seedance_legacy",
+      "comfly_model": "doubao-seedance-2-0-fast-260128",
+      "sutui_equivalent": ["seedance-2-0-lite-250428", "seedance-2-0-fast-260128"]
+    },
+    "sdols-2.0": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "seedance_legacy",
+      "comfly_model": "sdols-2.0"
+    },
+    "sdols-2.0-fast": {
+      "price_type": "per_call",
+      "price_per_unit": 20,
+      "api_format": "seedance_legacy",
+      "comfly_model": "sdols-2.0-fast"
+    },
+    "doubao-seedance-1-0-pro-250528": {
+      "price_type": "per_call",
+      "price_per_unit": 30,
+      "api_format": "seedance_legacy",
+      "comfly_model": "doubao-seedance-1-0-pro-250528"
+    },
+    "doubao-seedance-1-0-lite-t2v-250428": {
+      "price_type": "per_call",
+      "price_per_unit": 20,
+      "api_format": "seedance_legacy",
+      "comfly_model": "doubao-seedance-1-0-lite-t2v-250428"
+    },
+    "doubao-seedance-1-0-lite-i2v-250428": {
+      "price_type": "per_call",
+      "price_per_unit": 20,
+      "api_format": "seedance_legacy",
+      "comfly_model": "doubao-seedance-1-0-lite-i2v-250428"
+    },
+    "veo3.1": {
+      "price_type": "per_call",
+      "price_per_unit": 80,
+      "api_format": "veo",
+      "comfly_model": "veo3.1",
+      "token_group": "yunwu",
+      "sutui_equivalent": ["fal-ai/veo3.1"]
+    },
+    "veo3.1-fast": {
+      "price_type": "per_call",
+      "price_per_unit": 80,
+      "api_format": "veo",
+      "comfly_model": "veo3.1-fast",
+      "token_group": "veo31",
+      "sutui_equivalent": [
+        "fal-ai/veo3.1/lite",
+        "fal-ai/veo3.1/lite/text-to-video",
+        "fal-ai/veo3.1/lite/image-to-video",
+        "fal-ai/veo3.1/fast",
+        "fal-ai/veo3.1/fast/text-to-video",
+        "fal-ai/veo3.1/fast/image-to-video"
+      ]
+    },
+    "grok-video-3": {
+      "price_type": "per_call",
+      "price_per_unit": 80,
+      "api_format": "grok",
+      "comfly_model": "grok-video-3",
+      "sutui_equivalent": [
+        "grok-video-3",
+        "xai/grok-imagine-video/text-to-video",
+        "xai/grok-imagine-video/image-to-video"
+      ],
+      "note": "Comfly Grok video. Purchase price is 80 credits per generation; user charge is 160 with default 2x multiplier."
+    },
+    "sora2": {
+      "enabled": false,
+      "note": "Comfly Sora2 submit tested 2026-04-28: /v1/videos and /sora/v1/videos both failed on current server key. Keep priced but do not route until Comfly channel is available.",
+      "price_type": "per_call",
+      "price_per_unit": 10,
+      "api_format": "sora2",
+      "comfly_model": "sora-2",
+      "sutui_equivalent": [
+        "sora2",
+        "sora-2",
+        "sora_video2",
+        "fal-ai/sora-2/text-to-video",
+        "fal-ai/sora-2/image-to-video"
+      ]
+    },
+    "nano-banana-2": {
+      "price_type": "per_call",
+      "price_per_unit": 42,
+      "api_format": "dalle",
+      "comfly_model": "nano-banana-2",
+      "token_group": "premium"
+    },
+    "nano-banana-2-yunwu": {
+      "price_type": "per_call",
+      "price_per_unit": 42,
+      "api_format": "dalle",
+      "comfly_model": "nano-banana-2",
+      "token_group": "yunwu",
+      "note": "Nano fallback routed through Yunwu token/base."
+    },
+    "gemini-2.5-pro": {
+      "price_type": "per_token",
+      "input_price_per_1k_tokens": 0.125,
+      "output_price_per_1k_tokens": 1.0,
+      "api_format": "chat",
+      "comfly_model": "gemini-2.5-pro"
+    }
+  }
+}

@@ -32,6 +32,7 @@ from .api.custom_config import router as custom_config_router
 from .api.billing import router as billing_router
 from .api.consumption_accounts import router as consumption_accounts_router
 from .api.mcp_registry import router as mcp_registry_router
+from .api.comfly_proxy import router as comfly_proxy_router
 try:
     from .api.wecom import router as wecom_router
 except Exception as e:
@@ -1024,6 +1025,7 @@ def create_app() -> FastAPI:
     app.include_router(billing_router, prefix="")
     app.include_router(consumption_accounts_router, prefix="")
     app.include_router(mcp_registry_router, prefix="")
+    app.include_router(comfly_proxy_router, prefix="")
     app.include_router(assets_router, prefix="")
     app.include_router(cutcli_audio_router, prefix="")
     app.include_router(cutcli_templates_local_router, prefix="")
