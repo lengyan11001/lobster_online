@@ -734,19 +734,34 @@ def _local_bestseller_ass_content(subtitle_text: str, subtitle_style: Optional[D
     variant = str(style.get("variant") or "").strip()
     if variant == "rank_table":
         return _local_bestseller_rank_table_ass_content(subtitle_text, day=day)
+    scene_only_days = {1, 3, 4, 5, 8}
     lines = _local_bestseller_caption_lines(subtitle_text)
     title = lines[0] if lines else ""
     body = lines[1:] if len(lines) > 1 else []
     events: List[str] = []
+    stack: List[tuple[str, str]] = []
     if title:
-        events.append(_ass_event("Title", rf"{{\pos(540,132)}}" + _escape_ass_text(title)))
+        stack.append(("Title", title))
     if body:
-        if variant == "large_center_stack":
-            events.extend(_stacked_center_events("Body", body[:4], x=540, start_y=288, step_y=102))
+        stack.extend(("Body", line) for line in body[:4])
+    if stack:
+        use_top_layout = int(day or 0) in scene_only_days
+        if use_top_layout:
+            step_y = 102 if variant == "large_center_stack" else 88
+            start_y = 288 if variant == "large_center_stack" else 312
+            if title:
+                events.append(_ass_event("Title", rf"{{\pos(540,132)}}" + _escape_ass_text(title)))
+            stack = [entry for entry in stack if entry[0] == "Body"]
         else:
-            events.extend(_stacked_center_events("Body", body[:4], x=540, start_y=312, step_y=88))
+            step_y = 102 if variant == "large_center_stack" else 92
+            anchor_y = 1040 if variant == "large_center_stack" else 1010
+            start_y = int(round(anchor_y - ((len(stack) - 1) * step_y) / 2))
+        for idx, (event_style, text) in enumerate(stack):
+            y = start_y + idx * step_y
+            events.append(_ass_event(event_style, rf"{{\pos(540,{y})}}" + _escape_ass_text(text)))
     if not events:
-        events.append(_ass_event("Body", rf"{{\pos(540,288)}}"))
+        fallback_y = 312 if int(day or 0) in scene_only_days else 1010
+        events.append(_ass_event("Body", rf"{{\pos(540,{fallback_y})}}"))
     return "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",

@@ -17,6 +17,7 @@ from .comfly_seedance_tvc import ComflySeedancePipelinePayload, start_seedance_t
 from .comfly_image_studio import _generate_image_studio_core
 
 router = APIRouter()
+_LOCAL_BESTSELLER_SCENE_TIMEOUT_SECONDS = 300.0
 
 _ROOT = Path(__file__).resolve().parents[3]
 _DATA_FILE = _ROOT / "static" / "data" / "local-bestseller-10day.json"
@@ -951,6 +952,7 @@ async def local_bestseller_scene_generate(
         upload_payloads=[],
         reference_image_urls=refs,
         auto_save=True,
+        timeout_seconds=_LOCAL_BESTSELLER_SCENE_TIMEOUT_SECONDS,
     )
     return {"ok": True, "item": _card_with_scene_result(card, result), "raw": result}
 
@@ -984,6 +986,7 @@ async def local_bestseller_scene_batch(
                     upload_payloads=[],
                     reference_image_urls=_resolve_reference_urls(profile=profile, card=card, current_user=current_user, request=request, db=db),
                     auto_save=True,
+                    timeout_seconds=_LOCAL_BESTSELLER_SCENE_TIMEOUT_SECONDS,
                 )
                 return _card_with_scene_result(card, result)
         except Exception as exc:

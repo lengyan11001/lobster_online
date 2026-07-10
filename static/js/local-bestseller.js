@@ -665,6 +665,7 @@
     var subtitleLines = splitCaptionLines(item.subtitle_text || '');
     var dyLines = subtitleLines.length ? subtitleLines : (douyin.subtitle && Array.isArray(douyin.subtitle.lines) ? douyin.subtitle.lines : splitCaptionLines(douyin.copy || ''));
     var style = (douyin.subtitle && douyin.subtitle.style) || {};
+    var sceneOnlyDays = { 1: true, 3: true, 4: true, 5: true, 8: true };
     if (style.variant === 'rank_table' && Number(item.day) === 1) {
       var titleA = dyLines[0] || '我国南北城市分布';
       var titleB = dyLines[1] || '四川竟然是南方';
@@ -688,7 +689,8 @@
       if (len >= 30) cls += ' is-xlong';
       return cls;
     }
-    return '<div class="lb-phone-caption lb-phone-caption-top">' +
+    var layoutClass = sceneOnlyDays[Number(item.day)] ? 'lb-phone-caption-top' : 'lb-phone-caption-middle';
+    return '<div class="lb-phone-caption ' + layoutClass + '">' +
       (titleLine ? '<span class="' + captionClass(titleLine, 'is-hot') + '">' + escapeHtml(titleLine) + '</span>' : '') +
       (bodyLines.length ? '<div class="lb-caption-body">' + bodyLines.map(function(line) {
         return '<span class="' + captionClass(line, '') + '">' + escapeHtml(line) + '</span>';
@@ -702,6 +704,7 @@
       return [
         '<span class="lb-video-shell" data-lb-video-shell>',
         '<video class="lb-video-preview" src="' + escapeHtml(videoUrl) + '" controls controlsList="nodownload nofullscreen" playsinline preload="metadata"></video>',
+        renderSubtitlePreview(item),
         '<button type="button" class="lb-video-fs-btn" data-lb-video-fullscreen>放大</button>',
         '<span class="lb-video-fullscreen-hint">按 Esc 退出全屏</span>',
         '<button type="button" class="lb-video-exit-btn" data-lb-video-exit>退出全屏 Esc</button>',
