@@ -65,6 +65,8 @@ _PROXY_AUDIT_LOGGER = logging.getLogger("comfly_proxy_audit")
 # Comfly 上游超时（与 pipeline 默认 poll 间隔对齐，video submit 通常很快返回 task_id）
 _TIMEOUT_CHAT = 120.0
 _TIMEOUT_IMAGE = 300.0
+_TIMEOUT_OPENAI_OFFICIAL_IMAGE = 90.0
+_TIMEOUT_SEEDREAM_IMAGE = 180.0
 _TIMEOUT_FILE_UPLOAD = 120.0
 _TIMEOUT_VIDEO_SUBMIT = 60.0
 _TIMEOUT_OPENMIND_VIDEO_SUBMIT = 60.0
@@ -313,12 +315,7 @@ def _image_generation_model_attempts(model: str, body: Optional[Dict[str, Any]] 
     """Return billing model ids to try for one image generation request."""
     normalized = _normalized_model_id(model)
     if normalized in {"gpt-image-2", "gpt-image2", "gpt-image", "gpt-image-2-vip", "gpt-image-2-official"}:
-        attempts: List[str] = []
-        if _openai_official_image_enabled():
-            attempts.append("gpt-image-2-official")
-        _image_url, image_urls = _normalized_image_refs_from_payload(body or {})
-        if not image_urls:
-            attempts.append("doubao-seedream-5-0-260128")
+        attempts: List[str] = ["gpt-image-2", "doubao-seedream-5-0-260128"]
         attempts.extend(["gpt-image-2", "gpt-image-2-openmindapi", "gpt-image-2-yunwu"])
         ordered: List[str] = []
         for item in attempts:
@@ -455,11 +452,14 @@ async def _comfly_request(
     method: str, url: str, body: Optional[Dict[str, Any]], headers: Dict[str, str], timeout: float,
 ) -> Dict[str, Any]:
     """统一封装 httpx 调用 Comfly。失败抛 RuntimeError，含状态码与文本片段。"""
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        if method.upper() == "GET":
-            r = await client.get(url, headers=headers)
-        else:
-            r = await client.post(url, headers=headers, json=body or {})
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            if method.upper() == "GET":
+                r = await client.get(url, headers=headers)
+            else:
+                r = await client.post(url, headers=headers, json=body or {})
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Comfly timeout after {int(timeout)}s") from exc
     if r.status_code >= 400:
         raise RuntimeError(f"Comfly HTTP {r.status_code}: {(r.text or '')[:500]}")
     try:
@@ -472,11 +472,14 @@ async def _yunwu_request(
     method: str, url: str, body: Optional[Dict[str, Any]], headers: Dict[str, str], timeout: float,
 ) -> Dict[str, Any]:
     """Yunwu HTTP wrapper. Keep the provider name out of Comfly error text."""
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        if method.upper() == "GET":
-            r = await client.get(url, headers=headers)
-        else:
-            r = await client.post(url, headers=headers, json=body or {})
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            if method.upper() == "GET":
+                r = await client.get(url, headers=headers)
+            else:
+                r = await client.post(url, headers=headers, json=body or {})
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Yunwu timeout after {int(timeout)}s") from exc
     if r.status_code >= 400:
         raise RuntimeError(f"Yunwu HTTP {r.status_code}: {(r.text or '')[:500]}")
     try:
@@ -492,8 +495,11 @@ async def _comfly_multipart_request(
     headers: Dict[str, str],
     timeout: float,
 ) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(url, headers=headers, data=data, files=files)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(url, headers=headers, data=data, files=files)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Comfly timeout after {int(timeout)}s") from exc
     if r.status_code >= 400:
         raise RuntimeError(f"Comfly HTTP {r.status_code}: {(r.text or '')[:500]}")
     try:
@@ -509,8 +515,11 @@ async def _yunwu_multipart_request(
     headers: Dict[str, str],
     timeout: float,
 ) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(url, headers=headers, data=data, files=files)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(url, headers=headers, data=data, files=files)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Yunwu timeout after {int(timeout)}s") from exc
     if r.status_code >= 400:
         raise RuntimeError(f"Yunwu HTTP {r.status_code}: {(r.text or '')[:500]}")
     try:
@@ -561,7 +570,15 @@ def _yunwu_auth_headers() -> Dict[str, str]:
 
 def _is_retryable_image_error(exc: BaseException) -> bool:
     msg = str(exc or "").lower()
-    if "comfly http 400" in msg or "comfly http 401" in msg or "comfly http 403" in msg or "comfly http 404" in msg:
+    if (
+        "comfly http 400" in msg
+        or "comfly http 401" in msg
+        or "comfly http 403" in msg
+        or "comfly http 404" in msg
+        or "comfly http 451" in msg
+        or "policyviolation" in msg
+        or "copyright restrictions" in msg
+    ):
         return False
     retry_tokens = (
         "comfly http 408",
@@ -607,6 +624,24 @@ def _image_attempt_route_meta(entry: Dict[str, Any]) -> Tuple[str, str, str]:
         return "comfly", "seedream_large", "comfly"
     channel = token_group or "comfly"
     return channel, channel, "comfly"
+
+
+def _image_retry_attempts_for_entry(entry: Dict[str, Any], default_attempts: int) -> int:
+    api_format = str((entry or {}).get("api_format") or "").strip().lower()
+    if api_format in {"openai_official", "seedream_large"}:
+        return 1
+    return max(1, int(default_attempts or 1))
+
+
+def _image_timeout_for_entry(entry: Dict[str, Any], default_timeout: float) -> float:
+    api_format = str((entry or {}).get("api_format") or "").strip().lower()
+    token_group = str((entry or {}).get("token_group") or "").strip().lower()
+    upstream_model = str((entry or {}).get("comfly_model") or "").strip().lower()
+    if api_format == "dalle" and not token_group and upstream_model == "gpt-image-2":
+        return 120.0
+    if api_format == "seedream_large":
+        return _TIMEOUT_SEEDREAM_IMAGE
+    return default_timeout
 
 
 def _openmind_image_url() -> str:
@@ -1126,7 +1161,7 @@ async def _build_image_edit_request_parts(
 ) -> Tuple[Dict[str, str], List[Tuple[str, Tuple[Any, ...]]]]:
     forwarded = _body_for_upstream_model(body, model, entry)
     prompt = str(forwarded.get("prompt") or body.get("prompt") or "").strip()
-    image_size = _coerce_image_edit_size(
+    raw_size = (
         forwarded.get("size")
         or forwarded.get("image_size")
         or forwarded.get("aspect_ratio")
@@ -1137,6 +1172,11 @@ async def _build_image_edit_request_parts(
         or body.get("ratio")
         or "1024x1024"
     )
+    api_format = str((entry or {}).get("api_format") or "").strip().lower()
+    if api_format == "seedream_large":
+        image_size = _coerce_seedream_large_image_size(raw_size)
+    else:
+        image_size = _coerce_image_edit_size(raw_size)
     try:
         num_images = max(1, int(forwarded.get("num_images") or forwarded.get("n") or body.get("n") or 1))
     except (TypeError, ValueError):
@@ -1438,12 +1478,15 @@ def _openai_official_image_body(source_body: Dict[str, Any]) -> Dict[str, Any]:
 async def _openai_official_image_request(source_body: Dict[str, Any]) -> Dict[str, Any]:
     body = _openai_official_image_body(source_body)
     path = "/v1/images/edits" if body.get("images") else "/v1/images/generations"
-    async with httpx.AsyncClient(timeout=_TIMEOUT_IMAGE, trust_env=False) as client:
-        resp = await client.post(
-            _openai_official_image_url(path),
-            headers=_openai_official_image_headers(json_body=True),
-            json=body,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_OPENAI_OFFICIAL_IMAGE, trust_env=False) as client:
+            resp = await client.post(
+                _openai_official_image_url(path),
+                headers=_openai_official_image_headers(json_body=True),
+                json=body,
+            )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"OpenAI official timeout after {int(_TIMEOUT_OPENAI_OFFICIAL_IMAGE)}s") from exc
     if resp.status_code >= 400:
         raise RuntimeError(f"OpenAI official HTTP {resp.status_code}: {(resp.text or '')[:500]}")
     try:
@@ -1703,7 +1746,8 @@ async def proxy_images_generations(
         )
 
         channel_succeeded = False
-        for retry_index in range(1, attempts_per_model + 1):
+        retries_for_model = _image_retry_attempts_for_entry(entry, attempts_per_model)
+        for retry_index in range(1, retries_for_model + 1):
             try:
                 endpoint_path = "/v1/images/edits" if reference_urls else "/v1/images/generations"
                 _audit(
@@ -1719,10 +1763,9 @@ async def proxy_images_generations(
                 )
                 token_group = str(entry.get("token_group") or "").strip().lower()
                 api_format = str(entry.get("api_format") or "").strip().lower()
+                request_timeout = _image_timeout_for_entry(entry, _TIMEOUT_IMAGE)
                 if api_format == "openai_official":
                     resp = await _openai_official_image_request(body)
-                elif api_format == "seedream_large" and reference_urls:
-                    raise RuntimeError("Seedream image fallback does not support reference images")
                 elif reference_urls:
                     if token_group == "openmindapi":
                         resp = await _openmind_image_request(upstream_body)
@@ -1734,7 +1777,7 @@ async def proxy_images_generations(
                                 edit_data,
                                 edit_files,
                                 _yunwu_auth_headers(),
-                                _TIMEOUT_IMAGE,
+                                request_timeout,
                             )
                         else:
                             resp = await _comfly_multipart_request(
@@ -1742,7 +1785,7 @@ async def proxy_images_generations(
                                 edit_data,
                                 edit_files,
                                 _comfly_auth_headers(attempt_model),
-                                _TIMEOUT_IMAGE,
+                                request_timeout,
                             )
                 else:
                     resp = await _comfly_request(
@@ -1750,7 +1793,7 @@ async def proxy_images_generations(
                         _comfly_url(endpoint_path, attempt_model),
                         upstream_body,
                         _comfly_headers(attempt_model),
-                        _TIMEOUT_IMAGE,
+                        request_timeout,
                     )
                 saved_assets = await _save_generated_images_best_effort_by_user_id(
                     billing_user_id,
@@ -1822,7 +1865,7 @@ async def proxy_images_generations(
                     model=attempt_model,
                     attempt=index,
                     retry=retry_index,
-                    retries=attempts_per_model,
+                    retries=retries_for_model,
                     error=last_error[:300],
                 )
                 provider, channel, route_name = _image_attempt_route_meta(entry)
@@ -1839,9 +1882,9 @@ async def proxy_images_generations(
                     route=route_name,
                     endpoint=endpoint_path,
                     error_message=last_error[:1000],
-                    meta={"attempt": index, "retry": retry_index, "retries": attempts_per_model, "refs": len(reference_urls)},
+                    meta={"attempt": index, "retry": retry_index, "retries": retries_for_model, "refs": len(reference_urls)},
                 )
-                if retry_index >= attempts_per_model or not _is_retryable_image_error(e):
+                if retry_index >= retries_for_model or not _is_retryable_image_error(e):
                     break
                 await asyncio.sleep(0.8 * retry_index)
 
