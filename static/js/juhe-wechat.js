@@ -26,7 +26,11 @@
   }
 
   function apiBase() {
-    return (typeof API_BASE !== 'undefined' && API_BASE ? String(API_BASE) : '').replace(/\/$/, '');
+    var local = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE) : '';
+    if (local) return local.replace(/\/$/, '');
+    var host = (window.location && window.location.hostname) || '';
+    if (/^(127\.0\.0\.1|localhost|\[::1\])$/i.test(host)) return window.location.origin.replace(/\/$/, '');
+    return '';
   }
 
   function authHeaderJson() {
@@ -54,7 +58,7 @@
   function apiJson(path, opts) {
     opts = opts || {};
     var base = apiBase();
-    if (!base) return Promise.reject(new Error('未配置服务器 API_BASE'));
+    if (!base) return Promise.reject(new Error('未配置本机 LOCAL_API_BASE'));
     var req = { method: opts.method || 'GET', headers: authHeaderJson() };
     if (opts.body !== undefined) req.body = JSON.stringify(opts.body || {});
     return fetch(base + path, req).then(function(resp) {
@@ -67,7 +71,7 @@
 
   function uploadLocalFile(file) {
     var base = apiBase();
-    if (!base) return Promise.reject(new Error('未配置服务器 API_BASE'));
+    if (!base) return Promise.reject(new Error('未配置本机 LOCAL_API_BASE'));
     var fd = new FormData();
     fd.append('file', file);
     return fetch(base + '/api/assets/upload', {
@@ -103,6 +107,14 @@
     return Array.from(state.selectedContacts);
   }
 
+  function selectedRoomUsernames() {
+    return state.activeRoomUsername ? [state.activeRoomUsername] : [];
+  }
+
+  function normalizeTargetType(value) {
+    return value === 'groups' || value === 'auto' ? value : 'contacts';
+  }
+
   function itemUsername(item) {
     if (!item) return '';
     if (typeof item === 'string') return item;
@@ -126,6 +138,14 @@
     if (item.last_error) parts.push(item.last_error);
     if (item.province || item.city) parts.push([item.province, item.city].filter(Boolean).join(' '));
     return parts.join(' · ');
+  }
+
+  function activeRoomTitle() {
+    if (!state.activeRoomUsername) return '';
+    var item = state.groups.find(function(group) {
+      return itemUsername(group) === state.activeRoomUsername;
+    });
+    return item ? itemTitle(item) : state.activeRoomUsername;
   }
 
   function formatJson(data) {
@@ -181,6 +201,7 @@
     setMsg('', false);
     return apiJson('/api/juhe-wechat/configs').then(function(data) {
       state.configs = Array.isArray(data.configs) ? data.configs : [];
+      if (data.error) setMsg(data.error, true);
       if (state.activeConfigId && !state.configs.some(function(c) { return String(c.id) === state.activeConfigId; })) {
         state.activeConfigId = '';
       }
@@ -208,14 +229,18 @@
     var id = activeConfigId();
     if (!id) {
       state.contacts = [];
+      state.groups = [];
       state.selectedContacts.clear();
       renderContacts();
+      renderRooms();
       return Promise.resolve();
     }
     return apiJson('/api/juhe-wechat/contacts/cache?config_id=' + encodeURIComponent(id)).then(function(data) {
       state.contacts = Array.isArray(data.contacts) ? data.contacts : (Array.isArray(data.items) ? data.items : []);
+      state.groups = Array.isArray(data.groups) ? data.groups : [];
       state.selectedContacts.clear();
       renderContacts();
+      renderRooms();
     }).catch(function(err) {
       setMsg(err.message || 'load saved contacts failed', true);
     });
@@ -416,10 +441,10 @@
     renderMediaPreview();
   }
 
-  function sendTextOnly(id, names, content) {
+  function sendTextOnly(id, names, content, targetType) {
     return apiJson('/api/juhe-wechat/messages/send', {
       method: 'POST',
-      body: { config_id: Number(id), to_usernames: names, message_type: 'text', content: content }
+      body: { config_id: Number(id), to_usernames: names, target_type: normalizeTargetType(targetType), message_type: 'text', content: content }
     });
   }
 
@@ -442,7 +467,7 @@
     var base = apiBase();
     var id = activeConfigId();
     var fileType = type === 'image' ? 2 : 4;
-    if (!base) return Promise.reject(new Error('鏈厤缃湇鍔″櫒 API_BASE'));
+    if (!base) return Promise.reject(new Error('未配置本机 LOCAL_API_BASE'));
     var fd = new FormData();
     fd.append('file', file);
     return fetch(base + '/api/juhe-wechat/media/upload-file?config_id=' + encodeURIComponent(id) + '&file_type=' + encodeURIComponent(fileType), {
@@ -451,18 +476,18 @@
       body: fd
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
-        if (!resp.ok) throw new Error(parseErr(data, '寰俊 CDN 涓婁紶澶辫触'));
+        if (!resp.ok) throw new Error(parseErr(data, '微信文件上传失败'));
         state.lastUpload = { local: data.source || {}, cdn: data.upload || data.upstream || data };
         return state.lastUpload;
       });
     });
   }
 
-  function sendMediaOnly(id, names, file, type) {
+  function sendMediaOnly(id, names, file, type, targetType) {
     return uploadToWechatCdn(file, type).then(function(uploaded) {
       return apiJson('/api/juhe-wechat/messages/send', {
         method: 'POST',
-        body: { config_id: Number(id), to_usernames: names, message_type: type, upload: uploaded.cdn }
+        body: { config_id: Number(id), to_usernames: names, target_type: normalizeTargetType(targetType), message_type: type, upload: uploaded.cdn }
       });
     });
   }
@@ -486,13 +511,14 @@
     });
   }
 
-  async function sendSelectedContent() {
+  async function sendSelectedContent(targetType) {
+    targetType = normalizeTargetType(targetType);
     var id = activeConfigId();
-    var names = selectedUsernames();
+    var names = targetType === 'groups' ? selectedRoomUsernames() : selectedUsernames();
     var content = (($('juheMessageContent') || {}).value || '').trim();
     var files = state.mediaFiles.map(function(item) { return item.file; });
     if (!id) return setMsg('请先选择可用实例', true);
-    if (!names.length) return setMsg('请先选择联系人', true);
+    if (!names.length) return setMsg(targetType === 'groups' ? '请先选择群' : '请先选择联系人', true);
     if (!content && !files.length) return setMsg('请输入文案或选择图片/文件', true);
 
     var resultNode = $('juheSendResults');
@@ -502,7 +528,7 @@
     try {
       if (content) {
         setMsg('正在发送文案...', false);
-        var textResult = await sendTextOnly(id, names, content);
+        var textResult = await sendTextOnly(id, names, content, targetType);
         appendResults('juheSendResults', (textResult.items || []).map(function(x) {
           return Object.assign({}, x, { to_username: '文案 / ' + (x.to_username || '') });
         }));
@@ -514,7 +540,7 @@
         var isImage = String(file.type || '').indexOf('image/') === 0;
         var type = isImage ? 'image' : 'file';
         setMsg('正在发送 ' + (i + 1) + '/' + files.length + '：' + file.name, false);
-        var mediaResult = await sendMediaOnly(id, names, file, type);
+        var mediaResult = await sendMediaOnly(id, names, file, type, targetType);
         appendResults('juheSendResults', (mediaResult.items || []).map(function(x) {
           return Object.assign({}, x, { to_username: (isImage ? '图片 ' : '文件 ') + file.name + ' / ' + (x.to_username || '') });
         }));
@@ -563,7 +589,7 @@
   function renderRooms() {
     var list = $('juheRoomList');
     var active = $('juheActiveRoomName');
-    if (active) active.textContent = state.activeRoomUsername || '未选择群';
+    if (active) active.textContent = activeRoomTitle() || '未选择群';
     if (!list) return;
     if (!state.groups.length) {
       list.className = 'juhe-empty';
@@ -684,6 +710,21 @@
     roomAction('/api/juhe-wechat/rooms/display-name', { room_username: room, display_name: displayName }, '群昵称请求已提交');
   }
 
+  function sendRoomText() {
+    var id = activeConfigId();
+    var names = selectedRoomUsernames();
+    var content = (($('juheRoomMessageContent') || {}).value || '').trim();
+    if (!id) return setMsg('请先选择可用实例', true);
+    if (!names.length) return setMsg('请先选择一个群', true);
+    if (!content) return setMsg('请输入要发送到群的消息', true);
+    setMsg('正在发送群消息...', false);
+    sendTextOnly(id, names, content, 'groups').then(function(data) {
+      renderResults('juheRoomResults', data.items || [], '没有发送结果');
+      setMsg('群消息发送完成：成功 ' + (data.success_count || 0) + '，失败 ' + (data.failed_count || 0), data.failed_count > 0);
+      loadLogs();
+    }).catch(function(err) { setMsg(err.message || '群消息发送失败', true); });
+  }
+
   function loadAiConfig() {
     var id = activeConfigId();
     if (!id) return Promise.resolve();
@@ -784,7 +825,7 @@
     var status = $('juheAiKnowledgeUploadStatus');
     var mode = (($('juheAiKnowledgeUploadMode') || {}).value || 'append');
     var base = apiBase();
-    if (!base) return setMsg('未配置服务器 API_BASE', true);
+    if (!base) return setMsg('未配置本机 LOCAL_API_BASE', true);
     var fd = new FormData();
     fd.append('config_id', String(id));
     fd.append('mode', mode);
@@ -999,7 +1040,7 @@
     var remark = $('juheModifyRemarkBtn');
     if (remark) remark.addEventListener('click', modifyRemark);
     var sendSelectedBtn = $('juheSendSelectedBtn');
-    if (sendSelectedBtn) sendSelectedBtn.addEventListener('click', sendSelectedContent);
+    if (sendSelectedBtn) sendSelectedBtn.addEventListener('click', function() { sendSelectedContent('contacts'); });
     var mediaInput = $('juheMediaFile');
     if (mediaInput) mediaInput.addEventListener('change', function() {
       addMediaFiles(mediaInput.files || []);
@@ -1015,6 +1056,8 @@
     if (createRoomBtn) createRoomBtn.addEventListener('click', createRoom);
     var roomDetailBtn = $('juheRoomDetailBtn');
     if (roomDetailBtn) roomDetailBtn.addEventListener('click', roomDetail);
+    var roomSendTextBtn = $('juheRoomSendTextBtn');
+    if (roomSendTextBtn) roomSendTextBtn.addEventListener('click', sendRoomText);
     var roomMembersBtn = $('juheRoomMembersBtn');
     if (roomMembersBtn) roomMembersBtn.addEventListener('click', roomMembers);
     var addMembersBtn = $('juheRoomAddMembersBtn');

@@ -1,4 +1,4 @@
-<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260706-upload-grid-v1">
+<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260710-resumable-component-records-v1">
 <div id="content-ai-3d-model" class="content-block">
   <div class="ai3d-page">
     <header class="ai3d-head">
@@ -39,6 +39,7 @@
                 <label for="ai3dWorkflowMode">任务类型</label>
                 <select id="ai3dWorkflowMode" name="workflow_mode">
                   <option value="game_prop" selected>虚拟/游戏道具（参考图理解生成多视角）</option>
+                  <option value="component_split">拆件（一张图生成部件三视图再 3D）</option>
                   <option value="real_object">实物生 3D（固定角度上传）</option>
                   <option value="direct_multiview">多视图直接生成 3D</option>
                   <option value="custom">自定义（现有流程）</option>
@@ -64,8 +65,7 @@
               <label>实物固定角度</label>
               <div class="ai3d-slot-grid">
                 <label class="ai3d-slot"><span>正面</span><input type="file" accept="image/*" data-ai3d-role="front"><small>主体正面，完整入镜</small></label>
-                <label class="ai3d-slot"><span>左前45°</span><input type="file" accept="image/*" data-ai3d-role="front_left_45"><small>左侧结构可见</small></label>
-                <label class="ai3d-slot"><span>右前45°</span><input type="file" accept="image/*" data-ai3d-role="front_right_45"><small>右侧结构可见</small></label>
+                <label class="ai3d-slot"><span>45°</span><input type="file" accept="image/*" data-ai3d-role="front_left_45"><small>前侧结构和厚度可见</small></label>
                 <label class="ai3d-slot"><span>侧面</span><input type="file" accept="image/*" data-ai3d-role="side"><small>严格侧向轮廓</small></label>
                 <label class="ai3d-slot"><span>背面</span><input type="file" accept="image/*" data-ai3d-role="back"><small>背部结构和厚度</small></label>
               </div>
@@ -216,16 +216,14 @@
         <div class="ai3d-progress">
           <div id="ai3dProgressBar"></div>
         </div>
-        <div id="ai3dPreview" class="ai3d-preview">
-          <div class="ai3d-empty">生成完成后显示预览图和模型下载</div>
-        </div>
+        <div id="ai3dPreview" class="ai3d-preview" hidden></div>
         <div id="ai3dMetrics" class="ai3d-metrics"></div>
       </section>
     </div>
 
   </div>
 </div>
-<script src="/static/js/ai-3d-model.js?v=20260706-workflow-steps-v1"></script>
+<script src="/static/js/ai-3d-model.js?v=20260710-resumable-component-records-v1"></script>
 <script>
   (function() {
     window.ai3dDirectBootstrapRan = true;

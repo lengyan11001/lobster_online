@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import logging
 import math
@@ -118,8 +119,10 @@ _AI3D_IMAGE_STAGE_PIXEL_SIZES = {
 _STANDARD_MULTI_VIEW_SHEET_VIEWS = ["front", "front_left_45", "front_right_45"]
 _CHARACTER_MULTI_VIEW_SHEET_VIEWS = ["front", "front_left_45", "front_right_45"]
 _DIRECT_MULTI_VIEW_ROLES = ["front", "front_left_45", "front_right_45", "side", "back"]
-_MESHY_MULTI_IMAGE_MAX = 5
-_MESHY_BASE_VIEW_ROLES = ["front", "front_right_45", "front_left_45", "side", "back"]
+_PROMPT_MULTI_VIEW_SHEET_VIEWS = ["front", "front_left_45", "side", "back"]
+_MESHY_MULTI_IMAGE_MAX = 4
+_MESHY_BASE_VIEW_ROLES_CHARACTER = ["front", "front_left_45", "side", "back", "front_right_45"]
+_MESHY_BASE_VIEW_ROLES_ASSET = ["front", "front_left_45", "side", "back", "front_right_45"]
 _VIEW_ROLE_LABELS = {
     "front": "正视图",
     "front_left_45": "左前45°视图",
@@ -128,7 +131,7 @@ _VIEW_ROLE_LABELS = {
     "back": "背视图",
 }
 _VIEW_ROLE_ORDER = {role: idx for idx, role in enumerate(_DIRECT_MULTI_VIEW_ROLES)}
-_AI3D_WORKFLOW_MODES = {"custom", "real_object", "game_prop", "direct_multiview"}
+_AI3D_WORKFLOW_MODES = {"custom", "real_object", "game_prop", "direct_multiview", "component_split"}
 
 _CHARACTER_PART_PRESETS = [
     {"role": "full_body", "label": "全身主体", "box": (0.05, 0.00, 0.95, 1.00)},
@@ -160,6 +163,8 @@ _TRUE_COMPONENT_SOURCE_MODES = {
     "fidelity_source_crops",
     "semantic_image_component_sheet",
     "semantic_image_component_parts",
+    "prompt_component_parts",
+    "prompt_component_triview_parts",
     "see_through_psd_layers",
 }
 _REMBG_SESSION = None
@@ -660,6 +665,8 @@ def _normalize_reference_sheet_detection(data: Dict[str, Any]) -> Dict[str, Any]
         if not isinstance(item, dict):
             continue
         role = _canonical_reference_sheet_view_role(item.get("role") or item.get("view"), item.get("label") or item.get("name"))
+        if role == "front_right_45" and "front_left_45" not in by_role:
+            role = "front_left_45"
         if role not in _VIEW_ROLE_ORDER:
             continue
         box = item.get("box") or item.get("bbox")
@@ -681,7 +688,7 @@ def _normalize_reference_sheet_detection(data: Dict[str, Any]) -> Dict[str, Any]
         view = {
             "index": idx,
             "role": role,
-            "label": str(item.get("label") or item.get("name") or _VIEW_ROLE_LABELS.get(role, role)).strip()[:60],
+            "label": _VIEW_ROLE_LABELS.get(role, role),
             "box": tuple(vals),  # type: ignore[arg-type]
             "usable_for_3d": False if usable is False else True,
             "quality_score": max(0, min(100, quality_score)),
@@ -797,6 +804,15 @@ def _triview_inputs_from_reference_sheet_plan(
             public["reference_sheet_reason"] = str(item.get("reason") or "")
             generated.append(public)
     return generated
+
+
+def _reference_sheet_public_input(source_input: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(source_input)
+    item["role"] = "triview_sheet"
+    item["label"] = "原始多视图参考板"
+    item["reference_sheet_source"] = True
+    item["generated"] = False
+    return item
 
 
 def _decompose_character_image(src: Path, out_dir: Path, *, max_parts: int = _AI3D_DEFAULT_MAX_PARTS) -> List[Dict[str, Any]]:
@@ -1203,7 +1219,7 @@ def _text_prompt_view_generation_plan(
     if template == "auto":
         template = "ornament_prop"
     desc = (description or "").strip()
-    sheet_views = _sheet_views_for_template(template)
+    sheet_views = list(_PROMPT_MULTI_VIEW_SHEET_VIEWS)
     asset_hint = {
         "character_realistic": "realistic game-ready character asset",
         "character_stylized": "stylized game-ready character asset",
@@ -1222,15 +1238,15 @@ def _text_prompt_view_generation_plan(
     )
     sheet_prompt = (
         prompt_core
-        + " Output one 3:2 image containing exactly three views left to right: front view, front-left 45 degree view, front-right 45 degree view. "
-        "Do not generate side view or back view. "
-        "Keep all three views visually consistent as the same physical asset rotated on a turntable, but do not copy the front view into the 45-degree columns. "
-        "The front-left and front-right 45-degree views must visibly prove rotation: center ornaments shift toward the far side, side rim thickness becomes visible, side seam lines curve around the body, highlights move laterally, ropes/knots/tassels hang from a slightly different perspective, and relief patterns wrap around the rounded surface. "
-        "For symmetrical ornamental props, the outer silhouette may remain similar, but the two 45-degree views must still reveal thickness, side curvature, offset decorative relief, shifted hanging elements, and opposite left/right side information."
+        + " Output one 16:9 image containing exactly four evenly spaced views left to right: front view, front-left 45 degree view, side view, back view. "
+        "Keep all four views visually consistent as the same physical asset rotated on a turntable, but do not copy the front view into the other columns. "
+        "The 45-degree view must visibly prove rotation: center ornaments shift toward the far side, side rim thickness becomes visible, side seam lines curve around the body, highlights move laterally, ropes/knots/tassels hang from a different perspective, and relief patterns wrap around the rounded surface. "
+        "The side and back views must be plausible continuations of the same design, not a new object: preserve the same material zones, silhouette logic, ornament placement, relief style, seams, ropes, tassels, hanging parts, and PBR surface behavior. "
+        "For symmetrical ornamental props, the outer silhouette may remain similar, but every non-front view must still reveal thickness, side curvature, offset decorative relief, shifted hanging elements, and consistent side/back information."
     )
     views = [{
         "view": "triview_sheet",
-        "label": "文本生成高清三视图板",
+        "label": "文本生成高清四视图板",
         "prompt": sheet_prompt,
         "sheet_views": sheet_views,
     }]
@@ -1250,12 +1266,44 @@ def _text_prompt_view_generation_plan(
         "prompt_version": _VIEW_PROMPT_VERSION,
         "stage_provider": "image_model",
         "uses_meshy": False,
-        "stage_note": "纯文本三视图由图片模型生成，确认 3D 后才调用 Meshy。",
+        "stage_note": "纯文本多视图由图片模型生成，确认 3D 后才调用 Meshy。",
         "view_generation_mode": "sheet",
         "front_view_policy": "generated_from_text",
         "text_prompt_only": True,
+        "sheet_aspect_ratio": "16:9",
         "views": views,
     }
+
+
+def _virtual_asset_spec_from_understanding(
+    *,
+    description: str = "",
+    view_understanding: Optional[Dict[str, Any]] = None,
+) -> str:
+    parts: List[str] = []
+    desc = (description or "").strip()
+    if desc:
+        parts.append(f"User intent: {desc[:1200]}")
+    if isinstance(view_understanding, dict) and view_understanding:
+        for key in (
+            "subject",
+            "asset_type",
+            "visual_summary",
+            "body_structure",
+            "head_face",
+            "clothing_accessories",
+            "mechanical_parts",
+            "materials",
+            "colors",
+            "props",
+            "must_keep",
+            "forbidden_changes",
+            "triview_prompt",
+        ):
+            value = _compact_text_value(view_understanding.get(key), max_chars=520 if key == "triview_prompt" else 320)
+            if value:
+                parts.append(f"{key}: {value}")
+    return ". ".join(parts).strip() or desc
 
 
 def _apply_generic_reference_triview_prompts(
@@ -1431,6 +1479,35 @@ def _fresh_view_generation_plan(
     asset_template = _template_from_understanding(view_understanding, requested_template)
     reference_strength = str(job.get("reference_strength") or stored.get("reference_strength") or "high")
     description = str(job.get("description") or "")
+    workflow_mode = current_workflow_mode
+    prompt_based_virtual = bool(
+        preprocessing.get("text_prompt_only")
+        or preprocessing.get("virtual_prompt_from_reference")
+        or workflow_mode == "game_prop"
+    )
+    if prompt_based_virtual:
+        prompt_description = str(preprocessing.get("text_prompt") or "").strip()
+        if not prompt_description:
+            prompt_description = _virtual_asset_spec_from_understanding(
+                description=description,
+                view_understanding=view_understanding,
+            )
+        plan = _text_prompt_view_generation_plan(
+            asset_template=asset_template if asset_template != "auto" else "ornament_prop",
+            description=prompt_description or description,
+            image_model=image_model or str(stored.get("image_model") or job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL),
+            target_formats=job.get("target_formats") or [],
+        )
+        custom_prompt = str(preprocessing.get("custom_triview_prompt") or stored.get("custom_triview_prompt") or "").strip()
+        if custom_prompt and preprocessing.get("custom_triview_prompt_user_edited"):
+            for view in plan.get("views", []):
+                if isinstance(view, dict) and str(view.get("view") or "") == "triview_sheet":
+                    view["prompt"] = custom_prompt
+                    view["custom_prompt"] = True
+                    break
+            plan["custom_triview_prompt"] = custom_prompt
+            plan["editable_prompt_enabled"] = True
+        return plan
     plan = _view_generation_plan(
         asset_template=asset_template,
         reference_strength=reference_strength,
@@ -1451,7 +1528,7 @@ def _fresh_view_generation_plan(
     plan["front_view_policy"] = "source_anchor_for_character_generated_sheet_front_for_hard_surface"
     plan["image_model"] = _canonical_image_model(image_model or str(stored.get("image_model") or job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
     custom_prompt = str(preprocessing.get("custom_triview_prompt") or stored.get("custom_triview_prompt") or "").strip()
-    if custom_prompt:
+    if custom_prompt and preprocessing.get("custom_triview_prompt_user_edited"):
         for view in plan.get("views", []):
             if isinstance(view, dict) and str(view.get("view") or "") == "triview_sheet":
                 view["prompt"] = custom_prompt
@@ -1987,6 +2064,10 @@ def _normalize_ai_part_plan(data: Dict[str, Any], *, max_parts: int) -> List[Dic
             "output_strategy": str(item.get("output_strategy") or item.get("strategy") or "3d_part").strip()[:80],
             "occlusion": str(item.get("occlusion") or "").strip()[:80],
             "uncertainty": str(item.get("uncertainty") or item.get("risk") or "").strip()[:180],
+            "image_prompt": _compact_text_value(item.get("image_prompt") or item.get("part_image_prompt"), max_chars=1600),
+            "triview_prompt": _compact_text_value(item.get("triview_prompt") or item.get("part_triview_prompt"), max_chars=1800),
+            "must_keep": item.get("must_keep") if isinstance(item.get("must_keep"), list) else [],
+            "forbidden_changes": item.get("forbidden_changes") if isinstance(item.get("forbidden_changes"), list) else [],
         })
     return out
 
@@ -2205,11 +2286,7 @@ async def _ai_triview_understanding(
         prompt += f"User description, secondary to the image: {desc[:1000]}"
     args = {
         "capability_id": "image.understand",
-        "payload": {
-            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
-            "prompt": prompt,
-            "image_url": reference_url,
-        },
+        "payload": _image_understand_payload(prompt, [reference_path]),
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
@@ -2243,7 +2320,11 @@ async def _ai_reference_sheet_detection(
     prompt = (
         "You are the routing layer for an automated 2D-to-3D pipeline. "
         "Decide whether the uploaded image is already a multi-view / turnaround / reference sheet containing the same asset in multiple viewpoints. "
-        "If yes, identify only the views that are useful as direct 3D reconstruction inputs. Do not include unrelated detail callouts, logos, UI, text blocks, or texture swatches as views. "
+        "Treat concept sheets as valid when one canvas contains a large beauty render plus smaller repeated views, orthographic drawings, clay/gray model views, side profiles, back views, exploded view panels, or technical line drawings of the same character, prop, weapon, vehicle, or building. "
+        "If yes, identify only the views that are useful as direct 3D reconstruction inputs. Prefer complete full-body/full-object views with clear silhouettes and different angles. "
+        "Color views are preferred for texture/material guidance; gray/clay/line views are still useful for shape when they show missing side/back information. "
+        "Do not include unrelated detail callouts, logos, UI, text blocks, creator marks, texture swatches, color palettes, close-up material samples, or tiny unreadable thumbnails as views. "
+        "For sheets with a huge hero render and smaller true turnaround views, include the hero only if it is a complete useful view; otherwise use the smaller true turnaround views. "
         "Return strict JSON only: {"
         "\"is_multiview_reference_sheet\":true|false,"
         "\"confidence\":0-100,"
@@ -2263,11 +2344,7 @@ async def _ai_reference_sheet_detection(
         prompt += f"User description, secondary to image: {desc[:1000]}"
     args = {
         "capability_id": "image.understand",
-        "payload": {
-            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
-            "prompt": prompt,
-            "image_url": reference_url,
-        },
+        "payload": _image_understand_payload(prompt, [reference_path]),
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
@@ -2304,8 +2381,10 @@ async def _ai_subject_candidates(
         "Analyze the uploaded image as Codex would: identify every plausible 3D-generation subject, decide the best default subject, and extract the details that downstream multi-view generation must preserve. "
         "Do not make the user choose by guesswork. Prefer one complete, coherent subject over random crop regions. "
         "First decide whether the uploaded image is already a multi-view / turnaround / reference sheet: one canvas containing the same asset from multiple viewpoints, orthographic views, sketches, clay views, or technical side views. "
+        "Concept sheets with a large beauty render plus smaller repeated color views, gray/clay model views, side/back drawings, or weapon/prop technical line drawings are valid multi-view sheets when the panels depict the same asset. "
         "If it is a reference sheet, return the view boxes explicitly so the pipeline can skip subject-candidate crop preview and skip AI multi-view generation. "
-        "If the image is a concept sheet with insets, recommend the main complete asset panel, not detail insets, unless the insets are true usable alternate views of the same subject. "
+        "If the image is a concept sheet with insets, recommend the main complete asset panel for single-subject fallback, but for reference_sheet.views include only true usable alternate views of the same subject. "
+        "Ignore logos, text blocks, project names, color palettes, texture swatches, tiny unreadable thumbnails, and close-up detail callouts as 3D views. "
         "If the image contains a large environment plus smaller vehicles/props, list them separately and recommend the subject that appears most central/complete unless the smaller subject is clearly the intended standalone asset. "
         "For each candidate, give a tight but complete bbox around the visible subject, a suitability score for single-image-to-3D, and risks such as occlusion, hidden backside uncertainty, too small, embedded in scene, or likely to be misread. "
         "Extract type-specific identity locks: shape, silhouette, materials, colors, markings/text/signs, small details, accessories, pipes, antennas, flags, weapons, clothing, face/screen, etc. Do not hard-code any object type; describe what is actually visible. "
@@ -2351,11 +2430,7 @@ async def _ai_subject_candidates(
         prompt += f"User description, secondary to image: {desc[:1000]}"
     args = {
         "capability_id": "image.understand",
-        "payload": {
-            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
-            "prompt": prompt,
-            "image_url": reference_url,
-        },
+        "payload": _image_understand_payload(prompt, [reference_path]),
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
@@ -2406,11 +2481,17 @@ async def _ai_component_plan(
         "\"box\":[x1,y1,x2,y2],\"part_type\":\"unique|shared|variant|module|texture|assembly_reference|effect|unknown\","
         "\"output_strategy\":\"3d_part|multi_view_part|texture|module|assembly_reference|keep_in_base|do_not_split\","
         "\"occlusion\":\"none|minor|heavy\",\"uncertainty\":\"不确定点或不强拆理由\","
-        "\"reason\":\"为什么要拆或为什么不强拆\"}]}"
+        "\"reason\":\"为什么要拆或为什么不强拆\","
+        "\"must_keep\":[\"该部件必须保留的可见细节\"],"
+        "\"forbidden_changes\":[\"生成该部件时禁止发生的改动\"],"
+        "\"image_prompt\":\"给图片模型生成这个单独部件图的高保真提示词，必须锁定原图材质/颜色/纹样/结构，不要输出整个人物或多格图，并包含：边缘留少量安全边距，不裁切、不缺边、不缩放变形，置于纯灰色背景，不使用透明背景或棋盘格假透明。\"}]}"
         "box 是相对整张图的 0-1 坐标，必须包住可见部件并留少量边缘。"
         f"最多列出 {max(1, min(_AI3D_ABSOLUTE_MAX_PARTS, int(max_parts or _AI3D_DEFAULT_MAX_PARTS)))} 个有价值条目；"
         "复杂角色优先真正独立件如头饰、腰带扣、武器、靴子、配饰；连续衣服、袖子、下摆、皮肤和软布料通常 keep_in_base，不强行拆。"
         "道具、建筑或器物按真实结构拆，如主体、屋顶、管线、塔、烟囱、底座、可分离外挂件、重复模块；融合太深的保留在主体。"
+        "对每个 3d_part/multi_view_part 必须给 image_prompt；这一步不要输出三视图提示词，三视图提示词会在下一步根据已生成的部件图单独规划。"
+        "image_prompt 要描述这个部件本身，而不是让图片模型再次自行决定拆哪些部位；"
+        "每个 image_prompt 末尾都必须包含这句中文硬约束：边缘留少量安全边距，不裁切、不缺边、不缩放变形，置于纯灰色背景，不使用透明背景或棋盘格假透明。"
         f"资产模板：{asset_template or 'auto'}。"
     )
     desc = (description or "").strip()
@@ -2418,11 +2499,7 @@ async def _ai_component_plan(
         prompt += f"用户设定：{desc[:1000]}。"
     args = {
         "capability_id": "image.understand",
-        "payload": {
-            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
-            "prompt": prompt,
-            "image_url": reference_url,
-        },
+        "payload": _image_understand_payload(prompt, [reference_path]),
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
@@ -2439,6 +2516,503 @@ async def _ai_component_plan(
         "parts": parts,
         "raw": data,
     }
+
+
+_COMPONENT_IMAGE_PROMPT_SAFETY_MARGIN = "边缘留少量安全边距，不裁切、不缺边、不缩放变形，置于纯灰色背景，不使用透明背景或棋盘格假透明。"
+
+
+def _ensure_component_image_prompt_margin(prompt: str) -> str:
+    text = str(prompt or "").strip()
+    if not text:
+        return _COMPONENT_IMAGE_PROMPT_SAFETY_MARGIN
+    if "边缘留少量安全边距" in text and "不裁切" in text and "纯灰色背景" in text:
+        return text
+    return f"{text}\n\n{_COMPONENT_IMAGE_PROMPT_SAFETY_MARGIN}"
+
+
+def _component_part_image_prompt_from_plan(
+    *,
+    part_plan: Dict[str, Any],
+    asset_template: str,
+    reference_strength: str,
+    role: str,
+    label: str,
+    description: str,
+) -> str:
+    planned = str(part_plan.get("image_prompt") or "").strip()
+    if not planned:
+        return _ensure_component_image_prompt_margin(_component_part_prompt(
+            asset_template=asset_template,
+            reference_strength=reference_strength,
+            role=role,
+            label=label,
+            reason=str(part_plan.get("reason") or ""),
+            description=description,
+        ))
+    must_keep = _compact_text_value(part_plan.get("must_keep"), max_chars=500)
+    forbidden = _compact_text_value(part_plan.get("forbidden_changes"), max_chars=420)
+    guard = (
+        f"\nProduction constraints for isolated 2D component image: generate only one clean independent part: {label} (role={role}). "
+        "Use the uploaded red-box reference only as spatial and identity guidance. Preserve the source material, color, patterns, weathering, silhouette, thickness, and construction. "
+        "Do not output the full character/object, do not output a multi-cell board, do not add labels, arrows, UI, text, watermark, red boxes, extra accessories, or a redesigned variant. "
+        "Neutral white or light gray background, centered, full component visible, no occlusion, high-detail production asset input for 3D."
+    )
+    if must_keep:
+        guard += f" Must keep: {must_keep}."
+    if forbidden:
+        guard += f" Forbidden changes: {forbidden}."
+    desc = (description or "").strip()
+    if desc:
+        guard += f" User description is secondary and must not override the source image: {desc[:600]}."
+    return _ensure_component_image_prompt_margin(planned + guard)
+
+
+def _fallback_component_triview_prompt(part_plan: Dict[str, Any], role: str, label: str) -> str:
+    planned = str(part_plan.get("triview_prompt") or "").strip()
+    must_keep = _compact_text_value(part_plan.get("must_keep"), max_chars=500)
+    forbidden = _compact_text_value(part_plan.get("forbidden_changes"), max_chars=420)
+    base = planned or (
+        f"Create a production 3D reconstruction model sheet for this exact isolated component: {label} (role={role}). "
+        "Use the uploaded isolated component image as the only identity source."
+    )
+    base += (
+        " Output one 3:2 image containing exactly three evenly spaced views left to right: front view, front-left 45 degree view, front-right 45 degree view. "
+        "All three columns must be the same physical component rotated on a turntable: identical proportions, material zones, colors, patterns, wear, seams, bevels, thickness, and edge silhouette. "
+        "Do not redesign the part, do not add unrelated accessories, do not include the whole character/object, and do not add text, labels, arrows, UI, watermark, or decorative background. "
+        "Neutral white or light gray background, centered, equal scale in every column, high-detail PBR-friendly asset reference for multi-image-to-3D."
+    )
+    if must_keep:
+        base += f" Must keep: {must_keep}."
+    if forbidden:
+        base += f" Forbidden changes: {forbidden}."
+    return base
+
+
+async def _ai_component_triview_prompt(
+    *,
+    job_id: str,
+    request: Request,
+    original_reference_path: Path,
+    part_image_path: Path,
+    preprocessing: Dict[str, Any],
+    part_plan: Dict[str, Any],
+    role: str,
+    label: str,
+    force_ai: bool = False,
+) -> str:
+    if str(part_plan.get("triview_prompt") or "").strip() and not force_ai:
+        return _fallback_component_triview_prompt(part_plan, role, label)
+    part_url = await _reference_image_public_url(
+        job_id=job_id,
+        request=request,
+        reference_path=part_image_path,
+        preprocessing=preprocessing,
+    )
+    original_url = ""
+    if original_reference_path.is_file():
+        original_url = await _reference_image_public_url(
+            job_id=job_id,
+            request=request,
+            reference_path=original_reference_path,
+            preprocessing=preprocessing,
+        )
+    prompt = (
+        "你是3D资产制作提示词工程师。第一张图是完整原参考图，第二张图是已经生成的单独部件图。"
+        "请只为这个单独部件生成三视图图片提示词，不要再规划拆哪些部件。"
+        "输出严格 JSON，不要 Markdown："
+        "{\"triview_prompt\":\"给图片模型生成该部件三视图板的完整提示词\"}。"
+        "三视图板必须只有三栏：正面、左前45度、右前45度；同一部件同一比例、同一材质、同一颜色、同一纹样、同一磨损。"
+        "必须保留部件图中的可见结构，也参考原图中的材质和身份约束；禁止生成整个人物/整件物体，禁止换设计、加不存在配件、文字、水印、UI。"
+        "提示词要能直接喂给 GPT Image 2 生成 3:2 三视图图像。"
+        f"部件：{label}，role={role}。"
+    )
+    reason = str(part_plan.get("reason") or "").strip()
+    if reason:
+        prompt += f"拆件理由：{reason[:220]}。"
+    args = {
+        "capability_id": "image.understand",
+        "payload": _image_understand_payload(
+            prompt,
+            [path for path in (original_reference_path, part_image_path) if path.is_file()],
+        ),
+    }
+    text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
+    text = await _poll_understand_result(request, text)
+    data = _extract_understand_output_json(text, expected_keys=("triview_prompt",))
+    prompt_text = str(data.get("triview_prompt") or "").strip()
+    if not prompt_text:
+        raise RuntimeError(f"视觉模型未返回部件三视图提示词：{text[:500]}")
+    part_plan["triview_prompt"] = prompt_text
+    return _fallback_component_triview_prompt(part_plan, role, label)
+
+
+async def _generate_component_triviews_for_parts(
+    *,
+    job_id: str,
+    request: Request,
+    current_user: _ServerUser,
+    db: Any,
+    job: Dict[str, Any],
+    preprocessing: Dict[str, Any],
+    model_id: str,
+    original_reference_path: Path,
+    role_filter: str = "",
+) -> List[Dict[str, Any]]:
+    component_inputs = preprocessing.get("component_inputs") if isinstance(preprocessing.get("component_inputs"), list) else []
+    if not component_inputs:
+        component_inputs = preprocessing.get("component_inputs_partial") if isinstance(preprocessing.get("component_inputs_partial"), list) else []
+    if not component_inputs:
+        raise RuntimeError("没有可用于三视图生成的 2D 部件输入图。")
+    role_filter = str(role_filter or "").strip()
+    existing = preprocessing.get("component_triview_parts") if isinstance(preprocessing.get("component_triview_parts"), list) else []
+    reusable: Dict[int, Dict[str, Any]] = {}
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        try:
+            part_index = int(item.get("part_index") or 0)
+        except Exception:
+            part_index = 0
+        views = item.get("views") if isinstance(item.get("views"), list) else []
+        paths = [Path(str(view.get("normalized_path") or "")) for view in views if isinstance(view, dict)]
+        if part_index > 0 and len([path for path in paths if path.is_file()]) >= 2:
+            reusable[part_index] = item
+    plan_lookup = _part_plan_lookup(preprocessing)
+    out_root = store.job_dir(job_id) / "components" / "part_triviews"
+    rows: List[Dict[str, Any]] = [item for item in existing if isinstance(item, dict)]
+    if role_filter:
+        rows = [item for item in rows if str(item.get("role") or "") != role_filter]
+    selected_components = [item for item in component_inputs if isinstance(item, dict) and (not role_filter or str(item.get("role") or "") == role_filter)]
+    if role_filter and not selected_components:
+        raise RuntimeError(f"找不到可生成三视图的部件：{role_filter}")
+    total = len(selected_components)
+    for idx, component in enumerate(selected_components, start=1):
+        try:
+            part_index = int(component.get("index") or idx)
+        except Exception:
+            part_index = idx
+        if part_index in reusable:
+            rows.append(reusable[part_index])
+            continue
+        role = str(component.get("role") or f"part_{part_index:02d}")
+        label = str(component.get("label") or role)
+        part_path = Path(str(component.get("normalized_path") or ""))
+        if not part_path.is_file():
+            raise RuntimeError(f"部件 {part_index} 缺少 2D 输入图：{label}")
+        part_plan = plan_lookup.get(role) or {"role": role, "label": label}
+        progress = min(82, 18 + int((idx - 1) / max(1, total) * 46))
+        store.update_job(
+            job_id,
+            status="running",
+            stage=f"planning_component_triview_{part_index}",
+            progress=progress,
+            preprocessing=preprocessing,
+            error=None,
+        )
+        prompt = await _ai_component_triview_prompt(
+            job_id=job_id,
+            request=request,
+            original_reference_path=original_reference_path,
+            part_image_path=part_path,
+            preprocessing=preprocessing,
+            part_plan=part_plan,
+            role=role,
+            label=label,
+        )
+        part_dir = out_root / f"part_{part_index:02d}_{role}"
+        part_dir.mkdir(parents=True, exist_ok=True)
+        sheet_path = part_dir / "triview_sheet.jpg"
+        store.update_job(
+            job_id,
+            status="running",
+            stage=f"generating_component_triview_{part_index}",
+            progress=min(88, progress + 6),
+            preprocessing=preprocessing,
+            error=None,
+        )
+        result = await _generate_image_stage_core(
+            job_id=job_id,
+            request=request,
+            current_user=current_user,
+            db=db,
+            prompt=prompt,
+            model=model_id,
+            aspect_ratio="3:2",
+            ref_payload=_image_file_payload(part_path, content_type="image/png" if part_path.suffix.lower() == ".png" else "image/jpeg"),
+            reference_path=part_path,
+            preprocessing=preprocessing,
+        )
+        images = result.get("images") if isinstance(result.get("images"), list) else []
+        if not images:
+            raise RuntimeError(f"部件三视图生成没有返回图片：{label}")
+        sheet_meta = await _save_generated_preview_image(images[0], sheet_path)
+        sheet_input = _public_input(
+            job_id=job_id,
+            index=0,
+            filename=sheet_path.name,
+            normalized_path=sheet_path,
+            meta=sheet_meta,
+            role=f"{role}_triview_sheet",
+            label=f"{label}三视图板",
+            source_filename=str(component.get("filename") or ""),
+            generated=True,
+        )
+        split_parts = _split_side_back_sheet(sheet_path, part_dir, sheet_views=["front", "front_left_45", "front_right_45"])
+        view_inputs: List[Dict[str, Any]] = []
+        for view_idx, split in enumerate(split_parts, start=1):
+            view_role = str(split.get("role") or f"view_{view_idx}")
+            view_path = Path(str(split.get("path") or ""))
+            view_meta = {
+                "width": split.get("width"),
+                "height": split.get("height"),
+                "source_box": split.get("source_box"),
+                "crop_applied": False,
+            }
+            view_input = _public_input(
+                job_id=job_id,
+                index=view_idx,
+                filename=view_path.name,
+                normalized_path=view_path,
+                meta=view_meta,
+                role=view_role,
+                label=f"{label}{_VIEW_ROLE_LABELS.get(view_role, view_role)}",
+                source_filename=sheet_path.name,
+                generated=True,
+            )
+            view_input["part_index"] = part_index
+            view_input["part_role"] = role
+            view_inputs.append(view_input)
+        row = {
+            "part_index": part_index,
+            "role": role,
+            "label": label,
+            "prompt": prompt[:3200],
+            "source_component": component,
+            "sheet": sheet_input,
+            "views": view_inputs,
+        }
+        rows.append(row)
+        preprocessing["component_triview_parts"] = rows
+        store.update_job(
+            job_id,
+            status="running",
+            stage=f"component_triview_ready_{part_index}",
+            progress=min(90, 18 + int(idx / max(1, total) * 46)),
+            preprocessing=preprocessing,
+            error=None,
+        )
+    rows.sort(key=lambda item: int(item.get("part_index") or 0) if isinstance(item, dict) else 0)
+    preprocessing["component_triview_parts"] = rows
+    if len(rows) >= len(component_inputs):
+        preprocessing["component_triview_generated"] = True
+    preprocessing["component_source_mode"] = "prompt_component_triview_parts"
+    return rows
+
+
+async def _plan_component_triview_prompts_for_parts(
+    *,
+    job_id: str,
+    request: Request,
+    job: Dict[str, Any],
+    preprocessing: Dict[str, Any],
+    original_reference_path: Path,
+    role_filter: str = "",
+) -> List[Dict[str, Any]]:
+    component_inputs = preprocessing.get("component_inputs") if isinstance(preprocessing.get("component_inputs"), list) else []
+    if not component_inputs:
+        component_inputs = preprocessing.get("component_inputs_partial") if isinstance(preprocessing.get("component_inputs_partial"), list) else []
+    if not component_inputs:
+        raise RuntimeError("没有可用于规划三视图提示词的 2D 部件输入图。")
+    role_filter = str(role_filter or "").strip()
+    plan_lookup = _part_plan_lookup(preprocessing)
+    existing = preprocessing.get("component_triview_prompt_parts") if isinstance(preprocessing.get("component_triview_prompt_parts"), list) else []
+    rows: List[Dict[str, Any]] = [item for item in existing if isinstance(item, dict)]
+    if role_filter:
+        rows = [item for item in rows if str(item.get("role") or "") != role_filter]
+    existing_roles = {
+        str(item.get("role") or "")
+        for item in rows
+        if isinstance(item, dict) and str(item.get("role") or "")
+    }
+    selected_components = [
+        item for item in component_inputs
+        if isinstance(item, dict)
+        and (not role_filter or str(item.get("role") or "") == role_filter)
+        and (role_filter or str(item.get("role") or "") not in existing_roles)
+    ]
+    if role_filter and not selected_components:
+        raise RuntimeError(f"找不到可规划三视图提示词的部件：{role_filter}")
+    if not selected_components:
+        rows.sort(key=lambda item: int(item.get("part_index") or 0) if isinstance(item, dict) else 0)
+        preprocessing["component_triview_prompt_parts"] = rows
+        if len(rows) >= len(component_inputs):
+            preprocessing["component_triview_prompts_ready"] = True
+        return rows
+    total = len(selected_components)
+    for idx, component in enumerate(selected_components, start=1):
+        try:
+            part_index = int(component.get("index") or idx)
+        except Exception:
+            part_index = idx
+        role = str(component.get("role") or f"part_{part_index:02d}")
+        label = str(component.get("label") or role)
+        part_path = Path(str(component.get("normalized_path") or ""))
+        if not part_path.is_file():
+            raise RuntimeError(f"部件 {part_index} 缺少 2D 输入图：{label}")
+        part_plan = plan_lookup.get(role) or {"role": role, "label": label}
+        store.update_job(
+            job_id,
+            status="running",
+            stage=f"planning_component_triview_prompt_{part_index}",
+            progress=min(92, 10 + int((idx - 1) / max(1, total) * 78)),
+            preprocessing=preprocessing,
+            error=None,
+        )
+        prompt = await _ai_component_triview_prompt(
+            job_id=job_id,
+            request=request,
+            original_reference_path=original_reference_path,
+            part_image_path=part_path,
+            preprocessing=preprocessing,
+            part_plan=part_plan,
+            role=role,
+            label=label,
+            force_ai=True,
+        )
+        row = {
+            "part_index": part_index,
+            "role": role,
+            "label": label,
+            "prompt": prompt[:3200],
+            "source_component": component,
+            "views": [],
+        }
+        rows.append(row)
+        preprocessing["component_triview_prompt_parts"] = rows
+        store.update_job(
+            job_id,
+            status="running",
+            stage=f"component_triview_prompt_ready_{part_index}",
+            progress=min(96, 10 + int(idx / max(1, total) * 78)),
+            preprocessing=preprocessing,
+            error=None,
+        )
+    rows.sort(key=lambda item: int(item.get("part_index") or 0) if isinstance(item, dict) else 0)
+    preprocessing["component_triview_prompt_parts"] = rows
+    if len(rows) >= len(component_inputs):
+        preprocessing["component_triview_prompts_ready"] = True
+    plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
+    if plan:
+        preprocessing["component_ai_plan"] = plan
+    return rows
+
+
+async def _run_component_triview_prompts_background(
+    *,
+    job_id: str,
+    request: Request,
+    role_filter: str = "",
+) -> None:
+    job = store.load_job(job_id)
+    if not job:
+        return
+    try:
+        preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+        source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
+        original_reference_path = Path(str((source_inputs[0] if source_inputs else {}).get("normalized_path") or ""))
+        component_inputs = preprocessing.get("component_inputs") if isinstance(preprocessing.get("component_inputs"), list) else []
+        if not original_reference_path.is_file() and component_inputs:
+            original_reference_path = Path(str((component_inputs[0] if component_inputs else {}).get("normalized_path") or ""))
+        rows = await _plan_component_triview_prompts_for_parts(
+            job_id=job_id,
+            request=request,
+            job=job,
+            preprocessing=preprocessing,
+            original_reference_path=original_reference_path,
+            role_filter=role_filter,
+        )
+        notes = list(job.get("quality_notes") or [])
+        note = "GPT 已完成当前部件的三视图提示词；请检查/修改后再生成部件三视图。" if role_filter else "GPT 已完成每个部件的三视图提示词；请检查/修改后再生成部件三视图。"
+        if note not in notes:
+            notes.append(note)
+        store.update_job(
+            job_id,
+            status="preprocessed",
+            stage="component_triview_prompt_ready" if role_filter else "component_triview_prompts_ready",
+            progress=100,
+            error=None,
+            preprocessing=preprocessing,
+            quality_notes=notes,
+        )
+    except Exception as exc:
+        latest = store.load_job(job_id) or job
+        preprocessing = dict(latest.get("preprocessing") if isinstance(latest.get("preprocessing"), dict) else {})
+        store.update_job(
+            job_id,
+            status="preprocessed",
+            stage="component_triview_prompts_failed",
+            progress=100,
+            error=str(exc),
+            preprocessing=preprocessing,
+        )
+
+
+async def _run_component_triview_images_background(
+    *,
+    job_id: str,
+    request: Request,
+    current_user: _ServerUser,
+    model_id: str,
+    role_filter: str = "",
+) -> None:
+    job = store.load_job(job_id)
+    if not job:
+        return
+    db = SessionLocal()
+    try:
+        preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+        source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
+        original_reference_path = Path(str((source_inputs[0] if source_inputs else {}).get("normalized_path") or ""))
+        if not original_reference_path.is_file():
+            component_inputs = preprocessing.get("component_inputs") if isinstance(preprocessing.get("component_inputs"), list) else []
+            original_reference_path = Path(str((component_inputs[0] if component_inputs else {}).get("normalized_path") or ""))
+        rows = await _generate_component_triviews_for_parts(
+            job_id=job_id,
+            request=request,
+            current_user=current_user,
+            db=db,
+            job=job,
+            preprocessing=preprocessing,
+            model_id=model_id,
+            original_reference_path=original_reference_path,
+            role_filter=role_filter,
+        )
+        notes = list(job.get("quality_notes") or [])
+        note = "已按提示词生成当前部件三视图；下一步才会送 Meshy 生成 3D。" if role_filter else f"已按提示词生成 {len(rows)} 个部件三视图；下一步才会送 Meshy 生成 3D。"
+        if note not in notes:
+            notes.append(note)
+        store.update_job(
+            job_id,
+            status="preprocessed",
+            stage="component_triview_ready" if role_filter else "component_triviews_ready",
+            progress=100,
+            error=None,
+            preprocessing=preprocessing,
+            quality_notes=notes,
+        )
+    except Exception as exc:
+        latest = store.load_job(job_id) or job
+        preprocessing = dict(latest.get("preprocessing") if isinstance(latest.get("preprocessing"), dict) else {})
+        store.update_job(
+            job_id,
+            status="preprocessed",
+            stage="component_triviews_failed",
+            progress=100,
+            error=str(exc),
+            preprocessing=preprocessing,
+        )
+    finally:
+        db.close()
 
 
 async def _ai_verify_component_sheet(
@@ -2475,11 +3049,7 @@ async def _ai_verify_component_sheet(
     )
     args = {
         "capability_id": "image.understand",
-        "payload": {
-            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
-            "prompt": prompt,
-            "image_urls": [reference_url, sheet_url],
-        },
+        "payload": _image_understand_payload(prompt, [reference_path, sheet_path]),
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
@@ -2560,11 +3130,7 @@ async def _ai_verify_multiview_consistency(
         )
     args = {
         "capability_id": "image.understand",
-        "payload": {
-            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
-            "prompt": prompt,
-            "image_url": review_url,
-        },
+        "payload": _image_understand_payload(prompt, [review_sheet_path]),
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
@@ -2725,6 +3291,60 @@ async def _reference_image_public_url(
     preprocessing["reference_public_url"] = public_url
     store.update_job(job_id, preprocessing=preprocessing)
     return public_url
+
+
+def _image_understand_data_url(
+    image_path: Path,
+    *,
+    max_side: int = 2048,
+    max_bytes: int = 7 * 1024 * 1024,
+) -> str:
+    """Use inline image bytes for vision understanding so upstream never has to fetch local/CDN URLs."""
+    if not image_path.is_file():
+        raise RuntimeError(f"找不到可供视觉理解读取的图片：{image_path}")
+    try:
+        with Image.open(image_path) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.mode in {"RGBA", "LA"} or (img.mode == "P" and "transparency" in img.info):
+                bg = Image.new("RGB", img.size, (255, 255, 255))
+                bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[-1])
+                img = bg
+            else:
+                img = img.convert("RGB")
+
+            side = max(512, int(max_side or 2048))
+            quality = 88
+            payload = b""
+            while True:
+                work = img.copy()
+                work.thumbnail((side, side), _LANCZOS)
+                buf = io.BytesIO()
+                work.save(buf, format="JPEG", quality=quality, optimize=True, progressive=True)
+                payload = buf.getvalue()
+                if len(payload) <= max_bytes or (side <= 768 and quality <= 72):
+                    break
+                if quality > 72:
+                    quality -= 8
+                else:
+                    side = max(768, int(side * 0.8))
+            return "data:image/jpeg;base64," + base64.b64encode(payload).decode("ascii")
+    except Exception as exc:
+        raise RuntimeError(f"构造视觉理解图片数据失败：{type(exc).__name__}: {exc}") from exc
+
+
+def _image_understand_payload(prompt: str, image_paths: List[Path]) -> Dict[str, Any]:
+    data_urls = [_image_understand_data_url(path) for path in image_paths if path and path.is_file()]
+    if not data_urls:
+        raise RuntimeError("视觉理解缺少可读取的图片输入")
+    payload: Dict[str, Any] = {
+        "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
+        "prompt": prompt,
+    }
+    if len(data_urls) == 1:
+        payload["image_url"] = data_urls[0]
+    else:
+        payload["image_urls"] = data_urls
+    return payload
 
 
 async def _generate_sutui_image_stage(
@@ -3251,11 +3871,7 @@ async def _ai_verify_front45_pair(
     )
     args = {
         "capability_id": "image.understand",
-        "payload": {
-            "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
-            "prompt": prompt,
-            "image_url": review_url,
-        },
+        "payload": _image_understand_payload(prompt, [review_sheet_path]),
     }
     text = await _call_mcp_tool(request, "invoke_capability", args, timeout_seconds=8 * 60.0)
     text = await _poll_understand_result(request, text)
@@ -4066,7 +4682,7 @@ def _multiview_quality_gate_error(job: Dict[str, Any]) -> str:
     verification = preprocessing.get("triview_consistency_verification")
     if isinstance(verification, dict):
         return (
-            f"三视图一致性复核未通过：score={verification.get('score')}, "
+            f"多视角一致性复核未通过：score={verification.get('score')}, "
             f"issues={verification.get('issues')}。请重新生成多视图或提供真实多视图图。"
         )
     return "当前多视图由旧流程生成，未经过一致性复核；请重新生成多视图后再生成 3D。"
@@ -4264,7 +4880,11 @@ def _step_status(job: Dict[str, Any], step: str) -> str:
             return "done"
         if stage == "parts_3d_failed":
             return "failed"
-        if stage == "queued_part_models" or stage == "generating_part_models" or stage.startswith("generating_part_") or stage.endswith("_already_done"):
+        if (
+            stage in {"queued_part_models", "generating_part_models"}
+            or stage.startswith("generating_part_")
+            or stage.endswith("_already_done")
+        ):
             return "running"
         if preprocessing.get("component_split_generated"):
             return "pending"
@@ -4301,6 +4921,7 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
     triview_inputs = preprocessing.get("triview_inputs") if isinstance(preprocessing.get("triview_inputs"), list) else []
     if not triview_inputs:
         triview_inputs = preprocessing.get("triview_inputs_partial") if isinstance(preprocessing.get("triview_inputs_partial"), list) else []
+    triview_sheet = preprocessing.get("triview_sheet") if isinstance(preprocessing.get("triview_sheet"), dict) else None
     component_inputs = preprocessing.get("component_inputs") if isinstance(preprocessing.get("component_inputs"), list) else []
     component_reference_inputs = preprocessing.get("component_reference_inputs") if isinstance(preprocessing.get("component_reference_inputs"), list) else []
     component_sheet = preprocessing.get("component_sheet") if isinstance(preprocessing.get("component_sheet"), dict) else None
@@ -4325,19 +4946,37 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
         }
     component_status = _step_status(job, "components")
     triview_roles = [str(item.get("role") or "") for item in triview_inputs if isinstance(item, dict)]
+    prompt_based_virtual = bool(
+        preprocessing.get("text_prompt_only")
+        or preprocessing.get("virtual_prompt_from_reference")
+        or _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") == "game_prop"
+    )
     triview_summary = (
         f"{_sheet_view_names(triview_roles)}；这一步不调用 Meshy"
         if triview_roles
         else "默认生成正视图、左前45°、右前45°；不生成侧视图和背视图；这一步不调用 Meshy"
     )
-    if text_prompt_only and not triview_roles:
-        triview_summary = "从文本提示词直接生成多视图；不生成侧视图和背视图；这一步不调用 Meshy"
-    elif text_prompt_only and triview_roles:
-        triview_summary = f"文本生成：{_sheet_view_names(triview_roles)}；这一步不调用 Meshy"
+    if prompt_based_virtual and not triview_roles:
+        triview_summary = "从可编辑提示词生成正面、45°、侧面、背面；这一步不调用 Meshy"
+    elif prompt_based_virtual and triview_roles:
+        triview_summary = f"提示词生成：{_sheet_view_names(triview_roles)}；这一步不调用 Meshy"
     if preprocessing.get("triview_from_reference_sheet"):
         triview_summary = f"AI 已识别原图是多视角参考板，已直接提取：{_sheet_view_names(triview_roles)}；不再调用 image-2 重画"
     if preprocessing.get("triview_unsuitable_reason"):
         triview_summary = str(preprocessing.get("triview_unsuitable_reason") or "")
+    triview_groups = []
+    if triview_sheet:
+        triview_groups.append({
+            "title": "原始多视图整板",
+            "summary": "上游图片模型一次返回的完整图；用于直接判断生成质量",
+            "items": [triview_sheet],
+        })
+    if triview_sheet and triview_inputs:
+        triview_groups.append({
+            "title": "裁切后的 3D 输入视角",
+            "summary": "按视角切开后送入 Multi-Image to 3D",
+            "items": triview_inputs,
+        })
     triview_prompt_item = None
     custom_prompt = str(preprocessing.get("custom_triview_prompt") or "").strip()
     if custom_prompt and not triview_inputs:
@@ -4358,6 +4997,40 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
     component_summary = "只生成 2D 部件输入图；完整 3D 模型是主干，部件是后续可选增强"
     component_title = "部件输入图/拆件规划"
     component_groups = []
+    current_workflow_mode = _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom")
+    component_plan_items: List[Dict[str, Any]] = []
+    component_plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
+    component_plan_parts = component_plan.get("parts") if isinstance(component_plan.get("parts"), list) else []
+    component_slots = _component_slots_from_plan(
+        preprocessing,
+        max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS),
+    ) if component_plan_parts else []
+    component_plan_lookup = _part_plan_lookup(preprocessing)
+    for idx, (role, label) in enumerate(component_slots, start=1):
+        part = component_plan_lookup.get(role) or {"role": role, "label": label}
+        image_prompt = str(part.get("image_prompt") or "").strip()
+        if not image_prompt:
+            image_prompt = _component_part_image_prompt_from_plan(
+                part_plan=part,
+                asset_template=str(job.get("asset_template") or "auto"),
+                reference_strength=str(job.get("reference_strength") or "high"),
+                role=role,
+                label=label,
+                description=str(job.get("description") or ""),
+            )
+        else:
+            image_prompt = _ensure_component_image_prompt_margin(image_prompt)
+        component_plan_items.append({
+            "kind": "component_prompt",
+            "format": "text",
+            "index": idx,
+            "role": role,
+            "label": label[:80],
+            "image_prompt": image_prompt[:2600],
+            "reason": str(part.get("reason") or "")[:500],
+            "box": part.get("box") if isinstance(part.get("box"), (list, tuple)) else None,
+        })
+    skipped_component_plan_count = max(0, len(component_plan_parts) - len(component_plan_items))
     if preprocessing.get("component_quality_gate") == "failed" or str(job.get("stage") or "") == "component_split_failed":
         component_summary = "部件输入图质量门未通过；已停止，不会使用低质量兜底进入 part_batch"
     elif components_passed:
@@ -4367,38 +5040,90 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
             component_summary = "AI 重绘拆件未通过时已切换为原图像素保真裁切；可试生成 3D 部件，但融合区域建议保留在完整 3D 模型"
         else:
             component_summary = "2D 部件输入图已准备；可单独生成 3D 部件，确认后再与完整 3D 模型合成"
-    if components_passed and (component_sheet or component_inputs):
-        source_mode = str(preprocessing.get("component_source_mode") or "")
-        component_groups.append({
-            "title": "原图保真裁切部件输入图" if source_mode == "fidelity_source_crops" else "2D 部件输入图",
-            "summary": "使用原图像素裁切，避免 AI 重绘换设计；这不是 3D 部件，需要下一步单独生成" if source_mode == "fidelity_source_crops" else "已通过质量门；这不是 3D 部件，需要下一步单独生成",
-            "items": ([component_sheet] if component_sheet else []) + component_inputs,
+    if current_workflow_mode == "component_split":
+        result_sheet = component_sheet or component_sheet_partial or component_failed_preview_sheet
+        result_inputs = component_inputs or component_inputs_partial or component_failed_preview_inputs
+        result_items = ([result_sheet] if result_sheet else []) + (result_inputs if isinstance(result_inputs, list) else [])
+        if result_items:
+            component_groups.append({
+                "title": "已生成的部件图",
+                "summary": "",
+                "items": result_items,
+            })
+            component_summary = "已生成的部件图如下；可单个重新生成或继续生成三视图提示词"
+    else:
+        if components_passed and (component_sheet or component_inputs):
+            source_mode = str(preprocessing.get("component_source_mode") or "")
+            component_groups.append({
+                "title": "原图保真裁切部件输入图" if source_mode == "fidelity_source_crops" else "2D 部件输入图",
+                "summary": "使用原图像素裁切，避免 AI 重绘换设计；这不是 3D 部件，需要下一步单独生成" if source_mode == "fidelity_source_crops" else "已通过质量门；这不是 3D 部件，需要下一步单独生成",
+                "items": ([component_sheet] if component_sheet else []) + component_inputs,
+            })
+        if not components_passed and (component_sheet_partial or component_inputs_partial) and preprocessing.get("component_quality_gate") != "failed":
+            component_groups.append({
+                "title": "已生成的部件图（部分）",
+                "summary": "单个部件生成结果；全部部件生成完成后再继续整批三视图和 3D",
+                "items": ([component_sheet_partial] if component_sheet_partial else []) + component_inputs_partial,
+            })
+        if components_passed and see_through_artifacts:
+            component_groups.append({
+                "title": "See-through PSD 分层资源",
+                "summary": "PSD、Depth、元数据和重建预览会进入批量下载",
+                "items": see_through_artifacts,
+            })
+        if components_passed and (component_reference_sheet or component_reference_inputs):
+            component_groups.append({
+                "title": "裁切参考",
+                "summary": "定位参考，不是 3D 部件",
+                "items": ([component_reference_sheet] if component_reference_sheet else []) + component_reference_inputs,
+            })
+        if not components_passed and (component_failed_preview_sheet or component_failed_preview_inputs or component_sheet_partial or component_inputs_partial):
+            preview_sheet = component_failed_preview_sheet or component_sheet_partial
+            preview_inputs = component_failed_preview_inputs or component_inputs_partial
+            component_groups.append({
+                "title": "未通过复核的部件预览",
+                "summary": "仅用于排查，不会进入 Meshy 3D",
+                "items": ([preview_sheet] if preview_sheet else []) + preview_inputs,
+            })
+        if not components_passed and component_reference_inputs:
+            component_groups.append({
+                "title": "逐部件定位参考",
+                "summary": "原图红框 + 局部裁片，用于约束图片模型",
+                "items": component_reference_inputs,
+            })
+    component_triview_parts = preprocessing.get("component_triview_parts") if isinstance(preprocessing.get("component_triview_parts"), list) else []
+    component_triview_prompt_parts = preprocessing.get("component_triview_prompt_parts") if isinstance(preprocessing.get("component_triview_prompt_parts"), list) else []
+    component_triview_prompt_items: List[Dict[str, Any]] = []
+    for idx, row in enumerate(component_triview_prompt_parts, start=1):
+        if not isinstance(row, dict):
+            continue
+        source = row.get("source_component") if isinstance(row.get("source_component"), dict) else {}
+        component_triview_prompt_items.append({
+            "kind": "component_triview_prompt",
+            "format": "text",
+            "index": int(row.get("part_index") or idx),
+            "role": str(row.get("role") or source.get("role") or f"part_{idx:02d}"),
+            "label": str(row.get("label") or source.get("label") or f"部件 {idx}")[:80],
+            "triview_prompt": str(row.get("prompt") or "")[:3200],
+            "source_preview_url": str(source.get("preview_url") or ""),
         })
-    if components_passed and see_through_artifacts:
-        component_groups.append({
-            "title": "See-through PSD 分层资源",
-            "summary": "PSD、Depth、元数据和重建预览会进入批量下载",
-            "items": see_through_artifacts,
-        })
-    if components_passed and (component_reference_sheet or component_reference_inputs):
-        component_groups.append({
-            "title": "裁切参考",
-            "summary": "定位参考，不是 3D 部件",
-            "items": ([component_reference_sheet] if component_reference_sheet else []) + component_reference_inputs,
-        })
-    if not components_passed and (component_failed_preview_sheet or component_failed_preview_inputs or component_sheet_partial or component_inputs_partial):
-        preview_sheet = component_failed_preview_sheet or component_sheet_partial
-        preview_inputs = component_failed_preview_inputs or component_inputs_partial
-        component_groups.append({
-            "title": "未通过复核的部件预览",
-            "summary": "仅用于排查，不会进入 Meshy 3D",
-            "items": ([preview_sheet] if preview_sheet else []) + preview_inputs,
-        })
-    if not components_passed and component_reference_inputs:
-        component_groups.append({
-            "title": "逐部件定位参考",
-            "summary": "原图红框 + 局部裁片，用于约束图片模型",
-            "items": component_reference_inputs,
+    component_triview_groups = []
+    for row in component_triview_parts:
+        if not isinstance(row, dict):
+            continue
+        row_items = []
+        sheet = row.get("sheet") if isinstance(row.get("sheet"), dict) else None
+        views = row.get("views") if isinstance(row.get("views"), list) else []
+        if sheet:
+            row_items.append(sheet)
+        row_items.extend([item for item in views if isinstance(item, dict)])
+        if not row_items:
+            continue
+        label = str(row.get("label") or row.get("role") or f"部件 {row.get('part_index') or ''}").strip()
+        component_triview_groups.append({
+            "title": f"{label}三视图",
+            "summary": "部件图生成的正面、左前45°、右前45°，用于 Meshy 多图 3D",
+            "items": row_items,
         })
     outputs = job.get("outputs") if isinstance(job.get("outputs"), dict) else {}
     output_files = outputs.get("files") if isinstance(outputs.get("files"), list) else []
@@ -4419,7 +5144,83 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
             "prompt": str(job.get("description") or "")[:3200],
         }]
     model_items = base_files or output_files
-    if prompt_flow:
+    direct_single_reference_sheet_pending = bool(
+        workflow_mode == "direct_multiview"
+        and not preprocessing.get("triview_generated")
+        and len(source_inputs or job.get("inputs") or []) == 1
+    )
+    if workflow_mode == "component_split":
+        part_summary = "按已生成的部件三视图送入 Meshy，逐部件生成 3D；不生成底模、不做最终拼接"
+        if output_parts:
+            part_summary = f"已生成/复用 {len(output_parts)} 个 3D 部件；此流程不做底模替换拼接"
+        steps = [
+            {
+                "key": "upload",
+                "title": "上传拆件参考图",
+                "status": _step_status(job, "upload"),
+                "summary": "拆件流程只用 1 张主参考图；AI 自动决定可拆部件和提示词",
+                "items": source_inputs or job.get("inputs") or [],
+            },
+            {
+                "key": "component_prompts",
+                "title": "GPT 拆件提示词规划",
+                "status": "done" if component_plan_items else component_status,
+                "summary": (
+                    (
+                        f"GPT 已规划 {len(component_plan_parts)} 个条目，其中 {len(component_plan_items)} 个进入部件生成；"
+                        + (f"{skipped_component_plan_count} 个保留在主体/纹理参考；" if skipped_component_plan_count else "")
+                        + "可逐个修改生成提示词"
+                    )
+                    if component_plan_items
+                    else "只让 GPT 理解原图并输出每个部件的图片提示词；这一步不生成图片"
+                ),
+                "items": component_plan_items,
+            },
+            {
+                "key": "component_images",
+                "title": "按提示词生成孤立部件图",
+                "status": "done" if components_passed else ("running" if str(job.get("stage") or "").startswith(("generating_semantic_component_part", "queued_component_image")) else "pending"),
+                "summary": (
+                    "已根据可编辑提示词生成孤立部件图；下一步规划每个部件三视图提示词"
+                    if components_passed
+                    else "使用上一步确认的提示词生成每个孤立部件图；这一步不调用 Meshy"
+                ),
+                "items": [],
+                "groups": component_groups,
+            },
+            {
+                "key": "component_triview_prompts",
+                "title": "GPT 部件三视图提示词",
+                "status": "done" if preprocessing.get("component_triview_prompts_ready") else ("running" if str(job.get("stage") or "").startswith(("planning_component_triview_prompt", "queued_component_triview_prompts")) else "pending"),
+                "summary": (
+                    f"GPT 已为 {len(component_triview_prompt_items)} 个部件规划三视图提示词；可逐个修改"
+                    if component_triview_prompt_items
+                    else "让 GPT 根据原图和孤立部件图，给每个部件写正面/左前45/右前45三视图提示词"
+                ),
+                "items": component_triview_prompt_items,
+            },
+            {
+                "key": "component_triviews",
+                "title": "按提示词生成部件三视图",
+                "status": "done" if preprocessing.get("component_triview_generated") else ("running" if str(job.get("stage") or "").startswith(("generating_component_triview", "queued_component_triviews")) else "pending"),
+                "summary": (
+                    f"已生成 {len(component_triview_parts)} 个部件三视图；下一步送 Meshy 生成 3D"
+                    if preprocessing.get("component_triview_generated")
+                    else "使用确认后的三视图提示词生成图片；这一步仍不调用 Meshy"
+                ),
+                "items": [],
+                "groups": component_triview_groups,
+            },
+            {
+                "key": "parts_3d",
+                "title": "生成 3D 部件",
+                "status": _step_status(job, "parts_3d"),
+                "summary": part_summary,
+                "items": [],
+                "parts": output_parts,
+            },
+        ]
+    elif prompt_flow:
         steps = [
             {
                 "key": "prompt",
@@ -4434,12 +5235,38 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "status": _step_status(job, "triview"),
                 "summary": triview_summary,
                 "items": triview_inputs,
+                "groups": triview_groups,
             },
             {
                 "key": "base_model",
                 "title": "生成 3D 模型",
                 "status": _step_status(job, "base_model"),
                 "summary": f"输出 {len(model_items)} 个文件" if model_items else "用确认后的多视图生成完整 3D 模型",
+                "items": model_items,
+            },
+        ]
+    elif direct_single_reference_sheet_pending:
+        steps = [
+            {
+                "key": "upload",
+                "title": "多视图参考板",
+                "status": _step_status(job, "upload"),
+                "summary": "已保存单张参考板；需要先识别并裁切出独立视角",
+                "items": source_inputs or job.get("inputs") or [],
+            },
+            {
+                "key": "triview",
+                "title": "识别裁切视角",
+                "status": _step_status(job, "triview"),
+                "summary": "从单张参考板提取正面、45°、侧面、背面等可用视角；不重画图片",
+                "items": triview_inputs,
+                "groups": triview_groups,
+            },
+            {
+                "key": "base_model",
+                "title": "生成 3D 模型",
+                "status": _step_status(job, "base_model"),
+                "summary": "先完成参考板识别裁切，再用裁切视角生成完整 3D 模型",
                 "items": model_items,
             },
         ]
@@ -4457,8 +5284,12 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
             upload_title = "固定角度照片"
             upload_summary = "已保存实物多角度照片，直接用于 3D 生成"
         elif workflow_mode == "direct_multiview":
-            upload_title = "多视图输入"
-            upload_summary = "已保存已有多视角图，不裁切、不重画，直接用于 3D 生成"
+            if preprocessing.get("triview_from_reference_sheet") and triview_groups:
+                upload_title = "多视图参考板"
+                upload_summary = "已从单张参考板识别并裁切出可用视角"
+            else:
+                upload_title = "多视图输入"
+                upload_summary = "已保存已有多视角图，直接用于 3D 生成"
         else:
             upload_title = "上传参考图"
             upload_summary = "已保存多张参考图，按自定义流程直接用于 3D 生成"
@@ -4469,6 +5300,7 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "status": _step_status(job, "upload"),
                 "summary": upload_summary,
                 "items": source_inputs or job.get("inputs") or [],
+                "groups": triview_groups if workflow_mode == "direct_multiview" and triview_groups else [],
             },
             {
                 "key": "mesh",
@@ -4504,6 +5336,7 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "status": _step_status(job, "triview"),
                 "summary": triview_summary,
                 "items": triview_inputs or ([triview_prompt_item] if triview_prompt_item else []),
+                "groups": triview_groups,
             },
             {
                 "key": "base_model",
@@ -4521,7 +5354,7 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "groups": component_groups,
             },
         ]
-    if (not prompt_flow and workflow_mode not in {"real_object", "direct_multiview"}) and (str(job.get("strategy") or "") == "part_batch" or components_passed):
+    if (not prompt_flow and workflow_mode not in {"real_object", "direct_multiview", "component_split"}) and (str(job.get("strategy") or "") == "part_batch" or components_passed):
         steps.extend([
             {
                 "key": "parts_3d",
@@ -4633,6 +5466,8 @@ async def _run_single_image_preprocess_background(
                     out_dir=norm_dir / "reference_sheet_views",
                     detection=reference_sheet_detection,
                 )
+            if workflow_mode == "direct_multiview" and not reference_sheet_triview_inputs:
+                raise RuntimeError("多视图直接生成只支持多张独立视角图，或一张可识别的多视图参考板；当前单图未识别出至少两个可用视角。")
             if not reference_sheet_triview_inputs:
                 region_candidate_inputs = _region_inputs_from_subject_plan(
                     job_id=job_id,
@@ -4722,7 +5557,7 @@ async def _run_single_image_preprocess_background(
         effective_strategy = strategy
         if reference_sheet_ready:
             effective_strategy = "multi_view"
-            hold_for_preprocess = True
+            hold_for_preprocess = False if workflow_mode == "direct_multiview" and not preprocess_only else True
         elif hold_for_preprocess and generated_part_count:
             effective_strategy = "candidate_preview"
         elif hold_for_preprocess and effective_strategy == "auto":
@@ -4764,6 +5599,7 @@ async def _run_single_image_preprocess_background(
                 "triview_sheet_views": reference_roles,
                 "triview_usable_roles": reference_roles,
                 "triview_source": "reference_sheet",
+                "triview_sheet": _reference_sheet_public_input(source_inputs[0]),
             })
         if subject_candidate_plan:
             preprocessing["subject_candidate_plan"] = subject_candidate_plan
@@ -4777,21 +5613,40 @@ async def _run_single_image_preprocess_background(
         if subject_understanding_error:
             preprocessing["subject_understanding_error"] = subject_understanding_error
 
-        view_plan = _view_generation_plan(
-            asset_template=asset_template,
-            reference_strength=reference_strength,
-            description=description,
-            target_formats=target_formats,
+        current_understanding = (
+            preprocessing.get("triview_ai_understanding")
+            if isinstance(preprocessing.get("triview_ai_understanding"), dict)
+            else None
         )
-        _apply_generic_reference_triview_prompts(
-            view_plan,
-            asset_template=asset_template,
-            reference_strength=reference_strength,
-            description=description,
-            view_understanding=preprocessing.get("triview_ai_understanding") if isinstance(preprocessing.get("triview_ai_understanding"), dict) else None,
-            target_formats=target_formats,
-        )
-        view_plan["image_model"] = image_model
+        if workflow_mode == "game_prop":
+            virtual_spec = _virtual_asset_spec_from_understanding(
+                description=description,
+                view_understanding=current_understanding,
+            )
+            view_plan = _text_prompt_view_generation_plan(
+                asset_template=asset_template,
+                description=virtual_spec,
+                image_model=image_model,
+                target_formats=target_formats,
+            )
+            preprocessing["virtual_prompt_from_reference"] = True
+            preprocessing["text_prompt"] = virtual_spec
+        else:
+            view_plan = _view_generation_plan(
+                asset_template=asset_template,
+                reference_strength=reference_strength,
+                description=description,
+                target_formats=target_formats,
+            )
+            _apply_generic_reference_triview_prompts(
+                view_plan,
+                asset_template=asset_template,
+                reference_strength=reference_strength,
+                description=description,
+                view_understanding=current_understanding,
+                target_formats=target_formats,
+            )
+            view_plan["image_model"] = image_model
         latest_for_prompt = store.load_job(job_id) or {}
         latest_preprocessing = latest_for_prompt.get("preprocessing") if isinstance(latest_for_prompt.get("preprocessing"), dict) else {}
         user_custom_prompt = (
@@ -4838,7 +5693,18 @@ async def _run_single_image_preprocess_background(
             ),
             "error": None,
         })
+        if not hold_for_preprocess:
+            final_job["status"] = "queued"
+            final_job["stage"] = "queued"
+            final_job["progress"] = 0
+            final_job["quality_notes"] = list(final_job.get("quality_notes") or []) + _quality_notes(
+                strategy=effective_strategy,
+                image_count=len(inputs),
+                quality=quality,
+            )
         store.save_job(final_job)
+        if not hold_for_preprocess:
+            await _run_job_background(job_id)
     except Exception as exc:
         logger.exception("[ai_3d_model] async preprocess failed job_id=%s", job_id)
         preprocessing["preprocessing_error"] = str(exc)
@@ -5746,8 +6612,13 @@ def _meshy_base_image_items(job: Dict[str, Any]) -> List[Tuple[str, Path]]:
     if len(items) <= _MESHY_MULTI_IMAGE_MAX:
         return items
     by_role = {role: path for role, path in items}
+    role_order = (
+        _MESHY_BASE_VIEW_ROLES_CHARACTER
+        if _is_character_template(str(job.get("asset_template") or ""))
+        else _MESHY_BASE_VIEW_ROLES_ASSET
+    )
     selected: List[Tuple[str, Path]] = []
-    for role in _MESHY_BASE_VIEW_ROLES:
+    for role in role_order:
         path = by_role.get(role)
         if path and path.is_file():
             selected.append((role, path))
@@ -6265,24 +7136,31 @@ async def _run_job_background(job_id: str) -> None:
         store.update_job(job_id, **patch)
 
 
-async def _run_part_models_background(job_id: str) -> None:
+async def _run_part_models_background(
+    job_id: str,
+    request: Request,
+    current_user: _ServerUser,
+    model_id: str,
+) -> None:
     job = store.load_job(job_id)
     if not job:
         return
     subtasks: List[Dict[str, Any]] = []
     total_credits = 0
     base_outputs: Optional[Dict[str, Any]] = None
+    db = SessionLocal()
     try:
         if str(job.get("strategy") or "") != "part_batch":
             raise RuntimeError("当前任务不是部件增强流程。请先生成部件输入图。")
         if not _has_true_component_source(job):
             raise RuntimeError("当前输入不是可用于 3D 部件生成的真实部件输入图。")
-        preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
+        preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+        component_split_mode = _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") == "component_split"
         if not preprocessing.get("component_split_generated"):
             raise RuntimeError("必须先生成 2D 部件输入图，才能生成 3D 部件。")
         outputs_before = job.get("outputs") if isinstance(job.get("outputs"), dict) else {}
-        base_outputs = _base_outputs_for_current_triview(job_id, job, outputs_before)
-        if not _base_glb_path(job_id, base_outputs):
+        base_outputs = None if component_split_mode else _base_outputs_for_current_triview(job_id, job, outputs_before)
+        if not component_split_mode and not _base_glb_path(job_id, base_outputs):
             raise RuntimeError("缺少完整 3D 模型。请先生成多视图 3D 模型，再生成 3D 部件。")
         image_paths = [Path(item["normalized_path"]) for item in job.get("inputs", []) if isinstance(item, dict) and item.get("normalized_path")]
         image_paths = [path for path in image_paths if path.is_file()]
@@ -6296,19 +7174,131 @@ async def _run_part_models_background(job_id: str) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         meta_by_index = _component_meta_by_index(job)
         preflight_issues = _component_mesh_preflight_issues(meta_by_index)
-        if preflight_issues:
+        if preflight_issues and not component_split_mode:
             raise RuntimeError("3D 部件生成前检查未通过：" + "；".join(preflight_issues))
         existing_by_index = _cached_part_tasks_by_index(job_id, job)
         store.update_job(
             job_id,
             status="running",
-            stage="generating_part_models",
+            stage="generating_component_triviews" if component_split_mode else "generating_part_models",
             progress=12,
             started_at=store.now_iso(),
             finished_at=None,
             error=None,
-            outputs={"base": base_outputs or {}},
+            outputs=outputs_before if component_split_mode else ({"base": base_outputs or {}} if base_outputs else {}),
         )
+        if component_split_mode:
+            if not preprocessing.get("component_triview_generated"):
+                raise RuntimeError("请先生成部件三视图，再生成 3D 部件。")
+            triview_rows = preprocessing.get("component_triview_parts") if isinstance(preprocessing.get("component_triview_parts"), list) else []
+            if not triview_rows:
+                raise RuntimeError("找不到可送入 Meshy 的部件三视图。")
+            store.update_job(
+                job_id,
+                status="running",
+                stage="generating_part_models",
+                progress=62,
+                preprocessing=preprocessing,
+                outputs=outputs_before,
+                error=None,
+            )
+            total_rows = max(1, len(triview_rows))
+            for row_idx, row in enumerate(triview_rows, start=1):
+                part_index = int(row.get("part_index") or row_idx)
+                role = str(row.get("role") or f"part_{part_index:02d}")
+                label = str(row.get("label") or role)
+                views = row.get("views") if isinstance(row.get("views"), list) else []
+                view_paths = [
+                    Path(str(view.get("normalized_path") or ""))
+                    for view in views
+                    if isinstance(view, dict) and view.get("normalized_path")
+                ]
+                view_paths = [path for path in view_paths if path.is_file()]
+                if len(view_paths) < 2:
+                    raise RuntimeError(f"部件 {part_index} 三视图不足，不能送入 Meshy：{label}")
+                digest = hashlib.sha256()
+                digest.update(_VIEW_PROMPT_VERSION.encode("utf-8"))
+                digest.update(role.encode("utf-8", errors="ignore"))
+                for path in view_paths:
+                    digest.update(path.name.encode("utf-8", errors="ignore"))
+                    digest.update(path.read_bytes())
+                fingerprint = digest.hexdigest()
+                existing = existing_by_index.get(part_index)
+                if existing and existing.get("input_fingerprint") == fingerprint:
+                    reused = dict(existing)
+                    reused["reused"] = True
+                    subtasks.append(reused)
+                    total_credits = sum(int(item.get("consumed_credits") or 0) for item in subtasks)
+                    store.update_job(
+                        job_id,
+                        stage=f"part_{part_index}_already_done",
+                        progress=min(96, 62 + int(row_idx / total_rows * 32)),
+                        subtasks=subtasks,
+                        outputs={"parts": subtasks},
+                        consumed_credits=total_credits,
+                    )
+                    continue
+                store.update_job(
+                    job_id,
+                    stage=f"generating_part_{part_index}_from_triview",
+                    progress=min(94, 62 + int((row_idx - 1) / total_rows * 32)),
+                    preprocessing=preprocessing,
+                )
+                part_dir = out_dir / f"part_{part_index:02d}"
+                part_dir.mkdir(parents=True, exist_ok=True)
+                part_outputs = await _run_single_meshy_task(
+                    job_id=job_id,
+                    image_paths=view_paths,
+                    mode="multi-image-to-3d",
+                    quality=quality,
+                    target_formats=target_formats,
+                    out_dir=part_dir,
+                    prefix=f"part_{part_index:02d}_",
+                    texture_prompt=f"PBR material, preserve this exact component design: {label}",
+                )
+                subtask = {
+                    "part_index": part_index,
+                    "role": role,
+                    "label": label,
+                    "source": str((row.get("source_component") or {}).get("filename") or label),
+                    "input_mode": "component_triview",
+                    "input_fingerprint": fingerprint,
+                    "provider_task_id": part_outputs.get("provider_task_id"),
+                    "files": part_outputs.get("files") or [],
+                    "mesh_metrics": part_outputs.get("mesh_metrics") or {},
+                    "consumed_credits": part_outputs.get("consumed_credits") or 0,
+                    "triview_sheet": row.get("sheet"),
+                    "triview_views": views,
+                }
+                subtasks.append(subtask)
+                total_credits = sum(int(item.get("consumed_credits") or 0) for item in subtasks)
+                store.update_job(
+                    job_id,
+                    subtasks=subtasks,
+                    outputs={"parts": subtasks},
+                    preprocessing=preprocessing,
+                    consumed_credits=total_credits,
+                )
+            notes = list(job.get("quality_notes") or [])
+            note = "拆件 3D 已按“部件图 -> 部件三视图 -> Meshy 多图 3D”流程生成；未生成完整底模，也不会做低精度拼接。"
+            if note not in notes:
+                notes.append(note)
+            store.update_job(
+                job_id,
+                status="preprocessed",
+                stage="parts_3d_ready",
+                progress=100,
+                finished_at=store.now_iso(),
+                subtasks=subtasks,
+                outputs={"parts": subtasks},
+                mesh_metrics={},
+                consumed_credits=total_credits,
+                provider_task_id=None,
+                preprocessing=preprocessing,
+                quality_notes=notes,
+                error=None,
+            )
+            return
         for idx, image_path in enumerate(image_paths, start=1):
             meta = meta_by_index.get(idx, {})
             fingerprint = _component_input_fingerprint(image_path, meta)
@@ -6387,6 +7377,7 @@ async def _run_part_models_background(job_id: str) -> None:
         )
     except Exception as exc:
         logger.exception("[ai_3d_model] part models failed job_id=%s", job_id)
+        fail_outputs = {"base": base_outputs or {}, "parts": subtasks} if subtasks or base_outputs else {"parts": subtasks}
         store.update_job(
             job_id,
             status="failed",
@@ -6395,9 +7386,11 @@ async def _run_part_models_background(job_id: str) -> None:
             finished_at=store.now_iso(),
             error=str(exc),
             subtasks=subtasks or (job.get("subtasks") if isinstance(job.get("subtasks"), list) else []),
-            outputs={"base": base_outputs or {}, "parts": subtasks} if subtasks else {"base": base_outputs or {}},
+            outputs=fail_outputs,
             consumed_credits=total_credits,
         )
+    finally:
+        db.close()
 
 
 async def _run_part_assembly_background(job_id: str) -> None:
@@ -6548,17 +7541,17 @@ async def _run_triview_background(
         preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
         source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
         text_prompt_only = bool(preprocessing.get("text_prompt_only"))
-        if text_prompt_only:
+        prompt_based_virtual = bool(
+            text_prompt_only
+            or preprocessing.get("virtual_prompt_from_reference")
+            or _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") == "game_prop"
+        )
+        if prompt_based_virtual:
             out_dir = store.job_dir(job_id) / "triview"
             out_dir.mkdir(parents=True, exist_ok=True)
-            plan = _text_prompt_view_generation_plan(
-                asset_template=str(job.get("asset_template") or "ornament_prop"),
-                description=str(job.get("description") or preprocessing.get("text_prompt") or ""),
-                image_model=model_id,
-                target_formats=job.get("target_formats") or [],
-            )
+            plan = _fresh_view_generation_plan(job, image_model=model_id)
             custom_prompt = str(preprocessing.get("custom_triview_prompt") or "").strip()
-            if custom_prompt:
+            if custom_prompt and preprocessing.get("custom_triview_prompt_user_edited"):
                 for view in plan.get("views", []):
                     if isinstance(view, dict) and str(view.get("view") or "") == "triview_sheet":
                         view["prompt"] = custom_prompt
@@ -6571,7 +7564,7 @@ async def _run_triview_background(
             sheet_item = next((item for item in views if str(item.get("view") or "") == "triview_sheet"), None)
             if not sheet_item:
                 raise RuntimeError("文本多视角模板为空")
-            sheet_views = _valid_sheet_views(sheet_item.get("sheet_views"), fallback=_sheet_views_for_template(str(plan.get("asset_template") or "")))
+            sheet_views = _valid_sheet_views(sheet_item.get("sheet_views"), fallback=_PROMPT_MULTI_VIEW_SHEET_VIEWS)
             sheet_dest = out_dir / "triview_sheet.jpg"
             store.update_job(job_id, status="generating_views", stage="generating_text_prompt_triview_sheet", progress=12, preprocessing=preprocessing, error=None)
             result = await _generate_image_stage_core(
@@ -6581,14 +7574,14 @@ async def _run_triview_background(
                 db=db,
                 prompt=str(sheet_item.get("prompt") or ""),
                 model=model_id,
-                aspect_ratio="3:2",
+                aspect_ratio=str(plan.get("sheet_aspect_ratio") or "16:9"),
                 ref_payload=None,
                 reference_path=None,
                 preprocessing=preprocessing,
             )
             images = result.get("images") if isinstance(result.get("images"), list) else []
             if not images:
-                raise RuntimeError("文本三视图生成没有返回图片")
+                raise RuntimeError("文本多视图生成没有返回图片")
             sheet_meta = await _save_generated_preview_image(images[0], sheet_dest)
             sheet_input = _public_input(
                 job_id=job_id,
@@ -6597,7 +7590,7 @@ async def _run_triview_background(
                 normalized_path=sheet_dest,
                 meta=sheet_meta,
                 role="triview_sheet",
-                label="文本生成高清三视图板",
+                label=str(sheet_item.get("label") or "文本生成高清四视图板"),
                 source_filename="text_prompt",
                 generated=True,
             )
@@ -6641,9 +7634,9 @@ async def _run_triview_background(
                     preprocessing=preprocessing,
                     view_generation_plan=plan,
                     image_model=model_id,
-                    error=f"文本三视图本地复核未通过：issues={local_geometry.get('issues')}",
+                    error=f"文本多视图本地复核未通过：issues={local_geometry.get('issues')}",
                 )
-                raise RuntimeError(f"文本三视图本地复核未通过：issues={local_geometry.get('issues')}")
+                raise RuntimeError(f"文本多视图本地复核未通过：issues={local_geometry.get('issues')}")
             for item in generated:
                 for view in views:
                     if isinstance(view, dict) and str(view.get("view") or "") == str(item.get("role") or ""):
@@ -7270,7 +8263,7 @@ async def _run_triview_background(
         latest_preprocessing.pop("force_regenerate_triview", None)
         notes = list(latest.get("quality_notes") or [])
         notes.append(
-            f"三视图生成失败：{detail}。任务和已生成视图已保留"
+            f"多视图生成失败：{detail}。任务和已生成视图已保留"
             f"{f'（已生成 {partial_count} 张）' if partial_count else ''}；为保证一致性，系统不会自动切换模型或改用低参考强度生成。"
         )
         store.update_job(
@@ -7292,6 +8285,8 @@ async def _run_component_split_background(
     request: Request,
     current_user: _ServerUser,
     model: str,
+    plan_only: bool = False,
+    role_filter: str = "",
 ) -> None:
     job = store.load_job(job_id)
     if not job:
@@ -7301,24 +8296,39 @@ async def _run_component_split_background(
         preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
         root = store.job_dir(job_id)
         model_id = _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
+        workflow_mode = _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom")
+        component_split_mode = workflow_mode == "component_split"
+        role_filter = str(role_filter or "").strip()
         source_for_plan = None
-        triview_inputs = preprocessing.get("triview_inputs") if isinstance(preprocessing.get("triview_inputs"), list) else []
-        for item in triview_inputs:
-            if isinstance(item, dict) and str(item.get("role") or "") == "front":
-                source_for_plan = item
-                break
+        if component_split_mode:
+            source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
+            if source_inputs and isinstance(source_inputs[0], dict):
+                source_for_plan = source_inputs[0]
+        else:
+            triview_inputs = preprocessing.get("triview_inputs") if isinstance(preprocessing.get("triview_inputs"), list) else []
+            for item in triview_inputs:
+                if isinstance(item, dict) and str(item.get("role") or "") == "front":
+                    source_for_plan = item
+                    break
         if not isinstance(source_for_plan, dict):
-            raise RuntimeError("高精度拆件必须先生成多视图；拆件规划只使用正面锚点图，不回退到单图低精度裁切。")
+            raise RuntimeError("高精度拆件必须先有可用参考图；普通增强流程需先生成多视图，拆件模式需上传 1 张原图。")
         reference_path = Path(str(source_for_plan.get("normalized_path") or ""))
         if not reference_path.exists():
             raise RuntimeError("找不到可用于生成拆件板的参考图。")
-        preprocessing.pop("component_split_generated", None)
-        preprocessing.pop("component_sheet", None)
-        preprocessing.pop("component_inputs", None)
-        preprocessing.pop("component_reference_sheet", None)
-        preprocessing.pop("component_reference_inputs", None)
-        preprocessing.pop("component_reference_mode", None)
-        if _is_character_template(str(job.get("asset_template") or "")):
+        if role_filter:
+            for key in ("component_triview_generated",):
+                preprocessing.pop(key, None)
+            if isinstance(preprocessing.get("component_triview_parts"), list):
+                preprocessing["component_triview_parts"] = [
+                    item for item in preprocessing["component_triview_parts"]
+                    if isinstance(item, dict) and str(item.get("role") or "") != role_filter
+                ]
+            if isinstance(preprocessing.get("component_triview_prompt_parts"), list):
+                preprocessing["component_triview_prompt_parts"] = [
+                    item for item in preprocessing["component_triview_prompt_parts"]
+                    if isinstance(item, dict) and str(item.get("role") or "") != role_filter
+                ]
+        if _is_character_template(str(job.get("asset_template") or "")) and not component_split_mode:
             await _run_see_through_component_split(
                 job_id=job_id,
                 job=job,
@@ -7327,24 +8337,66 @@ async def _run_component_split_background(
                 reference_path=reference_path,
             )
             return
-        store.update_job(job_id, status="splitting_parts", stage="planning_components_with_ai", progress=12, error=None)
-        ai_plan = await _ai_component_plan(
-            job_id=job_id,
-            request=request,
-            reference_path=reference_path,
-            preprocessing=preprocessing,
-            asset_template=str(job.get("asset_template") or "auto"),
-            description=str(job.get("description") or ""),
-            max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS),
-        )
+        existing_plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
+        if isinstance(existing_plan.get("parts"), list) and existing_plan.get("parts"):
+            ai_plan = existing_plan
+        else:
+            store.update_job(job_id, status="splitting_parts", stage="planning_components_with_ai", progress=12, error=None)
+            ai_plan = await _ai_component_plan(
+                job_id=job_id,
+                request=request,
+                reference_path=reference_path,
+                preprocessing=preprocessing,
+                asset_template=str(job.get("asset_template") or "auto"),
+                description=str(job.get("description") or ""),
+                max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS),
+            )
         preprocessing["component_ai_plan"] = ai_plan
         preprocessing["component_plan_source"] = "image.understand"
         store.update_job(job_id, preprocessing=preprocessing)
         if preprocessing.get("component_plan_source") != "image.understand":
             raise RuntimeError("AI 拆件规划失败，已停止；不会使用模板裁切或 rembg 兜底。")
+        if component_split_mode and plan_only:
+            part_slots = _component_slots_from_plan(preprocessing, max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS))
+            preprocessing["component_slots"] = [{"role": role, "label": label} for role, label in part_slots]
+            notes = list(job.get("quality_notes") or [])
+            note = "GPT 已完成拆件规划和每个部件的图片提示词；请先检查/修改提示词，再生成部件图。"
+            if note not in notes:
+                notes.append(note)
+            store.update_job(
+                job_id,
+                status="preprocessed",
+                stage="component_prompts_ready",
+                progress=100,
+                error=None,
+                preprocessing=preprocessing,
+                inputs=[source_for_plan],
+                mode="component-prompt-split",
+                strategy="part_batch",
+                provider="meshy",
+                final_3d_provider="meshy",
+                image_stage_provider="image_model",
+                image_model=model_id,
+                quality_notes=notes,
+            )
+            return
         store.update_job(job_id, status="splitting_parts", stage="generating_semantic_component_parts", progress=32, preprocessing=preprocessing, error=None)
-        part_slots = _component_slots_from_plan(preprocessing, max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS))
-        preprocessing["component_slots"] = [{"role": role, "label": label} for role, label in part_slots]
+        all_part_slots = _component_slots_from_plan(preprocessing, max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS))
+        existing_component_inputs = preprocessing.get("component_inputs") if isinstance(preprocessing.get("component_inputs"), list) else []
+        if not existing_component_inputs:
+            existing_component_inputs = preprocessing.get("component_inputs_partial") if isinstance(preprocessing.get("component_inputs_partial"), list) else []
+        existing_roles = {
+            str(item.get("role") or "")
+            for item in existing_component_inputs
+            if isinstance(item, dict) and str(item.get("role") or "")
+        }
+        if role_filter:
+            part_slots = [(role, label) for role, label in all_part_slots if role == role_filter]
+            if not part_slots:
+                raise RuntimeError(f"找不到拆件部件：{role_filter}")
+        else:
+            part_slots = [(role, label) for role, label in all_part_slots if role not in existing_roles]
+        preprocessing["component_slots"] = [{"role": role, "label": label} for role, label in all_part_slots]
         component_dir = root / "components" / "semantic_parts"
         refs_dir = component_dir / "part_references"
         outputs_dir = component_dir / "parts"
@@ -7352,10 +8404,56 @@ async def _run_component_split_background(
         component_dir.mkdir(parents=True, exist_ok=True)
         sheet_path = component_dir / "component_sheet.jpg"
         plan_lookup = _part_plan_lookup(preprocessing)
-        component_inputs: List[Dict[str, Any]] = []
-        part_reference_inputs: List[Dict[str, Any]] = []
+        existing_reference_inputs = preprocessing.get("component_reference_inputs") if isinstance(preprocessing.get("component_reference_inputs"), list) else []
+        if role_filter:
+            component_inputs = [item for item in existing_component_inputs if isinstance(item, dict) and str(item.get("role") or "") != role_filter]
+            part_reference_inputs = [
+                item for item in existing_reference_inputs
+                if isinstance(item, dict) and str(item.get("role") or "") not in {role_filter, f"{role_filter}_reference"}
+            ]
+        else:
+            component_inputs = [item for item in existing_component_inputs if isinstance(item, dict)]
+            part_reference_inputs = [item for item in existing_reference_inputs if isinstance(item, dict)]
         max_generate = len(part_slots)
-        for idx, (role, label) in enumerate(part_slots[:max_generate], start=1):
+        selected_roles = {role for role, _ in part_slots}
+        if not selected_roles and component_inputs:
+            component_inputs.sort(key=lambda item: int(item.get("index") or 0) if isinstance(item, dict) else 0)
+            sheet_meta = _make_generated_component_sheet(component_inputs, sheet_path)
+            sheet_input = _public_input(
+                job_id=job_id,
+                index=0,
+                filename=sheet_path.name,
+                normalized_path=sheet_path,
+                meta=sheet_meta,
+                role="component_sheet",
+                label="GPT Image 2 孤立部件输入板",
+                source_filename=str(source_for_plan.get("filename") or ""),
+                generated=True,
+            )
+            preprocessing["component_sheet"] = sheet_input
+            preprocessing["component_inputs"] = component_inputs
+            preprocessing["component_inputs_partial"] = component_inputs
+            preprocessing["component_sheet_partial"] = sheet_input
+            preprocessing["component_split_generated"] = len(component_inputs) >= len(all_part_slots)
+            store.update_job(
+                job_id,
+                status="preprocessed",
+                stage="component_split_completed" if preprocessing["component_split_generated"] else "component_images_partial",
+                progress=100,
+                inputs=component_inputs,
+                mode="part_batch",
+                strategy="part_batch",
+                provider="meshy",
+                final_3d_provider="meshy",
+                image_stage_provider="image_model",
+                preprocessing=preprocessing,
+                image_model=model_id,
+                error=None,
+            )
+            return
+        for idx, (role, label) in enumerate(all_part_slots, start=1):
+            if role not in selected_roles:
+                continue
             part_plan = plan_lookup.get(role) or {"role": role, "label": label}
             ref_path = refs_dir / f"{idx:02d}_{role}_reference.jpg"
             ref_meta = _make_component_part_reference(reference_path, part_plan, ref_path)
@@ -7382,12 +8480,12 @@ async def _run_component_split_background(
                 preprocessing=preprocessing,
                 error=None,
             )
-            prompt = _component_part_prompt(
+            prompt = _component_part_image_prompt_from_plan(
+                part_plan=part_plan,
                 asset_template=str(job.get("asset_template") or "auto"),
                 reference_strength=str(job.get("reference_strength") or "high"),
                 role=role,
                 label=label,
-                reason=str(part_plan.get("reason") or ""),
                 description=str(job.get("description") or ""),
             )
             progress = 34 + int((idx - 1) / max(1, max_generate) * 34)
@@ -7439,6 +8537,10 @@ async def _run_component_split_background(
             )
             part_input["mesh_input_kind"] = "ai_generated_isolated_part"
             part_input["part_reason"] = str(part_plan.get("reason") or "")
+            if str(part_plan.get("image_prompt") or "").strip():
+                part_input["image_prompt"] = _ensure_component_image_prompt_margin(str(part_plan.get("image_prompt") or ""))[:1800]
+            if str(part_plan.get("triview_prompt") or "").strip():
+                part_input["triview_prompt"] = str(part_plan.get("triview_prompt") or "")[:1800]
             component_inputs.append(part_input)
             partial_sheet_meta = _make_generated_component_sheet(component_inputs, sheet_path)
             partial_sheet = _public_input(
@@ -7464,8 +8566,49 @@ async def _run_component_split_background(
                 preprocessing=preprocessing,
                 error=None,
             )
-        if len(component_inputs) < max(1, min(len(part_slots), 6)):
-            raise RuntimeError(f"逐部件生成数量不足：{len(component_inputs)}/{len(part_slots)}")
+        full_slot_count = len(all_part_slots)
+        if role_filter and len(component_inputs) < full_slot_count:
+            component_inputs.sort(key=lambda item: int(item.get("index") or 0) if isinstance(item, dict) else 0)
+            partial_sheet_meta = _make_generated_component_sheet(component_inputs, sheet_path)
+            partial_sheet = _public_input(
+                job_id=job_id,
+                index=0,
+                filename=sheet_path.name,
+                normalized_path=sheet_path,
+                meta=partial_sheet_meta,
+                role="component_sheet",
+                label="AI 逐部件拼板（部分）",
+                source_filename=str(source_for_plan.get("filename") or ""),
+                generated=True,
+            )
+            preprocessing["component_reference_inputs"] = part_reference_inputs
+            preprocessing["component_inputs_partial"] = component_inputs
+            preprocessing["component_sheet_partial"] = partial_sheet
+            preprocessing["component_source_mode"] = "prompt_component_parts" if component_split_mode else "semantic_image_component_parts"
+            preprocessing["component_mesh_input_mode"] = "ai_generated_isolated_parts"
+            notes = list(job.get("quality_notes") or [])
+            note = f"已单独生成部件图：{role_filter}；全部部件生成完成后可继续三视图和 3D。"
+            if note not in notes:
+                notes.append(note)
+            store.update_job(
+                job_id,
+                status="preprocessed",
+                stage="component_image_ready",
+                progress=100,
+                inputs=component_inputs,
+                mode="component-prompt-split",
+                strategy="part_batch",
+                provider="meshy",
+                final_3d_provider="meshy",
+                image_stage_provider="image_model",
+                preprocessing=preprocessing,
+                image_model=model_id,
+                quality_notes=notes,
+                error=None,
+            )
+            return
+        if len(component_inputs) < max(1, min(full_slot_count, 6)):
+            raise RuntimeError(f"逐部件生成数量不足：{len(component_inputs)}/{full_slot_count}")
         sheet_meta = _make_generated_component_sheet(component_inputs, sheet_path)
         sheet_input = _public_input(
             job_id=job_id,
@@ -7481,7 +8624,7 @@ async def _run_component_split_background(
         preprocessing["component_reference_inputs"] = part_reference_inputs
         preprocessing["component_inputs_partial"] = component_inputs
         preprocessing["component_sheet_partial"] = sheet_input
-        preprocessing["component_source_mode"] = "semantic_image_component_parts"
+        preprocessing["component_source_mode"] = "prompt_component_parts" if component_split_mode else "semantic_image_component_parts"
         preprocessing["component_mesh_input_mode"] = "ai_generated_isolated_parts"
         store.update_job(job_id, status="splitting_parts", stage="verifying_semantic_component_parts", progress=72, preprocessing=preprocessing, inputs=component_inputs)
         uses_source_pixel_inputs = (
@@ -7502,10 +8645,15 @@ async def _run_component_split_background(
                 reference_path=reference_path,
                 sheet_path=sheet_path,
                 preprocessing=preprocessing,
-                part_slots=part_slots,
+                part_slots=all_part_slots,
             )
         preprocessing["component_ai_verification"] = verify
         if not verify.get("passed"):
+            if component_split_mode:
+                raise RuntimeError(
+                    f"AI 逐部件复核未通过：score={verify.get('score')}, issues={verify.get('issues')}。"
+                    "拆件模式不会回退到原图裁切或低质量部件，需重新生成部件输入图。"
+                )
             preprocessing["component_failed_preview_inputs"] = component_inputs
             preprocessing["component_failed_preview_sheet"] = sheet_input
             preprocessing["component_ai_redraw_quality_gate"] = "failed"
@@ -7560,19 +8708,25 @@ async def _run_component_split_background(
                 quality_notes=notes,
             )
             return
-        gate_passed, gate_meta = _component_sheet_quality_gate(component_inputs, sheet_meta, part_slots=part_slots)
+        gate_passed, gate_meta = _component_sheet_quality_gate(component_inputs, sheet_meta, part_slots=all_part_slots)
         preprocessing["component_quality_gate"] = "passed" if gate_passed else "failed"
         preprocessing["component_quality_gate_meta"] = gate_meta
         if not gate_passed:
             raise RuntimeError(f"AI 部件板质量门未通过：{json.dumps(gate_meta, ensure_ascii=False)}")
         preprocessing["component_sheet"] = sheet_input
         preprocessing["component_inputs"] = component_inputs
-        preprocessing["component_source_mode"] = "semantic_image_component_parts"
+        preprocessing["component_source_mode"] = "prompt_component_parts" if component_split_mode else "semantic_image_component_parts"
         preprocessing["component_mesh_input_mode"] = "ai_generated_isolated_parts"
         preprocessing["component_split_generated"] = True
+        if component_split_mode:
+            preprocessing["component_triview_required"] = True
         notes = list(job.get("quality_notes") or [])
-        notes.append("已使用 GPT Image 2 根据红框参考生成干净孤立部件输入图；裁剪图只用于定位参考，不直接送入 3D。")
-        notes.append("当前步骤只生成 2D 部件输入图；下一步可单独生成 Meshy 3D 部件，确认后再与完整 3D 模型合成。")
+        if component_split_mode:
+            notes.append("已按 GPT 拆件规划提示词生成干净孤立部件图；下一步会先为每个部件生成三视图，再送入 Meshy。")
+            notes.append("拆件模式不要求先生成完整底模；输出是逐部件 3D 模型。")
+        else:
+            notes.append("已使用 GPT Image 2 根据红框参考生成干净孤立部件输入图；裁剪图只用于定位参考，不直接送入 3D。")
+            notes.append("当前步骤只生成 2D 部件输入图；下一步可单独生成 Meshy 3D 部件，确认后再与完整 3D 模型合成。")
         store.update_job(
             job_id,
             status="preprocessed",
@@ -7603,9 +8757,14 @@ async def _run_component_split_background(
         if isinstance(partial_sheet, dict):
             latest_preprocessing["component_failed_preview_sheet"] = partial_sheet
         latest_preprocessing["component_quality_gate"] = "failed"
-        safe_inputs = _safe_frontend_generation_inputs(latest, latest_preprocessing)
-        next_strategy = "multi_view" if _looks_like_triview_inputs(safe_inputs) else "candidate_preview"
-        next_mode = "multi-image-to-3d" if next_strategy == "multi_view" else "preprocess-preview"
+        if _canonical_workflow_mode(latest.get("workflow_mode") or latest_preprocessing.get("workflow_mode") or "custom") == "component_split":
+            safe_inputs = latest_preprocessing.get("source_inputs") if isinstance(latest_preprocessing.get("source_inputs"), list) else (latest.get("inputs") or [])
+            next_strategy = "part_batch"
+            next_mode = "component-prompt-split"
+        else:
+            safe_inputs = _safe_frontend_generation_inputs(latest, latest_preprocessing)
+            next_strategy = "multi_view" if _looks_like_triview_inputs(safe_inputs) else "candidate_preview"
+            next_mode = "multi-image-to-3d" if next_strategy == "multi_view" else "preprocess-preview"
         notes = list(latest.get("quality_notes") or [])
         notes.append(
             f"真实部件分离失败：{detail}。系统不会使用模板裁切、rembg 或低质量结果兜底进入 part_batch。"
@@ -7690,10 +8849,15 @@ async def ai_3d_model_create_job(
     image_model = _canonical_image_model(image_model or _SUTUI_GPT_IMAGE_2_MODEL)
     if workflow_mode in {"real_object", "direct_multiview", "game_prop"}:
         strategy = "multi_view"
+    if workflow_mode == "component_split":
+        strategy = "part_batch"
+        auto_decompose = False
     if workflow_mode == "game_prop" and asset_template == "auto":
         asset_template = "ornament_prop"
     character_template = _is_character_template(asset_template)
     upload_files = [f for f in (files or []) if f and f.filename]
+    if workflow_mode == "component_split" and not upload_files:
+        raise HTTPException(status_code=400, detail="拆件流程必须上传 1 张参考图，用于 GPT 规划部件提示词")
     if not upload_files:
         desc = description.strip()
         if not desc:
@@ -7755,8 +8919,8 @@ async def ai_3d_model_create_job(
             "workflow_mode": workflow_mode,
             "description": desc,
             "quality_notes": [
-                "这是纯提示词任务：不需要上传图片，系统会先用图片模型生成高质量三视图参考图。",
-                "文本生成多视图适合硬表面、饰品、道具、PBR 资产；默认不生成侧视图和背视图，避免换设计。",
+                "这是纯提示词任务：不需要上传图片，系统会先用图片模型生成高质量四视图参考图。",
+                "文本生成多视图适合硬表面、饰品、道具、PBR 资产；默认生成正面、45°、侧面和背面。",
                 "这一步不会调用 Meshy；只有确认多视图后生成 3D 模型才会消耗 Meshy credits。",
             ],
         }
@@ -7804,7 +8968,65 @@ async def ai_3d_model_create_job(
             label="主体裁切" if len(raw_image_paths) == 1 else f"参考图 {idx}",
         ))
 
-    if workflow_mode not in {"real_object", "direct_multiview"} and len(inputs) == 1 and auto_decompose:
+    if workflow_mode == "component_split":
+        if len(inputs) != 1:
+            raise HTTPException(status_code=400, detail="拆件流程当前只接受 1 张参考图；多图请用“多视图直接生成 3D”或实物流程")
+        source_inputs = list(inputs)
+        preprocessing = {
+            "auto_crop": True,
+            "auto_decompose": False,
+            "generated_part_count": 0,
+            "max_parts": max_parts,
+            "source_inputs": source_inputs,
+            "region_candidate_inputs": [],
+            "requires_image_stage_for_quality": False,
+            "preprocess_only": True,
+            "workflow_mode": workflow_mode,
+            "component_policy": "prompt_parts_to_part_triview_to_3d",
+            "component_triview_required": True,
+            "component_prompt_split": True,
+        }
+        job = {
+            "job_id": job_id,
+            "status": "preprocessed",
+            "stage": "component_split_ready",
+            "progress": 100,
+            "provider": "meshy",
+            "final_3d_provider": "meshy",
+            "image_stage_provider": "image_model",
+            "image_stage_models": [_SUTUI_GPT_IMAGE_2_MODEL, "nano-banana-2"],
+            "mode": "component-prompt-split",
+            "strategy": "part_batch",
+            "quality": quality,
+            "title": title.strip() or f"拆件 3D job {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "created_at": store.now_iso(),
+            "updated_at": store.now_iso(),
+            "inputs": source_inputs,
+            "target_formats": target_formats,
+            "outputs": {},
+            "preprocessing": preprocessing,
+            "view_generation_plan": {
+                "image_model": image_model,
+                "stage_provider": "image_model",
+                "uses_meshy": False,
+                "workflow": "component_split",
+                "prompt_version": _VIEW_PROMPT_VERSION,
+            },
+            "asset_template": asset_template,
+            "reference_strength": reference_strength,
+            "image_model": image_model,
+            "workflow_mode": workflow_mode,
+            "description": description.strip(),
+            "quality_notes": [
+                "拆件流程已独立：一张参考图先由 GPT 规划部件和提示词，再用 GPT Image 2 生成部件图。",
+                "生成 3D 部件前，系统会先为每个部件生成正面、左前45°、右前45°三视图，再把三视图送入 Meshy。",
+                "这一步还未调用 Meshy；只有点击生成 3D 部件时才会消耗 Meshy credits。",
+            ],
+        }
+        store.save_job(job)
+        return {"ok": True, "job": _public_job(job)}
+
+    if workflow_mode != "real_object" and len(inputs) == 1 and (auto_decompose or workflow_mode == "direct_multiview"):
         initial_source_inputs = list(inputs)
         initial_preprocessing = {
             "auto_crop": True,
@@ -7814,26 +9036,35 @@ async def ai_3d_model_create_job(
             "source_inputs": initial_source_inputs,
             "region_candidate_inputs": [],
             "requires_image_stage_for_quality": True,
-            "preprocess_only": True,
+            "preprocess_only": bool(workflow_mode != "direct_multiview"),
             "preprocessing_pending": True,
             "workflow_mode": workflow_mode,
             "component_policy": "triview_first_for_character" if character_template else "parts_allowed_for_hard_surface",
         }
-        initial_view_plan = _view_generation_plan(
-            asset_template=asset_template,
-            reference_strength=reference_strength,
-            description=description,
-            target_formats=target_formats,
-        )
-        _apply_generic_reference_triview_prompts(
-            initial_view_plan,
-            asset_template=asset_template,
-            reference_strength=reference_strength,
-            description=description,
-            view_understanding=None,
-            target_formats=target_formats,
-        )
-        initial_view_plan["image_model"] = image_model
+        if workflow_mode == "game_prop":
+            initial_view_plan = _text_prompt_view_generation_plan(
+                asset_template=asset_template,
+                description=description or "Use the uploaded reference image understanding to create a coherent game-ready asset specification.",
+                image_model=image_model,
+                target_formats=target_formats,
+            )
+            initial_preprocessing["virtual_prompt_from_reference"] = True
+        else:
+            initial_view_plan = _view_generation_plan(
+                asset_template=asset_template,
+                reference_strength=reference_strength,
+                description=description,
+                target_formats=target_formats,
+            )
+            _apply_generic_reference_triview_prompts(
+                initial_view_plan,
+                asset_template=asset_template,
+                reference_strength=reference_strength,
+                description=description,
+                view_understanding=None,
+                target_formats=target_formats,
+            )
+            initial_view_plan["image_model"] = image_model
         if workflow_mode == "game_prop":
             sheet_item = next((item for item in initial_view_plan.get("views", []) if isinstance(item, dict) and item.get("view") == "triview_sheet"), None)
             if isinstance(sheet_item, dict):
@@ -7903,19 +9134,23 @@ async def ai_3d_model_create_job(
     recommended_subject_candidate: Optional[Dict[str, Any]] = None
     parsed_input_roles = _parse_input_roles(input_roles)
     if workflow_mode in {"real_object", "direct_multiview"}:
-        if len(source_inputs) < 2:
-            raise HTTPException(status_code=400, detail="当前模式至少需要上传 2 张不同角度图片")
-        explicit_multiview_inputs = _assign_uploaded_multiview_roles(source_inputs, parsed_input_roles)
-        explicit_roles = {str(item.get("role") or "") for item in explicit_multiview_inputs if isinstance(item, dict)}
-        if workflow_mode == "real_object" and (
-            "front" not in explicit_roles
-            or not ({"front_left_45", "front_right_45"} & explicit_roles)
-        ):
-            raise HTTPException(status_code=400, detail="实物生 3D 必须至少包含正面和一个 45°角度")
-        source_inputs = explicit_multiview_inputs
-        inputs = explicit_multiview_inputs
-        reference_sheet_triview_inputs = explicit_multiview_inputs
-        auto_decompose = False
+        if workflow_mode == "real_object":
+            if len(source_inputs) < 2:
+                raise HTTPException(status_code=400, detail="实物生 3D 至少需要上传 2 张不同角度图片")
+            explicit_multiview_inputs = _assign_uploaded_multiview_roles(source_inputs, parsed_input_roles)
+            explicit_roles = {str(item.get("role") or "") for item in explicit_multiview_inputs if isinstance(item, dict)}
+            if "front" not in explicit_roles or len(explicit_roles) < 2:
+                raise HTTPException(status_code=400, detail="实物生 3D 必须至少包含正面和一个非正面角度")
+            source_inputs = explicit_multiview_inputs
+            inputs = explicit_multiview_inputs
+            reference_sheet_triview_inputs = explicit_multiview_inputs
+            auto_decompose = False
+        elif len(source_inputs) >= 2:
+            explicit_multiview_inputs = _assign_uploaded_multiview_roles(source_inputs, parsed_input_roles)
+            source_inputs = explicit_multiview_inputs
+            inputs = explicit_multiview_inputs
+            reference_sheet_triview_inputs = explicit_multiview_inputs
+            auto_decompose = False
     if len(source_inputs) == 1 and auto_decompose:
         part_dir = norm_dir / "parts"
         try:
@@ -8060,18 +9295,21 @@ async def ai_3d_model_create_job(
         preprocessing["reference_sheet_detection"] = reference_sheet_detection
     if reference_sheet_ready:
         reference_roles = [str(item.get("role") or "") for item in reference_sheet_triview_inputs if isinstance(item, dict)]
-        preprocessing.update({
+        reference_sheet_patch = {
             "reference_sheet_detected": True,
             "triview_from_reference_sheet": True,
             "triview_generated": True,
             "triview_generation_skipped": True,
             "triview_quality_gate": "passed",
             "triview_inputs": reference_sheet_triview_inputs,
-            "triview_inputs_partial": reference_sheet_triview_inputs,
+                "triview_inputs_partial": reference_sheet_triview_inputs,
             "triview_sheet_views": reference_roles,
             "triview_usable_roles": reference_roles,
             "triview_source": "reference_sheet",
-        })
+        }
+        if not explicit_multiview_inputs and source_inputs:
+            reference_sheet_patch["triview_sheet"] = _reference_sheet_public_input(source_inputs[0])
+        preprocessing.update(reference_sheet_patch)
     if subject_candidate_plan:
         preprocessing["subject_candidate_plan"] = subject_candidate_plan
     if subject_understanding_error:
@@ -8099,6 +9337,7 @@ async def ai_3d_model_create_job(
             "triview_usable_roles": roles,
             "triview_source": workflow_mode,
         })
+        preprocessing.pop("triview_sheet", None)
     if not hold_for_preprocess and effective_strategy == "part_batch" and len(source_inputs) >= 2 and not region_candidate_inputs:
         preprocessing["component_source_mode"] = "user_part_package"
         preprocessing["component_quality_gate"] = "passed"
@@ -8195,6 +9434,13 @@ async def ai_3d_model_start_generation(
     if not job.get("inputs"):
         raise HTTPException(status_code=400, detail="任务没有可生成的输入图")
     preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
+    source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
+    if (
+        _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") == "direct_multiview"
+        and len(source_inputs or job.get("inputs") or []) == 1
+        and not preprocessing.get("triview_generated")
+    ):
+        raise HTTPException(status_code=409, detail="这是一张多视图参考板，请先点击“识别裁切视角”，系统会切出独立视角后再生成 3D。")
     if (
         job.get("stage") == "preprocessed"
         and preprocessing.get("requires_image_stage_for_quality")
@@ -8269,8 +9515,10 @@ async def ai_3d_model_generate_base_model(
 @router.post("/api/ai-3d-model/jobs/{job_id}/parts-3d")
 async def ai_3d_model_generate_part_models(
     job_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
-    _: _ServerUser = Depends(_ai3d_local_user),
+    model: str = Form(""),
+    current_user: _ServerUser = Depends(_ai3d_local_user),
 ):
     job = store.load_job(job_id)
     if not job:
@@ -8284,12 +9532,15 @@ async def ai_3d_model_generate_part_models(
         raise HTTPException(status_code=409, detail="请先生成 2D 部件输入图，再生成 3D 部件")
     if not _has_true_component_source(job):
         raise HTTPException(status_code=409, detail="当前部件输入未通过质量门，不能送入 3D")
+    component_split_mode = _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") == "component_split"
+    if component_split_mode and not preprocessing.get("component_triview_generated"):
+        raise HTTPException(status_code=409, detail="请先生成部件三视图，再生成 3D 部件")
     outputs = job.get("outputs") if isinstance(job.get("outputs"), dict) else {}
     base_outputs = _base_outputs_for_current_triview(job_id, job, outputs)
-    if not _base_glb_path(job_id, base_outputs):
+    if not component_split_mode and not _base_glb_path(job_id, base_outputs):
         raise HTTPException(status_code=409, detail="请先生成完整 3D 模型，再生成 3D 部件")
     preflight_issues = _component_mesh_preflight_issues(_component_meta_by_index(job))
-    if preflight_issues:
+    if preflight_issues and not component_split_mode:
         raise HTTPException(status_code=409, detail="3D 部件生成前检查未通过：" + "；".join(preflight_issues))
     if not meshy.is_configured():
         raise HTTPException(status_code=503, detail="Meshy API Key 未配置，请在 .env 中设置 MESHY_API_KEY")
@@ -8300,11 +9551,17 @@ async def ai_3d_model_generate_part_models(
         progress=0,
         error=None,
         finished_at=None,
-        outputs={"base": base_outputs or {}},
+        outputs={} if component_split_mode else {"base": base_outputs or {}},
         mesh_metrics={},
         provider_task_id=None,
     )
-    background_tasks.add_task(_run_part_models_background, job_id)
+    background_tasks.add_task(
+        _run_part_models_background,
+        job_id,
+        request,
+        current_user,
+        _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL)),
+    )
     return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
 
 
@@ -8362,7 +9619,12 @@ async def ai_3d_model_generate_triview(
     if preprocessing.get("triview_from_reference_sheet"):
         return {"ok": True, "job": _public_job(job), "skipped": True, "reason": "已从多视角参考板提取视角，不再调用 image-2 重画。"}
     source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
-    if len(source_inputs) == 1:
+    prompt_based_virtual = bool(
+        preprocessing.get("text_prompt_only")
+        or preprocessing.get("virtual_prompt_from_reference")
+        or _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") == "game_prop"
+    )
+    if len(source_inputs) == 1 and not prompt_based_virtual:
         source_path = Path(str(source_inputs[0].get("normalized_path") or ""))
         if source_path.is_file():
             try:
@@ -8396,6 +9658,7 @@ async def ai_3d_model_generate_triview(
                         "triview_sheet_views": roles,
                         "triview_usable_roles": roles,
                         "triview_source": "reference_sheet",
+                        "triview_sheet": _reference_sheet_public_input(source_inputs[0]),
                         "requires_image_stage_for_quality": False,
                         "generated_part_count": 0,
                     })
@@ -8816,12 +10079,14 @@ async def ai_3d_model_generate_components(
     selected_model = _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
     preprocessing = job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {}
     preprocessing = dict(preprocessing)
+    workflow_mode = _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom")
+    component_split_mode = workflow_mode == "component_split"
     preprocessing["max_parts"] = max(
         _AI3D_DEFAULT_MAX_PARTS,
         min(_AI3D_ABSOLUTE_MAX_PARTS, int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS)),
     )
     notes = list(job.get("quality_notes") or [])
-    if _is_character_template(str(job.get("asset_template") or "")):
+    if _is_character_template(str(job.get("asset_template") or "")) and not component_split_mode:
         preprocessing["component_manual_override"] = "character_split_trial"
         trial_note = "角色拆件由用户手动触发：优先使用 see-through PSD 语义分层；若环境或质量门未通过，不会送入 part_batch 3D。"
         if trial_note not in notes:
@@ -8844,16 +10109,21 @@ async def ai_3d_model_generate_components(
         "component_ai_verification",
         "component_ai_plan_error",
         "component_slots",
+        "component_triview_generated",
+        "component_triview_parts",
         "see_through_result",
     ):
         preprocessing.pop(key, None)
-    if str(preprocessing.get("component_plan_source") or "") != "image.understand":
+    if component_split_mode:
+        preprocessing.pop("component_plan_source", None)
+        preprocessing.pop("component_ai_plan", None)
+    elif str(preprocessing.get("component_plan_source") or "") != "image.understand":
         preprocessing.pop("component_plan_source", None)
         preprocessing.pop("component_ai_plan", None)
     safe_inputs = _safe_frontend_generation_inputs(job, preprocessing)
     previous_outputs = job.get("outputs") if isinstance(job.get("outputs"), dict) else {}
     preserved_base = _base_outputs_for_current_triview(job_id, job, previous_outputs)
-    next_outputs = {"base": preserved_base} if preserved_base else {}
+    next_outputs = {} if component_split_mode else ({"base": preserved_base} if preserved_base else {})
     store.update_job(
         job_id,
         status="splitting_parts",
@@ -8867,8 +10137,8 @@ async def ai_3d_model_generate_components(
         outputs=next_outputs,
         mesh_metrics={},
         provider_task_id=None,
-        mode="multi-image-to-3d" if _looks_like_triview_inputs(safe_inputs) else "preprocess-preview",
-        strategy="multi_view" if _looks_like_triview_inputs(safe_inputs) else "candidate_preview",
+        mode="component-prompt-split" if component_split_mode else ("multi-image-to-3d" if _looks_like_triview_inputs(safe_inputs) else "preprocess-preview"),
+        strategy="part_batch" if component_split_mode else ("multi_view" if _looks_like_triview_inputs(safe_inputs) else "candidate_preview"),
     )
     background_tasks.add_task(
         _run_component_split_background,
@@ -8876,6 +10146,318 @@ async def ai_3d_model_generate_components(
         request=request,
         current_user=current_user,
         model=selected_model,
+        plan_only=component_split_mode,
+    )
+    return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
+
+
+@router.post("/api/ai-3d-model/jobs/{job_id}/component-prompts")
+async def ai_3d_model_update_component_prompts(
+    job_id: str,
+    parts_json: str = Form(...),
+    _: _ServerUser = Depends(_ai3d_local_user),
+):
+    job = store.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
+        raise HTTPException(status_code=409, detail="当前任务状态不能编辑拆件提示词")
+    preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+    plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
+    parts = plan.get("parts") if isinstance(plan.get("parts"), list) else []
+    if not parts:
+        raise HTTPException(status_code=409, detail="请先生成 GPT 拆件提示词")
+    try:
+        incoming = json.loads(parts_json or "[]")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="parts_json 不是有效 JSON") from exc
+    if not isinstance(incoming, list):
+        raise HTTPException(status_code=400, detail="parts_json 必须是数组")
+    by_role = {
+        str(item.get("role") or "").strip(): item
+        for item in incoming
+        if isinstance(item, dict) and str(item.get("role") or "").strip()
+    }
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        role = str(part.get("role") or "").strip()
+        patch = by_role.get(role)
+        if not isinstance(patch, dict):
+            continue
+        label = str(patch.get("label") or "").strip()
+        image_prompt = str(patch.get("image_prompt") or "").strip()
+        triview_prompt = str(patch.get("triview_prompt") or "").strip()
+        if label:
+            part["label"] = label[:40]
+        if image_prompt:
+            part["image_prompt"] = _ensure_component_image_prompt_margin(image_prompt)[:2600]
+            part["image_prompt_user_edited"] = True
+        if triview_prompt:
+            part["triview_prompt"] = triview_prompt[:2600]
+            part["triview_prompt_user_edited"] = True
+    plan["parts"] = parts
+    preprocessing["component_ai_plan"] = plan
+    preprocessing["component_prompts_user_edited"] = True
+    store.update_job(job_id, preprocessing=preprocessing, stage=str(job.get("stage") or "component_prompts_ready"), error=None)
+    return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
+
+
+def _component_expected_count(preprocessing: Dict[str, Any]) -> int:
+    return len(_component_slots_from_plan(preprocessing, max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS)))
+
+
+def _filter_component_records(items: Any, role: str = "", part_index: int = 0) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        item_role = str(item.get("role") or item.get("part_role") or "").strip()
+        try:
+            item_index = int(item.get("part_index") or item.get("index") or 0)
+        except Exception:
+            item_index = 0
+        if role and (item_role == role or item_role == f"{role}_reference" or item_role == f"{role}_triview_sheet" or str(item.get("part_role") or "") == role):
+            continue
+        if part_index and item_index == part_index:
+            continue
+        out.append(item)
+    return out
+
+
+def _rebuild_component_sheet_state(job_id: str, job: Dict[str, Any], preprocessing: Dict[str, Any]) -> None:
+    component_inputs = preprocessing.get("component_inputs") if isinstance(preprocessing.get("component_inputs"), list) else []
+    if not component_inputs:
+        component_inputs = preprocessing.get("component_inputs_partial") if isinstance(preprocessing.get("component_inputs_partial"), list) else []
+    component_inputs = [item for item in component_inputs if isinstance(item, dict)]
+    expected_count = _component_expected_count(preprocessing)
+    if component_inputs:
+        component_inputs.sort(key=lambda item: int(item.get("index") or 0) if isinstance(item, dict) else 0)
+        sheet_path = store.job_dir(job_id) / "components" / "semantic_parts" / "component_sheet.jpg"
+        sheet_meta = _make_generated_component_sheet(component_inputs, sheet_path)
+        sheet_input = _public_input(
+            job_id=job_id,
+            index=0,
+            filename=sheet_path.name,
+            normalized_path=sheet_path,
+            meta=sheet_meta,
+            role="component_sheet",
+            label="GPT Image 2 孤立部件输入板",
+            source_filename=str(((preprocessing.get("source_inputs") or [{}])[0] if isinstance(preprocessing.get("source_inputs"), list) and preprocessing.get("source_inputs") else {}).get("filename") or ""),
+            generated=True,
+        )
+        preprocessing["component_inputs_partial"] = component_inputs
+        preprocessing["component_sheet_partial"] = sheet_input
+        if expected_count and len(component_inputs) >= expected_count:
+            preprocessing["component_inputs"] = component_inputs
+            preprocessing["component_sheet"] = sheet_input
+            preprocessing["component_split_generated"] = True
+        else:
+            preprocessing.pop("component_inputs", None)
+            preprocessing.pop("component_sheet", None)
+            preprocessing.pop("component_split_generated", None)
+    else:
+        for key in ("component_inputs", "component_sheet", "component_inputs_partial", "component_sheet_partial", "component_split_generated"):
+            preprocessing.pop(key, None)
+
+
+@router.post("/api/ai-3d-model/jobs/{job_id}/component-record/delete")
+async def ai_3d_model_delete_component_record(
+    job_id: str,
+    scope: str = Form(...),
+    role: str = Form(""),
+    part_index: int = Form(0),
+    _: _ServerUser = Depends(_ai3d_local_user),
+):
+    job = store.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
+        raise HTTPException(status_code=409, detail="当前任务还在运行中，不能删除记录")
+    preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+    outputs = dict(job.get("outputs") if isinstance(job.get("outputs"), dict) else {})
+    clean_scope = str(scope or "").strip()
+    clean_role = str(role or "").strip()
+    clean_index = int(part_index or 0)
+    if not clean_role and not clean_index:
+        raise HTTPException(status_code=400, detail="缺少要删除的 role 或 part_index")
+
+    if clean_scope in {"component_image", "component_images"}:
+        for key in ("component_inputs", "component_inputs_partial", "component_failed_preview_inputs"):
+            if isinstance(preprocessing.get(key), list):
+                preprocessing[key] = _filter_component_records(preprocessing[key], clean_role, clean_index)
+        if isinstance(preprocessing.get("component_reference_inputs"), list):
+            preprocessing["component_reference_inputs"] = _filter_component_records(preprocessing["component_reference_inputs"], clean_role, clean_index)
+        for key in ("component_triview_prompt_parts", "component_triview_parts"):
+            if isinstance(preprocessing.get(key), list):
+                preprocessing[key] = _filter_component_records(preprocessing[key], clean_role, clean_index)
+        preprocessing.pop("component_triview_prompts_ready", None)
+        preprocessing.pop("component_triview_generated", None)
+        _rebuild_component_sheet_state(job_id, job, preprocessing)
+        if isinstance(outputs.get("parts"), list):
+            outputs["parts"] = _filter_component_records(outputs["parts"], clean_role, clean_index)
+    elif clean_scope in {"component_triview_prompt", "component_triview_prompts"}:
+        if isinstance(preprocessing.get("component_triview_prompt_parts"), list):
+            preprocessing["component_triview_prompt_parts"] = _filter_component_records(preprocessing["component_triview_prompt_parts"], clean_role, clean_index)
+        if len(preprocessing.get("component_triview_prompt_parts") or []) < _component_expected_count(preprocessing):
+            preprocessing.pop("component_triview_prompts_ready", None)
+        if isinstance(preprocessing.get("component_triview_parts"), list):
+            preprocessing["component_triview_parts"] = _filter_component_records(preprocessing["component_triview_parts"], clean_role, clean_index)
+        preprocessing.pop("component_triview_generated", None)
+        if isinstance(outputs.get("parts"), list):
+            outputs["parts"] = _filter_component_records(outputs["parts"], clean_role, clean_index)
+    elif clean_scope in {"component_triview", "component_triviews"}:
+        if isinstance(preprocessing.get("component_triview_parts"), list):
+            preprocessing["component_triview_parts"] = _filter_component_records(preprocessing["component_triview_parts"], clean_role, clean_index)
+        if len(preprocessing.get("component_triview_parts") or []) < _component_expected_count(preprocessing):
+            preprocessing.pop("component_triview_generated", None)
+        if isinstance(outputs.get("parts"), list):
+            outputs["parts"] = _filter_component_records(outputs["parts"], clean_role, clean_index)
+    elif clean_scope in {"part_3d", "parts_3d"}:
+        if isinstance(outputs.get("parts"), list):
+            outputs["parts"] = _filter_component_records(outputs["parts"], clean_role, clean_index)
+        if isinstance(job.get("subtasks"), list):
+            job["subtasks"] = _filter_component_records(job.get("subtasks"), clean_role, clean_index)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的删除 scope")
+
+    patch: Dict[str, Any] = {
+        "preprocessing": preprocessing,
+        "outputs": outputs,
+        "stage": f"{clean_scope}_record_deleted",
+        "error": None,
+    }
+    if clean_scope in {"component_image", "component_images"}:
+        patch["inputs"] = _safe_frontend_generation_inputs(job, preprocessing) or job.get("inputs") or []
+    if "subtasks" in job:
+        patch["subtasks"] = job.get("subtasks")
+    store.update_job(job_id, **patch)
+    return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
+
+
+@router.post("/api/ai-3d-model/jobs/{job_id}/component-images")
+async def ai_3d_model_generate_component_images(
+    job_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    model: str = Form(""),
+    role: str = Form(""),
+    current_user: _ServerUser = Depends(_ai3d_local_user),
+):
+    job = store.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
+        raise HTTPException(status_code=409, detail="当前任务状态不能生成部件图")
+    preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+    if _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") != "component_split":
+        raise HTTPException(status_code=409, detail="只有拆件独立流程使用分步生成部件图")
+    plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
+    if not isinstance(plan.get("parts"), list) or not plan.get("parts"):
+        raise HTTPException(status_code=409, detail="请先生成 GPT 拆件提示词")
+    selected_model = _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
+    role_filter = str(role or "").strip()
+    safe_inputs = _safe_frontend_generation_inputs(job, preprocessing)
+    store.update_job(
+        job_id,
+        status="splitting_parts",
+        stage=f"queued_component_image_{role_filter}" if role_filter else "queued_component_images",
+        progress=0,
+        error=None,
+        finished_at=None,
+        preprocessing=preprocessing,
+        inputs=safe_inputs or job.get("inputs") or [],
+        outputs=job.get("outputs") if role_filter and isinstance(job.get("outputs"), dict) else {},
+        mesh_metrics={},
+        provider_task_id=None,
+        mode="component-prompt-split",
+        strategy="part_batch",
+        image_model=selected_model,
+    )
+    background_tasks.add_task(
+        _run_component_split_background,
+        job_id=job_id,
+        request=request,
+        current_user=current_user,
+        model=selected_model,
+        plan_only=False,
+        role_filter=role_filter,
+    )
+    return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
+
+
+@router.post("/api/ai-3d-model/jobs/{job_id}/component-triview-prompts")
+async def ai_3d_model_generate_component_triview_prompts(
+    job_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    role: str = Form(""),
+    _: _ServerUser = Depends(_ai3d_local_user),
+):
+    job = store.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
+        raise HTTPException(status_code=409, detail="当前任务状态不能生成三视图提示词")
+    preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+    if _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") != "component_split":
+        raise HTTPException(status_code=409, detail="只有拆件独立流程使用部件三视图提示词")
+    role_filter = str(role or "").strip()
+    has_component_inputs = bool(preprocessing.get("component_split_generated") or preprocessing.get("component_inputs") or preprocessing.get("component_inputs_partial"))
+    if not has_component_inputs:
+        raise HTTPException(status_code=409, detail="请先生成部件图，再生成部件三视图提示词")
+    store.update_job(
+        job_id,
+        status="running",
+        stage=f"queued_component_triview_prompt_{role_filter}" if role_filter else "queued_component_triview_prompts",
+        progress=0,
+        error=None,
+        preprocessing=preprocessing,
+    )
+    background_tasks.add_task(_run_component_triview_prompts_background, job_id=job_id, request=request, role_filter=role_filter)
+    return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
+
+
+@router.post("/api/ai-3d-model/jobs/{job_id}/component-triviews")
+async def ai_3d_model_generate_component_triviews(
+    job_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    model: str = Form(""),
+    role: str = Form(""),
+    current_user: _ServerUser = Depends(_ai3d_local_user),
+):
+    job = store.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
+        raise HTTPException(status_code=409, detail="当前任务状态不能生成部件三视图")
+    preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+    if _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") != "component_split":
+        raise HTTPException(status_code=409, detail="只有拆件独立流程使用部件三视图生成")
+    role_filter = str(role or "").strip()
+    has_component_inputs = bool(preprocessing.get("component_split_generated") or preprocessing.get("component_inputs") or preprocessing.get("component_inputs_partial"))
+    if not has_component_inputs:
+        raise HTTPException(status_code=409, detail="请先生成部件图，再生成部件三视图")
+    if not preprocessing.get("component_triview_prompts_ready") and not preprocessing.get("component_triview_prompt_parts"):
+        raise HTTPException(status_code=409, detail="请先生成/确认部件三视图提示词")
+    selected_model = _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
+    store.update_job(
+        job_id,
+        status="running",
+        stage=f"queued_component_triview_{role_filter}" if role_filter else "queued_component_triviews",
+        progress=0,
+        error=None,
+        preprocessing=preprocessing,
+        image_model=selected_model,
+    )
+    background_tasks.add_task(
+        _run_component_triview_images_background,
+        job_id=job_id,
+        request=request,
+        current_user=current_user,
+        model_id=selected_model,
+        role_filter=role_filter,
     )
     return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
 

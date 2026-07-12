@@ -942,7 +942,7 @@
     },
     "juhe_wechat_skill": {
       "name": "微信协议助手",
-      "description": "使用管理后台已绑定的微信实例执行在线检测、文本发送和调用记录查看。",
+      "description": "使用本机 MsgHelper 识别已登录微信，执行通讯录、群发、加好友和调用记录查看。",
       "type": "builtin",
       "store_visibility": "online",
       "default_installed": true,
@@ -950,8 +950,8 @@
       "capabilities": {},
       "tags": [
         "wechat",
-        "juhebot",
-        "server-proxy"
+        "MsgHelper",
+        "local"
       ]
     },
     "wechat_channels_transcript_skill": {

@@ -83,8 +83,8 @@
   });
 
   window.registerLobsterView('juhe-wechat', {
-    html: '/static/views/juhe-wechat.html?v=20260618-user-actions-only',
-    scripts: '/static/js/juhe-wechat.js?v=20260618-user-actions-only',
+    html: '/static/views/juhe-wechat.html?v=20260706-msghelper-local',
+    scripts: '/static/js/juhe-wechat.js?v=20260706-msghelper-local',
     init: 'initJuheWechatView',
     cache: 'reload'
   });
@@ -97,8 +97,8 @@
   });
 
   window.registerLobsterView('ai-3d-model', {
-    html: '/static/views/ai-3d-model.html?v=20260706-workflow-steps-v1',
-    scripts: '/static/js/ai-3d-model.js?v=20260706-workflow-steps-v1',
+    html: '/static/views/ai-3d-model.html?v=20260709-component-split-v1',
+    scripts: '/static/js/ai-3d-model.js?v=20260709-component-split-v1',
     init: 'initAi3dModelView',
     cache: 'reload',
     reloadExisting: true

@@ -1350,8 +1350,8 @@ window._openIpContentStudioView = function() {
 window._openJuheWechatView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('juhe-wechat', {
-      html: '/static/views/juhe-wechat.html?v=20260618-user-actions-only',
-      scripts: '/static/js/juhe-wechat.js?v=20260618-user-actions-only',
+      html: '/static/views/juhe-wechat.html?v=20260706-msghelper-local',
+      scripts: '/static/js/juhe-wechat.js?v=20260706-msghelper-local',
       cache: 'reload'
     });
   }
@@ -1453,8 +1453,8 @@ window._openWechatChannelsTranscriptView = function() {
 window._openAi3dModelView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ai-3d-model', {
-      html: '/static/views/ai-3d-model.html?v=20260706-workflow-steps-v1',
-      scripts: '/static/js/ai-3d-model.js?v=20260706-workflow-steps-v1',
+      html: '/static/views/ai-3d-model.html?v=20260709-component-split-v1',
+      scripts: '/static/js/ai-3d-model.js?v=20260709-component-split-v1',
       init: 'initAi3dModelView',
       cache: 'reload'
     });
@@ -1882,7 +1882,7 @@ function _renderJuheWechatCard(pkg, showDebug) {
   var debugBadge = showDebug
     ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
     : '';
-  var tags = _skillStoreTagHtml(pkg.tags || ['微信协议', '服务器托管', '批量加人']);
+  var tags = _skillStoreTagHtml(pkg.tags || ['微信协议', 'MsgHelper', '本机']);
   var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
   return '<div class="skill-store-card juhe-wechat-card" data-skill-package-id="' + escapeAttr(pkg.id || 'juhe_wechat_skill') + '" style="cursor:pointer;border-color:rgba(34,197,94,0.34);background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(20,184,166,0.05));">' +
     '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
@@ -2653,7 +2653,7 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'ecommerce_publish_skill': { title: '商品发布', desc: '管理店铺账号' },
   'ip_content_daily_skill': { title: 'IP日更文案', desc: '榜单、同行、记忆生成文案' },
   'linkedin_mining_skill': { title: 'LinkedIn线索挖掘', desc: '画像、候选人、图谱和报告' },
-  'juhe_wechat_skill': { title: '微信协议助手', desc: '使用后台绑定实例' },
+  'juhe_wechat_skill': { title: '微信协议助手', desc: '使用本机 MsgHelper' },
   'create_ppt_skill': { title: 'PPT 生成', desc: '主题生成演示文稿' },
   'mcp_agency_lona_trading': { title: 'Lona Trading', desc: '业务自动化工具' }
 };

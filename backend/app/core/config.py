@@ -126,6 +126,16 @@ class Settings(BaseSettings):
     wechat_oa_secret: Optional[str] = None
     """服务号回调与登录跳转根地址（无公网 IP 时填服务器地址，如 https://ts-api.fyshark.com）"""
     wechat_oa_base_url: Optional[str] = None
+    """MsgHelper 本机 OpenAPI 地址。微信协议助手新链路使用用户电脑本机服务，默认端口 6003。"""
+    msghelper_api_base: str = "http://127.0.0.1:6003"
+    """MsgHelper client_credentials 租户 ID。"""
+    msghelper_tenant_id: Optional[str] = None
+    """MsgHelper client_credentials Client ID。"""
+    msghelper_client_id: Optional[str] = None
+    """MsgHelper client_credentials Client Secret。"""
+    msghelper_client_secret: Optional[str] = None
+    """MsgHelper 业务 userId；client_credentials 场景默认 0。"""
+    msghelper_user_id: str = "0"
     capability_sutui_mcp_url: Optional[str] = None
     capability_upstream_urls_json: Optional[str] = None
     reddit_comment2video_backend_url: Optional[str] = None

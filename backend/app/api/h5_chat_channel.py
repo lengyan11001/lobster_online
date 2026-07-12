@@ -782,7 +782,7 @@ def _normalize_goal_video_task_create_body(body: Dict[str, Any]) -> None:
     cap_payload["candidate_group"] = candidate_group
     custom_prompt = _scheduled_custom_prompt(cap_payload)
     existing_plan = cap_payload.get("precomputed_plan")
-    if custom_prompt and not (isinstance(existing_plan, dict) and existing_plan.get("video_prompt")):
+    if custom_prompt and not _goal_video_memory_doc_ids(cap_payload) and not (isinstance(existing_plan, dict) and existing_plan.get("video_prompt")):
         cap_payload["precomputed_plan"] = _scheduled_goal_video_direct_plan(
             custom_prompt,
             str(body.get("title") or ""),
@@ -1581,6 +1581,22 @@ def _scheduled_goal_video_direct_plan(prompt: str, task_title: str) -> Dict[str,
     }
 
 
+def _goal_video_memory_doc_ids(payload: Dict[str, Any], limit: int = 8) -> List[str]:
+    if not isinstance(payload, dict):
+        return []
+    raw = payload.get("memory_doc_ids") or payload.get("memoryDocIds") or []
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    for item in raw:
+        text = re.sub(r"[^A-Za-z0-9_-]", "", str(item or "").strip())[:80]
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _scheduled_goal_video_precomputed_plan(
     cap_payload: Dict[str, Any],
     generated: Dict[str, Any],
@@ -1589,6 +1605,8 @@ def _scheduled_goal_video_precomputed_plan(
     existing = cap_payload.get("precomputed_plan") if isinstance(cap_payload, dict) else {}
     if isinstance(existing, dict) and existing.get("video_prompt"):
         return existing
+    if _goal_video_memory_doc_ids(cap_payload):
+        return {}
     if not generated.get("custom_prompt_used"):
         return {}
     prompt = str(generated.get("goal") or cap_payload.get("prompt") or cap_payload.get("goal") or "").strip()
@@ -3065,6 +3083,7 @@ async def _run_goal_video_scheduled_pipeline(
         language="zh",
         memory_scope="none" if generated.get("custom_prompt_used") else "default",
         precomputed_plan=cap_payload.get("precomputed_plan") if isinstance(cap_payload.get("precomputed_plan"), dict) else {},
+        memory_doc_ids=_goal_video_memory_doc_ids(cap_payload),
     )
 
     def progress(stage: str, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
@@ -3340,10 +3359,12 @@ async def _run_scheduled_capability(
                 goal = generated.get("goal") or _fallback_goal(task_title)
                 precomputed_plan = _scheduled_goal_video_precomputed_plan(original_cap_payload, generated, task_title)
                 cap_payload = {
+                    "video_mode": original_cap_payload.get("video_mode") or "",
                     "source_mode": source_mode,
                     "candidate_group": candidate_group,
                     "goal": goal,
                     "prompt": goal,
+                    "memory_doc_ids": _goal_video_memory_doc_ids(original_cap_payload),
                     "reference_asset_ids": original_cap_payload.get("reference_asset_ids") or [],
                     "reference_image_urls": original_cap_payload.get("reference_image_urls") or [],
                     "resume_from_image": bool(original_cap_payload.get("resume_from_image")),
@@ -3505,10 +3526,13 @@ async def _run_scheduled_capability(
             publish_draft: Optional[Dict[str, Any]] = None
             if capability_id == "goal.video.pipeline":
                 input_refs = {
+                    "video_mode": cap_payload.get("video_mode"),
                     "source_mode": result.get("source_mode") or cap_payload.get("source_mode"),
                     "image_model": result.get("image_model"),
                     "candidate_group": result.get("candidate_group"),
+                    "memory_doc_ids": cap_payload.get("memory_doc_ids") or [],
                     "reference_asset_id": result.get("reference_asset_id"),
+                    "reference_image_urls": cap_payload.get("reference_image_urls") or [],
                     "reference_asset_reservation_id": result.get("reference_asset_reservation_id"),
                 }
             elif capability_id == "create.video.pipeline":
