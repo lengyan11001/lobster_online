@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,38 +40,6 @@ class UserComflyConfig(Base):
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     api_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     api_base: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-
-class CreditLedger(Base):
-    __tablename__ = "credit_ledger"
-    __table_args__ = (Index("ix_credit_ledger_user_created", "user_id", "created_at"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    delta: Mapped[Decimal] = mapped_column(Numeric(20, 4), nullable=False)
-    balance_after: Mapped[Decimal] = mapped_column(Numeric(20, 4), nullable=False)
-    entry_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    description: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    ref_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    ref_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class UserDailyCreditLimit(Base):
-    __tablename__ = "user_daily_credit_limits"
-    __table_args__ = (UniqueConstraint("user_id", name="uq_user_daily_credit_limits_user_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    daily_limit: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 4), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-        nullable=False,
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class CapabilityConfig(Base):
@@ -625,32 +592,4 @@ class KfMessage(Base):
     msg_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
     origin: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     send_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class ModelUsageEvent(Base):
-    __tablename__ = "model_usage_events"
-    __table_args__ = (
-        Index("ix_model_usage_events_category_created", "category", "created_at"),
-        Index("ix_model_usage_events_kind_created", "event_kind", "created_at"),
-        Index("ix_model_usage_events_user_created", "user_id", "created_at"),
-        Index("ix_model_usage_events_provider_created", "provider", "created_at"),
-        Index("ix_model_usage_events_model_created", "model", "created_at"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    event_kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    requested_model: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
-    model: Mapped[Optional[str]] = mapped_column(String(191), nullable=True, index=True)
-    provider: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
-    route: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    endpoint: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    request_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
-    success: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
-    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
