@@ -80,7 +80,7 @@
 
 .ai3d-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.72fr) minmax(520px, 1.28fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
@@ -780,7 +780,8 @@
 }
 
 .ai3d-result {
-  min-height: 480px;
+  min-height: 0;
+  padding: 0.85rem 1rem;
 }
 
 .ai3d-result-head {
@@ -798,7 +799,7 @@
   background: #e2e8f0;
   border-radius: 999px;
   overflow: hidden;
-  margin-bottom: 0.85rem;
+  margin-bottom: 0;
 }
 
 .ai3d-progress > div {
@@ -809,20 +810,23 @@
 }
 
 .ai3d-preview {
-  min-height: 320px;
-  border: 1px solid rgba(203, 213, 225, 0.9);
-  border-radius: 8px;
-  background: #f8fafc;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  margin-top: 0.85rem;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  display: block;
+  overflow: visible;
+}
+
+.ai3d-preview[hidden] {
+  display: none;
 }
 
 .ai3d-preview img {
   width: 100%;
-  height: 100%;
-  max-height: 520px;
+  height: auto;
+  max-height: 260px;
   object-fit: contain;
   display: block;
 }
@@ -1076,6 +1080,47 @@
   gap: 0.45rem;
 }
 
+.ai3d-output-compact {
+  display: grid;
+  gap: 0.65rem;
+  padding-top: 0.1rem;
+}
+
+.ai3d-output-compact-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ai3d-output-compact-head strong {
+  color: #0f172a;
+  font-size: 0.88rem;
+}
+
+.ai3d-output-compact-head span {
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.ai3d-output-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.55rem;
+}
+
+.ai3d-output-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 8px;
+  background: #fff;
+}
+
 .ai3d-output-preview-btn {
   border: 0;
   background: transparent;
@@ -1086,6 +1131,20 @@
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  min-width: 0;
+}
+
+.ai3d-output-preview-btn span {
+  color: #0f172a;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai3d-output-preview-btn small {
+  color: #64748b;
+  font-size: 0.72rem;
 }
 
 .ai3d-output-preview-btn.active span,
@@ -1322,6 +1381,46 @@
   line-height: 1.35;
 }
 
+.ai3d-step-thumbs .ai3d-component-prompt {
+  grid-column: span 2;
+}
+
+.ai3d-step-thumbs .ai3d-text-only-prompt {
+  grid-column: span 2;
+}
+
+.ai3d-step-thumbs .ai3d-text-only-prompt figcaption,
+.ai3d-component-prompt figcaption {
+  gap: 0.42rem;
+}
+
+.ai3d-prompt-label {
+  display: block;
+  color: #334155;
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.ai3d-inline-prompt {
+  width: 100%;
+  min-height: 118px;
+  max-height: 220px;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  border-radius: 7px;
+  background: #fff;
+  color: #0f172a;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1.42;
+}
+
+.ai3d-inline-prompt:focus {
+  outline: none;
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
 .ai3d-mini-action {
   min-height: 24px;
   border: 1px solid rgba(37, 99, 235, 0.45);
@@ -1335,6 +1434,31 @@
 
 .ai3d-mini-action:hover {
   background: #eff6ff;
+}
+
+.ai3d-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ai3d-mini-action.primary {
+  border-color: rgba(37, 99, 235, 0.72);
+  background: #2563eb;
+  color: #fff;
+}
+
+.ai3d-mini-action.primary:hover {
+  background: #1d4ed8;
+}
+
+.ai3d-mini-action.danger {
+  border-color: rgba(220, 38, 38, 0.42);
+  color: #b91c1c;
+}
+
+.ai3d-mini-action.danger:hover {
+  background: #fef2f2;
 }
 
 .ai3d-text-edit-panel {
@@ -1473,6 +1597,21 @@
   background: #111827;
 }
 
+.ai3d-model-lightbox-panel {
+  width: min(1180px, 96vw);
+}
+
+.ai3d-model-lightbox-body {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ai3d-model-viewer-modal {
+  min-height: min(68vh, 680px);
+  height: min(68vh, 680px);
+  background: radial-gradient(circle at center, #334155 0, #111827 58%, #020617 100%);
+}
+
 .ai3d-step-files {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -1557,10 +1696,15 @@
   }
 
   .ai3d-preview {
-    min-height: 240px;
+    min-height: 0;
   }
 
   .ai3d-model-viewer {
     min-height: 320px;
+  }
+
+  .ai3d-model-viewer-modal {
+    min-height: 62vh;
+    height: 62vh;
   }
 }

@@ -1016,6 +1016,60 @@ def _creative_candidate_group_last_used_at(meta: Optional[dict], group_name: str
     return str(data.get("last_used_at") or data.get("last_used") or "")
 
 
+def _sync_creative_candidate_group_to_auth_server(row: Asset, group_name: str, request: Request, db: Session) -> None:
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        return
+    source_url = (row.source_url or "").strip()
+    meta = dict(row.meta or {})
+    remote_asset_id = str(meta.get("remote_asset_id") or "").strip()
+    try:
+        with httpx.Client(timeout=12.0, follow_redirects=True, trust_env=False) as client:
+            if not remote_asset_id and source_url.startswith(("http://", "https://")):
+                register_payload = {
+                    "url": source_url,
+                    "media_type": row.media_type or "image",
+                    "filename": row.filename or "",
+                    "file_size": row.file_size or 0,
+                    "source_asset_id": row.asset_id,
+                    "asset_origin": _asset_origin(row.meta),
+                    "creative_candidate_group": group_name,
+                    "creative_candidate_groups": [group_name],
+                }
+                resp = client.post(f"{base}/api/assets/register-url", json=register_payload, headers=headers)
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "[assets-sync] register creative group asset failed status=%s body=%s",
+                        resp.status_code,
+                        (resp.text or "")[:300],
+                    )
+                    return
+                data = resp.json() if resp.content else {}
+                remote_asset_id = str((data or {}).get("asset_id") or "").strip()
+                if remote_asset_id:
+                    meta["remote_asset_id"] = remote_asset_id[:80]
+                    meta["remote_registered_at"] = datetime.utcnow().isoformat()
+                    row.meta = meta
+                    db.add(row)
+                    db.commit()
+            if remote_asset_id:
+                resp = client.post(
+                    f"{base}/api/assets/{remote_asset_id}/creative-candidate-groups",
+                    json={"group_name": group_name},
+                    headers=headers,
+                )
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "[assets-sync] sync creative group failed remote_asset_id=%s status=%s body=%s",
+                        remote_asset_id,
+                        resp.status_code,
+                        (resp.text or "")[:300],
+                    )
+    except Exception as exc:
+        logger.warning("[assets-sync] sync creative group exception asset_id=%s err=%s", row.asset_id, exc)
+
+
 def _clean_creative_group_name(value: str) -> str:
     name = re.sub(r"\s+", " ", str(value or "").strip())
     if not name:
@@ -1166,6 +1220,227 @@ def _save_url_dedupe_key(url: str) -> str:
     return hashlib.sha256(
         (url or "").strip().split("?")[0].split("#")[0].lower().encode("utf-8")
     ).hexdigest()
+
+
+def _auth_server_base_url() -> str:
+    return _normalize_auth_server_base((get_settings().auth_server_base or "").strip().rstrip("/"))
+
+
+def _forward_auth_headers(request: Optional[Request]) -> dict[str, str]:
+    if not request:
+        return {}
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not auth.lower().startswith("bearer "):
+        return {}
+    headers = {"Authorization": auth}
+    installation_id = (
+        request.headers.get("X-Installation-Id")
+        or request.headers.get("x-installation-id")
+        or ""
+    ).strip()
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    return headers
+
+
+def _remote_asset_filename(raw: Any, url: str, fallback: str) -> str:
+    name = Path(str(raw or "").replace("\\", "/")).name.strip()
+    if not name:
+        path = str(url or "").split("?", 1)[0].split("#", 1)[0]
+        name = Path(path.replace("\\", "/")).name.strip()
+    if not name:
+        name = fallback
+    return name[:180]
+
+
+async def _register_user_upload_asset_to_auth_server(
+    asset: Asset,
+    request: Request,
+) -> Optional[dict[str, Any]]:
+    source_url = (asset.source_url or "").strip()
+    if not source_url.startswith(("http://", "https://")):
+        return None
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        return None
+    payload = {
+        "url": source_url,
+        "media_type": asset.media_type or "image",
+        "filename": asset.filename or "",
+        "file_size": asset.file_size or 0,
+        "source_asset_id": asset.asset_id,
+        "asset_origin": _asset_origin(asset.meta),
+    }
+    group_name = _creative_candidate_group(asset.meta)
+    if group_name:
+        payload["creative_candidate_group"] = group_name
+        payload["creative_candidate_groups"] = [group_name]
+    try:
+        async with httpx.AsyncClient(timeout=18.0, follow_redirects=True, trust_env=False) as client:
+            resp = await client.post(f"{base}/api/assets/register-url", json=payload, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning(
+                "[assets-sync] register user upload to server failed status=%s body=%s",
+                resp.status_code,
+                (resp.text or "")[:300],
+            )
+            return None
+        data = resp.json() if resp.content else {}
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.warning("[assets-sync] register user upload to server exception asset_id=%s err=%s", asset.asset_id, exc)
+        return None
+
+
+def _sync_remote_user_upload_assets(
+    request: Request,
+    current_user: _ServerUser,
+    db: Session,
+    *,
+    media_type: Optional[str] = None,
+) -> int:
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        return 0
+    params: dict[str, str] = {"origin": "user_upload", "limit": "200"}
+    mt_filter = (media_type or "").strip()
+    if mt_filter:
+        params["media_type"] = mt_filter
+    try:
+        with httpx.Client(timeout=12.0, follow_redirects=True, trust_env=False) as client:
+            resp = client.get(f"{base}/api/assets", params=params, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning("[assets-sync] remote user uploads list failed status=%s body=%s", resp.status_code, (resp.text or "")[:300])
+            return 0
+        data = resp.json() if resp.content else {}
+    except Exception as exc:
+        logger.warning("[assets-sync] remote user uploads list exception err=%s", exc)
+        return 0
+    rows = data.get("assets") if isinstance(data, dict) else []
+    if not isinstance(rows, list):
+        return 0
+    inserted = 0
+    now_iso = datetime.utcnow().isoformat()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        if item.get("asset_origin") != "user_upload":
+            continue
+        source_url = str(item.get("source_url") or item.get("url") or item.get("open_url") or item.get("preview_url") or "").strip()
+        if not source_url.startswith(("http://", "https://")):
+            continue
+        exists = (
+            db.query(Asset)
+            .filter(Asset.user_id == current_user.id, Asset.source_url == source_url)
+            .first()
+        )
+        if exists:
+            continue
+        remote_asset_id = str(item.get("asset_id") or "").strip()
+        filename = _remote_asset_filename(item.get("filename"), source_url, remote_asset_id or "remote-upload")
+        media = str(item.get("media_type") or "image").strip().lower()
+        if media not in ("image", "video", "audio", "document"):
+            media = "image"
+        try:
+            file_size = max(int(item.get("file_size") or 0), 0)
+        except Exception:
+            file_size = 0
+        row = Asset(
+            asset_id=_gen_asset_id(),
+            user_id=current_user.id,
+            filename=filename,
+            media_type=media,
+            file_size=file_size,
+            source_url=source_url,
+            meta={
+                "asset_origin": "user_upload",
+                "remote_asset_id": remote_asset_id,
+                "remote_synced_at": now_iso,
+                "remote_source": "h5_server",
+                "save_url_dedupe": _save_url_dedupe_key(source_url),
+            },
+        )
+        group_name = _creative_candidate_group(item)
+        if group_name:
+            meta = dict(row.meta or {})
+            meta["creative_candidate_group"] = group_name
+            meta["creative_candidate_groups"] = [group_name]
+            row.meta = meta
+        db.add(row)
+        inserted += 1
+    if inserted:
+        db.commit()
+        logger.info("[assets-sync] synced remote user uploads inserted=%s user_id=%s", inserted, current_user.id)
+    return inserted
+
+
+def _register_local_user_upload_assets_to_auth_server(
+    request: Request,
+    current_user: _ServerUser,
+    db: Session,
+    *,
+    media_type: Optional[str] = None,
+) -> int:
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        return 0
+    query = db.query(Asset).filter(Asset.user_id == current_user.id)
+    mt_filter = (media_type or "").strip()
+    if mt_filter:
+        query = query.filter(Asset.media_type == mt_filter)
+    rows = query.order_by(Asset.id.desc()).limit(200).all()
+    candidates = []
+    for row in rows:
+        meta = dict(row.meta or {})
+        if _asset_origin(meta) != "user_upload":
+            continue
+        if meta.get("remote_asset_id"):
+            continue
+        source_url = (row.source_url or "").strip()
+        if not source_url.startswith(("http://", "https://")):
+            continue
+        candidates.append(row)
+    if not candidates:
+        return 0
+    registered = 0
+    with httpx.Client(timeout=12.0, follow_redirects=True, trust_env=False) as client:
+        for row in candidates:
+            payload = {
+                "url": row.source_url or "",
+                "media_type": row.media_type or "image",
+                "filename": row.filename or "",
+                "file_size": row.file_size or 0,
+                "source_asset_id": row.asset_id,
+                "asset_origin": _asset_origin(row.meta),
+            }
+            group_name = _creative_candidate_group(row.meta)
+            if group_name:
+                payload["creative_candidate_group"] = group_name
+                payload["creative_candidate_groups"] = [group_name]
+            try:
+                resp = client.post(f"{base}/api/assets/register-url", json=payload, headers=headers)
+                if resp.status_code >= 400:
+                    logger.warning("[assets-sync] register existing local upload failed status=%s body=%s", resp.status_code, (resp.text or "")[:300])
+                    continue
+                data = resp.json() if resp.content else {}
+                remote_asset_id = str((data or {}).get("asset_id") or "").strip()
+                if not remote_asset_id:
+                    continue
+                meta = dict(row.meta or {})
+                meta["remote_asset_id"] = remote_asset_id[:80]
+                meta["remote_registered_at"] = datetime.utcnow().isoformat()
+                row.meta = meta
+                db.add(row)
+                registered += 1
+            except Exception as exc:
+                logger.warning("[assets-sync] register existing local upload exception asset_id=%s err=%s", row.asset_id, exc)
+    if registered:
+        db.commit()
+        logger.info("[assets-sync] registered existing local uploads=%s user_id=%s", registered, current_user.id)
+    return registered
 
 
 def _url_snip_for_log(u: Optional[str], max_len: int = 120) -> str:
@@ -1947,6 +2222,14 @@ async def upload_asset(
     )
     db.add(asset)
     db.commit()
+    remote_asset = await _register_user_upload_asset_to_auth_server(asset, request)
+    if remote_asset and remote_asset.get("asset_id"):
+        meta = dict(asset.meta or {})
+        meta["remote_asset_id"] = str(remote_asset.get("asset_id") or "")[:80]
+        meta["remote_registered_at"] = datetime.utcnow().isoformat()
+        asset.meta = meta
+        db.add(asset)
+        db.commit()
     
     # 【步骤5】返回结果（此时必有公网 source_url，见上方 [上传流程-失败]）
     if tos_url:
@@ -1979,6 +2262,10 @@ def list_assets(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
+    origin_filter = _normalize_asset_origin_filter(origin or asset_origin)
+    if origin_filter == "user_upload":
+        _register_local_user_upload_assets_to_auth_server(request, current_user, db, media_type=media_type)
+        _sync_remote_user_upload_assets(request, current_user, db, media_type=media_type)
     query = db.query(Asset).filter(Asset.user_id == current_user.id)
     if media_type:
         query = query.filter(Asset.media_type == media_type)
@@ -1991,7 +2278,6 @@ def list_assets(
         )
     creative_group_name = (creative_group or "").strip()
     max_limit = min(limit, 200)
-    origin_filter = _normalize_asset_origin_filter(origin or asset_origin)
     if creative_group_name or origin_filter:
         matched = [
             row
@@ -2096,6 +2382,7 @@ def list_creative_candidate_groups(
 def add_asset_to_creative_candidate_group(
     asset_id: str,
     body: CreativeCandidateGroupReq,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
@@ -2110,6 +2397,7 @@ def add_asset_to_creative_candidate_group(
     meta["creative_candidate_groups"] = [group_name]
     row.meta = meta
     db.commit()
+    _sync_creative_candidate_group_to_auth_server(row, group_name, request, db)
     return {"ok": True, "asset_id": row.asset_id, "group_name": group_name, "groups": [group_name]}
 
 

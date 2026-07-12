@@ -54,6 +54,7 @@ class GoalVideoPipelinePayload(BaseModel):
     precomputed_plan: Dict[str, Any] = Field(default_factory=dict)
     reference_asset_ids: List[str] = Field(default_factory=list)
     reference_image_urls: List[str] = Field(default_factory=list)
+    memory_doc_ids: List[str] = Field(default_factory=list)
     image_retry_count: int = Field(2, ge=0, le=5)
     video_retry_count: int = Field(2, ge=0, le=5)
     poll_interval_seconds: int = Field(12, ge=5, le=60)
@@ -530,23 +531,78 @@ async def _retry_async(
     raise RuntimeError(f"{label} failed after {total} attempts: {last}") from last
 
 
+def _clean_memory_doc_ids(raw: Any, limit: int = 8) -> List[str]:
+    source = raw if isinstance(raw, list) else []
+    out: List[str] = []
+    for item in source:
+        text = re.sub(r"[^A-Za-z0-9_-]", "", str(item or "").strip())[:80]
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _selected_memory_context(*, doc_ids: List[str], token: str, installation_id: str) -> str:
+    selected_ids = _clean_memory_doc_ids(doc_ids)
+    if not selected_ids:
+        return ""
+    try:
+        from .openclaw_chat_gateway import _decode_token_user_id
+        from .openclaw_memory import _load_index, _read_canonical_memory_content
+
+        user_id = _decode_token_user_id(token, installation_id)
+        if not user_id:
+            return ""
+        rows = _load_index(int(user_id))
+        by_id = {str(row.get("id") or "").strip(): row for row in rows if isinstance(row, dict)}
+        lines: List[str] = []
+        total = 0
+        for doc_id in selected_ids:
+            row = by_id.get(doc_id)
+            if not row:
+                continue
+            title = str(row.get("title") or row.get("filename") or doc_id).strip()
+            text = _read_canonical_memory_content(row, max_chars=2400)
+            if not text:
+                continue
+            chunk = f"## 记忆文件：{title}\n{text}"
+            remain = 12000 - total
+            if remain <= 0:
+                break
+            if len(chunk) > remain:
+                chunk = chunk[:remain]
+            lines.append(chunk.strip())
+            total += len(chunk)
+        return "\n\n".join(line for line in lines if line).strip()
+    except Exception as exc:
+        logger.warning("[goal.video.pipeline] selected memory context unavailable: %s", exc)
+        return ""
+
+
 async def _call_planning_llm(*, pl: GoalVideoPipelinePayload, token: str, installation_id: str) -> Dict[str, Any]:
     asb = (settings.auth_server_base or "").strip().rstrip("/")
     if not asb or not token:
         raise RuntimeError("AUTH_SERVER_BASE or user token is missing; cannot build goal video plan")
 
+    selected_memory_doc_ids = _clean_memory_doc_ids(pl.memory_doc_ids)
     memory_context = ""
-    try:
-        from .openclaw_chat_gateway import _build_openclaw_memory_context
+    if selected_memory_doc_ids:
+        memory_context = _selected_memory_context(doc_ids=selected_memory_doc_ids, token=token, installation_id=installation_id)
+        if not memory_context:
+            raise RuntimeError("选中的记忆文件未同步到本机，无法按记忆生成创意视频")
+    else:
+        try:
+            from .openclaw_chat_gateway import _build_openclaw_memory_context
 
-        memory_context = _build_openclaw_memory_context(
-            [{"role": "user", "content": pl.goal}],
-            token,
-            installation_id,
-            pl.memory_scope,
-        )
-    except Exception as e:
-        logger.warning("[goal.video.pipeline] memory context unavailable: %s", e)
+            memory_context = _build_openclaw_memory_context(
+                [{"role": "user", "content": pl.goal}],
+                token,
+                installation_id,
+                pl.memory_scope,
+            )
+        except Exception as e:
+            logger.warning("[goal.video.pipeline] memory context unavailable: %s", e)
 
     model = (
         (pl.planning_model or "").strip()
@@ -569,6 +625,7 @@ async def _call_planning_llm(*, pl: GoalVideoPipelinePayload, token: str, instal
         "duration": pl.duration,
         "aspect_ratio": pl.aspect_ratio,
         "memory_context": memory_context[:12000],
+        "memory_doc_ids": selected_memory_doc_ids,
         "reference_asset_ids": pl.reference_asset_ids,
         "reference_image_urls": pl.reference_image_urls,
     }
@@ -1013,6 +1070,7 @@ def _goal_video_partial_from_image(
             "aspect_ratio": pl.aspect_ratio,
             "language": pl.language,
             "memory_scope": "none",
+            "memory_doc_ids": list(pl.memory_doc_ids or []),
             "planning_model": pl.planning_model,
             "video_model": pl.video_model,
             "precomputed_plan": plan or {},
