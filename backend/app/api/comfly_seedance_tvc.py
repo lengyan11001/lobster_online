@@ -577,6 +577,24 @@ def _pipeline_result_video_candidates(result: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _is_local_bestseller_postprocessed_video(result: Dict[str, Any]) -> bool:
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    kind = str(final_video.get("kind") or "").strip().lower()
+    hint = str(final_video.get("hint") or "").strip()
+    if kind in {"local_bestseller_captioned", "local_bestseller_bgm_final"}:
+        return True
+    if "同城爆款字幕成片" in hint or "同城爆款字幕+BGM成片" in hint:
+        return True
+    captioned_video = result.get("captioned_video") if isinstance(result.get("captioned_video"), dict) else {}
+    bgm_video = result.get("bgm_video") if isinstance(result.get("bgm_video"), dict) else {}
+    final_ref = str(final_video.get("url") or final_video.get("path") or "").strip()
+    for item in (captioned_video, bgm_video):
+        ref = str(item.get("source_url") or item.get("path") or "").strip()
+        if final_ref and ref and final_ref == ref:
+            return True
+    return False
+
+
 def _normalize_video_download_ref(raw: str, *, job: Dict[str, Any]) -> str:
     value = str(raw or "").strip().strip('"').strip("'")
     if not value:
@@ -610,7 +628,18 @@ def _is_usable_video_download_ref(ref: str) -> bool:
 
 
 def _select_pipeline_video_download_ref(result: Dict[str, Any], *, job: Dict[str, Any]) -> str:
-    for raw in _pipeline_result_video_candidates(result):
+    candidates = _pipeline_result_video_candidates(result)
+    # Avoid re-burning subtitles onto a previously captioned/BGM-final local bestseller output.
+    if _is_local_bestseller_postprocessed_video(result):
+        final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+        final_refs = {
+            str(final_video.get("url") or "").strip(),
+            str(final_video.get("path") or "").strip(),
+        }
+        candidates = [raw for raw in candidates if str(raw or "").strip() not in final_refs]
+        if not candidates:
+            candidates = _pipeline_result_video_candidates(result)
+    for raw in candidates:
         ref = _normalize_video_download_ref(raw, job=job)
         if _is_usable_video_download_ref(ref):
             return ref

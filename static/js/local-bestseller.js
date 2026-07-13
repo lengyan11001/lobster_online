@@ -704,7 +704,6 @@
       return [
         '<span class="lb-video-shell" data-lb-video-shell>',
         '<video class="lb-video-preview" src="' + escapeHtml(videoUrl) + '" controls controlsList="nodownload nofullscreen" playsinline preload="metadata"></video>',
-        renderSubtitlePreview(item),
         '<button type="button" class="lb-video-fs-btn" data-lb-video-fullscreen>放大</button>',
         '<span class="lb-video-fullscreen-hint">按 Esc 退出全屏</span>',
         '<button type="button" class="lb-video-exit-btn" data-lb-video-exit>退出全屏 Esc</button>',
