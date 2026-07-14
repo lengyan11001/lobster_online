@@ -82,6 +82,13 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('global-leads', {
+    html: '/static/views/global-leads.html?v=20260714-global-leads-web-search',
+    scripts: '/static/js/global-leads.js?v=20260714-global-leads-web-search',
+    init: 'initGlobalLeadsView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('juhe-wechat', {
     html: '/static/views/juhe-wechat.html?v=20260706-msghelper-local',
     scripts: '/static/js/juhe-wechat.js?v=20260706-msghelper-local',

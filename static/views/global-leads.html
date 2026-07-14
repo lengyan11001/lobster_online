@@ -1,0 +1,528 @@
+<div id="content-global-leads" class="content-block">
+  <div class="gl-page">
+    <style>
+      .gl-page {
+        --gl-ink: #122033;
+        --gl-muted: #64748b;
+        --gl-line: rgba(15, 23, 42, 0.12);
+        --gl-blue: #155eef;
+        --gl-cyan: #06b6d4;
+        --gl-green: #13a06f;
+        --gl-orange: #f97316;
+        min-height: calc(100vh - 72px);
+        padding: 1rem;
+        color: var(--gl-ink);
+        background:
+          radial-gradient(circle at 14% 10%, rgba(21, 94, 239, 0.18), transparent 30%),
+          radial-gradient(circle at 88% 12%, rgba(6, 182, 212, 0.16), transparent 28%),
+          linear-gradient(135deg, #f6faff 0%, #f8fbf7 52%, #fff8ed 100%);
+      }
+      .gl-hero,
+      .gl-card {
+        border: 1px solid var(--gl-line);
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 18px 46px rgba(15, 23, 42, 0.07);
+      }
+      .gl-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 1rem;
+        align-items: end;
+        margin-bottom: 0.85rem;
+        padding: 1.15rem;
+        border-radius: 24px;
+        overflow: hidden;
+        position: relative;
+      }
+      .gl-hero:after {
+        content: "";
+        position: absolute;
+        right: -70px;
+        top: -90px;
+        width: 250px;
+        height: 250px;
+        border-radius: 999px;
+        border: 42px solid rgba(21, 94, 239, 0.08);
+      }
+      .gl-kicker {
+        color: var(--gl-blue);
+        font-size: 0.78rem;
+        font-weight: 950;
+        letter-spacing: 0.08em;
+      }
+      .gl-title {
+        margin: 0.22rem 0 0;
+        font-size: clamp(1.5rem, 2.3vw, 2.15rem);
+        line-height: 1.12;
+        letter-spacing: -0.04em;
+      }
+      .gl-subtitle {
+        margin-top: 0.42rem;
+        color: var(--gl-muted);
+        font-size: 0.92rem;
+      }
+      .gl-hero-stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(88px, 1fr));
+        gap: 0.55rem;
+        min-width: 330px;
+        position: relative;
+        z-index: 1;
+      }
+      .gl-stat {
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 17px;
+        padding: 0.75rem;
+        background: rgba(255, 255, 255, 0.78);
+      }
+      .gl-stat strong {
+        display: block;
+        font-size: 1.28rem;
+        line-height: 1;
+      }
+      .gl-stat span {
+        display: block;
+        margin-top: 0.32rem;
+        color: var(--gl-muted);
+        font-size: 0.75rem;
+        font-weight: 900;
+      }
+      .gl-tabs {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        gap: 0.4rem;
+        margin-bottom: 0.85rem;
+        padding: 0.35rem;
+        border: 1px solid var(--gl-line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.86);
+        backdrop-filter: blur(14px);
+        overflow-x: auto;
+      }
+      .gl-tab {
+        border: 0;
+        border-radius: 12px;
+        padding: 0.62rem 0.88rem;
+        background: transparent;
+        color: #334155;
+        font-weight: 950;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .gl-tab.is-active {
+        color: #fff;
+        background: linear-gradient(135deg, var(--gl-blue), var(--gl-cyan));
+        box-shadow: 0 12px 26px rgba(21, 94, 239, 0.22);
+      }
+      .gl-msg {
+        display: none;
+        margin: 0 0 0.85rem;
+        padding: 0.72rem 0.85rem;
+        border-radius: 14px;
+        border: 1px solid rgba(21, 94, 239, 0.22);
+        background: rgba(21, 94, 239, 0.08);
+        color: #16439a;
+        white-space: pre-line;
+      }
+      .gl-msg.err {
+        color: #be123c;
+        border-color: rgba(225, 29, 72, 0.28);
+        background: rgba(225, 29, 72, 0.08);
+      }
+      .gl-panel { display: none; }
+      .gl-panel.is-active { display: block; }
+      .gl-grid {
+        display: grid;
+        grid-template-columns: minmax(360px, 0.82fr) minmax(460px, 1.18fr);
+        gap: 0.85rem;
+        align-items: start;
+      }
+      .gl-grid.is-even {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .gl-card {
+        border-radius: 21px;
+        padding: 0.95rem;
+      }
+      .gl-card-title,
+      .gl-toolbar,
+      .gl-item-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.7rem;
+      }
+      .gl-card-title {
+        margin-bottom: 0.78rem;
+        font-weight: 950;
+      }
+      .gl-card-title small,
+      .gl-meta {
+        color: var(--gl-muted);
+        font-size: 0.78rem;
+        font-weight: 750;
+      }
+      .gl-form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.64rem;
+      }
+      .gl-field {
+        display: grid;
+        gap: 0.35rem;
+      }
+      .gl-field.is-wide { grid-column: 1 / -1; }
+      .gl-field label {
+        color: #334155;
+        font-size: 0.78rem;
+        font-weight: 950;
+      }
+      .gl-field input,
+      .gl-field textarea,
+      .gl-field select,
+      .gl-toolbar input,
+      .gl-toolbar select {
+        width: 100%;
+        border: 1px solid rgba(15, 23, 42, 0.13);
+        border-radius: 13px;
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--gl-ink);
+        padding: 0.66rem 0.76rem;
+        font-size: 0.9rem;
+        outline: none;
+      }
+      .gl-field textarea { min-height: 86px; resize: vertical; line-height: 1.5; }
+      .gl-field input:focus,
+      .gl-field textarea:focus,
+      .gl-field select:focus,
+      .gl-toolbar input:focus,
+      .gl-toolbar select:focus {
+        border-color: rgba(21, 94, 239, 0.48);
+        box-shadow: 0 0 0 4px rgba(21, 94, 239, 0.1);
+      }
+      .gl-source-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.5rem;
+      }
+      .gl-source-card {
+        display: flex;
+        align-items: center;
+        gap: 0.46rem;
+        min-height: 42px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        border-radius: 14px;
+        padding: 0.58rem 0.62rem;
+        background: rgba(255, 255, 255, 0.84);
+        cursor: pointer;
+        font-size: 0.82rem;
+        font-weight: 950;
+      }
+      .gl-source-card input { width: auto; }
+      .gl-source-card:has(input:checked) {
+        color: #fff;
+        border-color: transparent;
+        background: linear-gradient(135deg, #155eef, #06b6d4);
+      }
+      .gl-logo {
+        display: inline-grid;
+        place-items: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.08);
+        font-size: 0.78rem;
+        font-weight: 1000;
+      }
+      .gl-source-card:has(input:checked) .gl-logo { background: rgba(255,255,255,0.2); }
+      .gl-actions,
+      .gl-toolbar-left,
+      .gl-toolbar-right,
+      .gl-badges,
+      .gl-row-actions {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .gl-actions { margin-top: 0.75rem; }
+      .gl-toolbar {
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+      }
+      .gl-toolbar-left { flex: 1; }
+      .gl-toolbar-left input { max-width: 260px; }
+      .gl-toolbar-left select { max-width: 170px; }
+      .gl-list,
+      .gl-detail-list {
+        display: grid;
+        gap: 0.65rem;
+      }
+      .gl-item,
+      .gl-lead-card,
+      .gl-source-row,
+      .gl-box {
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.78);
+        padding: 0.75rem;
+      }
+      .gl-item { cursor: pointer; }
+      .gl-item.is-active {
+        border-color: rgba(21, 94, 239, 0.45);
+        box-shadow: 0 0 0 4px rgba(21, 94, 239, 0.08);
+      }
+      .gl-badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.28rem 0.5rem;
+        background: rgba(15, 23, 42, 0.07);
+        color: #334155;
+        font-size: 0.72rem;
+        font-weight: 950;
+      }
+      .gl-badge.ok { color: #067647; background: rgba(19, 160, 111, 0.12); }
+      .gl-badge.warn { color: #b45309; background: rgba(249, 115, 22, 0.14); }
+      .gl-badge.err { color: #be123c; background: rgba(225, 29, 72, 0.1); }
+      .gl-lead-card h4,
+      .gl-box h4 {
+        margin: 0 0 0.3rem;
+        font-size: 0.95rem;
+      }
+      .gl-kv {
+        display: grid;
+        grid-template-columns: 94px minmax(0, 1fr);
+        gap: 0.4rem 0.65rem;
+        font-size: 0.82rem;
+      }
+      .gl-kv span:nth-child(odd) {
+        color: var(--gl-muted);
+        font-weight: 850;
+      }
+      .gl-progress {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+        margin-top: 0.55rem;
+      }
+      .gl-progress i {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, var(--gl-blue), var(--gl-green));
+      }
+      .gl-source-row {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr) auto;
+        gap: 0.55rem;
+        align-items: center;
+      }
+      .gl-empty {
+        min-height: 120px;
+        display: grid;
+        place-items: center;
+        color: var(--gl-muted);
+        border: 1px dashed rgba(15, 23, 42, 0.16);
+        border-radius: 18px;
+        background: rgba(255,255,255,0.55);
+        text-align: center;
+        padding: 1rem;
+      }
+      .gl-pager {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.6rem;
+        margin-top: 0.75rem;
+      }
+      .gl-chart {
+        display: grid;
+        gap: 0.62rem;
+      }
+      .gl-bar-row {
+        display: grid;
+        grid-template-columns: 100px minmax(0, 1fr) 42px;
+        align-items: center;
+        gap: 0.58rem;
+        font-size: 0.82rem;
+        font-weight: 850;
+      }
+      .gl-bar-track {
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+      }
+      .gl-bar {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--gl-blue), var(--gl-cyan));
+      }
+      @media (max-width: 980px) {
+        .gl-hero,
+        .gl-grid,
+        .gl-grid.is-even {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .gl-hero-stats { min-width: 0; }
+        .gl-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 640px) {
+        .gl-page { padding: 0.72rem; }
+        .gl-form-grid,
+        .gl-kv,
+        .gl-source-row {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .gl-hero-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      }
+    </style>
+
+    <header class="gl-hero">
+      <div>
+        <div class="gl-kicker">GLOBAL ACQUISITION</div>
+        <h1 class="gl-title">全球获客系统</h1>
+        <div class="gl-subtitle">输入企业、域名、区域，跨来源采集企业和联系人线索，统一进入 CRM。</div>
+      </div>
+      <div class="gl-hero-stats">
+        <div class="gl-stat"><strong id="glStatJobs">0</strong><span>任务</span></div>
+        <div class="gl-stat"><strong id="glStatCrm">0</strong><span>CRM线索</span></div>
+        <div class="gl-stat"><strong id="glStatRunning">0</strong><span>执行中</span></div>
+      </div>
+    </header>
+
+    <div id="globalLeadsMsg" class="gl-msg"></div>
+
+    <nav class="gl-tabs" aria-label="全球获客">
+      <button type="button" class="gl-tab is-active" data-gl-tab="create">搜企业</button>
+      <button type="button" class="gl-tab" data-gl-tab="crm">数据中心 CRM</button>
+      <button type="button" class="gl-tab" data-gl-tab="jobs">任务记录</button>
+      <button type="button" class="gl-tab" data-gl-tab="dashboard">数据看板</button>
+    </nav>
+
+    <section class="gl-panel is-active" data-gl-panel="create">
+      <div class="gl-grid">
+        <form class="gl-card" id="globalLeadsForm">
+          <div class="gl-card-title">
+            <span>创建获客任务</span>
+            <small>企业 / 域名 / 区域</small>
+          </div>
+          <div class="gl-form-grid">
+            <div class="gl-field">
+              <label for="glCompanyInput">企业名称</label>
+              <input id="glCompanyInput" maxlength="255" placeholder="例如 Tesla、某某科技">
+            </div>
+            <div class="gl-field">
+              <label for="glDomainInput">域名</label>
+              <input id="glDomainInput" maxlength="255" placeholder="example.com">
+            </div>
+            <div class="gl-field">
+              <label for="glRegionInput">国家 / 区域</label>
+              <input id="glRegionInput" maxlength="120" placeholder="美国、东南亚、英国">
+            </div>
+            <div class="gl-field">
+              <label for="glMaxItemsInput">采集规模</label>
+              <input id="glMaxItemsInput" type="number" min="10" max="300" step="10" value="80">
+            </div>
+            <div class="gl-field is-wide">
+              <label for="glKeywordsInput">目标方向</label>
+              <textarea id="glKeywordsInput" placeholder="每行一个方向，例如：采购负责人&#10;渠道代理&#10;AI自动化服务需求"></textarea>
+            </div>
+            <div class="gl-field is-wide">
+              <label for="glTargetInput">筛选要求</label>
+              <textarea id="glTargetInput" placeholder="要找什么类型的公司或联系人，职位、行业、购买意图、地区限制都可以写。"></textarea>
+            </div>
+            <div class="gl-field is-wide">
+              <label>数据来源</label>
+              <div id="glSourceGrid" class="gl-source-grid"></div>
+            </div>
+            <div class="gl-field is-wide" id="glRedditField" style="display:none;">
+              <label for="glRedditInput">Reddit 社区</label>
+              <textarea id="glRedditInput" placeholder="Reddit 需要指定社区，每行一个，例如 smallbusiness"></textarea>
+            </div>
+          </div>
+          <div class="gl-actions">
+            <button type="submit" class="btn btn-primary" id="glStartBtn">开始采集</button>
+            <button type="button" class="btn btn-ghost" id="glResetBtn">清空</button>
+          </div>
+        </form>
+
+        <aside class="gl-card">
+          <div class="gl-card-title">
+            <span>采集路径</span>
+            <small id="glPlanCount">0 个来源</small>
+          </div>
+          <div id="glPlanPreview" class="gl-detail-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="gl-panel" data-gl-panel="crm">
+      <div class="gl-toolbar">
+        <div class="gl-toolbar-left">
+          <input id="glCrmSearchInput" placeholder="搜索姓名、公司、职位、域名">
+          <select id="glCrmSourceFilter">
+            <option value="">全部来源</option>
+          </select>
+        </div>
+        <div class="gl-toolbar-right">
+          <button type="button" class="btn btn-ghost btn-sm" id="glRefreshCrmBtn">刷新</button>
+          <button type="button" class="btn btn-primary btn-sm" id="glExportCrmBtn">导出当前页</button>
+        </div>
+      </div>
+      <div class="gl-grid">
+        <div class="gl-card">
+          <div class="gl-card-title"><span>线索列表</span><small id="glCrmCountText">0 条</small></div>
+          <div id="glCrmList" class="gl-list"></div>
+          <div class="gl-pager">
+            <button type="button" class="btn btn-ghost btn-sm" id="glCrmPrevBtn">上一页</button>
+            <span class="gl-meta" id="glCrmPageText">1 / 1</span>
+            <button type="button" class="btn btn-ghost btn-sm" id="glCrmNextBtn">下一页</button>
+          </div>
+        </div>
+        <div class="gl-card">
+          <div class="gl-card-title"><span>线索详情</span><small id="glActiveCrmText">未选择</small></div>
+          <div id="glCrmDetail" class="gl-detail-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="gl-panel" data-gl-panel="jobs">
+      <div class="gl-toolbar">
+        <div class="gl-toolbar-left">
+          <input id="glJobSearchInput" placeholder="搜索任务、企业、域名、区域">
+        </div>
+        <div class="gl-toolbar-right">
+          <button type="button" class="btn btn-ghost btn-sm" id="glRefreshJobsBtn">刷新</button>
+        </div>
+      </div>
+      <div class="gl-grid">
+        <div class="gl-card">
+          <div class="gl-card-title"><span>任务列表</span><small id="glJobCountText">0 条</small></div>
+          <div id="glJobList" class="gl-list"></div>
+        </div>
+        <div class="gl-card">
+          <div class="gl-card-title"><span>任务详情</span><small id="glActiveJobText">未选择</small></div>
+          <div id="glJobDetail" class="gl-detail-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="gl-panel" data-gl-panel="dashboard">
+      <div class="gl-grid is-even">
+        <div class="gl-card">
+          <div class="gl-card-title"><span>来源分布</span></div>
+          <div id="glSourceChart" class="gl-chart"></div>
+        </div>
+        <div class="gl-card">
+          <div class="gl-card-title"><span>任务状态</span></div>
+          <div id="glStatusChart" class="gl-chart"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>

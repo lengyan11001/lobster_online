@@ -1425,6 +1425,31 @@ window._openSocialLeadsView = function(platform) {
   try { location.hash = 'social-leads'; } catch (e1) {}
 };
 
+window._openGlobalLeadsView = function() {
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('global-leads', {
+      html: '/static/views/global-leads.html?v=20260714-global-leads-web-search',
+      scripts: '/static/js/global-leads.js?v=20260714-global-leads-web-search',
+      init: 'initGlobalLeadsView',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('global-leads', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .then(function() {
+        if (typeof window.initGlobalLeadsView === 'function') window.initGlobalLeadsView();
+      })
+      .catch(function(err) {
+        console.error('Failed to open global-leads', err);
+        alert('全球客户开发工作台加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('global-leads');
+  if (typeof window.initGlobalLeadsView === 'function') window.initGlobalLeadsView();
+  try { location.hash = 'global-leads'; } catch (e1) {}
+};
+
 window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
@@ -1874,6 +1899,22 @@ function _renderSocialLeadsCard(pkg, platform, showDebug) {
     '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || fallbackDesc)) + cap + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm social-leads-entry-btn" data-social-leads-platform="' + escapeAttr(platform) + '">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _renderGlobalLeadsCard(pkg, showDebug) {
+  pkg = pkg || {};
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['外贸获客', 'LinkedIn', 'X', 'TikTok', 'Reddit']);
+  var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+  return '<div class="skill-store-card global-leads-card" data-skill-package-id="' + escapeAttr(pkg.id || 'global_trade_leads_skill') + '" style="cursor:pointer;border-color:rgba(20,99,255,0.34);background:linear-gradient(135deg,rgba(20,99,255,0.09),rgba(9,169,184,0.06),rgba(249,115,22,0.05));">' +
+    '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '全球客户开发')) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '搜客、模板、周期更新和线索明细。')) + cap + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm global-leads-entry-btn">进入工作台</button></div>' +
   '</div>';
 }
 
@@ -3038,6 +3079,7 @@ function loadSkillStore() {
       var juheWechatPkg = pkgById('juhe_wechat_skill');
       var wechatTranscriptPkg = pkgById('wechat_channels_transcript_skill');
       var ai3dPkg = pkgById('ai_3d_model_skill');
+      var globalLeadsPkg = pkgById('global_trade_leads_skill');
 
       function paintSkillStoreList() {
         var html = '';
@@ -3054,6 +3096,7 @@ function loadSkillStore() {
         if (redditLeadsPkg) html += _renderSocialLeadsCard(redditLeadsPkg, 'reddit', !!(isSkillAdmin && redditLeadsPkg.store_visibility === 'debug'));
         if (xLeadsPkg) html += _renderSocialLeadsCard(xLeadsPkg, 'x', !!(isSkillAdmin && xLeadsPkg.store_visibility === 'debug'));
         if (tiktokLeadsPkg) html += _renderSocialLeadsCard(tiktokLeadsPkg, 'tiktok', !!(isSkillAdmin && tiktokLeadsPkg.store_visibility === 'debug'));
+        if (globalLeadsPkg) html += _renderGlobalLeadsCard(globalLeadsPkg, !!(isSkillAdmin && globalLeadsPkg.store_visibility === 'debug'));
         if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
         if (wechatTranscriptPkg) html += _renderWechatChannelsTranscriptCard(wechatTranscriptPkg, !!(isSkillAdmin && wechatTranscriptPkg.store_visibility === 'debug'));
         if (ai3dPkg) html += _renderAi3dModelCard(ai3dPkg, !!(isSkillAdmin && ai3dPkg.store_visibility === 'debug'));
@@ -3105,6 +3148,7 @@ function loadSkillStore() {
           if (pkg.id === 'reddit_leads') return '';
           if (pkg.id === 'x_leads') return '';
           if (pkg.id === 'tiktok_leads') return '';
+          if (pkg.id === 'global_trade_leads_skill') return '';
           if (pkg.id === 'juhe_wechat_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
@@ -3203,6 +3247,7 @@ function loadSkillStore() {
         _bindIpContentStudioCardEntry();
         _bindLinkedinMiningCardEntry();
         _bindSocialLeadsCardEntry();
+        _bindGlobalLeadsCardEntry();
         _bindJuheWechatCardEntry();
         _bindWechatChannelsTranscriptCardEntry();
         _bindAi3dModelCardEntry();
@@ -3610,6 +3655,26 @@ function _bindSocialLeadsCardEntry() {
       e.stopPropagation();
       var platform = btn.getAttribute('data-social-leads-platform') || 'reddit';
       if (typeof window._openSocialLeadsView === 'function') window._openSocialLeadsView(platform);
+    });
+  });
+}
+
+function _bindGlobalLeadsCardEntry() {
+  document.querySelectorAll('.global-leads-card, [data-skill-package-id="global_trade_leads_skill"]').forEach(function(card) {
+    if (card.dataset.globalLeadsEntryBound === '1') return;
+    card.dataset.globalLeadsEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openGlobalLeadsView === 'function') window._openGlobalLeadsView();
+    });
+  });
+  document.querySelectorAll('.global-leads-entry-btn').forEach(function(btn) {
+    if (btn.dataset.globalLeadsEntryBound === '1') return;
+    btn.dataset.globalLeadsEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openGlobalLeadsView === 'function') window._openGlobalLeadsView();
     });
   });
 }
