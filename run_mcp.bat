@@ -8,19 +8,25 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "PY="
 if exist "%ROOT%\python\python.exe" set "PY=%ROOT%\python\python.exe"
 if exist "%SCRIPT_DIR%\python\python.exe" set "PY=%SCRIPT_DIR%\python\python.exe"
+if defined PY call :probe_python
 if defined PY goto :python_ready
 python --version >nul 2>&1
 if not errorlevel 1 (
     set "PY=python"
+    call :probe_python
     goto :python_ready
 )
 call :detect_py_launcher 3.12
+if defined PY call :probe_python
 if defined PY goto :python_ready
 call :detect_py_launcher 3.11
+if defined PY call :probe_python
 if defined PY goto :python_ready
 call :detect_py_launcher 3.10
+if defined PY call :probe_python
 if defined PY goto :python_ready
 call :detect_py_launcher 3
+if defined PY call :probe_python
 if defined PY goto :python_ready
 echo [ERR] Python not found >> "%ROOT%\mcp.log"
 exit /b 1
@@ -35,6 +41,15 @@ if errorlevel 1 (
 set /p PY=<"%PY_PROBE%"
 if exist "%PY_PROBE%" del /f /q "%PY_PROBE%" >nul 2>&1
 if not exist "%PY%" (
+    set "PY="
+    exit /b 1
+)
+exit /b 0
+
+:probe_python
+"%PY%" -c "import uvicorn" >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] Selected Python missing uvicorn: %PY%>> "%ROOT%\mcp.log"
     set "PY="
     exit /b 1
 )
