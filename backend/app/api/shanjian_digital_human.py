@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -8,12 +13,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import ShanjianDigitalHumanProfile, ShanjianDigitalHumanVideoTask
-from .assets import get_asset_public_url
+from ..models import Asset, ShanjianDigitalHumanProfile, ShanjianDigitalHumanVideoTask
+from .assets import ASSETS_DIR, get_asset_public_url
 from .auth import _ServerUser, get_current_user_for_local
 from .shanjian_smart_clip import _data, _get, _post
 
 router = APIRouter()
+_ROOT_DIR = Path(__file__).resolve().parents[3]
 
 
 class _TokenBody(BaseModel):
@@ -127,6 +133,134 @@ def _clear_default_profiles(db: Session, user_id: int) -> None:
         ShanjianDigitalHumanProfile.user_id == int(user_id),
         ShanjianDigitalHumanProfile.is_default.is_(True),
     ).update({"is_default": False}, synchronize_session=False)
+
+
+def _ffprobe_path() -> str:
+    candidates = []
+    if os.name == "nt":
+        candidates.extend(
+            [
+                _ROOT_DIR / "deps" / "ffmpeg" / "ffprobe.exe",
+                _ROOT_DIR / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffprobe.exe",
+            ]
+        )
+    else:
+        candidates.append(_ROOT_DIR / "deps" / "ffmpeg" / "ffprobe")
+    for item in candidates:
+        if item.exists():
+            return str(item.resolve())
+    return shutil.which("ffprobe.exe" if os.name == "nt" else "ffprobe") or ""
+
+
+def _asset_local_path(asset: Optional[Asset]) -> Optional[Path]:
+    if not asset or not getattr(asset, "filename", None):
+        return None
+    filename = str(asset.filename or "")
+    if not filename or "/" in filename or "\\" in filename:
+        return None
+    path = ASSETS_DIR / filename
+    return path if path.exists() else None
+
+
+def _parse_fps(raw: Any) -> float:
+    text = str(raw or "").strip()
+    if not text:
+        return 0.0
+    if "/" in text:
+        left, right = text.split("/", 1)
+        try:
+            numerator = float(left or 0)
+            denominator = float(right or 1)
+            if denominator == 0:
+                return 0.0
+            return numerator / denominator
+        except Exception:
+            return 0.0
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _probe_video_media(source: str) -> Dict[str, Any]:
+    ffprobe = _ffprobe_path()
+    if not ffprobe:
+        raise HTTPException(status_code=500, detail="本机缺少 ffprobe，暂时无法校验视频参数")
+    proc = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,codec_name,codec_tag_string,avg_frame_rate,r_frame_rate,duration:format=duration",
+            "-of",
+            "json",
+            source,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=90,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise HTTPException(status_code=400, detail=f"无法读取视频信息：{detail[:300] or 'ffprobe failed'}")
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="无法解析视频元数据") from exc
+    stream = ((payload.get("streams") or [{}])[0]) or {}
+    fmt = payload.get("format") or {}
+    return {
+        "width": int(stream.get("width") or 0),
+        "height": int(stream.get("height") or 0),
+        "duration": float(stream.get("duration") or fmt.get("duration") or 0.0),
+        "codec": str(stream.get("codec_name") or stream.get("codec_tag_string") or "").strip().lower(),
+        "fps": _parse_fps(stream.get("avg_frame_rate") or stream.get("r_frame_rate")),
+    }
+
+
+def _validate_video_constraints(
+    *,
+    label: str,
+    url: str,
+    asset: Optional[Asset],
+    max_size_mb: int,
+    min_duration_sec: Optional[float],
+    max_duration_sec: float,
+    max_side_px: Optional[int],
+    min_fps: Optional[float],
+    max_fps: Optional[float],
+) -> None:
+    filename = str(getattr(asset, "filename", "") or url or "").lower()
+    if not (filename.endswith(".mp4") or filename.endswith(".mov")):
+        raise HTTPException(status_code=400, detail=f"{label}仅支持 mp4、mov 格式")
+    file_size = int(getattr(asset, "file_size", 0) or 0)
+    if file_size > 0 and file_size > max_size_mb * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"{label}文件大小需小于等于 {max_size_mb}MB")
+    source = str(_asset_local_path(asset) or url)
+    meta = _probe_video_media(source)
+    duration = float(meta.get("duration") or 0.0)
+    width = int(meta.get("width") or 0)
+    height = int(meta.get("height") or 0)
+    codec = str(meta.get("codec") or "").lower()
+    fps = float(meta.get("fps") or 0.0)
+    if min_duration_sec is not None and duration < min_duration_sec:
+        raise HTTPException(status_code=400, detail=f"{label}时长需大于等于 {int(min_duration_sec)} 秒")
+    if duration > max_duration_sec:
+        raise HTTPException(status_code=400, detail=f"{label}时长需小于等于 {int(max_duration_sec if max_duration_sec < 120 else max_duration_sec / 60)}{'秒' if max_duration_sec < 120 else '分钟'}")
+    if max_side_px and max(width, height) > max_side_px:
+        raise HTTPException(status_code=400, detail=f"{label}分辨率单边不能超过 {max_side_px}px")
+    if codec not in {"h264", "avc1", "hevc", "h265", "hev1"}:
+        raise HTTPException(status_code=400, detail=f"{label}视频编码仅支持 h264、HEVC(h265)")
+    if min_fps is not None and fps > 0 and fps < min_fps:
+        raise HTTPException(status_code=400, detail=f"{label}帧率需在 {int(min_fps)}-{int(max_fps or min_fps)}fps 范围内")
+    if max_fps is not None and fps > max_fps:
+        raise HTTPException(status_code=400, detail=f"{label}帧率需在 {int(min_fps or 0)}-{int(max_fps)}fps 范围内")
 
 
 def _profile_to_dict(row: ShanjianDigitalHumanProfile) -> Dict[str, Any]:
@@ -301,6 +435,41 @@ async def create_profile(
         db=db,
         current_user=current_user,
     )
+    source_asset = None
+    auth_asset = None
+    if source_asset_id:
+        source_asset = db.query(Asset).filter(
+            Asset.asset_id == source_asset_id,
+            Asset.user_id == int(current_user.id),
+        ).first()
+    if auth_asset_id:
+        auth_asset = db.query(Asset).filter(
+            Asset.asset_id == auth_asset_id,
+            Asset.user_id == int(current_user.id),
+        ).first()
+    _validate_video_constraints(
+        label="授权视频",
+        url=_clean_text(payload.get("authVideoUrl")),
+        asset=auth_asset,
+        max_size_mb=100,
+        min_duration_sec=None,
+        max_duration_sec=120,
+        max_side_px=None,
+        min_fps=None,
+        max_fps=None,
+    )
+    if _normalize_mode(body.mode) == "video":
+        _validate_video_constraints(
+            label="训练视频",
+            url=source_url,
+            asset=source_asset,
+            max_size_mb=500,
+            min_duration_sec=5,
+            max_duration_sec=60,
+            max_side_px=2000,
+            min_fps=10,
+            max_fps=60,
+        )
     upstream = await _post(endpoint, body.token, payload)
     data = _data(upstream)
     task_id = _clean_text(data.get("taskId"))
