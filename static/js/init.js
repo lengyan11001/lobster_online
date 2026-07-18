@@ -868,6 +868,7 @@ var LOBSTER_HIDDEN_VIEWS = {
   'viral-video-remix': true,
   'cutcli-template-studio': true,
   'hifly-digital-human': true,
+  'shanjian-digital-human': true,
   'douyin-workbench': true,
   'shanjian-smart-clip': true,
   'global-leads': true,
@@ -1863,6 +1864,9 @@ function openCreditLimitModal() {
     if (hash === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
       window._openHiflyDigitalHumanView();
     }
+    if (hash === 'shanjian-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
+      window._openShanjianDigitalHumanView();
+    }
     if (hash === 'douyin-workbench' && typeof window._openDouyinWorkbenchView === 'function') {
       window._openDouyinWorkbenchView();
     }
@@ -1888,6 +1892,7 @@ function openCreditLimitModal() {
     location.hash.indexOf('viral-video-remix') !== -1 ||
     location.hash.indexOf('cutcli-template-studio') !== -1 ||
     location.hash.indexOf('hifly-digital-human') !== -1 ||
+    location.hash.indexOf('shanjian-digital-human') !== -1 ||
     location.hash.indexOf('douyin-workbench') !== -1 ||
     location.hash.indexOf('shanjian-smart-clip') !== -1 ||
     location.hash.indexOf('openclaw-skill-chat') !== -1

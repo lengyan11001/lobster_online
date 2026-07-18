@@ -1271,6 +1271,12 @@ window._openHiflyDigitalHumanView = function() {
   try { location.hash = 'hifly-digital-human'; } catch (e1) {}
 };
 
+window._openShanjianDigitalHumanView = function() {
+  _switchToHiddenView('shanjian-digital-human');
+  if (typeof window.initShanjianDigitalHumanView === 'function') window.initShanjianDigitalHumanView();
+  try { location.hash = 'shanjian-digital-human'; } catch (e1) {}
+};
+
 window._openDouyinWorkbenchView = function() {
   var host = _ensureDouyinWorkbenchHost();
   _bindDouyinWorkbenchTabs(host);
@@ -1505,6 +1511,10 @@ window._openHiddenWorkspaceView = function(view) {
   if (!target) return;
   if (target === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
     window._openHiflyDigitalHumanView();
+    return;
+  }
+  if (target === 'shanjian-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
+    window._openShanjianDigitalHumanView();
     return;
   }
   if (target === 'douyin-workbench' && typeof window._openDouyinWorkbenchView === 'function') {
