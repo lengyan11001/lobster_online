@@ -593,3 +593,64 @@ class KfMessage(Base):
     origin: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     send_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ShanjianDigitalHumanProfile(Base):
+    __tablename__ = "shanjian_digital_human_profiles"
+    __table_args__ = (
+        UniqueConstraint("user_id", "virtualman_id", name="uq_sj_dh_profile_user_virtualman"),
+        Index("ix_sj_dh_profile_user_default", "user_id", "is_default"),
+        Index("ix_sj_dh_profile_user_status", "user_id", "status"),
+        Index("ix_sj_dh_profile_user_task", "user_id", "task_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(128), nullable=False, default="未命名数字人")
+    train_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="image")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    task_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    virtualman_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    source_asset_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auth_video_asset_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    auth_video_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    auth_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cover_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    train_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    train_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ShanjianDigitalHumanVideoTask(Base):
+    __tablename__ = "shanjian_digital_human_video_tasks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "task_id", name="uq_sj_dh_video_task_user_task"),
+        Index("ix_sj_dh_video_task_user_profile", "user_id", "profile_id"),
+        Index("ix_sj_dh_video_task_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    profile_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(128), nullable=False, default="数字人口播")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
+    task_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    virtualman_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    audio_asset_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    audio_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    speaker_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    video_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cover_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    duration: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    submit_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    result_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
