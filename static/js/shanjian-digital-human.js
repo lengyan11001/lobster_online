@@ -81,7 +81,15 @@
   }
 
   function cloudBaseUrl() {
-    return (typeof API_BASE !== 'undefined' ? (API_BASE || '') : '').replace(/\/$/, '');
+    var api = (typeof API_BASE !== 'undefined' ? (API_BASE || '') : '').replace(/\/$/, '');
+    if (api && !/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/|$)/i.test(api) && api !== baseUrl()) return api;
+    return (typeof LOBSTER_SERVER_PUBLIC !== 'undefined' ? String(LOBSTER_SERVER_PUBLIC || '').replace(/\/$/, '') : api);
+  }
+
+  function shanjianApiBase(path) {
+    var cloud = cloudBaseUrl();
+    if (String(path || '').indexOf('/api/shanjian-') === 0 && cloud) return cloud;
+    return baseUrl();
   }
 
   function authHeadersSafe() {
@@ -501,7 +509,7 @@
   }
 
   function request(path, body) {
-    return requestTo(baseUrl(), path, body);
+    return requestTo(shanjianApiBase(path), path, body);
   }
 
   function requestCloud(path, body) {
@@ -540,7 +548,7 @@
   }
 
   function requestForm(path, formData) {
-    return requestFormTo(baseUrl(), path, formData);
+    return requestFormTo(shanjianApiBase(path), path, formData);
   }
 
   function requestCloudForm(path, formData) {
@@ -567,7 +575,7 @@
   }
 
   function requestGet(path) {
-    return requestGetTo(baseUrl(), path);
+    return requestGetTo(shanjianApiBase(path), path);
   }
 
   function requestCloudDelete(path) {
@@ -595,7 +603,7 @@
   function uploadAssetFile(file) {
     var fd = new FormData();
     fd.append('file', file);
-    return fetch(baseUrl() + '/api/assets/upload', {
+    return fetch((cloudBaseUrl() || baseUrl()) + '/api/assets/upload', {
       method: 'POST',
       headers: assetUploadHeaders(),
       body: fd
@@ -1846,7 +1854,7 @@
     }
     state.materialPicker.loading = true;
     renderMaterialPicker();
-    return fetch(baseUrl() + '/api/assets?limit=120', {
+    return fetch((cloudBaseUrl() || baseUrl()) + '/api/assets?limit=120', {
       headers: authHeadersSafe()
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
@@ -2005,6 +2013,7 @@
         if (!id) return;
         var item = (state.templateLibrary.rows || []).find(function(row) { return row.id === id; });
         if (!item) return;
+        selectTemplate(item, false);
         if (item.demo_url) {
           openTemplatePreview(item);
           return;
