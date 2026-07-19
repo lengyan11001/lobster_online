@@ -468,6 +468,37 @@ def _decode_token_user_id(raw_token: str, installation_id: str = "") -> Optional
         return None
 
 
+async def _sync_openclaw_memory_for_gateway(raw_token: str, installation_id: str = "") -> None:
+    xi = (installation_id or "").strip()
+    if not raw_token or not xi or xi.lower().startswith("lobster-internal-"):
+        return
+    user_id = _decode_token_user_id(raw_token, xi)
+    if not user_id:
+        return
+    try:
+        from .auth import _ServerUser
+        from .openclaw_memory import sync_openclaw_memory_from_cloud
+
+        headers = [
+            (b"authorization", f"Bearer {raw_token}".encode("utf-8")),
+            (b"x-installation-id", xi.encode("utf-8")),
+        ]
+        req = Request({"type": "http", "method": "POST", "path": "/api/openclaw/memory/sync-cloud", "headers": headers})
+        result = await sync_openclaw_memory_from_cloud(req, _ServerUser(id=user_id), raise_errors=False)
+        if result.get("ok"):
+            logger.debug(
+                "[OPENCLAW] cloud memory synced user_id=%s installation=%s applied=%s deleted=%s",
+                user_id,
+                xi,
+                result.get("applied_count"),
+                result.get("deleted_count"),
+            )
+        elif result.get("error") or result.get("skipped"):
+            logger.debug("[OPENCLAW] cloud memory sync skipped user_id=%s installation=%s result=%s", user_id, xi, result)
+    except Exception as exc:
+        logger.warning("[OPENCLAW] cloud memory sync failed before context: %s", exc)
+
+
 def _last_user_text(msgs: List[Dict]) -> str:
     for m in reversed(msgs or []):
         if isinstance(m, dict) and m.get("role") == "user":
@@ -1165,6 +1196,7 @@ async def try_openclaw(
             "\n".join(part for part in hint_parts if part).strip(),
         )
         stage = "memory_context"
+        await _sync_openclaw_memory_for_gateway(raw_token, xi)
         memory_context = _build_openclaw_memory_context(msgs, raw_token, xi, memory_scope)
         if memory_context:
             openclaw_messages = _inject_memory_context(openclaw_messages, memory_context)

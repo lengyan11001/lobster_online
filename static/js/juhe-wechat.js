@@ -1,19 +1,24 @@
 (function() {
   var state = {
-    configs: [],
-    activeConfigId: '',
+    accounts: [],
+    activeAccountId: '',
+    peers: [],
+    activePeerId: '',
+    messages: [],
     contacts: [],
     groups: [],
-    selectedContacts: new Set(),
-    activeRoomUsername: '',
-    lastUpload: null,
-    mediaFiles: [],
-    aiSessions: [],
-    aiMessages: [],
-    aiMemoryDocs: [],
-    aiSelectedMemoryDocIds: new Set(),
-    activeAiContact: '',
-    tab: 'contacts'
+    activeGroupKey: '',
+    groupMembers: [],
+    tasks: [],
+    strategy: null,
+    autoReply: null,
+    autoReplyBusy: false,
+    driver: null,
+    sendFiles: [],
+    momentsFiles: [],
+    momentsSubmitting: false,
+    contactSelected: {},
+    tab: 'messages'
   };
 
   function $(id) { return document.getElementById(id); }
@@ -40,7 +45,7 @@
     return h;
   }
 
-  function authHeaderUpload() {
+  function authHeaderForm() {
     var h = typeof authHeaders === 'function' ? Object.assign({}, authHeaders() || {}) : {};
     if (!h.Authorization && typeof token !== 'undefined' && token) h.Authorization = 'Bearer ' + token;
     delete h['Content-Type'];
@@ -51,14 +56,45 @@
     if (!data) return fallback || '请求失败';
     if (typeof data === 'string') return data;
     var detail = data.detail || data.error || data.message || data.msg;
-    if (typeof detail === 'string') return detail;
-    try { return JSON.stringify(detail || data); } catch (e) { return fallback || '请求失败'; }
+    if (typeof detail === 'string' && detail.trim()) return detail.trim();
+    if (detail && typeof detail === 'object') {
+      if (typeof detail.message === 'string') return detail.message;
+      if (typeof detail.msg === 'string') return detail.msg;
+    }
+    return fallback || '请求失败';
+  }
+
+  function splitTargets(text) {
+    var seen = {};
+    return String(text || '').split(/[\s,，;；]+/).map(function(x) {
+      return x.trim();
+    }).filter(function(x) {
+      var key = x.toLowerCase();
+      if (!x || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+  }
+
+  function mergeTargets() {
+    var seen = {};
+    var out = [];
+    Array.prototype.slice.call(arguments).forEach(function(list) {
+      (list || []).forEach(function(raw) {
+        var value = String(raw || '').trim();
+        var key = value.toLowerCase();
+        if (!value || seen[key]) return;
+        seen[key] = true;
+        out.push(value);
+      });
+    });
+    return out;
   }
 
   function apiJson(path, opts) {
     opts = opts || {};
     var base = apiBase();
-    if (!base) return Promise.reject(new Error('未配置本机 LOCAL_API_BASE'));
+    if (!base) return Promise.reject(new Error('未配置本机 API 地址'));
     var req = { method: opts.method || 'GET', headers: authHeaderJson() };
     if (opts.body !== undefined) req.body = JSON.stringify(opts.body || {});
     return fetch(base + path, req).then(function(resp) {
@@ -69,1065 +105,1323 @@
     });
   }
 
-  function uploadLocalFile(file) {
+  function formatFileSize(size) {
+    var n = Number(size || 0);
+    if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(1) + 'GB';
+    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + 'MB';
+    if (n >= 1024) return (n / 1024).toFixed(1) + 'KB';
+    return n + 'B';
+  }
+
+  function renderSendFiles() {
+    var list = $('nativeWechatFileList');
+    if (!list) return;
+    if (!state.sendFiles.length) {
+      list.className = 'native-wechat-muted';
+      list.innerHTML = '未选择附件';
+      return;
+    }
+    list.className = 'native-wechat-list';
+    list.innerHTML = state.sendFiles.map(function(file, idx) {
+      return '<div class="native-wechat-item">' +
+        '<div class="native-wechat-card-head" style="margin:0;">' +
+          '<div>' +
+            '<div class="native-wechat-item-title">' + esc(file.name || 'file') + '</div>' +
+            '<div class="native-wechat-meta">' + esc(formatFileSize(file.size || 0)) + '</div>' +
+          '</div>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-native-file-remove="' + idx + '">删除</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function renderMomentsFiles() {
+    var list = $('nativeWechatMomentsFileList');
+    if (!list) return;
+    if (!state.momentsFiles.length) {
+      list.className = 'native-wechat-muted';
+      list.innerHTML = '未选择素材';
+      return;
+    }
+    list.className = 'native-wechat-list';
+    list.innerHTML = state.momentsFiles.map(function(file, idx) {
+      return '<div class="native-wechat-item">' +
+        '<div class="native-wechat-card-head" style="margin:0;">' +
+          '<div>' +
+            '<div class="native-wechat-item-title">' + esc(file.name || 'file') + '</div>' +
+            '<div class="native-wechat-meta">' + esc(formatFileSize(file.size || 0)) + '</div>' +
+          '</div>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-native-moments-file-remove="' + idx + '">删除</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function uploadWechatFile(file) {
     var base = apiBase();
-    if (!base) return Promise.reject(new Error('未配置本机 LOCAL_API_BASE'));
+    if (!base) return Promise.reject(new Error('未配置本机 API 地址'));
     var fd = new FormData();
     fd.append('file', file);
-    return fetch(base + '/api/assets/upload', {
+    return fetch(base + '/api/native-wechat/files/upload', {
       method: 'POST',
-      headers: authHeaderUpload(),
+      headers: authHeaderForm(),
       body: fd
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
         if (!resp.ok) throw new Error(parseErr(data, '文件上传失败'));
-        var url = data.source_url || data.public_url || data.url || (data.asset && data.asset.source_url) || '';
-        if (!url || String(url).indexOf('http') !== 0) {
-          throw new Error('文件上传后没有可公网访问的链接，无法交给微信协议发送');
-        }
-        return { url: url, asset: data };
+        if (!data.file || !data.file.local_path) throw new Error('文件上传失败');
+        return data.file;
       });
     });
   }
 
   function setMsg(text, isErr) {
-    var node = $('juheMsg');
+    var node = $('nativeWechatMsg');
     if (!node) return;
     node.textContent = text || '';
-    node.className = 'juhe-msg' + (isErr ? ' err' : '');
+    node.className = 'native-wechat-msg' + (isErr ? ' err' : '');
     node.style.display = text ? 'block' : 'none';
   }
 
-  function activeConfigId() {
-    var sel = $('juheConfigSelect');
-    return String((sel && sel.value) || state.activeConfigId || '');
+  function setChip(id, text) {
+    var node = $(id);
+    if (node) node.textContent = text || '';
   }
 
-  function selectedUsernames() {
-    return Array.from(state.selectedContacts);
+  function activeAccountId() {
+    var sel = $('nativeWechatAccountSelect');
+    return String((sel && sel.value) || state.activeAccountId || '');
   }
 
-  function selectedRoomUsernames() {
-    return state.activeRoomUsername ? [state.activeRoomUsername] : [];
+  function formatTime(value) {
+    if (!value) return '';
+    var raw = String(value);
+    var date = new Date(raw.indexOf('T') >= 0 ? raw : raw.replace(' ', 'T') + 'Z');
+    if (Number.isNaN(date.getTime())) return raw;
+    return date.toLocaleString();
   }
 
-  function normalizeTargetType(value) {
-    return value === 'groups' || value === 'auto' ? value : 'contacts';
+  function peerTitle(item) {
+    return item.display_name || item.peer_id || item.id || '未命名会话';
   }
 
-  function itemUsername(item) {
-    if (!item) return '';
-    if (typeof item === 'string') return item;
-    return item.username || item.contact_key || item.user_name || item.UserName || item.wxid || item.room_username || item.chatroom_username || '';
+  function contactTitle(item) {
+    return item.display_name || item.remark || item.wx_no || item.contact_key || item.id || '未命名联系人';
   }
 
-  function itemTitle(item) {
-    if (!item) return '';
-    if (typeof item === 'string') return item;
-    if (item.display_name) return item.display_name;
-    return item.nickname || item.nick_name || item.NickName || item.remark || item.RemarkName || item.alias || itemUsername(item) || '未命名';
-  }
-
-  function itemSub(item) {
-    if (!item || typeof item === 'string') return '';
+  function contactSub(item) {
     var parts = [];
-    var username = itemUsername(item);
-    if (item.source || item.status) parts.push([item.source, item.status].filter(Boolean).join(' '));
-    if (username) parts.push(username);
-    if (item.signature) parts.push(item.signature);
-    if (item.last_error) parts.push(item.last_error);
-    if (item.province || item.city) parts.push([item.province, item.city].filter(Boolean).join(' '));
+    if (item.remark) parts.push('备注 ' + item.remark);
+    if (item.wx_no) parts.push(item.wx_no);
+    if (item.source) parts.push(item.source);
     return parts.join(' · ');
   }
 
-  function activeRoomTitle() {
-    if (!state.activeRoomUsername) return '';
-    var item = state.groups.find(function(group) {
-      return itemUsername(group) === state.activeRoomUsername;
+  function contactValue(item) {
+    return item.contact_key || item.wx_no || item.display_name || item.remark || item.id || contactTitle(item);
+  }
+
+  function selectedContactValues() {
+    return Object.keys(state.contactSelected).map(function(key) { return state.contactSelected[key]; }).filter(Boolean);
+  }
+
+  function renderContactSelectionState() {
+    var count = selectedContactValues().length;
+    setChip('nativeWechatContactSelectedCount', '已选 ' + count);
+  }
+
+  function groupTitle(item) {
+    return item.display_name || item.group_key || item.id || '未命名群';
+  }
+
+  function groupSub(item) {
+    var parts = [];
+    if (item.member_count) parts.push(item.member_count + ' 人');
+    if (item.group_key) parts.push(item.group_key);
+    if (item.source) parts.push(item.source);
+    return parts.join(' · ');
+  }
+
+  function peerSub(item) {
+    var parts = [];
+    if (item.chat_type) parts.push(item.chat_type === 'group' ? '群' : '个人');
+    if (item.peer_id) parts.push(item.peer_id);
+    if (Number(item.unread_count || 0) > 0) parts.push('未读 ' + Number(item.unread_count || 0));
+    if (item.last_content) parts.push(item.last_content);
+    if (item.session_time) parts.push(item.session_time);
+    if (item.last_inbound_at) parts.push('收 ' + formatTime(item.last_inbound_at));
+    if (item.last_outbound_at) parts.push('发 ' + formatTime(item.last_outbound_at));
+    return parts.join(' · ');
+  }
+
+  function renderAccountSelect() {
+    var sel = $('nativeWechatAccountSelect');
+    if (!sel) return;
+    if (!state.accounts.length) {
+      sel.innerHTML = '<option value="">暂无账号</option>';
+      state.activeAccountId = '';
+      return;
+    }
+    if (!state.activeAccountId || !state.accounts.some(function(x) { return x.account_id === state.activeAccountId; })) {
+      state.activeAccountId = state.accounts[0].account_id;
+    }
+    sel.innerHTML = state.accounts.map(function(item) {
+      var label = item.name || item.user_id || item.account_id;
+      if (item.source === 'pc_wechat' && item.version) label += ' · ' + item.version;
+      return '<option value="' + esc(item.account_id) + '">' + esc(label) + '</option>';
+    }).join('');
+    sel.value = state.activeAccountId;
+  }
+
+  function renderAccountList() {
+    var list = $('nativeWechatAccountList');
+    if (!list) return;
+    if (!state.accounts.length) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '未检测到本机微信。请打开已登录的 PC 微信主窗口后重试。';
+      return;
+    }
+    list.className = 'native-wechat-list';
+    list.innerHTML = state.accounts.map(function(item) {
+      var bits = [];
+      if (item.source === 'pc_wechat') bits.push('本机微信');
+      else if (item.source) bits.push(item.source);
+      if (item.version) bits.push(item.version);
+      if (item.pid) bits.push('PID ' + item.pid);
+      if (item.hwnd) bits.push('HWND ' + item.hwnd);
+      var status = item.driver_ready ? '可下发任务' : '控制组件不可用';
+      if (item.driver_ready && item.full_driver_ready === false) status += ' · 通讯录增强驱动未就绪';
+      return '<div class="native-wechat-item" data-native-account="' + esc(item.account_id) + '">' +
+        '<div class="native-wechat-item-title">' + esc(item.name || item.account_id) + '</div>' +
+        '<div class="native-wechat-meta">' + esc(bits.join(' · ') || item.account_id) + '</div>' +
+        '<div class="native-wechat-meta">' + esc(status) + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function renderStrategy() {
+    var box = $('nativeWechatStrategyList');
+    if (!box) return;
+    var s = state.strategy || {};
+    if (!Object.keys(s).length) {
+      box.className = 'native-wechat-empty';
+      box.innerHTML = '暂无策略';
+      return;
+    }
+    var rows = [
+      ['发送间隔', (s.send_sleep_min || 0) + ' - ' + (s.send_sleep_max || 0) + ' 秒'],
+      ['批量数量', s.batch_size || 0],
+      ['批量休息', (s.batch_sleep || 0) + ' 秒'],
+      ['失败重试', (s.retry_max || 0) + ' 次'],
+      ['单账号任务', s.one_active_task_per_account ? '同一时间只执行一个' : '允许并行']
+    ];
+    box.className = 'native-wechat-detail-list';
+    box.innerHTML = rows.map(function(row) {
+      return '<strong>' + esc(row[0]) + '</strong><span>' + esc(row[1]) + '</span>';
+    }).join('');
+  }
+
+  function renderAutoReply() {
+    var enabled = $('nativeWechatAutoReplyEnabled');
+    var status = $('nativeWechatAutoReplyStatus');
+    var runBtn = $('nativeWechatAutoReplyRunBtn');
+    var cfg = state.autoReply || {};
+    if (enabled) {
+      enabled.checked = !!cfg.enabled;
+      enabled.disabled = state.autoReplyBusy || !activeAccountId();
+    }
+    if (runBtn) runBtn.disabled = state.autoReplyBusy || !activeAccountId();
+    if (!status) return;
+    if (!activeAccountId()) {
+      status.textContent = '请先选择本机微信账号。';
+      return;
+    }
+    if (state.autoReplyBusy) {
+      status.textContent = '正在检查私聊消息，处理时会按会话顺序慢速回复。';
+      return;
+    }
+    var parts = [];
+    parts.push(cfg.enabled ? '已开启' : '未开启');
+    parts.push('每' + Math.round((cfg.interval_seconds || 1800) / 60) + '分钟检查一次');
+    parts.push('只回复私聊');
+    if (cfg.running) parts.push('运行中');
+    if (cfg.last_checked_at) parts.push('上次 ' + formatTime(cfg.last_checked_at));
+    var result = cfg.last_result || {};
+    if (result && (result.replied || result.skipped || result.failed)) {
+      parts.push('回复 ' + (result.replied || 0) + '，跳过 ' + (result.skipped || 0) + '，失败 ' + (result.failed || 0));
+    }
+    if (cfg.last_error) parts.push('错误：' + cfg.last_error);
+    status.textContent = parts.join(' · ');
+  }
+
+  function renderPeers() {
+    var list = $('nativeWechatPeerList');
+    if (!list) return;
+    var keyword = (($('nativeWechatPeerSearch') || {}).value || '').trim().toLowerCase();
+    var peers = state.peers.filter(function(item) {
+      if (!keyword) return true;
+      return [peerTitle(item), peerSub(item), item.peer_id].join(' ').toLowerCase().indexOf(keyword) >= 0;
     });
-    return item ? itemTitle(item) : state.activeRoomUsername;
+    if (!peers.length) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = state.peers.length ? '没有匹配会话' : '暂无会话，先点击“收消息”。';
+      return;
+    }
+    list.className = 'native-wechat-list';
+    list.innerHTML = peers.map(function(item) {
+      var active = item.peer_id === state.activePeerId ? ' active' : '';
+      return '<div class="native-wechat-item' + active + '" data-native-peer="' + esc(item.peer_id) + '">' +
+        '<div class="native-wechat-item-title">' + esc(peerTitle(item)) + '</div>' +
+        '<div class="native-wechat-meta">' + esc(peerSub(item)) + '</div>' +
+      '</div>';
+    }).join('');
   }
 
-  function formatJson(data) {
-    try { return JSON.stringify(data || {}, null, 2); } catch (e) { return String(data || ''); }
+  function renderContacts() {
+    var list = $('nativeWechatContactList');
+    if (!list) return;
+    if (!state.contacts.length) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '暂无联系人';
+      renderContactSelectionState();
+      return;
+    }
+    list.className = 'native-wechat-list';
+    list.innerHTML = state.contacts.map(function(item) {
+      var value = contactValue(item);
+      var key = value.toLowerCase();
+      var checked = state.contactSelected[key] ? ' checked' : '';
+      return '<label class="native-wechat-item" style="display:flex;gap:10px;align-items:flex-start;">' +
+        '<input type="checkbox" data-native-contact-select="' + esc(value) + '"' + checked + ' style="margin-top:3px;">' +
+        '<span style="min-width:0;">' +
+          '<span class="native-wechat-item-title" style="display:block;">' + esc(contactTitle(item)) + '</span>' +
+          '<span class="native-wechat-meta" style="display:block;">' + esc(contactSub(item)) + '</span>' +
+        '</span>' +
+      '</label>';
+    }).join('');
+    renderContactSelectionState();
   }
 
-  function showDetail(title, data) {
-    var modal = $('juheDetailModal');
-    var t = $('juheDetailTitle');
-    var body = $('juheDetailBody');
-    if (t) t.textContent = title || '详情';
-    if (body) body.textContent = typeof data === 'string' ? data : formatJson(data);
-    if (modal) modal.classList.add('show');
+  function renderGroups() {
+    var list = $('nativeWechatGroupList');
+    if (!list) return;
+    if (!state.groups.length) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '暂无群';
+      return;
+    }
+    list.className = 'native-wechat-list';
+    list.innerHTML = state.groups.map(function(item) {
+      var key = item.group_key || item.display_name || '';
+      var active = key === state.activeGroupKey ? ' active' : '';
+      return '<div class="native-wechat-item' + active + '" data-native-group="' + esc(key) + '">' +
+        '<div class="native-wechat-item-title">' + esc(groupTitle(item)) + '</div>' +
+        '<div class="native-wechat-meta">' + esc(groupSub(item)) + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function renderGroupMembers() {
+    var title = $('nativeWechatGroupMemberTitle');
+    var list = $('nativeWechatGroupMemberList');
+    if (title) title.textContent = state.activeGroupKey ? ('群成员：' + state.activeGroupKey) : '群成员';
+    if (!list) return;
+    if (!state.activeGroupKey) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '请选择群';
+      return;
+    }
+    if (!state.groupMembers.length) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '暂无成员';
+      return;
+    }
+    list.className = 'native-wechat-list';
+    list.innerHTML = state.groupMembers.map(function(item) {
+      return '<div class="native-wechat-item">' +
+        '<div class="native-wechat-item-title">' + esc(item.display_name || item.member_key || '') + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function renderMessages() {
+    var list = $('nativeWechatMessageList');
+    var title = $('nativeWechatActivePeerTitle');
+    var sub = $('nativeWechatActivePeerSub');
+    var recipient = $('nativeWechatRecipientInput');
+    var peer = state.peers.find(function(x) { return x.peer_id === state.activePeerId; });
+    if (title) title.textContent = peer ? peerTitle(peer) : '未选择会话';
+    if (sub) sub.textContent = peer ? peerSub(peer) : '也可以手动输入 Weixin ID 发送。';
+    if (recipient && peer && !recipient.value) recipient.value = peer.peer_id;
+    if (!list) return;
+    if (!state.activePeerId) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '选择会话后查看消息。';
+      return;
+    }
+    if (!state.messages.length) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '暂无消息';
+      return;
+    }
+    list.className = 'native-wechat-chat';
+    list.innerHTML = state.messages.slice().reverse().map(function(item) {
+      if (item.is_system || item.direction === 'system' || item.msg_type === 'time') {
+        return '<div class="native-wechat-time">' + esc(item.content || formatTime(item.created_at)) + '</div>';
+      }
+      var dir = item.direction === 'out' ? 'out' : 'in';
+      var text = item.content || (item.msg_type && item.msg_type !== 'text' ? '[' + item.msg_type + ']' : '');
+      var raw = item.raw_json || {};
+      var sender = raw.sender || raw.sender_remark || '';
+      var attachments = Array.isArray(item.attachments) ? item.attachments : [];
+      var mediaHtml = attachments.map(renderMessageAttachment).join('');
+      var metaParts = [];
+      if (sender && sender !== 'self' && sender !== 'system') metaParts.push(sender);
+      if (item.msg_type) metaParts.push(item.msg_type);
+      metaParts.push(formatTime(item.created_at));
+      if (item.status) metaParts.push(item.status);
+      if (sender && sender !== 'self' && sender !== 'system') text = sender + '：' + text;
+      return '<div class="native-wechat-bubble ' + dir + '">' +
+        '<div>' + esc(text || '(空消息)') + '</div>' +
+        mediaHtml +
+        '<div class="native-wechat-meta">' + esc(formatTime(item.created_at)) + (item.status ? ' · ' + esc(item.status) : '') + '</div>' +
+      '</div>';
+    }).join('');
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function mediaUrl(url) {
+    url = String(url || '');
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url;
+    var base = apiBase();
+    return base ? base + url : url;
+  }
+
+  function renderMessageAttachment(file) {
+    file = file || {};
+    var kind = String(file.kind || '').toLowerCase();
+    var url = mediaUrl(file.url || '');
+    var name = file.filename || (kind === 'image' ? '图片' : (kind === 'video' ? '视频' : '文件'));
+    if (file.download_error && !url) {
+      return '<div class="native-wechat-meta">附件未下载：' + esc(file.download_error) + '</div>';
+    }
+    if (!url) return '';
+    if (kind === 'image') {
+      return '<a href="' + esc(url) + '" target="_blank" rel="noopener"><img class="native-wechat-media" src="' + esc(url) + '" alt="' + esc(name) + '"></a>';
+    }
+    if (kind === 'video') {
+      return '<video class="native-wechat-media" src="' + esc(url) + '" controls preload="metadata"></video>';
+    }
+    return '<a class="native-wechat-file-link" href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(name) + '</a>';
+  }
+
+  function renderTasks() {
+    var list = $('nativeWechatTaskList');
+    if (!list) return;
+    if (!state.tasks.length) {
+      list.className = 'native-wechat-empty';
+      list.innerHTML = '暂无任务';
+      return;
+    }
+    list.className = '';
+    list.innerHTML = '<table class="native-wechat-table"><thead><tr>' +
+      '<th>时间</th><th>类型</th><th>状态</th><th>进度</th><th>操作</th>' +
+      '</tr></thead><tbody>' + state.tasks.map(function(item) {
+        return '<tr>' +
+          '<td>' + esc(formatTime(item.created_at)) + '</td>' +
+          '<td>' + esc(taskTypeText(item.task_type)) + '</td>' +
+          '<td>' + esc(taskStatusText(item.status)) + '</td>' +
+          '<td>' + esc((item.processed || 0) + '/' + (item.planned_total || 0) + '，成功 ' + (item.success || 0) + '，失败 ' + (item.failed || 0)) + '</td>' +
+          '<td><button type="button" class="btn btn-ghost btn-sm" data-native-task="' + esc(item.id) + '">详情</button></td>' +
+        '</tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  function taskTypeText(type) {
+    var map = { send_text: '发送消息', send_message: '发送消息', add_friend: '添加好友', moments_like: '朋友圈点赞', moments_comment: '朋友圈评论', moments_publish: '朋友圈发布', create_group: '创建群' };
+    return map[type] || type || '-';
+  }
+
+  function taskStatusText(status) {
+    var map = { pending: '排队中', running: '执行中', success: '成功', failed: '失败', partial_failed: '部分失败' };
+    return map[status] || status || '-';
+  }
+
+  function switchTab(tab) {
+    state.tab = tab || 'messages';
+    document.querySelectorAll('[data-native-wechat-tab]').forEach(function(btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-native-wechat-tab') === state.tab);
+    });
+    document.querySelectorAll('[data-native-wechat-panel]').forEach(function(panel) {
+      panel.classList.toggle('active', panel.getAttribute('data-native-wechat-panel') === state.tab);
+    });
+    if (state.tab === 'tasks') loadTasks();
+    if (state.tab === 'contacts') loadContacts();
+    if (state.tab === 'groups') {
+      loadGroups();
+      if (state.activeGroupKey) loadGroupMembers();
+    }
+    if (state.tab === 'accounts') {
+      loadAccounts();
+      loadStrategy();
+    }
+  }
+
+  function loadAccounts() {
+    return apiJson('/api/native-wechat/accounts').then(function(data) {
+      state.accounts = Array.isArray(data.items) ? data.items : [];
+      state.driver = data.driver || null;
+      renderAccountSelect();
+      renderAccountList();
+      return state.accounts;
+    }).catch(function(err) {
+      state.accounts = [];
+      renderAccountSelect();
+      renderAccountList();
+      setMsg(err.message || '账号加载失败', true);
+    });
+  }
+
+  function loadStrategy() {
+    return apiJson('/api/native-wechat/strategy').then(function(data) {
+      state.strategy = data.strategy || {};
+      renderStrategy();
+    }).catch(function(err) {
+      setMsg(err.message || '策略加载失败', true);
+    });
+  }
+
+  function loadAutoReplyConfig() {
+    var id = activeAccountId();
+    if (!id) {
+      state.autoReply = null;
+      renderAutoReply();
+      return Promise.resolve();
+    }
+    return apiJson('/api/native-wechat/auto-reply/config?account_id=' + encodeURIComponent(id)).then(function(data) {
+      state.autoReply = data.config || {};
+      renderAutoReply();
+    }).catch(function(err) {
+      state.autoReply = null;
+      renderAutoReply();
+      setMsg(err.message || '自动回复配置加载失败', true);
+    });
+  }
+
+  function saveAutoReplyConfig(enabled) {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择本机微信账号', true);
+    state.autoReplyBusy = true;
+    renderAutoReply();
+    return apiJson('/api/native-wechat/auto-reply/config', {
+      method: 'POST',
+      body: { account_id: id, enabled: !!enabled, interval_seconds: 1800 }
+    }).then(function(data) {
+      state.autoReply = data.config || {};
+      setMsg(enabled ? '个人微信自动回复已开启：每30分钟检查一次，只回复私聊。' : '个人微信自动回复已关闭。', false);
+    }).catch(function(err) {
+      setMsg(err.message || '自动回复配置保存失败', true);
+      return loadAutoReplyConfig();
+    }).finally(function() {
+      state.autoReplyBusy = false;
+      renderAutoReply();
+    });
+  }
+
+  function runAutoReplyOnce() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择本机微信账号', true);
+    state.autoReplyBusy = true;
+    renderAutoReply();
+    setMsg('正在检查私聊消息，会按会话顺序慢速回复...', false);
+    return apiJson('/api/native-wechat/auto-reply/run-once', {
+      method: 'POST',
+      body: { account_id: id, force: true }
+    }).then(function(data) {
+      state.autoReply = data.config || state.autoReply || {};
+      var replied = Number(data.replied || 0);
+      var skipped = Number(data.skipped || 0);
+      var failed = Number(data.failed || 0);
+      setMsg('自动回复检查完成：回复 ' + replied + '，跳过 ' + skipped + '，失败 ' + failed + '。', !!failed);
+      return Promise.all([loadPeers(), loadTasks(), loadAutoReplyConfig()]);
+    }).catch(function(err) {
+      setMsg(err.message || '自动回复检查失败', true);
+      return loadAutoReplyConfig();
+    }).finally(function() {
+      state.autoReplyBusy = false;
+      renderAutoReply();
+    });
+  }
+
+  function loadPeers() {
+    var id = activeAccountId();
+    if (!id) {
+      state.peers = [];
+      renderPeers();
+      return Promise.resolve();
+    }
+    return apiJson('/api/native-wechat/peers?account_id=' + encodeURIComponent(id) + '&limit=100&offset=0').then(function(data) {
+      state.peers = Array.isArray(data.items) ? data.items : [];
+      if (state.activePeerId && !state.peers.some(function(x) { return x.peer_id === state.activePeerId; })) {
+        state.activePeerId = '';
+      }
+      renderPeers();
+      renderMessages();
+    }).catch(function(err) {
+      setMsg(err.message || '会话加载失败', true);
+    });
+  }
+
+  function loadContacts() {
+    var id = activeAccountId();
+    if (!id) {
+      state.contacts = [];
+      renderContacts();
+      return Promise.resolve();
+    }
+    var keyword = (($('nativeWechatContactSearch') || {}).value || '').trim();
+    var path = '/api/native-wechat/contacts?account_id=' + encodeURIComponent(id) +
+      '&limit=100&offset=0' + (keyword ? '&keyword=' + encodeURIComponent(keyword) : '');
+    return apiJson(path).then(function(data) {
+      state.contacts = Array.isArray(data.items) ? data.items : [];
+      renderContacts();
+    }).catch(function(err) {
+      setMsg(err.message || '通讯录加载失败', true);
+    });
+  }
+
+  function loadGroups() {
+    var id = activeAccountId();
+    if (!id) {
+      state.groups = [];
+      renderGroups();
+      return Promise.resolve();
+    }
+    var keyword = (($('nativeWechatGroupSearch') || {}).value || '').trim();
+    var path = '/api/native-wechat/groups?account_id=' + encodeURIComponent(id) +
+      '&limit=100&offset=0' + (keyword ? '&keyword=' + encodeURIComponent(keyword) : '');
+    return apiJson(path).then(function(data) {
+      state.groups = Array.isArray(data.items) ? data.items : [];
+      if (state.activeGroupKey && !state.groups.some(function(x) { return (x.group_key || x.display_name) === state.activeGroupKey; })) {
+        state.activeGroupKey = '';
+        state.groupMembers = [];
+      }
+      renderGroups();
+      renderGroupMembers();
+    }).catch(function(err) {
+      setMsg(err.message || '群加载失败', true);
+    });
+  }
+
+  function loadGroupMembers() {
+    var id = activeAccountId();
+    if (!id || !state.activeGroupKey) {
+      state.groupMembers = [];
+      renderGroupMembers();
+      return Promise.resolve();
+    }
+    var path = '/api/native-wechat/groups/members?account_id=' + encodeURIComponent(id) +
+      '&group_key=' + encodeURIComponent(state.activeGroupKey) + '&limit=200&offset=0';
+    return apiJson(path).then(function(data) {
+      state.groupMembers = Array.isArray(data.items) ? data.items : [];
+      renderGroupMembers();
+    }).catch(function(err) {
+      setMsg(err.message || '群成员加载失败', true);
+    });
+  }
+
+  function loadMessages() {
+    var id = activeAccountId();
+    if (!id || !state.activePeerId) {
+      state.messages = [];
+      renderMessages();
+      return Promise.resolve();
+    }
+    var path = '/api/native-wechat/messages?account_id=' + encodeURIComponent(id) +
+      '&peer_id=' + encodeURIComponent(state.activePeerId) + '&limit=100&offset=0';
+    return apiJson(path).then(function(data) {
+      state.messages = Array.isArray(data.items) ? data.items : [];
+      renderMessages();
+    }).catch(function(err) {
+      setMsg(err.message || '消息加载失败', true);
+    });
+  }
+
+  function syncActiveMessages() {
+    var id = activeAccountId();
+    if (!id || !state.activePeerId) {
+      return setMsg('请先选择会话', true);
+    }
+    setMsg('正在读取当前会话消息...', false);
+    return apiJson('/api/native-wechat/messages/sync', {
+      method: 'POST',
+      body: { account_id: id, peer_id: state.activePeerId, load_more_pages: 0 }
+    }).then(function(data) {
+      setMsg('消息读取完成，新增 ' + (data.count || 0) + ' 条', false);
+      state.activePeerId = data.peer_id || state.activePeerId;
+      return Promise.all([loadPeers(), loadMessages()]);
+    }).catch(function(err) {
+      setMsg(err.message || '消息读取失败', true);
+    });
+  }
+
+  function loadTasks() {
+    var id = activeAccountId();
+    var path = '/api/native-wechat/tasks?limit=80&offset=0' + (id ? '&account_id=' + encodeURIComponent(id) : '');
+    return apiJson(path).then(function(data) {
+      state.tasks = Array.isArray(data.items) ? data.items : [];
+      renderTasks();
+    }).catch(function(err) {
+      setMsg(err.message || '任务加载失败', true);
+    });
+  }
+
+  function pollUpdates() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先连接或选择账号', true);
+    setMsg('正在收消息...', false);
+    apiJson('/api/native-wechat/updates/poll', {
+      method: 'POST',
+      body: { account_id: id, timeout_ms: 8000 }
+    }).then(function(data) {
+      var current = data.current_session || {};
+      var name = current.display_name || current.peer_id || '';
+      var messageCount = Number(data.new_message_count || data.message_count || 0);
+      var unreadSessions = Number(data.unread_session_count || 0);
+      var unreadMessages = Number(data.unread_message_count || 0);
+      var text = '收消息完成：左侧未读 ' + unreadSessions + ' 个会话 / ' + unreadMessages + ' 条';
+      if (name) text += '，当前会话 ' + name + ' 新增 ' + messageCount + ' 条';
+      setMsg(text, false);
+      return Promise.all([loadPeers(), loadGroups()]);
+    }).then(function() {
+      if (state.activePeerId) return loadMessages();
+    }).catch(function(err) {
+      setMsg(err.message || '收消息失败', true);
+    });
+  }
+
+  function syncSessions() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择账号', true);
+    setMsg('正在同步会话...', false);
+    return apiJson('/api/native-wechat/sessions/sync', {
+      method: 'POST',
+      body: { account_id: id, limit: 2000 }
+    }).then(function(data) {
+      var sessionCount = data.count || 0;
+      return apiJson('/api/native-wechat/groups/sync', {
+        method: 'POST',
+        body: { account_id: id, limit: 2000 }
+      }).then(function(groupData) {
+        setMsg('同步完成：' + sessionCount + ' 条，会话中识别群聊 ' + (groupData.count || 0) + ' 个', false);
+      }).catch(function() {
+        setMsg('同步完成：' + sessionCount + ' 条', false);
+      }).then(function() {
+        return Promise.all([loadPeers(), loadContacts(), loadGroups()]);
+      });
+    }).catch(function(err) {
+      setMsg(err.message || '同步会话失败', true);
+    });
+  }
+
+  function syncContacts() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择账号', true);
+    setMsg('正在同步通讯录...', false);
+    return apiJson('/api/native-wechat/contacts/sync', {
+      method: 'POST',
+      body: { account_id: id, limit: 2000 }
+    }).then(function(data) {
+      setMsg('同步完成：' + (data.count || 0) + ' 条', false);
+      return Promise.all([loadContacts(), loadPeers()]);
+    }).catch(function(err) {
+      setMsg(err.message || '同步通讯录失败', true);
+    });
+  }
+
+  function syncGroupMembers() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择账号', true);
+    if (!state.activeGroupKey) return setMsg('请先选择群', true);
+    setMsg('正在同步群成员...', false);
+    return apiJson('/api/native-wechat/groups/members/sync', {
+      method: 'POST',
+      body: { account_id: id, group_key: state.activeGroupKey }
+    }).then(function(data) {
+      setMsg('同步完成：' + (data.count || 0) + ' 人', false);
+      return loadGroupMembers();
+    }).catch(function(err) {
+      setMsg(err.message || '同步群成员失败', true);
+    });
+  }
+
+  function addFriend() {
+    var id = activeAccountId();
+    var keywords = splitTargets((($('nativeWechatFriendKeyword') || {}).value || '').trim());
+    var applyMessage = (($('nativeWechatFriendApplyMessage') || {}).value || '').trim();
+    var remark = (($('nativeWechatFriendRemark') || {}).value || '').trim();
+    var permission = (($('nativeWechatFriendPermission') || {}).value || '朋友圈').trim();
+    var tags = (($('nativeWechatFriendTags') || {}).value || '').split(/[,，]/).map(function(x) { return x.trim(); }).filter(Boolean);
+    if (!id) return setMsg('请先选择账号', true);
+    if (!keywords.length) return setMsg('请填写好友关键词', true);
+    setChip('nativeWechatFriendState', '排队中');
+    return apiJson('/api/native-wechat/friends/add', {
+      method: 'POST',
+      body: {
+        account_id: id,
+        keywords: keywords,
+        apply_message: applyMessage,
+        remark: remark,
+        tags: tags,
+        permission: permission,
+        prepare_only: false
+      }
+    }).then(function(data) {
+      setChip('nativeWechatFriendState', '已排队');
+      setMsg((data && data.message) || ('已加入队列：' + keywords.length + ' 个目标'), false);
+      return loadTasks();
+    }).catch(function(err) {
+      setChip('nativeWechatFriendState', '失败');
+      setMsg(err.message || '提交好友申请失败', true);
+    });
+  }
+
+  function submitMomentsLike() {
+    var id = activeAccountId();
+    var targets = selectedContactValues();
+    var dryRunNode = $('nativeWechatContactMomentsDryRun');
+    var scrollNode = $('nativeWechatContactMomentsMaxScrolls');
+    var maxScrolls = Number((scrollNode && scrollNode.value) || 20);
+    if (!id) return setMsg('请先选择账号', true);
+    if (!targets.length) return setMsg('请先选择联系人', true);
+    setMsg('正在加入朋友圈点赞队列...', false);
+    return apiJson('/api/native-wechat/moments/like', {
+      method: 'POST',
+      body: {
+        account_id: id,
+        targets: targets,
+        dry_run: dryRunNode ? !!dryRunNode.checked : true,
+        max_scrolls: maxScrolls || 20
+      }
+    }).then(function(data) {
+      setMsg((data && data.message) || ('已加入队列：' + targets.length + ' 个目标'), false);
+      return loadTasks();
+    }).catch(function(err) {
+      setMsg(err.message || '朋友圈任务提交失败', true);
+    });
+  }
+
+  function submitMomentsComment() {
+    var id = activeAccountId();
+    var targets = selectedContactValues();
+    var dryRunNode = $('nativeWechatContactMomentsDryRun');
+    var scrollNode = $('nativeWechatContactMomentsMaxScrolls');
+    var maxScrolls = Math.min(30, Number((scrollNode && scrollNode.value) || 6));
+    if (!id) return setMsg('请先选择账号', true);
+    if (!targets.length) return setMsg('请先选择联系人', true);
+    setMsg('正在加入朋友圈评论队列...', false);
+    return apiJson('/api/native-wechat/moments/comment', {
+      method: 'POST',
+      body: {
+        account_id: id,
+        targets: targets,
+        dry_run: dryRunNode ? !!dryRunNode.checked : false,
+        max_scrolls: maxScrolls || 6
+      }
+    }).then(function(data) {
+      setMsg((data && data.message) || ('已加入队列：' + targets.length + ' 个目标'), false);
+      return loadTasks();
+    }).catch(function(err) {
+      setMsg(err.message || '朋友圈评论任务提交失败', true);
+    });
+  }
+
+  function momentsLocalFileKind(file) {
+    var type = String((file && file.type) || '').toLowerCase();
+    var name = String((file && file.name) || '').toLowerCase();
+    if (type.indexOf('image/') === 0 || /\.(png|jpe?g|webp|gif|bmp)$/i.test(name)) return 'image';
+    if (type.indexOf('video/') === 0 || /\.(mp4|mov|webm|avi|mkv)$/i.test(name)) return 'video';
+    return '';
+  }
+
+  function submitMomentsPublish() {
+    var id = activeAccountId();
+    var content = (($('nativeWechatMomentsContent') || {}).value || '').trim();
+    var mediaType = (($('nativeWechatMomentsMediaType') || {}).value || 'image_text').trim() || 'image_text';
+    var visibility = (($('nativeWechatMomentsVisibility') || {}).value || 'public').trim() || 'public';
+    var files = state.momentsFiles || [];
+    var imageCount = files.filter(function(file) { return momentsLocalFileKind(file) === 'image'; }).length;
+    var videoCount = files.filter(function(file) { return momentsLocalFileKind(file) === 'video'; }).length;
+    if (!id) return setMsg('请先连接或选择账号', true);
+    if (!content && !files.length) return setMsg('请填写正文或选择素材', true);
+    if (mediaType === 'image_text' && videoCount > 0) return setMsg('图文朋友圈只能选择图片；发视频请切换到视频类型', true);
+    if (mediaType === 'image_text' && imageCount > 9) return setMsg('朋友圈图文一次最多选择 9 张图片', true);
+    if (mediaType === 'video' && (videoCount !== files.length || videoCount > 1)) return setMsg('朋友圈视频一次只能选择 1 个视频', true);
+    if (state.momentsSubmitting) return;
+    state.momentsSubmitting = true;
+    var submitBtn = $('nativeWechatMomentsPublishBtn');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = '提交中...';
+    }
+    setChip('nativeWechatMomentsState', '排队中');
+    setMsg(files.length ? '正在上传素材...' : '正在提交朋友圈发布...', false);
+    Promise.all(files.map(uploadWechatFile)).then(function(uploaded) {
+      setMsg('正在加入朋友圈发布队列...', false);
+      return apiJson('/api/native-wechat/moments/publish', {
+        method: 'POST',
+        body: {
+          account_id: id,
+          content: content,
+          attachments: uploaded,
+          media_type: mediaType,
+          visibility: visibility
+        }
+      });
+    }).then(function(data) {
+      setChip('nativeWechatMomentsState', '已排队');
+      setMsg((data && data.message) || '朋友圈发布任务已加入队列', false);
+      var input = $('nativeWechatMomentsContent');
+      if (input) input.value = '';
+      state.momentsFiles = [];
+      renderMomentsFiles();
+      return loadTasks();
+    }).catch(function(err) {
+      setChip('nativeWechatMomentsState', '失败');
+      setMsg(err.message || '朋友圈发布失败', true);
+    }).finally(function() {
+      state.momentsSubmitting = false;
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '发布到朋友圈';
+      }
+    });
+  }
+
+  function selectedContactsToSend() {
+    var recipients = selectedContactValues();
+    if (!recipients.length) return setMsg('请先选择联系人', true);
+    var input = $('nativeWechatRecipientInput');
+    if (input) input.value = recipients.join('\n');
+    state.activePeerId = recipients[0] || '';
+    switchTab('messages');
+    renderPeers();
+    renderMessages();
+    setMsg('已填入 ' + recipients.length + ' 个联系人', false);
+  }
+
+  function createGroupFromSelectedContacts() {
+    var id = activeAccountId();
+    var contacts = selectedContactValues();
+    if (!id) return setMsg('请先选择账号', true);
+    if (contacts.length < 2) return setMsg('创建群至少选择2个联系人', true);
+    setMsg('正在加入创建群队列...', false);
+    return apiJson('/api/native-wechat/groups/create', {
+      method: 'POST',
+      body: { account_id: id, contacts: contacts }
+    }).then(function(data) {
+      setMsg((data && data.message) || ('已加入队列：' + contacts.length + ' 个联系人'), false);
+      return loadTasks();
+    }).catch(function(err) {
+      setMsg(err.message || '创建群失败', true);
+    });
+  }
+
+  function sendMessage() {
+    var id = activeAccountId();
+    var recipients = splitTargets((($('nativeWechatRecipientInput') || {}).value || '').trim());
+    var content = (($('nativeWechatSendContent') || {}).value || '').trim();
+    if (!id) return setMsg('请先连接或选择账号', true);
+    if (!recipients.length) return setMsg('请填写接收人', true);
+    if (!content && !state.sendFiles.length) return setMsg('请填写发送内容或选择附件', true);
+    setChip('nativeWechatSendState', '排队中');
+    setMsg(state.sendFiles.length ? '正在上传附件...' : '正在发送...', false);
+    Promise.all(state.sendFiles.map(uploadWechatFile)).then(function(files) {
+      setMsg('正在加入发送队列...', false);
+      return apiJson('/api/native-wechat/messages/send', {
+      method: 'POST',
+        body: { account_id: id, to_usernames: recipients, content: content, target_type: 'direct', attachments: files }
+      });
+    }).then(function(data) {
+      var failed = Number(data.failed_count || 0);
+      var taskError = data && data.task && data.task.error_message ? String(data.task.error_message) : '';
+      setChip('nativeWechatSendState', failed ? '发送失败' : '已排队');
+      setMsg(failed ? ('发送失败' + (taskError ? '：' + taskError : '，请查看任务记录')) : ('已加入队列：' + recipients.length + ' 个目标'), failed > 0);
+      if (!failed) {
+        var input = $('nativeWechatSendContent');
+        if (input) input.value = '';
+        state.sendFiles = [];
+        renderSendFiles();
+      }
+      state.activePeerId = recipients[0] || '';
+      return loadPeers();
+    }).then(function() {
+      return loadTasks();
+    }).catch(function(err) {
+      setChip('nativeWechatSendState', '发送失败');
+      setMsg(err.message || '发送失败', true);
+    });
   }
 
   function closeModals() {
-    document.querySelectorAll('.juhe-modal-mask.show').forEach(function(node) {
+    document.querySelectorAll('.native-wechat-modal-mask.show').forEach(function(node) {
       node.classList.remove('show');
     });
   }
 
-  function switchTab(tab) {
-    state.tab = tab || 'contacts';
-    document.querySelectorAll('[data-juhe-tab]').forEach(function(btn) {
-      btn.classList.toggle('active', btn.getAttribute('data-juhe-tab') === state.tab);
-    });
-    document.querySelectorAll('[data-juhe-panel]').forEach(function(panel) {
-      panel.classList.toggle('active', panel.getAttribute('data-juhe-panel') === state.tab);
-    });
-    if (state.tab === 'ai') {
-      loadAiConfig();
-      loadAiMemoryDocs();
-      loadAiSessions();
-    }
-    if (state.tab === 'logs') loadLogs();
+  function shortText(value, maxLen) {
+    var text = String(value || '').replace(/\s+/g, ' ').trim();
+    var limit = maxLen || 240;
+    return text.length > limit ? text.slice(0, limit) + '...' : text;
   }
 
-  function renderConfigSelect() {
-    var sel = $('juheConfigSelect');
-    if (!sel) return;
-    if (!state.configs.length) {
-      sel.innerHTML = '<option value="">暂无可用实例</option>';
-      return;
-    }
-    if (!state.activeConfigId) state.activeConfigId = String(state.configs[0].id);
-    sel.innerHTML = state.configs.map(function(cfg) {
-      return '<option value="' + esc(cfg.id) + '">' + esc(cfg.label || ('实例 ' + cfg.id)) + '</option>';
-    }).join('');
-    sel.value = state.activeConfigId;
+  function commentStatusText(status) {
+    var map = {
+      submitted: '已评论',
+      ready: '已生成',
+      failed: '失败',
+      skipped: '跳过',
+      already_commented: '已评论过',
+      unknown: '未知'
+    };
+    return map[status] || status || '';
   }
 
-  function loadConfigs() {
-    setMsg('', false);
-    return apiJson('/api/juhe-wechat/configs').then(function(data) {
-      state.configs = Array.isArray(data.configs) ? data.configs : [];
-      if (data.error) setMsg(data.error, true);
-      if (state.activeConfigId && !state.configs.some(function(c) { return String(c.id) === state.activeConfigId; })) {
-        state.activeConfigId = '';
-      }
-      renderConfigSelect();
-    }).catch(function(err) {
-      state.configs = [];
-      renderConfigSelect();
-      setMsg(err.message || '加载实例失败', true);
-    });
+  function formatMomentsCommentResult(item) {
+    if (!item) return '';
+    var lines = [];
+    var head = [item.target || '', commentStatusText(item.status)].filter(Boolean).join(' · ');
+    if (head) lines.push(head);
+    if (item.post_text) lines.push('帖子：' + shortText(item.post_text, 360));
+    if (item.media_summary) lines.push('AI理解：' + shortText(item.media_summary, 360));
+    if (item.reply) lines.push('评论：' + item.reply);
+    if (item.reason) lines.push('原因：' + item.reason);
+    if (item.error) lines.push('错误：' + item.error);
+    return lines.join('\n');
   }
 
-  function checkStatus() {
-    var id = activeConfigId();
-    if (!id) return setMsg('请先选择可用实例', true);
-    setMsg('正在检测在线状态...', false);
-    apiJson('/api/juhe-wechat/configs/' + encodeURIComponent(id) + '/status', { method: 'POST', body: {} })
-      .then(function(data) {
-        setMsg('检测完成：' + (data.status_label || data.status || '未知'), !data.ok);
-        return loadConfigs();
-      })
-      .catch(function(err) { setMsg(err.message || '检测失败', true); });
+  function formatMomentsCommentStep(item) {
+    if (!item || !item.step) return '';
+    var map = {
+      open_contact_profile: '打开联系人',
+      open_contact_moments: '进入朋友圈',
+      moments_comment_open_post: '打开帖子',
+      moments_comment_post_found: '找到帖子',
+      moments_comment_snapshot: '截取帖子',
+      moments_comment_media_understood: 'AI理解完成',
+      moments_comment_media_understand_failed: 'AI理解失败',
+      moments_comment_reply_generated: '生成评论',
+      moments_comment_ready: '等待提交',
+      moments_comment_submit_failed: '提交失败',
+      moments_comment_submitted: '评论成功',
+      moments_comment_skip: '跳过',
+      moments_comment_stop_after_24h: '超过24小时停止',
+      contact_album_back: '返回列表',
+      close_contact_moments: '关闭朋友圈'
+    };
+    var label = map[item.step] || item.step;
+    var parts = [label];
+    if (item.target) parts.push(item.target);
+    if (item.time) parts.push(item.time);
+    if (item.reply) parts.push('评论：' + item.reply);
+    if (item.summary) parts.push('AI理解：' + shortText(item.summary, 220));
+    if (item.post_text) parts.push('帖子：' + shortText(item.post_text, 220));
+    if (item.reason) parts.push('原因：' + item.reason);
+    if (item.error) parts.push('错误：' + item.error);
+    return parts.filter(Boolean).join(' · ');
   }
 
-  function loadContactCache() {
-    var id = activeConfigId();
-    if (!id) {
-      state.contacts = [];
-      state.groups = [];
-      state.selectedContacts.clear();
-      renderContacts();
-      renderRooms();
-      return Promise.resolve();
-    }
-    return apiJson('/api/juhe-wechat/contacts/cache?config_id=' + encodeURIComponent(id)).then(function(data) {
-      state.contacts = Array.isArray(data.contacts) ? data.contacts : (Array.isArray(data.items) ? data.items : []);
-      state.groups = Array.isArray(data.groups) ? data.groups : [];
-      state.selectedContacts.clear();
-      renderContacts();
-      renderRooms();
-    }).catch(function(err) {
-      setMsg(err.message || 'load saved contacts failed', true);
-    });
-  }
-
-  function renderContacts() {
-    var list = $('juheContactList');
-    var count = $('juheSelectedCount');
-    var targetCount = $('juheSendTargetCount');
-    if (count) count.textContent = '已选 ' + state.selectedContacts.size;
-    if (targetCount) targetCount.textContent = state.selectedContacts.size + ' 人';
-    if (!list) return;
-    var keyword = (($('juheContactSearch') || {}).value || '').trim().toLowerCase();
-    var contacts = state.contacts.filter(function(item) {
-      if (!keyword) return true;
-      return [itemTitle(item), itemSub(item), itemUsername(item)].join(' ').toLowerCase().indexOf(keyword) >= 0;
-    });
-    if (!contacts.length) {
-      list.className = 'juhe-empty';
-      list.innerHTML = state.contacts.length ? '没有匹配联系人。' : '点击“刷新通讯录”加载联系人。';
-      return;
-    }
-    list.className = 'juhe-list';
-    list.innerHTML = contacts.map(function(item) {
-      var username = itemUsername(item);
-      var checked = state.selectedContacts.has(username);
-      return '<div class="juhe-item' + (checked ? ' active' : '') + '" data-juhe-contact="' + esc(username) + '">' +
-        '<input type="checkbox" class="juhe-contact-check" ' + (checked ? 'checked' : '') + '>' +
-        '<div><div class="juhe-item-title">' + esc(itemTitle(item)) + '</div><div class="juhe-meta">' + esc(itemSub(item)) + '</div></div>' +
-        '<button type="button" class="btn btn-ghost btn-sm" data-juhe-contact-detail="' + esc(username) + '">详情</button>' +
-      '</div>';
-    }).join('');
-  }
-
-  function refreshContacts() {
-    var id = activeConfigId();
-    if (!id) return setMsg('请先选择可用实例', true);
-    setMsg('正在刷新通讯录...', false);
-    apiJson('/api/juhe-wechat/contacts/refresh', {
-      method: 'POST',
-      body: { config_id: Number(id) }
-    }).then(function(data) {
-      state.contacts = Array.isArray(data.contacts) ? data.contacts : (Array.isArray(data.items) ? data.items.filter(function(x) { return String(itemUsername(x)).indexOf('@chatroom') < 0; }) : []);
-      state.groups = Array.isArray(data.groups) ? data.groups : state.groups;
-      state.selectedContacts.clear();
-      renderContacts();
-      renderRooms();
-      setMsg('通讯录刷新完成：' + state.contacts.length + ' 个联系人', false);
-    }).catch(function(err) {
-      setMsg(err.message || '刷新通讯录失败', true);
-    });
-  }
-
-  function toggleContact(username, checked) {
-    if (!username) return;
-    if (checked) state.selectedContacts.add(username);
-    else state.selectedContacts.delete(username);
-    renderContacts();
-  }
-
-  function selectAllContacts() {
-    var keyword = (($('juheContactSearch') || {}).value || '').trim().toLowerCase();
-    var visible = state.contacts.filter(function(item) {
-      if (!keyword) return true;
-      return [itemTitle(item), itemSub(item), itemUsername(item)].join(' ').toLowerCase().indexOf(keyword) >= 0;
-    });
-    var allSelected = visible.length && visible.every(function(item) { return state.selectedContacts.has(itemUsername(item)); });
-    visible.forEach(function(item) {
-      var username = itemUsername(item);
-      if (!username) return;
-      if (allSelected) state.selectedContacts.delete(username);
-      else state.selectedContacts.add(username);
-    });
-    renderContacts();
-  }
-
-  function contactDetail(username) {
-    var id = activeConfigId();
-    var target = username || selectedUsernames()[0];
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (!target || state.selectedContacts.size > 1 && !username) return setMsg('查看详情请单选一个联系人', true);
-    setMsg('正在获取联系人详情...', false);
-    apiJson('/api/juhe-wechat/contacts/detail', {
-      method: 'POST',
-      body: { config_id: Number(id), username: target }
-    }).then(function(data) {
-      setMsg('联系人详情已返回', false);
-      showDetail('联系人详情', data.detail || data.upstream || data);
-      loadContactCache();
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '获取联系人详情失败', true); });
-  }
-
-  function modifyRemark() {
-    var id = activeConfigId();
-    var names = selectedUsernames();
-    var remark = (($('juheRemarkInput') || {}).value || '').trim();
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (names.length !== 1) return setMsg('修改备注请单选一个联系人', true);
-    setMsg('正在修改备注...', false);
-    apiJson('/api/juhe-wechat/contacts/remark', {
-      method: 'POST',
-      body: { config_id: Number(id), username: names[0], remark: remark }
-    }).then(function(data) {
-      setMsg('备注修改请求已提交', !data.ok);
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '修改备注失败', true); });
-  }
-
-  function resultHtml(item, titleKey) {
-    var ok = !!item.ok;
-    var title = item[titleKey || 'to_username'] || item.contact || item.resolved_username || '-';
-    var err = item.error || '';
-    return '<div class="juhe-result ' + (ok ? 'ok' : 'fail') + '">' +
-      '<div><b>' + esc(title) + '</b> · ' + esc(ok ? '成功' : '失败') + '</div>' +
-      (err ? '<div class="juhe-meta">' + esc(err) + '</div>' : '') +
-    '</div>';
-  }
-
-  function renderResults(nodeId, items, emptyText) {
-    var node = $(nodeId);
-    if (!node) return;
-    if (!items || !items.length) {
-      node.innerHTML = emptyText ? '<div class="juhe-empty">' + esc(emptyText) + '</div>' : '';
-      return;
-    }
-    node.innerHTML = items.map(function(item) { return resultHtml(item); }).join('');
-  }
-
-  function appendResults(nodeId, items) {
-    var node = $(nodeId);
-    if (!node || !items || !items.length) return;
-    node.innerHTML = (node.innerHTML || '') + items.map(function(item) { return resultHtml(item); }).join('');
-  }
-
-  function formatFileSize(size) {
-    var n = Number(size || 0);
-    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
-    if (n >= 1024) return Math.ceil(n / 1024) + ' KB';
-    return n + ' B';
-  }
-
-  function renderMediaPreview() {
-    var wrap = $('juheMediaPreview');
-    var summary = $('juheMediaSummary');
-    if (summary) {
-      summary.textContent = state.mediaFiles.length
-        ? ('已选择 ' + state.mediaFiles.length + ' 个文件')
-        : '未选择文件';
-    }
-    if (!wrap) return;
-    if (!state.mediaFiles.length) {
-      wrap.innerHTML = '';
-      return;
-    }
-    wrap.innerHTML = state.mediaFiles.map(function(item, idx) {
-      var file = item.file;
-      var isImage = String(file.type || '').indexOf('image/') === 0;
-      return '<div class="juhe-media-card" data-juhe-media-index="' + idx + '">' +
-        '<div class="juhe-media-thumb">' +
-          (isImage && item.previewUrl ? '<img src="' + esc(item.previewUrl) + '" alt="">' : esc((file.name || 'FILE').split('.').pop() || 'FILE')) +
-        '</div>' +
-        '<div class="juhe-media-info">' +
-          '<div class="juhe-media-name" title="' + esc(file.name || '') + '">' + esc(file.name || '未命名文件') + '</div>' +
-          '<div class="juhe-media-actions"><span class="juhe-meta">' + esc(formatFileSize(file.size)) + '</span><button type="button" class="juhe-link-btn" data-juhe-remove-media="' + idx + '">移除</button></div>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-  }
-
-  function addMediaFiles(files) {
-    Array.from(files || []).forEach(function(file) {
-      var previewUrl = '';
-      if (String(file.type || '').indexOf('image/') === 0 && typeof URL !== 'undefined' && URL.createObjectURL) {
-        previewUrl = URL.createObjectURL(file);
-      }
-      state.mediaFiles.push({ file: file, previewUrl: previewUrl });
-    });
-    renderMediaPreview();
-  }
-
-  function removeMediaFile(index) {
-    var item = state.mediaFiles[index];
-    if (item && item.previewUrl && typeof URL !== 'undefined' && URL.revokeObjectURL) {
-      URL.revokeObjectURL(item.previewUrl);
-    }
-    state.mediaFiles.splice(index, 1);
-    renderMediaPreview();
-  }
-
-  function clearMediaFiles() {
-    state.mediaFiles.forEach(function(item) {
-      if (item.previewUrl && typeof URL !== 'undefined' && URL.revokeObjectURL) URL.revokeObjectURL(item.previewUrl);
-    });
-    state.mediaFiles = [];
-    var fileInput = $('juheMediaFile');
-    if (fileInput) fileInput.value = '';
-    renderMediaPreview();
-  }
-
-  function sendTextOnly(id, names, content, targetType) {
-    return apiJson('/api/juhe-wechat/messages/send', {
-      method: 'POST',
-      body: { config_id: Number(id), to_usernames: names, target_type: normalizeTargetType(targetType), message_type: 'text', content: content }
-    });
-  }
-
-  function sendText() {
-    var id = activeConfigId();
-    var names = selectedUsernames();
-    var content = (($('juheMessageContent') || {}).value || '').trim();
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (!names.length) return setMsg('请先选择联系人', true);
-    if (!content) return setMsg('请输入要发送的文案', true);
-    setMsg('正在发送文本...', false);
-    sendTextOnly(id, names, content).then(function(data) {
-      renderResults('juheSendResults', data.items || [], '没有发送结果');
-      setMsg('文本发送完成：成功 ' + (data.success_count || 0) + '，失败 ' + (data.failed_count || 0), data.failed_count > 0);
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '发送失败', true); });
-  }
-
-  function uploadToWechatCdn(file, type) {
-    var base = apiBase();
-    var id = activeConfigId();
-    var fileType = type === 'image' ? 2 : 4;
-    if (!base) return Promise.reject(new Error('未配置本机 LOCAL_API_BASE'));
-    var fd = new FormData();
-    fd.append('file', file);
-    return fetch(base + '/api/juhe-wechat/media/upload-file?config_id=' + encodeURIComponent(id) + '&file_type=' + encodeURIComponent(fileType), {
-      method: 'POST',
-      headers: authHeaderUpload(),
-      body: fd
-    }).then(function(resp) {
-      return resp.json().catch(function() { return {}; }).then(function(data) {
-        if (!resp.ok) throw new Error(parseErr(data, '微信文件上传失败'));
-        state.lastUpload = { local: data.source || {}, cdn: data.upload || data.upstream || data };
-        return state.lastUpload;
+  function detectLocalWechat() {
+    setMsg('正在检测本机微信...', false);
+    return apiJson('/api/native-wechat/local/status').then(function(status) {
+      state.driver = status || null;
+      return loadAccounts().then(function(items) {
+        return { status: status || {}, items: items || [] };
       });
-    });
-  }
-
-  function sendMediaOnly(id, names, file, type, targetType) {
-    return uploadToWechatCdn(file, type).then(function(uploaded) {
-      return apiJson('/api/juhe-wechat/messages/send', {
-        method: 'POST',
-        body: { config_id: Number(id), to_usernames: names, target_type: normalizeTargetType(targetType), message_type: type, upload: uploaded.cdn }
-      });
-    });
-  }
-
-  function sendMedia(type) {
-    var id = activeConfigId();
-    var names = selectedUsernames();
-    var fileInput = $('juheMediaFile');
-    var file = state.mediaFiles[0] ? state.mediaFiles[0].file : (fileInput && fileInput.files && fileInput.files[0]);
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (!names.length) return setMsg('请先选择联系人', true);
-    if (!file) return setMsg('请先选择要发送的图片或文件', true);
-    setMsg('正在上传并发送' + (type === 'image' ? '图片' : '文件') + '...', false);
-    sendMediaOnly(id, names, file, type).then(function(data) {
-      renderResults('juheSendResults', data.items || [], '没有发送结果');
-      setMsg((type === 'image' ? '图片' : '文件') + '发送完成：成功 ' + (data.success_count || 0) + '，失败 ' + (data.failed_count || 0), data.failed_count > 0);
-      clearMediaFiles();
-      loadLogs();
+    }).then(function(result) {
+      var status = result.status || {};
+      var items = result.items || [];
+      if (!items.length) {
+        setMsg('未检测到本机微信，请打开已登录的 PC 微信主窗口后重试。', true);
+        return;
+      }
+      var ready = !!status.driver_ready || items.some(function(item) { return item.source === 'pc_wechat' && item.driver_ready; });
+      setMsg(ready ? '已检测到本机微信，可以下发任务。' : '已检测到本机微信，但本机控制组件不可用，请检查 pywin32。', !ready);
+      return loadPeers();
     }).catch(function(err) {
-      setMsg(err.message || '媒体发送失败', true);
+      setMsg(err.message || '检测本机微信失败', true);
     });
   }
 
-  async function sendSelectedContent(targetType) {
-    targetType = normalizeTargetType(targetType);
-    var id = activeConfigId();
-    var names = targetType === 'groups' ? selectedRoomUsernames() : selectedUsernames();
-    var content = (($('juheMessageContent') || {}).value || '').trim();
-    var files = state.mediaFiles.map(function(item) { return item.file; });
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (!names.length) return setMsg(targetType === 'groups' ? '请先选择群' : '请先选择联系人', true);
-    if (!content && !files.length) return setMsg('请输入文案或选择图片/文件', true);
-
-    var resultNode = $('juheSendResults');
-    if (resultNode) resultNode.innerHTML = '';
-    var ok = 0;
-    var fail = 0;
-    try {
-      if (content) {
-        setMsg('正在发送文案...', false);
-        var textResult = await sendTextOnly(id, names, content, targetType);
-        appendResults('juheSendResults', (textResult.items || []).map(function(x) {
-          return Object.assign({}, x, { to_username: '文案 / ' + (x.to_username || '') });
-        }));
-        ok += Number(textResult.success_count || 0);
-        fail += Number(textResult.failed_count || 0);
-      }
-      for (var i = 0; i < files.length; i++) {
-        var file = files[i];
-        var isImage = String(file.type || '').indexOf('image/') === 0;
-        var type = isImage ? 'image' : 'file';
-        setMsg('正在发送 ' + (i + 1) + '/' + files.length + '：' + file.name, false);
-        var mediaResult = await sendMediaOnly(id, names, file, type, targetType);
-        appendResults('juheSendResults', (mediaResult.items || []).map(function(x) {
-          return Object.assign({}, x, { to_username: (isImage ? '图片 ' : '文件 ') + file.name + ' / ' + (x.to_username || '') });
-        }));
-        ok += Number(mediaResult.success_count || 0);
-        fail += Number(mediaResult.failed_count || 0);
-      }
-      setMsg('发送完成：成功 ' + ok + '，失败 ' + fail, fail > 0);
-      clearMediaFiles();
-      loadLogs();
-    } catch (err) {
-      setMsg(err.message || '发送选中内容失败', true);
-      loadLogs();
+  function showJsonDetail(titleText, data) {
+    var modal = $('nativeWechatDetailModal');
+    var title = $('nativeWechatDetailTitle');
+    var body = $('nativeWechatDetailBody');
+    if (title) title.textContent = titleText || '详情';
+    if (body) {
+      body.className = '';
+      body.innerHTML = '<pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;line-height:1.55;">' +
+        esc(JSON.stringify(data || {}, null, 2)) +
+        '</pre>';
     }
-  }
-
-  function parseLines(text) {
-    return String(text || '')
-      .split(/\r?\n|,|，|;|；|\t/g)
-      .map(function(x) { return x.trim(); })
-      .filter(Boolean)
-      .filter(function(x, idx, arr) { return arr.indexOf(x) === idx; });
-  }
-
-  function openImportModal() {
-    var modal = $('juheImportModal');
     if (modal) modal.classList.add('show');
   }
 
-  function startImportFriends() {
-    var id = activeConfigId();
-    if (!id) return setMsg('请先选择可用实例', true);
-    var contacts = parseLines(($('juheImportTextarea') || {}).value || '').map(function(x) { return { contact: x }; });
-    if (!contacts.length) return setMsg('请先粘贴要添加的联系人', true);
-    var verify = (($('juheVerifyContentInput') || {}).value || '').trim();
-    setMsg('正在发送好友申请...', false);
-    apiJson('/api/juhe-wechat/friend-requests', {
-      method: 'POST',
-      body: { config_id: Number(id), verify_content: verify, contacts: contacts }
-    }).then(function(data) {
-      renderResults('juheImportResults', data.items || [], '没有导入结果');
-      setMsg('好友申请完成：成功 ' + (data.success_count || 0) + '，失败 ' + (data.failed_count || 0), data.failed_count > 0);
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '批量加好友失败', true); });
-  }
-
-  function renderRooms() {
-    var list = $('juheRoomList');
-    var active = $('juheActiveRoomName');
-    if (active) active.textContent = activeRoomTitle() || '未选择群';
-    if (!list) return;
-    if (!state.groups.length) {
-      list.className = 'juhe-empty';
-      list.innerHTML = '点击“刷新群”加载群列表，或先刷新通讯录。';
-      return;
-    }
-    list.className = 'juhe-list';
-    list.innerHTML = state.groups.map(function(item) {
-      var username = itemUsername(item);
-      var activeCls = username === state.activeRoomUsername ? ' active' : '';
-      return '<div class="juhe-item' + activeCls + '" data-juhe-room="' + esc(username) + '">' +
-        '<span class="juhe-chip">群</span>' +
-        '<div><div class="juhe-item-title">' + esc(itemTitle(item)) + '</div><div class="juhe-meta">' + esc(itemSub(item)) + '</div></div>' +
-        '<button type="button" class="btn btn-ghost btn-sm" data-juhe-room-detail="' + esc(username) + '">详情</button>' +
-      '</div>';
-    }).join('');
-  }
-
-  function refreshRooms() {
-    var id = activeConfigId();
-    if (!id) return setMsg('请先选择可用实例', true);
-    setMsg('正在刷新群列表...', false);
-    apiJson('/api/juhe-wechat/rooms/list', {
-      method: 'POST',
-      body: { config_id: Number(id) }
-    }).then(function(data) {
-      state.groups = Array.isArray(data.items) ? data.items : [];
-      renderRooms();
-      setMsg('群列表刷新完成：' + state.groups.length + ' 个群', false);
-    }).catch(function(err) { setMsg(err.message || '刷新群失败', true); });
-  }
-
-  function roomUsernameRequired() {
-    if (!state.activeRoomUsername) {
-      setMsg('请先选择一个群', true);
-      return '';
-    }
-    return state.activeRoomUsername;
-  }
-
-  function roomAction(path, body, successText) {
-    var id = activeConfigId();
-    if (!id) return setMsg('请先选择可用实例', true);
-    setMsg('正在执行群操作...', false);
-    body = Object.assign({ config_id: Number(id) }, body || {});
-    apiJson(path, { method: 'POST', body: body }).then(function(data) {
-      renderResults('juheRoomResults', [{ ok: data.ok !== false, to_username: successText || '群操作', error: data.ok === false ? parseErr(data.upstream || data) : '' }]);
-      setMsg(successText || '群操作已提交', data.ok === false);
-      if (path.indexOf('/rooms/create') >= 0 || path.indexOf('/rooms/rename') >= 0) refreshRooms();
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '群操作失败', true); });
-  }
-
-  function createRoom() {
-    var names = selectedUsernames();
-    if (!names.length) return setMsg('请先在通讯录选择要拉群的联系人', true);
-    roomAction('/api/juhe-wechat/rooms/create', { username_list: names }, '建群请求已提交');
-  }
-
-  function roomDetail() {
-    var room = roomUsernameRequired();
-    if (!room) return;
-    apiJson('/api/juhe-wechat/rooms/detail', {
-      method: 'POST',
-      body: { config_id: Number(activeConfigId()), room_username: room }
-    }).then(function(data) {
-      renderResults('juheRoomResults', [{ ok: data.ok !== false, to_username: '群详情', error: data.ok === false ? parseErr(data.upstream || data) : '' }]);
-      setMsg('群详情已返回', data.ok === false);
-      showDetail('群详情', data.detail || data.upstream || data);
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '获取群详情失败', true); });
-  }
-
-  function roomMembers() {
-    var room = roomUsernameRequired();
-    if (!room) return;
-    apiJson('/api/juhe-wechat/rooms/members', {
-      method: 'POST',
-      body: { config_id: Number(activeConfigId()), room_username: room }
-    }).then(function(data) {
-      setMsg('群成员已返回：' + ((data.items || []).length || 0) + ' 条', false);
-      showDetail('群成员', data.items && data.items.length ? data.items : (data.detail || data.upstream || data));
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '获取群成员失败', true); });
-  }
-
-  function addMembers(invite) {
-    var room = roomUsernameRequired();
-    var names = selectedUsernames();
-    if (!room) return;
-    if (!names.length) return setMsg('请先在通讯录选择联系人', true);
-    roomAction(invite ? '/api/juhe-wechat/rooms/invite-members' : '/api/juhe-wechat/rooms/add-members', {
-      room_username: room,
-      username_list: names
-    }, invite ? '邀请成员请求已提交' : '添加成员请求已提交');
-  }
-
-  function renameRoom() {
-    var room = roomUsernameRequired();
-    var name = (($('juheRoomNameInput') || {}).value || '').trim();
-    if (!room) return;
-    if (!name) return setMsg('请输入新的群名称', true);
-    roomAction('/api/juhe-wechat/rooms/rename', { room_username: room, name: name }, '改群名请求已提交');
-  }
-
-  function setAnnouncement() {
-    var room = roomUsernameRequired();
-    var announcement = (($('juheRoomAnnouncementInput') || {}).value || '').trim();
-    if (!room) return;
-    if (!announcement) return setMsg('请输入群公告', true);
-    roomAction('/api/juhe-wechat/rooms/announcement', { room_username: room, announcement: announcement }, '群公告请求已提交');
-  }
-
-  function setDisplayName() {
-    var room = roomUsernameRequired();
-    var displayName = (($('juheRoomDisplayNameInput') || {}).value || '').trim();
-    if (!room) return;
-    roomAction('/api/juhe-wechat/rooms/display-name', { room_username: room, display_name: displayName }, '群昵称请求已提交');
-  }
-
-  function sendRoomText() {
-    var id = activeConfigId();
-    var names = selectedRoomUsernames();
-    var content = (($('juheRoomMessageContent') || {}).value || '').trim();
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (!names.length) return setMsg('请先选择一个群', true);
-    if (!content) return setMsg('请输入要发送到群的消息', true);
-    setMsg('正在发送群消息...', false);
-    sendTextOnly(id, names, content, 'groups').then(function(data) {
-      renderResults('juheRoomResults', data.items || [], '没有发送结果');
-      setMsg('群消息发送完成：成功 ' + (data.success_count || 0) + '，失败 ' + (data.failed_count || 0), data.failed_count > 0);
-      loadLogs();
-    }).catch(function(err) { setMsg(err.message || '群消息发送失败', true); });
-  }
-
-  function loadAiConfig() {
-    var id = activeConfigId();
-    if (!id) return Promise.resolve();
-    return apiJson('/api/juhe-wechat/ai-reply/config?config_id=' + encodeURIComponent(id)).then(function(data) {
-      var cfg = data.config || {};
-      state.aiSelectedMemoryDocIds = new Set(Array.isArray(cfg.auto_reply_memory_doc_ids) ? cfg.auto_reply_memory_doc_ids.map(String) : []);
-      var enabled = $('juheAiEnabled');
-      var maxContext = $('juheAiMaxContext');
-      var knowledge = $('juheAiKnowledge');
-      var prompt = $('juheAiPrompt');
-      var handoff = $('juheAiHandoffKeywords');
-      if (enabled) enabled.value = cfg.auto_reply_enabled ? '1' : '0';
-      if (maxContext) maxContext.value = cfg.auto_reply_max_context || 12;
-      if (knowledge) knowledge.value = cfg.knowledge || '';
-      if (prompt) prompt.value = cfg.auto_reply_prompt || '';
-      if (handoff) handoff.value = cfg.auto_reply_handoff_keywords || '';
-      renderAiMemoryDocs();
+  function diagnoseWechatControls() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择本机微信账号', true);
+    setMsg('正在诊断微信控件树...', false);
+    return apiJson('/api/native-wechat/local/diagnose?account_id=' + encodeURIComponent(id)).then(function(data) {
+      setMsg('控件诊断完成，把弹窗里的结果发回来即可定位。', false);
+      showJsonDetail('微信控件诊断', data);
     }).catch(function(err) {
-      setMsg(err.message || 'AI客服配置加载失败', true);
+      setMsg(err.message || '控件诊断失败', true);
     });
   }
 
-  function renderAiMemoryDocs() {
-    var list = $('juheAiMemoryDocs');
-    if (!list) return;
-    if (!state.aiMemoryDocs.length) {
-      list.className = 'juhe-empty';
-      list.innerHTML = '暂无可选记忆文件，请先在个人记忆上传，或由管理后台下发资料。';
-      return;
-    }
-    list.className = 'juhe-list';
-    list.style.maxHeight = '220px';
-    list.innerHTML = state.aiMemoryDocs.map(function(doc) {
-      var docId = String(doc.doc_id || '');
-      var checked = state.aiSelectedMemoryDocIds.has(docId) || !!doc.selected;
-      var layer = doc.memory_layer === 'agent' ? '下发资料' : '个人记忆';
-      return '<label class="juhe-item" style="grid-template-columns:24px minmax(0,1fr); cursor:pointer;">' +
-        '<input type="checkbox" data-juhe-ai-memory-doc="' + esc(docId) + '"' + (checked ? ' checked' : '') + '>' +
-        '<div><div class="juhe-item-title">' + esc(doc.title || doc.filename || docId) + '</div>' +
-        '<div class="juhe-meta">' + esc(layer) + ' · ' + esc(doc.filename || '') + '</div>' +
-        '<div class="juhe-muted">' + esc(doc.notes || doc.content_preview || '') + '</div></div>' +
-      '</label>';
-    }).join('');
-  }
-
-  function loadAiMemoryDocs() {
-    var id = activeConfigId();
-    if (!id) return Promise.resolve();
-    return apiJson('/api/juhe-wechat/ai-reply/memory-docs?config_id=' + encodeURIComponent(id)).then(function(data) {
-      state.aiMemoryDocs = Array.isArray(data.items) ? data.items : [];
-      var selected = Array.isArray(data.selected_doc_ids) ? data.selected_doc_ids.map(String) : [];
-      state.aiSelectedMemoryDocIds = new Set(selected);
-      renderAiMemoryDocs();
-    }).catch(function(err) {
-      state.aiMemoryDocs = [];
-      renderAiMemoryDocs();
-      setMsg(err.message || '记忆文件加载失败', true);
-    });
-  }
-
-  function selectedAiMemoryDocIds() {
-    var fromDom = [];
-    document.querySelectorAll('[data-juhe-ai-memory-doc]').forEach(function(input) {
-      if (input.checked) fromDom.push(String(input.getAttribute('data-juhe-ai-memory-doc') || ''));
-    });
-    if (fromDom.length || $('juheAiMemoryDocs')) {
-      state.aiSelectedMemoryDocIds = new Set(fromDom.filter(Boolean));
-    }
-    return Array.from(state.aiSelectedMemoryDocIds);
-  }
-
-  function saveAiConfig() {
-    var id = activeConfigId();
-    if (!id) return setMsg('请先选择可用实例', true);
-    var body = {
-      config_id: Number(id),
-      enabled: (($('juheAiEnabled') || {}).value || '0') === '1',
-      memory_doc_ids: selectedAiMemoryDocIds(),
-      knowledge: (($('juheAiKnowledge') || {}).value || '').trim(),
-      prompt: (($('juheAiPrompt') || {}).value || '').trim(),
-      handoff_keywords: (($('juheAiHandoffKeywords') || {}).value || '').trim(),
-      max_context: Math.max(2, Math.min(parseInt((($('juheAiMaxContext') || {}).value || '12'), 10) || 12, 40)),
-      cooldown_seconds: 8
-    };
-    setMsg('正在保存AI客服设置...', false);
-    apiJson('/api/juhe-wechat/ai-reply/config', { method: 'POST', body: body }).then(function() {
-      setMsg('AI客服设置已保存', false);
-      return loadConfigs();
-    }).catch(function(err) {
-      setMsg(err.message || 'AI客服设置保存失败', true);
-    });
-  }
-
-  function uploadAiKnowledgeFile(file) {
-    var id = activeConfigId();
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (!file) return;
-    var status = $('juheAiKnowledgeUploadStatus');
-    var mode = (($('juheAiKnowledgeUploadMode') || {}).value || 'append');
-    var base = apiBase();
-    if (!base) return setMsg('未配置本机 LOCAL_API_BASE', true);
-    var fd = new FormData();
-    fd.append('config_id', String(id));
-    fd.append('mode', mode);
-    fd.append('file', file);
-    if (status) status.textContent = '正在解析：' + (file.name || '资料文件');
-    fetch(base + '/api/juhe-wechat/ai-reply/knowledge-upload', {
-      method: 'POST',
-      headers: authHeaderUpload(),
-      body: fd
-    }).then(function(resp) {
-      return resp.json().catch(function() { return {}; }).then(function(data) {
-        if (!resp.ok) throw new Error(parseErr(data, '资料上传失败'));
-        return data;
+  function showTaskDetail(task) {
+    var modal = $('nativeWechatDetailModal');
+    var title = $('nativeWechatDetailTitle');
+    var body = $('nativeWechatDetailBody');
+    if (title) title.textContent = '任务详情';
+    if (body) body.className = 'native-wechat-detail-list';
+    if (body) {
+      var targets = Array.isArray(task.targets) ? task.targets.join('，') : '';
+      var payload = task.payload || {};
+      var attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+      var attachmentText = attachments.map(function(item) {
+        return item.filename || item.name || item.local_path || item.path || '';
+      }).filter(Boolean).join('\n');
+      var commentResults = Array.isArray(payload.comment_results) ? payload.comment_results : [];
+      var commentText = commentResults.map(formatMomentsCommentResult).filter(Boolean).join('\n\n');
+      var stepText = (Array.isArray(payload.steps) ? payload.steps : []).map(formatMomentsCommentStep).filter(Boolean).join('\n');
+      var rows = [
+        ['任务', taskTypeText(task.task_type)],
+        ['状态', taskStatusText(task.status)],
+        ['账号', task.account_id],
+        ['接收人', targets],
+        ['内容', payload.text || payload.content || ''],
+        ['评论结果', commentText],
+        ['执行过程', stepText],
+        ['进度', (task.processed || 0) + '/' + (task.planned_total || 0)],
+        ['附件', attachmentText],
+        ['成功', task.success || 0],
+        ['失败', task.failed || 0],
+        ['错误', task.error_message || ''],
+        ['创建时间', formatTime(task.created_at)]
+      ].filter(function(row) {
+        return row[1] !== undefined && row[1] !== null && String(row[1]).trim() !== '';
       });
-    }).then(function(data) {
-      var knowledge = $('juheAiKnowledge');
-      if (knowledge) knowledge.value = data.knowledge || (data.config && data.config.knowledge) || knowledge.value || '';
-      if (status) status.textContent = '已解析 ' + (data.chars || 0) + ' 字：' + (data.filename || file.name || '');
-      setMsg('资料文件已写入客服资料', false);
-    }).catch(function(err) {
-      if (status) status.textContent = err.message || '资料上传失败';
-      setMsg(err.message || '资料上传失败', true);
-    });
-  }
-
-  function renderAiSessions() {
-    var list = $('juheAiSessionList');
-    if (!list) return;
-    if (!state.aiSessions.length) {
-      list.className = 'juhe-empty';
-      list.innerHTML = '暂无会话';
-      return;
-    }
-    list.className = 'juhe-list';
-    list.innerHTML = state.aiSessions.map(function(item) {
-      var active = item.contact_key === state.activeAiContact;
-      return '<div class="juhe-item' + (active ? ' active' : '') + '" data-juhe-ai-session="' + esc(item.contact_key || '') + '" style="grid-template-columns:minmax(0,1fr) auto;">' +
-        '<div><div class="juhe-item-title">' + esc(item.contact_name || item.contact_key || '-') + '</div>' +
-        '<div class="juhe-meta">' + esc(item.last_status || '') + ' · ' + esc(item.last_at || '') + '</div>' +
-        '<div class="juhe-meta">' + esc(item.last_message || '') + '</div></div>' +
-        '<span class="juhe-chip">' + esc(item.message_count || 0) + '</span>' +
-      '</div>';
-    }).join('');
-  }
-
-  function renderAiMessages() {
-    var title = $('juheAiActiveTitle');
-    var list = $('juheAiMessageList');
-    if (title) title.textContent = state.activeAiContact || '未选择会话';
-    if (!list) return;
-    if (!state.activeAiContact) {
-      list.className = 'juhe-empty';
-      list.innerHTML = '点击左侧会话查看消息。';
-      return;
-    }
-    if (!state.aiMessages.length) {
-      list.className = 'juhe-empty';
-      list.innerHTML = '暂无消息';
-      return;
-    }
-    list.className = 'juhe-ai-chat';
-    list.innerHTML = state.aiMessages.map(function(msg) {
-      var failed = msg.status === 'failed' || msg.status === 'reply_send_failed';
-      var cls = 'juhe-ai-bubble ' + (msg.direction === 'out' ? 'out' : 'in') + (failed ? ' failed' : '');
-      var retry = failed ? '<button type="button" class="btn btn-ghost btn-sm" data-juhe-ai-retry="' + esc(msg.id) + '">重试</button>' : '';
-      return '<div class="' + cls + '">' +
-        '<div class="juhe-meta">' + esc(msg.direction === 'out' ? 'AI客服' : '客户') + ' · ' + esc(msg.status || '') + ' · ' + esc(msg.created_at || '') + '</div>' +
-        '<div class="juhe-ai-message">' + esc(msg.content || '') + '</div>' +
-        (msg.error_message ? '<div class="juhe-meta">' + esc(msg.error_message) + '</div>' : '') +
-        (retry ? '<div style="margin-top:6px;">' + retry + '</div>' : '') +
-      '</div>';
-    }).join('');
-  }
-
-  function loadAiSessions() {
-    var id = activeConfigId();
-    if (!id) return Promise.resolve();
-    return apiJson('/api/juhe-wechat/ai-reply/sessions?config_id=' + encodeURIComponent(id) + '&limit=80').then(function(data) {
-      state.aiSessions = Array.isArray(data.items) ? data.items : [];
-      if (state.activeAiContact && !state.aiSessions.some(function(x) { return x.contact_key === state.activeAiContact; })) {
-        state.activeAiContact = '';
-        state.aiMessages = [];
-      }
-      renderAiSessions();
-      renderAiMessages();
-    }).catch(function(err) {
-      setMsg(err.message || 'AI客服会话加载失败', true);
-    });
-  }
-
-  function loadAiMessages(contactKey) {
-    var id = activeConfigId();
-    if (!id || !contactKey) return Promise.resolve();
-    state.activeAiContact = contactKey;
-    renderAiSessions();
-    return apiJson('/api/juhe-wechat/ai-reply/messages?config_id=' + encodeURIComponent(id) + '&contact_key=' + encodeURIComponent(contactKey) + '&limit=100').then(function(data) {
-      state.aiMessages = Array.isArray(data.items) ? data.items : [];
-      renderAiMessages();
-    }).catch(function(err) {
-      setMsg(err.message || 'AI客服消息加载失败', true);
-    });
-  }
-
-  function sendAiTestIncoming() {
-    var id = activeConfigId();
-    var contact = (($('juheAiTestContact') || {}).value || '').trim();
-    var name = (($('juheAiTestName') || {}).value || '').trim();
-    var content = (($('juheAiTestContent') || {}).value || '').trim();
-    if (!id) return setMsg('请先选择可用实例', true);
-    if (!contact) return setMsg('请输入客户 username', true);
-    if (!content) return setMsg('请输入客户消息', true);
-    setMsg('正在生成AI客服回复...', false);
-    apiJson('/api/juhe-wechat/ai-reply/incoming', {
-      method: 'POST',
-      body: {
-        config_id: Number(id),
-        contact_key: contact,
-        contact_name: name,
-        content: content,
-        msg_type: 'text'
-      }
-    }).then(function(data) {
-      setMsg(data.ok ? 'AI客服处理完成' : ('AI客服处理失败：' + (data.error || '')), !data.ok);
-      state.activeAiContact = contact;
-      return loadAiSessions().then(function() { return loadAiMessages(contact); });
-    }).catch(function(err) {
-      setMsg(err.message || 'AI客服测试失败', true);
-    });
-  }
-
-  function retryAiMessage(messageId) {
-    if (!messageId) return;
-    setMsg('正在重试AI客服消息...', false);
-    apiJson('/api/juhe-wechat/ai-reply/messages/' + encodeURIComponent(messageId) + '/retry', { method: 'POST', body: {} }).then(function(data) {
-      setMsg(data.ok ? '重试完成' : ('重试失败：' + (data.error || '')), !data.ok);
-      return loadAiSessions().then(function() {
-        if (state.activeAiContact) return loadAiMessages(state.activeAiContact);
-      });
-    }).catch(function(err) {
-      setMsg(err.message || '重试失败', true);
-    });
-  }
-
-  function loadLogs() {
-    var id = activeConfigId();
-    var path = '/api/juhe-wechat/call-logs?limit=80' + (id ? '&config_id=' + encodeURIComponent(id) : '');
-    return apiJson(path).then(function(data) {
-      var list = $('juheLogList');
-      if (!list) return;
-      var items = Array.isArray(data.items) ? data.items : [];
-      if (!items.length) {
-        list.className = 'juhe-empty';
-        list.innerHTML = '暂无记录';
-        return;
-      }
-      list.className = 'juhe-list';
-      list.innerHTML = items.map(function(item) {
-        return '<div class="juhe-result ' + (item.success ? 'ok' : 'fail') + '">' +
-          '<div><b>' + esc(item.action || '-') + '</b> · ' + esc(item.success ? '成功' : '失败') + '</div>' +
-          '<div class="juhe-meta">' + esc(item.created_at || '') + ' · ' + esc(item.upstream_path || '') + ' · ' + esc(item.latency_ms || '-') + 'ms</div>' +
-          (item.error_message ? '<div class="juhe-meta">' + esc(item.error_message) + '</div>' : '') +
-          '<div style="margin-top:6px;"><button type="button" class="btn btn-ghost btn-sm" data-juhe-log-detail="' + esc(item.id) + '">详情</button></div>' +
-        '</div>';
+      body.innerHTML = rows.map(function(row) {
+        return '<strong>' + esc(row[0]) + '</strong><span>' + esc(row[1]) + '</span>';
       }).join('');
-      list.querySelectorAll('[data-juhe-log-detail]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var id = Number(btn.getAttribute('data-juhe-log-detail'));
-          var item = items.find(function(x) { return Number(x.id) === id; });
-          showDetail('调用记录', item || {});
-        });
-      });
-    }).catch(function(err) { setMsg(err.message || '加载记录失败', true); });
+    }
+    if (modal) modal.classList.add('show');
   }
 
   function bindEvents(root) {
-    var back = $('juheBackBtn');
+    var back = $('nativeWechatBackBtn');
     if (back) back.addEventListener('click', function() {
-      var nav = document.querySelector('.nav-left-item[data-view="skill-store"]');
-      if (nav) nav.click();
+      if (typeof showView === 'function') showView('skill-store');
+      else if (typeof window.showLobsterView === 'function') window.showLobsterView('skill-store');
     });
-    var refresh = $('juheRefreshBtn');
-    if (refresh) refresh.addEventListener('click', function() {
-      loadConfigs().then(loadContactCache);
+    var accountSelect = $('nativeWechatAccountSelect');
+    if (accountSelect) accountSelect.addEventListener('change', function() {
+      state.activeAccountId = accountSelect.value || '';
+      state.activePeerId = '';
+      state.activeGroupKey = '';
+      state.messages = [];
+      state.groupMembers = [];
+      state.contactSelected = {};
+      renderMessages();
+      renderContactSelectionState();
+      loadPeers();
+      loadContacts();
+      loadGroups();
+      loadTasks();
+      loadAutoReplyConfig();
     });
-    var sel = $('juheConfigSelect');
-    if (sel) sel.addEventListener('change', function() {
-      state.activeConfigId = sel.value;
-      state.contacts = [];
-      state.groups = [];
-      state.selectedContacts.clear();
-      state.activeRoomUsername = '';
+    var peerSearch = $('nativeWechatPeerSearch');
+    if (peerSearch) peerSearch.addEventListener('input', renderPeers);
+    var contactSearch = $('nativeWechatContactSearch');
+    if (contactSearch) contactSearch.addEventListener('input', loadContacts);
+    var groupSearch = $('nativeWechatGroupSearch');
+    if (groupSearch) groupSearch.addEventListener('input', loadGroups);
+
+    [
+      ['nativeWechatRefreshAccountsBtn', loadAccounts],
+      ['nativeWechatRefreshAccountsBtn2', loadAccounts],
+      ['nativeWechatRefreshStrategyBtn', loadStrategy],
+      ['nativeWechatRefreshPeersBtn', loadPeers],
+      ['nativeWechatRefreshContactsBtn', loadContacts],
+      ['nativeWechatRefreshGroupsBtn', loadGroups],
+      ['nativeWechatRefreshMessagesBtn', syncActiveMessages],
+      ['nativeWechatRefreshTasksBtn', loadTasks]
+    ].forEach(function(pair) {
+      var node = $(pair[0]);
+      if (node) node.addEventListener('click', pair[1]);
+    });
+
+    var loginBtn = $('nativeWechatLoginBtn');
+    if (loginBtn) loginBtn.addEventListener('click', detectLocalWechat);
+    var diagnoseBtn = $('nativeWechatDiagnoseBtn');
+    if (diagnoseBtn) diagnoseBtn.addEventListener('click', diagnoseWechatControls);
+    var poll = $('nativeWechatPollBtn');
+    if (poll) poll.addEventListener('click', pollUpdates);
+    var autoReplyToggle = $('nativeWechatAutoReplyEnabled');
+    if (autoReplyToggle) {
+      autoReplyToggle.addEventListener('change', function() {
+        saveAutoReplyConfig(autoReplyToggle.checked);
+      });
+    }
+    var autoReplyRunBtn = $('nativeWechatAutoReplyRunBtn');
+    if (autoReplyRunBtn) autoReplyRunBtn.addEventListener('click', runAutoReplyOnce);
+    var send = $('nativeWechatSendBtn');
+    if (send) send.addEventListener('click', sendMessage);
+    var fileInput = $('nativeWechatFileInput');
+    var chooseFileBtn = $('nativeWechatChooseFileBtn');
+    if (chooseFileBtn && fileInput) {
+      chooseFileBtn.addEventListener('click', function() {
+        fileInput.click();
+      });
+    }
+    if (fileInput) {
+      fileInput.addEventListener('change', function() {
+        var files = Array.prototype.slice.call(fileInput.files || []);
+        if (files.length) {
+          state.sendFiles = state.sendFiles.concat(files);
+          renderSendFiles();
+          setChip('nativeWechatSendState', '待发送');
+        }
+        fileInput.value = '';
+      });
+    }
+    var clearFileBtn = $('nativeWechatClearFilesBtn');
+    if (clearFileBtn) {
+      clearFileBtn.addEventListener('click', function() {
+        state.sendFiles = [];
+        renderSendFiles();
+      });
+    }
+    var momentsFileInput = $('nativeWechatMomentsFileInput');
+    var momentsChooseFileBtn = $('nativeWechatMomentsChooseFileBtn');
+    if (momentsChooseFileBtn && momentsFileInput) {
+      momentsChooseFileBtn.addEventListener('click', function() {
+        momentsFileInput.click();
+      });
+    }
+    if (momentsFileInput) {
+      momentsFileInput.addEventListener('change', function() {
+        var files = Array.prototype.slice.call(momentsFileInput.files || []);
+        if (files.length) {
+          state.momentsFiles = state.momentsFiles.concat(files);
+          renderMomentsFiles();
+          setChip('nativeWechatMomentsState', '待发布');
+        }
+        momentsFileInput.value = '';
+      });
+    }
+    var momentsClearFileBtn = $('nativeWechatMomentsClearFilesBtn');
+    if (momentsClearFileBtn) {
+      momentsClearFileBtn.addEventListener('click', function() {
+        state.momentsFiles = [];
+        renderMomentsFiles();
+      });
+    }
+    var momentsPublishBtn = $('nativeWechatMomentsPublishBtn');
+    if (momentsPublishBtn) momentsPublishBtn.addEventListener('click', submitMomentsPublish);
+    var syncSessionBtn = $('nativeWechatSyncSessionsBtn');
+    if (syncSessionBtn) syncSessionBtn.addEventListener('click', syncSessions);
+    var syncContactsBtn = $('nativeWechatSyncContactsBtn');
+    if (syncContactsBtn) syncContactsBtn.addEventListener('click', syncContacts);
+    var syncGroupMembersBtn = $('nativeWechatSyncGroupMembersBtn');
+    if (syncGroupMembersBtn) syncGroupMembersBtn.addEventListener('click', syncGroupMembers);
+    var addFriendBtn = $('nativeWechatAddFriendBtn');
+    if (addFriendBtn) addFriendBtn.addEventListener('click', addFriend);
+    var contactSelectAllBtn = $('nativeWechatContactSelectAllBtn');
+    if (contactSelectAllBtn) contactSelectAllBtn.addEventListener('click', function() {
+      state.contacts.forEach(function(item) {
+        var value = contactValue(item);
+        if (value) state.contactSelected[value.toLowerCase()] = value;
+      });
       renderContacts();
-      renderRooms();
-      loadContactCache();
-      if (state.tab === 'ai') {
-        loadAiConfig();
-        loadAiMemoryDocs();
-        loadAiSessions();
-      }
-      loadLogs();
     });
-    var status = $('juheCheckStatusBtn');
-    if (status) status.addEventListener('click', checkStatus);
-    var refreshContactsBtn = $('juheRefreshContactsBtn');
-    if (refreshContactsBtn) refreshContactsBtn.addEventListener('click', refreshContacts);
-    var search = $('juheContactSearch');
-    if (search) search.addEventListener('input', renderContacts);
-    var selectAll = $('juheSelectAllContactsBtn');
-    if (selectAll) selectAll.addEventListener('click', selectAllContacts);
-    var detail = $('juheContactDetailBtn');
-    if (detail) detail.addEventListener('click', function() { contactDetail(''); });
-    var remark = $('juheModifyRemarkBtn');
-    if (remark) remark.addEventListener('click', modifyRemark);
-    var sendSelectedBtn = $('juheSendSelectedBtn');
-    if (sendSelectedBtn) sendSelectedBtn.addEventListener('click', function() { sendSelectedContent('contacts'); });
-    var mediaInput = $('juheMediaFile');
-    if (mediaInput) mediaInput.addEventListener('change', function() {
-      addMediaFiles(mediaInput.files || []);
-      mediaInput.value = '';
+    var contactClearBtn = $('nativeWechatContactClearBtn');
+    if (contactClearBtn) contactClearBtn.addEventListener('click', function() {
+      state.contactSelected = {};
+      renderContacts();
     });
-    var importBtn = $('juheImportFriendBtn');
-    if (importBtn) importBtn.addEventListener('click', openImportModal);
-    var startImport = $('juheStartImportBtn');
-    if (startImport) startImport.addEventListener('click', startImportFriends);
-    var refreshRoomsBtn = $('juheRefreshRoomsBtn');
-    if (refreshRoomsBtn) refreshRoomsBtn.addEventListener('click', refreshRooms);
-    var createRoomBtn = $('juheCreateRoomBtn');
-    if (createRoomBtn) createRoomBtn.addEventListener('click', createRoom);
-    var roomDetailBtn = $('juheRoomDetailBtn');
-    if (roomDetailBtn) roomDetailBtn.addEventListener('click', roomDetail);
-    var roomSendTextBtn = $('juheRoomSendTextBtn');
-    if (roomSendTextBtn) roomSendTextBtn.addEventListener('click', sendRoomText);
-    var roomMembersBtn = $('juheRoomMembersBtn');
-    if (roomMembersBtn) roomMembersBtn.addEventListener('click', roomMembers);
-    var addMembersBtn = $('juheRoomAddMembersBtn');
-    if (addMembersBtn) addMembersBtn.addEventListener('click', function() { addMembers(false); });
-    var inviteMembersBtn = $('juheRoomInviteMembersBtn');
-    if (inviteMembersBtn) inviteMembersBtn.addEventListener('click', function() { addMembers(true); });
-    var roomRenameBtn = $('juheRoomRenameBtn');
-    if (roomRenameBtn) roomRenameBtn.addEventListener('click', renameRoom);
-    var roomAnnouncementBtn = $('juheRoomAnnouncementBtn');
-    if (roomAnnouncementBtn) roomAnnouncementBtn.addEventListener('click', setAnnouncement);
-    var roomDisplayNameBtn = $('juheRoomDisplayNameBtn');
-    if (roomDisplayNameBtn) roomDisplayNameBtn.addEventListener('click', setDisplayName);
-    var refreshLogs = $('juheRefreshLogsBtn');
-    if (refreshLogs) refreshLogs.addEventListener('click', loadLogs);
-    var aiSave = $('juheAiSaveBtn');
-    if (aiSave) aiSave.addEventListener('click', saveAiConfig);
-    var aiRefresh = $('juheAiRefreshBtn');
-    if (aiRefresh) aiRefresh.addEventListener('click', function() {
-      loadAiConfig();
-      loadAiMemoryDocs();
-      loadAiSessions();
+    var contactSendBtn = $('nativeWechatContactSendBtn');
+    if (contactSendBtn) contactSendBtn.addEventListener('click', selectedContactsToSend);
+    var contactMomentsLikeBtn = $('nativeWechatContactMomentsLikeBtn');
+    if (contactMomentsLikeBtn) contactMomentsLikeBtn.addEventListener('click', submitMomentsLike);
+    var contactMomentsCommentBtn = $('nativeWechatContactMomentsCommentBtn');
+    if (contactMomentsCommentBtn) contactMomentsCommentBtn.addEventListener('click', submitMomentsComment);
+    var contactCreateGroupBtn = $('nativeWechatContactCreateGroupBtn');
+    if (contactCreateGroupBtn) contactCreateGroupBtn.addEventListener('click', createGroupFromSelectedContacts);
+
+    root.querySelectorAll('[data-native-wechat-tab]').forEach(function(btn) {
+      btn.addEventListener('click', function() { switchTab(btn.getAttribute('data-native-wechat-tab')); });
     });
-    var aiSendTest = $('juheAiSendTestBtn');
-    if (aiSendTest) aiSendTest.addEventListener('click', sendAiTestIncoming);
-    root.querySelectorAll('[data-juhe-tab]').forEach(function(btn) {
-      btn.addEventListener('click', function() { switchTab(btn.getAttribute('data-juhe-tab')); });
-    });
-    root.querySelectorAll('[data-juhe-close-modal]').forEach(function(btn) {
+    root.querySelectorAll('[data-native-wechat-close]').forEach(function(btn) {
       btn.addEventListener('click', closeModals);
     });
     root.addEventListener('click', function(evt) {
-      var contactDetailBtn = evt.target.closest('[data-juhe-contact-detail]');
-      var removeMediaBtn = evt.target.closest('[data-juhe-remove-media]');
-      var aiSession = evt.target.closest('[data-juhe-ai-session]');
-      var aiRetry = evt.target.closest('[data-juhe-ai-retry]');
-      if (aiRetry) {
-        retryAiMessage(aiRetry.getAttribute('data-juhe-ai-retry'));
+      var removeFile = evt.target.closest('[data-native-file-remove]');
+      if (removeFile) {
+        var idx = Number(removeFile.getAttribute('data-native-file-remove'));
+        if (!Number.isNaN(idx)) state.sendFiles.splice(idx, 1);
+        renderSendFiles();
         return;
       }
-      if (aiSession) {
-        loadAiMessages(aiSession.getAttribute('data-juhe-ai-session') || '');
+      var removeMomentsFile = evt.target.closest('[data-native-moments-file-remove]');
+      if (removeMomentsFile) {
+        var momentsIdx = Number(removeMomentsFile.getAttribute('data-native-moments-file-remove'));
+        if (!Number.isNaN(momentsIdx)) state.momentsFiles.splice(momentsIdx, 1);
+        renderMomentsFiles();
         return;
       }
-      if (removeMediaBtn) {
-        removeMediaFile(Number(removeMediaBtn.getAttribute('data-juhe-remove-media')));
+      var peer = evt.target.closest('[data-native-peer]');
+      if (peer) {
+        state.activePeerId = peer.getAttribute('data-native-peer') || '';
+        var input = $('nativeWechatRecipientInput');
+        if (input) input.value = state.activePeerId;
+        renderPeers();
+        loadMessages();
         return;
       }
-      if (contactDetailBtn) {
-        contactDetail(contactDetailBtn.getAttribute('data-juhe-contact-detail'));
+      var account = evt.target.closest('[data-native-account]');
+      if (account) {
+        state.activeAccountId = account.getAttribute('data-native-account') || '';
+        renderAccountSelect();
+        loadPeers();
+        loadAutoReplyConfig();
         return;
       }
-      var contactNode = evt.target.closest('[data-juhe-contact]');
-      if (contactNode && !evt.target.closest('[data-juhe-contact-detail]')) {
-        var username = contactNode.getAttribute('data-juhe-contact');
-        var checkbox = contactNode.querySelector('.juhe-contact-check');
-        var checked = evt.target.classList.contains('juhe-contact-check') ? evt.target.checked : !(checkbox && checkbox.checked);
-        toggleContact(username, checked);
+      var contactSelect = evt.target.closest('[data-native-contact-select]');
+      if (contactSelect) {
+        var contactName = contactSelect.getAttribute('data-native-contact-select') || '';
+        var contactKey = contactName.toLowerCase();
+        if (contactSelect.checked) state.contactSelected[contactKey] = contactName;
+        else delete state.contactSelected[contactKey];
+        renderContactSelectionState();
         return;
       }
-      var roomDetailBtn2 = evt.target.closest('[data-juhe-room-detail]');
-      if (roomDetailBtn2) {
-        state.activeRoomUsername = roomDetailBtn2.getAttribute('data-juhe-room-detail') || '';
-        renderRooms();
-        roomDetail();
+      var group = evt.target.closest('[data-native-group]');
+      if (group) {
+        state.activeGroupKey = group.getAttribute('data-native-group') || '';
+        var groupInput = $('nativeWechatRecipientInput');
+        if (groupInput) groupInput.value = state.activeGroupKey;
+        renderGroups();
+        loadGroupMembers();
         return;
       }
-      var roomNode = evt.target.closest('[data-juhe-room]');
-      if (roomNode) {
-        state.activeRoomUsername = roomNode.getAttribute('data-juhe-room') || '';
-        renderRooms();
+      var taskBtn = evt.target.closest('[data-native-task]');
+      if (taskBtn) {
+        var taskId = taskBtn.getAttribute('data-native-task');
+        var local = state.tasks.find(function(x) { return x.id === taskId; });
+        if (local) showTaskDetail(local);
       }
     });
   }
@@ -1137,12 +1431,18 @@
     if (!root || root.dataset.inited === '1') return;
     root.dataset.inited = '1';
     bindEvents(root);
+    renderAccountSelect();
+    renderPeers();
     renderContacts();
-    renderRooms();
-    loadConfigs().then(function() {
-      return loadContactCache();
-    }).then(function() {
-      return loadLogs();
+    renderGroups();
+    renderGroupMembers();
+    renderMessages();
+    renderTasks();
+    renderSendFiles();
+    renderMomentsFiles();
+    renderAutoReply();
+    loadAccounts().then(function() {
+      return Promise.all([loadPeers(), loadTasks(), loadStrategy(), loadAutoReplyConfig()]);
     });
   };
 })();

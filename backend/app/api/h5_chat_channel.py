@@ -13,13 +13,16 @@ import base64
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
+import shutil
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -28,8 +31,9 @@ from sqlalchemy import func
 from ..core.config import settings
 from ..db import SessionLocal
 from ..models import Asset, PublishAccount
+from ..services import native_wechat_engine
 from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
-from .auth import get_current_user_for_local
+from .auth import _ServerUser, get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
 from .chat import _get_default_image_generate_model
 from .create_ppt_pipeline import CreatePptPipelinePayload, run_create_ppt_pipeline
@@ -48,6 +52,7 @@ router = APIRouter()
 _BASE_DIR = Path(__file__).resolve().parents[3]
 _DOUYIN_ORIGIN_DIR = _BASE_DIR / "backend" / "douyin_origin"
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
+_H5_CLIENT_COMMAND_PREFIX = "__LOBSTER_H5_CLIENT_COMMAND__"
 _active_scheduled_run_ids: set[str] = set()
 _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
@@ -333,6 +338,33 @@ def _headers(jwt_token: str, installation_id: str) -> Dict[str, str]:
     return h
 
 
+async def _sync_openclaw_memory_for_context(jwt_token: str, installation_id: str, reason: str = "") -> None:
+    uid = int(_decode_jwt_sub(jwt_token) or "0")
+    if uid <= 0 or not installation_id:
+        return
+    try:
+        from .openclaw_memory import sync_openclaw_memory_from_cloud
+
+        raw_headers = [
+            (b"authorization", f"Bearer {jwt_token}".encode("utf-8")),
+            (b"x-installation-id", installation_id.encode("utf-8")),
+        ]
+        req = Request({"type": "http", "method": "POST", "path": "/api/openclaw/memory/sync-cloud", "headers": raw_headers})
+        result = await sync_openclaw_memory_from_cloud(req, _ServerUser(id=uid), raise_errors=False)
+        if result.get("ok"):
+            logger.debug(
+                "[OPENCLAW-MEMORY] synced before %s applied=%s deleted=%s remote=%s",
+                reason or "task",
+                result.get("applied_count"),
+                result.get("deleted_count"),
+                result.get("remote_count"),
+            )
+        elif result.get("error") or result.get("skipped"):
+            logger.debug("[OPENCLAW-MEMORY] sync skipped before %s: %s", reason or "task", result)
+    except Exception as exc:
+        logger.warning("[OPENCLAW-MEMORY] sync failed before %s: %s", reason or "task", exc)
+
+
 def _local_chat_headers(headers: Dict[str, str]) -> Dict[str, str]:
     out = dict(headers or {})
     billing_key = (getattr(settings, "lobster_mcp_billing_internal_key", None) or "").strip()
@@ -346,6 +378,72 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except Exception:
         return 0
+
+
+def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    num = _safe_int(value)
+    if num <= 0:
+        num = default
+    return max(minimum, min(num, maximum))
+
+
+def _parse_utc_datetime(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _local_bestseller_workflow_day(source: Dict[str, Any], days: int) -> int:
+    explicit = _safe_int(source.get("day"))
+    if explicit > 0:
+        return max(1, min(explicit, days))
+    ctx = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+    schedule = source.get("schedule_config") if isinstance(source.get("schedule_config"), dict) else {}
+    tz_offset = _safe_int(schedule.get("timezone_offset_minutes") or ctx.get("timezone_offset_minutes") or 480)
+    start = _parse_utc_datetime(ctx.get("workflow_day_start") or ctx.get("workflow_started_at") or source.get("workflow_started_at"))
+    if not start:
+        return 1
+    today_local = (datetime.now(timezone.utc) + timedelta(minutes=tz_offset)).date()
+    start_local = (start + timedelta(minutes=tz_offset)).date()
+    elapsed = max(0, (today_local - start_local).days)
+    return (elapsed % max(1, days)) + 1
+
+
+def _local_bestseller_missing_fields(source: Dict[str, Any], profile: Dict[str, Any]) -> List[str]:
+    out: List[str] = []
+    raw = source.get("missing_profile_fields")
+    if isinstance(raw, list):
+        out.extend([str(item or "").strip() for item in raw if str(item or "").strip()])
+    checks = [
+        ("gender", "性别"),
+        ("identity", "你是做什么的"),
+        ("industry", "业务/产品或主要分享内容"),
+        ("province", "现居省份"),
+        ("city", "现居城市"),
+        ("hometown", "籍贯"),
+        ("age_label", "出生年代"),
+        ("target_age", "想卖给谁/目标客户"),
+        ("style", "视频风格"),
+    ]
+    for key, label in checks:
+        if not str(profile.get(key) or "").strip():
+            out.append(label)
+    if not (str(profile.get("photo_asset_id") or "").strip() or str(profile.get("photo_url") or "").strip()):
+        out.append("人物照片")
+    seen: set[str] = set()
+    unique: List[str] = []
+    for item in out:
+        if item and item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique
 
 
 def _today_date_text() -> str:
@@ -1153,6 +1251,67 @@ def _pick_creative_candidate_asset(
         db.close()
 
 
+def _h5_client_command_payload(content: str) -> Optional[Dict[str, Any]]:
+    raw = str(content or "").strip()
+    if not raw.startswith(_H5_CLIENT_COMMAND_PREFIX):
+        return None
+    body = raw[len(_H5_CLIENT_COMMAND_PREFIX) :].strip()
+    if not body:
+        return {}
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _run_client_command(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    jwt_token: str,
+    installation_id: str,
+    item: Dict[str, Any],
+) -> None:
+    message_id = str(item.get("id") or "").strip()
+    payload = _h5_client_command_payload(str(item.get("content") or ""))
+    action = str((payload or {}).get("action") or "").strip()
+    if not message_id:
+        return
+    if not payload:
+        await _complete_cloud_message(cloud, base, headers, message_id, error="invalid client command")
+        return
+    try:
+        if action == "native_wechat_auto_reply_config":
+            account_id = str(payload.get("account_id") or "pc-wechat-default").strip() or "pc-wechat-default"
+            interval_seconds = max(300, min(int(payload.get("interval_seconds") or 1800), 86400))
+            user_id = int(_decode_jwt_sub(jwt_token) or "0") or None
+            cfg = native_wechat_engine.save_auto_reply_config(
+                account_id,
+                enabled=bool(payload.get("enabled")),
+                interval_seconds=interval_seconds,
+                user_id=user_id,
+                auth_context={
+                    "token": jwt_token,
+                    "user_id": user_id,
+                    "installation_id": installation_id,
+                },
+            )
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                reply_text="personal WeChat auto-reply config updated",
+                payload={"mode": "client_command", "action": action, "config": cfg},
+            )
+            return
+        raise RuntimeError(f"unsupported client command: {action or '-'}")
+    except Exception as exc:
+        logger.exception("[H5-CHAT] client command failed message_id=%s action=%s", message_id, action)
+        await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "client command failed")
+
+
 async def _run_direct_chat(
     cloud: httpx.AsyncClient,
     base: str,
@@ -1306,6 +1465,10 @@ async def _process_item(
     item: Dict[str, Any],
 ) -> None:
     headers = _headers(jwt_token, installation_id)
+    if str(item.get("mode") or "").strip() == "client_command" or _h5_client_command_payload(str(item.get("content") or "")):
+        await _run_client_command(client, base, headers, jwt_token, installation_id, item)
+        return
+    await _sync_openclaw_memory_for_context(jwt_token, installation_id, "h5-message")
     await _run_direct_chat(client, base, headers, item, jwt_token=jwt_token)
 
 
@@ -1828,11 +1991,14 @@ def _scheduled_refs_with_asset_urls(
 def _scheduled_publish_config(cap_payload: Dict[str, Any]) -> Dict[str, Any]:
     payload = cap_payload if isinstance(cap_payload, dict) else {}
     platform = str(payload.get("publish_platform") or payload.get("platform") or "").strip()
-    account_id = payload.get("publish_account_id") or payload.get("account_id")
-    try:
-        account_id_int = int(account_id) if account_id not in (None, "") else None
-    except (TypeError, ValueError):
-        account_id_int = None
+    account_id_raw = payload.get("publish_account_id") or payload.get("account_id")
+    if account_id_raw in (None, ""):
+        account_id_value: Any = None
+    else:
+        try:
+            account_id_value = int(account_id_raw)
+        except (TypeError, ValueError):
+            account_id_value = str(account_id_raw).strip() or None
     account_nickname = str(payload.get("publish_account_nickname") or payload.get("account_nickname") or "").strip()
     installation_id = str(payload.get("publish_installation_id") or payload.get("installation_id") or "").strip()
     auto_publish = str(payload.get("publish_auto") or payload.get("auto_publish") or "").strip().lower() in {
@@ -1842,12 +2008,13 @@ def _scheduled_publish_config(cap_payload: Dict[str, Any]) -> Dict[str, Any]:
         "on",
         "是",
     } or payload.get("publish_auto") is True or payload.get("auto_publish") is True
-    if not (platform or account_id_int or account_nickname or auto_publish):
+    if not (platform or account_id_value or account_nickname or auto_publish):
         return {}
     return {
         "platform": platform,
-        "platform_name": str(payload.get("publish_platform_name") or "").strip(),
-        "account_id": account_id_int,
+        "platform_name": str(payload.get("publish_platform_name") or "").strip()
+        or ("朋友圈图文" if _is_wechat_moments_platform(platform) else ""),
+        "account_id": account_id_value,
         "account_nickname": account_nickname,
         "installation_id": installation_id,
         "auto_publish": auto_publish,
@@ -1908,6 +2075,8 @@ def _clean_publish_tags(value: Any) -> str:
 
 def _platform_publish_rules(platform: str) -> str:
     p = (platform or "").strip().lower()
+    if p in {"wechat_moments", "wechat", "moments"}:
+        return "朋友圈图文：标题可以留空，正文 30-120 字，更像朋友动态的口吻，少营销少口号；有图片就按图文发布，视频只传 1 条；标签 0-5 个即可。"
     if p == "xiaohongshu":
         return "小红书：标题 12-20 字，有种草感；正文 80-180 字，分段自然，结尾带 3-6 个话题标签。"
     if p == "toutiao":
@@ -1965,11 +2134,199 @@ async def _generate_scheduled_publish_copy(
         return {"title": fallback_title, "description": fallback_desc, "tags": fallback_tags}
 
 
+def _is_wechat_moments_platform(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"wechat_moments", "wechat", "moments"}
+
+
+def _publish_moments_content_from_draft(draft: Dict[str, Any]) -> str:
+    content = str(draft.get("content") or draft.get("text") or "").strip()
+    title = str(draft.get("title") or "").strip()
+    description = str(draft.get("description") or "").strip()
+    tags = str(draft.get("tags") or "").strip()
+    parts: List[str] = []
+    if content:
+        parts.append(content)
+    else:
+        if title and (not description or not description.startswith(title)):
+            parts.append(title)
+        if description:
+            parts.append(description)
+    if tags and tags not in "\n".join(parts):
+        parts.append(tags)
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _filename_from_url_for_moments(url: str, media_type: str = "") -> str:
+    parsed = urlparse(str(url or ""))
+    name = unquote((parsed.path or "").rsplit("/", 1)[-1]).strip()
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")
+    if name and Path(name).suffix:
+        return name[:140]
+    suffix = {
+        "image": ".jpg",
+        "image_text": ".jpg",
+        "video": ".mp4",
+    }.get(str(media_type or "").lower(), "")
+    return f"moments_asset_{uuid.uuid4().hex[:8]}{suffix or '.bin'}"
+
+
+def _local_asset_to_native_wechat_attachment(asset_id: str) -> Optional[Dict[str, Any]]:
+    aid = str(asset_id or "").strip()
+    if not aid:
+        return None
+    db = SessionLocal()
+    try:
+        row = db.query(Asset).filter(Asset.asset_id == aid).first()
+        if not row or not row.filename:
+            return None
+        source = (_BASE_DIR / "assets" / row.filename).resolve()
+        if not source.exists() or not source.is_file():
+            return None
+        target = native_wechat_engine.make_native_wechat_upload_path(row.filename)
+        shutil.copy2(source, target)
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        return {
+            "local_path": str(target.resolve()),
+            "filename": row.filename,
+            "size": target.stat().st_size,
+            "content_type": content_type,
+            "kind": native_wechat_engine.native_wechat_file_kind(target, content_type),
+            "asset_id": aid,
+        }
+    finally:
+        db.close()
+
+
+async def _download_url_to_native_wechat_attachment(
+    url: str,
+    *,
+    filename: str = "",
+    media_type: str = "",
+    headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        raise RuntimeError("朋友圈发布缺少素材 URL")
+    target = native_wechat_engine.make_native_wechat_upload_path(filename or _filename_from_url_for_moments(clean_url, media_type))
+    timeout = httpx.Timeout(600.0, connect=10.0, read=600.0, write=30.0, pool=10.0)
+    req_headers = {"User-Agent": "Lobster-H5-Moments/1.0", "Accept": "*/*"}
+    auth = str((headers or {}).get("Authorization") or "").strip()
+    xi = str((headers or {}).get("X-Installation-Id") or (headers or {}).get("x-installation-id") or "").strip()
+    if auth:
+        req_headers["Authorization"] = auth
+    if xi:
+        req_headers["X-Installation-Id"] = xi
+    total = 0
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+            async with client.stream("GET", clean_url, headers=req_headers) as resp:
+                if resp.status_code >= 400:
+                    text = await resp.aread()
+                    raise RuntimeError(f"朋友圈素材下载失败 HTTP {resp.status_code}: {text[:200]!r}")
+                content_type = str(resp.headers.get("content-type") or mimetypes.guess_type(str(target))[0] or "application/octet-stream").split(";", 1)[0]
+                with target.open("wb") as out:
+                    async for chunk in resp.aiter_bytes(1024 * 1024):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > native_wechat_engine.NATIVE_WECHAT_MAX_UPLOAD_BYTES:
+                            raise RuntimeError("朋友圈素材文件过大")
+                        out.write(chunk)
+    except Exception:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    if total <= 0:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise RuntimeError("朋友圈素材下载为空")
+    return {
+        "local_path": str(target.resolve()),
+        "filename": target.name,
+        "size": total,
+        "content_type": content_type,
+        "kind": native_wechat_engine.native_wechat_file_kind(target, content_type),
+        "source_url": clean_url,
+    }
+
+
+async def _wechat_moments_attachments_from_draft(
+    draft: Dict[str, Any],
+    headers: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    files: List[Dict[str, Any]] = []
+    raw_attachments = draft.get("attachments") if isinstance(draft.get("attachments"), list) else []
+    for item in raw_attachments:
+        if not isinstance(item, dict):
+            continue
+        local_path = str(item.get("local_path") or item.get("path") or "").strip()
+        if local_path:
+            files.append(item)
+            continue
+        attachment_asset_id = str(item.get("asset_id") or "").strip()
+        attachment_url = str(item.get("source_url") or item.get("url") or "").strip()
+        attachment_media_type = str(item.get("media_type") or item.get("kind") or draft.get("media_type") or "").strip()
+        if attachment_asset_id:
+            local = _local_asset_to_native_wechat_attachment(attachment_asset_id)
+            if local:
+                files.append(local)
+                continue
+        if attachment_url:
+            files.append(
+                await _download_url_to_native_wechat_attachment(
+                    attachment_url,
+                    filename=str(item.get("filename") or "").strip(),
+                    media_type=attachment_media_type,
+                    headers=headers,
+                )
+            )
+    asset_id = str(draft.get("asset_id") or "").strip()
+    media_type = str(draft.get("media_type") or "").strip()
+    source_url = str(draft.get("source_url") or draft.get("url") or "").strip()
+    if asset_id and not files:
+        local = _local_asset_to_native_wechat_attachment(asset_id)
+        if local:
+            files.append(local)
+    if source_url and not files:
+        files.append(
+            await _download_url_to_native_wechat_attachment(
+                source_url,
+                filename=str(draft.get("filename") or "").strip(),
+                media_type=media_type,
+                headers=headers,
+            )
+        )
+    return files[:9]
+
+
 async def _submit_local_publish_draft(
     *,
     draft: Dict[str, Any],
     headers: Dict[str, str],
 ) -> Dict[str, Any]:
+    if _is_wechat_moments_platform(draft.get("platform")):
+        content = _publish_moments_content_from_draft(draft)
+        attachments = await _wechat_moments_attachments_from_draft(draft, headers)
+        if not content and not attachments:
+            raise RuntimeError("朋友圈发布缺少正文或素材")
+        body = {
+            "account_id": str(draft.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID,
+            "content": content,
+            "attachments": attachments,
+            "media_type": str(draft.get("media_type") or ("video" if any(item.get("kind") == "video" for item in attachments) else "image_text")).strip() or "image_text",
+            "visibility": str(draft.get("visibility") or "public").strip() or "public",
+        }
+        return await _post_local_api_json(
+            "/api/native-wechat/moments/publish",
+            body,
+            headers=headers,
+            timeout_seconds=1200.0,
+        )
+
     asset_id = str(draft.get("asset_id") or "").strip()
     if not asset_id:
         raise RuntimeError("发布草稿缺少素材 asset_id")
@@ -2539,6 +2896,153 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
     return result
 
 
+def _scheduled_douyin_account_id(params: Optional[Dict[str, Any]]) -> int:
+    source = params if isinstance(params, dict) else {}
+    for key in ("douyin_account_id", "account_id", "account_key"):
+        raw = str(source.get(key) or "").strip()
+        if not raw:
+            continue
+        matches = re.findall(r"\d+", raw)
+        if matches:
+            value = _safe_int(matches[-1])
+            if value > 0:
+                return value
+    return 0
+
+
+def _scheduled_douyin_fixed_text(params: Optional[Dict[str, Any]], kind: str) -> str:
+    source = params if isinstance(params, dict) else {}
+    if kind == "message":
+        return str(source.get("message") or source.get("direct_message") or "你好，看到你的内容挺有启发，想交流一下。").strip()
+    return str(source.get("comment_text") or source.get("comment") or "内容很有参考价值，学习了。").strip()
+
+
+def _scheduled_douyin_interaction_users(limit: int = 10) -> List[Dict[str, Any]]:
+    _install_douyin_origin_import_path()
+    from douyin_api import collect_douyin_interaction_users  # type: ignore
+
+    rows = collect_douyin_interaction_users()
+    out: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("profile_url") or row.get("sec_uid") or row.get("user_id") or row.get("username") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(dict(row))
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    source = params if isinstance(params, dict) else {}
+    account_id = _scheduled_douyin_account_id(source)
+    max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 30))
+    interval_minutes_min = max(1, min(_safe_int(source.get("interval_minutes_min") or 4) or 4, 60))
+    interval_minutes_max = max(interval_minutes_min, min(_safe_int(source.get("interval_minutes_max") or 6) or 6, 120))
+
+    _install_douyin_origin_import_path()
+    if action == "account_nurture":
+        from douyin_api import douyin_start_account_nurture  # type: ignore
+
+        payload = {"account_ids": [account_id]} if account_id > 0 else {}
+        result = await douyin_start_account_nurture(payload)
+        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音养号启动失败"}
+
+    if action == "reply_comments":
+        from douyin_api import douyin_start_video_comment  # type: ignore
+
+        result = await douyin_start_video_comment(
+            request={
+                "comment_mode": "fixed",
+                "comment_text": _scheduled_douyin_fixed_text(source, "comment"),
+                "interval_minutes_min": interval_minutes_min,
+                "interval_minutes_max": interval_minutes_max,
+            }
+        )
+        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音视频评论启动失败"}
+
+    if action == "follow_comment":
+        from douyin_api import douyin_start_follow_comment  # type: ignore
+
+        users = _scheduled_douyin_interaction_users(max_users)
+        if not users:
+            return {"code": 400, "msg": "当前没有可执行的精准客户，请先完成关键词采集。"}
+        result = await douyin_start_follow_comment(
+            request={
+                "users": users,
+                "comment_mode": "fixed",
+                "comment_text": _scheduled_douyin_fixed_text(source, "comment"),
+                "interval_minutes_min": interval_minutes_min,
+                "interval_minutes_max": interval_minutes_max,
+            }
+        )
+        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音关注评论启动失败"}
+
+    if action == "direct_message":
+        from douyin_api import douyin_start_interaction  # type: ignore
+
+        users = _scheduled_douyin_interaction_users(max_users)
+        if not users:
+            return {"code": 400, "msg": "当前没有可私信的精准客户，请先完成关键词采集。"}
+        message = _scheduled_douyin_fixed_text(source, "message")
+        result = await douyin_start_interaction(
+            request={
+                "users": users,
+                "message_mode": "fixed",
+                "messages": [message],
+                "message": message,
+                "interval_minutes_min": interval_minutes_min,
+                "interval_minutes_max": interval_minutes_max,
+            }
+        )
+        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音私信启动失败"}
+
+    if action == "mention_comment":
+        from douyin_api import douyin_get_self_videos  # type: ignore
+        from douyin_api import douyin_start_mention_comment  # type: ignore
+
+        users = _scheduled_douyin_interaction_users(max_users)
+        if not users:
+            return {"code": 400, "msg": "当前没有可@的精准客户，请先完成关键词采集。"}
+        videos_result = await douyin_get_self_videos(account_id=account_id, max_videos=6)
+        if _safe_int(videos_result.get("code") if isinstance(videos_result, dict) else 0) != 200:
+            return dict(videos_result) if isinstance(videos_result, dict) else {"code": 500, "msg": "读取自己的抖音视频失败"}
+        videos = videos_result.get("videos") if isinstance(videos_result, dict) else []
+        video = next((row for row in videos if isinstance(row, dict) and str(row.get("url") or "").strip()), None)
+        if not video:
+            return {"code": 400, "msg": "当前账号没有可用于@评论的公开视频。"}
+        result = await douyin_start_mention_comment(
+            request={
+                "account_id": account_id,
+                "users": users,
+                "video_url": str(video.get("url") or "").strip(),
+                "video_title": str(video.get("title") or "").strip(),
+                "video_cover_image": str(video.get("cover_image") or "").strip(),
+                "max_mentions": max_users,
+            }
+        )
+        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音@评论启动失败"}
+
+    if action == "stranger_message":
+        from douyin_api import douyin_start_stranger_message_monitor  # type: ignore
+
+        result = await douyin_start_stranger_message_monitor(
+            request={
+                "account_id": account_id,
+                "interval_minutes": 30,
+                "max_conversations": max_users,
+                "auto_reply_enabled": False,
+            }
+        )
+        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音陌生人消息接管启动失败"}
+
+    return {"code": 400, "msg": f"暂不支持的销售抖音动作：{action}"}
+
+
 async def _run_scheduled_douyin_leads(
     cloud: httpx.AsyncClient,
     base: str,
@@ -2553,12 +3057,17 @@ async def _run_scheduled_douyin_leads(
     payload = _scheduled_payload(item)
     action = str(payload.get("action") or "").strip().lower()
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    sales_action = str((params if isinstance(params, dict) else {}).get("sales_action") or "").strip().lower()
+    if action == "search_collect" and sales_action and sales_action != "search_collect":
+        action = sales_action
     if not run_id or not action:
         return
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行抖音获客任务：{action}"})
     try:
         if action == "search_collect":
             result = await _run_scheduled_douyin_search_collect_action(params)
+        elif action in {"account_nurture", "reply_comments", "mention_comment", "follow_comment", "direct_message", "stranger_message"}:
+            result = await _run_scheduled_douyin_sales_action(action, params)
         else:
             raise RuntimeError(f"暂不支持的抖音获客任务类型：{action}")
 
@@ -3729,14 +4238,179 @@ async def _post_local_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+def _parse_run_time(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _workflow_target_list(source: Dict[str, Any], *keys: str) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        value = source.get(key) if isinstance(source, dict) else None
+        values = value if isinstance(value, list) else [value]
+        for raw in values:
+            for part in re.split(r"[\s,，、;；]+", str(raw or "")):
+                item = part.strip()
+                if not item:
+                    continue
+                dedupe_key = item.lower()
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                out.append(item)
+    return out
+
+
+def _run_h5_context(run: Dict[str, Any]) -> Dict[str, Any]:
+    payload = run.get("payload") if isinstance(run.get("payload"), dict) else {}
+    ctx = payload.get("h5_context") if isinstance(payload.get("h5_context"), dict) else {}
+    if ctx:
+        return ctx
+    result_payload = run.get("result_payload") if isinstance(run.get("result_payload"), dict) else {}
+    params = result_payload.get("params") if isinstance(result_payload.get("params"), dict) else {}
+    return params.get("h5_context") if isinstance(params.get("h5_context"), dict) else {}
+
+
+def _extract_parent_material(payload: Any) -> Dict[str, Any]:
+    video_ids: List[str] = []
+    image_ids: List[str] = []
+    other_ids: List[str] = []
+    video_urls: List[str] = []
+    image_urls: List[str] = []
+    other_urls: List[str] = []
+    seen: set[str] = set()
+    skip_keys = {"params", "input_refs", "request", "prompt", "requirements", "h5_context"}
+    video_id_keys = {"video_asset_id", "final_video_asset_id", "video_material_id"}
+    image_id_keys = {"image_asset_id", "cover_asset_id", "final_image_asset_id", "image_material_id"}
+    generic_id_keys = {"asset_id", "final_asset_id", "material_asset_id", "saved_asset_id"}
+    video_url_keys = {"video_url", "video_uri", "video_file_url"}
+    image_url_keys = {"image_url", "cover_url", "image_file_url"}
+    generic_url_keys = {"url", "file_url", "public_url", "media_url"}
+
+    def add(value: Any, kind: str, is_url: bool) -> None:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        target = video_urls if is_url and kind == "video" else image_urls if is_url and kind == "image" else other_urls if is_url else video_ids if kind == "video" else image_ids if kind == "image" else other_ids
+        target.append(text)
+
+    def visit(value: Any, inherited_kind: str = "") -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item, inherited_kind)
+            return
+        if not isinstance(value, dict):
+            return
+        item_kind = str(value.get("media_type") or value.get("type") or inherited_kind or "").strip().lower()
+        if item_kind not in {"video", "image"}:
+            item_kind = ""
+        for raw_key, raw_value in value.items():
+            key = str(raw_key or "").strip().lower()
+            if key in skip_keys:
+                continue
+            kind = "video" if key in video_id_keys or key in video_url_keys else "image" if key in image_id_keys or key in image_url_keys else item_kind
+            if key in video_id_keys or key in image_id_keys or key in generic_id_keys:
+                add(raw_value, kind, False)
+            elif key in video_url_keys or key in image_url_keys or key in generic_url_keys:
+                add(raw_value, kind, True)
+            elif key.endswith("_asset_ids") and isinstance(raw_value, list):
+                for item in raw_value:
+                    add(item, "video" if "video" in key else "image" if "image" in key else item_kind, False)
+            elif key.endswith("_urls") and isinstance(raw_value, list):
+                for item in raw_value:
+                    add(item, "video" if "video" in key else "image" if "image" in key else item_kind, True)
+            elif key == "asset_ids" and isinstance(raw_value, list):
+                for item in raw_value:
+                    add(item, item_kind, False)
+            elif key in {"assets", "saved_assets", "result_refs", "outputs", "output", "item", "video_result", "image_result", "local_result"}:
+                visit(raw_value, item_kind)
+            elif isinstance(raw_value, (dict, list)):
+                visit(raw_value, item_kind)
+
+    visit(payload)
+    if video_ids:
+        return {"asset_id": video_ids[0], "media_type": "video"}
+    if video_urls:
+        return {"url": video_urls[0], "media_type": "video"}
+    if image_ids:
+        return {"asset_id": image_ids[0], "media_type": "image"}
+    if image_urls:
+        return {"url": image_urls[0], "media_type": "image"}
+    if other_ids:
+        return {"asset_id": other_ids[0], "media_type": "video"}
+    if other_urls:
+        return {"url": other_urls[0], "media_type": "video"}
+    return {}
+
+
+async def _resolve_parent_workflow_material(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    *,
+    params: Dict[str, Any],
+    current_item: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    source_node_id = str(params.get("source_workflow_node_id") or "").strip()
+    if not source_node_id:
+        raise RuntimeError("发布动作缺少上级节点")
+    current_context = params.get("h5_context") if isinstance(params.get("h5_context"), dict) else {}
+    template_id = str(current_context.get("workflow_template_id") or "").strip()
+    current_time = _parse_run_time((current_item or {}).get("created_at") or (current_item or {}).get("started_at"))
+    try:
+        resp = await cloud.get(
+            f"{base}/api/scheduled-tasks/runs",
+            params={"limit": 200, "offset": 0},
+            headers=headers,
+        )
+        data = resp.json() if resp.content else {}
+    except Exception as exc:
+        raise RuntimeError("读取上级节点执行记录失败") from exc
+    if resp.status_code >= 400 or not isinstance(data, dict):
+        raise RuntimeError("读取上级节点执行记录失败")
+    runs = data.get("runs") if isinstance(data.get("runs"), list) else []
+    candidates: List[Dict[str, Any]] = []
+    for run in runs:
+        if not isinstance(run, dict) or str(run.get("status") or "").strip().lower() not in {"completed", "success"}:
+            continue
+        if str(run.get("id") or "").strip() == str((current_item or {}).get("id") or "").strip():
+            continue
+        ctx = _run_h5_context(run)
+        if str(ctx.get("workflow_node_id") or "").strip() != source_node_id:
+            continue
+        if template_id and str(ctx.get("workflow_template_id") or "").strip() != template_id:
+            continue
+        run_time = _parse_run_time(run.get("finished_at") or run.get("updated_at") or run.get("created_at"))
+        if current_time and run_time and run_time > current_time + timedelta(minutes=10):
+            continue
+        material = _extract_parent_material(run.get("result_payload") or {})
+        if not material:
+            continue
+        candidates.append({**material, "source_run_id": str(run.get("id") or "")})
+    if not candidates:
+        raise RuntimeError("上级节点还没有可发布的素材")
+    return candidates[0]
+
+
 async def _run_client_workflow_action(
     action: str,
     params: Dict[str, Any],
     *,
     headers: Dict[str, str],
     run_id: str,
+    cloud: Optional[httpx.AsyncClient] = None,
+    base: str = "",
+    current_item: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
+    native_account_id = str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
     if action == "local_bestseller_plan":
         return await _post_local_api_json(
             "/api/local-bestseller/plan",
@@ -3757,6 +4431,50 @@ async def _run_client_workflow_action(
             },
             headers=headers,
         )
+    if action == "local_bestseller_daily_video":
+        profile = source.get("profile") if isinstance(source.get("profile"), dict) else {}
+        profile = {str(key): value for key, value in profile.items() if str(value or "").strip()}
+        missing = _local_bestseller_missing_fields(source, profile)
+        if missing:
+            raise RuntimeError("IP人设定位缺少：" + "、".join(missing) + "。请先补全后再启动销售员工。")
+        days = _clamp_int(source.get("days"), 30, 1, 30)
+        day = _local_bestseller_workflow_day(source, days)
+        scene = await _post_local_api_json(
+            "/api/local-bestseller/scene/generate",
+            {
+                "profile": profile,
+                "days": days,
+                "day": day,
+                "model": str(source.get("model") or "gpt-image-2").strip() or "gpt-image-2",
+                "quality": str(source.get("quality") or "high").strip() or "high",
+            },
+            headers=headers,
+            timeout_seconds=900.0,
+        )
+        scene_item = scene.get("item") if isinstance(scene.get("item"), dict) else {}
+        video = await _post_local_api_json(
+            "/api/local-bestseller/video/generate",
+            {
+                "profile": profile,
+                "days": days,
+                "day": day,
+                "item": scene_item,
+                "video_model": str(source.get("video_model") or "grok-imagine-video-1.5-preview").strip() or "grok-imagine-video-1.5-preview",
+            },
+            headers=headers,
+            timeout_seconds=7200.0,
+        )
+        item = video.get("item") if isinstance(video.get("item"), dict) else scene_item
+        return {
+            "ok": True,
+            "mode": "daily_video",
+            "day": day,
+            "days": days,
+            "item": item,
+            "items": [item] if item else [],
+            "scene_result": scene,
+            "video_result": video,
+        }
     if action == "viral_video_remix_start":
         body = {
             "original_video_url": str(source.get("original_video_url") or "").strip(),
@@ -3781,18 +4499,79 @@ async def _run_client_workflow_action(
         return await _post_local_api_json("/api/viral-video-remix/seedance/start", body, headers=headers)
     if action == "wecom_poll_reply":
         return await _post_local_api_json("/api/wecom/poll-and-reply", {}, headers=headers, timeout_seconds=300.0)
+    if action == "native_wechat_poll":
+        return await _post_local_api_json(
+            "/api/native-wechat/auto-reply/run-once",
+            {"account_id": native_account_id, "force": True},
+            headers=headers,
+            timeout_seconds=1800.0,
+        )
+    if action == "native_wechat_add_friend":
+        targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")
+        if not targets:
+            return {"ok": True, "skipped": True, "reason": "missing_targets", "message": "未配置加好友目标，已跳过"}
+        return await _post_local_api_json(
+            "/api/native-wechat/friends/add",
+            {
+                "account_id": native_account_id,
+                "targets": targets,
+                "apply_message": str(source.get("apply_message") or "").strip(),
+                "remark": str(source.get("remark") or "").strip(),
+                "tags": source.get("tags") if isinstance(source.get("tags"), list) else [],
+                "permission": str(source.get("permission") or "朋友圈").strip() or "朋友圈",
+                "prepare_only": bool(source.get("prepare_only", False)),
+            },
+            headers=headers,
+            timeout_seconds=300.0,
+        )
+    if action == "native_wechat_moments_engage":
+        targets = _workflow_target_list(source, "targets", "contacts", "names")
+        if not targets:
+            return {"ok": True, "skipped": True, "reason": "missing_targets", "message": "未配置朋友圈互动目标，已跳过"}
+        moment_action = str(source.get("moment_action") or source.get("mode") or "like_comment").strip().lower() or "like_comment"
+        max_scrolls = max(1, min(_safe_int(source.get("max_scrolls") or 6), 30))
+        result: Dict[str, Any] = {"ok": True, "targets": targets, "moment_action": moment_action}
+        if moment_action in {"like", "like_comment", "both"}:
+            result["like_result"] = await _post_local_api_json(
+                "/api/native-wechat/moments/like",
+                {"account_id": native_account_id, "targets": targets, "dry_run": False, "max_scrolls": max(1, min(max_scrolls * 4, 120))},
+                headers=headers,
+                timeout_seconds=300.0,
+            )
+        if moment_action in {"comment", "like_comment", "both"}:
+            result["comment_result"] = await _post_local_api_json(
+                "/api/native-wechat/moments/comment",
+                {"account_id": native_account_id, "targets": targets, "dry_run": False, "max_scrolls": max_scrolls},
+                headers=headers,
+                timeout_seconds=300.0,
+            )
+        return result
     if action == "ip_moments_generate_images":
         return await _post_local_api_json("/api/ip-content/moments/images/generate", source, headers=headers, timeout_seconds=7200.0)
     if action == "publish_content":
+        platform = str(source.get("platform") or "").strip().lower()
         material = str(source.get("asset_id") or "").strip()
         source_url = str(source.get("url") or "").strip()
+        material_source: Dict[str, Any] = {}
+        if not material and not source_url and str(source.get("source_mode") or "").strip() == "parent_latest_run":
+            if cloud is None or not base:
+                raise RuntimeError("发布动作无法读取上级节点结果")
+            material_source = await _resolve_parent_workflow_material(
+                cloud,
+                base,
+                headers,
+                params=source,
+                current_item=current_item,
+            )
+            material = str(material_source.get("asset_id") or "").strip()
+            source_url = str(material_source.get("url") or "").strip()
         save_result: Dict[str, Any] = {}
-        if not material and source_url:
+        if not material and source_url and not _is_wechat_moments_platform(platform):
             save_result = await _post_local_api_json(
                 "/api/assets/save-url",
                 {
                     "url": source_url,
-                    "media_type": str(source.get("media_type") or "video").strip() or "video",
+                    "media_type": str(material_source.get("media_type") or source.get("media_type") or "video").strip() or "video",
                     "name": str(source.get("name") or source.get("title") or "H5安排工作素材").strip(),
                     "tags": str(source.get("tags") or "H5安排工作").strip(),
                     "prompt": str(source.get("description") or source.get("title") or "").strip(),
@@ -3801,28 +4580,57 @@ async def _run_client_workflow_action(
                 timeout_seconds=1200.0,
             )
             material = str(save_result.get("asset_id") or "").strip()
+        if _is_wechat_moments_platform(platform):
+            draft = {
+                "asset_id": material,
+                "source_url": source_url,
+                "url": source_url,
+                "platform": "wechat_moments",
+                "platform_name": str(source.get("platform_name") or "微信朋友圈").strip(),
+                "account_id": str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip(),
+                "account_nickname": str(source.get("account_nickname") or "本机微信").strip(),
+                "title": str(source.get("title") or source.get("name") or "").strip(),
+                "description": str(source.get("description") or source.get("prompt") or material_source.get("description") or "").strip(),
+                "tags": str(source.get("tags") or "").strip(),
+                "media_type": str(material_source.get("media_type") or source.get("media_type") or "image_text").strip() or "image_text",
+                "options": source.get("options") if isinstance(source.get("options"), dict) else {},
+            }
+            publish_result = await _submit_local_publish_draft(draft=draft, headers=headers)
+            return {
+                "ok": True,
+                "asset_id": material,
+                "source_url": source_url,
+                "source_run_id": str(material_source.get("source_run_id") or ""),
+                "save_result": save_result,
+                "publish_result": publish_result,
+            }
         if not material:
             raise RuntimeError("发布中心入库缺少素材 ID 或公网链接")
         account_nickname = str(source.get("account_nickname") or "").strip()
         if not account_nickname:
             raise RuntimeError("发布中心入库缺少发布账号昵称")
+        publish_body: Dict[str, Any] = {
+            "asset_id": material,
+            "account_nickname": account_nickname,
+            "title": str(source.get("title") or "").strip() or None,
+            "description": str(source.get("description") or "").strip() or None,
+            "tags": str(source.get("tags") or "").strip() or None,
+            "ai_publish_copy": bool(source.get("ai_publish_copy", True)),
+            "options": source.get("options") if isinstance(source.get("options"), dict) else {},
+        }
+        account_id = str(source.get("account_id") or "").strip()
+        if account_id.isdigit():
+            publish_body["account_id"] = int(account_id)
         publish_result = await _post_local_api_json(
             "/api/publish",
-            {
-                "asset_id": material,
-                "account_nickname": account_nickname,
-                "title": str(source.get("title") or "").strip() or None,
-                "description": str(source.get("description") or "").strip() or None,
-                "tags": str(source.get("tags") or "").strip() or None,
-                "ai_publish_copy": bool(source.get("ai_publish_copy", True)),
-                "options": source.get("options") if isinstance(source.get("options"), dict) else {},
-            },
+            publish_body,
             headers=headers,
             timeout_seconds=7200.0,
         )
         return {
             "ok": True,
             "asset_id": material,
+            "source_run_id": str(material_source.get("source_run_id") or ""),
             "save_result": save_result,
             "publish_result": publish_result,
         }
@@ -3830,6 +4638,11 @@ async def _run_client_workflow_action(
 
 
 def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
+    if action == "local_bestseller_daily_video":
+        item = result.get("item") if isinstance(result.get("item"), dict) else {}
+        task_id = str(item.get("video_task_id") or item.get("video_job_id") or "").strip()
+        day = _safe_int(result.get("day") or item.get("day"))
+        return f"同城爆款 Day {day or 1} 视频任务已提交。" + (f" 视频任务ID：{task_id}" if task_id else "")
     if action.startswith("local_bestseller"):
         items = result.get("items") if isinstance(result.get("items"), list) else []
         return f"同城爆款任务完成，已生成 {len(items)} 条内容。" if items else "同城爆款任务已完成。"
@@ -3838,6 +4651,27 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
         return "爆款复刻任务已提交到客户端。" + (f" 任务ID：{task_id}" if task_id else "")
     if action == "wecom_poll_reply":
         return "企业微信客服已执行一次拉取与自动回复检查。"
+    if action == "native_wechat_poll":
+        replied = int(result.get("replied") or result.get("success") or 0)
+        skipped = int(result.get("skipped_count") or result.get("skipped") or 0)
+        return f"个微私信接管已执行一次，回复 {replied} 条，跳过 {skipped} 条。"
+    if action == "native_wechat_add_friend":
+        if result.get("skipped"):
+            return str(result.get("message") or "个微自动加好友已跳过。")
+        task = result.get("task") if isinstance(result.get("task"), dict) else {}
+        task_id = str(task.get("id") or "").strip()
+        return "个微自动加好友已加入队列。" + (f" 任务ID：{task_id}" if task_id else "")
+    if action == "native_wechat_moments_engage":
+        if result.get("skipped"):
+            return str(result.get("message") or "朋友圈互动已跳过。")
+        like_task = result.get("like_result") if isinstance(result.get("like_result"), dict) else {}
+        comment_task = result.get("comment_result") if isinstance(result.get("comment_result"), dict) else {}
+        labels = []
+        if like_task:
+            labels.append("点赞")
+        if comment_task:
+            labels.append("评论")
+        return f"朋友圈{'/'.join(labels) if labels else '互动'}任务已加入队列。"
     if action == "ip_moments_generate_images":
         return f"朋友圈图片生成完成：{int(result.get('record_count') or 0)} 条文案，{int(result.get('image_count') or 0)} 张图片。"
     if action == "publish_content":
@@ -3858,11 +4692,24 @@ async def _run_client_workflow(
     payload = _scheduled_payload(item)
     action = str(payload.get("action") or "").strip()
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    params = dict(params)
+    if isinstance(payload.get("h5_context"), dict) and "h5_context" not in params:
+        params["h5_context"] = payload.get("h5_context")
+    if isinstance(payload.get("schedule_config"), dict) and "schedule_config" not in params:
+        params["schedule_config"] = payload.get("schedule_config")
     if not run_id or not action:
         return
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行客户端工作流：{action}"})
     try:
-        result = await _run_client_workflow_action(action, params, headers=headers, run_id=run_id)
+        result = await _run_client_workflow_action(
+            action,
+            params,
+            headers=headers,
+            run_id=run_id,
+            cloud=cloud,
+            base=base,
+            current_item=item,
+        )
         await _complete_task_run(
             cloud,
             base,
@@ -3889,6 +4736,7 @@ async def _process_scheduled_task(
     item: Dict[str, Any],
 ) -> None:
     headers = _headers(jwt_token, installation_id)
+    await _sync_openclaw_memory_for_context(jwt_token, installation_id, "scheduled-task")
     kind = str(item.get("task_kind") or "openclaw_message").strip().lower()
     if kind == "capability":
         await _run_scheduled_capability(

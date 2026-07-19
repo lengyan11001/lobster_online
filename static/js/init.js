@@ -877,9 +877,65 @@ var LOBSTER_HIDDEN_VIEWS = {
 var _restoringDashboardView = false;
 var _suppressNextHashApply = false;
 var LOBSTER_FEATURE_FLAGS = {};
+var LOBSTER_FEATURE_RAW = {};
+var LOBSTER_FEATURE_STRICT = false;
 var _lobsterFeatureRefreshInFlight = null;
 var _lobsterFeatureLastRefreshAt = 0;
 var LOBSTER_FEATURE_REFRESH_INTERVAL_MS = 15000;
+var LOBSTER_FEATURE_STRICT_MARKER = '__homepage_feature_gates_v1';
+var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
+  douyin_leads_access: true,
+  reddit_leads_access: true,
+  x_leads_access: true,
+  tiktok_leads_access: true,
+  openai_official_image_channel_access: true
+};
+var LOBSTER_VIEW_FEATURE_GATES = {
+  chat: 'home_ai_chat_entry',
+  'skill-store': 'skill_store_entry',
+  'douyin-leads': 'douyin_leads_access',
+  publish: 'publish_center_entry',
+  assets: 'asset_library_entry',
+  'scheduled-tasks': 'scheduled_tasks_entry',
+  production: 'production_records_entry',
+  billing: 'billing_entry',
+  'sys-config': 'sys_config_entry',
+  logs: 'logs_entry',
+  'personal-settings': 'personal_settings_entry',
+  agent: 'agent_entry',
+  'openclaw-memory': 'openclaw_memory_skill',
+  'creative-film-studio': 'goal_video_pipeline_skill',
+  'ip-content-studio': 'ip_content_daily_skill',
+  'wechat-article': 'wewrite_official_account_skill',
+  'image-composer-studio': 'goal_video_pipeline_skill',
+  'ppt-studio': 'create_ppt_skill',
+  'viral-tvc-studio': 'comfly_veo_skill',
+  'seedance-tvc-studio': 'comfly_seedance_tvc_skill',
+  'local-bestseller': 'local_bestseller_skill',
+  'viral-video-remix': 'viral_video_remix_skill',
+  'hifly-digital-human': 'hifly_digital_human_skill',
+  'ecommerce-detail-studio': 'comfly_ecommerce_detail_skill',
+  'juhe-wechat': 'juhe_wechat_skill',
+  'wechat-channels-transcript': 'wechat_channels_transcript_skill',
+  'ai-3d-model': 'ai_3d_model_skill',
+  'wecom-config': 'wecom_reply',
+  'wecom-detail': 'wecom_reply',
+  'messenger-config': 'messenger_reply',
+  'twilio-whatsapp-config': 'twilio_whatsapp',
+  'twilio-whatsapp-detail': 'twilio_whatsapp',
+  'youtube-accounts': 'youtube_publish',
+  'meta-social': 'meta_social',
+  'cutcli-template-studio': 'cutcli_template_studio',
+  'douyin-workbench': 'douyin_leads_access',
+  'shanjian-smart-clip': 'shanjian_smart_clip',
+  'global-leads': 'global_trade_leads_skill',
+  'linkedin-mining': 'linkedin_mining_skill',
+  'reddit-leads': 'reddit_leads_access',
+  'x-leads': 'x_leads_access',
+  'tiktok-leads': 'tiktok_leads_access',
+  'social-leads': ['reddit_leads_access', 'x_leads_access', 'tiktok_leads_access', 'reddit_leads', 'x_leads', 'tiktok_leads'],
+  'openclaw-skill-chat': ['browser_use_skill', 'computer_use_skill']
+};
 
 function _normalizeLobsterFeatureFlags(features) {
   var out = {};
@@ -913,25 +969,51 @@ function _normalizeLobsterFeatureFlags(features) {
 
 function _hasLobsterFeature(featureKey) {
   if (!featureKey) return false;
-  return !!(LOBSTER_FEATURE_FLAGS && LOBSTER_FEATURE_FLAGS[featureKey]);
+  if (LOBSTER_FEATURE_FLAGS && LOBSTER_FEATURE_FLAGS[featureKey]) return true;
+  if (!LOBSTER_FEATURE_STRICT && !LOBSTER_LEGACY_DENY_MISSING_FEATURES[featureKey]) return true;
+  return false;
+}
+
+function _isLobsterFeatureGateAllowed(gate) {
+  if (!gate) return true;
+  if (Array.isArray(gate)) {
+    return gate.some(function(item) { return _hasLobsterFeature(item); });
+  }
+  return _hasLobsterFeature(gate);
+}
+
+function _lobsterFeatureGateForView(view) {
+  var key = _baseHashView(view);
+  return LOBSTER_VIEW_FEATURE_GATES[key] || '';
 }
 
 function _isFeatureGatedViewAllowed(view) {
-  if (view === 'douyin-leads') return _hasLobsterFeature('douyin_leads_access');
+  var gate = _lobsterFeatureGateForView(view);
+  if (gate) return _isLobsterFeatureGateAllowed(gate);
   return true;
 }
 
 function applyLobsterFeatureGates(features) {
-  LOBSTER_FEATURE_FLAGS = _normalizeLobsterFeatureFlags(features);
+  if (arguments.length) {
+    LOBSTER_FEATURE_RAW = features || {};
+    LOBSTER_FEATURE_FLAGS = _normalizeLobsterFeatureFlags(features);
+    LOBSTER_FEATURE_STRICT = !!(LOBSTER_FEATURE_FLAGS && LOBSTER_FEATURE_FLAGS[LOBSTER_FEATURE_STRICT_MARKER]);
+  }
   document.querySelectorAll('[data-feature-gate]').forEach(function(el) {
     var key = el.getAttribute('data-feature-gate') || '';
     var allowed = _hasLobsterFeature(key);
     if (!el.dataset.featureGateDefaultDisplay) {
       var inlineDisplay = (el.style && el.style.display) ? String(el.style.display) : '';
-      el.dataset.featureGateDefaultDisplay = inlineDisplay && inlineDisplay !== 'none' ? inlineDisplay : '__empty__';
+      var preserveDisplay = el.getAttribute('data-feature-gate-preserve-display') === '1';
+      el.dataset.featureGateDefaultDisplay = preserveDisplay && inlineDisplay
+        ? inlineDisplay
+        : (inlineDisplay && inlineDisplay !== 'none' ? inlineDisplay : '__empty__');
+    }
+    if (!el.dataset.featureGateDefaultHidden) {
+      el.dataset.featureGateDefaultHidden = el.hidden ? '1' : '0';
     }
     if (allowed) {
-      el.hidden = false;
+      el.hidden = el.dataset.featureGateDefaultHidden === '1';
       el.style.display = el.dataset.featureGateDefaultDisplay === '__empty__'
         ? ''
         : el.dataset.featureGateDefaultDisplay;
@@ -939,10 +1021,24 @@ function applyLobsterFeatureGates(features) {
       el.hidden = true;
       el.style.display = 'none';
     }
-    el.setAttribute('aria-hidden', allowed ? 'false' : 'true');
+    var actuallyHidden = el.hidden || el.style.display === 'none';
+    el.setAttribute('aria-hidden', actuallyHidden ? 'true' : 'false');
+  });
+  document.querySelectorAll('.chat-sidebar-tree-group').forEach(function(group) {
+    var entries = Array.prototype.slice.call(group.querySelectorAll('.chat-sidebar-entry'));
+    if (!entries.length) return;
+    var hasVisible = entries.some(function(entry) {
+      return !entry.hidden && entry.style.display !== 'none';
+    });
+    group.hidden = !hasVisible;
   });
 }
 window.applyLobsterFeatureGates = applyLobsterFeatureGates;
+window.isLobsterFeatureAllowed = _hasLobsterFeature;
+window.isLobsterFeatureGateAllowed = _isLobsterFeatureGateAllowed;
+window.isLobsterViewAllowed = _isFeatureGatedViewAllowed;
+window.lobsterFeatureGateForView = _lobsterFeatureGateForView;
+window.getLobsterFeatureFlags = function() { return LOBSTER_FEATURE_RAW || {}; };
 
 function refreshLobsterFeatureGatesFromServer(force) {
   if (!token) return Promise.resolve(LOBSTER_FEATURE_FLAGS);
@@ -1002,6 +1098,17 @@ function _isRestorableView(view) {
   return !!(view && (LOBSTER_MAIN_VIEWS[view] || LOBSTER_HIDDEN_VIEWS[view]));
 }
 
+function _firstAllowedDashboardView() {
+  var navItems = Array.prototype.slice.call(document.querySelectorAll('.nav-left-item[data-view]'));
+  for (var i = 0; i < navItems.length; i++) {
+    if (navItems[i].hidden || navItems[i].style.display === 'none') continue;
+    var view = navItems[i].getAttribute('data-view') || '';
+    if (view && _isRestorableView(view)) return view;
+  }
+  return _isFeatureGatedViewAllowed('chat') ? 'chat' : '';
+}
+window.getFirstAllowedLobsterView = _firstAllowedDashboardView;
+
 function _saveLastView(view) {
   view = _baseHashView(view);
   if (!view || !_isRestorableView(view)) return;
@@ -1040,7 +1147,7 @@ function _preferredInitialView() {
     var stored = _baseHashView(localStorage.getItem(LOBSTER_LAST_VIEW_KEY) || '');
     if (_isRestorableView(stored)) return stored;
   } catch (e) {}
-  return 'chat';
+  return _firstAllowedDashboardView() || 'chat';
 }
 
 function restoreDashboardViewAfterLogin() {
@@ -1575,8 +1682,9 @@ function showAppView(view, sourceEl) {
   if (chatTips) chatTips.classList.remove('visible');
   if (!view) return Promise.resolve(null);
   if (!_isFeatureGatedViewAllowed(view)) {
-    try { localStorage.setItem(LOBSTER_LAST_VIEW_KEY, 'chat'); } catch (e0) {}
-    if (view !== 'chat') return showAppView('chat');
+    var fallbackView = _firstAllowedDashboardView();
+    try { if (fallbackView) localStorage.setItem(LOBSTER_LAST_VIEW_KEY, fallbackView); } catch (e0) {}
+    if (fallbackView && fallbackView !== view) return showAppView(fallbackView);
     return Promise.resolve(null);
   }
   _rememberView(view);
@@ -1642,7 +1750,14 @@ function loadSutuiBalance() {
   var textEl = document.getElementById('sutuiBalanceText');
   var rechargeBtn = document.getElementById('sutuiRechargeBtn');
   if (!wrap || !textEl) return;
+  if (typeof window.isLobsterFeatureAllowed === 'function' && !window.isLobsterFeatureAllowed('billing_entry')) {
+    wrap.hidden = true;
+    wrap.style.display = 'none';
+    return;
+  }
   wrap.style.display = 'flex';
+  wrap.dataset.featureGateDefaultDisplay = 'flex';
+  wrap.dataset.featureGateDefaultHidden = '0';
   wrap.classList.add('credit-balance-action');
   wrap.setAttribute('title', '查看算力消耗与每日上限');
   if (USE_INDEPENDENT_AUTH) {
@@ -1821,6 +1936,13 @@ function openCreditLimitModal() {
     if (!force && (_suppressNextHashApply || _restoringDashboardView)) return;
     var hash = (location.hash || '').replace(/^#/, '');
     var hashView = _baseHashView(hash);
+    if (hashView && !_isFeatureGatedViewAllowed(hashView)) {
+      var fallbackView = _firstAllowedDashboardView();
+      if (fallbackView && typeof showAppView === 'function') {
+        showAppView(fallbackView).catch(function() {});
+      }
+      return;
+    }
     if (hashView && LOBSTER_MAIN_VIEWS[hashView] && typeof showAppView === 'function') {
       showAppView(hashView, document.querySelector('.nav-left-item[data-view="' + hashView + '"]')).catch(function() {});
       return;

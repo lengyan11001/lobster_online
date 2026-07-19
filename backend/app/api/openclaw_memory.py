@@ -780,6 +780,7 @@ async def sync_openclaw_memory_from_cloud(
             "source": source,
             "origin": origin,
             "memory_layer": memory_layer,
+            "meta": meta,
             "scope_owner_user_id": item.get("scope_owner_user_id") or meta.get("scope_owner_user_id"),
             "cloud_doc_id": doc_id,
             "installation_id": item.get("installation_id") or headers.get("X-Installation-Id"),

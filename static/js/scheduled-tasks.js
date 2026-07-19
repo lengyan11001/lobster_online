@@ -34,6 +34,9 @@
     publishAccounts: [],
     publishAccountsLoaded: false,
     publishAccountsLoading: false,
+    wechatMomentsAccounts: [],
+    wechatMomentsAccountsLoaded: false,
+    wechatMomentsAccountsLoading: false,
     ipTemplates: [],
     ipTemplatesLoaded: false,
     ipTemplatesLoading: false,
@@ -789,18 +792,20 @@
       xiaohongshu: '小红书',
       toutiao: '今日头条',
       kuaishou: '快手',
-      bilibili: 'B站'
+      bilibili: 'B站',
+      wechat_moments: '朋友圈图文'
     };
     return names[p] || p || '-';
   }
 
   function publishAccountLabel(row) {
     if (!row) return '-';
-    return (row.platform_name || platformDisplayName(row.platform)) + ' · ' + (row.nickname || ('账号 #' + row.id));
+    return (row.platform_name || platformDisplayName(row.platform)) + ' · ' + (row.nickname || row.name || ('账号 #' + row.id));
   }
 
   function currentPublishAccounts(platform) {
     var p = String(platform || '').trim();
+    if (p === 'wechat_moments') return state.wechatMomentsAccounts || [];
     return (state.publishAccounts || []).filter(function (row) {
       return row && (!p || String(row.platform || '') === p);
     });
@@ -818,6 +823,10 @@
       seen[p] = true;
       rows.push({ platform: p, name: row.platform_name || platformDisplayName(p) });
     });
+    if ((state.wechatMomentsAccounts || []).length && !seen.wechat_moments) {
+      seen.wechat_moments = true;
+      rows.push({ platform: 'wechat_moments', name: platformDisplayName('wechat_moments') });
+    }
     sel.innerHTML = optionHtml('', '不发布，仅生成记录') + rows.map(function (row) {
       return optionHtml(row.platform, row.name);
     }).join('');
@@ -838,7 +847,9 @@
     }
     sel.disabled = false;
     if (!rows.length) {
-      sel.innerHTML = optionHtml('', state.publishAccountsLoading ? '加载账号中...' : '该平台暂无账号');
+      sel.innerHTML = optionHtml('', platform === 'wechat_moments'
+        ? (state.wechatMomentsAccountsLoading ? '加载朋友圈账号中...' : '该平台暂无账号')
+        : (state.publishAccountsLoading ? '加载账号中...' : '该平台暂无账号'));
       return;
     }
     sel.innerHTML = rows.map(function (row) {
@@ -850,31 +861,58 @@
   }
 
   function loadPublishAccounts() {
-    if (state.publishAccountsLoaded || state.publishAccountsLoading) return Promise.resolve(state.publishAccounts);
+    if (state.publishAccountsLoaded && state.wechatMomentsAccountsLoaded) return Promise.resolve(state.publishAccounts);
+    if (state.publishAccountsLoading || state.wechatMomentsAccountsLoading) return Promise.resolve(state.publishAccounts);
     state.publishAccountsLoading = true;
+    state.wechatMomentsAccountsLoading = true;
     fillPublishPlatformSelect();
-    return api('/api/accounts')
-      .then(function (d) {
-        state.publishAccounts = Array.isArray(d.accounts) ? d.accounts : [];
-        state.publishAccountsLoaded = true;
-        fillPublishPlatformSelect();
-        return state.publishAccounts;
-      })
-      .catch(function (e) {
-        state.publishAccounts = [];
-        fillPublishPlatformSelect();
+    return Promise.all([
+      api('/api/accounts').catch(function (e) {
         showMsg('scheduledTaskMsg', e.message || '发布账号加载失败', true);
-        return [];
+        return { accounts: [] };
+      }),
+      api('/api/native-wechat/accounts').catch(function () {
+        return { items: [] };
       })
-      .then(function (rows) {
-        state.publishAccountsLoading = false;
-        fillPublishPlatformSelect();
-        return rows;
-      }, function (e) {
-        state.publishAccountsLoading = false;
-        fillPublishPlatformSelect();
-        throw e;
-      });
+    ]).then(function (results) {
+      var publishData = results[0] || {};
+      var momentsData = results[1] || {};
+      state.publishAccounts = Array.isArray(publishData.accounts) ? publishData.accounts : [];
+      state.publishAccountsLoaded = true;
+      state.wechatMomentsAccounts = Array.isArray(momentsData.items) ? momentsData.items.map(function (row) {
+        var accountId = String(row && (row.account_id || row.id) || '').trim();
+        if (!accountId) return null;
+        return {
+          id: accountId,
+          account_id: accountId,
+          platform: 'wechat_moments',
+          platform_name: '朋友圈图文',
+          nickname: String(row.name || row.nickname || row.user_id || row.account_id || accountId).trim(),
+          name: String(row.name || row.nickname || '').trim(),
+          source: String(row.source || '').trim(),
+          version: String(row.version || '').trim()
+        };
+      }).filter(function (row) { return !!row; }) : [];
+      state.wechatMomentsAccountsLoaded = true;
+      fillPublishPlatformSelect();
+      return state.publishAccounts;
+    }).catch(function (e) {
+      state.publishAccounts = [];
+      state.wechatMomentsAccounts = [];
+      fillPublishPlatformSelect();
+      showMsg('scheduledTaskMsg', e.message || '发布账号加载失败', true);
+      return [];
+    }).then(function (rows) {
+      state.publishAccountsLoading = false;
+      state.wechatMomentsAccountsLoading = false;
+      fillPublishPlatformSelect();
+      return rows;
+    }, function (e) {
+      state.publishAccountsLoading = false;
+      state.wechatMomentsAccountsLoading = false;
+      fillPublishPlatformSelect();
+      throw e;
+    });
   }
 
   function fillIpTemplateSelect() {
@@ -1350,7 +1388,8 @@
       var autoPublish = !!(document.getElementById('scheduledTaskPublishAuto') || {}).checked;
       var publishAccount = null;
       if (publishAccountId) {
-        publishAccount = (state.publishAccounts || []).find(function (row) {
+        var publishSourceRows = publishPlatform === 'wechat_moments' ? (state.wechatMomentsAccounts || []) : (state.publishAccounts || []);
+        publishAccount = publishSourceRows.find(function (row) {
           return row && String(row.id) === String(publishAccountId);
         }) || null;
       }
@@ -1360,12 +1399,14 @@
       if (publishPlatform || publishAccountId || autoPublish) {
         if (!publishPlatform) throw new Error('请选择发布平台');
         if (!publishAccountId) throw new Error('请选择发布账号');
-        var parsedAccountId = parseInt(publishAccountId, 10);
-        if (isNaN(parsedAccountId)) throw new Error('发布账号无效');
         payload.publish_platform = publishPlatform;
         payload.publish_platform_name = publishAccount ? (publishAccount.platform_name || platformDisplayName(publishPlatform)) : platformDisplayName(publishPlatform);
-        payload.publish_account_id = parsedAccountId;
-        payload.publish_account_nickname = publishAccount ? (publishAccount.nickname || '') : '';
+        payload.publish_account_id = publishPlatform === 'wechat_moments' ? publishAccountId : (function() {
+          var parsedAccountId = parseInt(publishAccountId, 10);
+          if (isNaN(parsedAccountId)) throw new Error('发布账号无效');
+          return parsedAccountId;
+        })();
+        payload.publish_account_nickname = publishAccount ? (publishAccount.nickname || publishAccount.name || '') : '';
         payload.publish_auto = autoPublish;
       }
       return {
@@ -1399,6 +1440,15 @@
       kind = 'lead_collection_templates';
       installationIds = [];
     }
+    var publishPlatform = val('scheduledTaskPublishPlatform');
+    var publishAccountId = val('scheduledTaskPublishAccount');
+    var publishAccount = null;
+    if (publishAccountId) {
+      var publishSourceRows = publishPlatform === 'wechat_moments' ? (state.wechatMomentsAccounts || []) : (state.publishAccounts || []);
+      publishAccount = publishSourceRows.find(function (row) {
+        return row && String(row.id) === String(publishAccountId);
+      }) || null;
+    }
     var body = {
       title: title,
       task_kind: kind,
@@ -1415,6 +1465,21 @@
     if (startAt && scheduleType !== 'daily_times') body.start_at = startAt;
     if (scheduleType === 'interval') body.interval_seconds = Math.max(60, (isNaN(intervalMin) ? 60 : intervalMin) * 60);
     if (scheduleType === 'daily_times') body.daily_times = dailyTimes;
+    if (publishPlatform || publishAccountId || autoPublish) {
+      if (!publishPlatform) throw new Error('请选择发布平台');
+      if (!publishAccountId) throw new Error('请选择发布账号');
+      body.publish_platform = publishPlatform;
+      body.publish_platform_name = publishAccount ? (publishAccount.platform_name || platformDisplayName(publishPlatform)) : platformDisplayName(publishPlatform);
+      body.publish_account_nickname = publishAccount ? (publishAccount.nickname || publishAccount.name || '') : '';
+      body.publish_auto = autoPublish;
+      if (publishPlatform === 'wechat_moments') {
+        body.publish_account_id = publishAccountId;
+      } else {
+        var parsedAccountId = parseInt(publishAccountId, 10);
+        if (isNaN(parsedAccountId)) throw new Error('发布账号无效');
+        body.publish_account_id = parsedAccountId;
+      }
+    }
     return body;
   }
 

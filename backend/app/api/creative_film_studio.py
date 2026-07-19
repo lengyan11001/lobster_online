@@ -97,6 +97,7 @@ class IpMomentImageBatchIn(BaseModel):
     batch_created_at: str = ""
     image_extra: str = ""
     image_model: str = _SUTUI_GPT_IMAGE_2_MODEL
+    reference_image_urls: List[str] = Field(default_factory=list)
 
 
 def _raw_token_from_request(request: Request) -> str:
@@ -221,6 +222,75 @@ def _extract_sutui_image_url(result_text: str) -> str:
         if found:
             return found
     return ""
+
+
+def _looks_like_reference_image_url(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.lower().startswith("data:image/"):
+        return True
+    if not text.lower().startswith(("http://", "https://")):
+        return False
+    path = text.split("#", 1)[0].split("?", 1)[0].lower()
+    return any(path.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"))
+
+
+def _clean_reference_image_urls(value: Any, *, limit: int = 8) -> List[str]:
+    urls: List[str] = []
+    image_keys = {
+        "image",
+        "image_url",
+        "image_urls",
+        "images",
+        "reference_image_url",
+        "reference_image_urls",
+        "source_image",
+        "source_images",
+        "public_url",
+        "preview_url",
+        "source_url",
+        "url",
+    }
+
+    def add(raw: Any) -> None:
+        if len(urls) >= limit:
+            return
+        text = str(raw or "").strip()
+        if text and _looks_like_reference_image_url(text) and text not in urls:
+            urls.append(text)
+
+    def visit(raw: Any, *, hinted: bool = False, depth: int = 0) -> None:
+        if len(urls) >= limit or raw is None or depth > 6:
+            return
+        if isinstance(raw, str):
+            if hinted:
+                add(raw)
+            return
+        if isinstance(raw, list):
+            for item in raw:
+                visit(item, hinted=hinted, depth=depth + 1)
+                if len(urls) >= limit:
+                    break
+            return
+        if isinstance(raw, dict):
+            for key, val in raw.items():
+                lower = str(key or "").lower()
+                next_hinted = hinted or lower in image_keys or "image" in lower
+                if next_hinted or lower in {"meta", "source_meta"}:
+                    visit(val, hinted=next_hinted, depth=depth + 1)
+
+    visit(value, hinted=True)
+    return urls[:limit]
+
+
+def _reference_urls_for_memory_doc_ids(user_id: int, doc_ids: List[str], *, limit: int = 8) -> List[str]:
+    if not doc_ids:
+        return []
+    wanted = {str(doc_id or "").strip() for doc_id in doc_ids if str(doc_id or "").strip()}
+    docs = _load_index(user_id)
+    selected = [doc for doc in docs if isinstance(doc, dict) and str(doc.get("id") or "").strip() in wanted]
+    return _clean_reference_image_urls(selected, limit=limit)
 
 
 def _image_size_for_aspect_ratio(aspect_ratio: str) -> str:
@@ -481,7 +551,14 @@ async def _generate_image_comfly_legacy(request: Request, user: _ServerUser, pro
     return image_url
 
 
-async def _generate_image(request: Request, user: _ServerUser, prompt: str, model: str, aspect_ratio: str) -> str:
+async def _generate_image(
+    request: Request,
+    user: _ServerUser,
+    prompt: str,
+    model: str,
+    aspect_ratio: str,
+    reference_image_urls: List[str] | None = None,
+) -> str:
     token = _raw_token_from_request(request)
     if not token:
         raise HTTPException(status_code=401, detail="需要登录后才能生成图片")
@@ -499,6 +576,11 @@ async def _generate_image(request: Request, user: _ServerUser, prompt: str, mode
         "num_images": 1,
         "n": 1,
     }
+    refs = _clean_reference_image_urls(reference_image_urls or [], limit=8)
+    if refs:
+        payload["image_url"] = refs[0]
+        payload["image"] = refs[0]
+        payload["image_urls"] = refs
     submit_args = {"capability_id": "image.generate", "payload": payload}
     try:
         submit_text = await _call_server_mcp_gateway(
@@ -717,6 +799,7 @@ def _clean_ip_moment_records(records: List[Dict[str, Any]], limit: int = 5) -> L
                 "image_prompt": str(raw.get("image_prompt") or "").strip(),
                 "image_prompts": prompts,
                 "memory_doc_ids": memory_doc_ids,
+                "reference_image_urls": _clean_reference_image_urls(raw, limit=8),
             }
         )
     return out
@@ -820,8 +903,10 @@ def _moment_image_writeback_payload(
     prompts: List[str],
     images: List[Dict[str, Any]],
     complete: bool,
+    reference_image_urls: List[str] | None = None,
 ) -> Dict[str, Any]:
     first = images[0] if images else {}
+    refs = _clean_reference_image_urls(reference_image_urls or [], limit=8)
     return {
         "image_url": first.get("image_url") or "",
         "image_asset_id": first.get("image_asset_id") or "",
@@ -835,6 +920,7 @@ def _moment_image_writeback_payload(
             "image_status": f"{len(images)} 张图片已生成" if complete else f"正在生成图片：{len(images)}/3",
             "image_progress": f"{len(images)}/3",
             "image_complete": complete,
+            "reference_image_urls": refs,
             "images": images,
         },
     }
@@ -852,10 +938,14 @@ async def generate_ip_moment_images(
     batch_id = (body.batch_id or "").strip() or f"moment_img_{uuid.uuid4().hex[:12]}"
     batch_created_at = (body.batch_created_at or "").strip() or datetime.now(timezone.utc).isoformat()
     image_model = _sutui_image_model(body.image_model)
+    batch_reference_urls = _clean_reference_image_urls(body.reference_image_urls, limit=8)
     all_images: List[Dict[str, Any]] = []
     processed: List[Dict[str, Any]] = []
     for record in records:
         record_id = str(record.get("record_id") or "")
+        reference_urls = _clean_reference_image_urls([record.get("reference_image_urls"), batch_reference_urls], limit=8)
+        if not reference_urls and record.get("memory_doc_ids"):
+            reference_urls = _reference_urls_for_memory_doc_ids(current_user.id, record.get("memory_doc_ids") or [], limit=8)
         prompts = _ip_moment_prompts(record)
         images: List[Dict[str, Any]] = []
         for index, prompt in enumerate(prompts, start=1):
@@ -872,7 +962,7 @@ async def generate_ip_moment_images(
             if record.get("memory_doc_ids"):
                 memory_context, selected_docs = _optional_selected_memory_context(current_user.id, record.get("memory_doc_ids") or [])
             plan_prompt = _compose_direct_image_prompt(direct_prompt, memory_context)
-            image_url = await _generate_image(request, current_user, plan_prompt, image_model, "1:1")
+            image_url = await _generate_image(request, current_user, plan_prompt, image_model, "1:1", reference_image_urls=reference_urls)
             asset = await _save_generated_image_asset(
                 request=request,
                 current_user=current_user,
@@ -893,6 +983,7 @@ async def generate_ip_moment_images(
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "batch_id": batch_id,
                     "batch_created_at": batch_created_at,
+                    "reference_image_urls": reference_urls,
                     "selected_documents": selected_docs,
                 }
             )
@@ -914,6 +1005,7 @@ async def generate_ip_moment_images(
                     prompts=prompts,
                     images=images,
                     complete=index >= len(prompts),
+                    reference_image_urls=reference_urls,
                 ),
             )
             logger.info(
@@ -923,7 +1015,7 @@ async def generate_ip_moment_images(
                 index,
                 batch_id,
             )
-        processed.append({"record_id": record.get("record_id") or "", "title": record.get("title") or "", "image_count": len(images), "images": images})
+        processed.append({"record_id": record.get("record_id") or "", "title": record.get("title") or "", "image_count": len(images), "reference_image_urls": reference_urls, "images": images})
         all_images.extend(images)
     return {
         "ok": True,

@@ -1,14 +1,22 @@
 (function() {
   var state = {
-    tab: 'template',
+    tab: 'keywords',
     keywords: [],
     competitors: [],
     competitorCandidates: [],
     memories: [],
+    templates: [],
+    editingTemplateId: '',
+    profileIndex: 0,
     selectedKeywords: {},
     selectedCompetitors: {},
     selectedMemories: {},
     selectedReferenceMemories: {},
+    memoryUseProfile: true,
+    memorySourceKeywords: {},
+    memorySourceCompetitors: {},
+    memorySourceDocs: {},
+    memorySourceFiles: {},
     generatedDocuments: {},
     generatedDocOrder: [],
     uploadFiles: [],
@@ -91,6 +99,14 @@
     return requestJson(localBase(), path, opts);
   }
 
+  function syncOpenClawMemoryFromCloud() {
+    if (!localBase()) return Promise.resolve({ ok: false, skipped: 'LOCAL_API_BASE not configured' });
+    return localJson('/api/openclaw/memory/sync-cloud', { method: 'POST', json: false }).catch(function(err) {
+      console.warn('[personal-settings] sync OpenClaw memory failed', err);
+      return { ok: false, error: err && err.message ? err.message : String(err || '') };
+    });
+  }
+
   function setMsg(text, isErr) {
     var el = $('psMsg');
     if (!el) return;
@@ -113,13 +129,15 @@
   }
 
   function switchTab(tab) {
-    state.tab = tab || 'template';
+    var allowed = ['keywords', 'competitors', 'profile', 'upload', 'memory', 'template'];
+    state.tab = allowed.indexOf(String(tab || '')) >= 0 ? String(tab || '') : 'keywords';
     document.querySelectorAll('#content-personal-settings [data-ps-tab]').forEach(function(btn) {
       btn.classList.toggle('is-active', btn.getAttribute('data-ps-tab') === state.tab);
     });
     document.querySelectorAll('#content-personal-settings [data-ps-panel]').forEach(function(panel) {
       panel.classList.toggle('is-active', panel.getAttribute('data-ps-panel') === state.tab);
     });
+    if (state.tab === 'profile') renderProfileWizard();
   }
 
   function memoryId(doc) {
@@ -154,6 +172,221 @@
 
   function cleanStringIds(map) {
     return Object.keys(map || {}).filter(function(id) { return !!map[id]; }).map(function(id) { return String(id || '').trim(); }).filter(Boolean);
+  }
+
+  function uniqueIds(ids) {
+    var seen = {};
+    return (ids || []).map(function(id) { return String(id || '').trim(); }).filter(function(id) {
+      if (!id || seen[id]) return false;
+      seen[id] = true;
+      return true;
+    });
+  }
+
+  function fieldValue(id) {
+    var el = $(id);
+    return el ? String(el.value || '').trim() : '';
+  }
+
+  function setFieldValue(id, value) {
+    var el = $(id);
+    if (el) el.value = value || '';
+  }
+
+  function profileQuestions() {
+    return [
+      { field: 'psProfileName', label: '你的名字', type: 'input' },
+      { field: 'psBirthEra', label: '哪个年代出生', type: 'input' },
+      { field: 'psCurrentCity', label: '现居城市', type: 'input' },
+      { field: 'psHometown', label: '籍贯', type: 'input' },
+      { field: 'psRole', label: '你是做什么的', type: 'input' },
+      { field: 'psShareTopic', label: '你主要分享什么', type: 'input' },
+      { field: 'psVideoStyle', label: '你希望视频是什么风格', type: 'input' },
+      { field: 'psAfterViewAction', label: '希望大家看完后做什么', type: 'input' },
+      { field: 'psBusinessProduct', label: '你在做什么/什么产品', type: 'textarea' },
+      { field: 'psTargetCustomer', label: '你想卖给谁/哪些年代的人', type: 'textarea' },
+      { field: 'psAdvantages', label: '你的优势/比同行好在哪', type: 'textarea' }
+    ];
+  }
+
+  function syncProfileAnswerToField() {
+    var questions = profileQuestions();
+    var idx = Math.max(0, Math.min(Number(state.profileIndex || 0), questions.length - 1));
+    var question = questions[idx];
+    var answer = $('psProfileAnswer');
+    if (question && answer) setFieldValue(question.field, answer.value || '');
+  }
+
+  function renderProfileWizard() {
+    var host = $('psProfileAnswerHost');
+    var title = $('psProfileQuestionTitle');
+    if (!host || !title) return;
+    var questions = profileQuestions();
+    var maxIdx = Math.max(0, questions.length - 1);
+    var idx = Math.max(0, Math.min(Number(state.profileIndex || 0), maxIdx));
+    state.profileIndex = idx;
+    var question = questions[idx];
+    title.textContent = question.label;
+    var step = $('psProfileStepText');
+    var progress = $('psProfileProgress');
+    if (step) step.textContent = (idx + 1) + '/' + questions.length;
+    if (progress) progress.style.width = Math.round(((idx + 1) / questions.length) * 100) + '%';
+    host.innerHTML = question.type === 'textarea'
+      ? '<textarea id="psProfileAnswer" rows="5"></textarea>'
+      : '<input id="psProfileAnswer" type="text">';
+    var answer = $('psProfileAnswer');
+    if (answer) {
+      answer.value = fieldValue(question.field);
+      answer.addEventListener('input', syncProfileAnswerToField);
+      setTimeout(function() { answer.focus(); }, 0);
+    }
+    if ($('psProfilePrevBtn')) $('psProfilePrevBtn').disabled = idx <= 0;
+    if ($('psProfileNextBtn')) $('psProfileNextBtn').hidden = idx >= maxIdx;
+    if ($('psSaveProfileBtn')) $('psSaveProfileBtn').hidden = idx < maxIdx;
+  }
+
+  function moveProfile(delta) {
+    syncProfileAnswerToField();
+    var questions = profileQuestions();
+    var maxIdx = Math.max(0, questions.length - 1);
+    state.profileIndex = Math.max(0, Math.min(Number(state.profileIndex || 0) + delta, maxIdx));
+    renderProfileWizard();
+  }
+
+  function profileRequirements() {
+    var basic = {
+      name: fieldValue('psProfileName'),
+      birth_era: fieldValue('psBirthEra'),
+      current_city: fieldValue('psCurrentCity'),
+      hometown: fieldValue('psHometown'),
+      role: fieldValue('psRole'),
+      share_topic: fieldValue('psShareTopic'),
+      video_style: fieldValue('psVideoStyle'),
+      after_view_action: fieldValue('psAfterViewAction')
+    };
+    var business = {
+      product: fieldValue('psBusinessProduct'),
+      target_customer: fieldValue('psTargetCustomer'),
+      advantages: fieldValue('psAdvantages')
+    };
+    var lines = [
+      ['名字', basic.name],
+      ['出生年代', basic.birth_era],
+      ['现居城市', basic.current_city],
+      ['籍贯', basic.hometown],
+      ['职业/身份', basic.role],
+      ['主要分享', basic.share_topic],
+      ['视频风格', basic.video_style],
+      ['看完后动作', basic.after_view_action],
+      ['产品/业务', business.product],
+      ['目标客户', business.target_customer],
+      ['优势', business.advantages]
+    ].filter(function(item) { return String(item[1] || '').trim(); }).map(function(item) { return item[0] + '：' + item[1]; });
+    var text = lines.join('\n');
+    return {
+      basic_profile: basic,
+      business_description: business,
+      profile_name: basic.name,
+      birth_era: basic.birth_era,
+      current_city: basic.current_city,
+      hometown: basic.hometown,
+      role: basic.role,
+      share_topic: basic.share_topic,
+      video_style: basic.video_style,
+      after_view_action: basic.after_view_action,
+      product: business.product,
+      target_customer: business.target_customer,
+      advantages: business.advantages,
+      common: text,
+      oral: text,
+      industry_oral: text,
+      ip_oral: text,
+      moments: text,
+      moments_copy: text,
+      image: text
+    };
+  }
+
+  function fillProfileFields(item) {
+    var req = (item && item.requirements) || {};
+    var profile = req.basic_profile && typeof req.basic_profile === 'object' ? req.basic_profile : (req.profile || {});
+    var business = req.business_description && typeof req.business_description === 'object' ? req.business_description : (req.business || {});
+    setFieldValue('psProfileName', req.profile_name || profile.name || '');
+    setFieldValue('psBirthEra', req.birth_era || profile.birth_era || '');
+    setFieldValue('psCurrentCity', req.current_city || profile.current_city || '');
+    setFieldValue('psHometown', req.hometown || profile.hometown || '');
+    setFieldValue('psRole', req.role || profile.role || '');
+    setFieldValue('psShareTopic', req.share_topic || profile.share_topic || '');
+    setFieldValue('psVideoStyle', req.video_style || profile.video_style || '');
+    setFieldValue('psAfterViewAction', req.after_view_action || profile.after_view_action || '');
+    setFieldValue('psBusinessProduct', req.product || business.product || '');
+    setFieldValue('psTargetCustomer', req.target_customer || business.target_customer || '');
+    setFieldValue('psAdvantages', req.advantages || business.advantages || '');
+    renderProfileWizard();
+  }
+
+  function profileContextText(options) {
+    options = options || {};
+    var includeProfile = options.includeProfile !== false;
+    var keywordRows = Array.isArray(options.keywordRows) ? options.keywordRows : selectedMemoryKeywordRows();
+    var competitorRows = Array.isArray(options.competitorRows) ? options.competitorRows : selectedMemoryCompetitorRows();
+    var sourceDocs = Array.isArray(options.sourceDocs) ? options.sourceDocs : selectedMemorySourceDocs();
+    var req = profileRequirements();
+    var keywordLines = keywordRows.map(function(row) { return row.display_name || row.keyword; }).filter(Boolean);
+    var competitorLines = competitorRows.map(function(row) {
+      return [platformLabel(row.platform), row.display_name || row.account_key || ''].filter(Boolean).join(' ');
+    }).filter(Boolean);
+    var docLines = sourceDocs.map(function(doc) {
+      var title = memoryTitle(doc);
+      var text = String(doc.content_text || doc.content || doc.text || doc.content_preview || '').trim();
+      return text ? '【' + title + '】\n' + text : '';
+    }).filter(Boolean);
+    var sections = [];
+    if (includeProfile && req.common) sections.push('资料调查：\n' + req.common);
+    if (keywordLines.length) sections.push('关键词：\n' + keywordLines.join('\n'));
+    if (competitorLines.length) sections.push('同行账号：\n' + competitorLines.join('\n'));
+    if (docLines.length) sections.push('上传资料：\n' + docLines.join('\n\n'));
+    return sections.join('\n\n').trim();
+  }
+
+  function metricText(metrics) {
+    if (!metrics || typeof metrics !== 'object') return '';
+    return [
+      ['点赞', metrics.like_count || metrics.digg_count || metrics.likes],
+      ['评论', metrics.comment_count || metrics.comments],
+      ['分享', metrics.share_count || metrics.shares],
+      ['收藏', metrics.collect_count || metrics.favorite_count || metrics.favorites],
+      ['播放', metrics.play_count || metrics.view_count || metrics.views]
+    ].filter(function(item) { return item[1] !== undefined && item[1] !== null && String(item[1]) !== ''; })
+      .map(function(item) { return item[0] + item[1]; })
+      .join('，');
+  }
+
+  function competitorSourceText(selectedIds) {
+    var selected = (Array.isArray(selectedIds) ? selectedIds : cleanIntIds(state.memorySourceCompetitors)).map(function(id) { return String(id); });
+    if (!selected.length) return Promise.resolve('');
+    var wanted = {};
+    selected.forEach(function(id) { wanted[id] = true; });
+    return cloudJson('/api/ip-content/source-items?source_type=competitor&limit=80')
+      .then(function(data) {
+        var rows = (Array.isArray(data.items) ? data.items : []).filter(function(row) {
+          var meta = row && row.source_meta && typeof row.source_meta === 'object' ? row.source_meta : {};
+          var cid = String(meta.competitor_account_id || '');
+          return !!wanted[cid];
+        }).slice(0, 40);
+        if (!rows.length) return '';
+        return '同行同步数据：\n' + rows.map(function(row, idx) {
+          var metrics = metricText(row.metrics || {});
+          return [
+            (idx + 1) + '. ' + [row.author_name || '', row.title ? '《' + row.title + '》' : ''].filter(Boolean).join(' '),
+            row.description ? '内容：' + row.description : '',
+            row.publish_time ? '时间：' + row.publish_time : '',
+            metrics ? '数据：' + metrics : '',
+            row.public_url ? '链接：' + row.public_url : ''
+          ].filter(Boolean).join('\n');
+        }).join('\n\n');
+      })
+      .catch(function() { return ''; });
   }
 
   function selectedMemoryDocs() {
@@ -233,6 +466,7 @@
     });
     if (input) input.value = '';
     renderSelectedFiles();
+    renderMemorySourceSelectors();
   }
 
   function removeUploadFile(index) {
@@ -240,12 +474,21 @@
       return idx !== index;
     });
     renderSelectedFiles();
+    renderMemorySourceSelectors();
   }
 
   function docTypeLabel(key) {
     var row = DOC_TYPES.find(function(item) { return item.key === key; });
     if (key === 'custom_memory') return '自定义参考文档';
     return row ? row.label : key;
+  }
+
+  function recommendMemoryTitle(docTypes, hasCustomReference) {
+    var keys = Array.isArray(docTypes) ? docTypes.filter(Boolean) : [];
+    if (keys.length === 1 && keys[0] === 'custom_memory') return '自定义记忆';
+    if (keys.length === 1) return docTypeLabel(keys[0]);
+    if (!keys.length && hasCustomReference) return '自定义记忆';
+    return 'IP人设记忆';
   }
 
   function selectedCustomReferenceFile() {
@@ -363,7 +606,8 @@
   function fetchMemoryContent(doc) {
     var id = memoryId(doc);
     if (!id) return Promise.resolve(doc);
-    return localJson('/api/openclaw/memory/' + encodeURIComponent(id) + '/content', { json: false })
+    if (doc.content_text || doc.content || doc.text) return Promise.resolve(doc);
+    return cloudJson('/api/personal-settings/memory-documents/' + encodeURIComponent(id) + '/preview', { json: false })
       .then(function(data) {
         return Object.assign({}, doc, data.document || {}, { content_text: data.content_text || '' });
       })
@@ -424,6 +668,64 @@
     });
   }
 
+  function isPersonalDefaultTemplate(row) {
+    var meta = row && row.meta && typeof row.meta === 'object' ? row.meta : {};
+    return !!meta.is_personal_default || String((row && row.name) || '') === '个人默认配置';
+  }
+
+  function templateName(row) {
+    return String((row && row.name) || '').trim() || '未命名模板';
+  }
+
+  function renderCurrentTemplate() {
+    var box = $('psCurrentTemplateBox');
+    if (!box) return;
+    var current = state.defaultItem || {};
+    var keywordCount = Array.isArray(current.keyword_ids) ? current.keyword_ids.length : 0;
+    var competitorCount = Array.isArray(current.competitor_ids) ? current.competitor_ids.length : 0;
+    var memoryCount = Array.isArray(current.memory_doc_ids) ? current.memory_doc_ids.length : 0;
+    var meta = current.meta && typeof current.meta === 'object' ? current.meta : {};
+    var sourceId = String(meta.current_template_id || '').trim();
+    var sourceTemplate = sourceId ? (state.templates || []).find(function(row) { return String(row.id || '') === sourceId; }) : null;
+    var title = sourceTemplate ? templateName(sourceTemplate) : (current.name && !isPersonalDefaultTemplate(current) ? templateName(current) : '未指定模板');
+    box.innerHTML = '<article class="ps-template-card">' +
+      '<div><strong>' + esc(title) + '</strong><div class="ps-template-meta">关键词 ' + keywordCount + ' · 同行 ' + competitorCount + ' · 记忆 ' + memoryCount + '</div></div>' +
+    '</article>';
+  }
+
+  function renderSavedTemplates() {
+    var list = $('psSavedTemplateList');
+    if (!list) return;
+    var rows = Array.isArray(state.templates) ? state.templates : [];
+    if (!rows.length) {
+      list.innerHTML = '<div class="ps-empty">暂无模板</div>';
+      return;
+    }
+    list.innerHTML = rows.map(function(row) {
+      var id = String(row.id || '');
+      var k = Array.isArray(row.keyword_ids) ? row.keyword_ids.length : 0;
+      var c = Array.isArray(row.competitor_ids) ? row.competitor_ids.length : 0;
+      var m = Array.isArray(row.memory_doc_ids) ? row.memory_doc_ids.length : 0;
+      return '<article class="ps-template-card">' +
+        '<div><strong>' + esc(templateName(row)) + '</strong><div class="ps-template-meta">关键词 ' + k + ' · 同行 ' + c + ' · 记忆 ' + m + '</div></div>' +
+        '<div class="ps-item-actions">' +
+          '<button type="button" class="btn btn-primary btn-sm" data-use-template="' + escAttr(id) + '">设为当前</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-edit-template="' + escAttr(id) + '">编辑</button>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+    list.querySelectorAll('[data-use-template]').forEach(function(btn) {
+      btn.addEventListener('click', function() { useTemplate(btn.getAttribute('data-use-template') || '', btn); });
+    });
+    list.querySelectorAll('[data-edit-template]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-edit-template') || '';
+        var row = (state.templates || []).find(function(item) { return String(item.id || '') === id; });
+        if (row) applyTemplate(row, true);
+      });
+    });
+  }
+
   function renderKeywords() {
     var el = $('psKeywordList');
     if (!el) return;
@@ -437,14 +739,10 @@
         '<div><strong>' + esc(row.display_name || row.keyword || ('关键词 #' + id)) + '</strong>' +
         '<small>关键词：' + esc(row.keyword || '') + (row.last_fetch_at ? ' · 最近同步：' + esc(row.last_fetch_at) : '') + '</small></div>' +
         '<div class="ps-item-actions">' +
-          '<button type="button" class="btn btn-primary btn-sm" data-sync-keyword="' + escAttr(id) + '">同步榜单</button>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-delete-keyword="' + escAttr(id) + '">删除</button>' +
         '</div>' +
       '</article>';
     }).join('');
-    el.querySelectorAll('[data-sync-keyword]').forEach(function(btn) {
-      btn.addEventListener('click', function() { syncKeyword(btn.getAttribute('data-sync-keyword') || '', btn); });
-    });
     el.querySelectorAll('[data-delete-keyword]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteKeyword(btn.getAttribute('data-delete-keyword') || ''); });
     });
@@ -488,12 +786,14 @@
     }
     el.innerHTML = state.memories.map(function(doc) {
       var id = memoryId(doc);
+      var readOnly = !!(doc && (doc.read_only || doc.source === 'agent'));
+      var tag = readOnly ? '代理商' : '个人';
       return '<article class="ps-memory-item">' +
         '<div><strong>' + esc(memoryTitle(doc)) + '</strong>' +
-        '<small>' + esc((doc.notes || doc.filename || '') + (doc.created_at ? ' · ' + doc.created_at : '')) + '</small></div>' +
+        '<small>' + esc(tag + (doc.notes || doc.filename ? ' · ' + (doc.notes || doc.filename) : '') + (doc.created_at ? ' · ' + doc.created_at : '')) + '</small></div>' +
         '<div class="ps-actions">' +
           '<button type="button" class="btn btn-ghost btn-sm" data-preview-memory="' + escAttr(id) + '">预览</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm" data-delete-memory="' + escAttr(id) + '">删除</button>' +
+          (readOnly ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-delete-memory="' + escAttr(id) + '">删除</button>') +
         '</div>' +
       '</article>';
     }).join('');
@@ -509,14 +809,112 @@
     var select = $('psTargetMemorySelect');
     if (!select) return;
     var current = select.value || '';
-    select.innerHTML = '<option value="">请选择已有文档</option>' + state.memories.map(function(doc) {
+    var editableDocs = state.memories.filter(function(doc) { return !(doc && (doc.read_only || doc.source === 'agent')); });
+    select.innerHTML = '<option value="">请选择已有文档</option>' + editableDocs.map(function(doc) {
       var id = memoryId(doc);
       return '<option value="' + escAttr(id) + '">' + esc(memoryTitle(doc)) + '</option>';
     }).join('');
-    if (current && state.memories.some(function(doc) { return memoryId(doc) === current; })) {
+    if (current && editableDocs.some(function(doc) { return memoryId(doc) === current; })) {
       select.value = current;
     }
     syncSaveModeState();
+  }
+
+  function syncSelectionMap(map, ids, defaultSelected) {
+    ids = (ids || []).map(function(id) { return String(id || '').trim(); }).filter(Boolean);
+    var allowed = {};
+    ids.forEach(function(id) { allowed[id] = true; });
+    Object.keys(map || {}).forEach(function(id) {
+      if (!allowed[String(id)]) delete map[id];
+    });
+    ids.forEach(function(id) {
+      if (!(id in map)) map[id] = defaultSelected !== false;
+    });
+    return map;
+  }
+
+  function isUploadedMemoryDoc(doc) {
+    var notes = String((doc && doc.notes) || '');
+    var meta = doc && doc.meta && typeof doc.meta === 'object' ? doc.meta : {};
+    return notes.indexOf('上传资料') >= 0 || meta.save_mode === 'new' || meta.uploaded === true;
+  }
+
+  function memorySourceDocRows() {
+    var rows = (state.memories || []).filter(function(doc) { return !(doc && (doc.read_only || doc.source === 'agent')); });
+    var uploaded = rows.filter(isUploadedMemoryDoc);
+    return uploaded.length ? uploaded : rows;
+  }
+
+  function ensureMemorySourceSelections() {
+    if (state.memoryUseProfile !== false) state.memoryUseProfile = true;
+    state.memorySourceKeywords = syncSelectionMap(state.memorySourceKeywords || {}, (state.keywords || []).map(function(row) { return row.id; }));
+    state.memorySourceCompetitors = syncSelectionMap(state.memorySourceCompetitors || {}, (state.competitors || []).map(function(row) { return row.id; }));
+    state.memorySourceDocs = syncSelectionMap(state.memorySourceDocs || {}, memorySourceDocRows().map(memoryId));
+    state.memorySourceFiles = syncSelectionMap(state.memorySourceFiles || {}, selectedUploadFiles().map(uploadFileKey));
+  }
+
+  function selectedMemoryKeywordRows() {
+    ensureMemorySourceSelections();
+    return (state.keywords || []).filter(function(row) { return state.memorySourceKeywords[String(row.id || '')]; });
+  }
+
+  function selectedMemoryCompetitorRows() {
+    ensureMemorySourceSelections();
+    return (state.competitors || []).filter(function(row) { return state.memorySourceCompetitors[String(row.id || '')]; });
+  }
+
+  function selectedMemorySourceDocs() {
+    ensureMemorySourceSelections();
+    return memorySourceDocRows().filter(function(doc) { return state.memorySourceDocs[memoryId(doc)]; });
+  }
+
+  function selectedMemoryUploadFiles() {
+    ensureMemorySourceSelections();
+    return selectedUploadFiles().filter(function(file) { return state.memorySourceFiles[uploadFileKey(file)]; });
+  }
+
+  function renderSourceOptions(elId, rows, selected, kind, titleFn, subtitleFn) {
+    var el = $(elId);
+    if (!el) return;
+    if (!rows.length) {
+      el.innerHTML = '<div class="ps-empty">暂无</div>';
+      return;
+    }
+    el.innerHTML = rows.map(function(row) {
+      var id = kind === 'source_file' ? uploadFileKey(row) : (kind === 'source_doc' ? memoryId(row) : String(row.id || ''));
+      var subtitle = subtitleFn ? String(subtitleFn(row) || '') : '';
+      return '<label class="ps-source-option">' +
+        '<input type="checkbox" data-ps-memory-source="' + escAttr(kind) + '" value="' + escAttr(id) + '"' + (selected[id] ? ' checked' : '') + '>' +
+        '<span><strong>' + esc(titleFn(row)) + '</strong>' + (subtitle ? '<small>' + esc(subtitle) + '</small>' : '') + '</span>' +
+      '</label>';
+    }).join('');
+  }
+
+  function renderMemorySourceSelectors() {
+    ensureMemorySourceSelections();
+    if ($('psMemoryUseProfile')) $('psMemoryUseProfile').checked = state.memoryUseProfile !== false;
+    renderSourceOptions('psMemoryKeywordSourceList', state.keywords || [], state.memorySourceKeywords, 'keyword',
+      function(row) { return row.display_name || row.keyword || ('关键词 #' + row.id); },
+      function(row) { return row.keyword || ''; });
+    renderSourceOptions('psMemoryCompetitorSourceList', state.competitors || [], state.memorySourceCompetitors, 'competitor',
+      function(row) { return row.display_name || row.account_key || ('同行 #' + row.id); },
+      function(row) { return platformLabel(row.platform) + (row.account_key ? ' · ' + row.account_key : ''); });
+    renderSourceOptions('psMemoryUploadSourceList', memorySourceDocRows(), state.memorySourceDocs, 'source_doc',
+      memoryTitle,
+      function(row) { return row.notes || row.filename || ''; });
+    var currentFiles = selectedUploadFiles();
+    if (currentFiles.length) {
+      var box = $('psMemoryUploadSourceList');
+      var fileHtml = currentFiles.map(function(file) {
+        var id = uploadFileKey(file);
+        var size = file && file.size ? ' · ' + Math.ceil(file.size / 1024) + 'KB' : '';
+        return '<label class="ps-source-option">' +
+          '<input type="checkbox" data-ps-memory-source="source_file" value="' + escAttr(id) + '"' + (state.memorySourceFiles[id] ? ' checked' : '') + '>' +
+          '<span><strong>' + esc(file.name || '未命名文件') + '</strong><small>当前选择' + esc(size) + '</small></span>' +
+        '</label>';
+      }).join('');
+      if (box) box.innerHTML = (box.innerHTML && box.innerHTML.indexOf('ps-empty') < 0 ? box.innerHTML : '') + fileHtml;
+    }
   }
 
   function renderReferenceMemoryOptions() {
@@ -549,9 +947,13 @@
 
   function renderAllLists() {
     renderTemplateLists();
+    renderCurrentTemplate();
+    renderSavedTemplates();
     renderKeywords();
     renderCompetitors();
     renderMemories();
+    renderMemorySourceSelectors();
+    renderProfileWizard();
   }
 
   function applyDefaultItem(item) {
@@ -562,17 +964,16 @@
     (item.keyword_ids || []).forEach(function(id) { if (id) state.selectedKeywords[String(id)] = true; });
     (item.competitor_ids || []).forEach(function(id) { if (id) state.selectedCompetitors[String(id)] = true; });
     (item.memory_doc_ids || []).forEach(function(id) { if (id) state.selectedMemories[String(id)] = true; });
-    var req = item.requirements || {};
-    if ($('psOralReq')) $('psOralReq').value = req.oral || req.industry_oral || req.ip_oral || '';
-    if ($('psMomentsReq')) $('psMomentsReq').value = req.moments || req.moments_copy || '';
-    if ($('psImageReq')) $('psImageReq').value = req.image || '';
+    fillProfileFields(state.defaultItem);
     renderTemplateLists();
+    renderCurrentTemplate();
   }
 
   function loadKeywords() {
     return cloudJson('/api/ip-content/keywords').then(function(data) {
       state.keywords = Array.isArray(data.items) ? data.items : [];
       renderTemplateLists();
+      renderMemorySourceSelectors();
       renderKeywords();
     });
   }
@@ -581,15 +982,27 @@
     return cloudJson('/api/ip-content/competitors').then(function(data) {
       state.competitors = Array.isArray(data.items) ? data.items : [];
       renderTemplateLists();
+      renderMemorySourceSelectors();
       renderCompetitors();
     });
   }
 
   function loadMemories() {
-    return localJson('/api/openclaw/memory/list', { json: false }).then(function(data) {
+    return syncOpenClawMemoryFromCloud().then(function() {
+      return cloudJson('/api/personal-settings/memory-documents/list', { json: false });
+    }).then(function(data) {
       state.memories = Array.isArray(data.documents) ? data.documents : [];
       renderTemplateLists();
+      renderMemorySourceSelectors();
       renderMemories();
+    });
+  }
+
+  function loadTemplates() {
+    return cloudJson('/api/ip-content/schedule-templates').then(function(data) {
+      state.templates = (Array.isArray(data.items) ? data.items : []).filter(function(row) { return !isPersonalDefaultTemplate(row); });
+      renderCurrentTemplate();
+      renderSavedTemplates();
     });
   }
 
@@ -598,7 +1011,8 @@
     return Promise.all([
       cloudJson('/api/ip-content/keywords').then(function(data) { state.keywords = Array.isArray(data.items) ? data.items : []; }),
       cloudJson('/api/ip-content/competitors').then(function(data) { state.competitors = Array.isArray(data.items) ? data.items : []; }),
-      localJson('/api/openclaw/memory/list', { json: false }).then(function(data) { state.memories = Array.isArray(data.documents) ? data.documents : []; }),
+      loadMemories().catch(function() { state.memories = []; }),
+      loadTemplates().catch(function() { state.templates = []; }),
       cloudJson('/api/ip-content/personal-default').then(function(data) { state.defaultItem = data.item || {}; })
     ]).then(function() {
       applyDefaultItem(state.defaultItem || {});
@@ -610,32 +1024,51 @@
     });
   }
 
-  function saveConfig() {
-    var btn = $('psSaveConfigBtn');
+  function selectedMemoryPayload(ids) {
+    ids = ids || cleanStringIds(state.selectedMemories);
+    return state.memories.filter(function(doc) { return ids.indexOf(memoryId(doc)) >= 0; });
+  }
+
+  function removeDefaultId(kind, id) {
+    var item = state.defaultItem || {};
+    var key = kind === 'keyword' ? 'keyword_ids' : (kind === 'competitor' ? 'competitor_ids' : 'memory_doc_ids');
+    var strId = String(id || '');
+    item[key] = (Array.isArray(item[key]) ? item[key] : []).filter(function(value) { return String(value || '') !== strId; });
+    if (kind === 'memory') {
+      item.memory_docs = (Array.isArray(item.memory_docs) ? item.memory_docs : []).filter(function(doc) {
+        return String((doc && (doc.doc_id || doc.id)) || '') !== strId;
+      });
+    }
+    state.defaultItem = item;
+  }
+
+  function saveTemplate() {
+    var btn = $('psSaveTemplateBtn');
+    var name = fieldValue('psTemplateName');
+    if (!name) {
+      setMsg('请填写模板名称。', true);
+      return;
+    }
     setBusy(btn, true, '保存中...');
     setMsg('正在保存模板...');
-    Promise.all(selectedMemoryDocs().map(fetchMemoryContent)).then(function(memoryDocs) {
-      return cloudJson('/api/ip-content/personal-default', {
-        method: 'PUT',
-        body: {
-          name: '个人默认模板',
-          keyword_ids: cleanIntIds(state.selectedKeywords),
-          competitor_ids: cleanIntIds(state.selectedCompetitors),
-          memory_doc_ids: cleanStringIds(state.selectedMemories),
-          memory_docs: memoryDocs,
-          requirements: {
-            oral: (($('psOralReq') || {}).value || '').trim(),
-            industry_oral: (($('psOralReq') || {}).value || '').trim(),
-            ip_oral: (($('psOralReq') || {}).value || '').trim(),
-            moments: (($('psMomentsReq') || {}).value || '').trim(),
-            image: (($('psImageReq') || {}).value || '').trim()
-          },
-          meta: { source: 'personal_settings' }
-        }
+    Promise.all(selectedMemoryPayload().map(fetchMemoryContent)).then(function(memoryDocs) {
+      var body = {
+        name: name,
+        keyword_ids: cleanIntIds(state.selectedKeywords),
+        competitor_ids: cleanIntIds(state.selectedCompetitors),
+        memory_doc_ids: cleanStringIds(state.selectedMemories),
+        memory_docs: memoryDocs,
+        requirements: profileRequirements(),
+        meta: { source: 'personal_settings' }
+      };
+      return cloudJson(state.editingTemplateId ? '/api/ip-content/schedule-templates/' + encodeURIComponent(state.editingTemplateId) : '/api/ip-content/schedule-templates', {
+        method: state.editingTemplateId ? 'PATCH' : 'POST',
+        body: body
       });
     }).then(function(data) {
-      applyDefaultItem(data.item || {});
+      if (data.item && data.item.id) state.editingTemplateId = String(data.item.id);
       setMsg('模板已保存。');
+      return loadTemplates();
     }).catch(function(err) {
       setMsg(err.message || '保存失败', true);
     }).finally(function() {
@@ -643,29 +1076,102 @@
     });
   }
 
-  function saveConfigSilently() {
-    return Promise.all(selectedMemoryDocs().map(fetchMemoryContent)).then(function(memoryDocs) {
+  function saveCurrentDefault(options) {
+    options = options || {};
+    var existing = state.defaultItem || {};
+    var keywordSource = options.replaceSelection ? cleanIntIds(state.selectedKeywords) : [].concat(Array.isArray(existing.keyword_ids) ? existing.keyword_ids : [], cleanIntIds(state.selectedKeywords));
+    var competitorSource = options.replaceSelection ? cleanIntIds(state.selectedCompetitors) : [].concat(Array.isArray(existing.competitor_ids) ? existing.competitor_ids : [], cleanIntIds(state.selectedCompetitors));
+    var memorySource = options.replaceSelection ? cleanStringIds(state.selectedMemories) : [].concat(Array.isArray(existing.memory_doc_ids) ? existing.memory_doc_ids : [], cleanStringIds(state.selectedMemories));
+    var keywordIds = uniqueIds(keywordSource).map(function(id) { return Number(id); }).filter(function(id) { return isFinite(id) && id > 0; });
+    var competitorIds = uniqueIds(competitorSource).map(function(id) { return Number(id); }).filter(function(id) { return isFinite(id) && id > 0; });
+    var memoryIds = uniqueIds(memorySource);
+    return Promise.all(selectedMemoryPayload(memoryIds).map(fetchMemoryContent)).then(function(memoryDocs) {
       return cloudJson('/api/ip-content/personal-default', {
         method: 'PUT',
         body: {
-          name: '个人默认模板',
-          keyword_ids: cleanIntIds(state.selectedKeywords),
-          competitor_ids: cleanIntIds(state.selectedCompetitors),
-          memory_doc_ids: cleanStringIds(state.selectedMemories),
+          name: options.name || existing.name || '个人默认模板',
+          keyword_ids: keywordIds,
+          competitor_ids: competitorIds,
+          memory_doc_ids: memoryIds,
           memory_docs: memoryDocs,
-          requirements: {
-            oral: (($('psOralReq') || {}).value || '').trim(),
-            industry_oral: (($('psOralReq') || {}).value || '').trim(),
-            ip_oral: (($('psOralReq') || {}).value || '').trim(),
-            moments: (($('psMomentsReq') || {}).value || '').trim(),
-            image: (($('psImageReq') || {}).value || '').trim()
-          },
-          meta: { source: 'personal_settings' }
+          requirements: Object.assign({}, (existing.requirements && typeof existing.requirements === 'object') ? existing.requirements : {}, profileRequirements(), options.requirements || {}),
+          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: options.source || 'personal_settings' })
         }
       });
     }).then(function(data) {
       applyDefaultItem(data.item || {});
-      return data;
+      return syncOpenClawMemoryFromCloud().then(function() { return data; });
+    });
+  }
+
+  function saveConfigSilently() {
+    return saveCurrentDefault();
+  }
+
+  function saveProfile() {
+    syncProfileAnswerToField();
+    var btn = $('psSaveProfileBtn');
+    setBusy(btn, true, '保存中...');
+    setMsg('正在保存资料调查...');
+    saveCurrentDefault({ source: 'personal_settings_profile' })
+      .then(function() { setMsg('资料调查已保存。'); })
+      .catch(function(err) { setMsg(err.message || '保存失败', true); })
+      .finally(function() { setBusy(btn, false); });
+  }
+
+  function applyTemplate(row, editing) {
+    row = row || {};
+    state.editingTemplateId = editing && row.id ? String(row.id) : '';
+    state.selectedKeywords = {};
+    state.selectedCompetitors = {};
+    state.selectedMemories = {};
+    (row.keyword_ids || []).forEach(function(id) { if (id) state.selectedKeywords[String(id)] = true; });
+    (row.competitor_ids || []).forEach(function(id) { if (id) state.selectedCompetitors[String(id)] = true; });
+    (row.memory_doc_ids || []).forEach(function(id) { if (id) state.selectedMemories[String(id)] = true; });
+    if ($('psTemplateName')) $('psTemplateName').value = row.name || '';
+    if (row.requirements && typeof row.requirements === 'object') fillProfileFields(row);
+    renderAllLists();
+    switchTab('template');
+  }
+
+  function resetTemplateForm() {
+    state.editingTemplateId = '';
+    state.selectedKeywords = {};
+    state.selectedCompetitors = {};
+    state.selectedMemories = {};
+    if ($('psTemplateName')) $('psTemplateName').value = '';
+    renderTemplateLists();
+    renderSavedTemplates();
+  }
+
+  function useTemplate(id, btn) {
+    var row = (state.templates || []).find(function(item) { return String(item.id || '') === String(id || ''); });
+    if (!row) {
+      setMsg('模板不存在。', true);
+      return;
+    }
+    setBusy(btn, true, '保存中...');
+    state.selectedKeywords = {};
+    state.selectedCompetitors = {};
+    state.selectedMemories = {};
+    (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
+    (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
+    (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
+    var requirements = Object.assign({}, (state.defaultItem && state.defaultItem.requirements && typeof state.defaultItem.requirements === 'object') ? state.defaultItem.requirements : profileRequirements(), (row.requirements && typeof row.requirements === 'object') ? row.requirements : {});
+    saveCurrentDefault({
+      name: templateName(row),
+      requirements: requirements,
+      meta: Object.assign({}, row.meta || {}, { current_template_id: row.id }),
+      source: 'personal_settings_current_template',
+      replaceSelection: true
+    }).then(function() {
+      fillProfileFields(state.defaultItem || {});
+      renderAllLists();
+      setMsg('当前使用模板已更新。');
+    }).catch(function(err) {
+      setMsg(err.message || '设置当前模板失败', true);
+    }).finally(function() {
+      setBusy(btn, false);
     });
   }
 
@@ -700,26 +1206,11 @@
     cloudJson('/api/ip-content/keywords/' + encodeURIComponent(id), { method: 'DELETE', json: false })
       .then(function() {
         delete state.selectedKeywords[String(id)];
+        removeDefaultId('keyword', id);
         setMsg('关键词已删除。');
-        return loadKeywords();
+        return loadKeywords().then(saveConfigSilently);
       })
       .catch(function(err) { setMsg(err.message || '关键词删除失败', true); });
-  }
-
-  function syncKeyword(id, btn) {
-    if (!id) return;
-    setBusy(btn, true, '同步中...');
-    cloudJson('/api/ip-content/keywords/' + encodeURIComponent(id) + '/sync', {
-      method: 'POST',
-      body: { page_size: 20, date_window: 24 }
-    }).then(function(data) {
-      setMsg('关键词榜单已同步，入库 ' + ((data.items && data.items.length) || 0) + ' 条。');
-      return loadKeywords();
-    }).catch(function(err) {
-      setMsg(err.message || '同步关键词失败', true);
-    }).finally(function() {
-      setBusy(btn, false);
-    });
   }
 
   function renderCompetitorCandidates() {
@@ -841,13 +1332,16 @@
     };
     setBusy(btn, true, '添加中...');
     cloudJson('/api/ip-content/competitors', { method: 'POST', body: payload })
-      .then(function() {
+      .then(function(data) {
         if ($('psCompetitorSearchInput')) $('psCompetitorSearchInput').value = '';
         if ($('psCompetitorTags')) $('psCompetitorTags').value = '';
         state.competitorCandidates = [];
         renderCompetitorCandidates();
         setMsg('同行账号已添加。');
-        return loadCompetitors();
+        return loadCompetitors().then(function() {
+          if (data.item && data.item.id) return syncCompetitor(data.item.id);
+          return null;
+        });
       })
       .catch(function(err) { setMsg(err.message || '添加同行失败', true); })
       .finally(function() { setBusy(btn, false); });
@@ -874,57 +1368,70 @@
     cloudJson('/api/ip-content/competitors/' + encodeURIComponent(id), { method: 'DELETE', json: false })
       .then(function() {
         delete state.selectedCompetitors[String(id)];
+        removeDefaultId('competitor', id);
         setMsg('同行账号已删除。');
-        return loadCompetitors();
+        return loadCompetitors().then(saveConfigSilently);
       })
       .catch(function(err) { setMsg(err.message || '删除同行失败', true); });
   }
 
   function memoryInputText() {
     var parts = [];
-    var raw = (($('psRawMemoryText') || {}).value || '').trim();
-    var urls = (($('psMemoryUrls') || {}).value || '').trim();
-    if (raw) parts.push(raw);
-    if (urls) parts.push('资料链接：\n' + urls);
-    var files = selectedUploadFiles();
+    var context = profileContextText({
+      includeProfile: state.memoryUseProfile !== false,
+      keywordRows: selectedMemoryKeywordRows(),
+      competitorRows: selectedMemoryCompetitorRows(),
+      sourceDocs: selectedMemorySourceDocs()
+    });
+    if (context) parts.push(context);
+    var files = selectedMemoryUploadFiles();
     if (files.length) {
-      parts.push('已上传文件：\n' + files.map(function(file) { return '- ' + file.name; }).join('\n'));
+      parts.push('当前选择文件：\n' + files.map(function(file) { return '- ' + file.name; }).join('\n'));
     }
     return parts.join('\n\n').trim();
   }
 
   function generateMemoryDocs() {
     var btn = $('psGenerateMemoryBtn');
-    var fd = new FormData();
-    var files = selectedUploadFiles();
-    var raw = (($('psRawMemoryText') || {}).value || '').trim();
-    var urls = (($('psMemoryUrls') || {}).value || '').trim();
-    var referenceIds = [];
+    syncProfileAnswerToField();
+    ensureMemorySourceSelections();
+    var files = selectedMemoryUploadFiles();
+    var keywordRows = selectedMemoryKeywordRows();
+    var competitorRows = selectedMemoryCompetitorRows();
+    var sourceDocs = selectedMemorySourceDocs();
     var docTypes = selectedGenerateDocTypes();
     var customReferenceFile = selectedCustomReferenceFile();
-    if (!files.length && !raw && !urls) {
-      setMsg('请上传资料、填写链接或粘贴资料内容。自定义参考文档只用于学习格式，不算业务资料。', true);
-      return;
-    }
+    var contextText = profileContextText({
+      includeProfile: state.memoryUseProfile !== false,
+      keywordRows: keywordRows,
+      competitorRows: competitorRows,
+      sourceDocs: sourceDocs
+    });
     if (!docTypes.length && !customReferenceFile) {
       setMsg('请选择一个预置生成类型，或上传一份自定义参考文档。', true);
       return;
     }
-    files.forEach(function(file) { fd.append('files', file, file.name || 'upload'); });
-    fd.append('urls', urls);
-    fd.append('direct_intro', raw);
-    fd.append('direct_faq', '');
-    fd.append('direct_scripts', '');
-    fd.append('doc_type', docTypes[0] || '');
-    fd.append('doc_types', JSON.stringify(docTypes));
-    if (customReferenceFile) fd.append('custom_reference_file', customReferenceFile, customReferenceFile.name || 'custom-reference');
-    fd.append('reference_doc_ids', referenceIds.join(','));
     setBusy(btn, true, '理解中...');
     setMsg('正在理解资料并生成记忆内容...');
-    fetch(localBase() + '/api/personal-settings/memory-documents/generate', {
-      method: 'POST',
-      headers: headers(false),
-      body: fd
+    competitorSourceText(competitorRows.map(function(row) { return row.id; })).then(function(competitorText) {
+      if (!files.length && !contextText && !competitorText) {
+        throw new Error('请选择要生成的资料来源。');
+      }
+      var fd = new FormData();
+      files.forEach(function(file) { fd.append('files', file, file.name || 'upload'); });
+      fd.append('urls', '');
+      fd.append('direct_intro', [contextText, competitorText].filter(Boolean).join('\n\n'));
+      fd.append('direct_faq', '');
+      fd.append('direct_scripts', '');
+      fd.append('doc_type', docTypes[0] || '');
+      fd.append('doc_types', JSON.stringify(docTypes));
+      if (customReferenceFile) fd.append('custom_reference_file', customReferenceFile, customReferenceFile.name || 'custom-reference');
+      fd.append('reference_doc_ids', '');
+      return fetch(cloudBase() + '/api/personal-settings/memory-documents/generate', {
+        method: 'POST',
+        headers: headers(false),
+        body: fd
+      });
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
         if (!resp.ok || data.ok === false) throw new Error(parseErr(data, '生成失败'));
@@ -933,6 +1440,9 @@
     }).then(function(data) {
       state.generatedDocuments = data.documents || {};
       state.generatedDocOrder = Array.isArray(data.doc_types) && data.doc_types.length ? data.doc_types : docTypes;
+      if ($('psMemoryTitle') && (($('psSaveMode') || {}).value || 'new') === 'new') {
+        $('psMemoryTitle').value = recommendMemoryTitle(state.generatedDocOrder, !!customReferenceFile);
+      }
       renderGeneratedDocs();
       setMsg('AI 理解完成，请审核右侧结果后存入记忆。');
     }).catch(function(err) {
@@ -944,32 +1454,35 @@
 
   function saveRawMemory() {
     var files = selectedUploadFiles();
-    var raw = (($('psRawMemoryText') || {}).value || '').trim();
-    var urls = (($('psMemoryUrls') || {}).value || '').trim();
-    var mode = (($('psSaveMode') || {}).value || 'new');
-    var title = mode === 'new' ? memoryFormTitle() : '';
-    var targetDocId = (($('psTargetMemorySelect') || {}).value || '');
-    if (!raw && !urls && !files.length) {
-      setMsg('请上传资料、填写链接或粘贴资料后再保存。', true);
+    if (!files.length) {
+      setMsg('请先上传文件。', true);
       return;
     }
-    if (mode === 'new' && !title) {
-      setMsg('新建文档需要填写文档名字。', true);
-      return;
-    }
-    if (mode === 'overwrite' && !targetDocId) {
-      setMsg('覆盖已有文档需要先选择一个文档。', true);
-      return;
-    }
-    var fd = new FormData();
-    files.forEach(function(file) { fd.append('files', file, file.name || 'upload'); });
-    fd.append('title', title);
-    fd.append('notes', '个人设置直接保存的原始资料');
-    fd.append('raw_text', raw);
-    fd.append('urls', urls);
-    fd.append('mode', mode);
-    fd.append('target_doc_id', targetDocId);
-    saveUploadedMemory($('psSaveRawMemoryBtn'), fd);
+    var btn = $('psSaveRawMemoryBtn');
+    setBusy(btn, true, '保存中...');
+    setMsg('正在保存上传文件...');
+    files.reduce(function(chain, file) {
+      return chain.then(function() {
+        var fd = new FormData();
+        fd.append('files', file, file.name || 'upload');
+        fd.append('title', file.name || '上传资料');
+        fd.append('notes', 'IP人设定位上传资料');
+        fd.append('raw_text', '');
+        fd.append('urls', '');
+        fd.append('mode', 'new');
+        fd.append('target_doc_id', '');
+        return saveUploadedMemory(null, fd);
+      });
+    }, Promise.resolve()).then(function() {
+      state.uploadFiles = [];
+      renderSelectedFiles();
+      renderMemorySourceSelectors();
+      setMsg('已存入记忆。');
+    }).catch(function(err) {
+      setMsg(err.message || '保存记忆失败', true);
+    }).finally(function() {
+      setBusy(btn, false);
+    });
   }
 
   function saveMemory() {
@@ -1010,7 +1523,7 @@
   function saveGeneratedDocuments(btn, title, documents) {
     setBusy(btn, true, '保存中...');
     setMsg('正在按生成类型保存到记忆...');
-    localJson('/api/personal-settings/memory-documents/save', {
+    cloudJson('/api/personal-settings/memory-documents/save', {
       method: 'POST',
       body: {
         title: title,
@@ -1041,7 +1554,7 @@
   function saveMemoryContent(btn, title, content, notes, mode, targetDocId) {
     setBusy(btn, true, '保存中...');
     setMsg('正在保存到记忆...');
-    localJson('/api/personal-settings/memory-documents/save-raw', {
+    cloudJson('/api/personal-settings/memory-documents/save-raw', {
       method: 'POST',
       body: { title: title, notes: notes, content: content, mode: mode || 'new', target_doc_id: targetDocId || '' }
     })
@@ -1067,7 +1580,7 @@
   function saveUploadedMemory(btn, formData) {
     setBusy(btn, true, '保存中...');
     setMsg('正在保存上传资料到记忆...');
-    fetch(localBase() + '/api/personal-settings/memory-documents/save-upload', {
+    fetch(cloudBase() + '/api/personal-settings/memory-documents/save-upload', {
       method: 'POST',
       headers: headers(false),
       body: formData
@@ -1102,7 +1615,7 @@
     if (!id) return;
     var box = $('psMemoryPreview');
     if (box) box.textContent = '正在读取...';
-    localJson('/api/personal-settings/memory-documents/' + encodeURIComponent(id) + '/preview', { json: false })
+    cloudJson('/api/personal-settings/memory-documents/' + encodeURIComponent(id) + '/preview', { json: false })
       .then(function(data) {
         if (box) box.textContent = data.content_text || '没有内容。';
       })
@@ -1114,10 +1627,11 @@
   function deleteMemory(id) {
     if (!id) return;
     if (!window.confirm('删除这个记忆文件？')) return;
-    localJson('/api/openclaw/memory/' + encodeURIComponent(id), { method: 'DELETE', json: false })
+    cloudJson('/api/personal-settings/memory-documents/' + encodeURIComponent(id), { method: 'DELETE', json: false })
       .then(function() {
         delete state.selectedMemories[String(id)];
         delete state.selectedReferenceMemories[String(id)];
+        removeDefaultId('memory', id);
         return loadMemories();
       })
       .then(saveConfigSilently)
@@ -1127,13 +1641,17 @@
 
   function bind() {
     document.querySelectorAll('#content-personal-settings [data-ps-tab]').forEach(function(btn) {
-      btn.addEventListener('click', function() { switchTab(btn.getAttribute('data-ps-tab') || 'template'); });
+      btn.addEventListener('click', function() { switchTab(btn.getAttribute('data-ps-tab') || 'keywords'); });
     });
     if ($('psRefreshBtn')) $('psRefreshBtn').addEventListener('click', loadAll);
     if ($('psBackBtn')) $('psBackBtn').addEventListener('click', function() {
       if (typeof window.showLobsterView === 'function') window.showLobsterView('chat');
     });
-    if ($('psSaveConfigBtn')) $('psSaveConfigBtn').addEventListener('click', saveConfig);
+    if ($('psProfilePrevBtn')) $('psProfilePrevBtn').addEventListener('click', function() { moveProfile(-1); });
+    if ($('psProfileNextBtn')) $('psProfileNextBtn').addEventListener('click', function() { moveProfile(1); });
+    if ($('psSaveProfileBtn')) $('psSaveProfileBtn').addEventListener('click', saveProfile);
+    if ($('psSaveTemplateBtn')) $('psSaveTemplateBtn').addEventListener('click', saveTemplate);
+    if ($('psNewTemplateBtn')) $('psNewTemplateBtn').addEventListener('click', resetTemplateForm);
     if ($('psAddKeywordBtn')) $('psAddKeywordBtn').addEventListener('click', addKeyword);
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);
     if ($('psSearchCompetitorBtn')) $('psSearchCompetitorBtn').addEventListener('click', searchCompetitors);
@@ -1148,6 +1666,23 @@
     if ($('psGenerateMemoryBtn')) $('psGenerateMemoryBtn').addEventListener('click', generateMemoryDocs);
     if ($('psMemoryFiles')) $('psMemoryFiles').addEventListener('change', handleUploadFileChange);
     if ($('psCustomReferenceFile')) $('psCustomReferenceFile').addEventListener('change', handleCustomReferenceFileChange);
+    if ($('psMemoryUseProfile')) $('psMemoryUseProfile').addEventListener('change', function(ev) {
+      state.memoryUseProfile = !!ev.target.checked;
+    });
+    var root = $('content-personal-settings');
+    if (root) {
+      root.addEventListener('change', function(ev) {
+        var input = ev.target && ev.target.closest ? ev.target.closest('[data-ps-memory-source]') : null;
+        if (!input) return;
+        var kind = input.getAttribute('data-ps-memory-source') || '';
+        var map = kind === 'keyword'
+          ? state.memorySourceKeywords
+          : (kind === 'competitor'
+            ? state.memorySourceCompetitors
+            : (kind === 'source_doc' ? state.memorySourceDocs : state.memorySourceFiles));
+        if (input.value) map[String(input.value)] = !!input.checked;
+      });
+    }
     if ($('psSaveMemoryBtn')) $('psSaveMemoryBtn').addEventListener('click', saveMemory);
     if ($('psSaveRawMemoryBtn')) $('psSaveRawMemoryBtn').addEventListener('click', saveRawMemory);
     if ($('psSaveMode')) $('psSaveMode').addEventListener('change', syncSaveModeState);
@@ -1167,6 +1702,7 @@
     }
     updateCompetitorPlatformFields();
     renderSelectedFiles();
+    renderMemorySourceSelectors();
     renderCustomReferenceFile();
     renderGeneratedDocs();
     loadAll();

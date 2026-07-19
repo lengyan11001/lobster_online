@@ -21,21 +21,21 @@
         <button type="button" class="btn btn-ghost btn-sm desktop-refresh-btn" id="desktopHardRefreshBtn" title="刷新桌面窗口，重新加载最新页面" style="display:none;">刷新页面</button>
       </div>
       <nav class="app-top-nav" id="appTopNav" aria-label="主导航" style="display:none;">
-        <button type="button" class="nav-left-item active" data-view="chat">首页</button>
-        <button type="button" class="nav-left-item" data-view="skill-store">技能商店</button>
-        <button type="button" class="nav-left-item" data-view="douyin-leads">抖音获客</button>
-        <button type="button" class="nav-left-item" data-view="publish">发布中心</button>
-        <button type="button" class="nav-left-item" data-view="assets">素材库</button>
-        <button type="button" class="nav-left-item" data-view="scheduled-tasks">定时任务</button>
-        <button type="button" class="nav-left-item" data-view="production">生成历史</button>
+        <button type="button" class="nav-left-item active" data-view="chat" data-feature-gate="home_ai_chat_entry">首页</button>
+        <button type="button" class="nav-left-item" data-view="skill-store" data-feature-gate="skill_store_entry">技能商店</button>
+        <button type="button" class="nav-left-item" data-view="douyin-leads" data-feature-gate="douyin_leads_access">抖音获客</button>
+        <button type="button" class="nav-left-item" data-view="publish" data-feature-gate="publish_center_entry">发布中心</button>
+        <button type="button" class="nav-left-item" data-view="assets" data-feature-gate="asset_library_entry">素材库</button>
+        <button type="button" class="nav-left-item" data-view="scheduled-tasks" data-feature-gate="scheduled_tasks_entry">定时任务</button>
+        <button type="button" class="nav-left-item" data-view="production" data-feature-gate="production_records_entry">生成历史</button>
         <button type="button" class="nav-left-item nav-hidden-route" data-view="billing" hidden>消费记录</button>
         <button type="button" class="nav-left-item nav-hidden-route" data-view="sys-config" hidden>系统配置</button>
         <button type="button" class="nav-left-item nav-hidden-route" data-view="logs" hidden>日志</button>
         <button type="button" class="nav-left-item nav-hidden-route" data-view="personal-settings" hidden>个人设置</button>
-        <button type="button" class="nav-left-item" data-view="agent" id="navAgent">AI 执行台</button>
+        <button type="button" class="nav-left-item" data-view="agent" data-feature-gate="agent_entry" id="navAgent">AI 执行台</button>
       </nav>
       <div class="header-actions" id="headerActions" style="display: none;">
-        <span id="sutuiBalanceWrap" style="display:none;margin-right:0.75rem;font-size:0.85rem;color:var(--text-muted);align-items:center;gap:0.5rem;">
+        <span id="sutuiBalanceWrap" data-feature-gate="billing_entry" data-feature-gate-preserve-display="1" style="display:none;margin-right:0.75rem;font-size:0.85rem;color:var(--text-muted);align-items:center;gap:0.5rem;">
           <span class="sutui-balance-badge" aria-hidden="true">
             <svg viewBox="0 0 20 20" fill="none">
               <path d="M11.2 1.8L4.9 10h3.9l-1 8.2 7.3-9.3h-4.1l.2-7.1z" fill="currentColor"></path>
@@ -52,10 +52,10 @@
           </button>
           <div class="header-dropdown-menu">
             <div class="dropdown-email" id="userEmail">-</div>
-            <button type="button" class="header-menu-view" data-view="personal-settings">个人设置</button>
-            <button type="button" class="header-menu-view" data-view="billing">消费记录</button>
-            <button type="button" class="header-menu-view" data-view="sys-config">系统配置</button>
-            <button type="button" class="header-menu-view" data-view="logs">日志</button>
+            <button type="button" class="header-menu-view" data-view="personal-settings" data-feature-gate="personal_settings_entry">个人设置</button>
+            <button type="button" class="header-menu-view" data-view="billing" data-feature-gate="billing_entry">消费记录</button>
+            <button type="button" class="header-menu-view" data-view="sys-config" data-feature-gate="sys_config_entry">系统配置</button>
+            <button type="button" class="header-menu-view" data-view="logs" data-feature-gate="logs_entry">日志</button>
             <div class="header-dropdown-divider"></div>
             <button type="button" id="logout">退出登录</button>
           </div>
@@ -143,41 +143,47 @@
                   <details class="chat-sidebar-tree-group" open>
                     <summary><span class="chat-sidebar-tree-dot"></span><span>市场部</span></summary>
                     <div class="chat-sidebar-tree-items">
-                      <button type="button" class="chat-sidebar-entry" data-chat-prompt="帮我写一版电商详情页文案、短视频脚本和发布标题。">
-                        <span class="chat-sidebar-entry-icon">≡</span>
-                        <span class="chat-sidebar-entry-copy">帮我创作</span>
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="ip-content-studio" data-feature-gate="ip_content_daily_skill">
+                        <span class="chat-sidebar-entry-icon">日</span>
+                        <span class="chat-sidebar-entry-copy">每日IP日更</span>
+                        <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="image-composer-studio">
+                      <button type="button" class="chat-sidebar-entry" data-jump-view="wechat-article" data-feature-gate="wewrite_official_account_skill">
+                        <span class="chat-sidebar-entry-icon">文</span>
+                        <span class="chat-sidebar-entry-copy">公众号文章</span>
+                        <span class="chat-sidebar-entry-arrow">›</span>
+                      </button>
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="image-composer-studio" data-feature-gate="goal_video_pipeline_skill">
                         <span class="chat-sidebar-entry-icon">▣</span>
                         <span class="chat-sidebar-entry-copy">创作图片</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="ppt-studio">
+                      <button type="button" class="chat-sidebar-entry" data-jump-view="ppt-studio" data-feature-gate="create_ppt_skill">
                         <span class="chat-sidebar-entry-icon">P</span>
                         <span class="chat-sidebar-entry-copy">PPT制作</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="viral-tvc-studio">
+                      <button type="button" class="chat-sidebar-entry" data-jump-view="viral-tvc-studio" data-feature-gate="comfly_veo_skill">
                         <span class="chat-sidebar-entry-icon">▶</span>
                         <span class="chat-sidebar-entry-copy">爆款TVC</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="seedance-tvc-studio">
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="seedance-tvc-studio" data-feature-gate="comfly_seedance_tvc_skill">
                         <span class="chat-sidebar-entry-icon">▶</span>
                         <span class="chat-sidebar-entry-copy">创意分镜头视频</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="local-bestseller">
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="local-bestseller" data-feature-gate="local_bestseller_skill">
                         <span class="chat-sidebar-entry-icon">城</span>
                         <span class="chat-sidebar-entry-copy">同城爆款</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="viral-video-remix">
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="viral-video-remix" data-feature-gate="viral_video_remix_skill">
                         <span class="chat-sidebar-entry-icon">R</span>
                         <span class="chat-sidebar-entry-copy">爆款复刻</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="hifly-digital-human">
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="hifly-digital-human" data-feature-gate="hifly_digital_human_skill">
                         <span class="chat-sidebar-entry-icon">H</span>
                         <span class="chat-sidebar-entry-copy">数字人</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
@@ -197,7 +203,7 @@
                   <details class="chat-sidebar-tree-group">
                     <summary><span class="chat-sidebar-tree-dot"></span><span>客服部</span></summary>
                     <div class="chat-sidebar-tree-items">
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="wecom-config">
+                      <button type="button" class="chat-sidebar-entry" data-jump-view="wecom-config" data-feature-gate="wecom_reply">
                         <span class="chat-sidebar-entry-icon">微</span>
                         <span class="chat-sidebar-entry-copy">企业微信客服</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
@@ -207,7 +213,7 @@
                   <details class="chat-sidebar-tree-group" open>
                     <summary><span class="chat-sidebar-tree-dot"></span><span>运营部</span></summary>
                     <div class="chat-sidebar-tree-items">
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="publish">
+                      <button type="button" class="chat-sidebar-entry" data-jump-view="publish" data-feature-gate="publish_center_entry">
                         <span class="chat-sidebar-entry-icon">▣</span>
                         <span class="chat-sidebar-entry-copy">发布中心入库</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
@@ -341,27 +347,27 @@
                   <div class="chat-home-tools" id="chatHomeTools">
                     <div class="chat-home-tools-head">
                       <strong>最近使用</strong>
-                      <button type="button" class="chat-home-viewall" data-jump-view="skill-store">查看全部 <span>&rsaquo;</span></button>
+                      <button type="button" class="chat-home-viewall" data-jump-view="skill-store" data-feature-gate="skill_store_entry">查看全部 <span>&rsaquo;</span></button>
                     </div>
                     <div class="chat-suggestion-grid">
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip1" data-chip-tone="video" data-chat-open-default="1"><span class="chat-suggestion-chip-icon">⌕</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">AI对话</span><span class="chat-suggestion-chip-desc">回到本机智能对话</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip2" data-chip-tone="ecommerce" data-h5-chat-sync="1"><span class="chat-suggestion-chip-icon">○</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">手机对话</span><span class="chat-suggestion-chip-desc">查看手机消息</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip3" data-chip-tone="publish" data-chat-prompt="帮我写一版电商详情页文案、短视频脚本和发布标题。"><span class="chat-suggestion-chip-icon">≡</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">帮我创作</span><span class="chat-suggestion-chip-desc">填入创作需求</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip4" data-chip-tone="content" data-open-hidden-view="image-composer-studio"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创作图片</span><span class="chat-suggestion-chip-desc">进入图片工作台</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipWechatArticle" data-chip-tone="content" data-chat-prompt="帮我写个公众号文章(已配置)，自动生成3张16:9横屏配图，完成公众号排版，并推送到草稿箱。主题是："><span class="chat-suggestion-chip-icon">文</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">公众号文章</span><span class="chat-suggestion-chip-desc">输入主题后推草稿</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipEcommerceDetail" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">电商详情</span><span class="chat-suggestion-chip-desc">生成主图和详情页</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-jump-view="viral-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">爆款TVC</span><span class="chat-suggestion-chip-desc">进入爆款 TVC 页面</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创意分镜头视频</span><span class="chat-suggestion-chip-desc">进入创意分镜头视频工作台</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipLocalBestseller" data-chip-tone="douyin" data-open-hidden-view="local-bestseller"><span class="chat-suggestion-chip-icon">城</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">同城爆款</span><span class="chat-suggestion-chip-desc">批量做30天内容</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip9" data-chip-tone="content" data-open-hidden-view="hifly-digital-human"><span class="chat-suggestion-chip-icon">H</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">必火数字人</span><span class="chat-suggestion-chip-desc">进入必火数字人工作台</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-view="douyin-leads"><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音获客</span><span class="chat-suggestion-chip-desc">搜索采集、精准客户、私信互动</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
-                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-jump-view="skill-store"><span class="chat-suggestion-chip-icon">&lt;/&gt;</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">技能商店</span><span class="chat-suggestion-chip-desc">查看可用技能</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipIpDaily" data-chip-tone="content" data-open-hidden-view="ip-content-studio" data-feature-gate="ip_content_daily_skill"><span class="chat-suggestion-chip-icon">日</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">每日IP日更</span><span class="chat-suggestion-chip-desc">热点、同行、记忆生成文案</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipWechatArticle" data-chip-tone="content" data-jump-view="wechat-article" data-feature-gate="wewrite_official_account_skill"><span class="chat-suggestion-chip-icon">文</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">公众号文章</span><span class="chat-suggestion-chip-desc">写文、配图、推草稿</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip1" data-chip-tone="video" data-chat-open-default="1" data-feature-gate="home_ai_chat_entry"><span class="chat-suggestion-chip-icon">⌕</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">AI对话</span><span class="chat-suggestion-chip-desc">回到本机智能对话</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip2" data-chip-tone="ecommerce" data-h5-chat-sync="1" data-feature-gate="h5_chat_entry"><span class="chat-suggestion-chip-icon">○</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">手机对话</span><span class="chat-suggestion-chip-desc">查看手机消息</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip4" data-chip-tone="content" data-open-hidden-view="image-composer-studio" data-feature-gate="goal_video_pipeline_skill"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创作图片</span><span class="chat-suggestion-chip-desc">进入图片工作台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipEcommerceDetail" data-chip-tone="ecommerce" data-open-hidden-view="ecommerce-detail-studio" data-feature-gate="comfly_ecommerce_detail_skill"><span class="chat-suggestion-chip-icon">▤</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">电商详情</span><span class="chat-suggestion-chip-desc">生成主图和详情页</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip5" data-chip-tone="image" data-jump-view="viral-tvc-studio" data-feature-gate="comfly_veo_skill"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">爆款TVC</span><span class="chat-suggestion-chip-desc">进入爆款 TVC 页面</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip6" data-chip-tone="plan" data-open-hidden-view="seedance-tvc-studio" data-feature-gate="comfly_seedance_tvc_skill"><span class="chat-suggestion-chip-icon">▶</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">创意分镜头视频</span><span class="chat-suggestion-chip-desc">进入创意分镜头视频工作台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChipLocalBestseller" data-chip-tone="douyin" data-open-hidden-view="local-bestseller" data-feature-gate="local_bestseller_skill"><span class="chat-suggestion-chip-icon">城</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">同城爆款</span><span class="chat-suggestion-chip-desc">批量做30天内容</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip9" data-chip-tone="content" data-open-hidden-view="hifly-digital-human" data-feature-gate="hifly_digital_human_skill"><span class="chat-suggestion-chip-icon">H</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">必火数字人</span><span class="chat-suggestion-chip-desc">进入必火数字人工作台</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip10" data-chip-tone="douyin" data-view="douyin-leads" data-feature-gate="douyin_leads_access"><span class="chat-suggestion-chip-icon">D</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">抖音获客</span><span class="chat-suggestion-chip-desc">搜索采集、精准客户、私信互动</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip7" data-chip-tone="publish" data-jump-view="publish" data-feature-gate="publish_center_entry"><span class="chat-suggestion-chip-icon">▣</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">发布中心</span><span class="chat-suggestion-chip-desc">管理发布账号和记录</span></span></button>
+                      <button type="button" class="chat-suggestion-chip" id="chatSuggestionChip8" data-chip-tone="ecommerce" data-jump-view="skill-store" data-feature-gate="skill_store_entry"><span class="chat-suggestion-chip-icon">&lt;/&gt;</span><span class="chat-suggestion-chip-copy"><span class="chat-suggestion-chip-title">技能商店</span><span class="chat-suggestion-chip-desc">查看可用技能</span></span></button>
                     </div>
                     <div class="chat-shortcut-row">
-                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink1" data-jump-view="skill-store">打开技能商店</button>
-                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink2" data-jump-view="publish">前往发布中心</button>
-                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink3" data-open-hidden-view="ecommerce-detail-studio">电商详情</button>
+                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink1" data-jump-view="skill-store" data-feature-gate="skill_store_entry">打开技能商店</button>
+                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink2" data-jump-view="publish" data-feature-gate="publish_center_entry">前往发布中心</button>
+                      <button type="button" class="chat-shortcut-link" id="chatShortcutLink3" data-open-hidden-view="ecommerce-detail-studio" data-feature-gate="comfly_ecommerce_detail_skill">电商详情</button>
                     </div>
                   </div>
                 </div>
@@ -2510,8 +2516,8 @@
   <script src="/static/js/view-registry.js?v=20260626-wct-entry-cache"></script>
   <script src="/static/js/app.js?v=20260511-server-api-override"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
-  <script src="/static/js/chat.js?v=20260611-memory-dropdown-fix"></script>
-  <script src="/static/js/skill.js?v=20260626-wct-entry-cache"></script>
+  <script src="/static/js/chat.js?v=20260718-home-feature-gates"></script>
+  <script src="/static/js/skill.js?v=20260718-home-feature-gates"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>
@@ -2531,6 +2537,6 @@
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js?v=20260612-asset-library-preview-cache"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260615-ip-daily-task-options"></script>
-  <script src="/static/js/init.js?v=20260612-feature-gate-cache"></script>
+  <script src="/static/js/init.js?v=20260718-home-feature-gates"></script>
 </body>
 </html>

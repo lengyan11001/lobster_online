@@ -21,8 +21,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260702-personal-settings',
-    scripts: '/static/js/personal-settings.js?v=20260702-personal-settings',
+    html: '/static/views/personal-settings.html?v=20260717-memory-source-select',
+    scripts: '/static/js/personal-settings.js?v=20260717-memory-source-select',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -62,8 +62,8 @@
   });
 
   window.registerLobsterView('ip-content-studio', {
-    html: '/static/views/ip-content-studio.html?v=20260615-ip-content-batch',
-    scripts: '/static/js/ip-content-studio.js?v=20260615-ip-content-batch',
+    html: '/static/views/ip-content-studio.html?v=20260716-personal-sync',
+    scripts: '/static/js/ip-content-studio.js?v=20260716-personal-sync',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
@@ -90,8 +90,8 @@
   });
 
   window.registerLobsterView('juhe-wechat', {
-    html: '/static/views/juhe-wechat.html?v=20260706-msghelper-local',
-    scripts: '/static/js/juhe-wechat.js?v=20260706-msghelper-local',
+    html: '/static/views/juhe-wechat.html?v=20260715-native-wechat-moments-comment',
+    scripts: '/static/js/juhe-wechat.js?v=20260718-native-wechat-moments-publish',
     init: 'initJuheWechatView',
     cache: 'reload'
   });

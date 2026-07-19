@@ -158,6 +158,20 @@ DOUYIN_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
     "websockets-*-cp312-*-win_amd64.whl",
 )
 
+WECHAT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
+    "wxauto4-*-cp312-*-win_amd64.whl",
+    "uiautomation-*.whl",
+    "pywin32-*-cp312-*-win_amd64.whl",
+    "pywinauto-*.whl",
+    "pyperclip-*.whl",
+    "comtypes-*.whl",
+    "six-*.whl",
+    "colorama-*.whl",
+    "pillow-*-cp312-*-win_amd64.whl",
+    "psutil-*-win_amd64.whl",
+    "tenacity-*.whl",
+)
+
 SKIP_DIR_NAMES = {"__pycache__", ".git"}
 
 # OpenClaw state/runtime directories are intentionally excluded from OTA.
@@ -208,6 +222,7 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     "static/uploads",
     "tmp_templates",
     "chat_storage",
+    "scripts/wechat_runtime_wheels",
 )
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
@@ -491,6 +506,10 @@ def _prepare_douyin_runtime_wheels(root: Path) -> list[str]:
     return _prepare_runtime_wheels(root, "scripts/douyin_runtime_wheels", DOUYIN_RUNTIME_WHEEL_PATTERNS)
 
 
+def _prepare_wechat_runtime_wheels(root: Path) -> list[str]:
+    return _prepare_runtime_wheels(root, "scripts/wechat_runtime_wheels", WECHAT_RUNTIME_WHEEL_PATTERNS)
+
+
 def _ensure_douyin_protocol_node_deps(root: Path) -> None:
     protocol_root = root / "backend" / "douyin_origin" / "douyin_protocol"
     package_lock = protocol_root / "package-lock.json"
@@ -704,6 +723,11 @@ def main() -> int:
         help="Pack scripts/douyin_runtime_wheels and let updater install Douyin export dependencies offline",
     )
     ap.add_argument(
+        "--with-wechat-runtime-deps",
+        action="store_true",
+        help="Pack scripts/wechat_runtime_wheels and let updater install native WeChat control dependencies offline",
+    )
+    ap.add_argument(
         "--encrypted",
         action="store_true",
         help="Pack encrypted OTA: ship .py loader stubs plus sibling .pyc files compiled by bundled Python",
@@ -734,6 +758,14 @@ def main() -> int:
             "scripts/douyin_runtime_wheels",
             "CLIENT_CODE_VERSION.json",
         )
+    if args.with_wechat_runtime_deps:
+        copied = _prepare_wechat_runtime_wheels(root)
+        print(f"[wechat-runtime] copied {len(copied)} wheels into scripts/wechat_runtime_wheels")
+        _INCLUDE_RUNTIME_WHEEL_DIRS.add("scripts/wechat_runtime_wheels")
+        paths_tuple = tuple(p for p in paths_tuple if p != "CLIENT_CODE_VERSION.json") + (
+            "scripts/wechat_runtime_wheels",
+            "CLIENT_CODE_VERSION.json",
+        )
     _ensure_douyin_protocol_node_deps(root)
     if args.out is None:
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -744,6 +776,8 @@ def main() -> int:
             suffix_parts.append("with_ppt_runtime")
         if args.with_douyin_runtime_deps:
             suffix_parts.append("with_douyin_runtime")
+        if args.with_wechat_runtime_deps:
+            suffix_parts.append("with_wechat_runtime")
         if args.encrypted:
             suffix_parts.append("encrypted")
         suffix = "_" + "_".join(suffix_parts) if suffix_parts else ""

@@ -16,6 +16,7 @@ cffi==2.0.0
 charset-normalizer==3.4.6
 click==8.1.8
 colorama==0.4.6
+comtypes==1.4.16
 crcmod==1.7
 cryptography==46.0.6
 cssselect2==0.9.0
@@ -55,6 +56,7 @@ playwright==1.58.0
 propcache==0.4.1
 proto-plus==1.27.2
 protobuf==6.33.6
+psutil==7.2.2
 pyasn1==0.6.3
 pyasn1_modules==0.4.2
 pycairo==1.29.0
@@ -69,6 +71,7 @@ Pygments==2.20.0
 PyJWT==2.12.1
 pymysql==1.2.0
 pyparsing==3.3.2
+pyperclip==1.11.0
 pypdf==6.11.0
 python-dateutil==2.9.0.post0
 python-pptx==1.0.2
@@ -79,6 +82,7 @@ python-jose==3.3.0
 python-multipart==0.0.19
 pytz==2026.1.post1
 pywin32==311
+pywinauto==0.6.9
 reportlab==4.5.1
 requests==2.32.5
 rich==15.0.0
@@ -107,6 +111,8 @@ uvicorn==0.30.6
 websockets==16.0
 webencodings==0.5.1
 wrapt==1.16.0
+wxauto4==41.1.2
 xlrd==2.0.2
 XlsxWriter==3.2.9
 yarl==1.22.0
+uiautomation==2.0.29

@@ -1362,10 +1362,15 @@ function _getChatSuggestionMeta(title) {
     '参数设计': { tone: 'plan', icon: '≣', desc: '把参数和规则设计清楚' },
     'AI对话': { tone: 'video', icon: '⌕', desc: '回到本机智能对话' },
     '手机对话': { tone: 'ecommerce', icon: '○', desc: '查看手机消息' },
-    '帮我创作': { tone: 'publish', icon: '≡', desc: '填入创作需求' },
+    '每日IP日更': { tone: 'content', icon: '日', desc: '热点、同行、记忆生成文案' },
+    '公众号文章': { tone: 'content', icon: '文', desc: '写文、配图、推草稿' },
     '创作图片': { tone: 'content', icon: '▣', desc: '进入图片工作台' },
+    '电商详情': { tone: 'ecommerce', icon: '▤', desc: '生成主图和详情页' },
     '爆款TVC': { tone: 'image', icon: '▶', desc: '填入视频生成话术' },
     '创意分镜头视频': { tone: 'plan', icon: '▶', desc: '进入创意分镜头视频工作台' },
+    '同城爆款': { tone: 'douyin', icon: '城', desc: '批量做30天内容' },
+    '必火数字人': { tone: 'content', icon: 'H', desc: '进入必火数字人工作台' },
+    '抖音获客': { tone: 'douyin', icon: 'D', desc: '搜索采集、精准客户、私信互动' },
     '发布中心': { tone: 'publish', icon: '▣', desc: '管理发布账号和记录' },
     '技能商店': { tone: 'ecommerce', icon: '</>', desc: '查看可用技能' }
   };
@@ -1377,15 +1382,46 @@ function _clearChatSuggestionActionAttrs(el) {
   el.removeAttribute('data-chat-prompt');
   el.removeAttribute('data-open-hidden-view');
   el.removeAttribute('data-jump-view');
+  el.removeAttribute('data-view');
   el.removeAttribute('data-chat-quick-mode');
   el.removeAttribute('data-chat-open-default');
   el.removeAttribute('data-h5-chat-sync');
+  el.removeAttribute('data-feature-gate');
 }
 
 function _setChatSuggestionAction(el, attr, value) {
   if (!el || !attr) return;
   _clearChatSuggestionActionAttrs(el);
   el.setAttribute(attr, value == null ? '1' : String(value));
+}
+
+function _setChatSuggestionGate(el, featureKey) {
+  if (!el) return;
+  var key = String(featureKey || '').trim();
+  if (key) el.setAttribute('data-feature-gate', key);
+  else el.removeAttribute('data-feature-gate');
+}
+
+function _refreshChatFeatureGates() {
+  if (typeof window.applyLobsterFeatureGates === 'function') {
+    window.applyLobsterFeatureGates();
+  }
+}
+
+function _chatHomeActionAllowed(el, view) {
+  var gate = '';
+  var gatedEl = el && el.closest ? el.closest('[data-feature-gate]') : null;
+  if (gatedEl) gate = gatedEl.getAttribute('data-feature-gate') || '';
+  if (!gate && view && typeof window.lobsterFeatureGateForView === 'function') {
+    gate = window.lobsterFeatureGateForView(view) || '';
+  }
+  if (gate && typeof window.isLobsterFeatureGateAllowed === 'function' && !window.isLobsterFeatureGateAllowed(gate)) {
+    return false;
+  }
+  if (gate && typeof window.isLobsterFeatureGateAllowed !== 'function' && typeof window.isLobsterFeatureAllowed === 'function' && !window.isLobsterFeatureAllowed(gate)) {
+    return false;
+  }
+  return true;
 }
 
 function _renderChatSuggestionChip(el, title, prompt) {
@@ -1428,6 +1464,7 @@ function fillChatPromptInput(prompt) {
 }
 
 function openWechatArticlePage() {
+  if (!_chatHomeActionAllowed(null, 'wechat-article')) return;
   if (typeof window._openWechatArticleView === 'function') {
     window._openWechatArticleView();
     return;
@@ -1448,9 +1485,10 @@ function syncWechatArticleChatEntry() {
   chip.removeAttribute('data-chat-prompt');
   chip.removeAttribute('data-open-hidden-view');
   chip.setAttribute('data-jump-view', 'wechat-article');
+  chip.setAttribute('data-feature-gate', 'wewrite_official_account_skill');
   chip.title = '打开公众号文章页面';
   var desc = chip.querySelector('.chat-suggestion-chip-desc');
-  if (desc) desc.textContent = '进入文章创作页面';
+  if (desc) desc.textContent = '写文、配图、推草稿';
 }
 window.WECHAT_ARTICLE_CHAT_PROMPT = WECHAT_ARTICLE_CHAT_PROMPT;
 window.fillChatPromptInput = fillChatPromptInput;
@@ -1792,8 +1830,13 @@ function updateChatModeUi(mode) {
   var chip6 = document.getElementById('chatSuggestionChip6');
   var chip7 = document.getElementById('chatSuggestionChip7');
   var chip8 = document.getElementById('chatSuggestionChip8');
+  var chipIpDaily = document.getElementById('chatSuggestionChipIpDaily');
   var chipWechatArticle = document.getElementById('chatSuggestionChipWechatArticle');
   var chipPpt = document.getElementById('chatSuggestionChipPpt');
+  var chipEcommerceDetail = document.getElementById('chatSuggestionChipEcommerceDetail');
+  var chipLocalBestseller = document.getElementById('chatSuggestionChipLocalBestseller');
+  var chipHifly = document.getElementById('chatSuggestionChip9');
+  var chipDouyinLeads = document.getElementById('chatSuggestionChip10');
   var shortcut1 = document.getElementById('chatShortcutLink1');
   var shortcut2 = document.getElementById('chatShortcutLink2');
   var shortcut3 = document.getElementById('chatShortcutLink3');
@@ -1835,61 +1878,99 @@ function updateChatModeUi(mode) {
     if (composerLead) composerLead.textContent = '告诉我您想做什么？我会先帮您理清任务，再继续生成和执行~';
     if (categoryTabs) categoryTabs.classList.remove('is-visible');
     updateWorkspaceStatusUi({ visible: false });
+    if (chipIpDaily) {
+      _renderChatSuggestionChip(chipIpDaily, '每日IP日更');
+      _setChatSuggestionAction(chipIpDaily, 'data-open-hidden-view', 'ip-content-studio');
+      _setChatSuggestionGate(chipIpDaily, 'ip_content_daily_skill');
+    }
+    if (chipWechatArticle) {
+      _renderChatSuggestionChip(chipWechatArticle, '公众号文章');
+      syncWechatArticleChatEntry();
+    }
     if (chip1) {
       _renderChatSuggestionChip(chip1, 'AI对话');
       _setChatSuggestionAction(chip1, 'data-chat-open-default', '1');
+      _setChatSuggestionGate(chip1, 'home_ai_chat_entry');
     }
     if (chip2) {
       _renderChatSuggestionChip(chip2, '手机对话');
       _setChatSuggestionAction(chip2, 'data-h5-chat-sync', '1');
-    }
-    if (chip3) {
-      _renderChatSuggestionChip(chip3, '帮我创作', '帮我写一版电商详情页文案、短视频脚本和发布标题。');
+      _setChatSuggestionGate(chip2, 'h5_chat_entry');
     }
     if (chip4) {
       _renderChatSuggestionChip(chip4, '创作图片');
       _setChatSuggestionAction(chip4, 'data-open-hidden-view', 'image-composer-studio');
+      _setChatSuggestionGate(chip4, 'goal_video_pipeline_skill');
+    }
+    if (chipEcommerceDetail) {
+      _renderChatSuggestionChip(chipEcommerceDetail, '电商详情');
+      _setChatSuggestionAction(chipEcommerceDetail, 'data-open-hidden-view', 'ecommerce-detail-studio');
+      _setChatSuggestionGate(chipEcommerceDetail, 'comfly_ecommerce_detail_skill');
     }
     if (chip5) {
       _renderChatSuggestionChip(chip5, '爆款TVC');
       _setChatSuggestionAction(chip5, 'data-jump-view', 'viral-tvc-studio');
+      _setChatSuggestionGate(chip5, 'comfly_veo_skill');
     }
-    syncWechatArticleChatEntry();
     if (chip6) {
       _renderChatSuggestionChip(chip6, '创意分镜头视频');
       _setChatSuggestionAction(chip6, 'data-open-hidden-view', 'seedance-tvc-studio');
+      _setChatSuggestionGate(chip6, 'comfly_seedance_tvc_skill');
     }
     if (chipPpt) {
       _renderChatSuggestionChip(chipPpt, 'PPT制作');
       _setChatSuggestionAction(chipPpt, 'data-jump-view', 'ppt-studio');
+      _setChatSuggestionGate(chipPpt, 'create_ppt_skill');
+    }
+    if (chipLocalBestseller) {
+      _renderChatSuggestionChip(chipLocalBestseller, '同城爆款');
+      _setChatSuggestionAction(chipLocalBestseller, 'data-open-hidden-view', 'local-bestseller');
+      _setChatSuggestionGate(chipLocalBestseller, 'local_bestseller_skill');
+    }
+    if (chipHifly) {
+      _renderChatSuggestionChip(chipHifly, '必火数字人');
+      _setChatSuggestionAction(chipHifly, 'data-open-hidden-view', 'hifly-digital-human');
+      _setChatSuggestionGate(chipHifly, 'hifly_digital_human_skill');
+    }
+    if (chipDouyinLeads) {
+      _renderChatSuggestionChip(chipDouyinLeads, '抖音获客');
+      _setChatSuggestionAction(chipDouyinLeads, 'data-view', 'douyin-leads');
+      _setChatSuggestionGate(chipDouyinLeads, 'douyin_leads_access');
     }
     if (chip7) {
       _renderChatSuggestionChip(chip7, '发布中心');
       _setChatSuggestionAction(chip7, 'data-jump-view', 'publish');
+      _setChatSuggestionGate(chip7, 'publish_center_entry');
     }
     if (chip8) {
       _renderChatSuggestionChip(chip8, '技能商店');
       _setChatSuggestionAction(chip8, 'data-jump-view', 'skill-store');
+      _setChatSuggestionGate(chip8, 'skill_store_entry');
     }
     if (shortcut1) {
       shortcut1.textContent = '打开技能商店';
       shortcut1.setAttribute('data-jump-view', 'skill-store');
       shortcut1.removeAttribute('data-chat-prompt');
+      shortcut1.setAttribute('data-feature-gate', 'skill_store_entry');
     }
     if (shortcut2) {
       shortcut2.textContent = '前往发布中心';
       shortcut2.setAttribute('data-jump-view', 'publish');
       shortcut2.removeAttribute('data-chat-prompt');
+      shortcut2.setAttribute('data-feature-gate', 'publish_center_entry');
     }
     if (shortcut3) {
-      shortcut3.textContent = '查看系统配置';
-      shortcut3.setAttribute('data-jump-view', 'sys-config');
+      shortcut3.textContent = '电商详情';
+      shortcut3.setAttribute('data-open-hidden-view', 'ecommerce-detail-studio');
+      shortcut3.removeAttribute('data-jump-view');
       shortcut3.removeAttribute('data-chat-prompt');
+      shortcut3.setAttribute('data-feature-gate', 'comfly_ecommerce_detail_skill');
     }
     if (attachBtn) attachBtn.style.display = '';
     if (directChip) directChip.style.display = '';
   }
   if (chipWechatArticle) syncWechatArticleChatEntry();
+  _refreshChatFeatureGates();
   renderChatQuickModeUi(normalized === CHAT_MODE_WORKSPACE ? '' : _getSessionQuickMode(getSessionById(currentSessionId)));
   renderChatMemoryScopeUi();
   if (homeWorkspacePill) homeWorkspacePill.textContent = '云端工作台';
@@ -4140,17 +4221,20 @@ function bindChatHomeActions() {
     }
     var defaultChatBtn = e.target.closest('[data-chat-open-default]');
     if (defaultChatBtn) {
+      if (!_chatHomeActionAllowed(defaultChatBtn, 'chat')) return;
       openDefaultChatSession();
       return;
     }
     var h5SyncBtn = e.target.closest('[data-h5-chat-sync]');
     if (h5SyncBtn) {
+      if (!_chatHomeActionAllowed(h5SyncBtn, 'h5_chat_entry')) return;
       openH5ChatMirrorSession();
       return;
     }
     var hiddenViewBtn = e.target.closest('[data-open-hidden-view]');
     if (hiddenViewBtn) {
       var hiddenView = hiddenViewBtn.getAttribute('data-open-hidden-view');
+      if (!_chatHomeActionAllowed(hiddenViewBtn, hiddenView)) return;
       if (hiddenView === 'wechat-article' && typeof window.openWechatArticlePage === 'function') {
         window.openWechatArticlePage();
       } else if (hiddenView === 'hifly-digital-human') {
@@ -4165,6 +4249,7 @@ function bindChatHomeActions() {
     var jumpBtn = e.target.closest('[data-jump-view]');
     if (jumpBtn) {
       var view = jumpBtn.getAttribute('data-jump-view');
+      if (!_chatHomeActionAllowed(jumpBtn, view)) return;
       var navBtn = document.querySelector('.nav-left-item[data-view="' + view + '"]');
       if (navBtn) {
         navBtn.click();
@@ -4180,6 +4265,7 @@ function bindChatHomeActions() {
     }
     var promptBtn = e.target.closest('[data-chat-prompt]');
     if (promptBtn) {
+      if (!_chatHomeActionAllowed(promptBtn)) return;
       if (typeof _isH5MirrorSession === 'function' && _isH5MirrorSession(getSessionById(currentSessionId)) && typeof openDefaultChatSession === 'function') {
         openDefaultChatSession();
       }
@@ -4202,6 +4288,7 @@ function bindChatQuickModeActions() {
     advancedBtn.addEventListener('click', function() {
       var hiddenView = advancedBtn.getAttribute('data-open-hidden-view');
       if (!hiddenView) return;
+      if (!_chatHomeActionAllowed(advancedBtn, hiddenView)) return;
       if (hiddenView === 'hifly-digital-human') {
         openHiddenWorkspaceFallback(hiddenView);
       } else if (typeof window._openHiddenWorkspaceView === 'function') {
@@ -4216,6 +4303,7 @@ function bindChatQuickModeActions() {
 function openHiddenWorkspaceFallback(view) {
   var target = String(view || '').trim();
   if (!target) return;
+  if (!_chatHomeActionAllowed(null, target)) return;
   try { location.hash = target; } catch (e) {}
   if (typeof window._rememberLobsterView === 'function') {
     window._rememberLobsterView(target, { skipHash: true });
@@ -4277,8 +4365,15 @@ function appendAssistantActionRow(parent, hasAssets) {
     btn.className = 'chat-result-action' + (action.primary ? ' is-primary' : '');
     btn.textContent = action.label;
     if (action.prompt) btn.setAttribute('data-chat-prompt', action.prompt);
-    if (action.jump) btn.setAttribute('data-jump-view', action.jump);
+    if (action.jump) {
+      btn.setAttribute('data-jump-view', action.jump);
+      if (typeof window.lobsterFeatureGateForView === 'function') {
+        var gate = window.lobsterFeatureGateForView(action.jump);
+        if (gate && !Array.isArray(gate)) btn.setAttribute('data-feature-gate', gate);
+      }
+    }
     wrap.appendChild(btn);
   });
   parent.appendChild(wrap);
+  _refreshChatFeatureGates();
 }

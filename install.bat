@@ -70,6 +70,7 @@ if exist "python\python.exe" (
         )
     )
     if not exist "python\Lib\site-packages" mkdir "python\Lib\site-packages"
+    call :ensure_tkinter_stub
 )
 
 REM Step 1b: Ensure pip
@@ -256,6 +257,51 @@ exit /b 1
 
 :packages_done
 if exist "requirements.runtime.txt" del /f /q "requirements.runtime.txt" >nul 2>&1
+echo.
+
+REM Step 2a-extra: Native WeChat runtime deps (wxauto4 / UI automation)
+REM OTA updater can install these when applying scripts\wechat_runtime_wheels;
+REM manual unzip + install.bat must do the same explicitly.
+echo   [2a/7] Native WeChat dependencies...
+set "WECHAT_IMPORT_CHECK=import wxauto4,uiautomation,win32gui,pywinauto,pyperclip,comtypes"
+"%PYTHON%" -c "%WECHAT_IMPORT_CHECK%" >nul 2>&1
+if not errorlevel 1 (
+    echo   [OK] Native WeChat dependencies already installed
+    goto :wechat_runtime_done
+)
+set "WECHAT_RUNTIME_OK=0"
+if exist "scripts\wechat_runtime_wheels" (
+    echo   Installing Native WeChat dependencies from scripts\wechat_runtime_wheels...
+    "%PYTHON%" -m pip install --no-index --find-links scripts\wechat_runtime_wheels "wxauto4==41.1.2" "uiautomation>=2.0.29" "pywin32>=306" "pywinauto>=0.6.8" "pyperclip>=1.9.0" 2>&1
+    if not errorlevel 1 (
+        "%PYTHON%" -c "%WECHAT_IMPORT_CHECK%" >nul 2>&1
+        if not errorlevel 1 set "WECHAT_RUNTIME_OK=1"
+    )
+)
+if "%WECHAT_RUNTIME_OK%"=="0" (
+    if /i not "%LOBSTER_OFFLINE_ONLY%"=="1" (
+        echo   Offline Native WeChat install incomplete - trying online...
+        "%PYTHON%" -m pip install "wxauto4==41.1.2" "uiautomation>=2.0.29" "pywin32>=306" "pywinauto>=0.6.8" "pyperclip>=1.9.0" 2>&1
+        if not errorlevel 1 (
+            "%PYTHON%" -c "%WECHAT_IMPORT_CHECK%" >nul 2>&1
+            if not errorlevel 1 set "WECHAT_RUNTIME_OK=1"
+        )
+    )
+)
+if "%WECHAT_RUNTIME_OK%"=="1" (
+    echo   [OK] Native WeChat dependencies installed
+) else (
+    echo [ERR] Native WeChat dependencies missing. Contact sync / group message features require wxauto4.
+    echo   Check:
+    echo     %PYTHON% -m pip install --no-index --find-links scripts\wechat_runtime_wheels wxauto4==41.1.2 uiautomation pywin32 pywinauto pyperclip
+    echo     %PYTHON% -c "%WECHAT_IMPORT_CHECK%"
+    echo ----- import check output -----
+    "%PYTHON%" -c "%WECHAT_IMPORT_CHECK%"
+    echo -----
+    pause
+    exit /b 1
+)
+:wechat_runtime_done
 echo.
 
 REM Step 2b: Skill extra deps - WeCom pycryptodome, Volcano tos
@@ -583,5 +629,23 @@ echo     3. Start chatting!
 echo ================================================
 echo.
 if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
+exit /b 0
+
+:ensure_tkinter_stub
+if not exist "python\tkinter" mkdir "python\tkinter"
+> "python\tkinter\__init__.py" echo """Minimal tkinter stub for the embedded Lobster runtime."""
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo class TclError(RuntimeError):
+>> "python\tkinter\__init__.py" echo     pass
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo class Tk:
+>> "python\tkinter\__init__.py" echo     def __init__(self, *args, **kwargs):
+>> "python\tkinter\__init__.py" echo         raise TclError("tkinter UI is not bundled in this runtime")
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo class Toplevel(Tk):
+>> "python\tkinter\__init__.py" echo     pass
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo END = "end"
+exit /b 0
 
 

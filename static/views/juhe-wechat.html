@@ -1,326 +1,341 @@
 <div id="content-juhe-wechat" class="content-block">
-  <div class="juhe-page">
+  <div class="native-wechat-page">
     <style>
-      .juhe-page { min-height: calc(100vh - 72px); padding: 16px; background: #f5f7fb; color: #0f172a; }
-      .juhe-shell { max-width: 1360px; margin: 0 auto; }
-      .juhe-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-      .juhe-title { margin: 0; font-size: 22px; line-height: 1.25; font-weight: 900; }
-      .juhe-sub { margin-top: 4px; color: #64748b; font-size: 13px; }
-      .juhe-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-      .juhe-actions select, .juhe-input, .juhe-textarea { border: 1px solid #d8e0ec; border-radius: 6px; background: #fff; color: #0f172a; font: inherit; box-sizing: border-box; }
-      .juhe-actions select, .juhe-input { height: 36px; padding: 0 10px; }
-      .juhe-textarea { width: 100%; min-height: 104px; padding: 10px; resize: vertical; line-height: 1.5; }
-      .juhe-msg { display: none; margin: 0 0 12px; border: 1px solid rgba(20, 184, 166, .24); background: rgba(20, 184, 166, .08); color: #0f766e; border-radius: 8px; padding: 10px 12px; line-height: 1.5; }
-      .juhe-msg.err { border-color: rgba(244, 63, 94, .25); background: rgba(244, 63, 94, .08); color: #be123c; }
-      .juhe-tabs { display: flex; gap: 6px; border-bottom: 1px solid #dfe7f2; margin-bottom: 12px; }
-      .juhe-tab { border: 0; background: transparent; padding: 10px 14px; color: #475569; font-weight: 800; cursor: pointer; border-bottom: 2px solid transparent; }
-      .juhe-tab[data-juhe-tab="ai"] { order: 3; }
-      .juhe-tab[data-juhe-tab="logs"] { order: 4; }
-      .juhe-tab.active { color: #0f766e; border-bottom-color: #0f766e; }
-      .juhe-panel { display: none; }
-      .juhe-panel.active { display: block; }
-      .juhe-grid { display: grid; grid-template-columns: minmax(420px, .95fr) minmax(460px, 1.05fr); gap: 12px; align-items: start; }
-      .juhe-card { border: 1px solid #dfe7f2; border-radius: 8px; background: #fff; padding: 14px; box-shadow: 0 8px 24px rgba(15, 23, 42, .04); }
-      .juhe-card-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-      .juhe-card h3 { margin: 0; font-size: 16px; font-weight: 900; }
-      .juhe-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-      .juhe-muted { color: #64748b; font-size: 12px; line-height: 1.5; }
-      .juhe-list { display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow: auto; padding-right: 2px; }
-      .juhe-item { border: 1px solid #dfe7f2; border-radius: 8px; background: #fff; padding: 10px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
-      .juhe-item.active { border-color: #0f766e; box-shadow: 0 0 0 1px rgba(15, 118, 110, .15); }
-      .juhe-item-title { font-weight: 900; line-height: 1.35; word-break: break-all; }
-      .juhe-meta { color: #64748b; font-size: 12px; line-height: 1.5; word-break: break-all; }
-      .juhe-chip { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 2px 8px; background: #eef6ff; color: #2563eb; font-size: 12px; font-weight: 800; }
-      .juhe-empty { color: #64748b; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 24px; text-align: center; background: #fff; }
-      .juhe-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-      .juhe-form-block { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-      .juhe-form-block label { font-size: 12px; font-weight: 900; color: #334155; }
-      .juhe-uploader { border: 1px dashed #b8c6d8; border-radius: 8px; background: #f8fafc; padding: 10px; }
-      .juhe-uploader-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-      .juhe-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-      .juhe-upload-trigger { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 12px; border-radius: 6px; border: 1px solid #2563eb; background: #2563eb; color: #fff; font-size: 13px; font-weight: 900; cursor: pointer; }
-      .juhe-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; margin-top: 10px; }
-      .juhe-media-card { border: 1px solid #dfe7f2; border-radius: 8px; background: #fff; overflow: hidden; }
-      .juhe-media-thumb { height: 82px; display: flex; align-items: center; justify-content: center; background: #edf2f7; color: #64748b; font-size: 12px; font-weight: 900; }
-      .juhe-media-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-      .juhe-media-info { padding: 7px; }
-      .juhe-media-name { font-size: 12px; font-weight: 900; color: #0f172a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .juhe-media-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 5px; }
-      .juhe-link-btn { border: 0; padding: 0; background: transparent; color: #dc2626; font-size: 12px; cursor: pointer; }
-      .juhe-result-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-      .juhe-result { border: 1px solid #dfe7f2; border-left-width: 4px; border-radius: 8px; padding: 9px; background: #fff; }
-      .juhe-result.ok { border-left-color: #22c55e; }
-      .juhe-result.fail { border-left-color: #f43f5e; }
-      .juhe-ai-chat { display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow: auto; padding-right: 2px; }
-      .juhe-ai-bubble { max-width: 88%; border: 1px solid #dfe7f2; border-radius: 8px; padding: 9px 10px; background: #f8fafc; }
-      .juhe-ai-bubble.out { margin-left: auto; background: #eaf5ff; border-color: #bfdbfe; }
-      .juhe-ai-bubble.in { margin-right: auto; background: #fff; }
-      .juhe-ai-bubble.failed { border-color: #fecdd3; background: #fff1f2; }
-      .juhe-ai-message { white-space: pre-wrap; line-height: 1.55; word-break: break-word; }
-      .juhe-modal-mask { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 20px; z-index: 9999; background: rgba(15, 23, 42, .42); }
-      .juhe-modal-mask.show { display: flex; }
-      .juhe-modal { width: min(760px, 96vw); max-height: 88vh; overflow: auto; border-radius: 10px; background: #fff; box-shadow: 0 24px 70px rgba(15, 23, 42, .22); padding: 16px; }
-      .juhe-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-      .juhe-detail { white-space: pre-wrap; border: 1px solid #dfe7f2; border-radius: 8px; padding: 10px; background: #f8fafc; font-size: 12px; line-height: 1.55; max-height: 360px; overflow: auto; }
-      @media (max-width: 980px) { .juhe-grid { grid-template-columns: 1fr; } .juhe-head { align-items: flex-start; flex-direction: column; } }
+      .native-wechat-page { min-height: calc(100vh - 72px); padding: 18px; background: linear-gradient(135deg, #eef8f4 0%, #f7fbff 42%, #f7f3eb 100%); color: #10201b; }
+      .native-wechat-shell { max-width: 1320px; margin: 0 auto; }
+      .native-wechat-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+      .native-wechat-title { margin: 0; font-size: 24px; font-weight: 900; letter-spacing: -0.02em; }
+      .native-wechat-sub { margin-top: 5px; color: #587069; font-size: 13px; }
+      .native-wechat-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .native-wechat-select, .native-wechat-input, .native-wechat-textarea { border: 1px solid rgba(20, 83, 45, .16); border-radius: 12px; background: rgba(255,255,255,.9); color: #10201b; font: inherit; box-sizing: border-box; outline: none; }
+      .native-wechat-select, .native-wechat-input { height: 38px; padding: 0 12px; }
+      .native-wechat-textarea { width: 100%; min-height: 118px; padding: 12px; line-height: 1.55; resize: vertical; }
+      .native-wechat-msg { display: none; margin: 0 0 12px; border-radius: 14px; padding: 10px 12px; background: rgba(13, 148, 136, .1); color: #0f766e; border: 1px solid rgba(13, 148, 136, .18); }
+      .native-wechat-msg.err { color: #be123c; background: rgba(244, 63, 94, .09); border-color: rgba(244, 63, 94, .2); }
+      .native-wechat-tabs { display: flex; gap: 8px; margin-bottom: 14px; overflow-x: auto; padding-bottom: 2px; }
+      .native-wechat-tab { border: 1px solid transparent; border-radius: 999px; padding: 9px 16px; background: rgba(255,255,255,.68); color: #48635b; font-weight: 900; cursor: pointer; white-space: nowrap; }
+      .native-wechat-tab.active { color: #fff; background: #0f766e; box-shadow: 0 12px 28px rgba(15,118,110,.24); }
+      .native-wechat-panel { display: none; }
+      .native-wechat-panel.active { display: block; }
+      .native-wechat-grid { display: grid; grid-template-columns: minmax(300px, .9fr) minmax(460px, 1.4fr); gap: 14px; align-items: start; }
+      .native-wechat-card { border: 1px solid rgba(20, 83, 45, .13); border-radius: 22px; background: rgba(255,255,255,.82); box-shadow: 0 18px 46px rgba(25, 61, 54, .08); padding: 16px; backdrop-filter: blur(14px); }
+      .native-wechat-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+      .native-wechat-card h3 { margin: 0; font-size: 16px; font-weight: 900; }
+      .native-wechat-muted { color: #64766f; font-size: 12px; line-height: 1.45; }
+      .native-wechat-list { display: flex; flex-direction: column; gap: 9px; max-height: 560px; overflow: auto; padding-right: 2px; }
+      .native-wechat-pick-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 260px; overflow: auto; padding-right: 2px; }
+      .native-wechat-pick-item { display: flex; align-items: flex-start; gap: 8px; border: 1px solid rgba(20, 83, 45, .12); border-radius: 14px; background: rgba(255,255,255,.76); padding: 9px; font-size: 13px; cursor: pointer; }
+      .native-wechat-pick-item input { margin-top: 3px; }
+      .native-wechat-item { border: 1px solid rgba(20, 83, 45, .12); border-radius: 16px; background: rgba(255,255,255,.78); padding: 11px; cursor: pointer; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+      .native-wechat-item:hover { transform: translateY(-1px); border-color: rgba(15,118,110,.38); box-shadow: 0 12px 28px rgba(15,118,110,.11); }
+      .native-wechat-item.active { border-color: #0f766e; box-shadow: 0 0 0 2px rgba(15,118,110,.12); }
+      .native-wechat-item-title { font-weight: 900; line-height: 1.35; word-break: break-all; }
+      .native-wechat-meta { margin-top: 4px; color: #667a73; font-size: 12px; line-height: 1.45; word-break: break-all; }
+      .native-wechat-chip { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 4px 9px; background: rgba(20,184,166,.12); color: #0f766e; font-size: 12px; font-weight: 900; }
+      .native-wechat-auto-reply { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; padding: 10px 11px; border: 1px solid rgba(15,118,110,.16); border-radius: 16px; background: rgba(240,253,250,.72); }
+      .native-wechat-auto-reply-main { display: flex; align-items: center; gap: 9px; min-width: 0; }
+      .native-wechat-auto-reply-title { font-size: 13px; font-weight: 900; color: #123c34; white-space: nowrap; }
+      .native-wechat-auto-reply-status { color: #587069; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .native-wechat-switch { position: relative; display: inline-flex; width: 42px; height: 24px; flex: 0 0 auto; }
+      .native-wechat-switch input { position: absolute; opacity: 0; pointer-events: none; }
+      .native-wechat-switch span { position: absolute; inset: 0; border-radius: 999px; background: rgba(100,116,139,.28); transition: background .18s ease; cursor: pointer; }
+      .native-wechat-switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(15,23,42,.18); transition: transform .18s ease; }
+      .native-wechat-switch input:checked + span { background: #0f766e; }
+      .native-wechat-switch input:checked + span::after { transform: translateX(18px); }
+      .native-wechat-contact-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0; padding: 10px; border: 1px solid rgba(20, 83, 45, .12); border-radius: 16px; background: rgba(255,255,255,.66); }
+      .native-wechat-compact-input { width: 82px; height: 32px; padding: 0 8px; }
+      .native-wechat-empty { border: 1px dashed rgba(20, 83, 45, .22); border-radius: 18px; padding: 26px 16px; text-align: center; color: #667a73; background: rgba(255,255,255,.52); }
+      .native-wechat-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+      .native-wechat-form-block { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+      .native-wechat-form-block label { color: #30463f; font-size: 12px; font-weight: 900; }
+      .native-wechat-chat { display: flex; flex-direction: column; gap: 9px; min-height: 260px; max-height: 450px; overflow: auto; padding: 4px 2px 8px; }
+      .native-wechat-bubble { max-width: 86%; border-radius: 18px; padding: 10px 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+      .native-wechat-bubble.in { align-self: flex-start; background: #fff; border: 1px solid rgba(20,83,45,.12); }
+      .native-wechat-bubble.out { align-self: flex-end; background: #dff7ef; border: 1px solid rgba(15,118,110,.16); }
+      .native-wechat-time { align-self: center; max-width: 82%; border-radius: 999px; padding: 4px 10px; background: rgba(71,85,105,.1); color: #64748b; font-size: 12px; }
+      .native-wechat-media { display: block; max-width: 260px; max-height: 260px; border-radius: 12px; margin-top: 6px; background: #eef2f7; object-fit: contain; }
+      .native-wechat-file-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; border-radius: 12px; padding: 8px 10px; background: rgba(15,118,110,.1); color: #0f766e; font-weight: 900; text-decoration: none; }
+      .native-wechat-composer { border-top: 1px solid rgba(20, 83, 45, .12); padding-top: 12px; margin-top: 10px; }
+      .native-wechat-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .native-wechat-table th, .native-wechat-table td { padding: 10px 8px; border-bottom: 1px solid rgba(20, 83, 45, .1); text-align: left; vertical-align: top; }
+      .native-wechat-table th { color: #48635b; font-size: 12px; }
+      .native-wechat-modal-mask { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(15,23,42,.46); }
+      .native-wechat-modal-mask.show { display: flex; }
+      .native-wechat-modal { width: min(720px, 96vw); max-height: 88vh; overflow: auto; border-radius: 22px; background: #fbfffd; box-shadow: 0 28px 80px rgba(15,23,42,.28); padding: 18px; }
+      .native-wechat-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+      .native-wechat-qr { display: flex; align-items: center; justify-content: center; min-height: 260px; border-radius: 20px; background: #f2faf6; border: 1px solid rgba(20,83,45,.12); margin-bottom: 12px; }
+      .native-wechat-qr img { max-width: 260px; max-height: 260px; display: block; border-radius: 14px; }
+      .native-wechat-detail-list { display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 9px 12px; font-size: 13px; }
+      .native-wechat-detail-list strong { color: #48635b; }
+      .native-wechat-detail-list span { word-break: break-word; white-space: pre-wrap; }
+      @media (max-width: 980px) { .native-wechat-page { padding: 12px; } .native-wechat-head { align-items: flex-start; flex-direction: column; } .native-wechat-grid, .native-wechat-form-row, .native-wechat-pick-list { grid-template-columns: 1fr; } }
     </style>
 
-    <div class="juhe-shell">
-      <div class="juhe-head">
+    <div class="native-wechat-shell">
+      <div class="native-wechat-head">
         <div>
-          <h2 class="juhe-title">微信协议助手</h2>
-          <div class="juhe-sub">通讯录、群与消息工作台</div>
+          <h2 class="native-wechat-title">微信协议助手</h2>
+          <div class="native-wechat-sub">连接本机已登录的 PC 微信，消息和任务记录保存在本地。</div>
         </div>
-        <div class="juhe-actions">
-          <select id="juheConfigSelect"></select>
-          <button type="button" class="btn btn-ghost btn-sm" id="juheCheckStatusBtn">检测在线</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="juheRefreshBtn">刷新实例</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="juheBackBtn">返回技能商店</button>
+        <div class="native-wechat-actions">
+          <select id="nativeWechatAccountSelect" class="native-wechat-select"></select>
+          <button type="button" class="btn btn-primary btn-sm" id="nativeWechatLoginBtn">检测本机微信</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatDiagnoseBtn">控件诊断</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshAccountsBtn">刷新账号</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatBackBtn">返回技能商店</button>
         </div>
       </div>
 
-      <div id="juheMsg" class="juhe-msg"></div>
+      <div id="nativeWechatMsg" class="native-wechat-msg"></div>
 
-      <div class="juhe-tabs">
-        <button type="button" class="juhe-tab" data-juhe-tab="ai">AI客服</button>
-        <button type="button" class="juhe-tab active" data-juhe-tab="contacts">通讯录</button>
-        <button type="button" class="juhe-tab" data-juhe-tab="rooms">群</button>
-        <button type="button" class="juhe-tab" data-juhe-tab="logs">记录</button>
+      <div class="native-wechat-tabs">
+        <button type="button" class="native-wechat-tab active" data-native-wechat-tab="messages">消息</button>
+        <button type="button" class="native-wechat-tab" data-native-wechat-tab="contacts">通讯录</button>
+        <button type="button" class="native-wechat-tab" data-native-wechat-tab="groups">群</button>
+        <button type="button" class="native-wechat-tab" data-native-wechat-tab="friends">加好友</button>
+        <button type="button" class="native-wechat-tab" data-native-wechat-tab="moments">发朋友圈</button>
+        <button type="button" class="native-wechat-tab" data-native-wechat-tab="tasks">任务记录</button>
+        <button type="button" class="native-wechat-tab" data-native-wechat-tab="accounts">账号</button>
       </div>
 
-      <section class="juhe-panel active" data-juhe-panel="contacts">
-        <div class="juhe-grid">
-          <div class="juhe-card">
-            <div class="juhe-card-title">
+      <section class="native-wechat-panel active" data-native-wechat-panel="messages">
+        <div class="native-wechat-grid">
+          <div class="native-wechat-card">
+            <div class="native-wechat-card-head">
               <div>
-                <h3>通讯录</h3>
-                <div class="juhe-muted">不会自动刷新，点击刷新后才向协议接口请求。</div>
+                <h3>会话</h3>
+                <div class="native-wechat-muted">选择联系人后下发消息任务。</div>
               </div>
-              <div class="juhe-actions">
-                <button type="button" class="btn btn-ghost btn-sm" id="juheImportFriendBtn">导入加好友</button>
-                <button type="button" class="btn btn-primary btn-sm" id="juheRefreshContactsBtn">刷新通讯录</button>
-              </div>
-            </div>
-            <div class="juhe-toolbar">
-              <input id="juheContactSearch" class="juhe-input" placeholder="搜索昵称、备注、username" style="min-width: 220px;">
-              <div class="juhe-actions">
-                <button type="button" class="btn btn-ghost btn-sm" id="juheSelectAllContactsBtn">全选</button>
-                <span class="juhe-chip" id="juheSelectedCount">已选 0</span>
+              <div class="native-wechat-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatSyncSessionsBtn">同步会话</button>
+                <button type="button" class="btn btn-primary btn-sm" id="nativeWechatPollBtn">收消息</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshPeersBtn">刷新</button>
               </div>
             </div>
-            <div id="juheContactList" class="juhe-empty">点击“刷新通讯录”加载联系人。</div>
-          </div>
-
-          <div class="juhe-card">
-            <div class="juhe-card-title">
-              <h3>发送与联系人操作</h3>
-              <span class="juhe-chip" id="juheSendTargetCount">0 人</span>
-            </div>
-            <div class="juhe-form-block">
-              <label>文案</label>
-              <textarea id="juheMessageContent" class="juhe-textarea" placeholder="输入要发送给选中联系人的文本"></textarea>
-            </div>
-            <div class="juhe-form-block">
-              <label>图片/文件</label>
-              <div class="juhe-uploader">
-                <div class="juhe-uploader-row">
-                  <label class="juhe-upload-trigger" for="juheMediaFile">选择图片/文件</label>
-                  <input id="juheMediaFile" type="file" class="juhe-file-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar,.mp4">
-                  <span class="juhe-muted" id="juheMediaSummary">未选择文件</span>
+            <div class="native-wechat-auto-reply">
+              <div class="native-wechat-auto-reply-main">
+                <label class="native-wechat-switch" title="个人微信自动回复">
+                  <input id="nativeWechatAutoReplyEnabled" type="checkbox">
+                  <span></span>
+                </label>
+                <div style="min-width:0;">
+                  <div class="native-wechat-auto-reply-title">个人微信自动回复</div>
+                  <div class="native-wechat-auto-reply-status" id="nativeWechatAutoReplyStatus">每30分钟检查一次，只回复私聊。</div>
                 </div>
-                <div id="juheMediaPreview" class="juhe-media-grid"></div>
               </div>
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatAutoReplyRunBtn">立即检查</button>
             </div>
-            <div class="juhe-form-row">
-              <div class="juhe-form-block">
-                <label>备注名</label>
-                <input id="juheRemarkInput" class="juhe-input" placeholder="选择单个联系人后可修改备注">
-              </div>
-            </div>
-            <div class="juhe-actions" style="justify-content: flex-start;">
-              <button type="button" class="btn btn-primary btn-sm" id="juheSendSelectedBtn">发送选中内容</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheContactDetailBtn">查看详情</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheModifyRemarkBtn">修改备注</button>
-            </div>
-            <div id="juheSendResults" class="juhe-result-list"></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="juhe-panel" data-juhe-panel="rooms">
-        <div class="juhe-grid">
-          <div class="juhe-card">
-            <div class="juhe-card-title">
-              <div>
-                <h3>群列表</h3>
-                <div class="juhe-muted">可从通讯录多选联系人后创建群。</div>
-              </div>
-              <div class="juhe-actions">
-                <button type="button" class="btn btn-primary btn-sm" id="juheCreateRoomBtn">用已选联系人建群</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="juheRefreshRoomsBtn">刷新群</button>
-              </div>
-            </div>
-            <div id="juheRoomList" class="juhe-empty">点击“刷新群”加载群列表。</div>
+            <input id="nativeWechatPeerSearch" class="native-wechat-input" placeholder="搜索会话或 Weixin ID" style="width:100%;margin-bottom:10px;">
+            <div id="nativeWechatPeerList" class="native-wechat-empty">暂无会话</div>
           </div>
 
-          <div class="juhe-card">
-            <div class="juhe-card-title">
-              <h3>群操作</h3>
-              <span class="juhe-chip" id="juheActiveRoomName">未选择群</span>
-            </div>
-            <div class="juhe-form-row">
-              <div class="juhe-form-block">
-                <label>群名称</label>
-                <input id="juheRoomNameInput" class="juhe-input" placeholder="新的群名称">
-              </div>
-              <div class="juhe-form-block">
-                <label>我在群里的昵称</label>
-                <input id="juheRoomDisplayNameInput" class="juhe-input" placeholder="群内显示昵称">
-              </div>
-            </div>
-            <div class="juhe-form-block">
-              <label>群公告</label>
-              <textarea id="juheRoomAnnouncementInput" class="juhe-textarea" placeholder="输入群公告"></textarea>
-            </div>
-            <div class="juhe-form-block">
-              <label>群消息</label>
-              <textarea id="juheRoomMessageContent" class="juhe-textarea" placeholder="选择左侧群后，输入要发送到这个群的消息"></textarea>
-            </div>
-            <div class="juhe-actions" style="justify-content: flex-start;">
-              <button type="button" class="btn btn-primary btn-sm" id="juheRoomSendTextBtn">发送到当前群</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheRoomDetailBtn">群详情</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheRoomMembersBtn">群成员</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheRoomAddMembersBtn">添加已选联系人</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheRoomInviteMembersBtn">邀请已选联系人</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheRoomRenameBtn">改群名</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheRoomAnnouncementBtn">设公告</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheRoomDisplayNameBtn">改群昵称</button>
-            </div>
-            <div id="juheRoomResults" class="juhe-result-list"></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="juhe-panel" data-juhe-panel="ai">
-        <div class="juhe-grid">
-          <div class="juhe-card">
-            <div class="juhe-card-title">
+          <div class="native-wechat-card">
+            <div class="native-wechat-card-head">
               <div>
-                <h3>AI客服设置</h3>
-                <div class="juhe-muted">收到客户消息后，按资料和多轮历史生成回复。</div>
+                <h3 id="nativeWechatActivePeerTitle">未选择会话</h3>
+                <div class="native-wechat-muted" id="nativeWechatActivePeerSub">也可以手动输入 Weixin ID 发送。</div>
               </div>
-              <button type="button" class="btn btn-primary btn-sm" id="juheAiSaveBtn">保存设置</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshMessagesBtn">刷新消息</button>
             </div>
-            <div class="juhe-form-row">
-              <div class="juhe-form-block">
-                <label>自动回复</label>
-                <select id="juheAiEnabled" class="juhe-input">
-                  <option value="0">关闭</option>
-                  <option value="1">开启</option>
-                </select>
+            <div id="nativeWechatMessageList" class="native-wechat-empty">选择会话后查看消息。</div>
+            <div class="native-wechat-composer">
+              <div class="native-wechat-form-block">
+                <label>接收人</label>
+                <textarea id="nativeWechatRecipientInput" class="native-wechat-textarea" placeholder="联系人昵称、备注或微信号；多个目标可换行或用逗号分隔"></textarea>
               </div>
-              <div class="juhe-form-block">
-                <label>上下文条数</label>
-                <input id="juheAiMaxContext" class="juhe-input" type="number" min="2" max="40" value="12">
+              <div class="native-wechat-form-block">
+                <label>发送内容</label>
+                <textarea id="nativeWechatSendContent" class="native-wechat-textarea" placeholder="输入要发送的内容"></textarea>
               </div>
-            </div>
-            <div class="juhe-form-block">
-              <label>记忆文件</label>
-              <div id="juheAiMemoryDocs" class="juhe-empty">点击刷新加载可用记忆文件</div>
-            </div>
-            <div class="juhe-form-block">
-              <label>补充话术 / 临时规则</label>
-              <textarea id="juheAiKnowledge" class="juhe-textarea" style="min-height:110px;" placeholder="临时活动、特殊报价、售后口径、需要额外强调的话术。长期资料请先放到个人记忆。"></textarea>
-            </div>
-            <div class="juhe-form-block">
-              <label>回复要求</label>
-              <textarea id="juheAiPrompt" class="juhe-textarea" placeholder="语气、禁用表达、回复长度、引导方式"></textarea>
-            </div>
-            <div class="juhe-form-block">
-              <label>转人工关键词</label>
-              <textarea id="juheAiHandoffKeywords" class="juhe-textarea" style="min-height:70px;" placeholder="人工、转人工、投诉、退款、合同、报价"></textarea>
-            </div>
-            <div class="juhe-card-title" style="margin-top:14px;">
-              <h3>测试收到消息</h3>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheAiSendTestBtn">生成并发送</button>
-            </div>
-            <div class="juhe-form-row">
-              <div class="juhe-form-block">
-                <label>客户 username</label>
-                <input id="juheAiTestContact" class="juhe-input" placeholder="可从通讯录复制 username">
+              <div class="native-wechat-form-block">
+                <label>附件</label>
+                <div class="native-wechat-actions">
+                  <input id="nativeWechatFileInput" type="file" multiple style="display:none;">
+                  <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatChooseFileBtn">选择文件</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatClearFilesBtn">清空附件</button>
+                </div>
+                <div id="nativeWechatFileList" class="native-wechat-muted">未选择附件</div>
               </div>
-              <div class="juhe-form-block">
-                <label>客户昵称</label>
-                <input id="juheAiTestName" class="juhe-input" placeholder="选填">
-              </div>
-            </div>
-            <div class="juhe-form-block">
-              <label>客户消息</label>
-              <textarea id="juheAiTestContent" class="juhe-textarea" placeholder="输入一条客户消息，用于验证多轮客服回复"></textarea>
-            </div>
-          </div>
-
-          <div class="juhe-card">
-            <div class="juhe-card-title">
-              <div>
-                <h3>客服会话</h3>
-                <div class="juhe-muted">左侧点会话，右侧查看这名客户的多轮记录。</div>
-              </div>
-              <button type="button" class="btn btn-ghost btn-sm" id="juheAiRefreshBtn">刷新</button>
-            </div>
-            <div class="juhe-grid" style="grid-template-columns:minmax(220px,.72fr) minmax(320px,1.28fr);">
-              <div id="juheAiSessionList" class="juhe-empty">暂无会话</div>
-              <div>
-                <div id="juheAiActiveTitle" class="juhe-chip" style="margin-bottom:8px;">未选择会话</div>
-                <div id="juheAiMessageList" class="juhe-empty">点击左侧会话查看消息。</div>
+              <div class="native-wechat-actions">
+                <button type="button" class="btn btn-primary" id="nativeWechatSendBtn">发送消息</button>
+                <span class="native-wechat-chip" id="nativeWechatSendState">待发送</span>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="juhe-panel" data-juhe-panel="logs">
-        <div class="juhe-card">
-          <div class="juhe-card-title">
-            <h3>调用记录</h3>
-            <button type="button" class="btn btn-ghost btn-sm" id="juheRefreshLogsBtn">刷新记录</button>
+      <section class="native-wechat-panel" data-native-wechat-panel="contacts">
+        <div class="native-wechat-card">
+          <div class="native-wechat-card-head">
+            <div>
+              <h3>通讯录</h3>
+              <div class="native-wechat-muted">从本机微信同步后保存在本地。</div>
+            </div>
+            <div class="native-wechat-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="nativeWechatSyncContactsBtn">同步通讯录</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshContactsBtn">刷新</button>
+            </div>
           </div>
-          <div id="juheLogList" class="juhe-empty">暂无记录</div>
+          <div class="native-wechat-contact-tools">
+            <span class="native-wechat-chip" id="nativeWechatContactSelectedCount">已选 0</span>
+            <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatContactSelectAllBtn">全选</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatContactClearBtn">清空</button>
+            <button type="button" class="btn btn-primary btn-sm" id="nativeWechatContactSendBtn">发送消息</button>
+            <button type="button" class="btn btn-primary btn-sm" id="nativeWechatContactMomentsLikeBtn">朋友圈点赞</button>
+            <button type="button" class="btn btn-primary btn-sm" id="nativeWechatContactMomentsCommentBtn">朋友圈评论</button>
+            <button type="button" class="btn btn-primary btn-sm" id="nativeWechatContactCreateGroupBtn">创建群</button>
+            <label class="native-wechat-muted" style="display:flex;align-items:center;gap:6px;margin-left:auto;">翻页
+              <input id="nativeWechatContactMomentsMaxScrolls" class="native-wechat-input native-wechat-compact-input" type="number" min="1" max="120" value="20">
+            </label>
+            <label class="native-wechat-muted" style="display:flex;align-items:center;gap:6px;">
+              <input id="nativeWechatContactMomentsDryRun" type="checkbox">只探测
+            </label>
+          </div>
+          <input id="nativeWechatContactSearch" class="native-wechat-input" placeholder="搜索昵称、备注、微信号" style="width:100%;margin-bottom:10px;">
+          <div id="nativeWechatContactList" class="native-wechat-empty">暂无联系人</div>
+        </div>
+      </section>
+
+      <section class="native-wechat-panel" data-native-wechat-panel="groups">
+        <div class="native-wechat-grid">
+          <div class="native-wechat-card">
+            <div class="native-wechat-card-head">
+              <div>
+                <h3>群聊</h3>
+              </div>
+              <div class="native-wechat-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshGroupsBtn">刷新</button>
+              </div>
+            </div>
+            <input id="nativeWechatGroupSearch" class="native-wechat-input" placeholder="搜索群名" style="width:100%;margin-bottom:10px;">
+            <div id="nativeWechatGroupList" class="native-wechat-empty">暂无群</div>
+          </div>
+          <div class="native-wechat-card">
+            <div class="native-wechat-card-head">
+              <div>
+                <h3 id="nativeWechatGroupMemberTitle">群成员</h3>
+                <div class="native-wechat-muted">选择群后同步成员。</div>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatSyncGroupMembersBtn">同步成员</button>
+            </div>
+            <div id="nativeWechatGroupMemberList" class="native-wechat-empty">请选择群</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="native-wechat-panel" data-native-wechat-panel="friends">
+        <div class="native-wechat-card">
+          <div class="native-wechat-card-head">
+            <h3>添加好友</h3>
+            <span class="native-wechat-chip" id="nativeWechatFriendState">待提交</span>
+          </div>
+          <div class="native-wechat-form-row">
+            <div class="native-wechat-form-block">
+              <label>微信号 / 手机号 / 昵称</label>
+              <textarea id="nativeWechatFriendKeyword" class="native-wechat-textarea" placeholder="输入微信号、手机号或昵称；多个目标可换行或用逗号分隔"></textarea>
+            </div>
+            <div class="native-wechat-form-block">
+              <label>备注</label>
+              <input id="nativeWechatFriendRemark" class="native-wechat-input" placeholder="可不填">
+            </div>
+          </div>
+          <div class="native-wechat-form-row">
+            <div class="native-wechat-form-block">
+              <label>验证消息</label>
+              <input id="nativeWechatFriendApplyMessage" class="native-wechat-input" placeholder="加好友时发送">
+            </div>
+            <div class="native-wechat-form-block">
+              <label>权限</label>
+              <select id="nativeWechatFriendPermission" class="native-wechat-select">
+                <option value="朋友圈">朋友圈</option>
+                <option value="仅聊天">仅聊天</option>
+              </select>
+            </div>
+          </div>
+          <div class="native-wechat-form-block">
+            <label>标签</label>
+            <input id="nativeWechatFriendTags" class="native-wechat-input" placeholder="多个标签用逗号分隔">
+          </div>
+          <button type="button" class="btn btn-primary" id="nativeWechatAddFriendBtn">提交好友申请</button>
+        </div>
+      </section>
+
+      <section class="native-wechat-panel" data-native-wechat-panel="moments">
+        <div class="native-wechat-card">
+          <div class="native-wechat-card-head">
+            <h3>发朋友圈</h3>
+            <span class="native-wechat-chip" id="nativeWechatMomentsState">待发布</span>
+          </div>
+          <div class="native-wechat-form-block">
+            <label>正文</label>
+            <textarea id="nativeWechatMomentsContent" class="native-wechat-textarea" placeholder="这一刻的想法..."></textarea>
+          </div>
+          <div class="native-wechat-form-row">
+            <div class="native-wechat-form-block">
+              <label>类型</label>
+              <select id="nativeWechatMomentsMediaType" class="native-wechat-select">
+                <option value="image_text">图文</option>
+                <option value="video">视频</option>
+              </select>
+            </div>
+            <div class="native-wechat-form-block">
+              <label>可见范围</label>
+              <select id="nativeWechatMomentsVisibility" class="native-wechat-select">
+                <option value="public">公开</option>
+              </select>
+            </div>
+          </div>
+          <div class="native-wechat-form-block">
+            <label>素材</label>
+            <div class="native-wechat-actions">
+              <input id="nativeWechatMomentsFileInput" type="file" multiple accept="image/*,video/*" style="display:none;">
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatMomentsChooseFileBtn">选择图片/视频</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatMomentsClearFilesBtn">清空素材</button>
+            </div>
+            <div id="nativeWechatMomentsFileList" class="native-wechat-muted">未选择素材</div>
+          </div>
+          <button type="button" class="btn btn-primary" id="nativeWechatMomentsPublishBtn">发布到朋友圈</button>
+        </div>
+      </section>
+
+      <section class="native-wechat-panel" data-native-wechat-panel="tasks">
+        <div class="native-wechat-card">
+          <div class="native-wechat-card-head">
+            <h3>任务记录</h3>
+            <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshTasksBtn">刷新</button>
+          </div>
+          <div id="nativeWechatTaskList" class="native-wechat-empty">暂无任务</div>
+        </div>
+      </section>
+
+      <section class="native-wechat-panel" data-native-wechat-panel="accounts">
+        <div class="native-wechat-grid">
+          <div class="native-wechat-card">
+            <div class="native-wechat-card-head">
+              <h3>本机微信</h3>
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshAccountsBtn2">刷新</button>
+            </div>
+            <div id="nativeWechatAccountList" class="native-wechat-empty">暂无账号</div>
+          </div>
+          <div class="native-wechat-card">
+            <div class="native-wechat-card-head">
+              <h3>策略</h3>
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshStrategyBtn">刷新</button>
+            </div>
+            <div id="nativeWechatStrategyList" class="native-wechat-empty">暂无策略</div>
+          </div>
         </div>
       </section>
     </div>
 
-    <div class="juhe-modal-mask" id="juheImportModal">
-      <div class="juhe-modal">
-        <div class="juhe-modal-head">
-          <div>
-            <h3 style="margin:0;">导入加好友</h3>
-            <div class="juhe-muted">每行一个手机号、微信号或 QQ；也可以粘贴多行内容。</div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" data-juhe-close-modal>关闭</button>
+    <div class="native-wechat-modal-mask" id="nativeWechatDetailModal">
+      <div class="native-wechat-modal">
+        <div class="native-wechat-modal-head">
+          <h3 id="nativeWechatDetailTitle" style="margin:0;">详情</h3>
+          <button type="button" class="btn btn-ghost btn-sm" data-native-wechat-close>关闭</button>
         </div>
-        <div class="juhe-form-block">
-          <label>验证语</label>
-          <input id="juheVerifyContentInput" class="juhe-input" placeholder="请输入好友申请验证语">
-        </div>
-        <div class="juhe-form-block">
-          <label>联系人列表</label>
-          <textarea id="juheImportTextarea" class="juhe-textarea" style="min-height:180px;" placeholder="13800000000&#10;wechat_id&#10;qq_number"></textarea>
-        </div>
-        <div class="juhe-actions" style="justify-content:flex-start;">
-          <button type="button" class="btn btn-primary btn-sm" id="juheStartImportBtn">开始发送好友申请</button>
-        </div>
-        <div id="juheImportResults" class="juhe-result-list"></div>
-      </div>
-    </div>
-
-    <div class="juhe-modal-mask" id="juheDetailModal">
-      <div class="juhe-modal">
-        <div class="juhe-modal-head">
-          <h3 id="juheDetailTitle" style="margin:0;">详情</h3>
-          <button type="button" class="btn btn-ghost btn-sm" data-juhe-close-modal>关闭</button>
-        </div>
-        <div id="juheDetailBody" class="juhe-detail"></div>
+        <div id="nativeWechatDetailBody" class="native-wechat-detail-list"></div>
       </div>
     </div>
   </div>

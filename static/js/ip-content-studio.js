@@ -143,6 +143,14 @@
     });
   }
 
+  function syncOpenClawMemoryFromCloud() {
+    if (!localBase()) return Promise.resolve({ ok: false, skipped: 'LOCAL_API_BASE not configured' });
+    return localJson('/api/openclaw/memory/sync-cloud', { method: 'POST', json: false }).catch(function(err) {
+      console.warn('[ip-content-studio] sync OpenClaw memory failed', err);
+      return { ok: false, error: err && err.message ? err.message : String(err || '') };
+    });
+  }
+
   function switchTab(tab) {
     state.tab = tab || 'records';
     document.querySelectorAll('#content-ip-content-studio [data-ip-tab]').forEach(function(btn) {
@@ -266,11 +274,19 @@
   function fetchMemoryContent(doc) {
     var id = doc.id || doc.doc_id || doc.filename || doc.name || '';
     if (!id || doc.content || doc.content_text || doc.text) return Promise.resolve(doc);
-    return localJson('/api/openclaw/memory/' + encodeURIComponent(id) + '/content', { json: false })
+    return cloudJson('/api/personal-settings/memory-documents/' + encodeURIComponent(id) + '/preview', { json: false })
       .then(function(data) {
         return Object.assign({}, doc, data.document || data.item || data.doc || {}, {
           content_text: data.content_text || data.content || ''
         });
+      })
+      .catch(function() {
+        return localJson('/api/openclaw/memory/' + encodeURIComponent(id) + '/content', { json: false })
+          .then(function(data) {
+            return Object.assign({}, doc, data.document || data.item || data.doc || {}, {
+              content_text: data.content_text || data.content || ''
+            });
+          });
       })
       .catch(function() { return doc; });
   }
@@ -336,7 +352,15 @@
   function loadMemory() {
     var list = $('ipMemoryList');
     if (list) list.innerHTML = '<div class="ip-content-empty">正在加载记忆...</div>';
-    return localJson('/api/openclaw/memory/list', { json: false })
+    return syncOpenClawMemoryFromCloud()
+      .then(function() {
+        return cloudJson('/api/personal-settings/memory-documents/list', { json: false });
+      })
+      .catch(function(cloudErr) {
+        return localJson('/api/openclaw/memory/list', { json: false }).catch(function() {
+          throw cloudErr;
+        });
+      })
       .then(function(data) {
         state.docs = Array.isArray(data.documents) ? data.documents : (Array.isArray(data.items) ? data.items : (Array.isArray(data.docs) ? data.docs : []));
         renderMemoryList();

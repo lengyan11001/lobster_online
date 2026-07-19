@@ -1,6 +1,6 @@
 {
-  "version": "1.0.96",
-  "build": 139,
-  "applied_at": "2026-07-10T00:00:00+08:00",
-  "note": "Latest client OTA package"
+  "version": "1.0.108",
+  "build": 151,
+  "applied_at": "2026-07-19T10:51:03+08:00",
+  "note": "latest encrypted OTA with native WeChat runtime"
 }

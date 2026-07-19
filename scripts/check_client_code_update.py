@@ -144,6 +144,7 @@ ALLOWED_DEPS_WHEEL_SUFFIXES = (".whl", ".tar.gz")
 
 PPT_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "ppt_runtime_wheels"
 DOUYIN_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "douyin_runtime_wheels"
+WECHAT_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "wechat_runtime_wheels"
 PPT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
     "python-pptx>=1.0.0",
     "svglib>=1.5.0",
@@ -174,6 +175,21 @@ DOUYIN_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
     "pymysql",
     "websockets.sync.client",
 )
+WECHAT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
+    "wxauto4==41.1.2",
+    "uiautomation>=2.0.29",
+    "pywin32>=306",
+    "pywinauto>=0.6.8",
+    "pyperclip>=1.9.0",
+)
+WECHAT_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
+    "wxauto4",
+    "uiautomation",
+    "win32gui",
+    "pywinauto",
+    "pyperclip",
+    "comtypes",
+)
 RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
     {
         "name": "ppt_runtime",
@@ -190,6 +206,15 @@ RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
         "required": True,
         "trigger_exact": {"scripts/douyin_runtime_wheels"},
         "trigger_prefix": ("scripts/douyin_runtime_wheels/",),
+    },
+    {
+        "name": "wechat_runtime",
+        "wheel_dirs": (WECHAT_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels"),
+        "requirements": WECHAT_RUNTIME_REQUIREMENTS,
+        "verify_imports": WECHAT_RUNTIME_IMPORT_CHECKS,
+        "required": True,
+        "trigger_exact": {"scripts/wechat_runtime_wheels"},
+        "trigger_prefix": ("scripts/wechat_runtime_wheels/",),
     },
 )
 

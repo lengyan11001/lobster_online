@@ -12,9 +12,9 @@
     .ps-page { display: grid; gap: 0.9rem; }
     .ps-head {
       border-radius: 24px;
-      padding: 1.1rem 1.2rem;
+      padding: 1rem 1.1rem;
       background:
-        radial-gradient(circle at 8% 0%, rgba(15,143,122,0.18), transparent 34%),
+        radial-gradient(circle at 8% 0%, rgba(15,143,122,0.16), transparent 34%),
         linear-gradient(135deg, #fffaf0 0%, #eefaf6 58%, #f7fbff 100%);
       border: 1px solid var(--ps-line);
       box-shadow: 0 20px 50px rgba(20, 36, 64, 0.08);
@@ -24,9 +24,7 @@
       flex-wrap: wrap;
       align-items: center;
     }
-    .ps-kicker { font-size: 0.74rem; letter-spacing: 0.14em; color: var(--ps-accent); font-weight: 800; }
-    .ps-title { margin: 0.2rem 0 0; font-size: clamp(1.45rem, 3vw, 2.05rem); line-height: 1.15; }
-    .ps-desc { margin: 0.35rem 0 0; color: var(--ps-muted); font-size: 0.92rem; }
+    .ps-title { margin: 0; font-size: clamp(1.45rem, 3vw, 2.05rem); line-height: 1.15; }
     .ps-tabs { display: flex; gap: 0.5rem; flex-wrap: wrap; padding: 0.45rem; border: 1px solid var(--ps-line); border-radius: 18px; background: rgba(255,255,255,0.86); }
     .ps-tab { border: 0; border-radius: 14px; padding: 0.62rem 0.9rem; background: transparent; color: var(--ps-muted); font-weight: 800; cursor: pointer; }
     .ps-tab.is-active { background: var(--ps-accent); color: #fff; box-shadow: 0 12px 26px rgba(15,143,122,0.22); }
@@ -45,7 +43,6 @@
     .ps-field select { width: 100%; box-sizing: border-box; border: 1px solid rgba(21,35,64,0.16); border-radius: 14px; background: #fff; color: var(--ps-ink); padding: 0.68rem 0.75rem; outline: none; }
     .ps-field textarea { min-height: 96px; resize: vertical; line-height: 1.55; }
     .ps-field textarea.is-large { min-height: 250px; }
-    .ps-hint { color: var(--ps-muted); font-size: 0.78rem; line-height: 1.5; }
     .ps-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
     .ps-inline { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.6rem; align-items: end; }
     .ps-list { display: grid; gap: 0.55rem; }
@@ -68,6 +65,17 @@
     .ps-file-meta { min-width: 0; flex: 1; }
     .ps-file-meta span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ps-file-chip button { border: 0; background: transparent; color: #b42318; font-weight: 800; cursor: pointer; white-space: nowrap; }
+    .ps-source-grid { display: grid; gap: 0.5rem; }
+    .ps-source-card { display: grid; gap: 0.45rem; border: 1px solid rgba(21,35,64,0.1); border-radius: 14px; background: rgba(255,255,255,0.78); padding: 0.65rem; }
+    .ps-source-card > span,
+    .ps-source-profile span { font-size: 0.83rem; font-weight: 900; color: #34425c; }
+    .ps-source-profile { grid-template-columns: auto minmax(0,1fr); align-items: center; }
+    .ps-source-list { display: grid; gap: 0.35rem; }
+    .ps-source-option { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 0.5rem; align-items: start; color: var(--ps-muted); font-size: 0.78rem; }
+    .ps-source-option strong { display: block; color: var(--ps-ink); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-source-option small { display: block; margin-top: 0.12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-source-option input,
+    .ps-source-profile input { width: auto; margin-top: 0.12rem; }
     .ps-doc-type-list { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0.5rem; }
     .ps-doc-type-list .ps-option { height: 100%; }
     .ps-generated-list { display: grid; gap: 0.72rem; }
@@ -78,77 +86,60 @@
     .ps-memory-item { border: 1px solid rgba(21,35,64,0.1); background: #fff; border-radius: 18px; padding: 0.78rem; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0.75rem; align-items: start; }
     .ps-memory-item strong { display: block; }
     .ps-memory-item small { display: block; color: var(--ps-muted); margin-top: 0.24rem; word-break: break-all; }
-    .ps-memory-preview { white-space: pre-wrap; max-height: 360px; overflow: auto; border-radius: 16px; padding: 0.8rem; background: #101827; color: #eef7f3; font-size: 0.84rem; line-height: 1.55; }
+    .ps-memory-preview { white-space: pre-wrap; max-height: 420px; overflow: auto; border-radius: 16px; padding: 0.8rem; background: #101827; color: #eef7f3; font-size: 0.84rem; line-height: 1.55; }
+    .ps-survey { display: grid; gap: 0.8rem; }
+    .ps-survey-top { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 0.7rem; align-items: center; color: var(--ps-muted); font-weight: 900; }
+    .ps-survey-bar { height: 8px; border-radius: 999px; background: rgba(15,143,122,0.13); overflow: hidden; }
+    .ps-survey-bar i { display: block; height: 100%; width: 0; background: linear-gradient(135deg, #0f8f7a, #18a9c8); border-radius: inherit; transition: width 0.2s ease; }
+    .ps-survey-card { border: 1px solid rgba(21,35,64,0.1); border-radius: 18px; background: #fff; padding: 1rem; display: grid; gap: 0.65rem; }
+    .ps-survey-card strong { font-size: 1.12rem; }
+    .ps-survey-answer input,
+    .ps-survey-answer textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(21,35,64,0.16); border-radius: 16px; padding: 0.82rem; font-size: 1rem; line-height: 1.55; }
+    .ps-survey-answer textarea { min-height: 160px; resize: vertical; }
+    .ps-hidden-fields { display: none; }
+    .ps-template-card { border: 1px solid rgba(21,35,64,0.1); border-radius: 16px; background: #fff; padding: 0.72rem; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0.65rem; align-items: start; }
+    .ps-template-card strong { display: block; }
+    .ps-template-meta { color: var(--ps-muted); font-size: 0.78rem; margin-top: 0.18rem; }
     @media (max-width: 960px) {
       .ps-grid,
       .ps-inline,
       .ps-doc-type-list { grid-template-columns: 1fr; }
       .personal-settings-view { padding: 0.75rem; }
+      .ps-template-card,
+      .ps-memory-item,
+      .ps-option.is-action { grid-template-columns: 1fr; }
+      .ps-item-actions { justify-content: flex-start; }
     }
   </style>
 
   <div class="ps-page">
     <header class="ps-head">
-      <div>
-        <div class="ps-kicker">PERSONAL SETTINGS</div>
-        <h3 class="ps-title">个人设置</h3>
-        <p class="ps-desc">统一维护可复用的模板、关键词、同行账号和记忆文件。</p>
-      </div>
+      <h3 class="ps-title">IP人设定位</h3>
       <div class="ps-actions">
         <button type="button" id="psRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
         <button type="button" id="psBackBtn" class="btn btn-ghost btn-sm">返回</button>
       </div>
     </header>
 
-    <nav class="ps-tabs" aria-label="个人设置">
-      <button type="button" class="ps-tab is-active" data-ps-tab="template">模板</button>
-      <button type="button" class="ps-tab" data-ps-tab="keywords">关键词</button>
+    <nav class="ps-tabs" aria-label="IP人设定位">
+      <button type="button" class="ps-tab is-active" data-ps-tab="keywords">关键词</button>
       <button type="button" class="ps-tab" data-ps-tab="competitors">同行账号</button>
+      <button type="button" class="ps-tab" data-ps-tab="profile">资料调查</button>
+      <button type="button" class="ps-tab" data-ps-tab="upload">上传资料</button>
       <button type="button" class="ps-tab" data-ps-tab="memory">记忆文件</button>
+      <button type="button" class="ps-tab" data-ps-tab="template">模板</button>
     </nav>
 
     <div id="psMsg" class="ps-msg"></div>
 
-    <section class="ps-panel is-active" data-ps-panel="template">
-      <div class="ps-grid">
-        <section class="ps-card">
-          <div class="ps-card-title">模板说明</div>
-          <div class="ps-hint">这里先保存用户默认模板。后续其他技能只需要读取这套模板，让用户在二级界面选择即可。</div>
-          <div class="ps-field">
-            <label for="psOralReq">口播要求</label>
-            <textarea id="psOralReq" placeholder="人设、语气、禁用表达、行业侧重点"></textarea>
-          </div>
-          <div class="ps-field">
-            <label for="psMomentsReq">朋友圈文案要求</label>
-            <textarea id="psMomentsReq" placeholder="朋友圈文案的风格、长度、禁用导流话术等"></textarea>
-          </div>
-          <div class="ps-field">
-            <label for="psImageReq">出图要求</label>
-            <textarea id="psImageReq" placeholder="画面主体、风格、场景、禁用元素"></textarea>
-          </div>
-          <div class="ps-actions">
-            <button type="button" id="psSaveConfigBtn" class="btn btn-primary btn-sm">保存模板</button>
-          </div>
-        </section>
-        <section class="ps-card">
-          <div class="ps-card-title">选择关键词</div>
-          <div id="psTemplateKeywordList" class="ps-list"></div>
-          <div class="ps-card-title">选择同行账号</div>
-          <div id="psTemplateCompetitorList" class="ps-list"></div>
-          <div class="ps-card-title">选择记忆文件</div>
-          <div id="psTemplateMemoryList" class="ps-list"></div>
-        </section>
-      </div>
-    </section>
-
-    <section class="ps-panel" data-ps-panel="keywords">
+    <section class="ps-panel is-active" data-ps-panel="keywords">
       <div class="ps-grid is-single">
         <section class="ps-card">
           <div class="ps-card-title">关键词</div>
           <div class="ps-inline">
             <div class="ps-field">
-              <label for="psKeywordInput">关键词</label>
-              <input id="psKeywordInput" placeholder="例如 3D打印">
+              <label for="psKeywordInput">行业关键词</label>
+              <input id="psKeywordInput" placeholder="输入行业关键词">
             </div>
             <div class="ps-field">
               <label for="psKeywordDisplayName">显示名</label>
@@ -183,7 +174,7 @@
           <div class="ps-inline">
             <div class="ps-field">
               <label for="psCompetitorTags">行业标签</label>
-              <input id="psCompetitorTags" placeholder="例如 3D打印,工厂,老板IP">
+              <input id="psCompetitorTags" placeholder="可空">
             </div>
             <div class="ps-field">
               <label>&nbsp;</label>
@@ -196,41 +187,91 @@
       </div>
     </section>
 
-    <section class="ps-panel" data-ps-panel="memory">
+    <section class="ps-panel" data-ps-panel="profile">
+      <section class="ps-card ps-survey">
+        <div class="ps-survey-top">
+          <span id="psProfileStepText">1/11</span>
+          <div class="ps-survey-bar"><i id="psProfileProgress"></i></div>
+        </div>
+        <div class="ps-survey-card">
+          <strong id="psProfileQuestionTitle">名字</strong>
+          <div id="psProfileAnswerHost" class="ps-survey-answer"></div>
+        </div>
+        <div class="ps-actions">
+          <button class="btn btn-ghost btn-sm" type="button" id="psProfilePrevBtn">上一步</button>
+          <button class="btn btn-primary btn-sm" type="button" id="psProfileNextBtn">下一步</button>
+          <button class="btn btn-primary btn-sm" type="button" id="psSaveProfileBtn">保存资料调查</button>
+        </div>
+        <div class="ps-hidden-fields" aria-hidden="true">
+          <input id="psProfileName" type="hidden">
+          <input id="psBirthEra" type="hidden">
+          <input id="psCurrentCity" type="hidden">
+          <input id="psHometown" type="hidden">
+          <input id="psRole" type="hidden">
+          <input id="psShareTopic" type="hidden">
+          <input id="psVideoStyle" type="hidden">
+          <input id="psAfterViewAction" type="hidden">
+          <textarea id="psBusinessProduct"></textarea>
+          <textarea id="psTargetCustomer"></textarea>
+          <textarea id="psAdvantages"></textarea>
+        </div>
+      </section>
+    </section>
+
+    <section class="ps-panel" data-ps-panel="upload">
       <div class="ps-grid">
         <section class="ps-card">
           <div class="ps-card-title">上传资料</div>
           <div class="ps-upload-zone">
             <div class="ps-field">
               <label for="psMemoryFiles">上传文件</label>
-              <input id="psMemoryFiles" type="file" multiple accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.pptx,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.avi,.mkv,.webm">
+              <input id="psMemoryFiles" type="file" multiple accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.pptx,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.ogg,.flac,.amr,.wma,audio/*">
             </div>
             <div id="psSelectedFiles" class="ps-file-list"></div>
-            <div class="ps-hint">支持一次上传多个不同类型文件。AI 理解会先把图片/视频理解成文字，再和文档、链接、粘贴资料一起整理成可审核记忆；也可以不理解，直接把原始资料保存入记忆。</div>
+          </div>
+          <div class="ps-actions">
+            <button type="button" id="psSaveRawMemoryBtn" class="btn btn-ghost btn-sm">存入资料</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="ps-panel" data-ps-panel="memory">
+      <div class="ps-grid">
+        <section class="ps-card">
+          <div class="ps-card-title">生成记忆文件</div>
+          <div class="ps-source-grid">
+            <label class="ps-source-card ps-source-profile">
+              <input id="psMemoryUseProfile" type="checkbox" checked>
+              <span>资料调查</span>
+            </label>
+            <div class="ps-source-card">
+              <span>关键词</span>
+              <div id="psMemoryKeywordSourceList" class="ps-source-list"></div>
+            </div>
+            <div class="ps-source-card">
+              <span>同行账号</span>
+              <div id="psMemoryCompetitorSourceList" class="ps-source-list"></div>
+            </div>
+            <div class="ps-source-card">
+              <span>上传资料</span>
+              <div id="psMemoryUploadSourceList" class="ps-source-list"></div>
+            </div>
           </div>
           <div class="ps-field">
-            <label for="psMemoryUrls">图片/视频/网页链接</label>
-            <textarea id="psMemoryUrls" placeholder="一行一个链接，可放图片、视频、官网、产品页"></textarea>
-          </div>
-          <div class="ps-field">
-            <label for="psRawMemoryText">粘贴资料</label>
-            <textarea id="psRawMemoryText" class="is-large" placeholder="可以粘贴产品介绍、问答、口播稿、客户资料等。"></textarea>
-          </div>
-          <div class="ps-field">
-            <label>AI 生成目标</label>
-            <div class="ps-hint">下面三个是预置生成类型；也可以三个都不选，改在“自定义参考文档”里上传一份格式参考，让 AI 按参考文档的结构生成。</div>
+            <label>AI 生成类型</label>
             <div id="psGenerateDocTypes" class="ps-doc-type-list">
               <label class="ps-option">
                 <input type="checkbox" data-ps-doc-type value="brand_product_intro" checked>
-                <span><strong>产品介绍</strong><small>定位、优势、产品线、工艺、服务价值</small></span>
+                <span><strong>产品介绍</strong></span>
               </label>
               <label class="ps-option">
                 <input type="checkbox" data-ps-doc-type value="product_service_faq" checked>
-                <span><strong>百问百答</strong><small>问题/回答，可给客服和内容技能复用</small></span>
+                <span><strong>百问百答</strong></span>
               </label>
               <label class="ps-option">
                 <input type="checkbox" data-ps-doc-type value="short_video_scripts" checked>
-                <span><strong>短视频口播稿</strong><small>系列分组、标题、场景提示、逐字稿</small></span>
+                <span><strong>短视频口播稿</strong></span>
               </label>
             </div>
           </div>
@@ -238,23 +279,15 @@
             <label for="psCustomReferenceFile">自定义参考文档</label>
             <input id="psCustomReferenceFile" type="file" accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.pptx">
             <div id="psCustomReferenceFileInfo" class="ps-file-list"></div>
-            <div class="ps-hint">只用于学习格式、栏目、颗粒度和写法，不作为业务资料内容。需要生成自定义类型时，取消上面三个预置类型，上传这个参考文档。</div>
           </div>
           <div class="ps-actions">
-            <button type="button" id="psGenerateMemoryBtn" class="btn btn-primary btn-sm">AI 理解</button>
-            <button type="button" id="psSaveRawMemoryBtn" class="btn btn-ghost btn-sm">不理解，直接存入记忆</button>
+            <button type="button" id="psGenerateMemoryBtn" class="btn btn-primary btn-sm">生成记忆文件</button>
           </div>
-        </section>
-        <section class="ps-card">
           <div class="ps-card-title">审核后存入记忆</div>
-          <div class="ps-field">
-            <label>AI 理解结果</label>
-            <div id="psGeneratedDocList" class="ps-generated-list">
-              <div class="ps-empty">选择资料和生成类型后，点击“AI 理解”生成预览。</div>
-            </div>
-            <textarea id="psMemoryReviewText" class="is-large" style="display:none;" aria-hidden="true"></textarea>
-            <div class="ps-hint">可以在每个预览框里直接改内容。新建文档会按选中的生成类型分别保存；覆盖已有文档会把选中的内容合并后覆盖目标文档。</div>
+          <div id="psGeneratedDocList" class="ps-generated-list">
+            <div class="ps-empty">生成后在这里预览。</div>
           </div>
+          <textarea id="psMemoryReviewText" class="is-large" style="display:none;" aria-hidden="true"></textarea>
           <div class="ps-inline">
             <div class="ps-field">
               <label for="psSaveMode">存入文档</label>
@@ -277,14 +310,42 @@
           <div class="ps-actions">
             <button type="button" id="psSaveMemoryBtn" class="btn btn-primary btn-sm">存入记忆</button>
           </div>
-          <div class="ps-card-title">已保存记忆文件</div>
+        </section>
+        <section class="ps-card">
+          <div class="ps-card-title">记忆文件</div>
           <div id="psMemoryList" class="ps-list"></div>
+          <div class="ps-card-title">内容预览</div>
+          <div id="psMemoryPreview" class="ps-memory-preview">点击“预览”查看内容。</div>
         </section>
       </div>
-      <section class="ps-card" style="margin-top:0.9rem;">
-        <div class="ps-card-title">内容预览</div>
-        <div id="psMemoryPreview" class="ps-memory-preview">点击“预览”查看内容。</div>
-      </section>
+    </section>
+
+    <section class="ps-panel" data-ps-panel="template">
+      <div class="ps-grid">
+        <section class="ps-card">
+          <div class="ps-card-title">当前使用模板</div>
+          <div id="psCurrentTemplateBox" class="ps-list"></div>
+          <div class="ps-card-title">新建模板</div>
+          <div class="ps-field">
+            <label for="psTemplateName">模板名称</label>
+            <input id="psTemplateName" placeholder="模板名称">
+          </div>
+          <div class="ps-actions">
+            <button type="button" id="psSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button>
+            <button type="button" id="psNewTemplateBtn" class="btn btn-ghost btn-sm">新建模板</button>
+          </div>
+          <div class="ps-card-title">已有模板</div>
+          <div id="psSavedTemplateList" class="ps-list"></div>
+        </section>
+        <section class="ps-card">
+          <div class="ps-card-title">选择关键词</div>
+          <div id="psTemplateKeywordList" class="ps-list"></div>
+          <div class="ps-card-title">选择同行账号</div>
+          <div id="psTemplateCompetitorList" class="ps-list"></div>
+          <div class="ps-card-title">选择记忆文件</div>
+          <div id="psTemplateMemoryList" class="ps-list"></div>
+        </section>
+      </div>
     </section>
   </div>
 </div>

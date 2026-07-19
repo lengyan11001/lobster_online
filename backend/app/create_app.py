@@ -80,6 +80,7 @@ from .api.account_creator_schedule import router as account_creator_schedule_rou
 from .api.logs_api import router as logs_router
 from .api.wechat_oa import router as wechat_oa_router
 from .api.msghelper_wechat import router as msghelper_wechat_router
+from .api.native_wechat import router as native_wechat_router
 from .api.twilio_whatsapp import router as twilio_whatsapp_router
 from .api.youtube_publish import router as youtube_publish_router
 from .api.wechat_article import router as wechat_article_router
@@ -1062,6 +1063,7 @@ def create_app() -> FastAPI:
     app.include_router(logs_router, prefix="")
     app.include_router(wechat_oa_router, prefix="")
     app.include_router(msghelper_wechat_router, prefix="")
+    app.include_router(native_wechat_router, prefix="")
     app.include_router(twilio_whatsapp_router, prefix="")
     app.include_router(youtube_publish_router, prefix="")
     app.include_router(wechat_article_router, prefix="")
