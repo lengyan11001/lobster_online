@@ -1,5 +1,6 @@
 {
-  "version": "1.0.96",
-  "build": 139,
-  "applied_at": "2026-07-10T00:00:00+08:00"
+  "version": "1.0.109",
+  "build": 152,
+  "applied_at": "2026-07-19T17:47:24+08:00",
+  "note": "fix sales department Douyin leads entry visibility"
 }
