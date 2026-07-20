@@ -14,6 +14,7 @@
     draftGroups: [],
     activeGroupId: '',
     activeMomentImageBatchId: '',
+    momentBatchJobs: [],
     latestDrafts: [],
     recordFilter: '',
     configTab: 'templates',
@@ -25,6 +26,23 @@
 
   var SETTINGS_STORAGE_KEY = 'ipContentStudio.generationSettings.v1';
   var TEMPLATES_STORAGE_KEY = 'ipContentStudio.requirementTemplates.v1';
+  var MOMENT_BATCH_JOBS_STORAGE_KEY = 'ipContentStudio.momentBatchJobs.v1';
+  var IP_TEMPLATE_LANGUAGES = [
+    ['zh-CN', '简体中文'],
+    ['en', 'English'],
+    ['ja', '日本語'],
+    ['ko', '한국어'],
+    ['th', 'ไทย'],
+    ['vi', 'Tiếng Việt'],
+    ['id', 'Bahasa Indonesia'],
+    ['ms', 'Bahasa Melayu'],
+    ['es', 'Español'],
+    ['pt', 'Português'],
+    ['fr', 'Français'],
+    ['de', 'Deutsch'],
+    ['ru', 'Русский'],
+    ['ar', 'العربية']
+  ];
 
   function $(id) {
     return document.getElementById(id);
@@ -63,6 +81,71 @@
   function cssEscape(text) {
     if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(text || ''));
     return String(text || '').replace(/["\\\]]/g, '\\$&');
+  }
+
+  function normalizeIpTemplateLanguage(value) {
+    var raw = String(value || '').trim();
+    var lower = raw.toLowerCase();
+    var aliases = {
+      zh: 'zh-CN',
+      'zh-cn': 'zh-CN',
+      chinese: 'zh-CN',
+      '简体中文': 'zh-CN',
+      english: 'en',
+      japanese: 'ja',
+      korean: 'ko',
+      thai: 'th',
+      vietnamese: 'vi',
+      indonesian: 'id',
+      malay: 'ms',
+      spanish: 'es',
+      portuguese: 'pt',
+      french: 'fr',
+      german: 'de',
+      russian: 'ru',
+      arabic: 'ar'
+    };
+    var normalized = aliases[lower] || raw;
+    return IP_TEMPLATE_LANGUAGES.some(function(row) { return row[0] === normalized; }) ? normalized : 'zh-CN';
+  }
+
+  function ipTemplateLanguageLabel(value) {
+    var lang = normalizeIpTemplateLanguage(value);
+    var row = IP_TEMPLATE_LANGUAGES.find(function(item) { return item[0] === lang; });
+    return row ? row[1] : '简体中文';
+  }
+
+  function ipTemplateLanguageInstruction(value) {
+    var label = ipTemplateLanguageLabel(value);
+    return '目标语种：' + label + '。所有生成内容必须使用' + label + '输出；标题、口播正文、朋友圈正文、图片提示词中的可见文字都要使用' + label + '，不要混用其他语言。';
+  }
+
+  function stripIpTemplateLanguageInstruction(text) {
+    return String(text || '')
+      .split(/\r?\n/)
+      .filter(function(line) { return !/^目标语种[:：]/.test(line.trim()); })
+      .join('\n')
+      .trim();
+  }
+
+  function textWithTemplateLanguage(text, language) {
+    var clean = stripIpTemplateLanguageInstruction(text);
+    return [ipTemplateLanguageInstruction(language), clean].filter(Boolean).join('\n');
+  }
+
+  function templateLanguageFromParts(requirements, meta, fallback) {
+    var req = requirements && typeof requirements === 'object' ? requirements : {};
+    var m = meta && typeof meta === 'object' ? meta : {};
+    return normalizeIpTemplateLanguage(
+      req.language || req.target_language ||
+      m.language || m.target_language || m.profile_language ||
+      fallback || ''
+    );
+  }
+
+  function currentTemplateLanguage() {
+    var sel = $('ipTemplateLanguageSelect');
+    return normalizeIpTemplateLanguage((sel && sel.value) || '');
   }
 
   function cloudBase() {
@@ -371,10 +454,13 @@
   }
 
   function generationSettingSnapshot() {
+    var language = currentTemplateLanguage();
     return {
       memory_doc_ids: selectedMemoryIds(),
       keyword_ids: cleanTemplateIds(state.templateKeywordIds, false),
       competitor_ids: cleanTemplateIds(state.templateCompetitorIds, false),
+      language: language,
+      target_language: ipTemplateLanguageLabel(language),
       task1_extra: (($('ipTask1Extra') && $('ipTask1Extra').value) || '').trim(),
       task2_extra: (($('ipTask2Extra') && $('ipTask2Extra').value) || '').trim(),
       image_extra: (($('ipImageExtra') && $('ipImageExtra').value) || '').trim()
@@ -383,6 +469,46 @@
 
   function saveGenerationSettings() {
     writeStoredJson(SETTINGS_STORAGE_KEY, generationSettingSnapshot());
+  }
+
+  function normalizeMomentBatchJobs(items) {
+    if (!Array.isArray(items)) return [];
+    return items.map(function(item, idx) {
+      item = item && typeof item === 'object' ? item : {};
+      var batchIndex = parseInt(item.batch_index, 10);
+      if (!batchIndex || batchIndex < 1) batchIndex = idx + 1;
+      var batchCount = parseInt(item.batch_count, 10);
+      if (!batchCount || batchCount < batchIndex) batchCount = Math.max(batchIndex, 1);
+      var batchId = String(item.batch_id || item.id || item.group_id || ('moment_batch_' + batchIndex + '_' + batchCount));
+      var groupId = String(item.group_id || batchId);
+      var status = String(item.status || 'queued').toLowerCase();
+      if (['queued', 'running', 'done', 'failed'].indexOf(status) < 0) status = 'queued';
+      return {
+        batch_id: batchId,
+        batch_index: batchIndex,
+        batch_count: batchCount,
+        label: String(item.label || ('第' + batchIndex + '批')),
+        group_id: groupId,
+        count: Math.max(1, parseInt(item.count, 10) || 5),
+        status: status,
+        error: String(item.error || ''),
+        records: Array.isArray(item.records) ? item.records : [],
+        payload: item.payload && typeof item.payload === 'object' ? item.payload : null,
+        created_at: String(item.created_at || ''),
+        updated_at: String(item.updated_at || ''),
+        retry_count: Math.max(0, parseInt(item.retry_count, 10) || 0),
+        summary: String(item.summary || '')
+      };
+    });
+  }
+
+  function saveMomentBatchJobs() {
+    writeStoredJson(MOMENT_BATCH_JOBS_STORAGE_KEY, normalizeMomentBatchJobs(state.momentBatchJobs));
+  }
+
+  function restoreMomentBatchJobs() {
+    state.momentBatchJobs = normalizeMomentBatchJobs(readStoredJson(MOMENT_BATCH_JOBS_STORAGE_KEY, []));
+    renderMomentBatchQueue();
   }
 
   function cleanTemplateIds(values, asString) {
@@ -400,7 +526,10 @@
 
   function templateRequirements(item) {
     var req = item && item.requirements && typeof item.requirements === 'object' ? item.requirements : {};
+    var meta = item && item.meta && typeof item.meta === 'object' ? item.meta : {};
+    var language = templateLanguageFromParts(req, meta, item && (item.language || item.target_language));
     return {
+      language: language,
       oral: String(item.task1_extra || item.task1Extra || req.oral || req.industry_oral || req.ip_oral || ''),
       moments: String(item.task2_extra || item.task2Extra || req.moments || req.moments_copy || ''),
       image: String(item.image_extra || item.imageExtra || req.image || '')
@@ -433,6 +562,7 @@
         competitor_ids: cleanTemplateIds(item.competitor_ids, false),
         memory_docs: memoryDocs,
         memory_doc_ids: memoryIds,
+        language: req.language,
         task1_extra: req.oral,
         task2_extra: req.moments,
         image_extra: req.image,
@@ -578,6 +708,7 @@
     var competitors = (data.competitor_ids || []).map(competitorLabelById);
     return '<div class="ip-template-snapshot-section"><strong>' + esc(title) + '</strong>' +
       '<small>记忆文件</small>' + chipHtml(memories, '未选择记忆文件') +
+      '<small>语种</small>' + chipHtml([ipTemplateLanguageLabel(data.language || 'zh-CN')], '简体中文') +
       '<small>关键词</small>' + chipHtml(keywords, '未配置关键词') +
       '<small>同行账号（可选）</small>' + chipHtml(competitors, '未配置同行账号') +
       '</div>' +
@@ -593,6 +724,8 @@
       memory_docs: selectedMemoryDocs(),
       keyword_ids: cleanTemplateIds(state.templateKeywordIds, false),
       competitor_ids: cleanTemplateIds(state.templateCompetitorIds, false),
+      language: snapshot.language,
+      target_language: snapshot.target_language,
       task1_extra: snapshot.task1_extra,
       task2_extra: snapshot.task2_extra,
       image_extra: snapshot.image_extra
@@ -621,6 +754,7 @@
       list.innerHTML = state.settingTemplates.map(function(tpl) {
         var meta = [];
         meta.push(tpl.source === 'server' ? '服务器' : '本地');
+        meta.push(ipTemplateLanguageLabel(tpl.language || 'zh-CN'));
         if (tpl.keyword_ids.length) meta.push('关键词 ' + tpl.keyword_ids.length);
         if (tpl.competitor_ids.length) meta.push('同行 ' + tpl.competitor_ids.length);
         if (tpl.memory_doc_ids.length || tpl.memory_docs.length) meta.push('记忆 ' + Math.max(tpl.memory_doc_ids.length, tpl.memory_docs.length));
@@ -668,6 +802,7 @@
     state.templateCompetitorIds = [];
     state.selectedDocs = {};
     if ($('ipTemplateNameInput')) $('ipTemplateNameInput').value = '';
+    if ($('ipTemplateLanguageSelect')) $('ipTemplateLanguageSelect').value = 'zh-CN';
     if ($('ipTask1Extra')) $('ipTask1Extra').value = '';
     if ($('ipTask2Extra')) $('ipTask2Extra').value = '';
     if ($('ipImageExtra')) $('ipImageExtra').value = '';
@@ -702,6 +837,7 @@
     if ($('ipTask1Extra') && typeof saved.task1_extra === 'string') $('ipTask1Extra').value = saved.task1_extra;
     if ($('ipTask2Extra') && typeof saved.task2_extra === 'string') $('ipTask2Extra').value = saved.task2_extra;
     if ($('ipImageExtra') && typeof saved.image_extra === 'string') $('ipImageExtra').value = saved.image_extra;
+    if ($('ipTemplateLanguageSelect')) $('ipTemplateLanguageSelect').value = normalizeIpTemplateLanguage(saved.language || saved.target_language || '');
     state.templateKeywordIds = cleanTemplateIds(saved.keyword_ids, false);
     state.templateCompetitorIds = cleanTemplateIds(saved.competitor_ids, false);
     state.settingTemplates = normalizeTemplates(readStoredJson(TEMPLATES_STORAGE_KEY, []));
@@ -710,6 +846,7 @@
 
   function applyTemplate(tpl) {
     if (!tpl) return;
+    if ($('ipTemplateLanguageSelect')) $('ipTemplateLanguageSelect').value = normalizeIpTemplateLanguage(tpl.language || '');
     if ($('ipTask1Extra')) $('ipTask1Extra').value = tpl.task1_extra || '';
     if ($('ipTask2Extra')) $('ipTask2Extra').value = tpl.task2_extra || '';
     if ($('ipImageExtra')) $('ipImageExtra').value = tpl.image_extra || '';
@@ -754,6 +891,8 @@
   }
 
   function templateRequestBody(name, snapshot, memoryDocs) {
+    var language = normalizeIpTemplateLanguage(snapshot.language || snapshot.target_language || '');
+    var targetLanguage = ipTemplateLanguageLabel(language);
     return {
       name: name,
       keyword_ids: cleanTemplateIds(snapshot.keyword_ids, false),
@@ -761,14 +900,16 @@
       memory_doc_ids: cleanTemplateIds(snapshot.memory_doc_ids, true),
       memory_docs: memoryDocs || [],
       requirements: {
+        language: language,
+        target_language: targetLanguage,
         oral: snapshot.task1_extra || '',
         industry_oral: snapshot.task1_extra || '',
         ip_oral: snapshot.task1_extra || '',
         moments: snapshot.task2_extra || '',
         image: snapshot.image_extra || '',
-        common: ''
+        common: ipTemplateLanguageInstruction(language)
       },
-      meta: { source: 'ip_content_studio' }
+      meta: { source: 'ip_content_studio', language: language, target_language: targetLanguage }
     };
   }
 
@@ -785,9 +926,25 @@
       keyword_ids: snapshot.keyword_ids,
       competitor_ids: snapshot.competitor_ids,
       memory_doc_ids: snapshot.memory_doc_ids,
+      language: snapshot.language,
       task1_extra: snapshot.task1_extra,
       task2_extra: snapshot.task2_extra,
       image_extra: snapshot.image_extra,
+      requirements: {
+        language: normalizeIpTemplateLanguage(snapshot.language || snapshot.target_language || ''),
+        target_language: ipTemplateLanguageLabel(snapshot.language || snapshot.target_language || ''),
+        oral: snapshot.task1_extra || '',
+        industry_oral: snapshot.task1_extra || '',
+        ip_oral: snapshot.task1_extra || '',
+        moments: snapshot.task2_extra || '',
+        image: snapshot.image_extra || '',
+        common: ipTemplateLanguageInstruction(snapshot.language || snapshot.target_language || '')
+      },
+      meta: {
+        source: 'ip_content_studio_local',
+        language: normalizeIpTemplateLanguage(snapshot.language || snapshot.target_language || ''),
+        target_language: ipTemplateLanguageLabel(snapshot.language || snapshot.target_language || '')
+      },
       updated_at: new Date().toISOString()
     }])[0];
   }
@@ -1623,6 +1780,75 @@
     renderDraftCards('ipLatestDraftList', state.latestDrafts, { selectable: group.task === 'moments_candidate' });
   }
 
+  function momentBatchStatusLabel(status) {
+    if (status === 'running') return '执行中';
+    if (status === 'done') return '已完成';
+    if (status === 'failed') return '失败';
+    return '待执行';
+  }
+
+  function momentBatchStatusClass(status) {
+    if (status === 'running') return ' is-running';
+    if (status === 'done') return ' is-done';
+    if (status === 'failed') return ' is-failed';
+    return '';
+  }
+
+  function selectMomentBatchGroup(groupId) {
+    groupId = String(groupId || '');
+    if (!groupId) return;
+    state.recordFilter = 'moments_candidate';
+    state.activeGroupId = groupId;
+    setRecordFilter('moments_candidate');
+    switchTab('records');
+    renderDraftRecords();
+  }
+
+  function renderMomentBatchQueue() {
+    var box = $('ipMomentBatchQueue');
+    if (!box) return;
+    var jobs = normalizeMomentBatchJobs(state.momentBatchJobs);
+    state.momentBatchJobs = jobs;
+    if (!jobs.length) {
+      box.style.display = 'none';
+      box.innerHTML = '';
+      return;
+    }
+    box.style.display = 'grid';
+    box.innerHTML = jobs.map(function(job) {
+      var status = String(job.status || 'queued');
+      var doneCount = status === 'done' ? (job.records.length || job.count || 0) : 0;
+      var action = '';
+      if (status === 'failed') {
+        action = '<button type="button" class="btn btn-primary btn-sm" data-retry-moment-batch="' + escAttr(job.batch_id) + '">重试该批</button>';
+      } else if (status === 'done') {
+        action = '<button type="button" class="btn btn-ghost btn-sm" data-show-moment-batch="' + escAttr(job.group_id) + '">查看结果</button>';
+      } else if (status === 'running') {
+        action = '<button type="button" class="btn btn-ghost btn-sm" disabled>执行中</button>';
+      } else {
+        action = '<button type="button" class="btn btn-ghost btn-sm" disabled>待执行</button>';
+      }
+      return '<div class="ip-moment-batch-card' + momentBatchStatusClass(status) + '">' +
+        '<div class="ip-badge-row"><span class="ip-badge">朋友圈文案</span><span class="ip-badge">' + esc(job.label) + '</span><span class="ip-badge is-image">' + esc(job.count) + '条</span><span class="ip-badge' + (status === 'failed' ? ' is-used' : (status === 'done' ? ' is-new' : '')) + '">' + esc(momentBatchStatusLabel(status)) + '</span></div>' +
+        '<strong>' + esc(job.label) + ' / 共 ' + esc(job.batch_count) + ' 批</strong>' +
+        (status === 'done' ? '<small>已生成 ' + esc(doneCount || job.count) + ' 条，可查看这一批结果。</small>' : '') +
+        (status === 'failed' ? '<small class="ip-moment-batch-error">' + esc(job.error || '这一批生成失败，可以单独重试。') + '</small>' : '') +
+        (status === 'running' ? '<small>当前批次正在云端生成，其它批次互不影响。</small>' : '') +
+        '<div class="ip-moment-batch-actions">' + action + '</div>' +
+        '</div>';
+    }).join('');
+    box.querySelectorAll('[data-retry-moment-batch]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        retryMomentBatchJob(btn.getAttribute('data-retry-moment-batch'));
+      });
+    });
+    box.querySelectorAll('[data-show-moment-batch]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        selectMomentBatchGroup(btn.getAttribute('data-show-moment-batch'));
+      });
+    });
+  }
+
   function renderMomentImageRecords() {
     var list = $('ipMomentImageRecordList');
     if (!list) return;
@@ -1699,6 +1925,7 @@
       .then(function(data) {
         state.draftRecords = Array.isArray(data.items) ? data.items : [];
         state.draftGroups = buildDraftGroups(state.draftRecords);
+        renderMomentBatchQueue();
         renderDraftRecords();
         renderMomentImageRecords();
       })
@@ -1745,6 +1972,8 @@
     if (!selectTemplateById(selectedTemplateId, { required: true })) {
       return Promise.reject(new Error('请选择模板后再生成。'));
     }
+    var language = currentTemplateLanguage();
+    var targetLanguage = ipTemplateLanguageLabel(language);
     var extraNode = extraId ? $(extraId) : null;
     saveGenerationSettings();
     var keywordIds = cleanTemplateIds(state.templateKeywordIds, false);
@@ -1760,7 +1989,14 @@
         memory_docs: memoryDocs,
         keyword_ids: keywordIds,
         competitor_ids: competitorIds,
-        extra_requirements: ((extraNode && extraNode.value) || '').trim(),
+        language: language,
+        target_language: targetLanguage,
+        requirements: {
+          language: language,
+          target_language: targetLanguage,
+          common: ipTemplateLanguageInstruction(language)
+        },
+        extra_requirements: textWithTemplateLanguage(((extraNode && extraNode.value) || '').trim(), language),
         count: count || 5,
         sync_before: false
       };
@@ -1796,54 +2032,166 @@
     return once();
   }
 
+  function createMomentBatchJobs(payload, total, batchSize) {
+    total = Math.max(1, parseInt(total, 10) || 20);
+    batchSize = Math.max(1, parseInt(batchSize, 10) || 5);
+    var batchCount = Math.ceil(total / batchSize);
+    var groupBase = 'moments_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    var createdAt = new Date().toISOString();
+    var jobs = [];
+    for (var i = 0; i < batchCount; i += 1) {
+      var count = Math.min(batchSize, total - i * batchSize);
+      var groupId = groupBase + '_b' + (i + 1);
+      var batchPayload = clonePayload(payload);
+      batchPayload.count = count;
+      batchPayload.group_id = groupId;
+      batchPayload.sync_before = false;
+      batchPayload.batch_id = groupId;
+      batchPayload.batch_index = i + 1;
+      batchPayload.batch_count = batchCount;
+      jobs.push({
+        batch_id: groupId,
+        batch_index: i + 1,
+        batch_count: batchCount,
+        label: '第' + (i + 1) + '批',
+        group_id: groupId,
+        count: count,
+        status: 'queued',
+        error: '',
+        records: [],
+        payload: batchPayload,
+        created_at: createdAt,
+        updated_at: createdAt,
+        retry_count: 0
+      });
+    }
+    return jobs;
+  }
+
+  function findMomentBatchJob(batchId) {
+    batchId = String(batchId || '');
+    return (state.momentBatchJobs || []).find(function(job) {
+      return String(job.batch_id || '') === batchId;
+    }) || null;
+  }
+
+  function updateMomentBatchJob(batchId, patch) {
+    var job = findMomentBatchJob(batchId);
+    if (!job) return null;
+    Object.assign(job, patch || {}, { updated_at: new Date().toISOString() });
+    state.momentBatchJobs = normalizeMomentBatchJobs(state.momentBatchJobs);
+    saveMomentBatchJobs();
+    renderMomentBatchQueue();
+    return findMomentBatchJob(batchId);
+  }
+
+  function runMomentBatchJob(job) {
+    job = job ? findMomentBatchJob(job.batch_id) || job : null;
+    if (!job) return Promise.reject(new Error('未找到要重试的批次'));
+    var payload = clonePayload(job.payload || {});
+    payload.count = job.count || payload.count || 5;
+    payload.group_id = job.group_id || payload.group_id || job.batch_id;
+    payload.sync_before = false;
+    payload.batch_id = job.batch_id;
+    payload.batch_index = job.batch_index;
+    payload.batch_count = job.batch_count;
+    updateMomentBatchJob(job.batch_id, { status: 'running', error: '', payload: payload, records: [] });
+    setMsg('正在生成朋友圈文案：' + (job.label || '当前批次') + '...');
+    return postWithRetry('/api/ip-content/generate/moments-candidates', payload, 1, (job.label || '当前批次') + '生成失败')
+      .then(function(data) {
+        var records = Array.isArray(data.records) ? data.records : [];
+        records.forEach(function(rec) {
+          rec.group_id = rec.group_id || data.group_id || payload.group_id;
+          rec.meta = Object.assign({}, rec.meta || {}, { group_id: rec.group_id });
+        });
+        updateMomentBatchJob(job.batch_id, {
+          status: 'done',
+          error: '',
+          group_id: data.group_id || payload.group_id,
+          records: records
+        });
+        if (records.length) {
+          syncMomentBatchRecords(records);
+          renderDraftRecords();
+        }
+        return Object.assign({}, data || {}, { records: records });
+      })
+      .catch(function(err) {
+        updateMomentBatchJob(job.batch_id, {
+          status: 'failed',
+          error: err && err.message ? err.message : '这一批生成失败'
+        });
+        throw err;
+      });
+  }
+
+  function retryMomentBatchJob(batchId) {
+    var job = findMomentBatchJob(batchId);
+    if (!job) {
+      setMsg('未找到要重试的批次。', true);
+      return;
+    }
+    job.retry_count = (parseInt(job.retry_count, 10) || 0) + 1;
+    saveMomentBatchJobs();
+    runMomentBatchJob(job)
+      .then(function() {
+        state.recordFilter = 'moments_candidate';
+        state.activeGroupId = job.group_id;
+        return loadDraftRecords().then(function() {
+          setRecordFilter('moments_candidate');
+          selectMomentBatchGroup(job.group_id);
+          setMsg((job.label || '当前批次') + '已重试成功。');
+        });
+      })
+      .catch(function(err) {
+        setMsg((err && err.message) || '这一批重试失败', true);
+      });
+  }
+
   function runMomentsGenerate(btn, successTab) {
     setBusy(btn, true, '生成中...');
-    setMsg('正在分批生成朋友圈文案，请稍等...');
+    setMsg('正在拆成 4 个独立批次生成朋友圈文案，单批失败不会影响其它批次。');
     generationPayload('ipTask2Extra', 20, {})
       .then(function(payload) {
         var total = 20;
         var batchSize = 5;
-        var batchCount = Math.ceil(total / batchSize);
-        var groupId = 'moments_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-        var allRecords = [];
-        var chain = Promise.resolve();
-        for (var i = 0; i < batchCount; i += 1) {
-          (function(batchIndex) {
-            chain = chain.then(function() {
-              var batchPayload = clonePayload(payload);
-              batchPayload.count = Math.min(batchSize, total - batchIndex * batchSize);
-              batchPayload.group_id = groupId;
-              batchPayload.sync_before = false;
-              setMsg('正在生成朋友圈文案：第 ' + (batchIndex + 1) + '/' + batchCount + ' 批...');
-              return postWithRetry('/api/ip-content/generate/moments-candidates', batchPayload, 2, '第 ' + (batchIndex + 1) + ' 批生成失败')
-                .then(function(data) {
-                  var records = Array.isArray(data.records) ? data.records : [];
-                  records.forEach(function(rec) {
-                    rec.group_id = rec.group_id || groupId;
-                    rec.meta = Object.assign({}, rec.meta || {}, { group_id: groupId });
-                  });
-                  allRecords = allRecords.concat(records);
-                  state.latestDrafts = allRecords;
-                  if (records.length && !state.activeGroupId) {
-                    state.activeGroupId = recordGroupId(records[0]);
-                    state.recordFilter = records[0].task || 'moments_candidate';
-                  }
-                  setMsg('已生成 ' + allRecords.length + '/' + total + ' 条朋友圈文案...');
-                });
-            });
-          })(i);
-        }
-        return chain.then(function() { return allRecords; });
+        var jobs = createMomentBatchJobs(payload, total, batchSize);
+        state.momentBatchJobs = jobs;
+        saveMomentBatchJobs();
+        renderMomentBatchQueue();
+        switchTab(successTab || 'records');
+        var runners = jobs.map(function(job, index) {
+          return delay(index * 1200).then(function() {
+            return runMomentBatchJob(job);
+          });
+        });
+        return Promise.allSettled(runners).then(function(results) {
+          return { results: results, jobs: normalizeMomentBatchJobs(state.momentBatchJobs) };
+        });
       })
-      .then(function(records) {
-        if (records.length) {
-          state.activeGroupId = recordGroupId(records[0]);
-          state.recordFilter = records[0].task || 'moments_candidate';
+      .then(function(ctx) {
+        var jobs = ctx.jobs || [];
+        var done = jobs.filter(function(job) { return job.status === 'done'; });
+        var failed = jobs.filter(function(job) { return job.status === 'failed'; });
+        var batchCount = jobs.length || 4;
+        if (done.length) {
+          state.activeGroupId = done[0].group_id;
+          state.recordFilter = 'moments_candidate';
         }
-        setMsg('已生成 ' + records.length + ' 条朋友圈文案。');
         return Promise.all([loadDraftRecords(), loadSources()]).then(function() {
-          setRecordFilter(state.recordFilter || 'moments_candidate');
-          switchTab(successTab || 'records');
+          if (done.length) {
+            setRecordFilter('moments_candidate');
+            switchTab(successTab || 'records');
+          }
+          if (failed.length) {
+            if (done.length) {
+              setMsg('朋友圈文案已完成 ' + done.length + '/' + batchCount + ' 批，失败 ' + failed.length + ' 批，可在批次卡片里单独重试。', true);
+            } else {
+              setMsg('朋友圈文案 ' + batchCount + ' 批全部失败，可在批次卡片里单独重试。', true);
+            }
+          } else {
+            setMsg('朋友圈文案 ' + batchCount + ' 个批次已全部生成完成。');
+          }
         });
       })
       .catch(function(err) { setMsg(err.message || '生成失败', true); })
@@ -1905,7 +2253,7 @@
       body: {
         batch_id: batchId,
         batch_created_at: batchCreatedAt,
-        image_extra: (($('ipImageExtra') && $('ipImageExtra').value) || '').trim(),
+        image_extra: textWithTemplateLanguage((($('ipImageExtra') && $('ipImageExtra').value) || '').trim(), currentTemplateLanguage()),
         records: selected.map(function(rec) {
           return {
             record_id: rec.record_id,
@@ -1976,8 +2324,12 @@
         setRecordFilter(btn.getAttribute('data-ip-record-filter') || '');
       });
     });
-    ['ipTask1Extra', 'ipTask2Extra', 'ipImageExtra'].forEach(function(id) {
+    ['ipTask1Extra', 'ipTask2Extra', 'ipImageExtra', 'ipTemplateLanguageSelect'].forEach(function(id) {
       if ($(id)) $(id).addEventListener('input', function() {
+        saveGenerationSettings();
+        renderTemplateSummary();
+      });
+      if ($(id) && id === 'ipTemplateLanguageSelect') $(id).addEventListener('change', function() {
         saveGenerationSettings();
         renderTemplateSummary();
       });
@@ -2045,6 +2397,7 @@
   window.initIpContentStudioView = function() {
     bind();
     restoreGenerationSettings();
+    restoreMomentBatchJobs();
     renderDraftCards('ipLatestDraftList', []);
     switchConfigTab(state.configTab);
     updateCompetitorPlatformFields();
