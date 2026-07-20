@@ -593,6 +593,10 @@
     });
   }
 
+  function requestDelete(path) {
+    return requestCloudDelete(path);
+  }
+
   function assetUploadHeaders() {
     var headers = authHeadersSafe();
     delete headers['Content-Type'];
@@ -2025,7 +2029,7 @@
 
   function renderAvatarCard(item) {
     var selected = state.selectedAvatar && state.selectedAvatar.avatar === item.avatar;
-    var canDelete = false;
+    var canDelete = !!(item && item.is_mine === true && item.id != null);
     var tags = (item.tags || []).slice(0, 2).map(function(tag) {
       return '<span class="shanjian-card-tag">' + escapeHtml(tag) + '</span>';
     }).join('');
@@ -2281,11 +2285,20 @@
           var oldText = btn.textContent;
           btn.disabled = true;
           btn.textContent = '删除中...';
-          Promise.resolve()
+          requestDelete('/api/shanjian-digital-human/profiles/' + encodeURIComponent(id))
             .then(function() {
+              state.avatarLibrary.mine = (state.avatarLibrary.mine || []).filter(function(item) {
+                return String(item && item.id) !== String(id);
+              });
+              if (state.selectedAvatar && String(state.selectedAvatar.id) === String(id)) {
+                var all = (state.avatarLibrary.mine || []).concat(state.avatarLibrary.public || []);
+                state.selectedAvatar = all.length ? all[0] : null;
+                renderSelectedAvatar();
+              }
+              renderAvatarLibrary();
               btn.disabled = false;
               btn.textContent = oldText;
-              showMessage('闪剪数字人暂不支持前端删除，请后续补充删除接口。', true);
+              showMessage('数字人已删除。', false);
             })
             .catch(function(err) {
               btn.disabled = false;
@@ -2690,7 +2703,34 @@
     });
     Array.prototype.forEach.call(document.querySelectorAll('.shanjian-video-history-delete'), function(btn) {
       btn.onclick = function() {
-        showMessage('闪剪数字人口播历史记录暂不支持前端删除。', true);
+        var id = btn.getAttribute('data-id') || '';
+        if (!id) return showMessage('无法删除该作品记录，请刷新后重试。', true);
+        showConfirmDialog({
+          title: '删除作品',
+          message: '确认删除这个数字人作品记录？删除后不会再显示在历史作品中。',
+          confirmText: '删除',
+          tone: 'danger'
+        }).then(function(confirmed) {
+          if (!confirmed) return;
+          var oldText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '删除中...';
+          requestDelete('/api/shanjian-digital-human/videos/' + encodeURIComponent(id))
+            .then(function() {
+              state.videoHistory = (state.videoHistory || []).filter(function(item) {
+                return String(item && item.id) !== String(id);
+              });
+              renderVideoHistory();
+              showMessage('作品记录已删除。', false);
+            })
+            .catch(function(err) {
+              showMessage(err && err.message ? err.message : '删除作品记录失败', true);
+            })
+            .finally(function() {
+              btn.disabled = false;
+              btn.textContent = oldText;
+            });
+        });
       };
     });
   }
