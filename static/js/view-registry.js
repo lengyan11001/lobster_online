@@ -89,6 +89,13 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('alibaba-inquiries', {
+    html: '/static/views/alibaba-inquiries.html?v=20260721-alibaba-inquiries',
+    scripts: '/static/js/alibaba-inquiries.js?v=20260721-alibaba-inquiries',
+    init: 'initAlibabaInquiriesView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('juhe-wechat', {
     html: '/static/views/juhe-wechat.html?v=20260715-native-wechat-moments-comment',
     scripts: '/static/js/juhe-wechat.js?v=20260718-native-wechat-moments-publish',

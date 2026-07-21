@@ -1463,6 +1463,31 @@ window._openGlobalLeadsView = function() {
   try { location.hash = 'global-leads'; } catch (e1) {}
 };
 
+window._openAlibabaInquiriesView = function() {
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('alibaba-inquiries', {
+      html: '/static/views/alibaba-inquiries.html?v=20260721-alibaba-inquiries',
+      scripts: '/static/js/alibaba-inquiries.js?v=20260721-alibaba-inquiries',
+      init: 'initAlibabaInquiriesView',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('alibaba-inquiries', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .then(function() {
+        if (typeof window.initAlibabaInquiriesView === 'function') window.initAlibabaInquiriesView();
+      })
+      .catch(function(err) {
+        console.error('Failed to open alibaba-inquiries', err);
+        alert('阿里询盘接管工作台加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('alibaba-inquiries');
+  if (typeof window.initAlibabaInquiriesView === 'function') window.initAlibabaInquiriesView();
+  try { location.hash = 'alibaba-inquiries'; } catch (e1) {}
+};
+
 window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
@@ -1591,6 +1616,10 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'wechat-channels-transcript' && typeof window._openWechatChannelsTranscriptView === 'function') {
     window._openWechatChannelsTranscriptView();
+    return;
+  }
+  if (target === 'alibaba-inquiries' && typeof window._openAlibabaInquiriesView === 'function') {
+    window._openAlibabaInquiriesView();
     return;
   }
   if (target === 'linkedin-mining' && typeof window._openLinkedinMiningView === 'function') {
@@ -1939,6 +1968,22 @@ function _renderGlobalLeadsCard(pkg, showDebug) {
     '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '搜客、模板、周期更新和线索明细。')) + cap + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm global-leads-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _renderAlibabaInquiriesCard(pkg, showDebug) {
+  pkg = pkg || {};
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['阿里国际站', '询盘', '客户档案', 'AI话术']);
+  var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+  return '<div class="skill-store-card alibaba-inquiries-card" data-skill-package-id="' + escapeAttr(pkg.id || 'alibaba_inquiry_takeover_skill') + '" style="cursor:pointer;border-color:rgba(249,115,22,0.36);background:linear-gradient(135deg,rgba(249,115,22,0.10),rgba(20,86,255,0.06),rgba(6,182,212,0.05));">' +
+    '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '阿里询盘接管')) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '接管阿里国际站询盘：账号登录、滚动同步历史询盘、客户档案、AI话术总结和回复辅助。')) + cap + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm alibaba-inquiries-entry-btn">进入工作台</button></div>' +
   '</div>';
 }
 
@@ -2959,6 +3004,13 @@ function _isWechatChannelsTranscriptSkillCard(card) {
     card.classList.contains('wechat-channels-transcript-card');
 }
 
+function _isAlibabaInquiriesSkillCard(card) {
+  if (!card) return false;
+  var packageId = card.getAttribute('data-skill-package-id') || '';
+  return packageId === 'alibaba_inquiry_takeover_skill' ||
+    card.classList.contains('alibaba-inquiries-card');
+}
+
 function _simplifySkillStoreCards(el) {
   if (!el) return;
   el.querySelectorAll('.skill-store-card').forEach(function(card) {
@@ -2967,6 +3019,7 @@ function _simplifySkillStoreCards(el) {
     if (_isSocialLeadsSkillCard(card)) return;
     if (_isJuheWechatSkillCard(card)) return;
     if (_isWechatChannelsTranscriptSkillCard(card)) return;
+    if (_isAlibabaInquiriesSkillCard(card)) return;
     var copy = _skillStoreSimpleCopyFor(card) || {};
     card.classList.add('is-simple-skill-card');
     Array.prototype.slice.call(card.children || []).forEach(function(child) {
@@ -3104,6 +3157,15 @@ function loadSkillStore() {
       var wechatTranscriptPkg = pkgById('wechat_channels_transcript_skill');
       var ai3dPkg = pkgById('ai_3d_model_skill');
       var globalLeadsPkg = pkgById('global_trade_leads_skill');
+      var alibabaInquiriesPkg = pkgById('alibaba_inquiry_takeover_skill') || {
+        id: 'alibaba_inquiry_takeover_skill',
+        name: '阿里询盘接管',
+        description: '接入阿里国际站询盘：账号登录、滚动同步历史询盘、客户档案、AI话术总结和回复辅助。',
+        type: 'builtin',
+        status: 'available',
+        default_installed: true,
+        tags: ['阿里国际站', '询盘', '客户档案', 'AI话术']
+      };
 
       function paintSkillStoreList() {
         var html = '';
@@ -3121,6 +3183,7 @@ function loadSkillStore() {
         if (xLeadsPkg) html += _renderSocialLeadsCard(xLeadsPkg, 'x', !!(isSkillAdmin && xLeadsPkg.store_visibility === 'debug'));
         if (tiktokLeadsPkg) html += _renderSocialLeadsCard(tiktokLeadsPkg, 'tiktok', !!(isSkillAdmin && tiktokLeadsPkg.store_visibility === 'debug'));
         if (globalLeadsPkg) html += _renderGlobalLeadsCard(globalLeadsPkg, !!(isSkillAdmin && globalLeadsPkg.store_visibility === 'debug'));
+        if (alibabaInquiriesPkg) html += _renderAlibabaInquiriesCard(alibabaInquiriesPkg, !!(isSkillAdmin && alibabaInquiriesPkg.store_visibility === 'debug'));
         if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
         if (wechatTranscriptPkg) html += _renderWechatChannelsTranscriptCard(wechatTranscriptPkg, !!(isSkillAdmin && wechatTranscriptPkg.store_visibility === 'debug'));
         if (ai3dPkg) html += _renderAi3dModelCard(ai3dPkg, !!(isSkillAdmin && ai3dPkg.store_visibility === 'debug'));
@@ -3173,6 +3236,7 @@ function loadSkillStore() {
           if (pkg.id === 'x_leads') return '';
           if (pkg.id === 'tiktok_leads') return '';
           if (pkg.id === 'global_trade_leads_skill') return '';
+          if (pkg.id === 'alibaba_inquiry_takeover_skill') return '';
           if (pkg.id === 'juhe_wechat_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
@@ -3272,6 +3336,7 @@ function loadSkillStore() {
         _bindLinkedinMiningCardEntry();
         _bindSocialLeadsCardEntry();
         _bindGlobalLeadsCardEntry();
+        _bindAlibabaInquiriesCardEntry();
         _bindJuheWechatCardEntry();
         _bindWechatChannelsTranscriptCardEntry();
         _bindAi3dModelCardEntry();
@@ -3699,6 +3764,26 @@ function _bindGlobalLeadsCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openGlobalLeadsView === 'function') window._openGlobalLeadsView();
+    });
+  });
+}
+
+function _bindAlibabaInquiriesCardEntry() {
+  document.querySelectorAll('.alibaba-inquiries-card, [data-skill-package-id="alibaba_inquiry_takeover_skill"]').forEach(function(card) {
+    if (card.dataset.alibabaInquiriesEntryBound === '1') return;
+    card.dataset.alibabaInquiriesEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openAlibabaInquiriesView === 'function') window._openAlibabaInquiriesView();
+    });
+  });
+  document.querySelectorAll('.alibaba-inquiries-entry-btn').forEach(function(btn) {
+    if (btn.dataset.alibabaInquiriesEntryBound === '1') return;
+    btn.dataset.alibabaInquiriesEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openAlibabaInquiriesView === 'function') window._openAlibabaInquiriesView();
     });
   });
 }

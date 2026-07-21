@@ -142,6 +142,128 @@ class PublishAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class AlibabaInquiryAccount(Base):
+    __tablename__ = "alibaba_inquiry_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    nickname: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    browser_profile: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    sync_status: Mapped[str] = mapped_column(String(32), default="idle", nullable=False, index=True)
+    sync_progress: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    last_login: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AlibabaInquiry(Base):
+    __tablename__ = "alibaba_inquiries"
+    __table_args__ = (
+        UniqueConstraint("account_id", "inquiry_id", name="uq_alibaba_inquiry_account_inquiry"),
+        Index("ix_alibaba_inquiries_account_updated", "account_id", "last_message_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    inquiry_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    buyer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    buyer_login_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    owner_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at_on_platform: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    ai_intent: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    ai_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AlibabaInquiryMessage(Base):
+    __tablename__ = "alibaba_inquiry_messages"
+    __table_args__ = (
+        UniqueConstraint("account_id", "inquiry_id", "message_uid", name="uq_alibaba_msg_uid"),
+        Index("ix_alibaba_messages_inquiry_sent", "account_id", "inquiry_id", "sent_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    inquiry_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    message_uid: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False, index=True)
+    sender_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    msg_type: Mapped[str] = mapped_column(String(32), default="text", nullable=False)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AlibabaCustomerProfile(Base):
+    __tablename__ = "alibaba_customer_profiles"
+    __table_args__ = (UniqueConstraint("account_id", "inquiry_id", name="uq_alibaba_customer_account_inquiry"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    inquiry_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    buyer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    buyer_login_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    registration_time: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    attributes: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    activity: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AlibabaInquiryTrainingDoc(Base):
+    __tablename__ = "alibaba_inquiry_training_docs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), default="script", nullable=False, index=True)
+    filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    file_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AlibabaInquiryPhraseSummary(Base):
+    __tablename__ = "alibaba_inquiry_phrase_summaries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    summary_type: Mapped[str] = mapped_column(String(32), default="history", nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class Enterprise(Base):
     """企业：多企业，每企业可有 1～2 个产品。"""
     __tablename__ = "enterprises"
