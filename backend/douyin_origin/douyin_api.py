@@ -1898,6 +1898,27 @@ def build_douyin_nurture_conflict(action_label: str) -> Optional[Dict]:
     return None
 
 
+def has_running_douyin_task_for_account_nurture() -> bool:
+    reconcile_douyin_runtime_state()
+    reconcile_douyin_video_comment_runtime_state()
+    reconcile_douyin_mention_comment_runtime_state()
+    reconcile_douyin_follow_comment_runtime_state()
+    reconcile_douyin_interaction_runtime_state()
+    reconcile_douyin_group_member_runtime_state()
+    reconcile_douyin_stranger_message_runtime_state()
+    monitor_running = bool(douyin_monitor_runtime_state.get("running"))
+    return bool(
+        douyin_running
+        or douyin_video_comment_running
+        or douyin_mention_comment_running
+        or douyin_follow_comment_running
+        or douyin_interaction_running
+        or douyin_group_member_running
+        or douyin_stranger_message_running
+        or monitor_running
+    )
+
+
 def safe_int(value, default: int) -> int:
     try:
         text = str(value).strip() if value is not None else ""
@@ -11973,6 +11994,95 @@ async def douyin_get_account_nurture_status():
     return {"code": 200, "status": snapshot}
 
 
+async def douyin_run_account_nurture_once(request: Optional[dict] = None):
+    global douyin_account_nurture_scheduler
+
+    source = request if isinstance(request, dict) else {}
+    target_account_ids = parse_douyin_nurture_account_ids(source)
+    duration_minutes = safe_int(
+        source.get("duration_minutes")
+        or source.get("sales_schedule_duration_minutes")
+        or source.get("session_minutes"),
+        30,
+    )
+    duration_minutes = max(5, min(duration_minutes, 180))
+
+    if reconcile_douyin_account_nurture_runtime_state() and douyin_account_nurture_scheduler:
+        if douyin_account_nurture_scheduler.is_actively_blocking_other_tasks():
+            return build_douyin_nurture_conflict("执行自动养号")
+        if source.get("stop_waiting_scheduler", True):
+            douyin_account_nurture_scheduler.disable_accounts(target_account_ids or None)
+            if not douyin_account_nurture_scheduler.has_enabled_online_accounts():
+                douyin_account_nurture_scheduler.stop()
+            douyin_log("H5 销售工作流准备执行一次性养号，已释放等待中的常驻养号排班。", "warning")
+            await asyncio.sleep(0.2)
+
+    if has_running_douyin_task_for_account_nurture():
+        return {
+            "code": 409,
+            "type": "douyin_task_conflict",
+            "msg": "当前还有其他抖音任务在执行，请稍后再执行自动养号。",
+        }
+
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("douyin_accounts"))
+    online_accounts = [account for account in accounts if account.get("status") == "online"]
+    selected_online_accounts = (
+        [account for account in online_accounts if int(account.get("id", 0) or 0) in set(target_account_ids)]
+        if target_account_ids
+        else online_accounts
+    )
+    if not selected_online_accounts:
+        return {"code": 400, "type": "no_online_account", "msg": "当前没有在线抖音账号，无法执行自动养号。"}
+
+    runtime_config = dict(config)
+    runtime_config["douyin_nurture_session_min_minutes"] = duration_minutes
+    runtime_config["douyin_nurture_session_max_minutes"] = duration_minutes
+    scheduler = DouyinAccountNurtureScheduler(
+        accounts=accounts,
+        config=runtime_config,
+        broadcast_log=douyin_log,
+        enabled_account_ids=[int(account.get("id", 0) or 0) for account in selected_online_accounts],
+    )
+
+    errors: List[str] = []
+    completed = 0
+    try:
+        for account in selected_online_accounts:
+            account_id = int(account.get("id", 0) or 0)
+            before = int(scheduler.account_states.get(account_id, {}).get("completed_sessions", 0) or 0)
+            await scheduler._run_session(account)
+            state = scheduler.account_states.get(account_id, {})
+            after = int(state.get("completed_sessions", 0) or 0)
+            if after > before:
+                completed += after - before
+            if state.get("last_error"):
+                errors.append(f"账号 {account_id}: {state.get('last_error')}")
+    finally:
+        scheduler.stop()
+
+    snapshot = scheduler.snapshot()
+    if errors and completed <= 0:
+        return {
+            "code": 500,
+            "type": "account_nurture_once_failed",
+            "msg": "抖音自动养号执行失败：" + "；".join(errors[:3]),
+            "status": snapshot,
+        }
+    if errors:
+        return {
+            "code": 200,
+            "msg": f"抖音自动养号已部分完成，成功 {completed} 个账号，异常 {len(errors)} 个账号。",
+            "status": snapshot,
+            "warnings": errors[:5],
+        }
+    return {
+        "code": 200,
+        "msg": f"抖音自动养号已完成，本次执行 {completed} 个账号，每个约 {duration_minutes} 分钟。",
+        "status": snapshot,
+    }
+
+
 @router.post("/account-nurture/start")
 async def douyin_start_account_nurture(request: Optional[dict] = None):
     global douyin_account_nurture_scheduler, douyin_account_nurture_background_task
@@ -12188,7 +12298,7 @@ async def douyin_view_account(account_id: int):
 
 @router.post("/search/collect")
 async def douyin_search_collect(request: dict):
-    nurture_conflict = build_douyin_nurture_conflict("??????")
+    nurture_conflict = build_douyin_nurture_conflict("执行关键词采集")
     if nurture_conflict:
         return nurture_conflict
     request = request or {}

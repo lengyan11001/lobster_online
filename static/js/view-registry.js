@@ -21,8 +21,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260717-memory-source-select',
-    scripts: '/static/js/personal-settings.js?v=20260717-memory-source-select',
+    html: '/static/views/personal-settings.html?v=20260720-ip-profile-unified',
+    scripts: '/static/js/personal-settings.js?v=20260720-ip-profile-unified',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -62,8 +62,8 @@
   });
 
   window.registerLobsterView('ip-content-studio', {
-    html: '/static/views/ip-content-studio.html?v=20260716-personal-sync',
-    scripts: '/static/js/ip-content-studio.js?v=20260716-personal-sync',
+    html: '/static/views/ip-content-studio.html?v=20260720-current-profile-only',
+    scripts: '/static/js/ip-content-studio.js?v=20260720-current-profile-only',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });

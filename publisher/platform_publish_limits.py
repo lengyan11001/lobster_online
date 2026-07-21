@@ -6,6 +6,7 @@
 - 小红书：标题严格 ≤20 字（超出会无法提交或前端拦截）。
 - 抖音：驱动内已对标题做截断；此处与驱动一致：图文标题 20、视频 30；描述+话题合并填入约 500 字。
 - 今日头条：标题保守 30 字；正文/简介保守 5000 字（mp 后台以实际提示为准）。
+- 视频号：短标题保守 30 字；描述+话题合并保守 1000 字。
 """
 from __future__ import annotations
 
@@ -89,6 +90,19 @@ def normalize_publish_texts(
         if len(d) > desc_max:
             warnings.append(f"头条正文/简介已超过 {desc_max} 字，已截断（原 {len(d)} 字）")
             d = d[:desc_max]
+        return t, d, g, warnings
+
+    if plat == "wechat_channels":
+        title_max, desc_max = 30, 1000
+        if len(t) > title_max:
+            warnings.append(f"视频号短标题已超过 {title_max} 字，已截断（原 {len(t)} 字）")
+            t = t[:title_max]
+        suffix = _douyin_tag_suffix(g)
+        combined = d + suffix
+        if len(combined) > desc_max:
+            room = max(0, desc_max - len(suffix))
+            warnings.append(f"视频号描述+话题总长度已超过 {desc_max} 字，已缩短描述（原描述 {len(d)} 字）")
+            d = d[:room]
         return t, d, g, warnings
 
     return t, d, g, warnings

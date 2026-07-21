@@ -310,9 +310,10 @@ class DouyinAccountNurtureScheduler:
     def is_actively_blocking_other_tasks(self) -> bool:
         if not self.is_running or not self.has_enabled_online_accounts():
             return False
-        if any(state.get("is_enabled") and state.get("worker_status") == "running" for state in self.account_states.values()):
-            return True
-        return self._is_in_active_window()
+        return any(
+            state.get("is_enabled") and state.get("worker_status") == "running"
+            for state in self.account_states.values()
+        )
 
     def _is_in_active_window(self, current: Optional[datetime] = None) -> bool:
         now = current or datetime.now()

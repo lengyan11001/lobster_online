@@ -26,8 +26,8 @@ function bindPublishTabs() {
   });
 }
 
-var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
-var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'bilibili', 'xiaohongshu', 'kuaishou', 'toutiao'];
+var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', wechat_channels: '视频号', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
+var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'wechat_channels', 'bilibili', 'xiaohongshu', 'kuaishou', 'toutiao'];
 var ECOMMERCE_ACCOUNT_PLATFORMS = ['douyin_shop', 'xiaohongshu_shop', 'alibaba1688', 'taobao', 'pinduoduo'];
 var ECOMMERCE_PLATFORMS = { douyin_shop: true, xiaohongshu_shop: true, alibaba1688: true, taobao: true, pinduoduo: true };
 var _currentAccountType = 'publish';
@@ -1286,6 +1286,18 @@ function _bindAccountButtons(el) {
             return;
           }
         }
+      }
+      if (platform === 'wechat_channels') {
+        var wcLocation = prompt('视频号位置（可留空；例如：深圳市）：', '') || '';
+        var wcCollection = prompt('视频号合集（可留空；填写已有合集名称）：', '') || '';
+        var wcLink = prompt('视频号链接（可留空；填写已有链接名称）：', '') || '';
+        var wcMusic = prompt('视频号音乐（可留空；填写页面可选音乐名称）：', '') || '';
+        var wcActivity = prompt('视频号活动（可留空；例如：不参与活动 或活动名称）：', '') || '';
+        if (wcLocation.trim()) options.wechat_channels_location = wcLocation.trim();
+        if (wcCollection.trim()) options.wechat_channels_collection = wcCollection.trim();
+        if (wcLink.trim()) options.wechat_channels_link = wcLink.trim();
+        if (wcMusic.trim()) options.wechat_channels_music = wcMusic.trim();
+        if (wcActivity.trim()) options.wechat_channels_activity = wcActivity.trim();
       }
       btn.disabled = true; btn.textContent = '发布中…';
       var payload = {

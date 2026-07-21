@@ -2138,6 +2138,14 @@ def _is_wechat_moments_platform(value: Any) -> bool:
     return str(value or "").strip().lower() in {"wechat_moments", "wechat", "moments"}
 
 
+def _should_forward_auth_for_download_url(url: str) -> bool:
+    try:
+        host = (urlparse(str(url or "")).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 def _publish_moments_content_from_draft(draft: Dict[str, Any]) -> str:
     content = str(draft.get("content") or draft.get("text") or "").strip()
     title = str(draft.get("title") or "").strip()
@@ -2210,12 +2218,13 @@ async def _download_url_to_native_wechat_attachment(
     target = native_wechat_engine.make_native_wechat_upload_path(filename or _filename_from_url_for_moments(clean_url, media_type))
     timeout = httpx.Timeout(600.0, connect=10.0, read=600.0, write=30.0, pool=10.0)
     req_headers = {"User-Agent": "Lobster-H5-Moments/1.0", "Accept": "*/*"}
-    auth = str((headers or {}).get("Authorization") or "").strip()
-    xi = str((headers or {}).get("X-Installation-Id") or (headers or {}).get("x-installation-id") or "").strip()
-    if auth:
-        req_headers["Authorization"] = auth
-    if xi:
-        req_headers["X-Installation-Id"] = xi
+    if _should_forward_auth_for_download_url(clean_url):
+        auth = str((headers or {}).get("Authorization") or "").strip()
+        xi = str((headers or {}).get("X-Installation-Id") or (headers or {}).get("x-installation-id") or "").strip()
+        if auth:
+            req_headers["Authorization"] = auth
+        if xi:
+            req_headers["X-Installation-Id"] = xi
     total = 0
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
@@ -2946,10 +2955,12 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
 
     _install_douyin_origin_import_path()
     if action == "account_nurture":
-        from douyin_api import douyin_start_account_nurture  # type: ignore
+        from douyin_api import douyin_run_account_nurture_once  # type: ignore
 
-        payload = {"account_ids": [account_id]} if account_id > 0 else {}
-        result = await douyin_start_account_nurture(payload)
+        payload = {"duration_minutes": _safe_int(source.get("sales_schedule_duration_minutes") or 30) or 30}
+        if account_id > 0:
+            payload["account_ids"] = [account_id]
+        result = await douyin_run_account_nurture_once(payload)
         return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音养号启动失败"}
 
     if action == "reply_comments":
@@ -4277,7 +4288,52 @@ def _run_h5_context(run: Dict[str, Any]) -> Dict[str, Any]:
     return params.get("h5_context") if isinstance(params.get("h5_context"), dict) else {}
 
 
-def _extract_parent_material(payload: Any) -> Dict[str, Any]:
+def _normalize_parent_material_media_type(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    if text in {"video", "short_video", "video_text", "mp4", "mov"}:
+        return "video"
+    if text in {"image", "image_text", "images", "picture", "photo", "photos", "jpg", "jpeg", "png", "webp"}:
+        return "image"
+    return ""
+
+
+def _local_asset_media_type_map(asset_ids: List[str]) -> Dict[str, str]:
+    ordered = [str(aid or "").strip() for aid in asset_ids if str(aid or "").strip()]
+    ordered = list(dict.fromkeys(ordered))
+    if not ordered:
+        return {}
+    db = SessionLocal()
+    try:
+        rows = db.query(Asset).filter(Asset.asset_id.in_(ordered)).all()
+        return {
+            str(row.asset_id): _normalize_parent_material_media_type(row.media_type)
+            for row in rows
+            if row and _normalize_parent_material_media_type(row.media_type)
+        }
+    except Exception as exc:
+        logger.warning("[H5-WORKFLOW] lookup parent asset media type failed asset_ids=%s err=%s", ordered[:8], exc)
+        return {}
+    finally:
+        db.close()
+
+
+def _preferred_parent_material_media_type(params: Dict[str, Any]) -> str:
+    if not _is_wechat_moments_platform((params or {}).get("platform") or (params or {}).get("publish_platform")):
+        return ""
+    raw = str(
+        (params or {}).get("media_type")
+        or (params or {}).get("content_type")
+        or (params or {}).get("publish_media_type")
+        or ""
+    ).strip().lower().replace("-", "_")
+    # H5 workflow currently defaults Moments actions to image_text. For parent
+    # outputs, the generated local asset type is more reliable than that default.
+    if raw == "image_text":
+        return ""
+    return _normalize_parent_material_media_type(raw)
+
+
+def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Dict[str, Any]:
     video_ids: List[str] = []
     image_ids: List[str] = []
     other_ids: List[str] = []
@@ -4335,18 +4391,78 @@ def _extract_parent_material(payload: Any) -> Dict[str, Any]:
                 visit(raw_value, item_kind)
 
     visit(payload)
-    if video_ids:
-        return {"asset_id": video_ids[0], "media_type": "video"}
-    if video_urls:
-        return {"url": video_urls[0], "media_type": "video"}
-    if image_ids:
-        return {"asset_id": image_ids[0], "media_type": "image"}
-    if image_urls:
-        return {"url": image_urls[0], "media_type": "image"}
+
     if other_ids:
-        return {"asset_id": other_ids[0], "media_type": "video"}
+        typed = _local_asset_media_type_map(other_ids)
+        remaining_other_ids: List[str] = []
+        for aid in other_ids:
+            kind = typed.get(aid)
+            if kind == "video":
+                if aid not in video_ids:
+                    video_ids.append(aid)
+            elif kind == "image":
+                if aid not in image_ids:
+                    image_ids.append(aid)
+            else:
+                remaining_other_ids.append(aid)
+        other_ids = remaining_other_ids
+
+    def first_url(*buckets: List[str]) -> str:
+        for bucket in buckets:
+            if bucket:
+                return bucket[0]
+        return ""
+
+    def asset_result(asset_id: str, media_type: str, *fallback_buckets: List[str]) -> Dict[str, Any]:
+        result = {"asset_id": asset_id, "media_type": media_type}
+        fallback = first_url(*fallback_buckets)
+        if fallback:
+            result["url"] = fallback
+        return result
+
+    def url_result(url: str, media_type: str) -> Dict[str, Any]:
+        return {"url": url, "media_type": media_type}
+
+    preferred = _normalize_parent_material_media_type(preferred_media_type)
+    if preferred == "image":
+        if image_ids:
+            return asset_result(image_ids[0], "image", image_urls, other_urls)
+        if other_ids:
+            return asset_result(other_ids[0], "image", image_urls, other_urls)
+        if image_urls:
+            return url_result(image_urls[0], "image")
+        if video_ids:
+            return asset_result(video_ids[0], "video", video_urls, other_urls)
+        if video_urls:
+            return url_result(video_urls[0], "video")
+        if other_urls:
+            return url_result(other_urls[0], "image")
+    elif preferred == "video":
+        if video_ids:
+            return asset_result(video_ids[0], "video", video_urls, other_urls)
+        if other_ids:
+            return asset_result(other_ids[0], "video", video_urls, other_urls)
+        if video_urls:
+            return url_result(video_urls[0], "video")
+        if other_urls:
+            return url_result(other_urls[0], "video")
+        if image_ids:
+            return asset_result(image_ids[0], "image", image_urls)
+        if image_urls:
+            return url_result(image_urls[0], "image")
+
+    if video_ids:
+        return asset_result(video_ids[0], "video", video_urls, other_urls)
+    if video_urls:
+        return url_result(video_urls[0], "video")
+    if image_ids:
+        return asset_result(image_ids[0], "image", image_urls, other_urls)
+    if image_urls:
+        return url_result(image_urls[0], "image")
+    if other_ids:
+        return asset_result(other_ids[0], "video", other_urls)
     if other_urls:
-        return {"url": other_urls[0], "media_type": "video"}
+        return url_result(other_urls[0], "video")
     return {}
 
 
@@ -4390,7 +4506,10 @@ async def _resolve_parent_workflow_material(
         run_time = _parse_run_time(run.get("finished_at") or run.get("updated_at") or run.get("created_at"))
         if current_time and run_time and run_time > current_time + timedelta(minutes=10):
             continue
-        material = _extract_parent_material(run.get("result_payload") or {})
+        material = _extract_parent_material(
+            run.get("result_payload") or {},
+            preferred_media_type=_preferred_parent_material_media_type(params),
+        )
         if not material:
             continue
         candidates.append({**material, "source_run_id": str(run.get("id") or "")})

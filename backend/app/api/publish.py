@@ -1029,6 +1029,7 @@ SUPPORTED_PLATFORMS = {
     "xiaohongshu": {"name": "小红书", "login_url": "https://creator.xiaohongshu.com"},
     "kuaishou": {"name": "快手", "login_url": "https://cp.kuaishou.com"},
     "toutiao": {"name": "今日头条", "login_url": "https://mp.toutiao.com/auth/page/login?redirect_url=JTJGcHJvZmlsZV92NCUyRg=="},
+    "wechat_channels": {"name": "视频号", "login_url": "https://channels.weixin.qq.com/platform"},
     "douyin_shop": {"name": "抖店", "login_url": "https://fxg.jinritemai.com/"},
     "xiaohongshu_shop": {"name": "小红书店铺", "login_url": "https://ark.xiaohongshu.com/"},
     "alibaba1688": {"name": "1688", "login_url": "https://work.1688.com/"},
@@ -1769,6 +1770,8 @@ class PublishReq(BaseModel):
     # douyin_manual_cover_wait_sec：manual 时轮询秒数上限（默认 600）。
     # 头条：无图纯文可 toutiao_graphic_no_cover=true；主素材为图片时 API 会忽略该开关走单图封面，
     # 除非 toutiao_force_graphic_no_cover=true（极少用）。
+    # 视频号：wechat_channels_publish_type=image|video 可显式指定；可选参数支持
+    # wechat_channels_location / collection / link / music / activity / original。
     options: Optional[dict] = None
     # 可选第二图片；头条视频作单独封面；头条图文时主 asset 即「封面图」，此项可作补充配图
     cover_asset_id: Optional[str] = None

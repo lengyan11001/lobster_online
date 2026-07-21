@@ -21,13 +21,31 @@
     generatedDocOrder: [],
     uploadFiles: [],
     customReferenceFile: null,
-    defaultItem: null
+    defaultItem: null,
+    personalTemplateLanguage: 'zh-CN'
   };
 
   var DOC_TYPES = [
     { key: 'brand_product_intro', label: '产品介绍' },
     { key: 'product_service_faq', label: '百问百答' },
     { key: 'short_video_scripts', label: '短视频口播稿' }
+  ];
+
+  var IP_TEMPLATE_LANGUAGES = [
+    ['zh-CN', '简体中文'],
+    ['en', 'English'],
+    ['ja', '日本語'],
+    ['ko', '한국어'],
+    ['th', 'ไทย'],
+    ['vi', 'Tiếng Việt'],
+    ['id', 'Bahasa Indonesia'],
+    ['ms', 'Bahasa Melayu'],
+    ['es', 'Español'],
+    ['pt', 'Português'],
+    ['fr', 'Français'],
+    ['de', 'Deutsch'],
+    ['ru', 'Русский'],
+    ['ar', 'العربية']
   ];
 
   function $(id) { return document.getElementById(id); }
@@ -193,19 +211,85 @@
     if (el) el.value = value || '';
   }
 
+  function normalizeIpTemplateLanguage(value) {
+    var raw = String(value || '').trim();
+    var lower = raw.toLowerCase();
+    var aliases = {
+      zh: 'zh-CN',
+      'zh-cn': 'zh-CN',
+      chinese: 'zh-CN',
+      '简体中文': 'zh-CN',
+      english: 'en',
+      japanese: 'ja',
+      korean: 'ko',
+      thai: 'th',
+      vietnamese: 'vi',
+      indonesian: 'id',
+      malay: 'ms',
+      spanish: 'es',
+      portuguese: 'pt',
+      french: 'fr',
+      german: 'de',
+      russian: 'ru',
+      arabic: 'ar'
+    };
+    var normalized = aliases[lower] || raw;
+    return IP_TEMPLATE_LANGUAGES.some(function(row) { return row[0] === normalized; }) ? normalized : 'zh-CN';
+  }
+
+  function ipTemplateLanguageLabel(value) {
+    var lang = normalizeIpTemplateLanguage(value);
+    var row = IP_TEMPLATE_LANGUAGES.find(function(item) { return item[0] === lang; });
+    return row ? row[1] : '简体中文';
+  }
+
+  function ipTemplateLanguageInstruction(value) {
+    var label = ipTemplateLanguageLabel(value);
+    return '目标语种：' + label + '。所有生成内容必须使用' + label + '输出；标题、口播正文、朋友圈正文、图片提示词中的可见文字都要使用' + label + '，不要混用其他语言。';
+  }
+
+  function templateLanguageFromParts(requirements, meta, fallback) {
+    var req = requirements && typeof requirements === 'object' ? requirements : {};
+    var m = meta && typeof meta === 'object' ? meta : {};
+    return normalizeIpTemplateLanguage(req.language || req.target_language || m.language || m.target_language || m.profile_language || fallback || '');
+  }
+
+  function currentPersonalTemplateLanguage() {
+    var sel = $('psTemplateLanguage');
+    return normalizeIpTemplateLanguage((sel && sel.value) || state.personalTemplateLanguage || '');
+  }
+
+  function setPersonalTemplateLanguage(value) {
+    state.personalTemplateLanguage = normalizeIpTemplateLanguage(value);
+    var sel = $('psTemplateLanguage');
+    if (sel) sel.value = state.personalTemplateLanguage;
+  }
+
+  function templateRequirementsWithLanguage(requirements, language) {
+    var req = requirements && typeof requirements === 'object' ? Object.assign({}, requirements) : {};
+    var lang = normalizeIpTemplateLanguage(language);
+    req.language = lang;
+    req.target_language = ipTemplateLanguageLabel(lang);
+    req.common = ipTemplateLanguageInstruction(lang);
+    return req;
+  }
+
   function profileQuestions() {
     return [
-      { field: 'psProfileName', label: '你的名字', type: 'input' },
-      { field: 'psBirthEra', label: '哪个年代出生', type: 'input' },
-      { field: 'psCurrentCity', label: '现居城市', type: 'input' },
-      { field: 'psHometown', label: '籍贯', type: 'input' },
-      { field: 'psRole', label: '你是做什么的', type: 'input' },
-      { field: 'psShareTopic', label: '你主要分享什么', type: 'input' },
-      { field: 'psVideoStyle', label: '你希望视频是什么风格', type: 'input' },
-      { field: 'psAfterViewAction', label: '希望大家看完后做什么', type: 'input' },
-      { field: 'psBusinessProduct', label: '你在做什么/什么产品', type: 'textarea' },
-      { field: 'psTargetCustomer', label: '你想卖给谁/哪些年代的人', type: 'textarea' },
-      { field: 'psAdvantages', label: '你的优势/比同行好在哪', type: 'textarea' }
+      { field: 'psProfileName', label: '你的名字', type: 'input', placeholder: '填写出镜称呼' },
+      { field: 'psGender', label: '性别', type: 'select', placeholder: '选择性别', options: [{ value: 'female', label: '女' }, { value: 'male', label: '男' }] },
+      { field: 'psProfilePhoto', label: '人物照片', type: 'input', placeholder: '填写人物照片素材ID或图片URL' },
+      { field: 'psBirthEra', label: '哪个年代出生', type: 'input', placeholder: '如 80后、90后' },
+      { field: 'psCurrentProvince', label: '现居省份', type: 'input', placeholder: '填写现居省份' },
+      { field: 'psCurrentCity', label: '现居城市', type: 'input', placeholder: '填写现居城市' },
+      { field: 'psHometown', label: '籍贯', type: 'input', placeholder: '填写籍贯城市' },
+      { field: 'psRole', label: '你是做什么的', type: 'input', placeholder: '写身份或岗位' },
+      { field: 'psShareTopic', label: '你主要分享什么', type: 'input', placeholder: '写内容方向' },
+      { field: 'psVideoStyle', label: '你希望视频是什么风格', type: 'input', placeholder: '写口播/画面风格' },
+      { field: 'psAfterViewAction', label: '希望大家看完后做什么', type: 'input', placeholder: '如关注、私信、到店' },
+      { field: 'psBusinessProduct', label: '你在做什么/什么产品', type: 'textarea', placeholder: '写产品、服务和卖点' },
+      { field: 'psTargetCustomer', label: '你想卖给谁/哪些年代的人', type: 'textarea', placeholder: '写目标人群和痛点' },
+      { field: 'psAdvantages', label: '你的优势/比同行好在哪', type: 'textarea', placeholder: '写差异化优势' }
     ];
   }
 
@@ -231,13 +315,22 @@
     var progress = $('psProfileProgress');
     if (step) step.textContent = (idx + 1) + '/' + questions.length;
     if (progress) progress.style.width = Math.round(((idx + 1) / questions.length) * 100) + '%';
-    host.innerHTML = question.type === 'textarea'
-      ? '<textarea id="psProfileAnswer" rows="5"></textarea>'
-      : '<input id="psProfileAnswer" type="text">';
+    if (question.type === 'select') {
+      var options = Array.isArray(question.options) ? question.options : [];
+      host.innerHTML = '<select id="psProfileAnswer">' +
+        '<option value="">' + esc(question.placeholder || '请选择') + '</option>' +
+        options.map(function(item) { return '<option value="' + escAttr(item.value) + '">' + esc(item.label) + '</option>'; }).join('') +
+        '</select>';
+    } else if (question.type === 'textarea') {
+      host.innerHTML = '<textarea id="psProfileAnswer" rows="5" placeholder="' + escAttr(question.placeholder || '') + '"></textarea>';
+    } else {
+      host.innerHTML = '<input id="psProfileAnswer" type="text" placeholder="' + escAttr(question.placeholder || '') + '">';
+    }
     var answer = $('psProfileAnswer');
     if (answer) {
       answer.value = fieldValue(question.field);
       answer.addEventListener('input', syncProfileAnswerToField);
+      answer.addEventListener('change', syncProfileAnswerToField);
       setTimeout(function() { answer.focus(); }, 0);
     }
     if ($('psProfilePrevBtn')) $('psProfilePrevBtn').disabled = idx <= 0;
@@ -254,9 +347,14 @@
   }
 
   function profileRequirements() {
+    var profilePhoto = fieldValue('psProfilePhoto');
     var basic = {
       name: fieldValue('psProfileName'),
+      gender: fieldValue('psGender'),
+      profile_photo_asset_id: /^https?:\/\//i.test(profilePhoto) ? '' : profilePhoto,
+      profile_photo_url: /^https?:\/\//i.test(profilePhoto) ? profilePhoto : '',
       birth_era: fieldValue('psBirthEra'),
+      current_province: fieldValue('psCurrentProvince'),
       current_city: fieldValue('psCurrentCity'),
       hometown: fieldValue('psHometown'),
       role: fieldValue('psRole'),
@@ -271,7 +369,10 @@
     };
     var lines = [
       ['名字', basic.name],
+      ['性别', basic.gender],
+      ['人物照片', basic.profile_photo_asset_id || basic.profile_photo_url],
       ['出生年代', basic.birth_era],
+      ['现居省份', basic.current_province],
       ['现居城市', basic.current_city],
       ['籍贯', basic.hometown],
       ['职业/身份', basic.role],
@@ -287,7 +388,11 @@
       basic_profile: basic,
       business_description: business,
       profile_name: basic.name,
+      gender: basic.gender,
+      profile_photo_asset_id: basic.profile_photo_asset_id,
+      profile_photo_url: basic.profile_photo_url,
       birth_era: basic.birth_era,
+      current_province: basic.current_province,
       current_city: basic.current_city,
       hometown: basic.hometown,
       role: basic.role,
@@ -307,12 +412,47 @@
     };
   }
 
+  var PERSONAL_PROFILE_REQUIREMENT_KEYS = [
+    'basic_profile',
+    'business_description',
+    'profile',
+    'business',
+    'profile_name',
+    'name',
+    'gender',
+    'profile_photo_asset_id',
+    'profile_photo_url',
+    'birth_era',
+    'current_province',
+    'province',
+    'current_city',
+    'city',
+    'hometown',
+    'role',
+    'identity',
+    'share_topic',
+    'video_style',
+    'after_view_action',
+    'product',
+    'target_customer',
+    'advantages'
+  ];
+
+  function stripPersonalProfileRequirements(requirements) {
+    var req = requirements && typeof requirements === 'object' ? Object.assign({}, requirements) : {};
+    PERSONAL_PROFILE_REQUIREMENT_KEYS.forEach(function(key) { delete req[key]; });
+    return req;
+  }
+
   function fillProfileFields(item) {
     var req = (item && item.requirements) || {};
     var profile = req.basic_profile && typeof req.basic_profile === 'object' ? req.basic_profile : (req.profile || {});
     var business = req.business_description && typeof req.business_description === 'object' ? req.business_description : (req.business || {});
     setFieldValue('psProfileName', req.profile_name || profile.name || '');
+    setFieldValue('psGender', req.gender || profile.gender || '');
+    setFieldValue('psProfilePhoto', req.profile_photo_asset_id || profile.profile_photo_asset_id || req.profile_photo_url || profile.profile_photo_url || '');
     setFieldValue('psBirthEra', req.birth_era || profile.birth_era || '');
+    setFieldValue('psCurrentProvince', req.current_province || profile.current_province || req.province || profile.province || '');
     setFieldValue('psCurrentCity', req.current_city || profile.current_city || '');
     setFieldValue('psHometown', req.hometown || profile.hometown || '');
     setFieldValue('psRole', req.role || profile.role || '');
@@ -685,11 +825,12 @@
     var competitorCount = Array.isArray(current.competitor_ids) ? current.competitor_ids.length : 0;
     var memoryCount = Array.isArray(current.memory_doc_ids) ? current.memory_doc_ids.length : 0;
     var meta = current.meta && typeof current.meta === 'object' ? current.meta : {};
+    var languageLabel = ipTemplateLanguageLabel(templateLanguageFromParts(current.requirements, meta, ''));
     var sourceId = String(meta.current_template_id || '').trim();
     var sourceTemplate = sourceId ? (state.templates || []).find(function(row) { return String(row.id || '') === sourceId; }) : null;
     var title = sourceTemplate ? templateName(sourceTemplate) : (current.name && !isPersonalDefaultTemplate(current) ? templateName(current) : '未指定模板');
     box.innerHTML = '<article class="ps-template-card">' +
-      '<div><strong>' + esc(title) + '</strong><div class="ps-template-meta">关键词 ' + keywordCount + ' · 同行 ' + competitorCount + ' · 记忆 ' + memoryCount + '</div></div>' +
+      '<div><strong>' + esc(title) + '</strong><div class="ps-template-meta">语种 ' + esc(languageLabel) + ' · 关键词 ' + keywordCount + ' · 同行 ' + competitorCount + ' · 记忆 ' + memoryCount + '</div></div>' +
     '</article>';
   }
 
@@ -706,8 +847,9 @@
       var k = Array.isArray(row.keyword_ids) ? row.keyword_ids.length : 0;
       var c = Array.isArray(row.competitor_ids) ? row.competitor_ids.length : 0;
       var m = Array.isArray(row.memory_doc_ids) ? row.memory_doc_ids.length : 0;
+      var languageLabel = ipTemplateLanguageLabel(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || ''));
       return '<article class="ps-template-card">' +
-        '<div><strong>' + esc(templateName(row)) + '</strong><div class="ps-template-meta">关键词 ' + k + ' · 同行 ' + c + ' · 记忆 ' + m + '</div></div>' +
+        '<div><strong>' + esc(templateName(row)) + '</strong><div class="ps-template-meta">语种 ' + esc(languageLabel) + ' · 关键词 ' + k + ' · 同行 ' + c + ' · 记忆 ' + m + '</div></div>' +
         '<div class="ps-item-actions">' +
           '<button type="button" class="btn btn-primary btn-sm" data-use-template="' + escAttr(id) + '">设为当前</button>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-edit-template="' + escAttr(id) + '">编辑</button>' +
@@ -958,6 +1100,7 @@
 
   function applyDefaultItem(item) {
     state.defaultItem = item || {};
+    setPersonalTemplateLanguage(templateLanguageFromParts(state.defaultItem.requirements, state.defaultItem.meta, state.personalTemplateLanguage));
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
     state.selectedMemories = {};
@@ -1052,14 +1195,15 @@
     setBusy(btn, true, '保存中...');
     setMsg('正在保存模板...');
     Promise.all(selectedMemoryPayload().map(fetchMemoryContent)).then(function(memoryDocs) {
+      var language = currentPersonalTemplateLanguage();
       var body = {
         name: name,
         keyword_ids: cleanIntIds(state.selectedKeywords),
         competitor_ids: cleanIntIds(state.selectedCompetitors),
         memory_doc_ids: cleanStringIds(state.selectedMemories),
         memory_docs: memoryDocs,
-        requirements: profileRequirements(),
-        meta: { source: 'personal_settings' }
+        requirements: templateRequirementsWithLanguage({}, language),
+        meta: { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language) }
       };
       return cloudJson(state.editingTemplateId ? '/api/ip-content/schedule-templates/' + encodeURIComponent(state.editingTemplateId) : '/api/ip-content/schedule-templates', {
         method: state.editingTemplateId ? 'PATCH' : 'POST',
@@ -1079,6 +1223,12 @@
   function saveCurrentDefault(options) {
     options = options || {};
     var existing = state.defaultItem || {};
+    var source = options.source || 'personal_settings';
+    var language = normalizeIpTemplateLanguage(options.language || currentPersonalTemplateLanguage() || templateLanguageFromParts(existing.requirements, existing.meta, ''));
+    var baseRequirements = stripPersonalProfileRequirements((existing.requirements && typeof existing.requirements === 'object') ? existing.requirements : {});
+    var incomingRequirements = Object.assign({}, baseRequirements, stripPersonalProfileRequirements(options.requirements || {}));
+    if (options.includeProfile) incomingRequirements = Object.assign({}, incomingRequirements, profileRequirements());
+    incomingRequirements = templateRequirementsWithLanguage(incomingRequirements, language);
     var keywordSource = options.replaceSelection ? cleanIntIds(state.selectedKeywords) : [].concat(Array.isArray(existing.keyword_ids) ? existing.keyword_ids : [], cleanIntIds(state.selectedKeywords));
     var competitorSource = options.replaceSelection ? cleanIntIds(state.selectedCompetitors) : [].concat(Array.isArray(existing.competitor_ids) ? existing.competitor_ids : [], cleanIntIds(state.selectedCompetitors));
     var memorySource = options.replaceSelection ? cleanStringIds(state.selectedMemories) : [].concat(Array.isArray(existing.memory_doc_ids) ? existing.memory_doc_ids : [], cleanStringIds(state.selectedMemories));
@@ -1094,8 +1244,8 @@
           competitor_ids: competitorIds,
           memory_doc_ids: memoryIds,
           memory_docs: memoryDocs,
-          requirements: Object.assign({}, (existing.requirements && typeof existing.requirements === 'object') ? existing.requirements : {}, profileRequirements(), options.requirements || {}),
-          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: options.source || 'personal_settings' })
+          requirements: incomingRequirements,
+          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: source, language: language, target_language: ipTemplateLanguageLabel(language) })
         }
       });
     }).then(function(data) {
@@ -1113,7 +1263,7 @@
     var btn = $('psSaveProfileBtn');
     setBusy(btn, true, '保存中...');
     setMsg('正在保存资料调查...');
-    saveCurrentDefault({ source: 'personal_settings_profile' })
+    saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true })
       .then(function() { setMsg('资料调查已保存。'); })
       .catch(function(err) { setMsg(err.message || '保存失败', true); })
       .finally(function() { setBusy(btn, false); });
@@ -1129,7 +1279,7 @@
     (row.competitor_ids || []).forEach(function(id) { if (id) state.selectedCompetitors[String(id)] = true; });
     (row.memory_doc_ids || []).forEach(function(id) { if (id) state.selectedMemories[String(id)] = true; });
     if ($('psTemplateName')) $('psTemplateName').value = row.name || '';
-    if (row.requirements && typeof row.requirements === 'object') fillProfileFields(row);
+    setPersonalTemplateLanguage(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage));
     renderAllLists();
     switchTab('template');
   }
@@ -1140,6 +1290,7 @@
     state.selectedCompetitors = {};
     state.selectedMemories = {};
     if ($('psTemplateName')) $('psTemplateName').value = '';
+    setPersonalTemplateLanguage(templateLanguageFromParts((state.defaultItem || {}).requirements, (state.defaultItem || {}).meta, state.personalTemplateLanguage));
     renderTemplateLists();
     renderSavedTemplates();
   }
@@ -1157,12 +1308,18 @@
     (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
     (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
     (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
-    var requirements = Object.assign({}, (state.defaultItem && state.defaultItem.requirements && typeof state.defaultItem.requirements === 'object') ? state.defaultItem.requirements : profileRequirements(), (row.requirements && typeof row.requirements === 'object') ? row.requirements : {});
+    var language = templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage);
+    var requirements = templateRequirementsWithLanguage(Object.assign(
+      {},
+      stripPersonalProfileRequirements((state.defaultItem && state.defaultItem.requirements && typeof state.defaultItem.requirements === 'object') ? state.defaultItem.requirements : {}),
+      stripPersonalProfileRequirements((row.requirements && typeof row.requirements === 'object') ? row.requirements : {})
+    ), language);
     saveCurrentDefault({
       name: templateName(row),
       requirements: requirements,
-      meta: Object.assign({}, row.meta || {}, { current_template_id: row.id }),
+      meta: Object.assign({}, row.meta || {}, { current_template_id: row.id, language: language, target_language: ipTemplateLanguageLabel(language) }),
       source: 'personal_settings_current_template',
+      language: language,
       replaceSelection: true
     }).then(function() {
       fillProfileFields(state.defaultItem || {});
@@ -1652,6 +1809,11 @@
     if ($('psSaveProfileBtn')) $('psSaveProfileBtn').addEventListener('click', saveProfile);
     if ($('psSaveTemplateBtn')) $('psSaveTemplateBtn').addEventListener('click', saveTemplate);
     if ($('psNewTemplateBtn')) $('psNewTemplateBtn').addEventListener('click', resetTemplateForm);
+    if ($('psTemplateLanguage')) $('psTemplateLanguage').addEventListener('change', function(ev) {
+      setPersonalTemplateLanguage(ev.target.value || 'zh-CN');
+      renderCurrentTemplate();
+      renderSavedTemplates();
+    });
     if ($('psAddKeywordBtn')) $('psAddKeywordBtn').addEventListener('click', addKeyword);
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);
     if ($('psSearchCompetitorBtn')) $('psSearchCompetitorBtn').addEventListener('click', searchCompetitors);

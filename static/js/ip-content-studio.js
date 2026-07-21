@@ -144,8 +144,8 @@
   }
 
   function currentTemplateLanguage() {
-    var sel = $('ipTemplateLanguageSelect');
-    return normalizeIpTemplateLanguage((sel && sel.value) || '');
+    var tpl = activeTemplate() || state.settingTemplates[0] || {};
+    return templateLanguageFromParts(tpl.requirements, tpl.meta, tpl.language || tpl.target_language || '');
   }
 
   function cloudBase() {
@@ -708,7 +708,6 @@
     var competitors = (data.competitor_ids || []).map(competitorLabelById);
     return '<div class="ip-template-snapshot-section"><strong>' + esc(title) + '</strong>' +
       '<small>记忆文件</small>' + chipHtml(memories, '未选择记忆文件') +
-      '<small>语种</small>' + chipHtml([ipTemplateLanguageLabel(data.language || 'zh-CN')], '简体中文') +
       '<small>关键词</small>' + chipHtml(keywords, '未配置关键词') +
       '<small>同行账号（可选）</small>' + chipHtml(competitors, '未配置同行账号') +
       '</div>' +
@@ -747,9 +746,10 @@
       if (current && state.settingTemplates.some(function(tpl) { return tpl.id === current; })) generateSelect.value = current;
       else generateSelect.value = '';
     }
+    renderCurrentProfileTemplateBox();
     if (!list) return;
     if (!state.settingTemplates.length) {
-      list.innerHTML = '<div class="ip-content-empty">暂无模板。点击添加模板，填写记忆、关键词、可选同行和要求后保存。</div>';
+      list.innerHTML = '<div class="ip-content-empty">未读取到当前IP人设。请到 IP人设定位 保存并启用模板。</div>';
     } else {
       list.innerHTML = state.settingTemplates.map(function(tpl) {
         var meta = [];
@@ -774,6 +774,21 @@
         });
       });
     }
+  }
+
+  function renderCurrentProfileTemplateBox() {
+    var box = $('ipCurrentProfileTemplateBox');
+    if (!box) return;
+    var tpl = activeTemplate() || state.settingTemplates[0] || null;
+    if (!tpl) {
+      box.innerHTML = '未读取到当前IP人设，请先到 IP人设定位 保存并启用模板。';
+      return;
+    }
+    var keywordCount = Array.isArray(tpl.keyword_ids) ? tpl.keyword_ids.length : 0;
+    var competitorCount = Array.isArray(tpl.competitor_ids) ? tpl.competitor_ids.length : 0;
+    var memoryCount = Math.max(Array.isArray(tpl.memory_doc_ids) ? tpl.memory_doc_ids.length : 0, Array.isArray(tpl.memory_docs) ? tpl.memory_docs.length : 0);
+    box.innerHTML = '<strong>' + esc(tpl.name || '当前IP人设') + '</strong>' +
+      '<small>关键词 ' + keywordCount + ' · 同行 ' + competitorCount + ' · 记忆 ' + memoryCount + '</small>';
   }
 
   function renderTemplateSummary() {
@@ -802,7 +817,6 @@
     state.templateCompetitorIds = [];
     state.selectedDocs = {};
     if ($('ipTemplateNameInput')) $('ipTemplateNameInput').value = '';
-    if ($('ipTemplateLanguageSelect')) $('ipTemplateLanguageSelect').value = 'zh-CN';
     if ($('ipTask1Extra')) $('ipTask1Extra').value = '';
     if ($('ipTask2Extra')) $('ipTask2Extra').value = '';
     if ($('ipImageExtra')) $('ipImageExtra').value = '';
@@ -837,16 +851,15 @@
     if ($('ipTask1Extra') && typeof saved.task1_extra === 'string') $('ipTask1Extra').value = saved.task1_extra;
     if ($('ipTask2Extra') && typeof saved.task2_extra === 'string') $('ipTask2Extra').value = saved.task2_extra;
     if ($('ipImageExtra') && typeof saved.image_extra === 'string') $('ipImageExtra').value = saved.image_extra;
-    if ($('ipTemplateLanguageSelect')) $('ipTemplateLanguageSelect').value = normalizeIpTemplateLanguage(saved.language || saved.target_language || '');
     state.templateKeywordIds = cleanTemplateIds(saved.keyword_ids, false);
     state.templateCompetitorIds = cleanTemplateIds(saved.competitor_ids, false);
-    state.settingTemplates = normalizeTemplates(readStoredJson(TEMPLATES_STORAGE_KEY, []));
+    state.settingTemplates = [];
+    state.activeTemplateId = '';
     renderTemplateOptions();
   }
 
   function applyTemplate(tpl) {
     if (!tpl) return;
-    if ($('ipTemplateLanguageSelect')) $('ipTemplateLanguageSelect').value = normalizeIpTemplateLanguage(tpl.language || '');
     if ($('ipTask1Extra')) $('ipTask1Extra').value = tpl.task1_extra || '';
     if ($('ipTask2Extra')) $('ipTask2Extra').value = tpl.task2_extra || '';
     if ($('ipImageExtra')) $('ipImageExtra').value = tpl.image_extra || '';
@@ -950,25 +963,28 @@
   }
 
   function loadServerTemplates() {
-    return cloudJson('/api/ip-content/schedule-templates')
+    return cloudJson('/api/ip-content/personal-default')
       .then(function(data) {
-        var server = normalizeTemplates((Array.isArray(data.items) ? data.items : []).map(function(item) {
-          return Object.assign({}, item || {}, { source: 'server', server_id: item && item.id });
-        }));
-        var localOnly = normalizeTemplates(readStoredJson(TEMPLATES_STORAGE_KEY, [])).filter(function(tpl) {
-          if (tpl.source === 'server') return false;
-          return !server.some(function(row) { return row.name === tpl.name; });
-        });
-        state.settingTemplates = server.concat(localOnly);
-        if (state.activeTemplateId && !state.settingTemplates.some(function(tpl) { return tpl.id === state.activeTemplateId; })) {
-          state.activeTemplateId = '';
-        }
+        var item = data.item || {};
+        var meta = item.meta && typeof item.meta === 'object' ? item.meta : {};
+        var language = templateLanguageFromParts(item.requirements, meta, item.language || item.target_language || '');
+        var tpl = normalizeTemplates([Object.assign({}, item, {
+          id: 'personal-default',
+          server_id: item.id || '',
+          source: 'personal_default',
+          name: meta.current_template_name || item.display_name || '当前IP人设',
+          language: language,
+          target_language: ipTemplateLanguageLabel(language)
+        })])[0];
+        state.settingTemplates = tpl ? [tpl] : [];
+        state.activeTemplateId = tpl ? tpl.id : '';
         renderTemplateOptions();
       })
       .catch(function(err) {
-        state.settingTemplates = normalizeTemplates(readStoredJson(TEMPLATES_STORAGE_KEY, []));
+        state.settingTemplates = [];
+        state.activeTemplateId = '';
         renderTemplateOptions();
-        setMsg('模板记录加载失败，已显示本地备份：' + (err.message || '未知错误'), true);
+        setMsg('当前IP人设读取失败：' + (err.message || '未知错误'), true);
       });
   }
 
@@ -1966,40 +1982,54 @@
     document.body.removeChild(ta);
   }
 
+  function ensureActiveProfileTemplate() {
+    var tpl = activeTemplate() || state.settingTemplates[0] || null;
+    if (tpl) {
+      if (!state.activeTemplateId) state.activeTemplateId = tpl.id;
+      if ($('ipGenerateTemplateSelect')) $('ipGenerateTemplateSelect').value = tpl.id;
+      renderCurrentProfileTemplateBox();
+      return Promise.resolve(tpl);
+    }
+    return loadServerTemplates().then(function() {
+      tpl = activeTemplate() || state.settingTemplates[0] || null;
+      if (!tpl) throw new Error('请先到 IP人设定位 保存并启用模板。');
+      return tpl;
+    });
+  }
+
   function generationPayload(extraId, count, opts) {
     opts = opts || {};
-    var selectedTemplateId = ($('ipGenerateTemplateSelect') && $('ipGenerateTemplateSelect').value) || state.activeTemplateId || '';
-    if (!selectTemplateById(selectedTemplateId, { required: true })) {
-      return Promise.reject(new Error('请选择模板后再生成。'));
-    }
-    var language = currentTemplateLanguage();
-    var targetLanguage = ipTemplateLanguageLabel(language);
-    var extraNode = extraId ? $(extraId) : null;
-    saveGenerationSettings();
-    var keywordIds = cleanTemplateIds(state.templateKeywordIds, false);
-    var competitorIds = cleanTemplateIds(state.templateCompetitorIds, false);
-    if (opts.requireKeywords && !keywordIds.length) return Promise.reject(new Error('请选择模板里的关键词后再生成。'));
-    return selectedMemoryDocsWithContent().then(function(memoryDocs) {
-      if (!memoryDocs.length) {
-        var tpl = activeTemplate();
-        var savedMemoryDocs = templateMemoryDocs(tpl);
-        if (savedMemoryDocs.length) memoryDocs = savedMemoryDocs;
-      }
-      return {
-        memory_docs: memoryDocs,
-        keyword_ids: keywordIds,
-        competitor_ids: competitorIds,
-        language: language,
-        target_language: targetLanguage,
-        requirements: {
+    return ensureActiveProfileTemplate().then(function(tpl) {
+      state.activeTemplateId = tpl.id;
+      applyTemplate(tpl);
+      var language = currentTemplateLanguage();
+      var targetLanguage = ipTemplateLanguageLabel(language);
+      var extraNode = extraId ? $(extraId) : null;
+      saveGenerationSettings();
+      var keywordIds = cleanTemplateIds(state.templateKeywordIds, false);
+      var competitorIds = cleanTemplateIds(state.templateCompetitorIds, false);
+      if (opts.requireKeywords && !keywordIds.length) return Promise.reject(new Error('请先到 IP人设定位 给当前模板选择关键词。'));
+      return selectedMemoryDocsWithContent().then(function(memoryDocs) {
+        if (!memoryDocs.length) {
+          var savedMemoryDocs = templateMemoryDocs(tpl);
+          if (savedMemoryDocs.length) memoryDocs = savedMemoryDocs;
+        }
+        return {
+          memory_docs: memoryDocs,
+          keyword_ids: keywordIds,
+          competitor_ids: competitorIds,
           language: language,
           target_language: targetLanguage,
-          common: ipTemplateLanguageInstruction(language)
-        },
-        extra_requirements: textWithTemplateLanguage(((extraNode && extraNode.value) || '').trim(), language),
-        count: count || 5,
-        sync_before: false
-      };
+          requirements: {
+            language: language,
+            target_language: targetLanguage,
+            common: ipTemplateLanguageInstruction(language)
+          },
+          extra_requirements: textWithTemplateLanguage(((extraNode && extraNode.value) || '').trim(), language),
+          count: count || 5,
+          sync_before: false
+        };
+      });
     });
   }
 
@@ -2324,12 +2354,8 @@
         setRecordFilter(btn.getAttribute('data-ip-record-filter') || '');
       });
     });
-    ['ipTask1Extra', 'ipTask2Extra', 'ipImageExtra', 'ipTemplateLanguageSelect'].forEach(function(id) {
+    ['ipTask1Extra', 'ipTask2Extra', 'ipImageExtra'].forEach(function(id) {
       if ($(id)) $(id).addEventListener('input', function() {
-        saveGenerationSettings();
-        renderTemplateSummary();
-      });
-      if ($(id) && id === 'ipTemplateLanguageSelect') $(id).addEventListener('change', function() {
         saveGenerationSettings();
         renderTemplateSummary();
       });
@@ -2368,9 +2394,9 @@
       else if (typeof window.showLobsterView === 'function') window.showLobsterView('skill-store');
       else history.back();
     });
-    if ($('ipOpenRequirementConfigBtn')) $('ipOpenRequirementConfigBtn').addEventListener('click', function() {
-      switchTab('config');
-      switchConfigTab('templates');
+    if ($('ipOpenPersonalSettingsBtn')) $('ipOpenPersonalSettingsBtn').addEventListener('click', function() {
+      if (typeof showView === 'function') showView('personal-settings');
+      else if (typeof window.showLobsterView === 'function') window.showLobsterView('personal-settings');
     });
     if ($('ipRefreshKeywordSourcesBtn')) $('ipRefreshKeywordSourcesBtn').addEventListener('click', function() { loadSources(); });
     if ($('ipRefreshCompetitorSourcesBtn')) $('ipRefreshCompetitorSourcesBtn').addEventListener('click', function() { loadSources(); });

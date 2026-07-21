@@ -56,6 +56,9 @@ def _platform_copy_limits(platform: str, media_type: str) -> str:
     elif p == "toutiao":
         lines.append("标题：最多 30 个字。")
         lines.append("简介/正文：宜充实、口语化，最多约 5000 字以内。")
+    elif p == "wechat_channels":
+        lines.append("短标题：最多 30 个字。")
+        lines.append("描述：宜控制在 800 字以内，可带少量话题。")
     else:
         lines.append("标题：宜简短有力，不超过 30 字。")
         lines.append("描述：清晰说明内容亮点，避免空洞套话。")
@@ -170,6 +173,7 @@ async def generate_publish_copy(
         "douyin": "抖音",
         "xiaohongshu": "小红书",
         "toutiao": "今日头条/头条号",
+        "wechat_channels": "视频号",
         "bilibili": "B站",
         "kuaishou": "快手",
     }.get((platform or "").strip().lower(), platform or "该平台")

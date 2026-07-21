@@ -94,7 +94,8 @@
     .ps-survey-card { border: 1px solid rgba(21,35,64,0.1); border-radius: 18px; background: #fff; padding: 1rem; display: grid; gap: 0.65rem; }
     .ps-survey-card strong { font-size: 1.12rem; }
     .ps-survey-answer input,
-    .ps-survey-answer textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(21,35,64,0.16); border-radius: 16px; padding: 0.82rem; font-size: 1rem; line-height: 1.55; }
+    .ps-survey-answer select,
+    .ps-survey-answer textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(21,35,64,0.16); border-radius: 16px; padding: 0.82rem; font-size: 1rem; line-height: 1.55; background:#fff; }
     .ps-survey-answer textarea { min-height: 160px; resize: vertical; }
     .ps-hidden-fields { display: none; }
     .ps-template-card { border: 1px solid rgba(21,35,64,0.1); border-radius: 16px; background: #fff; padding: 0.72rem; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0.65rem; align-items: start; }
@@ -190,7 +191,7 @@
     <section class="ps-panel" data-ps-panel="profile">
       <section class="ps-card ps-survey">
         <div class="ps-survey-top">
-          <span id="psProfileStepText">1/11</span>
+          <span id="psProfileStepText">1/14</span>
           <div class="ps-survey-bar"><i id="psProfileProgress"></i></div>
         </div>
         <div class="ps-survey-card">
@@ -204,7 +205,10 @@
         </div>
         <div class="ps-hidden-fields" aria-hidden="true">
           <input id="psProfileName" type="hidden">
+          <input id="psGender" type="hidden">
+          <input id="psProfilePhoto" type="hidden">
           <input id="psBirthEra" type="hidden">
+          <input id="psCurrentProvince" type="hidden">
           <input id="psCurrentCity" type="hidden">
           <input id="psHometown" type="hidden">
           <input id="psRole" type="hidden">
@@ -329,6 +333,25 @@
           <div class="ps-field">
             <label for="psTemplateName">模板名称</label>
             <input id="psTemplateName" placeholder="模板名称">
+          </div>
+          <div class="ps-field">
+            <label for="psTemplateLanguage">语种</label>
+            <select id="psTemplateLanguage">
+              <option value="zh-CN">简体中文</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="th">ไทย</option>
+              <option value="vi">Tiếng Việt</option>
+              <option value="id">Bahasa Indonesia</option>
+              <option value="ms">Bahasa Melayu</option>
+              <option value="es">Español</option>
+              <option value="pt">Português</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="ru">Русский</option>
+              <option value="ar">العربية</option>
+            </select>
           </div>
           <div class="ps-actions">
             <button type="button" id="psSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button>
