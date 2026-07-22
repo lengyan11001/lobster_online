@@ -1,23 +1,29 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import Asset, ShanjianDigitalHumanProfile, ShanjianDigitalHumanVideoTask
-from .assets import ASSETS_DIR, get_asset_public_url
+from .assets import ASSETS_DIR, _save_bytes_or_tos, get_asset_public_url
 from .auth import _ServerUser, get_current_user_for_local
 from .shanjian_smart_clip import _data, _get, _post
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 _ROOT_DIR = Path(__file__).resolve().parents[3]
 
@@ -69,6 +75,18 @@ class VideoTaskBody(_TokenBody):
 
 def _clean_text(value: Optional[str]) -> str:
     return str(value or "").strip()
+
+
+def _url_hint(value: str) -> str:
+    raw = _clean_text(value)
+    if raw.startswith("data:"):
+        return "data-url"
+    try:
+        parsed = urlparse(raw)
+        path = (parsed.path or "")[:80]
+        return f"{parsed.scheme}://{parsed.netloc}{path}"
+    except Exception:
+        return raw[:120]
 
 
 def _normalize_mode(value: str) -> str:
@@ -135,6 +153,98 @@ def _clear_default_profiles(db: Session, user_id: int) -> None:
     ).update({"is_default": False}, synchronize_session=False)
 
 
+def _audio_ext_from_content(content_type: str, url: str = "") -> str:
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    suffix = Path((url or "").split("?", 1)[0].split("#", 1)[0]).suffix.lower()
+    if suffix in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}:
+        return suffix
+    if "wav" in ct:
+        return ".wav"
+    if "mp4" in ct or "m4a" in ct:
+        return ".m4a"
+    if "aac" in ct:
+        return ".aac"
+    if "ogg" in ct:
+        return ".ogg"
+    if "flac" in ct:
+        return ".flac"
+    return ".mp3"
+
+
+async def _download_audio_bytes(audio_url: str) -> tuple[bytes, str]:
+    raw = _clean_text(audio_url)
+    if raw.startswith("data:"):
+        header, _, payload = raw.partition(",")
+        if not payload:
+            raise HTTPException(status_code=400, detail="audio_url data URL 格式无效")
+        content_type = header[5:].split(";", 1)[0].strip() or "audio/mpeg"
+        try:
+            data = base64.b64decode(payload)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="audio_url data URL 解码失败") from exc
+        return data, content_type
+    if not raw.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="audio_url 必须是 http(s) 或 data: 音频地址")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "audio/*,*/*;q=0.8",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True, trust_env=False) as client:
+            resp = await client.get(raw, headers=headers)
+            resp.raise_for_status()
+            return resp.content, resp.headers.get("content-type", "") or "audio/mpeg"
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=400, detail=f"下载音频失败: HTTP {exc.response.status_code}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"下载音频失败: {type(exc).__name__}: {exc}") from exc
+
+
+async def _persist_audio_for_shanjian(
+    *,
+    audio_url: str,
+    db: Session,
+    current_user: _ServerUser,
+    title: str,
+) -> tuple[str, str]:
+    raw = _clean_text(audio_url)
+    data, content_type = await _download_audio_bytes(raw)
+    if not data:
+        raise HTTPException(status_code=400, detail="音频内容为空，无法提交数字人任务")
+    media_type = (content_type or "audio/mpeg").split(";", 1)[0].strip() or "audio/mpeg"
+    ext = _audio_ext_from_content(media_type, raw)
+    asset_id, filename_or_key, file_size, public_url = _save_bytes_or_tos(data, ext, media_type)
+    if not public_url:
+        raise HTTPException(status_code=503, detail="数字人口播音频转存 TOS 失败，无法提交闪剪")
+    asset = Asset(
+        asset_id=asset_id,
+        user_id=int(current_user.id),
+        filename=filename_or_key,
+        media_type="audio",
+        file_size=file_size,
+        source_url=public_url,
+        prompt=_clean_text(title)[:200],
+        model="shanjian-digital-human-tts-audio",
+        tags="shanjian,digital-human,audio",
+        meta={
+            "source": "shanjian_digital_human_audio_transfer",
+            "original_url_hint": _url_hint(raw),
+            "content_type": media_type,
+        },
+    )
+    db.add(asset)
+    db.flush()
+    logger.info(
+        "[shanjian-dh] audio rehosted user_id=%s asset_id=%s size=%s from=%s to=%s",
+        getattr(current_user, "id", ""),
+        asset_id,
+        file_size,
+        _url_hint(raw),
+        _url_hint(public_url),
+    )
+    return public_url, asset_id
+
+
 def _ffprobe_path() -> str:
     candidates = []
     if os.name == "nt":
@@ -150,6 +260,23 @@ def _ffprobe_path() -> str:
         if item.exists():
             return str(item.resolve())
     return shutil.which("ffprobe.exe" if os.name == "nt" else "ffprobe") or ""
+
+
+def _ffmpeg_path() -> str:
+    candidates = []
+    if os.name == "nt":
+        candidates.extend(
+            [
+                _ROOT_DIR / "deps" / "ffmpeg" / "ffmpeg.exe",
+                _ROOT_DIR / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / "ffmpeg.exe",
+            ]
+        )
+    else:
+        candidates.append(_ROOT_DIR / "deps" / "ffmpeg" / "ffmpeg")
+    for item in candidates:
+        if item.exists():
+            return str(item.resolve())
+    return shutil.which("ffmpeg.exe" if os.name == "nt" else "ffmpeg") or ""
 
 
 def _asset_local_path(asset: Optional[Asset]) -> Optional[Path]:
@@ -222,6 +349,152 @@ def _probe_video_media(source: str) -> Dict[str, Any]:
         "codec": str(stream.get("codec_name") or stream.get("codec_tag_string") or "").strip().lower(),
         "fps": _parse_fps(stream.get("avg_frame_rate") or stream.get("r_frame_rate")),
     }
+
+
+def _normalize_avatar_video_kind(raw: str) -> str:
+    kind = _clean_text(raw).lower()
+    if kind in {"train", "training", "avatar_train", "video_train"}:
+        return "training"
+    if kind in {"auth", "authorize", "authorization", "auth_video"}:
+        return "auth"
+    raise HTTPException(status_code=400, detail="kind 仅支持 training 或 auth")
+
+
+def _avatar_video_limits(kind: str) -> Dict[str, Optional[float]]:
+    if kind == "training":
+        return {
+            "max_size_mb": 500,
+            "min_duration_sec": 5.0,
+            "max_duration_sec": 60.0,
+            "max_side_px": 2000,
+            "min_fps": 10.0,
+            "max_fps": 60.0,
+        }
+    return {
+        "max_size_mb": 100,
+        "min_duration_sec": None,
+        "max_duration_sec": 120.0,
+        "max_side_px": 2000,
+        "min_fps": None,
+        "max_fps": None,
+    }
+
+
+def _guess_video_content_type(name: str) -> str:
+    suffix = str(Path(name or "").suffix or "").lower()
+    if suffix == ".mov":
+        return "video/quicktime"
+    return "video/mp4"
+
+
+def _normalize_video_filename(name: str) -> str:
+    stem = Path(name or "avatar_video").stem or "avatar_video"
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in stem).strip("._") or "avatar_video"
+    return f"{safe}_normalized.mp4"
+
+
+def _build_avatar_video_filters(width: int, height: int, max_side_px: Optional[int]) -> str:
+    parts: list[str] = []
+    if max_side_px and max(width, height) > int(max_side_px):
+        if width >= height:
+            parts.append(f"scale='min({int(max_side_px)},iw)':-2")
+        else:
+            parts.append(f"scale=-2:'min({int(max_side_px)},ih)'")
+    parts.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
+    return ",".join(parts)
+
+
+def _needs_avatar_video_normalization(
+    *,
+    kind: str,
+    meta: Dict[str, Any],
+    filename: str,
+    file_size: int,
+) -> tuple[bool, list[str]]:
+    limits = _avatar_video_limits(kind)
+    reasons: list[str] = []
+    suffix = str(Path(filename or "").suffix or "").lower()
+    codec = str(meta.get("codec") or "").lower()
+    width = int(meta.get("width") or 0)
+    height = int(meta.get("height") or 0)
+    fps = float(meta.get("fps") or 0.0)
+    max_side_px = int(limits.get("max_side_px") or 0)
+    max_size_bytes = int(float(limits["max_size_mb"]) * 1024 * 1024)
+    if suffix not in {".mp4", ".mov"}:
+        reasons.append("format")
+    if codec not in {"h264", "avc1", "hevc", "h265", "hev1"}:
+        reasons.append("codec")
+    if max_side_px and max(width, height) > max_side_px:
+        reasons.append("resolution")
+    if file_size > max_size_bytes:
+        reasons.append("size")
+    min_fps = limits.get("min_fps")
+    max_fps = limits.get("max_fps")
+    if fps > 0 and ((min_fps is not None and fps < float(min_fps)) or (max_fps is not None and fps > float(max_fps))):
+        reasons.append("fps")
+    return bool(reasons), reasons
+
+
+def _transcode_avatar_video(
+    *,
+    src_path: Path,
+    dst_path: Path,
+    meta: Dict[str, Any],
+    kind: str,
+) -> None:
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        raise HTTPException(status_code=500, detail="本机缺少 ffmpeg，暂时无法自动修正视频规格")
+    limits = _avatar_video_limits(kind)
+    vf = _build_avatar_video_filters(
+        int(meta.get("width") or 0),
+        int(meta.get("height") or 0),
+        int(limits.get("max_side_px") or 0),
+    )
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(src_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+    ]
+    fps = float(meta.get("fps") or 0.0)
+    min_fps = limits.get("min_fps")
+    max_fps = limits.get("max_fps")
+    if fps > 0 and ((min_fps is not None and fps < float(min_fps)) or (max_fps is not None and fps > float(max_fps))):
+        cmd.extend(["-r", "30"])
+    cmd.append(str(dst_path))
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+        check=False,
+    )
+    if proc.returncode != 0 or not dst_path.exists():
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise HTTPException(status_code=500, detail=f"自动修正视频失败：{detail[:300] or 'ffmpeg failed'}")
 
 
 def _validate_video_constraints(
@@ -420,6 +693,91 @@ async def list_video_tasks(
         ShanjianDigitalHumanVideoTask.id.desc(),
     ).limit(100).all()
     return {"ok": True, "items": [_video_task_to_dict(row) for row in rows]}
+
+
+@router.post("/api/local/avatar-video/normalize")
+async def normalize_avatar_video_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    kind: str = Form("training"),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del request, current_user
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="上传文件为空")
+
+    normalized_kind = _normalize_avatar_video_kind(kind)
+    limits = _avatar_video_limits(normalized_kind)
+    filename = file.filename or "avatar_video.mp4"
+    temp_root = Path(tempfile.mkdtemp(prefix="avatar_video_fix_"))
+    input_suffix = Path(filename).suffix or ".mp4"
+    input_path = temp_root / f"input{input_suffix}"
+    output_path = temp_root / _normalize_video_filename(filename)
+
+    try:
+        input_path.write_bytes(raw)
+        meta = _probe_video_media(str(input_path))
+        duration = float(meta.get("duration") or 0.0)
+        min_duration = limits.get("min_duration_sec")
+        max_duration = float(limits.get("max_duration_sec") or 0.0)
+        if min_duration is not None and duration < float(min_duration):
+            raise HTTPException(status_code=400, detail=f"{'训练视频' if normalized_kind == 'training' else '授权视频'}时长不能小于 {int(float(min_duration))} 秒")
+        if max_duration and duration > max_duration:
+            if normalized_kind == "training":
+                raise HTTPException(status_code=400, detail="训练视频时长需要在 5 到 60 秒之间")
+            raise HTTPException(status_code=400, detail="授权视频时长不能超过 2 分钟")
+
+        needs_fix, reasons = _needs_avatar_video_normalization(
+            kind=normalized_kind,
+            meta=meta,
+            filename=filename,
+            file_size=len(raw),
+        )
+        response_bytes = raw
+        response_name = filename
+        normalized_flag = "0"
+        if needs_fix:
+            _transcode_avatar_video(
+                src_path=input_path,
+                dst_path=output_path,
+                meta=meta,
+                kind=normalized_kind,
+            )
+            response_bytes = output_path.read_bytes()
+            response_name = output_path.name
+            normalized_flag = "1"
+            max_size_bytes = int(float(limits["max_size_mb"]) * 1024 * 1024)
+            if len(response_bytes) > max_size_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"自动修正后文件仍超过 {int(limits['max_size_mb'])}MB，请裁剪更短的视频后重试",
+                )
+            fixed_meta = _probe_video_media(str(output_path))
+            _validate_video_constraints(
+                label="训练视频" if normalized_kind == "training" else "授权视频",
+                url=str(output_path),
+                asset=None,
+                max_size_mb=int(limits["max_size_mb"]),
+                min_duration_sec=limits.get("min_duration_sec"),
+                max_duration_sec=float(limits.get("max_duration_sec") or 0.0),
+                max_side_px=int(limits.get("max_side_px") or 0) or None,
+                min_fps=limits.get("min_fps"),
+                max_fps=limits.get("max_fps"),
+            )
+            del fixed_meta
+
+        return Response(
+            content=response_bytes,
+            media_type=_guess_video_content_type(response_name),
+            headers={
+                "X-Lobster-Filename": response_name,
+                "X-Lobster-Video-Normalized": normalized_flag,
+                "X-Lobster-Video-Reason": ",".join(reasons[:8]),
+            },
+        )
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
 @router.post("/api/shanjian-digital-human/profile/train")
