@@ -48,6 +48,11 @@
   var SHANJIAN_STYLE_VERSION = '20260606-voice-provider-detect';
   var SHANJIAN_AVATAR_COVER_MANIFEST = '/static/data/shanjian-public-avatar-covers.json?v=20260512';
   var SHANJIAN_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
+  var INLINE_MATERIAL_IMAGE_SECONDS = 2;
+  var INLINE_MATERIAL_VIDEO_MAX_SECONDS = 60;
+  var INLINE_MATERIAL_TOTAL_MAX_SECONDS = 300;
+  var INLINE_MATERIAL_VIDEO_MAX_BYTES = 500 * 1024 * 1024;
+  var INLINE_MATERIAL_MAX_EDGE_1080 = 2000;
   var SHANJIAN_VOICE_RECORD_PROMPTS = {
     zh: [
       '你好，欢迎使用声音创建功能。请保持自然语速和清晰发音，完整朗读这段文字。今天的风很轻，阳光也刚刚好，希望这段录音可以帮助系统更准确地识别你的声音特点。',
@@ -1429,6 +1434,7 @@
       'shanjianCreateVoiceBtn',
       'shanjianOpenMaterialLibraryBtn',
       'shanjianOpenMaterialLibraryBtnInline',
+      'shanjianUploadMaterialBtnInline',
       'shanjianClearMaterialsBtnInline',
       'shanjianMaterialReloadBtn'
     ].forEach(function(id) {
@@ -1584,11 +1590,231 @@
       name: String(item.filename || item.name || assetId).trim() || assetId,
       media_type: mediaType,
       file_size: Number(item.file_size || 0) || 0,
+      duration_seconds: Number(item.duration_seconds || item.duration || 0) || 0,
+      width: Number(item.width || 0) || 0,
+      height: Number(item.height || 0) || 0,
       preview_url: thumb,
       open_url: normalizeAssetUrl(item.open_url || item.source_url || item.preview_url || ''),
       source_url: normalizeAssetUrl(item.source_url || ''),
       selected_key: assetId
     };
+  }
+
+  function getFileExtension(name) {
+    var match = String(name || '').trim().toLowerCase().match(/\.([a-z0-9]+)$/i);
+    return match ? match[1] : '';
+  }
+
+  function isInlineImageExtension(ext) {
+    return ['jpg', 'jpeg', 'png', 'webp'].indexOf(String(ext || '').trim().toLowerCase()) >= 0;
+  }
+
+  function isInlineVideoExtension(ext) {
+    return ['mp4', 'mov'].indexOf(String(ext || '').trim().toLowerCase()) >= 0;
+  }
+
+  function currentMaterialBudgetSeconds() {
+    return (state.selectedMaterials || []).reduce(function(total, item) {
+      var type = String(item && item.media_type || '').trim().toLowerCase();
+      if (type === 'image') return total + INLINE_MATERIAL_IMAGE_SECONDS;
+      if (type === 'video') {
+        var seconds = Number(item && item.duration_seconds || 0);
+        if (isFinite(seconds) && seconds > 0) return total + Math.min(INLINE_MATERIAL_VIDEO_MAX_SECONDS, seconds);
+      }
+      return total;
+    }, 0);
+  }
+
+  function getInlineMaterialMaxEdge() {
+    return INLINE_MATERIAL_MAX_EDGE_1080;
+  }
+
+  function readImageFileMeta(file) {
+    return new Promise(function(resolve, reject) {
+      var url = '';
+      var img = new Image();
+      function cleanup() {
+        img.onload = null;
+        img.onerror = null;
+        if (url) {
+          try { URL.revokeObjectURL(url); } catch (e) {}
+        }
+      }
+      img.onload = function() {
+        var meta = {
+          media_type: 'image',
+          width: Number(img.naturalWidth || img.width || 0) || 0,
+          height: Number(img.naturalHeight || img.height || 0) || 0,
+          duration_seconds: INLINE_MATERIAL_IMAGE_SECONDS,
+          consumed_seconds: INLINE_MATERIAL_IMAGE_SECONDS
+        };
+        cleanup();
+        resolve(meta);
+      };
+      img.onerror = function() {
+        cleanup();
+        reject(new Error('图片读取失败，请换一个文件重试'));
+      };
+      try {
+        url = URL.createObjectURL(file);
+        img.src = url;
+      } catch (err) {
+        cleanup();
+        reject(err);
+      }
+    });
+  }
+
+  function readVideoFileMeta(file) {
+    return new Promise(function(resolve, reject) {
+      var url = '';
+      var video = document.createElement('video');
+      function cleanup() {
+        video.onloadedmetadata = null;
+        video.onerror = null;
+        try { video.removeAttribute('src'); } catch (e) {}
+        try { video.load(); } catch (e2) {}
+        if (url) {
+          try { URL.revokeObjectURL(url); } catch (e3) {}
+        }
+      }
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      video.onloadedmetadata = function() {
+        var seconds = Number(video.duration || 0);
+        var meta = {
+          media_type: 'video',
+          width: Number(video.videoWidth || 0) || 0,
+          height: Number(video.videoHeight || 0) || 0,
+          duration_seconds: seconds,
+          consumed_seconds: Math.min(INLINE_MATERIAL_VIDEO_MAX_SECONDS, Math.max(0, seconds))
+        };
+        cleanup();
+        resolve(meta);
+      };
+      video.onerror = function() {
+        cleanup();
+        reject(new Error('视频读取失败，请换一个文件重试'));
+      };
+      try {
+        url = URL.createObjectURL(file);
+        video.src = url;
+      } catch (err) {
+        cleanup();
+        reject(err);
+      }
+    });
+  }
+
+  function validateInlineMaterialFile(file, usedSeconds) {
+    if (!file) return Promise.reject(new Error('请选择要上传的素材文件'));
+    var ext = getFileExtension(file.name);
+    var fileType = String(file.type || '').trim().toLowerCase();
+    var mediaType = '';
+    if (isInlineImageExtension(ext) || /^image\//.test(fileType)) mediaType = 'image';
+    else if (isInlineVideoExtension(ext) || /^video\//.test(fileType)) mediaType = 'video';
+    if (!mediaType) {
+      return Promise.reject(new Error('仅支持 jpg、jpeg、png、webp、mp4、mov 素材'));
+    }
+    if (mediaType === 'video' && Number(file.size || 0) > INLINE_MATERIAL_VIDEO_MAX_BYTES) {
+      return Promise.reject(new Error('视频素材不能超过 500MB：' + (file.name || '未命名文件')));
+    }
+    var reader = mediaType === 'image' ? readImageFileMeta : readVideoFileMeta;
+    return reader(file).then(function(meta) {
+      var maxEdge = getInlineMaterialMaxEdge();
+      var width = Number(meta.width || 0);
+      var height = Number(meta.height || 0);
+      var longest = Math.max(width, height);
+      var duration = Number(meta.duration_seconds || 0);
+      var consumed = Number(meta.consumed_seconds || 0);
+      if (mediaType === 'video') {
+        if (!(isFinite(duration) && duration > 0)) throw new Error('视频时长读取失败：' + (file.name || '未命名文件'));
+        if (duration > INLINE_MATERIAL_VIDEO_MAX_SECONDS) {
+          throw new Error('单个视频素材不能超过 60 秒：' + (file.name || '未命名文件'));
+        }
+      }
+      if (longest > maxEdge) {
+        throw new Error('素材分辨率过大，最长边不能超过 ' + maxEdge + '：' + (file.name || '未命名文件'));
+      }
+      if ((Number(usedSeconds || 0) + consumed) > INLINE_MATERIAL_TOTAL_MAX_SECONDS) {
+        throw new Error('混剪素材总时长不能超过 5 分钟，请减少后再上传');
+      }
+      return Object.assign({ extension: ext, file_size: Number(file.size || 0) || 0 }, meta);
+    });
+  }
+
+  function inferMaterialMediaType(item, file) {
+    var mediaType = String(item && item.media_type || '').trim().toLowerCase();
+    if (mediaType === 'image' || mediaType === 'video') return mediaType;
+    var ext = getFileExtension((item && (item.filename || item.name)) || (file && file.name) || '');
+    var fileType = String((item && (item.content_type || item.mime_type)) || (file && file.type) || '').trim().toLowerCase();
+    if (isInlineImageExtension(ext) || /^image\//.test(fileType)) return 'image';
+    if (isInlineVideoExtension(ext) || /^video\//.test(fileType)) return 'video';
+    return '';
+  }
+
+  function materialAssetFromUpload(uploaded, file, meta) {
+    uploaded = uploaded || {};
+    meta = meta || {};
+    var mediaType = inferMaterialMediaType(uploaded, file) || String(meta.media_type || '').trim().toLowerCase();
+    var normalized = normalizeMaterialAsset({
+      asset_id: uploaded.asset_id || uploaded.id || '',
+      filename: uploaded.filename || uploaded.name || (file && file.name) || '',
+      media_type: mediaType,
+      file_size: uploaded.file_size || uploaded.size || (file && file.size) || meta.file_size || 0,
+      duration_seconds: uploaded.duration_seconds || uploaded.duration || meta.duration_seconds || 0,
+      width: uploaded.width || meta.width || 0,
+      height: uploaded.height || meta.height || 0,
+      preview_url: uploaded.preview_url || uploaded.thumbnail_url || uploaded.thumb_url || uploaded.open_url || uploaded.source_url || uploaded.url || uploaded.file_url || uploaded.asset_url || '',
+      open_url: uploaded.open_url || uploaded.source_url || uploaded.url || uploaded.file_url || uploaded.asset_url || uploaded.preview_url || '',
+      source_url: uploaded.source_url || uploaded.open_url || uploaded.url || uploaded.file_url || uploaded.asset_url || uploaded.preview_url || ''
+    });
+    if (normalized) return normalized;
+    return {
+      asset_id: String(uploaded.asset_id || '').trim(),
+      name: String(uploaded.filename || uploaded.name || (file && file.name) || '').trim(),
+      media_type: mediaType || 'image',
+      file_size: Number((file && file.size) || meta.file_size || 0) || 0,
+      duration_seconds: Number(meta.duration_seconds || 0) || 0,
+      width: Number(meta.width || 0) || 0,
+      height: Number(meta.height || 0) || 0,
+      preview_url: normalizeAssetUrl(uploaded.preview_url || uploaded.open_url || uploaded.source_url || uploaded.url || ''),
+      open_url: normalizeAssetUrl(uploaded.open_url || uploaded.source_url || uploaded.url || ''),
+      source_url: normalizeAssetUrl(uploaded.source_url || uploaded.open_url || uploaded.url || ''),
+      selected_key: String(uploaded.asset_id || '').trim()
+    };
+  }
+
+  function mergeSelectedMaterials(existing, additions) {
+    var map = {};
+    var merged = [];
+    (existing || []).concat(additions || []).forEach(function(item) {
+      var normalized = normalizeMaterialAsset(item) || item;
+      var assetId = String(normalized && normalized.asset_id || '').trim();
+      if (!assetId) return;
+      if (map[assetId]) {
+        map[assetId] = Object.assign({}, map[assetId], normalized);
+        for (var i = 0; i < merged.length; i += 1) {
+          if (String(merged[i] && merged[i].asset_id || '').trim() === assetId) {
+            merged[i] = map[assetId];
+            break;
+          }
+        }
+        return;
+      }
+      map[assetId] = normalized;
+      merged.push(normalized);
+    });
+    return merged;
+  }
+
+  function syncMaterialPickerSelection() {
+    state.materialPicker.selected = {};
+    (state.selectedMaterials || []).forEach(function(item) {
+      var assetId = String(item && item.asset_id || '').trim();
+      if (assetId) state.materialPicker.selected[assetId] = true;
+    });
   }
 
   function selectedMaterialIdsMap() {
@@ -1649,8 +1875,65 @@
         var idx = Number(btn.getAttribute('data-material-index'));
         if (!Number.isFinite(idx)) return;
         state.selectedMaterials.splice(idx, 1);
+        syncMaterialPickerSelection();
         renderSelectedMaterials();
+        renderMaterialLibrary();
+        if ($('shanjianMaterialPickerModal')) renderMaterialPicker();
       });
+    });
+  }
+
+  function uploadInlineMaterials(files, triggerBtn) {
+    var input = $('shanjianInlineMaterialUploadInput');
+    var list = Array.prototype.slice.call(files || []);
+    if (!list.length) {
+      if (input) input.value = '';
+      return Promise.resolve([]);
+    }
+    var button = triggerBtn || $('shanjianUploadMaterialBtnInline');
+    var originalText = button ? button.textContent : '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = '上传中...';
+    }
+    var usedSeconds = currentMaterialBudgetSeconds();
+    var validated = [];
+    showMessage('正在上传混剪素材...', false);
+    return list.reduce(function(chain, file) {
+      return chain.then(function() {
+        return validateInlineMaterialFile(file, usedSeconds).then(function(meta) {
+          usedSeconds += Number(meta.consumed_seconds || 0);
+          validated.push({ file: file, meta: meta });
+        });
+      });
+    }, Promise.resolve()).then(function() {
+      return Promise.all(validated.map(function(entry) {
+        return uploadAssetFile(entry.file).then(function(data) {
+          return materialAssetFromUpload(data, entry.file, entry.meta);
+        });
+      }));
+    }).then(function(uploadedAssets) {
+      return loadMaterialPickerItems(true).catch(function() {
+        return state.materialPicker.items || [];
+      }).then(function() {
+        state.materialPicker.items = mergeSelectedMaterials(state.materialPicker.items || [], uploadedAssets);
+        state.selectedMaterials = mergeSelectedMaterials(state.selectedMaterials || [], uploadedAssets);
+        syncMaterialPickerSelection();
+        renderSelectedMaterials();
+        renderMaterialLibrary();
+        if ($('shanjianMaterialPickerModal')) renderMaterialPicker();
+        showMessage('已上传并加入 ' + uploadedAssets.length + ' 个混剪素材。', false);
+        return uploadedAssets;
+      });
+    }).catch(function(err) {
+      showMessage(err && err.message ? err.message : '素材上传失败', true);
+      throw err;
+    }).finally(function() {
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText || '上传素材';
+      }
+      if (input) input.value = '';
     });
   }
 
@@ -1782,14 +2065,20 @@
               asset_id: row.asset_id,
               name: row.name,
               media_type: row.media_type,
+              file_size: row.file_size,
+              duration_seconds: row.duration_seconds,
+              width: row.width,
+              height: row.height,
               preview_url: row.preview_url,
               open_url: row.open_url,
               source_url: row.source_url
             }]);
           }
         }
+        syncMaterialPickerSelection();
         renderSelectedMaterials();
         renderMaterialLibrary();
+        if ($('shanjianMaterialPickerModal')) renderMaterialPicker();
       });
     });
   }
@@ -1801,7 +2090,7 @@
     var count = modal.querySelector('#shanjianMaterialPickerCount');
     var confirm = modal.querySelector('#shanjianMaterialPickerConfirm');
     if (!grid || !status) return;
-    var selectedMap = selectedMaterialIdsMap();
+    var selectedMap = state.materialPicker.selected || {};
     var selectedCount = Object.keys(selectedMap).length;
     if (count) count.textContent = '已选择 ' + selectedCount + ' 个';
     if (confirm) confirm.disabled = selectedCount < 1;
@@ -1882,11 +2171,7 @@
   }
 
   function openMaterialPicker() {
-    state.materialPicker.selected = {};
-    (state.selectedMaterials || []).forEach(function(item) {
-      var assetId = String(item && item.asset_id || '').trim();
-      if (assetId) state.materialPicker.selected[assetId] = true;
-    });
+    syncMaterialPickerSelection();
     state.materialPicker.query = '';
     var modal = ensureMaterialPickerModal();
     var search = modal.querySelector('#shanjianMaterialPickerSearch');
@@ -1903,13 +2188,19 @@
         asset_id: item.asset_id,
         name: item.name,
         media_type: item.media_type,
+        file_size: item.file_size,
+        duration_seconds: item.duration_seconds,
+        width: item.width,
+        height: item.height,
         preview_url: item.preview_url,
         open_url: item.open_url,
         source_url: item.source_url
       };
     });
     state.selectedMaterials = picked;
+    syncMaterialPickerSelection();
     renderSelectedMaterials();
+    renderMaterialLibrary();
     closeModal('shanjianMaterialPickerModal');
     showMessage(picked.length ? ('已选择 ' + picked.length + ' 个素材，提交模板混剪时会一起带上。') : '已清空素材选择。', false);
   }
@@ -3640,11 +3931,20 @@
     if ($('shanjianOpenTemplateLibraryBtn')) $('shanjianOpenTemplateLibraryBtn').addEventListener('click', function() { setActiveView('template'); });
     if ($('shanjianOpenMaterialLibraryBtn')) $('shanjianOpenMaterialLibraryBtn').addEventListener('click', function() { setActiveView('material'); });
     if ($('shanjianOpenMaterialLibraryBtnInline')) $('shanjianOpenMaterialLibraryBtnInline').addEventListener('click', function() { setActiveView('material'); });
+    if ($('shanjianUploadMaterialBtnInline')) $('shanjianUploadMaterialBtnInline').addEventListener('click', function() {
+      var input = $('shanjianInlineMaterialUploadInput');
+      if (input) input.click();
+    });
+    if ($('shanjianInlineMaterialUploadInput')) $('shanjianInlineMaterialUploadInput').addEventListener('change', function(ev) {
+      uploadInlineMaterials(ev && ev.target ? ev.target.files : null, $('shanjianUploadMaterialBtnInline')).catch(function() {});
+    });
     if ($('shanjianClearTemplateBtn')) $('shanjianClearTemplateBtn').addEventListener('click', function() { selectTemplate(null, false); });
     if ($('shanjianClearMaterialsBtnInline')) $('shanjianClearMaterialsBtnInline').addEventListener('click', function() {
       state.selectedMaterials = [];
+      syncMaterialPickerSelection();
       renderSelectedMaterials();
       renderMaterialLibrary();
+      if ($('shanjianMaterialPickerModal')) renderMaterialPicker();
       showMessage('已清空混剪素材。', false);
     });
     if ($('shanjianAvatarSearchInput')) $('shanjianAvatarSearchInput').addEventListener('input', function(ev) {
@@ -4209,10 +4509,12 @@
                         <span>模板混剪会优先使用这里选中的图片和视频素材。</span>
                       </div>
                       <div class="shanjian-head-actions">
+                        <button type="button" id="shanjianUploadMaterialBtnInline" class="btn btn-ghost btn-sm">上传素材</button>
                         <button type="button" id="shanjianOpenMaterialLibraryBtnInline" class="btn btn-primary btn-sm">去素材库选择</button>
                         <button type="button" id="shanjianClearMaterialsBtnInline" class="btn btn-ghost btn-sm">清空</button>
                       </div>
                     </div>
+                    <input id="shanjianInlineMaterialUploadInput" type="file" accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,image/jpeg,image/png,image/webp,video/mp4,video/quicktime" multiple style="display:none;">
                     <div id="shanjianSelectedMaterialsPreview" class="shanjian-material-list is-empty"></div>
                   </div>
                 </div>
