@@ -2583,6 +2583,56 @@ def _scheduled_douyin_regions(params: Optional[Dict[str, Any]]) -> List[str]:
     return normalized or ["全国"]
 
 
+_DOUYIN_WORKFLOW_TITLE_PATTERNS = [
+    re.compile(pattern)
+    for pattern in (
+        r"(抖音|微信|视频号).*(接管|养号|自动加好友|自动拉群|朋友圈点赞|朋友圈发布)",
+        r"(评论并@|@.*精准客户|回复精准客户评论|评论区接管)",
+        r"(主动私信|私信接管|关注\d*个?精准客户|抓取精准客户)",
+        r"同城爆款视频发布|数字人口播视频|创作一条",
+    )
+]
+
+
+def _scheduled_douyin_keyword_values(value: Any) -> List[str]:
+    raw_values = value if isinstance(value, list) else [value]
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in raw_values:
+        text = re.sub(r"\s+", " ", str(item or "")).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text[:120])
+    return out[:12]
+
+
+def _scheduled_douyin_keyword_looks_like_workflow_title(value: Any) -> bool:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _DOUYIN_WORKFLOW_TITLE_PATTERNS)
+
+
+def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
+    # Sales workflow search must use the enabled IP template keywords. Node
+    # titles such as "抖音自己评论区接管" are task labels, not search queries.
+    for keyword in _scheduled_douyin_keyword_values(source.get("keywords")):
+        if not _scheduled_douyin_keyword_looks_like_workflow_title(keyword):
+            return keyword
+    for key in ("keyword", "search_keyword", "query"):
+        values = _scheduled_douyin_keyword_values(source.get(key))
+        if values and not _scheduled_douyin_keyword_looks_like_workflow_title(values[0]):
+            return values[0]
+    values = _scheduled_douyin_keyword_values(source.get("prompt"))
+    if values and not _scheduled_douyin_keyword_looks_like_workflow_title(values[0]):
+        return values[0]
+    return ""
+
+
 def _scheduled_douyin_skip_payload(
     capability_id: str,
     result: Any,
@@ -2731,15 +2781,9 @@ def _scheduled_douyin_collect_result_payload(
 
 async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
-    keyword = str(
-        source.get("keyword")
-        or source.get("query")
-        or source.get("search_keyword")
-        or source.get("prompt")
-        or ""
-    ).strip()
+    keyword = _scheduled_douyin_search_keyword(source)
     if not keyword:
-        return {"code": 400, "msg": "缺少采集关键词"}
+        return {"code": 400, "msg": "缺少采集关键词：请在当前启用的 IP 人设模板里选择关键词，不要使用工作流节点标题。"}
 
     max_results = max(10, min(_safe_int(source.get("max_results") or 50) or 50, 100))
     max_videos = max(1, min(_safe_int(source.get("max_videos_per_run") or source.get("max_videos") or 1) or 1, 50))
@@ -4318,8 +4362,6 @@ def _local_asset_media_type_map(asset_ids: List[str]) -> Dict[str, str]:
 
 
 def _preferred_parent_material_media_type(params: Dict[str, Any]) -> str:
-    if not _is_wechat_moments_platform((params or {}).get("platform") or (params or {}).get("publish_platform")):
-        return ""
     raw = str(
         (params or {}).get("media_type")
         or (params or {}).get("content_type")
@@ -4446,10 +4488,7 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
             return url_result(video_urls[0], "video")
         if other_urls:
             return url_result(other_urls[0], "video")
-        if image_ids:
-            return asset_result(image_ids[0], "image", image_urls)
-        if image_urls:
-            return url_result(image_urls[0], "image")
+        return {}
 
     if video_ids:
         return asset_result(video_ids[0], "video", video_urls, other_urls)
@@ -4506,16 +4545,395 @@ async def _resolve_parent_workflow_material(
         run_time = _parse_run_time(run.get("finished_at") or run.get("updated_at") or run.get("created_at"))
         if current_time and run_time and run_time > current_time + timedelta(minutes=10):
             continue
+        detail_run = run
+        run_id = str(run.get("id") or "").strip()
+        if run_id:
+            try:
+                detail_resp = await cloud.get(
+                    f"{base}/api/scheduled-tasks/runs/{run_id}",
+                    headers=headers,
+                )
+                detail_data = detail_resp.json() if detail_resp.content else {}
+                if detail_resp.status_code < 400 and isinstance(detail_data, dict) and isinstance(detail_data.get("run"), dict):
+                    detail_run = detail_data["run"]
+            except Exception as exc:
+                logger.warning("[H5-WORKFLOW] fetch parent run detail failed run_id=%s err=%s", run_id, exc)
         material = _extract_parent_material(
-            run.get("result_payload") or {},
+            detail_run.get("result_payload") or {},
             preferred_media_type=_preferred_parent_material_media_type(params),
         )
         if not material:
             continue
-        candidates.append({**material, "source_run_id": str(run.get("id") or "")})
+        candidates.append({**material, "source_run_id": run_id})
     if not candidates:
         raise RuntimeError("上级节点还没有可发布的素材")
     return candidates[0]
+
+
+def _workflow_text(value: Any, limit: int = 500) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    return text[:limit] if text else ""
+
+
+def _workflow_has_content(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_workflow_has_content(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_workflow_has_content(item) for item in value)
+    return bool(str(value or "").strip())
+
+
+def _workflow_list_texts(value: Any, limit: int = 20) -> List[str]:
+    values = value if isinstance(value, list) else [value]
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if isinstance(item, dict):
+            text = _workflow_text(
+                item.get("display_name")
+                or item.get("name")
+                or item.get("keyword")
+                or item.get("account_name")
+                or item.get("account_id")
+                or item.get("title"),
+                180,
+            )
+        else:
+            text = _workflow_text(item, 180)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _workflow_auth_token(headers: Dict[str, str]) -> str:
+    for key in ("Authorization", "authorization"):
+        raw = str((headers or {}).get(key) or "").strip()
+        if raw.lower().startswith("bearer "):
+            return raw.split(" ", 1)[1].strip()
+        if raw:
+            return raw
+    return ""
+
+
+def _workflow_installation_id(headers: Dict[str, str]) -> str:
+    for key in ("X-Installation-Id", "x-installation-id"):
+        value = str((headers or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _workflow_language_label(language: str) -> str:
+    raw = _workflow_text(language, 64)
+    lowered = raw.lower()
+    if lowered in {"zh", "zh-cn", "中文", "简体中文", "chinese"}:
+        return "中文"
+    if lowered in {"en", "en-us", "english", "英文", "英语"}:
+        return "English"
+    if lowered in {"ja", "ja-jp", "japanese", "日文", "日语"}:
+        return "日本語"
+    if lowered in {"ko", "ko-kr", "korean", "韩文", "韩语"}:
+        return "한국어"
+    return raw or "中文"
+
+
+def _workflow_script_candidate(value: Any, limit: int = 700) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text[:limit].strip()
+
+
+def _workflow_memory_doc_summaries(value: Any, limit: int = 8) -> List[Dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for item in value:
+        if isinstance(item, dict):
+            title = _workflow_text(item.get("title") or item.get("name") or item.get("doc_type"), 120)
+            content = _workflow_text(
+                item.get("content")
+                or item.get("summary")
+                or item.get("text")
+                or item.get("preview")
+                or item.get("body"),
+                1200,
+            )
+        else:
+            title = ""
+            content = _workflow_text(item, 1200)
+        if not (title or content):
+            continue
+        out.append({"title": title, "content": content})
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _workflow_event(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    text: str,
+) -> None:
+    if cloud is None or not base or not run_id:
+        return
+    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": text})
+
+
+async def _generate_shanjian_workflow_script(
+    *,
+    source: Dict[str, Any],
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+) -> Dict[str, str]:
+    explicit = (
+        _workflow_script_candidate(source.get("script"))
+        or _workflow_script_candidate(source.get("text"))
+        or _workflow_script_candidate(source.get("oral_script"))
+    )
+    label = _workflow_text(
+        source.get("sales_node_label")
+        or source.get("task_title")
+        or source.get("title")
+        or "数字人口播视频",
+        160,
+    )
+    title = _workflow_text(source.get("title") or label or "数字人口播", 80)
+    language = _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64)
+    if explicit:
+        return {"title": title, "script": explicit, "caption_hint": "", "language": language}
+    if cloud is None or not base:
+        raise RuntimeError("数字人2.0缺少云端LLM连接，无法根据IP人设生成口播文案")
+
+    requirements = source.get("requirements") if isinstance(source.get("requirements"), dict) else {}
+    keywords = _workflow_list_texts(source.get("keyword_texts") or source.get("keywords"))
+    competitors = _workflow_list_texts(source.get("competitors"))
+    memory_doc_ids = _workflow_list_texts(source.get("memory_doc_ids"), 12)
+    memory_docs = _workflow_memory_doc_summaries(source.get("memory_docs"))
+    missing: List[str] = []
+    if not _workflow_has_content(requirements):
+        missing.append("IP人设定位资料调查")
+    if not keywords:
+        missing.append("当前启用模板的行业关键词")
+    if not competitors:
+        missing.append("当前启用模板的同行账号")
+    if not (memory_doc_ids or memory_docs):
+        missing.append("当前启用模板的记忆文件")
+    if missing:
+        raise RuntimeError("数字人2.0生成缺少：" + "、".join(missing) + "。请先到 IP人设定位 补足后再启动销售员工。")
+
+    jwt_token = _workflow_auth_token(headers)
+    installation_id = _workflow_installation_id(headers)
+    memory_query = " ".join([label, "数字人口播", *keywords[:5], *competitors[:5]]).strip()
+    memory_context = _scheduled_memory_context(jwt_token, installation_id, memory_query) if jwt_token else ""
+    await _workflow_event(cloud, base, headers, run_id, "正在根据IP人设生成数字人口播文案")
+    system = (
+        "你是销售工作流里的数字人口播视频编导。只输出 JSON 对象，不要 Markdown。\n"
+        "字段：title(string), script(string), caption_hint(string), missing_fields(array)。\n"
+        "必须只基于用户提供的人设、关键词、同行资料、记忆文件和记忆上下文生成，不能编造价格、案例、资质、地址、承诺或数据。\n"
+        "如果缺少完成文案所需的关键信息，把缺失项写入 missing_fields，script 留空。\n"
+        "script 是给数字人直接口播的成片文案，要自然像真人表达，不营销轰炸，不写镜头指令，不写括号说明。"
+    )
+    user_payload = {
+        "task": label,
+        "target_language": _workflow_language_label(language),
+        "requirements": requirements,
+        "keywords": keywords,
+        "competitors": competitors,
+        "memory_doc_ids": memory_doc_ids,
+        "memory_docs": memory_docs,
+        "memory_context": memory_context[:12000],
+        "length_rule": "中文控制在80到180字；英文控制在60到120词；其他语种按同等时长控制。必须完整通顺。",
+        "safety_rule": "资料里没有的卖点不要补，宁可提示缺资料，也不要硬编。",
+    }
+    text = await _call_scheduled_llm(
+        base=base,
+        headers=headers,
+        system=system,
+        user_payload=user_payload,
+        temperature=0.45,
+    )
+    data = _extract_json_object_text(text)
+    llm_missing = [item for item in _workflow_list_texts(data.get("missing_fields"), 8) if item]
+    if llm_missing:
+        raise RuntimeError("数字人2.0生成缺少：" + "、".join(llm_missing) + "。请先到 IP人设定位 或记忆文件补足。")
+    script = _workflow_script_candidate(data.get("script"))
+    if not script:
+        raise RuntimeError("数字人2.0未生成有效口播文案，请检查IP人设定位和记忆文件是否有足够真实资料")
+    return {
+        "title": _workflow_text(data.get("title") or title or "数字人口播", 80),
+        "script": script,
+        "caption_hint": _workflow_text(data.get("caption_hint"), 200),
+        "language": language or "zh-CN",
+    }
+
+
+async def _run_shanjian_digital_human_workflow(
+    source: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    run_id: str,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+) -> Dict[str, Any]:
+    virtualman_id = _workflow_text(source.get("virtualman_id") or source.get("virtualmanId"), 128)
+    voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
+    missing = []
+    if not virtualman_id:
+        missing.append("素材库：请先创建并训练完成可用的数字人形象分身（数字人2.0）")
+    if not voice:
+        missing.append("素材库：请先创建可用的声音分身")
+    if missing:
+        raise RuntimeError("数字人2.0生成缺少：" + "；".join(missing))
+    if cloud is None or not base:
+        raise RuntimeError("数字人2.0缺少云端连接，无法合成声音分身音频")
+
+    generated = await _generate_shanjian_workflow_script(
+        source=source,
+        cloud=cloud,
+        base=base,
+        headers=headers,
+        run_id=run_id,
+    )
+    script = generated["script"]
+    title = generated["title"] or "数字人口播"
+    language = generated["language"] or "zh-CN"
+
+    tts_payload: Dict[str, Any] = {
+        "voice": voice,
+        "text": script,
+        "rate": str(source.get("rate") or source.get("speed_ratio") or "1"),
+        "volume": str(source.get("volume") or "1"),
+        "pitch": str(source.get("pitch") if source.get("pitch") is not None else "0"),
+        "emotion": str(source.get("emotion") or "happy"),
+    }
+    instructions = _workflow_text(source.get("instructions"), 500)
+    if instructions:
+        tts_payload["instructions"] = instructions
+    provider = _workflow_text(source.get("voice_provider") or source.get("provider"), 32).lower()
+    if provider in {"minimax", "qwen"}:
+        tts_payload["voice_provider"] = provider
+
+    await _workflow_event(cloud, base, headers, run_id, "正在合成声音分身音频")
+    tts_resp = await cloud.post(
+        f"{base}/api/hifly/my/voice/preview-tts",
+        json=tts_payload,
+        headers=headers,
+        timeout=httpx.Timeout(1800.0, connect=10.0, read=1800.0, write=30.0, pool=10.0),
+    )
+    try:
+        tts_data = tts_resp.json() if tts_resp.content else {}
+    except Exception:
+        tts_data = {"detail": (tts_resp.text or "")[:1000]}
+    if not isinstance(tts_data, dict):
+        tts_data = {"result": tts_data}
+    if tts_resp.status_code >= 400 or (isinstance(tts_data, dict) and tts_data.get("ok") is False):
+        raise RuntimeError(str(tts_data.get("detail") or tts_data.get("error") or tts_data.get("message") or tts_data or tts_resp.text)[:500])
+    audio_url = str(tts_data.get("audio_url") or "").strip()
+    if not audio_url:
+        raise RuntimeError("声音分身合成成功，但没有返回可用于数字人2.0的音频地址")
+
+    await _workflow_event(cloud, base, headers, run_id, "正在提交数字人2.0视频任务")
+    create_data = await _post_local_api_json(
+        "/api/shanjian-digital-human/video/create",
+        {
+            "virtualman_id": virtualman_id,
+            "title": title,
+            "text": script,
+            "speaker_id": voice,
+            "audio_url": audio_url,
+            "language": language,
+            "speed_ratio": source.get("speed_ratio") or 1.0,
+        },
+        headers=headers,
+        timeout_seconds=1800.0,
+    )
+    task_id = _workflow_text(create_data.get("task_id"), 128)
+    record = create_data.get("record") if isinstance(create_data.get("record"), dict) else {}
+    record_id = _safe_int(record.get("id") if record else 0)
+    if not task_id and not record_id:
+        raise RuntimeError("数字人2.0提交成功但没有返回任务ID")
+
+    poll_timeout = _clamp_int(source.get("poll_timeout_seconds"), 3600, 60, 7200)
+    interval = _clamp_int(source.get("poll_interval_seconds"), 10, 5, 60)
+    waited = 0
+    last: Dict[str, Any] = {"ok": True, "status": "processing", "task_id": task_id, "record": record}
+    await _workflow_event(cloud, base, headers, run_id, "正在等待数字人2.0出片")
+    while waited <= poll_timeout:
+        body: Dict[str, Any] = {}
+        if record_id:
+            body["record_id"] = record_id
+        if task_id:
+            body["task_id"] = task_id
+        last = await _post_local_api_json(
+            "/api/shanjian-digital-human/video/task",
+            body,
+            headers=headers,
+            timeout_seconds=180.0,
+        )
+        status = _workflow_text(last.get("status"), 64).lower()
+        if status in {"succeed", "success", "completed", "complete", "done", "finished"}:
+            record = last.get("record") if isinstance(last.get("record"), dict) else record
+            video_url = _workflow_text(last.get("video_url") or (record or {}).get("video_url"), 1000)
+            cover_url = _workflow_text(last.get("cover_url") or (record or {}).get("cover_url"), 1000)
+            if not video_url:
+                raise RuntimeError("数字人2.0任务已完成，但没有返回视频链接")
+            return {
+                "ok": True,
+                "action": "shanjian_digital_human_video",
+                "status": status or "succeed",
+                "task_id": task_id or _workflow_text(last.get("task_id"), 128),
+                "record_id": record_id,
+                "record": record,
+                "title": title,
+                "script": script,
+                "caption_hint": generated.get("caption_hint") or "",
+                "virtualman_id": virtualman_id,
+                "voice": voice,
+                "media_type": "video",
+                "video_url": video_url,
+                "cover_url": cover_url,
+                "duration": last.get("duration") or (record or {}).get("duration"),
+                "source_media_urls": [video_url],
+                "media_urls": {"video": [video_url]},
+                "result_refs": {"asset_ids": [], "urls": [video_url]},
+                "tts": {
+                    "duration_seconds": tts_data.get("duration_seconds") if isinstance(tts_data, dict) else None,
+                    "audio_url": (record or {}).get("audio_url") or "",
+                },
+            }
+        if status in {"failed", "fail", "error", "canceled", "cancelled"}:
+            raise RuntimeError("数字人2.0生成失败：" + _workflow_text(last.get("message") or (record or {}).get("error_message") or last, 500))
+        if waited >= poll_timeout:
+            break
+        await asyncio.sleep(interval)
+        waited += interval
+        if waited % 60 < interval:
+            await _workflow_event(cloud, base, headers, run_id, f"数字人2.0仍在生成中，已等待 {waited} 秒")
+
+    last["result_ready"] = False
+    last["action"] = "shanjian_digital_human_video"
+    last["title"] = title
+    last["script"] = script
+    last["virtualman_id"] = virtualman_id
+    last["voice"] = voice
+    last["task_id"] = task_id
+    last["record_id"] = record_id
+    last["media_type"] = "video"
+    return last
 
 
 async def _run_client_workflow_action(
@@ -4530,6 +4948,14 @@ async def _run_client_workflow_action(
 ) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
     native_account_id = str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
+    if action == "shanjian_digital_human_video":
+        return await _run_shanjian_digital_human_workflow(
+            source,
+            headers=headers,
+            run_id=run_id,
+            cloud=cloud,
+            base=base,
+        )
     if action == "local_bestseller_plan":
         return await _post_local_api_json(
             "/api/local-bestseller/plan",
@@ -4757,6 +5183,12 @@ async def _run_client_workflow_action(
 
 
 def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
+    if action == "shanjian_digital_human_video":
+        task_id = str(result.get("task_id") or "").strip()
+        if result.get("result_ready") is False:
+            return "数字人2.0视频任务已提交，仍在生成中。" + (f" 任务ID：{task_id}" if task_id else "")
+        video_url = str(result.get("video_url") or "").strip()
+        return "数字人2.0视频生成完成。" + (f" 任务ID：{task_id}" if task_id else "") + (f" 视频：{video_url}" if video_url else "")
     if action == "local_bestseller_daily_video":
         item = result.get("item") if isinstance(result.get("item"), dict) else {}
         task_id = str(item.get("video_task_id") or item.get("video_job_id") or "").strip()

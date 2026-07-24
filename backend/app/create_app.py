@@ -535,6 +535,49 @@ def _migrate_kf_customer_group():
         logger.warning("Migration kf_customer group_id skipped: %s", e)
 
 
+def _migrate_alibaba_inquiry_accounts_v2():
+    """Add auto-reply takeover flag for Alibaba inquiry accounts."""
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        if not insp.has_table("alibaba_inquiry_accounts"):
+            return
+        cols = [c["name"] for c in insp.get_columns("alibaba_inquiry_accounts")]
+        if "auto_reply_enabled" in cols:
+            return
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE alibaba_inquiry_accounts ADD COLUMN auto_reply_enabled BOOLEAN NOT NULL DEFAULT 0"))
+    except Exception as e:
+        logger.warning("Migration alibaba_inquiry_accounts v2 skipped: %s", e)
+
+
+def _migrate_alibaba_customer_archives_v2():
+    """Add archive merge, field evidence, and manual override columns."""
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        if not insp.has_table("alibaba_customer_archives"):
+            return
+        cols = [c["name"] for c in insp.get_columns("alibaba_customer_archives")]
+        with engine.begin() as conn:
+            if "linked_inquiry_ids" not in cols:
+                conn.execute(text("ALTER TABLE alibaba_customer_archives ADD COLUMN linked_inquiry_ids JSON"))
+            if "field_evidence" not in cols:
+                conn.execute(text("ALTER TABLE alibaba_customer_archives ADD COLUMN field_evidence JSON"))
+            if "manual_overrides" not in cols:
+                conn.execute(text("ALTER TABLE alibaba_customer_archives ADD COLUMN manual_overrides JSON"))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_alibaba_archives_account_key "
+                    "ON alibaba_customer_archives (account_id, archive_key)"
+                )
+            )
+    except Exception as e:
+        logger.warning("Migration alibaba_customer_archives v2 skipped: %s", e)
+
+
 def _migrate_wecom_config_enterprise_product():
     """Add enterprise_id, product_id, secret, agent_id to wecom_configs if missing."""
     from sqlalchemy import text
@@ -974,6 +1017,8 @@ def create_app() -> FastAPI:
     _migrate_publish_account_creator_schedule_v5()
     _migrate_wecom_config_enterprise_product()
     _migrate_kf_customer_group()
+    _migrate_alibaba_inquiry_accounts_v2()
+    _migrate_alibaba_customer_archives_v2()
     _ensure_default_user()
     _seed_capability_catalog()
     _sync_missing_capabilities_from_catalog()

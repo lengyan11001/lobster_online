@@ -90,8 +90,8 @@
   });
 
   window.registerLobsterView('alibaba-inquiries', {
-    html: '/static/views/alibaba-inquiries.html?v=20260721-alibaba-inquiries',
-    scripts: '/static/js/alibaba-inquiries.js?v=20260721-alibaba-inquiries',
+    html: '/static/views/alibaba-inquiries.html?v=20260721-alibaba-doc-collapse',
+    scripts: '/static/js/alibaba-inquiries.js?v=20260722-alibaba-archive-jobs',
     init: 'initAlibabaInquiriesView',
     cache: 'reload'
   });

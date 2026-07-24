@@ -1442,6 +1442,7 @@
     }
     var publishPlatform = val('scheduledTaskPublishPlatform');
     var publishAccountId = val('scheduledTaskPublishAccount');
+    var autoPublish = !!(document.getElementById('scheduledTaskPublishAuto') || {}).checked;
     var publishAccount = null;
     if (publishAccountId) {
       var publishSourceRows = publishPlatform === 'wechat_moments' ? (state.wechatMomentsAccounts || []) : (state.publishAccounts || []);

@@ -97,5 +97,18 @@ Thumbs.db
 .cursor/
 /temp_test_outputs
 /static/generated
+
+# Local runtime artifacts
+.updates/
+@AutomationLog.txt
+*.bak
+*.bak-*
+data/
+temp_assets/
+scripts/wechat_runtime_wheels/
+wxautox/
+wxautox*/
+素材库/
+backend/douyin_origin/douyin_protocol/node_modules/.package-lock.json
 /家德诗花漾森语手部护理组合_20260427_165740
 /家德诗花漾森语手部护理组合_20260427_174551

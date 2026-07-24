@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -8,18 +10,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import Asset, ShanjianDigitalHumanProfile, ShanjianDigitalHumanVideoTask
-from .assets import ASSETS_DIR, get_asset_public_url
+from .assets import ASSETS_DIR, _save_bytes_or_tos, get_asset_public_url
 from .auth import _ServerUser, get_current_user_for_local
 from .shanjian_smart_clip import _data, _get, _post
 
 router = APIRouter()
 _ROOT_DIR = Path(__file__).resolve().parents[3]
+logger = logging.getLogger(__name__)
 
 
 class _TokenBody(BaseModel):
@@ -126,6 +130,107 @@ def _resolve_asset_or_url(
     if not public_url:
         raise HTTPException(status_code=400, detail=f"{label}素材还没有可用公网地址，请先确认素材已上传成功")
     return public_url
+
+
+def _url_hint(value: str) -> str:
+    raw = _clean_text(value)
+    if raw.startswith("data:"):
+        return raw[:48] + "..."
+    return raw[:160]
+
+
+def _audio_ext_from_content(content_type: str, url: str = "") -> str:
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    suffix = Path((url or "").split("?", 1)[0].split("#", 1)[0]).suffix.lower()
+    if suffix in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}:
+        return suffix
+    if "wav" in ct:
+        return ".wav"
+    if "mp4" in ct or "m4a" in ct:
+        return ".m4a"
+    if "aac" in ct:
+        return ".aac"
+    if "ogg" in ct:
+        return ".ogg"
+    if "flac" in ct:
+        return ".flac"
+    return ".mp3"
+
+
+async def _download_audio_bytes(audio_url: str) -> tuple[bytes, str]:
+    raw = _clean_text(audio_url)
+    if raw.startswith("data:"):
+        header, _, payload = raw.partition(",")
+        if not payload:
+            raise HTTPException(status_code=400, detail="audio_url data URL 格式无效")
+        content_type = header[5:].split(";", 1)[0].strip() or "audio/mpeg"
+        try:
+            data = base64.b64decode(payload)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="audio_url data URL 解码失败") from exc
+        return data, content_type
+    if not raw.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="audio_url 必须是 http(s) 或 data: 音频地址")
+    try:
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True, trust_env=False) as client:
+            resp = await client.get(
+                raw,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "audio/*,*/*;q=0.8",
+                },
+            )
+            resp.raise_for_status()
+            return resp.content, resp.headers.get("content-type", "") or "audio/mpeg"
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=400, detail=f"下载音频失败: HTTP {exc.response.status_code}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"下载音频失败: {type(exc).__name__}: {exc}") from exc
+
+
+async def _persist_audio_for_shanjian(
+    *,
+    audio_url: str,
+    db: Session,
+    current_user: _ServerUser,
+    title: str,
+) -> tuple[str, str]:
+    raw = _clean_text(audio_url)
+    data, content_type = await _download_audio_bytes(raw)
+    if not data:
+        raise HTTPException(status_code=400, detail="音频内容为空，无法提交数字人任务")
+    media_type = (content_type or "audio/mpeg").split(";", 1)[0].strip() or "audio/mpeg"
+    ext = _audio_ext_from_content(media_type, raw)
+    asset_id, filename_or_key, file_size, public_url = _save_bytes_or_tos(data, ext, media_type)
+    if not public_url:
+        raise HTTPException(status_code=503, detail="数字人口播音频转存 TOS 失败，无法提交闪剪")
+    asset = Asset(
+        asset_id=asset_id,
+        user_id=int(current_user.id),
+        filename=filename_or_key,
+        media_type="audio",
+        file_size=file_size,
+        source_url=public_url,
+        prompt=_clean_text(title)[:200],
+        model="shanjian-digital-human-tts-audio",
+        tags="shanjian,digital-human,audio",
+        meta={
+            "source": "shanjian_digital_human_audio_transfer",
+            "original_url_hint": _url_hint(raw),
+            "content_type": media_type,
+        },
+    )
+    db.add(asset)
+    db.flush()
+    logger.info(
+        "[shanjian-dh] audio rehosted user_id=%s asset_id=%s size=%s from=%s to=%s",
+        getattr(current_user, "id", ""),
+        asset_id,
+        file_size,
+        _url_hint(raw),
+        _url_hint(public_url),
+    )
+    return public_url, asset_id
 
 
 def _clear_default_profiles(db: Session, user_id: int) -> None:
@@ -604,8 +709,18 @@ async def create_video(
     if not audio_url and (not text or not speaker_id):
         raise HTTPException(status_code=400, detail="请提供 audio_url / audio_asset_id，或同时提供 text + speaker_id")
 
+    title = _clean_text(body.title)[:80] or "数字人口播"
+    if audio_url:
+        audio_url, persisted_audio_asset_id = await _persist_audio_for_shanjian(
+            audio_url=audio_url,
+            db=db,
+            current_user=current_user,
+            title=title,
+        )
+        audio_asset_id = audio_asset_id or persisted_audio_asset_id
+
     payload: Dict[str, Any] = {
-        "title": _clean_text(body.title)[:80] or "数字人口播",
+        "title": title,
         "virtualmanId": virtualman_id,
     }
     if _clean_text(body.callback_url):
@@ -628,7 +743,7 @@ async def create_video(
     row = ShanjianDigitalHumanVideoTask(
         user_id=int(current_user.id),
         profile_id=getattr(profile, "id", None),
-        title=_clean_text(body.title)[:80] or "数字人口播",
+        title=title,
         status="processing",
         task_id=task_id,
         request_id=_clean_text(upstream.get("requestId")),

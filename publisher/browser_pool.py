@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -328,6 +329,78 @@ def _douyin_cdp_storage_key(profile_dir: str, browser_options: Optional[Dict[str
     return f"douyin-cdp:{profile_dir}\0{_douyin_cdp_port_from_profile(profile_dir, browser_options)}"
 
 
+def _norm_user_data_dir(value: str) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(str(value or "").strip().strip('"')))
+    except Exception:
+        return str(value or "").strip().strip('"').lower()
+
+
+def _cmdline_user_data_dir(cmdline: Any) -> str:
+    if isinstance(cmdline, (list, tuple)):
+        parts = [str(x or "") for x in cmdline]
+    else:
+        parts = re.split(r"\s+", str(cmdline or ""))
+    for idx, part in enumerate(parts):
+        text = part.strip().strip('"')
+        lower = text.lower()
+        if lower.startswith("--user-data-dir="):
+            return text.split("=", 1)[1].strip().strip('"')
+        if lower == "--user-data-dir" and idx + 1 < len(parts):
+            return str(parts[idx + 1] or "").strip().strip('"')
+    joined = " ".join(parts)
+    match = re.search(r'--user-data-dir=(?:"([^"]+)"|([^\s]+))', joined, flags=re.I)
+    if match:
+        return (match.group(1) or match.group(2) or "").strip()
+    return ""
+
+
+async def _terminate_chrome_for_profile(profile_dir: str, *, reason: str = "") -> None:
+    """Close only Chrome processes that are using this dedicated profile dir."""
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return
+    target = _norm_user_data_dir(profile_dir)
+    victims: List[Any] = []
+    try:
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                name = str((proc.info or {}).get("name") or "").lower()
+                if "chrome" not in name:
+                    continue
+                cmdline = (proc.info or {}).get("cmdline") or []
+                user_dir = _cmdline_user_data_dir(cmdline)
+                if user_dir and _norm_user_data_dir(user_dir) == target:
+                    victims.append(proc)
+            except Exception:
+                continue
+    except Exception:
+        return
+    if not victims:
+        return
+    logger.info(
+        "[BROWSER][CDP] terminate stale chrome profile=%s count=%s reason=%s",
+        str(profile_dir)[-80:],
+        len(victims),
+        reason[:120],
+    )
+    for proc in victims:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        _, alive = psutil.wait_procs(victims, timeout=3)
+    except Exception:
+        alive = []
+    for proc in alive:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 async def _connect_douyin_cdp_context(profile_dir: str, port: int) -> Any:
     global _pw_instance
     try:
@@ -358,9 +431,12 @@ async def _ensure_douyin_cdp_context(
     start_url: str = "https://www.douyin.com/jingxuan",
     browser_options: Optional[Dict[str, Any]] = None,
 ) -> Any:
+    opts = browser_options or {}
+    start_url = str(opts.get("start_url") or opts.get("cdp_start_url") or start_url).strip() or start_url
     port = _douyin_cdp_port_from_profile(profile_dir, browser_options)
     Path(profile_dir).mkdir(parents=True, exist_ok=True)
     if not _is_port_open(port):
+        await _terminate_chrome_for_profile(profile_dir, reason=f"prepare cdp port {port}")
         chrome_path = _find_chrome_executable()
         cmd = [
             chrome_path,

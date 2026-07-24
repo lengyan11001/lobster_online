@@ -1,6 +1,6 @@
 {
-  "version": "1.0.112",
-  "build": 156,
-  "applied_at": "2026-07-21T10:19:54+08:00",
-  "note": "prefer local asset files for WeChat Moments publishing"
+  "version": "1.0.114",
+  "build": 158,
+  "applied_at": "2026-07-22T14:02:16+08:00",
+  "note": "fix scheduled IP daily task submit"
 }

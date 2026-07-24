@@ -165,15 +165,50 @@
         background: rgba(255, 255, 255, 0.68);
         font-size: 0.72rem;
         font-weight: 900;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .ali-badge.ok { color: #047857; border-color: rgba(4,120,87,0.22); background: rgba(16,185,129,0.08); }
       .ali-badge.warn { color: #b45309; border-color: rgba(180,83,9,0.24); background: rgba(245,158,11,0.1); }
       .ali-badge.err { color: #be123c; border-color: rgba(190,18,60,0.24); background: rgba(244,63,94,0.1); }
-      .ali-workspace {
+      .ali-level {
         display: none;
-        margin-top: 0.85rem;
       }
-      .ali-workspace.is-visible { display: block; }
+      .ali-level.is-active {
+        display: block;
+      }
+      .ali-workspace {
+        margin-top: 0;
+        animation: aliSlideIn 0.2s ease both;
+      }
+      .ali-detail-head {
+        margin-bottom: 0.85rem;
+        background:
+          linear-gradient(135deg, rgba(20, 86, 255, 0.1), rgba(6, 182, 212, 0.08)),
+          rgba(255, 255, 255, 0.92);
+      }
+      .ali-detail-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin-bottom: 0.32rem;
+        color: var(--ali-blue);
+        font-size: 0.74rem;
+        font-weight: 950;
+        letter-spacing: 0.06em;
+      }
+      .ali-account-enter {
+        margin-top: 0.62rem;
+        color: var(--ali-blue);
+        font-size: 0.78rem;
+        font-weight: 950;
+      }
+      @keyframes aliSlideIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
       .ali-tabs {
         position: sticky;
         top: 0;
@@ -210,6 +245,23 @@
         grid-template-columns: minmax(420px, 1fr) minmax(360px, 0.74fr);
         gap: 0.85rem;
         align-items: start;
+      }
+      .ali-grid-split {
+        grid-template-columns: minmax(340px, 0.74fr) minmax(540px, 1.08fr);
+      }
+      .ali-list-card,
+      .ali-detail-card {
+        min-width: 0;
+      }
+      .ali-detail-card {
+        position: sticky;
+        top: 4.25rem;
+        max-height: calc(100vh - 5rem);
+        overflow: auto;
+        overscroll-behavior: contain;
+      }
+      .ali-list-card .ali-list {
+        gap: 0.48rem;
       }
       .ali-list {
         display: grid;
@@ -266,6 +318,33 @@
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         overflow: hidden;
+      }
+      .ali-inquiry-compact .ali-item-main {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+      }
+      .ali-inquiry-compact .ali-avatar {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        font-size: 0.82rem;
+      }
+      .ali-inquiry-compact .ali-card-head {
+        display: block;
+        margin-bottom: 0;
+      }
+      .ali-inquiry-compact .ali-item-title {
+        font-size: 0.94rem;
+      }
+      .ali-inquiry-compact .ali-preview {
+        -webkit-line-clamp: 1;
+        margin-top: 0.28rem;
+        font-size: 0.78rem;
+      }
+      .ali-inquiry-status {
+        display: grid;
+        justify-items: end;
+        gap: 0.3rem;
       }
       .ali-field-grid {
         display: grid;
@@ -346,6 +425,162 @@
         margin-top: 0.24rem;
         word-break: break-word;
       }
+      .ali-detail-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
+        margin-bottom: 0.72rem;
+      }
+      .ali-detail-action-strip {
+        position: static;
+        z-index: 4;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.65rem;
+        margin: 0 0 0.72rem;
+        padding: 0.62rem;
+        border: 1px solid rgba(20,86,255,0.16);
+        border-radius: 16px;
+        background: rgba(255,255,255,0.93);
+        box-shadow: 0 12px 30px rgba(15,23,42,0.08);
+        backdrop-filter: blur(14px);
+      }
+      .ali-archive-hero {
+        display: flex;
+        gap: 0.7rem;
+        align-items: center;
+        margin-bottom: 0.7rem;
+      }
+      .ali-inline-note {
+        margin: 0.58rem 0 0.2rem;
+        padding: 0.58rem 0.68rem;
+        border: 1px solid rgba(6,182,212,0.18);
+        border-radius: 14px;
+        color: #155e75;
+        background: rgba(6,182,212,0.08);
+        font-size: 0.8rem;
+        font-weight: 850;
+      }
+      .ali-inline-note.err {
+        color: #be123c;
+        border-color: rgba(190,18,60,0.22);
+        background: rgba(244,63,94,0.08);
+      }
+      .ali-archive-section {
+        margin-top: 0.75rem;
+        border: 1px solid rgba(15,23,42,0.09);
+        border-radius: 16px;
+        padding: 0.72rem;
+        background: rgba(248,250,252,0.78);
+      }
+      .ali-archive-section h4 {
+        margin: 0 0 0.48rem;
+        font-size: 0.86rem;
+        font-weight: 950;
+      }
+      .ali-result-card {
+        border: 1px solid rgba(20,86,255,0.14);
+        border-radius: 18px;
+        padding: 0.8rem;
+        background:
+          linear-gradient(135deg, rgba(20,86,255,0.08), rgba(6,182,212,0.05)),
+          rgba(255,255,255,0.82);
+      }
+      .ali-result-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin-top: 0.58rem;
+      }
+      .ali-result-cell {
+        border: 1px solid rgba(15,23,42,0.08);
+        border-radius: 14px;
+        padding: 0.62rem;
+        background: rgba(255,255,255,0.72);
+        min-width: 0;
+      }
+      .ali-result-cell span {
+        display: block;
+        color: var(--ali-muted);
+        font-size: 0.72rem;
+        font-weight: 950;
+      }
+      .ali-result-cell strong {
+        display: block;
+        margin-top: 0.22rem;
+        color: #0f172a;
+        font-size: 0.86rem;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .ali-archive-list {
+        margin: 0;
+        padding-left: 1.1rem;
+        color: #475569;
+        font-size: 0.82rem;
+        line-height: 1.55;
+      }
+      .ali-archive-list li { margin: 0.22rem 0; }
+      .ali-evidence {
+        display: grid;
+        gap: 0.5rem;
+        max-height: 340px;
+        overflow: auto;
+      }
+      .ali-evidence-item {
+        border: 1px solid rgba(15,23,42,0.08);
+        border-radius: 13px;
+        padding: 0.58rem;
+        background: rgba(255,255,255,0.72);
+        min-width: 0;
+        overflow: hidden;
+      }
+      .ali-source-notes {
+        display: grid;
+        gap: 0.36rem;
+        margin-top: 0.42rem;
+      }
+      .ali-source-note {
+        margin-top: 0.36rem;
+        padding: 0.46rem 0.55rem;
+        border-radius: 12px;
+        color: #334155;
+        background: rgba(226,232,240,0.52);
+        font-size: 0.78rem;
+        font-weight: 760;
+        line-height: 1.48;
+        word-break: break-word;
+      }
+      .ali-source-link {
+        display: inline-flex;
+        width: fit-content;
+        margin-top: 0.42rem;
+        border: 1px solid rgba(20,86,255,0.2);
+        border-radius: 999px;
+        padding: 0.22rem 0.56rem;
+        color: #1456ff;
+        background: rgba(20,86,255,0.07);
+        font-size: 0.74rem;
+        font-weight: 950;
+        text-decoration: none;
+      }
+      .ali-collapsed-sources summary {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+        cursor: pointer;
+        list-style: none;
+      }
+      .ali-collapsed-sources summary::-webkit-details-marker { display: none; }
+      .ali-collapsed-sources summary strong {
+        font-size: 0.86rem;
+        font-weight: 950;
+      }
+      .ali-collapsed-sources[open] summary {
+        margin-bottom: 0.56rem;
+      }
       .ali-empty {
         padding: 1.1rem;
         border: 1px dashed rgba(15,23,42,0.18);
@@ -376,10 +611,26 @@
         box-shadow: 0 30px 80px rgba(15,23,42,0.22);
         padding: 1rem;
       }
+      .ali-modal-card.is-wide { width: min(760px, 96vw); }
+      .ali-field-evidence {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
+      }
+      .ali-source-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
+      }
       @media (max-width: 980px) {
         .ali-hero,
         .ali-grid {
           grid-template-columns: 1fr;
+        }
+        .ali-detail-card {
+          position: static;
+          max-height: none;
+          overflow: visible;
         }
         .ali-hero-stats { min-width: 0; }
         .ali-account-grid { grid-template-columns: 1fr; }
@@ -388,28 +639,37 @@
         .ali-page { padding: 0.7rem; }
         .ali-field-grid,
         .ali-profile-grid,
+        .ali-detail-summary-grid,
+        .ali-result-grid,
+        .ali-field-evidence,
+        .ali-source-grid,
         .ali-hero-stats {
           grid-template-columns: 1fr;
+        }
+        .ali-detail-action-strip,
+        .ali-archive-hero {
+          align-items: stretch;
+          flex-direction: column;
         }
       }
     </style>
 
     <section class="ali-hero">
       <div>
-        <div class="ali-kicker">ALI INQUIRY TAKEOVER</div>
+        <div class="ali-kicker">阿里国际站询盘接管</div>
         <h2 class="ali-title">阿里询盘接管</h2>
-        <div class="ali-subtitle">接入阿里国际站询盘列表，滚动同步历史询盘、本地沉淀客户档案，并基于历史话术训练回复策略。</div>
+        <div class="ali-subtitle">接入阿里国际站询盘列表，沉淀原始询盘详情，并用全网补全流程生成真正的客户档案。</div>
       </div>
       <div class="ali-actions">
         <button type="button" id="aliBackSkillStoreBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
-        <button type="button" id="aliRefreshAccountsBtn" class="btn btn-ghost btn-sm">刷新账号</button>
-        <button type="button" id="aliAddAccountBtn" class="btn btn-primary btn-sm">添加账号</button>
+        <button type="button" id="aliRefreshAccountsBtn" class="btn btn-ghost btn-sm ali-account-level-only">刷新账号</button>
+        <button type="button" id="aliAddAccountBtn" class="btn btn-primary btn-sm ali-account-level-only">添加账号</button>
       </div>
     </section>
 
     <div id="aliMsg" class="ali-msg"></div>
 
-    <section class="ali-card">
+    <section id="aliAccountLevel" class="ali-card ali-level is-active">
       <div class="ali-card-head">
         <div>
           <h3 class="ali-card-title">账号</h3>
@@ -424,20 +684,18 @@
       <div id="aliAccountList" class="ali-account-grid"></div>
     </section>
 
-    <section id="aliWorkspace" class="ali-workspace">
-      <div class="ali-card" style="margin-bottom:0.85rem;">
+    <section id="aliWorkspace" class="ali-workspace ali-level">
+      <div class="ali-card ali-detail-head">
         <div class="ali-card-head">
           <div>
+            <div class="ali-detail-kicker">第三级 · 账号工作台</div>
             <h3 id="aliAccountTitle" class="ali-card-title">账号工作台</h3>
-            <div id="aliAccountMeta" class="ali-muted">选择账号后展示同步、询盘和客户资料。</div>
+            <div id="aliAccountMeta" class="ali-muted">选择账号后展示同步、询盘、客户档案和话术策略。</div>
           </div>
           <div class="ali-actions">
-            <button type="button" id="aliOpenLoginBtn" class="btn btn-ghost btn-sm">打开登录</button>
-            <button type="button" id="aliCheckLoginBtn" class="btn btn-ghost btn-sm">检测登录</button>
-            <label class="ali-badge warn" title="勾选后会逐条进入询盘详情页，耗时更久。">
-              <input type="checkbox" id="aliSyncDetailsChk" style="width:auto;"> 同步详情
-            </label>
-            <button type="button" id="aliSyncBtn" class="btn btn-primary btn-sm">滚动同步全部询盘</button>
+            <button type="button" id="aliBackAccountsBtn" class="btn btn-ghost btn-sm">返回账号列表</button>
+            <button type="button" id="aliOpenLoginBtn" class="btn btn-ghost btn-sm">打开/检测账号</button>
+            <button type="button" id="aliSyncBtn" class="btn btn-primary btn-sm">同步全量询盘</button>
           </div>
         </div>
       </div>
@@ -446,12 +704,12 @@
         <button type="button" class="ali-tab is-active" data-ali-tab="inquiries">询盘</button>
         <button type="button" class="ali-tab" data-ali-tab="customers">客户档案</button>
         <button type="button" class="ali-tab" data-ali-tab="training">话术资料</button>
-        <button type="button" class="ali-tab" data-ali-tab="analysis">AI话术总结</button>
+        <button type="button" class="ali-tab" data-ali-tab="analysis">智能回复策略</button>
       </nav>
 
       <section class="ali-panel is-active" data-ali-panel="inquiries">
-        <div class="ali-grid">
-          <div class="ali-card">
+        <div class="ali-grid ali-grid-split">
+          <div class="ali-card ali-list-card">
             <div class="ali-card-head">
               <div>
                 <h3 class="ali-card-title">询盘列表</h3>
@@ -466,13 +724,16 @@
             <div id="aliInquiryList" class="ali-list"></div>
             <div id="aliInquiryPager" class="ali-pager"></div>
           </div>
-          <div class="ali-card">
+          <div class="ali-card ali-detail-card">
             <div class="ali-card-head">
               <div>
                 <h3 class="ali-card-title">询盘详情</h3>
                 <div class="ali-muted">点列表项查看本地详情；没有消息时可点同步详情。</div>
               </div>
-              <button type="button" id="aliSyncDetailBtn" class="btn btn-ghost btn-sm" disabled>同步详情</button>
+              <div class="ali-actions">
+                <button type="button" id="aliSyncDetailBtn" class="btn btn-ghost btn-sm" disabled>同步详情</button>
+                <button type="button" id="aliEnrichArchiveBtn" class="btn btn-primary btn-sm" disabled>生成/更新客户档案</button>
+              </div>
             </div>
             <div id="aliDetailBox" class="ali-empty">请选择一条询盘</div>
             <div style="margin-top:0.75rem;">
@@ -490,26 +751,27 @@
       </section>
 
       <section class="ali-panel" data-ali-panel="customers">
-        <div class="ali-grid">
-          <div class="ali-card">
+        <div class="ali-grid ali-grid-split">
+          <div class="ali-card ali-list-card">
             <div class="ali-card-head">
               <div>
                 <h3 class="ali-card-title">客户档案库</h3>
-                <div class="ali-muted">来自询盘详情右侧客户属性，后续可继续接 TikHub 等外部资料补充。</div>
+                <div class="ali-muted">这里展示全网补全后的客户档案；阿里原始属性只保留在询盘详情。</div>
               </div>
             </div>
             <div class="ali-toolbar">
-              <input id="aliCustomerSearch" type="search" placeholder="搜索客户、公司、国家、邮箱">
+              <input id="aliCustomerSearch" type="search" placeholder="搜索客户、公司、国家、域名、邮箱">
               <button type="button" id="aliCustomerSearchBtn" class="btn btn-ghost btn-sm">搜索</button>
+              <button type="button" id="aliCustomerReloadBtn" class="btn btn-ghost btn-sm">刷新</button>
             </div>
             <div id="aliCustomerList" class="ali-list"></div>
             <div id="aliCustomerPager" class="ali-pager"></div>
           </div>
-          <div class="ali-card">
+          <div class="ali-card ali-detail-card">
             <div class="ali-card-head">
               <div>
-                <h3 class="ali-card-title">客户资料</h3>
-                <div class="ali-muted">点击头像或客户条目查看完整属性。</div>
+                <h3 class="ali-card-title">档案详情</h3>
+                <div class="ali-muted">点击客户档案查看补全结果、证据链和补全任务记录。</div>
               </div>
             </div>
             <div id="aliCustomerDetail" class="ali-empty">请选择客户</div>
@@ -544,6 +806,10 @@
                 <label for="aliDocFile">文件</label>
                 <input id="aliDocFile" type="file" accept=".txt,.md,.csv,.json,.docx,.pdf,.html,.htm,.log">
               </div>
+              <div class="ali-field is-wide">
+                <label for="aliDocContent">直接录入资料</label>
+                <textarea id="aliDocContent" placeholder="没有文件时可直接粘贴产品资料、FAQ、报价规则、交期规则等。上传文件和录入内容二选一即可。"></textarea>
+              </div>
             </div>
             <div class="ali-actions" style="margin-top:0.75rem;">
               <button type="button" id="aliUploadDocBtn" class="btn btn-primary btn-sm">上传并入库</button>
@@ -553,7 +819,7 @@
             <div class="ali-card-head">
               <div>
                 <h3 class="ali-card-title">资料列表</h3>
-                <div class="ali-muted">AI 总结和回复草稿会参考这里的资料。</div>
+                <div class="ali-muted">智能回复策略和回复草稿会参考这里的资料。</div>
               </div>
               <button type="button" id="aliReloadDocsBtn" class="btn btn-ghost btn-sm">刷新</button>
             </div>
@@ -567,33 +833,100 @@
           <div class="ali-card">
             <div class="ali-card-head">
               <div>
-                <h3 class="ali-card-title">AI 处理历史询盘</h3>
-                <div class="ali-muted">从历史询盘、客服回复和上传资料里总结好话术、负面话术、常见问题和回复规则。</div>
+                <h3 class="ali-card-title">智能回复策略</h3>
+                <div class="ali-muted">全量分析历史询盘，结合选中的资料、FAQ 或话术，生成可启用的自动回复策略。</div>
+              </div>
+              <button type="button" id="aliAnalyzeBtn" class="btn btn-primary btn-sm">生成回复策略</button>
+            </div>
+            <div class="ali-card" style="box-shadow:none;background:rgba(248,250,252,0.72);margin-bottom:0.75rem;">
+              <div class="ali-card-head">
+                <div>
+                  <h3 class="ali-card-title">原有询盘数据分析</h3>
+                  <div class="ali-muted">默认使用本地已同步的全部询盘和消息做全量分析。</div>
+                </div>
               </div>
             </div>
-            <div class="ali-field-grid">
-              <div class="ali-field">
-                <label for="aliAnalyzeLimit">分析样本数</label>
-                <input id="aliAnalyzeLimit" type="number" min="10" max="1000" value="120">
+            <div class="ali-card" style="box-shadow:none;background:rgba(248,250,252,0.72);">
+              <div class="ali-card-head">
+                <div>
+                  <h3 class="ali-card-title">选择资料 / FAQ / 话术</h3>
+                  <div class="ali-muted">已保存的资料都可以勾选。产品事实只按资料回答，话术只作为表达风格参考。</div>
+                </div>
+                <button type="button" id="aliStrategyReloadDocsBtn" class="btn btn-ghost btn-sm">刷新资料</button>
               </div>
-            </div>
-            <div class="ali-actions" style="margin-top:0.75rem;">
-              <button type="button" id="aliAnalyzeBtn" class="btn btn-primary btn-sm">开始总结话术</button>
-              <button type="button" id="aliReloadSummaryBtn" class="btn btn-ghost btn-sm">刷新总结</button>
+              <div id="aliStrategyDocList" class="ali-list"></div>
             </div>
           </div>
           <div class="ali-card">
             <div class="ali-card-head">
               <div>
-                <h3 class="ali-card-title">总结结果</h3>
-                <div class="ali-muted">最新总结排在最前，后续生成回复会优先参考。</div>
+                <h3 class="ali-card-title">策略列表</h3>
+                <div class="ali-muted">每次生成都会保存。选择一条启用后，自动接管回复只使用启用策略。</div>
               </div>
+              <button type="button" id="aliReloadSummaryBtn" class="btn btn-ghost btn-sm">刷新策略</button>
             </div>
             <div id="aliSummaryList" class="ali-list"></div>
           </div>
         </div>
       </section>
     </section>
+
+    <div id="aliArchiveEditModal" class="ali-modal" role="dialog" aria-modal="true">
+      <div class="ali-modal-card is-wide">
+        <div class="ali-card-head">
+          <div>
+            <h3 class="ali-card-title">编辑客户档案</h3>
+            <div class="ali-muted">人工修正会记录到修正记录里，智能回复仍会优先遵守证据和安全边界。</div>
+          </div>
+          <button type="button" id="aliCloseArchiveEditModal" class="btn btn-ghost btn-sm">关闭</button>
+        </div>
+        <div class="ali-field-grid">
+          <div class="ali-field">
+            <label for="aliArchiveEditName">档案名称</label>
+            <input id="aliArchiveEditName" type="text" placeholder="客户或公司展示名">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditCompany">公司</label>
+            <input id="aliArchiveEditCompany" type="text" placeholder="已核验的公司名">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditBuyer">买家</label>
+            <input id="aliArchiveEditBuyer" type="text" placeholder="联系人/买家名称">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditCountry">国家/地区</label>
+            <input id="aliArchiveEditCountry" type="text" placeholder="国家或地区">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditDomain">官网/域名</label>
+            <input id="aliArchiveEditDomain" type="text" placeholder="example.com">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditEmail">邮箱</label>
+            <input id="aliArchiveEditEmail" type="email" placeholder="name@example.com">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditPhone">电话</label>
+            <input id="aliArchiveEditPhone" type="text" placeholder="+86 ...">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditGrade">评级</label>
+            <input id="aliArchiveEditGrade" type="text" placeholder="P1 / P2 / P3">
+          </div>
+          <div class="ali-field">
+            <label for="aliArchiveEditScore">分数</label>
+            <input id="aliArchiveEditScore" type="number" min="0" max="100" placeholder="0-100">
+          </div>
+          <div class="ali-field is-wide">
+            <label for="aliArchiveEditNotes">人工备注</label>
+            <textarea id="aliArchiveEditNotes" placeholder="记录人工核验来源、补充说明或后续跟进注意事项"></textarea>
+          </div>
+        </div>
+        <div class="ali-actions" style="margin-top:0.75rem;">
+          <button type="button" id="aliSaveArchiveEditBtn" class="btn btn-primary btn-sm">保存修正</button>
+        </div>
+      </div>
+    </div>
 
     <div id="aliAccountModal" class="ali-modal" role="dialog" aria-modal="true">
       <div class="ali-modal-card">

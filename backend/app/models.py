@@ -150,6 +150,7 @@ class AlibabaInquiryAccount(Base):
     nickname: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
     browser_profile: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sync_status: Mapped[str] = mapped_column(String(32), default="idle", nullable=False, index=True)
     sync_progress: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     last_login: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -231,6 +232,86 @@ class AlibabaCustomerProfile(Base):
     activity: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AlibabaCustomerArchive(Base):
+    __tablename__ = "alibaba_customer_archives"
+    __table_args__ = (
+        UniqueConstraint("account_id", "inquiry_id", name="uq_alibaba_archive_account_inquiry"),
+        Index("ix_alibaba_archives_account_key", "account_id", "archive_key"),
+        Index("ix_alibaba_archives_account_updated", "account_id", "updated_at"),
+        Index("ix_alibaba_archives_account_status", "account_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    inquiry_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    archive_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    buyer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    country: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    domain: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    grade: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    seed: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    profile: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    pending_review: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    linked_inquiry_ids: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    field_evidence: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    manual_overrides: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_enriched_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AlibabaCustomerArchiveEvidence(Base):
+    __tablename__ = "alibaba_customer_archive_evidence"
+    __table_args__ = (
+        Index("ix_alibaba_archive_evidence_archive", "archive_id", "created_at"),
+        Index("ix_alibaba_archive_evidence_account", "account_id", "inquiry_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    inquiry_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    archive_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    snippet: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence: Mapped[str] = mapped_column(String(16), default="C", nullable=False, index=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AlibabaCustomerArchiveJob(Base):
+    __tablename__ = "alibaba_customer_archive_jobs"
+    __table_args__ = (
+        Index("ix_alibaba_archive_jobs_account_created", "account_id", "created_at"),
+        Index("ix_alibaba_archive_jobs_archive_created", "archive_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    inquiry_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    archive_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
+    progress: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    seed: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

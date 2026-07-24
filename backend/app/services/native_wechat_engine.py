@@ -429,6 +429,8 @@ def _local_hwnd_from_account_id(account_id: str) -> int:
         return 0
     if value == LOCAL_DEFAULT_ACCOUNT_ID:
         windows = _scan_local_wechat_windows(max_age_seconds=0)
+        if not windows:
+            windows = _ensure_local_wechat_window_visible().get("windows") or []
         return int((windows[0] if windows else {}).get("hwnd") or 0)
     try:
         return int(value[len(LOCAL_ACCOUNT_PREFIX) :])
@@ -519,6 +521,182 @@ def _looks_like_wechat_process(meta: Dict[str, Any]) -> bool:
     name = str(meta.get("name") or "").lower()
     exe = str(meta.get("exe") or "").lower().replace("/", "\\")
     return name in WECHAT_PROCESS_NAMES or "\\tencent\\weixin\\" in exe or "\\program files\\tencent\\weixin" in exe
+
+
+def _clear_local_windows_cache() -> None:
+    _LOCAL_WINDOWS_CACHE.update({"items": [], "at": 0.0, "error": ""})
+
+
+def _wechat_process_candidates() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    try:
+        import psutil  # type: ignore
+
+        for proc in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                info = proc.info or {}
+                meta = {
+                    "pid": int(info.get("pid") or 0),
+                    "name": str(info.get("name") or ""),
+                    "exe": str(info.get("exe") or ""),
+                }
+                if _looks_like_wechat_process(meta):
+                    full = _process_meta(int(meta["pid"]))
+                    out.append({**meta, **full})
+            except Exception:
+                continue
+    except Exception:
+        return []
+    return out
+
+
+def _known_wechat_exe_paths() -> List[str]:
+    paths: List[str] = []
+    for meta in _wechat_process_candidates():
+        exe = str(meta.get("exe") or "").strip()
+        if exe and Path(exe).is_file() and exe not in paths:
+            paths.append(exe)
+    for raw in (
+        os.environ.get("WECHAT_EXE", ""),
+        r"C:\Program Files\Tencent\Weixin\Weixin.exe",
+        r"C:\Program Files (x86)\Tencent\Weixin\Weixin.exe",
+        r"C:\Program Files\Tencent\WeChat\WeChat.exe",
+        r"C:\Program Files (x86)\Tencent\WeChat\WeChat.exe",
+    ):
+        text = str(raw or "").strip()
+        if text and Path(text).is_file() and text not in paths:
+            paths.append(text)
+    return paths
+
+
+def _restore_hidden_wechat_windows() -> Dict[str, Any]:
+    result: Dict[str, Any] = {"restored": False, "found": 0, "hwnds": [], "errors": []}
+    try:
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+    except Exception as exc:
+        result["errors"].append(f"missing win32 window dependency: {exc}")
+        return result
+
+    candidates: List[int] = []
+
+    def _enum(hwnd: int, _extra: Any) -> None:
+        try:
+            title = win32gui.GetWindowText(hwnd) or ""
+            class_name = win32gui.GetClassName(hwnd) or ""
+            if "TrayIcon" in class_name:
+                return
+            _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+            meta = _process_meta(int(pid or 0))
+            class_l = class_name.lower()
+            looks_like_restore_window = (
+                _looks_like_wechat_window(title, class_name, meta)
+                or (_looks_like_wechat_process(meta) and "qwindowicon" in class_l)
+            )
+            if not looks_like_restore_window:
+                return
+            candidates.append(int(hwnd))
+        except Exception:
+            return
+
+    try:
+        win32gui.EnumWindows(_enum, None)
+    except Exception as exc:
+        result["errors"].append(str(exc))
+        return result
+
+    result["found"] = len(candidates)
+    for hwnd in candidates:
+        try:
+            if not win32gui.IsWindow(hwnd):
+                continue
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            try:
+                win32gui.SetWindowPos(
+                    hwnd,
+                    win32con.HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+                )
+            except Exception:
+                pass
+            result["hwnds"].append(hwnd)
+        except Exception as exc:
+            result["errors"].append(f"{hwnd}: {exc}")
+    time.sleep(0.6)
+    for hwnd in candidates:
+        try:
+            if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+                result["restored"] = True
+                break
+        except Exception:
+            continue
+    if result["restored"]:
+        _clear_local_windows_cache()
+    return result
+
+
+def _launch_wechat_single_instance() -> Dict[str, Any]:
+    result: Dict[str, Any] = {"launched": False, "path": "", "errors": []}
+    for exe in _known_wechat_exe_paths():
+        try:
+            os.startfile(exe)  # type: ignore[attr-defined]
+            result.update({"launched": True, "path": exe})
+            time.sleep(1.2)
+            _clear_local_windows_cache()
+            return result
+        except Exception as exc:
+            result["errors"].append(f"os.startfile {exe}: {exc}")
+            try:
+                subprocess.Popen([exe], cwd=str(Path(exe).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                result.update({"launched": True, "path": exe})
+                time.sleep(1.2)
+                _clear_local_windows_cache()
+                return result
+            except Exception as sub_exc:
+                result["errors"].append(f"popen {exe}: {sub_exc}")
+    return result
+
+
+def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"ok": False, "action": "none", "windows": [], "restore": {}, "launch": {}}
+    windows = _scan_local_wechat_windows(max_age_seconds=0)
+    if windows:
+        result.update({"ok": True, "windows": windows})
+        return result
+
+    restore = _restore_hidden_wechat_windows()
+    result["restore"] = restore
+    if restore.get("restored"):
+        deadline = time.time() + max(0.5, float(wait_seconds))
+        while time.time() < deadline:
+            windows = _scan_local_wechat_windows(max_age_seconds=0)
+            if windows:
+                result.update({"ok": True, "action": "restore_hidden_window", "windows": windows})
+                return result
+            time.sleep(0.3)
+
+    launch = _launch_wechat_single_instance()
+    result["launch"] = launch
+    if launch.get("launched"):
+        deadline = time.time() + max(1.0, float(wait_seconds))
+        while time.time() < deadline:
+            windows = _scan_local_wechat_windows(max_age_seconds=0)
+            if windows:
+                result.update({"ok": True, "action": "launch_single_instance", "windows": windows})
+                return result
+            # Some WeChat builds first create a hidden main window, then show it
+            # on the second single-instance activation.
+            _restore_hidden_wechat_windows()
+            time.sleep(0.4)
+    return result
 
 
 def _looks_like_wechat_window(title: str, class_name: str, process_meta: Dict[str, Any]) -> bool:
@@ -761,7 +939,11 @@ def _local_driver_status(*, passive: bool = False) -> Dict[str, Any]:
         "wxauto4",
     ):
         deps[name] = _module_available(name)
+    restore_info: Dict[str, Any] = {}
     windows = _scan_local_wechat_windows(max_age_seconds=0)
+    if not windows and not passive:
+        restore_info = _ensure_local_wechat_window_visible()
+        windows = restore_info.get("windows") or []
     if passive:
         full_probe = {
             "installed": deps.get("wxauto4", False),
@@ -779,6 +961,7 @@ def _local_driver_status(*, passive: bool = False) -> Dict[str, Any]:
         "dependencies": deps,
         "windows": windows,
         "count": len(windows),
+        "restore": restore_info,
     }
 
 
@@ -988,6 +1171,8 @@ def list_accounts() -> List[Dict[str, Any]]:
     init_db()
     _migrate_legacy_local_account_data()
     out: List[Dict[str, Any]] = _scan_local_wechat_windows(max_age_seconds=0)
+    if not out:
+        out = _ensure_local_wechat_window_visible().get("windows") or []
     if out:
         return out
     if _has_local_account_data(LOCAL_DEFAULT_ACCOUNT_ID):
@@ -2179,6 +2364,8 @@ def _local_wechat_hwnd(account_id: str = "") -> int:
         item = _find_local_account(account_id)
         return int(item.get("hwnd") or 0)
     windows = _scan_local_wechat_windows(max_age_seconds=0)
+    if not windows:
+        windows = _ensure_local_wechat_window_visible().get("windows") or []
     return int((windows[0] if windows else {}).get("hwnd") or 0)
 
 
@@ -6039,6 +6226,9 @@ async def send_text(account_id: str, peer_id: str, text: str, *, context_token: 
 
 def _find_local_account(account_id: str) -> Dict[str, Any]:
     hwnd = _local_hwnd_from_account_id(account_id)
+    if not hwnd:
+        restored = _ensure_local_wechat_window_visible()
+        hwnd = int(((restored.get("windows") or [{}])[0]).get("hwnd") or 0)
     if not hwnd:
         raise RuntimeError("本机微信账号标识无效")
     for item in _scan_local_wechat_windows(max_age_seconds=0):
