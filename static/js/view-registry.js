@@ -38,7 +38,9 @@
 
   window.registerLobsterView('wechat-article', {
     html: '/static/views/wechat-article.html',
-    scripts: '/static/js/wechat-article.js?v=20260605-wechat-save-local-doubleclick'
+    scripts: '/static/js/wechat-article.js?v=20260724-wechat-init-fix',
+    init: 'loadWechatArticlePage',
+    cache: 'reload'
   });
 
   window.registerLobsterView('creative-film-studio', {
