@@ -14,6 +14,7 @@
     autoReply: null,
     autoReplyBusy: false,
     driver: null,
+    lastDiagnostic: null,
     sendFiles: [],
     momentsFiles: [],
     momentsSubmitting: false,
@@ -56,12 +57,33 @@
     if (!data) return fallback || '请求失败';
     if (typeof data === 'string') return data;
     var detail = data.detail || data.error || data.message || data.msg;
-    if (typeof detail === 'string' && detail.trim()) return detail.trim();
+    if (typeof detail === 'string' && detail.trim()) return withDiagnostic(detail.trim(), data);
     if (detail && typeof detail === 'object') {
-      if (typeof detail.message === 'string') return detail.message;
-      if (typeof detail.msg === 'string') return detail.msg;
+      if (typeof detail.message === 'string') return withDiagnostic(detail.message, data);
+      if (typeof detail.msg === 'string') return withDiagnostic(detail.msg, data);
     }
-    return fallback || '请求失败';
+    return withDiagnostic(fallback || '请求失败', data);
+  }
+
+  function diagnosticCode(data) {
+    if (!data || typeof data === 'string') return '';
+    var detail = data.detail || null;
+    if (detail && typeof detail === 'object') {
+      if (detail.diagnostic_code) return String(detail.diagnostic_code);
+      if (detail.diagnostic && detail.diagnostic.code) return String(detail.diagnostic.code);
+    }
+    if (data.diagnostic_code) return String(data.diagnostic_code);
+    if (data.diagnostic && data.diagnostic.code) return String(data.diagnostic.code);
+    if (data.code && /^NWX-/i.test(String(data.code))) return String(data.code);
+    return '';
+  }
+
+  function withDiagnostic(text, data) {
+    var code = diagnosticCode(data);
+    if (!code) return text || '';
+    var base = String(text || '').trim();
+    if (base.indexOf(code) >= 0) return base;
+    return base + '\n\u65e5\u5fd7\u7801\uff1a' + code + '\uff08\u8bf7\u628a\u8fd9\u4e2a\u7801\u53d1\u7ed9\u6211\u4eec\u5b9a\u4f4d\uff09';
   }
 
   function splitTargets(text) {
@@ -572,6 +594,7 @@
     return apiJson('/api/native-wechat/accounts').then(function(data) {
       state.accounts = Array.isArray(data.items) ? data.items : [];
       state.driver = data.driver || null;
+      if (data.diagnostic || data.diagnostic_code) state.lastDiagnostic = data;
       renderAccountSelect();
       renderAccountList();
       return state.accounts;
@@ -1136,6 +1159,7 @@
     setMsg('正在检测本机微信...', false);
     return apiJson('/api/native-wechat/local/status').then(function(status) {
       state.driver = status || null;
+      if (status && (status.diagnostic || status.diagnostic_code)) state.lastDiagnostic = status;
       return loadAccounts().then(function(items) {
         return { status: status || {}, items: items || [] };
       });
@@ -1143,6 +1167,10 @@
       var status = result.status || {};
       var items = result.items || [];
       if (!items.length) {
+        if (state.lastDiagnostic || status.diagnostic || status.diagnostic_code) {
+          setMsg(withDiagnostic('\u672a\u68c0\u6d4b\u5230\u672c\u673a\u5fae\u4fe1\uff0c\u8bf7\u6253\u5f00\u5df2\u767b\u5f55\u7684 PC \u5fae\u4fe1\u4e3b\u7a97\u53e3\u540e\u91cd\u8bd5\u3002', state.lastDiagnostic || status), true);
+          return;
+        }
         setMsg('未检测到本机微信，请打开已登录的 PC 微信主窗口后重试。', true);
         return;
       }
@@ -1170,9 +1198,20 @@
 
   function diagnoseWechatControls() {
     var id = activeAccountId();
+    if (!id) {
+      setMsg('\u6b63\u5728\u751f\u6210\u5fae\u4fe1\u68c0\u6d4b\u65e5\u5fd7\u7801...', false);
+      return apiJson('/api/native-wechat/local/diagnostic-code').then(function(data) {
+        if (data && (data.diagnostic || data.diagnostic_code)) state.lastDiagnostic = data;
+        setMsg(withDiagnostic('\u65e5\u5fd7\u7801\u5df2\u751f\u6210\uff0c\u8bf7\u628a\u8fd9\u4e2a\u7801\u53d1\u7ed9\u6211\u4eec\u5b9a\u4f4d\u3002', data), false);
+        showJsonDetail('\u5fae\u4fe1\u68c0\u6d4b\u65e5\u5fd7', data);
+      }).catch(function(err) {
+        setMsg(err.message || '\u751f\u6210\u65e5\u5fd7\u7801\u5931\u8d25', true);
+      });
+    }
     if (!id) return setMsg('请先选择本机微信账号', true);
     setMsg('正在诊断微信控件树...', false);
     return apiJson('/api/native-wechat/local/diagnose?account_id=' + encodeURIComponent(id)).then(function(data) {
+      if (data && (data.diagnostic || data.diagnostic_code)) state.lastDiagnostic = data;
       setMsg('控件诊断完成，把弹窗里的结果发回来即可定位。', false);
       showJsonDetail('微信控件诊断', data);
     }).catch(function(err) {

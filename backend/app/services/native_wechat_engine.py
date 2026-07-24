@@ -31,6 +31,8 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT_DIR / "openclaw" / "openclaw-weixin"
 ACCOUNTS_DIR = STATE_DIR / "accounts"
 DB_PATH = ROOT_DIR / "data" / "native_wechat_engine.db"
+LOG_DIR = ROOT_DIR / "logs"
+NATIVE_WECHAT_DIAGNOSTIC_LOG = LOG_DIR / "native_wechat_diagnostics.jsonl"
 NATIVE_WECHAT_UPLOAD_DIR = ROOT_DIR / "temp_assets" / "native_wechat"
 NATIVE_WECHAT_DOWNLOAD_DIR = ROOT_DIR / "assets" / "native_wechat"
 NATIVE_WECHAT_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -150,6 +152,189 @@ def _write_json_file(path: Path, value: Any) -> None:
         os.chmod(path, 0o600)
     except Exception:
         pass
+
+
+def _json_safe_value(value: Any, *, max_text: int = 1200) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v, max_text=max_text) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_value(v, max_text=max_text) for v in list(value)]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str) and len(value) > max_text:
+            return value[:max_text] + "...<truncated>"
+        return value
+    return str(value)[:max_text]
+
+
+def _runtime_build_info() -> Dict[str, Any]:
+    data = _read_json_file(ROOT_DIR / "CLIENT_CODE_VERSION.json", {})
+    if not isinstance(data, dict):
+        data = {}
+    out: Dict[str, Any] = {
+        "version": data.get("version") or "",
+        "build": data.get("build") or "",
+        "updated_at": data.get("updated_at") or data.get("created_at") or "",
+    }
+    try:
+        out["root"] = str(ROOT_DIR)
+    except Exception:
+        pass
+    return out
+
+
+def _raw_wechat_window_candidates(*, max_items: int = 120) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"ok": False, "items": [], "count": 0, "error": ""}
+    try:
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+    except Exception as exc:
+        result["error"] = f"missing win32 window dependency: {exc}"
+        return result
+
+    try:
+        process_items = _wechat_process_candidates()
+        process_pids = {int(item.get("pid") or 0) for item in process_items}
+    except Exception:
+        process_items = []
+        process_pids = set()
+
+    items: List[Dict[str, Any]] = []
+
+    def _enum(hwnd: int, _extra: Any) -> None:
+        if len(items) >= max_items:
+            return
+        try:
+            title = win32gui.GetWindowText(hwnd) or ""
+            class_name = win32gui.GetClassName(hwnd) or ""
+            _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+            pid = int(pid or 0)
+            meta = _process_meta(pid)
+            class_l = class_name.lower()
+            title_l = title.lower()
+            process_ok = pid in process_pids or _looks_like_wechat_process(meta)
+            title_hint = any(token in title_l for token in ("微信", "wechat", "weixin", "朋友圈"))
+            class_hint = any(token in class_l for token in ("wechat", "weixin", "mmui", "qwindow", "qwidget"))
+            if not (process_ok or title_hint or class_hint):
+                return
+            try:
+                rect = tuple(int(x) for x in win32gui.GetWindowRect(hwnd))
+            except Exception:
+                rect = (0, 0, 0, 0)
+            width = max(0, int(rect[2]) - int(rect[0]))
+            height = max(0, int(rect[3]) - int(rect[1]))
+            items.append(
+                {
+                    "hwnd": int(hwnd),
+                    "pid": pid,
+                    "title": title,
+                    "class_name": class_name,
+                    "is_visible": bool(win32gui.IsWindowVisible(hwnd)),
+                    "is_iconic": bool(win32gui.IsIconic(hwnd)),
+                    "rect": list(rect),
+                    "width": width,
+                    "height": height,
+                    "area": width * height,
+                    "process_name": meta.get("name") or "",
+                    "process_path": meta.get("exe") or "",
+                    "version": meta.get("version") or "",
+                    "looks_like_wechat_process": bool(process_ok),
+                    "title_hint": bool(title_hint),
+                    "class_hint": bool(class_hint),
+                }
+            )
+        except Exception:
+            return
+
+    try:
+        win32gui.EnumWindows(_enum, None)
+        result.update({"ok": True, "items": items, "count": len(items)})
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
+
+
+def create_native_wechat_diagnostic(
+    operation: str,
+    *,
+    error: str = "",
+    account_id: str = "",
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    code = "NWX-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3).upper()
+    entry: Dict[str, Any] = {
+        "code": code,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "operation": str(operation or "native_wechat"),
+        "account_id": str(account_id or ""),
+        "error": str(error or ""),
+        "runtime": _runtime_build_info(),
+        "process": {
+            "pid": os.getpid(),
+            "integrity": _process_integrity(os.getpid()),
+        },
+        "dependencies": {},
+        "wechat_processes": [],
+        "recognized_windows": [],
+        "raw_windows": {},
+        "ensure_without_launch": {},
+        "extra": _json_safe_value(extra or {}),
+    }
+    try:
+        for name in (
+            "win32gui",
+            "win32process",
+            "win32api",
+            "win32con",
+            "psutil",
+            "uiautomation",
+            "pywinauto",
+            "pyperclip",
+            "wxauto4",
+        ):
+            entry["dependencies"][name] = _module_available(name)
+    except Exception as exc:
+        entry["dependencies_error"] = str(exc)
+    try:
+        entry["wechat_processes"] = _wechat_process_brief()
+    except Exception as exc:
+        entry["wechat_processes_error"] = str(exc)
+    try:
+        entry["recognized_windows"] = _scan_local_wechat_windows(max_age_seconds=0)
+        entry["scan_cache_error"] = str(_LOCAL_WINDOWS_CACHE.get("error") or "")
+    except Exception as exc:
+        entry["recognized_windows_error"] = str(exc)
+    try:
+        entry["raw_windows"] = _raw_wechat_window_candidates()
+    except Exception as exc:
+        entry["raw_windows_error"] = str(exc)
+    try:
+        entry["ensure_without_launch"] = _ensure_local_wechat_window_visible(wait_seconds=1.0, allow_launch=False)
+    except Exception as exc:
+        entry["ensure_without_launch_error"] = str(exc)
+
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with NATIVE_WECHAT_DIAGNOSTIC_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(_json_safe_value(entry), ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        entry["write_error"] = str(exc)
+
+    windows = entry.get("recognized_windows") or []
+    raw_windows = (entry.get("raw_windows") or {}).get("items") or []
+    processes = entry.get("wechat_processes") or []
+    return {
+        "code": code,
+        "operation": entry["operation"],
+        "created_at": entry["created_at"],
+        "log_path": str(NATIVE_WECHAT_DIAGNOSTIC_LOG),
+        "error": entry["error"],
+        "account_id": entry["account_id"],
+        "window_count": len(windows) if isinstance(windows, list) else 0,
+        "raw_window_count": len(raw_windows) if isinstance(raw_windows, list) else 0,
+        "wechat_process_count": len(processes) if isinstance(processes, list) else 0,
+        "backend_integrity": (entry.get("process") or {}).get("integrity") or {},
+        "action": (entry.get("ensure_without_launch") or {}).get("action") or "",
+    }
 
 
 def _account_path(account_id: str) -> Path:
@@ -500,8 +685,12 @@ def _process_integrity(pid: int) -> Dict[str, Any]:
             htok = win32security.OpenProcessToken(hproc, win32con.TOKEN_QUERY)
             try:
                 sid, _attrs = win32security.GetTokenInformation(htok, win32security.TokenIntegrityLevel)
-                count = win32security.GetSidSubAuthorityCount(sid)
-                rid = int(win32security.GetSidSubAuthority(sid, count - 1))
+                try:
+                    count = win32security.GetSidSubAuthorityCount(sid)
+                    rid = int(win32security.GetSidSubAuthority(sid, count - 1))
+                except AttributeError:
+                    count = sid.GetSubAuthorityCount()
+                    rid = int(sid.GetSubAuthority(count - 1))
                 return {"pid": pid, "rid": rid, "label": _integrity_label(rid)}
             finally:
                 try:
@@ -705,7 +894,7 @@ def _launch_wechat_single_instance() -> Dict[str, Any]:
     return result
 
 
-def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0) -> Dict[str, Any]:
+def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0, allow_launch: bool = False) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "ok": False,
         "action": "none",
@@ -742,6 +931,16 @@ def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0) -> Dict[st
             "launched": False,
             "skipped": True,
             "reason": "微信进程已存在，但没有找到可复用主窗口；为避免打开一个新的未登录微信，本次不再启动 Weixin.exe。",
+        }
+        return result
+
+    result["processes"] = []
+    if not allow_launch:
+        result["action"] = "no_wechat_window_launch_disabled"
+        result["launch"] = {
+            "launched": False,
+            "skipped": True,
+            "reason": "launch disabled for detection/sync to avoid opening a second login window",
         }
         return result
 

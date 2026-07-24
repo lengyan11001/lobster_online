@@ -144,6 +144,51 @@ def _merge_targets(*items: Any) -> List[str]:
     return out
 
 
+def _diagnostic_detail(operation: str, exc: Exception, *, account_id: str = "", extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    diag = engine.create_native_wechat_diagnostic(
+        operation,
+        error=str(exc),
+        account_id=account_id,
+        extra=extra or {},
+    )
+    return {
+        "message": str(exc),
+        "diagnostic_code": diag.get("code"),
+        "diagnostic": diag,
+    }
+
+
+def _raise_native_wechat_error(
+    operation: str,
+    exc: Exception,
+    *,
+    account_id: str = "",
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    raise HTTPException(
+        status_code=502,
+        detail=_diagnostic_detail(operation, exc, account_id=account_id, extra=extra),
+    ) from exc
+
+
+def _attach_diagnostic_if_needed(
+    result: Dict[str, Any],
+    operation: str,
+    *,
+    account_id: str = "",
+    reason: str = "",
+) -> Dict[str, Any]:
+    diag = engine.create_native_wechat_diagnostic(
+        operation,
+        error=reason,
+        account_id=account_id,
+        extra={"result": result},
+    )
+    result["diagnostic"] = diag
+    result["diagnostic_code"] = diag.get("code")
+    return result
+
+
 @router.get("/api/native-wechat/strategy")
 async def native_wechat_strategy(current_user: _ServerUser = Depends(get_current_user_for_local)):
     return {"ok": True, "strategy": engine.get_strategy()}
@@ -151,13 +196,42 @@ async def native_wechat_strategy(current_user: _ServerUser = Depends(get_current
 
 @router.get("/api/native-wechat/accounts")
 async def native_wechat_accounts(current_user: _ServerUser = Depends(get_current_user_for_local)):
-    items = engine.list_accounts()
-    return {"ok": True, "items": items, "count": len(items), "driver": engine.local_driver_status(passive=True)}
+    try:
+        items = engine.list_accounts()
+        result = {"ok": True, "items": items, "count": len(items), "driver": engine.local_driver_status(passive=True)}
+        has_local_window = any(
+            item.get("source") == "pc_wechat" and int(item.get("hwnd") or 0) > 0 and not item.get("offline")
+            for item in items
+        )
+        if not has_local_window:
+            return _attach_diagnostic_if_needed(result, "accounts", reason="no reusable local pc wechat window")
+        return result
+    except Exception as exc:
+        _raise_native_wechat_error("accounts", exc)
 
 
 @router.get("/api/native-wechat/local/status")
 async def native_wechat_local_status(current_user: _ServerUser = Depends(get_current_user_for_local)):
-    return {"ok": True, **engine.local_driver_status()}
+    try:
+        result = {"ok": True, **engine.local_driver_status()}
+        if not result.get("ok") or int(result.get("count") or 0) <= 0:
+            return _attach_diagnostic_if_needed(result, "local_status", reason="local pc wechat window not detected")
+        return result
+    except Exception as exc:
+        _raise_native_wechat_error("local_status", exc)
+
+
+@router.get("/api/native-wechat/local/diagnostic-code")
+async def native_wechat_local_diagnostic_code(
+    account_id: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    diag = engine.create_native_wechat_diagnostic(
+        "manual_diagnostic_code",
+        account_id=account_id,
+        error="manual diagnostic requested",
+    )
+    return {"ok": True, "diagnostic_code": diag.get("code"), "diagnostic": diag}
 
 
 @router.get("/api/native-wechat/local/diagnose")
@@ -166,9 +240,18 @@ async def native_wechat_local_diagnose(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        return engine.diagnose_local_wechat_ui(account_id)
+        result = engine.diagnose_local_wechat_ui(account_id)
+        diag = engine.create_native_wechat_diagnostic(
+            "local_diagnose",
+            account_id=account_id,
+            error="" if result.get("ok") else str(result.get("error") or "diagnose returned not ok"),
+            extra={"diagnose": result},
+        )
+        result["diagnostic_code"] = diag.get("code")
+        result["diagnostic"] = diag
+        return result
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("local_diagnose", exc, account_id=account_id)
 
 
 @router.post("/api/native-wechat/login/start")
@@ -179,7 +262,7 @@ async def native_wechat_login_start(
     try:
         return await engine.start_login(force=body.force, session_key=body.session_key or "")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("login_start", exc)
 
 
 @router.post("/api/native-wechat/login/wait")
@@ -190,7 +273,7 @@ async def native_wechat_login_wait(
     try:
         return await engine.wait_login(session_key=body.session_key, timeout_seconds=body.timeout_seconds)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("login_wait", exc)
 
 
 @router.post("/api/native-wechat/updates/poll")
@@ -201,7 +284,7 @@ async def native_wechat_poll_updates(
     try:
         return await engine.poll_updates(body.account_id, timeout_ms=body.timeout_ms)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("updates_poll", exc, account_id=body.account_id)
 
 
 @router.get("/api/native-wechat/auto-reply/config")
@@ -223,7 +306,7 @@ async def native_wechat_auto_reply_config(
             )
         return {"ok": True, "config": cfg}
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("auto_reply_config_get", exc, account_id=account_id)
 
 
 @router.post("/api/native-wechat/auto-reply/config")
@@ -246,7 +329,7 @@ async def native_wechat_save_auto_reply_config(
         )
         return {"ok": True, "config": cfg}
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("auto_reply_config_save", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/auto-reply/run-once")
@@ -268,7 +351,7 @@ async def native_wechat_run_auto_reply_once(
         )
         return result
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("auto_reply_run_once", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/contacts/sync")
@@ -279,7 +362,7 @@ async def native_wechat_sync_contacts(
     try:
         return engine.sync_local_contacts(body.account_id, limit=body.limit)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("contacts_sync", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/sessions/sync")
@@ -290,7 +373,7 @@ async def native_wechat_sync_sessions(
     try:
         return engine.sync_local_sessions(body.account_id)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("sessions_sync", exc, account_id=body.account_id)
 
 
 @router.get("/api/native-wechat/contacts")
@@ -312,7 +395,7 @@ async def native_wechat_sync_groups(
     try:
         return engine.sync_local_groups(body.account_id, limit=body.limit)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("groups_sync", exc, account_id=body.account_id)
 
 
 @router.get("/api/native-wechat/groups")
@@ -343,7 +426,7 @@ async def native_wechat_create_group(
             "message": "创建群任务已加入队列",
         }
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("groups_create", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/groups/members/sync")
@@ -354,7 +437,7 @@ async def native_wechat_sync_group_members(
     try:
         return engine.sync_local_group_members(body.account_id, body.group_key)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("group_members_sync", exc, account_id=body.account_id)
 
 
 @router.get("/api/native-wechat/groups/members")
@@ -405,7 +488,7 @@ async def native_wechat_fetch_messages(
             load_more_pages=body.load_more_pages,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("messages_fetch", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/messages/sync")
@@ -416,7 +499,7 @@ async def native_wechat_sync_messages(
     try:
         return engine.sync_local_messages(body.account_id, body.peer_id, load_more_pages=body.load_more_pages)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("messages_sync", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/files/upload")
@@ -481,7 +564,7 @@ async def native_wechat_send_text(
             "queued": task.get("status") in {"pending", "running"},
         }
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("messages_send", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/friends/add")
@@ -506,7 +589,7 @@ async def native_wechat_add_friend(
             "message": "好友申请任务已加入队列，将按频率慢慢处理",
         }
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("friends_add", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/moments/like")
@@ -528,7 +611,7 @@ async def native_wechat_moments_like(
             "message": "朋友圈点赞任务已加入队列" if not body.dry_run else "朋友圈点赞探测任务已加入队列",
         }
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("moments_like", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/moments/comment")
@@ -562,7 +645,7 @@ async def native_wechat_moments_comment(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("moments_comment", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/moments/publish")
@@ -586,7 +669,7 @@ async def native_wechat_moments_publish(
             "message": "朋友圈发布任务已加入队列",
         }
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_native_wechat_error("moments_publish", exc, account_id=body.account_id)
 
 
 @router.get("/api/native-wechat/tasks")
