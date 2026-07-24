@@ -527,6 +527,45 @@ def _clear_local_windows_cache() -> None:
     _LOCAL_WINDOWS_CACHE.update({"items": [], "at": 0.0, "error": ""})
 
 
+def _wechat_process_brief(items: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    source = items if items is not None else _wechat_process_candidates()
+    for meta in source:
+        out.append(
+            {
+                "pid": int(meta.get("pid") or 0),
+                "name": str(meta.get("name") or ""),
+                "exe": str(meta.get("exe") or ""),
+                "version": str(meta.get("version") or ""),
+                "integrity": meta.get("integrity") or {},
+            }
+        )
+    return out
+
+
+def _wechat_window_rank(item: Dict[str, Any]) -> int:
+    """Prefer the real chat window over QR/login helper windows."""
+    rank = 0
+    area = int(item.get("area") or 0)
+    if area >= 420_000:
+        rank += 40
+    elif area >= 260_000:
+        rank += 24
+    elif area >= 150_000:
+        rank += 8
+    else:
+        rank -= 12
+    if item.get("full_driver_ready"):
+        rank += 60
+    if item.get("is_iconic"):
+        rank -= 4
+    if str(item.get("class_name") or "") in WECHAT_WINDOW_CLASSES:
+        rank += 8
+    if str(item.get("title") or "").strip() in WECHAT_WINDOW_TITLES:
+        rank += 4
+    return rank
+
+
 def _wechat_process_candidates() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
@@ -542,7 +581,8 @@ def _wechat_process_candidates() -> List[Dict[str, Any]]:
                 }
                 if _looks_like_wechat_process(meta):
                     full = _process_meta(int(meta["pid"]))
-                    out.append({**meta, **full})
+                    integrity = _process_integrity(int(meta["pid"]))
+                    out.append({**meta, **full, "integrity": integrity})
             except Exception:
                 continue
     except Exception:
@@ -666,9 +706,17 @@ def _launch_wechat_single_instance() -> Dict[str, Any]:
 
 
 def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"ok": False, "action": "none", "windows": [], "restore": {}, "launch": {}}
+    result: Dict[str, Any] = {
+        "ok": False,
+        "action": "none",
+        "windows": [],
+        "restore": {},
+        "launch": {},
+        "processes": [],
+    }
     windows = _scan_local_wechat_windows(max_age_seconds=0)
-    if windows:
+    initial_windows = windows
+    if windows and _wechat_window_rank(windows[0]) >= 32:
         result.update({"ok": True, "windows": windows})
         return result
 
@@ -682,6 +730,20 @@ def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0) -> Dict[st
                 result.update({"ok": True, "action": "restore_hidden_window", "windows": windows})
                 return result
             time.sleep(0.3)
+    if initial_windows:
+        result.update({"ok": True, "action": "visible_window_low_confidence", "windows": initial_windows})
+        return result
+
+    processes = _wechat_process_candidates()
+    if processes:
+        result["processes"] = _wechat_process_brief(processes)
+        result["action"] = "wechat_process_running_without_readable_window"
+        result["launch"] = {
+            "launched": False,
+            "skipped": True,
+            "reason": "微信进程已存在，但没有找到可复用主窗口；为避免打开一个新的未登录微信，本次不再启动 Weixin.exe。",
+        }
+        return result
 
     launch = _launch_wechat_single_instance()
     result["launch"] = launch
@@ -702,11 +764,15 @@ def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0) -> Dict[st
 def _looks_like_wechat_window(title: str, class_name: str, process_meta: Dict[str, Any]) -> bool:
     title = str(title or "").strip()
     class_name = str(class_name or "").strip()
+    process_ok = _looks_like_wechat_process(process_meta)
+    class_l = class_name.lower()
     if class_name in WECHAT_WINDOW_CLASSES:
         return True
-    if title in WECHAT_WINDOW_TITLES and _looks_like_wechat_process(process_meta):
+    if title in WECHAT_WINDOW_TITLES and process_ok:
         return True
-    if class_name.startswith("Qt") and "QWindowIcon" in class_name and title in WECHAT_WINDOW_TITLES:
+    if process_ok and any(token in title for token in ("微信", "WeChat", "Weixin")):
+        return True
+    if process_ok and class_l.startswith("qt") and ("qwindow" in class_l or "qwidget" in class_l):
         return True
     return False
 
@@ -821,6 +887,13 @@ def _scan_local_wechat_windows(*, max_age_seconds: float = 1.5) -> List[Dict[str
             title = win32gui.GetWindowText(hwnd) or ""
             class_name = win32gui.GetClassName(hwnd) or ""
             visible = bool(win32gui.IsWindowVisible(hwnd))
+            iconic = bool(win32gui.IsIconic(hwnd))
+            try:
+                rect = tuple(int(x) for x in win32gui.GetWindowRect(hwnd))
+            except Exception:
+                rect = (0, 0, 0, 0)
+            width = max(0, int(rect[2]) - int(rect[0]))
+            height = max(0, int(rect[3]) - int(rect[1]))
             _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
             meta = _process_meta(int(pid or 0))
             if not _looks_like_wechat_window(title, class_name, meta):
@@ -843,6 +916,12 @@ def _scan_local_wechat_windows(*, max_age_seconds: float = 1.5) -> List[Dict[str
                     "pid": int(pid or 0),
                     "title": title,
                     "class_name": class_name,
+                    "is_visible": visible,
+                    "is_iconic": iconic,
+                    "rect": list(rect),
+                    "width": width,
+                    "height": height,
+                    "area": width * height,
                     "process_name": meta.get("name") or "",
                     "process_path": meta.get("exe") or "",
                     "version": meta.get("version") or "",
@@ -862,8 +941,11 @@ def _scan_local_wechat_windows(*, max_age_seconds: float = 1.5) -> List[Dict[str
         uia_status = _probe_wechat_uia(int(item.get("hwnd") or 0))
         item["uia"] = uia_status
         item["full_driver_ready"] = bool(uia_status.get("available"))
-        dedup[str(item["account_id"])] = item
-    out = list(dedup.values())
+        key = str(item["account_id"])
+        previous = dedup.get(key)
+        if previous is None or _wechat_window_rank(item) > _wechat_window_rank(previous):
+            dedup[key] = item
+    out = sorted(dedup.values(), key=_wechat_window_rank, reverse=True)
     _LOCAL_WINDOWS_CACHE.update({"items": out, "at": now, "error": ""})
     return [dict(x) for x in out]
 
@@ -1170,9 +1252,10 @@ def _migrate_legacy_local_account_data() -> None:
 def list_accounts() -> List[Dict[str, Any]]:
     init_db()
     _migrate_legacy_local_account_data()
-    out: List[Dict[str, Any]] = _scan_local_wechat_windows(max_age_seconds=0)
+    ensured = _ensure_local_wechat_window_visible()
+    out: List[Dict[str, Any]] = ensured.get("windows") or []
     if not out:
-        out = _ensure_local_wechat_window_visible().get("windows") or []
+        out = _scan_local_wechat_windows(max_age_seconds=0)
     if out:
         return out
     if _has_local_account_data(LOCAL_DEFAULT_ACCOUNT_ID):
