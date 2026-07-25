@@ -1,6 +1,6 @@
 {
   "version": "1.0.116",
   "build": 160,
-  "applied_at": "2026-07-25T17:03:34+08:00",
-  "note": "publish latest encrypted OTA with WeChat runtime dependencies"
+  "applied_at": "2026-07-25T17:11:23+08:00",
+  "note": "full build 160 with Alibaba inquiry takeover and WeChat runtime dependencies"
 }
