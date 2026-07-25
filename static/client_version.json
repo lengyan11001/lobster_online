@@ -1,6 +1,6 @@
 {
-  "version": "1.0.117",
-  "build": 161,
-  "applied_at": "2026-07-25T22:11:47+08:00",
-  "note": "fix installed-client updates; include Alibaba inquiry takeover and WeChat runtime dependencies"
+  "version": "1.0.118",
+  "build": 162,
+  "applied_at": "2026-07-25T22:29:15+08:00",
+  "note": "bootstrap client updates from legacy source-mode launchers"
 }

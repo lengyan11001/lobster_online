@@ -31,6 +31,9 @@ namespace LobsterDesktopLauncher
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.EnvironmentVariables["PYTHONPATH"] = root;
+                // Also unlock update checks in older launcher.py versions so the
+                // lightweight EXE can bootstrap the client onto the fixed OTA.
+                psi.EnvironmentVariables["LOBSTER_ENABLE_DEV_CODE_UPDATE"] = "1";
                 Process.Start(psi);
             }
             catch (Exception ex)

@@ -701,13 +701,12 @@ def run_client_code_update(env: dict[str, str]) -> None:
     script = ROOT / "scripts" / "check_client_code_update.py"
     if not script.is_file():
         return
-    is_dev_checkout = not _is_frozen() and (ROOT / ".git").exists()
-    if is_dev_checkout and not is_truthy_env_value(env.get("LOBSTER_ENABLE_DEV_CODE_UPDATE")):
-        log("CodeUpdate: skipped in Git development checkout (set LOBSTER_ENABLE_DEV_CODE_UPDATE=1 to enable)")
+    if is_truthy_env_value(env.get("LOBSTER_DISABLE_CLIENT_CODE_UPDATE")):
+        log("CodeUpdate: explicitly disabled by LOBSTER_DISABLE_CLIENT_CODE_UPDATE")
         set_startup_status(
             "update_skip",
-            "开发目录已跳过更新检查",
-            detail="检测到 Git 开发仓库，默认不覆盖本地源码。",
+            "已按本机配置关闭更新检查",
+            detail="LOBSTER_DISABLE_CLIENT_CODE_UPDATE 已启用。",
             percent=8,
         )
         return
