@@ -4293,6 +4293,30 @@ async def _post_local_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+async def _post_cloud_api_json(
+    path: str,
+    body: Dict[str, Any],
+    *,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    timeout_seconds: float = 7200.0,
+) -> Dict[str, Any]:
+    if cloud is None or not base:
+        raise RuntimeError("cloud api connection missing")
+    timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
+    resp = await cloud.post(f"{base}{path}", json=body or {}, headers=headers, timeout=timeout)
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"detail": (resp.text or "")[:1000]}
+    if resp.status_code >= 400:
+        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+    if isinstance(data, dict) and data.get("ok") is False:
+        raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
+    return data if isinstance(data, dict) else {"result": data}
+
+
 def _parse_run_time(value: Any) -> Optional[datetime]:
     text = str(value or "").strip()
     if not text:
@@ -4847,7 +4871,7 @@ async def _run_shanjian_digital_human_workflow(
         raise RuntimeError("声音分身合成成功，但没有返回可用于数字人2.0的音频地址")
 
     await _workflow_event(cloud, base, headers, run_id, "正在提交数字人2.0视频任务")
-    create_data = await _post_local_api_json(
+    create_data = await _post_cloud_api_json(
         "/api/shanjian-digital-human/video/create",
         {
             "virtualman_id": virtualman_id,
@@ -4858,6 +4882,8 @@ async def _run_shanjian_digital_human_workflow(
             "language": language,
             "speed_ratio": source.get("speed_ratio") or 1.0,
         },
+        cloud=cloud,
+        base=base,
         headers=headers,
         timeout_seconds=1800.0,
     )
@@ -4878,9 +4904,11 @@ async def _run_shanjian_digital_human_workflow(
             body["record_id"] = record_id
         if task_id:
             body["task_id"] = task_id
-        last = await _post_local_api_json(
+        last = await _post_cloud_api_json(
             "/api/shanjian-digital-human/video/task",
             body,
+            cloud=cloud,
+            base=base,
             headers=headers,
             timeout_seconds=180.0,
         )

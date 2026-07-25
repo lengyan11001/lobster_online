@@ -1,6 +1,6 @@
 {
-  "version": "1.0.114",
-  "build": 158,
-  "applied_at": "2026-07-22T14:02:16+08:00",
-  "note": "fix scheduled IP daily task submit"
+  "version": "1.0.115",
+  "build": 159,
+  "applied_at": "2026-07-25T12:55:58+08:00",
+  "note": "route scheduled digital human 2.0 through cloud API"
 }
