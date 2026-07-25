@@ -820,6 +820,28 @@ function syncTosFromServerIfOnline() {
     .catch(function() {});
 }
 
+function syncContentRecordsFromLocalIfOnline() {
+  if (typeof EDITION === 'undefined' || EDITION !== 'online' || !token || window.__contentRecordBackfillStarted) return;
+  var localBase = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+  if (!localBase) return;
+  window.__contentRecordBackfillStarted = true;
+  fetch(localBase + '/api/content-records/sync-local', {
+    method: 'POST',
+    headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + token }
+  }).then(function(response) {
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return response.json();
+  }).then(function(result) {
+    if (result && result.ok === false) window.__contentRecordBackfillStarted = false;
+    if (result && ((result.errors && result.errors.length) || (result.upload_failures && result.upload_failures.length)) && typeof console !== 'undefined') {
+      console.warn('[content-records] 历史内容补传部分失败', result.errors || [], result.upload_failures || []);
+    }
+  }).catch(function(error) {
+    window.__contentRecordBackfillStarted = false;
+    if (typeof console !== 'undefined') console.warn('[content-records] 历史内容补传失败', error);
+  });
+}
+
 function syncOpenclawMemoryFromServerIfOnline() {
   if (typeof EDITION === 'undefined' || EDITION !== 'online' || !token) return;
   if (typeof _syncOpenclawMemoryFromCloud !== 'function') return;
@@ -1217,6 +1239,7 @@ function loadDashboard() {
       initChatSessions();
       setTimeout(restoreDashboardViewAfterLogin, 0);
       syncTosFromServerIfOnline();
+      syncContentRecordsFromLocalIfOnline();
       syncOpenclawMemoryFromServerIfOnline();
       if (EDITION === 'online') {
         loadSutuiBalance();

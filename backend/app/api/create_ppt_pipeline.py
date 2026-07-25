@@ -21,6 +21,7 @@ from ..models import Asset
 from .assets import ASSETS_DIR
 from .auth import _ServerUser, get_current_user_media_edit
 from .comfly_image_studio import _generate_image_studio_core
+from .content_records import sync_ppt_asset_to_server
 from .goal_video_pipeline import _extract_json_object, _safe_str
 from ..services.create_ppt_runner import create_ppt_run_dir, safe_create_ppt_name
 from ..services.ppt_master_runner import (
@@ -613,6 +614,26 @@ async def run_create_ppt_pipeline(
         model=planning_model,
         theme=pl.theme or DEFAULT_THEME,
     )
+    content_sync = await sync_ppt_asset_to_server(
+        asset["asset_id"],
+        title=str(outline.get("title") or topic),
+        slide_count=len(outline.get("slides") or []),
+        request=request,
+        token=token,
+        installation_id=installation_id,
+    )
+    if content_sync.get("ok"):
+        synced_items = content_sync.get("items") if isinstance(content_sync.get("items"), list) else []
+        synced_item = synced_items[0] if synced_items and isinstance(synced_items[0], dict) else {}
+        if synced_item.get("file_url"):
+            asset["source_url"] = synced_item["file_url"]
+            asset["url"] = synced_item["file_url"]
+    else:
+        logger.warning(
+            "[create_ppt_pipeline] H5 content sync deferred asset_id=%s error=%s",
+            asset["asset_id"],
+            content_sync.get("error") or content_sync,
+        )
     try:
         tmp_path.unlink(missing_ok=True)
     except Exception:
@@ -630,6 +651,7 @@ async def run_create_ppt_pipeline(
         "saved_assets": [asset],
         "models": {"planning": planning_model},
         "render_meta": render_meta,
+        "content_sync": content_sync,
         "message": "PPT 已生成",
     }
 

@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from .auth import _ServerUser, get_current_user_media_edit
 from .assets import build_asset_file_url, get_asset_public_url
+from .content_records import sync_wechat_article_to_server
 from ..core.config import settings
 from ..db import get_db
 from ..models import Asset, User
@@ -1291,6 +1292,9 @@ async def create_wechat_article_draft(
             article_html=article_html,
             push_error="公众号 AppID 或 AppSecret 未配置",
         )
+        sync_result = await sync_wechat_article_to_server(item, request)
+        if not sync_result.get("ok"):
+            logger.warning("[wechat-article] H5 content sync deferred draft_id=%s error=%s", item.get("id"), sync_result.get("error"))
         return {
             "ok": True,
             "pushed": False,
@@ -1345,6 +1349,9 @@ async def create_wechat_article_draft(
             image_uploads=len(image_mapping),
             push_error=detail,
         )
+        sync_result = await sync_wechat_article_to_server(item, request)
+        if not sync_result.get("ok"):
+            logger.warning("[wechat-article] H5 content sync deferred draft_id=%s error=%s", item.get("id"), sync_result.get("error"))
         return {
             "ok": True,
             "pushed": False,
@@ -1365,6 +1372,7 @@ async def create_wechat_article_draft(
             "author": author,
             "theme": theme_name,
             "cover_asset_id": cover_asset_id,
+            "cover_image_url": cover_image_url,
             "has_cover": bool(thumb_media_id),
             "image_uploads": len(image_mapping),
             "markdown": markdown,
@@ -1372,6 +1380,9 @@ async def create_wechat_article_draft(
             "created_at": _now_iso(),
         },
     )
+    sync_result = await sync_wechat_article_to_server(item, request)
+    if not sync_result.get("ok"):
+        logger.warning("[wechat-article] H5 content sync deferred draft_id=%s error=%s", item.get("id"), sync_result.get("error"))
     logger.info(
         "[wechat-article] draft created user_id=%s media_id=%s title=%s images=%s",
         current_user.id,

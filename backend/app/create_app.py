@@ -62,6 +62,7 @@ from .api.goal_video_pipeline import router as goal_video_pipeline_router
 from .api.create_video_pipeline import router as create_video_pipeline_router
 from .api.creative_film_studio import router as creative_film_studio_router
 from .api.create_ppt_pipeline import router as create_ppt_pipeline_router
+from .api.content_records import router as content_records_router
 from .api.create_ppt import router as create_ppt_router
 from .api.viral_video_remix import router as viral_video_remix_router
 from .api.hifly_digital_human import router as hifly_digital_human_router
@@ -1092,6 +1093,7 @@ def create_app() -> FastAPI:
     app.include_router(create_video_pipeline_router, prefix="")
     app.include_router(creative_film_studio_router, prefix="")
     app.include_router(create_ppt_pipeline_router, prefix="")
+    app.include_router(content_records_router, prefix="")
     app.include_router(create_ppt_router, prefix="")
     app.include_router(viral_video_remix_router, prefix="")
     app.include_router(hifly_digital_human_router, prefix="")
