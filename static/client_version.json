@@ -1,6 +1,6 @@
 {
-  "version": "1.0.115",
-  "build": 159,
-  "applied_at": "2026-07-25T12:55:58+08:00",
-  "note": "route scheduled digital human 2.0 through cloud API"
+  "version": "1.0.117",
+  "build": 161,
+  "applied_at": "2026-07-25T22:11:47+08:00",
+  "note": "fix installed-client updates; include Alibaba inquiry takeover and WeChat runtime dependencies"
 }
