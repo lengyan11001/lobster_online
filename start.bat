@@ -130,12 +130,15 @@ echo   Share the LAN address with other devices
 echo ================================================
 echo.
 
+REM Installed clients may use the lightweight EXE or this BAT and are not
+REM frozen Python processes. Only a real Git checkout is treated as source mode.
+if not exist ".git" goto :run_code_update
 set "DEV_CODE_UPDATE_FLAG=%LOBSTER_ENABLE_DEV_CODE_UPDATE%"
 if /I "%DEV_CODE_UPDATE_FLAG%"=="1" goto :run_code_update
 if /I "%DEV_CODE_UPDATE_FLAG%"=="true" goto :run_code_update
 if /I "%DEV_CODE_UPDATE_FLAG%"=="yes" goto :run_code_update
 if /I "%DEV_CODE_UPDATE_FLAG%"=="on" goto :run_code_update
-echo [Code] source mode detected, skip client code update check.
+echo [Code] Git development checkout detected, skip client code update check.
 goto :after_code_update
 
 :run_code_update

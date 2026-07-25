@@ -4,7 +4,8 @@
 
 - 仅在 .env 配置 CLIENT_CODE_MANIFEST_URL（HTTPS）时拉取 manifest。
 - 本地版本：CLIENT_CODE_VERSION.json 的 build（整数）与 version（语义版本，默认 1.0.0）。
-- 满足任一即更新：① 服务端 build 更大；② build 相同且 manifest.version 高于本地（如 1.0.0 → 1.0.1，便于只发「小版本」包）。
+- 满足任一即更新：① 服务端 build 更大；② build 相同且 manifest.version 高于本地；
+  ③ build/version 相同但服务端 OTA SHA256 已变化（支持同版本覆盖发布）。
 - 兼容旧 manifest：下载 bundle_url，校验 sha256 后，对 manifest.paths 所列路径做「整路径覆盖」
   （目录则先删再拷，文件则覆盖）；绝不触碰 python/、deps/、browser_chromium/、nodejs 可执行文件等。
 - 新 manifest 可额外下发 patches/resources：新 updater 会优先应用增量补丁；补丁失败时回退到旧
@@ -312,6 +313,17 @@ def _local_semver() -> str:
         return DEFAULT_CLIENT_SEMVER
 
 
+def _local_bundle_sha256() -> str:
+    if not VERSION_FILE.is_file():
+        return ""
+    try:
+        data = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
+        value = str(data.get("bundle_sha256") or "").strip().lower()
+        return value if _valid_sha256(value) else ""
+    except Exception:
+        return ""
+
+
 def _semver_is_newer(remote: str, local: str) -> bool:
     """manifest 的 version 是否严格高于本机（支持 1.0.1 / v1.2.3）。"""
     r = (remote or "").strip().lstrip("vV")
@@ -345,7 +357,35 @@ def _semver_is_newer(remote: str, local: str) -> bool:
         return tuple(rp) > tuple(lp)
 
 
-def _save_local_build(build: int, version_from_manifest: str | None = None) -> None:
+def _update_reason(
+    *,
+    local_build: int,
+    local_version: str,
+    local_bundle_sha256: str,
+    remote_build: int,
+    remote_version: str,
+    remote_bundle_sha256: str,
+) -> str:
+    if remote_build > local_build:
+        return "build"
+    if remote_build != local_build:
+        return ""
+    if remote_version and _semver_is_newer(remote_version, local_version):
+        return "version"
+    if remote_version and remote_version != local_version:
+        return ""
+    remote_sha = str(remote_bundle_sha256 or "").strip().lower()
+    local_sha = str(local_bundle_sha256 or "").strip().lower()
+    if _valid_sha256(remote_sha) and remote_sha != local_sha:
+        return "bundle_sha256"
+    return ""
+
+
+def _save_local_build(
+    build: int,
+    version_from_manifest: str | None = None,
+    bundle_sha256: str | None = None,
+) -> None:
     prev: dict = {}
     if VERSION_FILE.is_file():
         try:
@@ -365,6 +405,9 @@ def _save_local_build(build: int, version_from_manifest: str | None = None) -> N
         prev["version"] = ex if ex else DEFAULT_CLIENT_SEMVER
     semver = str(prev.get("version", "") or DEFAULT_CLIENT_SEMVER).strip() or DEFAULT_CLIENT_SEMVER
     prev["version"] = semver
+    bundle_sha = str(bundle_sha256 or "").strip().lower()
+    if _valid_sha256(bundle_sha):
+        prev["bundle_sha256"] = bundle_sha
     VERSION_FILE.write_text(json.dumps(prev, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         STATIC_CLIENT_VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -1536,6 +1579,7 @@ def _main_locked() -> int:
 
     local = _local_build()
     local_ver = _local_semver()
+    local_bundle_sha = _local_bundle_sha256()
     try:
         manifest = _fetch_manifest_with_retry(manifest_url)
     except urllib.error.URLError as e:
@@ -1555,24 +1599,37 @@ def _main_locked() -> int:
         return 0
 
     remote_ver = str(manifest.get("version") or "").strip()
-    need_update = remote_build > local
-    if not need_update and remote_build == local and remote_ver and _semver_is_newer(remote_ver, local_ver):
-        need_update = True
-    if not need_update:
+    remote_bundle_sha = str(manifest.get("sha256") or "").strip().lower()
+    update_reason = _update_reason(
+        local_build=local,
+        local_version=local_ver,
+        local_bundle_sha256=local_bundle_sha,
+        remote_build=remote_build,
+        remote_version=remote_ver,
+        remote_bundle_sha256=remote_bundle_sha,
+    )
+    if not update_reason:
         print(f"[code] 本地代码包已是最新 (build={local}, version={local_ver})。", flush=True)
         with tempfile.TemporaryDirectory() as td:
             _apply_resources(manifest.get("resources"), Path(td))
         return 0
 
-    if remote_build > local:
+    if update_reason == "build":
         print(f"[code-progress] found_update remote_build={remote_build} local_build={local}", flush=True)
         print(f"[code] 发现新版本 build={remote_build}（本地 build={local}），正在下载…", flush=True)
-    else:
+    elif update_reason == "version":
         print(f"[code-progress] found_update remote_version={remote_ver} local_version={local_ver}", flush=True)
         print(
             f"[code] 发现新版本 version={remote_ver}（本地 {local_ver}，build 均为 {local}），正在下载…",
             flush=True,
         )
+    else:
+        print(
+            f"[code-progress] found_update remote_sha={remote_bundle_sha[:12]} "
+            f"local_sha={local_bundle_sha[:12] or 'missing'}",
+            flush=True,
+        )
+        print(f"[code] 检测到 build={local} 的 OTA 包已替换，正在下载最新覆盖包…", flush=True)
 
     with tempfile.TemporaryDirectory() as td:
         tdir = Path(td)
@@ -1599,7 +1656,7 @@ def _main_locked() -> int:
 
         mver = manifest.get("version")
         mver_s = str(mver).strip() if mver is not None else ""
-        _save_local_build(remote_build, mver_s or None)
+        _save_local_build(remote_build, mver_s or None, remote_bundle_sha)
         try:
             _apply_resources(manifest.get("resources"), tdir)
             _install_runtime_dependencies_if_needed(applied)
