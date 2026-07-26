@@ -4780,7 +4780,7 @@ async def _generate_shanjian_workflow_script(
         "memory_doc_ids": memory_doc_ids,
         "memory_docs": memory_docs,
         "memory_context": memory_context[:12000],
-        "length_rule": "中文控制在80到180字；英文控制在60到120词；其他语种按同等时长控制。必须完整通顺。",
+        "length_rule": "目标口播时长20到25秒。中文控制在90到120字且不得超过120字；英文控制在45到60词且不得超过60词；其他语种按同等时长控制。必须完整通顺，不能为了凑字数重复表达。",
         "safety_rule": "资料里没有的卖点不要补，宁可提示缺资料，也不要硬编。",
     }
     text = await _call_scheduled_llm(
@@ -4881,6 +4881,8 @@ async def _run_shanjian_digital_human_workflow(
             "audio_url": audio_url,
             "language": language,
             "speed_ratio": source.get("speed_ratio") or 1.0,
+            "video_duration": 30,
+            "hard_max_duration": 30,
         },
         cloud=cloud,
         base=base,
