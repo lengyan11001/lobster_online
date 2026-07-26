@@ -1,6 +1,6 @@
 {
-  "version": "1.0.118",
-  "build": 162,
-  "applied_at": "2026-07-25T22:29:15+08:00",
-  "note": "bootstrap client updates from legacy source-mode launchers"
+  "version": "1.0.119",
+  "build": 163,
+  "applied_at": "2026-07-26T15:25:06+08:00",
+  "note": "repair runtime dependencies and prevent duplicate OTA downloads"
 }

@@ -130,6 +130,14 @@ echo   Share the LAN address with other devices
 echo ================================================
 echo.
 
+REM Older embedded runtimes did not include Tcl/Tk. wxauto4 only imports
+REM tkinter for optional debug UI, so install the same lightweight stub used
+REM by install.bat before the OTA dependency verification runs.
+if exist "python\python.exe" (
+    "%PYTHON%" -c "import tkinter" >nul 2>&1
+    if errorlevel 1 call :ensure_tkinter_stub
+)
+
 set "DISABLE_CODE_UPDATE_FLAG=%LOBSTER_DISABLE_CLIENT_CODE_UPDATE%"
 if /I "%DISABLE_CODE_UPDATE_FLAG%"=="1" goto :skip_code_update
 if /I "%DISABLE_CODE_UPDATE_FLAG%"=="true" goto :skip_code_update
@@ -144,8 +152,26 @@ goto :after_code_update
 :run_code_update
 echo [Code] checking client code pack update...
 "%PYTHON%" "%ROOT%\scripts\check_client_code_update.py"
+REM The running updater may be the pre-OTA implementation.  Re-open the newly
+REM installed script and write build/version/SHA to the same marker read by the
+REM desktop EXE, preventing a second download for the same OTA.
+if exist "%ROOT%\scripts\check_client_code_update.py" if exist "%ROOT%\CLIENT_CODE_VERSION.json" (
+    findstr /C:"bundle_sha256" "%ROOT%\CLIENT_CODE_VERSION.json" >nul 2>&1
+    if errorlevel 1 "%PYTHON%" "%ROOT%\scripts\check_client_code_update.py" --sync-version-marker
+)
 :after_code_update
 echo.
+
+if exist "scripts\repair_runtime_dependencies.py" (
+    echo [Repair] Checking runtime dependencies after update...
+    "%PYTHON%" "scripts\repair_runtime_dependencies.py"
+    if errorlevel 1 (
+        echo [WARN] Runtime dependency repair is incomplete. Open System Config and click Repair Runtime Dependencies.
+    ) else (
+        echo [OK] Runtime dependencies are ready.
+    )
+    echo.
+)
 
 if exist "openclaw\.env" (
     for /f "usebackq eol=# tokens=1,2 delims==" %%a in ("openclaw\.env") do (
@@ -240,6 +266,24 @@ exit /b 0
 for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":%~1 " ^| findstr "LISTENING"') do (
     if not "%%p"=="0" taskkill /F /T /PID %%p >nul 2>&1
 )
+exit /b 0
+
+:ensure_tkinter_stub
+if not exist "python\tkinter" mkdir "python\tkinter"
+> "python\tkinter\__init__.py" echo """Minimal tkinter stub for the embedded Lobster runtime."""
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo class TclError(RuntimeError):
+>> "python\tkinter\__init__.py" echo     pass
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo class Tk:
+>> "python\tkinter\__init__.py" echo     def __init__(self, *args, **kwargs):
+>> "python\tkinter\__init__.py" echo         raise TclError("tkinter UI is not bundled in this runtime")
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo class Toplevel(Tk):
+>> "python\tkinter\__init__.py" echo     pass
+>> "python\tkinter\__init__.py" echo.
+>> "python\tkinter\__init__.py" echo END = "end"
+echo   [OK] Added embedded tkinter compatibility stub.
 exit /b 0
 
 :cleanup

@@ -508,6 +508,90 @@ if (resetAssetPathBtn) resetAssetPathBtn.addEventListener('click', function() {
   saveAssetPathSettings(true);
 });
 
+function renderRuntimeRepairResult(data) {
+  var root = document.getElementById('repairRuntimeDependenciesResult');
+  if (!root) return;
+  root.replaceChildren();
+  root.style.display = '';
+
+  var checks = data && Array.isArray(data.checks) ? data.checks : [];
+  checks.forEach(function(item) {
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;padding:0.55rem 0;border-top:1px solid var(--border);font-size:0.82rem;';
+    var label = document.createElement('span');
+    label.textContent = item.label || item.key || '运行组件';
+    var state = document.createElement('span');
+    var failedModules = Array.isArray(item.failures) ? item.failures.map(function(failure) {
+      return failure && failure.module ? failure.module : '';
+    }).filter(Boolean) : [];
+    state.textContent = item.ok ? '正常' : ((item.message || '修复失败') + (failedModules.length ? '：' + failedModules.join('、') : ''));
+    if (!item.ok && Array.isArray(item.failures)) {
+      state.title = item.failures.map(function(failure) {
+        return ((failure && failure.module) || 'module') + ': ' + ((failure && failure.error) || '导入失败');
+      }).join('\n');
+    }
+    state.style.color = item.ok ? 'var(--success, #16a34a)' : 'var(--danger, #dc2626)';
+    row.appendChild(label);
+    row.appendChild(state);
+    root.appendChild(row);
+  });
+
+  var install = data && data.install;
+  var logText = install && install.log ? String(install.log) : (data && data.pip_log ? String(data.pip_log) : '');
+  if (logText) {
+    var details = document.createElement('details');
+    details.style.marginTop = '0.55rem';
+    var summary = document.createElement('summary');
+    summary.textContent = '查看修复日志';
+    summary.style.cssText = 'cursor:pointer;font-size:0.8rem;color:var(--text-muted);';
+    var pre = document.createElement('pre');
+    pre.textContent = logText;
+    pre.style.cssText = 'margin:0.55rem 0 0;max-height:15rem;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.72rem;line-height:1.5;';
+    details.appendChild(summary);
+    details.appendChild(pre);
+    root.appendChild(details);
+  }
+}
+
+var repairRuntimeDependenciesBtn = document.getElementById('repairRuntimeDependenciesBtn');
+if (repairRuntimeDependenciesBtn) {
+  repairRuntimeDependenciesBtn.addEventListener('click', function() {
+    var msgEl = document.getElementById('repairRuntimeDependenciesMsg');
+    var resultEl = document.getElementById('repairRuntimeDependenciesResult');
+    var originalText = repairRuntimeDependenciesBtn.textContent;
+    repairRuntimeDependenciesBtn.disabled = true;
+    repairRuntimeDependenciesBtn.textContent = '修复中...';
+    if (resultEl) {
+      resultEl.replaceChildren();
+      resultEl.style.display = 'none';
+    }
+    showMsg(msgEl, '正在检查并修复运行依赖，请不要关闭客户端...', false);
+    if (msgEl) msgEl.style.display = '';
+
+    fetch((LOCAL_API_BASE || '') + '/api/settings/repair-runtime-dependencies', {
+      method: 'POST',
+      headers: authHeaders()
+    })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(x) {
+        if (!x.ok) throw new Error((x.data && x.data.detail) || '依赖修复失败');
+        renderRuntimeRepairResult(x.data || {});
+        var text = (x.data && x.data.message) || '依赖修复完成';
+        if (x.data && x.data.restart_recommended) text += '，重启客户端后全部生效';
+        showMsg(msgEl, text, !(x.data && x.data.ok));
+        if (msgEl) msgEl.style.display = '';
+      })
+      .catch(function(err) {
+        showMsg(msgEl, (err && err.message) || '依赖修复失败', true);
+        if (msgEl) msgEl.style.display = '';
+      })
+      .finally(function() {
+        repairRuntimeDependenciesBtn.disabled = false;
+        repairRuntimeDependenciesBtn.textContent = originalText;
+      });
+  });
+}
+
 function clearLocalUserConfigClientStorage() {
   try {
     var i;

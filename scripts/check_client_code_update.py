@@ -1381,11 +1381,52 @@ def _should_install_runtime_group(group: dict[str, Any], applied: list[str]) -> 
     return False
 
 
+_EMBEDDED_TKINTER_STUB = '''"""Minimal tkinter stub for the embedded Lobster runtime."""
+
+class TclError(RuntimeError):
+    pass
+
+class Tk:
+    def __init__(self, *args, **kwargs):
+        raise TclError("tkinter UI is not bundled in this runtime")
+
+class Toplevel(Tk):
+    pass
+
+END = "end"
+'''
+
+
+def _ensure_embedded_tkinter_stub() -> None:
+    runtime_root = ROOT / "python"
+    if os.name != "nt" or not (runtime_root / "python.exe").is_file():
+        return
+    if (runtime_root / "DLLs" / "_tkinter.pyd").is_file():
+        return
+    stub_file = runtime_root / "tkinter" / "__init__.py"
+    try:
+        if stub_file.is_file() and stub_file.read_text(encoding="utf-8") == _EMBEDDED_TKINTER_STUB:
+            return
+        stub_file.parent.mkdir(parents=True, exist_ok=True)
+        stub_file.write_text(_EMBEDDED_TKINTER_STUB, encoding="utf-8")
+        print("[code] embedded tkinter compatibility stub is ready", flush=True)
+    except Exception as exc:
+        print(f"[code] [WARN] failed to prepare tkinter compatibility stub: {exc}", flush=True)
+
+
+def _print_process_output(name: str, stage: str, output: str, limit: int = 80) -> None:
+    lines = [line.rstrip() for line in (output or "").splitlines() if line.strip()]
+    for line in lines[-limit:]:
+        print(f"[code] [{name}:{stage}] {line}", flush=True)
+
+
 def _install_runtime_group_if_needed(group: dict[str, Any], applied: list[str]) -> None:
     if not _should_install_runtime_group(group, applied):
         return
     name = str(group.get("name") or "runtime")
     required = bool(group.get("required"))
+    if name == "wechat_runtime":
+        _ensure_embedded_tkinter_stub()
     wheel_dirs = [p for p in group.get("wheel_dirs", ()) if isinstance(p, Path) and p.is_dir()]
     if not wheel_dirs:
         msg = f"{name} wheels missing; skip offline dependency install."
@@ -1398,33 +1439,62 @@ def _install_runtime_group_if_needed(group: dict[str, Any], applied: list[str]) 
         "-m",
         "pip",
         "install",
+        "--disable-pip-version-check",
         "--no-index",
     ]
     for wheel_dir in wheel_dirs:
         cmd.extend(["--find-links", str(wheel_dir)])
     cmd.extend(tuple(group.get("requirements") or ()))
     print(f"[code-progress] {name}_install_start", flush=True)
+    timeout_seconds = max(60, int(os.environ.get("CLIENT_RUNTIME_INSTALL_TIMEOUT_SECONDS") or 600))
     try:
-        subprocess.run(cmd, cwd=str(ROOT), check=True, creationflags=_creation_flags())
+        cp = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            timeout=timeout_seconds,
+            creationflags=_creation_flags(),
+        )
+        if cp.returncode:
+            _print_process_output(name, "pip", cp.stdout or "")
+            raise RuntimeError(
+                f"pip exited with code {cp.returncode}; python={sys.version.split()[0]}"
+            )
+    except subprocess.TimeoutExpired as exc:
+        captured = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        _print_process_output(name, "pip", captured)
+        print(f"[code] [ERR] {name} dependency install timed out after {timeout_seconds}s", flush=True)
+        if required:
+            raise RuntimeError(f"{name} dependency install timeout") from exc
+        return
     except Exception as exc:
         print(f"[code] [ERR] {name} dependency install failed: {exc}", flush=True)
         if required:
             raise RuntimeError(f"{name} dependency install failed") from exc
         return
     imports = [str(item).strip() for item in (group.get("verify_imports") or ()) if str(item).strip()]
-    if imports:
-        code = "import importlib\nfor name in " + repr(imports) + ":\n    importlib.import_module(name)\n"
+    for module_name in imports:
         try:
-            subprocess.run(
-                [sys.executable, "-c", code],
+            cp = subprocess.run(
+                [sys.executable, "-c", f"import importlib; importlib.import_module({module_name!r})"],
                 cwd=str(ROOT),
-                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+                timeout=60,
                 creationflags=_creation_flags(),
             )
+            if cp.returncode:
+                _print_process_output(name, f"import:{module_name}", cp.stdout or "", limit=30)
+                raise RuntimeError(f"import {module_name} exited with code {cp.returncode}")
         except Exception as exc:
-            print(f"[code] [ERR] {name} dependency verify failed: {exc}", flush=True)
+            print(f"[code] [ERR] {name} dependency verify failed for {module_name}: {exc}", flush=True)
             if required:
-                raise RuntimeError(f"{name} dependency verify failed") from exc
+                raise RuntimeError(f"{name} dependency verify failed for {module_name}") from exc
             return
     print(f"[code-progress] {name}_install_done", flush=True)
 
@@ -1667,11 +1737,57 @@ def _main_locked() -> int:
     return 0
 
 
+def _sync_version_marker_locked() -> int:
+    """Backfill the complete manifest identity after a legacy updater ran.
+
+    Older updater processes write build/version but not bundle_sha256.  When a
+    freshly updated EXE starts, the missing SHA makes a same-build replacement
+    look like another update.  Only copy the remote SHA after build/version
+    already match, so this cannot mark an unapplied newer release as installed.
+    """
+    env = _load_dotenv_simple(ROOT / ".env")
+    env.update({k: v for k, v in os.environ.items() if k.startswith("CLIENT_CODE_")})
+    manifest_url = (env.get("CLIENT_CODE_MANIFEST_URL") or "").strip()
+    if not manifest_url or not manifest_url.lower().startswith(("https://", "http://")):
+        return 0
+    try:
+        manifest = _fetch_manifest_with_retry(manifest_url)
+        remote_build = int(manifest.get("build", 0))
+    except Exception as exc:
+        print(f"[code] [WARN] 无法同步本地更新标记: {exc}", flush=True)
+        return 0
+
+    local_build = _local_build()
+    local_version = _local_semver()
+    remote_version = str(manifest.get("version") or "").strip()
+    remote_sha = str(manifest.get("sha256") or "").strip().lower()
+    versions_match = not remote_version or remote_version == local_version
+    if local_build != remote_build or not versions_match or not _valid_sha256(remote_sha):
+        print(
+            "[code] [WARN] 本地代码与线上 manifest 尚未一致，不写入完成标记 "
+            f"(local={local_build}/{local_version}, remote={remote_build}/{remote_version or '-'})。",
+            flush=True,
+        )
+        return 0
+
+    if _local_bundle_sha256() != remote_sha:
+        _save_local_build(remote_build, remote_version or None, remote_sha)
+        print(
+            f"[code-progress] version_marker_synced build={remote_build} sha={remote_sha[:12]}",
+            flush=True,
+        )
+    else:
+        print(f"[code] 更新完成标记已同步 (build={remote_build})。", flush=True)
+    return 0
+
+
 def main() -> int:
     lock_file = _acquire_update_lock()
     if lock_file is None:
         return 0
     try:
+        if "--sync-version-marker" in sys.argv[1:]:
+            return _sync_version_marker_locked()
         return _main_locked()
     finally:
         _release_update_lock(lock_file)

@@ -29,6 +29,10 @@ from ..services.chat_route_mode import (
     normalize_chat_route_mode,
     set_chat_route_mode,
 )
+from ..services.runtime_dependency_repair import (
+    RuntimeDependencyRepairBusy,
+    repair_runtime_dependencies,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +372,16 @@ def update_asset_paths_settings(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     return set_asset_export_dir(body.export_dir)
+
+
+@router.post("/api/settings/repair-runtime-dependencies", summary="Repair local runtime dependencies")
+def repair_local_runtime_dependencies(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    try:
+        return repair_runtime_dependencies()
+    except RuntimeDependencyRepairBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post(
