@@ -1,6 +1,6 @@
 {
-  "version": "1.0.119",
-  "build": 163,
-  "applied_at": "2026-07-26T15:25:06+08:00",
-  "note": "repair runtime dependencies and prevent duplicate OTA downloads"
+  "version": "1.0.120",
+  "build": 164,
+  "applied_at": "2026-07-26T19:36:03+08:00",
+  "note": "stabilize 3D component generation and image understanding timeouts"
 }

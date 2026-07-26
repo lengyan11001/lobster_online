@@ -63,6 +63,7 @@ def _mcp_opts_toutiao_graphic_no_cover(opts: Any) -> bool:
     return False
 
 _SUTUI_UPSTREAM_LOG_MAX = 500_000
+_UNDERSTAND_UPSTREAM_READ_TIMEOUT_SECONDS = 7 * 60.0
 
 # 本机 invoke_capability：后端路径与 HTTP 超时（秒）；带货整包流水线可能极长，单独加长超时
 _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
@@ -3800,6 +3801,8 @@ async def _call_upstream_mcp_tool(
         _upstream_call_read_timeout = 130 * 60.0
     elif tool_name == "invoke_capability" and _cap_for_timeout == "comfly.daihuo":
         _upstream_call_read_timeout = 40 * 60.0
+    elif tool_name == "invoke_capability" and _cap_for_timeout in {"image.understand", "video.understand"}:
+        _upstream_call_read_timeout = _UNDERSTAND_UPSTREAM_READ_TIMEOUT_SECONDS
     else:
         _upstream_call_read_timeout = 120.0
 
@@ -3866,14 +3869,17 @@ async def _call_upstream_mcp_tool(
         async with httpx.AsyncClient(timeout=_call_timeout, trust_env=trust_env) as client:
             try:
                 r = await client.post(server_url, json=call_body, headers=call_headers)
-            except httpx.HTTPError as exc:
+            except httpx.ReadTimeout as exc:
+                error_detail = str(exc).strip() or type(exc).__name__
                 logger.warning(
-                    "[MCP] 上游调用失败 tool=%s url=%s attempt=%s/%s: %s",
+                    "[MCP] 上游处理超时 tool=%s capability=%s url=%s timeout=%ss attempt=%s/%s: %s",
                     tool_name,
+                    _cap_for_timeout or "-",
                     server_url,
+                    int(_upstream_call_read_timeout),
                     attempt,
                     call_attempts,
-                    exc,
+                    error_detail,
                 )
                 if attempt < call_attempts:
                     await asyncio.sleep(min(2.0 * attempt, 5.0))
@@ -3881,7 +3887,28 @@ async def _call_upstream_mcp_tool(
                 return {
                     "error": {
                         "message": (
-                            f"上游工具调用失败: {exc}。"
+                            f"云端处理超时（已等待 {int(_upstream_call_read_timeout)} 秒）："
+                            f"{error_detail}。请稍后重试，任务进度不会自动切换到其他模型。"
+                        )
+                    }
+                }
+            except httpx.HTTPError as exc:
+                error_detail = str(exc).strip() or type(exc).__name__
+                logger.warning(
+                    "[MCP] 上游调用失败 tool=%s url=%s attempt=%s/%s: %s",
+                    tool_name,
+                    server_url,
+                    attempt,
+                    call_attempts,
+                    error_detail,
+                )
+                if attempt < call_attempts:
+                    await asyncio.sleep(min(2.0 * attempt, 5.0))
+                    continue
+                return {
+                    "error": {
+                        "message": (
+                            f"上游工具调用失败: {error_detail}。"
                             f"（云端地址 {server_url} 不可达时请查本机 HTTPS 出网/VPN/DNS）"
                         )
                     }

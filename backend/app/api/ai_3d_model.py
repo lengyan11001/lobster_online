@@ -10161,10 +10161,19 @@ async def ai_3d_model_update_component_prompts(
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
-        raise HTTPException(status_code=409, detail="当前任务状态不能编辑拆件提示词")
+        raise HTTPException(status_code=409, detail="当前任务仍在执行，请等待完成后再编辑拆件提示词")
     preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+
+    preprocessing = _apply_component_prompt_updates(preprocessing, parts_json)
+    store.update_job(job_id, preprocessing=preprocessing, stage=str(job.get("stage") or "component_prompts_ready"), error=None)
+    return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
+
+
+def _apply_component_prompt_updates(preprocessing: Dict[str, Any], parts_json: str) -> Dict[str, Any]:
+    preprocessing = dict(preprocessing)
     plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
-    parts = plan.get("parts") if isinstance(plan.get("parts"), list) else []
+    plan = dict(plan)
+    parts = [dict(part) for part in plan.get("parts", []) if isinstance(part, dict)]
     if not parts:
         raise HTTPException(status_code=409, detail="请先生成 GPT 拆件提示词")
     try:
@@ -10199,8 +10208,7 @@ async def ai_3d_model_update_component_prompts(
     plan["parts"] = parts
     preprocessing["component_ai_plan"] = plan
     preprocessing["component_prompts_user_edited"] = True
-    store.update_job(job_id, preprocessing=preprocessing, stage=str(job.get("stage") or "component_prompts_ready"), error=None)
-    return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
+    return preprocessing
 
 
 def _component_expected_count(preprocessing: Dict[str, Any]) -> int:
@@ -10342,19 +10350,22 @@ async def ai_3d_model_generate_component_images(
     background_tasks: BackgroundTasks,
     model: str = Form(""),
     role: str = Form(""),
+    parts_json: str = Form(""),
     current_user: _ServerUser = Depends(_ai3d_local_user),
 ):
     job = store.load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
-        raise HTTPException(status_code=409, detail="当前任务状态不能生成部件图")
+        raise HTTPException(status_code=409, detail="当前任务仍在执行，请等待完成后再生成部件图")
     preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
     if _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") != "component_split":
         raise HTTPException(status_code=409, detail="只有拆件独立流程使用分步生成部件图")
     plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
     if not isinstance(plan.get("parts"), list) or not plan.get("parts"):
         raise HTTPException(status_code=409, detail="请先生成 GPT 拆件提示词")
+    if str(parts_json or "").strip():
+        preprocessing = _apply_component_prompt_updates(preprocessing, parts_json)
     selected_model = _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
     role_filter = str(role or "").strip()
     safe_inputs = _safe_frontend_generation_inputs(job, preprocessing)
@@ -10425,13 +10436,14 @@ async def ai_3d_model_generate_component_triviews(
     background_tasks: BackgroundTasks,
     model: str = Form(""),
     role: str = Form(""),
+    parts_json: str = Form(""),
     current_user: _ServerUser = Depends(_ai3d_local_user),
 ):
     job = store.load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.get("status") not in {"preprocessed", "failed", "succeeded"}:
-        raise HTTPException(status_code=409, detail="当前任务状态不能生成部件三视图")
+        raise HTTPException(status_code=409, detail="当前任务仍在执行，请等待完成后再生成部件三视图")
     preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
     if _canonical_workflow_mode(job.get("workflow_mode") or preprocessing.get("workflow_mode") or "custom") != "component_split":
         raise HTTPException(status_code=409, detail="只有拆件独立流程使用部件三视图生成")
@@ -10441,6 +10453,8 @@ async def ai_3d_model_generate_component_triviews(
         raise HTTPException(status_code=409, detail="请先生成部件图，再生成部件三视图")
     if not preprocessing.get("component_triview_prompts_ready") and not preprocessing.get("component_triview_prompt_parts"):
         raise HTTPException(status_code=409, detail="请先生成/确认部件三视图提示词")
+    if str(parts_json or "").strip():
+        preprocessing = _apply_component_prompt_updates(preprocessing, parts_json)
     selected_model = _canonical_image_model(model or str(job.get("image_model") or _SUTUI_GPT_IMAGE_2_MODEL))
     store.update_job(
         job_id,
