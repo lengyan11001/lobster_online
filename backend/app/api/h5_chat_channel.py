@@ -2099,15 +2099,23 @@ async def _generate_scheduled_publish_copy(
     platform: str,
     task_title: str,
     caption: str,
+    source_script: str = "",
 ) -> Dict[str, str]:
+    source_script = " ".join(str(source_script or "").split())[:6000]
     fallback_title = (str(generated.get("title") or task_title or "AI 创意内容").strip() or "AI 创意内容")[:30]
-    fallback_desc = caption or _fallback_scheduled_caption(capability_id, generated)
+    fallback_desc = source_script or caption or _fallback_scheduled_caption(capability_id, generated)
     fallback_tags = _clean_publish_tags(generated.get("tags") or generated.get("keywords") or "")
     system = (
-        "你是中文社交平台运营。只输出 JSON 对象，字段必须是 title、description、tags。"
+        "你是社交平台运营。只输出 JSON 对象，字段必须是 title、description、tags。"
         "不要 Markdown，不要解释。"
         + _platform_publish_rules(platform)
     )
+    if source_script:
+        system += (
+            "\nThe source_oral_script is the primary factual source. Create platform copy from its actual topic and claims; "
+            "do not infer facts from the filename or task title. Keep the output language consistent with the script. "
+            "Do not invent prices, results, credentials, addresses, guarantees, or statistics."
+        )
     try:
         text = await _call_scheduled_llm(
             base=base,
@@ -2118,9 +2126,13 @@ async def _generate_scheduled_publish_copy(
                 "task_title": task_title,
                 "generated_content": generated,
                 "caption": caption,
+                "source_oral_script": source_script,
                 "skill_result_summary": _compact_result_text(result)[:1200],
                 "result_refs": refs,
-                "requirements": "标题、正文、标签要适合所选平台；不要编造不存在的优惠、价格或地址。",
+                "requirements": (
+                    "标题、正文、标签要适合所选平台；不要编造不存在的优惠、价格或地址。"
+                    " When source_oral_script is present, derive every field from that script."
+                ),
             },
             temperature=0.55,
         )
@@ -2128,10 +2140,77 @@ async def _generate_scheduled_publish_copy(
         title = " ".join(str(data.get("title") or fallback_title).split())[:60]
         desc = str(data.get("description") or data.get("desc") or fallback_desc).strip()[:1200]
         tags = _clean_publish_tags(data.get("tags") or fallback_tags)
-        return {"title": title or fallback_title, "description": desc or fallback_desc, "tags": tags}
+        final_title = "" if _is_wechat_moments_platform(platform) else (title or fallback_title)
+        return {"title": final_title, "description": desc or fallback_desc, "tags": tags}
     except Exception as exc:
         logger.warning("[SCHEDULED-TASK] publish copy failed platform=%s: %s", platform, exc)
-        return {"title": fallback_title, "description": fallback_desc, "tags": fallback_tags}
+        final_title = "" if _is_wechat_moments_platform(platform) else fallback_title
+        return {"title": final_title, "description": fallback_desc, "tags": fallback_tags}
+
+
+def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
+    if not isinstance(result_payload, dict):
+        return {}
+    generated = result_payload.get("generated") if isinstance(result_payload.get("generated"), dict) else {}
+    local_result = result_payload.get("local_result") if isinstance(result_payload.get("local_result"), dict) else {}
+    record = generated.get("ip_daily_record") if isinstance(generated.get("ip_daily_record"), dict) else {}
+    if not record and isinstance(local_result.get("ip_daily_record"), dict):
+        record = local_result["ip_daily_record"]
+    mcp_result = result_payload.get("mcp_result") if isinstance(result_payload.get("mcp_result"), dict) else {}
+
+    def first_text(*values: Any, limit: int = 6000) -> str:
+        for value in values:
+            if isinstance(value, (dict, list)):
+                continue
+            text = " ".join(str(value or "").split())
+            if text:
+                return text[:limit]
+        return ""
+
+    script = first_text(
+        generated.get("script"),
+        generated.get("oral_script"),
+        local_result.get("script"),
+        local_result.get("oral_script"),
+        record.get("body"),
+        record.get("content"),
+        record.get("script"),
+        record.get("text"),
+        result_payload.get("skill_prompt"),
+        mcp_result.get("script"),
+    )
+    title = first_text(
+        record.get("title"),
+        generated.get("title"),
+        local_result.get("title"),
+        result_payload.get("title"),
+        limit=160,
+    )
+    caption = first_text(
+        result_payload.get("caption"),
+        generated.get("caption_hint"),
+        local_result.get("caption_hint"),
+        limit=1200,
+    )
+    tags = _clean_publish_tags(
+        record.get("tags")
+        or record.get("keywords")
+        or generated.get("tags")
+        or generated.get("keywords")
+        or ""
+    )
+    language = first_text(generated.get("language"), local_result.get("language"), record.get("language"), limit=64)
+    capability_id = first_text(result_payload.get("capability_id"), limit=128)
+    if not capability_id and str(local_result.get("action") or "").strip() == "shanjian_digital_human_video":
+        capability_id = "hifly.video.create_by_tts"
+    return {
+        "source_script": script,
+        "source_title": title,
+        "source_caption": caption,
+        "source_tags": tags,
+        "source_language": language,
+        "source_capability_id": capability_id,
+    }
 
 
 def _is_wechat_moments_platform(value: Any) -> bool:
@@ -4607,13 +4686,15 @@ async def _resolve_parent_workflow_material(
                     detail_run = detail_data["run"]
             except Exception as exc:
                 logger.warning("[H5-WORKFLOW] fetch parent run detail failed run_id=%s err=%s", run_id, exc)
+        parent_result_payload = detail_run.get("result_payload") or {}
         material = _extract_parent_material(
-            detail_run.get("result_payload") or {},
+            parent_result_payload,
             preferred_media_type=_preferred_parent_material_media_type(params),
         )
         if not material:
             continue
-        candidates.append({**material, "source_run_id": run_id})
+        publish_context = _extract_parent_publish_context(parent_result_payload)
+        candidates.append({**material, **publish_context, "source_run_id": run_id})
     if not candidates:
         raise RuntimeError("上级节点还没有可发布的素材")
     return candidates[0]
@@ -4973,6 +5054,7 @@ async def _run_shanjian_digital_human_workflow(
                 "record": record,
                 "title": title,
                 "script": script,
+                "language": language,
                 "caption_hint": generated.get("caption_hint") or "",
                 "ip_daily_group_id": generated.get("ip_daily_group_id") or "",
                 "ip_daily_record_id": generated.get("ip_daily_record_id") or "",
@@ -5004,6 +5086,7 @@ async def _run_shanjian_digital_human_workflow(
     last["action"] = "shanjian_digital_human_video"
     last["title"] = title
     last["script"] = script
+    last["language"] = language
     last["ip_daily_group_id"] = generated.get("ip_daily_group_id") or ""
     last["ip_daily_record_id"] = generated.get("ip_daily_record_id") or ""
     last["ip_daily_record"] = generated.get("ip_daily_record") or {}
@@ -5189,6 +5272,38 @@ async def _run_client_workflow_action(
             )
             material = str(material_source.get("asset_id") or "").strip()
             source_url = str(material_source.get("url") or "").strip()
+        source_script = str(material_source.get("source_script") or "").strip()
+        publish_title = str(source.get("title") or "").strip()
+        publish_description = str(source.get("description") or source.get("prompt") or "").strip()
+        publish_tags = str(source.get("tags") or "").strip()
+        generated_publish_copy: Dict[str, str] = {}
+        if source_script and bool(source.get("ai_publish_copy", True)):
+            generated_publish_copy = await _generate_scheduled_publish_copy(
+                base=base,
+                headers=headers,
+                capability_id=str(material_source.get("source_capability_id") or "hifly.video.create_by_tts").strip(),
+                generated={
+                    "title": str(material_source.get("source_title") or source.get("source_workflow_node_label") or "").strip(),
+                    "script": source_script,
+                    "caption_hint": str(material_source.get("source_caption") or "").strip(),
+                    "tags": str(material_source.get("source_tags") or "").strip(),
+                    "language": str(material_source.get("source_language") or "").strip(),
+                },
+                result=material_source,
+                refs={
+                    "asset_ids": [material] if material else [],
+                    "urls": [source_url] if source_url else [],
+                },
+                platform=platform,
+                task_title=str(material_source.get("source_title") or source.get("source_workflow_node_label") or "数字人口播").strip(),
+                caption=str(material_source.get("source_caption") or "").strip(),
+                source_script=source_script,
+            )
+            publish_title = publish_title or generated_publish_copy.get("title", "")
+            publish_description = publish_description or generated_publish_copy.get("description", "")
+            publish_tags = publish_tags or generated_publish_copy.get("tags", "")
+        if _is_wechat_moments_platform(platform) and not str(source.get("title") or "").strip():
+            publish_title = ""
         save_result: Dict[str, Any] = {}
         if not material and source_url and not _is_wechat_moments_platform(platform):
             save_result = await _post_local_api_json(
@@ -5213,9 +5328,9 @@ async def _run_client_workflow_action(
                 "platform_name": str(source.get("platform_name") or "微信朋友圈").strip(),
                 "account_id": str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip(),
                 "account_nickname": str(source.get("account_nickname") or "本机微信").strip(),
-                "title": str(source.get("title") or source.get("name") or "").strip(),
-                "description": str(source.get("description") or source.get("prompt") or material_source.get("description") or "").strip(),
-                "tags": str(source.get("tags") or "").strip(),
+                "title": publish_title,
+                "description": publish_description or str(material_source.get("source_caption") or material_source.get("description") or "").strip(),
+                "tags": publish_tags,
                 "media_type": str(material_source.get("media_type") or source.get("media_type") or "image_text").strip() or "image_text",
                 "options": source.get("options") if isinstance(source.get("options"), dict) else {},
             }
@@ -5226,6 +5341,7 @@ async def _run_client_workflow_action(
                 "source_url": source_url,
                 "source_run_id": str(material_source.get("source_run_id") or ""),
                 "save_result": save_result,
+                "publish_copy": {"title": publish_title, "description": publish_description, "tags": publish_tags},
                 "publish_result": publish_result,
             }
         if not material:
@@ -5233,14 +5349,17 @@ async def _run_client_workflow_action(
         account_nickname = str(source.get("account_nickname") or "").strip()
         if not account_nickname:
             raise RuntimeError("发布中心入库缺少发布账号昵称")
+        publish_options = dict(source.get("options")) if isinstance(source.get("options"), dict) else {}
+        if source_script:
+            publish_options["_source_prompt"] = source_script
         publish_body: Dict[str, Any] = {
             "asset_id": material,
             "account_nickname": account_nickname,
-            "title": str(source.get("title") or "").strip() or None,
-            "description": str(source.get("description") or "").strip() or None,
-            "tags": str(source.get("tags") or "").strip() or None,
-            "ai_publish_copy": bool(source.get("ai_publish_copy", True)),
-            "options": source.get("options") if isinstance(source.get("options"), dict) else {},
+            "title": publish_title or None,
+            "description": publish_description or None,
+            "tags": publish_tags or None,
+            "ai_publish_copy": False if generated_publish_copy else bool(source.get("ai_publish_copy", True)),
+            "options": publish_options,
         }
         account_id = str(source.get("account_id") or "").strip()
         if account_id.isdigit():
@@ -5256,6 +5375,7 @@ async def _run_client_workflow_action(
             "asset_id": material,
             "source_run_id": str(material_source.get("source_run_id") or ""),
             "save_result": save_result,
+            "publish_copy": {"title": publish_title, "description": publish_description, "tags": publish_tags},
             "publish_result": publish_result,
         }
     raise RuntimeError(f"暂不支持的客户端工作流：{action}")
