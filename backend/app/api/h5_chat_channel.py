@@ -3896,7 +3896,19 @@ async def _run_scheduled_capability(
             asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
             custom_prompt = _scheduled_custom_prompt(cap_payload)
             resume_from_image = bool(cap_payload.get("resume_from_image"))
-            if resume_from_image and capability_id in {"goal.video.pipeline", "create.video.pipeline"}:
+            uses_ip_daily_script = (
+                capability_id == "hifly.video.create_by_tts"
+                and str(cap_payload.get("script_source") or "").strip() == "ip_daily_industry_hot_oral"
+            )
+            if uses_ip_daily_script:
+                generated = await _generate_shanjian_workflow_script(
+                    source=cap_payload,
+                    cloud=cloud,
+                    base=base,
+                    headers=headers,
+                    run_id=run_id,
+                )
+            elif resume_from_image and capability_id in {"goal.video.pipeline", "create.video.pipeline"}:
                 generated = {
                     "goal": str(cap_payload.get("goal") or cap_payload.get("prompt") or task_title or "").strip(),
                     "custom_prompt_used": True,
@@ -3956,12 +3968,17 @@ async def _run_scheduled_capability(
                     raise RuntimeError("请选择数字人")
                 if not voice:
                     raise RuntimeError("请选择声音")
-                skill_prompt = (
-                    _hifly_script_text(cap_payload.get("script"))
-                    or _hifly_script_text(cap_payload.get("text"))
-                    or _hifly_script_text(generated.get("script"))
-                    or _fallback_hifly_script(task_title)
-                )
+                if uses_ip_daily_script:
+                    skill_prompt = _workflow_script_candidate(generated.get("script"))
+                else:
+                    skill_prompt = (
+                        _hifly_script_text(cap_payload.get("script"))
+                        or _hifly_script_text(cap_payload.get("text"))
+                        or _hifly_script_text(generated.get("script"))
+                        or _fallback_hifly_script(task_title)
+                    )
+                if not skill_prompt:
+                    raise RuntimeError("IP 日更未返回可用于数字人的行业口播文案")
                 cap_payload = {
                     "title": (generated.get("title") or task_title or "数字人口播")[:20],
                     "avatar": avatar,
@@ -4636,6 +4653,24 @@ def _workflow_list_texts(value: Any, limit: int = 20) -> List[str]:
     return out
 
 
+def _workflow_int_ids(value: Any, limit: int = 20) -> List[int]:
+    values = value if isinstance(value, list) else [value]
+    out: List[int] = []
+    seen: set[int] = set()
+    for item in values:
+        try:
+            ident = int(item or 0)
+        except Exception:
+            continue
+        if ident <= 0 or ident in seen:
+            continue
+        seen.add(ident)
+        out.append(ident)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _workflow_auth_token(headers: Dict[str, str]) -> str:
     for key in ("Authorization", "authorization"):
         raw = str((headers or {}).get(key) or "").strip()
@@ -4722,12 +4757,7 @@ async def _generate_shanjian_workflow_script(
     base: str,
     headers: Dict[str, str],
     run_id: str,
-) -> Dict[str, str]:
-    explicit = (
-        _workflow_script_candidate(source.get("script"))
-        or _workflow_script_candidate(source.get("text"))
-        or _workflow_script_candidate(source.get("oral_script"))
-    )
+) -> Dict[str, Any]:
     label = _workflow_text(
         source.get("sales_node_label")
         or source.get("task_title")
@@ -4737,14 +4767,12 @@ async def _generate_shanjian_workflow_script(
     )
     title = _workflow_text(source.get("title") or label or "数字人口播", 80)
     language = _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64)
-    if explicit:
-        return {"title": title, "script": explicit, "caption_hint": "", "language": language}
     if cloud is None or not base:
-        raise RuntimeError("数字人2.0缺少云端LLM连接，无法根据IP人设生成口播文案")
+        raise RuntimeError("数字人生成缺少云端连接，无法调用 IP 日更生成行业口播文案")
 
     requirements = source.get("requirements") if isinstance(source.get("requirements"), dict) else {}
+    keyword_ids = _workflow_int_ids(source.get("keyword_ids"), 20)
     keywords = _workflow_list_texts(source.get("keyword_texts") or source.get("keywords"))
-    competitors = _workflow_list_texts(source.get("competitors"))
     memory_doc_ids = _workflow_list_texts(source.get("memory_doc_ids"), 12)
     memory_docs = _workflow_memory_doc_summaries(source.get("memory_docs"))
     missing: List[str] = []
@@ -4752,56 +4780,63 @@ async def _generate_shanjian_workflow_script(
         missing.append("IP人设定位资料调查")
     if not keywords:
         missing.append("当前启用模板的行业关键词")
-    if not competitors:
-        missing.append("当前启用模板的同行账号")
     if not (memory_doc_ids or memory_docs):
         missing.append("当前启用模板的记忆文件")
     if missing:
-        raise RuntimeError("数字人2.0生成缺少：" + "、".join(missing) + "。请先到 IP人设定位 补足后再启动销售员工。")
+        raise RuntimeError("数字人生成缺少：" + "、".join(missing) + "。请先到 IP人设定位 补足后再启动工作流。")
 
-    jwt_token = _workflow_auth_token(headers)
-    installation_id = _workflow_installation_id(headers)
-    memory_query = " ".join([label, "数字人口播", *keywords[:5], *competitors[:5]]).strip()
-    memory_context = _scheduled_memory_context(jwt_token, installation_id, memory_query) if jwt_token else ""
-    await _workflow_event(cloud, base, headers, run_id, "正在根据IP人设生成数字人口播文案")
-    system = (
-        "你是销售工作流里的数字人口播视频编导。只输出 JSON 对象，不要 Markdown。\n"
-        "字段：title(string), script(string), caption_hint(string), missing_fields(array)。\n"
-        "必须只基于用户提供的人设、关键词、同行资料、记忆文件和记忆上下文生成，不能编造价格、案例、资质、地址、承诺或数据。\n"
-        "如果缺少完成文案所需的关键信息，把缺失项写入 missing_fields，script 留空。\n"
-        "script 是给数字人直接口播的成片文案，要自然像真人表达，不营销轰炸，不写镜头指令，不写括号说明。"
-    )
-    user_payload = {
-        "task": label,
-        "target_language": _workflow_language_label(language),
-        "requirements": requirements,
-        "keywords": keywords,
-        "competitors": competitors,
-        "memory_doc_ids": memory_doc_ids,
-        "memory_docs": memory_docs,
-        "memory_context": memory_context[:12000],
-        "length_rule": "目标口播时长20到25秒。中文控制在90到120字且不得超过120字；英文控制在45到60词且不得超过60词；其他语种按同等时长控制。必须完整通顺，不能为了凑字数重复表达。",
-        "safety_rule": "资料里没有的卖点不要补，宁可提示缺资料，也不要硬编。",
-    }
-    text = await _call_scheduled_llm(
+    persona_json = json.dumps(requirements, ensure_ascii=False, separators=(",", ":"))
+    extra_requirements = "\n".join(
+        [
+            "本次只生成 1 条行业热门口播文案，并直接作为数字人视频的完整口播脚本。",
+            f"输出语种必须是：{_workflow_language_label(language)}。",
+            "目标口播时长 20 到 25 秒；中文控制在 90 到 120 字且不得超过 120 字，英文控制在 45 到 60 词且不得超过 60 词，其他语种按同等时长控制。",
+            "文案必须自然、完整、可直接口播，不写镜头指令、括号说明或虚构数据，不要为了凑长度重复表达。",
+            f"IP人设资料：{persona_json[:2200]}",
+        ]
+    )[:4000]
+    await _workflow_event(cloud, base, headers, run_id, "正在调用 IP 日更生成行业热门口播文案")
+    generated = await _post_cloud_api_json(
+        "/api/ip-content/generate/industry-hot-oral",
+        {
+            "keyword_ids": keyword_ids,
+            "keyword_texts": keywords,
+            "memory_docs": memory_docs,
+            "extra_requirements": extra_requirements,
+            "count": 1,
+            "sync_before": bool(source.get("industry_oral_sync_before", False)),
+            "group_id": run_id,
+        },
+        cloud=cloud,
         base=base,
         headers=headers,
-        system=system,
-        user_payload=user_payload,
-        temperature=0.45,
+        timeout_seconds=600.0,
     )
-    data = _extract_json_object_text(text)
-    llm_missing = [item for item in _workflow_list_texts(data.get("missing_fields"), 8) if item]
-    if llm_missing:
-        raise RuntimeError("数字人2.0生成缺少：" + "、".join(llm_missing) + "。请先到 IP人设定位 或记忆文件补足。")
-    script = _workflow_script_candidate(data.get("script"))
+    records = generated.get("records") if isinstance(generated.get("records"), list) else []
+    drafts = generated.get("drafts") if isinstance(generated.get("drafts"), list) else []
+    selected: Dict[str, Any] = {}
+    script = ""
+    for candidate in [*records, *drafts]:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_script = _workflow_script_candidate(
+            candidate.get("body") or candidate.get("content") or candidate.get("script") or candidate.get("text")
+        )
+        if candidate_script:
+            selected = candidate
+            script = candidate_script
+            break
     if not script:
-        raise RuntimeError("数字人2.0未生成有效口播文案，请检查IP人设定位和记忆文件是否有足够真实资料")
+        raise RuntimeError("IP 日更未返回有效的行业口播文案，数字人任务未继续执行")
+    await _workflow_event(cloud, base, headers, run_id, "行业热门口播文案已生成，正在用于数字人视频")
     return {
-        "title": _workflow_text(data.get("title") or title or "数字人口播", 80),
+        "title": _workflow_text(selected.get("title") or title or "数字人口播", 80),
         "script": script,
-        "caption_hint": _workflow_text(data.get("caption_hint"), 200),
+        "caption_hint": _workflow_text(selected.get("title"), 200),
         "language": language or "zh-CN",
+        "ip_daily_group_id": _workflow_text(generated.get("group_id"), 128),
+        "ip_daily_record_id": _workflow_text(selected.get("record_id") or selected.get("id"), 128),
+        "ip_daily_record": selected,
     }
 
 
@@ -4931,6 +4966,9 @@ async def _run_shanjian_digital_human_workflow(
                 "title": title,
                 "script": script,
                 "caption_hint": generated.get("caption_hint") or "",
+                "ip_daily_group_id": generated.get("ip_daily_group_id") or "",
+                "ip_daily_record_id": generated.get("ip_daily_record_id") or "",
+                "ip_daily_record": generated.get("ip_daily_record") or {},
                 "virtualman_id": virtualman_id,
                 "voice": voice,
                 "media_type": "video",
@@ -4958,6 +4996,9 @@ async def _run_shanjian_digital_human_workflow(
     last["action"] = "shanjian_digital_human_video"
     last["title"] = title
     last["script"] = script
+    last["ip_daily_group_id"] = generated.get("ip_daily_group_id") or ""
+    last["ip_daily_record_id"] = generated.get("ip_daily_record_id") or ""
+    last["ip_daily_record"] = generated.get("ip_daily_record") or {}
     last["virtualman_id"] = virtualman_id
     last["voice"] = voice
     last["task_id"] = task_id
