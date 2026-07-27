@@ -26,7 +26,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from .video_model_resolve import resolve_video_model_id
+from .video_model_resolve import (
+    APIZ_VEO31_IMAGE_MODEL,
+    APIZ_VEO31_REFERENCE_MODEL,
+    APIZ_VEO31_TEXT_MODEL,
+    resolve_default_video_model_id,
+    resolve_video_model_id,
+)
 
 # 与 mcp/__main__.py 一致：被 uvicorn 直接加载 app 时也能读到项目根 .env
 _lobster_root = Path(__file__).resolve().parent.parent
@@ -2722,6 +2728,21 @@ def _coerce_grok_video_resolution(raw: Any) -> Optional[str]:
     return "720p"
 
 
+_APIZ_VEO31_DURATION_SECONDS = (4, 6, 8)
+
+
+def _coerce_apiz_veo31_duration(raw: Any, *, reference_mode: bool = False) -> int:
+    if reference_mode:
+        return 8
+    seconds = _parse_video_duration_seconds(raw, default=4)
+    return min(_APIZ_VEO31_DURATION_SECONDS, key=lambda allowed: (abs(allowed - seconds), allowed))
+
+
+def _coerce_apiz_veo31_resolution(raw: Any) -> str:
+    value = str(raw or "").strip().lower().replace(" ", "")
+    return "1080p" if "1080" in value else "720p"
+
+
 def _sanitize_options_dict_resolution(options: Dict[str, Any]) -> None:
     """Seedance 等 options.resolution 合并后去掉 auto 占位。"""
     if not isinstance(options, dict) or "resolution" not in options:
@@ -2777,9 +2798,9 @@ _IMAGE_MODEL_ALIASES: Dict[str, str] = {
 }
 
 _DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "openai/gpt-image-2").strip() or "openai/gpt-image-2"
-_DEFAULT_VIDEO_MODEL = (
-    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or "xai/grok-imagine-video/text-to-video"
-).strip() or "xai/grok-imagine-video/text-to-video"
+_DEFAULT_VIDEO_MODEL = resolve_default_video_model_id(
+    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or APIZ_VEO31_TEXT_MODEL
+)
 _IMAGE_SOCIAL_PLATFORM_PATTERN = r"(?:抖音|小红书|今日头条|头条|快手|B站|b站|视频号|微博|TikTok|tiktok|YouTube|youtube|Instagram|instagram)"
 _IMAGE_PUBLISH_CONTEXT_RE = re.compile(
     rf"(?:发布|投稿|上传|发到|发至|发送到|同步到|{_IMAGE_SOCIAL_PLATFORM_PATTERN}.{{0,12}}(?:账号|帐号|账户|昵称|发布|文案|配文|话题))",
@@ -3158,13 +3179,31 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         )
     image_refs = _collect_video_image_refs(payload)
     has_image = bool(image_refs)
-    model = resolve_video_model_id(model, has_image)
+    model = resolve_video_model_id(model, has_image, image_count=len(image_refs))
     model_lower = model.lower()
     first_url = image_refs[0] if image_refs else ""
     aspect_ratio = _coerce_video_aspect_ratio_for_upstream(_payload_get_aspect_ratio(payload))
     valid_ratios = _VIDEO_ASPECT_RATIOS
     ratio_ok = aspect_ratio in valid_ratios
     duration_sec = _parse_video_duration_seconds(_payload_get_duration_raw(payload), default=10)
+
+    if model.startswith("apiz/veo3.1/"):
+        reference_mode = model == APIZ_VEO31_REFERENCE_MODEL
+        out: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "duration": _coerce_apiz_veo31_duration(
+                _payload_get_duration_raw(payload),
+                reference_mode=reference_mode,
+            ),
+            "aspect_ratio": "9:16" if aspect_ratio == "9:16" else "16:9",
+            "resolution": _coerce_apiz_veo31_resolution(payload.get("resolution")),
+        }
+        if model == APIZ_VEO31_IMAGE_MODEL and first_url:
+            out["image_url"] = first_url
+        elif reference_mode:
+            out["image_urls"] = list(image_refs[:3])
+        return out
 
     # st-ai/super-seed2：ratio, filePaths, functionMode（保留 backend 注入的多图 filePaths）
     if "super-seed2" in model or "st-ai/super-seed2" == model:

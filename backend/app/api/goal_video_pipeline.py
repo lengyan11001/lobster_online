@@ -47,6 +47,7 @@ class GoalVideoPipelinePayload(BaseModel):
     language: str = "中文"
     duration: Optional[int] = Field(6, ge=3, le=60)
     aspect_ratio: str = "9:16"
+    resolution: str = "720p"
     memory_scope: str = "default"
     planning_model: Optional[str] = None
     image_model: Optional[str] = None
@@ -820,6 +821,7 @@ async def run_goal_video_pipeline(
     video_payload: Dict[str, Any] = {
         "prompt": plan["video_prompt"],
         "aspect_ratio": pl.aspect_ratio,
+        "resolution": pl.resolution,
     }
     if pl.duration:
         video_payload["duration"] = int(pl.duration)
@@ -980,6 +982,7 @@ async def run_goal_video_from_reference_pipeline(
     video_payload: Dict[str, Any] = {
         "prompt": plan["video_prompt"],
         "aspect_ratio": pl.aspect_ratio,
+        "resolution": pl.resolution,
     }
     if pl.duration:
         video_payload["duration"] = int(pl.duration)
@@ -1068,6 +1071,7 @@ def _goal_video_partial_from_image(
             "platform": pl.platform,
             "duration": pl.duration,
             "aspect_ratio": pl.aspect_ratio,
+            "resolution": pl.resolution,
             "language": pl.language,
             "memory_scope": "none",
             "memory_doc_ids": list(pl.memory_doc_ids or []),

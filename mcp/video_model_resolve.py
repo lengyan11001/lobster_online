@@ -8,10 +8,44 @@ video.generate 的 payload.model 统一解析：展示名 / 误填 id / 速推�
 from __future__ import annotations
 
 import re
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 # (文生视频 id, 图生视频 id)
 Pair = Tuple[str, str]
+
+APIZ_VEO31_TEXT_MODEL = "apiz/veo3.1/text-to-video"
+APIZ_VEO31_IMAGE_MODEL = "apiz/veo3.1/image-to-video"
+APIZ_VEO31_REFERENCE_MODEL = "apiz/veo3.1/reference-to-video"
+_LEGACY_DEFAULT_VIDEO_MODELS = frozenset(
+    {
+        "xai/grok-imagine-video/text-to-video",
+        "xai/grok-imagine-video/image-to-video",
+        "grok-video-3",
+        "grok-imagine-video-1.5-preview",
+    }
+)
+
+
+def _apiz_veo31_model_for_image_count(image_count: int) -> str:
+    if image_count >= 2:
+        return APIZ_VEO31_REFERENCE_MODEL
+    if image_count == 1:
+        return APIZ_VEO31_IMAGE_MODEL
+    return APIZ_VEO31_TEXT_MODEL
+
+
+def _route_apiz_veo31_family(model: str, image_count: int) -> str:
+    if (model or "").strip().lower().startswith("apiz/veo3.1/"):
+        return _apiz_veo31_model_for_image_count(image_count)
+    return model
+
+
+def resolve_default_video_model_id(raw: str, has_image: bool = False) -> str:
+    """Migrate retired configured defaults without changing explicit Grok requests."""
+    value = (raw or "").strip()
+    if not value or value.lower() in _LEGACY_DEFAULT_VIDEO_MODELS:
+        return APIZ_VEO31_IMAGE_MODEL if has_image else APIZ_VEO31_TEXT_MODEL
+    return resolve_video_model_id(value, has_image, image_count=1 if has_image else 0)
 
 
 def _p(t2v: str, i2v: str) -> Pair:
@@ -154,8 +188,8 @@ def _build_alias_map() -> Dict[str, Pair]:
         veo_fast,
     )
 
-    # —— Veo 3.1 ——（速推 ID 为 fal-ai/veo3.1，不区分 t2v/i2v）
-    veo = _p("fal-ai/veo3.1", "fal-ai/veo3.1")
+    # APIZ Veo 3.1 uses separate text/image/reference endpoints.
+    veo = _p(APIZ_VEO31_TEXT_MODEL, APIZ_VEO31_IMAGE_MODEL)
     add(
         (
             "veo 3.1",
@@ -251,6 +285,7 @@ def _canonical_prefixes() -> Tuple[str, ...]:
         "ark/",
         "openrouter/",
         "sora2pub/",
+        "apiz/",
     )
 
 
@@ -335,7 +370,7 @@ def _heuristic_video_model(model: str, has_image: bool) -> str:
     if "veo" in model_lower:
         if "fast" in model_lower:
             return "veo3.1-fast"
-        return "fal-ai/veo3.1"
+        return APIZ_VEO31_IMAGE_MODEL if has_image else APIZ_VEO31_TEXT_MODEL
 
     if "grok" in model_lower:
         return "xai/grok-imagine-video/image-to-video" if has_image else "xai/grok-imagine-video/text-to-video"
@@ -368,7 +403,7 @@ def _heuristic_video_model(model: str, has_image: bool) -> str:
     return model
 
 
-def resolve_video_model_id(raw: str, has_image: bool) -> str:
+def resolve_video_model_id(raw: str, has_image: bool, image_count: Optional[int] = None) -> str:
     """
     将 LLM/用户填入的 model 解析为速推可接受的视频模型 id。
     has_image：是否视为图生视频（filePaths/image_url/media_files 已有图）。
@@ -377,22 +412,31 @@ def resolve_video_model_id(raw: str, has_image: bool) -> str:
     if not m:
         return m
 
+    try:
+        ref_count = max(0, int(image_count)) if image_count is not None else (1 if has_image else 0)
+    except (TypeError, ValueError):
+        ref_count = 1 if has_image else 0
+    has_image = ref_count > 0
+
     m = _rewrite_legacy_prefix(m)
 
     # 别名表（展示名）
     nk = _norm_key(m)
     nk2 = _norm_key_compact(m)
     if nk in ALIAS_MAP:
-        return _pick(ALIAS_MAP[nk], has_image)
+        return _route_apiz_veo31_family(_pick(ALIAS_MAP[nk], has_image), ref_count)
     if nk2 in ALIAS_MAP:
-        return _pick(ALIAS_MAP[nk2], has_image)
+        return _route_apiz_veo31_family(_pick(ALIAS_MAP[nk2], has_image), ref_count)
 
     low = m.lower()
 
     # 子串级误填（已知幻觉 id）
     for rx, pair in _BAD_SUBSTR_REWRITE:
         if rx.search(low):
-            return _pick(pair, has_image)
+            return _route_apiz_veo31_family(_pick(pair, has_image), ref_count)
+
+    if low.startswith("apiz/veo3.1/"):
+        return _apiz_veo31_model_for_image_count(ref_count)
 
     if low.startswith("xai/grok-imagine-video/"):
         return (
@@ -406,4 +450,4 @@ def resolve_video_model_id(raw: str, has_image: bool) -> str:
         return m
 
     # 其余：展示名 / 无前缀 / 非白名单斜杠 id → 启发式
-    return _heuristic_video_model(m, has_image)
+    return _route_apiz_veo31_family(_heuristic_video_model(m, has_image), ref_count)

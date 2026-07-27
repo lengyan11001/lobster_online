@@ -35,7 +35,7 @@ from ..services import native_wechat_engine
 from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
 from .auth import _ServerUser, get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
-from .chat import _get_default_image_generate_model
+from .chat import _get_default_image_generate_model, _get_default_video_generate_model_cached
 from .create_ppt_pipeline import CreatePptPipelinePayload, run_create_ppt_pipeline
 from .create_video_pipeline import CreateVideoPipelinePayload, run_create_video_pipeline_with_total_billing
 from .goal_video_pipeline import (
@@ -1430,7 +1430,7 @@ async def _run_openclaw_chat(
             openclaw_fallback_model(),
             jwt_token,
             installation_id=installation_id,
-            video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "xai/grok-imagine-video/text-to-video"),
+            video_model_lock=_get_default_video_generate_model_cached(False),
             video_model_lock_source="default",
             chat_turn_id=str(item.get("chat_turn_id") or f"h5:{message_id}")[:128],
             chat_turn_precharged=bool(item.get("chat_turn_charged")),
@@ -1509,7 +1509,7 @@ async def _run_scheduled_chat_message(
                 openclaw_fallback_model(),
                 jwt_token,
                 installation_id=installation_id,
-                video_model_lock=(getattr(settings, "lobster_default_video_generate_model", None) or "xai/grok-imagine-video/text-to-video"),
+                video_model_lock=_get_default_video_generate_model_cached(False),
                 video_model_lock_source="default",
                 chat_turn_id=str(item.get("chat_turn_id") or f"scheduled:{run_id}")[:128],
                 chat_turn_precharged=bool(item.get("chat_turn_charged")),
@@ -3641,11 +3641,15 @@ async def _run_goal_video_scheduled_pipeline(
     pl = GoalVideoPipelinePayload(
         action="run_pipeline",
         goal=generated.get("goal") or _fallback_goal(task_title),
-        platform="douyin",
-        duration=6,
-        aspect_ratio="9:16",
-        language="zh",
+        platform=str(cap_payload.get("platform") or "douyin").strip() or "douyin",
+        duration=int(cap_payload.get("duration") or 6),
+        aspect_ratio=str(cap_payload.get("aspect_ratio") or "9:16").strip() or "9:16",
+        resolution=str(cap_payload.get("resolution") or "720p").strip() or "720p",
+        language=str(cap_payload.get("language") or "zh").strip() or "zh",
         memory_scope="none" if generated.get("custom_prompt_used") else "default",
+        planning_model=str(cap_payload.get("planning_model") or "").strip() or None,
+        image_model=str(cap_payload.get("image_model") or "").strip() or None,
+        video_model=str(cap_payload.get("video_model") or "apiz/veo3.1/image-to-video").strip() or None,
         precomputed_plan=cap_payload.get("precomputed_plan") if isinstance(cap_payload.get("precomputed_plan"), dict) else {},
         memory_doc_ids=_goal_video_memory_doc_ids(cap_payload),
     )
@@ -3658,7 +3662,7 @@ async def _run_goal_video_scheduled_pipeline(
         )
 
     if source_mode == _SCHEDULED_VIDEO_SOURCE_AI_IMAGE:
-        pl.image_model = _normalize_image_model_id(_get_default_image_generate_model())
+        pl.image_model = _normalize_image_model_id(pl.image_model or _get_default_image_generate_model())
         if pl.image_model and not pl.image_model.startswith("openai/") and "/" not in pl.image_model:
             pl.image_model = f"openai/{pl.image_model}"
         pl.image_model = _normalize_image_model_id(pl.image_model)
@@ -3781,10 +3785,11 @@ async def _run_create_video_scheduled_pipeline(
         duration=int(payload.get("duration") or 8),
         scene_count=int(payload.get("scene_count") or 1),
         aspect_ratio=str(payload.get("aspect_ratio") or "9:16").strip() or "9:16",
+        resolution=str(payload.get("resolution") or "720p").strip() or "720p",
         language=str(payload.get("language") or "Chinese").strip() or "Chinese",
         planning_model=str(payload.get("planning_model") or "gpt-5.4").strip() or None,
         image_model=str(payload.get("image_model") or "openai/gpt-image-2").strip() or None,
-        video_model=str(payload.get("video_model") or "fal-ai/veo3.1/image-to-video").strip() or None,
+        video_model=str(payload.get("video_model") or "apiz/veo3.1/image-to-video").strip() or None,
         precomputed_plan=payload.get("precomputed_plan") if isinstance(payload.get("precomputed_plan"), dict) else {},
         reference_asset_ids=[str(x).strip() for x in (payload.get("reference_asset_ids") or []) if str(x).strip()],
         reference_image_urls=[str(x).strip() for x in (payload.get("reference_image_urls") or []) if str(x).strip()],
@@ -3934,17 +3939,20 @@ async def _run_scheduled_capability(
                 source_mode, candidate_group = _goal_video_source_config_from_payload(cap_payload)
                 goal = generated.get("goal") or _fallback_goal(task_title)
                 precomputed_plan = _scheduled_goal_video_precomputed_plan(original_cap_payload, generated, task_title)
-                cap_payload = {
-                    "video_mode": original_cap_payload.get("video_mode") or "",
-                    "source_mode": source_mode,
-                    "candidate_group": candidate_group,
-                    "goal": goal,
-                    "prompt": goal,
-                    "memory_doc_ids": _goal_video_memory_doc_ids(original_cap_payload),
-                    "reference_asset_ids": original_cap_payload.get("reference_asset_ids") or [],
-                    "reference_image_urls": original_cap_payload.get("reference_image_urls") or [],
-                    "resume_from_image": bool(original_cap_payload.get("resume_from_image")),
-                }
+                cap_payload = dict(original_cap_payload or {})
+                cap_payload.update(
+                    {
+                        "video_mode": original_cap_payload.get("video_mode") or "",
+                        "source_mode": source_mode,
+                        "candidate_group": candidate_group,
+                        "goal": goal,
+                        "prompt": goal,
+                        "memory_doc_ids": _goal_video_memory_doc_ids(original_cap_payload),
+                        "reference_asset_ids": original_cap_payload.get("reference_asset_ids") or [],
+                        "reference_image_urls": original_cap_payload.get("reference_image_urls") or [],
+                        "resume_from_image": bool(original_cap_payload.get("resume_from_image")),
+                    }
+                )
                 if precomputed_plan:
                     cap_payload["precomputed_plan"] = precomputed_plan
             elif capability_id == "create.video.pipeline":

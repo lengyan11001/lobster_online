@@ -157,7 +157,11 @@ def _get_default_video_generate_model(_has_image: bool = False) -> str:
     _refresh_remote_generation_config()
     local_fallback = (getattr(settings, "lobster_default_video_generate_model", None) or "").strip()
     bundled_fallback = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
-    return _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
+    raw = _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
+    low = raw.strip().lower()
+    if low.startswith("apiz/veo3.1/") or low.startswith("xai/grok-imagine-video/"):
+        return _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
+    return raw
 
 
 def _get_default_video_generate_model_cached(_has_image: bool = False) -> str:
@@ -165,7 +169,11 @@ def _get_default_video_generate_model_cached(_has_image: bool = False) -> str:
     _refresh_remote_generation_config_background()
     local_fallback = (getattr(settings, "lobster_default_video_generate_model", None) or "").strip()
     bundled_fallback = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
-    return _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
+    raw = _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
+    low = raw.strip().lower()
+    if low.startswith("apiz/veo3.1/") or low.startswith("xai/grok-imagine-video/"):
+        return _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
+    return raw
 
 
 router = APIRouter()
@@ -2252,6 +2260,9 @@ _VEO_31_IN_USER_TEXT = re.compile(r"(?:veo|ve)\s*3[\._]?\s*1", re.IGNORECASE)
 _VEO_31_FAST_IN_USER_TEXT = re.compile(r"(?:veo|ve)\s*3[\._]?\s*1\s*[-_\s]?\s*fast", re.IGNORECASE)
 # 用户直接写速推完整 model id（与 tasks/create 一致），优先于口语「veo3.1」推断
 _VEO_FULL_MODEL_SUBSTR: Tuple[Tuple[str, str], ...] = (
+    ("apiz/veo3.1/reference-to-video", "apiz/veo3.1/reference-to-video"),
+    ("apiz/veo3.1/image-to-video", "apiz/veo3.1/image-to-video"),
+    ("apiz/veo3.1/text-to-video", "apiz/veo3.1/text-to-video"),
     ("fal-ai/veo3.1/fast/image-to-video", "fal-ai/veo3.1/fast/image-to-video"),
     ("fal-ai/veo3.1/image-to-video", "fal-ai/veo3.1/image-to-video"),
     ("fal-ai/veo3.1/fast", "fal-ai/veo3.1/fast"),
@@ -2261,7 +2272,7 @@ _VEO_FULL_MODEL_SUBSTR: Tuple[Tuple[str, str], ...] = (
     ("veo3 fast", "veo3.1-fast"),
 )
 _VIDEO_PROVIDER_MODEL_ID_RE = re.compile(
-    r"(?<![A-Za-z0-9_/-])((?:fal-ai|st-ai|sora2pub|ark|wan|xai|sprcra|minimax)/[A-Za-z0-9._~:+/-]+)",
+    r"(?<![A-Za-z0-9_/-])((?:apiz|fal-ai|st-ai|sora2pub|ark|wan|xai|sprcra|minimax)/[A-Za-z0-9._~:+/-]+)",
     re.IGNORECASE,
 )
 _VIDEO_SHORT_MODEL_ID_RE = re.compile(
@@ -2315,7 +2326,7 @@ def _infer_video_model_from_user_text(
         return
     if _VEO_31_IN_USER_TEXT.search(text):
         inner["model"] = (
-            "fal-ai/veo3.1/image-to-video" if has_attachment else "fal-ai/veo3.1"
+            "apiz/veo3.1/image-to-video" if has_attachment else "apiz/veo3.1/text-to-video"
         )
         logger.info(
             "[CHAT] 用户正文含 Veo 3.1 但 payload 无 model，已补全 model=%s",
@@ -2370,8 +2381,8 @@ def _infer_video_model_lock_for_openclaw(user_message: str, has_attachment: bool
 
 
 _DEFAULT_IMAGE_GENERATE_MODEL = "openai/gpt-image-2"
-_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "xai/grok-imagine-video/text-to-video"
-_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "xai/grok-imagine-video/image-to-video"
+_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "apiz/veo3.1/text-to-video"
+_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "apiz/veo3.1/image-to-video"
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
     "openai/gpt-image": "openai/gpt-image-2",
@@ -2403,18 +2414,18 @@ _VIDEO_MODEL_ALIASES: Dict[str, str] = {
     "seedance": "ark/seedance-2.0",
     "seedance-2": "ark/seedance-2.0",
     "seedance-2.0": "ark/seedance-2.0",
-    "veo": "fal-ai/veo3.1",
-    "veo3": "fal-ai/veo3.1",
-    "veo3.1": "fal-ai/veo3.1",
+    "veo": "apiz/veo3.1/text-to-video",
+    "veo3": "apiz/veo3.1/text-to-video",
+    "veo3.1": "apiz/veo3.1/text-to-video",
     "veo3.1-fast": "veo3.1-fast",
     "veo 3.1 fast": "veo3.1-fast",
     "veo3-fast": "veo3.1-fast",
     "veo3 fast": "veo3.1-fast",
     "veo-fast": "veo3.1-fast",
     "veo fast": "veo3.1-fast",
-    "grok": _DEFAULT_VIDEO_GENERATE_MODEL_T2V,
-    "grok video": _DEFAULT_VIDEO_GENERATE_MODEL_T2V,
-    "grok-video-3": _DEFAULT_VIDEO_GENERATE_MODEL_T2V,
+    "grok": "xai/grok-imagine-video/text-to-video",
+    "grok video": "xai/grok-imagine-video/text-to-video",
+    "grok-video-3": "xai/grok-imagine-video/text-to-video",
     "hailuo": "fal-ai/minimax/hailuo-2.3/standard/text-to-video",
     "kling": "fal-ai/kling-video/v3/standard/text-to-video",
     "wan": "wan/v2.6/text-to-video",

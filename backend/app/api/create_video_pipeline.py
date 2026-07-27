@@ -41,7 +41,7 @@ router = APIRouter()
 
 DEFAULT_PLANNING_MODEL = "gpt-5.4"
 DEFAULT_IMAGE_MODEL = "openai/gpt-image-2"
-DEFAULT_VIDEO_MODEL = "fal-ai/veo3.1/image-to-video"
+DEFAULT_VIDEO_MODEL = "apiz/veo3.1/image-to-video"
 
 SCRIPT_PROMPT_TEMPLATE = """你是一位专业的视频脚本编剧。请根据以下需求，创作一份结构化的视频故事脚本。
 
@@ -181,6 +181,7 @@ class CreateVideoPipelinePayload(BaseModel):
     duration: int = Field(8, ge=3, le=60)
     scene_count: int = Field(1, ge=1, le=6)
     aspect_ratio: str = "16:9"
+    resolution: str = "720p"
     language: str = "Chinese"
     planning_model: Optional[str] = None
     image_model: Optional[str] = None
@@ -579,6 +580,7 @@ async def run_create_video_pipeline(
             "prompt": _with_video_no_text_constraint(scene["video_prompt"], 2500),
             "model": video_model,
             "aspect_ratio": aspect_ratio,
+            "resolution": pl.resolution,
             "duration": int(scene.get("duration") or _scene_duration(pl.duration, len(scenes))),
         }
         if image_ref.get("asset_id"):
@@ -712,6 +714,7 @@ def _create_video_partial_from_scenes(
             "duration": pl.duration,
             "scene_count": max(1, len(partial_scenes) or int(pl.scene_count or 1)),
             "aspect_ratio": pl.aspect_ratio,
+            "resolution": pl.resolution,
             "language": pl.language,
             "planning_model": pl.planning_model,
             "image_model": pl.image_model,
