@@ -154,6 +154,90 @@
         font-size: 0.8rem;
         line-height: 1.5;
       }
+      .viral-tvc-upload-box {
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 8px;
+        background: rgba(248, 250, 252, 0.78);
+        padding: 0.72rem;
+      }
+      .viral-tvc-upload-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .viral-tvc-upload-help {
+        color: var(--tvc-muted);
+        font-size: 0.78rem;
+        line-height: 1.45;
+      }
+      .viral-tvc-upload-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 0.6rem;
+        margin-top: 0.72rem;
+      }
+      .viral-tvc-upload-empty {
+        grid-column: 1 / -1;
+        border: 1px dashed rgba(15, 23, 42, 0.12);
+        border-radius: 8px;
+        min-height: 92px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: var(--tvc-muted);
+        font-size: 0.82rem;
+        background: #fff;
+        padding: 0.8rem;
+      }
+      .viral-tvc-upload-card {
+        position: relative;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: #fff;
+      }
+      .viral-tvc-upload-card img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        background: #e2e8f0;
+      }
+      .viral-tvc-upload-card-body {
+        padding: 0.55rem 0.6rem 0.62rem;
+      }
+      .viral-tvc-upload-card-title {
+        font-size: 0.8rem;
+        font-weight: 800;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .viral-tvc-upload-card-meta {
+        margin-top: 0.18rem;
+        color: var(--tvc-muted);
+        font-size: 0.74rem;
+      }
+      .viral-tvc-upload-remove {
+        position: absolute;
+        top: 0.4rem;
+        right: 0.4rem;
+        width: 24px;
+        height: 24px;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.72);
+        color: #fff;
+        cursor: pointer;
+        font-size: 0.74rem;
+        font-weight: 800;
+      }
+      .viral-tvc-url-summary {
+        margin-top: 0.42rem;
+        color: var(--tvc-muted);
+        font-size: 0.78rem;
+        line-height: 1.5;
+      }
       .viral-tvc-status-hero {
         border-radius: 8px;
         border: 1px solid rgba(15, 23, 42, 0.08);
@@ -244,6 +328,69 @@
         gap: 0.55rem;
         margin-top: 0.9rem;
       }
+      .viral-tvc-result-wrap {
+        display: grid;
+        gap: 0.9rem;
+      }
+      .viral-tvc-result-card {
+        border-radius: 8px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: #fff;
+        padding: 0.8rem;
+      }
+      .viral-tvc-result-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        margin-bottom: 0.6rem;
+      }
+      .viral-tvc-result-title {
+        font-size: 0.92rem;
+        font-weight: 900;
+      }
+      .viral-tvc-result-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+      }
+      .viral-tvc-video-stage {
+        border-radius: 8px;
+        overflow: hidden;
+        background: #0f172a;
+        min-height: 240px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .viral-tvc-video-stage video {
+        display: block;
+        width: 100%;
+        max-height: 520px;
+        background: #000;
+      }
+      .viral-tvc-video-placeholder {
+        min-height: 240px;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        padding: 1rem;
+        text-align: center;
+        color: #94a3b8;
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.96));
+      }
+      .viral-tvc-video-placeholder strong {
+        color: #e2e8f0;
+        font-size: 0.92rem;
+      }
+      .viral-tvc-video-placeholder span {
+        max-width: 360px;
+        font-size: 0.8rem;
+        line-height: 1.6;
+      }
       .viral-tvc-record {
         border-radius: 8px;
         border: 1px solid rgba(15, 23, 42, 0.08);
@@ -288,7 +435,7 @@
       <div>
         <div class="viral-tvc-kicker">视频生成工作台</div>
         <h3 class="viral-tvc-title">爆款 TVC 专属页面</h3>
-        <p class="viral-tvc-subtitle">首页点“爆款TVC”后直接进入这里。先快速填一句视频目标，先出任务，再决定要不要继续进完整分镜工作台细调。</p>
+        <p class="viral-tvc-subtitle">首页点“爆款TVC”后直接进入这里。先快速填一句视频目标，也可以顺手带上产品图或参考图，先出任务，再决定要不要继续进完整分镜工作台细调。</p>
       </div>
       <div class="viral-tvc-head-actions">
         <button type="button" id="viralTvcBackBtn" class="btn btn-ghost btn-sm">返回首页</button>
@@ -300,10 +447,39 @@
       <section class="viral-tvc-panel">
         <div class="viral-tvc-panel-title">快速生成</div>
         <p class="viral-tvc-panel-hint">适合先快速起一条视频任务。后面如果要补参考图、重做分镜、看完整进度，可以继续进入完整工作台。</p>
+
+        <div class="viral-tvc-field">
+          <label>主产品图 / 品牌图</label>
+          <div class="viral-tvc-upload-box">
+            <div class="viral-tvc-upload-actions">
+              <button type="button" id="viralTvcMainImagePickBtn" class="btn btn-primary btn-sm">选择图片</button>
+              <input type="file" id="viralTvcMainImageInput" accept="image/*" style="display:none;">
+              <span class="viral-tvc-upload-help">上传后会作为主商品图提交；不上传也可以直接填公网图片链接。</span>
+            </div>
+            <div id="viralTvcMainImageList" class="viral-tvc-upload-list"></div>
+          </div>
+          <input id="viralTvcMainImageUrl" type="text" placeholder="或直接粘贴主产品图公网 URL">
+        </div>
+
+        <div class="viral-tvc-field">
+          <label>补充参考图</label>
+          <div class="viral-tvc-upload-box">
+            <div class="viral-tvc-upload-actions">
+              <button type="button" id="viralTvcRefImagePickBtn" class="btn btn-ghost btn-sm">添加参考图</button>
+              <input type="file" id="viralTvcRefImageInput" accept="image/*" multiple style="display:none;">
+              <span class="viral-tvc-upload-help">可补充包装、场景、细节、氛围等参考。主产品图会优先作为第一参考。</span>
+            </div>
+            <div id="viralTvcRefImageList" class="viral-tvc-upload-list"></div>
+          </div>
+          <textarea id="viralTvcReferenceUrls" placeholder="也可以直接粘贴一个或多个公网参考图 URL，多个用换行、逗号或中文逗号分隔。"></textarea>
+          <div id="viralTvcReferenceUrlSummary" class="viral-tvc-url-summary"></div>
+        </div>
+
         <div class="viral-tvc-field">
           <label for="viralTvcPrompt">视频需求</label>
           <textarea id="viralTvcPrompt" placeholder="例如：做一个医美抗衰爆款短视频，主角是 30 岁左右女性，镜头高级、有产品感，适合抖音投流。"></textarea>
         </div>
+
         <div class="viral-tvc-inline">
           <div class="viral-tvc-field">
             <label for="viralTvcRatio">画幅</label>
@@ -325,6 +501,7 @@
             </select>
           </div>
         </div>
+
         <div class="viral-tvc-inline">
           <div class="viral-tvc-field">
             <label for="viralTvcTone">风格节奏</label>
@@ -343,6 +520,7 @@
             </select>
           </div>
         </div>
+
         <div class="viral-tvc-inline">
           <div class="viral-tvc-field">
             <label for="viralTvcAudio">配音</label>
@@ -359,10 +537,12 @@
             </select>
           </div>
         </div>
+
         <button type="button" id="viralTvcGenerateBtn" class="btn btn-primary viral-tvc-main-btn">提交爆款 TVC 任务</button>
         <div class="viral-tvc-secondary-actions">
           <button type="button" id="viralTvcOpenFullBtn" class="btn btn-ghost btn-sm">进入完整分镜工作台</button>
         </div>
+
         <div class="viral-tvc-cues">
           <div class="viral-tvc-cue">
             <strong>这里适合做什么</strong>
@@ -374,6 +554,7 @@
           </div>
         </div>
       </section>
+
       <section class="viral-tvc-panel">
         <div class="viral-tvc-panel-title">任务状态</div>
         <div id="viralTvcStatusHost" class="viral-tvc-empty">还没有提交任务。<br>左侧填好需求后，点一下就能直接发起爆款 TVC 任务。</div>
