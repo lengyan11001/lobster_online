@@ -100,7 +100,7 @@ _RESAMPLING = getattr(Image, "Resampling", Image)
 _LANCZOS = getattr(_RESAMPLING, "LANCZOS", getattr(Image, "LANCZOS", 1))
 _BILINEAR = getattr(_RESAMPLING, "BILINEAR", getattr(Image, "BILINEAR", 2))
 _SUTUI_GPT_IMAGE_2_MODEL = "openai/gpt-image-2"
-_SUTUI_IMAGE_UNDERSTAND_MODEL = "openai/gpt-5.5"
+_SUTUI_IMAGE_UNDERSTAND_MODEL = "openai/gpt-5.6-sol"
 _VIEW_PROMPT_VERSION = "hd-triview-v24-front45-only"
 _AI3D_DEFAULT_MAX_PARTS = 24
 _AI3D_ABSOLUTE_MAX_PARTS = 24
@@ -2470,25 +2470,25 @@ async def _ai_component_plan(
         "你是3D资产制作的拆件规划师。请分析图片中的单个主体，为后续高质量3D生成规划真实可拆部件。"
         "不要重新设计主体，不要更换性别/人种/服装/材质，只基于图中可见结构。"
         "拆件数量由画面决定，不要凑固定数量；宁愿少拆也不要拆坏。"
-        "只有边界清楚、能完整移动、对3D重建有收益的独立硬部件才标记为3d_part。"
-        "平面纹样、贴花、文字、污渍、连续表面细节标记为texture；重复模块标记为module；"
-        "只表达装配关系的组合件标记为assembly_reference；遮挡严重、边缘融合太深、无法完整分离的元素标记为keep_in_base或do_not_split。"
+        "parts 只列出后续确实需要单独生成的部件，output_strategy 只能是3d_part或multi_view_part。"
+        "不要输出texture、effect、module、assembly_reference、keep_in_base、do_not_split等无需生成的条目；这些元素直接忽略。"
+        "只有边界清楚、能完整移动、对3D重建有收益的独立部件才列入parts。"
         "不要把一个完整对象切碎，不要为了数量拆出破碎透明区域、锯齿边、白边、黑边或拼贴感。"
         "输出严格 JSON，不要 Markdown，不要解释。JSON 结构："
         "{\"asset_type\":\"character|prop|hard_surface|architecture|ornament|other\","
         "\"strategy\":\"multi_view|part_batch|base_plus_selected_parts\","
         "\"parts\":[{\"role\":\"英文snake_case\",\"label\":\"中文短标签\","
-        "\"box\":[x1,y1,x2,y2],\"part_type\":\"unique|shared|variant|module|texture|assembly_reference|effect|unknown\","
-        "\"output_strategy\":\"3d_part|multi_view_part|texture|module|assembly_reference|keep_in_base|do_not_split\","
-        "\"occlusion\":\"none|minor|heavy\",\"uncertainty\":\"不确定点或不强拆理由\","
-        "\"reason\":\"为什么要拆或为什么不强拆\","
-        "\"must_keep\":[\"该部件必须保留的可见细节\"],"
-        "\"forbidden_changes\":[\"生成该部件时禁止发生的改动\"],"
+        "\"box\":[x1,y1,x2,y2],\"part_type\":\"unique|shared|variant\","
+        "\"output_strategy\":\"3d_part|multi_view_part\","
+        "\"occlusion\":\"none|minor\",\"uncertainty\":\"不超过30个汉字\","
+        "\"reason\":\"不超过40个汉字\","
+        "\"must_keep\":[\"最多4条简短细节\"],"
+        "\"forbidden_changes\":[\"最多3条简短约束\"],"
         "\"image_prompt\":\"给图片模型生成这个单独部件图的高保真提示词，必须锁定原图材质/颜色/纹样/结构，不要输出整个人物或多格图，并包含：边缘留少量安全边距，不裁切、不缺边、不缩放变形，置于纯灰色背景，不使用透明背景或棋盘格假透明。\"}]}"
         "box 是相对整张图的 0-1 坐标，必须包住可见部件并留少量边缘。"
-        f"最多列出 {max(1, min(_AI3D_ABSOLUTE_MAX_PARTS, int(max_parts or _AI3D_DEFAULT_MAX_PARTS)))} 个有价值条目；"
-        "复杂角色优先真正独立件如头饰、腰带扣、武器、靴子、配饰；连续衣服、袖子、下摆、皮肤和软布料通常 keep_in_base，不强行拆。"
-        "道具、建筑或器物按真实结构拆，如主体、屋顶、管线、塔、烟囱、底座、可分离外挂件、重复模块；融合太深的保留在主体。"
+        f"列出1至 {max(1, min(_AI3D_ABSOLUTE_MAX_PARTS, int(max_parts or _AI3D_DEFAULT_MAX_PARTS)))} 个有价值条目；没有明显独立件时选择最可靠的整体结构件。"
+        "复杂角色优先真正独立件如头饰、腰带扣、武器、靴子、配饰；连续衣服、袖子、下摆、皮肤和软布料不要列出。"
+        "道具、建筑或器物按真实结构列出可分离的屋顶、管线、塔、烟囱、底座、外挂件；融合太深的不要列出。"
         "对每个 3d_part/multi_view_part 必须给 image_prompt；这一步不要输出三视图提示词，三视图提示词会在下一步根据已生成的部件图单独规划。"
         "image_prompt 要描述这个部件本身，而不是让图片模型再次自行决定拆哪些部位；"
         "每个 image_prompt 末尾都必须包含这句中文硬约束：边缘留少量安全边距，不裁切、不缺边、不缩放变形，置于纯灰色背景，不使用透明背景或棋盘格假透明。"
@@ -3339,6 +3339,8 @@ def _image_understand_payload(prompt: str, image_paths: List[Path]) -> Dict[str,
     payload: Dict[str, Any] = {
         "model": _SUTUI_IMAGE_UNDERSTAND_MODEL,
         "prompt": prompt,
+        "temperature": 0,
+        "max_tokens": 4096,
     }
     if len(data_urls) == 1:
         payload["image_url"] = data_urls[0]

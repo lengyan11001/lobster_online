@@ -5195,7 +5195,7 @@ def expand_douyin_keywords_with_ai(seed_keyword: str, *, limit: int = 10) -> Lis
     seed = normalize_douyin_text(seed_keyword)
     if not seed:
         return []
-    client = create_ai_client(model_override="gpt-5.5")
+    client = create_ai_client(model_override="openai/gpt-5.6-sol")
     if not str(client.api_key or "").strip():
         raise RuntimeError("AI 接口 Key 未配置，无法自动拓词。")
     prompt = f"""
