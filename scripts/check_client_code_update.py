@@ -8,6 +8,7 @@
   ③ build/version 相同但服务端 OTA SHA256 已变化（支持同版本覆盖发布）。
 - 兼容旧 manifest：下载 bundle_url，校验 sha256 后，对 manifest.paths 所列路径做「整路径覆盖」
   （目录则先删再拷，文件则覆盖）；绝不触碰 python/、deps/、browser_chromium/、nodejs 可执行文件等。
+- 根 .env 属于安装实例配置，不在默认更新路径中；即使旧/手工 manifest 显式下发 .env，也保留本机 OEM 品牌标记。
 - 新 manifest 可额外下发 patches/resources：新 updater 会优先应用增量补丁；补丁失败时回退到旧
   bundle_url 全量包。老 updater 会忽略新字段，继续走 bundle_url。
 - openclaw/：覆盖前保留本地 workspace、运行态目录、.env/登录态文件；gateway token 跟随 OTA 包覆盖，
@@ -78,7 +79,6 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "skills",
     "skill_registry.json",
     "upstream_urls.json",
-    ".env",
     "必火智能AI.exe",
     "openclaw",
     "requirements.txt",
@@ -1321,6 +1321,36 @@ def _download_verified(url: str, expect_sha: str, dest: Path, *, label: str) -> 
     return True
 
 
+def _valid_brand_mark(value: str) -> bool:
+    mark = str(value or "").strip().lower()
+    if not mark or len(mark) > 63 or not mark[0].isascii() or not mark[0].isalpha():
+        return False
+    return all(ch.isascii() and (ch.isalnum() or ch in "_-") for ch in mark)
+
+
+def _stage_env_with_local_brand(src: Path, tdir: Path, local_brand: str) -> Path:
+    brand = str(local_brand or "").strip().lower()
+    if not _valid_brand_mark(brand):
+        return src
+    lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
+    output: list[str] = []
+    found = False
+    for line in lines:
+        if line.strip().startswith("LOBSTER_BRAND_MARK="):
+            output.append(f"LOBSTER_BRAND_MARK={brand}")
+            found = True
+        else:
+            output.append(line)
+    if not found:
+        if output and output[-1].strip():
+            output.append("")
+        output.append(f"LOBSTER_BRAND_MARK={brand}")
+    staged = tdir / "preserved_runtime_config" / ".env"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text("\n".join(output) + "\n", encoding="utf-8")
+    return staged
+
+
 def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
     print(f"[code-progress] extract_start file={zpath.name}", flush=True)
     extract_root = tdir / ("extracted_" + hashlib.sha1(str(zpath).encode("utf-8")).hexdigest()[:8])
@@ -1338,6 +1368,7 @@ def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
 
     applied: list[str] = []
     backups: list[tuple[Path, Path | None]] = []
+    local_brand = str(_load_dotenv_simple(ROOT / ".env").get("LOBSTER_BRAND_MARK") or "").strip().lower()
     total = max(1, len(paths))
     try:
         for idx, rel in enumerate(paths, 1):
@@ -1347,7 +1378,10 @@ def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
                 continue
             print(f"[code-progress] apply_path {idx}/{total} {rel}", flush=True)
             dst = ROOT / rel.replace("/", os.sep)
-            backup, can_rollback = _apply_path(src, dst, keep_backup=True)
+            apply_src = _stage_env_with_local_brand(src, tdir, local_brand) if _norm_rel(rel) == ".env" else src
+            if apply_src != src:
+                print(f"[code] preserved local OEM brand: {local_brand}", flush=True)
+            backup, can_rollback = _apply_path(apply_src, dst, keep_backup=True)
             if can_rollback:
                 backups.append((dst, backup))
                 _write_pending_bundle_apply_marker(backups)

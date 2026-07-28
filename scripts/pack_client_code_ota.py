@@ -8,7 +8,7 @@
 
 不含 python/、deps/、browser_chromium/、nodejs 可执行文件；openclaw 不含 workspace* 整目录（避免 .git/ 与用户数据），
 但强制纳入「主对话」必需的 openclaw/workspace/LOBSTER_CHAT_POLICY_*.md（与 backend chat 单一事实来源一致）。
-logs、OpenClaw 登录态均不打包；根 .env 作为产品配置随 OTA 下发。
+logs、OpenClaw 登录态均不打包；根 .env 属于安装实例配置，不随 OTA 覆盖，.env.example 作为产品默认配置下发。
 openclaw/openclaw.json 属于运行态配置，不随 OTA 覆盖；backend 启动/重启 Gateway 前会按本机 .env 同步必要字段。
 默认产物与 pack_slim_zip 一致：写在 lobster_online 的上一级目录（例如 d:\\lobster_online → d:\\）。
 """
@@ -37,7 +37,6 @@ OTA_PATHS: tuple[str, ...] = (
     "skills",
     "skill_registry.json",
     "upstream_urls.json",
-    ".env",
     "必火智能AI.exe",
     "openclaw",
     "requirements.txt",
@@ -264,24 +263,31 @@ def _norm(p: str) -> str:
 _INCLUDE_RUNTIME_WHEEL_DIRS: set[str] = set()
 _INCLUDE_PYC_FILES = False
 _PACK_OVERSEAS = False
+_PACK_BRAND = ""
 
 
 def _env_text_for_pack(path: Path) -> str:
     text = path.read_text(encoding="utf-8", errors="ignore")
     lines = text.splitlines()
-    found = False
+    overseas_found = False
+    brand_found = False
     out: list[str] = []
     desired = "true" if _PACK_OVERSEAS else "false"
     for line in lines:
         if line.strip().startswith("LOBSTER_IS_OVERSEAS_USER="):
             out.append(f"LOBSTER_IS_OVERSEAS_USER={desired}")
-            found = True
+            overseas_found = True
+        elif _PACK_BRAND and line.strip().startswith("LOBSTER_BRAND_MARK="):
+            out.append(f"LOBSTER_BRAND_MARK={_PACK_BRAND}")
+            brand_found = True
         else:
             out.append(line)
-    if not found:
+    if not overseas_found:
         if out and out[-1].strip():
             out.append("")
         out.append(f"LOBSTER_IS_OVERSEAS_USER={desired}")
+    if _PACK_BRAND and not brand_found:
+        out.append(f"LOBSTER_BRAND_MARK={_PACK_BRAND}")
     return "\n".join(out) + "\n"
 
 
@@ -326,7 +332,7 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
         if _skip_file(rel_dir):
             return
         if rel_dir not in zf.NameToInfo:
-            if _norm(rel_dir) == ".env":
+            if _norm(rel_dir) in {".env", ".env.example"}:
                 zf.writestr(rel_dir, _env_text_for_pack(base))
             else:
                 _zip_write_file(zf, base, rel_dir)
@@ -365,7 +371,7 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
                 if full.is_symlink() and not full.exists():
                     print(f"[WARN] 跳过断链: {rel}")
                     continue
-                if rel == ".env":
+                if rel in {".env", ".env.example"}:
                     zf.writestr(rel, _env_text_for_pack(full))
                 else:
                     _zip_write_file(zf, full, rel)
@@ -693,7 +699,7 @@ def _prepare_encrypted_ota_root(root: Path, paths_tuple: tuple[str, ...]) -> tup
 
 
 def main() -> int:
-    global _INCLUDE_RUNTIME_WHEEL_DIRS, _INCLUDE_PYC_FILES, _PACK_OVERSEAS
+    global _INCLUDE_RUNTIME_WHEEL_DIRS, _INCLUDE_PYC_FILES, _PACK_OVERSEAS, _PACK_BRAND
     ap = argparse.ArgumentParser(description="Pack client-code OTA zip")
     ap.add_argument(
         "--root",
@@ -737,8 +743,21 @@ def main() -> int:
         action="store_true",
         help="Pack overseas edition OTA; default false keeps LOBSTER_IS_OVERSEAS_USER=false in bundled .env",
     )
+    ap.add_argument(
+        "--brand",
+        default="",
+        help="OEM brand mark written only into the packaged .env files (for example: daka)",
+    )
     args = ap.parse_args()
     _PACK_OVERSEAS = bool(args.overseas)
+    _PACK_BRAND = str(args.brand or "").strip().lower()
+    if _PACK_BRAND and (
+        not _PACK_BRAND[0].isascii()
+        or not _PACK_BRAND[0].isalpha()
+        or not all(ch.isascii() and (ch.isalnum() or ch in "_-") for ch in _PACK_BRAND)
+    ):
+        print(f"[ERR] invalid --brand: {_PACK_BRAND}")
+        return 1
     root: Path = args.root.resolve()
     parent = root.parent
     paths_tuple: tuple[str, ...] = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
@@ -780,6 +799,8 @@ def main() -> int:
             suffix_parts.append("with_wechat_runtime")
         if args.encrypted:
             suffix_parts.append("encrypted")
+        if _PACK_BRAND:
+            suffix_parts.append(_PACK_BRAND)
         suffix = "_" + "_".join(suffix_parts) if suffix_parts else ""
         out = (parent / f"lobster_online_client_code_ota{suffix}_{ts}.zip").resolve()
     else:
