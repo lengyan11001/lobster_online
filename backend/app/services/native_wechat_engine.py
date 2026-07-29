@@ -1992,54 +1992,92 @@ def _recent_conversation_text(account_id: str, peer_id: str, *, limit: int = 8) 
     return "\n".join(lines[-limit:])
 
 
-def _load_faq_memory_context(user_id: Optional[int], *, max_chars: int = 12000) -> str:
+_AUTO_REPLY_MEMORY_PRIORITY_TERMS: tuple[tuple[str, int], ...] = (
+    ("product_service_faq", 20),
+    ("百问百答", 18),
+    ("faq", 16),
+    ("问答", 14),
+    ("产品", 10),
+    ("服务", 10),
+    ("业务", 9),
+    ("公司", 8),
+    ("品牌", 8),
+    ("价格", 8),
+    ("报价", 8),
+    ("售后", 8),
+    ("客服", 8),
+    ("话术", 8),
+    ("人设", 7),
+    ("规则", 7),
+    ("policy", 7),
+    ("profile", 6),
+)
+
+
+def _auto_reply_memory_score(doc: Dict[str, Any]) -> int:
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    haystack = " ".join(
+        str(value or "")
+        for value in (
+            doc.get("title"),
+            doc.get("filename"),
+            doc.get("notes"),
+            doc.get("origin"),
+            meta.get("document_type"),
+            meta.get("document_label"),
+            meta.get("memory_layer"),
+        )
+    ).lower()
+    return 1 + sum(weight for term, weight in _AUTO_REPLY_MEMORY_PRIORITY_TERMS if term.lower() in haystack)
+
+
+def _load_auto_reply_memory_context(
+    user_id: Optional[int],
+    *,
+    max_chars: int = 18000,
+    max_docs: int = 8,
+) -> Dict[str, Any]:
+    empty = {"text": "", "document_count": 0, "titles": []}
     if not user_id:
-        return ""
+        return empty
     try:
         from ..api.openclaw_memory import _load_index, _read_canonical_memory_content  # type: ignore
     except Exception:
-        return ""
+        return empty
     docs = _load_index(int(user_id))
-    scored: List[tuple[int, Dict[str, Any]]] = []
-    for doc in docs:
+    scored: List[tuple[int, int, Dict[str, Any]]] = []
+    for index, doc in enumerate(docs):
         if not isinstance(doc, dict):
             continue
-        meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
-        hay = " ".join(
-            str(x or "")
-            for x in (
-                doc.get("title"),
-                doc.get("filename"),
-                doc.get("notes"),
-                meta.get("document_type"),
-                meta.get("document_label"),
-            )
-        ).lower()
-        score = 0
-        if "product_service_faq" in hay:
-            score += 8
-        if "faq" in hay:
-            score += 6
-        if "百问百答" in hay or "问答" in hay:
-            score += 6
-        if "客服" in hay:
-            score += 2
-        if score:
-            scored.append((score, doc))
-    scored.sort(key=lambda x: x[0], reverse=True)
+        status = str(doc.get("status") or "active").strip().lower()
+        if status not in {"", "active", "enabled", "ready"}:
+            continue
+        scored.append((_auto_reply_memory_score(doc), -index, doc))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     parts: List[str] = []
+    titles: List[str] = []
     used = 0
-    for _score, doc in scored[:3]:
-        title = str(doc.get("title") or doc.get("filename") or "FAQ").strip()
-        text = _read_canonical_memory_content(doc, max_chars=max_chars - used)
+    for _score, _index, doc in scored[: max(1, int(max_docs or 1))]:
+        title = str(doc.get("title") or doc.get("filename") or "个人记忆").strip()
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        text = _read_canonical_memory_content(doc, max_chars=min(5000, remaining))
         if not text:
             continue
         block = f"## {title}\n{text.strip()}"
         parts.append(block)
+        titles.append(title[:120])
         used += len(block)
         if used >= max_chars:
             break
-    return "\n\n---\n\n".join(parts).strip()[:max_chars]
+    context = "\n\n---\n\n".join(parts).strip()[:max_chars]
+    return {"text": context, "document_count": len(titles), "titles": titles}
+
+
+def _load_faq_memory_context(user_id: Optional[int], *, max_chars: int = 12000) -> str:
+    """Backward-compatible text accessor for callers that only need memory text."""
+    return str(_load_auto_reply_memory_context(user_id, max_chars=max_chars).get("text") or "")
 
 
 async def _call_auto_reply_llm(
@@ -2049,6 +2087,7 @@ async def _call_auto_reply_llm(
     peer_name: str,
     latest_message: str,
     recent_context: str,
+    memory_context: str = "",
 ) -> Dict[str, Any]:
     auth_context = auth_context or {}
     token = str(auth_context.get("token") or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
@@ -2064,19 +2103,20 @@ async def _call_auto_reply_llm(
         or getattr(settings, "lobster_default_sutui_chat_model", None)
         or "deepseek-chat"
     )
-    faq_context = _load_faq_memory_context(user_id)
     system_prompt = (
         "你是个人微信私聊代回复助手，只处理一对一私聊，不回复群聊。"
         "回复要像真人微信聊天：短、自然、有边界，不营销、不硬广、不夸大。"
-        "如果对方只是闲聊，就自然接话；如果对方问业务/产品/价格/流程/售后等专业问题，优先依据提供的百问百答资料。"
-        "如果资料里没有答案，不要编造，回复为稍后确认或让对方补充信息。"
-        "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|professional|other\",\"reply\":\"...\"}。"
+        "如果对方只是闲聊，就自然接话；如果对方问业务、产品、价格、流程、合作或售后等专业问题，必须优先依据提供的个人记忆资料。"
+        "有效文字消息必须回复；如果资料里没有答案，不能编造，要自然说明需要确认，或请对方补充必要信息。"
+        "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
+        "\"intent_level\":\"high|medium|low|none\",\"topic\":\"简短话题\","
+        "\"conversation_summary\":\"一句话总结对方诉求\",\"reply\":\"实际微信回复\"}。"
     )
     user_prompt = (
         f"会话对象：{peer_name or '未命名'}\n\n"
         f"最近聊天记录：\n{recent_context or '(暂无)'}\n\n"
         f"对方最新消息：\n{latest_message}\n\n"
-        f"本地百问百答资料：\n{faq_context or '(没有找到百问百答资料，专业问题不要编造)'}"
+        f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}"
     )
     payload = {
         "model": model,
@@ -2085,7 +2125,7 @@ async def _call_auto_reply_llm(
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
-        "temperature": 0.45,
+        "temperature": 0.35,
     }
     headers = {
         "Content-Type": "application/json",
@@ -2108,12 +2148,132 @@ async def _call_auto_reply_llm(
         reply = re.sub(r"^```.*?```$", "", content.strip(), flags=re.S).strip()
     max_chars = int(DEFAULT_STRATEGY["auto_reply_max_text_chars"])
     reply = reply[:max_chars].strip()
+    if not reply:
+        raise RuntimeError("AI未生成可发送的回复")
+    category = str(parsed.get("category") or "other").strip().lower()
+    if category not in {"casual", "product", "price", "service", "cooperation", "complaint", "other"}:
+        category = "other"
+    intent_level = str(parsed.get("intent_level") or "none").strip().lower()
+    if intent_level not in {"high", "medium", "low", "none"}:
+        intent_level = "none"
     return {
-        "should_reply": bool(parsed.get("should_reply", True)) and bool(reply),
-        "category": str(parsed.get("category") or "other")[:80],
+        "should_reply": True,
+        "category": category,
+        "intent_level": intent_level,
+        "topic": str(parsed.get("topic") or "").strip()[:80],
+        "conversation_summary": str(parsed.get("conversation_summary") or parsed.get("summary") or "").strip()[:200],
         "reply": reply,
         "raw": content[:2000],
     }
+
+
+def _auto_reply_report_line(value: Any, max_chars: int = 240) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:max_chars]
+
+
+def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> Dict[str, Any]:
+    items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
+    category_labels = {
+        "casual": "闲聊",
+        "product": "产品咨询",
+        "price": "价格咨询",
+        "service": "服务/售后",
+        "cooperation": "合作意向",
+        "complaint": "投诉/风险",
+        "other": "其他",
+    }
+    intent_labels = {"high": "高意向", "medium": "中意向", "low": "低意向", "none": "未判定"}
+    status_labels = {
+        "sent": "已回复",
+        "llm_skipped": "未回复",
+        "no_unreplied_message": "无待回复消息",
+        "duplicate": "已处理过",
+        "failed": "回复失败",
+        "skipped_group": "群聊已跳过",
+        "skipped": "已跳过",
+    }
+    category_counts: Dict[str, int] = {}
+    topic_counts: Dict[str, int] = {}
+    high_intent_count = 0
+    for item in items:
+        category = str(item.get("category") or "").strip().lower()
+        if category:
+            category_counts[category] = category_counts.get(category, 0) + 1
+        topic = _auto_reply_report_line(item.get("topic"), 80)
+        if topic:
+            topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        if str(item.get("intent_level") or "").strip().lower() == "high":
+            high_intent_count += 1
+
+    memory_titles = [_auto_reply_report_line(title, 80) for title in (memory.get("titles") or []) if _auto_reply_report_line(title, 80)]
+    report = {
+        "started_at": result.get("started_at") or result.get("checked_at"),
+        "finished_at": result.get("finished_at"),
+        "duration_seconds": result.get("duration_seconds") or 0,
+        "session_count": int(result.get("session_count") or 0),
+        "private_session_count": int(result.get("unread_private_count") or 0),
+        "unread_message_count": int(result.get("unread_message_count") or 0),
+        "replied": int(result.get("replied") or 0),
+        "skipped": int(result.get("skipped") or 0),
+        "failed": int(result.get("failed") or 0),
+        "skipped_groups": int(result.get("skipped_groups") or 0),
+        "high_intent_count": high_intent_count,
+        "category_counts": category_counts,
+        "topic_counts": topic_counts,
+        "memory_document_count": int(memory.get("document_count") or 0),
+        "memory_titles": memory_titles,
+        "conversations": items,
+    }
+    lines = [
+        "个微私信自动接管汇总",
+        f"统计时间：{report['started_at'] or '-'} 至 {report['finished_at'] or '-'}",
+        "",
+        f"- 扫描会话：{report['session_count']} 个",
+        f"- 有新消息的个人会话：{report['private_session_count']} 个",
+        f"- 未读消息：{report['unread_message_count']} 条",
+        f"- 已自动回复：{report['replied']} 个会话",
+        f"- 高意向会话：{report['high_intent_count']} 个",
+        f"- 跳过：{report['skipped']} 个；群聊/公众号排除：{report['skipped_groups']} 个；失败：{report['failed']} 个",
+    ]
+    if memory_titles:
+        lines.append(f"- 回复依据：个人记忆 {report['memory_document_count']} 份（{'、'.join(memory_titles[:5])}）")
+    else:
+        lines.append("- 回复依据：未读取到个人记忆；专业问题已按不编造、待确认处理")
+    if category_counts:
+        category_text = "、".join(
+            f"{category_labels.get(key, key)} {count} 个"
+            for key, count in sorted(category_counts.items(), key=lambda pair: pair[1], reverse=True)
+        )
+        lines.append(f"- 咨询类型：{category_text}")
+    if topic_counts:
+        topic_text = "、".join(
+            f"{topic} {count} 个"
+            for topic, count in sorted(topic_counts.items(), key=lambda pair: pair[1], reverse=True)[:6]
+        )
+        lines.append(f"- 主要话题：{topic_text}")
+    if items:
+        lines.extend(["", "会话处理明细"])
+        for index, item in enumerate(items, start=1):
+            name = _auto_reply_report_line(item.get("display_name") or item.get("peer_id") or "未命名会话", 80)
+            status = status_labels.get(str(item.get("status") or ""), str(item.get("status") or "已处理"))
+            category = category_labels.get(str(item.get("category") or "other"), "其他")
+            intent = intent_labels.get(str(item.get("intent_level") or "none"), "未判定")
+            topic = _auto_reply_report_line(item.get("topic"), 80)
+            lines.append(f"{index}. {name}｜{status}｜{category}｜{intent}" + (f"｜{topic}" if topic else ""))
+            conversation_summary = _auto_reply_report_line(item.get("conversation_summary"), 200)
+            inbound = _auto_reply_report_line(item.get("inbound_preview"), 240)
+            reply = _auto_reply_report_line(item.get("reply_preview"), 240)
+            if conversation_summary:
+                lines.append(f"   诉求：{conversation_summary}")
+            if inbound:
+                lines.append(f"   收到：{inbound}")
+            if reply:
+                lines.append(f"   回复：{reply}")
+            elif item.get("error"):
+                lines.append(f"   原因：{_auto_reply_report_line(item.get('error'), 200)}")
+    report["summary_text"] = "\n".join(lines)
+    return report
 
 
 async def run_auto_reply_once(
@@ -2137,18 +2297,27 @@ async def run_auto_reply_once(
         return {"ok": True, "skipped": True, "reason": "not_due", "config": cfg}
     if not _claim_auto_reply_run(account_id):
         return {"ok": True, "skipped": True, "reason": "running", "config": get_auto_reply_config(account_id)}
+    started_monotonic = time.monotonic()
+    started_at = _now_iso()
+    memory = _load_auto_reply_memory_context(effective_user_id)
     result: Dict[str, Any] = {
         "ok": True,
         "trigger": trigger,
-        "checked_at": _now_iso(),
+        "checked_at": started_at,
+        "started_at": started_at,
         "session_count": 0,
         "unread_private_count": 0,
+        "unread_message_count": 0,
         "processed": 0,
         "replied": 0,
         "skipped": 0,
         "skipped_groups": 0,
         "failed": 0,
         "items": [],
+        "memory": {
+            "document_count": int(memory.get("document_count") or 0),
+            "titles": list(memory.get("titles") or []),
+        },
     }
     try:
         session_data = await asyncio.to_thread(sync_local_sessions, account_id, passive=False)
@@ -2163,6 +2332,7 @@ async def run_auto_reply_once(
                 continue
             private_unread.append(item)
         result["unread_private_count"] = len(private_unread)
+        result["unread_message_count"] = sum(max(0, int(item.get("unread_count") or 0)) for item in private_unread)
         for idx, session in enumerate(private_unread[:max_sessions]):
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = str(session.get("display_name") or peer_id).strip()
@@ -2189,6 +2359,12 @@ async def run_auto_reply_once(
                     result["items"].append(item_result)
                     continue
                 current_inbound = inbound
+                item_result.update(
+                    {
+                        "inbound_preview": str(inbound.get("content") or "").strip()[:240],
+                        "message_time": str(inbound.get("created_at") or ""),
+                    }
+                )
                 recent = _recent_conversation_text(account_id, actual_peer, limit=8)
                 llm_reply = await _call_auto_reply_llm(
                     auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
@@ -2196,6 +2372,15 @@ async def run_auto_reply_once(
                     peer_name=display_name,
                     latest_message=str(inbound.get("content") or ""),
                     recent_context=recent,
+                    memory_context=str(memory.get("text") or ""),
+                )
+                item_result.update(
+                    {
+                        "category": llm_reply.get("category"),
+                        "intent_level": llm_reply.get("intent_level"),
+                        "topic": llm_reply.get("topic"),
+                        "conversation_summary": llm_reply.get("conversation_summary"),
+                    }
                 )
                 if not llm_reply.get("should_reply"):
                     _record_auto_reply_history(
@@ -2207,7 +2392,7 @@ async def run_auto_reply_once(
                         status="skipped",
                     )
                     result["skipped"] += 1
-                    item_result.update({"status": "llm_skipped", "category": llm_reply.get("category")})
+                    item_result.update({"status": "llm_skipped"})
                     result["items"].append(item_result)
                     continue
                 reply_text = str(llm_reply.get("reply") or "").strip()
@@ -2242,7 +2427,7 @@ async def run_auto_reply_once(
                 )
                 result["processed"] += 1
                 result["replied"] += 1
-                item_result.update({"status": "sent", "category": llm_reply.get("category"), "reply_preview": reply_text[:80]})
+                item_result.update({"status": "sent", "reply_preview": reply_text[:240]})
                 result["items"].append(item_result)
             except Exception as exc:
                 if current_inbound is not None:
@@ -2262,6 +2447,11 @@ async def run_auto_reply_once(
                 low = float(DEFAULT_STRATEGY["auto_reply_session_sleep_min"])
                 high = max(low, float(DEFAULT_STRATEGY["auto_reply_session_sleep_max"]))
                 await asyncio.sleep(random.uniform(low, high))
+        result["finished_at"] = _now_iso()
+        result["duration_seconds"] = round(max(0.0, time.monotonic() - started_monotonic), 2)
+        report = _build_auto_reply_report(result, memory)
+        result["report"] = report
+        result["summary_text"] = report.get("summary_text") or ""
         _finish_auto_reply_run(account_id, result)
         return {**result, "config": get_auto_reply_config(account_id)}
     except Exception as exc:

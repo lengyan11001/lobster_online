@@ -5582,6 +5582,9 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
     if action == "wecom_poll_reply":
         return "企业微信客服已执行一次拉取与自动回复检查。"
     if action == "native_wechat_poll":
+        summary_text = str(result.get("summary_text") or "").strip()
+        if summary_text:
+            return summary_text
         replied = int(result.get("replied") or result.get("success") or 0)
         skipped = int(result.get("skipped_count") or result.get("skipped") or 0)
         return f"个微私信接管已执行一次，回复 {replied} 条，跳过 {skipped} 条。"
