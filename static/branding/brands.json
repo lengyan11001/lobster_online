@@ -10,6 +10,8 @@
       "icons": {
         "favicon_32": "/static/bihu_32.png",
         "apple_touch": "/static/bihu_128.png",
+        "loading_mark": "/static/bihu_64.png",
+        "home_visual": "/static/bihu_source.png",
         "logo_mark": "/static/bihu_32.png",
         "logo_mark_width": 32,
         "logo_mark_height": 32
@@ -19,6 +21,28 @@
         "shortcut_lnk_name": "\u5fc5\u706b\u667a\u80fdAI.lnk",
         "shortcut_description": "\u5fc5\u706b\u667a\u80fdAI - \u672c\u5730\u5ba2\u6237\u7aef",
         "install_complete_hint": "\u53cc\u51fb\u684c\u9762 \u5fc5\u706b\u667a\u80fdAI.lnk \u6216\u672c\u76ee\u5f55 start.bat \u542f\u52a8"
+      }
+    },
+    "daka": {
+      "document_title": "大咖AI员工",
+      "logo_primary": "大咖",
+      "logo_accent": "AI员工",
+      "hero_title": "大咖AI员工 - 您的私人 AI 助手",
+      "hero_subtitle": "让AI员工持续执行营销、创作与客户运营",
+      "icons": {
+        "favicon_32": "/static/daka_32.png",
+        "apple_touch": "/static/daka_128.png",
+        "loading_mark": "/static/daka_64.png",
+        "home_visual": "/static/daka_source.png",
+        "logo_mark": "/static/daka_32.png",
+        "logo_mark_width": 32,
+        "logo_mark_height": 32
+      },
+      "install": {
+        "desktop_ico": "static/daka_box.ico",
+        "shortcut_lnk_name": "大咖AI员工.lnk",
+        "shortcut_description": "大咖AI员工 - 本地客户端",
+        "install_complete_hint": "双击桌面 大咖AI员工.lnk 或本目录 start.bat 启动"
       }
     }
   }

@@ -19,7 +19,7 @@ import re
 import shutil
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urlparse
@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 
 from ..core.config import settings
+from ..services.oem_brand_context import configured_brand_mark, with_oem_brand_header
 from ..db import SessionLocal
 from ..models import Asset, PublishAccount
 from ..services import native_wechat_engine
@@ -331,7 +332,7 @@ def _cloud_base() -> str:
 
 
 def _headers(jwt_token: str, installation_id: str) -> Dict[str, str]:
-    h = {"Authorization": f"Bearer {jwt_token}"}
+    h = with_oem_brand_header({"Authorization": f"Bearer {jwt_token}"})
     if installation_id:
         h["X-Installation-Id"] = installation_id
     h["X-Lobster-Chat-Turn-Billing"] = "pre_deduct_v1"
@@ -348,6 +349,7 @@ async def _sync_openclaw_memory_for_context(jwt_token: str, installation_id: str
         raw_headers = [
             (b"authorization", f"Bearer {jwt_token}".encode("utf-8")),
             (b"x-installation-id", installation_id.encode("utf-8")),
+            (b"x-lobster-brand", configured_brand_mark().encode("utf-8")),
         ]
         req = Request({"type": "http", "method": "POST", "path": "/api/openclaw/memory/sync-cloud", "headers": raw_headers})
         result = await sync_openclaw_memory_from_cloud(req, _ServerUser(id=uid), raise_errors=False)
@@ -4431,6 +4433,15 @@ def _parse_run_time(value: Any) -> Optional[datetime]:
         return None
 
 
+def _workflow_local_run_date(value: Optional[datetime], offset_minutes: int) -> Optional[date]:
+    if value is None:
+        return None
+    utc_value = value
+    if value.tzinfo is not None:
+        utc_value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return (utc_value + timedelta(minutes=offset_minutes)).date()
+
+
 def _workflow_target_list(source: Dict[str, Any], *keys: str) -> List[str]:
     out: List[str] = []
     seen: set[str] = set()
@@ -4647,6 +4658,13 @@ async def _resolve_parent_workflow_material(
     current_context = params.get("h5_context") if isinstance(params.get("h5_context"), dict) else {}
     template_id = str(current_context.get("workflow_template_id") or "").strip()
     current_time = _parse_run_time((current_item or {}).get("created_at") or (current_item or {}).get("started_at"))
+    schedule_config = params.get("schedule_config") if isinstance(params.get("schedule_config"), dict) else {}
+    try:
+        timezone_offset_minutes = int(schedule_config.get("timezone_offset_minutes", 480))
+    except (TypeError, ValueError):
+        timezone_offset_minutes = 480
+    timezone_offset_minutes = max(-840, min(timezone_offset_minutes, 840))
+    current_local_date = _workflow_local_run_date(current_time, timezone_offset_minutes)
     try:
         resp = await cloud.get(
             f"{base}/api/scheduled-tasks/runs",
@@ -4672,6 +4690,8 @@ async def _resolve_parent_workflow_material(
             continue
         run_time = _parse_run_time(run.get("finished_at") or run.get("updated_at") or run.get("created_at"))
         if current_time and run_time and run_time > current_time + timedelta(minutes=10):
+            continue
+        if current_local_date and _workflow_local_run_date(run_time, timezone_offset_minutes) != current_local_date:
             continue
         detail_run = run
         run_id = str(run.get("id") or "").strip()
@@ -4929,6 +4949,147 @@ async def _generate_shanjian_workflow_script(
     }
 
 
+def _normalize_virtualman_candidates(value: Any) -> List[Dict[str, Any]]:
+    rows = value if isinstance(value, list) else []
+    candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = _workflow_text(row.get("status"), 32).lower()
+        if status and status not in {"succeed", "success", "completed", "complete", "done"}:
+            continue
+        virtualman_id = _workflow_text(row.get("virtualman_id") or row.get("virtualmanId"), 128)
+        if not virtualman_id or virtualman_id in seen:
+            continue
+        seen.add(virtualman_id)
+        profile_id = _safe_int(row.get("profile_id") or row.get("id"))
+        candidates.append(
+            {
+                "profile_id": profile_id,
+                "virtualman_id": virtualman_id,
+                "title": _workflow_text(row.get("title") or row.get("name"), 128),
+                "cover_url": _workflow_text(row.get("cover_url") or row.get("coverUrl"), 1000),
+            }
+        )
+    return sorted(
+        candidates,
+        key=lambda item: (
+            0 if _safe_int(item.get("profile_id")) > 0 else 1,
+            _safe_int(item.get("profile_id")),
+            str(item.get("virtualman_id") or ""),
+        ),
+    )
+
+
+def _select_daily_virtualman(
+    candidates: List[Dict[str, Any]],
+    *,
+    local_day: date,
+    rotation_key: str,
+    sequence_slot: Optional[int] = None,
+) -> Dict[str, Any]:
+    normalized = _normalize_virtualman_candidates(candidates)
+    if not normalized:
+        return {}
+    if sequence_slot is not None:
+        slot = max(0, int(sequence_slot))
+        return dict(normalized[(local_day.toordinal() + slot) % len(normalized)])
+    digest = hashlib.sha256(str(rotation_key or "digital-human").encode("utf-8")).digest()
+    node_offset = int.from_bytes(digest[:8], "big")
+    return dict(normalized[(local_day.toordinal() + node_offset) % len(normalized)])
+
+
+def _digital_human_rotation_context(
+    source: Dict[str, Any],
+    current_item: Optional[Dict[str, Any]],
+) -> tuple[date, str]:
+    schedule = source.get("schedule_config") if isinstance(source.get("schedule_config"), dict) else {}
+    try:
+        timezone_offset_minutes = int(schedule.get("timezone_offset_minutes", 480))
+    except (TypeError, ValueError):
+        timezone_offset_minutes = 480
+    timezone_offset_minutes = max(-840, min(timezone_offset_minutes, 840))
+    run_time = _parse_run_time(
+        (current_item or {}).get("scheduled_for")
+        or (current_item or {}).get("scheduled_at")
+        or (current_item or {}).get("created_at")
+        or (current_item or {}).get("started_at")
+    )
+    local_day = _workflow_local_run_date(run_time or datetime.utcnow(), timezone_offset_minutes) or date.today()
+    context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+    rotation_key = "|".join(
+        str(value or "").strip()
+        for value in (
+            context.get("workflow_template_id"),
+            context.get("workflow_node_id"),
+            context.get("workflow_node_time"),
+            source.get("sales_node_label"),
+            source.get("task_title"),
+        )
+        if str(value or "").strip()
+    )
+    return local_day, rotation_key or "shanjian-digital-human"
+
+
+async def _resolve_workflow_virtualman(
+    source: Dict[str, Any],
+    *,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    current_item: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    fixed_id = _workflow_text(source.get("virtualman_id") or source.get("virtualmanId"), 128)
+    context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+    selection_mode = _workflow_text(source.get("virtualman_selection_mode"), 32)
+    rotation_enabled = (
+        selection_mode in {"daily_round_robin", "daily_sequence"}
+        or _workflow_text(source.get("script_source"), 64) == "ip_daily_industry_hot_oral"
+        or bool(context.get("workflow_node_id"))
+    )
+    if not rotation_enabled:
+        return {"virtualman_id": fixed_id} if fixed_id else {}
+
+    candidates = _normalize_virtualman_candidates(source.get("virtualman_candidates"))
+    profile_refresh_succeeded = False
+    if cloud is not None and base:
+        try:
+            response = await cloud.get(
+                f"{base}/api/shanjian-digital-human/profiles",
+                headers=headers,
+                timeout=30.0,
+            )
+            data = response.json() if response.content else {}
+            cloud_candidates = _normalize_virtualman_candidates(data.get("items") if isinstance(data, dict) else [])
+            if response.status_code < 400 and isinstance(data, dict):
+                candidates = cloud_candidates
+                profile_refresh_succeeded = True
+        except Exception as exc:
+            logger.warning("[H5-DIGITAL-HUMAN] profile refresh failed, using task snapshot: %s", exc)
+
+    if candidates:
+        local_day, rotation_key = _digital_human_rotation_context(source, current_item)
+        sequence_slot = (
+            max(0, _safe_int(source.get("virtualman_rotation_slot")))
+            if "virtualman_rotation_slot" in source
+            else None
+        )
+        selected = _select_daily_virtualman(
+            candidates,
+            local_day=local_day,
+            rotation_key=rotation_key,
+            sequence_slot=sequence_slot,
+        )
+        selected["selection_mode"] = "daily_sequence" if sequence_slot is not None else "daily_round_robin"
+        selected["selection_slot"] = sequence_slot
+        selected["selection_date"] = local_day.isoformat()
+        return selected
+    if profile_refresh_succeeded:
+        return {}
+    return {"virtualman_id": fixed_id} if fixed_id else {}
+
+
 async def _run_shanjian_digital_human_workflow(
     source: Dict[str, Any],
     *,
@@ -4936,8 +5097,16 @@ async def _run_shanjian_digital_human_workflow(
     run_id: str,
     cloud: Optional[httpx.AsyncClient],
     base: str,
+    current_item: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    virtualman_id = _workflow_text(source.get("virtualman_id") or source.get("virtualmanId"), 128)
+    selected_virtualman = await _resolve_workflow_virtualman(
+        source,
+        cloud=cloud,
+        base=base,
+        headers=headers,
+        current_item=current_item,
+    )
+    virtualman_id = _workflow_text(selected_virtualman.get("virtualman_id"), 128)
     voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
     missing = []
     if not virtualman_id:
@@ -5060,6 +5229,11 @@ async def _run_shanjian_digital_human_workflow(
                 "ip_daily_record_id": generated.get("ip_daily_record_id") or "",
                 "ip_daily_record": generated.get("ip_daily_record") or {},
                 "virtualman_id": virtualman_id,
+                "virtualman_profile_id": selected_virtualman.get("profile_id") or None,
+                "virtualman_title": selected_virtualman.get("title") or "",
+                "virtualman_selection_mode": selected_virtualman.get("selection_mode") or "fixed",
+                "virtualman_selection_slot": selected_virtualman.get("selection_slot"),
+                "virtualman_selection_date": selected_virtualman.get("selection_date") or "",
                 "voice": voice,
                 "media_type": "video",
                 "video_url": video_url,
@@ -5091,6 +5265,11 @@ async def _run_shanjian_digital_human_workflow(
     last["ip_daily_record_id"] = generated.get("ip_daily_record_id") or ""
     last["ip_daily_record"] = generated.get("ip_daily_record") or {}
     last["virtualman_id"] = virtualman_id
+    last["virtualman_profile_id"] = selected_virtualman.get("profile_id") or None
+    last["virtualman_title"] = selected_virtualman.get("title") or ""
+    last["virtualman_selection_mode"] = selected_virtualman.get("selection_mode") or "fixed"
+    last["virtualman_selection_slot"] = selected_virtualman.get("selection_slot")
+    last["virtualman_selection_date"] = selected_virtualman.get("selection_date") or ""
     last["voice"] = voice
     last["task_id"] = task_id
     last["record_id"] = record_id
@@ -5117,6 +5296,7 @@ async def _run_client_workflow_action(
             run_id=run_id,
             cloud=cloud,
             base=base,
+            current_item=current_item,
         )
     if action == "local_bestseller_plan":
         return await _post_local_api_json(

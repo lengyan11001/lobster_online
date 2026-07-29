@@ -1,4 +1,5 @@
 import pytest
+import httpx
 
 from backend.app.api import h5_chat_channel as channel
 from backend.app.api.h5_chat_channel import _extract_parent_publish_context
@@ -163,3 +164,110 @@ async def test_moments_child_uses_oral_script_description_and_no_generated_title
     assert drafts[0]["title"] == ""
     assert drafts[0]["description"] == "根据口播生成的朋友圈正文"
     assert drafts[0]["tags"] == "#行业分享"
+
+
+@pytest.mark.asyncio
+async def test_parent_material_only_uses_current_workflow_day(monkeypatch):
+    class Cloud:
+        async def get(self, url, **kwargs):
+            if url.endswith("/api/scheduled-tasks/runs"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "runs": [
+                            {
+                                "id": "yesterday-parent",
+                                "status": "completed",
+                                "created_at": "2026-07-26T00:00:00",
+                                "finished_at": "2026-07-26T00:30:00",
+                                "payload": {
+                                    "h5_context": {
+                                        "workflow_template_id": 0,
+                                        "workflow_node_id": "sales-video",
+                                    }
+                                },
+                            },
+                            {
+                                "id": "today-parent",
+                                "status": "completed",
+                                "created_at": "2026-07-27T00:00:00",
+                                "finished_at": "2026-07-27T00:30:00",
+                                "payload": {
+                                    "h5_context": {
+                                        "workflow_template_id": 0,
+                                        "workflow_node_id": "sales-video",
+                                    }
+                                },
+                            },
+                        ]
+                    },
+                )
+            run_id = url.rsplit("/", 1)[-1]
+            asset_id = "old-video" if run_id == "yesterday-parent" else "today-video"
+            return httpx.Response(
+                200,
+                json={
+                    "run": {
+                        "id": run_id,
+                        "result_payload": {
+                            "saved_assets": [{"asset_id": asset_id, "media_type": "video"}]
+                        },
+                    }
+                },
+            )
+
+    result = await channel._resolve_parent_workflow_material(
+        Cloud(),
+        "https://example.com",
+        {},
+        params={
+            "source_workflow_node_id": "sales-video",
+            "media_type": "video",
+            "h5_context": {"workflow_template_id": 0},
+            "schedule_config": {"timezone_offset_minutes": 480},
+        },
+        current_item={"id": "child", "created_at": "2026-07-27T00:45:00"},
+    )
+
+    assert result["asset_id"] == "today-video"
+    assert result["source_run_id"] == "today-parent"
+
+
+@pytest.mark.asyncio
+async def test_parent_material_rejects_previous_day_when_today_has_none():
+    class Cloud:
+        async def get(self, url, **kwargs):
+            if url.endswith("/api/scheduled-tasks/runs"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "runs": [
+                            {
+                                "id": "yesterday-parent",
+                                "status": "completed",
+                                "finished_at": "2026-07-26T00:30:00",
+                                "payload": {
+                                    "h5_context": {
+                                        "workflow_template_id": 0,
+                                        "workflow_node_id": "sales-video",
+                                    }
+                                },
+                            }
+                        ]
+                    },
+                )
+            raise AssertionError("previous-day parent detail must not be fetched")
+
+    with pytest.raises(RuntimeError, match="上级节点还没有可发布的素材"):
+        await channel._resolve_parent_workflow_material(
+            Cloud(),
+            "https://example.com",
+            {},
+            params={
+                "source_workflow_node_id": "sales-video",
+                "media_type": "video",
+                "h5_context": {"workflow_template_id": 0},
+                "schedule_config": {"timezone_offset_minutes": 480},
+            },
+            current_item={"id": "child", "created_at": "2026-07-27T00:45:00"},
+        )

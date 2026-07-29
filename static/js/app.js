@@ -77,7 +77,90 @@ var MESSENGER_API_BASE = (typeof window.__MESSENGER_API_BASE !== 'undefined' ? w
   }
 })();
 var TWILIO_API_BASE = (typeof window.__TWILIO_API_BASE !== 'undefined' ? window.__TWILIO_API_BASE : '');
-var token = localStorage.getItem('token');
+
+function normalizeLobsterBrandMark(raw) {
+  var mark = String(raw || 'bihuo').trim().toLowerCase();
+  return /^[a-z][a-z0-9_-]{0,62}$/.test(mark) ? mark : 'bihuo';
+}
+function getLobsterBrandMark() {
+  return normalizeLobsterBrandMark(
+    window.__LOBSTER_BRAND_MARK || localStorage.getItem('lobster_active_brand_mark') || 'bihuo'
+  );
+}
+function lobsterTokenStorageKey(mark) {
+  return 'token:' + normalizeLobsterBrandMark(mark || getLobsterBrandMark());
+}
+function getStoredAuthToken() {
+  var mark = getLobsterBrandMark();
+  var key = lobsterTokenStorageKey(mark);
+  var stored = localStorage.getItem(key) || '';
+  if (!stored && mark === 'bihuo') {
+    stored = localStorage.getItem('token') || '';
+    if (stored) localStorage.setItem(key, stored);
+  }
+  return stored;
+}
+function setStoredAuthToken(value) {
+  var next = String(value || '');
+  localStorage.setItem(lobsterTokenStorageKey(), next);
+  if (getLobsterBrandMark() === 'bihuo') localStorage.setItem('token', next);
+}
+function clearStoredAuthToken() {
+  localStorage.removeItem(lobsterTokenStorageKey());
+  if (getLobsterBrandMark() === 'bihuo') localStorage.removeItem('token');
+}
+function setLobsterBrandMark(mark) {
+  var next = normalizeLobsterBrandMark(mark);
+  window.__LOBSTER_BRAND_MARK = next;
+  localStorage.setItem('lobster_active_brand_mark', next);
+  token = getStoredAuthToken();
+  return next;
+}
+window.getLobsterBrandMark = getLobsterBrandMark;
+window.getStoredAuthToken = getStoredAuthToken;
+window.setStoredAuthToken = setStoredAuthToken;
+window.clearStoredAuthToken = clearStoredAuthToken;
+window.setLobsterBrandMark = setLobsterBrandMark;
+
+(function installBrandRequestContext() {
+  if (window.__LOBSTER_BRAND_FETCH_INSTALLED || typeof window.fetch !== 'function') return;
+  var nativeFetch = window.fetch.bind(window);
+  var apiPathPattern = /^\/(?:api|auth|chat|skills|capabilities)(?:\/|$)/;
+
+  function apiOrigins() {
+    var values = [];
+    [
+      window.location && window.location.origin,
+      typeof API_BASE !== 'undefined' ? API_BASE : '',
+      typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : ''
+    ].forEach(function(value) {
+      try {
+        var origin = new URL(String(value || ''), window.location.href).origin;
+        if (origin && values.indexOf(origin) < 0) values.push(origin);
+      } catch (e) {}
+    });
+    return values;
+  }
+
+  window.fetch = function(input, init) {
+    try {
+      var rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
+      var url = new URL(rawUrl, window.location.href);
+      if (apiPathPattern.test(url.pathname) && apiOrigins().indexOf(url.origin) >= 0) {
+        var next = Object.assign({}, init || {});
+        var headers = new Headers(input instanceof Request ? input.headers : undefined);
+        new Headers(next.headers || {}).forEach(function(value, key) { headers.set(key, value); });
+        headers.set('X-Lobster-Brand', getLobsterBrandMark());
+        next.headers = headers;
+        return nativeFetch(input, next);
+      }
+    } catch (e) {}
+    return nativeFetch(input, init);
+  };
+  window.__LOBSTER_BRAND_FETCH_INSTALLED = true;
+})();
+
+var token = getStoredAuthToken();
 var currentView = 'chat';
 /** 在线版前端，默认连 lobster_server（注册/登录在 server 上） */
 var EDITION = 'online';
@@ -88,10 +171,12 @@ var RECHARGE_URL = null;
 
 (function applyTokenFromUrl() {
   var params = new URLSearchParams(window.location.search);
+  var brandFromUrl = params.get('brand') || params.get('brand_mark');
+  if (brandFromUrl) setLobsterBrandMark(brandFromUrl);
   var t = params.get('token');
   if (t && t.length > 10) {
     token = t;
-    localStorage.setItem('token', t);
+    setStoredAuthToken(t);
     window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
   }
 })();
@@ -137,6 +222,7 @@ function getOrCreateInstallationId() {
 function authHeaders() {
   var h = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (token || '') };
   h['X-Installation-Id'] = getOrCreateInstallationId();
+  h['X-Lobster-Brand'] = getLobsterBrandMark();
   if (window.__LOBSTER_IS_OVERSEAS_USER) h['X-Lobster-Client-Overseas'] = 'true';
   return h;
 }
@@ -144,7 +230,7 @@ function authHeaders() {
 /** 从 JWT payload 解析 sub（与认证中心签发一致），供本地会话等按用户隔离；无 token 或解析失败返回空串 */
 function getCurrentUserIdFromToken() {
   try {
-    var t = (typeof token !== 'undefined' && token) ? token : (localStorage.getItem('token') || '');
+    var t = (typeof token !== 'undefined' && token) ? token : getStoredAuthToken();
     if (!t || t.indexOf('.') < 0) return '';
     var parts = t.split('.');
     if (parts.length < 2) return '';

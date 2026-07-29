@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..core.config import get_settings
+from .oem_brand_context import with_oem_brand_header
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ async def sync_creative_job_to_cloud(
         "error": (error or "")[:4000] or None,
         "meta": json_safe(meta or {}),
     }
-    headers = {"Authorization": auth, "Content-Type": "application/json"}
+    headers = with_oem_brand_header({"Authorization": auth, "Content-Type": "application/json"})
     if installation_id:
         headers["X-Installation-Id"] = installation_id
 

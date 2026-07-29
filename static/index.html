@@ -299,7 +299,14 @@
                       </div>
                       <div class="chat-home-visual" aria-hidden="true">
                         <div class="chat-home-orbit"></div>
-                        <div class="chat-home-visual-core"><img src="/static/bihu_source.png" alt=""></div>
+                        <div class="chat-home-visual-core"><img id="brandHomeVisual" src="/static/bihu_source.png" alt=""></div>
+                        <script>
+                          (function() {
+                            var mark = new URLSearchParams(location.search).get('brand');
+                            var image = document.getElementById('brandHomeVisual');
+                            if (image && mark === 'daka') image.src = '/static/daka_source.png';
+                          })();
+                        </script>
                         <div class="chat-home-stage"></div>
                       </div>
                     </div>

@@ -20,6 +20,7 @@ from ..core.config import settings
 from ..captcha_util import create_captcha, verify_captcha
 from ..db import get_db
 from ..models import User
+from ..services.oem_brand_context import with_oem_brand_header
 from ..services.openclaw_channel_auth_store import (
     persist_channel_fallback_for_login,
     persist_weixin_openclaw_peer_for_user,
@@ -72,12 +73,8 @@ _BRAND_MARK_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 
 
 def _normalize_brand_mark(raw: Optional[str]) -> Optional[str]:
-    """注册请求中的品牌标记；空则不入库。须为小写 slug（与 brands.json 的 marks 键一致）。"""
-    if raw is None:
-        return None
-    s = (raw or "").strip().lower()
-    if not s:
-        return None
+    """品牌标记；历史客户端未传时兼容为 bihuo。"""
+    s = (raw or "bihuo").strip().lower() or "bihuo"
     if not _BRAND_MARK_RE.match(s):
         raise HTTPException(status_code=400, detail="品牌标记格式无效")
     return s
@@ -95,6 +92,7 @@ class SmsSendBody(BaseModel):
     phone: str
     captcha_id: str = ""
     captcha_answer: str = ""
+    brand_mark: Optional[str] = None
 
 
 class RegisterPhoneBody(BaseModel):
@@ -110,6 +108,7 @@ class PhonePasswordLoginBody(BaseModel):
     phone: Optional[str] = None
     account: Optional[str] = None
     password: str
+    brand_mark: Optional[str] = None
 
 
 class SetPasswordBody(BaseModel):
@@ -125,6 +124,14 @@ def _normalize_cn_mobile(raw: str) -> str:
 
 def _phone_account_email(mobile: str) -> str:
     return f"{mobile}{PHONE_EMAIL_SUFFIX}"
+
+
+def _scoped_account_email(account_email: str, brand_mark: str) -> str:
+    email = (account_email or "").strip().lower()
+    if brand_mark == "bihuo" or not email:
+        return email
+    local, separator, domain = email.partition("@")
+    return f"{local}+brand-{brand_mark}@{domain}" if separator else f"{brand_mark}:{email}"
 
 
 def _normalize_new_password(raw: str) -> str:
@@ -159,6 +166,16 @@ def _auth_server_base_required() -> str:
     return base
 
 
+def _request_brand_mark(request: Request) -> str:
+    return _normalize_brand_mark(
+        request.headers.get("x-lobster-brand")
+        or request.query_params.get("brand")
+        or request.query_params.get("brand_mark")
+        or getattr(settings, "lobster_brand_mark", None)
+        or "bihuo"
+    ) or "bihuo"
+
+
 def _client_error_detail(resp: httpx.Response) -> Any:
     try:
         data = resp.json()
@@ -177,7 +194,7 @@ def _raise_auth_server_response(resp: httpx.Response) -> None:
 
 
 def _forward_headers_to_auth_server(request: Request, *, include_auth: bool = False) -> Dict[str, str]:
-    headers: Dict[str, str] = {}
+    headers: Dict[str, str] = with_oem_brand_header(brand_mark=_request_brand_mark(request))
     xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
     if xi:
         headers["X-Installation-Id"] = xi
@@ -354,6 +371,8 @@ async def get_current_user_for_local(
             detail="未配置认证中心（AUTH_SERVER_BASE），无法校验登录态",
         )
     headers: Dict[str, str] = {"Authorization": f"Bearer {token}"}
+    brand_mark = _request_brand_mark(request)
+    headers["X-Lobster-Brand"] = brand_mark
     xi = (request.headers.get("X-Installation-Id") or "").strip()
     if xi:
         headers["X-Installation-Id"] = xi
@@ -361,7 +380,7 @@ async def get_current_user_for_local(
     ttl_s = max(0, int(getattr(s, "auth_me_cache_ttl_seconds", 0) or 0))
     cache_key: Optional[str] = None
     if ttl_s > 0:
-        cache_key = hashlib.sha256(f"{token}\0{xi}".encode("utf-8")).hexdigest()
+        cache_key = hashlib.sha256(f"{token}\0{xi}\0{brand_mark}".encode("utf-8")).hexdigest()
         now_m = time.monotonic()
         async with _AUTH_ME_CACHE_LOCK:
             hit = _AUTH_ME_CACHE.get(cache_key)
@@ -468,7 +487,10 @@ async def require_skill_store_admin(request: Request) -> None:
             raise HTTPException(status_code=403, detail="需要技能商店管理员权限")
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{base}/skills/skill-store-admin", headers={"Authorization": hdr})
+            r = await client.get(
+                f"{base}/skills/skill-store-admin",
+                headers={"Authorization": hdr, "X-Lobster-Brand": _request_brand_mark(request)},
+            )
         if r.status_code != 200:
             logger.warning("[require_skill_store_admin] skill-store-admin HTTP %s", r.status_code)
             raise HTTPException(status_code=403, detail="需要技能商店管理员权限")
@@ -555,6 +577,7 @@ async def login(request: Request, db: Session = Depends(get_db)):
                 "password": password,
                 "captcha_id": captcha_id,
                 "captcha_answer": captcha_answer,
+                "brand_mark": _request_brand_mark(request),
             },
             request,
         )
@@ -771,13 +794,14 @@ def get_wechat_login_url(request: Request):
         raise HTTPException(status_code=503, detail="未配置服务号 AppID（请在 .env 中设置 WECHAT_OA_APP_ID）")
     base = _wechat_oa_base_url(request)
     redirect_uri = f"{base}/auth/wechat-callback"
+    brand_mark = _request_brand_mark(request)
     url = (
         "https://open.weixin.qq.com/connect/oauth2/authorize"
         f"?appid={quote(app_id, safe='')}"
         f"&redirect_uri={quote(redirect_uri, safe='')}"
         "&response_type=code"
         "&scope=snsapi_userinfo"
-        "&state=login"
+        f"&state={quote('login:' + brand_mark, safe='')}"
         "#wechat_redirect"
     )
     if not (url and url.strip()):
@@ -825,17 +849,18 @@ def wechat_callback(
     openid = (data.get("openid") or "").strip()
     if not openid:
         raise HTTPException(status_code=400, detail="未获取到 openid")
-    user = db.query(User).filter(User.wechat_openid == openid).first()
+    state_brand = (state or "").split(":", 1)[1] if (state or "").startswith("login:") else None
+    brand_mark = _normalize_brand_mark(state_brand or _request_brand_mark(request)) or "bihuo"
+    user = db.query(User).filter(User.wechat_openid == openid, User.brand_mark == brand_mark).first()
     if not user:
-        email = f"{openid}@wechat.lobster.local"
-        existing = db.query(User).filter(User.email == email).first()
+        email = _scoped_account_email(f"{openid}@wechat.lobster.local", brand_mark)
+        existing = db.query(User).filter(User.email == email, User.brand_mark == brand_mark).first()
         if existing:
             existing.wechat_openid = openid
             db.commit()
             db.refresh(existing)
             user = existing
         else:
-            _install_mark = (getattr(settings, "lobster_brand_mark", None) or "").strip().lower() or "bihuo"
             user = User(
                 email=email,
                 hashed_password=get_password_hash(f"wechat-{openid}-no-pwd"),
@@ -843,15 +868,18 @@ def wechat_callback(
                 role="user",
                 preferred_model="sutui",
                 wechat_openid=openid,
-                brand_mark=_normalize_brand_mark(_install_mark),
+                brand_mark=brand_mark,
             )
             db.add(user)
             db.commit()
             db.refresh(user)
-    access_token = create_access_token(data={"sub": str(user.id)})
+    access_token = create_access_token(data={"sub": str(user.id), "brand_mark": brand_mark})
     persist_channel_fallback_for_login(
         jwt_token=access_token, request=request, user_id=user.id, db=db
     )
     base = _wechat_oa_base_url(request)
     front = base.rstrip("/") + "/"
-    return RedirectResponse(url=f"{front}?token={access_token}", status_code=302)
+    return RedirectResponse(
+        url=f"{front}?token={quote(access_token, safe='')}&brand={quote(brand_mark, safe='')}",
+        status_code=302,
+    )

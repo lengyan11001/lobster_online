@@ -685,6 +685,10 @@
   width: min(720px, 96vw);
 }
 
+.ai3d-instruction-panel {
+  width: min(560px, 94vw);
+}
+
 .ai3d-history-modal-panel .ai3d-modal-body {
   gap: 0;
   padding: 0;

@@ -28,6 +28,7 @@ else:
 APP_NAME = "必火智能"
 DEFAULT_WINDOW_TITLE = "必火智能"
 OVERSEAS_WINDOW_TITLE = "必火AI海外员工"
+DEFAULT_BRAND_MARK = "bihuo"
 SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
@@ -193,6 +194,10 @@ ROOT = resolve_root()
 LOG_PATH = ROOT / "desktop_launcher.log"
 APP_ICON_PATH = ROOT / "static" / "bihu_box.ico"
 LOADING_MARK_PATH = ROOT / "static" / "bihu_64.png"
+_ACTIVE_DESKTOP_BRANDING: dict[str, object] = {
+    "mark": DEFAULT_BRAND_MARK,
+    "document_title": DEFAULT_WINDOW_TITLE,
+}
 _STARTUP_STATUS_LOCK = threading.Lock()
 _STARTUP_STATUS: dict[str, object] = {
     "stage": "prepare",
@@ -289,8 +294,11 @@ def adaptive_window_size(requested_width: int, requested_height: int) -> tuple[i
     return width, height
 
 
-def read_env_value(name: str, default: str) -> str:
-    env_path = ROOT / ".env"
+def read_env_value(name: str, default: str, root: Path | None = None) -> str:
+    process_value = str(os.environ.get(name) or "").strip()
+    if process_value:
+        return process_value
+    env_path = (root or ROOT) / ".env"
     if not env_path.is_file():
         return default
     try:
@@ -310,12 +318,87 @@ def is_truthy_env_value(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "overseas", "海外"}
 
 
-def desktop_brand_title(default: str = DEFAULT_WINDOW_TITLE) -> str:
+def _desktop_asset_path(root: Path, value: object, fallback: Path) -> Path:
+    relative = str(value or "").strip().replace("\\", "/").lstrip("/")
+    if not relative:
+        return fallback
+    return root / Path(relative)
+
+
+def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
+    root = root or ROOT
+    registry_path = root / "static" / "branding" / "brands.json"
+    registry: dict[str, object] = {}
+    try:
+        loaded = json.loads(registry_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            registry = loaded
+    except Exception as exc:
+        log(f"read desktop branding failed path={registry_path}: {exc}")
+
+    marks = registry.get("marks") if isinstance(registry.get("marks"), dict) else {}
+    default_mark = str(registry.get("default_mark") or DEFAULT_BRAND_MARK).strip().lower() or DEFAULT_BRAND_MARK
+    requested_mark = read_env_value("LOBSTER_BRAND_MARK", default_mark, root).strip().lower()
+    mark = requested_mark if requested_mark in marks else default_mark
+    if mark not in marks and DEFAULT_BRAND_MARK in marks:
+        mark = DEFAULT_BRAND_MARK
+    config = marks.get(mark) if isinstance(marks.get(mark), dict) else {}
+    profile = dict(config)
+    profile["mark"] = mark or DEFAULT_BRAND_MARK
+    return profile
+
+
+def configure_desktop_branding() -> dict[str, object]:
+    global APP_ICON_PATH, LOADING_MARK_PATH, _ACTIVE_DESKTOP_BRANDING
+
+    profile = load_desktop_branding(ROOT)
+    install = profile.get("install") if isinstance(profile.get("install"), dict) else {}
+    icons = profile.get("icons") if isinstance(profile.get("icons"), dict) else {}
+    APP_ICON_PATH = _desktop_asset_path(
+        ROOT,
+        install.get("desktop_ico"),
+        ROOT / "static" / "bihu_box.ico",
+    )
+    LOADING_MARK_PATH = _desktop_asset_path(
+        ROOT,
+        icons.get("loading_mark") or icons.get("apple_touch") or icons.get("logo_mark"),
+        ROOT / "static" / "bihu_64.png",
+    )
+    _ACTIVE_DESKTOP_BRANDING = profile
+    return profile
+
+
+def configure_windows_app_identity(mark: str) -> None:
+    if os.name != "nt":
+        return
+    safe_mark = re.sub(r"[^a-z0-9_-]+", "", str(mark or DEFAULT_BRAND_MARK).strip().lower()) or DEFAULT_BRAND_MARK
+    app_id = f"BHZN.LobsterOnline.{safe_mark}"
+    try:
+        setter = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        setter.argtypes = [ctypes.c_wchar_p]
+        setter.restype = ctypes.c_long
+        result = int(setter(app_id))
+        if result != 0:
+            log(f"set Windows AppUserModelID returned {result}: {app_id}")
+    except Exception as exc:
+        log(f"set Windows AppUserModelID failed: {exc}")
+
+
+def desktop_brand_title(
+    default: str = DEFAULT_WINDOW_TITLE,
+    branding: dict[str, object] | None = None,
+) -> str:
     explicit = read_env_value("LOBSTER_DESKTOP_TITLE", "").strip()
     if explicit:
         return explicit
+    profile = branding or _ACTIVE_DESKTOP_BRANDING
+    configured = str(profile.get("document_title") or "").strip()
+    if str(profile.get("mark") or DEFAULT_BRAND_MARK) != DEFAULT_BRAND_MARK and configured:
+        return configured
     if is_truthy_env_value(read_env_value("LOBSTER_IS_OVERSEAS_USER", "")):
         return OVERSEAS_WINDOW_TITLE
+    if configured:
+        return configured
     return default
 
 
@@ -1434,21 +1517,31 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=920)
     args = parser.parse_args()
 
+    branding = configure_desktop_branding()
+    brand_mark = str(branding.get("mark") or DEFAULT_BRAND_MARK)
+    configure_windows_app_identity(brand_mark)
+
     if not (ROOT / "backend").is_dir() or not (ROOT / "static").is_dir():
-        message_box(desktop_brand_title(APP_NAME), f"客户端目录不完整，找不到 backend/static。\n\n当前目录：{ROOT}")
+        message_box(desktop_brand_title(APP_NAME, branding), f"客户端目录不完整，找不到 backend/static。\n\n当前目录：{ROOT}")
         return 2
 
     if not (ROOT / ".env").is_file():
         log(".env not found; launcher will continue with built-in/default environment values")
     port = args.port or int(read_env_value("PORT", str(DEFAULT_PORT)) or DEFAULT_PORT)
     mcp_port = int(read_env_value("MCP_PORT", str(DEFAULT_MCP_PORT)) or DEFAULT_MCP_PORT)
-    title = args.title or desktop_brand_title()
-    url = f"http://127.0.0.1:{port}/?desktop=1&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
+    title = args.title or desktop_brand_title(branding=branding)
+    url = (
+        f"http://127.0.0.1:{port}/?desktop=1"
+        f"&brand={brand_mark}&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
+    )
     env = build_env()
     env["PORT"] = str(port)
     env["MCP_PORT"] = str(mcp_port)
 
-    log(f"launcher root={ROOT}")
+    log(
+        f"launcher root={ROOT} brand={brand_mark} title={title!r} "
+        f"icon={APP_ICON_PATH} loading_mark={LOADING_MARK_PATH}"
+    )
 
     if args.browser:
         return open_legacy_browser_mode(port, mcp_port, env, args.wait)

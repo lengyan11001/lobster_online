@@ -310,15 +310,18 @@ function applyBrandingFromApi() {
     });
   }
   var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
-  if (!base) return;
-  fetch(base + '/api/branding', { credentials: 'same-origin' })
+  if (!base) return Promise.resolve();
+  return fetch(base + '/api/branding', { credentials: 'same-origin' })
     .then(function(r) {
       if (!r.ok) return Promise.reject(new Error('branding ' + r.status));
       return r.json();
     })
     .then(function(b) {
       if (!b || typeof b !== 'object') return;
-      if (b.mark) window.__LOBSTER_BRAND_MARK = b.mark;
+      if (b.mark) {
+        if (typeof setLobsterBrandMark === 'function') setLobsterBrandMark(b.mark);
+        else window.__LOBSTER_BRAND_MARK = b.mark;
+      }
       if (b.parent_account) window.__LOBSTER_PARENT_ACCOUNT = b.parent_account;
       window.__LOBSTER_IS_OVERSEAS_USER = !!b.is_overseas_user;
       if (b.document_title) document.title = b.document_title;
@@ -333,6 +336,8 @@ function applyBrandingFromApi() {
         if (icons.logo_mark_width) markImg.width = Number(icons.logo_mark_width);
         if (icons.logo_mark_height) markImg.height = Number(icons.logo_mark_height);
       }
+      var homeVisual = document.getElementById('brandHomeVisual');
+      if (homeVisual && icons.home_visual) homeVisual.src = icons.home_visual;
       var primary = document.getElementById('brandLogoPrimary');
       var accent = document.getElementById('brandLogoAccent');
       if (primary && b.logo_primary != null) primary.textContent = b.logo_primary;
@@ -527,7 +532,7 @@ function startOwnWechatLogin() {
   if (link) link.style.display = 'none';
   if (mpWrap) mpWrap.style.display = 'none';
   if (qrWrap) qrWrap.style.display = 'block';
-  fetch(API_BASE + '/auth/wechat-login-url').then(function(r) {
+  fetch(API_BASE + '/auth/wechat-login-url', { headers: authHeaders() }).then(function(r) {
     return r.json().then(function(d) {
       if (!r.ok) {
         var msg = (d && (d.detail || d.msg)) || ('请求失败 ' + r.status);
@@ -574,20 +579,25 @@ function persistOpenclawChannelFallback(tok) {
     method: 'POST',
     headers: {
       'Authorization': 'Bearer ' + t,
-      'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : ''
+      'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '',
+      'X-Lobster-Brand': typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo'
     }
   }).catch(function() {});
 }
 
 (function applyTokenFromUrl() {
+  var params = new URLSearchParams(window.location.search || '');
+  var callbackBrand = params.get('brand') || params.get('brand_mark');
+  if (callbackBrand && typeof setLobsterBrandMark === 'function') setLobsterBrandMark(callbackBrand);
   var m = /[?&]token=([^&]+)/.exec(window.location.search || '');
   if (!m || !m[1]) return;
   var t = decodeURIComponent(m[1]);
   token = t;
-  localStorage.setItem('token', t);
+  if (typeof setStoredAuthToken === 'function') setStoredAuthToken(t);
+  else localStorage.setItem('token', t);
   persistOpenclawChannelFallback(t);
   if (window.opener) {
-    try { window.opener.postMessage({ type: 'auth_login_ok', token: t }, '*'); } catch (e) {}
+    try { window.opener.postMessage({ type: 'auth_login_ok', token: t, brand: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' }, '*'); } catch (e) {}
     window.close();
   } else {
     setTimeout(function() { loadDashboard(); }, 0);
@@ -596,8 +606,10 @@ function persistOpenclawChannelFallback(tok) {
 
 window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'auth_login_ok' && e.data.token) {
+    if (e.data.brand && typeof setLobsterBrandMark === 'function') setLobsterBrandMark(e.data.brand);
     token = e.data.token;
-    localStorage.setItem('token', token);
+    if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
+    else localStorage.setItem('token', token);
     persistOpenclawChannelFallback(token);
     loadDashboard();
   }
@@ -645,15 +657,17 @@ if (loginForm) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : ''
+        'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '',
+        'X-Lobster-Brand': typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo'
       },
-      body: JSON.stringify({ account: account, password: password })
+      body: JSON.stringify({ account: account, password: password, brand_mark: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' })
     })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(x) {
         if (x.ok) {
           token = x.data.access_token;
-          localStorage.setItem('token', token);
+          if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
+          else localStorage.setItem('token', token);
           if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
           showMsg(msgEl, '登录成功', false);
           loadDashboard();
@@ -724,8 +738,11 @@ function normalizeAuthErrorDetail(detail) {
     btn.disabled = true;
     fetch(API_BASE + '/auth/sms/send', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phone, captcha_id: captchaId, captcha_answer: captchaAnswer })
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lobster-Brand': typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo'
+      },
+      body: JSON.stringify({ phone: phone, captcha_id: captchaId, captcha_answer: captchaAnswer, brand_mark: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' })
     })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d, status: r.status }; }); })
       .then(function(x) {
@@ -767,7 +784,8 @@ if (registerForm) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : ''
+          'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '',
+          'X-Lobster-Brand': brandMark || (typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo')
         },
         body: JSON.stringify(payload)
       })
@@ -775,7 +793,8 @@ if (registerForm) {
         .then(function(x) {
           if (x.ok) {
             token = x.data.access_token;
-            localStorage.setItem('token', token);
+            if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
+            else localStorage.setItem('token', token);
             if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
             showMsg(msgEl, '登录成功', false);
             setRegisterSmsButtonCooldown(0);
@@ -1211,14 +1230,21 @@ function loadDashboard() {
   }
   fetch(API_BASE + '/auth/me', { headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + token } })
     .then(function(r) {
-      if (r.status === 401) { token = null; localStorage.removeItem('token'); loadDashboard(); return null; }
+      if (r.status === 401) {
+        token = null;
+        if (typeof clearStoredAuthToken === 'function') clearStoredAuthToken();
+        else localStorage.removeItem('token');
+        loadDashboard();
+        return null;
+      }
       return r.json();
     })
     .then(function(d) {
       if (!d) return;
       if (d.id == null) {
         token = null;
-        localStorage.removeItem('token');
+        if (typeof clearStoredAuthToken === 'function') clearStoredAuthToken();
+        else localStorage.removeItem('token');
         loadDashboard();
         return;
       }
@@ -1428,7 +1454,8 @@ function refreshModelSelector() {
 
 document.getElementById('logout').addEventListener('click', function() {
   token = null;
-  localStorage.removeItem('token');
+  if (typeof clearStoredAuthToken === 'function') clearStoredAuthToken();
+  else localStorage.removeItem('token');
   if (typeof window.resetChatSessionsForLogout === 'function') window.resetChatSessionsForLogout();
   var avatarEl = document.getElementById('headerUserAvatar');
   if (avatarEl) avatarEl.textContent = 'U';
@@ -2045,5 +2072,6 @@ function openCreditLimitModal() {
   )) applyHash();
 })();
 
-applyBrandingFromApi();
-if (token) loadDashboard();
+applyBrandingFromApi().then(function() {
+  if (token) loadDashboard();
+});

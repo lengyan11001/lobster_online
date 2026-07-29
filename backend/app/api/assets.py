@@ -201,14 +201,25 @@ async def _upload_bytes_to_auth_server(
     if installation_id:
         headers["X-Installation-Id"] = installation_id
 
+    last_error: Optional[str] = None
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                resp = await client.post(
+                    upload_url,
+                    files={"file": (filename or "upload.bin", data, content_type or "application/octet-stream")},
+                    headers=headers,
+                    follow_redirects=True,
+                )
+            break
+        except (httpx.ReadTimeout, httpx.ReadError, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_error = f"{type(e).__name__}: {e}"
+            if attempt >= 3:
+                return None, {"error": last_error, "attempt": attempt, "upload_url": upload_url}
+            await asyncio.sleep(1.0 if attempt == 1 else 3.0)
+        except Exception as e:
+            return None, {"error": f"{type(e).__name__}: {e}", "attempt": attempt, "upload_url": upload_url}
     try:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            resp = await client.post(
-                upload_url,
-                files={"file": (filename or "upload.bin", data, content_type or "application/octet-stream")},
-                headers=headers,
-                follow_redirects=True,
-            )
         diag: dict[str, Any] = {"status_code": resp.status_code}
         if resp.status_code >= 400:
             diag["error"] = f"server returned {resp.status_code}"
@@ -230,7 +241,7 @@ async def _upload_bytes_to_auth_server(
             return None, diag
         return public_url, diag
     except Exception as e:
-        return None, {"error": f"{type(e).__name__}: {e}"}
+        return None, {"error": f"{type(e).__name__}: {e}", "last_upload_error": last_error or ""}
 
 
 def _transfer_payload_type(media_type: str) -> str:
@@ -685,11 +696,21 @@ def _refresh_asset_source_url_from_local_file(
 def get_asset_public_url(
     asset_id: str, user_id: int, request: Request, db: Session
 ) -> Optional[str]:
-    """【使用素材-步骤A】获取素材公网 URL：source_url 为非内部 http(s) 时直接返回（含速推 CDN），否则返回 None。"""
+    """获取素材公网 URL；旧本地素材缺少 source_url 时先补传到云端。"""
     logger.info("[使用素材-步骤A.1] 查询素材 asset_id=%s user_id=%s", asset_id, user_id)
     row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == user_id).first()
-    if row and getattr(row, "source_url", None):
-        url = (row.source_url or "").strip()
+    if not row:
+        logger.warning("[使用素材-步骤A.2] 素材不存在 asset_id=%s user_id=%s", asset_id, user_id)
+        return None
+    url = (getattr(row, "source_url", None) or "").strip()
+    if not url:
+        return _refresh_asset_source_url_from_local_file(
+            row,
+            request,
+            db,
+            reason="missing_source_url",
+        )
+    if url:
         logger.info("[使用素材-步骤A.2] 找到素材 source_url=%s asset_id=%s", url[:100] if url else "None", asset_id)
         if url.startswith("http://") or url.startswith("https://"):
             if _is_internal_asset_http_url(url):
@@ -719,7 +740,7 @@ def get_asset_public_url(
                 return None
             logger.info("[使用素材-步骤A.4] 返回公网 URL asset_id=%s url=%s", asset_id, url[:80])
             return url
-    logger.warning("[使用素材-步骤A.2] 素材不存在或 source_url 为 None asset_id=%s user_id=%s", asset_id, user_id)
+    logger.warning("[使用素材-步骤A.2] 素材 source_url 不是 HTTP 地址 asset_id=%s user_id=%s", asset_id, user_id)
     return None
 
 

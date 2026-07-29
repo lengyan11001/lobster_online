@@ -363,7 +363,10 @@
       fd.append('file', _pendingAttach.file);
       var mediaType = _pendingAttach.type;
       fetch('/api/wecom/media/upload?config_id=' + configId + '&media_type=' + mediaType, {
-        method: 'POST', body: fd, headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('token') || '') }
+        method: 'POST', body: fd, headers: {
+          'Authorization': 'Bearer ' + (typeof getStoredAuthToken === 'function' ? getStoredAuthToken() : (localStorage.getItem('token') || '')),
+          'X-Lobster-Brand': typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo'
+        }
       })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(x) {

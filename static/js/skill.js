@@ -1517,7 +1517,7 @@ window._openAi3dModelView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ai-3d-model', {
       html: '/static/views/ai-3d-model.html?v=20260709-component-split-v1',
-      scripts: '/static/js/ai-3d-model.js?v=20260709-component-split-v1',
+      scripts: '/static/js/ai-3d-model.js?v=20260729-component-flow-v1-v8',
       init: 'initAi3dModelView',
       cache: 'reload'
     });
