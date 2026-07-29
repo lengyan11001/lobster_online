@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TypedDict
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 
@@ -350,6 +350,7 @@ def _is_grok_video_model(raw: str) -> bool:
     s = (raw or "").strip().lower().replace("_", "-").replace(" ", "")
     return s in {
         "grok-imagine-video-1.5-preview",
+        "grok-imagine-video-1.5",
         "grok-imagine-1.0-video",
         "grok-video-3",
         "yingmeng1.5plus",
@@ -361,6 +362,8 @@ def _normalize_video_channel(raw: str) -> str:
     s = (raw or "").strip().lower()
     if s in {"openmind", "open-mind", "om", "openmindapi"}:
         return "openmind"
+    if s in {"xai", "x-ai", "official-xai", "official_xai"}:
+        return "xai"
     if s in {"yunwu", "yw", "cloudmist", "cloud-mist", "云雾", "雲霧"}:
         return "yunwu"
     if s in {"comfly", "veo", "veo3", "veo3.1", "veo31"}:
@@ -387,6 +390,8 @@ def _default_video_model(channel: str) -> str:
     normalized = _normalize_video_channel(channel)
     if normalized == "openmind":
         return "veo31-fast"
+    if normalized == "xai":
+        return "grok-imagine-video-1.5"
     if normalized == "yunwu":
         return "veo3.1"
     if normalized == "comfly":
@@ -564,7 +569,31 @@ def _parse_json(text: str) -> Dict[str, Any]:
     raise PipelineError(f"Unable to parse JSON from model output: {stripped[:500]}")
 
 
-def _download_file(url: str, path: Path, timeout_seconds: int) -> Path:
+def _resolve_video_download_url(url: str, channel: str, base_url: str, task_id: str = "") -> str:
+    """Route protected OpenMind content through our server-side proxy."""
+    source_url = str(url or "").strip()
+    parsed = urlparse(source_url)
+    hostname = (parsed.hostname or "").lower()
+    if _normalize_video_channel(channel) != "openmind" and hostname not in {"xingapi.top", "www.xingapi.top"}:
+        return source_url
+    path_parts = [part for part in parsed.path.split("/") if part]
+    proxy_task_id = str(task_id or "").strip()
+    if not proxy_task_id:
+        try:
+            videos_index = path_parts.index("videos")
+            proxy_task_id = path_parts[videos_index + 1]
+        except (ValueError, IndexError):
+            return source_url
+    if not proxy_task_id or not (base_url or "").strip():
+        return source_url
+    return f"{base_url.rstrip('/')}/openmind/v1/videos/{quote(proxy_task_id, safe='')}/content"
+
+
+def _download_file(
+    url: str,
+    path: Path,
+    timeout_seconds: int,
+) -> Path:
     r = requests.get(url, timeout=timeout_seconds)
     if r.status_code != 200:
         raise PipelineError(f"Download failed HTTP {r.status_code}: {url}")
@@ -647,14 +676,24 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
     for seg in sorted(segments, key=lambda item: int(item.get("index", 0))):
         index = int(seg.get("index", 0))
         clip_url = _first_text(seg, "mp4url")
+        download_url = _resolve_video_download_url(
+            clip_url,
+            str(seg.get("video_channel") or config.video_channel),
+            str(seg.get("video_base_url") or config.video_base_url or config.base_url),
+            str(seg.get("video_task_id") or ""),
+        )
         clip_path = clips_dir / f"segment_{index:02d}.mp4"
-        logger_obj.segment(index, "merge_download", "running", payload={"index": index, "url": clip_url})
+        logger_obj.segment(index, "merge_download", "running", payload={"index": index, "url": clip_url, "download_url": download_url})
         downloaded_path, attempts = _retry(
             f"download_segment_{index:02d}",
             config.clip_download_retries,
             config.network_retry_delay_seconds,
             logger_obj,
-            lambda clip_url=clip_url, clip_path=clip_path: _download_file(clip_url, clip_path, config.clip_download_timeout_seconds),
+            lambda download_url=download_url, clip_path=clip_path: _download_file(
+                download_url,
+                clip_path,
+                config.clip_download_timeout_seconds,
+            ),
         )
         logger_obj.segment(index, "merge_download", "success", attempts=attempts, payload={"index": index, "path": str(downloaded_path)})
         downloaded.append({"index": index, "path": str(downloaded_path), "url": clip_url})
@@ -1120,6 +1159,34 @@ class ComflySeedanceClient:
 
             return _retry(action, 1, self.config.network_retry_delay_seconds, self.logger, call_openmind)
 
+        if video_channel == "xai":
+            image_url = str(segment_reference_url or "").strip()
+            body: Dict[str, Any] = {
+                "model": video_model or "grok-imagine-video-1.5",
+                "prompt": prompt,
+                "duration": int(duration_seconds),
+            }
+            if image_url:
+                body["image"] = {"url": image_url}
+
+            def call_xai() -> Dict[str, Any]:
+                vid_url = f"{video_base_url}/xai/v1/videos/generations"
+                self._trace_request("xai_video_submit", vid_url, body)
+                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                payload = self._check(r)
+                request_id = str(payload.get("request_id") or payload.get("id") or payload.get("task_id") or "").strip()
+                if not request_id:
+                    raise PipelineError(f"xAI submit returned no request id: {payload}")
+                payload["request_id"] = request_id
+                payload["task_id"] = request_id
+                payload["video_channel"] = "xai"
+                payload["video_base_url"] = video_base_url
+                payload["video_model"] = video_model or "grok-imagine-video-1.5"
+                payload["_request"] = body
+                return payload
+
+            return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call_xai)
+
         if video_channel == "yunwu":
             images = [segment_reference_url] if segment_reference_url else []
             body = {
@@ -1242,6 +1309,9 @@ class ComflySeedanceClient:
                 if video_channel == "openmind":
                     poll_url = f"{video_base_url}/openmind/v1/videos/{task_id}"
                     phase = "openmind_video_poll"
+                elif video_channel == "xai":
+                    poll_url = f"{video_base_url}/xai/v1/videos/{task_id}"
+                    phase = "xai_video_poll"
                 elif video_channel == "yunwu":
                     poll_url = f"{video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
                     phase = "yunwu_video_poll"
@@ -1663,6 +1733,7 @@ def _poll_segment_video(
         "video_raw": poll_result["raw"],
         "video_channel": segment_plan.get("video_channel") or client.video_channel,
         "video_model": segment_plan.get("video_model") or client.config.video_model,
+        "video_base_url": segment_plan.get("video_base_url") or client.video_base_url,
         "video_provider_role": segment_plan.get("video_provider_role") or "primary",
         "video_provider_stage_role": segment_plan.get("video_provider_stage_role") or segment_plan.get("video_provider_role") or "primary",
         "workflow_mode": segment_plan.get("workflow_mode") or client.config.workflow_mode,
@@ -1700,20 +1771,30 @@ def _validate_segment_video_aspect(
     role = str(segment_result.get("video_provider_stage_role") or segment_result.get("video_provider_role") or "primary").strip() or "primary"
     channel = str(segment_result.get("video_channel") or "").strip()
     model = str(segment_result.get("video_model") or "").strip()
+    download_url = _resolve_video_download_url(
+        video_url,
+        channel,
+        str(segment_result.get("video_base_url") or client.video_base_url or client.base_url),
+        str(segment_result.get("video_task_id") or ""),
+    )
     validation_dir = logger_obj.run_dir / "validation"
     validation_path = validation_dir / f"segment_{index:02d}_{role}_{channel or 'video'}.mp4"
     logger_obj.segment(
         index,
         f"aspect_check_{role}",
         "running",
-        payload={"url": video_url, "expected_aspect_ratio": aspect_ratio, "video_channel": channel, "video_model": model},
+        payload={"url": video_url, "download_url": download_url, "expected_aspect_ratio": aspect_ratio, "video_channel": channel, "video_model": model},
     )
     downloaded_path, attempts = _retry(
         f"validate_segment_{index:02d}_{role}",
         client.config.clip_download_retries,
         client.config.network_retry_delay_seconds,
         logger_obj,
-        lambda: _download_file(video_url, validation_path, client.config.clip_download_timeout_seconds),
+        lambda: _download_file(
+            download_url,
+            validation_path,
+            client.config.clip_download_timeout_seconds,
+        ),
     )
     dimensions = _probe_video_dimensions(str(downloaded_path), client.config.ffmpeg_path)
     payload = {

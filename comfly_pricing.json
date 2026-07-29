@@ -153,6 +153,18 @@
       ],
       "note": "Comfly Grok video. Purchase price is 80 credits per generation; user charge is 160 with default 2x multiplier."
     },
+    "grok-imagine-video-1.5": {
+      "price_type": "per_call",
+      "price_per_unit": 80,
+      "api_format": "xai_official",
+      "comfly_model": "grok-imagine-video-1.5",
+      "sutui_equivalent": [
+        "grok-imagine-video-1.5",
+        "xai/grok-imagine-video/image-to-video",
+        "xai/grok-imagine-video/text-to-video"
+      ],
+      "note": "Official xAI Grok Imagine Video 1.5 fallback channel; same user charge as the existing Grok video provider."
+    },
     "sora2": {
       "enabled": false,
       "note": "Comfly Sora2 submit tested 2026-04-28: /v1/videos and /sora/v1/videos both failed on current server key. Keep priced but do not route until Comfly channel is available.",

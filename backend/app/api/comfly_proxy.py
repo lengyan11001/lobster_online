@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -70,6 +70,7 @@ _TIMEOUT_SEEDREAM_IMAGE = 180.0
 _TIMEOUT_FILE_UPLOAD = 120.0
 _TIMEOUT_VIDEO_SUBMIT = 60.0
 _TIMEOUT_OPENMIND_VIDEO_SUBMIT = 60.0
+_TIMEOUT_XAI_VIDEO_SUBMIT = 60.0
 _TIMEOUT_VIDEO_POLL = 30.0
 _MAX_PROXY_VIDEO_TASK_TRACK = 5000
 _MAX_GROK_REFERENCE_BYTES = 30 * 1024 * 1024
@@ -901,17 +902,18 @@ def _openmind_video_model(model: str) -> str:
 def _openmind_video_body(body: Dict[str, Any], model: str, entry: Dict[str, Any]) -> Dict[str, Any]:
     forwarded = dict(body or {})
     forwarded["model"] = _openmind_video_model(model)
-    for key in ("seconds", "duration"):
+    duration_value = None
+    for key in ("duration", "seconds"):
         if key in forwarded and forwarded.get(key) is not None:
             try:
-                val = float(forwarded.get(key))
-                forwarded[key] = int(val) if val.is_integer() else val
+                duration_value = int(float(forwarded.get(key)))
+                break
             except (TypeError, ValueError):
                 forwarded.pop(key, None)
-    if "duration" not in forwarded and forwarded.get("seconds") is not None:
-        forwarded["duration"] = forwarded.get("seconds")
-    if "seconds" not in forwarded and forwarded.get("duration") is not None:
-        forwarded["seconds"] = forwarded.get("duration")
+    if duration_value is not None:
+        # OpenMind /v1/videos 当前实现要求 duration 为 int，避免再混传 seconds。
+        forwarded["duration"] = duration_value
+        forwarded.pop("seconds", None)
     if not forwarded.get("aspect_ratio") and forwarded.get("ratio"):
         forwarded["aspect_ratio"] = forwarded.get("ratio")
     forwarded.setdefault("aspect_ratio", "9:16")
@@ -971,6 +973,144 @@ async def _openmind_video_poll(task_id: str) -> Dict[str, Any]:
     if isinstance(payload, dict):
         payload.setdefault("_provider", "openmind")
     return payload
+
+
+def _xai_video_base_url() -> str:
+    base = (os.environ.get("XAI_API_BASE") or "https://api.x.ai").strip().rstrip("/")
+    return base or "https://api.x.ai"
+
+
+def _xai_video_api_key() -> str:
+    key = (os.environ.get("XAI_API_KEY") or "").strip()
+    if not key:
+        raise HTTPException(503, "Server missing XAI_API_KEY")
+    return key
+
+
+def _xai_video_headers() -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_xai_video_api_key()}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _xai_video_request_headers(*, json_body: bool = False) -> Dict[str, str]:
+    base = _xai_video_base_url().lower().rstrip("/")
+    proxy_token = (os.environ.get("XAI_PROXY_TOKEN") or "").strip()
+    token = proxy_token if base != "https://api.x.ai" and proxy_token else _xai_video_api_key()
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+def _xai_video_body(body: Dict[str, Any], model: str) -> Dict[str, Any]:
+    source = dict(body or {})
+    prompt = str(source.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "missing prompt")
+    try:
+        duration = int(float(source.get("duration") or source.get("seconds") or 10))
+    except (TypeError, ValueError):
+        duration = 10
+    if duration <= 0:
+        raise HTTPException(400, "duration must be a positive integer")
+
+    image_url = ""
+    image = source.get("image")
+    if isinstance(image, dict):
+        image_url = str(image.get("url") or "").strip()
+    elif image:
+        image_url = str(image).strip()
+    if not image_url:
+        image_url = str(source.get("image_url") or "").strip()
+    if not image_url:
+        images = source.get("images")
+        if isinstance(images, list):
+            image_url = next((str(item).strip() for item in images if str(item or "").strip()), "")
+
+    forwarded: Dict[str, Any] = {
+        "model": (os.environ.get("XAI_VIDEO_MODEL") or model or "grok-imagine-video-1.5").strip(),
+        "prompt": prompt,
+        "duration": duration,
+    }
+    if image_url:
+        forwarded["image"] = {"url": image_url}
+    return forwarded
+
+
+async def _xai_video_submit(body: Dict[str, Any], model: str) -> Dict[str, Any]:
+    upstream_body = _xai_video_body(body, model)
+    url = f"{_xai_video_base_url()}/v1/videos/generations"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_XAI_VIDEO_SUBMIT, follow_redirects=True) as client:
+            response = await client.post(url, headers=_xai_video_request_headers(json_body=True), json=upstream_body)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"xAI videos submit timeout after {_TIMEOUT_XAI_VIDEO_SUBMIT}s") from exc
+    except httpx.TransportError as exc:
+        raise RuntimeError(f"xAI videos transport error: {exc!r}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"xAI videos HTTP {response.status_code}: {(response.text or '')[:500]}")
+    try:
+        payload = response.json() if response.content else {}
+    except Exception:
+        payload = {"_raw_text": response.text}
+    if isinstance(payload, dict):
+        payload.setdefault("_provider", "xai")
+        payload.setdefault("_requested_model", upstream_body.get("model"))
+        request_id = str(payload.get("request_id") or payload.get("id") or "").strip()
+        if request_id:
+            payload.setdefault("request_id", request_id)
+            payload.setdefault("task_id", request_id)
+    return payload
+
+
+async def _xai_video_poll(request_id: str) -> Dict[str, Any]:
+    safe_request_id = (request_id or "").strip()
+    if not safe_request_id:
+        raise HTTPException(400, "missing request_id")
+    url = f"{_xai_video_base_url()}/v1/videos/{safe_request_id}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_VIDEO_POLL, follow_redirects=True) as client:
+            response = await client.get(
+                url,
+                headers=_xai_video_request_headers(),
+            )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"xAI videos poll timeout after {_TIMEOUT_VIDEO_POLL}s") from exc
+    except httpx.TransportError as exc:
+        raise RuntimeError(f"xAI videos poll transport error: {exc!r}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"xAI videos poll HTTP {response.status_code}: {(response.text or '')[:500]}")
+    try:
+        payload = response.json() if response.content else {}
+    except Exception:
+        payload = {"_raw_text": response.text}
+    if isinstance(payload, dict):
+        payload.setdefault("_provider", "xai")
+        payload.setdefault("request_id", safe_request_id)
+        payload.setdefault("task_id", safe_request_id)
+    return payload
+
+
+async def _openmind_video_content(task_id: str) -> Response:
+    """Fetch protected OpenMind video bytes with the server-side provider key."""
+    safe_task_id = (task_id or "").strip()
+    if not safe_task_id:
+        raise HTTPException(400, "missing task_id")
+    url = f"{_openmind_video_base_url()}/v1/videos/{safe_task_id}/content"
+    async with httpx.AsyncClient(timeout=_TIMEOUT_VIDEO_POLL, follow_redirects=True, trust_env=False) as client:
+        upstream = await client.get(url, headers=_openmind_video_headers())
+    if upstream.status_code >= 400:
+        raise HTTPException(upstream.status_code, f"OpenMind video content HTTP {upstream.status_code}: {(upstream.text or '')[:500]}")
+    media_type = upstream.headers.get("content-type") or "video/mp4"
+    response_headers = {}
+    for name in ("content-length", "content-disposition", "cache-control"):
+        value = upstream.headers.get(name)
+        if value:
+            response_headers[name] = value
+    return Response(content=upstream.content, media_type=media_type, headers=response_headers)
 
 
 def _task_id_from_response(resp: Dict[str, Any]) -> str:
@@ -2220,11 +2360,12 @@ def _video_provider_policy(model: str, channel: str = "") -> Dict[str, Any]:
     low_channel = (channel or "").strip().lower()
     proxy_base = "/api/comfly-proxy"
 
-    if low_channel in {"openmind", "grok"} or low_model in {"grok-video-3", "grok-imagine-video-1.5-preview", "grok-imagine-1.0-video", "yingmeng1.5plus"} or low_model.startswith("xai/grok-imagine-video/"):
+    if low_channel in {"openmind", "grok", "xai", "official-xai", "x-ai"} or low_model in {"grok-video-3", "grok-imagine-video-1.5", "grok-imagine-video-1.5-preview", "grok-imagine-1.0-video", "yingmeng1.5plus"} or low_model.startswith("xai/grok-imagine-video/"):
         return {
             "ok": True,
             "model_family": "grok",
             "providers": [
+                {"channel": "xai", "model": "grok-imagine-video-1.5", "base_url": proxy_base},
                 {"channel": "openmind", "model": "grok-video-3", "base_url": proxy_base},
                 {"channel": "comfly", "model": "grok-video-3", "base_url": proxy_base},
                 {"channel": "yunwu", "model": "grok-video-3", "base_url": proxy_base},
@@ -2382,6 +2523,73 @@ async def proxy_openmind_video_poll(
     except Exception as e:
         raise HTTPException(502, f"OpenMind video poll failed: {e}")
     return JSONResponse(resp)
+
+
+@router.get("/api/comfly-proxy/openmind/v1/videos/{task_id}/content", summary="OpenMind video content proxy")
+async def proxy_openmind_video_content(
+    task_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    _check_request_authorized_for_billing(request)
+    return await _openmind_video_content(task_id)
+
+
+@router.post("/api/comfly-proxy/xai/v1/videos/generations", summary="Official xAI Grok video submit proxy")
+async def proxy_xai_video_submit(request: Request):
+    _check_request_authorized_for_billing(request)
+    body = await request.json()
+    model = str(body.get("model") or "grok-imagine-video-1.5").strip()
+    entry = _require_model_entry(model)
+    request_user_id, billing_user_id = _resolve_proxy_user_ids_from_request(request, map_to_online_user=False)
+    estimated = estimate_comfly_credits(model, body, for_user=True) or 1
+    internal_fallback = _is_trusted_internal_video_fallback(request)
+    pre = Decimal("0") if internal_fallback else _do_pre_deduct_by_user_id(
+        billing_user_id,
+        estimated,
+        capability_id=_CAPABILITY_FOR_BILLING,
+        model=model,
+        endpoint="xai_video_submit",
+        extra_meta={"upstream": "xai"},
+    )
+    try:
+        response = await _xai_video_submit(body, model)
+    except Exception as exc:
+        _do_full_refund_by_user_id(
+            billing_user_id,
+            pre=pre,
+            capability_id=_CAPABILITY_FOR_BILLING,
+            model=model,
+            endpoint="xai_video_submit",
+            error=str(exc),
+        )
+        _audit("xai_video_submit_failed", user_id=billing_user_id, request_user_id=request_user_id, model=model, error=str(exc)[:300])
+        raise HTTPException(502, f"xAI video submit failed: {exc}")
+    task_id = _task_id_from_response(response)
+    _remember_proxy_video_task(task_id, "xai", model)
+    _audit(
+        "xai_video_submit_ok",
+        user_id=billing_user_id,
+        request_user_id=request_user_id,
+        model=model,
+        task_id=task_id,
+        pre=credits_json_float(pre),
+    )
+    return JSONResponse(response)
+
+
+@router.get("/api/comfly-proxy/xai/v1/videos/{request_id}", summary="Official xAI Grok video poll proxy")
+async def proxy_xai_video_poll(
+    request_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    _check_request_authorized_for_billing(request)
+    try:
+        response = await _xai_video_poll(request_id)
+    except Exception as exc:
+        raise HTTPException(502, f"xAI video poll failed: {exc}")
+    return JSONResponse(response)
 
 
 @router.post("/api/comfly-proxy/v1/video/create", summary="Yunwu video create proxy")
