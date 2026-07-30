@@ -1,6 +1,6 @@
 {
-  "version": "1.0.128",
-  "build": 172,
-  "applied_at": "2026-07-30T15:34:56+08:00",
-  "note": "fix local bestseller final-video publishing and force online publish copy through server LLM"
+  "version": "1.0.129",
+  "build": 173,
+  "applied_at": "2026-07-30T19:34:26+08:00",
+  "note": "unify digital human template preview and route digital human tasks through cloud 2.0"
 }
