@@ -1,6 +1,6 @@
 {
-  "version": "1.0.125",
-  "build": 169,
-  "applied_at": "2026-07-30T09:23:49+08:00",
-  "note": "add xAI Grok video routing and personal WeChat takeover summary"
+  "version": "1.0.127",
+  "build": 171,
+  "applied_at": "2026-07-30T14:55:27+08:00",
+  "note": "deliver TVC final videos to H5 and add daka partner branding"
 }

@@ -44,6 +44,7 @@ from .assets import (
     _resolve_v3_tasks_url_for_download,
     _save_asset_from_url_locked,
     _save_url_lock_for,
+    get_asset_public_url,
 )
 from .auth import _ServerUser, get_current_user_media_edit
 
@@ -515,6 +516,104 @@ def _redact_progress_for_client(prog: Any) -> Any:
     return red
 
 
+def _asset_delivery_url(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    return str(
+        item.get("source_url")
+        or item.get("url")
+        or item.get("public_url")
+        or asset.get("source_url")
+        or asset.get("url")
+        or asset.get("public_url")
+        or ""
+    ).strip()
+
+
+def _asset_delivery_id(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+    return str(item.get("asset_id") or asset.get("asset_id") or asset.get("id") or "").strip()
+
+
+def _repair_completed_job_delivery(
+    job: Dict[str, Any],
+    *,
+    request: Request,
+    db: Session,
+) -> Dict[str, Any]:
+    """Publish a locally merged final video before returning a completed job."""
+    if str(job.get("status") or "").strip() != "completed":
+        return job
+
+    result = deepcopy(job.get("result")) if isinstance(job.get("result"), dict) else {}
+    saved_assets = deepcopy(job.get("saved_assets")) if isinstance(job.get("saved_assets"), list) else []
+    user_id = int(job.get("user_id") or 0)
+    changed = False
+    final_url = ""
+
+    for item in saved_assets:
+        if not isinstance(item, dict):
+            continue
+        public_url = _asset_delivery_url(item)
+        asset_id = _asset_delivery_id(item)
+        if not public_url and asset_id and user_id > 0:
+            public_url = str(get_asset_public_url(asset_id, user_id, request, db) or "").strip()
+        if not public_url:
+            continue
+        if str(item.get("source_url") or "").strip() != public_url:
+            item["source_url"] = public_url
+            changed = True
+        asset = item.get("asset") if isinstance(item.get("asset"), dict) else None
+        if asset is not None and str(asset.get("source_url") or "").strip() != public_url:
+            asset["source_url"] = public_url
+            changed = True
+        if not final_url or str(item.get("task_id") or "").strip() == "merged_final":
+            final_url = public_url
+
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else None
+    if final_video is not None:
+        current_url = str(final_video.get("url") or "").strip()
+        if current_url:
+            final_url = current_url
+        elif final_url:
+            final_video["url"] = final_url
+            changed = True
+
+    if changed:
+        update_job(
+            str(job.get("job_id") or ""),
+            result=result,
+            saved_assets=saved_assets,
+        )
+        refreshed = get_job(str(job.get("job_id") or ""))
+        if refreshed:
+            return refreshed
+    return {**job, "result": result, "saved_assets": saved_assets}
+
+
+def _redact_completed_result_for_client(value: Any, *, key: str = "") -> Any:
+    if isinstance(value, list):
+        return [_redact_completed_result_for_client(item) for item in value]
+    if isinstance(value, dict):
+        clean: Dict[str, Any] = {}
+        for child_key, child_value in value.items():
+            if str(child_key).lower() in {"run_dir", "output_dir", "manifest_file"}:
+                continue
+            redacted = _redact_completed_result_for_client(child_value, key=str(child_key))
+            if redacted is not None:
+                clean[child_key] = redacted
+        return clean
+    if isinstance(value, str):
+        text = value.strip()
+        if key.lower() in {"path", "local_path", "merged_path"} and re.match(r"^[A-Za-z]:[/\\]", text):
+            return None
+        return re.sub(r"[A-Za-z]:[/\\][^\s\"'<>|]{2,500}", "…", value)
+    return value
+
+
 def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str, Any]:
     st = (job.get("status") or "").strip()
     out: Dict[str, Any] = {
@@ -546,7 +645,7 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str
             out["result"] = job.get("result")
     if st == "completed":
         if include_full:
-            out["result"] = job.get("result")
+            out["result"] = _redact_completed_result_for_client(job.get("result"))
             out["saved_assets"] = job.get("saved_assets") or []
         prog = read_manifest_progress(str(job_out))
         if prog:
@@ -722,14 +821,17 @@ async def comfly_daihuo_pipeline_start(
 
 
 @router.get("/api/comfly-daihuo/pipeline/jobs/{job_id}")
-async def comfly_daihuo_pipeline_job_status(
+def comfly_daihuo_pipeline_job_status(
     job_id: str,
+    request: Request,
     compact: bool = False,
     current_user: _ServerUser = Depends(get_current_user_media_edit),
+    db: Session = Depends(get_db),
 ):
     j = get_job(job_id)
     if not j:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     if int(j.get("user_id") or -1) != int(current_user.id):
         raise HTTPException(status_code=403, detail="无权查看该任务")
+    j = _repair_completed_job_delivery(j, request=request, db=db)
     return _job_status_response(j, include_full=not compact)

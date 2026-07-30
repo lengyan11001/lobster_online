@@ -81,3 +81,18 @@ def test_home_visual_is_applied_from_branding_registry():
 
     assert 'id="brandHomeVisual"' in html
     assert "icons.home_visual" in script
+
+
+def test_header_partner_logo_is_only_configured_for_daka():
+    registry = json.loads(
+        (launcher.ROOT / "static" / "branding" / "brands.json").read_text(encoding="utf-8")
+    )
+    html = (launcher.ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    script = (launcher.ROOT / "static" / "js" / "init.js").read_text(encoding="utf-8")
+
+    assert 'id="brandPartnerLogo"' in html
+    assert 'id="brandPartnerLogo" src="" alt="" hidden' in html
+    assert "icons.header_partner_logo" in script
+    assert "header_partner_logo" not in registry["marks"]["bihuo"]["icons"]
+    assert registry["marks"]["daka"]["icons"]["header_partner_logo"] == "/static/daka_header_partner.jpg"
+    assert (launcher.ROOT / "static" / "daka_header_partner.jpg").is_file()

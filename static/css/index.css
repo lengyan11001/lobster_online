@@ -5610,6 +5610,15 @@
     .logo .logo-accent {
       color: #3558d8;
     }
+    .brand-partner-logo {
+      width: 132px;
+      height: 39px;
+      flex: 0 0 auto;
+      object-fit: contain;
+    }
+    .brand-partner-logo[hidden] {
+      display: none;
+    }
     .header-version {
       max-width: clamp(120px, 14vw, 220px);
     }

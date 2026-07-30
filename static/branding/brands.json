@@ -36,7 +36,9 @@
         "home_visual": "/static/daka_source.png",
         "logo_mark": "/static/daka_32.png",
         "logo_mark_width": 32,
-        "logo_mark_height": 32
+        "logo_mark_height": 32,
+        "header_partner_logo": "/static/daka_header_partner.jpg",
+        "header_partner_logo_alt": "三域变现商学院"
       },
       "install": {
         "desktop_ico": "static/daka_box.ico",

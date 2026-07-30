@@ -1586,6 +1586,58 @@ def _compact_result_text(obj: Any) -> str:
         return str(obj)[:4000]
 
 
+def _scheduled_tvc_completion(result: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+    job = result.get("result") if isinstance(result.get("result"), dict) else result
+    if not isinstance(job, dict):
+        job = {}
+    pipeline_result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    final_video = pipeline_result.get("final_video") if isinstance(pipeline_result.get("final_video"), dict) else {}
+    saved_assets = job.get("saved_assets") if isinstance(job.get("saved_assets"), list) else []
+    urls: List[str] = []
+    asset_ids: List[str] = []
+
+    def add_url(value: Any) -> None:
+        url = str(value or "").strip()
+        if url.startswith(("http://", "https://")) and url not in urls:
+            urls.append(url)
+
+    add_url(final_video.get("url"))
+    for item in saved_assets:
+        if not isinstance(item, dict):
+            continue
+        asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+        add_url(
+            item.get("source_url")
+            or item.get("url")
+            or item.get("public_url")
+            or asset.get("source_url")
+            or asset.get("url")
+            or asset.get("public_url")
+        )
+        asset_id = str(item.get("asset_id") or asset.get("asset_id") or asset.get("id") or "").strip()
+        if asset_id and asset_id not in asset_ids:
+            asset_ids.append(asset_id)
+
+    if urls:
+        result_text = "爆款TVC已生成，点击查看成片。"
+    elif asset_ids:
+        result_text = "爆款TVC已生成，成片正在同步，请稍后刷新查看。"
+    else:
+        result_text = "爆款TVC已生成。"
+    payload = {
+        "capability_id": "comfly.daihuo.pipeline",
+        "mcp_result": result,
+        "saved_assets": saved_assets,
+        "media_urls": urls,
+        "result_refs": {
+            "urls": urls,
+            "asset_ids": asset_ids,
+            "saved_assets": saved_assets,
+        },
+    }
+    return result_text, payload
+
+
 def _extract_json_object_text(text: str) -> Dict[str, Any]:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -4312,13 +4364,18 @@ async def _run_scheduled_capability(
         cap_error = _scheduled_capability_error(result)
         if cap_error:
             raise RuntimeError(cap_error)
+        if capability_id == "comfly.daihuo.pipeline":
+            result_text, result_payload = _scheduled_tvc_completion(result)
+        else:
+            result_text = _compact_result_text(result)
+            result_payload = {"capability_id": capability_id, "mcp_result": result}
         await _complete_task_run(
             cloud,
             base,
             headers,
             run_id,
-            result_text=_compact_result_text(result),
-            result_payload={"capability_id": capability_id, "mcp_result": result},
+            result_text=result_text,
+            result_payload=result_payload,
         )
     except Exception as exc:
         logger.exception("[SCHEDULED-TASK] capability failed run_id=%s capability_id=%s", run_id, capability_id)

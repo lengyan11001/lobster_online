@@ -336,6 +336,18 @@ function applyBrandingFromApi() {
         if (icons.logo_mark_width) markImg.width = Number(icons.logo_mark_width);
         if (icons.logo_mark_height) markImg.height = Number(icons.logo_mark_height);
       }
+      var partnerLogo = document.getElementById('brandPartnerLogo');
+      if (partnerLogo) {
+        if (icons.header_partner_logo) {
+          partnerLogo.src = icons.header_partner_logo;
+          partnerLogo.alt = icons.header_partner_logo_alt || '';
+          partnerLogo.hidden = false;
+        } else {
+          partnerLogo.hidden = true;
+          partnerLogo.removeAttribute('src');
+          partnerLogo.alt = '';
+        }
+      }
       var homeVisual = document.getElementById('brandHomeVisual');
       if (homeVisual && icons.home_visual) homeVisual.src = icons.home_visual;
       var primary = document.getElementById('brandLogoPrimary');
