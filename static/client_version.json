@@ -1,6 +1,6 @@
 {
-  "version": "1.0.124",
-  "build": 168,
-  "applied_at": "2026-07-29T18:27:24+08:00",
-  "note": "summarize personal WeChat takeover and reply from synced memory"
+  "version": "1.0.125",
+  "build": 169,
+  "applied_at": "2026-07-30T09:23:49+08:00",
+  "note": "add xAI Grok video routing and personal WeChat takeover summary"
 }
