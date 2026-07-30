@@ -389,6 +389,14 @@ def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(num, maximum))
 
 
+def _workflow_flag(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def _parse_utc_datetime(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
@@ -2207,6 +2215,9 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         return {}
     generated = result_payload.get("generated") if isinstance(result_payload.get("generated"), dict) else {}
     local_result = result_payload.get("local_result") if isinstance(result_payload.get("local_result"), dict) else {}
+    local_item = local_result.get("item") if isinstance(local_result.get("item"), dict) else {}
+    video_result = local_result.get("video_result") if isinstance(local_result.get("video_result"), dict) else {}
+    video_item = video_result.get("item") if isinstance(video_result.get("item"), dict) else {}
     record = generated.get("ip_daily_record") if isinstance(generated.get("ip_daily_record"), dict) else {}
     if not record and isinstance(local_result.get("ip_daily_record"), dict):
         record = local_result["ip_daily_record"]
@@ -2226,6 +2237,8 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         generated.get("oral_script"),
         local_result.get("script"),
         local_result.get("oral_script"),
+        local_item.get("subtitle_text"),
+        video_item.get("subtitle_text"),
         record.get("body"),
         record.get("content"),
         record.get("script"),
@@ -2237,6 +2250,8 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         record.get("title"),
         generated.get("title"),
         local_result.get("title"),
+        local_item.get("title"),
+        video_item.get("title"),
         result_payload.get("title"),
         limit=160,
     )
@@ -2257,6 +2272,8 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
     capability_id = first_text(result_payload.get("capability_id"), limit=128)
     if not capability_id and str(local_result.get("action") or "").strip() == "shanjian_digital_human_video":
         capability_id = "hifly.video.create_by_tts"
+    if not capability_id and str(local_result.get("mode") or "").strip() == "daily_video":
+        capability_id = "local_bestseller_daily_video"
     return {
         "source_script": script,
         "source_title": title,
@@ -4038,6 +4055,11 @@ async def _run_scheduled_capability(
                 capability_id == "hifly.video.create_by_tts"
                 and str(cap_payload.get("script_source") or "").strip() == "ip_daily_industry_hot_oral"
             )
+            provided_hifly_script = (
+                _hifly_script_text(cap_payload.get("script"))
+                or _hifly_script_text(cap_payload.get("text"))
+                or _hifly_script_text(cap_payload.get("prompt"))
+            ) if capability_id == "hifly.video.create_by_tts" else ""
             if uses_ip_daily_script:
                 generated = await _generate_shanjian_workflow_script(
                     source=cap_payload,
@@ -4046,6 +4068,14 @@ async def _run_scheduled_capability(
                     headers=headers,
                     run_id=run_id,
                 )
+            elif provided_hifly_script:
+                generated = {
+                    "title": task_title or str(cap_payload.get("title") or "数字人口播"),
+                    "script": provided_hifly_script,
+                    "caption_hint": task_title,
+                    "language": str(cap_payload.get("language") or "zh-CN").strip() or "zh-CN",
+                    "custom_prompt_used": True,
+                }
             elif resume_from_image and capability_id in {"goal.video.pipeline", "create.video.pipeline"}:
                 generated = {
                     "goal": str(cap_payload.get("goal") or cap_payload.get("prompt") or task_title or "").strip(),
@@ -4120,24 +4150,30 @@ async def _run_scheduled_capability(
                     )
                 if not skill_prompt:
                     raise RuntimeError("IP 日更未返回可用于数字人的行业口播文案")
-                cap_payload = {
-                    "title": (generated.get("title") or task_title or "数字人口播")[:20],
-                    "avatar": avatar,
-                    "voice": voice,
-                    "text": skill_prompt,
-                    "st_show": 1,
-                    "aigc_flag": 0,
-                    "poll_interval_seconds": 10,
-                    "poll_timeout_seconds": 2400,
-                }
+                cap_payload = dict(original_cap_payload or {})
+                cap_payload.update(
+                    {
+                        "title": (generated.get("title") or task_title or "数字人口播")[:80],
+                        "avatar": avatar,
+                        "virtualman_id": str(cap_payload.get("virtualman_id") or avatar).strip(),
+                        "voice": voice,
+                        "script": skill_prompt,
+                        "text": skill_prompt,
+                        "prompt": skill_prompt,
+                        "poll_interval_seconds": int(cap_payload.get("poll_interval_seconds") or 10),
+                        "poll_timeout_seconds": int(cap_payload.get("poll_timeout_seconds") or 3600),
+                    }
+                )
             cap_payload = _inject_scheduled_assets_into_capability_payload(cap_payload, attachment_asset_ids)
             await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在调用 {capability_id}"})
             if capability_id == "hifly.video.create_by_tts":
-                result = await _invoke_hifly_cloud_tts(
+                result = await _run_shanjian_digital_human_workflow(
+                    cap_payload,
+                    headers=headers,
+                    run_id=run_id,
                     cloud=cloud,
                     base=base,
-                    headers=headers,
-                    cap_payload=cap_payload,
+                    current_item=item,
                 )
             elif capability_id == "goal.image.pipeline":
                 result = await _run_goal_image_scheduled_pipeline(
@@ -4456,6 +4492,92 @@ async def _post_local_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+async def _get_local_api_json(
+    path: str,
+    *,
+    headers: Dict[str, str],
+    timeout_seconds: float = 120.0,
+) -> Dict[str, Any]:
+    timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
+        resp = await local.get(_local_api_url(path), headers=_local_chat_headers(headers))
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"detail": (resp.text or "")[:1000]}
+    if resp.status_code >= 400:
+        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+    if isinstance(data, dict) and data.get("ok") is False:
+        raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
+    return data if isinstance(data, dict) else {"result": data}
+
+
+def _local_bestseller_final_video(job: Dict[str, Any]) -> Dict[str, str]:
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    asset_id = str(final_video.get("asset_id") or "").strip()
+    url = str(final_video.get("url") or final_video.get("source_url") or "").strip()
+    kind = str(final_video.get("kind") or "").strip()
+    if asset_id or url:
+        return {"asset_id": asset_id, "url": url, "kind": kind or "final_video"}
+
+    priorities = {"local_bestseller_bgm_final": 3, "local_bestseller_captioned": 2, "merged_final": 1}
+    candidates: List[tuple[int, Dict[str, str]]] = []
+    for item in job.get("saved_assets") if isinstance(job.get("saved_assets"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        asset = item.get("asset") if isinstance(item.get("asset"), dict) else {}
+        aid = str(item.get("asset_id") or asset.get("asset_id") or "").strip()
+        source_url = str(item.get("source_url") or item.get("url") or asset.get("source_url") or asset.get("url") or "").strip()
+        item_kind = str(item.get("kind") or "").strip()
+        if aid or source_url:
+            candidates.append((priorities.get(item_kind, 0), {"asset_id": aid, "url": source_url, "kind": item_kind}))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else {}
+
+
+async def _wait_local_bestseller_video(
+    submitted: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    timeout_seconds: float = 7200.0,
+    poll_interval_seconds: float = 5.0,
+) -> Dict[str, Any]:
+    item = submitted.get("item") if isinstance(submitted.get("item"), dict) else {}
+    job_id = str(item.get("video_job_id") or item.get("video_task_id") or submitted.get("job_id") or "").strip()
+    poll_path = str(item.get("video_poll_path") or submitted.get("poll_path") or "").strip()
+    if not poll_path and job_id:
+        poll_path = f"/api/comfly-seedance-tvc/pipeline/jobs/{job_id}"
+    if not poll_path:
+        raise RuntimeError("同城爆款视频未返回可查询的任务ID")
+
+    deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds))
+    while True:
+        job = await _get_local_api_json(
+            poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
+            headers=headers,
+            timeout_seconds=180.0,
+        )
+        status = str(job.get("status") or "").strip().lower()
+        if status == "failed":
+            raise RuntimeError(str(job.get("error") or job.get("post_error") or "同城爆款视频生成失败")[:500])
+        if status == "completed":
+            final_video = _local_bestseller_final_video(job)
+            if not final_video:
+                raise RuntimeError("同城爆款视频任务已结束，但未取得最终视频素材")
+            completed_item = {
+                **item,
+                "video_status": "completed",
+                "status": "video_completed",
+                "video_asset_id": final_video.get("asset_id") or "",
+                "video_url": final_video.get("url") or "",
+                "final_video": final_video,
+            }
+            return {**submitted, "item": completed_item, "job_result": job, "final_video": final_video}
+        if asyncio.get_running_loop().time() >= deadline:
+            raise RuntimeError("同城爆款视频生成超时，未取得最终成片")
+        await asyncio.sleep(max(0.1, float(poll_interval_seconds)))
+
+
 async def _post_cloud_api_json(
     path: str,
     body: Dict[str, Any],
@@ -4623,6 +4745,8 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
             elif key == "asset_ids" and isinstance(raw_value, list):
                 for item in raw_value:
                     add(item, item_kind, False)
+            elif key in {"final_video", "captioned_video", "bgm_video"}:
+                visit(raw_value, "video")
             elif key in {"assets", "saved_assets", "result_refs", "outputs", "output", "item", "video_result", "image_result", "local_result"}:
                 visit(raw_value, item_kind)
             elif isinstance(raw_value, (dict, list)):
@@ -4678,12 +4802,8 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
     elif preferred == "video":
         if video_ids:
             return asset_result(video_ids[0], "video", video_urls, other_urls)
-        if other_ids:
-            return asset_result(other_ids[0], "video", video_urls, other_urls)
         if video_urls:
             return url_result(video_urls[0], "video")
-        if other_urls:
-            return url_result(other_urls[0], "video")
         return {}
 
     if video_ids:
@@ -4714,7 +4834,11 @@ async def _resolve_parent_workflow_material(
         raise RuntimeError("发布动作缺少上级节点")
     current_context = params.get("h5_context") if isinstance(params.get("h5_context"), dict) else {}
     template_id = str(current_context.get("workflow_template_id") or "").strip()
-    current_time = _parse_run_time((current_item or {}).get("created_at") or (current_item or {}).get("started_at"))
+    current_time = _parse_run_time(
+        (current_item or {}).get("started_at")
+        or (current_item or {}).get("claimed_at")
+        or (current_item or {}).get("created_at")
+    )
     schedule_config = params.get("schedule_config") if isinstance(params.get("schedule_config"), dict) else {}
     try:
         timezone_offset_minutes = int(schedule_config.get("timezone_offset_minutes", 480))
@@ -4746,9 +4870,10 @@ async def _resolve_parent_workflow_material(
         if template_id and str(ctx.get("workflow_template_id") or "").strip() != template_id:
             continue
         run_time = _parse_run_time(run.get("finished_at") or run.get("updated_at") or run.get("created_at"))
-        if current_time and run_time and run_time > current_time + timedelta(minutes=10):
+        run_schedule_time = _parse_run_time(run.get("created_at")) or run_time
+        if current_time and run_schedule_time and run_schedule_time > current_time + timedelta(minutes=10):
             continue
-        if current_local_date and _workflow_local_run_date(run_time, timezone_offset_minutes) != current_local_date:
+        if current_local_date and _workflow_local_run_date(run_schedule_time, timezone_offset_minutes) != current_local_date:
             continue
         detail_run = run
         run_id = str(run.get("id") or "").strip()
@@ -5100,7 +5225,7 @@ async def _resolve_workflow_virtualman(
     fixed_id = _workflow_text(source.get("virtualman_id") or source.get("virtualmanId"), 128)
     context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
     selection_mode = _workflow_text(source.get("virtualman_selection_mode"), 32)
-    rotation_enabled = (
+    rotation_enabled = selection_mode != "fixed" and (
         selection_mode in {"daily_round_robin", "daily_sequence"}
         or _workflow_text(source.get("script_source"), 64) == "ip_daily_industry_hot_oral"
         or bool(context.get("workflow_node_id"))
@@ -5147,6 +5272,67 @@ async def _resolve_workflow_virtualman(
     return {"virtualman_id": fixed_id} if fixed_id else {}
 
 
+def _shanjian_video_create_payload(
+    source: Dict[str, Any],
+    *,
+    virtualman_id: str,
+    title: str,
+    script: str,
+    voice: str,
+    audio_url: str,
+    language: str,
+    tts_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    long_video = _workflow_flag(source.get("long_video"), False)
+    payload: Dict[str, Any] = {
+        "virtualman_id": virtualman_id,
+        "title": title,
+        "text": script,
+        "speaker_id": voice,
+        "audio_url": audio_url,
+        "language": language,
+        "speed_ratio": source.get("speed_ratio") or 1.0,
+        "long_video": long_video,
+    }
+
+    if long_video:
+        duration_value = source.get("video_duration") or source.get("duration_seconds")
+        if duration_value in (None, ""):
+            duration_value = (tts_data or {}).get("duration_seconds")
+        try:
+            duration_seconds = int(float(duration_value) + 0.999)
+        except (TypeError, ValueError):
+            duration_seconds = max(5, int((len("".join(str(script or "").split())) + 3) / 4))
+        payload["video_duration"] = max(31, min(duration_seconds, 300))
+    else:
+        payload["video_duration"] = 30
+        payload["hard_max_duration"] = 30
+
+    if "use_template" in source:
+        use_template = _workflow_flag(source.get("use_template"), False)
+        payload["use_template"] = use_template
+        if use_template:
+            for key in (
+                "template_scene",
+                "style_id",
+                "materials",
+                "material_sound_switch",
+                "introduce_name",
+                "introduce_description",
+                "header_switch",
+                "material_switch",
+                "subtitle_switch",
+                "keyword_switch",
+                "watermark_show",
+                "material_match_way",
+                "resource_preprocess_method",
+                "material_composition",
+            ):
+                if key in source:
+                    payload[key] = source[key]
+    return payload
+
+
 async def _run_shanjian_digital_human_workflow(
     source: Dict[str, Any],
     *,
@@ -5175,13 +5361,29 @@ async def _run_shanjian_digital_human_workflow(
     if cloud is None or not base:
         raise RuntimeError("数字人2.0缺少云端连接，无法合成声音分身音频")
 
-    generated = await _generate_shanjian_workflow_script(
-        source=source,
-        cloud=cloud,
-        base=base,
-        headers=headers,
-        run_id=run_id,
+    provided_script = (
+        _workflow_script_candidate(source.get("script"))
+        or _workflow_script_candidate(source.get("text"))
+        or _workflow_script_candidate(source.get("prompt"))
     )
+    if provided_script:
+        generated = {
+            "title": _workflow_text(source.get("title") or "数字人口播", 80),
+            "script": provided_script,
+            "caption_hint": _workflow_text(source.get("title"), 200),
+            "language": _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64),
+            "ip_daily_group_id": "",
+            "ip_daily_record_id": "",
+            "ip_daily_record": {},
+        }
+    else:
+        generated = await _generate_shanjian_workflow_script(
+            source=source,
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            run_id=run_id,
+        )
     script = generated["script"]
     title = generated["title"] or "数字人口播"
     language = generated["language"] or "zh-CN"
@@ -5223,17 +5425,16 @@ async def _run_shanjian_digital_human_workflow(
     await _workflow_event(cloud, base, headers, run_id, "正在提交数字人2.0视频任务")
     create_data = await _post_cloud_api_json(
         "/api/shanjian-digital-human/video/create",
-        {
-            "virtualman_id": virtualman_id,
-            "title": title,
-            "text": script,
-            "speaker_id": voice,
-            "audio_url": audio_url,
-            "language": language,
-            "speed_ratio": source.get("speed_ratio") or 1.0,
-            "video_duration": 30,
-            "hard_max_duration": 30,
-        },
+        _shanjian_video_create_payload(
+            source,
+            virtualman_id=virtualman_id,
+            title=title,
+            script=script,
+            voice=voice,
+            audio_url=audio_url,
+            language=language,
+            tts_data=tts_data,
+        ),
         cloud=cloud,
         base=base,
         headers=headers,
@@ -5396,7 +5597,7 @@ async def _run_client_workflow_action(
             timeout_seconds=900.0,
         )
         scene_item = scene.get("item") if isinstance(scene.get("item"), dict) else {}
-        video = await _post_local_api_json(
+        video_submission = await _post_local_api_json(
             "/api/local-bestseller/video/generate",
             {
                 "profile": profile,
@@ -5405,6 +5606,11 @@ async def _run_client_workflow_action(
                 "item": scene_item,
                 "video_model": str(source.get("video_model") or "grok-imagine-video-1.5-preview").strip() or "grok-imagine-video-1.5-preview",
             },
+            headers=headers,
+            timeout_seconds=7200.0,
+        )
+        video = await _wait_local_bestseller_video(
+            video_submission,
             headers=headers,
             timeout_seconds=7200.0,
         )
@@ -5514,11 +5720,11 @@ async def _run_client_workflow_action(
         publish_description = str(source.get("description") or source.get("prompt") or "").strip()
         publish_tags = str(source.get("tags") or "").strip()
         generated_publish_copy: Dict[str, str] = {}
-        if source_script and bool(source.get("ai_publish_copy", True)):
+        if bool(source.get("ai_publish_copy", True)):
             generated_publish_copy = await _generate_scheduled_publish_copy(
                 base=base,
                 headers=headers,
-                capability_id=str(material_source.get("source_capability_id") or "hifly.video.create_by_tts").strip(),
+                capability_id=str(material_source.get("source_capability_id") or "publish_content").strip(),
                 generated={
                     "title": str(material_source.get("source_title") or source.get("source_workflow_node_label") or "").strip(),
                     "script": source_script,
@@ -5532,7 +5738,7 @@ async def _run_client_workflow_action(
                     "urls": [source_url] if source_url else [],
                 },
                 platform=platform,
-                task_title=str(material_source.get("source_title") or source.get("source_workflow_node_label") or "数字人口播").strip(),
+                task_title=str(material_source.get("source_title") or source.get("source_workflow_node_label") or "发布内容").strip(),
                 caption=str(material_source.get("source_caption") or "").strip(),
                 source_script=source_script,
             )
@@ -5595,7 +5801,8 @@ async def _run_client_workflow_action(
             "title": publish_title or None,
             "description": publish_description or None,
             "tags": publish_tags or None,
-            "ai_publish_copy": False if generated_publish_copy else bool(source.get("ai_publish_copy", True)),
+            # Publishing automation is local, but all copy generation belongs to the cloud API.
+            "ai_publish_copy": False,
             "options": publish_options,
         }
         account_id = str(source.get("account_id") or "").strip()

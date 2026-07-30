@@ -1,7 +1,11 @@
 import asyncio
 from datetime import date
 
-from backend.app.api.h5_chat_channel import _resolve_workflow_virtualman, _select_daily_virtualman
+from backend.app.api.h5_chat_channel import (
+    _resolve_workflow_virtualman,
+    _select_daily_virtualman,
+    _shanjian_video_create_payload,
+)
 
 
 def _candidates():
@@ -133,3 +137,108 @@ def test_successful_empty_cloud_profile_list_does_not_reuse_deleted_snapshot():
     )
 
     assert selected == {}
+
+
+def test_explicit_fixed_virtualman_is_not_replaced_by_rotation():
+    selected = asyncio.run(
+        _resolve_workflow_virtualman(
+            {
+                "virtualman_id": "avatar-selected",
+                "virtualman_selection_mode": "fixed",
+                "script_source": "ip_daily_industry_hot_oral",
+            },
+            cloud=_ProfileCloud([{"id": 10, "virtualman_id": "avatar-other", "status": "succeed"}]),
+            base="https://example.test",
+            headers={},
+            current_item={"created_at": "2026-07-30T02:00:00Z"},
+        )
+    )
+
+    assert selected == {"virtualman_id": "avatar-selected"}
+
+
+def test_short_naked_video_request_keeps_30_second_limit_and_disables_template():
+    payload = _shanjian_video_create_payload(
+        {"long_video": False, "use_template": False},
+        virtualman_id="avatar-1",
+        title="短视频",
+        script="一段口播文案",
+        voice="voice-1",
+        audio_url="https://example.test/audio.mp3",
+        language="zh-CN",
+        tts_data={"duration_seconds": 42},
+    )
+
+    assert payload["hard_max_duration"] == 30
+    assert payload["video_duration"] == 30
+    assert payload["use_template"] is False
+    assert "style_id" not in payload
+
+
+def test_sales_short_video_leaves_template_choice_to_active_personal_template():
+    payload = _shanjian_video_create_payload(
+        {
+            "long_video": False,
+            "template_mode": "active_personal_template",
+            "script_source": "ip_daily_industry_hot_oral",
+        },
+        virtualman_id="avatar-1",
+        title="销售数字人口播",
+        script="约二十到二十五秒的销售口播文案",
+        voice="voice-1",
+        audio_url="https://example.test/audio.mp3",
+        language="zh-CN",
+        tts_data={"duration_seconds": 24},
+    )
+
+    assert payload["hard_max_duration"] == 30
+    assert payload["video_duration"] == 30
+    assert "use_template" not in payload
+    assert "style_id" not in payload
+
+
+def test_long_template_video_uses_audio_duration_without_hard_limit():
+    payload = _shanjian_video_create_payload(
+        {
+            "long_video": True,
+            "use_template": True,
+            "style_id": "style-1",
+            "template_scene": "realMan",
+            "subtitle_switch": False,
+        },
+        virtualman_id="avatar-1",
+        title="长视频",
+        script="长口播文案",
+        voice="voice-1",
+        audio_url="https://example.test/audio.mp3",
+        language="zh-CN",
+        tts_data={"duration_seconds": 83.2},
+    )
+
+    assert payload["long_video"] is True
+    assert payload["video_duration"] == 84
+    assert "hard_max_duration" not in payload
+    assert payload["use_template"] is True
+    assert payload["style_id"] == "style-1"
+    assert payload["subtitle_switch"] is False
+
+
+def test_long_video_prefers_requested_target_duration():
+    payload = _shanjian_video_create_payload(
+        {
+            "long_video": True,
+            "video_duration": 150,
+            "use_template": False,
+        },
+        virtualman_id="avatar-1",
+        title="长视频",
+        script="一段会根据口播节奏生成的长视频文案",
+        voice="voice-1",
+        audio_url="https://example.test/audio.mp3",
+        language="zh-CN",
+        tts_data={"duration_seconds": 83.2},
+    )
+
+    assert payload["long_video"] is True
+    assert payload["video_duration"] == 150
+    assert "hard_max_duration" not in payload

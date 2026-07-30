@@ -1,6 +1,6 @@
 {
-  "version": "1.0.127",
-  "build": 171,
-  "applied_at": "2026-07-30T14:55:27+08:00",
-  "note": "deliver TVC final videos to H5 and add daka partner branding"
+  "version": "1.0.128",
+  "build": 172,
+  "applied_at": "2026-07-30T15:34:56+08:00",
+  "note": "fix local bestseller final-video publishing and force online publish copy through server LLM"
 }

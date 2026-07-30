@@ -6,7 +6,6 @@ import logging
 import re
 from typing import Any, Dict, Optional, Tuple
 
-import httpx
 from fastapi import HTTPException
 
 from ..core.config import settings
@@ -115,39 +114,23 @@ async def generate_publish_copy(
     override_url: Optional[str] = None
     override_headers: Optional[Dict[str, str]] = None
 
-    if req_model.startswith("sutui/"):
-        inner = req_model.split("/", 1)[1].strip()
-        if edition == "online" and asb and raw_tok and inner:
-            cfg, override_url, override_headers = _sutui_route(asb, raw_tok, inner)
-        elif not inner:
-            pass
-        else:
-            raise PublishCopyLLMError("未配置 AUTH_SERVER_BASE 或缺少登录 Token，无法使用速推生成发布文案")
+    if edition == "online":
+        if not asb or not raw_tok:
+            raise PublishCopyLLMError("登录状态无效，无法调用服务器生成发布文案")
+        inner = req_model
+        if inner.startswith("sutui/"):
+            inner = inner.split("/", 1)[1].strip()
+        if not inner or inner in {"sutui", "openclaw"} or "/" not in inner:
+            inner = (
+                (getattr(settings, "lobster_orchestration_sutui_chat_model", None) or "").strip()
+                or (getattr(settings, "lobster_default_sutui_chat_model", None) or "deepseek-chat").strip()
+                or "deepseek-chat"
+            )
+        cfg, override_url, override_headers = _sutui_route(asb, raw_tok, inner)
     elif req_model and "/" in req_model:
         cfg = _resolve_config(req_model)
 
-    if cfg is None and edition == "online" and asb and raw_tok:
-        try:
-            async with httpx.AsyncClient(timeout=15.0, trust_env=False) as c:
-                r = await c.get(
-                    f"{asb}/auth/me",
-                    headers={"Authorization": f"Bearer {raw_tok}"},
-                )
-            if r.status_code == 200:
-                data = r.json() if r.content else {}
-                pm = (data.get("preferred_model") or "").strip()
-                if pm.startswith("sutui/"):
-                    inner = pm.split("/", 1)[1].strip()
-                    if inner:
-                        cfg, override_url, override_headers = _sutui_route(asb, raw_tok, inner)
-                elif pm and "/" in pm:
-                    cfg = _resolve_config(pm)
-        except PublishCopyLLMError:
-            raise
-        except Exception as e:
-            logger.warning("[PUBLISH-COPY-LLM] 读取 auth/me preferred_model 失败: %s", e)
-
-    if cfg is None:
+    if cfg is None and edition != "online":
         try:
             model = _pick_default_model()
             cfg = _resolve_config(model)
