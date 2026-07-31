@@ -88,6 +88,14 @@ _SCHEDULED_VIDEO_SOURCE_AI_IMAGE = "ai_image"
 _SCHEDULED_VIDEO_SOURCE_REFERENCE_IMAGE = "reference_image"
 _CREATIVE_CANDIDATE_USAGE_META_KEY = "creative_candidate_usage"
 _CREATIVE_CANDIDATE_RESERVATION_META_KEY = "creative_candidate_reservations"
+_IMAGE_STUDIO_REFERENCE_HINTS = {
+    "person": "参考图{n}是唯一目标人物身份参考。生成结果中的主要人物必须替换为参考图{n}里的人物，优先保持脸型、五官比例、发型、气质、肤色和服装核心特征；不要沿用提示词里的默认人物长相。",
+    "product": "参考图{n}是目标产品，请将画面中的主体产品替换为参考图{n}的产品，保持外观、包装、颜色、材质、标签布局和品牌识别特征。",
+    "style": "参考图{n}只作为风格参考，请学习它的色彩、光线、构图和质感，不要复制其中的具体人物或产品。",
+    "background": "参考图{n}是背景参考，请使用类似场景、空间氛围、光线和环境结构。",
+    "local_edit": "参考图{n}用于局部修改，请优先保持原图主体一致，只修改提示词明确要求的区域。",
+    "auto": "参考图{n}是普通参考图，请结合它的主体、风格或构图进行生成。",
+}
 _IMAGE_MODEL_ALIASES = {
     "openai/gpt-image2": "openai/gpt-image-2",
     "openai/gptimage2": "openai/gpt-image-2",
@@ -4492,6 +4500,31 @@ async def _post_local_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+async def _post_local_api_form(
+    path: str,
+    fields: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    timeout_seconds: float = 120.0,
+) -> Dict[str, Any]:
+    timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
+    multipart = [
+        (str(key), (None, str(value if value is not None else "")))
+        for key, value in (fields or {}).items()
+    ]
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
+        resp = await local.post(_local_api_url(path), files=multipart, headers=_local_chat_headers(headers))
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"detail": (resp.text or "")[:1000]}
+    if resp.status_code >= 400:
+        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+    if isinstance(data, dict) and data.get("ok") is False:
+        raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
+    return data if isinstance(data, dict) else {"result": data}
+
+
 async def _get_local_api_json(
     path: str,
     *,
@@ -4510,6 +4543,84 @@ async def _get_local_api_json(
     if isinstance(data, dict) and data.get("ok") is False:
         raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
     return data if isinstance(data, dict) else {"result": data}
+
+
+def _image_studio_reference_urls(value: Any) -> List[str]:
+    rows = value if isinstance(value, list) else [value]
+    urls: List[str] = []
+    for row in rows:
+        url = str(row or "").strip()
+        if url.startswith(("http://", "https://")) and url not in urls:
+            urls.append(url)
+        if len(urls) >= 12:
+            break
+    return urls
+
+
+def _image_studio_prompt_with_reference_hints(
+    prompt: str,
+    reference_urls: List[str],
+    reference_purposes: Any,
+) -> str:
+    purposes = reference_purposes if isinstance(reference_purposes, list) else []
+    hints: List[str] = []
+    for index, _url in enumerate(reference_urls):
+        purpose = str(purposes[index] if index < len(purposes) else "auto").strip().lower() or "auto"
+        template = _IMAGE_STUDIO_REFERENCE_HINTS.get(purpose, _IMAGE_STUDIO_REFERENCE_HINTS["auto"])
+        hints.append(template.replace("{n}", str(index + 1)))
+    text = str(prompt or "").strip()
+    hint_text = "\n".join(hints)
+    return f"{hint_text}\n\n用户提示词：{text}" if hint_text else text
+
+
+def _image_studio_completed_result(job: Dict[str, Any], *, job_id: str, prompt: str) -> Dict[str, Any]:
+    raw_images = job.get("images") if isinstance(job.get("images"), list) else []
+    saved_assets = job.get("saved_assets") if isinstance(job.get("saved_assets"), list) else []
+    images: List[Dict[str, Any]] = []
+    asset_ids: List[str] = []
+    urls: List[str] = []
+
+    def add_asset_id(value: Any) -> None:
+        asset_id = str(value or "").strip()
+        if asset_id and asset_id not in asset_ids:
+            asset_ids.append(asset_id)
+
+    def add_url(value: Any) -> None:
+        url = str(value or "").strip()
+        if url.startswith(("http://", "https://")) and url not in urls:
+            urls.append(url)
+
+    for row in raw_images:
+        if not isinstance(row, dict):
+            continue
+        asset_id = str(row.get("asset_id") or "").strip()
+        url = str(row.get("source_url") or row.get("url") or "").strip()
+        add_asset_id(asset_id)
+        add_url(url)
+        if asset_id or url:
+            images.append({"asset_id": asset_id, "url": url, "source_url": url, "media_type": "image"})
+    for row in saved_assets:
+        if not isinstance(row, dict):
+            continue
+        asset = row.get("asset") if isinstance(row.get("asset"), dict) else {}
+        asset_id = str(row.get("asset_id") or asset.get("asset_id") or asset.get("id") or "").strip()
+        url = str(row.get("source_url") or row.get("url") or asset.get("source_url") or asset.get("url") or "").strip()
+        add_asset_id(asset_id)
+        add_url(url)
+        if (asset_id or url) and not any(item.get("asset_id") == asset_id and item.get("url") == url for item in images):
+            images.append({"asset_id": asset_id, "url": url, "source_url": url, "media_type": "image"})
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": "completed",
+        "prompt": prompt,
+        "images": images,
+        "saved_assets": saved_assets,
+        "media_urls": urls,
+        "result_refs": {"asset_ids": asset_ids, "urls": urls, "saved_assets": saved_assets},
+        "meta": job.get("meta") if isinstance(job.get("meta"), dict) else {},
+    }
 
 
 def _local_bestseller_final_video(job: Dict[str, Any]) -> Dict[str, str]:
@@ -5547,6 +5658,48 @@ async def _run_client_workflow_action(
 ) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
     native_account_id = str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
+    if action == "image_studio_generate":
+        prompt = str(source.get("prompt") or "").strip()
+        if not prompt:
+            raise RuntimeError("请填写图片需求")
+        reference_urls = _image_studio_reference_urls(source.get("reference_image_urls"))
+        final_prompt = _image_studio_prompt_with_reference_hints(
+            prompt,
+            reference_urls,
+            source.get("reference_purposes"),
+        )
+        submission = await _post_local_api_form(
+            "/api/comfly-image-studio/generate/start",
+            {
+                "prompt": final_prompt,
+                "model": str(source.get("model") or "gpt-image-2").strip() or "gpt-image-2",
+                "aspect_ratio": str(source.get("aspect_ratio") or "9:16").strip() or "9:16",
+                "quality": str(source.get("quality") or "high").strip() or "high",
+                "background": str(source.get("background") or "auto").strip() or "auto",
+                "reference_image_urls": ",".join(reference_urls),
+            },
+            headers=headers,
+            timeout_seconds=120.0,
+        )
+        job_id = str(submission.get("job_id") or "").strip()
+        if not job_id:
+            raise RuntimeError("图片任务提交成功，但没有返回任务ID")
+        timeout_seconds = float(_clamp_int(source.get("poll_timeout_seconds"), 1200, 30, 7200))
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while True:
+            job = await _get_local_api_json(
+                f"/api/comfly-image-studio/jobs/{job_id}",
+                headers=headers,
+                timeout_seconds=120.0,
+            )
+            status = str(job.get("status") or "").strip().lower()
+            if status == "completed":
+                return _image_studio_completed_result(job, job_id=job_id, prompt=prompt)
+            if status == "failed":
+                raise RuntimeError(str(job.get("error") or "图片生成失败")[:500])
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"图片生成等待超时，任务ID：{job_id}")
+            await asyncio.sleep(2.5)
     if action == "shanjian_digital_human_video":
         return await _run_shanjian_digital_human_workflow(
             source,
@@ -5826,6 +5979,9 @@ async def _run_client_workflow_action(
 
 
 def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
+    if action == "image_studio_generate":
+        images = result.get("images") if isinstance(result.get("images"), list) else []
+        return f"AI设计图已生成，共 {len(images) or 1} 张。"
     if action == "shanjian_digital_human_video":
         task_id = str(result.get("task_id") or "").strip()
         if result.get("result_ready") is False:
