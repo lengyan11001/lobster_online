@@ -1,6 +1,6 @@
 {
-  "version": "1.0.129",
-  "build": 173,
-  "applied_at": "2026-07-30T19:34:26+08:00",
-  "note": "unify digital human template preview and route digital human tasks through cloud 2.0"
+  "version": "1.0.130",
+  "build": 174,
+  "applied_at": "2026-08-01T07:50:00+08:00",
+  "note": "add server-gated Bihuo 2.5 video studio and preserve selected video duration"
 }

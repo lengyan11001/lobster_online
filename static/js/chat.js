@@ -4320,6 +4320,8 @@ function openHiddenWorkspaceFallback(view) {
     window.initViralVideoRemixView();
   } else if (target === 'seedance-tvc-studio' && typeof window.initSeedanceTvcStudioView === 'function') {
     window.initSeedanceTvcStudioView();
+  } else if (target === 'bihuo-25-video' && typeof window.initBihuo25VideoView === 'function') {
+    window.initBihuo25VideoView();
   } else if (target === 'image-composer-studio' && typeof window.initImageComposerStudioView === 'function') {
     window.initImageComposerStudioView();
   } else if (target === 'local-bestseller' && typeof window.initLocalBestsellerView === 'function') {

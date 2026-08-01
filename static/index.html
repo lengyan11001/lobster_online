@@ -8,6 +8,7 @@
   <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
   <link rel="stylesheet" href="/static/css/common.css?v=20260608-latest-ota">
   <link rel="stylesheet" href="/static/css/index.css?v=20260730-daka-partner-logo">
+  <link rel="stylesheet" href="/static/css/bihuo-25-video.css?v=20260731-workbench-v1">
 </head>
 <body>
   <div class="page">
@@ -172,6 +173,11 @@
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="seedance-tvc-studio" data-feature-gate="comfly_seedance_tvc_skill">
                         <span class="chat-sidebar-entry-icon">▶</span>
                         <span class="chat-sidebar-entry-copy">创意分镜头视频</span>
+                        <span class="chat-sidebar-entry-arrow">›</span>
+                      </button>
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="bihuo-25-video" data-feature-gate="bihuo_25_video_skill" style="display:none;">
+                        <span class="chat-sidebar-entry-icon">2.5</span>
+                        <span class="chat-sidebar-entry-copy">必火2.5</span>
                         <span class="chat-sidebar-entry-arrow">›</span>
                       </button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="local-bestseller" data-feature-gate="local_bestseller_skill">
@@ -977,6 +983,127 @@
                     </div>
                   </div>
                 </section>
+              </div>
+            </div>
+          </div>
+
+          <div id="content-bihuo-25-video" class="content-block">
+            <div class="b25-workbench">
+              <header class="b25-header">
+                <div>
+                  <div class="b25-kicker">AI VIDEO STUDIO</div>
+                  <h2>必火2.5</h2>
+                </div>
+                <div class="b25-header-actions">
+                  <span id="b25HeaderStatus" class="b25-status" data-tone="idle">等待创作</span>
+                  <button type="button" id="b25BackBtn" class="btn btn-ghost btn-sm">返回技能商店</button>
+                </div>
+              </header>
+
+              <div class="b25-layout">
+                <section class="b25-controls" aria-label="视频生成参数">
+                  <div class="b25-field">
+                    <label for="b25Prompt">提示词</label>
+                    <textarea id="b25Prompt" maxlength="6000" placeholder="描述画面、主体动作、镜头运动、节奏和声音要求"></textarea>
+                    <div class="b25-prompt-meta"><span id="b25PromptCount">0 / 6000</span><span id="b25ReferenceTokenHint"></span></div>
+                  </div>
+
+                  <div class="b25-mode-switch" id="b25ModeSwitch" role="tablist" aria-label="生成模式">
+                    <button type="button" class="is-active" data-b25-mode="reference">参考生成</button>
+                    <button type="button" data-b25-mode="first_last">首尾帧</button>
+                    <button type="button" data-b25-mode="edit">视频编辑</button>
+                    <button type="button" data-b25-mode="extend">视频延长</button>
+                  </div>
+
+                  <div class="b25-media-panel is-active" data-b25-panel="reference">
+                    <div class="b25-dropzone">
+                      <div class="b25-dropzone-mark">+</div>
+                      <strong>添加参考内容</strong>
+                      <span>图片、视频、音频</span>
+                      <div class="b25-inline-actions">
+                        <button type="button" class="btn btn-primary btn-sm" data-b25-upload-target="reference">本地上传</button>
+                        <button type="button" class="btn btn-ghost btn-sm" data-b25-library-target="reference">素材库选择</button>
+                      </div>
+                    </div>
+                    <div id="b25ReferenceList" class="b25-reference-list"></div>
+                  </div>
+
+                  <div class="b25-media-panel" data-b25-panel="first_last">
+                    <div class="b25-frame-grid">
+                      <div class="b25-frame-slot" data-b25-slot="first">
+                        <span class="b25-slot-label">首帧图</span>
+                        <div id="b25FirstPreview" class="b25-slot-preview"><span>+</span></div>
+                        <div class="b25-slot-actions">
+                          <button type="button" class="btn btn-primary btn-sm" data-b25-upload-target="first">上传</button>
+                          <button type="button" class="btn btn-ghost btn-sm" data-b25-library-target="first">选择</button>
+                        </div>
+                      </div>
+                      <div class="b25-frame-slot" data-b25-slot="last">
+                        <span class="b25-slot-label">尾帧图</span>
+                        <div id="b25LastPreview" class="b25-slot-preview"><span>+</span></div>
+                        <div class="b25-slot-actions">
+                          <button type="button" class="btn btn-primary btn-sm" data-b25-upload-target="last">上传</button>
+                          <button type="button" class="btn btn-ghost btn-sm" data-b25-library-target="last">选择</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="b25-media-panel" data-b25-panel="edit">
+                    <div class="b25-video-slot">
+                      <div id="b25EditPreview" class="b25-video-preview"><span class="b25-video-glyph">▶</span><span>选择一个视频</span></div>
+                      <div class="b25-inline-actions">
+                        <button type="button" class="btn btn-primary btn-sm" data-b25-upload-target="video">本地上传</button>
+                        <button type="button" class="btn btn-ghost btn-sm" data-b25-library-target="video">素材库选择</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="b25-media-panel" data-b25-panel="extend">
+                    <div class="b25-video-slot">
+                      <div id="b25ExtendPreview" class="b25-video-preview"><span class="b25-video-glyph">▶</span><span>选择一个视频</span></div>
+                      <div class="b25-inline-actions">
+                        <button type="button" class="btn btn-primary btn-sm" data-b25-upload-target="video">本地上传</button>
+                        <button type="button" class="btn btn-ghost btn-sm" data-b25-library-target="video">素材库选择</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <input id="b25FileInput" type="file" hidden>
+
+                  <div class="b25-spec-grid">
+                    <label class="b25-spec"><span>比例</span><select id="b25Ratio"><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option><option value="4:3">4:3</option><option value="3:4">3:4</option><option value="21:9">21:9</option><option value="adaptive">自适应</option></select></label>
+                    <label class="b25-spec"><span>清晰度</span><select id="b25Resolution"><option value="720p">720p</option><option value="480p">480p</option></select></label>
+                    <label class="b25-spec" id="b25DurationField"><span id="b25DurationLabel">视频时长</span><div class="b25-number-wrap"><input id="b25Duration" type="number" min="4" max="30" step="1" value="10"><span>秒</span></div></label>
+                  </div>
+
+                  <div id="b25Message" class="b25-message" hidden></div>
+                  <button type="button" id="b25GenerateBtn" class="b25-generate-btn"><span>开始生成</span><span aria-hidden="true">→</span></button>
+                </section>
+
+                <section class="b25-result" aria-label="生成结果">
+                  <div class="b25-result-head">
+                    <div><span>生成结果</span><small id="b25TaskId"></small></div>
+                    <button type="button" id="b25RetryBtn" class="btn btn-ghost btn-sm" hidden>重新生成</button>
+                  </div>
+                  <div id="b25ResultStage" class="b25-result-stage">
+                    <div class="b25-empty-result"><span class="b25-empty-mark">▶</span><strong>视频将在这里显示</strong></div>
+                  </div>
+                  <div class="b25-progress" id="b25Progress" hidden><span></span><p id="b25ProgressText">任务已提交，正在生成</p></div>
+                  <div class="b25-result-actions" id="b25ResultActions" hidden>
+                    <button type="button" id="b25OpenResultBtn" class="btn btn-primary">打开视频</button>
+                    <button type="button" id="b25GoAssetsBtn" class="btn btn-ghost">查看素材库</button>
+                  </div>
+                </section>
+              </div>
+
+              <div id="b25AssetPicker" class="b25-picker" hidden>
+                <button type="button" class="b25-picker-backdrop" data-b25-picker-close aria-label="关闭"></button>
+                <div class="b25-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="b25PickerTitle">
+                  <div class="b25-picker-head"><div><h3 id="b25PickerTitle">选择素材</h3><p>素材库与内容库</p></div><button type="button" class="b25-icon-btn" data-b25-picker-close title="关闭">×</button></div>
+                  <div id="b25PickerTabs" class="b25-picker-tabs"></div>
+                  <div id="b25PickerGrid" class="b25-picker-grid"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -2543,6 +2670,7 @@
   <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260617-segment-mode-fix"></script>
   <script src="/static/js/local-bestseller.js?v=20260704-local-bgm-picker"></script>
   <script src="/static/js/viral-video-remix.js?v=20260612-auto-ref-upload-flow"></script>
+  <script src="/static/js/bihuo-25-video.js?v=20260731-workbench-v1"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/cutcli-template-studio.js?v=20260605-cutcli-source-orientation"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>

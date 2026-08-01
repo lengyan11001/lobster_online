@@ -1463,6 +1463,12 @@ window._openGlobalLeadsView = function() {
   try { location.hash = 'global-leads'; } catch (e1) {}
 };
 
+window._openBihuo25VideoView = function() {
+  _switchToHiddenView('bihuo-25-video');
+  if (typeof window.initBihuo25VideoView === 'function') window.initBihuo25VideoView();
+  try { location.hash = 'bihuo-25-video'; } catch (e1) {}
+};
+
 window._openAlibabaInquiriesView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('alibaba-inquiries', {
@@ -1985,6 +1991,16 @@ function _renderAlibabaInquiriesCard(pkg, showDebug) {
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm alibaba-inquiries-entry-btn">进入工作台</button></div>' +
   '</div>';
+}
+
+function _renderBihuo25VideoCard(pkg) {
+  pkg = pkg || {};
+  return '<div class="skill-store-card bihuo-25-video-card" data-skill-package-id="bihuo_25_video_skill" style="cursor:pointer;border-color:rgba(255,59,126,0.38);background:linear-gradient(135deg,rgba(255,59,126,0.10),rgba(36,211,218,0.05));">' +
+    '<div class="card-label">视频生成 <span class="badge-installed">平台托管</span></div>' +
+    '<div class="card-value">必火2.5</div>' +
+    '<div class="card-desc">统一处理多模态参考、首尾帧、视频编辑和视频延长。</div>' +
+    '<div class="card-tags"><span class="tag">多模态</span><span class="tag">首尾帧</span><span class="tag">编辑</span><span class="tag">延长</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm bihuo-25-video-entry-btn">进入工作台</button></div></div>';
 }
 
 function _renderJuheWechatCard(pkg, showDebug) {
@@ -3144,6 +3160,7 @@ function loadSkillStore() {
       var sutuiPkg = pkgById('sutui_mcp');
       var comflyPkg = pkgById('comfly_veo_skill');
       var seedancePkg = pkgById('comfly_seedance_tvc_skill') || pkgById('seedance_tvc_studio');
+      var bihuo25Pkg = pkgById('bihuo_25_video_skill');
       var viralPkg = pkgById('viral_video_remix_skill');
       var shanjianPkg = pkgById('shanjian_smart_clip');
       var metaPkg = pkgById('meta_social');
@@ -3170,6 +3187,7 @@ function loadSkillStore() {
       function paintSkillStoreList() {
         var html = '';
         if (sutuiPkg) html += _renderXSkillCard();
+        if (bihuo25Pkg) html += _renderBihuo25VideoCard(bihuo25Pkg);
         if (comflyPkg) html += _renderComflyCard();
         if (seedancePkg) html += _renderSeedanceTvcStudioCard();
         if (viralPkg) html += _renderViralVideoRemixCard();
@@ -3224,6 +3242,7 @@ function loadSkillStore() {
           if (pkg.id === 'comfly_veo_skill') return '';
           if (pkg.id === 'comfly_seedance_tvc_skill') return '';
           if (pkg.id === 'seedance_tvc_studio') return '';
+          if (pkg.id === 'bihuo_25_video_skill') return '';
           if (pkg.id === 'viral_video_remix_skill') return '';
           if (pkg.id === 'shanjian_smart_clip') return '';
           if (pkg.id === 'cutcli_template_skill') return '';
@@ -3327,6 +3346,7 @@ function loadSkillStore() {
         _bindYoutubePublishCardEntry();
         _bindMetaSocialCardEntry();
         _bindSeedanceTvcCardEntry();
+        _bindBihuo25VideoCardEntry();
         _bindViralVideoRemixCardEntry();
         _bindCutcliTemplateCardEntry();
         _bindHiflyDigitalHumanCardEntry();
@@ -3764,6 +3784,21 @@ function _bindGlobalLeadsCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openGlobalLeadsView === 'function') window._openGlobalLeadsView();
+    });
+  });
+}
+
+function _bindBihuo25VideoCardEntry() {
+  document.querySelectorAll('.bihuo-25-video-card').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openBihuo25VideoView === 'function') window._openBihuo25VideoView();
+    });
+  });
+  document.querySelectorAll('.bihuo-25-video-entry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openBihuo25VideoView === 'function') window._openBihuo25VideoView();
     });
   });
 }
