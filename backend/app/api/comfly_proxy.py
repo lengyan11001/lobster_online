@@ -975,6 +975,110 @@ async def _openmind_video_poll(task_id: str) -> Dict[str, Any]:
     return payload
 
 
+def _xing_seedance_base_url() -> str:
+    base = (os.environ.get("XING_SEEDANCE_API_BASE") or "https://xingapi.top").strip().rstrip("/")
+    return base or "https://xingapi.top"
+
+
+def _xing_seedance_api_key() -> str:
+    key = (os.environ.get("XING_SEEDANCE_API_KEY") or "").strip()
+    if not key:
+        raise HTTPException(503, "Server missing XING_SEEDANCE_API_KEY")
+    return key
+
+
+def _xing_seedance_headers() -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_xing_seedance_api_key()}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _xing_seedance_body(body: Dict[str, Any], model: str) -> Dict[str, Any]:
+    source = dict(body or {})
+    prompt = str(source.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "missing prompt")
+    try:
+        duration = int(float(source.get("duration") or source.get("seconds") or 10))
+    except (TypeError, ValueError):
+        duration = 10
+    if duration <= 0:
+        raise HTTPException(400, "duration must be a positive integer")
+    ratio = str(source.get("ratio") or source.get("aspect_ratio") or "9:16").strip()
+    if ratio not in {"16:9", "9:16"}:
+        ratio = "9:16"
+    return {
+        "model": (os.environ.get("XING_SEEDANCE_MODEL") or model or "seedance2.0-900").strip(),
+        "prompt": prompt,
+        "duration": duration,
+        "resolution": str(source.get("resolution") or "720p").strip() or "720p",
+        "ratio": ratio,
+    }
+
+
+async def _xing_seedance_submit(body: Dict[str, Any], model: str) -> Dict[str, Any]:
+    upstream_body = _xing_seedance_body(body, model)
+    url = f"{_xing_seedance_base_url()}/v1/videos/generations"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_VIDEO_SUBMIT, follow_redirects=True, trust_env=False) as client:
+            response = await client.post(url, headers=_xing_seedance_headers(), json=upstream_body)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"Xing Seedance submit timeout after {_TIMEOUT_VIDEO_SUBMIT}s") from exc
+    except httpx.TransportError as exc:
+        raise RuntimeError(f"Xing Seedance transport error: {exc!r}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"Xing Seedance HTTP {response.status_code}: {(response.text or '')[:700]}")
+    try:
+        payload = response.json() if response.content else {}
+    except Exception:
+        payload = {"_raw_text": response.text}
+    if isinstance(payload, dict):
+        payload.setdefault("_provider", "xing")
+        payload.setdefault("_requested_model", upstream_body.get("model"))
+        task_id = _task_id_from_response(payload)
+        if task_id:
+            payload.setdefault("task_id", task_id)
+    return payload
+
+
+async def _xing_seedance_poll(task_id: str) -> Dict[str, Any]:
+    safe_task_id = (task_id or "").strip()
+    if not safe_task_id:
+        raise HTTPException(400, "missing task_id")
+    url = f"{_xing_seedance_base_url()}/v1/videos/{safe_task_id}"
+    async with httpx.AsyncClient(timeout=_TIMEOUT_VIDEO_POLL, follow_redirects=True, trust_env=False) as client:
+        response = await client.get(url, headers=_xing_seedance_headers())
+    if response.status_code >= 400:
+        raise RuntimeError(f"Xing Seedance poll HTTP {response.status_code}: {(response.text or '')[:700]}")
+    try:
+        payload = response.json() if response.content else {}
+    except Exception:
+        payload = {"_raw_text": response.text}
+    if isinstance(payload, dict):
+        payload.setdefault("_provider", "xing")
+        payload.setdefault("task_id", safe_task_id)
+    return payload
+
+
+async def _xing_seedance_content(task_id: str) -> Response:
+    safe_task_id = (task_id or "").strip()
+    if not safe_task_id:
+        raise HTTPException(400, "missing task_id")
+    url = f"{_xing_seedance_base_url()}/v1/videos/{safe_task_id}/content"
+    async with httpx.AsyncClient(timeout=_TIMEOUT_VIDEO_POLL, follow_redirects=True, trust_env=False) as client:
+        upstream = await client.get(url, headers=_xing_seedance_headers())
+    if upstream.status_code >= 400:
+        raise HTTPException(upstream.status_code, f"Xing Seedance content HTTP {upstream.status_code}: {(upstream.text or '')[:500]}")
+    response_headers = {}
+    for name in ("content-length", "content-disposition", "cache-control"):
+        value = upstream.headers.get(name)
+        if value:
+            response_headers[name] = value
+    return Response(content=upstream.content, media_type=upstream.headers.get("content-type") or "video/mp4", headers=response_headers)
+
+
 def _xai_video_base_url() -> str:
     base = (os.environ.get("XAI_API_BASE") or "https://api.x.ai").strip().rstrip("/")
     return base or "https://api.x.ai"
@@ -2383,13 +2487,24 @@ def _video_provider_policy(model: str, channel: str = "") -> Dict[str, Any]:
             ],
         }
 
-    if low_model in {"seedance-2-0-pro-250528", "seedance-2-0-lite-250428", "seedance-2-0-260128", "seedance-2-0-fast-260128", "doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128"}:
+    if low_model in {"seedance-2-0-pro-250528", "seedance-2-0-lite-250428", "seedance-2-0-260128", "seedance-2-0-fast-260128", "doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128", "seedance2.0-900", "seedance2-0-900"}:
+        if low_model in {"seedance2.0-900", "seedance2-0-900"}:
+            return {
+                "ok": True,
+                "model_family": "seedance20",
+                "providers": [
+                    {"channel": "xing", "model": "seedance2.0-900", "base_url": proxy_base},
+                    {"channel": "openmind", "model": "doubao-seedance-2-0-260128", "base_url": proxy_base},
+                    {"channel": "seedance", "model": "doubao-seedance-2-0-260128", "base_url": proxy_base},
+                ],
+            }
         return {
             "ok": True,
             "model_family": "seedance20",
             "providers": [
                 {"channel": "openmind", "model": "doubao-seedance-2-0-260128", "base_url": proxy_base},
                 {"channel": "seedance", "model": "doubao-seedance-2-0-260128", "base_url": proxy_base},
+                {"channel": "xing", "model": "seedance2.0-900", "base_url": proxy_base},
             ],
         }
 
@@ -2533,6 +2648,81 @@ async def proxy_openmind_video_content(
 ):
     _check_request_authorized_for_billing(request)
     return await _openmind_video_content(task_id)
+
+
+@router.post("/api/comfly-proxy/xing/v1/videos/generations", summary="Xing Seedance2.0-900 video submit proxy")
+async def proxy_xing_seedance_submit(request: Request):
+    _check_request_authorized_for_billing(request)
+    body = await request.json()
+    model = str(body.get("model") or "seedance2.0-900").strip()
+    _require_model_entry(model)
+    request_user_id, billing_user_id = _resolve_proxy_user_ids_from_request(request, map_to_online_user=False)
+    estimated = estimate_comfly_credits(model, body, for_user=True) or 1
+    internal_fallback = _is_trusted_internal_video_fallback(request)
+    pre = Decimal("0") if internal_fallback else _do_pre_deduct_by_user_id(
+        billing_user_id,
+        estimated,
+        capability_id=_CAPABILITY_FOR_BILLING,
+        model=model,
+        endpoint="xing_seedance_submit",
+        extra_meta={"upstream": "xing", "xing_model": model},
+    )
+    try:
+        response = await _xing_seedance_submit(body, model)
+    except Exception as exc:
+        _do_full_refund_by_user_id(
+            billing_user_id,
+            pre=pre,
+            capability_id=_CAPABILITY_FOR_BILLING,
+            model=model,
+            endpoint="xing_seedance_submit",
+            error=str(exc),
+        )
+        _audit("xing_seedance_submit_failed", user_id=billing_user_id, request_user_id=request_user_id, model=model, error=str(exc)[:300])
+        raise HTTPException(502, f"Xing Seedance submit failed: {exc}")
+    task_id = _task_id_from_response(response)
+    _remember_proxy_video_task(task_id, "xing", model)
+    _audit("xing_seedance_submit_ok", user_id=billing_user_id, request_user_id=request_user_id, model=model, task_id=task_id, pre=credits_json_float(pre))
+    log_model_usage_event(
+        None,
+        category="video",
+        event_kind="request",
+        success=True,
+        user_id=billing_user_id,
+        requested_model=model,
+        model=model,
+        provider="xing",
+        channel="xing",
+        route="xing_seedance",
+        endpoint="/api/comfly-proxy/xing/v1/videos/generations",
+        request_id=task_id or "",
+        meta={"xing_model": model},
+    )
+    return JSONResponse(response)
+
+
+@router.get("/api/comfly-proxy/xing/v1/videos/{task_id}", summary="Xing Seedance task poll proxy")
+async def proxy_xing_seedance_poll(
+    task_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    _check_request_authorized_for_billing(request)
+    try:
+        response = await _xing_seedance_poll(task_id)
+    except Exception as exc:
+        raise HTTPException(502, f"Xing Seedance poll failed: {exc}")
+    return JSONResponse(response)
+
+
+@router.get("/api/comfly-proxy/xing/v1/videos/{task_id}/content", summary="Xing Seedance content proxy")
+async def proxy_xing_seedance_content(
+    task_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    _check_request_authorized_for_billing(request)
+    return await _xing_seedance_content(task_id)
 
 
 @router.post("/api/comfly-proxy/xai/v1/videos/generations", summary="Official xAI Grok video submit proxy")
