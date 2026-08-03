@@ -1,7 +1,7 @@
 {
-  "version": "1.0.133",
-  "build": 177,
-  "applied_at": "2026-08-03T00:32:03+08:00",
-  "note": "fix digital human verification and social publish title validation",
-  "bundle_sha256": "85d943d707645cabc3c1ecbde3305529f86e03c61c313febb6a4d863f8919614"
+  "version": "1.0.135",
+  "build": 179,
+  "applied_at": "2026-08-03T16:46:32+08:00",
+  "note": "fix top navigation and speed up asset libraries",
+  "bundle_sha256": "d389669e435d36fd93dc4aa44983ffc529be42974b4f29443c26032fbc489e82"
 }
