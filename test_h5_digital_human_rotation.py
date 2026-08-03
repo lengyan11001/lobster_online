@@ -2,6 +2,7 @@ import asyncio
 from datetime import date
 
 from backend.app.api.h5_chat_channel import (
+    _provided_shanjian_workflow_script,
     _resolve_workflow_virtualman,
     _select_daily_virtualman,
     _shanjian_video_create_payload,
@@ -71,6 +72,37 @@ def test_sales_sequence_advances_on_next_day():
     )
 
     assert first["virtualman_id"] != next_day["virtualman_id"]
+
+
+def test_sales_ip_daily_script_ignores_workflow_node_prompt():
+    selected = _provided_shanjian_workflow_script(
+        {
+            "script_source": "ip_daily_industry_hot_oral",
+            "prompt": "创作一条数字人口播视频（用于发朋友圈）",
+        }
+    )
+
+    assert selected == ""
+
+
+def test_sales_ip_daily_script_keeps_explicit_script_override():
+    selected = _provided_shanjian_workflow_script(
+        {
+            "script_source": "ip_daily_industry_hot_oral",
+            "script": "这是用户明确传入的完整口播文案。",
+            "prompt": "创作一条数字人口播视频（用于发朋友圈）",
+        }
+    )
+
+    assert selected == "这是用户明确传入的完整口播文案。"
+
+
+def test_non_sales_digital_human_can_still_use_prompt_as_script():
+    selected = _provided_shanjian_workflow_script(
+        {"prompt": "这是普通数字人任务直接提供的口播文案。"}
+    )
+
+    assert selected == "这是普通数字人任务直接提供的口播文案。"
 
 
 class _ProfileResponse:

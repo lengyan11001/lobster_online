@@ -30,6 +30,7 @@ except ImportError:
 class Input(TypedDict, total=False):
     reference_image: str
     reference_images: List[str]
+    reference_purposes: List[str]
     apikey: str
     base_url: str
     task_text: str
@@ -48,6 +49,8 @@ class Input(TypedDict, total=False):
     video_fallbacks: List[Dict[str, Any]]
     workflow_mode: str
     aspect_ratio: str
+    visual_tone: str
+    rhythm: str
     storyboard_count: int
     segment_count: int
     segment_duration_seconds: int
@@ -90,6 +93,9 @@ class PipelineConfig:
     video_fallbacks: List[Dict[str, Any]] = field(default_factory=list)
     workflow_mode: str = "storyboard"
     aspect_ratio: str = "9:16"
+    reference_purposes: List[str] = field(default_factory=list)
+    visual_tone: str = "clean_bright"
+    rhythm: str = "smooth"
     segment_count: int = 2
     segment_duration_seconds: int = 10
     total_duration_seconds: int = 20
@@ -115,6 +121,26 @@ ALLOWED_TOTAL_DURATIONS = (10, 20, 30, 40, 50, 60)
 ALLOWED_YUNWU_TOTAL_DURATIONS = (8, 16, 24, 32, 40, 48)
 FIXED_SEGMENT_DURATION_SECONDS = 10
 YUNWU_SEGMENT_DURATION_SECONDS = 8
+REFERENCE_PURPOSE_GUIDANCE = {
+    "storyboard": "use composition, shot structure, visual hierarchy, and pacing as storyboard guidance; do not treat unrelated people or products as mandatory subjects",
+    "person": "preserve this target person's face, facial features, hair, temperament, and core outfit traits throughout the film",
+    "product": "preserve this target product's shape, packaging, color, material, label layout, and identifying details",
+    "style": "use only its color, lighting, texture, lens mood, and art direction; do not copy unrelated people or products",
+    "scene": "preserve its space, environment, lighting, set relationship, and scene logic",
+    "auto": "infer the useful subject, style, scene, or composition information without inventing unsupported identity claims",
+}
+VISUAL_TONE_GUIDANCE = {
+    "clean_bright": "bright, clean, airy, accurate colors, uncluttered composition",
+    "lifestyle_warm": "warm, natural lifestyle light, approachable texture, lived-in atmosphere",
+    "luxury_refined": "refined premium finish, controlled highlights, elegant materials, restrained composition",
+    "cinematic_contrast": "cinematic contrast, motivated lighting, dimensional shadows, narrative atmosphere",
+}
+RHYTHM_GUIDANCE = {
+    "smooth": "smooth visual progression, stable camera motivation, soft and readable transitions",
+    "dynamic": "energetic movement, stronger changes in shot scale, decisive transitions without visual chaos",
+    "product_focus": "prioritize product readability, feature proof, material close-ups, and clear benefit progression",
+    "storytelling": "prioritize emotional setup, narrative development, character or scene continuity, and payoff",
+}
 _SEEDANCE_MODEL_ALIASES = {
     "seedance-2-0-pro-250528": "doubao-seedance-2-0-260128",
     "seedance-2-0-lite-250428": "doubao-seedance-2-0-fast-260128",
@@ -334,6 +360,18 @@ def _normalize_aspect_ratio(raw: str, default: str = "9:16") -> str:
     if s in {"1:1", "4:3", "3:4", "4:5", "5:4", "9:16", "16:9", "21:9"}:
         return s
     return default
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
 
 
 def _normalize_seedance_model(raw: str) -> str:
@@ -756,7 +794,28 @@ def _locale_guidance(config: PipelineConfig) -> str:
     return "Use localized styling that matches the intended market and language."
 
 
+def _reference_guidance(config: PipelineConfig) -> str:
+    if not config.reference_purposes:
+        return "Reference image purposes: infer each image conservatively from visible evidence and the user's task brief."
+    lines = ["Reference image purposes are ordered exactly like the attached images:"]
+    for index, purpose in enumerate(config.reference_purposes, start=1):
+        guidance = REFERENCE_PURPOSE_GUIDANCE.get(purpose, REFERENCE_PURPOSE_GUIDANCE["auto"])
+        lines.append(f"- Reference image {index}: {purpose}; {guidance}.")
+    return "\n".join(lines)
+
+
+def _audio_guidance(config: PipelineConfig) -> str:
+    if config.generate_audio:
+        return "Plan coherent native audio where the selected video provider supports it, including continuous voice-over, music mood, and restrained sound effects."
+    return "Do not request generated voice, music, or sound effects. Keep voiceover_cn empty and make the visual story understandable without generated audio."
+
+
 def _analysis_prompt(config: PipelineConfig) -> str:
+    voiceover_rule = (
+        "voiceover_cn should be the full Chinese narration for that segment, and all segments together must read like one continuous voice-over."
+        if config.generate_audio
+        else "voiceover_cn must be empty because generated audio is disabled."
+    )
     return (
         "You are a senior creative short-video storyboard director.\n"
         "The user may upload one or more reference images, or may provide only a text task brief. If reference images are present, first identify the real subject and intent from the image: it may be a person, a selfie, a scene, a lifestyle moment, a product, a packaging reference, a style reference, or a storyboard example. Do not assume ecommerce, product promotion, brand advertising, or sales content unless the user text or the image clearly indicates a product/brand/sales scenario.\n"
@@ -778,13 +837,17 @@ def _analysis_prompt(config: PipelineConfig) -> str:
         "4. The full set of boards must feel like one integrated short video, not disconnected mini videos. The story should progress naturally from opening, to development, to emotional/visual payoff, to a clean close. Use product-proof/brand-close structure only for explicit product or ad tasks.\n"
         "5. continuity_anchor_cn must describe what must visually stay continuous from the previous segment into this one.\n"
         "6. transition_in_cn and transition_out_cn must describe how the current segment connects to its neighbors in camera motion, lighting, props, subject behavior, or composition rhythm.\n"
-        "7. voiceover_cn should be the full Chinese narration for that segment, but all segments together must read like one continuous ad voice-over.\n"
+        f"7. {voiceover_rule}\n"
         "8. board_copy_cn should be the Chinese labels / supporting copy that should appear on the board image.\n"
         "9. image_prompt and video_prompt MUST be Simplified Chinese prompts for users to read and edit. Do not output English in these two fields. image_prompt describes the image/storyboard result for this segment; video_prompt describes the video motion result for this segment.\n"
         "10. storyboard_image_prompt_en and seedance_prompt_en may be English technical prompts for generation, but image_prompt and video_prompt must be the Chinese user-facing versions.\n"
         "11. Keep subject consistency across all boards: same person/object/scene identity, outfit or key visual traits, props, colorway, spatial logic, and art direction. For explicit product tasks, also keep packaging/logo/product identity consistent.\n"
         "12. The final segment must clearly resolve the same story/emotion/campaign arc established by the first segment.\n"
         "13. Return JSON only.\n"
+        f"Required visual tone: {VISUAL_TONE_GUIDANCE[config.visual_tone]}.\n"
+        f"Required camera rhythm: {RHYTHM_GUIDANCE[config.rhythm]}.\n"
+        f"Audio requirement: {_audio_guidance(config)}\n"
+        f"{_reference_guidance(config)}\n"
         f"Extra user task brief: {config.task_text or 'No extra task text provided.'}\n"
         f"Locale guidance: {_locale_guidance(config)}"
     )
@@ -1115,18 +1178,27 @@ class ComflySeedanceClient:
         video_model = (model or self.config.video_model or _default_video_model(video_channel)).strip() or _default_video_model(video_channel)
         video_base_url = _normalize_video_base_url_for_channel(video_channel, base_url or "", _default_video_base_url(video_channel, self.base_url))
         if video_channel == "openmind":
-            images = [segment_reference_url] if segment_reference_url else []
+            images = [url for url in reference_urls if url]
+            if segment_reference_url and segment_reference_url not in images:
+                images.append(segment_reference_url)
             is_grok = _is_grok_video_model(video_model)
+            normalized_ratio = _normalize_aspect_ratio(self.config.aspect_ratio)
+            output_sizes = {
+                "9:16": "720x1280",
+                "16:9": "1280x720",
+                "1:1": "1024x1024",
+                "4:5": "864x1080",
+            }
             body = {
                 "model": video_model,
                 "prompt": prompt,
                 "images": images,
                 "seconds": str(int(duration_seconds)) if is_grok else int(duration_seconds),
                 "duration": str(int(duration_seconds)) if is_grok else int(duration_seconds),
-                "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+                "aspect_ratio": normalized_ratio,
                 "resolution": "720p",
             }
-            body["size"] = "720x1280" if body["aspect_ratio"] == "9:16" else "1280x720"
+            body["size"] = output_sizes.get(normalized_ratio, "720x1280")
             if images:
                 body["image"] = images[0]
                 body["image_url"] = images[0]
@@ -1165,6 +1237,8 @@ class ComflySeedanceClient:
                 "model": video_model or "grok-imagine-video-1.5",
                 "prompt": prompt,
                 "duration": int(duration_seconds),
+                "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+                "resolution": "720p",
             }
             if image_url:
                 body["image"] = {"url": image_url}
@@ -1240,9 +1314,8 @@ class ComflySeedanceClient:
                     "model": video_model,
                     "images": images,
                     "watermark": bool(self.config.watermark),
+                    "aspect_ratio": normalized_ratio,
                 }
-                if normalized_ratio in {"9:16", "16:9"}:
-                    body["aspect_ratio"] = normalized_ratio
 
             def call_comfly_veo() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v2/videos/generations"
@@ -1264,11 +1337,11 @@ class ComflySeedanceClient:
             return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call_comfly_veo)
 
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
-        if segment_reference_url:
-            content.append({"type": "image_url", "image_url": {"url": segment_reference_url}, "role": "reference_image"})
-        for ref_url in reference_urls:
-            if ref_url and ref_url != segment_reference_url:
-                content.append({"type": "image_url", "image_url": {"url": ref_url}, "role": "reference_image"})
+        ordered_references = [url for url in reference_urls if url]
+        if segment_reference_url and segment_reference_url not in ordered_references:
+            ordered_references.append(segment_reference_url)
+        for ref_url in ordered_references:
+            content.append({"type": "image_url", "image_url": {"url": ref_url}, "role": "reference_image"})
         body: Dict[str, Any] = {
             "model": _normalize_seedance_model(video_model),
             "content": content,
@@ -1905,9 +1978,17 @@ def _run_segment_video_providers(
 
 def _direct_video_prompt(config: PipelineConfig) -> str:
     prompt = (config.task_text or "").strip()
-    if prompt:
-        return prompt
-    return "基于上传参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
+    if not prompt:
+        prompt = "基于上传参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
+    return "\n".join(
+        [
+            prompt,
+            f"Visual tone: {VISUAL_TONE_GUIDANCE[config.visual_tone]}.",
+            f"Camera rhythm: {RHYTHM_GUIDANCE[config.rhythm]}.",
+            f"Audio requirement: {_audio_guidance(config)}",
+            _reference_guidance(config),
+        ]
+    )
 
 
 def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str], index: int = 1) -> Dict[str, Any]:
@@ -1915,7 +1996,7 @@ def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: Lis
         raise PipelineError("direct_video requires at least one reference image")
     video_prompt = _direct_video_prompt(config)
     segment_index = max(1, int(index or 1))
-    reference_url = reference_image_urls[(segment_index - 1) % len(reference_image_urls)]
+    reference_url = reference_image_urls[0]
     start_second = (segment_index - 1) * config.segment_duration_seconds
     end_second = segment_index * config.segment_duration_seconds
     board = {
@@ -2005,6 +2086,10 @@ def _finish_segments(
             "video_fallbacks": config.video_fallbacks or [],
             "workflow_mode": config.workflow_mode,
             "aspect_ratio": config.aspect_ratio,
+            "merge_clips": config.merge_clips,
+            "reference_purposes": config.reference_purposes,
+            "visual_tone": config.visual_tone,
+            "rhythm": config.rhythm,
             "segment_count": config.segment_count,
             "segment_duration_seconds": config.segment_duration_seconds,
             "total_duration_seconds": config.total_duration_seconds,
@@ -2069,6 +2154,16 @@ def _build_config(data: Input) -> PipelineConfig:
     fallback_channel = _normalize_video_channel(str(data.get("video_fallback_channel") or data.get("fallback_video_channel") or "comfly"))
     fallback_base_default = _default_video_base_url(fallback_channel, base_url)
     fallback_model_default = _default_video_model(fallback_channel)
+    reference_purposes = [str(x or "").strip().lower() for x in (data.get("reference_purposes") or []) if str(x or "").strip()]
+    invalid_purposes = sorted({x for x in reference_purposes if x not in REFERENCE_PURPOSE_GUIDANCE})
+    if invalid_purposes:
+        raise PipelineError(f"unsupported reference purpose: {', '.join(invalid_purposes)}")
+    visual_tone = str(data.get("visual_tone") or "clean_bright").strip().lower()
+    if visual_tone not in VISUAL_TONE_GUIDANCE:
+        raise PipelineError(f"unsupported visual_tone: {visual_tone}")
+    rhythm = str(data.get("rhythm") or "smooth").strip().lower()
+    if rhythm not in RHYTHM_GUIDANCE:
+        raise PipelineError(f"unsupported rhythm: {rhythm}")
     return PipelineConfig(
         base_url=base_url,
         api_key=api_key,
@@ -2088,6 +2183,9 @@ def _build_config(data: Input) -> PipelineConfig:
         video_fallbacks=list(data.get("video_fallbacks") or data.get("fallback_video_providers") or []),
         workflow_mode=(str(data.get("workflow_mode") or "storyboard").strip().lower().replace("-", "_") or "storyboard"),
         aspect_ratio=_normalize_aspect_ratio(str(data.get("aspect_ratio") or "9:16"), "9:16"),
+        reference_purposes=reference_purposes,
+        visual_tone=visual_tone,
+        rhythm=rhythm,
         segment_count=segment_count,
         segment_duration_seconds=segment_seconds,
         total_duration_seconds=raw_total,
@@ -2100,12 +2198,12 @@ def _build_config(data: Input) -> PipelineConfig:
         image_generation_retries=max(1, int(data.get("image_generation_retries", 3))),
         video_submit_retries=max(1, int(data.get("video_submit_retries", 2))),
         network_retry_delay_seconds=max(1, int(data.get("network_retry_delay_seconds", 3))),
-        merge_clips=True,
+        merge_clips=_as_bool(data.get("merge_clips"), True),
         ffmpeg_path=(data.get("ffmpeg_path") or "ffmpeg").strip() or "ffmpeg",
         clip_download_retries=max(1, int(data.get("clip_download_retries", 2))),
         clip_download_timeout_seconds=max(30, int(data.get("clip_download_timeout_seconds", 180))),
-        generate_audio=bool(data.get("generate_audio", True)),
-        watermark=bool(data.get("watermark", False)),
+        generate_audio=_as_bool(data.get("generate_audio"), True),
+        watermark=_as_bool(data.get("watermark"), False),
         seed=int(data.get("seed", -1)),
     )
 
@@ -2119,6 +2217,8 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         primary = (data.get("reference_image") or "").strip()
         if primary and primary not in raw_refs:
             raw_refs.insert(0, primary)
+        if config.reference_purposes and len(config.reference_purposes) != len(raw_refs):
+            raise PipelineError("reference_purposes must match reference_images in count and order")
 
         client = ComflySeedanceClient(config, logger_obj)
         reference_image_urls: List[str] = []

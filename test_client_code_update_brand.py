@@ -1,6 +1,8 @@
+import json
+
+from backend.app.api import h5_chat_channel
 from scripts import check_client_code_update as updater
 from scripts import pack_client_code_ota as packer
-from backend.app.api import h5_chat_channel
 
 
 def test_default_ota_paths_do_not_replace_runtime_env():
@@ -8,6 +10,80 @@ def test_default_ota_paths_do_not_replace_runtime_env():
     assert ".env" not in packer.OTA_PATHS
     assert ".env.example" in updater.DEFAULT_PATHS
     assert ".env.example" in packer.OTA_PATHS
+
+
+def test_packaging_bumps_and_synchronizes_local_version_files(tmp_path):
+    version = {
+        "version": "1.0.131",
+        "build": 175,
+        "applied_at": "2026-08-01T18:16:45+08:00",
+        "note": "previous",
+    }
+    static = tmp_path / "static"
+    static.mkdir()
+    for rel in packer.VERSION_FILE_RELS:
+        path = tmp_path / rel
+        path.write_text(json.dumps(version), encoding="utf-8")
+
+    bumped = packer._bump_local_client_version(tmp_path, note="regression test")
+
+    assert bumped["version"] == "1.0.132"
+    assert bumped["build"] == 176
+    for rel in packer.VERSION_FILE_RELS:
+        saved = json.loads((tmp_path / rel).read_text(encoding="utf-8"))
+        assert saved == bumped
+        assert saved["note"] == "regression test"
+
+
+def test_packaging_refuses_unsynchronized_local_version_files(tmp_path):
+    static = tmp_path / "static"
+    static.mkdir()
+    (tmp_path / "CLIENT_CODE_VERSION.json").write_text(
+        json.dumps({"version": "1.0.131", "build": 175}),
+        encoding="utf-8",
+    )
+    (static / "client_version.json").write_text(
+        json.dumps({"version": "1.0.130", "build": 174}),
+        encoding="utf-8",
+    )
+
+    try:
+        packer._bump_local_client_version(tmp_path)
+    except ValueError as exc:
+        assert "out of sync" in str(exc)
+    else:
+        raise AssertionError("unsynchronized version files must block OTA packing")
+
+
+def test_packaging_records_bundle_identity_for_same_build_update_check(tmp_path):
+    static = tmp_path / "static"
+    static.mkdir()
+    version = {"version": "1.0.132", "build": 176}
+    for rel in packer.VERSION_FILE_RELS:
+        (tmp_path / rel).write_text(json.dumps(version), encoding="utf-8")
+    digest = "a" * 64
+
+    packer._record_local_bundle_sha256(
+        tmp_path,
+        version="1.0.132",
+        build=176,
+        bundle_sha256=digest,
+    )
+
+    for rel in packer.VERSION_FILE_RELS:
+        saved = json.loads((tmp_path / rel).read_text(encoding="utf-8"))
+        assert saved["bundle_sha256"] == digest
+    assert (
+        updater._update_reason(
+            local_build=176,
+            local_version="1.0.132",
+            local_bundle_sha256=digest,
+            remote_build=176,
+            remote_version="1.0.132",
+            remote_bundle_sha256=digest,
+        )
+        == ""
+    )
 
 
 def test_stage_env_preserves_existing_brand(tmp_path):

@@ -22,6 +22,10 @@ protobuf>=5.28.0,<7.0.0
 tos>=2.9.0
 Pillow>=10.0.0
 numpy>=1.26.0
+torch==2.13.0
+torchvision==0.28.0
+opencv-python==5.0.0.93
+segment-anything==1.0
 pypdf>=4.0.0
 xlrd>=2.0.1
 pywin32>=306; platform_system=="Windows"

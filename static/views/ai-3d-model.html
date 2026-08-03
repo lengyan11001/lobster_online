@@ -1,4 +1,4 @@
-<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260729-component-flow-v1-v8">
+﻿<link id="ai3dModelCss" rel="stylesheet" href="/static/css/ai-3d-model.css?v=20260803-component-split-v3">
 <div id="content-ai-3d-model" class="content-block">
   <div class="ai3d-page">
     <header class="ai3d-head">
@@ -41,6 +41,7 @@
                   <option value="game_prop" selected>虚拟/游戏道具（参考图理解生成多视角）</option>
                   <option value="component_split">拆件 1.0（先提示词，再部件图/三视图/3D）</option>
                   <option value="component_split_v2">拆件 2.0（先部件图，提示词可选反推）</option>
+                  <option value="component_split_v3">拆件 3.0（SAM 分割 + 遮罩补全）</option>
                   <option value="real_object">实物生 3D（固定角度上传）</option>
                   <option value="direct_multiview">多视图直接生成 3D</option>
                   <option value="custom">自定义（现有流程）</option>
@@ -224,7 +225,7 @@
 
   </div>
 </div>
-<script src="/static/js/ai-3d-model.js?v=20260729-component-flow-v1-v8"></script>
+<script src="/static/js/ai-3d-model.js?v=20260803-component-split-v3"></script>
 <script>
   (function() {
     window.ai3dDirectBootstrapRan = true;
@@ -297,3 +298,4 @@
     }
   })();
 </script>
+

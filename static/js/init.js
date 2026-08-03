@@ -888,6 +888,71 @@ function setAuthenticatedChrome(isAuthenticated) {
   if (actions) actions.style.display = isAuthenticated ? 'flex' : 'none';
 }
 
+function revealTopNavItem(item) {
+  var nav = document.getElementById('appTopNav');
+  if (!nav || !item || nav.scrollWidth <= nav.clientWidth) return;
+  var left = item.offsetLeft;
+  var right = left + item.offsetWidth;
+  var visibleLeft = nav.scrollLeft;
+  var visibleRight = visibleLeft + nav.clientWidth;
+  if (left < visibleLeft || right > visibleRight) {
+    nav.scrollTo({
+      left: Math.max(0, left - (nav.clientWidth - item.offsetWidth) / 2),
+      behavior: 'smooth'
+    });
+  }
+}
+
+(function initScrollableTopNav() {
+  var nav = document.getElementById('appTopNav');
+  if (!nav || nav._scrollControlsBound) return;
+  nav._scrollControlsBound = true;
+  var dragging = false;
+  var moved = false;
+  var startX = 0;
+  var startScrollLeft = 0;
+
+  nav.addEventListener('wheel', function(event) {
+    if (nav.scrollWidth <= nav.clientWidth) return;
+    var delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (!delta) return;
+    nav.scrollLeft += delta;
+    event.preventDefault();
+  }, { passive: false });
+
+  nav.addEventListener('pointerdown', function(event) {
+    if (event.button !== 0 || nav.scrollWidth <= nav.clientWidth) return;
+    if (event.target && event.target.closest('button, a, input, select, textarea, [role="button"]')) return;
+    dragging = true;
+    moved = false;
+    startX = event.clientX;
+    startScrollLeft = nav.scrollLeft;
+    nav.classList.add('is-dragging');
+    try { nav.setPointerCapture(event.pointerId); } catch (e) {}
+  });
+  nav.addEventListener('pointermove', function(event) {
+    if (!dragging) return;
+    var distance = event.clientX - startX;
+    if (Math.abs(distance) > 4) moved = true;
+    nav.scrollLeft = startScrollLeft - distance;
+  });
+  function finishDrag(event) {
+    if (!dragging) return;
+    dragging = false;
+    nav.classList.remove('is-dragging');
+    try { nav.releasePointerCapture(event.pointerId); } catch (e) {}
+    setTimeout(function() { moved = false; }, 0);
+  }
+  nav.addEventListener('pointerup', finishDrag);
+  nav.addEventListener('pointercancel', finishDrag);
+  nav.addEventListener('click', function(event) {
+    if (!moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    moved = false;
+  }, true);
+})();
+
 var LOBSTER_LAST_VIEW_KEY = 'lobster_online_last_view';
 var LOBSTER_MAIN_VIEWS = {
   chat: true,
@@ -1758,7 +1823,10 @@ function showAppView(view, sourceEl) {
   if (currentView === 'chat' && view !== 'chat' && typeof saveCurrentSessionToStore === 'function') saveCurrentSessionToStore();
   document.querySelectorAll('.nav-left-item').forEach(function(b) { b.classList.remove('active'); });
   var navEl = document.querySelector('.nav-left-item[data-view="' + view + '"]');
-  if (navEl) navEl.classList.add('active');
+  if (navEl) {
+    navEl.classList.add('active');
+    revealTopNavItem(navEl);
+  }
   else if (sourceEl) sourceEl.classList.add('active');
 
   var ensure = (typeof window.ensureLobsterViewLoaded === 'function')

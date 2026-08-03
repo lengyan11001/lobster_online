@@ -741,7 +741,7 @@
     }
   },
   "comfly.seedance.tvc.pipeline": {
-    "description": "一体化创意分镜视频成片流水线：基于提示词和参考图生成广告视频。支持 Veo3.1 Plus 云雾通道（video_channel=yunwu，video_model=veo3.1，按 8 秒分段，支持 8/16/24/32/40/48 秒）和 Seedance 2.0 通道（按 10 秒分段，支持 10/20/30/40/50/60 秒）。action 可选 run_pipeline（同步）、start_pipeline（异步）、poll_pipeline（轮询）。上传 1 张参考图并给出提示词时，可使用 workflow_mode=direct_video 直接图生视频，避免额外生成分镜图。",
+    "description": "一体化创意分镜视频成片流水线：基于提示词和一张或多张参考图生成创意视频，可逐图指定人物、产品、风格、场景或分镜用途。支持 Veo3.1 Plus 云雾通道（video_channel=yunwu，video_model=veo3.1，按 8 秒分段，支持 8/16/24/32/40/48 秒）和 Seedance 2.0 通道（按 10 秒分段，支持 10/20/30/40/50/60 秒）。action 可选 run_pipeline（同步）、start_pipeline（异步）、poll_pipeline（轮询）。上传参考图并给出提示词时，可使用 workflow_mode=direct_video 直接图生视频。",
     "upstream": "local",
     "upstream_tool": "invoke",
     "enabled": true,
@@ -783,9 +783,24 @@
           },
           "description": "额外参考图公网 URL 列表，可与主图共同决定产品一致性、场景、包装和质感"
         },
+        "reference_purposes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "storyboard",
+              "person",
+              "product",
+              "style",
+              "scene",
+              "auto"
+            ]
+          },
+          "description": "与主图、额外 URL、额外素材 ID 顺序一一对应的用途列表"
+        },
         "merge_clips": {
           "type": "boolean",
-          "description": "保留兼容字段；该流水线最终始终会合并所有分段视频"
+          "description": "是否将多个分镜片段合成为一个成片，默认 true"
         },
         "storyboard_count": {
           "type": "integer",
@@ -816,6 +831,14 @@
           ],
           "description": "总时长；Veo3.1 Plus 支持 8/16/24/32/40/48 秒，Seedance 支持 10/20/30/40/50/60 秒"
         },
+        "workflow_mode": {
+          "type": "string",
+          "enum": [
+            "storyboard",
+            "direct_video"
+          ],
+          "description": "storyboard=先分析全部参考图并规划分镜；direct_video=直接使用参考图生成各段视频"
+        },
         "auto_save": {
           "type": "boolean",
           "description": "完成后是否将视频素材入库，默认 true"
@@ -843,6 +866,44 @@
         "image_model": {
           "type": "string",
           "description": "分镜设计图生成模型，默认 gpt-image-2"
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "enum": [
+            "9:16",
+            "16:9",
+            "1:1",
+            "4:5"
+          ],
+          "description": "成片画幅"
+        },
+        "visual_tone": {
+          "type": "string",
+          "enum": [
+            "clean_bright",
+            "lifestyle_warm",
+            "luxury_refined",
+            "cinematic_contrast"
+          ],
+          "description": "视觉基调"
+        },
+        "rhythm": {
+          "type": "string",
+          "enum": [
+            "smooth",
+            "dynamic",
+            "product_focus",
+            "storytelling"
+          ],
+          "description": "镜头节奏"
+        },
+        "generate_audio": {
+          "type": "boolean",
+          "description": "是否规划并在上游支持时生成原生音频"
+        },
+        "watermark": {
+          "type": "boolean",
+          "description": "是否请求上游添加水印，默认 false"
         },
         "video_model": {
           "type": "string",

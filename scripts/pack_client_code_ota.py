@@ -26,6 +26,12 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+
+VERSION_FILE_RELS: tuple[str, ...] = (
+    "CLIENT_CODE_VERSION.json",
+    "static/client_version.json",
+)
+
 # 与 check_client_code_update.DEFAULT_PATHS 保持一致
 OTA_PATHS: tuple[str, ...] = (
     "scripts",
@@ -258,6 +264,83 @@ _OTA_OPENCLAW_BUNDLED_DEFAULT_FILENAMES: tuple[str, ...] = (
 
 def _norm(p: str) -> str:
     return p.replace("\\", "/")
+
+
+def _next_patch_version(version: str) -> str:
+    parts = str(version or "").strip().split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        raise ValueError(f"invalid client version: {version!r}")
+    major, minor, patch = (int(part) for part in parts)
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def _bump_local_client_version(root: Path, *, note: str = "pack client OTA") -> dict[str, object]:
+    version_paths = [root / rel.replace("/", os.sep) for rel in VERSION_FILE_RELS]
+    existing: list[dict[str, object]] = []
+    for path in version_paths:
+        if not path.is_file():
+            raise FileNotFoundError(f"client version file missing: {path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"client version file must contain an object: {path}")
+        existing.append(data)
+
+    versions = {str(item.get("version") or "").strip() for item in existing}
+    builds = {int(item.get("build", -1)) for item in existing}
+    if len(versions) != 1 or len(builds) != 1:
+        raise ValueError(
+            "client version files are out of sync: "
+            + ", ".join(
+                f"{path.name}={data.get('version')}/{data.get('build')}"
+                for path, data in zip(version_paths, existing)
+            )
+        )
+
+    current_version = versions.pop()
+    current_build = builds.pop()
+    if current_build < 0:
+        raise ValueError(f"invalid client build: {current_build}")
+    bumped: dict[str, object] = {
+        "version": _next_patch_version(current_version),
+        "build": current_build + 1,
+        "applied_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": str(note or "pack client OTA").strip() or "pack client OTA",
+    }
+    payload = json.dumps(bumped, ensure_ascii=False, indent=2) + "\n"
+    temp_paths: list[Path] = []
+    try:
+        for path in version_paths:
+            temp_path = path.with_name(f".{path.name}.pack-version.tmp")
+            temp_path.write_text(payload, encoding="utf-8")
+            temp_paths.append(temp_path)
+        for path, temp_path in zip(version_paths, temp_paths):
+            temp_path.replace(path)
+    finally:
+        for temp_path in temp_paths:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return bumped
+
+
+def _record_local_bundle_sha256(
+    root: Path,
+    *,
+    version: str,
+    build: int,
+    bundle_sha256: str,
+) -> None:
+    digest = str(bundle_sha256 or "").strip().lower()
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise ValueError(f"invalid OTA sha256: {bundle_sha256!r}")
+    version_paths = [root / rel.replace("/", os.sep) for rel in VERSION_FILE_RELS]
+    for path in version_paths:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if str(data.get("version") or "").strip() != version or int(data.get("build", -1)) != build:
+            raise ValueError(f"client version changed while packing: {path}")
+        data["bundle_sha256"] = digest
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 _INCLUDE_RUNTIME_WHEEL_DIRS: set[str] = set()
@@ -748,6 +831,11 @@ def main() -> int:
         default="",
         help="OEM brand mark written only into the packaged .env files (for example: daka)",
     )
+    ap.add_argument(
+        "--version-note",
+        default="pack client OTA",
+        help="Note stored in both local client version files before packing",
+    )
     args = ap.parse_args()
     _PACK_OVERSEAS = bool(args.overseas)
     _PACK_BRAND = str(args.brand or "").strip().lower()
@@ -759,6 +847,18 @@ def main() -> int:
         print(f"[ERR] invalid --brand: {_PACK_BRAND}")
         return 1
     root: Path = args.root.resolve()
+    if not root.is_dir():
+        print(f"[ERR] root 不是目录: {root}")
+        return 1
+    try:
+        bumped_version = _bump_local_client_version(root, note=args.version_note)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        print(f"[ERR] 无法在打包前升级本地版本: {exc}")
+        return 1
+    print(
+        "[version] local client bumped before packing: "
+        f"version={bumped_version['version']} build={bumped_version['build']}"
+    )
     parent = root.parent
     paths_tuple: tuple[str, ...] = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
     if args.with_ppt_runtime_deps:
@@ -805,9 +905,6 @@ def main() -> int:
         out = (parent / f"lobster_online_client_code_ota{suffix}_{ts}.zip").resolve()
     else:
         out = args.out.resolve()
-    if not root.is_dir():
-        print(f"[ERR] root 不是目录: {root}")
-        return 1
     if args.with_nodejs_deps:
         nm = root / "nodejs" / "node_modules"
         if not nm.is_dir():
@@ -858,6 +955,16 @@ def main() -> int:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     digest = h.hexdigest()
+    try:
+        _record_local_bundle_sha256(
+            root,
+            version=str(bumped_version["version"]),
+            build=int(bumped_version["build"]),
+            bundle_sha256=digest,
+        )
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        print(f"[ERR] OTA 已生成，但无法记录本地包标识，禁止发布: {exc}")
+        return 1
     print(out)
     print(f"sha256={digest}")
     ver_path = root / "CLIENT_CODE_VERSION.json"

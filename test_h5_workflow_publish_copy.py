@@ -305,6 +305,70 @@ async def test_moments_child_uses_oral_script_description_and_no_generated_title
 
 
 @pytest.mark.asyncio
+async def test_moments_child_drops_explicit_source_title(monkeypatch):
+    drafts = []
+
+    async def submit_draft(*, draft, headers):
+        drafts.append(draft)
+        return {"ok": True}
+
+    monkeypatch.setattr(channel, "_submit_local_publish_draft", submit_draft)
+
+    await channel._run_client_workflow_action(
+        "publish_content",
+        {
+            "platform": "wechat_moments",
+            "url": "https://example.com/digital-human.mp4",
+            "media_type": "video",
+            "title": "AI增长｜实战！",
+            "description": "朋友圈发布正文。",
+            "tags": "#AI增长",
+            "ai_publish_copy": False,
+        },
+        headers={},
+        run_id="child-run",
+        cloud=None,
+        base="https://example.com",
+    )
+
+    assert drafts[0]["title"] == ""
+    assert drafts[0]["description"] == "朋友圈发布正文。"
+
+
+@pytest.mark.asyncio
+async def test_wechat_channels_child_strips_symbols_from_short_title(monkeypatch):
+    calls = []
+
+    async def post_local(path, body, **kwargs):
+        calls.append((path, body))
+        return {"ok": True}
+
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+
+    result = await channel._run_client_workflow_action(
+        "publish_content",
+        {
+            "platform": "wechat_channels",
+            "asset_id": "video-asset",
+            "media_type": "video",
+            "account_nickname": "默认视频号",
+            "title": "AI增长｜实战！2026🔥",
+            "description": "视频号发布正文。",
+            "tags": "#AI增长",
+            "ai_publish_copy": False,
+        },
+        headers={},
+        run_id="child-run",
+        cloud=None,
+        base="https://example.com",
+    )
+
+    assert calls[0][0] == "/api/publish"
+    assert calls[0][1]["title"] == "AI增长实战2026"
+    assert result["publish_copy"]["title"] == "AI增长实战2026"
+
+
+@pytest.mark.asyncio
 async def test_local_bestseller_moments_child_publishes_final_video_not_scene_image(monkeypatch):
     class Cloud:
         async def get(self, url, **kwargs):

@@ -135,6 +135,7 @@ def build_pipeline_input(
     *,
     reference_image: str,
     reference_images: Optional[List[str]],
+    reference_purposes: Optional[List[str]],
     api_key: str,
     api_base: str,
     merge_clips: bool,
@@ -156,6 +157,8 @@ def build_pipeline_input(
     video_fallbacks: Optional[List[Dict[str, Any]]] = None,
     workflow_mode: Optional[str] = None,
     aspect_ratio: Optional[str] = None,
+    visual_tone: Optional[str] = None,
+    rhythm: Optional[str] = None,
     generate_audio: Optional[bool] = None,
     watermark: Optional[bool] = None,
 ) -> Dict[str, Any]:
@@ -163,11 +166,17 @@ def build_pipeline_input(
     effective_total_duration = total_duration_seconds
     requested_count = segment_count if segment_count is not None else storyboard_count
     if effective_total_duration is None and requested_count is not None:
-        effective_total_duration = int(requested_count) * 10
+        model_hint = str(video_model or "").strip().lower().replace(" ", "")
+        uses_veo = str(video_channel or "").strip().lower() in {"yunwu", "云雾", "雲霧"} or model_hint in {
+            "yunwu-veo3.1-plus",
+            "veo3.1-plus",
+            "veo3.1",
+        }
+        effective_total_duration = int(requested_count) * int(segment_duration_seconds or (8 if uses_veo else 10))
     inp: Dict[str, Any] = {
         "apikey": api_key,
         "base_url": base,
-        "merge_clips": True,
+        "merge_clips": bool(merge_clips),
     }
     primary_ref = str(reference_image or "").strip()
     if primary_ref:
@@ -175,6 +184,9 @@ def build_pipeline_input(
     refs = [str(x).strip() for x in (reference_images or []) if str(x).strip()]
     if refs:
         inp["reference_images"] = refs
+    purposes = [str(x or "").strip().lower() for x in (reference_purposes or []) if str(x or "").strip()]
+    if purposes:
+        inp["reference_purposes"] = purposes
     if storyboard_count is not None:
         inp["storyboard_count"] = int(storyboard_count)
     if segment_count is not None:
@@ -211,6 +223,10 @@ def build_pipeline_input(
         inp["video_fallbacks"] = list(video_fallbacks)
     if (aspect_ratio or "").strip():
         inp["aspect_ratio"] = aspect_ratio.strip()
+    if (visual_tone or "").strip():
+        inp["visual_tone"] = visual_tone.strip()
+    if (rhythm or "").strip():
+        inp["rhythm"] = rhythm.strip()
     if generate_audio is not None:
         inp["generate_audio"] = bool(generate_audio)
     if watermark is not None:

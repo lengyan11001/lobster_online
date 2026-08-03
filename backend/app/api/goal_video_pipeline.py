@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..core.config import settings
 from ..services.goal_video_job_store import (
@@ -38,20 +38,81 @@ VIDEO_NO_TEXT_CONSTRAINT = (
     "英文、拼音、随机乱码字符或伪文字；只用真实画面、构图、光影和人物/产品动作表达。"
 )
 
+LONG_FORM_VIDEO_MODEL = "st-ai/super-seed2-lite"
+
+
+def _duration_seconds_from_goal(goal: str) -> Optional[int]:
+    text = str(goal or "").strip().lower()
+    if not text:
+        return None
+    minute_match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:分钟|minutes?|mins?)", text, re.IGNORECASE)
+    if minute_match:
+        return max(1, int(round(float(minute_match.group(1)) * 60)))
+    second_match = re.search(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:秒(?:钟)?|seconds?|secs?|s)", text, re.IGNORECASE)
+    if second_match:
+        return max(1, int(round(float(second_match.group(1)))))
+    return None
+
+
+def _aspect_ratio_from_goal(goal: str) -> Optional[str]:
+    text = str(goal or "").strip()
+    match = re.search(r"(?<!\d)(21|16|9|4|3|1)\s*[:：xX]\s*(9|16|4|3|1)(?!\d)", text)
+    if match:
+        return f"{match.group(1)}:{match.group(2)}"
+    if re.search(r"(?:竖屏|竖版|portrait|vertical)", text, re.IGNORECASE):
+        return "9:16"
+    if re.search(r"(?:横屏|横版|landscape|horizontal)", text, re.IGNORECASE):
+        return "16:9"
+    if re.search(r"(?:方形|正方形|square)", text, re.IGNORECASE):
+        return "1:1"
+    return None
+
+
+def _resolution_from_goal(goal: str) -> Optional[str]:
+    text = str(goal or "").strip().lower()
+    match = re.search(r"(?<!\d)(480|720|1080)\s*p(?![a-z0-9])", text, re.IGNORECASE)
+    if match:
+        return f"{match.group(1)}p"
+    if re.search(r"(?<![a-z0-9])4\s*k(?![a-z0-9])", text, re.IGNORECASE):
+        return "2160p"
+    return None
+
 
 class GoalVideoPipelinePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     action: str = Field("run_pipeline", description="run_pipeline/start_pipeline/poll_pipeline")
     job_id: Optional[str] = None
     goal: str = Field("", description="用户目标，例如：给某产品生成 6 秒宣传视频")
     platform: str = "douyin"
     language: str = "中文"
-    duration: Optional[int] = Field(6, ge=3, le=60)
+    duration: Optional[int] = Field(6, ge=4, le=60)
     aspect_ratio: str = "9:16"
     resolution: str = "720p"
     memory_scope: str = "default"
     planning_model: Optional[str] = None
     image_model: Optional[str] = None
     video_model: Optional[str] = None
+    function_mode: str = Field("reference", alias="functionMode")
+    first_image_url: Optional[str] = None
+    end_image_url: Optional[str] = None
+    reference_video_urls: List[str] = Field(default_factory=list)
+    reference_audio_urls: List[str] = Field(default_factory=list)
+    audio: Optional[bool] = None
+    generate_audio: Optional[bool] = None
+    seed: Optional[int] = None
+    negative_prompt: Optional[str] = None
+    enable_prompt_expansion: Optional[bool] = None
+    multi_shots: Optional[bool] = None
+    enable_safety_checker: Optional[bool] = None
+    camera_fixed: Optional[bool] = None
+    style: Optional[str] = None
+    mode: Optional[str] = None
+    fps: Optional[int] = None
+    cfg_scale: Optional[float] = None
+    motion_bucket_id: Optional[int] = None
+    consistency_with_text: Optional[float] = None
+    video_options: Dict[str, Any] = Field(default_factory=dict)
     precomputed_plan: Dict[str, Any] = Field(default_factory=dict)
     reference_asset_ids: List[str] = Field(default_factory=list)
     reference_image_urls: List[str] = Field(default_factory=list)
@@ -61,6 +122,75 @@ class GoalVideoPipelinePayload(BaseModel):
     poll_interval_seconds: int = Field(12, ge=5, le=60)
     image_poll_timeout_seconds: int = Field(900, ge=60, le=3600)
     video_poll_timeout_seconds: int = Field(2400, ge=120, le=7200)
+
+    @field_validator("duration", mode="before")
+    @classmethod
+    def normalize_duration_input(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return 6
+        if isinstance(value, str):
+            parsed = _duration_seconds_from_goal(value)
+            if parsed is not None:
+                return parsed
+        return value
+
+    @field_validator(
+        "reference_asset_ids",
+        "reference_image_urls",
+        "reference_video_urls",
+        "reference_audio_urls",
+        "memory_doc_ids",
+        mode="before",
+    )
+    @classmethod
+    def normalize_list_input(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @model_validator(mode="after")
+    def preserve_explicit_goal_parameters(self) -> "GoalVideoPipelinePayload":
+        explicit_duration = _duration_seconds_from_goal(self.goal)
+        if explicit_duration is not None:
+            configured_duration = int(self.duration or 6)
+            # Six seconds was the old injected default. A non-default value from
+            # either the user goal or task configuration must win over it.
+            if configured_duration == 6 or explicit_duration != 6:
+                self.duration = explicit_duration
+        explicit_ratio = _aspect_ratio_from_goal(self.goal)
+        if explicit_ratio:
+            self.aspect_ratio = explicit_ratio
+        explicit_resolution = _resolution_from_goal(self.goal)
+        if explicit_resolution:
+            self.resolution = explicit_resolution
+
+        duration = int(self.duration or 6)
+        if duration < 4:
+            raise ValueError("创意视频当前最短支持 4 秒，不能静默延长用户要求")
+        if duration > 30:
+            raise ValueError("创意视频当前单次生成最长支持 30 秒，不能静默缩短用户要求")
+        aspect_ratio = str(self.aspect_ratio or "9:16").strip().lower()
+        if aspect_ratio not in {"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}:
+            raise ValueError(f"不支持的视频比例：{self.aspect_ratio}")
+        resolution = str(self.resolution or "720p").strip().lower()
+        if resolution not in {"480p", "720p", "1080p"}:
+            raise ValueError(f"不支持的视频分辨率：{self.resolution}")
+        selected_model = str(self.video_model or "").strip().lower()
+        if selected_model == LONG_FORM_VIDEO_MODEL:
+            if resolution not in {"480p", "720p"}:
+                raise ValueError("明确选择必火2.5时，分辨率只支持 480p 或 720p")
+            if self.function_mode in {"", "reference", "multimodal", "omni"}:
+                self.function_mode = "omini"
+        elif not selected_model or selected_model.startswith("apiz/veo3.1/"):
+            if duration not in {4, 6, 8}:
+                raise ValueError(
+                    "当前创意视频模型仅支持 4/6/8 秒；系统不会自动切换到价格更高的必火2.5，请明确选择支持该时长的模型"
+                )
+            if resolution not in {"720p", "1080p"}:
+                raise ValueError("当前创意视频模型只支持 720p 或 1080p，不会自动切换其他模型")
+        return self
 
 
 class GoalVideoPipelineBody(BaseModel):
@@ -751,6 +881,66 @@ def _first_asset_id(result: Dict[str, Any], media_type: str = "") -> str:
     return ""
 
 
+def _build_video_generation_payload(
+    *,
+    pl: GoalVideoPipelinePayload,
+    prompt: str,
+    image_asset_id: str = "",
+    generated_image_urls: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "prompt": prompt,
+        "duration": int(pl.duration or 6),
+        "aspect_ratio": pl.aspect_ratio,
+        "resolution": pl.resolution,
+        "functionMode": pl.function_mode or "reference",
+    }
+    if pl.video_model:
+        payload["model"] = pl.video_model
+
+    image_urls = _dedupe_strings(
+        [pl.first_image_url or ""]
+        + list(generated_image_urls or [])
+        + list(pl.reference_image_urls or [])
+    )
+    if image_asset_id:
+        payload["asset_id"] = image_asset_id
+    if pl.reference_asset_ids:
+        payload["asset_ids"] = list(pl.reference_asset_ids)
+    if image_urls:
+        payload["image_url"] = image_urls[0]
+        payload["image_urls"] = image_urls
+    if pl.end_image_url:
+        payload["end_image_url"] = pl.end_image_url
+    if pl.reference_video_urls:
+        payload["video_urls"] = _dedupe_strings(list(pl.reference_video_urls))
+    if pl.reference_audio_urls:
+        payload["audio_urls"] = _dedupe_strings(list(pl.reference_audio_urls))
+
+    optional_fields = {
+        "audio": pl.audio,
+        "generate_audio": pl.generate_audio,
+        "seed": pl.seed,
+        "negative_prompt": pl.negative_prompt,
+        "enable_prompt_expansion": pl.enable_prompt_expansion,
+        "multi_shots": pl.multi_shots,
+        "enable_safety_checker": pl.enable_safety_checker,
+        "camera_fixed": pl.camera_fixed,
+        "style": pl.style,
+        "mode": pl.mode,
+        "fps": pl.fps,
+        "cfg_scale": pl.cfg_scale,
+        "motion_bucket_id": pl.motion_bucket_id,
+        "consistency_with_text": pl.consistency_with_text,
+    }
+    for key, value in optional_fields.items():
+        if value is not None and value != "":
+            payload[key] = value
+    if pl.video_options:
+        payload["options"] = dict(pl.video_options)
+    return payload
+
+
 async def run_goal_video_pipeline(
     *,
     pl: GoalVideoPipelinePayload,
@@ -818,21 +1008,14 @@ async def run_goal_video_pipeline(
         },
     )
 
-    video_payload: Dict[str, Any] = {
-        "prompt": plan["video_prompt"],
-        "aspect_ratio": pl.aspect_ratio,
-        "resolution": pl.resolution,
-    }
-    if pl.duration:
-        video_payload["duration"] = int(pl.duration)
-    if pl.video_model:
-        video_payload["model"] = pl.video_model
-    if image_asset_id:
-        video_payload["asset_id"] = image_asset_id
-    elif image_urls:
-        video_payload["image_url"] = image_urls[0]
-    else:
+    if not image_asset_id and not image_urls:
         raise RuntimeError("image generation finished but no image asset/url was available for video generation")
+    video_payload = _build_video_generation_payload(
+        pl=pl,
+        prompt=plan["video_prompt"],
+        image_asset_id=image_asset_id,
+        generated_image_urls=image_urls,
+    )
 
     video_result = await _retry_async(
         "video",
@@ -979,19 +1162,12 @@ async def run_goal_video_from_reference_pipeline(
         )
     emit("plan_done", "plan generated", {"title": plan.get("title"), "partial_plan": plan})
 
-    video_payload: Dict[str, Any] = {
-        "prompt": plan["video_prompt"],
-        "aspect_ratio": pl.aspect_ratio,
-        "resolution": pl.resolution,
-    }
-    if pl.duration:
-        video_payload["duration"] = int(pl.duration)
-    if pl.video_model:
-        video_payload["model"] = pl.video_model
-    if reference_asset_id:
-        video_payload["asset_id"] = reference_asset_id
-    if reference_image_url:
-        video_payload["image_url"] = reference_image_url
+    video_payload = _build_video_generation_payload(
+        pl=pl,
+        prompt=plan["video_prompt"],
+        image_asset_id=reference_asset_id,
+        generated_image_urls=[reference_image_url] if reference_image_url else [],
+    )
 
     video_result = await _retry_async(
         "video",

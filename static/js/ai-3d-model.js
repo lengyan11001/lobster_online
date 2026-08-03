@@ -315,6 +315,10 @@
     return node && node.value ? node.value : 'custom';
   }
 
+  function isComponentSplitMode(mode) {
+    return ['component_split', 'component_split_v2', 'component_split_v3'].indexOf(String(mode || '')) >= 0;
+  }
+
   function realObjectSlotFiles() {
     return Array.prototype.slice.call(document.querySelectorAll('#ai3dRealObjectSlots input[type="file"][data-ai3d-role]'))
       .filter(function(input) { return input.files && input.files[0]; })
@@ -386,11 +390,13 @@
       if (hint) hint.textContent = '游戏道具：可上传多张参考图，第一张作为主图；AI 先理解主体并生成可编辑多视角提示词。';
       if (dropTitle) dropTitle.textContent = '上传道具参考图（可多张）';
       if (dropHint) dropHint.textContent = '第一张作为主图，其他图作为造型/材质/细节参考；也可以只填写提示词。';
-    } else if (mode === 'component_split' || mode === 'component_split_v2') {
+    } else if (isComponentSplitMode(mode)) {
       if (strategy) strategy.value = 'part_batch';
       if (preprocess) preprocess.checked = true;
       if (autoDecompose) autoDecompose.checked = false;
-      if (hint) hint.textContent = mode === 'component_split_v2'
+      if (hint) hint.textContent = mode === 'component_split_v3'
+        ? '拆件 3.0：上传 1 张主图，GPT 规划部件区域，SAM 分割，再用遮罩补全生成部件图。'
+        : mode === 'component_split_v2'
         ? '拆件 2.0：上传 1 张主图，先直接生成部件图；不满意时再反推提示词重生。'
         : '拆件 1.0：上传 1 张主图，GPT 先规划部件提示词，再生成部件图、三视图和 3D。';
       if (dropTitle) dropTitle.textContent = '上传 1 张拆件参考图';
@@ -663,7 +669,7 @@
       setMsg('请上传图片，或填写资产提示词。', true);
       return;
     }
-    if ((mode === 'component_split' || mode === 'component_split_v2') && generalFiles.length !== 1) {
+    if (isComponentSplitMode(mode) && generalFiles.length !== 1) {
       setMsg('拆件流程必须且只需要上传 1 张参考图；多图请用“多视图直接生成 3D”或实物流程。', true);
       return;
     }
@@ -709,7 +715,7 @@
     fd.append('max_parts', el('ai3dMaxParts') ? el('ai3dMaxParts').value : '24');
     var preprocessOnly = el('ai3dPreprocessOnly') && el('ai3dPreprocessOnly').checked;
     if (mode === 'real_object' || mode === 'direct_multiview') preprocessOnly = false;
-    if (mode === 'game_prop' || mode === 'component_split' || mode === 'component_split_v2') preprocessOnly = true;
+    if (mode === 'game_prop' || isComponentSplitMode(mode)) preprocessOnly = true;
     fd.append('preprocess_only', preprocessOnly ? 'true' : 'false');
     fd.append('asset_template', el('ai3dTemplate') ? el('ai3dTemplate').value : 'auto');
     fd.append('reference_strength', el('ai3dReferenceStrength') ? el('ai3dReferenceStrength').value : 'high');
@@ -733,12 +739,12 @@
         loadJobs(false);
         if (x.data.job && x.data.job.status === 'preprocessed') {
           var createdWorkflowMode = String(x.data.job.workflow_mode || (x.data.job.preprocessing && x.data.job.preprocessing.workflow_mode) || '');
-          if (createdWorkflowMode === 'component_split_v2') {
+          if (createdWorkflowMode === 'component_split_v2' || createdWorkflowMode === 'component_split_v3') {
             setMsg('拆件 2.0 任务已创建，正在直接生成部件图。', false);
             startComponentsJob(null, x.data.job.job_id, '');
             return;
           }
-          if (['component_split', 'component_split_v2'].indexOf(x.data.job.workflow_mode) >= 0 || (x.data.job.preprocessing && ['component_split', 'component_split_v2'].indexOf(x.data.job.preprocessing.workflow_mode) >= 0)) {
+          if (isComponentSplitMode(x.data.job.workflow_mode) || (x.data.job.preprocessing && isComponentSplitMode(x.data.job.preprocessing.workflow_mode))) {
             setMsg('拆件任务已创建：先点“生成拆件部件图”；后续会为每个部件生成三视图再生成 3D。', false);
           } else if (x.data.job.workflow_mode === 'game_prop' || (x.data.job.preprocessing && x.data.job.preprocessing.workflow_mode === 'game_prop')) {
             setMsg('游戏道具任务已创建：先在第一步检查/编辑提示词，再生成多视图。', false);
@@ -1168,6 +1174,16 @@
     })[status || 'pending'] || status || '待处理';
   }
 
+  function stepStatusTextForStep(step) {
+    var status = step && step.status ? step.status : 'pending';
+    if (status !== 'pending') return stepStatusText(status);
+    var key = step && step.key ? step.key : '';
+    if (key === 'component_segments') return '等待生成';
+    if (key === 'component_prompts' || key === 'component_triview_prompts') return '可选';
+    if (key === 'component_images' || key === 'component_triviews' || key === 'parts_3d') return '等待上一步';
+    return stepStatusText(status);
+  }
+
   function stepStatusClass(status) {
     return status === 'done' ? 'ok' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : status === 'skipped' ? 'skip' : status === 'blocked' ? 'blocked' : 'muted';
   }
@@ -1379,9 +1395,13 @@
     }
     if (key === 'components') {
       if (f.componentSplitMode) {
+        var componentWorkflow = String((job && job.workflow_mode) || (job && job.preprocessing && job.preprocessing.workflow_mode) || '');
+        var isComponentSplitV3 = componentWorkflow === 'component_split_v3';
         return [{
           action: 'components',
-          text: job.stage === 'component_split_completed' ? '重新生成拆件部件图' : '生成拆件部件图',
+          text: isComponentSplitV3
+            ? (job.stage === 'component_split_completed' ? '重新生成 SAM 分割候选' : '生成 SAM 分割候选')
+            : (job.stage === 'component_split_completed' ? '重新生成拆件部件图' : '生成拆件部件图'),
           disabled: !f.canRegenerateComponents,
           primary: !f.partFlowReady
         }];
@@ -1572,7 +1592,7 @@
       return '<div class="ai3d-step-row ' + escAttr(cls) + '">' +
         '<div class="ai3d-step-index">' + (idx + 1) + '</div>' +
         '<div class="ai3d-step-body"><div class="ai3d-step-title"><strong>' + esc(step.title || '') + '</strong>' +
-        '<span class="ai3d-step-badge ' + escAttr(cls) + '">' + esc(stepStatusText(step.status)) + '</span></div>' +
+        '<span class="ai3d-step-badge ' + escAttr(cls) + '">' + esc(stepStatusTextForStep(step)) + '</span></div>' +
         '<div class="ai3d-step-summary">' + esc(step.error || step.summary || '') + '</div>' +
         renderStepItems(step, job) + renderStepActions(step, job) + '</div></div>';
     }).join('');
@@ -1584,8 +1604,8 @@
     var canRegenerateComponents = canPreprocessed;
     var preprocessing = job && job.preprocessing ? job.preprocessing : {};
     var workflow = String((job && job.workflow_mode) || preprocessing.workflow_mode || 'custom');
-    var componentSplitMode = workflow === 'component_split' || workflow === 'component_split_v2';
-    var componentSplitV2 = workflow === 'component_split_v2';
+    var componentSplitMode = isComponentSplitMode(workflow);
+    var componentSplitV2 = workflow === 'component_split_v2' || workflow === 'component_split_v3';
     var isCharacter = !!(job && ['character_realistic', 'character_stylized'].indexOf(String(job.asset_template || '')) >= 0);
     var hasTriview = !!(preprocessing.triview_generated || (Array.isArray(preprocessing.triview_inputs) && preprocessing.triview_inputs.length >= 2));
     var triviewFromReferenceSheet = !!preprocessing.triview_from_reference_sheet;
@@ -1861,9 +1881,9 @@
     var current = state.currentJob || {};
     var prep = current.preprocessing || {};
     var currentWorkflowMode = String(current.workflow_mode || prep.workflow_mode || '');
-    var componentSplitMode = currentWorkflowMode === 'component_split' || currentWorkflowMode === 'component_split_v2';
+    var componentSplitMode = isComponentSplitMode(currentWorkflowMode);
     var role = btn && btn.dataset ? (btn.dataset.ai3dRole || btn.getAttribute('data-ai3d-role') || '') : '';
-    if (componentSplitMode && currentWorkflowMode !== 'component_split_v2' && userInstruction === undefined) {
+    if (componentSplitMode && currentWorkflowMode === 'component_split' && userInstruction === undefined) {
       requestGenerationInstruction({
         title: role ? '补充单个 3D 部件抽卡方向' : '补充 3D 部件生成方向',
         subtitle: role ? '只重新生成当前 3D 部件，其它已生成部件会保留。' : '整批生成会跳过已有记录，只补缺失部件。'
@@ -2207,7 +2227,7 @@
     var current = state.currentJob || {};
     var prep = current.preprocessing || {};
     var currentWorkflowMode = String(current.workflow_mode || prep.workflow_mode || '');
-    var componentSplitMode = currentWorkflowMode === 'component_split' || currentWorkflowMode === 'component_split_v2';
+    var componentSplitMode = isComponentSplitMode(currentWorkflowMode);
     if (componentSplitMode && currentWorkflowMode !== 'component_split_v2' && userInstruction === undefined) {
       requestGenerationInstruction({
         title: '补充 GPT 拆件规划方向',

@@ -1,6 +1,7 @@
 {
-  "version": "1.0.130",
-  "build": 174,
-  "applied_at": "2026-08-01T07:50:00+08:00",
-  "note": "add server-gated Bihuo 2.5 video studio and preserve selected video duration"
+  "version": "1.0.133",
+  "build": 177,
+  "applied_at": "2026-08-03T00:32:03+08:00",
+  "note": "fix digital human verification and social publish title validation",
+  "bundle_sha256": "85d943d707645cabc3c1ecbde3305529f86e03c61c313febb6a4d863f8919614"
 }

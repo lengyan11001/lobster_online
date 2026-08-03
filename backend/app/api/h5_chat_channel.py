@@ -1936,7 +1936,8 @@ async def _generate_scheduled_content(
             "根据用户记忆和可用素材，为创意成片流水线生成目标。"
             "字段：title(string), goal(string), caption_hint(string), creative_angle(string), selling_points(array)。"
             "先从记忆里抽取真实卖点，再围绕指定创意角度生成本次视频目标。"
-            "goal 要能直接传给创意成片能力，明确 6 秒、抖音、9:16、中文宣传视频，并写出本次成片的切入角度、画面方向和核心短文案。"
+            "goal 要能直接传给创意成片能力，写明抖音、9:16、中文宣传视频及本次成片的切入角度、画面方向和核心短文案。"
+            "不要自行写死视频时长；时长由任务配置原样传给生成管线。"
             "每次都要换表达，不要复用固定开头、固定句式或通用宣传套话；不要要求用户补充信息，不要编造素材 ID。"
         )
     user_payload = {
@@ -2147,6 +2148,8 @@ def _platform_publish_rules(platform: str) -> str:
     p = (platform or "").strip().lower()
     if p in {"wechat_moments", "wechat", "moments"}:
         return "朋友圈图文：标题可以留空，正文 30-120 字，更像朋友动态的口吻，少营销少口号；有图片就按图文发布，视频只传 1 条；标签 0-5 个即可。"
+    if p in {"wechat_channels", "channels", "sph"}:
+        return "视频号：短标题 10-30 字，只能使用中英文和数字，不要标点、特殊符号或 Emoji；描述 40-120 字，带 2-5 个话题标签。"
     if p == "xiaohongshu":
         return "小红书：标题 12-20 字，有种草感；正文 80-180 字，分段自然，结尾带 3-6 个话题标签。"
     if p == "toutiao":
@@ -2294,6 +2297,21 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
 
 def _is_wechat_moments_platform(value: Any) -> bool:
     return str(value or "").strip().lower() in {"wechat_moments", "wechat", "moments"}
+
+
+def _is_wechat_channels_platform(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"wechat_channels", "channels", "sph"}
+
+
+def _wechat_channels_short_title(value: Any, fallback: Any = "") -> str:
+    raw = str(value or fallback or "").strip()
+    chars: List[str] = []
+    for char in raw:
+        if char.isalnum():
+            chars.append(char)
+        elif char.isspace() and chars and chars[-1] != " ":
+            chars.append(" ")
+    return ("".join(chars).strip() or "作品分享")[:30]
 
 
 def _should_forward_auth_for_download_url(url: str) -> bool:
@@ -3808,6 +3826,26 @@ async def _run_goal_video_scheduled_pipeline(
         planning_model=str(cap_payload.get("planning_model") or "").strip() or None,
         image_model=str(cap_payload.get("image_model") or "").strip() or None,
         video_model=str(cap_payload.get("video_model") or "apiz/veo3.1/image-to-video").strip() or None,
+        function_mode=str(cap_payload.get("function_mode") or cap_payload.get("functionMode") or "reference").strip() or "reference",
+        first_image_url=str(cap_payload.get("first_image_url") or "").strip() or None,
+        end_image_url=str(cap_payload.get("end_image_url") or cap_payload.get("last_image_url") or "").strip() or None,
+        reference_video_urls=[str(x).strip() for x in (cap_payload.get("reference_video_urls") or []) if str(x).strip()],
+        reference_audio_urls=[str(x).strip() for x in (cap_payload.get("reference_audio_urls") or []) if str(x).strip()],
+        audio=_workflow_flag(cap_payload.get("audio")) if cap_payload.get("audio") is not None else None,
+        generate_audio=_workflow_flag(cap_payload.get("generate_audio")) if cap_payload.get("generate_audio") is not None else None,
+        seed=_safe_int(cap_payload.get("seed")) if cap_payload.get("seed") is not None else None,
+        negative_prompt=str(cap_payload.get("negative_prompt") or "").strip() or None,
+        enable_prompt_expansion=_workflow_flag(cap_payload.get("enable_prompt_expansion")) if cap_payload.get("enable_prompt_expansion") is not None else None,
+        multi_shots=_workflow_flag(cap_payload.get("multi_shots")) if cap_payload.get("multi_shots") is not None else None,
+        enable_safety_checker=_workflow_flag(cap_payload.get("enable_safety_checker")) if cap_payload.get("enable_safety_checker") is not None else None,
+        camera_fixed=_workflow_flag(cap_payload.get("camera_fixed")) if cap_payload.get("camera_fixed") is not None else None,
+        style=str(cap_payload.get("style") or "").strip() or None,
+        mode=str(cap_payload.get("mode") or "").strip() or None,
+        fps=cap_payload.get("fps"),
+        cfg_scale=cap_payload.get("cfg_scale"),
+        motion_bucket_id=cap_payload.get("motion_bucket_id"),
+        consistency_with_text=cap_payload.get("consistency_with_text"),
+        video_options=cap_payload.get("video_options") if isinstance(cap_payload.get("video_options"), dict) else {},
         precomputed_plan=cap_payload.get("precomputed_plan") if isinstance(cap_payload.get("precomputed_plan"), dict) else {},
         memory_doc_ids=_goal_video_memory_doc_ids(cap_payload),
     )
@@ -5114,6 +5152,18 @@ def _workflow_script_candidate(value: Any, limit: int = 700) -> str:
     return text[:limit].strip()
 
 
+def _provided_shanjian_workflow_script(source: Dict[str, Any]) -> str:
+    explicit = (
+        _workflow_script_candidate(source.get("script"))
+        or _workflow_script_candidate(source.get("text"))
+    )
+    if explicit:
+        return explicit
+    if _workflow_text(source.get("script_source"), 64) == "ip_daily_industry_hot_oral":
+        return ""
+    return _workflow_script_candidate(source.get("prompt"))
+
+
 def _workflow_memory_doc_summaries(value: Any, limit: int = 8) -> List[Dict[str, str]]:
     if not isinstance(value, list):
         return []
@@ -5472,11 +5522,7 @@ async def _run_shanjian_digital_human_workflow(
     if cloud is None or not base:
         raise RuntimeError("数字人2.0缺少云端连接，无法合成声音分身音频")
 
-    provided_script = (
-        _workflow_script_candidate(source.get("script"))
-        or _workflow_script_candidate(source.get("text"))
-        or _workflow_script_candidate(source.get("prompt"))
-    )
+    provided_script = _provided_shanjian_workflow_script(source)
     if provided_script:
         generated = {
             "title": _workflow_text(source.get("title") or "数字人口播", 80),
@@ -5898,8 +5944,10 @@ async def _run_client_workflow_action(
             publish_title = publish_title or generated_publish_copy.get("title", "")
             publish_description = publish_description or generated_publish_copy.get("description", "")
             publish_tags = publish_tags or generated_publish_copy.get("tags", "")
-        if _is_wechat_moments_platform(platform) and not str(source.get("title") or "").strip():
+        if _is_wechat_moments_platform(platform):
             publish_title = ""
+        elif _is_wechat_channels_platform(platform):
+            publish_title = _wechat_channels_short_title(publish_title, publish_description)
         save_result: Dict[str, Any] = {}
         if not material and source_url and not _is_wechat_moments_platform(platform):
             save_result = await _post_local_api_json(

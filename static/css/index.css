@@ -5633,6 +5633,13 @@
       overflow-x: auto;
       scrollbar-width: none;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      touch-action: pan-x;
+      cursor: grab;
+    }
+    .app-top-nav.is-dragging {
+      cursor: grabbing;
+      user-select: none;
     }
     .app-top-nav::-webkit-scrollbar {
       display: none;
@@ -9132,6 +9139,20 @@
       .app-top-nav {
         justify-content: flex-start;
         gap: 0.22rem;
+        padding-bottom: 0.28rem;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(91, 124, 255, 0.34) transparent;
+      }
+      .app-top-nav::-webkit-scrollbar {
+        display: block;
+        height: 4px;
+      }
+      .app-top-nav::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .app-top-nav::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: rgba(91, 124, 255, 0.34);
       }
       .app-top-nav .nav-left-item {
         padding: 0.42rem 0.62rem;

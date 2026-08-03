@@ -11,6 +11,7 @@ import os
 import subprocess
 import re
 import sys
+import urllib.request
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -131,8 +132,8 @@ _VIEW_ROLE_LABELS = {
     "back": "背视图",
 }
 _VIEW_ROLE_ORDER = {role: idx for idx, role in enumerate(_DIRECT_MULTI_VIEW_ROLES)}
-_AI3D_WORKFLOW_MODES = {"custom", "real_object", "game_prop", "direct_multiview", "component_split", "component_split_v2"}
-_AI3D_COMPONENT_SPLIT_MODES = {"component_split", "component_split_v2"}
+_AI3D_WORKFLOW_MODES = {"custom", "real_object", "game_prop", "direct_multiview", "component_split", "component_split_v2", "component_split_v3"}
+_AI3D_COMPONENT_SPLIT_MODES = {"component_split", "component_split_v2", "component_split_v3"}
 
 _CHARACTER_PART_PRESETS = [
     {"role": "full_body", "label": "全身主体", "box": (0.05, 0.00, 0.95, 1.00)},
@@ -162,6 +163,7 @@ _TRUE_COMPONENT_SOURCE_MODES = {
     "semantic_segmentation",
     "manual_component_package",
     "fidelity_source_crops",
+    "sam_segmentation",
     "semantic_image_component_sheet",
     "semantic_image_component_parts",
     "prompt_component_parts",
@@ -169,6 +171,10 @@ _TRUE_COMPONENT_SOURCE_MODES = {
     "see_through_psd_layers",
 }
 _REMBG_SESSION = None
+_SAM_MODEL_CACHE: Dict[str, Any] = {}
+_SAM_CHECKPOINT_URLS = {
+    "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+}
 
 _CHARACTER_AI_PARTS = [
     ("head_face_headwear", "头部/面部/头饰"),
@@ -1484,7 +1490,9 @@ def _fresh_view_generation_plan(
     asset_template = _template_from_understanding(view_understanding, requested_template)
     reference_strength = str(job.get("reference_strength") or stored.get("reference_strength") or "high")
     description = str(job.get("description") or "")
-    workflow_mode = current_workflow_mode
+    workflow_mode = _canonical_workflow_mode(
+        job.get("workflow_mode") or preprocessing.get("workflow_mode") or stored.get("workflow") or "custom"
+    )
     prompt_based_virtual = bool(
         preprocessing.get("text_prompt_only")
         or preprocessing.get("virtual_prompt_from_reference")
@@ -4231,6 +4239,365 @@ def _make_alpha_component_sheet(parts: List[Dict[str, Any]], dest: Path) -> Dict
     return {"width": canvas.width, "height": canvas.height}
 
 
+def _sam_checkpoint_path(model_type: str = "vit_b") -> Path:
+    return store.application_root_dir() / "models" / "sam" / f"sam_{model_type}.pth"
+
+
+def _ensure_sam_checkpoint(model_type: str = "vit_b") -> Path:
+    path = _sam_checkpoint_path(model_type)
+    if path.is_file() and path.stat().st_size > 100 * 1024 * 1024:
+        return path
+    url = _SAM_CHECKPOINT_URLS.get(model_type)
+    if not url:
+        raise RuntimeError(f"SAM model type not configured: {model_type}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".download")
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response, tmp.open("wb") as out:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        if tmp.stat().st_size <= 100 * 1024 * 1024:
+            raise RuntimeError("downloaded checkpoint is too small")
+        tmp.replace(path)
+        return path
+    except Exception as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise RuntimeError(
+            "SAM 权重文件缺失且自动下载失败。请把 sam_vit_b_01ec64.pth 放到 "
+            f"{path.parent}，或检查本机到 dl.fbaipublicfiles.com 的网络。原始错误：{exc}"
+        ) from exc
+
+
+def _get_sam_automatic_mask_generator() -> Any:
+    cache_key = "vit_b_auto"
+    if cache_key in _SAM_MODEL_CACHE:
+        return _SAM_MODEL_CACHE[cache_key]
+    try:
+        import torch  # type: ignore
+        from segment_anything import SamAutomaticMaskGenerator, sam_model_registry  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("segment-anything/torch 未安装，无法执行 SAM 分割") from exc
+    checkpoint = _ensure_sam_checkpoint("vit_b")
+    device = "cuda" if bool(getattr(torch, "cuda", None) and torch.cuda.is_available()) else "cpu"
+    sam = sam_model_registry["vit_b"](checkpoint=str(checkpoint))
+    sam.to(device=device)
+    generator = SamAutomaticMaskGenerator(
+        sam,
+        points_per_side=24,
+        pred_iou_thresh=0.86,
+        stability_score_thresh=0.88,
+        crop_n_layers=1,
+        crop_n_points_downscale_factor=2,
+        min_mask_region_area=360,
+    )
+    _SAM_MODEL_CACHE[cache_key] = generator
+    return generator
+
+
+def _bbox_iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    ix0 = max(ax0, bx0)
+    iy0 = max(ay0, by0)
+    ix1 = min(ax1, bx1)
+    iy1 = min(ay1, by1)
+    iw = max(0, ix1 - ix0)
+    ih = max(0, iy1 - iy0)
+    inter = iw * ih
+    area_a = max(1, (ax1 - ax0) * (ay1 - ay0))
+    area_b = max(1, (bx1 - bx0) * (by1 - by0))
+    return inter / float(max(1, area_a + area_b - inter))
+
+
+def _mask_bbox_from_array(mask: Any) -> Optional[Tuple[int, int, int, int]]:
+    try:
+        import numpy as np  # type: ignore
+        ys, xs = np.where(mask)
+        if len(xs) == 0 or len(ys) == 0:
+            return None
+        return (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+    except Exception:
+        return None
+
+
+def _pad_box(box: Tuple[int, int, int, int], size: Tuple[int, int], ratio: float = 0.08) -> Tuple[int, int, int, int]:
+    left, top, right, bottom = box
+    width, height = size
+    pad = max(8, int(max(right - left, bottom - top) * ratio))
+    return (max(0, left - pad), max(0, top - pad), min(width, right + pad), min(height, bottom + pad))
+
+
+def _save_sam_box_reference(source: Image.Image, box: Tuple[int, int, int, int], dest: Path) -> Dict[str, Any]:
+    full_w = 900
+    crop_w = 900
+    panel_h = 1100
+    canvas = Image.new("RGB", (full_w + crop_w, panel_h), (244, 244, 240))
+    full = source.copy()
+    full.thumbnail((full_w - 64, panel_h - 64), _LANCZOS)
+    full_x = (full_w - full.width) // 2
+    full_y = (panel_h - full.height) // 2
+    canvas.paste(full, (full_x, full_y))
+    sx = full.width / max(1, source.width)
+    sy = full.height / max(1, source.height)
+    rect = (
+        int(full_x + box[0] * sx),
+        int(full_y + box[1] * sy),
+        int(full_x + box[2] * sx),
+        int(full_y + box[3] * sy),
+    )
+    draw = ImageDraw.Draw(canvas)
+    for offset in range(5):
+        draw.rectangle((rect[0] - offset, rect[1] - offset, rect[2] + offset, rect[3] + offset), outline=(228, 28, 28))
+    crop = source.crop(box)
+    side = max(crop.width, crop.height, 16)
+    crop_canvas = Image.new("RGB", (side, side), (238, 238, 238))
+    crop_canvas.paste(crop, ((side - crop.width) // 2, (side - crop.height) // 2))
+    crop_canvas.thumbnail((crop_w - 72, panel_h - 72), _LANCZOS)
+    canvas.paste(crop_canvas, (full_w + (crop_w - crop_canvas.width) // 2, (panel_h - crop_canvas.height) // 2))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest, "JPEG", quality=94, optimize=True)
+    return {"width": canvas.width, "height": canvas.height, "source_box": list(box)}
+
+
+def _save_sam_isolated_part(source: Image.Image, mask_image: Image.Image, box: Tuple[int, int, int, int], dest: Path) -> Dict[str, Any]:
+    crop = source.crop(box).convert("RGB")
+    mask_crop = mask_image.crop(box).convert("L")
+    side = max(crop.width, crop.height, 512)
+    canvas = Image.new("RGB", (side, side), (238, 238, 238))
+    x = (side - crop.width) // 2
+    y = (side - crop.height) // 2
+    canvas.paste(crop, (x, y), mask_crop)
+    canvas = canvas.resize((1536, 1536), _LANCZOS)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest, "PNG", optimize=True)
+    return {"width": canvas.width, "height": canvas.height, "source_box": list(box), "component_source_mode": "sam_segmentation"}
+
+
+def _generate_sam_component_parts(
+    *,
+    job_id: str,
+    source_input: Dict[str, Any],
+    source_path: Path,
+    out_dir: Path,
+    max_parts: int,
+) -> Dict[str, Any]:
+    try:
+        import numpy as np  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("numpy 未安装，无法执行 SAM 分割") from exc
+    latest = store.load_job(job_id) or {}
+    latest_preprocessing = latest.get("preprocessing") if isinstance(latest.get("preprocessing"), dict) else {}
+    store.update_job(
+        job_id,
+        status="splitting_parts",
+        stage="component_sam_model_loading",
+        progress=28,
+        error=None,
+        preprocessing=latest_preprocessing,
+    )
+    generator = _get_sam_automatic_mask_generator()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_path) as im:
+        source = ImageOps.exif_transpose(im).convert("RGB")
+    original_size = source.size
+    max_side = 1400
+    scale = min(1.0, max_side / float(max(source.width, source.height)))
+    if scale < 1.0:
+        work = source.resize((max(1, int(source.width * scale)), max(1, int(source.height * scale))), _LANCZOS)
+    else:
+        work = source
+    store.update_job(
+        job_id,
+        status="splitting_parts",
+        stage="component_segments_running",
+        progress=40,
+        error=None,
+        preprocessing=latest_preprocessing,
+    )
+    masks = generator.generate(np.array(work))
+    if not masks:
+        raise RuntimeError("SAM 没有返回可用分割候选")
+    store.update_job(
+        job_id,
+        status="splitting_parts",
+        stage="component_segments_postprocessing",
+        progress=78,
+        error=None,
+        preprocessing=latest_preprocessing,
+    )
+    image_area = max(1, work.width * work.height)
+    candidates: List[Dict[str, Any]] = []
+    for raw in masks:
+        if not isinstance(raw, dict):
+            continue
+        seg = raw.get("segmentation")
+        box = _mask_bbox_from_array(seg)
+        if box is None:
+            continue
+        left, top, right, bottom = box
+        box_area = max(1, (right - left) * (bottom - top))
+        mask_area = int(raw.get("area") or 0)
+        area_ratio = mask_area / float(image_area)
+        if area_ratio < 0.006 or area_ratio > 0.88:
+            continue
+        if right - left < 36 or bottom - top < 36:
+            continue
+        candidates.append({
+            "raw": raw,
+            "box": box,
+            "area_ratio": area_ratio,
+            "box_area": box_area,
+            "score": float(raw.get("predicted_iou") or 0.0) + float(raw.get("stability_score") or 0.0) + min(0.5, area_ratio),
+        })
+    candidates.sort(key=lambda item: (float(item["score"]), float(item["area_ratio"])), reverse=True)
+    selected: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        box = candidate["box"]
+        if any(_bbox_iou(box, prev["box"]) > 0.78 for prev in selected):
+            continue
+        selected.append(candidate)
+        if len(selected) >= max(1, min(_AI3D_ABSOLUTE_MAX_PARTS, int(max_parts or _AI3D_DEFAULT_MAX_PARTS))):
+            break
+    if not selected:
+        raise RuntimeError("SAM 返回的候选过小或重复，未筛出可用部件")
+
+    component_inputs: List[Dict[str, Any]] = []
+    region_inputs: List[Dict[str, Any]] = []
+    mask_inputs: List[Dict[str, Any]] = []
+    plan_parts: List[Dict[str, Any]] = []
+    inv_scale = 1.0 / scale
+    for idx, candidate in enumerate(selected, start=1):
+        raw = candidate["raw"]
+        work_box = candidate["box"]
+        abs_box = (
+            int(work_box[0] * inv_scale),
+            int(work_box[1] * inv_scale),
+            int(work_box[2] * inv_scale),
+            int(work_box[3] * inv_scale),
+        )
+        abs_box = _pad_box(abs_box, original_size, ratio=0.06)
+        seg = raw.get("segmentation")
+        mask_small = Image.fromarray((seg.astype("uint8") * 255), mode="L")
+        if scale < 1.0:
+            mask_full = mask_small.resize(original_size, _BILINEAR).point(lambda value: 255 if value > 96 else 0)
+        else:
+            mask_full = mask_small
+        role = f"sam_part_{idx:02d}"
+        label = f"SAM候选部件 {idx}"
+        part_path = out_dir / "parts" / f"{idx:02d}_{role}.png"
+        part_meta = _save_sam_isolated_part(source, mask_full, abs_box, part_path)
+        part_meta.update({
+            "source_width": source.width,
+            "source_height": source.height,
+            "relative_source_box": [
+                abs_box[0] / max(1, source.width),
+                abs_box[1] / max(1, source.height),
+                abs_box[2] / max(1, source.width),
+                abs_box[3] / max(1, source.height),
+            ],
+        })
+        part_item = _public_input(
+            job_id=job_id,
+            index=idx,
+            filename=part_path.name,
+            normalized_path=part_path,
+            meta=part_meta,
+            role=role,
+            label=label,
+            source_filename=str(source_input.get("filename") or source_path.name),
+            generated=True,
+        )
+        part_item["mesh_input_kind"] = "sam_masked_source_pixels"
+        part_item["component_source_mode"] = "sam_segmentation"
+        part_item["needs_inpaint_completion"] = True
+        component_inputs.append(part_item)
+
+        ref_path = out_dir / "references" / f"{idx:02d}_{role}_box.jpg"
+        ref_meta = _save_sam_box_reference(source, abs_box, ref_path)
+        region_inputs.append(_public_input(
+            job_id=job_id,
+            index=idx,
+            filename=ref_path.name,
+            normalized_path=ref_path,
+            meta=ref_meta,
+            role=role,
+            label=f"{label}定位",
+            source_filename=str(source_input.get("filename") or source_path.name),
+            generated=True,
+        ))
+
+        mask_path = out_dir / "masks" / f"{idx:02d}_{role}_mask.png"
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        mask_crop = mask_full.crop(abs_box)
+        mask_canvas = Image.new("L", (max(mask_crop.width, mask_crop.height, 512), max(mask_crop.width, mask_crop.height, 512)), 0)
+        mask_canvas.paste(mask_crop, ((mask_canvas.width - mask_crop.width) // 2, (mask_canvas.height - mask_crop.height) // 2))
+        mask_canvas.save(mask_path, "PNG")
+        mask_inputs.append(_public_input(
+            job_id=job_id,
+            index=idx,
+            filename=mask_path.name,
+            normalized_path=mask_path,
+            meta={"width": mask_canvas.width, "height": mask_canvas.height, "source_box": list(abs_box)},
+            role=role,
+            label=f"{label}遮罩",
+            source_filename=str(source_input.get("filename") or source_path.name),
+            generated=True,
+        ))
+        plan_parts.append({
+            "index": idx,
+            "role": role,
+            "label": label,
+            "box": part_meta["relative_source_box"],
+            "reason": "SAM automatic mask candidate from source pixels",
+            "output_strategy": "multi_view_part",
+            "part_type": "sam_mask",
+            "needs_inpaint_completion": True,
+            "mask_preview_url": mask_inputs[-1].get("preview_url"),
+            "source_preview_url": region_inputs[-1].get("preview_url"),
+            "component_preview_url": part_item.get("preview_url"),
+        })
+
+    sheet_path = out_dir / "component_sheet.jpg"
+    sheet_meta = _make_generated_component_sheet(component_inputs, sheet_path)
+    sheet_item = _public_input(
+        job_id=job_id,
+        index=0,
+        filename=sheet_path.name,
+        normalized_path=sheet_path,
+        meta=sheet_meta,
+        role="component_sheet",
+        label="SAM 分割部件输入板",
+        source_filename=str(source_input.get("filename") or source_path.name),
+        generated=True,
+    )
+    return {
+        "component_inputs": component_inputs,
+        "region_candidate_inputs": region_inputs,
+        "component_reference_inputs": mask_inputs,
+        "component_sheet": sheet_item,
+        "component_ai_plan": {
+            "strategy": "part_batch",
+            "parts": plan_parts,
+            "source": "sam_automatic_mask_generator",
+            "needs_inpaint_completion": True,
+        },
+        "sam_meta": {
+            "model_type": "vit_b",
+            "source_size": list(original_size),
+            "work_size": [work.width, work.height],
+            "raw_mask_count": len(masks),
+            "selected_count": len(component_inputs),
+            "checkpoint": str(_sam_checkpoint_path("vit_b")),
+        },
+    }
+
+
 _SEE_THROUGH_ROLE_LABELS = {
     "headwear": "头部/帽子/头饰",
     "face": "脸部/面板",
@@ -5247,7 +5614,117 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
         and not preprocessing.get("triview_generated")
         and len(source_inputs or job.get("inputs") or []) == 1
     )
-    if _is_component_split_workflow(workflow_mode):
+    if workflow_mode == "component_split_v3":
+        part_summary = "按已生成的部件三视图送入 Meshy，逐部件生成 3D；不生成底模、不做最终拼接"
+        if output_parts:
+            part_summary = f"已生成/复用 {len(output_parts)} 个 3D 部件；此流程不做底模替换拼接"
+        segment_items = []
+        segment_items.extend(region_inputs)
+        segment_items.extend(preprocessing.get("component_reference_inputs") if isinstance(preprocessing.get("component_reference_inputs"), list) else [])
+        segment_running_prefixes = (
+            "preprocessing_subject_candidates",
+            "planning_components_with_ai",
+            "preparing_semantic_component_part",
+            "queued_component_split",
+            "queued_component_segments",
+            "component_sam_checkpoint_downloading",
+            "component_sam_model_loading",
+            "component_segments_running",
+            "component_segments_postprocessing",
+        )
+        steps = [
+            {
+                "key": "upload",
+                "title": "上传拆件参考图",
+                "status": _step_status(job, "upload"),
+                "summary": "已保存 1 张原始参考图；3.0 不要求先生成底模",
+                "items": source_inputs or job.get("inputs") or [],
+            },
+            {
+                "key": "component_segments",
+                "title": "SAM 分割候选",
+                "status": (
+                    "failed"
+                    if str(job.get("stage") or "").startswith("component_segments_failed")
+                    else (
+                        "done"
+                        if segment_items
+                        else ("running" if str(job.get("stage") or "").startswith(segment_running_prefixes) else "pending")
+                    )
+                ),
+                "summary": (
+                    f"已得到 {len(segment_items)} 个候选/定位图；先检查部件范围，后续只把确认后的部件送三视图"
+                    if segment_items
+                    else "正在准备 SAM 权重；首次运行需要下载/校验模型文件，完成后自动进入分割"
+                    if str(job.get("stage") or "").startswith("component_sam_checkpoint_downloading")
+                    else "正在加载 SAM 模型；高质量分割会占用较多内存和 CPU/GPU"
+                    if str(job.get("stage") or "").startswith("component_sam_model_loading")
+                    else "正在用 SAM 高质量分割原图；复杂大图可能需要数分钟，请等候"
+                    if str(job.get("stage") or "").startswith("component_segments_running")
+                    else "正在整理 SAM 候选、遮罩和独立部件图"
+                    if str(job.get("stage") or "").startswith("component_segments_postprocessing")
+                    else "首次运行会先准备 SAM 权重，然后把原图切成候选部件区域"
+                    if str(job.get("stage") or "").startswith(("component_sam_checkpoint_downloading", "component_segments_running"))
+                    else "先把原图切成候选部件区域；这是 3.0 的第一个真实拆件步骤"
+                ),
+                "items": segment_items,
+            },
+            {
+                "key": "component_images",
+                "title": "遮挡补全/独立部件图",
+                "status": "done" if components_passed else ("running" if str(job.get("stage") or "").startswith(("generating_semantic_component_part", "queued_component_image")) else "pending"),
+                "summary": (
+                    "已生成独立完整部件图；满意可直接生成三视图，不满意再反推提示词重生"
+                    if components_passed
+                    else "对候选部件做独立化和遮挡补全，得到干净背景的单部件图；这一步不调用 Meshy"
+                ),
+                "items": [],
+                "groups": component_groups,
+            },
+            {
+                "key": "component_prompts",
+                "title": "可选：反推/修改部件提示词",
+                "status": "done" if component_plan_items else ("running" if str(job.get("stage") or "").startswith(("planning_components_with_ai", "queued_component_image_prompts")) else "pending"),
+                "summary": (
+                    "已反推出部件图提示词；可修改后单个或批量重生部件图"
+                    if component_plan_items
+                    else "部件图不满意时再用；满意可跳过此步"
+                ),
+                "items": component_plan_items,
+            },
+            {
+                "key": "component_triviews",
+                "title": "生成部件三视图",
+                "status": "done" if preprocessing.get("component_triview_generated") else ("running" if str(job.get("stage") or "").startswith(("generating_component_triview", "queued_component_triview")) else "pending"),
+                "summary": (
+                    f"已生成 {len(component_triview_parts)} 个部件三视图；满意可直接送 Meshy 生成 3D"
+                    if preprocessing.get("component_triview_generated")
+                    else "用部件图生成正面、左前45°、右前45°；这一步仍不调用 Meshy"
+                ),
+                "items": [],
+                "groups": component_triview_groups,
+            },
+            {
+                "key": "component_triview_prompts",
+                "title": "可选：反推/修改三视图提示词",
+                "status": "done" if (preprocessing.get("component_triview_prompts_ready") or component_triview_prompt_items) else ("running" if str(job.get("stage") or "").startswith(("planning_component_triview_prompt", "queued_component_triview_prompts", "queued_component_triview_prompt")) else "pending"),
+                "summary": (
+                    f"GPT 已为 {len(component_triview_prompt_items)} 个部件规划三视图提示词；可逐个修改后重生三视图"
+                    if component_triview_prompt_items
+                    else "三视图不满意时再用；满意可跳过此步"
+                ),
+                "items": component_triview_prompt_items,
+            },
+            {
+                "key": "parts_3d",
+                "title": "生成 3D 部件",
+                "status": _step_status(job, "parts_3d"),
+                "summary": part_summary,
+                "items": [],
+                "parts": output_parts,
+            },
+        ]
+    elif _is_component_split_workflow(workflow_mode):
         part_summary = "按已生成的部件三视图送入 Meshy，逐部件生成 3D；不生成底模、不做最终拼接"
         if output_parts:
             part_summary = f"已生成/复用 {len(output_parts)} 个 3D 部件；此流程不做底模替换拼接"
@@ -5516,7 +5993,11 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "groups": component_groups,
             },
         ]
-    if (not prompt_flow and workflow_mode not in {"real_object", "direct_multiview", "component_split", "component_split_v2"}) and (str(job.get("strategy") or "") == "part_batch" or components_passed):
+    if (
+        not prompt_flow
+        and workflow_mode not in {"real_object", "direct_multiview"}
+        and not _is_component_split_workflow(workflow_mode)
+    ) and (str(job.get("strategy") or "") == "part_batch" or components_passed):
         steps.extend([
             {
                 "key": "parts_3d",
@@ -9268,10 +9749,19 @@ async def ai_3d_model_create_job(
             label="主体裁切" if len(raw_image_paths) == 1 else f"参考图 {idx}",
         ))
 
+    if workflow_mode == "custom" and strategy == "part_batch" and len(inputs) == 1:
+        workflow_mode = "component_split_v3"
+        auto_decompose = False
+
     if _is_component_split_workflow(workflow_mode):
         if len(inputs) != 1:
             raise HTTPException(status_code=400, detail="拆件流程当前只接受 1 张参考图；多图请用“多视图直接生成 3D”或实物流程")
         source_inputs = list(inputs)
+        component_policy = (
+            "sam_segment_inpaint_parts_to_triview_to_3d"
+            if workflow_mode == "component_split_v3"
+            else "prompt_parts_to_part_triview_to_3d"
+        )
         preprocessing = {
             "auto_crop": True,
             "auto_decompose": False,
@@ -9282,10 +9772,14 @@ async def ai_3d_model_create_job(
             "requires_image_stage_for_quality": False,
             "preprocess_only": True,
             "workflow_mode": workflow_mode,
-            "component_policy": "prompt_parts_to_part_triview_to_3d",
+            "component_policy": component_policy,
             "component_triview_required": True,
             "component_prompt_split": True,
         }
+        if workflow_mode == "component_split_v3":
+            preprocessing["component_split_v3"] = True
+            preprocessing["component_source_mode"] = "sam_segmentation_pending"
+            preprocessing["component_mesh_input_mode"] = "segmented_or_inpainted_parts"
         job = {
             "job_id": job_id,
             "status": "preprocessed",
@@ -9318,7 +9812,11 @@ async def ai_3d_model_create_job(
             "workflow_mode": workflow_mode,
             "description": description.strip(),
             "quality_notes": [
-                "拆件流程已独立：一张参考图先由 GPT 规划部件和提示词，再用 GPT Image 2 生成部件图。",
+                (
+                    "拆件 3.0：一张参考图先进入分割候选/部件补全流程；部件满意可跳过提示词反推。"
+                    if workflow_mode == "component_split_v3"
+                    else "拆件流程已独立：一张参考图先由 GPT 规划部件和提示词，再用 GPT Image 2 生成部件图。"
+                ),
                 "生成 3D 部件前，系统会先为每个部件生成正面、左前45°、右前45°三视图，再把三视图送入 Meshy。",
                 "这一步还未调用 Meshy；只有点击生成 3D 部件时才会消耗 Meshy credits。",
             ],
@@ -10378,6 +10876,159 @@ async def ai_3d_model_select_candidate(
     return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
 
 
+async def _run_component_split_v3_background(
+    *,
+    job_id: str,
+    request: Request,
+    current_user: _ServerUser,
+    model: str,
+    user_instruction: str = "",
+) -> None:
+    job = store.load_job(job_id)
+    if not job:
+        return
+    preprocessing = dict(job.get("preprocessing") if isinstance(job.get("preprocessing"), dict) else {})
+    try:
+        store.update_job(
+            job_id,
+            status="splitting_parts",
+            stage="component_segments_running",
+            progress=8,
+            error=None,
+            preprocessing=preprocessing,
+        )
+        try:
+            import segment_anything  # type: ignore  # noqa: F401
+        except Exception as exc:
+            raise RuntimeError(
+                "拆件 3.0 需要真实 SAM 分割依赖，但当前运行环境未安装 segment_anything/sam2。"
+                "为避免假 3.0，本流程不会回退到 2.0 的 GPT 重画拆件。"
+            ) from exc
+        source_inputs = preprocessing.get("source_inputs") if isinstance(preprocessing.get("source_inputs"), list) else []
+        source_input = source_inputs[0] if source_inputs and isinstance(source_inputs[0], dict) else {}
+        source_path = Path(str(source_input.get("normalized_path") or ""))
+        if not source_path.is_file():
+            raise RuntimeError("拆件 3.0 找不到原始参考图，无法执行 SAM 分割。")
+        max_parts = max(1, min(_AI3D_ABSOLUTE_MAX_PARTS, int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS)))
+        if not _sam_checkpoint_path("vit_b").is_file():
+            store.update_job(
+                job_id,
+                status="splitting_parts",
+                stage="component_sam_checkpoint_downloading",
+                progress=12,
+                error=None,
+                preprocessing=preprocessing,
+            )
+            _ensure_sam_checkpoint("vit_b")
+            store.update_job(
+                job_id,
+                status="splitting_parts",
+                stage="component_sam_model_loading",
+                progress=24,
+                error=None,
+                preprocessing=preprocessing,
+            )
+        else:
+            store.update_job(
+                job_id,
+                status="splitting_parts",
+                stage="component_sam_model_loading",
+                progress=18,
+                error=None,
+                preprocessing=preprocessing,
+            )
+        store.update_job(
+            job_id,
+            status="splitting_parts",
+            stage="component_segments_running",
+            progress=32,
+            error=None,
+            preprocessing=preprocessing,
+        )
+        result = await asyncio.to_thread(
+            _generate_sam_component_parts,
+            job_id=job_id,
+            source_input=source_input,
+            source_path=source_path,
+            out_dir=store.job_dir(job_id) / "components" / "sam_segments",
+            max_parts=max_parts,
+        )
+        store.update_job(
+            job_id,
+            status="splitting_parts",
+            stage="component_segments_postprocessing",
+            progress=82,
+            error=None,
+            preprocessing=preprocessing,
+        )
+        latest = store.load_job(job_id) or job
+        latest_preprocessing = dict(latest.get("preprocessing") if isinstance(latest.get("preprocessing"), dict) else preprocessing)
+        latest_preprocessing.update({
+            "component_split_v3": True,
+            "component_source_mode": "sam_segmentation",
+            "component_mesh_input_mode": "sam_masked_source_pixels",
+            "component_split_generated": True,
+            "component_quality_gate": "passed",
+            "component_quality_gate_meta": {
+                "passed": True,
+                "warning": "SAM 已完成真实遮罩切割；遮挡补全尚未执行，可在后续用反推提示词/AI 编辑继续优化。",
+            },
+            "region_candidate_inputs": result["region_candidate_inputs"],
+            "component_reference_inputs": result["component_reference_inputs"],
+            "component_inputs": result["component_inputs"],
+            "component_sheet": result["component_sheet"],
+            "component_ai_plan": result["component_ai_plan"],
+            "component_slots": [
+                [str(item.get("role") or ""), str(item.get("label") or "")]
+                for item in (result.get("component_ai_plan", {}).get("parts") or [])
+                if isinstance(item, dict)
+            ],
+            "sam_segmentation": result["sam_meta"],
+        })
+        notes = list(latest.get("quality_notes") or [])
+        note = f"拆件 3.0 已用 SAM 生成 {len(result['component_inputs'])} 个真实遮罩部件；遮挡补全可在后续步骤继续处理。"
+        if note not in notes:
+            notes.append(note)
+        store.update_job(
+            job_id,
+            status="preprocessed",
+            stage="component_split_completed",
+            progress=100,
+            error=None,
+            preprocessing=latest_preprocessing,
+            quality_notes=notes,
+            mode="component-prompt-split",
+            strategy="part_batch",
+            provider="meshy",
+            final_3d_provider="meshy",
+            image_stage_provider="image_model",
+        )
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        latest = store.load_job(job_id) or job
+        latest_preprocessing = dict(latest.get("preprocessing") if isinstance(latest.get("preprocessing"), dict) else preprocessing)
+        latest_preprocessing["component_split_v3"] = True
+        latest_preprocessing["component_source_mode"] = "sam_segmentation_failed"
+        notes = list(latest.get("quality_notes") or [])
+        note = f"拆件 3.0 已停止：{detail}"
+        if note not in notes:
+            notes.append(note)
+        store.update_job(
+            job_id,
+            status="preprocessed",
+            stage="component_segments_failed",
+            progress=100,
+            error=str(detail),
+            preprocessing=latest_preprocessing,
+            quality_notes=notes,
+            mode="component-prompt-split",
+            strategy="part_batch",
+            provider="meshy",
+            final_3d_provider="meshy",
+            image_stage_provider="image_model",
+        )
+
+
 @router.post("/api/ai-3d-model/jobs/{job_id}/components")
 async def ai_3d_model_generate_components(
     job_id: str,
@@ -10444,6 +11095,32 @@ async def ai_3d_model_generate_components(
     previous_outputs = job.get("outputs") if isinstance(job.get("outputs"), dict) else {}
     preserved_base = _base_outputs_for_current_triview(job_id, job, previous_outputs)
     next_outputs = {} if component_split_mode else ({"base": preserved_base} if preserved_base else {})
+    if workflow_mode == "component_split_v3":
+        store.update_job(
+            job_id,
+            status="splitting_parts",
+            stage="queued_component_segments",
+            progress=0,
+            error=None,
+            finished_at=None,
+            preprocessing=preprocessing,
+            quality_notes=notes,
+            inputs=safe_inputs or job.get("inputs") or [],
+            outputs={},
+            mesh_metrics={},
+            provider_task_id=None,
+            mode="component-prompt-split",
+            strategy="part_batch",
+        )
+        background_tasks.add_task(
+            _run_component_split_v3_background,
+            job_id=job_id,
+            request=request,
+            current_user=current_user,
+            model=selected_model,
+            user_instruction=str(user_instruction or "").strip(),
+        )
+        return {"ok": True, "job": _public_job(store.load_job(job_id) or job)}
     store.update_job(
         job_id,
         status="splitting_parts",

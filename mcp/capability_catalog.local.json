@@ -101,8 +101,9 @@
         },
         "duration": {
           "type": "integer",
-          "default": 6,
-          "description": "视频时长，默认 6 秒"
+          "minimum": 4,
+          "maximum": 30,
+          "description": "视频时长（秒）。用户原话中明确写了 30秒/30s 等时必须原样传递；未指定时可以省略"
         },
         "aspect_ratio": {
           "type": "string",
@@ -111,7 +112,7 @@
         },
         "resolution": {
           "type": "string",
-          "enum": ["720p", "1080p"],
+          "enum": ["480p", "720p", "1080p"],
           "default": "720p",
           "description": "视频分辨率"
         },
@@ -130,8 +131,21 @@
         },
         "video_model": {
           "type": "string",
-          "default": "apiz/veo3.1/image-to-video",
-          "description": "可选，指定视频模型；默认 APIZ Veo 3.1 图生视频"
+          "description": "可选，指定视频模型；未指定时使用默认模型，系统不会因时长自动切换到价格更高的模型"
+        },
+        "function_mode": {
+          "type": "string",
+          "enum": ["reference", "edit", "extend", "first_last_frame"],
+          "default": "reference",
+          "description": "生成方式：参考生成、视频编辑、视频延长或首尾帧"
+        },
+        "first_image_url": {
+          "type": "string",
+          "description": "可选首帧图片 URL"
+        },
+        "end_image_url": {
+          "type": "string",
+          "description": "可选尾帧图片 URL；首尾帧模式必填"
         },
         "reference_asset_ids": {
           "type": "array",
@@ -146,6 +160,80 @@
             "type": "string"
           },
           "description": "可选参考图 URL；没有可留空"
+        },
+        "reference_video_urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "可选参考视频 URL"
+        },
+        "reference_audio_urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "可选参考音频 URL"
+        },
+        "audio": {
+          "type": "boolean",
+          "description": "模型支持时控制是否生成音频"
+        },
+        "generate_audio": {
+          "type": "boolean",
+          "description": "模型支持时控制是否生成音频"
+        },
+        "seed": {
+          "type": "integer",
+          "description": "可选随机种子"
+        },
+        "negative_prompt": {
+          "type": "string",
+          "description": "可选负面提示词"
+        },
+        "enable_prompt_expansion": {
+          "type": "boolean",
+          "description": "模型支持时控制提示词扩写"
+        },
+        "multi_shots": {
+          "type": "boolean",
+          "description": "模型支持时控制多镜头生成"
+        },
+        "enable_safety_checker": {
+          "type": "boolean",
+          "description": "模型支持时控制安全检查"
+        },
+        "camera_fixed": {
+          "type": "boolean",
+          "description": "模型支持时控制固定镜头"
+        },
+        "style": {
+          "type": "string",
+          "description": "模型支持时指定视频风格"
+        },
+        "mode": {
+          "type": "string",
+          "description": "模型支持时指定生成模式"
+        },
+        "fps": {
+          "type": "integer",
+          "description": "模型支持时指定帧率"
+        },
+        "cfg_scale": {
+          "type": "number",
+          "description": "模型支持时指定提示词引导强度"
+        },
+        "motion_bucket_id": {
+          "type": "integer",
+          "description": "模型支持时指定运动强度"
+        },
+        "consistency_with_text": {
+          "type": "number",
+          "description": "模型支持时指定文本一致性"
+        },
+        "video_options": {
+          "type": "object",
+          "description": "可选模型专用参数；只传上游文档明确支持的字段"
         },
         "image_retry_count": {
           "type": "integer",

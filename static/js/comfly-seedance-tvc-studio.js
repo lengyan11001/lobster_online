@@ -2596,6 +2596,11 @@
         { channel: 'comfly', model: 'veo3.1-fast' }
       ] : [],
       aspect_ratio: values.aspectRatio,
+      visual_tone: values.visualTone,
+      rhythm: values.rhythm,
+      reference_purposes: uploaded.map(function(item) {
+        return item.purpose || 'storyboard';
+      }),
       generate_audio: !!values.needAudio,
       watermark: false
     };
@@ -2622,7 +2627,7 @@
         reference_asset_ids: uploaded.slice(1).map(function(item) {
           return item.asset_id;
         }).filter(Boolean),
-        task_text: useDirectVideo ? values.prompt : buildPromptWithReferenceHints(values.prompt || '', uploaded)
+        task_text: values.prompt
       })
     };
   }

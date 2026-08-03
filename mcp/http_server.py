@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from .video_model_resolve import (
+    APIZ_BIHUO_25_VIDEO_MODEL,
     APIZ_VEO31_IMAGE_MODEL,
     APIZ_VEO31_REFERENCE_MODEL,
     APIZ_VEO31_TEXT_MODEL,
@@ -304,6 +305,7 @@ def _normalize_invoke_seedance_tvc_pipeline_args(args: Dict[str, Any]) -> Dict[s
         "image_url",
         "reference_asset_ids",
         "reference_image_urls",
+        "reference_purposes",
         "merge_clips",
         "storyboard_count",
         "segment_count",
@@ -322,6 +324,12 @@ def _normalize_invoke_seedance_tvc_pipeline_args(args: Dict[str, Any]) -> Dict[s
         "video_model",
         "video_channel",
         "video_base_url",
+        "video_fallbacks",
+        "aspect_ratio",
+        "visual_tone",
+        "rhythm",
+        "generate_audio",
+        "watermark",
     ):
         if k in args and args[k] is not None:
             pl.setdefault(k, args[k])
@@ -398,12 +406,34 @@ def _normalize_invoke_goal_video_pipeline_args(args: Dict[str, Any]) -> Dict[str
         "language",
         "duration",
         "aspect_ratio",
+        "resolution",
         "memory_scope",
         "planning_model",
         "image_model",
         "video_model",
+        "function_mode",
+        "functionMode",
+        "first_image_url",
+        "end_image_url",
         "reference_asset_ids",
         "reference_image_urls",
+        "reference_video_urls",
+        "reference_audio_urls",
+        "audio",
+        "generate_audio",
+        "seed",
+        "negative_prompt",
+        "enable_prompt_expansion",
+        "multi_shots",
+        "enable_safety_checker",
+        "camera_fixed",
+        "style",
+        "mode",
+        "fps",
+        "cfg_scale",
+        "motion_bucket_id",
+        "consistency_with_text",
+        "video_options",
         "image_retry_count",
         "video_retry_count",
     ):
@@ -2052,7 +2082,7 @@ def _tool_definitions(
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
                             "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由 MCP 按默认配置补齐。"
                             "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由后端按模型默认值处理）；model 可省略并由 MCP 按默认视频模型补齐；prompt 只写视频画面/动作，不写发布账号或发布文案；图生视频可传 image_url 或 asset_id。"
-                            "goal.video.pipeline: 创意成片专用；当用户说创意成片、目标成片或根据记忆给某产品生成宣传视频时，直接传 action=start_pipeline、goal、platform、duration、aspect_ratio；goal 必填，使用用户原话或整理后的目标，不要反问主题；没有素材也可以调用，不要先卡在素材库；若返回 status=running/openclaw_async/next_payload，说明任务仍在跑，只能继续 poll_pipeline，禁止改用普通 image.generate/video.generate。"
+                            "goal.video.pipeline: 创意成片专用；当用户说创意成片、目标成片或根据记忆给某产品生成宣传视频时，直接传 action=start_pipeline、goal、platform，以及用户明确要求的 duration、aspect_ratio、resolution 和参考素材参数；goal 必填并尽量保留用户原话。用户说 30秒/30s 时 duration 必须是 30，禁止套用 6 秒默认值或静默缩短；没有素材也可以调用，不要先卡在素材库；若返回 status=running/openclaw_async/next_payload，说明任务仍在跑，只能继续 poll_pipeline，禁止改用普通 image.generate/video.generate。"
                             "image.understand/video.understand: 必须带 image_url/video_url、对应 *_urls 数组或 asset_id。"
                             "task.get_result: 含 task_id。"
                         ),
@@ -2784,6 +2814,102 @@ def _merge_common_video_ui_fields(out: Dict[str, Any], payload: Dict[str, Any]) 
             out[k] = payload[k]
 
 
+_BIHUO_25_FUNCTION_MODES = frozenset({"omini", "edit", "extend", "first_last_frame"})
+_BIHUO_25_RESOLUTIONS = frozenset({"480p", "720p"})
+
+
+def _clean_media_url_list(value: Any, *, limit: int) -> List[str]:
+    values = value if isinstance(value, (list, tuple)) else [value]
+    out: List[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        if isinstance(raw, dict):
+            raw = raw.get("url") or raw.get("source_url") or raw.get("file_url") or ""
+        item = str(raw or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _normalize_bihuo_25_video_payload(payload: Dict[str, Any], prompt: str) -> Dict[str, Any]:
+    mode_aliases = {
+        "reference": "omini",
+        "multimodal": "omini",
+        "omni": "omini",
+        "first_last": "first_last_frame",
+        "first-last-frame": "first_last_frame",
+        "first_last_frames": "first_last_frame",
+    }
+    raw_mode = str(payload.get("functionMode") or payload.get("function_mode") or "omini").strip().lower()
+    function_mode = mode_aliases.get(raw_mode, raw_mode)
+    if function_mode not in _BIHUO_25_FUNCTION_MODES:
+        raise ValueError("必火2.5 模式无效，请使用参考生成、视频编辑、视频延长或首尾帧")
+
+    ratio_raw = str(payload.get("ratio") or payload.get("aspect_ratio") or "9:16").strip().lower()
+    ratio = "adaptive" if ratio_raw in {"adaptive", "auto", "adapt"} else _coerce_video_aspect_ratio_for_upstream(ratio_raw)
+    resolution_raw = str(payload.get("resolution") or "720p").strip().lower()
+    if resolution_raw not in _BIHUO_25_RESOLUTIONS:
+        raise ValueError("必火2.5 分辨率只支持 480p 或 720p")
+
+    image_urls = _clean_media_url_list(payload.get("image_urls"), limit=31)
+    video_urls = _clean_media_url_list(payload.get("video_urls"), limit=11)
+    audio_urls = _clean_media_url_list(payload.get("audio_urls"), limit=11)
+    file_paths = _clean_media_url_list(payload.get("filePaths"), limit=51)
+    first_image_url = str(payload.get("image_url") or payload.get("first_image_url") or "").strip()
+    end_image_url = str(payload.get("end_image_url") or payload.get("last_image_url") or "").strip()
+
+    out: Dict[str, Any] = {
+        "model": APIZ_BIHUO_25_VIDEO_MODEL,
+        "__apiz_params_model": "Seedance_2.5",
+        "prompt": prompt,
+        "functionMode": function_mode,
+        "ratio": ratio,
+        "resolution": resolution_raw,
+    }
+
+    if function_mode == "omini":
+        combined = _clean_media_url_list(
+            ([first_image_url] if first_image_url else []) + image_urls + video_urls + audio_urls + file_paths,
+            limit=51,
+        )
+        if not combined:
+            raise ValueError("参考生成至少需要一张图片、一段视频或一段音频")
+        if len(image_urls) > 30 or len(video_urls) > 10 or len(audio_urls) > 10 or len(combined) > 50:
+            raise ValueError("参考素材超过上限：图片30个、视频10个、音频10个，总数50个")
+        duration = _parse_video_duration_seconds(_payload_get_duration_raw(payload), default=10)
+        if duration < 4 or duration > 30:
+            raise ValueError("必火2.5 时长只支持 4-30 秒")
+        out["filePaths"] = combined
+        out["duration"] = duration
+        return out
+
+    if function_mode == "first_last_frame":
+        if not first_image_url or not end_image_url:
+            raise ValueError("首尾帧模式必须同时提供首帧图和尾帧图")
+        duration = _parse_video_duration_seconds(_payload_get_duration_raw(payload), default=10)
+        if duration < 4 or duration > 30:
+            raise ValueError("必火2.5 时长只支持 4-30 秒")
+        out["image_url"] = first_image_url
+        out["end_image_url"] = end_image_url
+        out["duration"] = duration
+        return out
+
+    videos = _clean_media_url_list(video_urls + file_paths, limit=2)
+    if len(videos) != 1:
+        raise ValueError("视频编辑和视频延长模式必须且只能提供一个视频")
+    out["filePaths"] = videos
+    if function_mode == "extend":
+        duration = _parse_video_duration_seconds(_payload_get_duration_raw(payload), default=5)
+        if duration < 4 or duration > 30:
+            raise ValueError("视频延长时长只支持 4-30 秒")
+        out["duration"] = duration
+    return out
+
+
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
     "gpt-image": "openai/gpt-image-2",
     "gpt-image2": "openai/gpt-image-2",
@@ -3204,6 +3330,10 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         elif reference_mode:
             out["image_urls"] = list(image_refs[:3])
         return out
+
+    # 必火2.5 supports exact 4-30 second output and has its own multimodal contract.
+    if model == APIZ_BIHUO_25_VIDEO_MODEL:
+        return _normalize_bihuo_25_video_payload(payload, prompt)
 
     # st-ai/super-seed2：ratio, filePaths, functionMode（保留 backend 注入的多图 filePaths）
     if "super-seed2" in model or "st-ai/super-seed2" == model:

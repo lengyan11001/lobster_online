@@ -38,6 +38,7 @@ _IMPORT_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ),
     ("desktop", "桌面窗口", ("webview",)),
     ("ppt", "PPT 创作", ("pptx", "svglib", "reportlab", "yaml", "lxml", "rich", "typer", "openai")),
+    ("sam3d", "3D component split / SAM", ("torch", "torchvision", "cv2", "segment_anything")),
     (
         "douyin",
         "抖音能力",

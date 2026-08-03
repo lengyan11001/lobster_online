@@ -18,7 +18,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user_for_local, _ServerUser
@@ -1464,6 +1464,64 @@ def _register_local_user_upload_assets_to_auth_server(
     return registered
 
 
+def _delete_remote_user_upload_asset(asset: Asset, request: Request) -> None:
+    """Delete the cloud copy first so a later sync cannot restore the local row."""
+    if _asset_origin(asset.meta) != "user_upload":
+        return
+    meta = dict(asset.meta or {})
+    remote_asset_id = str(meta.get("remote_asset_id") or "").strip()
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        raise HTTPException(503, detail="当前无法连接云端素材库，请稍后重试删除")
+    try:
+        with httpx.Client(timeout=12.0, follow_redirects=True, trust_env=False) as client:
+            if not remote_asset_id:
+                source_url = (asset.source_url or "").strip()
+                if not source_url.startswith(("http://", "https://")):
+                    return
+                register_resp = client.post(
+                    f"{base}/api/assets/register-url",
+                    json={
+                        "url": source_url,
+                        "media_type": asset.media_type or "image",
+                        "filename": asset.filename or "",
+                        "file_size": asset.file_size or 0,
+                        "source_asset_id": asset.asset_id,
+                        "asset_origin": "user_upload",
+                    },
+                    headers=headers,
+                )
+                if register_resp.status_code >= 400:
+                    raise HTTPException(502, detail="云端素材定位失败，请稍后重试删除")
+                remote_asset_id = str((register_resp.json() or {}).get("asset_id") or "").strip()
+                if not remote_asset_id:
+                    raise HTTPException(502, detail="云端素材定位失败，请稍后重试删除")
+            resp = client.delete(
+                f"{base}/api/assets/{remote_asset_id}",
+                headers=headers,
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "[assets-sync] delete remote user upload exception asset_id=%s remote_asset_id=%s err=%s",
+            asset.asset_id,
+            remote_asset_id,
+            exc,
+        )
+        raise HTTPException(502, detail="云端素材删除失败，请检查网络后重试") from exc
+    if resp.status_code not in (200, 204, 404):
+        logger.warning(
+            "[assets-sync] delete remote user upload failed asset_id=%s remote_asset_id=%s status=%s body=%s",
+            asset.asset_id,
+            remote_asset_id,
+            resp.status_code,
+            (resp.text or "")[:300],
+        )
+        raise HTTPException(502, detail="云端素材删除失败，请稍后重试")
+
+
 def _url_snip_for_log(u: Optional[str], max_len: int = 120) -> str:
     """日志里截断 URL，避免单行过长；便于 grep「save-url 诊断」。"""
     s = (u or "").strip().replace("\n", " ")
@@ -2284,9 +2342,6 @@ def list_assets(
     db: Session = Depends(get_db),
 ):
     origin_filter = _normalize_asset_origin_filter(origin or asset_origin)
-    if origin_filter == "user_upload":
-        _register_local_user_upload_assets_to_auth_server(request, current_user, db, media_type=media_type)
-        _sync_remote_user_upload_assets(request, current_user, db, media_type=media_type)
     query = db.query(Asset).filter(Asset.user_id == current_user.id)
     if media_type:
         query = query.filter(Asset.media_type == media_type)
@@ -2298,19 +2353,30 @@ def list_assets(
             | (Asset.filename.ilike(pat))
         )
     creative_group_name = (creative_group or "").strip()
-    max_limit = min(limit, 200)
-    if creative_group_name or origin_filter:
+    max_limit = max(1, min(int(limit or 50), 200))
+    clean_offset = max(0, int(offset or 0))
+    meta_origin = func.lower(
+        func.coalesce(
+            Asset.meta["asset_origin"].as_string(),
+            Asset.meta["origin"].as_string(),
+            "",
+        )
+    )
+    if origin_filter == "user_upload":
+        query = query.filter(meta_origin == "user_upload")
+    elif origin_filter == "generated":
+        query = query.filter(meta_origin != "user_upload")
+    if creative_group_name:
         matched = [
             row
             for row in query.order_by(Asset.created_at.desc()).all()
             if (not creative_group_name or _creative_candidate_group(row.meta) == creative_group_name)
-            and (not origin_filter or _asset_origin(row.meta) == origin_filter)
         ]
         total = len(matched)
-        rows = matched[offset : offset + max_limit]
+        rows = matched[clean_offset : clean_offset + max_limit]
     else:
         total = query.count()
-        rows = query.order_by(Asset.created_at.desc()).offset(offset).limit(max_limit).all()
+        rows = query.order_by(Asset.created_at.desc()).offset(clean_offset).limit(max_limit).all()
     out = []
     for r in rows:
         mt = (r.media_type or "").lower()
@@ -2319,26 +2385,27 @@ def list_assets(
         open_url = None
         if mt in ("image", "video", "document"):
             su = (r.source_url or "").strip()
-            if mt in ("image", "video") and _asset_local_path(r):
+            local_path = _asset_local_path(r)
+            has_external_source = su.startswith(("http://", "https://")) and not _is_internal_asset_http_url(su)
+            if mt in ("image", "video") and local_path:
                 local_preview_url = build_asset_file_url(
                     request,
                     r.asset_id,
                     expiry_sec=_ASSET_LIST_PREVIEW_EXPIRY_SEC,
                 )
                 preview_url = local_preview_url
-            elif su.startswith(("http://", "https://")) and not _is_internal_asset_http_url(su):
+            elif has_external_source:
                 preview_url = su
-            pub = get_asset_public_url(r.asset_id, current_user.id, request, db)
-            if pub:
-                open_url = pub
-            elif _asset_local_path(r):
+            # Listing must stay read-only and fast. Public URL repair/probing is
+            # deferred until the user actually selects the asset for generation.
+            if has_external_source:
+                open_url = su
+            elif local_path:
                 open_url = build_asset_file_url(
                     request,
                     r.asset_id,
                     expiry_sec=_ASSET_LIST_OPEN_FALLBACK_EXPIRY_SEC,
                 )
-            elif su.startswith(("http://", "https://")) and not _is_internal_asset_http_url(su):
-                open_url = su
             # 列表缩略图：签名链若是回环地址，在局域网打开页面时 img/video 无法加载；优先用公网 open_url
             if preview_url and open_url and preview_url != open_url:
                 pl = preview_url.lower()
@@ -2372,6 +2439,29 @@ def list_assets(
             }
         )
     return {"total": total, "assets": out}
+
+
+@router.post("/api/assets/sync-user-uploads", summary="同步用户上传素材")
+def sync_user_upload_assets(
+    request: Request,
+    media_type: Optional[str] = None,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """Run cloud reconciliation separately from list rendering."""
+    registered = _register_local_user_upload_assets_to_auth_server(
+        request,
+        current_user,
+        db,
+        media_type=media_type,
+    )
+    synced = _sync_remote_user_upload_assets(
+        request,
+        current_user,
+        db,
+        media_type=media_type,
+    )
+    return {"ok": True, "registered": registered, "synced": synced, "changed": registered + synced}
 
 
 @router.get("/api/assets/creative-candidate-groups", summary="创意成片备选素材组列表")
@@ -2614,12 +2704,14 @@ def get_asset(
 @router.delete("/api/assets/{asset_id}", summary="删除素材")
 def delete_asset(
     asset_id: str,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
     a = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
     if not a:
         raise HTTPException(404, detail="素材不存在")
+    _delete_remote_user_upload_asset(a, request)
     fp = ASSETS_DIR / a.filename
     if fp.exists():
         fp.unlink()
@@ -2631,6 +2723,7 @@ def delete_asset(
 @router.post("/api/assets/bulk-delete", summary="批量删除素材")
 def bulk_delete_assets(
     body: BulkDeleteAssetsReq,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
@@ -2654,6 +2747,8 @@ def bulk_delete_assets(
     )
     found_ids = {row.asset_id for row in rows}
     missing_ids = [aid for aid in asset_ids if aid not in found_ids]
+    for row in rows:
+        _delete_remote_user_upload_asset(row, request)
     deleted_ids: List[str] = []
     file_deleted = 0
     file_missing = 0

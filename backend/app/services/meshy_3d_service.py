@@ -32,7 +32,29 @@ def resolve_meshy_api_key() -> str:
 
 
 def is_configured() -> bool:
-    return bool(resolve_meshy_api_key())
+    return bool(resolve_meshy_api_key() or _proxy_base())
+
+
+def _proxy_base() -> str:
+    return (
+        getattr(settings, "meshy_proxy_base", None)
+        or os.environ.get("MESHY_PROXY_BASE")
+        or os.environ.get("LOBSTER_MESHY_PROXY_BASE")
+        or ""
+    ).strip().rstrip("/")
+
+
+def _proxy_headers() -> Dict[str, str]:
+    secret = (
+        getattr(settings, "meshy_proxy_secret", None)
+        or os.environ.get("MESHY_PROXY_SECRET")
+        or os.environ.get("LOBSTER_MESHY_PROXY_SECRET")
+        or ""
+    ).strip()
+    headers: Dict[str, str] = {}
+    if secret:
+        headers["X-Lobster-Meshy-Proxy-Secret"] = secret
+    return headers
 
 
 def _headers(api_key: Optional[str] = None) -> Dict[str, str]:
@@ -74,8 +96,11 @@ def _coerce_target_formats(values: Optional[Iterable[str]]) -> List[str]:
 
 
 async def get_balance() -> Dict[str, Any]:
+    proxy = _proxy_base()
+    url = f"{proxy}/balance" if proxy else f"{MESHY_API_BASE}/balance"
+    headers = _proxy_headers() if proxy else _headers()
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(f"{MESHY_API_BASE}/balance", headers=_headers())
+        resp = await client.get(url, headers=headers)
     if resp.status_code >= 400:
         raise MeshyError(_response_error(resp))
     return resp.json()
@@ -136,9 +161,9 @@ async def create_image_to_3d_task(
         body["texture_prompt"] = texture_prompt or "PBR material, preserve original surface colors and fine details"
     resp = await _request_with_retries(
         "POST",
-        f"{MESHY_API_BASE}/image-to-3d",
+        f"{_proxy_base() or MESHY_API_BASE}/image-to-3d",
         timeout=90.0,
-        headers={**_headers(), "Content-Type": "application/json"},
+        headers={**(_proxy_headers() if _proxy_base() else _headers()), "Content-Type": "application/json"},
         json=body,
     )
     if resp.status_code >= 400:
@@ -169,9 +194,9 @@ async def create_multi_image_to_3d_task(
         body["texture_prompt"] = texture_prompt or "PBR material, preserve the uploaded references, clean topology, production-ready hard-surface asset"
     resp = await _request_with_retries(
         "POST",
-        f"{MESHY_API_BASE}/multi-image-to-3d",
+        f"{_proxy_base() or MESHY_API_BASE}/multi-image-to-3d",
         timeout=90.0,
-        headers={**_headers(), "Content-Type": "application/json"},
+        headers={**(_proxy_headers() if _proxy_base() else _headers()), "Content-Type": "application/json"},
         json=body,
     )
     if resp.status_code >= 400:
@@ -182,9 +207,9 @@ async def create_multi_image_to_3d_task(
 async def get_image_to_3d_task(task_id: str) -> Dict[str, Any]:
     resp = await _request_with_retries(
         "GET",
-        f"{MESHY_API_BASE}/image-to-3d/{task_id}",
+        f"{_proxy_base() or MESHY_API_BASE}/image-to-3d/{task_id}",
         timeout=30.0,
-        headers=_headers(),
+        headers=_proxy_headers() if _proxy_base() else _headers(),
     )
     if resp.status_code >= 400:
         raise MeshyError(_response_error(resp))
@@ -194,9 +219,9 @@ async def get_image_to_3d_task(task_id: str) -> Dict[str, Any]:
 async def get_multi_image_to_3d_task(task_id: str) -> Dict[str, Any]:
     resp = await _request_with_retries(
         "GET",
-        f"{MESHY_API_BASE}/multi-image-to-3d/{task_id}",
+        f"{_proxy_base() or MESHY_API_BASE}/multi-image-to-3d/{task_id}",
         timeout=30.0,
-        headers=_headers(),
+        headers=_proxy_headers() if _proxy_base() else _headers(),
     )
     if resp.status_code >= 400:
         raise MeshyError(_response_error(resp))

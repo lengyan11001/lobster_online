@@ -61,7 +61,11 @@ class ComflySeedancePipelinePayload(BaseModel):
     image_url: Optional[str] = Field(None, description="主参考图公网 URL，与 asset_id 二选一")
     reference_asset_ids: List[str] = Field(default_factory=list, description="额外参考图素材 ID 列表")
     reference_image_urls: List[str] = Field(default_factory=list, description="额外参考图公网 URL 列表")
-    merge_clips: bool = Field(True, description="最终始终会合并所有视频段；该字段保留仅为兼容旧调用")
+    reference_purposes: List[str] = Field(
+        default_factory=list,
+        description="与主参考图、额外 URL、额外素材 ID 顺序一致的逐图用途",
+    )
+    merge_clips: bool = Field(True, description="是否将多个分镜片段合成为一个成片")
     storyboard_count: Optional[int] = Field(None, ge=1, le=6, description="兼容旧字段；若传入，将按当前模型单段时长推导总时长")
     segment_count: Optional[int] = Field(None, ge=1, le=6, description="兼容旧字段；若传入，必须与 total_duration_seconds / 单段时长一致")
     segment_duration_seconds: Optional[int] = Field(None, description="每段时长：Seedance 为 10 秒，云雾 Veo 为 8 秒")
@@ -82,6 +86,8 @@ class ComflySeedancePipelinePayload(BaseModel):
     video_base_url: Optional[str] = None
     video_fallbacks: List[Dict[str, Any]] = Field(default_factory=list, description="Ordered video fallback providers, each item supports channel/base_url/model.")
     aspect_ratio: str = "9:16"
+    visual_tone: str = "clean_bright"
+    rhythm: str = "smooth"
     generate_audio: bool = True
     watermark: bool = False
 
@@ -187,6 +193,24 @@ def _validate_payload(pl: ComflySeedancePipelinePayload) -> None:
     )
     if not has_reference and not (pl.task_text or "").strip():
         raise HTTPException(status_code=400, detail="请提供参考图或创意提示词")
+    reference_count = sum(
+        [
+            1 if (pl.asset_id or pl.image_url) else 0,
+            len([x for x in pl.reference_image_urls if str(x).strip()]),
+            len([x for x in pl.reference_asset_ids if str(x).strip()]),
+        ]
+    )
+    allowed_purposes = {"storyboard", "person", "product", "style", "scene", "auto"}
+    purposes = [str(x or "").strip().lower() for x in pl.reference_purposes]
+    if purposes and len(purposes) != reference_count:
+        raise HTTPException(status_code=400, detail="reference_purposes 必须与参考图片数量和顺序一一对应")
+    invalid_purposes = sorted({x for x in purposes if x not in allowed_purposes})
+    if invalid_purposes:
+        raise HTTPException(status_code=400, detail=f"不支持的参考图用途: {', '.join(invalid_purposes)}")
+    if pl.visual_tone not in {"clean_bright", "lifestyle_warm", "luxury_refined", "cinematic_contrast"}:
+        raise HTTPException(status_code=400, detail="visual_tone 参数无效")
+    if pl.rhythm not in {"smooth", "dynamic", "product_focus", "storytelling"}:
+        raise HTTPException(status_code=400, detail="rhythm 参数无效")
     uses_yunwu_veo = _is_veo31_request(pl.video_channel or "", pl.video_model or "")
     segment_seconds = 8 if uses_yunwu_veo else 10
     if pl.segment_duration_seconds is not None and int(pl.segment_duration_seconds) != segment_seconds:
@@ -222,6 +246,8 @@ async def _prepare_pipeline_input(
         reference_asset_ids=pl.reference_asset_ids,
         reference_image_urls=pl.reference_image_urls,
     )
+    if pl.reference_purposes and len(pl.reference_purposes) != len(reference_images):
+        raise HTTPException(status_code=400, detail="参考图片存在重复或无效项，无法与逐图用途一一对应")
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
     pipe_base = _api_base_for_pipeline(api_base)
     video_channel = (pl.video_channel or "").strip().lower()
@@ -267,6 +293,7 @@ async def _prepare_pipeline_input(
     return build_pipeline_input(
         reference_image=reference_images[0] if reference_images else "",
         reference_images=reference_images,
+        reference_purposes=pl.reference_purposes,
         api_key=api_key,
         api_base=api_base,
         merge_clips=pl.merge_clips,
@@ -288,6 +315,8 @@ async def _prepare_pipeline_input(
         video_base_url=video_base_url,
         video_fallbacks=video_fallbacks,
         aspect_ratio=pl.aspect_ratio,
+        visual_tone=pl.visual_tone,
+        rhythm=pl.rhythm,
         generate_audio=pl.generate_audio,
         watermark=pl.watermark,
     )

@@ -194,6 +194,10 @@ class Settings(BaseSettings):
     comfly_daihuo_yunwu_video_model: str = "veo3.1"
     """Meshy API Key for AI 3D model generation. Set MESHY_API_KEY in .env."""
     meshy_api_key: Optional[str] = None
+    """Optional Meshy relay base, e.g. http://43.162.111.36/api/meshy-proxy."""
+    meshy_proxy_base: Optional[str] = None
+    """Internal secret for the Meshy relay. Never expose it to the frontend."""
+    meshy_proxy_secret: Optional[str] = None
 
     def cors_origins_list(self) -> List[str]:
         if self.cors_origins.strip() == "*":

@@ -191,6 +191,18 @@ WECHAT_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
     "pyperclip",
     "comtypes",
 )
+SAM3D_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+    "opencv-python==5.0.0.93",
+    "segment-anything==1.0",
+)
+SAM3D_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
+    "torch",
+    "torchvision",
+    "cv2",
+    "segment_anything",
+)
 RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
     {
         "name": "ppt_runtime",
@@ -216,6 +228,17 @@ RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
         "required": True,
         "trigger_exact": {"scripts/wechat_runtime_wheels"},
         "trigger_prefix": ("scripts/wechat_runtime_wheels/",),
+    },
+    {
+        "name": "sam3d_runtime",
+        "wheel_dirs": (ROOT / "deps" / "wheels",),
+        "requirements": SAM3D_RUNTIME_REQUIREMENTS,
+        "verify_imports": SAM3D_RUNTIME_IMPORT_CHECKS,
+        "allow_online": True,
+        "timeout_seconds": 1800,
+        "required": False,
+        "trigger_exact": {"requirements.txt", "backend/app/api/ai_3d_model.py"},
+        "trigger_prefix": ("deps/wheels/",),
     },
 )
 
@@ -1461,8 +1484,9 @@ def _install_runtime_group_if_needed(group: dict[str, Any], applied: list[str]) 
     required = bool(group.get("required"))
     if name == "wechat_runtime":
         _ensure_embedded_tkinter_stub()
+    allow_online = bool(group.get("allow_online"))
     wheel_dirs = [p for p in group.get("wheel_dirs", ()) if isinstance(p, Path) and p.is_dir()]
-    if not wheel_dirs:
+    if not wheel_dirs and not allow_online:
         msg = f"{name} wheels missing; skip offline dependency install."
         print(f"[code] [WARN] {msg}", flush=True)
         if required:
@@ -1474,13 +1498,20 @@ def _install_runtime_group_if_needed(group: dict[str, Any], applied: list[str]) 
         "pip",
         "install",
         "--disable-pip-version-check",
-        "--no-index",
     ]
+    if wheel_dirs and not allow_online:
+        cmd.append("--no-index")
+    else:
+        cmd.append("--prefer-binary")
     for wheel_dir in wheel_dirs:
         cmd.extend(["--find-links", str(wheel_dir)])
     cmd.extend(tuple(group.get("requirements") or ()))
     print(f"[code-progress] {name}_install_start", flush=True)
-    timeout_seconds = max(60, int(os.environ.get("CLIENT_RUNTIME_INSTALL_TIMEOUT_SECONDS") or 600))
+    timeout_seconds = max(
+        60,
+        int(os.environ.get("CLIENT_RUNTIME_INSTALL_TIMEOUT_SECONDS") or 600),
+        int(group.get("timeout_seconds") or 0),
+    )
     try:
         cp = subprocess.run(
             cmd,

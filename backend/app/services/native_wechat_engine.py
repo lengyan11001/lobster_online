@@ -4216,25 +4216,51 @@ def sync_local_groups(account_id: str, *, limit: int = 2000) -> Dict[str, Any]:
     return _sync_local_groups_from_all_sessions(account_id, limit=limit, reason="session_list")
 
 
-def sync_local_group_members(account_id: str, group_key: str) -> Dict[str, Any]:
-    init_db()
-    _find_local_account(account_id)
-    group_key = str(group_key or "").strip()
-    if not group_key:
-        raise RuntimeError("缺少群名称")
-    wx = _get_wxauto4_client(account_id)
-    wx.ChatWith(group_key, exact=False, force=False)
-    if not hasattr(wx, "GetGroupMembers"):
-        raise RuntimeError("当前驱动不支持群成员读取")
-    members = wx.GetGroupMembers() or []
+def _normalize_local_group_members(members: List[Any], *, source: str) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for member in members or []:
+        raw = _obj_dict(member)
+        name = str(_obj_value(member, "name", "nickname", "remark", "display_name") or member or "").strip()
+        if not name:
+            continue
+        member_key = str(
+            _obj_value(member, "wxid", "user_id", "username", "id", "member_key") or name
+        ).strip()
+        if not member_key or member_key in seen:
+            continue
+        seen.add(member_key)
+        items.append(
+            {
+                "member_key": member_key,
+                "display_name": name,
+                "raw": {**raw, "source": source},
+            }
+        )
+    return items
+
+
+def _persist_local_group_members(
+    account_id: str,
+    group_key: str,
+    items: List[Dict[str, Any]],
+    *,
+    replace: bool,
+) -> List[Dict[str, Any]]:
     now = _now_iso()
-    items = []
+    saved: List[Dict[str, Any]] = []
     with _connect() as conn:
-        for member in members:
-            raw = _obj_dict(member)
-            name = _obj_value(member, "name", "nickname", "remark", "display_name") or str(member)
-            if not name:
+        if replace:
+            conn.execute(
+                "delete from wechat_group_members where account_id=? and group_key=?",
+                (account_id, group_key),
+            )
+        for item in items:
+            member_key = str(item.get("member_key") or "").strip()
+            display_name = str(item.get("display_name") or member_key).strip()
+            if not member_key or not display_name:
                 continue
+            raw = dict(item.get("raw") or {})
             conn.execute(
                 """
                 insert into wechat_group_members(id, account_id, group_key, member_key, display_name, raw_json, created_at, updated_at)
@@ -4244,10 +4270,195 @@ def sync_local_group_members(account_id: str, group_key: str) -> Dict[str, Any]:
                   raw_json=excluded.raw_json,
                   updated_at=excluded.updated_at
                 """,
-                (_stable_key(account_id, group_key, name), account_id, group_key, name, name, _json_dumps(raw), now, now),
+                (
+                    _stable_key(account_id, group_key, member_key),
+                    account_id,
+                    group_key,
+                    member_key,
+                    display_name,
+                    _json_dumps(raw),
+                    now,
+                    now,
+                ),
             )
-            items.append({"member_key": name, "display_name": name, "raw": raw})
-    return {"ok": True, "items": items, "count": len(items)}
+            saved.append({"member_key": member_key, "display_name": display_name, "raw": raw})
+    return saved
+
+
+def _uia_group_member_grid(root: Any) -> Optional[Any]:
+    fallback: Optional[Any] = None
+    for node in _uia_walk(root, max_depth=24, max_nodes=3000):
+        if _uia_control_class(node) != "QFReuseGridWidget":
+            continue
+        if _uia_control_text(node) == "\u804a\u5929\u6210\u5458":
+            return node
+        fallback = fallback or node
+    return fallback
+
+
+def _uia_visible_group_member_items(root: Any) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for node in _uia_walk(root, max_depth=24, max_nodes=3000):
+        if _uia_control_class(node) != "mmui::ChatMemberCell":
+            continue
+        name = _uia_control_text(node)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        items.append(
+            {
+                "member_key": name,
+                "display_name": name,
+                "raw": {
+                    "source": "pc_wechat_uia_group_members",
+                    "class_name": _uia_control_class(node),
+                },
+            }
+        )
+    return items
+
+
+def _uia_click_control_center(node: Any) -> None:
+    rect = _uia_rect_tuple(node)
+    if rect is None:
+        raise RuntimeError("local WeChat control has no clickable bounds")
+    left, top, right, bottom = rect
+    _uia_click_screen_point((left + right) // 2, (top + bottom) // 2)
+
+
+def _sync_local_group_members_from_uia(
+    account_id: str,
+    group_key: str,
+    *,
+    wx: Any,
+) -> Dict[str, Any]:
+    if not _module_available("uiautomation"):
+        raise RuntimeError("uiautomation is required to read local WeChat group members")
+    import uiautomation as auto  # type: ignore
+
+    hwnd = _local_wechat_hwnd(account_id)
+    if not hwnd:
+        raise RuntimeError("local WeChat window not found")
+    _focus_local_wechat(hwnd)
+    time.sleep(0.35)
+    root = auto.ControlFromHandle(int(hwnd))
+    opened_panel = False
+    grid = _uia_group_member_grid(root)
+    if grid is None:
+        button = root.ButtonControl(Name="\u804a\u5929\u4fe1\u606f")
+        if not button.Exists(2.0):
+            raise RuntimeError("local WeChat chat info button not found")
+        _uia_click_control_center(button)
+        opened_panel = True
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            root = auto.ControlFromHandle(int(hwnd))
+            grid = _uia_group_member_grid(root)
+            if grid is not None:
+                break
+            time.sleep(0.25)
+    if grid is None:
+        raise RuntimeError("local WeChat group member panel did not open")
+
+    info = wx.ChatInfo() if hasattr(wx, "ChatInfo") else {}
+    try:
+        expected_count = max(0, int((info or {}).get("group_member_count") or 0))
+    except (TypeError, ValueError):
+        expected_count = 0
+
+    try:
+        grid.WheelUp(wheelTimes=40)
+        time.sleep(0.35)
+    except Exception:
+        pass
+
+    ordered: Dict[str, Dict[str, Any]] = {}
+    stable_rounds = 0
+    last_signature = ""
+    rounds = 0
+    completed = False
+    max_rounds = max(12, min(240, (expected_count // 6) + 24 if expected_count else 80))
+    for index in range(max_rounds):
+        rounds = index + 1
+        root = auto.ControlFromHandle(int(hwnd))
+        visible = _uia_visible_group_member_items(root)
+        before = len(ordered)
+        for item in visible:
+            ordered.setdefault(str(item.get("member_key") or ""), item)
+        signature = "|".join(str(item.get("member_key") or "") for item in visible)
+        if expected_count and len(ordered) >= expected_count:
+            completed = True
+            break
+        if len(ordered) == before and signature == last_signature:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+        last_signature = signature
+        if stable_rounds >= 3:
+            completed = True
+            break
+        grid = _uia_group_member_grid(root) or grid
+        try:
+            grid.WheelDown(wheelTimes=4)
+            time.sleep(0.25)
+        except Exception:
+            break
+
+    items = [item for key, item in ordered.items() if key]
+    if not items:
+        raise RuntimeError("no group members were readable from local WeChat")
+
+    if opened_panel:
+        try:
+            root = auto.ControlFromHandle(int(hwnd))
+            button = root.ButtonControl(Name="\u804a\u5929\u4fe1\u606f")
+            if button.Exists(1.0):
+                _uia_click_control_center(button)
+        except Exception:
+            pass
+
+    return {
+        "items": items,
+        "count": len(items),
+        "expected_count": expected_count,
+        "scroll_rounds": rounds,
+        "scroll_completed": completed,
+        "source": "pc_wechat_uia_group_members",
+    }
+
+
+def sync_local_group_members(account_id: str, group_key: str) -> Dict[str, Any]:
+    init_db()
+    _find_local_account(account_id)
+    group_key = str(group_key or "").strip()
+    if not group_key:
+        raise RuntimeError("缺少群名称")
+    wx = _get_wxauto4_client(account_id)
+    wx.ChatWith(group_key, exact=True, force=False)
+    time.sleep(random.uniform(0.45, 0.8))
+    if hasattr(wx, "GetGroupMembers"):
+        items = _normalize_local_group_members(
+            list(wx.GetGroupMembers() or []),
+            source="wx_driver_group_members",
+        )
+        saved = _persist_local_group_members(account_id, group_key, items, replace=True)
+        return {
+            "ok": True,
+            "items": saved,
+            "count": len(saved),
+            "source": "wx_driver_group_members",
+            "scroll_completed": True,
+        }
+
+    scan = _sync_local_group_members_from_uia(account_id, group_key, wx=wx)
+    saved = _persist_local_group_members(
+        account_id,
+        group_key,
+        list(scan.get("items") or []),
+        replace=bool(scan.get("scroll_completed")),
+    )
+    return {"ok": True, **scan, "items": saved, "count": len(saved)}
 
 
 def sync_local_messages_legacy(account_id: str) -> Dict[str, Any]:

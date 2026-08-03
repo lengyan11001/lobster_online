@@ -2576,6 +2576,51 @@ var _assetLibraryLoadSeq = 0;
 var _assetLibraryRenderTimer = 0;
 var _assetSelectedAssets = {};
 var _assetBulkMode = false;
+var _assetUserUploadSyncPromise = null;
+var _assetUserUploadSyncAt = 0;
+var _ASSET_USER_UPLOAD_SYNC_TTL_MS = 60000;
+
+function _syncUserUploadAssetsAfterRender(snapshot, options) {
+  options = options || {};
+  if (!snapshot || snapshot.origin !== 'user_upload') return Promise.resolve(null);
+  var now = Date.now();
+  if (_assetUserUploadSyncPromise) return _assetUserUploadSyncPromise;
+  if (!options.force && now - _assetUserUploadSyncAt < _ASSET_USER_UPLOAD_SYNC_TTL_MS) {
+    return Promise.resolve(null);
+  }
+  _assetUserUploadSyncAt = now;
+  var url = publishLocalBase() + '/api/assets/sync-user-uploads';
+  if (snapshot.mediaType) url += '?media_type=' + encodeURIComponent(snapshot.mediaType);
+  _assetUserUploadSyncPromise = fetch(url, {
+    method: 'POST',
+    headers: authHeaders()
+  })
+    .then(function(r) {
+      return r.json().catch(function() { return {}; }).then(function(d) {
+        if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
+        return d;
+      });
+    })
+    .then(function(d) {
+      if (Number(d && d.synced || 0) > 0
+          && _currentAssetOriginFilter() === 'user_upload'
+          && _assetLibraryState.query === snapshot.query
+          && _assetLibraryState.mediaType === snapshot.mediaType) {
+        loadAssets(snapshot.query, { skipCloudSync: true });
+      }
+      return d;
+    })
+    .catch(function(err) {
+      if (options.showError) {
+        _assetMsgShow('云端素材同步失败：' + ((err && err.message) || err), true);
+      }
+      return null;
+    })
+    .finally(function() {
+      _assetUserUploadSyncPromise = null;
+    });
+  return _assetUserUploadSyncPromise;
+}
 
 function _assetSelectedIds() {
   return Object.keys(_assetSelectedAssets).filter(function(aid) { return !!_assetSelectedAssets[aid]; });
@@ -2673,7 +2718,7 @@ function _bulkDeleteSelectedAssets() {
       return loadCreativeCandidateGroups();
     })
     .then(function() {
-      loadAssets(_currentAssetSearchQuery(), { force: true });
+      loadAssets(_currentAssetSearchQuery(), { force: true, skipCloudSync: true });
     })
     .catch(function(e) {
       _assetMsgShow('批量删除失败：' + ((e && e.message) || e), true);
@@ -2811,17 +2856,36 @@ function _bindAssetCardActions(container) {
   container.querySelectorAll('button[data-delete-asset]').forEach(function(btn) {
     if (btn._assetLibraryBound) return;
     btn._assetLibraryBound = true;
-    btn.addEventListener('click', function() {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
       var aid = btn.getAttribute('data-delete-asset');
       if (!confirm('确定删除此素材？')) return;
-      fetch(publishLocalBase() + '/api/assets/' + aid, { method: 'DELETE', headers: authHeaders() })
+      btn.disabled = true;
+      var originalText = btn.textContent;
+      btn.textContent = '删除中...';
+      fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(aid), { method: 'DELETE', headers: authHeaders() })
+        .then(function(r) {
+          return r.json().catch(function() { return {}; }).then(function(d) {
+            if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
+            return d;
+          });
+        })
         .then(function() {
+          delete _assetLibraryState.assetMap[aid];
+          _assetSetSelected(aid, false);
           return loadCreativeCandidateGroups();
         })
         .then(function() {
-          loadAssets(_currentAssetSearchQuery());
+          _assetMsgShow('素材已删除。', false);
+          loadAssets(_currentAssetSearchQuery(), { force: true, skipCloudSync: true });
         })
-        .catch(function() { alert('删除失败'); });
+        .catch(function(err) {
+          _assetMsgShow('删除失败：' + ((err && err.message) || err), true);
+        })
+        .finally(function() {
+          btn.disabled = false;
+          btn.textContent = originalText || '删除';
+        });
     });
   });
   container.querySelectorAll('.asset-preview-wrap').forEach(function(wrap) {
@@ -3030,6 +3094,12 @@ function loadAssets(query, options) {
         _assetLibraryState.offset = offset + assets.length;
         _assetLibraryState.loading = false;
         _setAssetLoadMoreState(_assetLibraryState.offset < total, false);
+        if (!append && !options.skipCloudSync) {
+          _syncUserUploadAssetsAfterRender(snap, {
+            force: !!options.syncUploads,
+            showError: !!options.syncUploads
+          });
+        }
       });
     })
     .catch(function() {
@@ -3123,9 +3193,8 @@ function bindAssetLibraryUi() {
   if (assetRefreshBtn && !assetRefreshBtn._assetLibraryBound) {
     assetRefreshBtn._assetLibraryBound = true;
     assetRefreshBtn.addEventListener('click', function() {
-      loadCreativeCandidateGroups().then(function() {
-        loadAssets(_currentAssetSearchQuery(), { force: true });
-      });
+      loadCreativeCandidateGroups();
+      loadAssets(_currentAssetSearchQuery(), { force: true, syncUploads: true });
     });
   }
 
@@ -3229,9 +3298,8 @@ function bindAssetLibraryUi() {
             if (failed) msg += ', ' + failed + ' 请求失败';
             _assetMsgShow(msg, noTos > 0 || failed > 0);
             if (done || noTos) _setAssetOriginTab('user_upload');
-            loadCreativeCandidateGroups().then(function() {
-              loadAssets(_currentAssetSearchQuery(), { force: true });
-            });
+            loadCreativeCandidateGroups();
+            loadAssets(_currentAssetSearchQuery(), { force: true, skipCloudSync: true });
           } else {
             setAssetUploadState(true, '正在上传到火山 ' + finished + '/' + total + '…');
           }
@@ -3394,9 +3462,8 @@ function initAssetLibraryView() {
   bindAssetLibraryUi();
   bindAssetSaveUrlUi();
   bindPublishRefreshButtons();
-  loadCreativeCandidateGroups().then(function() {
-    loadAssets(_currentAssetSearchQuery());
-  });
+  loadAssets(_currentAssetSearchQuery());
+  loadCreativeCandidateGroups();
 }
 window.initAssetLibraryView = initAssetLibraryView;
 
