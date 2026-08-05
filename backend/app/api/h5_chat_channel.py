@@ -3000,6 +3000,24 @@ def _scheduled_douyin_result_payload(
     }
     if isinstance(result, dict):
         payload["mcp_result"] = result
+        for key in (
+            "summary",
+            "message",
+            "status",
+            "account_id",
+            "account_ids",
+            "total",
+            "stats",
+            "final_state",
+            "items",
+            "tasks",
+            "users",
+            "conversations",
+            "conversation_scope",
+        ):
+            value = result.get(key)
+            if value not in (None, "", []):
+                payload[key] = value
     selected_ids = _scheduled_douyin_selected_task_ids(source)
     if isinstance(result, dict) and not selected_ids:
         selected_ids = _scheduled_douyin_selected_task_ids(result)
@@ -3106,6 +3124,12 @@ def _scheduled_douyin_collect_result_payload(
             "high_intent_users": users,
             "precise_customers": users,
         }
+    payload["stats"] = {
+        "videos_found": _safe_int(payload.get("search_total")),
+        "comments_collected": _safe_int(payload.get("total_customers")),
+        "high_intent_users": _safe_int(payload.get("total_high_intent")),
+    }
+    payload["status"] = str(final_state.get("status") or "").strip()
     payload["final_state"] = {
         "status": str(final_state.get("status") or "").strip(),
         "tasks": normalized_tasks,
@@ -3268,9 +3292,11 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
             "regions": regions,
             "session_id": str(session.get("id", "") or "").strip(),
             "search_total": len(normalized_results),
+            "account_id": search_result.get("account_id", "") if isinstance(search_result, dict) else "",
             "selected_task_ids": task_ids,
             "selected_videos_total": len(task_ids),
             "selected_item_keys": selected_item_keys,
+            "items": [dict(row) for row in normalized_results[:20]],
         }
     )
     if _safe_int(result.get("code")) == 200:
@@ -3324,6 +3350,277 @@ def _scheduled_douyin_interaction_users(limit: int = 10) -> List[Dict[str, Any]]
     return out
 
 
+_SCHEDULED_DOUYIN_ACTION_LABELS = {
+    "account_nurture": "自动养号",
+    "search_collect": "关键词采集精准客户",
+    "reply_comments": "回复视频评论",
+    "mention_comment": "评论并@精准客户",
+    "follow_comment": "关注并评论精准客户",
+    "direct_message": "主动私信精准客户",
+    "stranger_message": "私信接管",
+}
+
+
+def _scheduled_douyin_action_timeout(start_result: Dict[str, Any]) -> float:
+    total = max(1, _safe_int(start_result.get("total") or 1))
+    interval_seconds = max(
+        0,
+        _safe_int(start_result.get("interval_seconds_max") or start_result.get("interval_seconds") or 0),
+    )
+    return float(max(300, min(7200, interval_seconds * max(0, total - 1) + 300)))
+
+
+async def _wait_for_douyin_sales_action_completion(
+    action: str,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = 2.0,
+) -> Dict[str, Any]:
+    _install_douyin_origin_import_path()
+    from douyin_api import (  # type: ignore
+        douyin_follow_comment_status,
+        douyin_interaction_status,
+        douyin_mention_comment_status,
+        douyin_video_comment_status,
+    )
+
+    deadline = asyncio.get_running_loop().time() + max(timeout_seconds, poll_interval_seconds)
+    last_snapshot: Dict[str, Any] = {}
+    while True:
+        if action == "reply_comments":
+            raw = await douyin_video_comment_status()
+        elif action == "mention_comment":
+            raw = await douyin_mention_comment_status()
+        elif action == "follow_comment":
+            raw = await douyin_follow_comment_status(lite=False, include_users=False)
+        elif action == "direct_message":
+            raw = await douyin_interaction_status(lite=False, include_users=False)
+        else:
+            return {"status": "unsupported", "state": {}}
+
+        state = raw.get("state") if isinstance(raw, dict) and isinstance(raw.get("state"), dict) else {}
+        last_snapshot = dict(state)
+        running = bool(raw.get("running")) if isinstance(raw, dict) else bool(state.get("running"))
+        if not running:
+            return {"status": "done", "state": last_snapshot}
+        if asyncio.get_running_loop().time() >= deadline:
+            return {"status": "timeout", "state": last_snapshot}
+        await asyncio.sleep(max(0.5, poll_interval_seconds))
+
+
+def _scheduled_douyin_slim_user(row: Dict[str, Any], action: str) -> Dict[str, Any]:
+    status_prefix = {
+        "mention_comment": "mention_comment",
+        "follow_comment": "follow_comment",
+        "direct_message": "interaction",
+    }.get(action, "interaction")
+    result: Dict[str, Any] = {}
+    field_map = {
+        "username": ("username", "nickname", "name"),
+        "profile_url": ("profile_url",),
+        "comment": ("comment", "content"),
+        "region": ("region", "location", "ip_location"),
+        "source_video": ("task_title", "video_title"),
+        "source_video_url": ("task_url", "video_url"),
+        "status": (f"{status_prefix}_status",),
+        "error": (f"{status_prefix}_error",),
+        "sent_text": (
+            f"{status_prefix}_message",
+            f"{status_prefix}_text",
+            f"{status_prefix}_result",
+        ),
+        "account_id": (f"{status_prefix}_account_id",),
+        "started_at": (f"{status_prefix}_started_at",),
+        "finished_at": (f"{status_prefix}_finished_at",),
+    }
+    for target, candidates in field_map.items():
+        for key in candidates:
+            value = row.get(key)
+            if value not in (None, "", []):
+                result[target] = value
+                break
+    return result
+
+
+def _scheduled_douyin_action_users(
+    action: str,
+    selected_users: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not selected_users:
+        return []
+    _install_douyin_origin_import_path()
+    from douyin_api import collect_douyin_interaction_users, user_choice_key  # type: ignore
+
+    current_rows = collect_douyin_interaction_users()
+    current_map = {
+        user_choice_key(row): row
+        for row in (current_rows if isinstance(current_rows, list) else [])
+        if isinstance(row, dict) and user_choice_key(row)
+    }
+    output: List[Dict[str, Any]] = []
+    for selected in selected_users:
+        key = user_choice_key(selected)
+        row = current_map.get(key, selected)
+        output.append(_scheduled_douyin_slim_user(row, action))
+    return output
+
+
+def _scheduled_douyin_video_comment_tasks(selected_task_ids: List[int]) -> List[Dict[str, Any]]:
+    if not selected_task_ids:
+        return []
+    _install_douyin_origin_import_path()
+    from douyin_api import douyin_tasks, ensure_douyin_task_shape  # type: ignore
+
+    wanted = {_safe_int(task_id) for task_id in selected_task_ids if _safe_int(task_id) > 0}
+    output: List[Dict[str, Any]] = []
+    for raw in douyin_tasks if isinstance(douyin_tasks, list) else []:
+        if not isinstance(raw, dict) or _safe_int(raw.get("id")) not in wanted:
+            continue
+        task = ensure_douyin_task_shape(dict(raw))
+        output.append(
+            {
+                "task_id": _safe_int(task.get("id")),
+                "title": str(task.get("title") or "").strip(),
+                "url": str(task.get("url") or "").strip(),
+                "author": str(task.get("author") or "").strip(),
+                "status": str(task.get("video_comment_status") or "pending").strip(),
+                "sent_text": str(task.get("video_comment_text") or "").strip(),
+                "error": str(task.get("video_comment_error") or "").strip(),
+                "account_id": str(task.get("video_comment_account_id") or "").strip(),
+                "started_at": str(task.get("video_comment_started_at") or "").strip(),
+                "finished_at": str(task.get("video_comment_finished_at") or "").strip(),
+            }
+        )
+    return output
+
+
+def _scheduled_douyin_conversation_key(row: Dict[str, Any]) -> str:
+    return str(
+        row.get("conversation_key")
+        or row.get("conversation_id")
+        or row.get("profile_url")
+        or row.get("sec_user_id")
+        or row.get("username")
+        or ""
+    ).strip()
+
+
+def _scheduled_douyin_conversation_signature(row: Dict[str, Any]) -> tuple:
+    return tuple(
+        str(row.get(key) if row.get(key) is not None else "").strip()
+        for key in (
+            "incoming_message",
+            "preview_text",
+            "unread_count",
+            "is_unread",
+            "time_text",
+            "reply_status",
+            "reply_message",
+            "reply_error",
+            "reply_updated_at",
+        )
+    )
+
+
+def _scheduled_douyin_slim_conversation(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: row.get(key)
+        for key in (
+            "conversation_key",
+            "username",
+            "avatar",
+            "incoming_message",
+            "preview_text",
+            "unread_count",
+            "is_unread",
+            "time_text",
+            "profile_url",
+            "account_id",
+            "reply_status",
+            "reply_message",
+            "reply_error",
+            "reply_started_at",
+            "reply_finished_at",
+            "reply_updated_at",
+            "collected_at",
+        )
+        if row.get(key) not in (None, "")
+    }
+
+
+def _scheduled_douyin_changed_conversations(
+    before: List[Dict[str, Any]],
+    after: List[Dict[str, Any]],
+    *,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    before_map = {
+        _scheduled_douyin_conversation_key(row): _scheduled_douyin_conversation_signature(row)
+        for row in before
+        if isinstance(row, dict) and _scheduled_douyin_conversation_key(row)
+    }
+    changed = [
+        row
+        for row in after
+        if isinstance(row, dict)
+        and _scheduled_douyin_conversation_key(row)
+        and before_map.get(_scheduled_douyin_conversation_key(row)) != _scheduled_douyin_conversation_signature(row)
+    ]
+    changed.sort(
+        key=lambda row: str(
+            row.get("reply_updated_at")
+            or row.get("collected_at")
+            or row.get("time_text")
+            or ""
+        ),
+        reverse=True,
+    )
+    return [_scheduled_douyin_slim_conversation(row) for row in changed[: max(1, limit)]]
+
+
+def _scheduled_douyin_completed_result(
+    action: str,
+    start_result: Dict[str, Any],
+    completion: Dict[str, Any],
+    *,
+    users: Optional[List[Dict[str, Any]]] = None,
+    tasks: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    result = dict(start_result)
+    state = completion.get("state") if isinstance(completion.get("state"), dict) else {}
+    completion_status = str(completion.get("status") or "done").strip().lower()
+    stats = {
+        key: _safe_int(state.get(key) if state.get(key) is not None else start_result.get(key))
+        for key in ("total", "processed", "success", "failed", "commented", "skipped_no_posts")
+    }
+    stats = {key: value for key, value in stats.items() if value or key in {"total", "processed", "success", "failed"}}
+    label = _SCHEDULED_DOUYIN_ACTION_LABELS.get(action, action)
+    if completion_status == "timeout":
+        summary = (
+            f"{label}仍在执行，当前已处理 {stats.get('processed', 0)}/{stats.get('total', 0)}，"
+            f"成功 {stats.get('success', 0)}，失败 {stats.get('failed', 0)}；后续结果会继续保存在 Online。"
+        )
+    else:
+        summary = (
+            f"{label}执行完成：共 {stats.get('total', 0)}，已处理 {stats.get('processed', 0)}，"
+            f"成功 {stats.get('success', 0)}，失败 {stats.get('failed', 0)}。"
+        )
+    result.update(
+        {
+            "msg": summary,
+            "summary": summary,
+            "status": completion_status,
+            "stats": stats,
+            "final_state": dict(state),
+        }
+    )
+    if users is not None:
+        result["users"] = users
+    if tasks is not None:
+        result["tasks"] = tasks
+    return result
+
+
 async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
     account_id = _scheduled_douyin_account_id(source)
@@ -3342,12 +3639,44 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         if account_id > 0:
             payload["account_ids"] = [account_id]
         result = await douyin_run_account_nurture_once(payload)
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音养号启动失败"}
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音养号启动失败"}
+        normalized = dict(result)
+        status = normalized.get("status") if isinstance(normalized.get("status"), dict) else {}
+        all_accounts = [dict(row) for row in (status.get("accounts") or []) if isinstance(row, dict)]
+        accounts = [
+            row
+            for row in all_accounts
+            if bool(row.get("is_enabled"))
+            or _safe_int(row.get("completed_sessions")) > 0
+            or bool(str(row.get("last_started_at") or "").strip())
+        ] or all_accounts
+        completed = _safe_int(status.get("total_sessions"))
+        failed = len([row for row in accounts if str(row.get("last_error") or "").strip()])
+        normalized.update(
+            {
+                "summary": str(normalized.get("msg") or "抖音自动养号执行完成。").strip(),
+                "final_state": dict(status),
+                "items": accounts,
+                "stats": {
+                    "total": len(accounts),
+                    "processed": completed + failed,
+                    "success": completed,
+                    "failed": failed,
+                },
+            }
+        )
+        return normalized
 
     if action == "reply_comments":
-        from douyin_api import douyin_start_video_comment  # type: ignore
+        from douyin_api import douyin_start_video_comment, get_commentable_douyin_tasks  # type: ignore
 
         comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
+        selected_task_ids = [
+            _safe_int(row.get("id"))
+            for row in get_commentable_douyin_tasks()
+            if isinstance(row, dict) and _safe_int(row.get("id")) > 0
+        ]
         result = await douyin_start_video_comment(request={
             "comment_mode": comment_mode,
             "comment_text": _scheduled_douyin_fixed_text(source, "comment") if comment_mode == "fixed" else "",
@@ -3356,7 +3685,20 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             "interval_minutes_min": interval_minutes_min,
             "interval_minutes_max": interval_minutes_max,
         })
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音视频评论启动失败"}
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音视频评论启动失败"}
+        if _safe_int(result.get("code")) != 200:
+            return dict(result)
+        completion = await _wait_for_douyin_sales_action_completion(
+            action,
+            timeout_seconds=_scheduled_douyin_action_timeout(result),
+        )
+        return _scheduled_douyin_completed_result(
+            action,
+            result,
+            completion,
+            tasks=_scheduled_douyin_video_comment_tasks(selected_task_ids),
+        )
 
     if action == "follow_comment":
         from douyin_api import douyin_start_follow_comment  # type: ignore
@@ -3374,7 +3716,20 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             "interval_minutes_min": interval_minutes_min,
             "interval_minutes_max": interval_minutes_max,
         })
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音关注评论启动失败"}
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音关注评论启动失败"}
+        if _safe_int(result.get("code")) != 200:
+            return dict(result)
+        completion = await _wait_for_douyin_sales_action_completion(
+            action,
+            timeout_seconds=_scheduled_douyin_action_timeout(result),
+        )
+        return _scheduled_douyin_completed_result(
+            action,
+            result,
+            completion,
+            users=_scheduled_douyin_action_users(action, users),
+        )
 
     if action == "direct_message":
         from douyin_api import douyin_start_interaction  # type: ignore
@@ -3400,7 +3755,20 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "interval_minutes_max": interval_minutes_max,
             }
         )
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音私信启动失败"}
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音私信启动失败"}
+        if _safe_int(result.get("code")) != 200:
+            return dict(result)
+        completion = await _wait_for_douyin_sales_action_completion(
+            action,
+            timeout_seconds=_scheduled_douyin_action_timeout(result),
+        )
+        return _scheduled_douyin_completed_result(
+            action,
+            result,
+            completion,
+            users=_scheduled_douyin_action_users(action, users),
+        )
 
     if action == "mention_comment":
         from douyin_api import douyin_get_self_videos  # type: ignore
@@ -3426,11 +3794,29 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "max_mentions": max_users,
             }
         )
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音@评论启动失败"}
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音@评论启动失败"}
+        if _safe_int(result.get("code")) != 200:
+            return dict(result)
+        completion = await _wait_for_douyin_sales_action_completion(
+            action,
+            timeout_seconds=_scheduled_douyin_action_timeout(result),
+        )
+        return _scheduled_douyin_completed_result(
+            action,
+            result,
+            completion,
+            users=_scheduled_douyin_action_users(action, users),
+        )
 
     if action == "stranger_message":
-        from douyin_api import douyin_start_stranger_message_monitor  # type: ignore
+        from douyin_api import (  # type: ignore
+            collect_douyin_stranger_message_results,
+            douyin_start_stranger_message_monitor,
+            run_douyin_stranger_message_monitor_cycle,
+        )
 
+        before_rows = collect_douyin_stranger_message_results(account_id)
         result = await douyin_start_stranger_message_monitor(
             request={
                 "account_id": account_id,
@@ -3443,7 +3829,63 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "contact_value": str(source.get("contact_value") or "").strip(),
             }
         )
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音陌生人消息接管启动失败"}
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音陌生人消息接管启动失败"}
+        if _safe_int(result.get("code")) != 200:
+            return dict(result)
+        monitor = result.get("monitor") if isinstance(result.get("monitor"), dict) else {}
+        target_account_id = _safe_int(monitor.get("account_id") or account_id)
+        if account_id <= 0:
+            before_rows = [
+                row
+                for row in before_rows
+                if isinstance(row, dict) and _safe_int(row.get("account_id")) == target_account_id
+            ]
+        cycle = await run_douyin_stranger_message_monitor_cycle(
+            target_account_id,
+            trigger_type="workflow",
+        )
+        after_rows = collect_douyin_stranger_message_results(target_account_id)
+        changed_rows = _scheduled_douyin_changed_conversations(before_rows, after_rows, limit=20)
+        recent_rows = [
+            _scheduled_douyin_slim_conversation(row)
+            for row in list(reversed(after_rows))[:10]
+            if isinstance(row, dict)
+        ]
+        conversations = changed_rows or recent_rows
+        cycle_status = str(cycle.get("status") or "").strip().lower() if isinstance(cycle, dict) else "failed"
+        cycle_message = str(cycle.get("message") or "").strip() if isinstance(cycle, dict) else "私信接管执行失败"
+        if cycle_status == "failed":
+            return {
+                "code": 500,
+                "msg": cycle_message or "私信接管执行失败",
+                "account_id": target_account_id,
+                "conversations": conversations,
+            }
+        stats = {
+            "total": _safe_int(cycle.get("total_count") if isinstance(cycle, dict) else len(after_rows)),
+            "processed": _safe_int(cycle.get("total_count") if isinstance(cycle, dict) else 0),
+            "new": _safe_int(cycle.get("new_count") if isinstance(cycle, dict) else 0),
+            "unread": _safe_int(cycle.get("unread_count") if isinstance(cycle, dict) else 0),
+            "updated": _safe_int(cycle.get("updated_count") if isinstance(cycle, dict) else 0),
+            "reply_total": _safe_int(cycle.get("auto_reply_total") if isinstance(cycle, dict) else 0),
+            "reply_success": _safe_int(cycle.get("auto_reply_success") if isinstance(cycle, dict) else 0),
+            "reply_failed": _safe_int(cycle.get("auto_reply_failed") if isinstance(cycle, dict) else 0),
+        }
+        summary = cycle_message or (
+            f"私信接管本轮读取 {stats['total']} 条会话，新增 {stats['new']} 条，自动回复成功 {stats['reply_success']} 条。"
+        )
+        return {
+            **dict(result),
+            "msg": summary,
+            "summary": summary,
+            "status": cycle_status or "completed",
+            "account_id": target_account_id,
+            "stats": stats,
+            "final_state": dict(cycle) if isinstance(cycle, dict) else {},
+            "conversations": conversations,
+            "conversation_scope": "changed" if changed_rows else "recent",
+        }
 
     return {"code": 400, "msg": f"暂不支持的销售抖音动作：{action}"}
 
