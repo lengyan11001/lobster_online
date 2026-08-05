@@ -15,6 +15,7 @@ import json
 import logging
 import mimetypes
 import os
+import random
 import re
 import shutil
 import sys
@@ -2794,8 +2795,7 @@ def _scheduled_douyin_keyword_looks_like_workflow_title(value: Any) -> bool:
 
 
 def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
-    # Sales workflow search must use the enabled IP template keywords. Node
-    # titles such as "抖音自己评论区接管" are task labels, not search queries.
+    # Node titles such as "抖音自己评论区接管" are task labels, not search queries.
     for keyword in _scheduled_douyin_keyword_values(source.get("keywords")):
         if not _scheduled_douyin_keyword_looks_like_workflow_title(keyword):
             return keyword
@@ -2807,6 +2807,164 @@ def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
     if values and not _scheduled_douyin_keyword_looks_like_workflow_title(values[0]):
         return values[0]
     return ""
+
+
+def _scheduled_douyin_sales_action_from_context(context: Any) -> str:
+    source = context if isinstance(context, dict) else {}
+    text = str(source.get("ability_label") or source.get("workflow_node_label") or "").strip()
+    if "养号" in text:
+        return "account_nurture"
+    if "发布后采集" in text or "关键词抓取" in text:
+        return "search_collect"
+    if "回复" in text and "评论" in text:
+        return "reply_comments"
+    if "@精准" in text or "评论并@" in text or "自己评论区接管" in text:
+        return "mention_comment"
+    if "关注" in text and "评论" in text:
+        return "follow_comment"
+    if "主动私信" in text or "私信10" in text:
+        return "direct_message"
+    if "私信接管" in text or "私信引流" in text:
+        return "stranger_message"
+    return ""
+
+
+def _scheduled_douyin_latest_config(rows: Any, *, row_type: str = "") -> Dict[str, Any]:
+    candidates = [
+        dict(row)
+        for row in (rows if isinstance(rows, list) else [])
+        if isinstance(row, dict) and (not row_type or str(row.get("type") or "").strip() == row_type)
+    ]
+    if not candidates:
+        return {}
+    candidates.sort(
+        key=lambda row: str(
+            row.get("updated_at")
+            or row.get("saved_at")
+            or row.get("created_at")
+            or row.get("id")
+            or ""
+        )
+    )
+    return candidates[-1]
+
+
+def _scheduled_douyin_online_config_params(
+    action: str,
+    *,
+    config: Optional[Dict[str, Any]] = None,
+    plans: Any = None,
+    search_sessions: Any = None,
+    stranger_monitors: Any = None,
+) -> Dict[str, Any]:
+    """Build task parameters exclusively from Online's persisted Douyin settings."""
+    action_key = str(action or "").strip().lower()
+    local_config = config if isinstance(config, dict) else {}
+    params: Dict[str, Any] = {}
+    default_account_id = _safe_int(local_config.get("douyin_default_account_id"))
+    if default_account_id > 0:
+        params["account_id"] = default_account_id
+
+    if action_key == "search_collect":
+        plan = _scheduled_douyin_latest_config(plans, row_type="collect_precise")
+        session = _scheduled_douyin_latest_config(search_sessions)
+        keyword = str(plan.get("keyword") or session.get("keyword") or "").strip()
+        if keyword:
+            params["keyword"] = keyword
+        params["max_results"] = _safe_int(plan.get("max_results") or 50) or 50
+        params["max_videos_per_run"] = _safe_int(plan.get("max_videos_per_run") or 1) or 1
+        params["comment_scroll_rounds"] = _safe_int(
+            plan.get("comment_scroll_rounds") or local_config.get("comment_scroll_rounds") or 300
+        ) or 300
+        params["comment_max_comments"] = _safe_int(
+            plan.get("comment_max_comments") or local_config.get("comment_max_comments") or 500
+        ) or 500
+        params["mode"] = str(plan.get("mode") or "script").strip() or "script"
+        return params
+
+    if action_key in {"reply_comments", "mention_comment", "follow_comment"}:
+        plan = _scheduled_douyin_latest_config(plans, row_type="follow_comment")
+        if plan:
+            params.update(
+                {
+                    "max_users": _safe_int(plan.get("max_users_per_run") or 10) or 10,
+                    "comment_mode": str(plan.get("comment_mode") or "fixed").strip() or "fixed",
+                    "comment_text": str(plan.get("comment_text") or "").strip(),
+                    "comment_prompt": str(plan.get("comment_prompt") or "").strip(),
+                    "comment_seed_text": str(plan.get("comment_seed_text") or "").strip(),
+                    "interval_minutes_min": plan.get("follow_interval_minutes_min", 4),
+                    "interval_minutes_max": plan.get("follow_interval_minutes_max", 6),
+                }
+            )
+        return params
+
+    if action_key == "direct_message":
+        plan = _scheduled_douyin_latest_config(plans, row_type="interaction")
+        if plan:
+            message = str(plan.get("message") or "").strip()
+            params.update(
+                {
+                    "max_users": _safe_int(plan.get("max_users_per_run") or 10) or 10,
+                    "message_mode": str(plan.get("message_mode") or "fixed").strip() or "fixed",
+                    "message": message,
+                    "messages": [message] if message else [],
+                    "message_prompt": str(plan.get("message_prompt") or "").strip(),
+                    "message_seed_text": str(plan.get("message_seed_text") or "").strip(),
+                    "interval_minutes_min": plan.get("interaction_interval_minutes_min", 4),
+                    "interval_minutes_max": plan.get("interaction_interval_minutes_max", 6),
+                }
+            )
+        return params
+
+    if action_key == "stranger_message":
+        monitors = [dict(row) for row in (stranger_monitors if isinstance(stranger_monitors, list) else []) if isinstance(row, dict)]
+        monitor = next(
+            (row for row in monitors if default_account_id > 0 and _safe_int(row.get("account_id")) == default_account_id),
+            next((row for row in monitors if bool(row.get("enabled"))), monitors[0] if monitors else {}),
+        )
+        if monitor:
+            params.update(
+                {
+                    "account_id": _safe_int(monitor.get("account_id") or default_account_id),
+                    "interval_minutes": _safe_int(monitor.get("interval_minutes") or 30) or 30,
+                    "max_users": _safe_int(monitor.get("max_conversations") or 100) or 100,
+                    "auto_reply_enabled": bool(monitor.get("auto_reply_enabled", True)),
+                    "reply_mode": str(monitor.get("reply_mode") or "fixed").strip() or "fixed",
+                    "message": str(monitor.get("reply_message") or "").strip(),
+                    "reply_prompt": str(monitor.get("reply_prompt") or "").strip(),
+                    "contact_value": str(monitor.get("contact_value") or "").strip(),
+                }
+            )
+        return params
+
+    if action_key == "account_nurture":
+        duration_min = max(5, _safe_int(local_config.get("douyin_nurture_session_min_minutes") or 20) or 20)
+        duration_max = max(duration_min, _safe_int(local_config.get("douyin_nurture_session_max_minutes") or 40) or 40)
+        params["nurture_duration_min"] = duration_min
+        params["nurture_duration_max"] = duration_max
+    return params
+
+
+def _load_scheduled_douyin_online_config_params(action: str) -> Dict[str, Any]:
+    try:
+        _install_douyin_origin_import_path()
+        from douyin_api import (  # type: ignore
+            douyin_schedule_plans,
+            list_douyin_stranger_message_monitor_states,
+            load_douyin_search_sessions_state,
+            load_global_config,
+        )
+
+        return _scheduled_douyin_online_config_params(
+            action,
+            config=load_global_config(),
+            plans=douyin_schedule_plans,
+            search_sessions=load_douyin_search_sessions_state(),
+            stranger_monitors=list_douyin_stranger_message_monitor_states(),
+        )
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] load Online Douyin config failed action=%s error=%s", action, exc)
+        return {}
 
 
 def _scheduled_douyin_skip_payload(
@@ -2959,7 +3117,7 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
     source = params if isinstance(params, dict) else {}
     keyword = _scheduled_douyin_search_keyword(source)
     if not keyword:
-        return {"code": 400, "msg": "缺少采集关键词：请在当前启用的 IP 人设模板里选择关键词，不要使用工作流节点标题。"}
+        return {"code": 400, "msg": "缺少采集关键词：请先在 Online 的抖音获客排期或搜索工作台配置关键词。"}
 
     max_results = max(10, min(_safe_int(source.get("max_results") or 50) or 50, 100))
     max_videos = max(1, min(_safe_int(source.get("max_videos_per_run") or source.get("max_videos") or 1) or 1, 50))
@@ -3169,7 +3327,7 @@ def _scheduled_douyin_interaction_users(limit: int = 10) -> List[Dict[str, Any]]
 async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
     account_id = _scheduled_douyin_account_id(source)
-    max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 30))
+    max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 200))
     interval_minutes_min = max(1, min(_safe_int(source.get("interval_minutes_min") or 4) or 4, 60))
     interval_minutes_max = max(interval_minutes_min, min(_safe_int(source.get("interval_minutes_max") or 6) or 6, 120))
 
@@ -3177,7 +3335,10 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "account_nurture":
         from douyin_api import douyin_run_account_nurture_once  # type: ignore
 
-        payload = {"duration_minutes": _safe_int(source.get("sales_schedule_duration_minutes") or 30) or 30}
+        duration_min = max(5, _safe_int(source.get("nurture_duration_min") or 20) or 20)
+        duration_max = max(duration_min, _safe_int(source.get("nurture_duration_max") or 40) or 40)
+        duration_minutes = _safe_int(source.get("duration_minutes") or source.get("sales_schedule_duration_minutes"))
+        payload = {"duration_minutes": duration_minutes or random.randint(duration_min, duration_max)}
         if account_id > 0:
             payload["account_ids"] = [account_id]
         result = await douyin_run_account_nurture_once(payload)
@@ -3186,14 +3347,15 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "reply_comments":
         from douyin_api import douyin_start_video_comment  # type: ignore
 
-        result = await douyin_start_video_comment(
-            request={
-                "comment_mode": "fixed",
-                "comment_text": _scheduled_douyin_fixed_text(source, "comment"),
-                "interval_minutes_min": interval_minutes_min,
-                "interval_minutes_max": interval_minutes_max,
-            }
-        )
+        comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
+        result = await douyin_start_video_comment(request={
+            "comment_mode": comment_mode,
+            "comment_text": _scheduled_douyin_fixed_text(source, "comment") if comment_mode == "fixed" else "",
+            "comment_prompt": str(source.get("comment_prompt") or "").strip(),
+            "comment_seed_text": str(source.get("comment_seed_text") or "").strip(),
+            "interval_minutes_min": interval_minutes_min,
+            "interval_minutes_max": interval_minutes_max,
+        })
         return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音视频评论启动失败"}
 
     if action == "follow_comment":
@@ -3202,15 +3364,16 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         users = _scheduled_douyin_interaction_users(max_users)
         if not users:
             return {"code": 400, "msg": "当前没有可执行的精准客户，请先完成关键词采集。"}
-        result = await douyin_start_follow_comment(
-            request={
-                "users": users,
-                "comment_mode": "fixed",
-                "comment_text": _scheduled_douyin_fixed_text(source, "comment"),
-                "interval_minutes_min": interval_minutes_min,
-                "interval_minutes_max": interval_minutes_max,
-            }
-        )
+        comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
+        result = await douyin_start_follow_comment(request={
+            "users": users,
+            "comment_mode": comment_mode,
+            "comment_text": _scheduled_douyin_fixed_text(source, "comment") if comment_mode == "fixed" else "",
+            "comment_prompt": str(source.get("comment_prompt") or "").strip(),
+            "comment_seed_text": str(source.get("comment_seed_text") or "").strip(),
+            "interval_minutes_min": interval_minutes_min,
+            "interval_minutes_max": interval_minutes_max,
+        })
         return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音关注评论启动失败"}
 
     if action == "direct_message":
@@ -3219,13 +3382,20 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         users = _scheduled_douyin_interaction_users(max_users)
         if not users:
             return {"code": 400, "msg": "当前没有可私信的精准客户，请先完成关键词采集。"}
-        message = _scheduled_douyin_fixed_text(source, "message")
+        message_mode = str(source.get("message_mode") or "fixed").strip() or "fixed"
+        raw_messages = source.get("messages") if isinstance(source.get("messages"), list) else []
+        messages = [str(value or "").strip() for value in raw_messages if str(value or "").strip()]
+        message = messages[0] if messages else (_scheduled_douyin_fixed_text(source, "message") if message_mode == "fixed" else "")
+        if message and not messages:
+            messages = [message]
         result = await douyin_start_interaction(
             request={
                 "users": users,
-                "message_mode": "fixed",
-                "messages": [message],
+                "message_mode": message_mode,
+                "messages": messages,
                 "message": message,
+                "message_prompt": str(source.get("message_prompt") or "").strip(),
+                "message_seed_text": str(source.get("message_seed_text") or "").strip(),
                 "interval_minutes_min": interval_minutes_min,
                 "interval_minutes_max": interval_minutes_max,
             }
@@ -3264,9 +3434,13 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         result = await douyin_start_stranger_message_monitor(
             request={
                 "account_id": account_id,
-                "interval_minutes": 30,
+                "interval_minutes": _safe_int(source.get("interval_minutes") or 30) or 30,
                 "max_conversations": max_users,
-                "auto_reply_enabled": False,
+                "auto_reply_enabled": bool(source.get("auto_reply_enabled", True)),
+                "reply_mode": str(source.get("reply_mode") or "fixed").strip() or "fixed",
+                "message": str(source.get("message") or "").strip(),
+                "reply_prompt": str(source.get("reply_prompt") or "").strip(),
+                "contact_value": str(source.get("contact_value") or "").strip(),
             }
         )
         return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音陌生人消息接管启动失败"}
@@ -3288,9 +3462,19 @@ async def _run_scheduled_douyin_leads(
     payload = _scheduled_payload(item)
     action = str(payload.get("action") or "").strip().lower()
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    h5_context = payload.get("h5_context") if isinstance(payload.get("h5_context"), dict) else {}
+    is_sales_workflow = (
+        str(h5_context.get("department_id") or "").strip().lower() == "sales"
+        or str(h5_context.get("workflow_template_key") or "").strip().lower() == "system_sales"
+    )
     sales_action = str((params if isinstance(params, dict) else {}).get("sales_action") or "").strip().lower()
     if action == "search_collect" and sales_action and sales_action != "search_collect":
         action = sales_action
+    if is_sales_workflow:
+        action = _scheduled_douyin_sales_action_from_context(h5_context) or action
+        params = _load_scheduled_douyin_online_config_params(action)
+    elif not params:
+        params = _load_scheduled_douyin_online_config_params(action)
     if not run_id or not action:
         return
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行抖音获客任务：{action}"})
