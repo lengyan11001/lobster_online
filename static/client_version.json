@@ -1,7 +1,7 @@
 {
-  "version": "1.0.142",
-  "build": 186,
-  "applied_at": "2026-08-06T17:49:35+08:00",
-  "note": "limit WeChat Channels short titles to 16 characters",
-  "bundle_sha256": "2bf882ae5163b182f5dbe77ba86b07d28b86cddcb4df28946f17f3917044b3ac"
+  "version": "1.0.143",
+  "build": 187,
+  "applied_at": "2026-08-06T21:28:50+08:00",
+  "note": "update Online workbench, OEM home theme and workflow fixes",
+  "bundle_sha256": "e6df8601e6e82434e27bff885e1c6fa30c010b622ae97ed14ecf6909c68e6205"
 }
