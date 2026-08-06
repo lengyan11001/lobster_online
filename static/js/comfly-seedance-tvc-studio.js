@@ -3407,4 +3407,31 @@
     renderWorkspace();
     ensureExampleCatalog();
   };
+
+  window.prefillSeedanceTvcContent = function(payload) {
+    payload = payload && typeof payload === 'object' ? payload : {};
+    var prompt = String(payload.prompt || '').trim();
+    if ($('seedanceTaskPromptInput')) {
+      $('seedanceTaskPromptInput').value = prompt;
+      $('seedanceTaskPromptInput').dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    var imageUrl = String(payload.image_url || '').trim();
+    if (imageUrl) {
+      state.images = appendMediaItems(state.images, [{
+        name: String(payload.filename || '内容图片'),
+        size: 0,
+        type: 'image',
+        url: imageUrl,
+        source_url: imageUrl,
+        asset_id: String(payload.asset_id || ''),
+        purpose: 'storyboard'
+      }]);
+      setMode('image_prompt');
+    } else {
+      setMode('prompt_only');
+    }
+    state.activeBoardIndex = 0;
+    renderWorkspace();
+    showMessage(imageUrl ? '已带入图片和提示词，可继续设置视频参数。' : '已带入提示词，可继续设置视频参数。');
+  };
 })();

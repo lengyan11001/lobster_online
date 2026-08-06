@@ -2046,5 +2046,27 @@
     renderWorkspace();
   }
 
+  window.prefillImageComposerContent = function(payload) {
+    payload = payload && typeof payload === 'object' ? payload : {};
+    var prompt = String(payload.prompt || '').trim();
+    if ($('imglabPromptInput')) {
+      $('imglabPromptInput').value = prompt;
+      $('imglabPromptInput').dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    var imageUrl = String(payload.image_url || '').trim();
+    if (imageUrl) {
+      state.references = appendReferenceItems(state.references, [{
+        name: String(payload.filename || '内容图片'),
+        size: 0,
+        purpose: 'local_edit',
+        objectUrl: imageUrl,
+        source_url: imageUrl,
+        asset_id: String(payload.asset_id || '')
+      }]);
+    }
+    renderReferenceList();
+    showMessage(imageUrl ? '已带入原图和提示词，可直接调整后生成。' : '已带入内容提示词。', false);
+  };
+
   window.initImageComposerStudioView = init;
 })();

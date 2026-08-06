@@ -1,6 +1,13 @@
 (function registerOnlineViews() {
   if (typeof window.registerLobsterView !== 'function') return;
 
+  window.registerLobsterView('audio-transcription', {
+    html: '/static/views/audio-transcription.html?v=20260806-audio-transcription-v1',
+    css: '/static/css/audio-transcription.css?v=20260806-audio-transcription-v1',
+    scripts: '/static/js/audio-transcription.js?v=20260806-audio-transcription-v1',
+    init: 'initAudioTranscriptionView'
+  });
+
   window.registerLobsterView('logs', {
     html: '/static/views/logs.html',
     scripts: '/static/js/views/logs.js?v=20260528-view-split'
@@ -64,8 +71,8 @@
   });
 
   window.registerLobsterView('ip-content-studio', {
-    html: '/static/views/ip-content-studio.html?v=20260720-current-profile-only',
-    scripts: '/static/js/ip-content-studio.js?v=20260720-current-profile-only',
+    html: '/static/views/ip-content-studio.html?v=20260806-ip-actions-batch-results',
+    scripts: '/static/js/ip-content-studio.js?v=20260806-moment-image-actions-restored',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
@@ -121,8 +128,8 @@
   });
 
   window.registerLobsterView('assets', {
-    html: '/static/views/assets.html?v=20260611-asset-cache-incremental',
-    scripts: '/static/js/publish.js?v=20260611-asset-preview-cache-incremental'
+    html: '/static/views/assets.html?v=20260806-content-record-categories',
+    scripts: '/static/js/publish.js?v=20260806-content-record-actions-v2'
   });
 
   window.registerLobsterView('scheduled-tasks', {

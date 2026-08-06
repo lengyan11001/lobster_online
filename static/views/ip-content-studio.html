@@ -683,6 +683,83 @@
         gap: 0.4rem;
         flex-wrap: wrap;
       }
+      .ip-moment-batch-previews {
+        display: grid;
+        gap: 0.35rem;
+      }
+      .ip-moment-batch-preview {
+        display: grid;
+        grid-template-columns: minmax(100px, 0.32fr) minmax(0, 1fr);
+        gap: 0.55rem;
+        align-items: baseline;
+        padding: 0.42rem 0.5rem;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.72);
+        min-width: 0;
+      }
+      .ip-moment-batch-preview strong,
+      .ip-moment-batch-preview span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.78rem;
+      }
+      .ip-moment-batch-preview span {
+        color: #475569;
+      }
+      .ip-result-modal[hidden] {
+        display: none;
+      }
+      .ip-result-modal {
+        position: fixed;
+        z-index: 1600;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background: rgba(15, 23, 42, 0.46);
+      }
+      .ip-result-dialog {
+        width: min(860px, calc(100vw - 2rem));
+        max-height: min(780px, calc(100vh - 2rem));
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        overflow: hidden;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+      }
+      .ip-result-dialog-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.8rem;
+        padding: 0.82rem 0.9rem;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+      }
+      .ip-result-dialog-head strong,
+      .ip-result-dialog-head small {
+        display: block;
+      }
+      .ip-result-dialog-head small {
+        margin-top: 0.18rem;
+        color: var(--ip-muted);
+      }
+      .ip-result-dialog-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex: 0 0 auto;
+      }
+      .ip-result-dialog-body {
+        min-height: 0;
+        overflow: auto;
+        padding: 0.85rem;
+        background: #f8fafc;
+      }
       .ip-draft-card textarea {
         width: 100%;
         min-height: 42px;
@@ -948,5 +1025,23 @@
         </section>
       </div>
     </section>
+
+    <div id="ipMomentBatchResultModal" class="ip-result-modal" hidden>
+      <section class="ip-result-dialog" role="dialog" aria-modal="true" aria-labelledby="ipMomentBatchResultTitle">
+        <header class="ip-result-dialog-head">
+          <div>
+            <strong id="ipMomentBatchResultTitle">朋友圈文案批次结果</strong>
+            <small id="ipMomentBatchResultMeta"></small>
+          </div>
+          <div class="ip-result-dialog-actions">
+            <button type="button" id="ipMomentBatchGenerateImagesBtn" class="btn btn-primary btn-sm">生成选中图片</button>
+            <button type="button" id="ipMomentBatchResultCloseBtn" class="btn btn-ghost btn-sm">关闭</button>
+          </div>
+        </header>
+        <div class="ip-result-dialog-body">
+          <div id="ipMomentBatchResultList" class="ip-draft-grid is-detail"></div>
+        </div>
+      </section>
+    </div>
   </div>
 </div>

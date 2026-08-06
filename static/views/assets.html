@@ -155,6 +155,54 @@
     padding-left: 0.35rem;
     padding-right: 0.35rem;
   }
+  #content-assets .asset-content-action-menu {
+    position: relative;
+    min-width: 0;
+  }
+  #content-assets .asset-content-action-menu > summary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 32px;
+    padding: 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    color: var(--text);
+    font-size: 0.78rem;
+    cursor: pointer;
+    list-style: none;
+  }
+  #content-assets .asset-content-action-menu > summary::-webkit-details-marker {
+    display: none;
+  }
+  #content-assets .asset-content-action-list {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 5px);
+    z-index: 20;
+    display: grid;
+    width: 150px;
+    padding: 0.3rem;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: #fff;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
+  }
+  #content-assets .asset-content-action-list button {
+    width: 100%;
+    padding: 0.48rem 0.55rem;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #1e293b;
+    text-align: left;
+    cursor: pointer;
+  }
+  #content-assets .asset-content-action-list button:hover {
+    background: #f1f5f9;
+  }
   #content-assets .asset-bulk-bar {
     display: inline-flex;
     align-items: center;
@@ -216,7 +264,7 @@
               <div class="asset-view-heading">
                 <div>
                   <h2 id="assetViewTitle">内容记录</h2>
-                  <p id="assetViewDescription">查看 AI 生成的图片、视频、音频和文档。</p>
+                  <p id="assetViewDescription">查看 AI 生成的图片、视频、文案、公众号文章和 PPT。</p>
                 </div>
               </div>
               <div class="asset-origin-tabs" role="tablist" aria-label="素材来源" hidden>
@@ -225,10 +273,11 @@
               </div>
               <div class="asset-controls">
                 <select id="assetTypeFilter" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
-                  <option value="">全部类型</option>
                   <option value="image">图片</option>
                   <option value="video">视频</option>
-                  <option value="document">文档</option>
+                  <option value="article">文案</option>
+                  <option value="wechat_article">公众号文章</option>
+                  <option value="ppt">PPT</option>
                 </select>
                 <select id="assetCreativeGroupFilter" class="asset-upload-control" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                   <option value="">全部备选组</option>

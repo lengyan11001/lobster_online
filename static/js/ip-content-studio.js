@@ -1888,11 +1888,43 @@
     box.querySelectorAll('[data-moment-select]').forEach(function(input) {
       input.addEventListener('change', function() {
         var id = input.getAttribute('data-moment-select');
-        state.latestDrafts.forEach(function(rec) {
+        records.forEach(function(rec) {
           if (String(rec.record_id) === String(id)) rec._selected = input.checked;
         });
       });
     });
+    box.querySelectorAll('[data-record-select]').forEach(function(input) {
+      input.addEventListener('change', function() {
+        var id = input.getAttribute('data-record-select') || '';
+        if (id) state.selectedRecordIds[id] = !!input.checked;
+        updateRecordBulkToolbar();
+      });
+    });
+    box.querySelectorAll('[data-record-action]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-record-id') || '';
+        var action = btn.getAttribute('data-record-action') || '';
+        var rec = records.find(function(item) { return String(item.record_id || '') === String(id); });
+        var details = btn.closest('details');
+        if (details) details.removeAttribute('open');
+        if (action === 'delete') {
+          deleteDraftRecord(id);
+          return;
+        }
+        var ta = box.querySelector('[data-record-copy="' + cssEscape(id) + '"]');
+        if (rec && rec.task === 'moments_candidate' && action === 'image') {
+          if (ta) {
+            rec.body = ta.value;
+            rec.content = ta.value;
+          }
+          rec._selected = true;
+          confirmMomentsImages([rec], btn, !!btn.closest('#ipMomentBatchResultModal'));
+          return;
+        }
+        openDraftContentAction(rec, action, ta ? ta.value : '');
+      });
+    });
+    updateRecordBulkToolbar();
   }
 
   function renderDraftRecords() {
@@ -1972,14 +2004,40 @@
     return '';
   }
 
-  function selectMomentBatchGroup(groupId) {
-    groupId = String(groupId || '');
-    if (!groupId) return;
-    state.recordFilter = 'moments_candidate';
-    state.activeGroupId = groupId;
-    setRecordFilter('moments_candidate');
-    switchTab('records');
-    renderDraftRecords();
+  function momentBatchRecords(job) {
+    if (!job) return [];
+    if (Array.isArray(job.records) && job.records.length) return job.records;
+    var group = (state.draftGroups || []).find(function(item) {
+      return String(item.group_id || '') === String(job.group_id || '');
+    });
+    return group && Array.isArray(group.records) ? group.records : [];
+  }
+
+  function closeMomentBatchResult() {
+    var modal = $('ipMomentBatchResultModal');
+    if (modal) modal.hidden = true;
+  }
+
+  function openMomentBatchResult(batchId) {
+    var job = findMomentBatchJob(batchId);
+    if (!job) return;
+    var records = momentBatchRecords(job);
+    if (!records.length) {
+      setMsg('这一批暂时没有可展示的文案，请刷新后重试。', true);
+      return;
+    }
+    var title = $('ipMomentBatchResultTitle');
+    var meta = $('ipMomentBatchResultMeta');
+    if (title) title.textContent = '朋友圈文案 · ' + (job.label || '批次结果');
+    if (meta) meta.textContent = records.length + ' 条 · ' + fmtTime(job.updated_at || job.created_at);
+    records.forEach(function(rec) {
+      if (rec._selected === undefined) rec._selected = false;
+    });
+    renderDraftCards('ipMomentBatchResultList', records, { selectable: true });
+    var generateBtn = $('ipMomentBatchGenerateImagesBtn');
+    if (generateBtn) generateBtn.dataset.batchId = String(batchId || '');
+    var modal = $('ipMomentBatchResultModal');
+    if (modal) modal.hidden = false;
   }
 
   function renderMomentBatchQueue() {
@@ -1995,12 +2053,18 @@
     box.style.display = 'grid';
     box.innerHTML = jobs.map(function(job) {
       var status = String(job.status || 'queued');
-      var doneCount = status === 'done' ? (job.records.length || job.count || 0) : 0;
+      var records = momentBatchRecords(job);
+      var doneCount = status === 'done' ? (records.length || job.count || 0) : 0;
+      var previews = records.slice(0, 2).map(function(rec, idx) {
+        var title = String(rec.title || ('朋友圈文案 ' + (idx + 1))).trim();
+        var body = String(rec.body || rec.content || '').replace(/\s+/g, ' ').trim();
+        return '<div class="ip-moment-batch-preview"><strong>' + esc(title) + '</strong><span>' + esc(body.slice(0, 100)) + (body.length > 100 ? '...' : '') + '</span></div>';
+      }).join('');
       var action = '';
       if (status === 'failed') {
         action = '<button type="button" class="btn btn-primary btn-sm" data-retry-moment-batch="' + escAttr(job.batch_id) + '">重试该批</button>';
       } else if (status === 'done') {
-        action = '<button type="button" class="btn btn-ghost btn-sm" data-show-moment-batch="' + escAttr(job.group_id) + '">查看结果</button>';
+        action = '<button type="button" class="btn btn-ghost btn-sm" data-show-moment-batch="' + escAttr(job.batch_id) + '">查看完整结果</button>';
       } else if (status === 'running') {
         action = '<button type="button" class="btn btn-ghost btn-sm" disabled>执行中</button>';
       } else {
@@ -2011,6 +2075,7 @@
         '<div class="ip-badge-row"><span class="ip-badge">朋友圈文案</span><span class="ip-badge">' + esc(job.label) + '</span><span class="ip-badge is-image">' + esc(job.count) + '条</span><span class="ip-badge' + (status === 'failed' ? ' is-used' : (status === 'done' ? ' is-new' : '')) + '">' + esc(momentBatchStatusLabel(status)) + '</span></div>' +
         '<strong>' + esc(job.label) + ' / 共 ' + esc(job.batch_count) + ' 批</strong>' +
         (status === 'done' ? '<small>已生成 ' + esc(doneCount || job.count) + ' 条，可查看这一批结果。</small>' : '') +
+        (previews ? '<div class="ip-moment-batch-previews">' + previews + '</div>' : '') +
         (status === 'failed' ? '<small class="ip-moment-batch-error">' + esc(job.error || '这一批生成失败，可以单独重试。') + '</small>' : '') +
         (status === 'running' ? '<small>当前批次正在云端生成，其它批次互不影响。</small>' : '') +
         '<div class="ip-moment-batch-actions">' + action + '</div>' +
@@ -2023,7 +2088,7 @@
     });
     box.querySelectorAll('[data-show-moment-batch]').forEach(function(btn) {
       btn.addEventListener('click', function() {
-        selectMomentBatchGroup(btn.getAttribute('data-show-moment-batch'));
+        openMomentBatchResult(btn.getAttribute('data-show-moment-batch'));
       });
     });
     box.querySelectorAll('[data-delete-moment-batch]').forEach(function(btn) {
@@ -2199,29 +2264,6 @@
         };
       });
     });
-    box.querySelectorAll('[data-record-select]').forEach(function(input) {
-      input.addEventListener('change', function() {
-        var id = input.getAttribute('data-record-select') || '';
-        if (id) state.selectedRecordIds[id] = !!input.checked;
-        updateRecordBulkToolbar();
-      });
-    });
-    box.querySelectorAll('[data-record-action]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var id = btn.getAttribute('data-record-id') || '';
-        var action = btn.getAttribute('data-record-action') || '';
-        var rec = records.find(function(item) { return String(item.record_id || '') === String(id); });
-        var details = btn.closest('details');
-        if (details) details.removeAttribute('open');
-        if (action === 'delete') {
-          deleteDraftRecord(id);
-          return;
-        }
-        var ta = box.querySelector('[data-record-copy="' + cssEscape(id) + '"]');
-        openDraftContentAction(rec, action, ta ? ta.value : '');
-      });
-    });
-    updateRecordBulkToolbar();
   }
 
   function clonePayload(payload) {
@@ -2470,17 +2512,19 @@
       .finally(function() { setBusy(btn, false); });
   }
 
-  function confirmMomentsImages() {
-    var selected = state.latestDrafts.filter(function(rec) { return rec.task === 'moments_candidate' && !!rec._selected && !rec.image_url; });
+  function confirmMomentsImages(records, triggerButton, closeResultModal) {
+    var sourceRecords = Array.isArray(records) ? records : state.latestDrafts;
+    var selected = sourceRecords.filter(function(rec) { return rec.task === 'moments_candidate' && !!rec._selected && !rec.image_url; });
     if (!selected.length) {
-      setMsg('请先在右侧明细勾选要出图的朋友圈文案。', true);
+      setMsg('请先勾选要出图的朋友圈文案。', true);
       return;
     }
     if (selected.length > 5) {
       setMsg('一次最多选择 5 条出图。', true);
       return;
     }
-    var btn = $('ipGenerateSelectedImagesBtn');
+    var btn = triggerButton || $('ipGenerateSelectedImagesBtn');
+    if (closeResultModal) closeMomentBatchResult();
     setBusy(btn, true, '出图中...');
     setMsg('正在为选中的朋友圈文案生成图片...');
     var batchId = 'moment_img_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -2636,6 +2680,11 @@
       runMomentsGenerate($('ipGenerateMomentsBtn'), 'records');
     });
     if ($('ipGenerateSelectedImagesBtn')) $('ipGenerateSelectedImagesBtn').addEventListener('click', confirmMomentsImages);
+    if ($('ipMomentBatchGenerateImagesBtn')) $('ipMomentBatchGenerateImagesBtn').addEventListener('click', function() {
+      var batchId = $('ipMomentBatchGenerateImagesBtn').dataset.batchId || '';
+      var job = findMomentBatchJob(batchId);
+      confirmMomentsImages(momentBatchRecords(job), $('ipMomentBatchGenerateImagesBtn'), true);
+    });
     if ($('ipRecordSelectAll')) $('ipRecordSelectAll').addEventListener('change', function() {
       var checked = !!$('ipRecordSelectAll').checked;
       (state.latestDrafts || []).forEach(function(rec) {
@@ -2647,6 +2696,10 @@
       updateRecordBulkToolbar();
     });
     if ($('ipCopySelectedRecordsBtn')) $('ipCopySelectedRecordsBtn').addEventListener('click', copySelectedDraftRecords);
+    if ($('ipMomentBatchResultCloseBtn')) $('ipMomentBatchResultCloseBtn').addEventListener('click', closeMomentBatchResult);
+    if ($('ipMomentBatchResultModal')) $('ipMomentBatchResultModal').addEventListener('click', function(ev) {
+      if (ev.target === $('ipMomentBatchResultModal')) closeMomentBatchResult();
+    });
   }
 
   window.initIpContentStudioView = function() {

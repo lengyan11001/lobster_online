@@ -1113,6 +1113,7 @@ document.addEventListener('click', function(event) {
 
 var LOBSTER_LAST_VIEW_KEY = 'lobster_online_last_view';
 var LOBSTER_MAIN_VIEWS = {
+  'audio-transcription': true,
   chat: true,
   'skill-store': true,
   'douyin-leads': true,
@@ -1183,6 +1184,7 @@ var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
   bihuo_25_video_skill: true
 };
 var LOBSTER_VIEW_FEATURE_GATES = {
+  'audio-transcription': 'personal_settings_entry',
   chat: 'home_ai_chat_entry',
   'skill-store': 'skill_store_entry',
   'douyin-leads': 'douyin_leads_access',

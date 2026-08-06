@@ -1,0 +1,87 @@
+<div id="content-audio-transcription" class="content-block audio-transcription-view">
+  <section class="at-page" data-at-screen="main">
+    <header class="at-heading">
+      <div>
+        <span class="at-eyebrow">工作台</span>
+        <h2>音频转写</h2>
+      </div>
+      <span class="at-message" id="atMessage" role="status"></span>
+    </header>
+
+    <nav class="at-tabs" id="atTabs" role="tablist" aria-label="音频来源">
+      <button type="button" class="is-active" data-at-tab="records" role="tab">转写记录</button>
+      <button type="button" data-at-tab="local" role="tab">本地音频</button>
+      <button type="button" data-at-tab="mobile" role="tab">手机同步</button>
+    </nav>
+
+    <section class="at-panel" data-at-panel="records">
+      <div class="at-toolbar">
+        <div><strong>全部转写记录</strong><small>本地音频、个人资料与手机同步记录</small></div>
+        <button type="button" class="at-button at-button-quiet" data-at-refresh>刷新</button>
+      </div>
+      <div class="at-list" id="atRecordList"></div>
+      <div class="at-pager" id="atRecordPager"></div>
+    </section>
+
+    <section class="at-panel" data-at-panel="local" hidden>
+      <label class="at-upload" for="atLocalFiles">
+        <span class="at-upload-mark" aria-hidden="true">+</span>
+        <span><strong>选择音频文件</strong><small>MP3、WAV、M4A、AAC、OGG、FLAC、AMR、WMA、OPUS、WebM</small></span>
+        <input id="atLocalFiles" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac,.amr,.wma,.opus,.webm" multiple hidden>
+      </label>
+      <div class="at-list" id="atLocalList"></div>
+    </section>
+
+    <section class="at-panel" data-at-panel="mobile" hidden>
+      <div class="at-toolbar">
+        <div><strong>手机同步文件</strong><small>显示已从 H5 或手机端同步到账号的录音</small></div>
+        <button type="button" class="at-button at-button-quiet" data-at-refresh>刷新</button>
+      </div>
+      <div class="at-list" id="atMobileList"></div>
+      <div class="at-pager" id="atMobilePager"></div>
+    </section>
+  </section>
+
+  <section class="at-page" data-at-screen="detail" hidden>
+    <header class="at-detail-heading">
+      <button type="button" class="at-back" id="atDetailBack" aria-label="返回">‹</button>
+      <div>
+        <span class="at-eyebrow">音频转写</span>
+        <h2 id="atDetailTitle">转写详情</h2>
+        <div class="at-detail-meta" id="atDetailMeta"></div>
+      </div>
+      <span class="at-status" id="atDetailStatus">处理中</span>
+    </header>
+    <div class="at-progress" id="atDetailProgress"></div>
+    <div class="at-audio-row">
+      <strong>原始音频</strong>
+      <audio id="atDetailAudio" controls preload="metadata"></audio>
+    </div>
+    <nav class="at-result-tabs" id="atResultTabs" role="tablist">
+      <button type="button" class="is-active" data-at-result-tab="summary" role="tab">AI 摘要</button>
+      <button type="button" data-at-result-tab="transcript" role="tab">完整转写</button>
+    </nav>
+    <section class="at-result" data-at-result-panel="summary">
+      <div class="at-result-head">
+        <h3>内容结论</h3>
+        <div class="at-result-actions">
+          <button type="button" class="at-button at-button-quiet" data-at-copy="summary">复制</button>
+          <button type="button" class="at-button at-button-quiet" data-at-export="summary">导出</button>
+        </div>
+      </div>
+      <div class="at-summary" id="atSummary"></div>
+      <h3>重点事项</h3>
+      <div class="at-key-points" id="atKeyPoints"></div>
+    </section>
+    <section class="at-result" data-at-result-panel="transcript" hidden>
+      <div class="at-result-head">
+        <div><h3>逐句转写</h3><small>点击说话人名称可批量改名</small></div>
+        <div class="at-result-actions">
+          <button type="button" class="at-button at-button-quiet" data-at-copy="transcript">复制</button>
+          <button type="button" class="at-button at-button-quiet" data-at-export="transcript">导出</button>
+        </div>
+      </div>
+      <div class="at-dialogue" id="atDialogue"></div>
+    </section>
+  </section>
+</div>
