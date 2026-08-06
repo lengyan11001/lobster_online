@@ -1,7 +1,7 @@
 {
-  "version": "1.0.143",
-  "build": 187,
-  "applied_at": "2026-08-06T21:28:50+08:00",
-  "note": "update Online workbench, OEM home theme and workflow fixes",
-  "bundle_sha256": "e6df8601e6e82434e27bff885e1c6fa30c010b622ae97ed14ecf6909c68e6205"
+  "version": "1.0.144",
+  "build": 188,
+  "applied_at": "2026-08-07T00:36:03+08:00",
+  "note": "add Online audio transcription and H5-aligned content actions",
+  "bundle_sha256": "0990b6c3a9027215a238566551b615cb3cc175c4f21100f24d8293273cfa9de7"
 }
