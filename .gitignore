@@ -84,6 +84,7 @@ skills/comfly_ecommerce_detail/scripts/temp_test_*
 _lobster_runtime/
 static/uploads/
 static/hifly_previews/
+static/branding/cache/
 data/hifly_public_avatars_cache.json
 lobster.exe
 lobster_fixed.exe

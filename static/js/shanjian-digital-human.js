@@ -644,7 +644,7 @@
   }
 
   function defaultShanjianAuthText() {
-    return '案例：我是xxx(真实姓名),我授权【必火】使用视频中的肖像、声音,为我生成定制数字人及声音,并在本人【必火】账号中创作使用。';
+    return '案例：我是xxx(真实姓名),我授权本平台使用视频中的肖像、声音,为我生成定制数字人及声音,并在本人账号中创作使用。';
   }
 
   function normalizeProfileItem(item) {
@@ -3641,7 +3641,7 @@
     var taskKindLabel = selectedTemplate ? '真人视频模板剪辑' : (mode === 'audio' ? '声音驱动视频' : '数字人口播');
     var submittingHint = selectedTemplate
       ? '正在提交真人视频模板剪辑任务...'
-      : (mode === 'audio' ? '正在提交声音驱动视频任务...' : '正在提交必火智能数字人口播任务...');
+      : (mode === 'audio' ? '正在提交声音驱动视频任务...' : '正在提交数字人口播任务...');
     var processingHint = selectedTemplate
       ? '正在生成真人视频模板剪辑视频...'
       : (mode === 'audio' ? '正在生成声音驱动视频...' : '正在生成数字人口播视频...');
@@ -4095,12 +4095,12 @@
       renderTemplateLibrary();
       renderMaterialLibrary();
       if (rejected.length >= 3 && results[1].status === 'rejected' && results[2].status === 'rejected' && results[3].status === 'rejected') {
-        throw rejected[0].reason || new Error('初始化必火智能数字人页面失败');
+        throw rejected[0].reason || new Error('初始化数字人口播页面失败');
       }
       if (state.avatarLibrary.using_default_token || state.voiceLibrary.using_default_token) {
         showMessage('当前已使用平台托管服务自动加载资源。', false);
       } else {
-        showMessage('必火智能数字人资源已加载完成。', false);
+        showMessage('数字人口播资源已加载完成。', false);
       }
       return results;
     });
@@ -4379,7 +4379,7 @@
       <div class="tvc-studio">
         <div class="tvc-studio-hero">
           <div>
-            <h3>必火智能数字人</h3>
+            <h3>数字人口播</h3>
             <p>把数字人、声音和口播任务放到同一个工作台里，左侧管理当前选择，右侧查看资源库和生成结果。</p>
             <div class="tvc-hero-meta">创建数字人或声音成功后，会自动刷新到“我的数字人 / 我的声音”。</div>
           </div>
@@ -4522,7 +4522,7 @@
             </div>
 
             <div class="tvc-panel tvc-panel-compact shanjian-service-panel">
-              <h4 class="tvc-panel-title">3. 必火智能数字人服务</h4>
+              <h4 class="tvc-panel-title">3. 数字人口播服务</h4>
               <p class="tvc-panel-hint">创作服务由平台统一托管，用户无需填写 API Token。</p>
               <div class="viral-action-row">
                 <span class="viral-inline-status">按作品实际时长消耗平台积分</span>

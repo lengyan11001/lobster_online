@@ -495,13 +495,16 @@
     return out;
   }
 
-  function templateCaptionStyle(tpl) {
+  function templateCaptionStyle(tpl, orientationOverride) {
     var strategy = tpl && tpl.generation_strategy && typeof tpl.generation_strategy === 'object' ? tpl.generation_strategy : {};
     var style = (strategy.caption_style && typeof strategy.caption_style === 'object')
       ? strategy.caption_style
       : ((tpl && tpl.caption_style && typeof tpl.caption_style === 'object') ? tpl.caption_style : {});
     style = withOrientationDefaults(style);
-    return orientedCaptionStyle(style, currentSourceOrientation());
+    var orientation = orientationOverride === 'portrait' || orientationOverride === 'landscape'
+      ? orientationOverride
+      : currentSourceOrientation();
+    return orientedCaptionStyle(style, orientation);
   }
 
   function currentSourceOrientation() {
@@ -539,10 +542,10 @@
     return clamp((0.5 - Number(value || 0.5)) / 0.5, -0.95, 0.95);
   }
 
-  function positionTargets(tpl) {
+  function positionTargets(tpl, orientationOverride) {
     var fields = overlayFields(tpl);
     var keys = fields.map(function(field) { return String((field && field.key) || '').trim(); });
-    var layout = overlayLayout(tpl);
+    var layout = overlayLayout(tpl, orientationOverride);
     var out = [];
     function add(key, label) {
       if (out.some(function(item) { return item.key === key; })) return;
@@ -556,8 +559,8 @@
     return out;
   }
 
-  function defaultPositionOverrides(tpl) {
-    var style = templateCaptionStyle(tpl);
+  function defaultPositionOverrides(tpl, orientationOverride) {
+    var style = templateCaptionStyle(tpl, orientationOverride);
     var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
     var layout = overlayLayout(tpl);
     var captionX = Number(style.transform_x != null ? style.transform_x : (style.cutcli_transform_x != null ? style.cutcli_transform_x : 0));
@@ -566,7 +569,7 @@
       caption: { x: Number.isFinite(captionX) ? captionX : 0, y: Number.isFinite(captionY) ? captionY : -0.66 },
       overlay: {}
     };
-    positionTargets(tpl).forEach(function(target) {
+    positionTargets(tpl, orientationOverride).forEach(function(target) {
       if (target.key === 'caption') return;
       if (target.key === 'top_text') {
         var topY = overlay.top_screen_y_ratio != null ? overlay.top_screen_y_ratio : overlay.top_y_ratio;
@@ -703,8 +706,8 @@
     }).join(';');
   }
 
-  function overlayLayout(tpl) {
-    var style = templateCaptionStyle(tpl);
+  function overlayLayout(tpl, orientationOverride) {
+    var style = templateCaptionStyle(tpl, orientationOverride);
     var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
     return String(overlay.layout || 'default').replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
   }
@@ -726,10 +729,10 @@
     };
   }
 
-  function previewInlineStyle(tpl, targetKey) {
-    var style = templateCaptionStyle(tpl);
+  function previewInlineStyle(tpl, targetKey, orientationOverride) {
+    var style = templateCaptionStyle(tpl, orientationOverride);
     var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
-    var layout = overlayLayout(tpl);
+    var layout = overlayLayout(tpl, orientationOverride);
     var base = {
       'box-sizing': 'border-box'
     };
@@ -954,8 +957,26 @@
     return '<span class="cutcli-template-preview-text-value">' + multilineHtml(value) + '</span>';
   }
 
-  function previewTextClass(tpl, targetKey) {
-    var style = templateCaptionStyle(tpl);
+  function previewTextHtmlForValues(tpl, targetKey, values, orientationOverride) {
+    values = values && typeof values === 'object' ? values : {};
+    var key = overlayKeyForTarget(tpl, targetKey);
+    var value = targetKey === 'caption' ? String(values.caption || '字幕预览') : String(values[key] || '');
+    var layout = overlayLayout(tpl, orientationOverride);
+    if (layout === 'right_vertical_card' && targetKey === 'title') {
+      return '<span class="cutcli-template-preview-text-value is-card-title">' + multilineHtml(value) + '</span>' +
+        '<span class="cutcli-template-preview-text-value is-card-subtitle">' + multilineHtml(String(values.subtitle || '')) + '</span>';
+    }
+    if (layout === 'education_focus_bar' && targetKey === 'top_text') {
+      return String(value || '').split(/\r\n|\r|\n/).map(function(line, idx) {
+        var lineStyle = idx === 0 ? '' : ' style="color:#ffffff"';
+        return '<span class="cutcli-template-preview-line"' + lineStyle + '>' + esc(line) + '</span>';
+      }).join('');
+    }
+    return '<span class="cutcli-template-preview-text-value">' + multilineHtml(value) + '</span>';
+  }
+
+  function previewTextClass(tpl, targetKey, orientationOverride) {
+    var style = templateCaptionStyle(tpl, orientationOverride);
     var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
     var layout = String(overlay.layout || 'default').replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
     return 'cutcli-template-preview-text is-' + esc(targetKey.replace(/_/g, '-')) + ' layout-' + esc(layout || 'default');
@@ -2056,4 +2077,12 @@
 
   window.openCutcliTemplateStudio = openView;
   window._openCutcliTemplateStudioView = openView;
+  window.CutcliTemplatePreview = {
+    captionStyle: templateCaptionStyle,
+    defaultPositions: defaultPositionOverrides,
+    inlineStyle: previewInlineStyle,
+    layout: overlayLayout,
+    textHtml: previewTextHtmlForValues,
+    textClass: previewTextClass
+  };
 })();

@@ -1,10 +1,18 @@
 @echo off
 cd /d "%~dp0"
 chcp 65001 >nul 2>&1
-title Lobster Install
+if defined LOBSTER_FACTORY_CONFIG (
+    title AI Agent Runtime Install
+) else (
+    title Lobster Install
+)
 
 echo ================================================
-echo       Lobster Long Xia - Offline Install
+if defined LOBSTER_FACTORY_CONFIG (
+    echo       AI Agent Runtime Setup
+) else (
+    echo       Lobster Long Xia - Offline Install
+)
 echo ================================================
 echo.
 
@@ -37,7 +45,7 @@ if defined PYTHON goto :python_ok
 call :detect_py_launcher 3
 if defined PYTHON goto :python_ok
 echo [ERR] Python not found. Install Python 3.10+ or place embedded python in python\ folder
-pause
+if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
 exit /b 1
 
 :detect_py_launcher
@@ -139,7 +147,7 @@ echo.
 echo [ERR] Failed to install pip.
 echo   Offline: ensure deps\wheels\ has pip-*.whl
 echo   Online: check internet connection
-pause
+if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
 exit /b 1
 
 :pip_ready
@@ -158,26 +166,26 @@ if exist "deps\vc_redist.x64.exe" (
 ) else (
     if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
         echo [ERR] LOBSTER_OFFLINE_ONLY=1 but deps\vc_redist.x64.exe missing. Full offline pack must include it, or set LOBSTER_SKIP_VCREDIST=1 if VC++ 2015-2022 x64 is already installed.
-        pause
+        if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
         exit /b 1
     )
     echo   No bundled VC++ in deps\ - downloading ^(needs network^). You may see a UAC prompt once.
     powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $p = Join-Path $env:TEMP 'vc_redist_lobster_x64.exe'; Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $p -UseBasicParsing; exit 0 } catch { exit 1 }"
     if errorlevel 1 (
         echo [ERR] Could not download VC++ redistributable. Bundle deps\vc_redist.x64.exe in full offline pack, or set LOBSTER_SKIP_VCREDIST=1 if already installed.
-        pause
+        if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
         exit /b 1
     )
     if not exist "%TEMP%\vc_redist_lobster_x64.exe" (
         echo [ERR] vc_redist download file missing.
-        pause
+        if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
         exit /b 1
     )
     set "VC_SETUP=%TEMP%\vc_redist_lobster_x64.exe"
 )
 if not defined VC_SETUP (
     echo [ERR] VC++ installer path not set.
-    pause
+    if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
     exit /b 1
 )
 start /wait "" "%VC_SETUP%" /install /quiet /norestart
@@ -186,7 +194,7 @@ if "%VC_EC%"=="0" goto :after_vcredist
 if "%VC_EC%"=="1638" goto :after_vcredist
 if "%VC_EC%"=="3010" goto :after_vcredist
 echo [ERR] VC++ installer failed with code %VC_EC%. Right-click install.bat - Run as administrator, then retry.
-pause
+if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
 exit /b 1
 :after_vcredist
 echo   [OK] VC++ runtime check done
@@ -252,7 +260,7 @@ echo     %PYTHON% -c "%PKG_IMPORT_CHECK%"
 echo ----- import check output -----
 "%PYTHON%" -c "%PKG_IMPORT_CHECK%"
 echo -----
-pause
+if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
 exit /b 1
 
 :packages_done
@@ -298,7 +306,7 @@ if "%WECHAT_RUNTIME_OK%"=="1" (
     echo ----- import check output -----
     "%PYTHON%" -c "%WECHAT_IMPORT_CHECK%"
     echo -----
-    pause
+    if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
     exit /b 1
 )
 :wechat_runtime_done
@@ -471,24 +479,24 @@ if exist "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffmpeg.exe" (
 )
 if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
     echo   [ERR] LOBSTER_OFFLINE_ONLY=1 but deps\ffmpeg\ffmpeg.exe missing. Full offline pack must include it ^(or copy from build machine^).
-    pause
+    if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
     exit /b 1
 )
 if not exist "scripts\ensure_ffmpeg_windows.py" (
     echo   [ERR] scripts\ensure_ffmpeg_windows.py missing
-    pause
+    if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
     exit /b 1
 )
 echo   Downloading ffmpeg ^(media.edit, needs network^)...
 "%PYTHON%" "%~dp0scripts\ensure_ffmpeg_windows.py"
 if errorlevel 1 (
     echo   [ERR] ffmpeg download failed. Fix network or place ffmpeg.exe in deps\ffmpeg\
-    pause
+    if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
     exit /b 1
 )
 if not exist "deps\ffmpeg\ffmpeg.exe" (
     echo   [ERR] deps\ffmpeg\ffmpeg.exe still missing after ensure script
-    pause
+    if not defined LOBSTER_SKIP_INSTALL_PAUSE pause
     exit /b 1
 )
 echo   [OK] deps\ffmpeg\ffmpeg.exe
@@ -593,6 +601,8 @@ if not defined LOBSTER_BRAND_MARK if exist ".env.example" for /f "usebackq eol=#
 )
 if not defined LOBSTER_BRAND_MARK set "LOBSTER_BRAND_MARK=bihuo"
 :brand_mark_done
+set "LOBSTER_BRAND_PROFILE_PATH="
+if exist "static\branding\cache\profiles\%LOBSTER_BRAND_MARK%.json" set "LOBSTER_BRAND_PROFILE_PATH=%CD%\static\branding\cache\profiles\%LOBSTER_BRAND_MARK%.json"
 if /i "%LOBSTER_SKIP_DESKTOP_SHORTCUT%"=="1" goto :after_desktop_shortcut
 if not exist "static\branding\brands.json" (
     echo   [WARN] static\branding\brands.json missing - desktop shortcut skipped
@@ -603,7 +613,7 @@ if not exist "scripts\create_desktop_shortcut.ps1" (
     goto :after_desktop_shortcut
 )
 echo   Creating desktop shortcut ^(LOBSTER_BRAND_MARK=%LOBSTER_BRAND_MARK%^)...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\create_desktop_shortcut.ps1" -Root "%CD%" -BrandMark "%LOBSTER_BRAND_MARK%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\create_desktop_shortcut.ps1" -Root "%CD%" -BrandMark "%LOBSTER_BRAND_MARK%" -BrandProfilePath "%LOBSTER_BRAND_PROFILE_PATH%"
 REM exit: 0=ok 1=fail 2=skip - do not use set to save ERRORLEVEL
 if errorlevel 2 if not errorlevel 3 (
     echo   [WARN] Desktop shortcut skipped - need start.bat, static\bihu_box.ico, and Desktop folder

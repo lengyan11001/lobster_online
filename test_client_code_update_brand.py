@@ -1,8 +1,10 @@
 import json
+from pathlib import Path
 
 from backend.app.api import h5_chat_channel
 from scripts import check_client_code_update as updater
 from scripts import pack_client_code_ota as packer
+from scripts import pack_code_only_zip, pack_full_project_zip, pack_slim_zip
 
 
 def test_default_ota_paths_do_not_replace_runtime_env():
@@ -10,6 +12,18 @@ def test_default_ota_paths_do_not_replace_runtime_env():
     assert ".env" not in packer.OTA_PATHS
     assert ".env.example" in updater.DEFAULT_PATHS
     assert ".env.example" in packer.OTA_PATHS
+
+
+def test_default_ota_paths_do_not_replace_installed_brand_exe():
+    def _root_exes(paths):
+        return {
+            path
+            for path in paths
+            if path.lower().endswith(".exe") and "/" not in path and "\\" not in path
+        }
+
+    assert _root_exes(updater.DEFAULT_PATHS) == set()
+    assert _root_exes(packer.OTA_PATHS) == set()
 
 
 def test_packaging_bumps_and_synchronizes_local_version_files(tmp_path):
@@ -100,6 +114,26 @@ def test_stage_env_preserves_existing_brand(tmp_path):
     assert "LOBSTER_BRAND_MARK=daka" in staged_text
     assert "CLIENT_CODE_MANIFEST_URL=https://example.test/manifest.json" in staged_text
     assert "LOBSTER_BRAND_MARK=bihuo" in source.read_text(encoding="utf-8")
+
+
+def test_stage_env_preserves_numeric_oem_code(tmp_path):
+    source = tmp_path / "bundle.env"
+    source.write_text("LOBSTER_BRAND_MARK=bihuo\n", encoding="utf-8")
+
+    staged = updater._stage_env_with_local_brand(source, tmp_path, "0400")
+
+    assert staged != source
+    assert "LOBSTER_BRAND_MARK=0400" in staged.read_text(encoding="utf-8")
+
+
+def test_ota_preserves_and_packers_exclude_downloaded_oem_cache():
+    cache_path = "static/branding/cache/hikong/v1/icon_32.png"
+
+    assert "static/branding/cache" in updater._PRESERVED_STATIC_REL_PATHS
+    assert packer._skip_file(cache_path)
+    assert pack_code_only_zip._is_excluded(cache_path)
+    assert pack_full_project_zip.should_exclude("lobster_online", cache_path)
+    assert pack_slim_zip.is_excluded(Path("lobster_online") / cache_path)
 
 
 def test_stage_env_uses_bundle_when_local_brand_is_invalid(tmp_path):

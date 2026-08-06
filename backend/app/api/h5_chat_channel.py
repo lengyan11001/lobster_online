@@ -523,6 +523,39 @@ def _build_publish_account_snapshot(jwt_token: str) -> List[Dict[str, Any]]:
         db.close()
 
 
+def _build_native_wechat_contact_snapshot() -> List[Dict[str, str]]:
+    try:
+        rows = native_wechat_engine.list_contacts(
+            native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID,
+            limit=500,
+            offset=0,
+        ).get("items") or []
+    except Exception as exc:
+        logger.debug("[H5-CHAT] native WeChat contact snapshot failed: %s", exc)
+        return []
+    contacts: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        display_name = str(item.get("display_name") or item.get("remark") or item.get("wx_no") or "").strip()
+        target = str(item.get("remark") or item.get("display_name") or item.get("wx_no") or item.get("contact_key") or "").strip()
+        contact_key = str(item.get("contact_key") or item.get("wx_no") or target).strip()
+        if not target or target.lower() in seen:
+            continue
+        seen.add(target.lower())
+        contacts.append(
+            {
+                "value": target[:240],
+                "name": (display_name or target)[:240],
+                "contact_key": contact_key[:240],
+                "remark": str(item.get("remark") or "").strip()[:240],
+                "wx_no": str(item.get("wx_no") or "").strip()[:240],
+            }
+        )
+    return contacts
+
+
 async def _build_douyin_dashboard_snapshot(jwt_token: str, installation_id: str) -> Dict[str, Any]:
     _install_douyin_origin_import_path()
     from douyin_api import (  # type: ignore
@@ -1310,6 +1343,41 @@ async def _run_client_command(
                 enabled=bool(payload.get("enabled")),
                 interval_seconds=interval_seconds,
                 user_id=user_id,
+                memory_doc_ids=(
+                    [str(item or "").strip() for item in payload.get("memory_doc_ids") if str(item or "").strip()]
+                    if isinstance(payload.get("memory_doc_ids"), list)
+                    else None
+                ),
+                group_invite_memory_doc_id=(
+                    str(payload.get("group_invite_memory_doc_id") or "").strip()
+                    if "group_invite_memory_doc_id" in payload
+                    else None
+                ),
+                group_invite_keywords=(
+                    str(payload.get("group_invite_keywords") or "").strip()
+                    if "group_invite_keywords" in payload
+                    else None
+                ),
+                group_invite_contacts=(
+                    [str(item or "").strip() for item in payload.get("group_invite_contacts") if str(item or "").strip()]
+                    if isinstance(payload.get("group_invite_contacts"), list)
+                    else None
+                ),
+                group_invite_primary_contact=(
+                    str(payload.get("group_invite_primary_contact") or "").strip()
+                    if "group_invite_primary_contact" in payload
+                    else None
+                ),
+                group_invite_primary_contact_name=(
+                    str(payload.get("group_invite_primary_contact_name") or "").strip()
+                    if "group_invite_primary_contact_name" in payload
+                    else None
+                ),
+                group_invite_welcome_message=(
+                    str(payload.get("group_invite_welcome_message") or "").strip()
+                    if "group_invite_welcome_message" in payload
+                    else None
+                ),
                 auth_context={
                     "token": jwt_token,
                     "user_id": user_id,
@@ -2150,7 +2218,7 @@ def _platform_publish_rules(platform: str) -> str:
     if p in {"wechat_moments", "wechat", "moments"}:
         return "朋友圈图文：标题可以留空，正文 30-120 字，更像朋友动态的口吻，少营销少口号；有图片就按图文发布，视频只传 1 条；标签 0-5 个即可。"
     if p in {"wechat_channels", "channels", "sph"}:
-        return "视频号：短标题 10-30 字，只能使用中英文和数字，不要标点、特殊符号或 Emoji；描述 40-120 字，带 2-5 个话题标签。"
+        return "视频号：短标题 10-16 字，只能使用中英文和数字，不要标点、特殊符号或 Emoji；描述 40-120 字，带 2-5 个话题标签。"
     if p == "xiaohongshu":
         return "小红书：标题 12-20 字，有种草感；正文 80-180 字，分段自然，结尾带 3-6 个话题标签。"
     if p == "toutiao":
@@ -2312,7 +2380,7 @@ def _wechat_channels_short_title(value: Any, fallback: Any = "") -> str:
             chars.append(char)
         elif char.isspace() and chars and chars[-1] != " ":
             chars.append(" ")
-    return ("".join(chars).strip() or "作品分享")[:30]
+    return ("".join(chars).strip() or "作品分享")[:16]
 
 
 def _should_forward_auth_for_download_url(url: str) -> bool:
@@ -5596,17 +5664,17 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
     return {}
 
 
-async def _resolve_parent_workflow_material(
+async def _resolve_parent_workflow_results(
     cloud: httpx.AsyncClient,
     base: str,
     headers: Dict[str, str],
     *,
     params: Dict[str, Any],
     current_item: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+) -> List[Dict[str, Any]]:
     source_node_id = str(params.get("source_workflow_node_id") or "").strip()
     if not source_node_id:
-        raise RuntimeError("发布动作缺少上级节点")
+        raise RuntimeError("动作缺少上级节点")
     current_context = params.get("h5_context") if isinstance(params.get("h5_context"), dict) else {}
     template_id = str(current_context.get("workflow_template_id") or "").strip()
     current_time = _parse_run_time(
@@ -5664,6 +5732,36 @@ async def _resolve_parent_workflow_material(
             except Exception as exc:
                 logger.warning("[H5-WORKFLOW] fetch parent run detail failed run_id=%s err=%s", run_id, exc)
         parent_result_payload = detail_run.get("result_payload") or {}
+        candidates.append(
+            {
+                "source_run_id": run_id,
+                "run": detail_run,
+                "result_payload": parent_result_payload if isinstance(parent_result_payload, dict) else {},
+            }
+        )
+    return candidates
+
+
+async def _resolve_parent_workflow_material(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    *,
+    params: Dict[str, Any],
+    current_item: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not str(params.get("source_workflow_node_id") or "").strip():
+        raise RuntimeError("发布动作缺少上级节点")
+    parent_runs = await _resolve_parent_workflow_results(
+        cloud,
+        base,
+        headers,
+        params=params,
+        current_item=current_item,
+    )
+    candidates: List[Dict[str, Any]] = []
+    for parent in parent_runs:
+        parent_result_payload = parent.get("result_payload") if isinstance(parent.get("result_payload"), dict) else {}
         material = _extract_parent_material(
             parent_result_payload,
             preferred_media_type=_preferred_parent_material_media_type(params),
@@ -5671,10 +5769,44 @@ async def _resolve_parent_workflow_material(
         if not material:
             continue
         publish_context = _extract_parent_publish_context(parent_result_payload)
-        candidates.append({**material, **publish_context, "source_run_id": run_id})
+        candidates.append({**material, **publish_context, "source_run_id": str(parent.get("source_run_id") or "")})
     if not candidates:
         raise RuntimeError("上级节点还没有可发布的素材")
     return candidates[0]
+
+
+_MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)(?:(?:\+?86)[\s-]*)?(1[3-9](?:[\s-]?\d){9})(?!\d)")
+
+
+def _extract_mainland_mobile_numbers(value: Any, *, limit: int = 100) -> List[str]:
+    texts: List[str] = []
+
+    def collect(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, item in node.items():
+                if key in {"incoming_message", "preview_text"} and isinstance(item, (str, int, float)):
+                    text = str(item or "").strip()
+                    if text:
+                        texts.append(text)
+                elif isinstance(item, (dict, list)):
+                    collect(item)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(value)
+    out: List[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        for match in _MAINLAND_MOBILE_RE.finditer(text):
+            phone = re.sub(r"\D", "", match.group(1))
+            if len(phone) != 11 or phone in seen:
+                continue
+            seen.add(phone)
+            out.append(phone)
+            if len(out) >= max(1, int(limit or 1)):
+                return out
+    return out
 
 
 def _workflow_text(value: Any, limit: int = 500) -> str:
@@ -6318,6 +6450,234 @@ async def _run_shanjian_digital_human_workflow(
     return last
 
 
+async def _run_native_wechat_takeover_session(
+    *,
+    account_id: str,
+    headers: Dict[str, str],
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    run_id: str,
+    rounds: int = 10,
+    interval_seconds: float = 180.0,
+) -> Dict[str, Any]:
+    round_count = max(1, min(int(rounds or 10), 10))
+    interval = max(0.0, float(interval_seconds or 0.0))
+    started_at = datetime.utcnow().isoformat()
+    started_monotonic = asyncio.get_running_loop().time()
+    output: Dict[str, Any] = {
+        "ok": True,
+        "mode": "takeover_session",
+        "account_id": account_id,
+        "session_minutes": 30,
+        "interval_seconds": int(interval),
+        "round_count": round_count,
+        "completed_rounds": 0,
+        "replied": 0,
+        "skipped": 0,
+        "failed": 0,
+        "friend_requests_checked": 0,
+        "friend_requests_accepted": 0,
+        "friend_requests_failed": 0,
+        "items": [],
+        "rounds": [],
+        "started_at": started_at,
+    }
+    last_config: Dict[str, Any] = {}
+    for index in range(round_count):
+        if index and interval:
+            await asyncio.sleep(interval)
+        round_number = index + 1
+        if cloud is not None and base and run_id:
+            await _post_task_event(
+                cloud,
+                base,
+                headers,
+                run_id,
+                "running",
+                {"text": f"个微私信接管第 {round_number}/{round_count} 轮巡检", "round": round_number, "round_count": round_count},
+            )
+        try:
+            result = await _post_local_api_json(
+                "/api/native-wechat/auto-reply/run-once",
+                {"account_id": account_id, "force": True},
+                headers=headers,
+                timeout_seconds=1800.0,
+            )
+            last_config = result.get("config") if isinstance(result.get("config"), dict) else last_config
+            items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
+            output["completed_rounds"] += 1
+            output["replied"] += _safe_int(result.get("replied"))
+            output["skipped"] += _safe_int(result.get("skipped"))
+            output["failed"] += _safe_int(result.get("failed"))
+            output["friend_requests_checked"] += _safe_int(result.get("friend_requests_checked"))
+            output["friend_requests_accepted"] += _safe_int(result.get("friend_requests_accepted"))
+            output["friend_requests_failed"] += _safe_int(result.get("friend_requests_failed"))
+            output["items"].extend({**item, "round": round_number} for item in items)
+            output["rounds"].append(
+                {
+                    "round": round_number,
+                    "checked_at": result.get("checked_at") or result.get("started_at") or datetime.utcnow().isoformat(),
+                    "replied": _safe_int(result.get("replied")),
+                    "skipped": _safe_int(result.get("skipped")),
+                    "failed": _safe_int(result.get("failed")),
+                    "friend_requests_checked": _safe_int(result.get("friend_requests_checked")),
+                    "friend_requests_accepted": _safe_int(result.get("friend_requests_accepted")),
+                    "friend_requests_failed": _safe_int(result.get("friend_requests_failed")),
+                    "friend_requests": result.get("friend_requests") if isinstance(result.get("friend_requests"), dict) else {},
+                    "items": items,
+                    "summary_text": str(result.get("summary_text") or "").strip(),
+                }
+            )
+        except Exception as exc:
+            output["failed"] += 1
+            output["rounds"].append({"round": round_number, "failed": 1, "error": str(exc)[:500]})
+    output["finished_at"] = datetime.utcnow().isoformat()
+    output["duration_seconds"] = round(max(0.0, asyncio.get_running_loop().time() - started_monotonic), 2)
+    output["config"] = last_config
+    output["group_invite_candidates"] = len(
+        {
+            str(item.get("peer_id") or "")
+            for item in output["items"]
+            if item.get("should_invite_group") and str(item.get("peer_id") or "").strip()
+        }
+    )
+    output["ok"] = output["completed_rounds"] > 0
+    output["summary_text"] = (
+        f"个微私信接管已持续巡检 {output['completed_rounds']}/{round_count} 轮，"
+        f"检查新好友申请 {output['friend_requests_checked']} 条，已同意 {output['friend_requests_accepted']} 条，"
+        f"自动回复 {output['replied']} 条，跳过 {output['skipped']} 条，失败 {output['failed']} 条；"
+        f"命中拉群条件 {output['group_invite_candidates']} 个会话。"
+    )
+    return output
+
+
+def _native_wechat_group_invite_candidates(parent_payload: Any) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+
+    def collect(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("should_invite_group") and str(node.get("peer_id") or "").strip():
+                candidates.append(node)
+            for key, value in node.items():
+                if key in {"items", "rounds", "local_result", "conversations"} and isinstance(value, (dict, list)):
+                    collect(value)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(parent_payload)
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in candidates:
+        peer_id = str(item.get("peer_id") or "").strip()
+        inbound_id = str(item.get("inbound_message_id") or "").strip()
+        key = inbound_id or peer_id
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(dict(item))
+    return deduped
+
+
+async def _run_native_wechat_group_invite_followup(
+    source: Dict[str, Any],
+    *,
+    account_id: str,
+    headers: Dict[str, str],
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    current_item: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if cloud is None or not base:
+        raise RuntimeError("自动拉群无法读取上级私信接管结果")
+    wait_seconds = _clamp_int(source.get("parent_wait_seconds"), 1800, 0, 2400)
+    poll_seconds = _clamp_int(source.get("parent_poll_seconds"), 60, 15, 300)
+    deadline = asyncio.get_running_loop().time() + wait_seconds
+    parent_runs: List[Dict[str, Any]] = []
+    while True:
+        parent_runs = await _resolve_parent_workflow_results(
+            cloud,
+            base,
+            headers,
+            params=source,
+            current_item=current_item,
+        )
+        if parent_runs or asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(poll_seconds)
+    if not parent_runs:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "parent_not_ready",
+            "waited_seconds": wait_seconds,
+            "message": "等待上级私信接管完成后仍未取得结果，已跳过本轮拉群",
+        }
+    candidates = _native_wechat_group_invite_candidates(parent_runs[0].get("result_payload"))
+    if not candidates:
+        return {"ok": True, "skipped": True, "reason": "no_match", "message": "本轮没有会话命中拉群条件"}
+    cfg = native_wechat_engine.get_auto_reply_config(account_id)
+    primary_contact = str(
+        source.get("group_invite_primary_contact")
+        or cfg.get("group_invite_primary_contact")
+        or ""
+    ).strip()
+    if not primary_contact:
+        legacy_contacts = _workflow_target_list(source, "group_invite_manager_contacts", "group_invite_members")
+        legacy_contacts.extend(_workflow_target_list(cfg, "group_invite_contacts"))
+        primary_contact = next((item for item in legacy_contacts if str(item or "").strip()), "")
+    primary_contact_name = str(
+        source.get("group_invite_primary_contact_name")
+        or cfg.get("group_invite_primary_contact_name")
+        or primary_contact
+    ).strip()
+    welcome_message = str(
+        source.get("group_invite_welcome_message")
+        or cfg.get("group_invite_welcome_message")
+        or ""
+    ).strip()[:4000]
+    if not primary_contact:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "missing_group_contacts",
+            "matched": len(candidates),
+            "candidates": candidates,
+            "message": f"已识别 {len(candidates)} 个符合拉群条件的会话，但未从通讯录配置主联系人",
+        }
+    tasks: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        peer_id = str(candidate.get("peer_id") or "").strip()
+        contacts = list(dict.fromkeys([peer_id, primary_contact]))
+        if len(contacts) < 2:
+            continue
+        result = await _post_local_api_json(
+            "/api/native-wechat/groups/create",
+            {"account_id": account_id, "contacts": contacts, "welcome_message": welcome_message},
+            headers=headers,
+            timeout_seconds=300.0,
+        )
+        tasks.append(
+            {
+                "peer_id": peer_id,
+                "display_name": candidate.get("display_name") or peer_id,
+                "reason": candidate.get("group_invite_reason") or "",
+                "matched_keywords": candidate.get("matched_group_keywords") or [],
+                "primary_contact": primary_contact,
+                "primary_contact_name": primary_contact_name,
+                "welcome_message": welcome_message,
+                "task": result.get("task") if isinstance(result.get("task"), dict) else {},
+            }
+        )
+    return {
+        "ok": True,
+        "matched": len(candidates),
+        "queued": len(tasks),
+        "tasks": tasks,
+        "message": f"命中拉群条件 {len(candidates)} 个会话，已提交 {len(tasks)} 个建群任务",
+    }
+
+
 async def _run_client_workflow_action(
     action: str,
     params: Dict[str, Any],
@@ -6475,17 +6835,52 @@ async def _run_client_workflow_action(
     if action == "wecom_poll_reply":
         return await _post_local_api_json("/api/wecom/poll-and-reply", {}, headers=headers, timeout_seconds=300.0)
     if action == "native_wechat_poll":
-        return await _post_local_api_json(
-            "/api/native-wechat/auto-reply/run-once",
-            {"account_id": native_account_id, "force": True},
+        if str(source.get("followup_action") or "").strip().lower() == "group_invite":
+            return await _run_native_wechat_group_invite_followup(
+                source,
+                account_id=native_account_id,
+                headers=headers,
+                cloud=cloud,
+                base=base,
+                current_item=current_item,
+            )
+        return await _run_native_wechat_takeover_session(
+            account_id=native_account_id,
             headers=headers,
-            timeout_seconds=1800.0,
+            cloud=cloud,
+            base=base,
+            run_id=run_id,
         )
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")
+        extracted_phones: List[str] = []
+        source_mode = str(source.get("source_mode") or "").strip().lower()
+        if source_mode in {
+            "douyin_private_message_phone",
+            "douyin_private_message_mobile",
+            "douyin_private_message_wechat_id",
+        }:
+            if cloud is None or not base:
+                raise RuntimeError("自动加好友无法读取抖音私信结果")
+            parent_runs = await _resolve_parent_workflow_results(
+                cloud,
+                base,
+                headers,
+                params=source,
+                current_item=current_item,
+            )
+            if parent_runs:
+                extracted_phones = _extract_mainland_mobile_numbers(parent_runs[0].get("result_payload"))
+        targets = list(dict.fromkeys([*targets, *extracted_phones]))
         if not targets:
-            return {"ok": True, "skipped": True, "reason": "missing_targets", "message": "未配置加好友目标，已跳过"}
-        return await _post_local_api_json(
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "missing_targets",
+                "extracted_phones": [],
+                "message": "本轮抖音私信未识别到客户发送的手机号，已跳过加好友",
+            }
+        result = await _post_local_api_json(
             "/api/native-wechat/friends/add",
             {
                 "account_id": native_account_id,
@@ -6499,6 +6894,9 @@ async def _run_client_workflow_action(
             headers=headers,
             timeout_seconds=300.0,
         )
+        result["targets"] = targets
+        result["extracted_phones"] = extracted_phones
+        return result
     if action == "native_wechat_moments_engage":
         targets = _workflow_target_list(source, "targets", "contacts", "names")
         if not targets:
@@ -6676,12 +7074,16 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
     if action == "wecom_poll_reply":
         return "企业微信客服已执行一次拉取与自动回复检查。"
     if action == "native_wechat_poll":
+        if result.get("skipped"):
+            return str(result.get("message") or "个微任务已跳过。")
+        if "queued" in result and "matched" in result:
+            return str(result.get("message") or "个微自动拉群任务已处理。")
         summary_text = str(result.get("summary_text") or "").strip()
         if summary_text:
             return summary_text
         replied = int(result.get("replied") or result.get("success") or 0)
         skipped = int(result.get("skipped_count") or result.get("skipped") or 0)
-        return f"个微私信接管已执行一次，回复 {replied} 条，跳过 {skipped} 条。"
+        return f"个微私信接管已完成，回复 {replied} 条，跳过 {skipped} 条。"
     if action == "native_wechat_add_friend":
         if result.get("skipped"):
             return str(result.get("message") or "个微自动加好友已跳过。")
@@ -7010,6 +7412,7 @@ async def h5_chat_poll_loop() -> None:
                         json={
                             "display_name": "local-online",
                             "publish_accounts": _build_publish_account_snapshot(jwt_token),
+                            "wechat_contacts": _build_native_wechat_contact_snapshot(),
                         },
                         headers=headers,
                     )

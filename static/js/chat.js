@@ -1369,7 +1369,7 @@ function _getChatSuggestionMeta(title) {
     '爆款TVC': { tone: 'image', icon: '▶', desc: '填入视频生成话术' },
     '创意分镜头视频': { tone: 'plan', icon: '▶', desc: '进入创意分镜头视频工作台' },
     '同城爆款': { tone: 'douyin', icon: '城', desc: '批量做30天内容' },
-    '必火数字人': { tone: 'content', icon: 'H', desc: '进入必火数字人工作台' },
+    '数字人口播': { tone: 'content', icon: 'H', desc: '进入数字人口播工作台' },
     '抖音获客': { tone: 'douyin', icon: 'D', desc: '搜索采集、精准客户、私信互动' },
     '发布中心': { tone: 'publish', icon: '▣', desc: '管理发布账号和记录' },
     '技能商店': { tone: 'ecommerce', icon: '</>', desc: '查看可用技能' }
@@ -1805,6 +1805,8 @@ function maybeUpdateWorkspaceStatusFromMessage(message) {
 
 function updateChatModeUi(mode) {
   var normalized = _normalizeChatMode(mode);
+  var emptyState = document.getElementById('chatEmptyState');
+  if (emptyState) emptyState.classList.toggle('is-workspace-mode', normalized === CHAT_MODE_WORKSPACE);
   document.querySelectorAll('[data-chat-mode="' + CHAT_MODE_WORKSPACE + '"], [data-chat-home-mode="' + CHAT_MODE_WORKSPACE + '"]').forEach(function(btn) {
     btn.hidden = !CHAT_WORKSPACE_ENTRY_ENABLED;
     btn.setAttribute('aria-hidden', CHAT_WORKSPACE_ENTRY_ENABLED ? 'false' : 'true');
@@ -1874,7 +1876,7 @@ function updateChatModeUi(mode) {
     if (input) input.placeholder = '发送消息或输入 / 选择技能';
     if (eyebrow) eyebrow.textContent = '智能对话';
     _renderChatEmptyTitle('👋 您好，我是 AI 员工');
-    if (subtitle) subtitle.textContent = '我可以帮您创作内容、生成视频、处理数据、运营分析等';
+    if (subtitle) subtitle.textContent = '我可以帮您：';
     if (composerLead) composerLead.textContent = '告诉我您想做什么？我会先帮您理清任务，再继续生成和执行~';
     if (categoryTabs) categoryTabs.classList.remove('is-visible');
     updateWorkspaceStatusUi({ visible: false });
@@ -1928,7 +1930,7 @@ function updateChatModeUi(mode) {
       _setChatSuggestionGate(chipLocalBestseller, 'local_bestseller_skill');
     }
     if (chipHifly) {
-      _renderChatSuggestionChip(chipHifly, '必火数字人');
+      _renderChatSuggestionChip(chipHifly, '数字人口播');
       _setChatSuggestionAction(chipHifly, 'data-open-hidden-view', 'hifly-digital-human');
       _setChatSuggestionGate(chipHifly, 'hifly_digital_human_skill');
     }

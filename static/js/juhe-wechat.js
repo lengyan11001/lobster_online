@@ -12,6 +12,7 @@
     tasks: [],
     strategy: null,
     autoReply: null,
+    autoReplyMemoryDocs: [],
     autoReplyBusy: false,
     driver: null,
     lastDiagnostic: null,
@@ -19,6 +20,7 @@
     momentsFiles: [],
     momentsSubmitting: false,
     contactSelected: {},
+    groupInviteContactSearch: '',
     tab: 'messages'
   };
 
@@ -243,6 +245,10 @@
     return item.contact_key || item.wx_no || item.display_name || item.remark || item.id || contactTitle(item);
   }
 
+  function groupInviteContactValue(item) {
+    return item.remark || item.display_name || item.wx_no || item.contact_key || item.id || contactTitle(item);
+  }
+
   function selectedContactValues() {
     return Object.keys(state.contactSelected).map(function(key) { return state.contactSelected[key]; }).filter(Boolean);
   }
@@ -372,8 +378,126 @@
     if (result && (result.replied || result.skipped || result.failed)) {
       parts.push('回复 ' + (result.replied || 0) + '，跳过 ' + (result.skipped || 0) + '，失败 ' + (result.failed || 0));
     }
+    if (result && (result.friend_requests_checked || result.friend_requests_accepted || result.friend_requests_failed)) {
+      parts.push('好友申请检查 ' + (result.friend_requests_checked || 0) + '，已同意 ' + (result.friend_requests_accepted || 0));
+    }
     if (cfg.last_error) parts.push('错误：' + cfg.last_error);
     status.textContent = parts.join(' · ');
+  }
+
+  function renderAutoReplyConfig() {
+    var cfg = state.autoReply || {};
+    var select = $('nativeWechatAutoReplyMemoryDoc');
+    if (select) {
+      var selected = Array.isArray(cfg.memory_doc_ids) && cfg.memory_doc_ids.length ? String(cfg.memory_doc_ids[0] || '') : '';
+      var options = ['<option value="">不指定，使用系统优先记忆</option>'];
+      (state.autoReplyMemoryDocs || []).forEach(function(doc) {
+        var id = String(doc.id || doc.doc_id || '');
+        if (!id) return;
+        options.push('<option value="' + esc(id) + '">' + esc(doc.title || doc.filename || id) + '</option>');
+      });
+      select.innerHTML = options.join('');
+      select.value = selected;
+    }
+    var inviteMemorySelect = $('nativeWechatGroupInviteMemoryDoc');
+    if (inviteMemorySelect) {
+      var inviteMemoryOptions = ['<option value="">不启用自动拉群</option>'];
+      (state.autoReplyMemoryDocs || []).forEach(function(doc) {
+        var inviteDocId = String(doc.id || doc.doc_id || '');
+        if (!inviteDocId) return;
+        inviteMemoryOptions.push('<option value="' + esc(inviteDocId) + '">' + esc(doc.title || doc.filename || inviteDocId) + '</option>');
+      });
+      inviteMemorySelect.innerHTML = inviteMemoryOptions.join('');
+      inviteMemorySelect.value = String(cfg.group_invite_memory_doc_id || '');
+    }
+    var primaryInput = $('nativeWechatGroupInvitePrimaryContact');
+    if (primaryInput) {
+      var selected = String(cfg.group_invite_primary_contact || ((cfg.group_invite_contacts || [])[0]) || '').trim();
+      var match = state.contacts.find(function(item) { return groupInviteContactValue(item) === selected; });
+      var selectedName = String((match && contactTitle(match)) || cfg.group_invite_primary_contact_name || selected).trim();
+      primaryInput.value = selected;
+      primaryInput.setAttribute('data-contact-name', selectedName);
+      var primaryText = $('nativeWechatGroupInvitePrimaryContactText');
+      if (primaryText) primaryText.textContent = selectedName || (state.contacts.length ? '请选择主联系人' : '暂无通讯录，请先同步');
+    }
+    var welcome = $('nativeWechatGroupInviteWelcomeMessage');
+    if (welcome && document.activeElement !== welcome) {
+      welcome.value = cfg.group_invite_welcome_message || '';
+    }
+  }
+
+  function renderGroupInviteContactPicker() {
+    var list = $('nativeWechatContactPickerList');
+    if (!list) return;
+    var query = String(state.groupInviteContactSearch || '').trim().toLowerCase();
+    var matched = state.contacts.filter(function(item) {
+      if (!query) return true;
+      return [contactTitle(item), contactSub(item), item.remark, item.wx_no, item.contact_key, groupInviteContactValue(item)]
+        .some(function(value) { return String(value || '').toLowerCase().indexOf(query) >= 0; });
+    });
+    var count = $('nativeWechatContactPickerCount');
+    if (count) count.textContent = query ? matched.length + ' / ' + state.contacts.length + ' 位联系人' : state.contacts.length + ' 位联系人';
+    var selected = (($('nativeWechatGroupInvitePrimaryContact') || {}).value || '').trim();
+    var visible = matched.slice(0, 100);
+    if (!visible.length) {
+      list.innerHTML = '<div class="native-wechat-empty">' + (state.contacts.length ? '没有匹配的联系人' : '暂无通讯录，请先同步') + '</div>';
+      return;
+    }
+    list.innerHTML = visible.map(function(item) {
+      var value = groupInviteContactValue(item);
+      var name = contactTitle(item) || value;
+      var sub = contactSub(item) || value;
+      var isSelected = value === selected;
+      return '<button type="button" class="native-wechat-contact-picker-row' + (isSelected ? ' selected' : '') + '" data-native-group-contact="' + esc(value) + '" data-native-group-contact-name="' + esc(name) + '">' +
+        '<span class="native-wechat-contact-picker-avatar">' + esc(String(name || '联系').slice(0, 2)) + '</span>' +
+        '<span class="native-wechat-contact-picker-copy"><strong>' + esc(name) + '</strong><small>' + esc(sub) + '</small></span>' +
+        '<span class="native-wechat-contact-picker-check">' + (isSelected ? '已选' : '') + '</span>' +
+      '</button>';
+    }).join('');
+  }
+
+  function setGroupInvitePrimaryContact(value, name) {
+    var input = $('nativeWechatGroupInvitePrimaryContact');
+    if (input) {
+      input.value = String(value || '').trim();
+      input.setAttribute('data-contact-name', String(name || value || '').trim());
+    }
+    var text = $('nativeWechatGroupInvitePrimaryContactText');
+    if (text) text.textContent = String(name || value || '请选择主联系人').trim();
+    closeModals();
+  }
+
+  function openGroupInviteContactPicker() {
+    state.groupInviteContactSearch = '';
+    var search = $('nativeWechatContactPickerSearch');
+    if (search) search.value = '';
+    renderGroupInviteContactPicker();
+    var modal = $('nativeWechatContactPickerModal');
+    if (modal) modal.classList.add('show');
+    window.setTimeout(function() { if (search) search.focus(); }, 80);
+  }
+
+  function splitConfigValues(value) {
+    return String(value || '').split(/[,，;；\n]+/).map(function(item) { return item.trim(); }).filter(Boolean);
+  }
+
+  function autoReplyConfigBody(enabled) {
+    var memoryId = (($('nativeWechatAutoReplyMemoryDoc') || {}).value || '').trim();
+    var primaryInput = $('nativeWechatGroupInvitePrimaryContact');
+    var primaryContact = ((primaryInput || {}).value || '').trim();
+    var primaryLabel = primaryContact ? String((primaryInput && primaryInput.getAttribute('data-contact-name')) || primaryContact).trim() : '';
+    return {
+      account_id: activeAccountId(),
+      enabled: !!enabled,
+      interval_seconds: 1800,
+      memory_doc_ids: memoryId ? [memoryId] : [],
+      group_invite_memory_doc_id: (($('nativeWechatGroupInviteMemoryDoc') || {}).value || '').trim(),
+      group_invite_keywords: '',
+      group_invite_contacts: primaryContact ? [primaryContact] : [],
+      group_invite_primary_contact: primaryContact,
+      group_invite_primary_contact_name: primaryLabel,
+      group_invite_welcome_message: (($('nativeWechatGroupInviteWelcomeMessage') || {}).value || '').trim()
+    };
   }
 
   function renderPeers() {
@@ -625,10 +749,21 @@
     return apiJson('/api/native-wechat/auto-reply/config?account_id=' + encodeURIComponent(id)).then(function(data) {
       state.autoReply = data.config || {};
       renderAutoReply();
+      renderAutoReplyConfig();
     }).catch(function(err) {
       state.autoReply = null;
       renderAutoReply();
       setMsg(err.message || '自动回复配置加载失败', true);
+    });
+  }
+
+  function loadAutoReplyMemoryDocs() {
+    return apiJson('/api/openclaw/memory/list').then(function(data) {
+      state.autoReplyMemoryDocs = Array.isArray(data.documents) ? data.documents : [];
+      renderAutoReplyConfig();
+    }).catch(function() {
+      state.autoReplyMemoryDocs = [];
+      renderAutoReplyConfig();
     });
   }
 
@@ -639,13 +774,34 @@
     renderAutoReply();
     return apiJson('/api/native-wechat/auto-reply/config', {
       method: 'POST',
-      body: { account_id: id, enabled: !!enabled, interval_seconds: 1800 }
+      body: autoReplyConfigBody(enabled)
     }).then(function(data) {
       state.autoReply = data.config || {};
+      renderAutoReplyConfig();
       setMsg(enabled ? '个人微信自动回复已开启：每30分钟检查一次，只回复私聊。' : '个人微信自动回复已关闭。', false);
     }).catch(function(err) {
       setMsg(err.message || '自动回复配置保存失败', true);
       return loadAutoReplyConfig();
+    }).finally(function() {
+      state.autoReplyBusy = false;
+      renderAutoReply();
+    });
+  }
+
+  function saveAutoReplyDetails() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择本机微信账号', true);
+    state.autoReplyBusy = true;
+    renderAutoReply();
+    return apiJson('/api/native-wechat/auto-reply/config', {
+      method: 'POST',
+      body: autoReplyConfigBody(!!(state.autoReply || {}).enabled)
+    }).then(function(data) {
+      state.autoReply = data.config || {};
+      renderAutoReplyConfig();
+      setMsg('接管设置已保存，AI 会结合消息上下文、关键词和所选记忆判断拉群条件。', false);
+    }).catch(function(err) {
+      setMsg(err.message || '接管设置保存失败', true);
     }).finally(function() {
       state.autoReplyBusy = false;
       renderAutoReply();
@@ -666,7 +822,9 @@
       var replied = Number(data.replied || 0);
       var skipped = Number(data.skipped || 0);
       var failed = Number(data.failed || 0);
-      setMsg('自动回复检查完成：回复 ' + replied + '，跳过 ' + skipped + '，失败 ' + failed + '。', !!failed);
+      var friendAccepted = Number(data.friend_requests_accepted || 0);
+      var friendFailed = Number(data.friend_requests_failed || 0);
+      setMsg('检查完成：同意好友申请 ' + friendAccepted + '，回复 ' + replied + '，跳过 ' + skipped + '，失败 ' + (failed + friendFailed) + '。', !!(failed + friendFailed));
       return Promise.all([loadPeers(), loadTasks(), loadAutoReplyConfig()]);
     }).catch(function(err) {
       setMsg(err.message || '自动回复检查失败', true);
@@ -709,6 +867,7 @@
     return apiJson(path).then(function(data) {
       state.contacts = Array.isArray(data.items) ? data.items : [];
       renderContacts();
+      renderAutoReplyConfig();
     }).catch(function(err) {
       setMsg(err.message || '通讯录加载失败', true);
     });
@@ -1280,6 +1439,7 @@
       loadGroups();
       loadTasks();
       loadAutoReplyConfig();
+      loadAutoReplyMemoryDocs();
     });
     var peerSearch = $('nativeWechatPeerSearch');
     if (peerSearch) peerSearch.addEventListener('input', renderPeers);
@@ -1316,6 +1476,8 @@
     }
     var autoReplyRunBtn = $('nativeWechatAutoReplyRunBtn');
     if (autoReplyRunBtn) autoReplyRunBtn.addEventListener('click', runAutoReplyOnce);
+    var autoReplyConfigSaveBtn = $('nativeWechatAutoReplyConfigSaveBtn');
+    if (autoReplyConfigSaveBtn) autoReplyConfigSaveBtn.addEventListener('click', saveAutoReplyDetails);
     var send = $('nativeWechatSendBtn');
     if (send) send.addEventListener('click', sendMessage);
     var fileInput = $('nativeWechatFileInput');
@@ -1399,6 +1561,15 @@
     if (contactMomentsCommentBtn) contactMomentsCommentBtn.addEventListener('click', submitMomentsComment);
     var contactCreateGroupBtn = $('nativeWechatContactCreateGroupBtn');
     if (contactCreateGroupBtn) contactCreateGroupBtn.addEventListener('click', createGroupFromSelectedContacts);
+    var choosePrimaryContactBtn = $('nativeWechatGroupInvitePrimaryContactChooseBtn');
+    if (choosePrimaryContactBtn) choosePrimaryContactBtn.addEventListener('click', openGroupInviteContactPicker);
+    var groupContactSearch = $('nativeWechatContactPickerSearch');
+    if (groupContactSearch) groupContactSearch.addEventListener('input', function() {
+      state.groupInviteContactSearch = groupContactSearch.value || '';
+      renderGroupInviteContactPicker();
+    });
+    var clearPrimaryContactBtn = $('nativeWechatContactPickerClear');
+    if (clearPrimaryContactBtn) clearPrimaryContactBtn.addEventListener('click', function() { setGroupInvitePrimaryContact('', ''); });
 
     root.querySelectorAll('[data-native-wechat-tab]').forEach(function(btn) {
       btn.addEventListener('click', function() { switchTab(btn.getAttribute('data-native-wechat-tab')); });
@@ -1430,12 +1601,22 @@
         loadMessages();
         return;
       }
+      var groupContact = evt.target.closest('[data-native-group-contact]');
+      if (groupContact) {
+        setGroupInvitePrimaryContact(
+          groupContact.getAttribute('data-native-group-contact') || '',
+          groupContact.getAttribute('data-native-group-contact-name') || ''
+        );
+        return;
+      }
       var account = evt.target.closest('[data-native-account]');
       if (account) {
         state.activeAccountId = account.getAttribute('data-native-account') || '';
         renderAccountSelect();
         loadPeers();
         loadAutoReplyConfig();
+        loadAutoReplyMemoryDocs();
+        loadContacts();
         return;
       }
       var contactSelect = evt.target.closest('[data-native-contact-select]');
@@ -1480,8 +1661,9 @@
     renderSendFiles();
     renderMomentsFiles();
     renderAutoReply();
+    renderAutoReplyConfig();
     loadAccounts().then(function() {
-      return Promise.all([loadPeers(), loadTasks(), loadStrategy(), loadAutoReplyConfig()]);
+      return Promise.all([loadPeers(), loadContacts(), loadTasks(), loadStrategy(), loadAutoReplyConfig(), loadAutoReplyMemoryDocs()]);
     });
   };
 })();

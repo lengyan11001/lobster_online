@@ -4,6 +4,13 @@ from backend.app.api import chat
 from backend.app.services import publish_copy_llm
 
 
+def test_wechat_channels_publish_copy_prompt_uses_16_character_limit():
+    limits = publish_copy_llm._platform_copy_limits("wechat_channels", "video")
+
+    assert "最多 16 个字" in limits
+    assert "不要标点" in limits
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("requested_model", "expected_model"),

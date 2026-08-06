@@ -16,6 +16,7 @@
     activeMomentImageBatchId: '',
     momentBatchJobs: [],
     latestDrafts: [],
+    selectedRecordIds: {},
     recordFilter: '',
     configTab: 'templates',
     settingTemplates: [],
@@ -276,6 +277,10 @@
     if (task === 'professional_ip_oral') return 'IP口播';
     if (task === 'moments_candidate') return '朋友圈';
     return task || '记录';
+  }
+
+  function isOralTask(task) {
+    return task === 'industry_hot_oral' || task === 'professional_ip_oral';
   }
 
   function sourceTitle(item) {
@@ -1683,6 +1688,141 @@
     });
   }
 
+  function setFieldValue(id, value) {
+    var field = $(id);
+    if (!field) return false;
+    field.value = String(value || '');
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    try {
+      field.focus();
+      if (typeof field.setSelectionRange === 'function') field.setSelectionRange(field.value.length, field.value.length);
+    } catch (e) {}
+    return true;
+  }
+
+  function fillFieldWhenReady(id, value, callback, attempts) {
+    attempts = attempts === undefined ? 40 : attempts;
+    if (setFieldValue(id, value)) {
+      if (typeof callback === 'function') callback();
+      return;
+    }
+    if (attempts <= 0) {
+      setMsg('目标工作台加载失败，请重新操作。', true);
+      return;
+    }
+    setTimeout(function() { fillFieldWhenReady(id, value, callback, attempts - 1); }, 50);
+  }
+
+  function ensureDraftActionAllowed(view) {
+    if (typeof window.isLobsterViewAllowed === 'function' && !window.isLobsterViewAllowed(view)) {
+      setMsg('当前账号没有该创作功能权限。', true);
+      return false;
+    }
+    return true;
+  }
+
+  function openDraftContentAction(rec, action, currentText) {
+    rec = rec || {};
+    var text = String(currentText || rec.body || rec.content || '').trim();
+    var title = String(rec.title || taskLabel(rec.task) || '口播文案').trim();
+    if (!text) {
+      setMsg('当前记录没有可带入的文案。', true);
+      return;
+    }
+    if (action === 'image') {
+      if (!ensureDraftActionAllowed('image-composer-studio')) return;
+      if (typeof window._openImageComposerStudioView === 'function') window._openImageComposerStudioView();
+      else if (typeof window._openHiddenWorkspaceView === 'function') window._openHiddenWorkspaceView('image-composer-studio');
+      fillFieldWhenReady('imglabPromptInput', text);
+      return;
+    }
+    if (action === 'video') {
+      if (!ensureDraftActionAllowed('seedance-tvc-studio')) return;
+      if (typeof window._openSeedanceTvcStudioView === 'function') window._openSeedanceTvcStudioView();
+      else if (typeof window._openHiddenWorkspaceView === 'function') window._openHiddenWorkspaceView('seedance-tvc-studio');
+      fillFieldWhenReady('seedanceTaskPromptInput', text);
+      return;
+    }
+    if (action === 'digital-human') {
+      if (!ensureDraftActionAllowed('hifly-digital-human')) return;
+      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+      else if (typeof window._openHiddenWorkspaceView === 'function') window._openHiddenWorkspaceView('hifly-digital-human');
+      fillFieldWhenReady('hiflyScriptInput', text, function() {
+        setFieldValue('hiflyTitleInput', title.slice(0, 20));
+      });
+    }
+  }
+
+  function deleteDraftRecord(recordId) {
+    recordId = String(recordId || '');
+    if (!recordId || !confirm('删除这条生成记录？删除后不可恢复。')) return;
+    cloudJson('/api/ip-content/draft-records/' + encodeURIComponent(recordId), { method: 'DELETE', json: false })
+      .then(function() {
+        delete state.selectedRecordIds[recordId];
+        setMsg('生成记录已删除。');
+        return loadDraftRecords();
+      })
+      .catch(function(err) { setMsg(err.message || '生成记录删除失败', true); });
+  }
+
+  function deleteDraftGroup(groupId) {
+    groupId = String(groupId || '');
+    if (!groupId || !confirm('删除这一批全部生成记录？删除后不可恢复。')) return;
+    cloudJson('/api/ip-content/draft-record-groups/' + encodeURIComponent(groupId), { method: 'DELETE', json: false })
+      .then(function() {
+        state.activeGroupId = '';
+        state.selectedRecordIds = {};
+        setMsg('这一批生成记录已删除。');
+        return loadDraftRecords();
+      })
+      .catch(function(err) { setMsg(err.message || '生成批次删除失败', true); });
+  }
+
+  function updateRecordBulkToolbar() {
+    var toolbar = $('ipRecordBulkToolbar');
+    var selectAll = $('ipRecordSelectAll');
+    var countNode = $('ipRecordSelectedCount');
+    var copyBtn = $('ipCopySelectedRecordsBtn');
+    var records = (state.latestDrafts || []).filter(function(rec) { return isOralTask(rec.task); });
+    var selected = records.filter(function(rec) { return !!state.selectedRecordIds[String(rec.record_id || '')]; });
+    if (toolbar) toolbar.hidden = !records.length;
+    if (selectAll) {
+      selectAll.checked = !!records.length && selected.length === records.length;
+      selectAll.indeterminate = selected.length > 0 && selected.length < records.length;
+    }
+    if (countNode) countNode.textContent = '已选 ' + selected.length + ' 条';
+    if (copyBtn) copyBtn.disabled = !selected.length;
+  }
+
+  function copySelectedDraftRecords() {
+    var selected = (state.latestDrafts || []).filter(function(rec) {
+      return isOralTask(rec.task) && !!state.selectedRecordIds[String(rec.record_id || '')];
+    });
+    if (!selected.length) {
+      setMsg('请先选择要复制的文案。', true);
+      return;
+    }
+    var text = selected.map(function(rec) {
+      return [String(rec.title || '').trim(), String(rec.body || rec.content || '').trim()].filter(Boolean).join('\n');
+    }).filter(Boolean).join('\n\n');
+    copyText(text, $('ipCopySelectedRecordsBtn'));
+    setMsg('已复制 ' + selected.length + ' 条文案。');
+  }
+
+  function draftActionMenuHtml(rec) {
+    var id = escAttr(rec.record_id || '');
+    var creationActions = isOralTask(rec.task)
+      ? '<button type="button" data-record-action="image" data-record-id="' + id + '">生成图片</button>' +
+        '<button type="button" data-record-action="video" data-record-id="' + id + '">生成视频</button>' +
+        '<button type="button" data-record-action="digital-human" data-record-id="' + id + '">数字人口播</button>'
+      : '';
+    return '<details class="ip-draft-action-menu"><summary>操作</summary><div class="ip-draft-action-list">' +
+      creationActions +
+      '<button type="button" class="is-danger" data-record-action="delete" data-record-id="' + id + '">删除</button>' +
+      '</div></details>';
+  }
+
   function renderDraftCards(targetId, records, opts) {
     opts = opts || {};
     var box = $(targetId);
@@ -1694,6 +1834,8 @@
     var selectable = !!opts.selectable;
     box.innerHTML = records.map(function(rec) {
       var checked = selectable && rec._selected ? ' checked' : '';
+      var oral = isOralTask(rec.task);
+      var oralChecked = oral && state.selectedRecordIds[String(rec.record_id || '')] ? ' checked' : '';
       var images = recordImages(rec);
       var isMoments = rec.task === 'moments_candidate';
       var bodyText = rec.body || rec.content || '';
@@ -1706,14 +1848,18 @@
         : '<div class="ip-image-preview" data-image-preview="' + escAttr(rec.record_id || '') + '">' + (rec._image_status ? '<small>' + esc(rec._image_status) + '</small>' : '') + '</div>';
       return '<div class="ip-draft-card" data-record-id="' + escAttr(rec.record_id || '') + '">' +
         (selectable ? '<label class="ip-badge-row"><input type="checkbox" data-moment-select="' + escAttr(rec.record_id || '') + '"' + checked + '> <span class="ip-badge">选中出图</span></label>' : '') +
-        '<div class="ip-badge-row"><span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' + (rec.image_url ? '<span class="ip-badge is-image">已出图</span>' : '') + '</div>' +
+        '<div class="ip-draft-card-head"><div class="ip-badge-row">' +
+        (oral ? '<label class="ip-draft-select"><input type="checkbox" data-record-select="' + escAttr(rec.record_id || '') + '"' + oralChecked + '>选择</label>' : '') +
+        '<span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' + (rec.image_url ? '<span class="ip-badge is-image">已出图</span>' : '') + '</div>' +
+        '<div class="ip-draft-top-actions">' +
+        (oral ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-record="' + escAttr(rec.record_id || '') + '">复制</button>' : '') +
+        draftActionMenuHtml(rec) + '</div></div>' +
         '<strong>' + esc(rec.title || '未命名文案') + '</strong>' +
         '<textarea class="' + (isMoments ? 'ip-moments-copy-editor' : '') + '" data-record-copy="' + escAttr(rec.record_id || '') + '">' + esc(bodyText) + '</textarea>' +
         renderImagePrompts(rec) +
         image +
-        '<div class="ip-content-item-actions">' +
-        '<button type="button" class="btn btn-ghost btn-sm" data-copy-record="' + escAttr(rec.record_id || '') + '">复制</button>' +
-        '</div></div>';
+        (!oral ? '<div class="ip-content-item-actions"><button type="button" class="btn btn-ghost btn-sm" data-copy-record="' + escAttr(rec.record_id || '') + '">复制</button></div>' : '') +
+        '</div>';
     }).join('');
     box.querySelectorAll('[data-copy-record]').forEach(function(btn) {
       btn.addEventListener('click', function() {
@@ -1729,6 +1875,12 @@
       var minH = ta.classList.contains('ip-moments-copy-editor') ? 220 : 42;
       ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, minH), maxH) + 'px';
       ta.addEventListener('input', function() {
+        var id = ta.getAttribute('data-record-copy') || '';
+        var rec = records.find(function(item) { return String(item.record_id || '') === String(id); });
+        if (rec) {
+          rec.body = ta.value;
+          rec.content = ta.value;
+        }
         ta.style.height = 'auto';
         ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, minH), maxH) + 'px';
       });
@@ -1767,12 +1919,20 @@
         '<strong>' + esc(taskLabel(group.task)) + ' · ' + esc(group.records.length) + ' 条</strong>' +
         '<small>' + esc(fmtTime(group.created_at)) + '</small>' +
         (preview ? '<small>' + esc(preview) + (preview.length >= 120 ? '...' : '') + '</small>' : '') +
+        '<div class="ip-content-item-actions"><button type="button" class="btn btn-ghost btn-sm" data-delete-group="' + escAttr(group.group_id) + '">删除记录</button></div>' +
         '</div>';
     }).join('');
     list.querySelectorAll('[data-show-group]').forEach(function(item) {
-      item.addEventListener('click', function() {
+      item.addEventListener('click', function(ev) {
+        if (ev.target && ev.target.closest && ev.target.closest('[data-delete-group]')) return;
         state.activeGroupId = item.getAttribute('data-show-group') || '';
         renderDraftRecords();
+      });
+    });
+    list.querySelectorAll('[data-delete-group]').forEach(function(btn) {
+      btn.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        deleteDraftGroup(btn.getAttribute('data-delete-group') || '');
       });
     });
     renderGroupDetail(groups.find(function(g) { return g.group_id === state.activeGroupId; }) || groups[0]);
@@ -1785,6 +1945,7 @@
       if (title) title.textContent = '生成明细';
       if (imageBtn) imageBtn.style.display = 'none';
       renderDraftCards('ipLatestDraftList', []);
+      updateRecordBulkToolbar();
       return;
     }
     state.latestDrafts = group.records.map(function(rec) {
@@ -1794,6 +1955,7 @@
     if (title) title.textContent = taskLabel(group.task) + ' · ' + group.records.length + ' 条';
     if (imageBtn) imageBtn.style.display = group.task === 'moments_candidate' ? '' : 'none';
     renderDraftCards('ipLatestDraftList', state.latestDrafts, { selectable: group.task === 'moments_candidate' });
+    updateRecordBulkToolbar();
   }
 
   function momentBatchStatusLabel(status) {
@@ -1844,6 +2006,7 @@
       } else {
         action = '<button type="button" class="btn btn-ghost btn-sm" disabled>待执行</button>';
       }
+      action += '<button type="button" class="btn btn-ghost btn-sm" data-delete-moment-batch="' + escAttr(job.batch_id) + '">删除记录</button>';
       return '<div class="ip-moment-batch-card' + momentBatchStatusClass(status) + '">' +
         '<div class="ip-badge-row"><span class="ip-badge">朋友圈文案</span><span class="ip-badge">' + esc(job.label) + '</span><span class="ip-badge is-image">' + esc(job.count) + '条</span><span class="ip-badge' + (status === 'failed' ? ' is-used' : (status === 'done' ? ' is-new' : '')) + '">' + esc(momentBatchStatusLabel(status)) + '</span></div>' +
         '<strong>' + esc(job.label) + ' / 共 ' + esc(job.batch_count) + ' 批</strong>' +
@@ -1861,6 +2024,11 @@
     box.querySelectorAll('[data-show-moment-batch]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         selectMomentBatchGroup(btn.getAttribute('data-show-moment-batch'));
+      });
+    });
+    box.querySelectorAll('[data-delete-moment-batch]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        deleteMomentBatchJob(btn.getAttribute('data-delete-moment-batch') || '');
       });
     });
   }
@@ -2031,6 +2199,29 @@
         };
       });
     });
+    box.querySelectorAll('[data-record-select]').forEach(function(input) {
+      input.addEventListener('change', function() {
+        var id = input.getAttribute('data-record-select') || '';
+        if (id) state.selectedRecordIds[id] = !!input.checked;
+        updateRecordBulkToolbar();
+      });
+    });
+    box.querySelectorAll('[data-record-action]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-record-id') || '';
+        var action = btn.getAttribute('data-record-action') || '';
+        var rec = records.find(function(item) { return String(item.record_id || '') === String(id); });
+        var details = btn.closest('details');
+        if (details) details.removeAttribute('open');
+        if (action === 'delete') {
+          deleteDraftRecord(id);
+          return;
+        }
+        var ta = box.querySelector('[data-record-copy="' + cssEscape(id) + '"]');
+        openDraftContentAction(rec, action, ta ? ta.value : '');
+      });
+    });
+    updateRecordBulkToolbar();
   }
 
   function clonePayload(payload) {
@@ -2153,6 +2344,33 @@
         });
         throw err;
       });
+  }
+
+  function deleteMomentBatchJob(batchId) {
+    var job = findMomentBatchJob(batchId);
+    if (!job || !confirm('删除这条批次记录？已生成的文案也会一起删除。')) return;
+    var groupId = String(job.group_id || '');
+    var removeRemote = groupId
+      ? cloudJson('/api/ip-content/draft-record-groups/' + encodeURIComponent(groupId), { method: 'DELETE', json: false })
+          .catch(function(err) {
+            if (/生成批次不存在|404/.test(String(err && err.message || ''))) return { ok: true, deleted: 0 };
+            throw err;
+          })
+      : Promise.resolve({ ok: true, deleted: 0 });
+    removeRemote.then(function() {
+      (job.records || []).forEach(function(rec) {
+        if (rec && rec.record_id) delete state.selectedRecordIds[String(rec.record_id)];
+      });
+      state.momentBatchJobs = (state.momentBatchJobs || []).filter(function(item) {
+        return String(item.batch_id || '') !== String(batchId || '');
+      });
+      saveMomentBatchJobs();
+      renderMomentBatchQueue();
+      setMsg('批次记录已删除。');
+      return loadDraftRecords();
+    }).catch(function(err) {
+      setMsg(err.message || '批次记录删除失败', true);
+    });
   }
 
   function retryMomentBatchJob(batchId) {
@@ -2418,6 +2636,17 @@
       runMomentsGenerate($('ipGenerateMomentsBtn'), 'records');
     });
     if ($('ipGenerateSelectedImagesBtn')) $('ipGenerateSelectedImagesBtn').addEventListener('click', confirmMomentsImages);
+    if ($('ipRecordSelectAll')) $('ipRecordSelectAll').addEventListener('change', function() {
+      var checked = !!$('ipRecordSelectAll').checked;
+      (state.latestDrafts || []).forEach(function(rec) {
+        if (isOralTask(rec.task) && rec.record_id) state.selectedRecordIds[String(rec.record_id)] = checked;
+      });
+      document.querySelectorAll('#ipLatestDraftList [data-record-select]').forEach(function(input) {
+        input.checked = checked;
+      });
+      updateRecordBulkToolbar();
+    });
+    if ($('ipCopySelectedRecordsBtn')) $('ipCopySelectedRecordsBtn').addEventListener('click', copySelectedDraftRecords);
   }
 
   window.initIpContentStudioView = function() {

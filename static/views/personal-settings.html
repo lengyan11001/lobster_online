@@ -1,5 +1,5 @@
 <div id="content-personal-settings" class="content-block personal-settings-view">
-  <style>
+  <style media="not all" data-superseded-by="pc-workbench.css">
     .personal-settings-view {
       --ps-ink: #18233a;
       --ps-muted: #66758f;
@@ -87,16 +87,54 @@
     .ps-memory-item strong { display: block; }
     .ps-memory-item small { display: block; color: var(--ps-muted); margin-top: 0.24rem; word-break: break-all; }
     .ps-memory-preview { white-space: pre-wrap; max-height: 420px; overflow: auto; border-radius: 16px; padding: 0.8rem; background: #101827; color: #eef7f3; font-size: 0.84rem; line-height: 1.55; }
-    .ps-survey { display: grid; gap: 0.8rem; }
-    .ps-survey-top { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 0.7rem; align-items: center; color: var(--ps-muted); font-weight: 900; }
-    .ps-survey-bar { height: 8px; border-radius: 999px; background: rgba(15,143,122,0.13); overflow: hidden; }
-    .ps-survey-bar i { display: block; height: 100%; width: 0; background: linear-gradient(135deg, #0f8f7a, #18a9c8); border-radius: inherit; transition: width 0.2s ease; }
-    .ps-survey-card { border: 1px solid rgba(21,35,64,0.1); border-radius: 18px; background: #fff; padding: 1rem; display: grid; gap: 0.65rem; }
-    .ps-survey-card strong { font-size: 1.12rem; }
+    .ps-survey { display: grid; gap: 0; }
+    .ps-survey-heading { display: grid; grid-template-columns: 36px minmax(0,1fr) auto; gap: 0.72rem; align-items: center; padding-bottom: 0.9rem; border-bottom: 1px solid #edf1f7; }
+    .ps-survey-heading-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: #4383ec; background: #edf5ff; font-size: 0.82rem; font-weight: 500; }
+    .ps-survey-heading strong { display: block; color: #273347; font-size: 1rem; line-height: 1.35; font-weight: 500; }
+    .ps-survey-heading p { margin: 0.2rem 0 0; color: var(--ps-muted); font-size: 0.76rem; line-height: 1.45; }
+    .ps-survey-heading > span { padding: 0.35rem 0.58rem; border-radius: 999px; color: #2f7a62; background: #eaf8f1; font-size: 0.72rem; white-space: nowrap; }
+    .ps-survey-list { display: block; }
+    .ps-survey-item { padding: 0.82rem 0 0.9rem; border-bottom: 1px solid #edf1f7; }
+    .ps-survey-item:last-child { border-bottom: 0; }
+    .ps-survey-question { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 0.58rem; align-items: start; }
+    .ps-survey-question > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: #4383ec; font-size: 0.74rem; line-height: 1; }
+    .ps-survey-question strong, .ps-survey-question small { display: block; letter-spacing: 0; }
+    .ps-survey-question strong { color: #273347; font-size: 0.9rem; line-height: 1.45; font-weight: 500; }
+    .ps-survey-question small { margin-top: 0.12rem; color: var(--ps-muted); font-size: 0.74rem; line-height: 1.45; font-weight: 400; }
+    .ps-survey-answer { margin-top: 0.58rem; }
     .ps-survey-answer input,
     .ps-survey-answer select,
-    .ps-survey-answer textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(21,35,64,0.16); border-radius: 16px; padding: 0.82rem; font-size: 1rem; line-height: 1.55; background:#fff; }
-    .ps-survey-answer textarea { min-height: 160px; resize: vertical; }
+    .ps-survey-answer textarea { width: 100%; box-sizing: border-box; border: 1px solid #edf0f4; border-radius: 12px; padding: 0.68rem 0.82rem; color: #344054; font-size: 0.82rem; line-height: 1.5; background:#f9fafc; }
+    .ps-survey-answer input,
+    .ps-survey-answer select { min-height: 42px; }
+    .ps-survey-answer textarea { min-height: 82px; resize: vertical; }
+    .ps-survey-actions { justify-content: flex-end; padding-top: 0.85rem; border-top: 1px solid #edf1f7; }
+    .ps-photo-select { display: grid; grid-template-columns: 88px minmax(0,1fr) auto; gap: 0.8rem; align-items: center; min-height: 88px; }
+    .ps-photo-preview { width: 88px; height: 88px; border-radius: 14px; overflow: hidden; background: #eef7f4; border: 1px dashed rgba(15,143,122,0.36); display: grid; place-items: center; color: var(--ps-accent); font-size: 0.84rem; }
+    .ps-photo-preview.has-image { border-style: solid; background: #f4f6f8; }
+    .ps-photo-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .ps-photo-copy { min-width: 0; display: grid; gap: 0.3rem; }
+    .ps-photo-copy strong { font-size: 0.96rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-photo-copy span { color: var(--ps-muted); font-size: 0.8rem; }
+    .ps-photo-actions { display: flex; gap: 0.45rem; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+    .ps-photo-clear { color: #b42318; }
+    .ps-photo-picker { position: fixed; inset: 0; z-index: 24000; display: none; align-items: center; justify-content: center; padding: 1rem; background: rgba(18,28,44,0.48); }
+    .ps-photo-picker.is-visible { display: flex; }
+    .ps-photo-picker-dialog { width: min(880px, 96vw); max-height: min(720px, 90vh); overflow: hidden; display: grid; grid-template-rows: auto auto auto minmax(180px,1fr); border-radius: 18px; background: #fff; border: 1px solid rgba(21,35,64,0.12); box-shadow: 0 28px 80px rgba(16,30,54,0.24); }
+    .ps-photo-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; padding: 0.9rem 1rem; border-bottom: 1px solid var(--ps-line); }
+    .ps-photo-picker-head strong { font-size: 1rem; }
+    .ps-photo-picker-close { width: 36px; height: 36px; border: 0; border-radius: 50%; background: #f1f4f7; color: var(--ps-ink); cursor: pointer; font-size: 1.25rem; line-height: 1; }
+    .ps-photo-picker-tools { padding: 0.75rem 1rem 0; }
+    .ps-photo-picker-tools input { width: 100%; box-sizing: border-box; border: 1px solid rgba(21,35,64,0.16); border-radius: 14px; padding: 0.72rem 0.8rem; background: #fff; color: var(--ps-ink); }
+    .ps-photo-picker-status { padding: 0.55rem 1rem; color: var(--ps-muted); font-size: 0.8rem; }
+    .ps-photo-picker-grid { min-height: 0; overflow: auto; padding: 0 1rem 1rem; display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 0.7rem; align-content: start; }
+    .ps-photo-picker-item { min-width: 0; border: 1px solid rgba(21,35,64,0.1); border-radius: 14px; background: #fff; padding: 0.5rem; display: grid; gap: 0.4rem; text-align: left; cursor: pointer; color: var(--ps-ink); }
+    .ps-photo-picker-item:hover, .ps-photo-picker-item.is-selected { border-color: rgba(15,143,122,0.58); box-shadow: 0 10px 26px rgba(15,143,122,0.12); }
+    .ps-photo-picker-thumb { width: 100%; aspect-ratio: 1 / 1; border-radius: 10px; overflow: hidden; display: grid; place-items: center; background: #f1f5f4; color: var(--ps-muted); font-size: 0.72rem; }
+    .ps-photo-picker-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .ps-photo-picker-name { min-width: 0; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-photo-picker-item small { color: var(--ps-muted); font-size: 0.72rem; }
+    .ps-photo-picker-empty { grid-column: 1 / -1; min-height: 180px; display: grid; place-items: center; color: var(--ps-muted); border: 1px dashed rgba(21,35,64,0.16); border-radius: 14px; }
     .ps-hidden-fields { display: none; }
     .ps-template-card { border: 1px solid rgba(21,35,64,0.1); border-radius: 16px; background: #fff; padding: 0.72rem; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0.65rem; align-items: start; }
     .ps-template-card strong { display: block; }
@@ -110,12 +148,334 @@
       .ps-memory-item,
       .ps-option.is-action { grid-template-columns: 1fr; }
       .ps-item-actions { justify-content: flex-start; }
+      .ps-photo-select { grid-template-columns: 88px minmax(0,1fr); }
+      .ps-photo-preview { width: 88px; height: 88px; }
+      .ps-photo-actions { grid-column: 1 / -1; justify-content: flex-start; }
+      .ps-photo-picker-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .ps-survey-heading { grid-template-columns: 36px minmax(0,1fr); }
+      .ps-survey-heading > span { grid-column: 2; justify-self: start; }
+    }
+  </style>
+
+  <style media="not all" data-superseded-by="pc-workbench.css">
+    /* PC IP profile refresh based on the supplied desktop design. */
+    .personal-settings-view {
+      --ps-ink: #273347;
+      --ps-muted: #8994a6;
+      --ps-line: #edf0f4;
+      --ps-soft: #ffffff;
+      --ps-accent: #4383ec;
+      min-height: calc(100vh - 112px);
+      padding: 1.35rem clamp(1rem, 3vw, 2.5rem) 2rem;
+      border-radius: 0;
+      background: #f8fafc;
+      color: var(--ps-ink);
+      font-weight: 400;
+    }
+    .personal-settings-view .ps-page {
+      width: min(1280px, 100%);
+      margin: 0 auto;
+      gap: 0;
+    }
+    .personal-settings-view .ps-head {
+      min-height: 46px;
+      margin: 0 0 0.7rem;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .personal-settings-view .ps-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.7rem;
+      margin: 0;
+      color: #202b3d;
+      font-size: 1.5rem;
+      line-height: 1.2;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    .personal-settings-view .ps-title-mark {
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid #4383ec;
+      border-radius: 7px;
+      color: #4383ec;
+      font-size: 0.58rem;
+      line-height: 1;
+      font-weight: 600;
+    }
+    .personal-settings-view .ps-head > .ps-actions {
+      gap: 0.7rem;
+    }
+    .personal-settings-view .ps-head .btn {
+      min-height: 36px;
+      padding: 0.45rem 0.95rem;
+      border: 1px solid #e3e8ef;
+      border-radius: 10px;
+      background: #fff;
+      color: #647184;
+      box-shadow: 0 2px 6px rgba(31, 47, 74, 0.03);
+      font-size: 0.8rem;
+      font-weight: 400;
+    }
+    .personal-settings-view .ps-tabs {
+      gap: 0.3rem;
+      margin: 0 0 1.1rem;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .personal-settings-view .ps-tabs::-webkit-scrollbar { display: none; }
+    .personal-settings-view .ps-tab {
+      flex: 0 0 auto;
+      min-height: 38px;
+      padding: 0.52rem 1.25rem;
+      border-radius: 10px;
+      color: #647184;
+      font-size: 0.82rem;
+      font-weight: 400;
+      white-space: nowrap;
+      transition: background 0.18s ease, color 0.18s ease;
+    }
+    .personal-settings-view .ps-tab:hover {
+      background: #fff;
+      color: #344054;
+    }
+    .personal-settings-view .ps-tab.is-active {
+      background: #edf5ff;
+      color: #3777dd;
+      box-shadow: none;
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-msg {
+      margin: 0 0 0.85rem;
+      border-color: #cfe2ff;
+      border-radius: 10px;
+      background: #edf5ff;
+      color: #2865c3;
+      font-size: 0.8rem;
+      font-weight: 400;
+    }
+    .personal-settings-view .ps-panel {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .personal-settings-view .ps-grid {
+      gap: 1rem;
+    }
+    .personal-settings-view .ps-card {
+      gap: 1rem;
+      padding: clamp(1.25rem, 2.5vw, 2rem);
+      border: 1px solid var(--ps-line);
+      border-radius: 20px;
+      background: #fff;
+      box-shadow: 0 8px 28px rgba(31, 47, 74, 0.04);
+    }
+    .personal-settings-view .ps-card-title {
+      color: #273347;
+      font-size: 1rem;
+      line-height: 1.35;
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-field {
+      gap: 0.45rem;
+    }
+    .personal-settings-view .ps-field label {
+      color: #8a95a6;
+      font-size: 0.76rem;
+      font-weight: 400;
+    }
+    .personal-settings-view .ps-field input,
+    .personal-settings-view .ps-field textarea,
+    .personal-settings-view .ps-field select,
+    .personal-settings-view .ps-survey-answer input,
+    .personal-settings-view .ps-survey-answer select,
+    .personal-settings-view .ps-survey-answer textarea {
+      min-height: 42px;
+      padding: 0.68rem 0.85rem;
+      border: 1px solid #edf0f4;
+      border-radius: 12px;
+      background: #f9fafc;
+      color: #344054;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      font-weight: 400;
+      box-shadow: none;
+    }
+    .personal-settings-view .ps-field input:focus,
+    .personal-settings-view .ps-field textarea:focus,
+    .personal-settings-view .ps-field select:focus,
+    .personal-settings-view .ps-survey-answer input:focus,
+    .personal-settings-view .ps-survey-answer select:focus,
+    .personal-settings-view .ps-survey-answer textarea:focus {
+      border-color: #9ec4ff;
+      background: #fff;
+      outline: 3px solid rgba(67, 131, 236, 0.08);
+    }
+    .personal-settings-view .ps-inline {
+      gap: 0.85rem 1.5rem;
+    }
+    .personal-settings-view .btn.btn-primary {
+      min-height: 40px;
+      border: 1px solid #4383ec;
+      border-radius: 10px;
+      background: #4383ec;
+      color: #fff;
+      box-shadow: 0 5px 12px rgba(67, 131, 236, 0.14);
+      font-weight: 400;
+    }
+    .personal-settings-view .btn.btn-primary:hover {
+      border-color: #3375df;
+      background: #3375df;
+    }
+    .personal-settings-view .btn.btn-ghost {
+      min-height: 36px;
+      border: 1px solid #e5e9ef;
+      border-radius: 10px;
+      background: #fff;
+      color: #657286;
+      box-shadow: none;
+      font-weight: 400;
+    }
+    .personal-settings-view .ps-inline .ps-field .btn {
+      width: 100%;
+    }
+    .personal-settings-view .ps-list,
+    .personal-settings-view .ps-user-results {
+      gap: 0.65rem;
+    }
+    .personal-settings-view .ps-option,
+    .personal-settings-view .ps-user-card,
+    .personal-settings-view .ps-memory-item,
+    .personal-settings-view .ps-template-card,
+    .personal-settings-view .ps-generated-doc,
+    .personal-settings-view .ps-source-card {
+      border-color: #edf0f4;
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: none;
+    }
+    .personal-settings-view .ps-option strong,
+    .personal-settings-view .ps-memory-item strong,
+    .personal-settings-view .ps-template-card strong,
+    .personal-settings-view .ps-source-card > span,
+    .personal-settings-view .ps-source-profile span {
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-user-avatar,
+    .personal-settings-view .ps-user-card img {
+      background: #edf5ff;
+      color: #4383ec;
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-empty {
+      border-color: #e6eaf0;
+      border-radius: 12px;
+      background: #fafbfc;
+      color: #98a2b2;
+    }
+    .personal-settings-view .ps-upload-zone {
+      padding: 1rem;
+      border-color: #bed7fb;
+      border-radius: 14px;
+      background: #f6faff;
+    }
+    .personal-settings-view .ps-file-thumb {
+      background: #edf5ff;
+      color: #4383ec;
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-survey {
+      gap: 0;
+    }
+    .personal-settings-view .ps-survey-top {
+      color: #7f8b9d;
+      font-size: 0.84rem;
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-survey-bar {
+      height: 7px;
+      background: #e8f0fb;
+    }
+    .personal-settings-view .ps-survey-bar i {
+      background: #4383ec;
+    }
+    .personal-settings-view .ps-survey-card {
+      gap: 0.8rem;
+      padding: 1.15rem;
+      border-color: #edf0f4;
+      border-radius: 14px;
+      background: #fbfcfe;
+    }
+    .personal-settings-view .ps-survey-card strong {
+      color: #344054;
+      font-size: 1rem;
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-photo-preview {
+      border-color: #bed7fb;
+      border-radius: 12px;
+      background: #f2f7ff;
+      color: #4383ec;
+    }
+    .personal-settings-view .ps-photo-copy strong {
+      font-weight: 500;
+    }
+    .personal-settings-view .ps-photo-picker-dialog {
+      border-color: #e8ecf2;
+      border-radius: 18px;
+      box-shadow: 0 24px 64px rgba(25, 40, 68, 0.18);
+    }
+    .personal-settings-view .ps-photo-picker-item:hover,
+    .personal-settings-view .ps-photo-picker-item.is-selected {
+      border-color: #8fb9f7;
+      box-shadow: 0 8px 20px rgba(67, 131, 236, 0.1);
+    }
+    .personal-settings-view .ps-memory-preview {
+      border: 1px solid #e7ebf1;
+      background: #f8fafc;
+      color: #475467;
+    }
+
+    @media (max-width: 960px) {
+      .personal-settings-view {
+        padding: 0.9rem;
+      }
+      .personal-settings-view .ps-head {
+        align-items: flex-start;
+      }
+      .personal-settings-view .ps-title {
+        font-size: 1.2rem;
+      }
+      .personal-settings-view .ps-tab {
+        padding-right: 0.9rem;
+        padding-left: 0.9rem;
+      }
+      .personal-settings-view .ps-card {
+        padding: 1rem;
+      }
     }
   </style>
 
   <div class="ps-page">
     <header class="ps-head">
-      <h3 class="ps-title">IP人设定位</h3>
+      <div class="ps-heading-copy">
+        <h3 class="ps-title"><span class="ps-title-mark" aria-hidden="true">IP</span>IP人设定位</h3>
+        <p>完善个人定位资料，让内容创作、数字人和销售员工更懂你的业务。</p>
+      </div>
       <div class="ps-actions">
         <button type="button" id="psRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
         <button type="button" id="psBackBtn" class="btn btn-ghost btn-sm">返回</button>
@@ -123,34 +483,37 @@
     </header>
 
     <nav class="ps-tabs" aria-label="IP人设定位">
-      <button type="button" class="ps-tab is-active" data-ps-tab="keywords">关键词</button>
-      <button type="button" class="ps-tab" data-ps-tab="competitors">同行账号</button>
-      <button type="button" class="ps-tab" data-ps-tab="profile">资料调查</button>
-      <button type="button" class="ps-tab" data-ps-tab="upload">上传资料</button>
-      <button type="button" class="ps-tab" data-ps-tab="memory">记忆文件</button>
-      <button type="button" class="ps-tab" data-ps-tab="template">模板</button>
+      <button type="button" class="ps-tab is-active" data-ps-tab="keywords"><span aria-hidden="true">关</span>关键词</button>
+      <button type="button" class="ps-tab" data-ps-tab="competitors"><span aria-hidden="true">同</span>同行账号</button>
+      <button type="button" class="ps-tab" data-ps-tab="profile"><span aria-hidden="true">资</span>资料调查</button>
+      <button type="button" class="ps-tab" data-ps-tab="upload"><span aria-hidden="true">传</span>上传资料</button>
+      <button type="button" class="ps-tab" data-ps-tab="memory"><span aria-hidden="true">忆</span>记忆文件</button>
+      <button type="button" class="ps-tab" data-ps-tab="template"><span aria-hidden="true">模</span>模板</button>
     </nav>
 
     <div id="psMsg" class="ps-msg"></div>
 
     <section class="ps-panel is-active" data-ps-panel="keywords">
       <div class="ps-grid is-single">
-        <section class="ps-card">
-          <div class="ps-card-title">关键词</div>
-          <div class="ps-inline">
+        <section class="ps-card ps-card-keywords">
+          <div class="ps-section-heading">
+            <div>
+              <div class="ps-card-title">关键词</div>
+              <p>添加你的行业、产品或服务关键词，用于热点检索和内容生成。</p>
+            </div>
+          </div>
+          <div class="ps-form-action-row">
             <div class="ps-field">
               <label for="psKeywordInput">行业关键词</label>
               <input id="psKeywordInput" placeholder="输入行业关键词">
             </div>
-            <div class="ps-field">
-              <label for="psKeywordDisplayName">显示名</label>
-              <input id="psKeywordDisplayName" placeholder="可空">
-            </div>
-          </div>
-          <div class="ps-actions">
+            <input id="psKeywordDisplayName" type="hidden">
             <button type="button" id="psAddKeywordBtn" class="btn btn-primary btn-sm">添加关键词</button>
           </div>
-          <div id="psKeywordList" class="ps-list"></div>
+          <div class="ps-list-region">
+            <div class="ps-list-label">已添加关键词</div>
+            <div id="psKeywordList" class="ps-list"></div>
+          </div>
         </section>
       </div>
     </section>
@@ -158,8 +521,13 @@
     <section class="ps-panel" data-ps-panel="competitors">
       <div class="ps-grid is-single">
         <section class="ps-card">
-          <div class="ps-card-title">同行账号</div>
-          <div class="ps-inline">
+          <div class="ps-section-heading">
+            <div>
+              <div class="ps-card-title">同行账号</div>
+              <p>搜索并添加同行账号，系统会同步公开内容作为创作参考。</p>
+            </div>
+          </div>
+          <div class="ps-competitor-form">
             <div class="ps-field">
               <label for="psCompetitorPlatform">平台</label>
               <select id="psCompetitorPlatform">
@@ -171,36 +539,33 @@
               <label for="psCompetitorSearchInput">昵称或抖音号</label>
               <input id="psCompetitorSearchInput" placeholder="输入昵称或抖音号">
             </div>
-          </div>
-          <div class="ps-inline">
             <div class="ps-field">
               <label for="psCompetitorTags">行业标签</label>
               <input id="psCompetitorTags" placeholder="可空">
             </div>
-            <div class="ps-field">
-              <label>&nbsp;</label>
-              <button type="button" id="psSearchCompetitorBtn" class="btn btn-primary btn-sm">搜索账号</button>
-            </div>
+            <button type="button" id="psSearchCompetitorBtn" class="btn btn-primary btn-sm">搜索账号</button>
           </div>
           <div id="psCompetitorSearchResults" class="ps-user-results"></div>
-          <div id="psCompetitorList" class="ps-list"></div>
+          <div class="ps-list-region">
+            <div class="ps-list-label">已添加同行</div>
+            <div id="psCompetitorList" class="ps-list"></div>
+          </div>
         </section>
       </div>
     </section>
 
     <section class="ps-panel" data-ps-panel="profile">
       <section class="ps-card ps-survey">
-        <div class="ps-survey-top">
-          <span id="psProfileStepText">1/14</span>
-          <div class="ps-survey-bar"><i id="psProfileProgress"></i></div>
+        <div class="ps-survey-heading">
+          <div class="ps-survey-heading-icon" aria-hidden="true">资</div>
+          <div>
+            <strong>资料调查</strong>
+            <p>请按实际情况填写，信息越完整，后续生成的内容越贴合你的业务。</p>
+          </div>
+          <span id="psProfileCompletionText">已填写 0/14</span>
         </div>
-        <div class="ps-survey-card">
-          <strong id="psProfileQuestionTitle">名字</strong>
-          <div id="psProfileAnswerHost" class="ps-survey-answer"></div>
-        </div>
-        <div class="ps-actions">
-          <button class="btn btn-ghost btn-sm" type="button" id="psProfilePrevBtn">上一步</button>
-          <button class="btn btn-primary btn-sm" type="button" id="psProfileNextBtn">下一步</button>
+        <div id="psProfileQuestionList" class="ps-survey-list"></div>
+        <div class="ps-actions ps-survey-actions">
           <button class="btn btn-primary btn-sm" type="button" id="psSaveProfileBtn">保存资料调查</button>
         </div>
         <div class="ps-hidden-fields" aria-hidden="true">
@@ -222,28 +587,53 @@
       </section>
     </section>
 
+    <div id="psProfilePhotoPicker" class="ps-photo-picker" aria-hidden="true">
+      <section class="ps-photo-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="psProfilePhotoPickerTitle">
+        <header class="ps-photo-picker-head">
+          <strong id="psProfilePhotoPickerTitle">选择素材库图片</strong>
+          <button type="button" class="ps-photo-picker-close" id="psProfilePhotoPickerClose" aria-label="关闭">×</button>
+        </header>
+        <div class="ps-photo-picker-tools">
+          <input id="psProfilePhotoPickerSearch" type="search" placeholder="搜索图片名称">
+        </div>
+        <div id="psProfilePhotoPickerStatus" class="ps-photo-picker-status"></div>
+        <div id="psProfilePhotoPickerGrid" class="ps-photo-picker-grid"></div>
+      </section>
+    </div>
+
     <section class="ps-panel" data-ps-panel="upload">
-      <div class="ps-grid">
-        <section class="ps-card">
-          <div class="ps-card-title">上传资料</div>
-          <div class="ps-upload-zone">
-            <div class="ps-field">
-              <label for="psMemoryFiles">上传文件</label>
-              <input id="psMemoryFiles" type="file" multiple accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.pptx,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.ogg,.flac,.amr,.wma,audio/*">
-            </div>
-            <div id="psSelectedFiles" class="ps-file-list"></div>
+      <section class="ps-card ps-upload-card">
+        <div class="ps-card-title">上传资料</div>
+        <div class="ps-upload-surface">
+          <label class="ps-upload-label" for="psMemoryFiles">上传文件</label>
+          <label id="psUploadDropzone" class="ps-upload-zone" for="psMemoryFiles">
+            <input id="psMemoryFiles" class="ps-upload-input" type="file" multiple accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.ppt,.pptx,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.ogg,.flac,.amr,.wma,audio/*">
+            <span class="ps-upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                <path d="M7 18a4 4 0 0 1-.4-7.98A5.5 5.5 0 0 1 17.3 8.3 4.5 4.5 0 0 1 18 17.95" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M12 17V10m0 0-2.7 2.7M12 10l2.7 2.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <span class="ps-upload-primary">点击选择文件，或将文件拖拽至此处</span>
+            <span class="ps-upload-hint">支持 PDF、DOCX、TXT、PPT、表格、图片、视频及音频，单文件大小不超过 50MB。</span>
+          </label>
+          <div id="psSelectedFiles" class="ps-file-list ps-upload-file-list"><div class="ps-empty">选择文件后会显示在这里。</div></div>
+          <div class="ps-actions ps-upload-actions">
+            <button type="button" id="psSaveRawMemoryBtn" class="btn btn-primary btn-sm">存入资料</button>
           </div>
-          <div class="ps-actions">
-            <button type="button" id="psSaveRawMemoryBtn" class="btn btn-ghost btn-sm">存入资料</button>
-          </div>
-        </section>
-      </div>
+        </div>
+      </section>
     </section>
 
     <section class="ps-panel" data-ps-panel="memory">
       <div class="ps-grid">
         <section class="ps-card">
-          <div class="ps-card-title">生成记忆文件</div>
+          <div class="ps-section-heading">
+            <div>
+              <div class="ps-card-title">生成记忆文件</div>
+              <p>组合人设、关键词、同行和上传资料，让 AI 整理成可长期调用的记忆。</p>
+            </div>
+          </div>
           <div class="ps-source-grid">
             <label class="ps-source-card ps-source-profile">
               <input id="psMemoryUseProfile" type="checkbox" checked>
@@ -327,7 +717,13 @@
     <section class="ps-panel" data-ps-panel="template">
       <div class="ps-grid">
         <section class="ps-card">
-          <div class="ps-card-title">当前使用模板</div>
+          <div class="ps-section-heading">
+            <div>
+              <div class="ps-card-title">模板管理</div>
+              <p>把关键词、同行和记忆组合成不同业务场景的个人 IP 模板。</p>
+            </div>
+          </div>
+          <div class="ps-card-title ps-card-subtitle">当前使用模板</div>
           <div id="psCurrentTemplateBox" class="ps-list"></div>
           <div class="ps-card-title">新建模板</div>
           <div class="ps-field">

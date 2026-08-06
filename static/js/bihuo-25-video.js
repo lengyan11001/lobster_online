@@ -353,10 +353,10 @@
       method: 'POST', headers: headers(true), body: JSON.stringify({
         url: url,
         media_type: 'video',
-        name: '必火2.5-' + String(state.task.task_id || '').slice(0, 16),
+        name: '智能视频2.5-' + String(state.task.task_id || '').slice(0, 16),
         tags: 'auto,bihuo.25,generated',
         prompt: String((state.task.payload || {}).prompt || ''),
-        model: '必火2.5',
+        model: '智能视频 2.5',
         generation_task_id: state.task.task_id || ''
       })
     }).then(function(data) {

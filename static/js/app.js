@@ -112,6 +112,9 @@ function clearStoredAuthToken() {
 function setLobsterBrandMark(mark) {
   var next = normalizeLobsterBrandMark(mark);
   window.__LOBSTER_BRAND_MARK = next;
+  if (document && document.documentElement) {
+    document.documentElement.setAttribute('data-brand', next);
+  }
   localStorage.setItem('lobster_active_brand_mark', next);
   token = getStoredAuthToken();
   return next;
@@ -121,6 +124,7 @@ window.getStoredAuthToken = getStoredAuthToken;
 window.setStoredAuthToken = setStoredAuthToken;
 window.clearStoredAuthToken = clearStoredAuthToken;
 window.setLobsterBrandMark = setLobsterBrandMark;
+document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
 
 (function installBrandRequestContext() {
   if (window.__LOBSTER_BRAND_FETCH_INSTALLED || typeof window.fetch !== 'function') return;

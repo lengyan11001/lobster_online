@@ -545,6 +545,13 @@ def init_db() -> None:
                 enabled integer not null default 0,
                 interval_seconds integer not null default 1800,
                 user_id integer,
+                memory_doc_ids text not null default '[]',
+                group_invite_memory_doc_id text not null default '',
+                group_invite_keywords text not null default '',
+                group_invite_contacts text not null default '[]',
+                group_invite_primary_contact text not null default '',
+                group_invite_primary_contact_name text not null default '',
+                group_invite_welcome_message text not null default '',
                 running integer not null default 0,
                 last_started_at text,
                 last_checked_at text,
@@ -590,11 +597,23 @@ def init_db() -> None:
             on wechat_moments_comments(account_id, created_at desc);
             """
         )
+        config_columns = {str(row[1]) for row in conn.execute("pragma table_info(wechat_auto_reply_config)").fetchall()}
+        for column_name, column_sql in (
+            ("memory_doc_ids", "text not null default '[]'"),
+            ("group_invite_memory_doc_id", "text not null default ''"),
+            ("group_invite_keywords", "text not null default ''"),
+            ("group_invite_contacts", "text not null default '[]'"),
+            ("group_invite_primary_contact", "text not null default ''"),
+            ("group_invite_primary_contact_name", "text not null default ''"),
+            ("group_invite_welcome_message", "text not null default ''"),
+        ):
+            if column_name not in config_columns:
+                conn.execute(f"alter table wechat_auto_reply_config add column {column_name} {column_sql}")
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     item = dict(row)
-    for key in ("raw_json", "targets", "payload", "strategy", "last_result"):
+    for key in ("raw_json", "targets", "payload", "strategy", "last_result", "memory_doc_ids", "group_invite_contacts"):
         if key in item and isinstance(item[key], str) and item[key]:
             item[key] = _safe_json_loads(item[key], item[key])
     return item
@@ -1691,6 +1710,13 @@ def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
         "enabled": False,
         "interval_seconds": int(DEFAULT_STRATEGY["auto_reply_interval_seconds"]),
         "user_id": None,
+        "memory_doc_ids": [],
+        "group_invite_memory_doc_id": "",
+        "group_invite_keywords": "",
+        "group_invite_contacts": [],
+        "group_invite_primary_contact": "",
+        "group_invite_primary_contact_name": "",
+        "group_invite_welcome_message": "",
         "running": False,
         "last_started_at": "",
         "last_checked_at": "",
@@ -1713,6 +1739,16 @@ def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) ->
         cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
     if not isinstance(cfg.get("last_result"), dict):
         cfg["last_result"] = _safe_json_loads(str(cfg.get("last_result") or ""), {})
+    for key in ("memory_doc_ids", "group_invite_contacts"):
+        value = cfg.get(key)
+        if not isinstance(value, list):
+            value = _safe_json_loads(str(value or ""), [])
+        cfg[key] = list(dict.fromkeys(str(item or "").strip() for item in value if str(item or "").strip()))[:50]
+    cfg["group_invite_keywords"] = str(cfg.get("group_invite_keywords") or "").strip()[:2000]
+    cfg["group_invite_memory_doc_id"] = str(cfg.get("group_invite_memory_doc_id") or "").strip()[:64]
+    cfg["group_invite_primary_contact"] = str(cfg.get("group_invite_primary_contact") or "").strip()[:240]
+    cfg["group_invite_primary_contact_name"] = str(cfg.get("group_invite_primary_contact_name") or "").strip()[:240]
+    cfg["group_invite_welcome_message"] = str(cfg.get("group_invite_welcome_message") or "").strip()[:4000]
     return cfg
 
 
@@ -1735,6 +1771,13 @@ def save_auto_reply_config(
     enabled: bool,
     interval_seconds: int = 1800,
     user_id: Optional[int] = None,
+    memory_doc_ids: Optional[List[str]] = None,
+    group_invite_memory_doc_id: Optional[str] = None,
+    group_invite_keywords: Optional[str] = None,
+    group_invite_contacts: Optional[List[str]] = None,
+    group_invite_primary_contact: Optional[str] = None,
+    group_invite_primary_contact_name: Optional[str] = None,
+    group_invite_welcome_message: Optional[str] = None,
     auth_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     init_db()
@@ -1745,19 +1788,82 @@ def save_auto_reply_config(
         raise RuntimeError("auto reply only supports local PC WeChat accounts")
     _find_local_account(account_id)
     interval_seconds = max(300, int(interval_seconds or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
+    current = get_auto_reply_config(account_id)
+    selected_memory_ids = current.get("memory_doc_ids") if memory_doc_ids is None else memory_doc_ids
+    selected_memory_ids = list(
+        dict.fromkeys(str(item or "").strip()[:64] for item in (selected_memory_ids or []) if str(item or "").strip())
+    )[:20]
+    invite_memory_doc_id = (
+        current.get("group_invite_memory_doc_id")
+        if group_invite_memory_doc_id is None
+        else group_invite_memory_doc_id
+    )
+    invite_memory_doc_id = str(invite_memory_doc_id or "").strip()[:64]
+    invite_keywords = current.get("group_invite_keywords") if group_invite_keywords is None else group_invite_keywords
+    invite_keywords = str(invite_keywords or "").strip()[:2000]
+    invite_contacts = current.get("group_invite_contacts") if group_invite_contacts is None else group_invite_contacts
+    invite_contacts = list(
+        dict.fromkeys(str(item or "").strip()[:240] for item in (invite_contacts or []) if str(item or "").strip())
+    )[:20]
+    primary_contact = (
+        current.get("group_invite_primary_contact")
+        if group_invite_primary_contact is None
+        else group_invite_primary_contact
+    )
+    primary_contact = str(primary_contact or "").strip()[:240]
+    primary_contact_name = (
+        current.get("group_invite_primary_contact_name")
+        if group_invite_primary_contact_name is None
+        else group_invite_primary_contact_name
+    )
+    primary_contact_name = str(primary_contact_name or "").strip()[:240]
+    welcome_message = (
+        current.get("group_invite_welcome_message")
+        if group_invite_welcome_message is None
+        else group_invite_welcome_message
+    )
+    welcome_message = str(welcome_message or "").strip()[:4000]
+    if primary_contact:
+        invite_contacts = [primary_contact]
     now = _now_iso()
     with _connect() as conn:
         conn.execute(
             """
-            insert into wechat_auto_reply_config(account_id, enabled, interval_seconds, user_id, running, updated_at)
-            values(?,?,?,?,?,?)
+            insert into wechat_auto_reply_config(
+                account_id, enabled, interval_seconds, user_id, memory_doc_ids,
+                group_invite_memory_doc_id, group_invite_keywords, group_invite_contacts,
+                group_invite_primary_contact, group_invite_primary_contact_name,
+                group_invite_welcome_message, running, updated_at
+            )
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(account_id) do update set
               enabled=excluded.enabled,
               interval_seconds=excluded.interval_seconds,
               user_id=coalesce(excluded.user_id, wechat_auto_reply_config.user_id),
+              memory_doc_ids=excluded.memory_doc_ids,
+              group_invite_memory_doc_id=excluded.group_invite_memory_doc_id,
+              group_invite_keywords=excluded.group_invite_keywords,
+              group_invite_contacts=excluded.group_invite_contacts,
+              group_invite_primary_contact=excluded.group_invite_primary_contact,
+              group_invite_primary_contact_name=excluded.group_invite_primary_contact_name,
+              group_invite_welcome_message=excluded.group_invite_welcome_message,
               updated_at=excluded.updated_at
             """,
-            (account_id, 1 if enabled else 0, interval_seconds, user_id, 0, now),
+            (
+                account_id,
+                1 if enabled else 0,
+                interval_seconds,
+                user_id,
+                _json_dumps(selected_memory_ids),
+                invite_memory_doc_id,
+                invite_keywords,
+                _json_dumps(invite_contacts),
+                primary_contact,
+                primary_contact_name,
+                welcome_message,
+                0,
+                now,
+            ),
         )
     if auth_context:
         _AUTO_REPLY_AUTH_CONTEXT[account_id] = dict(auth_context)
@@ -2036,6 +2142,7 @@ def _load_auto_reply_memory_context(
     *,
     max_chars: int = 18000,
     max_docs: int = 8,
+    selected_doc_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     empty = {"text": "", "document_count": 0, "titles": []}
     if not user_id:
@@ -2045,14 +2152,20 @@ def _load_auto_reply_memory_context(
     except Exception:
         return empty
     docs = _load_index(int(user_id))
+    selected = list(dict.fromkeys(str(item or "").strip() for item in (selected_doc_ids or []) if str(item or "").strip()))
+    selected_set = set(selected)
     scored: List[tuple[int, int, Dict[str, Any]]] = []
     for index, doc in enumerate(docs):
         if not isinstance(doc, dict):
             continue
+        doc_id = str(doc.get("id") or doc.get("doc_id") or "").strip()
+        if selected_set and doc_id not in selected_set:
+            continue
         status = str(doc.get("status") or "active").strip().lower()
         if status not in {"", "active", "enabled", "ready"}:
             continue
-        scored.append((_auto_reply_memory_score(doc), -index, doc))
+        selected_rank = len(selected) - selected.index(doc_id) if selected_set and doc_id in selected_set else 0
+        scored.append((selected_rank * 1000 + _auto_reply_memory_score(doc), -index, doc))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     parts: List[str] = []
     titles: List[str] = []
@@ -2088,6 +2201,8 @@ async def _call_auto_reply_llm(
     latest_message: str,
     recent_context: str,
     memory_context: str = "",
+    group_invite_rule_context: str = "",
+    group_invite_keywords: str = "",
 ) -> Dict[str, Any]:
     auth_context = auth_context or {}
     token = str(auth_context.get("token") or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
@@ -2103,20 +2218,34 @@ async def _call_auto_reply_llm(
         or getattr(settings, "lobster_default_sutui_chat_model", None)
         or "deepseek-chat"
     )
+    invite_keywords = list(
+        dict.fromkeys(
+            item.strip()
+            for item in re.split(r"[,，;；\n]+", str(group_invite_keywords or ""))
+            if item.strip()
+        )
+    )[:50]
+    invite_rule_context = str(group_invite_rule_context or "").strip()[:8000]
+    has_invite_rule = bool(invite_rule_context or invite_keywords)
     system_prompt = (
         "你是个人微信私聊代回复助手，只处理一对一私聊，不回复群聊。"
         "回复要像真人微信聊天：短、自然、有边界，不营销、不硬广、不夸大。"
         "如果对方只是闲聊，就自然接话；如果对方问业务、产品、价格、流程、合作或售后等专业问题，必须优先依据提供的个人记忆资料。"
         "有效文字消息必须回复；如果资料里没有答案，不能编造，要自然说明需要确认，或请对方补充必要信息。"
+        "如果提供了拉群判断规则文件，你还要结合最新消息、最近上下文和规则文件做语义判断；"
+        "只有客户真实诉求明确符合文件规则时 should_invite_group 才能为 true，不能只因出现相近字词就判定。没有提供规则时必须为 false。"
         "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
         "\"intent_level\":\"high|medium|low|none\",\"topic\":\"简短话题\","
-        "\"conversation_summary\":\"一句话总结对方诉求\",\"reply\":\"实际微信回复\"}。"
+        "\"conversation_summary\":\"一句话总结对方诉求\",\"reply\":\"实际微信回复\","
+        "\"should_invite_group\":false,\"matched_group_keywords\":[],\"group_invite_reason\":\"判断依据\"}。"
     )
     user_prompt = (
         f"会话对象：{peer_name or '未命名'}\n\n"
         f"最近聊天记录：\n{recent_context or '(暂无)'}\n\n"
         f"对方最新消息：\n{latest_message}\n\n"
-        f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}"
+        f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}\n\n"
+        f"拉群判断规则文件：\n{invite_rule_context or '(未配置，本轮不得判定拉群)'}\n\n"
+        f"历史拉群关键词（仅兼容旧设置）：\n{('、'.join(invite_keywords)) if invite_keywords else '(无)'}"
     )
     payload = {
         "model": model,
@@ -2156,6 +2285,20 @@ async def _call_auto_reply_llm(
     intent_level = str(parsed.get("intent_level") or "none").strip().lower()
     if intent_level not in {"high", "medium", "low", "none"}:
         intent_level = "none"
+    raw_should_invite = parsed.get("should_invite_group")
+    should_invite_group = raw_should_invite is True or str(raw_should_invite or "").strip().lower() in {"1", "true", "yes"}
+    if not has_invite_rule:
+        should_invite_group = False
+    matched_raw = parsed.get("matched_group_keywords")
+    if isinstance(matched_raw, str):
+        matched_values = re.split(r"[,，;；\n]+", matched_raw)
+    elif isinstance(matched_raw, list):
+        matched_values = matched_raw
+    else:
+        matched_values = []
+    matched_group_keywords = list(
+        dict.fromkeys(str(item or "").strip() for item in matched_values if str(item or "").strip())
+    )[:20]
     return {
         "should_reply": True,
         "category": category,
@@ -2163,6 +2306,9 @@ async def _call_auto_reply_llm(
         "topic": str(parsed.get("topic") or "").strip()[:80],
         "conversation_summary": str(parsed.get("conversation_summary") or parsed.get("summary") or "").strip()[:200],
         "reply": reply,
+        "should_invite_group": should_invite_group,
+        "matched_group_keywords": matched_group_keywords,
+        "group_invite_reason": str(parsed.get("group_invite_reason") or "").strip()[:300],
         "raw": content[:2000],
     }
 
@@ -2196,6 +2342,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
     category_counts: Dict[str, int] = {}
     topic_counts: Dict[str, int] = {}
     high_intent_count = 0
+    group_invite_match_count = 0
     for item in items:
         category = str(item.get("category") or "").strip().lower()
         if category:
@@ -2205,6 +2352,8 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
             topic_counts[topic] = topic_counts.get(topic, 0) + 1
         if str(item.get("intent_level") or "").strip().lower() == "high":
             high_intent_count += 1
+        if item.get("should_invite_group"):
+            group_invite_match_count += 1
 
     memory_titles = [_auto_reply_report_line(title, 80) for title in (memory.get("titles") or []) if _auto_reply_report_line(title, 80)]
     report = {
@@ -2218,7 +2367,11 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "skipped": int(result.get("skipped") or 0),
         "failed": int(result.get("failed") or 0),
         "skipped_groups": int(result.get("skipped_groups") or 0),
+        "friend_requests_checked": int(result.get("friend_requests_checked") or 0),
+        "friend_requests_accepted": int(result.get("friend_requests_accepted") or 0),
+        "friend_requests_failed": int(result.get("friend_requests_failed") or 0),
         "high_intent_count": high_intent_count,
+        "group_invite_match_count": group_invite_match_count,
         "category_counts": category_counts,
         "topic_counts": topic_counts,
         "memory_document_count": int(memory.get("document_count") or 0),
@@ -2233,7 +2386,9 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         f"- 有新消息的个人会话：{report['private_session_count']} 个",
         f"- 未读消息：{report['unread_message_count']} 条",
         f"- 已自动回复：{report['replied']} 个会话",
+        f"- 新好友申请：检查 {report['friend_requests_checked']} 条，已同意 {report['friend_requests_accepted']} 条，失败 {report['friend_requests_failed']} 条",
         f"- 高意向会话：{report['high_intent_count']} 个",
+        f"- 命中拉群条件：{report['group_invite_match_count']} 个",
         f"- 跳过：{report['skipped']} 个；群聊/公众号排除：{report['skipped_groups']} 个；失败：{report['failed']} 个",
     ]
     if memory_titles:
@@ -2272,6 +2427,10 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
                 lines.append(f"   回复：{reply}")
             elif item.get("error"):
                 lines.append(f"   原因：{_auto_reply_report_line(item.get('error'), 200)}")
+            if item.get("should_invite_group"):
+                matched = "、".join(str(value) for value in (item.get("matched_group_keywords") or []) if str(value).strip())
+                reason = _auto_reply_report_line(item.get("group_invite_reason"), 200)
+                lines.append(f"   拉群判断：符合{f'（{matched}）' if matched else ''}{f'；{reason}' if reason else ''}")
     report["summary_text"] = "\n".join(lines)
     return report
 
@@ -2299,7 +2458,21 @@ async def run_auto_reply_once(
         return {"ok": True, "skipped": True, "reason": "running", "config": get_auto_reply_config(account_id)}
     started_monotonic = time.monotonic()
     started_at = _now_iso()
-    memory = _load_auto_reply_memory_context(effective_user_id)
+    memory = _load_auto_reply_memory_context(
+        effective_user_id,
+        selected_doc_ids=cfg.get("memory_doc_ids") if isinstance(cfg.get("memory_doc_ids"), list) else [],
+    )
+    invite_rule_doc_id = str(cfg.get("group_invite_memory_doc_id") or "").strip()
+    invite_rule_memory = (
+        _load_auto_reply_memory_context(
+            effective_user_id,
+            max_chars=8000,
+            max_docs=1,
+            selected_doc_ids=[invite_rule_doc_id],
+        )
+        if invite_rule_doc_id
+        else {"text": "", "document_count": 0, "titles": []}
+    )
     result: Dict[str, Any] = {
         "ok": True,
         "trigger": trigger,
@@ -2314,12 +2487,25 @@ async def run_auto_reply_once(
         "skipped_groups": 0,
         "failed": 0,
         "items": [],
+        "friend_requests_checked": 0,
+        "friend_requests_accepted": 0,
+        "friend_requests_failed": 0,
+        "friend_requests": {},
         "memory": {
             "document_count": int(memory.get("document_count") or 0),
             "titles": list(memory.get("titles") or []),
         },
     }
     try:
+        try:
+            friend_requests = await asyncio.to_thread(accept_local_friend_requests, account_id)
+            result["friend_requests"] = friend_requests
+            result["friend_requests_checked"] = int(friend_requests.get("checked") or 0)
+            result["friend_requests_accepted"] = int(friend_requests.get("accepted") or 0)
+            result["friend_requests_failed"] = int(friend_requests.get("failed") or 0)
+        except Exception as friend_exc:
+            result["friend_requests"] = {"ok": False, "error": str(friend_exc)[:500]}
+            result["friend_requests_failed"] = 1
         session_data = await asyncio.to_thread(sync_local_sessions, account_id, passive=False)
         sessions = _enrich_sessions_with_message_counts(account_id, list(session_data.get("items") or []))
         result["session_count"] = len(sessions)
@@ -2361,6 +2547,12 @@ async def run_auto_reply_once(
                 current_inbound = inbound
                 item_result.update(
                     {
+                        "inbound_message_id": str(
+                            inbound.get("auto_reply_inbound_id")
+                            or inbound.get("provider_message_id")
+                            or inbound.get("id")
+                            or ""
+                        ),
                         "inbound_preview": str(inbound.get("content") or "").strip()[:240],
                         "message_time": str(inbound.get("created_at") or ""),
                     }
@@ -2373,6 +2565,8 @@ async def run_auto_reply_once(
                     latest_message=str(inbound.get("content") or ""),
                     recent_context=recent,
                     memory_context=str(memory.get("text") or ""),
+                    group_invite_rule_context=str(invite_rule_memory.get("text") or ""),
+                    group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
                 )
                 item_result.update(
                     {
@@ -2380,6 +2574,9 @@ async def run_auto_reply_once(
                         "intent_level": llm_reply.get("intent_level"),
                         "topic": llm_reply.get("topic"),
                         "conversation_summary": llm_reply.get("conversation_summary"),
+                        "should_invite_group": bool(llm_reply.get("should_invite_group")),
+                        "matched_group_keywords": llm_reply.get("matched_group_keywords") or [],
+                        "group_invite_reason": llm_reply.get("group_invite_reason") or "",
                     }
                 )
                 if not llm_reply.get("should_reply"):
@@ -4763,6 +4960,332 @@ def _uia_click_screen_point(x: int, y: int) -> None:
     time.sleep(0.04)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, int(x), int(y), 0, 0)
     _human_pause(floor=0.45)
+
+
+_FRIEND_REQUEST_ACCEPT_SUFFIXES = ("\u63a5\u53d7", "\u540c\u610f", "\u7b49\u5f85\u9a8c\u8bc1", "accept")
+_FRIEND_REQUEST_FINISHED_SUFFIXES = (
+    "\u5df2\u6dfb\u52a0",
+    "\u5df2\u63a5\u53d7",
+    "\u5df2\u540c\u610f",
+    "\u5df2\u62d2\u7edd",
+    "\u5df2\u8fc7\u671f",
+    "added",
+    "accepted",
+    "declined",
+    "expired",
+)
+
+
+def _friend_request_action_label(value: Any) -> str:
+    text = re.sub(r"\s+", "", str(value or "")).strip()
+    lowered = text.lower()
+    if not text or any(lowered.endswith(suffix.lower()) for suffix in _FRIEND_REQUEST_FINISHED_SUFFIXES):
+        return ""
+    for suffix in _FRIEND_REQUEST_ACCEPT_SUFFIXES:
+        if lowered.endswith(suffix.lower()):
+            return text[-len(suffix) :]
+    return ""
+
+
+def _friend_request_key(value: Any, action: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if action and text.lower().endswith(action.lower()):
+        text = text[: -len(action)].rstrip()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest() if text else ""
+
+
+def _visible_pending_friend_requests(root: Any) -> List[Dict[str, Any]]:
+    request_list = _uia_primary_contact_list(root)
+    if request_list is None:
+        return []
+    try:
+        children = request_list.GetChildren()
+    except Exception:
+        children = []
+    out: List[Dict[str, Any]] = []
+    for child in children:
+        if _uia_control_class(child) != "mmui::XTableCell":
+            continue
+        text = _uia_control_text(child)
+        action = _friend_request_action_label(text)
+        rect = _uia_rect_tuple(child)
+        if not action or rect is None:
+            continue
+        try:
+            if bool(getattr(child, "IsOffscreen", False)):
+                continue
+        except Exception:
+            pass
+        key = _friend_request_key(text, action)
+        if not key:
+            continue
+        out.append(
+            {
+                "node": child,
+                "key": key,
+                "action": action,
+                "text": text,
+                "preview": text[:120],
+                "rect": rect,
+            }
+        )
+    return out
+
+
+def _open_friend_requests_list(hwnd: int) -> Any:
+    import uiautomation as auto  # type: ignore
+
+    root = auto.ControlFromHandle(int(hwnd))
+    contact_list = _uia_primary_contact_list(root)
+    if contact_list is None:
+        raise RuntimeError("\u672a\u627e\u5230\u5fae\u4fe1\u901a\u8baf\u5f55\u5217\u8868")
+    try:
+        contact_list.WheelUp(wheelTimes=30)
+        time.sleep(0.35)
+    except Exception:
+        pass
+
+    root = auto.ControlFromHandle(int(hwnd))
+    contact_list = _uia_primary_contact_list(root)
+    entry = None
+    if contact_list is not None:
+        try:
+            children = contact_list.GetChildren()
+        except Exception:
+            children = []
+        entry = next(
+            (
+                node
+                for node in children
+                if _uia_control_text(node).replace(" ", "").startswith("\u65b0\u7684\u670b\u53cb")
+            ),
+            None,
+        )
+    if entry is None:
+        entry = _uia_find_by_names(root, ["\u65b0\u7684\u670b\u53cb"], contains=True, max_depth=18)
+    if entry is None:
+        raise RuntimeError("\u672a\u627e\u5230\u5fae\u4fe1\u201c\u65b0\u7684\u670b\u53cb\u201d\u5165\u53e3")
+
+    deadline = time.time() + 5.0
+    next_retry_at = 0.0
+    while time.time() < deadline:
+        now = time.time()
+        if now >= next_retry_at:
+            _uia_click(entry)
+            next_retry_at = now + 1.2
+        time.sleep(0.3)
+        root = auto.ControlFromHandle(int(hwnd))
+        request_list = _uia_primary_contact_list(root)
+        if request_list is None:
+            continue
+        try:
+            children = request_list.GetChildren()
+        except Exception:
+            children = []
+        if any(_uia_control_class(node) == "mmui::XTableCell" for node in children):
+            return request_list
+        refreshed_entry = next(
+            (
+                node
+                for node in children
+                if _uia_control_text(node).replace(" ", "").startswith("\u65b0\u7684\u670b\u53cb")
+            ),
+            None,
+        )
+        if refreshed_entry is not None:
+            entry = refreshed_entry
+    raise RuntimeError("\u6253\u5f00\u5fae\u4fe1\u201c\u65b0\u7684\u670b\u53cb\u201d\u540e\u672a\u8bfb\u53d6\u5230\u597d\u53cb\u7533\u8bf7\u5217\u8868")
+
+
+def _find_pending_friend_request(hwnd: int, request_key: str) -> Optional[Dict[str, Any]]:
+    import uiautomation as auto  # type: ignore
+
+    root = auto.ControlFromHandle(int(hwnd))
+    return next((item for item in _visible_pending_friend_requests(root) if item.get("key") == request_key), None)
+
+
+def _find_visible_action_button(root: Any, names: List[str]) -> Optional[Any]:
+    wanted = {str(name or "").strip().lower() for name in names if str(name or "").strip()}
+    for node in _uia_walk(root, max_depth=18, max_nodes=1800):
+        if _uia_control_text(node).lower() not in wanted:
+            continue
+        class_name = _uia_control_class(node)
+        control_type = str(getattr(node, "ControlTypeName", "") or "")
+        if "Button" not in class_name and "Button" not in control_type:
+            continue
+        try:
+            if bool(getattr(node, "IsOffscreen", False)):
+                continue
+        except Exception:
+            pass
+        if _uia_rect_tuple(node) is not None:
+            return node
+    return None
+
+
+def _complete_friend_request_dialog(hwnd: int, steps: List[str]) -> None:
+    time.sleep(0.55)
+    root = _uia_foreground_or_main_root(hwnd)
+    action = _find_visible_action_button(
+        root,
+        ["\u524d\u5f80\u9a8c\u8bc1", "\u901a\u8fc7\u9a8c\u8bc1", "\u63a5\u53d7", "\u540c\u610f", "Accept"],
+    )
+    if action is not None:
+        action_name = _uia_control_text(action)
+        _uia_click(action)
+        steps.append("open_verification" if action_name == "\u524d\u5f80\u9a8c\u8bc1" else "dialog_accept")
+        time.sleep(0.45)
+        root = _uia_foreground_or_main_root(hwnd)
+    confirm = _find_visible_action_button(root, ["\u786e\u5b9a", "\u5b8c\u6210", "Confirm", "Done"])
+    if confirm is not None:
+        _uia_click(confirm)
+        steps.append("dialog_confirm")
+        time.sleep(0.6)
+
+
+def _accept_visible_friend_request(hwnd: int, item: Dict[str, Any]) -> List[str]:
+    rect = item.get("rect")
+    if not isinstance(rect, tuple) or len(rect) != 4:
+        raise RuntimeError("\u597d\u53cb\u7533\u8bf7\u63a5\u53d7\u6309\u94ae\u4e0d\u53ef\u89c1")
+    left, top, right, bottom = rect
+    width = right - left
+    if str(item.get("action") or "") == "\u7b49\u5f85\u9a8c\u8bc1":
+        steps = ["open_request_detail"]
+        _uia_click(item["node"])
+        _complete_friend_request_dialog(hwnd, steps)
+        time.sleep(0.7)
+        if _find_pending_friend_request(hwnd, str(item.get("key") or "")) is not None:
+            raise RuntimeError("\u5df2\u70b9\u51fb\u540c\u610f\uff0c\u4f46\u5fae\u4fe1\u4ecd\u663e\u793a\u8be5\u7533\u8bf7\u672a\u5904\u7406")
+        return steps
+
+    steps = ["inline_accept"]
+    _uia_click_screen_point(right - max(26, min(42, int(width * 0.16))), int((top + bottom) / 2))
+    _complete_friend_request_dialog(hwnd, steps)
+    time.sleep(0.7)
+    current = _find_pending_friend_request(hwnd, str(item.get("key") or ""))
+    if current is None:
+        return steps
+
+    # Some WeChat builds select the row instead of invoking its inline button.
+    _uia_click(current["node"])
+    steps.append("open_request_detail")
+    _complete_friend_request_dialog(hwnd, steps)
+    time.sleep(0.7)
+    if _find_pending_friend_request(hwnd, str(item.get("key") or "")) is not None:
+        raise RuntimeError("\u5df2\u70b9\u51fb\u63a5\u53d7\uff0c\u4f46\u5fae\u4fe1\u4ecd\u663e\u793a\u8be5\u7533\u8bf7\u672a\u5904\u7406")
+    return steps
+
+
+def accept_local_friend_requests(
+    account_id: str,
+    *,
+    max_accepts: int = 20,
+    max_scrolls: int = 24,
+) -> Dict[str, Any]:
+    init_db()
+    _find_local_account(account_id)
+    if not _module_available("uiautomation"):
+        raise RuntimeError("\u7f3a\u5c11 uiautomation\uff0c\u65e0\u6cd5\u68c0\u67e5\u65b0\u597d\u53cb\u7533\u8bf7")
+    import uiautomation as auto  # type: ignore
+
+    hwnd = _ensure_local_contacts_tab(account_id)
+    if not hwnd:
+        raise RuntimeError("\u6ca1\u6709\u68c0\u6d4b\u5230\u672c\u673a\u5fae\u4fe1\u7a97\u53e3")
+    accepted_limit = max(1, min(int(max_accepts or 20), 50))
+    scroll_limit = max(1, min(int(max_scrolls or 24), 60))
+    accepted = 0
+    failed = 0
+    scanned_keys: set[str] = set()
+    attempted_keys: set[str] = set()
+    items: List[Dict[str, Any]] = []
+    last_signature = ""
+    stable_rounds = 0
+    scroll_rounds = 0
+    try:
+        request_list = _open_friend_requests_list(hwnd)
+        try:
+            request_list.WheelUp(wheelTimes=30)
+            time.sleep(0.4)
+        except Exception:
+            pass
+
+        while scroll_rounds < scroll_limit and accepted < accepted_limit:
+            root = auto.ControlFromHandle(int(hwnd))
+            request_list = _uia_primary_contact_list(root)
+            if request_list is None:
+                break
+            try:
+                visible_rows = [
+                    _uia_control_text(node)
+                    for node in request_list.GetChildren()
+                    if _uia_control_class(node) == "mmui::XTableCell" and _uia_control_text(node)
+                ]
+            except Exception:
+                visible_rows = []
+            for row_text in visible_rows:
+                action = _friend_request_action_label(row_text)
+                key = _friend_request_key(row_text, action)
+                if key:
+                    scanned_keys.add(key)
+            pending = [
+                item
+                for item in _visible_pending_friend_requests(root)
+                if str(item.get("key") or "") not in attempted_keys
+            ]
+            if pending:
+                item = pending[0]
+                request_key = str(item.get("key") or "")
+                attempted_keys.add(request_key)
+                try:
+                    steps = _accept_visible_friend_request(hwnd, item)
+                    accepted += 1
+                    items.append(
+                        {
+                            "key": request_key,
+                            "status": "accepted",
+                            "preview": str(item.get("preview") or "")[:120],
+                            "steps": steps,
+                        }
+                    )
+                except Exception as exc:
+                    failed += 1
+                    items.append(
+                        {
+                            "key": request_key,
+                            "status": "failed",
+                            "preview": str(item.get("preview") or "")[:120],
+                            "error": str(exc)[:300],
+                        }
+                    )
+                stable_rounds = 0
+                last_signature = ""
+                continue
+
+            signature = "|".join(visible_rows[-12:])
+            stable_rounds = stable_rounds + 1 if signature == last_signature else 0
+            last_signature = signature
+            if stable_rounds >= 2:
+                break
+            try:
+                request_list.WheelDown(wheelTimes=4)
+                scroll_rounds += 1
+                time.sleep(0.28)
+            except Exception:
+                break
+    finally:
+        _ensure_local_chat_tab(account_id)
+
+    return {
+        "ok": failed == 0,
+        "checked": len(attempted_keys),
+        "scanned": len(scanned_keys),
+        "accepted": accepted,
+        "failed": failed,
+        "limit_reached": accepted >= accepted_limit,
+        "scroll_rounds": scroll_rounds,
+        "items": items,
+        "source": "pc_wechat_uia_friend_requests",
+    }
 
 
 def _uia_find_add_friend_plus_button(root: Any) -> Optional[Any]:
@@ -8016,6 +8539,14 @@ def create_local_group(account_id: str, contacts: List[str]) -> Dict[str, Any]:
             pass
         raise
     group_key = "、".join(targets[:4]) + ("等" if len(targets) > 4 else "")
+    try:
+        wx = _get_wxauto4_client(account_id)
+        info = wx.ChatInfo() if hasattr(wx, "ChatInfo") else {}
+        detected_group_name = str((info or {}).get("chat_name") or "").strip()
+        if detected_group_name:
+            group_key = detected_group_name
+    except Exception:
+        info = {}
     saved = _persist_group(
         account_id,
         {
@@ -8023,7 +8554,7 @@ def create_local_group(account_id: str, contacts: List[str]) -> Dict[str, Any]:
             "display_name": group_key,
             "member_count": len(targets) + 1,
             "source": "pc_wechat_uia_created_group",
-            "raw": {"contacts": targets, "steps": steps},
+            "raw": {"contacts": targets, "steps": steps, "chat_info": info},
         },
     )
     return {"ok": True, "contacts": targets, "selected": selected, "group": saved, "steps": steps}
@@ -8196,6 +8727,21 @@ def _finish_task(task_id: str, status: str, processed: int, success: int, failed
         )
 
 
+def _update_task_payload(task_id: str, patch: Dict[str, Any]) -> None:
+    if not task_id or not isinstance(patch, dict):
+        return
+    with _connect() as conn:
+        row = conn.execute("select payload from wechat_tasks where id=? limit 1", (task_id,)).fetchone()
+        payload = _safe_json_loads(str(row["payload"] or ""), {}) if row else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload.update(patch)
+        conn.execute(
+            "update wechat_tasks set payload=?, updated_at=? where id=?",
+            (_json_dumps(payload), _now_iso(), task_id),
+        )
+
+
 def _update_task_progress(task_id: str, processed: int, success: int, failed: int, error_message: str = "") -> None:
     with _connect() as conn:
         conn.execute(
@@ -8321,7 +8867,7 @@ async def _process_send_task(task: Dict[str, Any]) -> None:
     _finish_task(task_id, status, processed, success, failed, last_error)
 
 
-async def create_group_task(account_id: str, contacts: List[str]) -> Dict[str, Any]:
+async def create_group_task(account_id: str, contacts: List[str], *, welcome_message: str = "") -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     targets = _normalize_task_targets(contacts, max_targets=100)
@@ -8333,7 +8879,7 @@ async def create_group_task(account_id: str, contacts: List[str]) -> Dict[str, A
         task_type="create_group",
         target_type="group_contacts",
         targets=targets,
-        payload={},
+        payload={"welcome_message": str(welcome_message or "").strip()[:4000]},
         strategy=strategy,
         planned_total=len(targets),
     )
@@ -8343,10 +8889,46 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
     task_id = str(task.get("id") or "")
     account_id = str(task.get("account_id") or "")
     targets = _normalize_task_targets(list(task.get("targets") or []))
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    welcome_message = str(payload.get("welcome_message") or "").strip()[:4000]
     try:
         result = await asyncio.to_thread(create_local_group, account_id, targets)
         selected = int(result.get("selected") or len(targets))
-        _finish_task(task_id, "success", selected, selected, 0, "")
+        group = result.get("group") if isinstance(result.get("group"), dict) else {}
+        group_key = str(group.get("group_key") or group.get("display_name") or "").strip()
+        welcome_result: Dict[str, Any] = {}
+        welcome_error = ""
+        if welcome_message:
+            if not group_key:
+                welcome_error = "群已创建，但未识别到群名称，默认欢迎话术未发送"
+            else:
+                try:
+                    welcome_result = await asyncio.to_thread(
+                        _send_text_local_slow,
+                        account_id,
+                        group_key,
+                        welcome_message,
+                        {"driver": "native_wechat_group_welcome", "group_task_id": task_id},
+                    )
+                except Exception as exc:
+                    welcome_error = f"群已创建，但默认欢迎话术发送失败：{exc}"
+        _update_task_payload(
+            task_id,
+            {
+                "group_result": result,
+                "welcome_message": welcome_message,
+                "welcome_sent": bool(welcome_message and welcome_result and not welcome_error),
+                "welcome_result": welcome_result,
+            },
+        )
+        _finish_task(
+            task_id,
+            "partial_failed" if welcome_error else "success",
+            selected,
+            selected,
+            1 if welcome_error else 0,
+            welcome_error,
+        )
     except Exception as exc:
         _finish_task(task_id, "failed", 0, 0, len(targets), str(exc))
 

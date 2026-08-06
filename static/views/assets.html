@@ -1,6 +1,6 @@
 <style>
   #content-assets .asset-origin-tabs {
-    display: inline-flex;
+    display: none;
     align-items: center;
     gap: 4px;
     margin: 0 0 0.55rem;
@@ -69,6 +69,30 @@
   #content-assets .asset-controls #assetUploadMsg {
     flex: 1 1 160px;
     min-width: 140px;
+  }
+  #content-assets[data-asset-origin="generated"] .asset-upload-control {
+    display: none !important;
+  }
+  #content-assets .asset-view-heading {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 0 0.8rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(34, 49, 78, 0.08);
+  }
+  #content-assets .asset-view-heading h2 {
+    margin: 0;
+    color: #172033;
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+  #content-assets .asset-view-heading p {
+    margin: 0.2rem 0 0;
+    color: #64748b;
+    font-size: 0.8rem;
   }
   #content-assets #assetList.skill-store-grid {
     display: grid !important;
@@ -187,9 +211,15 @@
     }
   }
 </style>
-<div id="content-assets" class="content-block">
+<div id="content-assets" class="content-block" data-asset-origin="generated">
             <div id="pubTabAssets" class="pub-tab-panel">
-              <div class="asset-origin-tabs" role="tablist" aria-label="素材来源">
+              <div class="asset-view-heading">
+                <div>
+                  <h2 id="assetViewTitle">内容记录</h2>
+                  <p id="assetViewDescription">查看 AI 生成的图片、视频、音频和文档。</p>
+                </div>
+              </div>
+              <div class="asset-origin-tabs" role="tablist" aria-label="素材来源" hidden>
                 <button type="button" class="asset-origin-tab active" data-asset-origin="generated">生成素材</button>
                 <button type="button" class="asset-origin-tab" data-asset-origin="user_upload">用户上传</button>
               </div>
@@ -200,18 +230,18 @@
                   <option value="video">视频</option>
                   <option value="document">文档</option>
                 </select>
-                <select id="assetCreativeGroupFilter" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+                <select id="assetCreativeGroupFilter" class="asset-upload-control" style="padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                   <option value="">全部备选组</option>
                 </select>
                 <input type="text" id="assetSearchInput" placeholder="搜索素材..." style="flex:1;min-width:100px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <button type="button" id="assetSearchBtn" class="btn btn-ghost btn-sm">搜索</button>
                 <button type="button" id="assetRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
-                <label class="btn btn-primary btn-sm" style="cursor:pointer;margin:0;">
+                <label class="btn btn-primary btn-sm asset-upload-control" style="cursor:pointer;margin:0;">
                   上传本地文件
                   <input type="file" id="assetUploadFile" accept="image/*,video/*,.ppt,.pptx,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md" multiple style="display:none;">
                 </label>
-                <input type="text" id="assetUrlInput" placeholder="网络素材URL（图片/视频链接）" style="flex:1;min-width:160px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
-                <button type="button" id="assetSaveUrlBtn" class="btn btn-ghost btn-sm">保存URL素材</button>
+                <input type="text" id="assetUrlInput" class="asset-upload-control" placeholder="网络素材URL（图片/视频链接）" style="flex:1;min-width:160px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+                <button type="button" id="assetSaveUrlBtn" class="btn btn-ghost btn-sm asset-upload-control">保存URL素材</button>
                 <div id="assetBulkBar" class="asset-bulk-bar">
                   <button type="button" id="assetBulkStartBtn" class="btn btn-ghost btn-sm">批量删除</button>
                   <label class="asset-bulk-select asset-bulk-active">

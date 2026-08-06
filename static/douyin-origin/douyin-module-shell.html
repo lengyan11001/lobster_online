@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>必火AI获客 · 抖音模块</title>
+    <title>AI获客 · 抖音模块</title>
     <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
     <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
     <style>
@@ -97,7 +97,7 @@
                     <div class="sidebar-brand-head">
                         <div class="sidebar-brand-mark">AI</div>
                         <div class="sidebar-brand-copy">
-                            <div class="brand-name">必火AI获客</div>
+                            <div class="brand-name">AI获客</div>
                         </div>
                     </div>
                 </div>
@@ -558,7 +558,7 @@
         function applyModuleRoute() {
             const routeKey = getCurrentRouteKey();
             const config = douyinRouteConfig[routeKey] || douyinRouteConfig.search;
-            document.title = `必火AI获客 · 抖音${config.title}`;
+            document.title = `AI获客 · 抖音${config.title}`;
             const frameUrl = `/static/douyin-origin/douyin.html?target=${encodeURIComponent(config.target)}&embed=1`;
             document.getElementById("module-route-title").textContent = config.title;
             document.getElementById("module-route-copy").textContent = config.copy;

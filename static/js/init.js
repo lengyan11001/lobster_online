@@ -467,7 +467,6 @@ function applyEditionLoginUI() {
     var parts = [];
     if (v) parts.push('v' + v);
     if (!isNaN(b)) parts.push('build ' + b);
-    if (appliedAt) parts.push(String(appliedAt));
     el.textContent = parts.length ? parts.join(' · ') : '';
   }
   function tryStaticClientVersionIfEmpty() {
@@ -953,6 +952,165 @@ function revealTopNavItem(item) {
   }, true);
 })();
 
+function _setAppSideNavCollapsed(collapsed) {
+  var side = document.getElementById('appSideNav');
+  var toggle = document.getElementById('appSideNavToggle');
+  if (!side || !toggle) return;
+  var next = !!collapsed;
+  side.classList.toggle('is-collapsed', next);
+  toggle.setAttribute('aria-expanded', next ? 'false' : 'true');
+  toggle.setAttribute('title', next ? '展开导航' : '收起导航');
+  var sr = toggle.querySelector('.sr-only');
+  if (sr) sr.textContent = next ? '展开导航' : '收起导航';
+  var icon = toggle.querySelector('[aria-hidden="true"]');
+  if (icon) icon.textContent = next ? '›' : '‹';
+  try { localStorage.setItem('lobster_online_side_nav_collapsed', next ? '1' : '0'); } catch (e) {}
+}
+
+function _syncAppSideNavActive(view, sourceEl) {
+  var side = document.getElementById('appSideNav');
+  if (!side) return;
+  var target = sourceEl && sourceEl.closest ? sourceEl.closest('.chat-sidebar-entry') : null;
+  if (!target && view) {
+    var selector = '[data-view="' + String(view).replace(/"/g, '\\"') + '"],'
+      + '[data-jump-view="' + String(view).replace(/"/g, '\\"') + '"],'
+      + '[data-open-hidden-view="' + String(view).replace(/"/g, '\\"') + '"]';
+    target = side.querySelector(selector);
+  }
+  side.querySelectorAll('.chat-sidebar-entry').forEach(function(item) {
+    item.classList.toggle('is-active', item === target);
+  });
+}
+
+function mountAppSideNav() {
+  var mount = document.getElementById('appSideNavMount');
+  var sidebar = document.querySelector('#content-chat .chat-history-sidebar');
+  var toggle = document.getElementById('appSideNavToggle');
+  if (!mount || !sidebar) return;
+  if (sidebar.parentElement !== mount) mount.appendChild(sidebar);
+  sidebar.classList.add('is-global-side-nav');
+  sidebar.querySelectorAll('.chat-sidebar-tree-group').forEach(function(group) {
+    group.removeAttribute('open');
+  });
+  if (toggle && !toggle.dataset.bound) {
+    toggle.dataset.bound = '1';
+    toggle.addEventListener('click', function() {
+      _setAppSideNavCollapsed(!document.getElementById('appSideNav').classList.contains('is-collapsed'));
+    });
+  }
+  var collapsed = false;
+  try { collapsed = localStorage.getItem('lobster_online_side_nav_collapsed') === '1'; } catch (e) {}
+  _setAppSideNavCollapsed(collapsed);
+}
+
+function _onlineEmployeeEscape(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+  });
+}
+
+function _onlineEmployeeSystemKey(template) {
+  var meta = template && template.meta && typeof template.meta === 'object' ? template.meta : {};
+  return String(meta.system_template_key || meta.systemTemplateKey || '').trim();
+}
+
+function _onlineEmployeeButton(template) {
+  var id = String(template && template.id || '').trim();
+  var name = String(template && template.name || '定制员工').trim() || '定制员工';
+  var mark = (name.charAt(0) || '员').toUpperCase();
+  return '<button type="button" class="chat-sidebar-entry" data-online-employee="' + _onlineEmployeeEscape(id) + '">'
+    + '<span class="chat-sidebar-entry-icon">' + _onlineEmployeeEscape(mark) + '</span>'
+    + '<span class="chat-sidebar-entry-copy">' + _onlineEmployeeEscape(name) + '</span>'
+    + '<span class="chat-sidebar-entry-arrow">›</span>'
+    + '</button>';
+}
+
+function renderOnlineH5Employees(templates) {
+  var host = document.getElementById('onlineEmployeeNavItems');
+  if (!host) return;
+  var salesAllowed = typeof window.isLobsterFeatureAllowed !== 'function' || window.isLobsterFeatureAllowed('local_bestseller_skill');
+  var customRows = (Array.isArray(templates) ? templates : []).filter(function(template) {
+    return template && template.id != null && !_onlineEmployeeSystemKey(template);
+  });
+  host.innerHTML = '<button type="button" class="chat-sidebar-entry" data-online-employee="system_sales" data-feature-gate="local_bestseller_skill"' + (salesAllowed ? '' : ' hidden') + '>'
+    + '<span class="chat-sidebar-entry-icon">销</span>'
+    + '<span class="chat-sidebar-entry-copy">销售</span>'
+    + '<span class="chat-sidebar-entry-arrow">›</span>'
+    + '</button>'
+    + customRows.map(_onlineEmployeeButton).join('');
+}
+
+function loadOnlineH5Employees() {
+  if (!token || typeof API_BASE === 'undefined' || !API_BASE) {
+    renderOnlineH5Employees([]);
+    return Promise.resolve([]);
+  }
+  var brand = typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo';
+  var url = String(API_BASE).replace(/\/$/, '') + '/api/h5-workflows/templates?brand=' + encodeURIComponent(brand);
+  return fetch(url, { headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + token } })
+    .then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        return data;
+      });
+    })
+    .then(function(data) {
+      var rows = Array.isArray(data.templates) ? data.templates : [];
+      renderOnlineH5Employees(rows);
+      return rows;
+    })
+    .catch(function() {
+      renderOnlineH5Employees([]);
+      return [];
+    });
+}
+
+function openAppSideNavPlaceholder(title, sourceEl) {
+  var main = document.querySelector('.dashboard-main');
+  if (!main) return;
+  var block = document.getElementById('content-app-side-nav-placeholder');
+  if (!block) {
+    block = document.createElement('section');
+    block.id = 'content-app-side-nav-placeholder';
+    block.className = 'content-block app-side-nav-placeholder';
+    main.appendChild(block);
+  }
+  var safeTitle = String(title || '该功能').replace(/[&<>"']/g, function(ch) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+  });
+  block.innerHTML = '<div class="app-side-nav-placeholder-card">'
+    + '<span class="app-side-nav-placeholder-mark">AI</span>'
+    + '<h2>' + safeTitle + '</h2>'
+    + '<p>这个工作台已加入导航，当前账号暂未开放对应执行能力。</p>'
+    + '<button type="button" class="btn btn-primary" data-view="skill-store" data-feature-gate="skill_store_entry">查看技能商店</button>'
+    + '</div>';
+  document.querySelectorAll('.content-block').forEach(function(item) { item.classList.remove('visible'); });
+  block.classList.add('visible');
+  document.querySelectorAll('.nav-left-item').forEach(function(item) { item.classList.remove('active'); });
+  if (typeof currentView !== 'undefined') currentView = 'app-side-nav-placeholder';
+  _syncAppSideNavActive('app-side-nav-placeholder', sourceEl);
+}
+
+document.addEventListener('click', function(event) {
+  var employee = event.target.closest && event.target.closest('[data-online-employee]');
+  if (employee) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.__onlineEmployeeSelectedId = employee.getAttribute('data-online-employee') || 'system_sales';
+    _syncAppSideNavActive('h5-employees', employee);
+    if (typeof showAppView === 'function') showAppView('h5-employees', employee).catch(function() {});
+    return;
+  }
+  var placeholder = event.target.closest && event.target.closest('[data-nav-placeholder]');
+  if (placeholder) {
+    event.preventDefault();
+    openAppSideNavPlaceholder(placeholder.getAttribute('data-nav-placeholder') || '该功能', placeholder);
+    return;
+  }
+  var sideItem = event.target.closest && event.target.closest('#appSideNav .chat-sidebar-entry');
+  if (sideItem) _syncAppSideNavActive(sideItem.getAttribute('data-view') || sideItem.getAttribute('data-jump-view') || sideItem.getAttribute('data-open-hidden-view'), sideItem);
+});
+
 var LOBSTER_LAST_VIEW_KEY = 'lobster_online_last_view';
 var LOBSTER_MAIN_VIEWS = {
   chat: true,
@@ -962,6 +1120,8 @@ var LOBSTER_MAIN_VIEWS = {
   assets: true,
   'scheduled-tasks': true,
   production: true,
+  'global-leads': true,
+  tutorial: true,
   billing: true,
   'sys-config': true,
   logs: true,
@@ -970,7 +1130,8 @@ var LOBSTER_MAIN_VIEWS = {
   'personal-settings': true,
   'creative-film-studio': true,
   'ppt-studio': true,
-  'viral-tvc-studio': true
+  'viral-tvc-studio': true,
+  'h5-employees': true
 };
 var LOBSTER_HIDDEN_VIEWS = {
   'wecom-config': true,
@@ -990,7 +1151,17 @@ var LOBSTER_HIDDEN_VIEWS = {
   'shanjian-digital-human': true,
   'douyin-workbench': true,
   'shanjian-smart-clip': true,
+  'multi-clip-mixer': true,
   'global-leads': true,
+  'ip-content-studio': true,
+  'wechat-article': true,
+  'linkedin-mining': true,
+  'alibaba-inquiries': true,
+  'juhe-wechat': true,
+  'social-leads': true,
+  'reddit-leads': true,
+  'x-leads': true,
+  'tiktok-leads': true,
   'ai-3d-model': true,
   'openclaw-skill-chat': true
 };
@@ -1031,6 +1202,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'image-composer-studio': 'goal_video_pipeline_skill',
   'ppt-studio': 'create_ppt_skill',
   'viral-tvc-studio': 'comfly_veo_skill',
+  'h5-employees': 'local_bestseller_skill',
   'seedance-tvc-studio': 'comfly_seedance_tvc_skill',
   'bihuo-25-video': 'bihuo_25_video_skill',
   'local-bestseller': 'local_bestseller_skill',
@@ -1051,7 +1223,9 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'cutcli-template-studio': 'cutcli_template_studio',
   'douyin-workbench': 'douyin_leads_access',
   'shanjian-smart-clip': 'shanjian_smart_clip',
+  'multi-clip-mixer': 'multi_clip_mixer_skill',
   'global-leads': 'global_trade_leads_skill',
+  'alibaba-inquiries': 'alibaba_inquiry_takeover_skill',
   'linkedin-mining': 'linkedin_mining_skill',
   'reddit-leads': 'reddit_leads_access',
   'x-leads': 'x_leads_access',
@@ -1286,7 +1460,12 @@ function restoreDashboardViewAfterLogin() {
   _restoringDashboardView = true;
   try {
     if (LOBSTER_MAIN_VIEWS[view] && typeof showAppView === 'function') {
-      showAppView(view, document.querySelector('.nav-left-item[data-view="' + view + '"]')).catch(function() {});
+      var restoreSource = document.querySelector('.nav-left-item[data-view="' + view + '"]');
+      if (view === 'assets' && route.indexOf('assets:') === 0) {
+        var restoreOrigin = route.split(':')[1] === 'user_upload' ? 'user_upload' : 'generated';
+        restoreSource = document.querySelector('.nav-left-item[data-view="assets"][data-asset-origin-target="' + restoreOrigin + '"]') || restoreSource;
+      }
+      showAppView(route, restoreSource).catch(function() {});
     } else if (typeof window._applyWecomConfigHash === 'function') {
       window._applyWecomConfigHash(true);
     } else if (typeof window._openHiddenWorkspaceView === 'function') {
@@ -1342,7 +1521,9 @@ function loadDashboard() {
       var heroEl = document.getElementById('pageHero');
       if (heroEl) heroEl.style.display = 'none';
       loadModelSelector(d.preferred_model);
-      initChatSessions();
+      if (!document.getElementById('onlineMastraChat')) initChatSessions();
+      if (typeof window.initMastraOnlineChat === 'function') window.initMastraOnlineChat();
+      loadOnlineH5Employees();
       setTimeout(restoreDashboardViewAfterLogin, 0);
       syncTosFromServerIfOnline();
       syncContentRecordsFromLocalIfOnline();
@@ -1786,8 +1967,10 @@ function runAppViewInit(view) {
   applyLobsterFeatureGates(LOBSTER_FEATURE_FLAGS);
   decorateWorkspaceSubsections();
   if (view === 'chat') {
-    if (typeof setChatMode === 'function') setChatMode('default');
-    refreshModelSelector();
+    if (!document.getElementById('onlineMastraChat')) {
+      if (typeof setChatMode === 'function') setChatMode('default');
+      refreshModelSelector();
+    }
   }
   if (view === 'skill-store') { loadSkillStore(); if (typeof initOnlineSkillStore === 'function') initOnlineSkillStore(); }
   if (view === 'publish') { if (typeof initPublishView === 'function') initPublishView(); }
@@ -1813,22 +1996,36 @@ function showAppView(view, sourceEl) {
   var chatTips = document.getElementById('chatTipsModal');
   if (chatTips) chatTips.classList.remove('visible');
   if (!view) return Promise.resolve(null);
+  var requestedRoute = _hashRoute(view);
+  var baseView = _baseHashView(requestedRoute);
+  var assetOrigin = '';
+  if (baseView === 'assets') {
+    assetOrigin = sourceEl && sourceEl.getAttribute('data-asset-origin-target') === 'user_upload'
+      ? 'user_upload'
+      : (requestedRoute.split(':')[1] === 'user_upload' ? 'user_upload' : 'generated');
+    requestedRoute = 'assets:' + assetOrigin;
+  }
+  view = baseView;
   if (!_isFeatureGatedViewAllowed(view)) {
     var fallbackView = _firstAllowedDashboardView();
     try { if (fallbackView) localStorage.setItem(LOBSTER_LAST_VIEW_KEY, fallbackView); } catch (e0) {}
     if (fallbackView && fallbackView !== view) return showAppView(fallbackView);
     return Promise.resolve(null);
   }
-  _rememberView(view);
+  _rememberView(requestedRoute);
   if (currentView === 'chat' && view !== 'chat' && typeof saveCurrentSessionToStore === 'function') saveCurrentSessionToStore();
   document.querySelectorAll('.nav-left-item').forEach(function(b) { b.classList.remove('active'); });
-  var navEl = document.querySelector('.nav-left-item[data-view="' + view + '"]');
+  var navEl = assetOrigin
+    ? document.querySelector('.nav-left-item[data-view="assets"][data-asset-origin-target="' + assetOrigin + '"]')
+    : document.querySelector('.nav-left-item[data-view="' + view + '"]');
   if (navEl) {
     navEl.classList.add('active');
     revealTopNavItem(navEl);
   }
   else if (sourceEl) sourceEl.classList.add('active');
+  _syncAppSideNavActive(view, sourceEl);
 
+  if (assetOrigin) window.__assetLibraryRequestedOrigin = assetOrigin;
   var ensure = (typeof window.ensureLobsterViewLoaded === 'function')
     ? window.ensureLobsterViewLoaded(view)
     : Promise.resolve(document.getElementById('content-' + view));
@@ -1838,7 +2035,13 @@ function showAppView(view, sourceEl) {
     if (!contentEl) contentEl = document.getElementById('content-' + view);
     if (contentEl) contentEl.classList.add('visible');
     currentView = view;
-    return runAppViewInit(view).then(function() { return contentEl; });
+    return runAppViewInit(view).then(function() {
+      if (assetOrigin && typeof window.setAssetLibraryOrigin === 'function') {
+        window.setAssetLibraryOrigin(assetOrigin, { load: false });
+      }
+      _syncAppSideNavActive(view, sourceEl);
+      return contentEl;
+    });
   }).catch(function(err) {
     console.error('Failed to show view:', view, err);
     var fallback = (typeof window.createLobsterViewError === 'function')
@@ -2079,7 +2282,12 @@ function openCreditLimitModal() {
       return;
     }
     if (hashView && LOBSTER_MAIN_VIEWS[hashView] && typeof showAppView === 'function') {
-      showAppView(hashView, document.querySelector('.nav-left-item[data-view="' + hashView + '"]')).catch(function() {});
+      var hashSource = document.querySelector('.nav-left-item[data-view="' + hashView + '"]');
+      if (hashView === 'assets' && hash.indexOf('assets:') === 0) {
+        var hashOrigin = hash.split(':')[1] === 'user_upload' ? 'user_upload' : 'generated';
+        hashSource = document.querySelector('.nav-left-item[data-view="assets"][data-asset-origin-target="' + hashOrigin + '"]') || hashSource;
+      }
+      showAppView(hash, hashSource).catch(function() {});
       return;
     }
     if (hash === 'wecom-config' && typeof showWecomConfigView === 'function') showWecomConfigView();
@@ -2132,6 +2340,9 @@ function openCreditLimitModal() {
     if (hash === 'shanjian-smart-clip' && typeof window._openShanjianSmartClipView === 'function') {
       window._openShanjianSmartClipView();
     }
+    if (hash === 'multi-clip-mixer' && typeof showAppView === 'function') {
+      showAppView('multi-clip-mixer').catch(function() {});
+    }
     if (hash === 'openclaw-skill-chat' && typeof window.openOpenclawSkillChat === 'function') {
       window.openOpenclawSkillChat();
     }
@@ -2155,10 +2366,12 @@ function openCreditLimitModal() {
     location.hash.indexOf('shanjian-digital-human') !== -1 ||
     location.hash.indexOf('douyin-workbench') !== -1 ||
     location.hash.indexOf('shanjian-smart-clip') !== -1 ||
+    location.hash.indexOf('multi-clip-mixer') !== -1 ||
     location.hash.indexOf('openclaw-skill-chat') !== -1
   )) applyHash();
 })();
 
+mountAppSideNav();
 applyBrandingFromApi().then(function() {
   if (token) loadDashboard();
 });

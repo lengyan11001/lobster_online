@@ -29,6 +29,7 @@ APP_NAME = "必火智能"
 DEFAULT_WINDOW_TITLE = "必火智能"
 OVERSEAS_WINDOW_TITLE = "必火AI海外员工"
 DEFAULT_BRAND_MARK = "bihuo"
+DEFAULT_OEM_BOOTSTRAP_SERVER = "https://bhzn.top"
 SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
@@ -325,6 +326,18 @@ def _desktop_asset_path(root: Path, value: object, fallback: Path) -> Path:
     return root / Path(relative)
 
 
+def resolve_factory_oem_branding(root: Path, code: str, server_base: str) -> dict[str, object] | None:
+    # Keep the factory-only downloader out of the legacy startup path.
+    desktop_dir = str(Path(__file__).resolve().parent)
+    if desktop_dir not in sys.path:
+        sys.path.insert(0, desktop_dir)
+    try:
+        from desktop.oem_branding import resolve_oem_branding
+    except ModuleNotFoundError:  # Direct invocation: python desktop/launcher.py
+        from oem_branding import resolve_oem_branding
+    return resolve_oem_branding(root, code, server_base)
+
+
 def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
     root = root or ROOT
     registry_path = root / "static" / "branding" / "brands.json"
@@ -339,6 +352,17 @@ def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
     marks = registry.get("marks") if isinstance(registry.get("marks"), dict) else {}
     default_mark = str(registry.get("default_mark") or DEFAULT_BRAND_MARK).strip().lower() or DEFAULT_BRAND_MARK
     requested_mark = read_env_value("LOBSTER_BRAND_MARK", default_mark, root).strip().lower()
+    configured_oem_code = read_env_value("LOBSTER_OEM_CODE", "", root).strip()
+    if configured_oem_code:
+        server_base = read_env_value(
+            "LOBSTER_OEM_BOOTSTRAP_BASE",
+            read_env_value("AUTH_SERVER_BASE", DEFAULT_OEM_BOOTSTRAP_SERVER, root),
+            root,
+        )
+        remote_profile = resolve_factory_oem_branding(root, configured_oem_code, server_base)
+        if remote_profile:
+            return remote_profile
+        log(f"OEM branding unavailable code={configured_oem_code}; using bundled default brand")
     mark = requested_mark if requested_mark in marks else default_mark
     if mark not in marks and DEFAULT_BRAND_MARK in marks:
         mark = DEFAULT_BRAND_MARK
@@ -366,6 +390,42 @@ def configure_desktop_branding() -> dict[str, object]:
     )
     _ACTIVE_DESKTOP_BRANDING = profile
     return profile
+
+
+def refresh_oem_desktop_shortcut(branding: dict[str, object]) -> None:
+    profile_path = str(branding.get("_cache_profile_path") or "").strip()
+    if os.name != "nt" or not profile_path:
+        return
+    script = ROOT / "scripts" / "create_desktop_shortcut.ps1"
+    if not script.is_file():
+        return
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                "-Root",
+                str(ROOT),
+                "-BrandMark",
+                str(branding.get("mark") or ""),
+                "-BrandProfilePath",
+                profile_path,
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+            creationflags=creation_flags(),
+        )
+        if result.returncode not in {0, 2}:
+            log(f"refresh OEM desktop shortcut failed code={result.returncode}: {result.stdout} {result.stderr}")
+    except Exception as exc:
+        log(f"refresh OEM desktop shortcut failed: {exc}")
 
 
 def configure_windows_app_identity(mark: str) -> None:
@@ -1520,6 +1580,8 @@ def main() -> int:
     branding = configure_desktop_branding()
     brand_mark = str(branding.get("mark") or DEFAULT_BRAND_MARK)
     configure_windows_app_identity(brand_mark)
+    if branding.get("_oem_code"):
+        refresh_oem_desktop_shortcut(branding)
 
     if not (ROOT / "backend").is_dir() or not (ROOT / "static").is_dir():
         message_box(desktop_brand_title(APP_NAME, branding), f"客户端目录不完整，找不到 backend/static。\n\n当前目录：{ROOT}")
@@ -1535,6 +1597,13 @@ def main() -> int:
         f"&brand={brand_mark}&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
     )
     env = build_env()
+    oem_code = str(branding.get("_oem_code") or "").strip()
+    if oem_code:
+        env["LOBSTER_BRAND_MARK"] = brand_mark
+        env["LOBSTER_OEM_CODE"] = oem_code
+    profile_path = str(branding.get("_cache_profile_path") or "").strip()
+    if profile_path:
+        env["LOBSTER_BRAND_PROFILE_PATH"] = profile_path
     env["PORT"] = str(port)
     env["MCP_PORT"] = str(mcp_port)
 

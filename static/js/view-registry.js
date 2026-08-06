@@ -21,8 +21,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260720-ip-profile-unified',
-    scripts: '/static/js/personal-settings.js?v=20260720-ip-profile-unified',
+    html: '/static/views/personal-settings.html?v=20260806-pc-layout-v1',
+    scripts: '/static/js/personal-settings.js?v=20260806-pc-layout-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -143,5 +143,24 @@
   window.registerLobsterView('agent', {
     html: '/static/views/agent.html',
     scripts: '/static/js/views/agent.js?v=20260622-agent-execution-screen'
+  });
+
+  window.registerLobsterView('tutorial', {
+    html: '/static/views/tutorial.html?v=20260803-global-navigation'
+  });
+
+  window.registerLobsterView('h5-employees', {
+    html: '/static/views/h5-employees.html?v=20260803-local-online-employee-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260803-local-online-employee-v1',
+    init: 'initOnlineH5EmployeesView',
+    cache: 'reload'
+  });
+
+  window.registerLobsterView('multi-clip-mixer', {
+    html: '/static/views/multi-clip-mixer.html?v=20260805-v2',
+    css: '/static/css/multi-clip-mixer.css?v=20260805-v2',
+    scripts: '/static/js/multi-clip-mixer.js?v=20260805-v2',
+    init: 'initMultiClipMixerView',
+    cache: 'reload'
   });
 })();

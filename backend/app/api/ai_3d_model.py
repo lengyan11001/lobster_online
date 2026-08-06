@@ -4315,6 +4315,212 @@ def _bbox_iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> flo
     return inter / float(max(1, area_a + area_b - inter))
 
 
+def _bbox_intersection_ratio(inner: Tuple[int, int, int, int], outer: Tuple[int, int, int, int]) -> float:
+    ix0 = max(inner[0], outer[0])
+    iy0 = max(inner[1], outer[1])
+    ix1 = min(inner[2], outer[2])
+    iy1 = min(inner[3], outer[3])
+    inter = max(0, ix1 - ix0) * max(0, iy1 - iy0)
+    inner_area = max(1, (inner[2] - inner[0]) * (inner[3] - inner[1]))
+    return inter / float(inner_area)
+
+
+def _sam_candidate_score(candidate: Dict[str, Any]) -> float:
+    quality = float(candidate.get("quality") or 0.0)
+    area_ratio = float(candidate.get("area_ratio") or 0.0)
+    box_area_ratio = float(candidate.get("box_area_ratio") or 0.0)
+    fill_ratio = float(candidate.get("fill_ratio") or 0.0)
+    w_frac = float(candidate.get("width_fraction") or 0.0)
+    h_frac = float(candidate.get("height_fraction") or 0.0)
+    medium_bonus = 0.0
+    if 0.018 <= area_ratio <= 0.22:
+        medium_bonus += 0.42
+    if 0.08 <= w_frac <= 0.72 and 0.08 <= h_frac <= 0.72:
+        medium_bonus += 0.22
+    tiny_penalty = 0.45 if area_ratio < 0.012 and max(w_frac, h_frac) < 0.22 else 0.0
+    huge_penalty = 0.55 if box_area_ratio > 0.62 else 0.0
+    sparse_penalty = 0.25 if fill_ratio < 0.16 else 0.0
+    return quality + medium_bonus + min(0.7, area_ratio * 2.2) - tiny_penalty - huge_penalty - sparse_penalty
+
+
+def _select_sam_component_candidates(candidates: List[Dict[str, Any]], *, max_parts: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    target_count = max(1, min(12, int(max_parts or _AI3D_DEFAULT_MAX_PARTS)))
+    candidates = sorted(candidates, key=_sam_candidate_score, reverse=True)
+    selected: List[Dict[str, Any]] = []
+    reject_counts = {"overlap": 0, "nested_fragment": 0}
+    for candidate in candidates:
+        box = candidate["box"]
+        area_ratio = float(candidate.get("area_ratio") or 0.0)
+        nested = False
+        for prev in selected:
+            prev_box = prev["box"]
+            prev_area = float(prev.get("area_ratio") or 0.0)
+            if _bbox_iou(box, prev_box) > 0.58:
+                reject_counts["overlap"] += 1
+                nested = True
+                break
+            if prev_area >= area_ratio and _bbox_intersection_ratio(box, prev_box) > 0.86:
+                reject_counts["nested_fragment"] += 1
+                nested = True
+                break
+        if nested:
+            continue
+        selected.append(candidate)
+        if len(selected) >= target_count:
+            break
+    if len(selected) < min(6, target_count):
+        selected_ids = {id(item) for item in selected}
+        for candidate in candidates:
+            if id(candidate) in selected_ids:
+                continue
+            box = candidate["box"]
+            if any(_bbox_iou(box, prev["box"]) > 0.78 for prev in selected):
+                continue
+            selected.append(candidate)
+            selected_ids.add(id(candidate))
+            if len(selected) >= min(6, target_count):
+                break
+    selected.sort(key=lambda item: (int(item["box"][1]), int(item["box"][0])))
+    return selected, {
+        "target_count": target_count,
+        "candidate_count_after_filter": len(candidates),
+        "reject_counts": reject_counts,
+        "selection_policy": "prefer medium/large stable masks; suppress nested texture fragments and near-duplicates",
+    }
+
+
+def _box_intersection_area(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> int:
+    return max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+
+
+def _assembly_aware_sam_candidates(candidates: List[Dict[str, Any]], *, work_size: Tuple[int, int]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if len(candidates) < 4:
+        return [], {"enabled": False, "reason": "not enough SAM candidates"}
+    work_w, work_h = work_size
+    subject_candidates = [
+        item for item in candidates
+        if 0.006 <= float(item.get("area_ratio") or 0.0) <= 0.58
+    ]
+    if not subject_candidates:
+        return [], {"enabled": False, "reason": "no usable subject candidates"}
+    sx0 = min(int(item["box"][0]) for item in subject_candidates)
+    sy0 = min(int(item["box"][1]) for item in subject_candidates)
+    sx1 = max(int(item["box"][2]) for item in subject_candidates)
+    sy1 = max(int(item["box"][3]) for item in subject_candidates)
+    subject_w = max(1, sx1 - sx0)
+    subject_h = max(1, sy1 - sy0)
+    tall_subject = subject_h / float(subject_w) >= 1.25 and subject_h / float(max(1, work_h)) >= 0.45
+    if not tall_subject:
+        return [], {
+            "enabled": False,
+            "reason": "source does not look like a tall character/figure; using generic SAM candidate filtering",
+            "subject_box": [sx0, sy0, sx1, sy1],
+        }
+    slots = [
+        ("head_face_headwear", "头部/面部/头饰", (0.22, 0.00, 0.78, 0.25)),
+        ("torso_core", "躯干/胸腹核心", (0.20, 0.18, 0.80, 0.56)),
+        ("left_arm_hand", "左臂/左手", (0.00, 0.20, 0.40, 0.76)),
+        ("right_arm_hand", "右臂/右手", (0.60, 0.20, 1.00, 0.76)),
+        ("left_leg", "左腿/左靴", (0.20, 0.50, 0.53, 1.00)),
+        ("right_leg", "右腿/右靴", (0.47, 0.50, 0.80, 1.00)),
+        ("feet_or_lower_accessory", "脚部/底部附件", (0.12, 0.82, 0.88, 1.00)),
+    ]
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        return [], {"enabled": False, "reason": "numpy unavailable"}
+    merged: List[Dict[str, Any]] = []
+    used_candidate_ids: set[int] = set()
+    for role, label, rel in slots:
+        slot_box = (
+            max(0, min(work_w, int(sx0 + subject_w * rel[0]))),
+            max(0, min(work_h, int(sy0 + subject_h * rel[1]))),
+            max(0, min(work_w, int(sx0 + subject_w * rel[2]))),
+            max(0, min(work_h, int(sy0 + subject_h * rel[3]))),
+        )
+        slot_masks = []
+        slot_quality = 0.0
+        for item in candidates:
+            box = item["box"]
+            box_area = max(1, (box[2] - box[0]) * (box[3] - box[1]))
+            cx = (box[0] + box[2]) / 2.0
+            cy = (box[1] + box[3]) / 2.0
+            inside_center = slot_box[0] <= cx <= slot_box[2] and slot_box[1] <= cy <= slot_box[3]
+            overlap_ratio = _box_intersection_area(box, slot_box) / float(box_area)
+            if not inside_center and overlap_ratio < 0.22:
+                continue
+            if float(item.get("area_ratio") or 0.0) > 0.62:
+                continue
+            seg = (item.get("raw") or {}).get("segmentation")
+            if seg is None:
+                continue
+            slot_masks.append(seg)
+            used_candidate_ids.add(id(item))
+            slot_quality = max(slot_quality, float(item.get("quality") or 0.0))
+        if not slot_masks:
+            continue
+        union = np.zeros((work_h, work_w), dtype=bool)
+        for seg in slot_masks:
+            union = np.logical_or(union, seg)
+        box = _mask_bbox_from_array(union)
+        if box is None:
+            continue
+        mask_area = int(union.sum())
+        if mask_area / float(max(1, work_w * work_h)) < 0.006:
+            continue
+        box_area = max(1, (box[2] - box[0]) * (box[3] - box[1]))
+        merged.append({
+            "raw": {
+                "segmentation": union,
+                "area": mask_area,
+                "predicted_iou": min(1.0, slot_quality / 2.0),
+                "stability_score": 1.0,
+            },
+            "box": box,
+            "area_ratio": mask_area / float(max(1, work_w * work_h)),
+            "box_area_ratio": box_area / float(max(1, work_w * work_h)),
+            "width_fraction": (box[2] - box[0]) / float(max(1, work_w)),
+            "height_fraction": (box[3] - box[1]) / float(max(1, work_h)),
+            "fill_ratio": mask_area / float(box_area),
+            "box_area": box_area,
+            "quality": slot_quality,
+            "score": slot_quality + 0.8,
+            "role": role,
+            "label": label,
+            "assembly_merged": True,
+            "merged_mask_count": len(slot_masks),
+        })
+    residual = [
+        item for item in candidates
+        if (
+            id(item) not in used_candidate_ids
+            and 0.018 <= float(item.get("area_ratio") or 0.0) <= 0.28
+            and float(item.get("box_area_ratio") or 0.0) <= 0.42
+        )
+    ]
+    residual_selected, residual_meta = _select_sam_component_candidates(residual, max_parts=max(0, 10 - len(merged)))
+    for item in residual_selected:
+        if any(_bbox_iou(item["box"], merged_item["box"]) > 0.62 for merged_item in merged):
+            continue
+        item = dict(item)
+        item["role"] = f"extra_part_{len(merged) + 1:02d}"
+        item["label"] = f"附属/道具候选 {len(merged) + 1}"
+        item["assembly_extra"] = True
+        merged.append(item)
+        if len(merged) >= 10:
+            break
+    merged.sort(key=lambda item: (int(item["box"][1]), int(item["box"][0])))
+    return merged, {
+        "enabled": bool(merged),
+        "subject_box": [sx0, sy0, sx1, sy1],
+        "slot_count": len(slots),
+        "merged_count": len([item for item in merged if item.get("assembly_merged")]),
+        "extra_count": len([item for item in merged if item.get("assembly_extra")]),
+        "residual": residual_meta,
+        "selection_policy": "merge SAM masks into assembly-friendly character slots before 3D part generation",
+    }
+
+
 def _mask_bbox_from_array(mask: Any) -> Optional[Tuple[int, int, int, int]]:
     try:
         import numpy as np  # type: ignore
@@ -4444,26 +4650,38 @@ def _generate_sam_component_parts(
         box_area = max(1, (right - left) * (bottom - top))
         mask_area = int(raw.get("area") or 0)
         area_ratio = mask_area / float(image_area)
-        if area_ratio < 0.006 or area_ratio > 0.88:
+        box_area_ratio = box_area / float(image_area)
+        width_fraction = (right - left) / float(max(1, work.width))
+        height_fraction = (bottom - top) / float(max(1, work.height))
+        fill_ratio = mask_area / float(box_area)
+        if area_ratio < 0.004 or area_ratio > 0.70:
             continue
         if right - left < 36 or bottom - top < 36:
             continue
+        if box_area_ratio < 0.009:
+            continue
+        if area_ratio < 0.012 and max(width_fraction, height_fraction) < 0.22:
+            continue
+        if fill_ratio < 0.10:
+            continue
+        quality = float(raw.get("predicted_iou") or 0.0) + float(raw.get("stability_score") or 0.0)
         candidates.append({
             "raw": raw,
             "box": box,
             "area_ratio": area_ratio,
+            "box_area_ratio": box_area_ratio,
+            "width_fraction": width_fraction,
+            "height_fraction": height_fraction,
+            "fill_ratio": fill_ratio,
             "box_area": box_area,
-            "score": float(raw.get("predicted_iou") or 0.0) + float(raw.get("stability_score") or 0.0) + min(0.5, area_ratio),
+            "quality": quality,
+            "score": quality + min(0.5, area_ratio),
         })
-    candidates.sort(key=lambda item: (float(item["score"]), float(item["area_ratio"])), reverse=True)
-    selected: List[Dict[str, Any]] = []
-    for candidate in candidates:
-        box = candidate["box"]
-        if any(_bbox_iou(box, prev["box"]) > 0.78 for prev in selected):
-            continue
-        selected.append(candidate)
-        if len(selected) >= max(1, min(_AI3D_ABSOLUTE_MAX_PARTS, int(max_parts or _AI3D_DEFAULT_MAX_PARTS))):
-            break
+    selected, assembly_meta = _assembly_aware_sam_candidates(candidates, work_size=(work.width, work.height))
+    if selected:
+        selection_meta = assembly_meta
+    else:
+        selected, selection_meta = _select_sam_component_candidates(candidates, max_parts=max_parts)
     if not selected:
         raise RuntimeError("SAM 返回的候选过小或重复，未筛出可用部件")
 
@@ -4488,8 +4706,8 @@ def _generate_sam_component_parts(
             mask_full = mask_small.resize(original_size, _BILINEAR).point(lambda value: 255 if value > 96 else 0)
         else:
             mask_full = mask_small
-        role = f"sam_part_{idx:02d}"
-        label = f"SAM候选部件 {idx}"
+        role = str(candidate.get("role") or f"sam_part_{idx:02d}")
+        label = str(candidate.get("label") or f"SAM候选部件 {idx}")
         part_path = out_dir / "parts" / f"{idx:02d}_{role}.png"
         part_meta = _save_sam_isolated_part(source, mask_full, abs_box, part_path)
         part_meta.update({
@@ -4554,10 +4772,18 @@ def _generate_sam_component_parts(
             "role": role,
             "label": label,
             "box": part_meta["relative_source_box"],
-            "reason": "SAM automatic mask candidate from source pixels",
+            "reason": (
+                "Assembly-aware merged SAM masks for a more complete, reconnectable character part"
+                if candidate.get("assembly_merged")
+                else "SAM high-quality mask candidate selected after fragment suppression"
+            ),
             "output_strategy": "multi_view_part",
-            "part_type": "sam_mask",
+            "part_type": "assembly_merged_sam_mask" if candidate.get("assembly_merged") else "sam_mask",
             "needs_inpaint_completion": True,
+            "assembly_aware": bool(candidate.get("assembly_merged") or candidate.get("assembly_extra")),
+            "merged_mask_count": int(candidate.get("merged_mask_count") or 1),
+            "sam_area_ratio": round(float(candidate.get("area_ratio") or 0.0), 5),
+            "sam_fill_ratio": round(float(candidate.get("fill_ratio") or 0.0), 4),
             "mask_preview_url": mask_inputs[-1].get("preview_url"),
             "source_preview_url": region_inputs[-1].get("preview_url"),
             "component_preview_url": part_item.get("preview_url"),
@@ -4592,7 +4818,9 @@ def _generate_sam_component_parts(
             "source_size": list(original_size),
             "work_size": [work.width, work.height],
             "raw_mask_count": len(masks),
+            "filtered_candidate_count": len(candidates),
             "selected_count": len(component_inputs),
+            "selection": selection_meta,
             "checkpoint": str(_sam_checkpoint_path("vit_b")),
         },
     }
@@ -5665,7 +5893,7 @@ def _job_steps(job: Dict[str, Any]) -> List[Dict[str, Any]]:
                     if str(job.get("stage") or "").startswith("component_segments_postprocessing")
                     else "首次运行会先准备 SAM 权重，然后把原图切成候选部件区域"
                     if str(job.get("stage") or "").startswith(("component_sam_checkpoint_downloading", "component_segments_running"))
-                    else "先把原图切成候选部件区域；这是 3.0 的第一个真实拆件步骤"
+                    else "先用 SAM 高质量分割，再过滤碎片/重复小块，输出更像可用部件的候选"
                 ),
                 "items": segment_items,
             },

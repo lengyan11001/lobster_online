@@ -43,7 +43,6 @@ OTA_PATHS: tuple[str, ...] = (
     "skills",
     "skill_registry.json",
     "upstream_urls.json",
-    "必火智能AI.exe",
     "openclaw",
     "requirements.txt",
     ".env.example",
@@ -225,6 +224,7 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     "scripts/ppt_runtime_wheels",
     "scripts/douyin_runtime_wheels",
     "static/uploads",
+    "static/branding/cache",
     "tmp_templates",
     "chat_storage",
     "scripts/wechat_runtime_wheels",
@@ -829,7 +829,7 @@ def main() -> int:
     ap.add_argument(
         "--brand",
         default="",
-        help="OEM brand mark written only into the packaged .env files (for example: daka)",
+        help="OEM brand mark or numeric factory code written only into packaged .env files (for example: daka or 0400)",
     )
     ap.add_argument(
         "--version-note",
@@ -839,11 +839,11 @@ def main() -> int:
     args = ap.parse_args()
     _PACK_OVERSEAS = bool(args.overseas)
     _PACK_BRAND = str(args.brand or "").strip().lower()
-    if _PACK_BRAND and (
-        not _PACK_BRAND[0].isascii()
-        or not _PACK_BRAND[0].isalpha()
-        or not all(ch.isascii() and (ch.isalnum() or ch in "_-") for ch in _PACK_BRAND)
-    ):
+    numeric_oem_code = _PACK_BRAND.isascii() and _PACK_BRAND.isdigit() and 4 <= len(_PACK_BRAND) <= 12
+    valid_brand_mark = bool(_PACK_BRAND) and _PACK_BRAND[0].isascii() and _PACK_BRAND[0].isalpha() and all(
+        ch.isascii() and (ch.isalnum() or ch in "_-") for ch in _PACK_BRAND
+    )
+    if _PACK_BRAND and not (numeric_oem_code or valid_brand_mark):
         print(f"[ERR] invalid --brand: {_PACK_BRAND}")
         return 1
     root: Path = args.root.resolve()

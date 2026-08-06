@@ -6,7 +6,7 @@
 - 小红书：标题严格 ≤20 字（超出会无法提交或前端拦截）。
 - 抖音：驱动内已对标题做截断；此处与驱动一致：图文标题 20、视频 30；描述+话题合并填入约 500 字。
 - 今日头条：标题保守 30 字；正文/简介保守 5000 字（mp 后台以实际提示为准）。
-- 视频号：短标题保守 30 字；描述+话题合并保守 1000 字。
+- 视频号：短标题严格不超过 16 字且不含标点；描述+话题合并保守 1000 字。
 """
 from __future__ import annotations
 
@@ -31,6 +31,16 @@ def _douyin_tag_suffix(tags: str) -> str:
     if not parts:
         return ""
     return " " + " ".join(f"#{t}" for t in parts)
+
+
+def _wechat_channels_short_title(title: str) -> str:
+    chars: List[str] = []
+    for char in str(title or "").strip():
+        if char.isalnum():
+            chars.append(char)
+        elif char.isspace() and chars and chars[-1] != " ":
+            chars.append(" ")
+    return ("".join(chars).strip() or "作品分享")[:16]
 
 
 def normalize_publish_texts(
@@ -93,10 +103,11 @@ def normalize_publish_texts(
         return t, d, g, warnings
 
     if plat == "wechat_channels":
-        title_max, desc_max = 30, 1000
-        if len(t) > title_max:
-            warnings.append(f"视频号短标题已超过 {title_max} 字，已截断（原 {len(t)} 字）")
-            t = t[:title_max]
+        title_max, desc_max = 16, 1000
+        normalized_title = _wechat_channels_short_title(t)
+        if normalized_title != t:
+            warnings.append(f"视频号短标题已清理符号并限制为 {title_max} 字（原 {len(t)} 字）")
+            t = normalized_title
         suffix = _douyin_tag_suffix(g)
         combined = d + suffix
         if len(combined) > desc_max:

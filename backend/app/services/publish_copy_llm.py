@@ -56,7 +56,7 @@ def _platform_copy_limits(platform: str, media_type: str) -> str:
         lines.append("标题：最多 30 个字。")
         lines.append("简介/正文：宜充实、口语化，最多约 5000 字以内。")
     elif p == "wechat_channels":
-        lines.append("短标题：最多 30 个字。")
+        lines.append("短标题：最多 16 个字，只能使用中英文和数字，不要标点、特殊符号或 Emoji。")
         lines.append("描述：宜控制在 800 字以内，可带少量话题。")
     else:
         lines.append("标题：宜简短有力，不超过 30 字。")

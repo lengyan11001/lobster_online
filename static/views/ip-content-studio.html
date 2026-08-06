@@ -528,12 +528,120 @@
         grid-template-columns: 1fr;
       }
       .ip-draft-card {
+        position: relative;
         border: 1px solid rgba(15, 23, 42, 0.11);
         border-radius: 8px;
         background: #fff;
         padding: 0.75rem;
         display: grid;
         gap: 0.5rem;
+      }
+      .ip-draft-card-head,
+      .ip-record-bulk-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+      }
+      .ip-draft-card-head .ip-badge-row {
+        min-width: 0;
+        flex: 1;
+      }
+      .ip-draft-select,
+      .ip-record-select-all {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        color: #475569;
+        font-size: 0.78rem;
+        cursor: pointer;
+        user-select: none;
+      }
+      .ip-draft-select input,
+      .ip-record-select-all input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        accent-color: var(--ip-accent-2);
+      }
+      .ip-draft-top-actions {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin-left: auto;
+      }
+      .ip-draft-action-menu {
+        position: relative;
+      }
+      .ip-draft-action-menu summary {
+        min-height: 30px;
+        padding: 0.36rem 0.62rem;
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid rgba(15, 23, 42, 0.13);
+        border-radius: 7px;
+        background: #fff;
+        color: #475569;
+        font-size: 0.78rem;
+        cursor: pointer;
+        list-style: none;
+      }
+      .ip-draft-action-menu summary::-webkit-details-marker {
+        display: none;
+      }
+      .ip-draft-action-list {
+        position: absolute;
+        z-index: 40;
+        top: calc(100% + 6px);
+        right: 0;
+        width: 148px;
+        padding: 5px;
+        display: grid;
+        gap: 2px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        border-radius: 9px;
+        background: #fff;
+        box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+      }
+      .ip-draft-action-list button {
+        width: 100%;
+        min-height: 32px;
+        padding: 0.38rem 0.55rem;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: #334155;
+        text-align: left;
+        font-size: 0.8rem;
+        cursor: pointer;
+      }
+      .ip-draft-action-list button:hover {
+        background: #f1f5f9;
+      }
+      .ip-draft-action-list button.is-danger {
+        color: #b42318;
+      }
+      .ip-record-bulk-toolbar {
+        margin: -0.1rem 0 0.7rem;
+        padding: 0.55rem 0.65rem;
+        border: 1px solid rgba(37, 99, 235, 0.14);
+        border-radius: 8px;
+        background: #f8fbff;
+      }
+      .ip-record-bulk-toolbar[hidden] {
+        display: none;
+      }
+      .ip-record-bulk-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+      }
+      .ip-record-selected-count {
+        color: #64748b;
+        font-size: 0.78rem;
       }
       .ip-moment-batch-queue {
         display: grid;
@@ -786,6 +894,13 @@
           <div class="ip-content-panel-title">
             <span id="ipRecordDetailTitle">生成明细</span>
             <button type="button" id="ipGenerateSelectedImagesBtn" class="btn btn-primary btn-sm" style="display:none;">生成选中图片</button>
+          </div>
+          <div id="ipRecordBulkToolbar" class="ip-record-bulk-toolbar" hidden>
+            <label class="ip-record-select-all"><input type="checkbox" id="ipRecordSelectAll">全选当前记录</label>
+            <div class="ip-record-bulk-actions">
+              <span id="ipRecordSelectedCount" class="ip-record-selected-count">已选 0 条</span>
+              <button type="button" id="ipCopySelectedRecordsBtn" class="btn btn-primary btn-sm" disabled>复制选中</button>
+            </div>
           </div>
           <div id="ipLatestDraftList" class="ip-draft-grid is-detail"></div>
         </section>

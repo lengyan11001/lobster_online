@@ -88,6 +88,115 @@ def test_auto_reply_llm_uses_memory_and_replies_to_valid_text(monkeypatch):
     assert result["reply"].startswith("企业版价格")
 
 
+def test_auto_reply_llm_returns_semantic_group_invite_decision(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b"json"
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"should_reply":true,"category":"cooperation","intent_level":"high",'
+                                '"topic":"预约体验","conversation_summary":"客户希望预约线下体验",'
+                                '"reply":"可以，我先帮您安排。","should_invite_group":true,'
+                                '"matched_group_keywords":["预约体验"],"group_invite_reason":"客户明确提出预约"}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, json, headers):
+            captured["prompt"] = json["messages"][1]["content"]
+            return FakeResponse()
+
+    monkeypatch.setattr(engine.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(
+        engine._call_auto_reply_llm(
+            auth_context={"token": "token", "installation_id": "iid"},
+            user_id=31,
+            peer_name="客户A",
+            latest_message="我想预约明天下午体验",
+            recent_context="对方: 你们在哪里？\n我: 在深圳南山",
+            memory_context="体验预约需要确认日期和到店人数。",
+            group_invite_rule_context="客户明确提出预约体验并确认时间时，可以邀请进入服务群。",
+        )
+    )
+
+    assert "最近聊天记录" in captured["prompt"]
+    assert "体验预约需要确认日期" in captured["prompt"]
+    assert "客户明确提出预约体验" in captured["prompt"]
+    assert result["should_invite_group"] is True
+    assert result["matched_group_keywords"] == ["预约体验"]
+
+
+def test_auto_reply_llm_never_invites_without_configured_keywords(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        content = b"json"
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"should_reply":true,"category":"other","intent_level":"none",'
+                                '"reply":"好的。","should_invite_group":true,'
+                                '"matched_group_keywords":["误判"],"group_invite_reason":"误判"}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, json, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr(engine.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(
+        engine._call_auto_reply_llm(
+            auth_context={"token": "token", "installation_id": "iid"},
+            user_id=31,
+            peer_name="客户A",
+            latest_message="你好",
+            recent_context="",
+            memory_context="",
+        )
+    )
+
+    assert result["should_invite_group"] is False
+
+
 def test_auto_reply_report_contains_received_and_reply_details():
     result = {
         "started_at": "2026-07-29T09:00:00",

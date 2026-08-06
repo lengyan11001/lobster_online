@@ -1,5 +1,15 @@
 {
   "packages": {
+    "multi_clip_mixer_skill": {
+      "name": "多段视频混剪",
+      "description": "上传多个视频，逐个选择使用片段并按顺序拼接；可选同城爆款音乐和剪辑模板。",
+      "type": "builtin",
+      "store_visibility": "online",
+      "default_installed": true,
+      "status": "available",
+      "capabilities": {},
+      "tags": ["视频", "混剪", "片段", "配乐", "模板"]
+    },
     "browser_use_skill": {
       "name": "Browser Use",
       "description": "管理员调试入口：在独立二级工作台中直接向 OpenClaw 发送浏览器操作消息，不进入龙虾主聊天链路。",

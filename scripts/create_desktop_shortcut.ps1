@@ -4,7 +4,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
-    [string]$BrandMark = ''
+    [string]$BrandMark = '',
+    [string]$BrandProfilePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,7 +37,19 @@ if ([string]::IsNullOrWhiteSpace($m)) {
     exit 1
 }
 
-$b = $json.marks.$m
+$b = $null
+if (-not [string]::IsNullOrWhiteSpace($BrandProfilePath) -and (Test-Path -LiteralPath $BrandProfilePath)) {
+    $runtime = Get-Content -LiteralPath $BrandProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $runtimeCode = [string]$runtime.oem_code
+    $runtimeMark = [string]$runtime.profile.mark
+    if ($null -ne $runtime.profile -and ($runtimeMark -eq $m -or $runtimeCode -eq $m)) {
+        $b = $runtime.profile
+        $m = $runtimeMark
+    }
+}
+if ($null -eq $b) {
+    $b = $json.marks.$m
+}
 if ($null -eq $b) {
     Write-Host "[desktop-shortcut] unknown brand mark: $m"
     exit 1
@@ -54,6 +67,15 @@ if ([string]::IsNullOrWhiteSpace($icoRel)) {
     exit 1
 }
 $ico = Join-Path $Root ($icoRel -replace '/', '\')
+
+$brandLauncher = $null
+$launcherName = [string]$inst.launcher_filename
+if (-not [string]::IsNullOrWhiteSpace($launcherName) -and (Split-Path -Leaf $launcherName) -eq $launcherName -and $launcherName.EndsWith('.exe')) {
+    $candidateLauncher = Join-Path $Root $launcherName
+    if (Test-Path -LiteralPath $candidateLauncher) {
+        $brandLauncher = $candidateLauncher
+    }
+}
 
 if (-not (Test-Path -LiteralPath $ico)) {
     Write-Host "[desktop-shortcut] icon not found: $ico"
@@ -89,7 +111,9 @@ $lnkPath = Join-Path $desktop $lnkName
 try {
     $shell = New-Object -ComObject WScript.Shell
     $sc = $shell.CreateShortcut($lnkPath)
-    if (Test-Path -LiteralPath $desktopExe) {
+    if (-not [string]::IsNullOrWhiteSpace($brandLauncher)) {
+        $sc.TargetPath = $brandLauncher
+    } elseif (Test-Path -LiteralPath $desktopExe) {
         $sc.TargetPath = $desktopExe
     } elseif (Test-Path -LiteralPath $legacyDesktopExe) {
         $sc.TargetPath = $legacyDesktopExe

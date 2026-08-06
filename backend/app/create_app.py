@@ -69,6 +69,7 @@ from .api.bihuo_25_video import router as bihuo_25_video_router
 from .api.hifly_digital_human import router as hifly_digital_human_router
 from .api.shanjian_smart_clip import router as shanjian_smart_clip_router
 from .api.shanjian_digital_human import router as shanjian_digital_human_router
+from .api.multi_clip_mixer import router as multi_clip_mixer_router
 from .api.douyin_origin import router as douyin_origin_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
@@ -1101,6 +1102,7 @@ def create_app() -> FastAPI:
     app.include_router(hifly_digital_human_router, prefix="")
     app.include_router(shanjian_smart_clip_router, prefix="")
     app.include_router(shanjian_digital_human_router, prefix="")
+    app.include_router(multi_clip_mixer_router, prefix="")
     ai_3d_model_router = _load_optional_router("backend.app.api.ai_3d_model", "ai_3d_model")
     if ai_3d_model_router is not None:
         app.include_router(ai_3d_model_router, prefix="")

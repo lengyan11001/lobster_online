@@ -200,6 +200,13 @@ async def _upload_bytes_to_auth_server(
     ).strip() if request else ""
     if installation_id:
         headers["X-Installation-Id"] = installation_id
+    brand_mark = (
+        request.headers.get("X-Lobster-Brand")
+        or request.headers.get("x-lobster-brand")
+        or ""
+    ).strip() if request else ""
+    if brand_mark:
+        headers["X-Lobster-Brand"] = brand_mark
 
     last_error: Optional[str] = None
     for attempt in range(1, 4):
@@ -2166,88 +2173,30 @@ async def upload_asset(
     if not public_url:
         logger.info("[上传流程-步骤3] TOS 未成功，开始上传到服务器临时文件接口 asset_id=%s", aid)
         try:
-            s = get_settings()
-            server_base = (s.auth_server_base or "").strip().rstrip("/")
-            logger.info(
-                "[上传流程-步骤3] server_base=%s asset_id=%s had_bearer_token=%s token_len=%s",
-                server_base,
-                aid,
-                had_bearer,
-                len(bearer_token) if bearer_token else 0,
+            public_url, upload_diag = await _upload_bytes_to_auth_server(
+                data,
+                name,
+                ct,
+                request,
+                timeout=60.0,
             )
-            if not had_bearer:
-                logger.warning("[上传流程-步骤3] 无 Authorization Bearer，服务器 upload-temp 将返回 401 asset_id=%s", aid)
-
-            if not server_base:
-                step3_network_err = "AUTH_SERVER_BASE 未配置，无法 POST upload-temp"
-                logger.error("[上传流程-步骤3] %s asset_id=%s", step3_network_err, aid)
+            temp_http_status = upload_diag.get("status_code")
+            temp_body_snip = str(upload_diag.get("body_snip") or "")[:800]
+            step3_network_err = str(upload_diag.get("error") or "")
+            if public_url:
+                logger.info(
+                    "[上传流程-步骤3] 服务器临时文件上传成功 asset_id=%s temp_id=%s storage=%s public_url=%s",
+                    aid,
+                    upload_diag.get("temp_id"),
+                    upload_diag.get("storage"),
+                    public_url[:80],
+                )
             else:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    files = {"file": (name, data, ct)}
-                    headers = {}
-                    if bearer_token:
-                        headers["Authorization"] = f"Bearer {bearer_token}"
-                    installation_id = (
-                        request.headers.get("X-Installation-Id")
-                        or request.headers.get("x-installation-id")
-                        or ""
-                    ).strip()
-                    if installation_id:
-                        headers["X-Installation-Id"] = installation_id
-                    upload_base = server_base.rstrip("/")
-                    if upload_base.lower().startswith("http://") and not re.search(
-                        r"^http://(127\.0\.0\.1|localhost|\[?::1\]?)(:\d+)?$",
-                        upload_base,
-                        re.IGNORECASE,
-                    ):
-                        upload_base = "https://" + upload_base[7:]
-                        logger.info(
-                            "[上传流程-步骤3] AUTH_SERVER_BASE 为 http，upload-temp 优先改用 https asset_id=%s url=%s",
-                            aid,
-                            upload_base,
-                        )
-                    upload_url = f"{upload_base}/api/assets/upload-temp"
-                    logger.info("[上传流程-步骤3] POST %s asset_id=%s", upload_url, aid)
-                    resp = await client.post(upload_url, files=files, headers=headers, follow_redirects=True)
-                    temp_http_status = resp.status_code
-                    logger.info("[上传流程-步骤3] 服务器响应状态码=%d asset_id=%s", resp.status_code, aid)
-                    if resp.status_code >= 400:
-                        temp_body_snip = (resp.text or "")[:800]
-                        logger.error(
-                            "[上传流程-步骤3] 服务器拒绝或失败 asset_id=%s status=%s body=%s",
-                            aid,
-                            resp.status_code,
-                            temp_body_snip,
-                        )
-                    else:
-                        try:
-                            result = resp.json()
-                        except Exception as je:
-                            temp_json_err = f"{type(je).__name__}: {je}"
-                            temp_body_snip = (resp.text or "")[:800]
-                            logger.error(
-                                "[上传流程-步骤3] 响应非JSON asset_id=%s err=%s content_type=%s body_prefix=%s",
-                                aid,
-                                temp_json_err,
-                                (resp.headers.get("content-type") or ""),
-                                temp_body_snip[:400],
-                            )
-                        else:
-                            public_url = result.get("public_url")
-                            if public_url:
-                                logger.info(
-                                    "[上传流程-步骤3] 服务器临时文件上传成功 asset_id=%s temp_id=%s public_url=%s",
-                                    aid,
-                                    result.get("temp_id"),
-                                    public_url[:80],
-                                )
-                            else:
-                                temp_body_snip = json.dumps(result, ensure_ascii=False)[:800]
-                                logger.error(
-                                    "[上传流程-步骤3] 服务器返回无 public_url asset_id=%s response=%s",
-                                    aid,
-                                    temp_body_snip[:500],
-                                )
+                logger.error(
+                    "[上传流程-步骤3] 服务器临时文件上传失败 asset_id=%s diag=%s",
+                    aid,
+                    json.dumps(upload_diag, ensure_ascii=False)[:1000],
+                )
         except Exception as e:
             step3_network_err = f"{type(e).__name__}: {e}"
             logger.error(
@@ -2279,12 +2228,21 @@ async def upload_asset(
             step3_network_err or "-",
             (temp_body_snip[:500] + ("…" if len(temp_body_snip) > 500 else "")) if temp_body_snip else "-",
         )
+        failure_parts = []
+        if temp_http_status:
+            failure_parts.append(f"云端上传 HTTP {temp_http_status}")
+        if step3_network_err:
+            failure_parts.append(step3_network_err[:240])
+        if temp_body_snip:
+            failure_parts.append(temp_body_snip[:240])
+        if not failure_parts:
+            failure_parts.append("未获得公网素材地址")
         raise HTTPException(
             status_code=503,
             detail=(
-                "本机 TOS 与服务器临时上传均未成功，无公网可访问链接。"
-                "请查看本机 logs/app.log 中带 [上传流程-失败] 汇总 的一行（含 temp_http、temp_body_snip）。"
-                "常见：未配 TOS_CONFIG、未带登录 Bearer、服务器 upload-temp 返回 401/404、或 AUTH_SERVER_BASE 错误。"
+                "素材上传失败：本机存储与云端兜底均未成功；"
+                + "；".join(failure_parts)
+                + "。请检查网络或重新登录后重试。"
             ),
         )
 

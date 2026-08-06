@@ -30,6 +30,7 @@ SKIP_DIR_PREFIXES: tuple[tuple[str, ...], ...] = (
     (PROJ, "browser_data"),
     (PROJ, "assets"),
     (PROJ, "static", "hifly_previews"),
+    (PROJ, "static", "branding", "cache"),
     (PROJ, "node_modules"),
     (PROJ, "docs"),  # 与完整项目包一致：交付包不含 docs（源码仓维护）
     (PROJ, "openclaw", "workspace"),

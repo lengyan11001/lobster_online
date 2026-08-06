@@ -7,7 +7,6 @@
     memories: [],
     templates: [],
     editingTemplateId: '',
-    profileIndex: 0,
     selectedKeywords: {},
     selectedCompetitors: {},
     selectedMemories: {},
@@ -22,7 +21,16 @@
     uploadFiles: [],
     customReferenceFile: null,
     defaultItem: null,
-    personalTemplateLanguage: 'zh-CN'
+    personalTemplateLanguage: 'zh-CN',
+    profilePhotoPreview: '',
+    profilePhotoName: '',
+    profilePhotoResolvedValue: '',
+    profilePhotoResolvingValue: '',
+    profilePhotoAssets: [],
+    profilePhotoPickerOpen: false,
+    profilePhotoPickerLoading: false,
+    profilePhotoPickerQuery: '',
+    profilePhotoUploadBusy: false
   };
 
   var DOC_TYPES = [
@@ -276,74 +284,291 @@
 
   function profileQuestions() {
     return [
-      { field: 'psProfileName', label: '你的名字', type: 'input', placeholder: '填写出镜称呼' },
-      { field: 'psGender', label: '性别', type: 'select', placeholder: '选择性别', options: [{ value: 'female', label: '女' }, { value: 'male', label: '男' }] },
-      { field: 'psProfilePhoto', label: '人物照片', type: 'input', placeholder: '填写人物照片素材ID或图片URL' },
-      { field: 'psBirthEra', label: '哪个年代出生', type: 'input', placeholder: '如 80后、90后' },
-      { field: 'psCurrentProvince', label: '现居省份', type: 'input', placeholder: '填写现居省份' },
-      { field: 'psCurrentCity', label: '现居城市', type: 'input', placeholder: '填写现居城市' },
-      { field: 'psHometown', label: '籍贯', type: 'input', placeholder: '填写籍贯城市' },
-      { field: 'psRole', label: '你是做什么的', type: 'input', placeholder: '写身份或岗位' },
-      { field: 'psShareTopic', label: '你主要分享什么', type: 'input', placeholder: '写内容方向' },
-      { field: 'psVideoStyle', label: '你希望视频是什么风格', type: 'input', placeholder: '写口播/画面风格' },
-      { field: 'psAfterViewAction', label: '希望大家看完后做什么', type: 'input', placeholder: '如关注、私信、到店' },
-      { field: 'psBusinessProduct', label: '你在做什么/什么产品', type: 'textarea', placeholder: '写产品、服务和卖点' },
-      { field: 'psTargetCustomer', label: '你想卖给谁/哪些年代的人', type: 'textarea', placeholder: '写目标人群和痛点' },
-      { field: 'psAdvantages', label: '你的优势/比同行好在哪', type: 'textarea', placeholder: '写差异化优势' }
+      { field: 'psProfileName', label: '你的名字', type: 'input', hint: '填写希望在内容中使用的姓名或称呼', placeholder: '例如：张老师、阿杰、李总' },
+      { field: 'psGender', label: '你的性别', type: 'select', hint: '用于匹配口播称谓和表达方式', placeholder: '请选择性别', options: [{ value: 'female', label: '女' }, { value: 'male', label: '男' }] },
+      { field: 'psProfilePhoto', label: '人物照片', type: 'photo', hint: '选择一张清晰正面照，便于后续形象和内容生成', placeholder: '支持从电脑上传或从素材库选择' },
+      { field: 'psBirthEra', label: '你是哪个年代出生的？', type: 'input', hint: '年龄阶段会影响语言习惯和内容表达', placeholder: '例如：80后、90后、00后' },
+      { field: 'psCurrentProvince', label: '你现在居住在哪个省份？', type: 'input', hint: '填写当前常住地所在省份', placeholder: '例如：广东省' },
+      { field: 'psCurrentCity', label: '你现在居住在哪个城市？', type: 'input', hint: '用于生成同城和地域相关内容', placeholder: '例如：深圳市' },
+      { field: 'psHometown', label: '你的籍贯是哪里？', type: 'input', hint: '填写家乡所在城市或地区', placeholder: '例如：湖南长沙' },
+      { field: 'psRole', label: '你是做什么的？', type: 'input', hint: '说明你的职业、岗位或对外身份', placeholder: '例如：餐饮老板、家装设计师、企业培训师' },
+      { field: 'psShareTopic', label: '你主要想分享什么内容？', type: 'input', hint: '填写账号长期输出的内容方向', placeholder: '例如：门店经营、育儿知识、行业经验' },
+      { field: 'psVideoStyle', label: '你希望呈现什么视频风格？', type: 'input', hint: '描述画面、口播语气或内容节奏', placeholder: '例如：专业口播、轻松聊天、剧情演绎' },
+      { field: 'psAfterViewAction', label: '希望用户看完后做什么？', type: 'input', hint: '填写你希望用户采取的下一步动作', placeholder: '例如：关注账号、私信咨询、到店体验' },
+      { field: 'psBusinessProduct', label: '你在做什么产品或服务？', type: 'textarea', hint: '写清产品、服务、主要卖点、价格带和交付方式', placeholder: '例如：为本地餐饮门店提供短视频获客服务，包含拍摄、运营和线索转化' },
+      { field: 'psTargetCustomer', label: '你最想服务哪类客户？', type: 'textarea', hint: '描述客户身份、年龄、地区、需求和主要痛点', placeholder: '例如：25-45 岁的餐饮门店老板，希望稳定获取同城客流' },
+      { field: 'psAdvantages', label: '你比同行好在哪里？', type: 'textarea', hint: '说明资历、案例、产品、服务或价格方面的差异化优势', placeholder: '例如：10 年行业经验，服务过 300 家门店，提供从内容到成交的完整方案' }
     ];
   }
 
-  function syncProfileAnswerToField() {
+  function profilePhotoAssetPreview(row) {
+    row = row || {};
+    return String(row.preview_url || row.local_preview_url || row.open_url || row.source_url || row.url || '').trim();
+  }
+
+  function profilePhotoDisplayUrl(value) {
+    var url = String(value || '').trim();
+    return /^(https?:\/\/|blob:|data:image\/|\/)/i.test(url) ? url : '';
+  }
+
+  function profilePhotoSize(value) {
+    var bytes = Number(value || 0);
+    if (!isFinite(bytes) || bytes <= 0) return '';
+    if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1) + ' MB';
+    return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+  }
+
+  function setProfilePhoto(value, previewUrl, name) {
+    var nextValue = String(value || '').trim();
+    setFieldValue('psProfilePhoto', nextValue);
+    state.profilePhotoPreview = profilePhotoDisplayUrl(previewUrl || (nextValue.indexOf('http') === 0 ? nextValue : ''));
+    state.profilePhotoName = String(name || '').trim();
+    state.profilePhotoResolvedValue = state.profilePhotoPreview ? nextValue : '';
+    state.profilePhotoResolvingValue = '';
+  }
+
+  function resolveProfilePhotoPreview(value) {
+    var selected = String(value || '').trim();
+    if (!selected || state.profilePhotoResolvedValue === selected || state.profilePhotoResolvingValue === selected) return;
+    var directUrl = profilePhotoDisplayUrl(selected);
+    if (directUrl) {
+      state.profilePhotoPreview = directUrl;
+      state.profilePhotoName = state.profilePhotoName || '已选择人物照片';
+      state.profilePhotoResolvedValue = selected;
+      return;
+    }
+    if (!localBase()) return;
+    state.profilePhotoResolvingValue = selected;
+    localJson('/api/assets/' + encodeURIComponent(selected), { json: false })
+      .then(function(item) {
+        if (fieldValue('psProfilePhoto') !== selected) return;
+        state.profilePhotoPreview = profilePhotoDisplayUrl(profilePhotoAssetPreview(item));
+        state.profilePhotoName = String(item.filename || item.name || '素材库图片');
+        state.profilePhotoResolvedValue = selected;
+      })
+      .catch(function() {
+        if (fieldValue('psProfilePhoto') === selected) state.profilePhotoResolvedValue = selected;
+      })
+      .finally(function() {
+        if (state.profilePhotoResolvingValue === selected) state.profilePhotoResolvingValue = '';
+        if (state.tab === 'profile' && fieldValue('psProfilePhoto') === selected) renderProfileWizard();
+      });
+  }
+
+  function renderProfilePhotoSelector() {
+    var value = fieldValue('psProfilePhoto');
+    resolveProfilePhotoPreview(value);
+    var preview = profilePhotoDisplayUrl(state.profilePhotoPreview || value);
+    var title = state.profilePhotoName || (value ? '已选择人物照片' : '还没有选择照片');
+    var meta = value ? (/^https?:\/\//i.test(value) ? '图片链接' : '素材库图片') : '支持 JPG、PNG、WEBP 等图片';
+    var uploadLabel = state.profilePhotoUploadBusy ? '上传中...' : '上传电脑图片';
+    return '<div class="ps-photo-select">' +
+      '<input id="psProfilePhotoFile" type="file" accept="image/*" hidden>' +
+      '<div class="ps-photo-preview' + (preview ? ' has-image' : '') + '">' +
+        (preview ? '<img src="' + escAttr(preview) + '" alt="人物照片预览">' : '<span>人像</span>') +
+      '</div>' +
+      '<div class="ps-photo-copy"><strong>' + esc(title) + '</strong><span>' + esc(meta) + '</span></div>' +
+      '<div class="ps-photo-actions">' +
+        '<button type="button" class="btn btn-primary btn-sm" id="psProfilePhotoUploadBtn"' + (state.profilePhotoUploadBusy ? ' disabled' : '') + '>' + esc(uploadLabel) + '</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" id="psProfilePhotoLibraryBtn"' + (state.profilePhotoUploadBusy ? ' disabled' : '') + '>从素材库选择</button>' +
+        (value ? '<button type="button" class="btn btn-ghost btn-sm ps-photo-clear" id="psProfilePhotoClearBtn">清除</button>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  function bindProfilePhotoSelector() {
+    var fileInput = $('psProfilePhotoFile');
+    var uploadBtn = $('psProfilePhotoUploadBtn');
+    var libraryBtn = $('psProfilePhotoLibraryBtn');
+    var clearBtn = $('psProfilePhotoClearBtn');
+    if (uploadBtn && fileInput) uploadBtn.addEventListener('click', function() { fileInput.click(); });
+    if (fileInput) fileInput.addEventListener('change', function() {
+      var file = fileInput.files && fileInput.files[0];
+      if (file) uploadProfilePhoto(file);
+    });
+    if (libraryBtn) libraryBtn.addEventListener('click', openProfilePhotoPicker);
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+      setProfilePhoto('', '', '');
+      renderProfileWizard();
+      setMsg('已清除人物照片。');
+    });
+  }
+
+  function uploadProfilePhoto(file) {
+    if (!file || state.profilePhotoUploadBusy) return;
+    var imageFile = /^image\//i.test(String(file.type || '')) || /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(String(file.name || ''));
+    if (!imageFile) {
+      setMsg('请选择图片文件。', true);
+      return;
+    }
+    if (!localBase()) {
+      setMsg('当前未检测到本机后端地址。', true);
+      return;
+    }
+    state.profilePhotoUploadBusy = true;
+    renderProfileWizard();
+    setMsg('正在上传人物照片...');
+    var fd = new FormData();
+    fd.append('file', file, file.name || 'profile-photo');
+    fetch(localBase() + '/api/assets/upload', { method: 'POST', headers: headers(false), body: fd })
+      .then(function(resp) {
+        return resp.json().catch(function() { return {}; }).then(function(data) {
+          if (!resp.ok || !data.asset_id) throw new Error(parseErr(data, '人物照片上传失败'));
+          return data;
+        });
+      })
+      .then(function(item) {
+        setProfilePhoto(item.asset_id, profilePhotoAssetPreview(item), item.filename || file.name || '人物照片');
+        setMsg('人物照片已上传并存入素材库。');
+      })
+      .catch(function(err) {
+        setMsg(err.message || '人物照片上传失败', true);
+      })
+      .finally(function() {
+        state.profilePhotoUploadBusy = false;
+        renderProfileWizard();
+      });
+  }
+
+  function renderProfilePhotoPicker(error) {
+    var modal = $('psProfilePhotoPicker');
+    var status = $('psProfilePhotoPickerStatus');
+    var grid = $('psProfilePhotoPickerGrid');
+    if (!modal || !status || !grid) return;
+    modal.classList.toggle('is-visible', !!state.profilePhotoPickerOpen);
+    modal.setAttribute('aria-hidden', state.profilePhotoPickerOpen ? 'false' : 'true');
+    if (!state.profilePhotoPickerOpen) return;
+    if (state.profilePhotoPickerLoading) {
+      status.textContent = '正在加载素材库图片...';
+      grid.innerHTML = '<div class="ps-photo-picker-empty">正在加载...</div>';
+      return;
+    }
+    if (error) {
+      status.textContent = error;
+      grid.innerHTML = '<div class="ps-photo-picker-empty">素材库加载失败</div>';
+      return;
+    }
+    var query = String(state.profilePhotoPickerQuery || '').trim().toLowerCase();
+    var rows = (state.profilePhotoAssets || []).filter(function(item) {
+      return !query || String(item.filename || item.name || item.asset_id || '').toLowerCase().indexOf(query) >= 0;
+    });
+    status.textContent = rows.length ? '共 ' + rows.length + ' 张图片' : '没有匹配的图片';
+    if (!rows.length) {
+      grid.innerHTML = '<div class="ps-photo-picker-empty">暂无可选图片</div>';
+      return;
+    }
+    grid.innerHTML = rows.map(function(item) {
+      var preview = profilePhotoAssetPreview(item);
+      var name = item.filename || item.name || item.asset_id || '人物照片';
+      var selected = String(fieldValue('psProfilePhoto')) === String(item.asset_id || '');
+      return '<button type="button" class="ps-photo-picker-item' + (selected ? ' is-selected' : '') + '" data-ps-photo-asset="' + escAttr(item.asset_id || '') + '">' +
+        '<span class="ps-photo-picker-thumb">' + (preview ? '<img src="' + escAttr(preview) + '" alt="" loading="lazy" decoding="async">' : '<span>无预览</span>') + '</span>' +
+        '<span class="ps-photo-picker-name" title="' + escAttr(name) + '">' + esc(name) + '</span>' +
+        '<small>' + esc(profilePhotoSize(item.file_size) || '图片素材') + '</small>' +
+      '</button>';
+    }).join('');
+  }
+
+  function loadProfilePhotoAssets() {
+    if (!localBase()) {
+      renderProfilePhotoPicker('当前未检测到本机后端地址');
+      return;
+    }
+    state.profilePhotoPickerLoading = true;
+    renderProfilePhotoPicker();
+    localJson('/api/assets?media_type=image&limit=200', { json: false })
+      .then(function(data) {
+        state.profilePhotoAssets = Array.isArray(data.assets) ? data.assets : [];
+        state.profilePhotoPickerLoading = false;
+        renderProfilePhotoPicker();
+      })
+      .catch(function(err) {
+        state.profilePhotoPickerLoading = false;
+        renderProfilePhotoPicker(err.message || '素材库加载失败');
+      });
+  }
+
+  function openProfilePhotoPicker() {
+    state.profilePhotoPickerOpen = true;
+    state.profilePhotoPickerQuery = '';
+    var search = $('psProfilePhotoPickerSearch');
+    if (search) search.value = '';
+    renderProfilePhotoPicker();
+    loadProfilePhotoAssets();
+  }
+
+  function closeProfilePhotoPicker() {
+    state.profilePhotoPickerOpen = false;
+    renderProfilePhotoPicker();
+  }
+
+  function pickProfilePhotoAsset(assetId) {
+    var item = (state.profilePhotoAssets || []).find(function(row) { return String(row.asset_id || '') === String(assetId || ''); });
+    if (!item) return;
+    setProfilePhoto(item.asset_id, profilePhotoAssetPreview(item), item.filename || item.name || '素材库图片');
+    closeProfilePhotoPicker();
+    renderProfileWizard();
+    setMsg('已选择素材库人物照片。');
+  }
+
+  function syncProfileAnswerToField(event) {
+    var changed = event && event.target;
+    if (changed && changed.getAttribute) {
+      var changedField = changed.getAttribute('data-ps-profile-answer');
+      if (changedField) setFieldValue(changedField, changed.value || '');
+    } else {
+      document.querySelectorAll('#psProfileQuestionList [data-ps-profile-answer]').forEach(function(answer) {
+        var field = answer.getAttribute('data-ps-profile-answer');
+        if (field) setFieldValue(field, answer.value || '');
+      });
+    }
+    updateProfileCompletion();
+  }
+
+  function updateProfileCompletion() {
     var questions = profileQuestions();
-    var idx = Math.max(0, Math.min(Number(state.profileIndex || 0), questions.length - 1));
-    var question = questions[idx];
-    var answer = $('psProfileAnswer');
-    if (question && answer) setFieldValue(question.field, answer.value || '');
+    var completed = questions.filter(function(question) {
+      return String(fieldValue(question.field) || '').trim();
+    }).length;
+    var text = $('psProfileCompletionText');
+    if (text) text.textContent = '已填写 ' + completed + '/' + questions.length;
   }
 
   function renderProfileWizard() {
-    var host = $('psProfileAnswerHost');
-    var title = $('psProfileQuestionTitle');
-    if (!host || !title) return;
+    var host = $('psProfileQuestionList');
+    if (!host) return;
     var questions = profileQuestions();
-    var maxIdx = Math.max(0, questions.length - 1);
-    var idx = Math.max(0, Math.min(Number(state.profileIndex || 0), maxIdx));
-    state.profileIndex = idx;
-    var question = questions[idx];
-    title.textContent = question.label;
-    var step = $('psProfileStepText');
-    var progress = $('psProfileProgress');
-    if (step) step.textContent = (idx + 1) + '/' + questions.length;
-    if (progress) progress.style.width = Math.round(((idx + 1) / questions.length) * 100) + '%';
-    if (question.type === 'select') {
-      var options = Array.isArray(question.options) ? question.options : [];
-      host.innerHTML = '<select id="psProfileAnswer">' +
-        '<option value="">' + esc(question.placeholder || '请选择') + '</option>' +
-        options.map(function(item) { return '<option value="' + escAttr(item.value) + '">' + esc(item.label) + '</option>'; }).join('') +
-        '</select>';
-    } else if (question.type === 'textarea') {
-      host.innerHTML = '<textarea id="psProfileAnswer" rows="5" placeholder="' + escAttr(question.placeholder || '') + '"></textarea>';
-    } else {
-      host.innerHTML = '<input id="psProfileAnswer" type="text" placeholder="' + escAttr(question.placeholder || '') + '">';
-    }
-    var answer = $('psProfileAnswer');
-    if (answer) {
-      answer.value = fieldValue(question.field);
+    host.innerHTML = questions.map(function(question, idx) {
+      var value = fieldValue(question.field);
+      var control = '';
+      if (question.type === 'photo') {
+        control = renderProfilePhotoSelector();
+      } else if (question.type === 'select') {
+        var options = Array.isArray(question.options) ? question.options : [];
+        control = '<select data-ps-profile-answer="' + escAttr(question.field) + '">' +
+          '<option value="">' + esc(question.placeholder || '请选择') + '</option>' +
+          options.map(function(item) { return '<option value="' + escAttr(item.value) + '">' + esc(item.label) + '</option>'; }).join('') +
+          '</select>';
+      } else if (question.type === 'textarea') {
+        control = '<textarea rows="3" data-ps-profile-answer="' + escAttr(question.field) + '" placeholder="' + escAttr(question.placeholder || '') + '">' + esc(value) + '</textarea>';
+      } else {
+        control = '<input type="text" data-ps-profile-answer="' + escAttr(question.field) + '" value="' + escAttr(value) + '" placeholder="' + escAttr(question.placeholder || '') + '">';
+      }
+      return '<article class="ps-survey-item">' +
+        '<div class="ps-survey-question"><span>' + (idx + 1) + '</span><div>' +
+          '<strong>' + esc(question.label) + '</strong>' +
+          '<small>' + esc(question.hint || question.placeholder || '') + '</small>' +
+        '</div></div>' +
+        '<div class="ps-survey-answer">' + control + '</div>' +
+      '</article>';
+    }).join('');
+    bindProfilePhotoSelector();
+    host.querySelectorAll('[data-ps-profile-answer]').forEach(function(answer) {
+      if (answer.tagName === 'SELECT') answer.value = fieldValue(answer.getAttribute('data-ps-profile-answer'));
       answer.addEventListener('input', syncProfileAnswerToField);
       answer.addEventListener('change', syncProfileAnswerToField);
-      setTimeout(function() { answer.focus(); }, 0);
-    }
-    if ($('psProfilePrevBtn')) $('psProfilePrevBtn').disabled = idx <= 0;
-    if ($('psProfileNextBtn')) $('psProfileNextBtn').hidden = idx >= maxIdx;
-    if ($('psSaveProfileBtn')) $('psSaveProfileBtn').hidden = idx < maxIdx;
-  }
-
-  function moveProfile(delta) {
-    syncProfileAnswerToField();
-    var questions = profileQuestions();
-    var maxIdx = Math.max(0, questions.length - 1);
-    state.profileIndex = Math.max(0, Math.min(Number(state.profileIndex || 0) + delta, maxIdx));
-    renderProfileWizard();
+    });
+    updateProfileCompletion();
   }
 
   function profileRequirements() {
@@ -448,9 +673,16 @@
     var req = (item && item.requirements) || {};
     var profile = req.basic_profile && typeof req.basic_profile === 'object' ? req.basic_profile : (req.profile || {});
     var business = req.business_description && typeof req.business_description === 'object' ? req.business_description : (req.business || {});
+    var profilePhoto = req.profile_photo_asset_id || profile.profile_photo_asset_id || req.profile_photo_url || profile.profile_photo_url || '';
     setFieldValue('psProfileName', req.profile_name || profile.name || '');
     setFieldValue('psGender', req.gender || profile.gender || '');
-    setFieldValue('psProfilePhoto', req.profile_photo_asset_id || profile.profile_photo_asset_id || req.profile_photo_url || profile.profile_photo_url || '');
+    if (fieldValue('psProfilePhoto') !== String(profilePhoto || '')) {
+      state.profilePhotoPreview = profilePhotoDisplayUrl(profilePhoto);
+      state.profilePhotoName = '';
+      state.profilePhotoResolvedValue = state.profilePhotoPreview ? String(profilePhoto || '') : '';
+      state.profilePhotoResolvingValue = '';
+    }
+    setFieldValue('psProfilePhoto', profilePhoto);
     setFieldValue('psBirthEra', req.birth_era || profile.birth_era || '');
     setFieldValue('psCurrentProvince', req.current_province || profile.current_province || req.province || profile.province || '');
     setFieldValue('psCurrentCity', req.current_city || profile.current_city || '');
@@ -590,23 +822,55 @@
     ].join('|');
   }
 
-  function handleUploadFileChange() {
-    var input = $('psMemoryFiles');
-    var picked = input && input.files ? Array.prototype.slice.call(input.files) : [];
+  function appendUploadFiles(fileList) {
+    var picked = fileList ? Array.prototype.slice.call(fileList) : [];
     if (!picked.length) {
       renderSelectedFiles();
       return;
     }
     var seen = {};
-    state.uploadFiles = selectedUploadFiles().concat(picked).filter(function(file) {
+    var existing = state.uploadFiles && state.uploadFiles.length ? state.uploadFiles : [];
+    state.uploadFiles = existing.concat(picked).filter(function(file) {
       var key = uploadFileKey(file);
       if (!key || seen[key]) return false;
       seen[key] = true;
       return true;
     });
-    if (input) input.value = '';
     renderSelectedFiles();
     renderMemorySourceSelectors();
+  }
+
+  function handleUploadFileChange() {
+    var input = $('psMemoryFiles');
+    appendUploadFiles(input && input.files ? input.files : []);
+    if (input) input.value = '';
+  }
+
+  function bindUploadDropzone() {
+    var zone = $('psUploadDropzone');
+    if (!zone || zone.dataset.bound) return;
+    zone.dataset.bound = '1';
+    var dragDepth = 0;
+    zone.addEventListener('dragenter', function(ev) {
+      ev.preventDefault();
+      dragDepth += 1;
+      zone.classList.add('is-dragover');
+    });
+    zone.addEventListener('dragover', function(ev) {
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'copy';
+    });
+    zone.addEventListener('dragleave', function(ev) {
+      ev.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (!dragDepth) zone.classList.remove('is-dragover');
+    });
+    zone.addEventListener('drop', function(ev) {
+      ev.preventDefault();
+      dragDepth = 0;
+      zone.classList.remove('is-dragover');
+      appendUploadFiles(ev.dataTransfer && ev.dataTransfer.files ? ev.dataTransfer.files : []);
+    });
   }
 
   function removeUploadFile(index) {
@@ -1804,9 +2068,23 @@
     if ($('psBackBtn')) $('psBackBtn').addEventListener('click', function() {
       if (typeof window.showLobsterView === 'function') window.showLobsterView('chat');
     });
-    if ($('psProfilePrevBtn')) $('psProfilePrevBtn').addEventListener('click', function() { moveProfile(-1); });
-    if ($('psProfileNextBtn')) $('psProfileNextBtn').addEventListener('click', function() { moveProfile(1); });
     if ($('psSaveProfileBtn')) $('psSaveProfileBtn').addEventListener('click', saveProfile);
+    if ($('psProfilePhotoPickerClose')) $('psProfilePhotoPickerClose').addEventListener('click', closeProfilePhotoPicker);
+    if ($('psProfilePhotoPickerSearch')) $('psProfilePhotoPickerSearch').addEventListener('input', function(ev) {
+      state.profilePhotoPickerQuery = String(ev.target.value || '');
+      renderProfilePhotoPicker();
+    });
+    if ($('psProfilePhotoPicker')) $('psProfilePhotoPicker').addEventListener('click', function(ev) {
+      if (ev.target === $('psProfilePhotoPicker')) {
+        closeProfilePhotoPicker();
+        return;
+      }
+      var item = ev.target && ev.target.closest ? ev.target.closest('[data-ps-photo-asset]') : null;
+      if (item) pickProfilePhotoAsset(item.getAttribute('data-ps-photo-asset') || '');
+    });
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && state.profilePhotoPickerOpen) closeProfilePhotoPicker();
+    });
     if ($('psSaveTemplateBtn')) $('psSaveTemplateBtn').addEventListener('click', saveTemplate);
     if ($('psNewTemplateBtn')) $('psNewTemplateBtn').addEventListener('click', resetTemplateForm);
     if ($('psTemplateLanguage')) $('psTemplateLanguage').addEventListener('change', function(ev) {
@@ -1827,6 +2105,7 @@
     }
     if ($('psGenerateMemoryBtn')) $('psGenerateMemoryBtn').addEventListener('click', generateMemoryDocs);
     if ($('psMemoryFiles')) $('psMemoryFiles').addEventListener('change', handleUploadFileChange);
+    bindUploadDropzone();
     if ($('psCustomReferenceFile')) $('psCustomReferenceFile').addEventListener('change', handleCustomReferenceFileChange);
     if ($('psMemoryUseProfile')) $('psMemoryUseProfile').addEventListener('change', function(ev) {
       state.memoryUseProfile = !!ev.target.checked;

@@ -3,6 +3,7 @@ import httpx
 
 from backend.app.api import h5_chat_channel as channel
 from backend.app.api.h5_chat_channel import _extract_parent_publish_context
+from publisher.platform_publish_limits import normalize_publish_texts
 
 
 def test_extracts_ip_daily_oral_script_for_child_publish():
@@ -352,7 +353,7 @@ async def test_wechat_channels_child_strips_symbols_from_short_title(monkeypatch
             "asset_id": "video-asset",
             "media_type": "video",
             "account_nickname": "默认视频号",
-            "title": "AI增长｜实战！2026🔥",
+            "title": "每天2000万人在豆包看病AI大健康要变天！",
             "description": "视频号发布正文。",
             "tags": "#AI增长",
             "ai_publish_copy": False,
@@ -364,8 +365,24 @@ async def test_wechat_channels_child_strips_symbols_from_short_title(monkeypatch
     )
 
     assert calls[0][0] == "/api/publish"
-    assert calls[0][1]["title"] == "AI增长实战2026"
-    assert result["publish_copy"]["title"] == "AI增长实战2026"
+    assert calls[0][1]["title"] == "每天2000万人在豆包看病AI大"
+    assert result["publish_copy"]["title"] == "每天2000万人在豆包看病AI大"
+
+
+def test_wechat_channels_driver_limits_short_title_to_16_characters():
+    title, description, tags, warnings = normalize_publish_texts(
+        "wechat_channels",
+        "video.mp4",
+        "每天2000万人在豆包看病AI大健康要变天！",
+        "视频号发布正文。",
+        "AI健康",
+    )
+
+    assert title == "每天2000万人在豆包看病AI大"
+    assert len(title) == 16
+    assert description == "视频号发布正文。"
+    assert tags == "AI健康"
+    assert warnings
 
 
 @pytest.mark.asyncio

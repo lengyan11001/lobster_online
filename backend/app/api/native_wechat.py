@@ -33,6 +33,13 @@ class AutoReplyConfigBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
     enabled: bool = False
     interval_seconds: int = Field(default=1800, ge=300, le=86400)
+    memory_doc_ids: Optional[List[str]] = Field(default=None, max_length=20)
+    group_invite_memory_doc_id: Optional[str] = Field(default=None, max_length=64)
+    group_invite_keywords: Optional[str] = Field(default=None, max_length=2000)
+    group_invite_contacts: Optional[List[str]] = Field(default=None, max_length=20)
+    group_invite_primary_contact: Optional[str] = Field(default=None, max_length=240)
+    group_invite_primary_contact_name: Optional[str] = Field(default=None, max_length=240)
+    group_invite_welcome_message: Optional[str] = Field(default=None, max_length=4000)
 
 
 class AutoReplyRunBody(BaseModel):
@@ -55,6 +62,7 @@ class CreateGroupBody(BaseModel):
     contacts: List[str] = Field(default_factory=list, max_length=100)
     targets: List[str] = Field(default_factory=list, max_length=100)
     names: List[str] = Field(default_factory=list, max_length=100)
+    welcome_message: str = Field(default="", max_length=4000)
 
 
 class MessageSyncBody(BaseModel):
@@ -321,6 +329,13 @@ async def native_wechat_save_auto_reply_config(
             enabled=body.enabled,
             interval_seconds=body.interval_seconds,
             user_id=current_user.id,
+            memory_doc_ids=body.memory_doc_ids,
+            group_invite_memory_doc_id=body.group_invite_memory_doc_id,
+            group_invite_keywords=body.group_invite_keywords,
+            group_invite_contacts=body.group_invite_contacts,
+            group_invite_primary_contact=body.group_invite_primary_contact,
+            group_invite_primary_contact_name=body.group_invite_primary_contact_name,
+            group_invite_welcome_message=body.group_invite_welcome_message,
             auth_context={
                 "token": _raw_token_from_request(request),
                 "user_id": current_user.id,
@@ -418,6 +433,7 @@ async def native_wechat_create_group(
         task = await engine.create_group_task(
             body.account_id,
             _merge_targets(body.contacts, body.targets, body.names),
+            welcome_message=body.welcome_message,
         )
         return {
             "ok": True,

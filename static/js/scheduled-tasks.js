@@ -13,7 +13,7 @@
       description: '生成文案和创意图片，生成图片后结束。'
     },
     'hifly.video.create_by_tts': {
-      label: '必火数字人',
+      label: '数字人口播',
       description: '选择本机已有数字人/模板数字人和声音，生成数字人口播视频。'
     },
     'ip_content_daily': {
@@ -1253,7 +1253,7 @@
     }).catch(function (e) {
       if (avatarSel) avatarSel.innerHTML = optionHtml('', '数字人加载失败');
       if (voiceSel) voiceSel.innerHTML = optionHtml('', '声音加载失败');
-      showMsg('scheduledTaskMsg', e.message || '必火数字人资源加载失败', true);
+      showMsg('scheduledTaskMsg', e.message || '数字人口播资源加载失败', true);
     }).then(function () {
       state.hiflyLoading = false;
     }, function (e) {

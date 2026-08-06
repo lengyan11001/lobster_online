@@ -59,18 +59,23 @@ function _skillStoreBrandSafeText(value) {
   var text = String(value == null ? '' : value);
   if (!text) return '';
   return text
-    .replace(/速推视频制作/g, '必火视频制作')
+    .replace(/速推视频制作/g, '平台视频制作')
     .replace(/速推\s*MCP/gi, 'AI 模型能力')
     .replace(/Sutui/gi, 'AI')
     .replace(/xSkill/gi, 'AI')
-    .replace(/51aigc\.cc/gi, '必火平台')
+    .replace(/51aigc\.cc/gi, '平台服务')
     .replace(/速推/g, 'AI')
     .replace(/Comfly/gi, '视频引擎')
     .replace(/Seedance\s*2\.0/gi, '智能视频模型')
     .replace(/Seedance/gi, '智能视频模型')
     .replace(/CapCut/gi, '视频模板')
     .replace(/剪映/g, '视频模板')
-    .replace(/山涧/g, '智能剪辑');
+    .replace(/山涧/g, '智能剪辑')
+    .replace(/必火\s*2\.5/g, '智能视频 2.5')
+    .replace(/必火数字人/g, '数字人口播')
+    .replace(/必火智能/g, '平台智能')
+    .replace(/必火平台/g, '平台服务')
+    .replace(/必火/g, '平台');
 }
 
 function _skillStoreTagHtml(tags) {
@@ -1570,6 +1575,13 @@ window._openHiddenWorkspaceView = function(view) {
     window._openShanjianSmartClipView();
     return;
   }
+  if (target === 'multi-clip-mixer' && typeof window.showLobsterView === 'function') {
+    window.showLobsterView('multi-clip-mixer').catch(function(error) {
+      console.error('Failed to open multi clip mixer:', error);
+    });
+    try { location.hash = 'multi-clip-mixer'; } catch (e1) {}
+    return;
+  }
   if (target === 'viral-video-remix' && typeof window._openViralVideoRemixView === 'function') {
     window._openViralVideoRemixView();
     return;
@@ -1870,12 +1882,12 @@ function _renderViralVideoRemixCard() {
 
 function _renderHiflyDigitalHumanCard(pkg) {
   pkg = pkg || {};
-  var title = escapeHtml(_skillStoreBrandSafeText(pkg.name || '必火数字人'));
-  var desc = escapeHtml(_skillStoreBrandSafeText(pkg.description || '选择数字人和声音，输入口播文案后生成必火数字人视频。'));
-  var rawTags = Array.isArray(pkg.tags) && pkg.tags.length ? pkg.tags : ['数字人', '口播', 'TTS', '必火'];
+  var title = escapeHtml(_skillStoreBrandSafeText(pkg.name || '数字人口播'));
+  var desc = escapeHtml(_skillStoreBrandSafeText(pkg.description || '选择数字人和声音，输入口播文案后生成数字人口播视频。'));
+  var rawTags = Array.isArray(pkg.tags) && pkg.tags.length ? pkg.tags : ['数字人', '口播', 'TTS', '平台服务'];
   var tags = _skillStoreTagHtml(rawTags);
   return '<div class="skill-store-card hifly-digital-human-card" data-skill-package-id="hifly_digital_human_skill" style="cursor:pointer;border-color:rgba(14,165,233,0.35);background:linear-gradient(135deg,rgba(14,165,233,0.09),rgba(20,184,166,0.06));">' +
-    '<div class="card-label">数字人 &middot; 必火 <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
+    '<div class="card-label">数字人 &middot; 平台 <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
     '<div class="card-value">' + title + '</div>' +
     '<div class="card-desc">' + desc + '</div>' +
     '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">创作服务由平台统一托管，用户无需填写 API Token。</div>' +
@@ -1886,18 +1898,18 @@ function _renderHiflyDigitalHumanCard(pkg) {
 
 function _renderShanjianSmartClipCard() {
   return '<div class="skill-store-card shanjian-smart-clip-card" data-skill-package-id="shanjian_smart_clip" style="cursor:pointer;border-color:rgba(37,99,235,0.35);background:linear-gradient(135deg,rgba(37,99,235,0.08),rgba(20,184,166,0.05));">' +
-    '<div class="card-label">\u89c6\u9891\u5408\u6210 &middot; \u5fc5\u706b <span class="badge-installed">\u65b0\u9875\u9762</span></div>' +
+    '<div class="card-label">\u89c6\u9891\u5408\u6210 &middot; 平台 <span class="badge-installed">\u65b0\u9875\u9762</span></div>' +
     '<div class="card-value">智能剪辑</div>' +
     '<div class="card-desc">拉取内置模板、公共数字人和公共声音，选择模板后提交数字人口播混剪任务。</div>' +
     '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(37,99,235,0.06);border:1px solid rgba(37,99,235,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">数字人口播混剪约 1 算力/秒，1 分钟约 60 算力。</div>' +
-    '<div class="card-tags"><span class="tag">智能剪辑</span><span class="tag">模板</span><span class="tag">数字人</span><span class="tag">必火</span></div>' +
+    '<div class="card-tags"><span class="tag">智能剪辑</span><span class="tag">模板</span><span class="tag">数字人</span><span class="tag">平台服务</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm shanjian-smart-clip-entry-btn">进入智能剪辑</button></div>' +
   '</div>';
 }
 
 function _renderCutcliTemplateCard() {
   return '<div class="skill-store-card cutcli-template-card" style="cursor:pointer;border-color:rgba(15,23,42,0.32);background:linear-gradient(135deg,rgba(15,23,42,0.08),rgba(224,176,92,0.08));">' +
-    '<div class="card-label">视频包装 &middot; 必火 <span class="badge-installed">模板</span></div>' +
+    '<div class="card-label">视频包装 &middot; 平台 <span class="badge-installed">模板</span></div>' +
     '<div class="card-value">模板定制</div>' +
     '<div class="card-desc">选择模板预览样片，上传视频或填写素材 ID，由服务端保留原片比例和时长生成同款。</div>' +
     '<div class="card-tags"><span class="tag">模板库</span><span class="tag">生成记录</span><span class="tag">视频入库</span></div>' +
@@ -1993,11 +2005,21 @@ function _renderAlibabaInquiriesCard(pkg, showDebug) {
   '</div>';
 }
 
+function _renderMultiClipMixerCard() {
+  return '<div class="skill-store-card multi-clip-mixer-card" data-skill-package-id="multi_clip_mixer_skill" style="cursor:pointer;border-color:rgba(229,72,77,0.3);background:#fff;">' +
+    '<div class="card-label">视频创作 <span class="badge-installed">本机处理</span></div>' +
+    '<div class="card-value">多段视频混剪</div>' +
+    '<div class="card-desc">逐个选择视频片段，按顺序拼接成片；可选同城爆款音乐和剪辑模板。</div>' +
+    '<div class="card-tags"><span class="tag">多视频</span><span class="tag">选段</span><span class="tag">配乐</span><span class="tag">模板</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm multi-clip-mixer-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
 function _renderBihuo25VideoCard(pkg) {
   pkg = pkg || {};
   return '<div class="skill-store-card bihuo-25-video-card" data-skill-package-id="bihuo_25_video_skill" style="cursor:pointer;border-color:rgba(255,59,126,0.38);background:linear-gradient(135deg,rgba(255,59,126,0.10),rgba(36,211,218,0.05));">' +
     '<div class="card-label">视频生成 <span class="badge-installed">平台托管</span></div>' +
-    '<div class="card-value">必火2.5</div>' +
+    '<div class="card-value">智能视频 2.5</div>' +
     '<div class="card-desc">统一处理多模态参考、首尾帧、视频编辑和视频延长。</div>' +
     '<div class="card-tags"><span class="tag">多模态</span><span class="tag">首尾帧</span><span class="tag">编辑</span><span class="tag">延长</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm bihuo-25-video-entry-btn">进入工作台</button></div></div>';
@@ -2764,8 +2786,9 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'seedance_tvc_studio': { title: '创意分镜头视频', desc: '生成分镜视频' },
   'viral_video_remix_skill': { title: '爆款视频复刻', desc: '复刻视频风格' },
   'shanjian_smart_clip': { title: '智能剪辑', desc: '数字人口播混剪' },
+  'multi_clip_mixer_skill': { title: '多段视频混剪', desc: '选段、拼接、配乐和模板成片' },
   'comfly_ecommerce_detail_skill': { title: '电商详情页', desc: '生成商品套图' },
-  'hifly_digital_human_skill': { title: '必火数字人', desc: '生成数字人口播' },
+  'hifly_digital_human_skill': { title: '数字人口播', desc: '生成数字人口播' },
   'openclaw_weixin_channel': { title: '微信助手', desc: '微信通道授权' },
   'wewrite_official_account_skill': { title: '公众号文章', desc: '写文、配图、推草稿' },
   'openclaw_memory_skill': { title: '个人记忆', desc: '管理本机资料' },
@@ -2789,6 +2812,7 @@ var _SKILL_STORE_SIMPLE_COPY_BY_CLASS = {
   'seedance-tvc-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.seedance_tvc_studio,
   'viral-video-remix-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.viral_video_remix_skill,
   'shanjian-smart-clip-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.shanjian_smart_clip,
+  'multi-clip-mixer-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.multi_clip_mixer_skill,
   'ecommerce-detail-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_ecommerce_detail_skill,
   'hifly-digital-human-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.hifly_digital_human_skill,
   'openclaw-weixin-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_weixin_channel,
@@ -2810,6 +2834,7 @@ var _SKILL_STORE_SIMPLE_COPY_PATTERNS = [
   [/创意分镜|seedance|分镜头/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.seedance_tvc_studio],
   [/爆款视频复刻|复刻/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.viral_video_remix_skill],
   [/智能剪辑|山涧/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.shanjian_smart_clip],
+  [/多段视频混剪|片段拼接/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.multi_clip_mixer_skill],
   [/电商上架|电商详情|上架套图|详情图|SKU/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_ecommerce_detail_skill],
   [/必火数字人|数字人/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.hifly_digital_human_skill],
   [/微信助手|openclaw.*微信|weixin/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_weixin_channel],
@@ -2836,6 +2861,7 @@ var _SKILL_STORE_ICON_BY_ID = {
   'seedance_tvc_studio': { icon: 'storyboard', tone: 'sky' },
   'viral_video_remix_skill': { icon: 'refresh', tone: 'mint' },
   'shanjian_smart_clip': { icon: 'scissors', tone: 'blue' },
+  'multi_clip_mixer_skill': { icon: 'scissors', tone: 'coral' },
   'comfly_ecommerce_detail_skill': { icon: 'bag', tone: 'rose' },
   'hifly_digital_human_skill': { icon: 'user', tone: 'violet' },
   'openclaw_weixin_channel': { icon: 'message', tone: 'green' },
@@ -2861,6 +2887,7 @@ var _SKILL_STORE_ICON_BY_CLASS = {
   'seedance-tvc-card': _SKILL_STORE_ICON_BY_ID.seedance_tvc_studio,
   'viral-video-remix-card': _SKILL_STORE_ICON_BY_ID.viral_video_remix_skill,
   'shanjian-smart-clip-card': _SKILL_STORE_ICON_BY_ID.shanjian_smart_clip,
+  'multi-clip-mixer-card': _SKILL_STORE_ICON_BY_ID.multi_clip_mixer_skill,
   'ecommerce-detail-card': _SKILL_STORE_ICON_BY_ID.comfly_ecommerce_detail_skill,
   'hifly-digital-human-card': _SKILL_STORE_ICON_BY_ID.hifly_digital_human_skill,
   'openclaw-weixin-card': _SKILL_STORE_ICON_BY_ID.openclaw_weixin_channel,
@@ -3163,6 +3190,7 @@ function loadSkillStore() {
       var bihuo25Pkg = pkgById('bihuo_25_video_skill');
       var viralPkg = pkgById('viral_video_remix_skill');
       var shanjianPkg = pkgById('shanjian_smart_clip');
+      var multiClipPkg = pkgById('multi_clip_mixer_skill');
       var metaPkg = pkgById('meta_social');
       var cutcliPkg = pkgById('cutcli_template_skill') || pkgById('cutcli_templates_skill') || pkgById('cutcli_template_studio');
       var ipContentPkg = pkgById('ip_content_daily_skill');
@@ -3193,6 +3221,7 @@ function loadSkillStore() {
         if (viralPkg) html += _renderViralVideoRemixCard();
         if (cutcliPkg) html += _renderCutcliTemplateCard();
         if (shanjianPkg) html += _renderShanjianSmartClipCard();
+        if (multiClipPkg) html += _renderMultiClipMixerCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
         if (ipContentPkg) html += _renderIpContentStudioCard(ipContentPkg, !!(isSkillAdmin && ipContentPkg.store_visibility === 'debug'));
@@ -3245,6 +3274,7 @@ function loadSkillStore() {
           if (pkg.id === 'bihuo_25_video_skill') return '';
           if (pkg.id === 'viral_video_remix_skill') return '';
           if (pkg.id === 'shanjian_smart_clip') return '';
+          if (pkg.id === 'multi_clip_mixer_skill') return '';
           if (pkg.id === 'cutcli_template_skill') return '';
           if (pkg.id === 'cutcli_templates_skill') return '';
           if (pkg.id === 'cutcli_template_studio') return '';
@@ -3351,6 +3381,7 @@ function loadSkillStore() {
         _bindCutcliTemplateCardEntry();
         _bindHiflyDigitalHumanCardEntry();
         _bindShanjianSmartClipCardEntry();
+        _bindMultiClipMixerCardEntry();
         _bindGoalVideoPipelineCardEntry();
         _bindIpContentStudioCardEntry();
         _bindLinkedinMiningCardEntry();
@@ -3666,6 +3697,22 @@ function _bindShanjianSmartClipCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openShanjianSmartClipView === 'function') window._openShanjianSmartClipView();
+    });
+  });
+}
+
+function _bindMultiClipMixerCardEntry() {
+  document.querySelectorAll('.multi-clip-mixer-card, .multi-clip-mixer-entry-btn').forEach(function(element) {
+    if (element.dataset.multiClipMixerBound === '1') return;
+    element.dataset.multiClipMixerBound = '1';
+    element.addEventListener('click', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof window.showLobsterView === 'function') {
+        window.showLobsterView('multi-clip-mixer').catch(function(error) {
+          console.error('Failed to open multi clip mixer:', error);
+        });
+      }
     });
   });
 }

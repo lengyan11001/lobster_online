@@ -6,13 +6,17 @@ Paths inside the zip: <proj>/<relative path from proj root>.
 from __future__ import annotations
 
 import fnmatch
+import argparse
 import os
 import sys
 import zipfile
 from pathlib import Path
 
 
-def should_exclude(proj: str, rel_posix: str) -> bool:
+FACTORY_CONFIGURATOR_EXE = "OEM\u914d\u7f6e\u542f\u52a8\u5668.exe"
+
+
+def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> bool:
     """rel_posix: relative path under project root, forward slashes, no leading slash."""
     if not rel_posix:
         return True
@@ -27,9 +31,54 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
     root_name = parts[0] if len(parts) == 1 else None
     lower_rel = rel_posix.lower()
 
+    if factory_oem:
+        if rel_posix == ".env":
+            return True
+        if root_name and root_name.lower().endswith(".exe"):
+            return root_name != FACTORY_CONFIGURATOR_EXE
+        if root_name and (root_name.startswith("test_") or root_name.startswith("_tmp_")):
+            return True
+        if root_name in {
+            ".gitattributes",
+            ".gitignore",
+            ".impeccable.md",
+            ".installed",
+            "@AutomationLog.txt",
+            "_probe_apiz_sdk.zip",
+            "build_bihuo_log.txt",
+            "client_code_manifest_1.0.7.json",
+            "custom_configs.json",
+            "models_config.json",
+            "oem_configurator.log",
+            "run_mock_comfly.bat",
+            "test_localsystem.txt",
+            "twilio_whatsapp_config.json",
+            "wecom_cloud_config.json",
+        }:
+            return True
+        if root_name and root_name.lower().endswith(".spec"):
+            return True
+        if root_name and (
+            fnmatch.fnmatch(root_name, "youtube_accounts_*.json")
+            or fnmatch.fnmatch(root_name, "xskill_*captured_requests*.json*")
+        ):
+            return True
+        if rel_posix.startswith((
+            ".cursor/",
+            ".pack_python_shim/",
+            ".pytest_cache/",
+            "_probe_apiz_sdk_src/",
+            "data/",
+            "temp_assets/",
+            "wxauto_logs/",
+            "wxautox\u6587\u4ef6\u4e0b\u8f7d/",
+            "\u7d20\u6750\u5e93/",
+        )):
+            return True
+
     if lower_rel.endswith((".pyc", ".pyo", ".log", ".db", ".sqlite", ".sqlite3", ".tmp", ".temp")):
         return True
-    if lower_rel.endswith(".bak") or ".bak." in lower_rel:
+    if lower_rel.endswith(".bak") or ".bak." in lower_rel or ".db.bak" in lower_rel:
         return True
     if rel_posix == "openclaw/.env":
         return True
@@ -65,6 +114,8 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
     if rel_posix.startswith("assets/"):
         return True
     if rel_posix.startswith("static/uploads/"):
+        return True
+    if rel_posix.startswith("static/branding/cache/"):
         return True
     if rel_posix.startswith("chat_storage/"):
         return True
@@ -158,12 +209,21 @@ def should_exclude(proj: str, rel_posix: str) -> bool:
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
-        print("Usage: pack_full_project_zip.py <parent_dir> <proj_dirname> <out_zip_path>", file=sys.stderr)
-        return 2
-    parent = Path(sys.argv[1]).resolve()
-    proj = sys.argv[2]
-    out_zip = Path(sys.argv[3]).resolve()
+    parser = argparse.ArgumentParser(
+        description="Create a complete project ZIP without requiring an external zip executable."
+    )
+    parser.add_argument("parent_dir")
+    parser.add_argument("proj_dirname")
+    parser.add_argument("out_zip_path")
+    parser.add_argument(
+        "--factory-oem",
+        action="store_true",
+        help="Build a generic factory package without local brand configuration or brand launchers.",
+    )
+    args = parser.parse_args()
+    parent = Path(args.parent_dir).resolve()
+    proj = args.proj_dirname
+    out_zip = Path(args.out_zip_path).resolve()
     proj_root = parent / proj
     if not proj_root.is_dir():
         print(f"[ERR] Not a directory: {proj_root}", file=sys.stderr)
@@ -186,7 +246,7 @@ def main() -> int:
                 except ValueError:
                     continue
                 rel_posix = rel.as_posix()
-                if should_exclude(proj, rel_posix):
+                if should_exclude(proj, rel_posix, factory_oem=args.factory_oem):
                     continue
                 arcname = f"{proj}/{rel_posix}"
                 zf.write(full, arcname, compress_type=zipfile.ZIP_DEFLATED)

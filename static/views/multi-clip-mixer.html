@@ -1,0 +1,161 @@
+<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20260805-v2">
+<div id="content-multi-clip-mixer" class="content-block">
+  <div class="mcm-page">
+    <header class="mcm-header">
+      <div>
+        <span class="mcm-eyebrow">视频创作</span>
+        <h2>多段视频混剪</h2>
+        <p>按顺序截取每个视频的指定片段，拼成一条完整视频。</p>
+      </div>
+      <button id="mcmBackBtn" type="button" class="btn btn-ghost btn-sm">返回技能商店</button>
+    </header>
+
+    <div class="mcm-layout">
+      <main class="mcm-editor">
+        <section class="mcm-section mcm-clips-section">
+          <div class="mcm-section-head">
+            <div>
+              <span class="mcm-step">01</span>
+              <h3>选择视频片段</h3>
+              <p>添加后逐个选择片段，生成时按列表顺序拼接。</p>
+            </div>
+            <button id="mcmAddVideoBtn" type="button" class="btn btn-primary">添加视频</button>
+            <input id="mcmVideoInput" type="file" accept="video/*" multiple hidden>
+          </div>
+
+          <div id="mcmClipList" class="mcm-clip-list"></div>
+          <div id="mcmClipEmpty" class="mcm-empty-clips">
+            <div class="mcm-empty-mark">+</div>
+            <strong>添加 3 个视频即可快速开始</strong>
+            <span>默认依次截取 0-3 秒、3-6 秒、6-9 秒，也可以逐条修改。</span>
+          </div>
+        </section>
+
+        <section class="mcm-section">
+          <div class="mcm-section-head">
+            <div>
+              <span class="mcm-step">02</span>
+              <h3>成片设置</h3>
+            </div>
+          </div>
+
+          <label class="mcm-setting-row" for="mcmKeepAudioSwitch">
+            <span><strong>保留视频原声</strong><small>关闭后只保留所选音乐；未选音乐时生成静音视频。</small></span>
+            <input id="mcmKeepAudioSwitch" type="checkbox" checked>
+          </label>
+
+          <label class="mcm-setting-row" for="mcmTemplateSwitch">
+            <span><strong>套用定制模板</strong><small>先完成片段拼接，再使用模板定制能力生成成片。</small></span>
+            <input id="mcmTemplateSwitch" type="checkbox">
+          </label>
+          <div id="mcmTemplatePanel" class="mcm-choice-panel" hidden>
+            <div class="mcm-choice-toolbar">
+              <div>
+                <strong>选择剪辑模板</strong>
+                <span id="mcmTemplatePicked">还未选择</span>
+              </div>
+              <input id="mcmTemplateSearch" type="search" placeholder="搜索模板">
+            </div>
+            <div id="mcmTemplateGrid" class="mcm-template-grid"></div>
+            <button id="mcmTemplateMoreBtn" type="button" class="btn btn-ghost btn-sm" hidden>加载更多</button>
+            <div id="mcmTemplateOverlayPanel" class="mcm-overlay-panel" hidden>
+              <div class="mcm-overlay-head">
+                <strong>模板文案</strong>
+                <span>填写项由当前模板决定，将直接用于成片标题和角标。</span>
+              </div>
+              <div id="mcmTemplateOverlayFields" class="mcm-overlay-fields"></div>
+            </div>
+            <div id="mcmTemplateLayoutPanel" class="mcm-layout-panel" hidden>
+              <div class="mcm-layout-head">
+                <strong>版式预览</strong>
+                <button id="mcmTemplateLayoutReset" type="button" class="btn btn-ghost btn-sm">重置位置</button>
+              </div>
+              <div id="mcmTemplateLayoutEditor" class="mcm-layout-editor">
+                <div id="mcmTemplateLayoutMedia" class="mcm-layout-media"></div>
+                <div id="mcmTemplateLayoutLayer" class="mcm-layout-layer"></div>
+              </div>
+            </div>
+          </div>
+
+          <label class="mcm-setting-row" for="mcmMusicSwitch">
+            <span><strong>添加同城爆款音乐</strong><small>从已有音乐模板中选择，支持试听。</small></span>
+            <input id="mcmMusicSwitch" type="checkbox">
+          </label>
+          <div id="mcmMusicPanel" class="mcm-choice-panel" hidden>
+            <div class="mcm-choice-toolbar">
+              <div>
+                <strong>选择音乐模板</strong>
+                <span id="mcmMusicPicked">还未选择</span>
+              </div>
+              <label class="mcm-volume-control">音量 <input id="mcmMusicVolume" type="range" min="0" max="1" step="0.05" value="0.24"><output id="mcmMusicVolumeValue">24%</output></label>
+            </div>
+            <div id="mcmMusicGrid" class="mcm-music-grid"></div>
+          </div>
+        </section>
+
+        <div id="mcmMessage" class="mcm-message" hidden></div>
+        <button id="mcmGenerateBtn" type="button" class="mcm-generate-btn">生成混剪视频</button>
+      </main>
+
+      <aside class="mcm-result-column">
+        <section class="mcm-result-section">
+          <div class="mcm-result-head">
+            <div><span class="mcm-step">03</span><h3>生成结果</h3></div>
+            <span id="mcmTotalDuration" class="mcm-duration">0 秒</span>
+          </div>
+          <div id="mcmResultSurface" class="mcm-result-surface">
+            <div class="mcm-result-empty"><strong>成片将在这里显示</strong><span>添加视频并完成设置后开始生成。</span></div>
+          </div>
+          <div id="mcmResultActions" class="mcm-result-actions" hidden>
+            <a id="mcmOpenResultBtn" class="btn btn-primary" target="_blank" rel="noopener">打开成片</a>
+            <button id="mcmRetryTemplateBtn" type="button" class="btn btn-ghost" hidden>重试模板处理</button>
+          </div>
+        </section>
+
+        <section class="mcm-progress-section">
+          <h3>处理进度</h3>
+          <ol id="mcmProgressList" class="mcm-progress-list">
+            <li data-stage="merge"><i></i><span><strong>裁剪并拼接</strong><small>等待开始</small></span></li>
+            <li data-stage="music"><i></i><span><strong>添加音乐</strong><small>未开启时自动跳过</small></span></li>
+            <li data-stage="template"><i></i><span><strong>套用定制模板</strong><small>未开启时自动跳过</small></span></li>
+            <li data-stage="done"><i></i><span><strong>保存成片</strong><small>完成后自动进入素材库</small></span></li>
+          </ol>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <div id="mcmSegmentModal" class="mcm-modal" hidden>
+    <div class="mcm-modal-backdrop" data-mcm-close-segment></div>
+    <div class="mcm-segment-dialog" role="dialog" aria-modal="true" aria-labelledby="mcmSegmentTitle">
+      <div class="mcm-modal-head">
+        <div><span id="mcmSegmentIndex">视频 1</span><h3 id="mcmSegmentTitle">选择要使用的片段</h3></div>
+        <button type="button" class="mcm-icon-btn" data-mcm-close-segment title="取消">×</button>
+      </div>
+      <video id="mcmSegmentVideo" controls playsinline preload="metadata"></video>
+      <div class="mcm-segment-fields">
+        <label>开始时间（秒）<input id="mcmSegmentStart" type="number" min="0" step="0.1" inputmode="decimal"></label>
+        <label>结束时间（秒）<input id="mcmSegmentEnd" type="number" min="0.1" step="0.1" inputmode="decimal"></label>
+      </div>
+      <div class="mcm-segment-summary">
+        <span>原视频 <b id="mcmSourceDuration">读取中</b></span>
+        <span>选中 <b id="mcmSelectedDuration">3.0 秒</b></span>
+      </div>
+      <div id="mcmSegmentError" class="mcm-field-error" hidden></div>
+      <div class="mcm-modal-actions">
+        <button id="mcmPreviewSegmentBtn" type="button" class="btn btn-ghost">预览片段</button>
+        <span></span>
+        <button type="button" class="btn btn-ghost" data-mcm-close-segment>取消</button>
+        <button id="mcmConfirmSegmentBtn" type="button" class="btn btn-primary">使用这段</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mcmTemplatePreviewModal" class="mcm-modal" hidden>
+    <div class="mcm-modal-backdrop" data-mcm-close-preview></div>
+    <div class="mcm-preview-dialog" role="dialog" aria-modal="true">
+      <div class="mcm-modal-head"><h3 id="mcmPreviewTitle">模板预览</h3><button type="button" class="mcm-icon-btn" data-mcm-close-preview title="关闭">×</button></div>
+      <video id="mcmTemplatePreviewVideo" controls playsinline></video>
+    </div>
+  </div>
+</div>

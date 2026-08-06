@@ -949,6 +949,32 @@ def _extract_audio(ffmpeg: str, source: str, out_path: Path) -> None:
         raise RuntimeError("extracted audio is empty")
 
 
+def _extract_audio_segment(ffmpeg: str, source: str, out_path: Path, *, start_sec: float, duration_sec: float) -> None:
+    _run_cmd(
+        [
+            ffmpeg,
+            "-y",
+            "-ss",
+            f"{max(0.0, float(start_sec)):.3f}",
+            "-i",
+            source,
+            "-t",
+            f"{max(0.1, float(duration_sec)):.3f}",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-acodec",
+            "pcm_s16le",
+            str(out_path),
+        ],
+        timeout=900,
+    )
+    if not out_path.exists() or out_path.stat().st_size <= 128:
+        raise RuntimeError("extracted segment audio is empty")
+
+
 def _save_asset_record(
     db: Session,
     *,
@@ -2699,6 +2725,177 @@ def _extract_video_url(value: Any) -> str:
     return best[0][1]
 
 
+def _multi_clip_audio_segments(db: Session, user_id: int, source_asset_id: str) -> List[Dict[str, Any]]:
+    if not source_asset_id:
+        return []
+    asset = db.query(Asset).filter(Asset.asset_id == source_asset_id, Asset.user_id == user_id).first()
+    if not asset:
+        return []
+    meta = asset.meta if isinstance(asset.meta, dict) else {}
+    if not meta and isinstance(asset.meta, str):
+        try:
+            parsed = json.loads(asset.meta)
+            meta = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            meta = {}
+    if not bool(meta.get("keep_original_audio")):
+        return []
+    raw_segments = meta.get("segments") if isinstance(meta.get("segments"), list) else []
+    timeline_sec = 0.0
+    segments: List[Dict[str, Any]] = []
+    for index, raw in enumerate(raw_segments):
+        if not isinstance(raw, dict):
+            continue
+        asset_id = str(raw.get("asset_id") or "").strip()
+        start_sec = max(0.0, _float_value(raw.get("start_sec"), 0.0))
+        end_sec = max(start_sec, _float_value(raw.get("end_sec"), start_sec))
+        duration_sec = max(0.0, _float_value(raw.get("duration"), end_sec - start_sec))
+        if not asset_id or duration_sec < 0.1 or end_sec - start_sec < 0.1:
+            continue
+        segments.append(
+            {
+                "index": index,
+                "asset_id": asset_id,
+                "start_sec": start_sec,
+                "duration_sec": min(duration_sec, end_sec - start_sec),
+                "timeline_sec": timeline_sec,
+                "has_audio": bool(raw.get("has_audio", True)),
+            }
+        )
+        timeline_sec += min(duration_sec, end_sec - start_sec)
+    return segments
+
+
+def _offset_segment_captions(
+    captions: List[Dict[str, Any]],
+    *,
+    timeline_sec: float,
+    segment_duration_sec: float,
+    video_duration_sec: float,
+) -> List[Dict[str, Any]]:
+    offset_us = max(0, int(float(timeline_sec) * 1_000_000))
+    segment_end_us = max(offset_us + 100_000, offset_us + int(float(segment_duration_sec) * 1_000_000))
+    video_end_us = max(100_000, int(float(video_duration_sec) * 1_000_000))
+    out: List[Dict[str, Any]] = []
+    for raw in captions or []:
+        if not isinstance(raw, dict):
+            continue
+        text = _clean_caption_text(raw.get("text") or raw.get("content") or "")
+        if not text:
+            continue
+        try:
+            start_us = max(0, int(raw.get("start") or 0))
+            end_us = max(start_us + 100_000, int(raw.get("end") or 0))
+        except (TypeError, ValueError):
+            continue
+        item = dict(raw)
+        item["text"] = text
+        item["start"] = min(video_end_us, offset_us + start_us)
+        item["end"] = min(video_end_us, segment_end_us, offset_us + end_us)
+        if item["end"] <= item["start"]:
+            continue
+        out.append(item)
+    return out
+
+
+def _transcribe_multi_clip_segments(
+    *,
+    db: Session,
+    job_id: str,
+    user_id: int,
+    job_dir: Path,
+    ffmpeg: str,
+    segments: List[Dict[str, Any]],
+    style: Dict[str, Any],
+    video_duration_sec: float,
+    video_width: int,
+    auth_headers: Dict[str, str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    captions: List[Dict[str, Any]] = []
+    report: List[Dict[str, Any]] = []
+    for order, segment in enumerate(segments, start=1):
+        if not segment.get("has_audio"):
+            report.append({"index": order, "status": "skipped", "reason": "no_audio"})
+            continue
+        try:
+            source, _aid, source_name, _public = _resolve_source(
+                db=db,
+                user_id=user_id,
+                request=None,
+                job_dir=job_dir,
+                asset_id=str(segment.get("asset_id") or ""),
+            )
+            duration_sec = float(segment.get("duration_sec") or 0.1)
+            audio_path = job_dir / f"segment_{order:02d}.wav"
+            _extract_audio_segment(
+                ffmpeg,
+                source,
+                audio_path,
+                start_sec=float(segment.get("start_sec") or 0.0),
+                duration_sec=duration_sec,
+            )
+            audio_url = _upload_temp_to_server(
+                data=audio_path.read_bytes(),
+                filename=f"{job_id}_segment_{order:02d}.wav",
+                content_type="audio/wav",
+                auth_headers=auth_headers,
+            )
+            stt_result = _call_server(
+                "/api/cutcli/stt/transcribe",
+                {
+                    "audio_url": audio_url,
+                    "caption_style": style,
+                    "video_duration_sec": duration_sec,
+                    "video_width": int(video_width or 1080),
+                    "return_captions": True,
+                },
+                auth_headers,
+                timeout=1200.0,
+            )
+            segment_captions = stt_result.get("captions") if isinstance(stt_result.get("captions"), list) else []
+            if not segment_captions:
+                stt_data = stt_result.get("stt_data") if isinstance(stt_result.get("stt_data"), dict) else stt_result
+                segment_captions = _captions_from_stt(
+                    stt_data,
+                    video_duration_sec=duration_sec,
+                    style=style,
+                    video_width=int(video_width or 1080),
+                )
+            offset_captions = _offset_segment_captions(
+                segment_captions,
+                timeline_sec=float(segment.get("timeline_sec") or 0.0),
+                segment_duration_sec=duration_sec,
+                video_duration_sec=video_duration_sec,
+            )
+            captions.extend(offset_captions)
+            report.append(
+                {
+                    "index": order,
+                    "status": "completed" if offset_captions else "no_speech",
+                    "asset_id": segment.get("asset_id"),
+                    "source_name": source_name,
+                    "caption_count": len(offset_captions),
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "[cutcli-local] segment STT failed job_id=%s segment=%s error=%s",
+                job_id,
+                order,
+                _safe_error(exc, limit=800),
+                exc_info=True,
+            )
+            report.append({"index": order, "status": "failed", "error": _safe_error(exc, limit=500)})
+        _update_job(
+            db,
+            job_id,
+            stage="stt_segments",
+            response_updates={"segment_stt_progress": f"{order}/{len(segments)}", "segment_stt_report": report},
+        )
+    captions.sort(key=lambda item: (int(item.get("start") or 0), int(item.get("end") or 0)))
+    return captions, report
+
+
 def _run_job(
     *,
     job_id: str,
@@ -2739,61 +2936,107 @@ def _run_job(
         if not style:
             raise RuntimeError(f"template {template.get('id') or ''} has no caption strategy")
 
-        current_stage = "extract_audio"
-        _update_job(db, job_id, stage="extract_audio", response_updates={"source_name": source_name, "source_asset_id": source_asset_id})
-        audio_path = job_dir / "audio.wav"
-        _extract_audio(ffmpeg, source, audio_path)
-        audio_asset_id, _audio_fname, _audio_size, audio_url, _audio_local = _save_binary_asset(
-            db,
-            user_id=user_id,
-            data=audio_path.read_bytes(),
-            ext=".wav",
-            content_type="audio/wav",
-            media_type="audio",
-            prompt=f"cutcli template audio | {source_name}",
-            model="local:ffmpeg-extract-audio",
-            tags="cutcli_template,local_audio_extract",
-            meta={"cutcli_job_id": job_id, "source_asset_id": source_asset_id, "source_name": source_name, "created_at": _now_ts()},
-        )
-        if not audio_url:
-            audio_url = _upload_temp_to_server(
-                data=audio_path.read_bytes(),
-                filename=_audio_fname,
-                content_type="audio/wav",
+        video_duration_sec = float(source_info.get("duration") or 0.1)
+        video_width = int(source_info.get("width") or 1080)
+        multi_clip_segments = _multi_clip_audio_segments(db, user_id, source_asset_id)
+        captions: List[Dict[str, Any]] = []
+        segment_stt_report: List[Dict[str, Any]] = []
+        if multi_clip_segments:
+            current_stage = "stt_segments"
+            _update_job(
+                db,
+                job_id,
+                stage="stt_segments",
+                response_updates={
+                    "source_name": source_name,
+                    "source_asset_id": source_asset_id,
+                    "caption_source": "multi_clip_segments",
+                    "segment_stt_total": len(multi_clip_segments),
+                },
+            )
+            captions, segment_stt_report = _transcribe_multi_clip_segments(
+                db=db,
+                job_id=job_id,
+                user_id=user_id,
+                job_dir=job_dir,
+                ffmpeg=ffmpeg,
+                segments=multi_clip_segments,
+                style=style,
+                video_duration_sec=video_duration_sec,
+                video_width=video_width,
                 auth_headers=auth_headers,
             )
-            _set_asset_source_url(db, audio_asset_id, user_id, audio_url)
-        if not audio_url.startswith(("http://", "https://")):
-            raise RuntimeError("audio extracted but no public URL is available for STT")
 
-        current_stage = "stt"
-        _update_job(db, job_id, stage="stt", response_updates={"audio_asset_id": audio_asset_id, "audio_url": audio_url})
-        stt_result = _call_server(
-            "/api/cutcli/stt/transcribe",
-            {
-                "audio_url": audio_url,
-                "caption_style": style,
-                "video_duration_sec": float(source_info.get("duration") or 0.1),
-                "video_width": int(source_info.get("width") or 1080),
-                "return_captions": True,
-            },
-            auth_headers,
-            timeout=1200.0,
-        )
-        stt_data = stt_result.get("stt_data") if isinstance(stt_result.get("stt_data"), dict) else stt_result
-        captions = stt_result.get("captions") if isinstance(stt_result.get("captions"), list) else []
         if not captions:
-            captions = _captions_from_stt(
-                stt_data,
-                video_duration_sec=float(source_info.get("duration") or 0.1),
-                style=style,
-                video_width=int(source_info.get("width") or 1080),
+            current_stage = "extract_audio"
+            _update_job(
+                db,
+                job_id,
+                stage="extract_audio",
+                response_updates={"source_name": source_name, "source_asset_id": source_asset_id, "caption_source": "merged_audio"},
             )
+            audio_path = job_dir / "audio.wav"
+            _extract_audio(ffmpeg, source, audio_path)
+            audio_asset_id, _audio_fname, _audio_size, audio_url, _audio_local = _save_binary_asset(
+                db,
+                user_id=user_id,
+                data=audio_path.read_bytes(),
+                ext=".wav",
+                content_type="audio/wav",
+                media_type="audio",
+                prompt=f"cutcli template audio | {source_name}",
+                model="local:ffmpeg-extract-audio",
+                tags="cutcli_template,local_audio_extract",
+                meta={"cutcli_job_id": job_id, "source_asset_id": source_asset_id, "source_name": source_name, "created_at": _now_ts()},
+            )
+            if not audio_url:
+                audio_url = _upload_temp_to_server(
+                    data=audio_path.read_bytes(),
+                    filename=_audio_fname,
+                    content_type="audio/wav",
+                    auth_headers=auth_headers,
+                )
+                _set_asset_source_url(db, audio_asset_id, user_id, audio_url)
+            if not audio_url.startswith(("http://", "https://")):
+                raise RuntimeError("audio extracted but no public URL is available for STT")
+
+            current_stage = "stt"
+            _update_job(db, job_id, stage="stt", response_updates={"audio_asset_id": audio_asset_id, "audio_url": audio_url})
+            stt_result = _call_server(
+                "/api/cutcli/stt/transcribe",
+                {
+                    "audio_url": audio_url,
+                    "caption_style": style,
+                    "video_duration_sec": video_duration_sec,
+                    "video_width": video_width,
+                    "return_captions": True,
+                },
+                auth_headers,
+                timeout=1200.0,
+            )
+            stt_data = stt_result.get("stt_data") if isinstance(stt_result.get("stt_data"), dict) else stt_result
+            captions = stt_result.get("captions") if isinstance(stt_result.get("captions"), list) else []
+            if not captions:
+                captions = _captions_from_stt(
+                    stt_data,
+                    video_duration_sec=video_duration_sec,
+                    style=style,
+                    video_width=video_width,
+                )
         if not captions:
             raise RuntimeError("STT returned no usable captions")
         (job_dir / "captions.json").write_text(json.dumps(captions, ensure_ascii=False, indent=2), encoding="utf-8")
         current_stage = "render"
-        _update_job(db, job_id, stage="render", response_updates={"caption_count": len(captions), "stt_model": _STT_MODEL})
+        _update_job(
+            db,
+            job_id,
+            stage="render",
+            response_updates={
+                "caption_count": len(captions),
+                "stt_model": _STT_MODEL,
+                "segment_stt_report": segment_stt_report,
+            },
+        )
 
         if render_mode == "cutcli_cloud":
             cutcli = _find_cutcli()

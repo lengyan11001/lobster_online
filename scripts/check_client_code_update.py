@@ -79,7 +79,6 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "skills",
     "skill_registry.json",
     "upstream_urls.json",
-    "必火智能AI.exe",
     "openclaw",
     "requirements.txt",
     ".env.example",
@@ -244,7 +243,7 @@ RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
 
 # 与 backend chat 读取路径一致；OTA 宜随包更新，安装机保留其余 workspace 文件
 _OPENCLAW_POLICY_FILENAMES = ("LOBSTER_CHAT_POLICY_INTRO.md", "LOBSTER_CHAT_POLICY_TOOLS.md")
-_PRESERVED_STATIC_REL_PATHS = ("static/hifly_previews",)
+_PRESERVED_STATIC_REL_PATHS = ("static/hifly_previews", "static/branding/cache")
 _PRESERVED_DESKTOP_REL_PATHS = ("desktop/webview2",)
 _RESOURCE_STATE_DIR = ROOT / "static" / ".resource_packs"
 _DESKTOP_EXE_NAME = "必火智能AI.exe"
@@ -1346,6 +1345,8 @@ def _download_verified(url: str, expect_sha: str, dest: Path, *, label: str) -> 
 
 def _valid_brand_mark(value: str) -> bool:
     mark = str(value or "").strip().lower()
+    if mark.isascii() and mark.isdigit() and 4 <= len(mark) <= 12:
+        return True
     if not mark or len(mark) > 63 or not mark[0].isascii() or not mark[0].isalpha():
         return False
     return all(ch.isascii() and (ch.isalnum() or ch in "_-") for ch in mark)

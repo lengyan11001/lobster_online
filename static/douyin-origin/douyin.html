@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>必火AI获客 · 抖音工作台</title>
+    <title>AI获客 · 抖音工作台</title>
     <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
     <style>
         :root {
@@ -5742,7 +5742,7 @@
                     <div class="sidebar-brand-head">
                         <div class="sidebar-brand-mark">AI</div>
                         <div class="sidebar-brand-copy">
-                            <div class="brand-name">必火AI获客</div>
+                            <div class="brand-name">AI获客</div>
                         </div>
                     </div>
                 </div>
@@ -7335,7 +7335,7 @@
         function isDouyinWorkbenchEmbedMode(){try{return new URLSearchParams(window.location.search).get("embed")==="1"}catch(error){return false}}
         function isDouyinWorkbenchDirectRouteMode(){const pathTarget=getDouyinRouteTargetFromPath();return !!pathTarget&&normalize(window.location.pathname||"").replace(/\/+$/,"")!=="/douyin/workbench"}
         function getDouyinRouteUrlForTarget(target="overview"){const normalized=normalize(target||"overview")||"overview";return({overview:"/douyin",scheduler:"/douyin/scheduler",inbox:"/douyin/inbox",search:"/douyin/search",monitor:"/douyin/monitor","self-comments":"/douyin/self-comments",collect:"/douyin/collect",mention:"/douyin/mention",follow:"/douyin/follow","all-customers":"/douyin/customers",intent:"/douyin/intent",interaction:"/douyin/interaction","stranger-leads":"/douyin/stranger-leads",nurture:"/douyin/nurture",groups:"/douyin/groups",logs:"/douyin/logs",guide:"/douyin/guide",config:"/douyin/config"})[normalized]||"/douyin"}
-        function getDouyinPageTitleByTarget(target="overview"){const normalized=normalize(target||"overview")||"overview";return({overview:"必火AI获客 · 抖音工作台",scheduler:"必火AI获客 · 抖音排期中心",inbox:"必火AI获客 · 抖音私信聚合",search:"必火AI获客 · 抖音搜索采集",monitor:"必火AI获客 · 抖音监控同行",collect:"必火AI获客 · 抖音视频评论",mention:"必火AI获客 · 抖音评论@客户",follow:"必火AI获客 · 抖音关注评论","all-customers":"必火AI获客 · 抖音全部客户",intent:"必火AI获客 · 抖音精准客户",interaction:"必火AI获客 · 抖音私信互动","stranger-leads":"必火AI获客 · 抖音私信引流",nurture:"必火AI获客 · 抖音账号养号",groups:"必火AI获客 · 抖音群成员提取",logs:"必火AI获客 · 抖音执行日志",guide:"必火AI获客 · 抖音使用说明",config:"必火AI获客 · 抖音配置中心"})[normalized]||"必火AI获客 · 抖音工作台"}
+        function getDouyinPageTitleByTarget(target="overview"){const normalized=normalize(target||"overview")||"overview";return({overview:"AI获客 · 抖音工作台",scheduler:"AI获客 · 抖音排期中心",inbox:"AI获客 · 抖音私信聚合",search:"AI获客 · 抖音搜索采集",monitor:"AI获客 · 抖音监控同行",collect:"AI获客 · 抖音视频评论",mention:"AI获客 · 抖音评论@客户",follow:"AI获客 · 抖音关注评论","all-customers":"AI获客 · 抖音全部客户",intent:"AI获客 · 抖音精准客户",interaction:"AI获客 · 抖音私信互动","stranger-leads":"AI获客 · 抖音私信引流",nurture:"AI获客 · 抖音账号养号",groups:"AI获客 · 抖音群成员提取",logs:"AI获客 · 抖音执行日志",guide:"AI获客 · 抖音使用说明",config:"AI获客 · 抖音配置中心"})[normalized]||"AI获客 · 抖音工作台"}
         function applyDouyinWorkbenchDisplayMode(){document.body.classList.toggle("embed-mode",isDouyinWorkbenchEmbedMode())}
         function applyInitialDouyinWorkbenchTarget(target="overview"){const resolved=normalize(target||"overview")||"overview";document.title=getDouyinPageTitleByTarget(resolved);document.querySelectorAll(".page").forEach(el=>el.classList.remove("active"));document.querySelectorAll(".workspace-panel-page").forEach(el=>el.classList.remove("active"));if(resolved==="config"){document.getElementById("config-page")?.classList.add("active")}else{document.getElementById("console-page")?.classList.add("active");document.getElementById(`${resolved}-workspace-page`)?.classList.add("active");}douyinCurrentWorkspaceTarget=resolved;syncSidebarNavigationState(resolved)}
         function getDouyinLogPollInterval(target="",anyBusy=false){if(anyBusy)return 5000;const normalizedTarget=normalize(target||"overview");if(normalizedTarget==="overview")return 30000;if(isDirectRouteLightweightTarget(normalizedTarget))return 30000;return 15000}

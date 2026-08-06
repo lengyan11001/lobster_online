@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -32,6 +33,21 @@ def _load_registry() -> Dict[str, Any]:
     return raw
 
 
+def _load_runtime_profile(mark: str) -> Dict[str, Any] | None:
+    raw_path = str(os.environ.get("LOBSTER_BRAND_PROFILE_PATH") or "").strip()
+    if not raw_path:
+        return None
+    try:
+        record = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("read runtime branding failed path=%s: %s", raw_path, exc)
+        return None
+    profile = record.get("profile") if isinstance(record, dict) else None
+    if not isinstance(profile, dict) or str(profile.get("mark") or "").strip().lower() != mark:
+        return None
+    return profile
+
+
 @router.get("/api/branding", summary="当前品牌标记下的文案与图标路径（供前端与安装脚本同源配置）")
 def get_branding() -> Dict[str, Any]:
     registry = _load_registry()
@@ -39,11 +55,11 @@ def get_branding() -> Dict[str, Any]:
     if not mark:
         raise HTTPException(status_code=500, detail="LOBSTER_BRAND_MARK is empty")
     marks = registry["marks"]
-    if mark not in marks:
-        raise HTTPException(status_code=400, detail=f"Unknown brand mark: {mark}")
-    cfg = marks[mark]
+    cfg = marks.get(mark)
     if not isinstance(cfg, dict):
-        raise HTTPException(status_code=500, detail=f"Invalid brand config for mark: {mark}")
+        cfg = _load_runtime_profile(mark)
+    if not isinstance(cfg, dict):
+        raise HTTPException(status_code=400, detail=f"Unknown brand mark: {mark}")
     out: Dict[str, Any] = {"mark": mark, **cfg}
     parent = (getattr(settings, "lobster_parent_account", None) or "").strip()
     if parent:

@@ -100,6 +100,29 @@ def test_asset_library_starts_list_before_optional_group_refresh():
     assert body.index("loadAssets(_currentAssetSearchQuery())") < body.index("loadCreativeCandidateGroups()")
 
 
+def test_asset_upload_reports_backend_or_network_failure_detail():
+    source = (Path(__file__).parent / "static" / "js" / "publish.js").read_text(encoding="utf-8")
+
+    assert "return r.text().then(function(raw)" in source
+    assert "uploadErrors.push" in source
+    assert "失败原因：" in source
+    assert "无法连接本机服务或云端上传接口" in source
+    assert "isErr ? 12000 : 4000" in source
+
+
+def test_asset_upload_uses_retried_proxy_independent_cloud_fallback():
+    upload_source = inspect.getsource(assets.upload_asset)
+    helper_source = inspect.getsource(assets._upload_bytes_to_auth_server)
+
+    assert "_upload_bytes_to_auth_server" in upload_source
+    assert "httpx.AsyncClient(timeout=60.0)" not in upload_source
+    assert "range(1, 4)" in helper_source
+    assert "trust_env=False" in helper_source
+    assert 'headers["X-Lobster-Brand"] = brand_mark' in helper_source
+    assert "云端上传 HTTP" in upload_source
+    assert "请检查网络或重新登录后重试" in upload_source
+
+
 def test_top_navigation_buttons_are_excluded_from_drag_capture():
     source = (Path(__file__).parent / "static" / "js" / "init.js").read_text(encoding="utf-8")
 
