@@ -1,7 +1,7 @@
 {
-  "version": "1.0.147",
-  "build": 191,
-  "applied_at": "2026-08-07T18:25:35+08:00",
-  "note": "blank OEM branding fallback",
-  "bundle_sha256": "802a7a71d7a4ee9938203b220b3c05003154e3bcbe85757b9451cae77f3da497"
+  "version": "1.0.148",
+  "build": 192,
+  "applied_at": "2026-08-07T21:50:05+08:00",
+  "note": "long audio transcription and local upload recovery",
+  "bundle_sha256": "7ce6339b0a3bbc762bef0a976e91861efc774bf63cd36f3d8d1cb0bfaf510502"
 }
