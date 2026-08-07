@@ -36,6 +36,99 @@
   flex-wrap: wrap;
 }
 
+.ai3d-runtime-bar {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.72rem 0.9rem;
+  border: 1px solid #dbe4f0;
+  border-left: 3px solid #94a3b8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.ai3d-runtime-bar.is-ready {
+  border-left-color: #16a34a;
+  background: #f8fdf9;
+}
+
+.ai3d-runtime-bar.is-installing {
+  border-left-color: #2563eb;
+  background: #f8fbff;
+}
+
+.ai3d-runtime-bar.is-failed {
+  border-left-color: #dc2626;
+  background: #fffafa;
+}
+
+.ai3d-runtime-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.18rem 0.6rem;
+}
+
+.ai3d-runtime-copy strong {
+  color: #172033;
+  font-size: 0.84rem;
+}
+
+.ai3d-runtime-copy span {
+  color: #334155;
+  font-size: 0.8rem;
+}
+
+.ai3d-runtime-copy small {
+  grid-column: 1 / -1;
+  color: #64748b;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ai3d-runtime-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.ai3d-runtime-progress {
+  width: 92px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbeafe;
+}
+
+.ai3d-runtime-progress i {
+  display: block;
+  width: 4%;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 0.25s ease;
+}
+
+@media (max-width: 720px) {
+  .ai3d-runtime-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ai3d-runtime-actions {
+    justify-content: space-between;
+  }
+
+  .ai3d-runtime-progress {
+    flex: 1 1 auto;
+  }
+}
+
 .ai3d-page .btn {
   min-height: 32px;
   display: inline-flex;

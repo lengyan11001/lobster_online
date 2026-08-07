@@ -9,7 +9,10 @@
     jobPageSize: 10,
     previewModelByJob: {},
     infoBubblePinned: false,
-    createFiles: []
+    createFiles: [],
+    runtimeReady: false,
+    runtimeLoaded: false,
+    runtimePollTimer: null
   };
   var LAST_JOB_KEY = 'lobster.ai3d.lastJobId';
 
@@ -59,11 +62,15 @@
   }
 
   function ensureCss() {
-    if (document.getElementById('ai3dModelCss')) return;
+    var existing = document.getElementById('ai3dModelCss');
+    if (existing) {
+      existing.href = '/static/css/ai-3d-model.css?v=20260807-sam-runtime-v1';
+      return;
+    }
     var link = document.createElement('link');
     link.id = 'ai3dModelCss';
     link.rel = 'stylesheet';
-    link.href = '/static/css/ai-3d-model.css?v=20260729-component-flow-v1-v6';
+    link.href = '/static/css/ai-3d-model.css?v=20260807-sam-runtime-v1';
     document.head.appendChild(link);
   }
 
@@ -266,6 +273,90 @@
           badge.className = 'ai3d-badge bad';
         }
         if (balance) balance.textContent = err && err.message ? err.message : '配置检查失败';
+      });
+  }
+
+  function renderRuntimeStatus(data) {
+    data = data || {};
+    state.runtimeLoaded = true;
+    state.runtimeReady = !!data.ready;
+    var installing = !!data.installing;
+    var failed = data.status === 'failed';
+    var root = el('ai3dRuntimeBar');
+    var status = el('ai3dRuntimeStatus');
+    var detail = el('ai3dRuntimeDetail');
+    var progress = el('ai3dRuntimeProgress');
+    var button = el('ai3dInstallRuntimeBtn');
+    if (root) {
+      root.className = 'ai3d-runtime-bar ' + (state.runtimeReady ? 'is-ready' : installing ? 'is-installing' : failed ? 'is-failed' : 'is-missing');
+    }
+    if (status) status.textContent = data.message || (state.runtimeReady ? '依赖已安装' : '依赖未安装');
+    var missing = Array.isArray(data.dependencies) ? data.dependencies.filter(function(item) { return !item.installed; }) : [];
+    if (detail) {
+      if (state.runtimeReady) {
+        detail.textContent = 'SAM 拆件 3.0 已可使用；普通 3D 任务不受影响。';
+      } else if (failed) {
+        detail.textContent = data.error || '安装失败，请检查网络后重试。';
+      } else if (installing) {
+        detail.textContent = '安装在后台进行，可以继续查看当前页面，请勿关闭客户端。';
+      } else {
+        detail.textContent = missing.length
+          ? '缺少：' + missing.map(function(item) { return item.package; }).join('、')
+          : '普通 3D 生成不需要安装；仅 SAM 拆件 3.0 使用。';
+      }
+      detail.title = data.log || data.error || '';
+    }
+    if (progress) {
+      progress.hidden = !installing;
+      var fill = progress.querySelector('i');
+      if (fill) fill.style.width = Math.max(4, Math.min(100, Number(data.progress || 0))) + '%';
+    }
+    if (button) {
+      button.disabled = installing || state.runtimeReady;
+      button.textContent = state.runtimeReady ? '依赖已安装' : installing ? '安装中...' : failed ? '重新安装' : '安装 3D 依赖';
+    }
+  }
+
+  function stopRuntimePolling() {
+    if (state.runtimePollTimer) clearTimeout(state.runtimePollTimer);
+    state.runtimePollTimer = null;
+  }
+
+  function loadRuntimeStatus() {
+    return fetch(api('/api/ai-3d-model/runtime'), { headers: headers() })
+      .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
+      .then(function(x) {
+        if (!x.ok) throw new Error(parseError(x.data, '3D 依赖状态读取失败'));
+        renderRuntimeStatus(x.data || {});
+        stopRuntimePolling();
+        if (x.data && x.data.installing) state.runtimePollTimer = setTimeout(loadRuntimeStatus, 1500);
+        return x.data || {};
+      })
+      .catch(function(err) {
+        renderRuntimeStatus({ status: 'failed', error: err && err.message ? err.message : '3D 依赖状态读取失败' });
+        return null;
+      });
+  }
+
+  function installRuntimeDependencies() {
+    var button = el('ai3dInstallRuntimeBtn');
+    if (button) {
+      button.disabled = true;
+      button.textContent = '准备安装...';
+    }
+    fetch(api('/api/ai-3d-model/runtime/install'), {
+      method: 'POST',
+      headers: headers()
+    })
+      .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
+      .then(function(x) {
+        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '3D 依赖安装启动失败'));
+        renderRuntimeStatus(x.data || {});
+        stopRuntimePolling();
+        state.runtimePollTimer = setTimeout(loadRuntimeStatus, 800);
+      })
+      .catch(function(err) {
+        renderRuntimeStatus({ status: 'failed', error: err && err.message ? err.message : '3D 依赖安装启动失败' });
       });
   }
 
@@ -664,6 +755,12 @@
       ? state.createFiles.slice()
       : Array.prototype.slice.call(input && input.files ? input.files : []);
     var description = el('ai3dDescription') ? el('ai3dDescription').value.trim() : '';
+    if (mode === 'component_split_v3' && !state.runtimeReady) {
+      setMsg(state.runtimeLoaded ? '拆件 3.0 依赖尚未安装，请先点击“安装 3D 依赖”。' : '正在检测拆件 3.0 依赖，请稍后再提交。', true);
+      var runtimeButton = el('ai3dInstallRuntimeBtn');
+      if (runtimeButton && !runtimeButton.disabled) runtimeButton.focus();
+      return;
+    }
     var hasFiles = mode === 'real_object' ? !!slotFiles.length : !!generalFiles.length;
     if (!hasFiles && !description) {
       setMsg('请上传图片，或填写资产提示词。', true);
@@ -2402,9 +2499,15 @@
       refresh._ai3dBound = true;
       refresh.addEventListener('click', function() {
         loadConfig();
+        loadRuntimeStatus();
         loadJobs(true);
         if (state.jobId) pollJob();
       });
+    }
+    var installRuntime = el('ai3dInstallRuntimeBtn');
+    if (installRuntime && !installRuntime._ai3dBound) {
+      installRuntime._ai3dBound = true;
+      installRuntime.addEventListener('click', installRuntimeDependencies);
     }
     var refreshJobs = el('ai3dRefreshJobsBtn');
     if (refreshJobs && !refreshJobs._ai3dBound) {
@@ -2612,6 +2715,7 @@
     bind();
     renderFiles();
     loadConfig();
+    loadRuntimeStatus();
     loadJobs(true);
   };
 })();

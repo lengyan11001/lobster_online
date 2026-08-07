@@ -36,6 +36,7 @@ from ..services import ai_3d_model_store as store
 from ..services import glb_assembly_service as glb_assembly
 from ..services import meshy_3d_service as meshy
 from ..services import model_3mf_service as model_3mf
+from ..services import sam3d_runtime
 from ..services import see_through_layer_service as see_through
 
 logger = logging.getLogger(__name__)
@@ -9820,6 +9821,16 @@ async def ai_3d_model_config(_: _ServerUser = Depends(_ai3d_local_user)):
     return data
 
 
+@router.get("/api/ai-3d-model/runtime")
+async def ai_3d_model_runtime(_: _ServerUser = Depends(_ai3d_local_user)):
+    return {"ok": True, **sam3d_runtime.sam3d_runtime_status()}
+
+
+@router.post("/api/ai-3d-model/runtime/install")
+async def ai_3d_model_install_runtime(_: _ServerUser = Depends(_ai3d_local_user)):
+    return {"ok": True, **sam3d_runtime.start_sam3d_runtime_install()}
+
+
 @router.post("/api/ai-3d-model/jobs")
 async def ai_3d_model_create_job(
     background_tasks: BackgroundTasks,
@@ -9841,6 +9852,8 @@ async def ai_3d_model_create_job(
     _: _ServerUser = Depends(_ai3d_local_user),
 ):
     workflow_mode = _canonical_workflow_mode(workflow_mode)
+    if workflow_mode == "component_split_v3" and not sam3d_runtime.sam3d_runtime_status()["ready"]:
+        raise HTTPException(status_code=409, detail="拆件 3.0 依赖尚未安装，请先在 3D 界面点击“安装 3D 依赖”")
     strategy = (strategy or "auto").strip().lower()
     if strategy not in {"auto", "multi_view", "part_batch"}:
         raise HTTPException(status_code=400, detail="strategy must be auto, multi_view or part_batch")

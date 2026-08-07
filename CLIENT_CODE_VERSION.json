@@ -1,7 +1,7 @@
 {
-  "version": "1.0.144",
-  "build": 188,
-  "applied_at": "2026-08-07T00:36:03+08:00",
-  "note": "add Online audio transcription and H5-aligned content actions",
-  "bundle_sha256": "0990b6c3a9027215a238566551b615cb3cc175c4f21100f24d8293273cfa9de7"
+  "version": "1.0.145",
+  "build": 189,
+  "applied_at": "2026-08-07T10:26:16+08:00",
+  "note": "make 3D SAM runtime dependencies opt-in",
+  "bundle_sha256": "8720f51f461dd9d5ed86bf7bc0b46e519738b7baba835afc2fc4333225343c96"
 }

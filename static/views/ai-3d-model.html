@@ -17,6 +17,18 @@
 
     <div id="ai3dMsg" class="msg" style="display:none;"></div>
 
+    <div id="ai3dRuntimeBar" class="ai3d-runtime-bar is-checking">
+      <div class="ai3d-runtime-copy">
+        <strong>拆件 3.0 本地依赖</strong>
+        <span id="ai3dRuntimeStatus">正在检测运行环境</span>
+        <small id="ai3dRuntimeDetail">普通 3D 生成不需要安装；仅 SAM 拆件 3.0 使用。</small>
+      </div>
+      <div class="ai3d-runtime-actions">
+        <span id="ai3dRuntimeProgress" class="ai3d-runtime-progress" hidden><i></i></span>
+        <button type="button" id="ai3dInstallRuntimeBtn" class="btn btn-ghost btn-sm">安装 3D 依赖</button>
+      </div>
+    </div>
+
     <div id="ai3dCreateModal" class="ai3d-modal" hidden>
       <div class="ai3d-modal-backdrop" data-ai3d-create-close></div>
       <div class="ai3d-modal-panel ai3d-create-modal-panel" role="dialog" aria-modal="true" aria-labelledby="ai3dCreateModalTitle">
@@ -225,7 +237,7 @@
 
   </div>
 </div>
-<script src="/static/js/ai-3d-model.js?v=20260803-component-split-v3"></script>
+<script src="/static/js/ai-3d-model.js?v=20260807-sam-runtime-v1"></script>
 <script>
   (function() {
     window.ai3dDirectBootstrapRan = true;

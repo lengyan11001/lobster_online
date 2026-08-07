@@ -190,18 +190,6 @@ WECHAT_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
     "pyperclip",
     "comtypes",
 )
-SAM3D_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
-    "torch==2.13.0",
-    "torchvision==0.28.0",
-    "opencv-python==5.0.0.93",
-    "segment-anything==1.0",
-)
-SAM3D_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
-    "torch",
-    "torchvision",
-    "cv2",
-    "segment_anything",
-)
 RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
     {
         "name": "ppt_runtime",
@@ -227,17 +215,6 @@ RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
         "required": True,
         "trigger_exact": {"scripts/wechat_runtime_wheels"},
         "trigger_prefix": ("scripts/wechat_runtime_wheels/",),
-    },
-    {
-        "name": "sam3d_runtime",
-        "wheel_dirs": (ROOT / "deps" / "wheels",),
-        "requirements": SAM3D_RUNTIME_REQUIREMENTS,
-        "verify_imports": SAM3D_RUNTIME_IMPORT_CHECKS,
-        "allow_online": True,
-        "timeout_seconds": 1800,
-        "required": False,
-        "trigger_exact": {"requirements.txt", "backend/app/api/ai_3d_model.py"},
-        "trigger_prefix": ("deps/wheels/",),
     },
 )
 
