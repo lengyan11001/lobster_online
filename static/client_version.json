@@ -1,7 +1,7 @@
 {
-  "version": "1.0.145",
-  "build": 189,
-  "applied_at": "2026-08-07T10:26:16+08:00",
-  "note": "make 3D SAM runtime dependencies opt-in",
-  "bundle_sha256": "8720f51f461dd9d5ed86bf7bc0b46e519738b7baba835afc2fc4333225343c96"
+  "version": "1.0.146",
+  "build": 190,
+  "applied_at": "2026-08-07T15:00:38+08:00",
+  "note": "offload heavy media and document processing",
+  "bundle_sha256": "b24da53f8d23717bde354851c4ebbd4e94c463657c7c0500bb6dcb19f44bd541"
 }
