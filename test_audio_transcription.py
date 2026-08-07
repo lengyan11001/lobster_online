@@ -51,9 +51,23 @@ def test_local_audio_upload_returns_immediately_to_background_record_list():
     script = (ROOT / "static" / "js" / "audio-transcription.js").read_text(encoding="utf-8")
     upload = script[script.index("function uploadLocalFile"):script.index("function recordRow")]
 
-    assert "setMessage('已上传，正在后台转写')" in upload
+    assert "音频已保存到本机，正在后台上传并转写，可以继续操作其他功能" in upload
+    assert ": '已上传，正在后台转写'" in upload
     assert "setTab('records')" in upload
     assert "showDetail(" not in upload
+
+
+def test_cloud_record_replaces_stale_local_upload_snapshot():
+    script = (ROOT / "static" / "js" / "audio-transcription.js").read_text(encoding="utf-8")
+    assert "cloudRecordIds" in script
+    assert "job && job.record && job.record.id" in script
+    assert "Do not render" in script
+
+
+def test_online_audio_progress_shows_long_audio_chunk_position():
+    script = (ROOT / "static" / "js" / "audio-transcription.js").read_text(encoding="utf-8")
+    assert "^transcribing:(\\d+)\\/(\\d+)$" in script
+    assert "正在识别第 " in script
 
 
 def test_online_audio_detail_supports_speaker_rename_copy_and_export():

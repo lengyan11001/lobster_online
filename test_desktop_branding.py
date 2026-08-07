@@ -11,6 +11,7 @@ def _clear_brand_environment(monkeypatch):
         "LOBSTER_DESKTOP_TITLE",
         "LOBSTER_IS_OVERSEAS_USER",
         "AUTH_SERVER_BASE",
+        "LOBSTER_BRANDING_UNAVAILABLE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -55,15 +56,33 @@ def test_desktop_branding_uses_installed_brand(tmp_path, monkeypatch):
     assert launcher.desktop_brand_title(branding=branding) == "Daka AI"
 
 
-def test_desktop_branding_unknown_mark_falls_back(tmp_path, monkeypatch):
+def test_desktop_branding_unknown_mark_stays_blank(tmp_path, monkeypatch):
     _clear_brand_environment(monkeypatch)
     _write_brand_registry(tmp_path)
     monkeypatch.setenv("LOBSTER_BRAND_MARK", "unknown")
 
     branding = launcher.load_desktop_branding(tmp_path)
 
-    assert branding["mark"] == "bihuo"
-    assert branding["document_title"] == "Bihuo AI"
+    assert branding["mark"] == ""
+    assert branding["_branding_unavailable"] is True
+    assert launcher.desktop_brand_title(branding=branding) == ""
+
+
+def test_failed_oem_branding_stays_blank_without_bihuo_assets(tmp_path, monkeypatch):
+    _clear_brand_environment(monkeypatch)
+    _write_brand_registry(tmp_path)
+    (tmp_path / ".env").write_text(
+        "LOBSTER_BRAND_MARK=0400\nLOBSTER_OEM_CODE=0400\nAUTH_SERVER_BASE=https://brand.example\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(launcher, "resolve_factory_oem_branding", lambda *_args, **_kwargs: None)
+
+    branding = launcher.configure_desktop_branding()
+
+    assert branding["_branding_unavailable"] is True
+    assert launcher.APP_ICON_PATH is None
+    assert launcher.LOADING_MARK_PATH is None
+    assert launcher.desktop_loading_html("http://127.0.0.1:8000", "") == launcher.BLANK_HTML
 
 
 def test_desktop_branding_resolves_numeric_oem_code(tmp_path, monkeypatch):
@@ -105,8 +124,8 @@ def test_numeric_brand_mark_alone_does_not_enter_factory_startup(tmp_path, monke
 
     branding = launcher.load_desktop_branding(tmp_path)
 
-    assert branding["mark"] == "bihuo"
-    assert branding["document_title"] == "Bihuo AI"
+    assert branding["mark"] == ""
+    assert branding["_branding_unavailable"] is True
 
 
 def test_non_default_brand_title_wins_over_legacy_overseas_title(tmp_path, monkeypatch):
@@ -147,7 +166,8 @@ def test_header_partner_logo_is_only_configured_for_daka():
     script = (launcher.ROOT / "static" / "js" / "init.js").read_text(encoding="utf-8")
 
     assert 'id="brandPartnerLogo"' in html
-    assert 'id="brandPartnerLogo" src="" alt="" hidden' in html
+    assert 'id="brandPartnerLogo"' in html
+    assert '__LOBSTER_PARTNER_LOGO__' in html
     assert "icons.header_partner_logo" in script
     assert "header_partner_logo" not in registry["marks"]["bihuo"]["icons"]
     assert registry["marks"]["daka"]["icons"]["header_partner_logo"] == "/static/daka_header_partner.jpg"

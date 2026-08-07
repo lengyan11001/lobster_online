@@ -71,8 +71,8 @@
   });
 
   window.registerLobsterView('ip-content-studio', {
-    html: '/static/views/ip-content-studio.html?v=20260806-ip-actions-batch-results',
-    scripts: '/static/js/ip-content-studio.js?v=20260806-moment-image-actions-restored',
+    html: '/static/views/ip-content-studio.html?v=20260807-moment-failure-scope',
+    scripts: '/static/js/ip-content-studio.js?v=20260807-moment-failure-scope',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
@@ -129,7 +129,7 @@
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20260806-content-record-actions-v2'
+    scripts: '/static/js/publish.js?v=20260807-digital-human-v2'
   });
 
   window.registerLobsterView('scheduled-tasks', {

@@ -26,8 +26,9 @@ def test_ip_daily_actions_fill_the_corresponding_workbench_fields():
 
     assert "imglabPromptInput" in script
     assert "seedanceTaskPromptInput" in script
-    assert "hiflyScriptInput" in script
-    assert "hiflyTitleInput" in script
+    assert "shanjianScriptInput" in script
+    assert "shanjianTitleInput" in script
+    assert "_openShanjianDigitalHumanView" in script
 
 
 def test_ip_daily_action_handlers_are_bound_when_cards_render():
@@ -63,3 +64,17 @@ def test_moment_batch_detail_keeps_direct_and_bulk_image_generation():
     assert "rec.task === 'moments_candidate' && action === 'image'" in script
     assert "confirmMomentsImages([rec], btn" in script
     assert "confirmMomentsImages(momentBatchRecords(job)" in script
+
+
+def test_moment_image_failures_are_rendered_on_the_matching_record():
+    script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")
+    view = (ROOT / "static" / "views" / "ip-content-studio.html").read_text(encoding="utf-8")
+
+    assert "function momentRecordError" in script
+    assert "function momentRecordFailedIndex" in script
+    assert "if (recordImages(rec).length >= 3) return false" in script
+    assert "张图片生成失败" in script
+    assert 'data-retry-moment-image-record' in script
+    assert "失败原因已标在对应文案" in script
+    assert "setMsg(err.message || '朋友圈出图失败', true)" not in script
+    assert ".ip-moment-image-error" in view

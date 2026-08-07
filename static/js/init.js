@@ -318,6 +318,30 @@ function applyBrandingFromApi() {
     })
     .then(function(b) {
       if (!b || typeof b !== 'object') return;
+      if (b.available === false || b._branding_unavailable) {
+        window.__LOBSTER_BRANDING_AVAILABLE__ = false;
+        document.title = '';
+        var emptyIds = ['brandLogoMark', 'brandHomeVisual'];
+        emptyIds.forEach(function(id) {
+          var emptyImg = document.getElementById(id);
+          if (emptyImg) {
+            emptyImg.src = 'data:,';
+            emptyImg.alt = '';
+          }
+        });
+        ['brandLogoPrimary', 'brandLogoAccent', 'brandHeroTitle', 'brandHeroSubtitle'].forEach(function(id) {
+          var emptyText = document.getElementById(id);
+          if (emptyText) emptyText.textContent = '';
+        });
+        var emptyPartner = document.getElementById('brandPartnerLogo');
+        if (emptyPartner) {
+          emptyPartner.hidden = true;
+          emptyPartner.removeAttribute('src');
+          emptyPartner.alt = '';
+        }
+        return;
+      }
+      window.__LOBSTER_BRANDING = b;
       if (b.mark) {
         if (typeof setLobsterBrandMark === 'function') setLobsterBrandMark(b.mark);
         else window.__LOBSTER_BRAND_MARK = b.mark;
@@ -358,6 +382,9 @@ function applyBrandingFromApi() {
       var heroP = document.getElementById('brandHeroSubtitle');
       if (heroH && b.hero_title != null) heroH.textContent = b.hero_title;
       if (heroP && b.hero_subtitle != null) setHeroSubtitle(heroP, b.hero_subtitle);
+      try {
+        window.dispatchEvent(new CustomEvent('lobster:branding-ready', { detail: b }));
+      } catch (eBrandEvent) {}
     })
     .catch(function(e) {
       if (typeof console !== 'undefined') console.warn('[branding]', e);

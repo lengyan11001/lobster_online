@@ -167,6 +167,14 @@ namespace LobsterOemConfigurator
                 psi.EnvironmentVariables["PYTHONPATH"] = root;
                 psi.EnvironmentVariables["PYTHONUTF8"] = "1";
                 psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+                string caBundle = Path.Combine(root, "python", "Lib", "site-packages", "certifi", "cacert.pem");
+                if (File.Exists(caBundle))
+                {
+                    psi.EnvironmentVariables["SSL_CERT_FILE"] = caBundle;
+                    psi.EnvironmentVariables["REQUESTS_CA_BUNDLE"] = caBundle;
+                }
+                psi.EnvironmentVariables["NO_PROXY"] = "*";
+                psi.EnvironmentVariables["no_proxy"] = "*";
                 using (Process process = Process.Start(psi))
                 {
                     string stdout = process.StandardOutput.ReadToEnd();

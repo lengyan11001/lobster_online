@@ -643,9 +643,42 @@
     return taskStatusKind(status) === 'failed';
   }
 
-  function defaultShanjianAuthText() {
-    return '案例：我是xxx(真实姓名),我授权本平台使用视频中的肖像、声音,为我生成定制数字人及声音,并在本人账号中创作使用。';
+  function currentShanjianBrandName() {
+    var branding = window.__LOBSTER_BRANDING || {};
+    var name = String(
+      branding.logo_primary || branding.display_name || branding.document_title || ''
+    ).trim();
+    if (name) return name;
+
+    var mark = typeof window.getLobsterBrandMark === 'function'
+      ? window.getLobsterBrandMark()
+      : String(window.__LOBSTER_BRAND_MARK || '').trim().toLowerCase();
+    var knownNames = {
+      bihuo: '必火',
+      daka: '大咖',
+      jinghai: '鲸海',
+      hikong: '海康'
+    };
+    if (knownNames[mark]) return knownNames[mark];
+
+    var primary = document.getElementById('brandLogoPrimary');
+    return String(primary && primary.textContent || '').trim() || '本平台';
   }
+
+  function defaultShanjianAuthText() {
+    var brandName = currentShanjianBrandName();
+    return '案例：我是xxx（真实姓名），我授权【' + brandName + '】使用视频中的肖像、声音，为我生成定制数字人及声音，并在本人【' + brandName + '】账号中创作使用。';
+  }
+
+  function refreshDefaultShanjianAuthText() {
+    ['shanjianAvatarImageAuthText', 'shanjianAvatarVideoAuthText'].forEach(function(id) {
+      var field = $(id);
+      if (!field || field.getAttribute('data-brand-auth-default') !== '1') return;
+      field.value = defaultShanjianAuthText();
+    });
+  }
+
+  window.addEventListener('lobster:branding-ready', refreshDefaultShanjianAuthText);
 
   function normalizeProfileItem(item) {
     item = item || {};
@@ -3062,7 +3095,10 @@
       if ($(id)) $(id).value = '';
     });
     ['shanjianAvatarImageAuthText', 'shanjianAvatarVideoAuthText'].forEach(function(id) {
-      if ($(id)) $(id).value = defaultShanjianAuthText();
+      if ($(id)) {
+        $(id).value = defaultShanjianAuthText();
+        $(id).setAttribute('data-brand-auth-default', '1');
+      }
     });
     if ($('shanjianVoiceLanguageSelect')) $('shanjianVoiceLanguageSelect').value = 'zh';
     setFieldError('shanjianVoiceCreateName', 'shanjianVoiceCreateNameError', '');
@@ -3901,6 +3937,11 @@
   }
 
   function bindEvents() {
+    ['shanjianAvatarImageAuthText', 'shanjianAvatarVideoAuthText'].forEach(function(id) {
+      if ($(id)) $(id).addEventListener('input', function() {
+        this.setAttribute('data-brand-auth-default', '0');
+      });
+    });
     if ($('shanjianBackBtn')) $('shanjianBackBtn').addEventListener('click', function() {
       if (typeof window._ensureSkillStoreVisible === 'function') window._ensureSkillStoreVisible();
       try { location.hash = 'skill-store'; } catch (e) {}
@@ -4762,7 +4803,7 @@
             </div>
             <div class="tvc-field">
               <label for="shanjianAvatarImageAuthText">授权说明</label>
-              <textarea id="shanjianAvatarImageAuthText" rows="3" placeholder="请输入授权说明">${defaultShanjianAuthText()}</textarea>
+              <textarea id="shanjianAvatarImageAuthText" rows="3" placeholder="请输入授权说明" data-brand-auth-default="1">${defaultShanjianAuthText()}</textarea>
             </div>
             <input id="shanjianAvatarImageAuthFile" type="file" accept=".mp4,.mov,video/mp4,video/quicktime" style="display:none;">
             <button type="button" id="shanjianAvatarImageAuthUploadBox" class="shanjian-upload-box">
@@ -4826,7 +4867,7 @@
             </div>
             <div class="tvc-field">
               <label for="shanjianAvatarVideoAuthText">授权说明</label>
-              <textarea id="shanjianAvatarVideoAuthText" rows="3" placeholder="请输入授权说明">${defaultShanjianAuthText()}</textarea>
+              <textarea id="shanjianAvatarVideoAuthText" rows="3" placeholder="请输入授权说明" data-brand-auth-default="1">${defaultShanjianAuthText()}</textarea>
             </div>
             <input id="shanjianAvatarVideoAuthFile" type="file" accept=".mp4,.mov,video/mp4,video/quicktime" style="display:none;">
             <button type="button" id="shanjianAvatarVideoAuthUploadBox" class="shanjian-upload-box">

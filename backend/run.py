@@ -5,6 +5,7 @@ import faulthandler
 import asyncio
 import importlib
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import subprocess
 import sys
@@ -43,7 +44,13 @@ _log_dir = os.path.join(_root, "logs")
 try:
     os.makedirs(_log_dir, exist_ok=True)
     _log_file = os.path.join(_log_dir, "app.log")
-    _file_handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
+    _file_handler = RotatingFileHandler(
+        _log_file,
+        mode="a",
+        maxBytes=50 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
     _file_handler.setLevel(_log_level)
     _file_handler.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",

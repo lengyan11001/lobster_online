@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>必火AI员工</title>
-  <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="/static/bihu_32.png">
-  <link rel="apple-touch-icon" id="brandAppleTouch" href="/static/bihu_128.png">
+  <script>window.__LOBSTER_BRANDING_AVAILABLE__ = __LOBSTER_BRANDING_AVAILABLE__;</script>
+  <title>__LOBSTER_DOCUMENT_TITLE__</title>
+  <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="__LOBSTER_FAVICON_32__">
+  <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">
   <link rel="stylesheet" href="/static/css/common.css?v=20260608-latest-ota">
   <link rel="stylesheet" href="/static/css/index.css?v=20260806-pc-home-layout-v1">
   <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20260806-home-logo-hover-v3">
@@ -16,9 +17,9 @@
             <header class="header auth-guest" id="appHeader">
       <div class="header-left">
         <div class="logo">
-          <img class="logo-mark" id="brandLogoMark" src="/static/bihu_32.png" width="32" height="32" alt="">
-          <span class="logo-text"><span id="brandLogoPrimary" class="logo-primary">必火</span><span id="brandLogoAccent" class="logo-accent">AI员工</span></span>
-          <img class="brand-partner-logo" id="brandPartnerLogo" src="" alt="" hidden>
+          <img class="logo-mark" id="brandLogoMark" src="__LOBSTER_LOGO_MARK__" width="32" height="32" alt="">
+          <span class="logo-text"><span id="brandLogoPrimary" class="logo-primary">__LOBSTER_LOGO_PRIMARY__</span><span id="brandLogoAccent" class="logo-accent">__LOBSTER_LOGO_ACCENT__</span></span>
+          <img class="brand-partner-logo" id="brandPartnerLogo" src="__LOBSTER_PARTNER_LOGO__" alt="__LOBSTER_PARTNER_ALT__" __LOBSTER_PARTNER_VISIBILITY__>
         </div>
       </div>
       <nav class="app-top-nav" id="appTopNav" aria-label="主导航" style="display:none;">
@@ -73,8 +74,8 @@
     </header>
 
     <section class="hero" id="pageHero">
-      <h1 id="brandHeroTitle">龙虾 - 您的私人 AI 助手</h1>
-      <p id="brandHeroSubtitle"><span class="hero-subtitle-line">必火智能的远景：</span><span class="hero-subtitle-line">成为全球领先的企业AI员工解决方案服务商</span></p>
+      <h1 id="brandHeroTitle">__LOBSTER_HERO_TITLE__</h1>
+      <p id="brandHeroSubtitle">__LOBSTER_HERO_SUBTITLE__</p>
     </section>
 
     <div id="authPanel">
@@ -343,14 +344,7 @@
                       </div>
                       <div class="chat-home-visual" aria-hidden="true">
                         <div class="chat-home-orbit"></div>
-                        <div class="chat-home-visual-core"><img id="brandHomeVisual" src="/static/bihu_source.png" alt=""></div>
-                        <script>
-                          (function() {
-                            var mark = new URLSearchParams(location.search).get('brand');
-                            var image = document.getElementById('brandHomeVisual');
-                            if (image && mark === 'daka') image.src = '/static/daka_source.png';
-                          })();
-                        </script>
+                        <div class="chat-home-visual-core"><img id="brandHomeVisual" src="__LOBSTER_HOME_VISUAL__" alt=""></div>
                         <div class="chat-home-stage"></div>
                       </div>
                     </div>
@@ -2667,7 +2661,7 @@
   <script src="/static/js/chat.js?v=20260718-home-feature-gates"></script>
   <script src="/static/js/mastra-chat.js?v=20260803-shared-h5-codex-chat-v2"></script>
   <script src="/static/js/skill.js?v=20260804-multi-clip-mixer"></script>
-  <script src="/static/js/shanjian-digital-human.js?v=20260719-shanjian-template-select-fix"></script>
+  <script src="/static/js/shanjian-digital-human.js?v=20260807-oem-auth-text-v1"></script>
   <script src="/static/js/openclaw-skill-chat.js?v=20260429-return-fix"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>
@@ -2688,6 +2682,6 @@
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js?v=20260806-content-record-actions-v2"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260615-ip-daily-task-options"></script>
-  <script src="/static/js/init.js?v=20260804-multi-clip-mixer"></script>
+  <script src="/static/js/init.js?v=20260807-oem-auth-text-v1"></script>
 </body>
 </html>

@@ -601,8 +601,13 @@ if not defined LOBSTER_BRAND_MARK if exist ".env.example" for /f "usebackq eol=#
 )
 if not defined LOBSTER_BRAND_MARK set "LOBSTER_BRAND_MARK=bihuo"
 :brand_mark_done
+if not defined LOBSTER_OEM_CODE if exist ".env" for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do (
+  if /i "%%~a"=="LOBSTER_OEM_CODE" set "LOBSTER_OEM_CODE=%%b"
+)
 set "LOBSTER_BRAND_PROFILE_PATH="
-if exist "static\branding\cache\profiles\%LOBSTER_BRAND_MARK%.json" set "LOBSTER_BRAND_PROFILE_PATH=%CD%\static\branding\cache\profiles\%LOBSTER_BRAND_MARK%.json"
+set "LOBSTER_PROFILE_KEY=%LOBSTER_OEM_CODE%"
+if not defined LOBSTER_PROFILE_KEY set "LOBSTER_PROFILE_KEY=%LOBSTER_BRAND_MARK%"
+if exist "static\branding\cache\profiles\%LOBSTER_PROFILE_KEY%.json" set "LOBSTER_BRAND_PROFILE_PATH=%CD%\static\branding\cache\profiles\%LOBSTER_PROFILE_KEY%.json"
 if /i "%LOBSTER_SKIP_DESKTOP_SHORTCUT%"=="1" goto :after_desktop_shortcut
 if not exist "static\branding\brands.json" (
     echo   [WARN] static\branding\brands.json missing - desktop shortcut skipped

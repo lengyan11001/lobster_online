@@ -1270,9 +1270,10 @@
   function momentRecordStatus(rec) {
     var meta = rec && rec.meta ? rec.meta : {};
     var imageUpdate = meta && meta.image_update ? meta.image_update : {};
-    var status = rec._image_status || meta.image_status || imageUpdate.image_status || '';
-    if (status) return String(status);
     var images = recordImages(rec);
+    var status = rec._image_status || meta.image_status || imageUpdate.image_status || '';
+    if (images.length >= 3 && /失败|failed|error/i.test(String(status))) return '已完成';
+    if (status) return String(status);
     if (images.length >= 3) return '已完成';
     if (images.length > 0) return '生成中 ' + images.length + '/3';
     return storedMomentImageBatchId(rec) ? '等待生成' : '';
@@ -1289,8 +1290,23 @@
   }
 
   function momentRecordFailed(rec) {
+    if (recordImages(rec).length >= 3) return false;
     var status = momentRecordStatus(rec).toLowerCase();
     return status.indexOf('失败') >= 0 || status.indexOf('failed') >= 0 || status.indexOf('error') >= 0;
+  }
+
+  function momentRecordError(rec) {
+    var meta = rec && rec.meta ? rec.meta : {};
+    var imageUpdate = meta && meta.image_update ? meta.image_update : {};
+    var error = rec && rec._image_error || meta.image_error || imageUpdate.image_error || '';
+    if (error) return String(error).trim();
+    return momentRecordStatus(rec).replace(/^生成失败\s*[：:]?\s*/, '').trim();
+  }
+
+  function momentRecordFailedIndex(rec) {
+    var meta = rec && rec.meta ? rec.meta : {};
+    var imageUpdate = meta && meta.image_update ? meta.image_update : {};
+    return Number(rec && rec._image_failed_index || meta.image_failed_index || imageUpdate.image_failed_index || 0);
   }
 
   function momentRecordDone(rec) {
@@ -1303,10 +1319,15 @@
         image_batch_id: batchId,
         image_batch_created_at: batchCreatedAt,
         image_status: idx === 0 ? '准备生成' : '等待生成',
-        image_progress: '0/3'
+        image_progress: '0/3',
+        image_error: '',
+        image_failed_index: 0,
+        image_complete: false
       });
       rec._image_status = idx === 0 ? '准备生成' : '等待生成';
       rec._image_progress = '0/3';
+      rec._image_error = '';
+      rec._image_failed_index = 0;
       rec.images = recordImages(rec);
     });
   }
@@ -1351,6 +1372,9 @@
           image_prompts: recordImagePrompts(rec),
           image_status: rec._image_status || momentRecordStatus(rec) || '',
           image_progress: rec._image_progress || momentRecordProgress(rec) || '0/3',
+          image_error: rec._image_error || '',
+          image_failed_index: rec._image_failed_index || 0,
+          image_complete: momentRecordDone(rec),
           images: images
         }
       }
@@ -1745,11 +1769,11 @@
       return;
     }
     if (action === 'digital-human') {
-      if (!ensureDraftActionAllowed('hifly-digital-human')) return;
-      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
-      else if (typeof window._openHiddenWorkspaceView === 'function') window._openHiddenWorkspaceView('hifly-digital-human');
-      fillFieldWhenReady('hiflyScriptInput', text, function() {
-        setFieldValue('hiflyTitleInput', title.slice(0, 20));
+      if (!ensureDraftActionAllowed('shanjian-digital-human')) return;
+      if (typeof window._openShanjianDigitalHumanView === 'function') window._openShanjianDigitalHumanView();
+      else if (typeof window._openHiddenWorkspaceView === 'function') window._openHiddenWorkspaceView('shanjian-digital-human');
+      fillFieldWhenReady('shanjianScriptInput', text, function() {
+        setFieldValue('shanjianTitleInput', title.slice(0, 20));
       });
     }
   }
@@ -2146,18 +2170,23 @@
         var images = recordImages(rec);
         var status = momentRecordStatus(rec);
         var progress = momentRecordProgress(rec);
+        var failed = momentRecordFailed(rec);
+        var errorText = failed ? momentRecordError(rec) : '';
+        var failedIndex = failed ? momentRecordFailedIndex(rec) : 0;
         var bodyText = rec.body || rec.content || '';
         return '<div class="ip-draft-card">' +
-          '<div class="ip-badge-row"><span class="ip-badge">朋友圈</span><span class="ip-badge is-image">图片 ' + esc(images.length) + '</span><span class="ip-badge' + (momentRecordFailed(rec) ? ' is-used' : '') + '">' + esc(status || '等待生成') + '</span>' + (progress ? '<span class="ip-badge">进度 ' + esc(progress) + '</span>' : '') + '</div>' +
+          '<div class="ip-badge-row"><span class="ip-badge">朋友圈</span><span class="ip-badge is-image">图片 ' + esc(images.length) + '</span><span class="ip-badge' + (failed ? ' is-used' : '') + '">' + esc(failed ? '生成失败' : (status || '等待生成')) + '</span>' + (progress ? '<span class="ip-badge">进度 ' + esc(progress) + '</span>' : '') + '</div>' +
           '<strong>' + esc(rec.title || '未命名文案') + '</strong>' +
           '<div class="ip-moments-copy-preview" data-moment-image-copy="' + escAttr(rec.record_id || '') + '">' + esc(bodyText) + '</div>' +
           renderImagePrompts(rec) +
+          (errorText ? '<div class="ip-moment-image-error"><strong>' + esc(failedIndex ? ('第 ' + failedIndex + ' 张图片生成失败') : '本条出图失败') + '</strong><span>' + esc(errorText) + '</span></div>' : '') +
           (images.length ? '<div class="ip-image-grid">' + images.slice(0, 3).map(function(img, idx) {
             var url = img.image_url || img.url || '';
             return '<div class="ip-image-tile"><img src="' + escAttr(url) + '" alt="朋友圈图片 ' + escAttr(idx + 1) + '">' +
               '<a class="btn btn-ghost btn-sm" href="' + escAttr(url) + '" target="_blank" rel="noopener">打开图片</a></div>';
-          }).join('') + '</div>' : '<div class="ip-content-empty">' + esc(status || '等待生成图片...') + '</div>') +
-          '<div class="ip-content-item-actions"><button type="button" class="btn btn-ghost btn-sm" data-copy-moment-image-record="' + escAttr(rec.record_id) + '">复制文案</button></div>' +
+          }).join('') + '</div>' : '<div class="ip-content-empty">' + esc(failed ? '本条文案未生成图片' : (status || '等待生成图片...')) + '</div>') +
+          '<div class="ip-content-item-actions"><button type="button" class="btn btn-ghost btn-sm" data-copy-moment-image-record="' + escAttr(rec.record_id) + '">复制文案</button>' +
+          (failed ? '<button type="button" class="btn btn-primary btn-sm" data-retry-moment-image-record="' + escAttr(rec.record_id) + '">重新出图</button>' : '') + '</div>' +
           '</div>';
       }).join('');
     box.querySelectorAll('[data-copy-moment-image-record]').forEach(function(btn) {
@@ -2165,6 +2194,15 @@
         var id = btn.getAttribute('data-copy-moment-image-record');
         var rec = batch.records.find(function(item) { return String(item.record_id) === String(id); });
         copyText(rec ? (rec.body || rec.content || '') : '', btn);
+      });
+    });
+    box.querySelectorAll('[data-retry-moment-image-record]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-retry-moment-image-record');
+        var rec = batch.records.find(function(item) { return String(item.record_id) === String(id); });
+        if (!rec) return;
+        rec._selected = true;
+        confirmMomentsImages([rec], btn, false);
       });
     });
   }
@@ -2514,7 +2552,7 @@
 
   function confirmMomentsImages(records, triggerButton, closeResultModal) {
     var sourceRecords = Array.isArray(records) ? records : state.latestDrafts;
-    var selected = sourceRecords.filter(function(rec) { return rec.task === 'moments_candidate' && !!rec._selected && !rec.image_url; });
+    var selected = sourceRecords.filter(function(rec) { return rec.task === 'moments_candidate' && !!rec._selected && !momentRecordDone(rec); });
     if (!selected.length) {
       setMsg('请先勾选要出图的朋友圈文案。', true);
       return;
@@ -2558,37 +2596,53 @@
         })
       }
     }).then(function(data) {
-      (data.records || []).forEach(function(item) {
-        var rec = selected.find(function(row) { return String(row.record_id || '') === String(item.record_id || ''); });
-        if (!rec) return;
+      var responseRecords = Array.isArray(data.records) ? data.records : [];
+      selected.forEach(function(rec) {
+        var item = responseRecords.find(function(row) { return String(row.record_id || '') === String(rec.record_id || ''); });
+        if (!item) item = { status: 'failed', error: '图片服务未返回当前文案的生成结果', images: recordImages(rec) };
         rec.images = item.images || [];
         rec.image_url = rec.images[0] && rec.images[0].image_url || rec.image_url || '';
         rec.image_asset_id = rec.images[0] && rec.images[0].image_asset_id || rec.image_asset_id || '';
         rec._selected = false;
-        rec._image_status = rec.images.length + ' 张图片已生成';
-        rec._image_progress = rec.images.length + '/3';
+        rec._image_error = String(item.error || '').trim();
+        rec._image_failed_index = Number(item.failed_index || 0);
+        rec._image_status = item.status === 'failed' || rec._image_error
+          ? '生成失败：' + (rec._image_error || '图片生成失败')
+          : rec.images.length + ' 张图片已生成';
+        rec._image_progress = item.image_progress || (rec.images.length + '/3');
         rec.meta = Object.assign({}, rec.meta || {}, {
           image_batch_id: batchId,
           image_batch_created_at: batchCreatedAt,
           image_status: rec._image_status,
           image_progress: rec._image_progress,
+          image_error: rec._image_error,
+          image_failed_index: rec._image_failed_index,
           images: rec.images
         });
       });
       refreshMomentBatchProgress(selected);
-      setMsg('选中的朋友圈文案已各生成 3 张图片并回写生成记录。');
+      var failedCount = Number(data.failed_count);
+      if (!Number.isFinite(failedCount)) failedCount = selected.filter(momentRecordFailed).length;
+      var completedCount = Number(data.completed_count);
+      if (!Number.isFinite(completedCount)) completedCount = selected.length - failedCount;
+      if (failedCount) {
+        setMsg('本轮出图结束：成功 ' + completedCount + ' 条，失败 ' + failedCount + ' 条。失败原因已标在对应文案，可单独重试。');
+      } else {
+        setMsg('选中的朋友圈文案已各生成 3 张图片并回写生成记录。');
+      }
       state.activeMomentImageBatchId = batchId;
       return loadDraftRecords().then(function() { switchTab('moment-images'); });
     }).catch(function(err) {
       selected.forEach(function(rec) {
         if (!momentRecordDone(rec)) {
           rec._image_status = '生成失败：' + (err.message || '图片生成失败');
-          rec.meta = Object.assign({}, rec.meta || {}, { image_status: rec._image_status, image_progress: rec._image_progress || '0/3' });
+          rec._image_error = err.message || '图片生成失败';
+          rec.meta = Object.assign({}, rec.meta || {}, { image_status: rec._image_status, image_progress: rec._image_progress || '0/3', image_error: rec._image_error });
           persistMomentRecordProgress(rec, recordImages(rec), batchId, batchCreatedAt);
         }
       });
       refreshMomentBatchProgress(selected);
-      setMsg(err.message || '朋友圈出图失败', true);
+      setMsg('本轮出图请求中断，失败原因已标在对应文案，可单独重试。');
     }).finally(function() {
       setBusy(btn, false);
     });

@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from desktop import oem_configurator
+from desktop import oem_branding, oem_configurator
 from scripts import pack_full_project_zip, pack_slim_zip
 
 
@@ -23,12 +23,107 @@ def _profile(root: Path) -> dict:
     }
 
 
+def test_oem_branding_download_uses_bundled_ca_without_system_proxy(monkeypatch):
+    observed = {}
+    ssl_context = object()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read(_limit):
+            return b'{"ok": true}'
+
+    class FakeOpener:
+        @staticmethod
+        def open(request, timeout):
+            observed["url"] = request.full_url
+            observed["timeout"] = timeout
+            return FakeResponse()
+
+    def _build_opener(*handlers):
+        observed["handlers"] = handlers
+        return FakeOpener()
+
+    monkeypatch.setattr(oem_branding, "_ssl_context", lambda: ssl_context)
+    monkeypatch.setattr(oem_branding.urllib.request, "build_opener", _build_opener)
+
+    assert oem_branding._fetch_json("https://brand.example/bootstrap", 6) == {"ok": True}
+    proxy = next(handler for handler in observed["handlers"] if isinstance(handler, oem_branding.urllib.request.ProxyHandler))
+    https = next(handler for handler in observed["handlers"] if isinstance(handler, oem_branding.urllib.request.HTTPSHandler))
+    assert proxy.proxies == {}
+    assert https._context is ssl_context
+    assert observed["timeout"] == 6
+
+
+def test_oem_branding_timeout_is_retried_and_reported_in_chinese(monkeypatch):
+    calls = []
+
+    def _timeout(_request, timeout):
+        calls.append(timeout)
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(oem_branding, "_urlopen_direct", _timeout)
+    monkeypatch.setattr(oem_branding.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(oem_branding.OemBrandingError, match="读取 OEM 品牌配置超时"):
+        oem_branding._fetch_json("https://brand.example/bootstrap", 6)
+    assert calls == [6, 6, 6]
+
+
+def test_index_html_is_branded_before_browser_paint(tmp_path, monkeypatch):
+    profile_path = tmp_path / "0400.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "profile": {
+                    "mark": "hikong",
+                    "document_title": "海康AI智能体",
+                    "logo_primary": "海康",
+                    "logo_accent": "AI智能体",
+                    "hero_title": "海康AI智能体 - 您的私人 AI 助手",
+                    "hero_subtitle": "海康的品牌介绍",
+                    "icons": {
+                        "favicon_32": "/oem/hikong/icon32.png",
+                        "apple_touch": "/oem/hikong/icon256.png",
+                        "logo_mark": "/oem/hikong/icon32.png",
+                        "home_visual": "/oem/hikong/logo.png",
+                    },
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOBSTER_BRAND_PROFILE_PATH", str(profile_path))
+    monkeypatch.setenv("LOBSTER_OEM_CODE", "0400")
+
+    from backend.app.api.branding import render_index_html
+
+    rendered = render_index_html(
+        "<title>__LOBSTER_DOCUMENT_TITLE__</title>"
+        "<img src=__LOBSTER_LOGO_MARK__>"
+        "<b>__LOBSTER_LOGO_PRIMARY__</b><b>__LOBSTER_LOGO_ACCENT__</b>"
+        "<h1>__LOBSTER_HERO_TITLE__</h1><p>__LOBSTER_HERO_SUBTITLE__</p>"
+        "<img src=__LOBSTER_HOME_VISUAL__>",
+        "hikong",
+    )
+
+    assert "必火" not in rendered
+    assert "海康AI智能体" in rendered
+    assert "/oem/hikong/icon32.png" in rendered
+
+
 def test_factory_config_installs_launcher_writes_code_and_runs_install(tmp_path, monkeypatch):
     profile = _profile(tmp_path)
     (tmp_path / ".env").write_text("AUTH_SERVER_BASE=https://brand.example\nLOBSTER_BRAND_MARK=bihuo\n", encoding="utf-8")
     calls = []
     monkeypatch.setattr(oem_configurator, "resolve_oem_branding", lambda *args, **kwargs: profile)
-    monkeypatch.setattr(oem_configurator, "run_install", lambda root, code: calls.append((root, code)))
+    monkeypatch.setattr(oem_configurator, "run_install", lambda root, code, mark: calls.append((root, code, mark)))
 
     name, launcher = oem_configurator.configure(tmp_path, "0400")
 
@@ -36,10 +131,10 @@ def test_factory_config_installs_launcher_writes_code_and_runs_install(tmp_path,
     assert launcher == tmp_path / "HikongAI.exe"
     assert launcher.read_bytes() == b"brand-launcher"
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "LOBSTER_BRAND_MARK=0400" in env_text
+    assert "LOBSTER_BRAND_MARK=hikong" in env_text
     assert "LOBSTER_OEM_CODE=0400" in env_text
     assert "AUTH_SERVER_BASE=https://brand.example" in env_text
-    assert calls == [(tmp_path, "0400")]
+    assert calls == [(tmp_path, "0400", "hikong")]
 
 
 def test_factory_config_rejects_invalid_code_before_download(tmp_path, monkeypatch):
@@ -160,7 +255,9 @@ def test_factory_install_uses_cached_oem_profile_for_shortcut():
     install = (root / "install.bat").read_text(encoding="utf-8")
     shortcut = (root / "scripts" / "create_desktop_shortcut.ps1").read_text(encoding="utf-8")
 
-    assert "static\\branding\\cache\\profiles\\%LOBSTER_BRAND_MARK%.json" in install
+    assert "static\\branding\\cache\\profiles\\%LOBSTER_PROFILE_KEY%.json" in install
+    assert "set \"LOBSTER_PROFILE_KEY=%LOBSTER_OEM_CODE%\"" in install
+    assert 'if /i "%%~a"=="LOBSTER_OEM_CODE" set "LOBSTER_OEM_CODE=%%b"' in install
     assert '-BrandProfilePath "%LOBSTER_BRAND_PROFILE_PATH%"' in install
     assert "$runtimeCode -eq $m" in shortcut
     assert "$inst.launcher_filename" in shortcut
@@ -220,11 +317,11 @@ def test_factory_oem_code_seeds_env_from_example(tmp_path):
         encoding="utf-8",
     )
 
-    oem_configurator.write_oem_code(tmp_path, "0400")
+    oem_configurator.write_oem_code(tmp_path, "0400", "hikong")
 
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "AUTH_SERVER_BASE=https://example.test" in env_text
-    assert "LOBSTER_BRAND_MARK=0400" in env_text
+    assert "LOBSTER_BRAND_MARK=hikong" in env_text
     assert "LOBSTER_OEM_CODE=0400" in env_text
 
 
@@ -281,4 +378,6 @@ def test_factory_process_protocol_is_ascii_and_utf8_safe():
 
     stub = (root / "desktop" / "oem_configurator_stub.cs").read_text(encoding="utf-8")
     assert 'psi.EnvironmentVariables["PYTHONUTF8"] = "1"' in stub
+    assert 'psi.EnvironmentVariables["SSL_CERT_FILE"] = caBundle' in stub
+    assert 'psi.EnvironmentVariables["NO_PROXY"] = "*"' in stub
     assert 'fields[0] == "OK64"' in stub

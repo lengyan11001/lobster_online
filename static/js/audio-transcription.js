@@ -11,9 +11,11 @@
     page: 1,
     pageSize: 20,
     total: 0,
+    uploadJobs: [],
     detail: null,
     audioUrl: '',
     poller: null,
+    uploadPoller: null,
     loading: false
   };
 
@@ -25,6 +27,9 @@
   }
   function cloudBase() {
     return String((typeof API_BASE !== 'undefined' && API_BASE) || window.__API_BASE || '').replace(/\/$/, '');
+  }
+  function localBase() {
+    return String((typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) || '').replace(/\/$/, '');
   }
   function requestHeaders(json) {
     var headers = typeof authHeaders === 'function' ? Object.assign({}, authHeaders() || {}) : {};
@@ -56,6 +61,52 @@
         if (!response.ok || data.ok === false) throw new Error(parseError(data, '请求失败'));
         return data;
       });
+    });
+  }
+  function requestLocalJson(path, options) {
+    var base = localBase();
+    if (!base) return Promise.resolve({ items: [] });
+    options = options || {};
+    var request = {
+      method: options.method || 'GET',
+      headers: requestHeaders(options.json !== false),
+      cache: options.cache || 'no-store'
+    };
+    if (options.body !== undefined) request.body = JSON.stringify(options.body || {});
+    return fetch(base + path, request).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok || data.ok === false) throw new Error(parseError(data, '本机任务请求失败'));
+        return data;
+      });
+    });
+  }
+  function uploadForm(url, form, button, timeoutMs, localUpload) {
+    return new Promise(function(resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      xhr.timeout = timeoutMs || 20 * 60 * 1000;
+      var headers = requestHeaders(false);
+      Object.keys(headers).forEach(function(name) {
+        if (String(name).toLowerCase() !== 'content-type') xhr.setRequestHeader(name, headers[name]);
+      });
+      xhr.upload.onprogress = function(event) {
+        if (!event.lengthComputable || !button) return;
+        var percent = Math.max(1, Math.min(99, Math.round(event.loaded * 100 / event.total)));
+        button.textContent = (localUpload ? '写入本机 ' : '上传 ') + percent + '%';
+      };
+      xhr.onload = function() {
+        var data = {};
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch (error) { data = {}; }
+        if (xhr.status < 200 || xhr.status >= 300 || data.ok === false) {
+          reject(new Error(parseError(data, '音频上传失败（HTTP ' + xhr.status + '）')));
+          return;
+        }
+        resolve(data);
+      };
+      xhr.onerror = function() { reject(new Error('音频上传连接中断，请检查网络后重试')); };
+      xhr.ontimeout = function() { reject(new Error('音频上传超时，已停止本次上传，请重试')); };
+      xhr.onabort = function() { reject(new Error('音频上传已取消')); };
+      xhr.send(form);
     });
   }
   function setMessage(message, isError) {
@@ -97,6 +148,13 @@
     if (row && row.status === 'completed') return { percent: 100, label: '转写与 AI 总结已完成' };
     if (row && row.status === 'failed') return { percent: 100, label: '处理失败' };
     if (row && row.process_stage === 'summarizing') return { percent: 85, label: '正在生成 AI 总结' };
+    var chunkMatch = /^transcribing:(\d+)\/(\d+)$/.exec(String(row && row.process_stage || ''));
+    if (chunkMatch) {
+      var current = Math.max(1, Number(chunkMatch[1] || 1));
+      var total = Math.max(current, Number(chunkMatch[2] || 1));
+      var percent = total === 1 ? 55 : Math.min(80, 35 + Math.round(45 * (current - 1) / total));
+      return { percent: percent, label: '正在识别第 ' + current + ' / ' + total + ' 段音频' };
+    }
     if (row && row.process_stage === 'transcribing') return { percent: 55, label: '正在识别语音和区分说话人' };
     return { percent: 20, label: '音频已上传，等待处理' };
   }
@@ -145,20 +203,13 @@
     if (typeof getOrCreateInstallationId === 'function') form.append('installation_id', getOrCreateInstallationId());
     setButtonBusy(button, true, '上传中...');
     setMessage('正在上传“' + (file.name || '音频') + '”');
-    return fetch(cloudBase() + '/api/h5/recorder/files', {
-      method: 'POST',
-      headers: requestHeaders(false),
-      body: form
-    }).then(function(response) {
-      return response.json().catch(function() { return {}; }).then(function(data) {
-        if (!response.ok || data.ok === false) throw new Error(parseError(data, '音频上传失败'));
-        return data;
-      });
-    }).then(function(data) {
+    var local = localBase();
+    var target = local ? local + '/api/audio-transcription/local-uploads' : cloudBase() + '/api/h5/recorder/files';
+    return uploadForm(target, form, button, local ? 5 * 60 * 1000 : 20 * 60 * 1000, !!local).then(function(data) {
       var key = fileKey(file);
       state.localFiles = state.localFiles.filter(function(item) { return fileKey(item) !== key; });
       renderLocalFiles();
-      setMessage('已上传，正在后台转写');
+      setMessage(local ? '音频已保存到本机，正在后台上传并转写，可以继续操作其他功能' : '已上传，正在后台转写');
       setTab('records');
       return data;
     }).catch(function(error) {
@@ -167,6 +218,25 @@
       setButtonBusy(button, false);
       return result;
     });
+  }
+
+  function localUploadStatus(job) {
+    var status = String(job && job.status || 'queued');
+    if (status === 'receiving') return '正在保存到本机';
+    if (status === 'queued') return '等待后台上传';
+    if (status === 'uploading') return '正在后台上传';
+    if (status === 'failed') return '上传失败';
+    return '已提交转写';
+  }
+  function localUploadRow(job) {
+    var status = String(job.status || 'queued');
+    return '<div class="at-row"><div class="at-row-main"><strong>' + esc(job.file_name || '本机音频') + '</strong>' +
+      '<div class="at-row-meta"><span>' + esc(formatDate(job.created_at)) + '</span><span>' + esc(formatBytes(job.file_size)) +
+      '</span><span class="at-record-status ' + esc(status) + '">' + esc(localUploadStatus(job)) + '</span></div>' +
+      (status === 'queued' || status === 'uploading' ? '<div class="at-progress-track"><i style="width:' + (status === 'uploading' ? 62 : 28) + '%"></i></div>' : '') +
+      (job.error ? '<div class="at-local-upload-error">' + esc(job.error) + '</div>' : '') + '</div>' +
+      '<div class="at-row-actions">' + (status === 'failed' ? '<button type="button" class="at-button" data-at-local-retry="' + esc(job.job_id) + '">重试</button>' : '') +
+      (status === 'failed' ? '<button type="button" class="at-button at-button-danger" data-at-local-delete="' + esc(job.job_id) + '">删除</button>' : '') + '</div></div>';
   }
 
   function recordRow(row) {
@@ -189,24 +259,51 @@
   function renderRecords() {
     var host = currentListHost();
     if (!host) return;
-    host.innerHTML = state.records.length ? state.records.map(recordRow).join('') : '<div class="at-empty">暂无记录</div>';
+    var pending = state.tab === 'records' ? state.uploadJobs.filter(function(job) { return job.status !== 'completed'; }) : [];
+    var rows = pending.map(localUploadRow).join('') + state.records.map(recordRow).join('');
+    host.innerHTML = rows || '<div class="at-empty">暂无记录</div>';
     var pager = currentPagerHost();
     if (!pager) return;
     var totalPages = Math.max(1, Math.ceil(state.total / state.pageSize));
     pager.innerHTML = '<button type="button" class="at-button at-button-quiet" data-at-page="' + (state.page - 1) + '"' + (state.page <= 1 ? ' disabled' : '') + '>上一页</button>' +
       '<span>第 ' + state.page + ' / ' + totalPages + ' 页，共 ' + state.total + ' 条</span>' +
       '<button type="button" class="at-button at-button-quiet" data-at-page="' + (state.page + 1) + '"' + (state.page >= totalPages ? ' disabled' : '') + '>下一页</button>';
+    clearTimeout(state.uploadPoller);
+    if (state.tab === 'records' && state.uploadJobs.some(function(job) { return ['receiving', 'queued', 'uploading'].indexOf(job.status) >= 0; })) {
+      state.uploadPoller = setTimeout(function() { loadRecords({ silent: true }); }, 2500);
+    }
   }
-  function loadRecords() {
+  function loadRecords(options) {
+    options = options || {};
     if (state.loading || state.tab === 'local') return Promise.resolve();
     state.loading = true;
     var host = currentListHost();
-    if (host) host.innerHTML = '<div class="at-empty">正在读取记录...</div>';
+    if (host && !options.silent) host.innerHTML = '<div class="at-empty">正在读取记录...</div>';
     var query = '?page=' + state.page + '&page_size=' + state.pageSize + (state.tab === 'mobile' ? '&source_type=device' : '');
-    return requestJson('/api/h5/recorder/files' + query).then(function(data) {
-      state.records = Array.isArray(data.items) ? data.items : [];
-      state.total = Number(data.total || 0);
-      state.page = Number(data.page || state.page);
+    var cloudRequest = requestJson('/api/h5/recorder/files' + query)
+      .then(function(data) { return { data: data }; })
+      .catch(function(error) { return { error: error }; });
+    var localRequest = state.tab === 'records' && localBase()
+      ? requestLocalJson('/api/audio-transcription/local-uploads').catch(function() { return { items: [] }; })
+      : Promise.resolve({ items: [] });
+    return Promise.all([cloudRequest, localRequest]).then(function(results) {
+      var cloud = results[0];
+      var local = results[1];
+      if (cloud.error) throw cloud.error;
+      state.records = Array.isArray(cloud.data.items) ? cloud.data.items : [];
+      state.total = Number(cloud.data.total || 0);
+      state.page = Number(cloud.data.page || state.page);
+      var cloudRecordIds = {};
+      state.records.forEach(function(row) {
+        var recordId = Number(row && row.id || 0);
+        if (recordId > 0) cloudRecordIds[String(recordId)] = true;
+      });
+      // Once the cloud record exists, it is the source of truth. Do not render
+      // the local upload snapshot on top of a newer cloud status.
+      state.uploadJobs = (Array.isArray(local.items) ? local.items : []).filter(function(job) {
+        var recordId = Number(job && job.record && job.record.id || 0);
+        return !(recordId > 0 && cloudRecordIds[String(recordId)]);
+      });
       renderRecords();
       setMessage('');
     }).catch(function(error) {
@@ -227,7 +324,21 @@
     state.root.querySelectorAll('[data-at-panel]').forEach(function(panel) {
       panel.hidden = panel.dataset.atPanel !== state.tab;
     });
+    if (state.tab !== 'records') clearTimeout(state.uploadPoller);
     if (state.tab !== 'local') loadRecords();
+  }
+
+  function retryLocalUpload(jobId, button) {
+    setButtonBusy(button, true, '提交中...');
+    return requestLocalJson('/api/audio-transcription/local-uploads/' + encodeURIComponent(jobId) + '/retry', { method: 'POST' })
+      .then(function() { setMessage('已重新加入本机后台上传队列'); return loadRecords(); })
+      .catch(function(error) { setMessage(error.message || '重试失败', true); })
+      .then(function() { setButtonBusy(button, false); });
+  }
+  function deleteLocalUpload(jobId) {
+    if (!window.confirm('删除这条本机上传任务？')) return Promise.resolve();
+    return requestLocalJson('/api/audio-transcription/local-uploads/' + encodeURIComponent(jobId), { method: 'DELETE' })
+      .then(function() { setMessage('本机上传任务已删除'); return loadRecords(); });
   }
 
   function releaseAudio() {
@@ -406,6 +517,8 @@
       var detail = event.target.closest('[data-at-detail]');
       var rename = event.target.closest('[data-at-rename]');
       var retry = event.target.closest('[data-at-retry]');
+      var localRetry = event.target.closest('[data-at-local-retry]');
+      var localDelete = event.target.closest('[data-at-local-delete]');
       var removeRecord = event.target.closest('[data-at-delete]');
       var resultTab = event.target.closest('[data-at-result-tab]');
       var speaker = event.target.closest('[data-at-speaker]');
@@ -422,6 +535,8 @@
       if (detail) return showDetail(detail.dataset.atDetail);
       if (rename) return renameRecord(rename.dataset.atRename, rename.dataset.atName || '').catch(function(error) { setMessage(error.message || '改名失败', true); });
       if (retry) return retryRecord(retry.dataset.atRetry, retry);
+      if (localRetry) return retryLocalUpload(localRetry.dataset.atLocalRetry, localRetry);
+      if (localDelete) return deleteLocalUpload(localDelete.dataset.atLocalDelete).catch(function(error) { setMessage(error.message || '删除失败', true); });
       if (removeRecord) return deleteRecord(removeRecord.dataset.atDelete).catch(function(error) { setMessage(error.message || '删除失败', true); });
       if (resultTab) return setResultTab(resultTab.dataset.atResultTab);
       if (speaker) return renameSpeaker(speaker.dataset.atSpeaker).catch(function(error) { setMessage(error.message || '说话人改名失败', true); });

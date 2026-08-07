@@ -40,12 +40,12 @@ def read_env(root: Path) -> dict[str, str]:
     return result
 
 
-def write_oem_code(root: Path, code: str) -> None:
+def write_oem_code(root: Path, code: str, brand_mark: str) -> None:
     path = root / ".env"
     template = root / ".env.example"
     source = path if path.is_file() else template
     lines = source.read_text(encoding="utf-8-sig", errors="ignore").splitlines() if source.is_file() else []
-    replacements = {"LOBSTER_BRAND_MARK": code, "LOBSTER_OEM_CODE": code}
+    replacements = {"LOBSTER_BRAND_MARK": brand_mark, "LOBSTER_OEM_CODE": code}
     found: set[str] = set()
     output: list[str] = []
     for line in lines:
@@ -218,7 +218,7 @@ def install_brand_launcher(root: Path, profile: dict) -> Path:
     return target
 
 
-def run_install(root: Path, code: str) -> None:
+def run_install(root: Path, code: str, brand_mark: str) -> None:
     install = root / "install.bat"
     if os.name != "nt" or not install.is_file():
         raise RuntimeError("客户端目录中缺少 install.bat")
@@ -226,7 +226,7 @@ def run_install(root: Path, code: str) -> None:
     env["LOBSTER_FACTORY_CONFIG"] = "1"
     env["LOBSTER_SKIP_INSTALL_PAUSE"] = "1"
     env["LOBSTER_SKIP_DESKTOP_SHORTCUT"] = "0"
-    env["LOBSTER_BRAND_MARK"] = code
+    env["LOBSTER_BRAND_MARK"] = brand_mark
     env["LOBSTER_OEM_CODE"] = code
     try:
         result = subprocess.run(
@@ -264,13 +264,16 @@ def configure(root: Path, code: str) -> tuple[str, Path]:
     )
     if not profile:
         raise RuntimeError("编号无效或品牌资源下载失败，请检查网络和编号")
+    brand_mark = str(profile.get("mark") or "").strip().lower()
+    if not BRAND_MARK_RE.fullmatch(brand_mark):
+        raise RuntimeError("服务器返回的品牌标记无效")
     launcher = install_brand_launcher(root, profile)
     env_path = root / ".env"
     env_existed = env_path.is_file()
     env_content = env_path.read_bytes() if env_existed else b""
-    write_oem_code(root, normalized)
+    write_oem_code(root, normalized, brand_mark)
     try:
-        run_install(root, normalized)
+        run_install(root, normalized, brand_mark)
     except Exception:
         _restore_env(env_path, env_existed, env_content)
         raise

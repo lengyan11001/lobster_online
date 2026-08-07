@@ -78,11 +78,16 @@ var MESSENGER_API_BASE = (typeof window.__MESSENGER_API_BASE !== 'undefined' ? w
 })();
 var TWILIO_API_BASE = (typeof window.__TWILIO_API_BASE !== 'undefined' ? window.__TWILIO_API_BASE : '');
 
+function lobsterBrandingUnavailable() {
+  return window.__LOBSTER_BRANDING_AVAILABLE__ === false;
+}
 function normalizeLobsterBrandMark(raw) {
+  if (lobsterBrandingUnavailable()) return '';
   var mark = String(raw || 'bihuo').trim().toLowerCase();
   return /^[a-z][a-z0-9_-]{0,62}$/.test(mark) ? mark : 'bihuo';
 }
 function getLobsterBrandMark() {
+  if (lobsterBrandingUnavailable()) return '';
   return normalizeLobsterBrandMark(
     window.__LOBSTER_BRAND_MARK || localStorage.getItem('lobster_active_brand_mark') || 'bihuo'
   );
@@ -110,6 +115,7 @@ function clearStoredAuthToken() {
   if (getLobsterBrandMark() === 'bihuo') localStorage.removeItem('token');
 }
 function setLobsterBrandMark(mark) {
+  if (lobsterBrandingUnavailable()) return '';
   var next = normalizeLobsterBrandMark(mark);
   window.__LOBSTER_BRAND_MARK = next;
   if (document && document.documentElement) {

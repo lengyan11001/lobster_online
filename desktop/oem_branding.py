@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import re
+import socket
+import ssl
 import time
 import urllib.parse
 import urllib.error
@@ -22,6 +24,9 @@ SAFE_ASSET_SUFFIXES = {".exe", ".ico", ".jpeg", ".jpg", ".png", ".webp"}
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_ASSET_BYTES = 16 * 1024 * 1024
 DEFAULT_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
+_NETWORK_RETRY_ATTEMPTS = 3
+_NETWORK_RETRY_BACKOFF_SECONDS = 0.75
+_RETRYABLE_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
 class OemBrandingError(RuntimeError):
@@ -43,29 +48,75 @@ def _read_limited(response, limit: int) -> bytes:
     return data
 
 
-def _fetch_json(url: str, timeout: float) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": "LobsterDesktop/OEM-1.0"})
+def _ssl_context() -> ssl.SSLContext:
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            data = json.loads(_read_limited(response, MAX_MANIFEST_BYTES).decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            body = json.loads(exc.read(MAX_MANIFEST_BYTES).decode("utf-8", errors="replace"))
-            detail = str(body.get("detail") or "").strip() if isinstance(body, dict) else ""
-        except (OSError, ValueError):
-            detail = ""
-        raise OemBrandingError(detail or f"OEM server returned HTTP {exc.code}") from exc
+        import certifi
+
+        ca_file = Path(certifi.where())
+        if ca_file.is_file():
+            return ssl.create_default_context(cafile=str(ca_file))
+    except (ImportError, OSError):
+        pass
+    return ssl.create_default_context()
+
+
+def _urlopen_direct(request: urllib.request.Request, timeout: float):
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=_ssl_context()),
+    )
+    return opener.open(request, timeout=timeout)
+
+
+def _network_error_message(exc: BaseException) -> str:
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, (ssl.SSLError, ssl.CertificateError)) or "CERTIFICATE_VERIFY_FAILED" in str(reason):
+        return "OEM 服务器 HTTPS 证书校验失败，请确认系统时间正确后重试"
+    if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason).lower():
+        return "读取 OEM 品牌配置超时，请检查网络后重试"
+    return f"无法连接 OEM 服务器：{reason}"
+
+
+def _fetch_json_once(url: str, timeout: float) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers={"User-Agent": "LobsterDesktop/OEM-1.0"})
+    with _urlopen_direct(request, timeout=timeout) as response:
+        data = json.loads(_read_limited(response, MAX_MANIFEST_BYTES).decode("utf-8"))
     if not isinstance(data, dict):
         raise OemBrandingError("OEM manifest must be an object")
     return data
 
 
-def _download_asset(url: str, target: Path, expected_size: int, expected_sha256: str) -> None:
+def _http_error_message(exc: urllib.error.HTTPError) -> str:
+    try:
+        body = json.loads(exc.read(MAX_MANIFEST_BYTES).decode("utf-8", errors="replace"))
+        detail = str(body.get("detail") or "").strip() if isinstance(body, dict) else ""
+    except (OSError, ValueError):
+        detail = ""
+    return detail or f"OEM server returned HTTP {exc.code}"
+
+
+def _fetch_json(url: str, timeout: float) -> dict[str, Any]:
+    last_error: BaseException | None = None
+    for attempt in range(_NETWORK_RETRY_ATTEMPTS):
+        try:
+            return _fetch_json_once(url, timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _RETRYABLE_HTTP_CODES:
+                raise OemBrandingError(_http_error_message(exc)) from exc
+            last_error = exc
+        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+            last_error = exc
+        if attempt + 1 < _NETWORK_RETRY_ATTEMPTS:
+            time.sleep(_NETWORK_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    raise OemBrandingError(_network_error_message(last_error or RuntimeError("unknown network error"))) from last_error
+
+
+def _download_asset_once(url: str, target: Path, expected_size: int, expected_sha256: str) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "LobsterDesktop/OEM-1.0"})
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(f".{target.name}.{os.getpid()}.part")
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with _urlopen_direct(request, timeout=20) as response:
             data = _read_limited(response, min(MAX_ASSET_BYTES, expected_size + 1))
         if len(data) != expected_size:
             raise OemBrandingError(f"OEM asset size mismatch: {target.name}")
@@ -75,6 +126,25 @@ def _download_asset(url: str, target: Path, expected_size: int, expected_sha256:
         os.replace(partial, target)
     finally:
         partial.unlink(missing_ok=True)
+
+
+def _download_asset(url: str, target: Path, expected_size: int, expected_sha256: str) -> None:
+    last_error: BaseException | None = None
+    for attempt in range(_NETWORK_RETRY_ATTEMPTS):
+        try:
+            _download_asset_once(url, target, expected_size, expected_sha256)
+            return
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _RETRYABLE_HTTP_CODES:
+                raise OemBrandingError(_http_error_message(exc)) from exc
+            last_error = exc
+        except (OemBrandingError, urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+            last_error = exc
+        if attempt + 1 < _NETWORK_RETRY_ATTEMPTS:
+            time.sleep(_NETWORK_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    if isinstance(last_error, OemBrandingError) and not isinstance(last_error, (TimeoutError, socket.timeout)):
+        raise last_error
+    raise OemBrandingError(_network_error_message(last_error or RuntimeError("unknown network error"))) from last_error
 
 
 def _cache_record_path(root: Path, code: str) -> Path:

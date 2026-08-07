@@ -2116,7 +2116,7 @@ function _assetOpenWorkspace(view) {
   var openers = {
     'image-composer-studio': '_openImageComposerStudioView',
     'seedance-tvc-studio': '_openSeedanceTvcStudioView',
-    'hifly-digital-human': '_openHiflyDigitalHumanView',
+    'shanjian-digital-human': '_openShanjianDigitalHumanView',
     'wechat-article': '_openWechatArticleView',
     'ip-content-studio': '_openIpContentStudioView'
   };
@@ -2186,11 +2186,11 @@ function _assetOpenVideoWorkbench(asset, includeReference) {
 function _assetOpenTalkingVideo(asset) {
   var script = _assetContentText(asset);
   if (!script) return Promise.reject(new Error('当前内容没有可用于口播的正文'));
-  return _assetOpenWorkspace('hifly-digital-human').then(function() {
-    return _assetWaitForElement('hiflyScriptInput');
+  return _assetOpenWorkspace('shanjian-digital-human').then(function() {
+    return _assetWaitForElement('shanjianScriptInput');
   }).then(function() {
-    _assetSetField('hiflyScriptInput', script);
-    _assetSetField('hiflyTitleInput', String(asset.title || '数字人口播').slice(0, 20));
+    _assetSetField('shanjianScriptInput', script);
+    _assetSetField('shanjianTitleInput', String(asset.title || '数字人口播').slice(0, 20));
   });
 }
 
@@ -2239,15 +2239,15 @@ function _assetFetchMediaFile(asset) {
 function _assetOpenAvatarClone(asset) {
   var mediaType = String(asset.media_type || '').toLowerCase();
   if (['image', 'video'].indexOf(mediaType) < 0) return Promise.reject(new Error('只有图片或视频可以生成数字人'));
-  return Promise.all([_assetOpenWorkspace('hifly-digital-human'), _assetFetchMediaFile(asset)]).then(function(results) {
+  return Promise.all([_assetOpenWorkspace('shanjian-digital-human'), _assetFetchMediaFile(asset)]).then(function(results) {
     var file = results[1];
-    return _assetWaitForElement('hiflyOpenAvatarCreateBtn').then(function(openButton) {
+    return _assetWaitForElement('shanjianOpenAvatarCreateBtn').then(function(openButton) {
       openButton.click();
-      var modeButton = document.querySelector('[data-avatar-mode="' + mediaType + '"]');
+      var modeButton = document.querySelector('#content-shanjian-digital-human [data-avatar-mode="' + mediaType + '"]');
       if (!modeButton) throw new Error('数字人分身入口加载失败');
       modeButton.click();
-      var inputId = mediaType === 'video' ? 'hiflyAvatarVideoFile' : 'hiflyAvatarImageFile';
-      var nameId = mediaType === 'video' ? 'hiflyAvatarVideoName' : 'hiflyAvatarImageName';
+      var inputId = mediaType === 'video' ? 'shanjianAvatarVideoFile' : 'shanjianAvatarImageFile';
+      var nameId = mediaType === 'video' ? 'shanjianAvatarVideoName' : 'shanjianAvatarImageName';
       return _assetWaitForElement(inputId).then(function(input) {
         var transfer = new DataTransfer();
         transfer.items.add(file);

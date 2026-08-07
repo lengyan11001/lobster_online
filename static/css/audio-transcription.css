@@ -57,6 +57,7 @@
 .at-progress { margin-top: 14px; padding: 11px 12px; border: 1px solid var(--at-line); border-radius: 8px; background: var(--at-soft); color: var(--at-muted); font-size: 12px; }
 .at-progress-track { height: 5px; margin-top: 8px; overflow: hidden; border-radius: 3px; background: #dfe5ed; }
 .at-progress-track i { display: block; height: 100%; border-radius: inherit; background: #0f8f7a; }
+.at-local-upload-error { margin-top: 6px; color: #b42318; font-size: 12px; line-height: 1.5; }
 .at-audio-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 16px; margin-top: 12px; padding: 12px; border: 1px solid var(--at-line); border-radius: 8px; background: #fff; }
 .at-audio-row strong { font-size: 13px; font-weight: 500; }
 .at-audio-row audio { width: 100%; min-width: 0; }

@@ -10,11 +10,11 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api.health import router as health_router
-from .api.branding import router as branding_router
+from .api.branding import render_index_html, router as branding_router
 from .api.auth import router as auth_router, get_password_hash
 from .api.chat import router as chat_router
 from .api.workbench_chat import router as workbench_chat_router
@@ -28,6 +28,7 @@ from .api.openclaw_memory import router as openclaw_memory_router
 from .api.personal_settings import router as personal_settings_router
 from .api.openclaw_skill_chat import router as openclaw_skill_chat_router
 from .api.h5_chat_channel import router as h5_chat_channel_router
+from .api.audio_transcription_local import router as audio_transcription_local_router
 from .api.custom_config import router as custom_config_router
 from .api.billing import router as billing_router
 from .api.consumption_accounts import router as consumption_accounts_router
@@ -1077,6 +1078,7 @@ def create_app() -> FastAPI:
     app.include_router(personal_settings_router, prefix="")
     app.include_router(openclaw_skill_chat_router, prefix="")
     app.include_router(h5_chat_channel_router, prefix="")
+    app.include_router(audio_transcription_local_router, prefix="")
     app.include_router(custom_config_router, prefix="")
     app.include_router(billing_router, prefix="")
     app.include_router(consumption_accounts_router, prefix="")
@@ -1180,9 +1182,12 @@ def create_app() -> FastAPI:
             )
 
         @app.get("/", include_in_schema=False)
-        def index():
-            return FileResponse(
-                static_dir / "index.html",
+        def index(request: Request):
+            index_path = static_dir / "index.html"
+            template = index_path.read_text(encoding="utf-8")
+            rendered = render_index_html(template, request.query_params.get("brand", ""))
+            return HTMLResponse(
+                content=rendered,
                 headers={
                     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                     "Pragma": "no-cache",

@@ -38,6 +38,11 @@ CONFIRM_CLOSE_BODY_TEMPLATE = (
     "\u5982\u679c\u6b63\u5728\u5168\u5c4f\u9884\u89c8\u89c6\u9891\uff0c"
     "\u53ef\u4ee5\u5148\u70b9\u51fb\u300c\u9000\u51fa\u5168\u5c4f\u300d\u6216\u6309 Esc\u3002"
 )
+BLANK_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title></title></head>
+<body></body>
+</html>"""
 LOADING_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -193,12 +198,9 @@ def resolve_root() -> Path:
 
 ROOT = resolve_root()
 LOG_PATH = ROOT / "desktop_launcher.log"
-APP_ICON_PATH = ROOT / "static" / "bihu_box.ico"
-LOADING_MARK_PATH = ROOT / "static" / "bihu_64.png"
-_ACTIVE_DESKTOP_BRANDING: dict[str, object] = {
-    "mark": DEFAULT_BRAND_MARK,
-    "document_title": DEFAULT_WINDOW_TITLE,
-}
+APP_ICON_PATH: Path | None = None
+LOADING_MARK_PATH: Path | None = None
+_ACTIVE_DESKTOP_BRANDING: dict[str, object] = {}
 _STARTUP_STATUS_LOCK = threading.Lock()
 _STARTUP_STATUS: dict[str, object] = {
     "stage": "prepare",
@@ -319,7 +321,7 @@ def is_truthy_env_value(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "overseas", "海外"}
 
 
-def _desktop_asset_path(root: Path, value: object, fallback: Path) -> Path:
+def _desktop_asset_path(root: Path, value: object, fallback: Path | None = None) -> Path | None:
     relative = str(value or "").strip().replace("\\", "/").lstrip("/")
     if not relative:
         return fallback
@@ -362,13 +364,18 @@ def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
         remote_profile = resolve_factory_oem_branding(root, configured_oem_code, server_base)
         if remote_profile:
             return remote_profile
-        log(f"OEM branding unavailable code={configured_oem_code}; using bundled default brand")
-    mark = requested_mark if requested_mark in marks else default_mark
-    if mark not in marks and DEFAULT_BRAND_MARK in marks:
-        mark = DEFAULT_BRAND_MARK
+        log(f"OEM branding unavailable code={configured_oem_code}; keeping desktop branding blank")
+        return {"mark": "", "_branding_unavailable": True, "_oem_code": configured_oem_code}
+    mark = requested_mark if requested_mark in marks else ""
+    if not mark:
+        log(f"desktop branding unavailable requested_mark={requested_mark!r}; keeping desktop branding blank")
+        return {"mark": "", "_branding_unavailable": True}
     config = marks.get(mark) if isinstance(marks.get(mark), dict) else {}
+    if not config:
+        log(f"desktop branding unavailable mark={mark!r}; keeping desktop branding blank")
+        return {"mark": "", "_branding_unavailable": True}
     profile = dict(config)
-    profile["mark"] = mark or DEFAULT_BRAND_MARK
+    profile["mark"] = mark
     return profile
 
 
@@ -381,12 +388,10 @@ def configure_desktop_branding() -> dict[str, object]:
     APP_ICON_PATH = _desktop_asset_path(
         ROOT,
         install.get("desktop_ico"),
-        ROOT / "static" / "bihu_box.ico",
     )
     LOADING_MARK_PATH = _desktop_asset_path(
         ROOT,
         icons.get("loading_mark") or icons.get("apple_touch") or icons.get("logo_mark"),
-        ROOT / "static" / "bihu_64.png",
     )
     _ACTIVE_DESKTOP_BRANDING = profile
     return profile
@@ -431,7 +436,7 @@ def refresh_oem_desktop_shortcut(branding: dict[str, object]) -> None:
 def configure_windows_app_identity(mark: str) -> None:
     if os.name != "nt":
         return
-    safe_mark = re.sub(r"[^a-z0-9_-]+", "", str(mark or DEFAULT_BRAND_MARK).strip().lower()) or DEFAULT_BRAND_MARK
+    safe_mark = re.sub(r"[^a-z0-9_-]+", "", str(mark or "lobster").strip().lower()) or "lobster"
     app_id = f"BHZN.LobsterOnline.{safe_mark}"
     try:
         setter = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
@@ -449,9 +454,11 @@ def desktop_brand_title(
     branding: dict[str, object] | None = None,
 ) -> str:
     explicit = read_env_value("LOBSTER_DESKTOP_TITLE", "").strip()
+    profile = branding or _ACTIVE_DESKTOP_BRANDING
+    if not profile or profile.get("_branding_unavailable"):
+        return ""
     if explicit:
         return explicit
-    profile = branding or _ACTIVE_DESKTOP_BRANDING
     configured = str(profile.get("document_title") or "").strip()
     if str(profile.get("mark") or DEFAULT_BRAND_MARK) != DEFAULT_BRAND_MARK and configured:
         return configured
@@ -459,7 +466,7 @@ def desktop_brand_title(
         return OVERSEAS_WINDOW_TITLE
     if configured:
         return configured
-    return default
+    return ""
 
 
 def load_env_file(path: Path, env: dict[str, str], *, override: bool = True) -> list[str]:
@@ -1144,16 +1151,18 @@ class DesktopApi:
 
 
 def desktop_loading_html(url: str, title: str) -> str:
+    if not _ACTIVE_DESKTOP_BRANDING or _ACTIVE_DESKTOP_BRANDING.get("_branding_unavailable"):
+        return BLANK_HTML
     match = re.match(r"^(https?://[^/]+)", url)
     base = match.group(1) if match else "http://127.0.0.1:8000"
-    mark_src = f"{base}/static/bihu_64.png"
+    mark_src = "data:,"
     try:
-        if LOADING_MARK_PATH.is_file():
+        if LOADING_MARK_PATH and LOADING_MARK_PATH.is_file():
             data = base64.b64encode(LOADING_MARK_PATH.read_bytes()).decode("ascii")
             mark_src = f"data:image/png;base64,{data}"
     except Exception as exc:
         log(f"load desktop loading mark failed: {exc}")
-    safe_title = escape(title or DEFAULT_WINDOW_TITLE)
+    safe_title = escape(title or "")
     return LOADING_HTML.replace("__LOADING_MARK__", mark_src).replace("__APP_TITLE__", safe_title)
 
 
@@ -1296,34 +1305,34 @@ class NativeLoadingWindow:
             self._font_title = gdi32.CreateFontW(32, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, "Microsoft YaHei")
             self._font_text = gdi32.CreateFontW(20, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Microsoft YaHei")
             hicon = None
-            if SHOW_WINDOW_TITLEBAR_ICON and APP_ICON_PATH.is_file():
+            if SHOW_WINDOW_TITLEBAR_ICON and APP_ICON_PATH and APP_ICON_PATH.is_file():
                 hicon = user32.LoadImageW(None, str(APP_ICON_PATH), IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
             mark_icon = None
-            if LOADING_MARK_PATH.is_file():
+            if LOADING_MARK_PATH and LOADING_MARK_PATH.is_file():
                 mark_icon = user32.LoadImageW(None, str(LOADING_MARK_PATH), IMAGE_BITMAP, 64, 64, LR_LOADFROMFILE)
 
             def paint(hwnd, hdc):
                 rect = wt.RECT()
                 user32.GetClientRect(hwnd, ctypes.byref(rect))
                 user32.FillRect(hdc, ctypes.byref(rect), bg_brush)
-                if mark_icon:
+                if _ACTIVE_DESKTOP_BRANDING and not _ACTIVE_DESKTOP_BRANDING.get("_branding_unavailable") and mark_icon:
                     memdc = gdi32.CreateCompatibleDC(hdc)
                     old_bitmap = gdi32.SelectObject(memdc, mark_icon)
                     gdi32.SetStretchBltMode(hdc, 4)
                     gdi32.StretchBlt(hdc, 32, 34, 40, 40, memdc, 0, 0, 64, 64, 0x00CC0020)
                     gdi32.SelectObject(memdc, old_bitmap)
                     gdi32.DeleteDC(memdc)
-                elif hicon:
+                elif _ACTIVE_DESKTOP_BRANDING and not _ACTIVE_DESKTOP_BRANDING.get("_branding_unavailable") and hicon:
                     user32.DrawIconEx(hdc, 32, 34, hicon, 40, 40, 0, None, DI_NORMAL)
                 gdi32.SetBkMode(hdc, TRANSPARENT)
                 title_rect = wt.RECT(88, 28, 486, 76)
                 text_rect = wt.RECT(34, 104, 486, 148)
-                if self._font_title:
+                if _ACTIVE_DESKTOP_BRANDING and not _ACTIVE_DESKTOP_BRANDING.get("_branding_unavailable") and self._font_title:
                     old_font = gdi32.SelectObject(hdc, self._font_title)
                     gdi32.SetTextColor(hdc, 0x00102033)
                     user32.DrawTextW(hdc, self.title, -1, ctypes.byref(title_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
                     gdi32.SelectObject(hdc, old_font)
-                if self._font_text:
+                if _ACTIVE_DESKTOP_BRANDING and not _ACTIVE_DESKTOP_BRANDING.get("_branding_unavailable") and self._font_text:
                     old_font = gdi32.SelectObject(hdc, self._font_text)
                     gdi32.SetTextColor(hdc, 0x00526173)
                     user32.DrawTextW(hdc, "正在加载本机服务，请稍候...", -1, ctypes.byref(text_rect), DT_LEFT | DT_SINGLELINE | DT_VCENTER)
@@ -1559,7 +1568,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             debug=False,
             private_mode=False,
             storage_path=str(ROOT / "browser_data" / "desktop_webview"),
-            icon=str(APP_ICON_PATH) if APP_ICON_PATH.is_file() else None,
+            icon=str(APP_ICON_PATH) if APP_ICON_PATH and APP_ICON_PATH.is_file() else None,
         )
         return True, runtime.get("backend_proc") if isinstance(runtime.get("backend_proc"), subprocess.Popen) else None, runtime.get("mcp_proc") if isinstance(runtime.get("mcp_proc"), subprocess.Popen) else None
     except Exception as exc:
@@ -1578,7 +1587,7 @@ def main() -> int:
     args = parser.parse_args()
 
     branding = configure_desktop_branding()
-    brand_mark = str(branding.get("mark") or DEFAULT_BRAND_MARK)
+    brand_mark = str(branding.get("mark") or "")
     configure_windows_app_identity(brand_mark)
     if branding.get("_oem_code"):
         refresh_oem_desktop_shortcut(branding)
@@ -1597,6 +1606,10 @@ def main() -> int:
         f"&brand={brand_mark}&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
     )
     env = build_env()
+    if branding.get("_branding_unavailable"):
+        # Do not let the backend reconstruct the bundled/default brand after
+        # the launcher has failed to resolve the configured OEM profile.
+        env["LOBSTER_BRANDING_UNAVAILABLE"] = "1"
     oem_code = str(branding.get("_oem_code") or "").strip()
     if oem_code:
         env["LOBSTER_BRAND_MARK"] = brand_mark
@@ -1608,7 +1621,7 @@ def main() -> int:
     env["MCP_PORT"] = str(mcp_port)
 
     log(
-        f"launcher root={ROOT} brand={brand_mark} title={title!r} "
+        f"launcher root={ROOT} brand={brand_mark or '<blank>'} title={title!r} "
         f"icon={APP_ICON_PATH} loading_mark={LOADING_MARK_PATH}"
     )
 

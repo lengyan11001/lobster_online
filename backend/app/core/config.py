@@ -52,6 +52,8 @@ class Settings(BaseSettings):
         return "online"
     """品牌标记：与 static/branding/brands.json 的 marks 键一致（如 bihuo）。桌面快捷方式与首页 logo/文案由该标记决定。"""
     lobster_brand_mark: str = "bihuo"
+    """工厂 OEM 数字编号（如 0100），用于定位已下载的运行时品牌配置。"""
+    lobster_oem_code: Optional[str] = None
     lobster_parent_account: Optional[str] = None
     """安装包默认注册为海外版用户；未设置时默认 False（国内版）。"""
     lobster_is_overseas_user: bool = False

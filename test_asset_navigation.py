@@ -61,6 +61,19 @@ def test_online_content_records_match_h5_actions_and_hide_missing_article_images
     assert ".asset-content-action-menu" in view
 
 
+def test_content_record_digital_human_actions_open_version_2_workbench():
+    publish = (ROOT / "static" / "js" / "publish.js").read_text(encoding="utf-8")
+    action_start = publish.index("function _assetOpenTalkingVideo")
+    action_end = publish.index("function _assetOpenPublish", action_start)
+    action_code = publish[action_start:action_end]
+
+    assert "_assetOpenWorkspace('shanjian-digital-human')" in action_code
+    assert "shanjianScriptInput" in action_code
+    assert "shanjianOpenAvatarCreateBtn" in action_code
+    assert "shanjianAvatarImageFile" in action_code
+    assert "hifly-digital-human" not in action_code
+
+
 def test_skill_store_copy_is_oem_neutral():
     skill = (ROOT / "static" / "js" / "skill.js").read_text(encoding="utf-8")
 
