@@ -1,6 +1,11 @@
+import asyncio
+import io
 from types import SimpleNamespace
 import inspect
 from pathlib import Path
+
+from starlette.datastructures import UploadFile
+from starlette.requests import Request
 
 from backend.app.api import assets
 
@@ -110,17 +115,65 @@ def test_asset_upload_reports_backend_or_network_failure_detail():
     assert "isErr ? 12000 : 4000" in source
 
 
-def test_asset_upload_uses_retried_proxy_independent_cloud_fallback():
+def test_asset_upload_saves_locally_and_defers_public_url_until_use():
     upload_source = inspect.getsource(assets.upload_asset)
     helper_source = inspect.getsource(assets._upload_bytes_to_auth_server)
 
-    assert "_upload_bytes_to_auth_server" in upload_source
-    assert "httpx.AsyncClient(timeout=60.0)" not in upload_source
+    assert "_save_bytes" in upload_source
+    assert "_upload_to_tos" not in upload_source
+    assert "_upload_bytes_to_auth_server" not in upload_source
+    assert '"public_url_status": "deferred_until_use"' in upload_source
+    assert 'source_url=None' in upload_source
     assert "range(1, 4)" in helper_source
     assert "trust_env=False" in helper_source
     assert 'headers["X-Lobster-Brand"] = brand_mark' in helper_source
-    assert "云端上传 HTTP" in upload_source
-    assert "请检查网络或重新登录后重试" in upload_source
+
+    ui_source = (Path(__file__).parent / "static" / "js" / "publish.js").read_text(encoding="utf-8")
+    assert "正在保存到本地素材库" in ui_source
+    assert "本地保存完成" in ui_source
+
+
+def test_asset_upload_returns_after_local_database_save(monkeypatch):
+    saved = []
+
+    class FakeDb:
+        commits = 0
+
+        @staticmethod
+        def in_transaction():
+            return True
+
+        def add(self, row):
+            saved.append(row)
+
+        def commit(self):
+            self.commits += 1
+
+    def fake_save(data, ext):
+        assert data == b"document"
+        assert ext == ".pdf"
+        return "local-asset", "local-asset.pdf", len(data)
+
+    monkeypatch.setattr(assets, "_save_bytes", fake_save)
+    monkeypatch.setattr(assets, "_upload_to_tos", lambda *_args: (_ for _ in ()).throw(AssertionError("must stay local")))
+    request = Request({"type": "http", "method": "POST", "path": "/api/assets/upload", "headers": []})
+    upload = UploadFile(filename="intro.pdf", file=io.BytesIO(b"document"))
+    db = FakeDb()
+
+    result = asyncio.run(
+        assets.upload_asset(
+            request=request,
+            file=upload,
+            current_user=SimpleNamespace(id=7),
+            db=db,
+        )
+    )
+
+    assert result["asset_id"] == "local-asset"
+    assert result["local_only"] is True
+    assert result["source_url"] is None
+    assert saved[0].source_url is None
+    assert saved[0].meta["public_url_status"] == "deferred_until_use"
 
 
 def test_top_navigation_buttons_are_excluded_from_drag_capture():

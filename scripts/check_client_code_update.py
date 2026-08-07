@@ -143,6 +143,7 @@ ALLOWED_DEPS_WHEEL_PREFIX = "deps/wheels/"
 ALLOWED_DEPS_WHEEL_SUFFIXES = (".whl", ".tar.gz")
 
 PPT_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "ppt_runtime_wheels"
+MEMORY_DOCUMENT_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "memory_document_runtime_wheels"
 DOUYIN_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "douyin_runtime_wheels"
 WECHAT_RUNTIME_WHEELS_DIR = ROOT / "scripts" / "wechat_runtime_wheels"
 PPT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
@@ -154,6 +155,14 @@ PPT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
     "rich>=13.0",
     "typer>=0.9.0",
     "openai>=1.0.0",
+)
+MEMORY_DOCUMENT_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
+    "pypdf>=4.0.0",
+    "xlrd>=2.0.1",
+)
+MEMORY_DOCUMENT_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
+    "pypdf",
+    "xlrd",
 )
 DOUYIN_RUNTIME_REQUIREMENTS: tuple[str, ...] = (
     "requests>=2.31.0",
@@ -191,6 +200,17 @@ WECHAT_RUNTIME_IMPORT_CHECKS: tuple[str, ...] = (
     "comtypes",
 )
 RUNTIME_DEPENDENCY_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "memory_document_runtime",
+        "wheel_dirs": (MEMORY_DOCUMENT_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels"),
+        "requirements": MEMORY_DOCUMENT_RUNTIME_REQUIREMENTS,
+        "verify_imports": MEMORY_DOCUMENT_RUNTIME_IMPORT_CHECKS,
+        "trigger_exact": {
+            "backend/app/services/document_text_extractor.py",
+            "scripts/memory_document_runtime_wheels",
+        },
+        "trigger_prefix": ("scripts/memory_document_runtime_wheels/",),
+    },
     {
         "name": "ppt_runtime",
         "wheel_dirs": (PPT_RUNTIME_WHEELS_DIR, ROOT / "deps" / "wheels"),

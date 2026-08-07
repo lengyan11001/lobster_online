@@ -138,6 +138,11 @@ PPT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
     "annotated_types-*.whl",
 )
 
+MEMORY_DOCUMENT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
+    "pypdf-*.whl",
+    "xlrd-*.whl",
+)
+
 DOUYIN_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
     "requests-*.whl",
     "urllib3-*.whl",
@@ -222,6 +227,7 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     ".updates",
     "scripts/_probe",
     "scripts/ppt_runtime_wheels",
+    "scripts/memory_document_runtime_wheels",
     "scripts/douyin_runtime_wheels",
     "static/uploads",
     "static/branding/cache",
@@ -591,6 +597,14 @@ def _prepare_ppt_runtime_wheels(root: Path) -> list[str]:
     return _prepare_runtime_wheels(root, "scripts/ppt_runtime_wheels", PPT_RUNTIME_WHEEL_PATTERNS)
 
 
+def _prepare_memory_document_runtime_wheels(root: Path) -> list[str]:
+    return _prepare_runtime_wheels(
+        root,
+        "scripts/memory_document_runtime_wheels",
+        MEMORY_DOCUMENT_RUNTIME_WHEEL_PATTERNS,
+    )
+
+
 def _prepare_douyin_runtime_wheels(root: Path) -> list[str]:
     return _prepare_runtime_wheels(root, "scripts/douyin_runtime_wheels", DOUYIN_RUNTIME_WHEEL_PATTERNS)
 
@@ -807,6 +821,11 @@ def main() -> int:
         help="打入 scripts/ppt_runtime_wheels，并让新版 updater 离线安装 PPT Master 所需依赖",
     )
     ap.add_argument(
+        "--with-memory-document-runtime-deps",
+        action="store_true",
+        help="打入 PDF/XLS 资料解析依赖，供 Online 离线补齐文档处理能力",
+    )
+    ap.add_argument(
         "--with-douyin-runtime-deps",
         action="store_true",
         help="Pack scripts/douyin_runtime_wheels and let updater install Douyin export dependencies offline",
@@ -869,6 +888,17 @@ def main() -> int:
             "scripts/ppt_runtime_wheels",
             "CLIENT_CODE_VERSION.json",
         )
+    if args.with_memory_document_runtime_deps:
+        copied = _prepare_memory_document_runtime_wheels(root)
+        print(
+            f"[memory-document-runtime] copied {len(copied)} wheels into "
+            "scripts/memory_document_runtime_wheels"
+        )
+        _INCLUDE_RUNTIME_WHEEL_DIRS.add("scripts/memory_document_runtime_wheels")
+        paths_tuple = tuple(p for p in paths_tuple if p != "CLIENT_CODE_VERSION.json") + (
+            "scripts/memory_document_runtime_wheels",
+            "CLIENT_CODE_VERSION.json",
+        )
     if args.with_douyin_runtime_deps:
         copied = _prepare_douyin_runtime_wheels(root)
         print(f"[douyin-runtime] copied {len(copied)} wheels into scripts/douyin_runtime_wheels")
@@ -893,6 +923,8 @@ def main() -> int:
             suffix_parts.append("with_nodejs")
         if args.with_ppt_runtime_deps:
             suffix_parts.append("with_ppt_runtime")
+        if args.with_memory_document_runtime_deps:
+            suffix_parts.append("with_memory_document_runtime")
         if args.with_douyin_runtime_deps:
             suffix_parts.append("with_douyin_runtime")
         if args.with_wechat_runtime_deps:

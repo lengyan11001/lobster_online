@@ -18,7 +18,9 @@ import os
 import random
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -31,6 +33,13 @@ from sqlalchemy import func
 
 from ..core.config import settings
 from ..services.oem_brand_context import configured_brand_mark, with_oem_brand_header
+from ..services.media_edit_exec import find_ffmpeg
+from ..services.document_text_extractor import (
+    SUPPORTED_SUFFIXES,
+    document_parser_runtime_status,
+    extract_document_text,
+    require_document_parser_runtime,
+)
 from ..db import SessionLocal
 from ..models import Asset, PublishAccount
 from ..services import native_wechat_engine
@@ -55,10 +64,20 @@ _BASE_DIR = Path(__file__).resolve().parents[3]
 _DOUYIN_ORIGIN_DIR = _BASE_DIR / "backend" / "douyin_origin"
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
 _H5_CLIENT_COMMAND_PREFIX = "__LOBSTER_H5_CLIENT_COMMAND__"
+_H5_CLIENT_BASE_CAPABILITIES = ("asset_video_split_v1",)
 _active_scheduled_run_ids: set[str] = set()
 _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
+
+
+def _h5_client_capabilities() -> list[str]:
+    capabilities = list(_H5_CLIENT_BASE_CAPABILITIES)
+    ready, _missing = document_parser_runtime_status()
+    if ready:
+        capabilities.append("memory_document_parse_v1")
+        capabilities.append("memory_document_generate_v1")
+    return capabilities
 
 
 def _local_mcp_url() -> str:
@@ -1034,11 +1053,12 @@ async def _complete_cloud_message(
     error: str = "",
     payload: Optional[Dict[str, Any]] = None,
 ) -> None:
-    await client.post(
+    response = await client.post(
         f"{base}/api/h5-chat/messages/{message_id}/complete",
         json={"reply_text": reply_text, "error": error, "payload": payload or {}},
         headers=headers,
     )
+    response.raise_for_status()
 
 
 async def _post_task_event(
@@ -1317,6 +1337,474 @@ def _h5_client_command_payload(content: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else {}
 
 
+def _split_online_video_file(
+    source_path: Path,
+    output_dir: Path,
+    *,
+    segment_seconds: int,
+    max_segments: int,
+) -> List[Path]:
+    ffmpeg = find_ffmpeg()
+    seconds = max(2, min(int(segment_seconds or 3), 10))
+    segment_limit = max(1, min(int(max_segments or 120), 120))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_pattern = output_dir / "segment_%03d.mp4"
+    command = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-t",
+        str(seconds * segment_limit),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-force_key_frames",
+        f"expr:gte(t,n_forced*{seconds})",
+        "-f",
+        "segment",
+        "-segment_time",
+        str(seconds),
+        "-reset_timestamps",
+        "1",
+        str(output_pattern),
+    ]
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=3600,
+            check=False,
+            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("本机视频切片超过 60 分钟，已停止处理") from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "ffmpeg segment failed").strip()[-1000:]
+        raise RuntimeError(f"本机视频切片失败：{detail}")
+    segments = sorted(output_dir.glob("segment_*.mp4"))[:segment_limit]
+    segments = [path for path in segments if path.is_file() and path.stat().st_size > 0]
+    if not segments:
+        raise RuntimeError("本机视频切片失败：没有生成可用片段")
+    return segments
+
+
+async def _download_online_split_source(source_url: str, target: Path) -> int:
+    if not source_url.startswith(("http://", "https://")):
+        raise RuntimeError("切片原视频缺少可下载的公网地址")
+    max_bytes = 4 * 1024 * 1024 * 1024
+    timeout = httpx.Timeout(1800.0, connect=20.0, read=180.0, write=30.0, pool=20.0)
+    total = 0
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+        async with client.stream("GET", source_url) as response:
+            response.raise_for_status()
+            content_length = int(response.headers.get("content-length") or 0)
+            if content_length > max_bytes:
+                raise RuntimeError("原视频超过 4GB，无法在本机执行切片")
+            with target.open("wb") as output:
+                async for chunk in response.aiter_bytes(1024 * 1024):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise RuntimeError("原视频超过 4GB，无法在本机执行切片")
+                    output.write(chunk)
+    if total <= 0:
+        raise RuntimeError("下载到的原视频为空")
+    return total
+
+
+async def _upload_online_split_segment(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    path: Path,
+    *,
+    source_filename: str,
+    split_job_id: str,
+    segment_index: int,
+) -> Dict[str, Any]:
+    with path.open("rb") as stream:
+        response = await cloud.post(
+            f"{base}/api/assets/upload",
+            headers=headers,
+            data={
+                "split_video": "false",
+                "source_upload_filename": source_filename,
+                "video_segment": "true",
+                "segment_index": str(segment_index),
+                "split_job_id": split_job_id,
+            },
+            files={"file": (path.name, stream, "video/mp4")},
+        )
+    if response.status_code >= 400:
+        detail = (response.text or "")[:500]
+        raise RuntimeError(f"第 {segment_index} 段回传素材库失败：HTTP {response.status_code} {detail}")
+    payload = response.json() if response.content else {}
+    if not isinstance(payload, dict) or not payload.get("asset_id"):
+        raise RuntimeError(f"第 {segment_index} 段回传后未返回 asset_id")
+    return payload
+
+
+async def _run_online_video_split_command(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    message_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    source_asset_id = str(payload.get("source_asset_id") or "").strip()
+    source_url = str(payload.get("source_url") or "").strip()
+    source_filename = Path(str(payload.get("source_filename") or "source.mp4")).name
+    segment_seconds = max(2, min(int(payload.get("segment_seconds") or 3), 10))
+    max_segments = max(1, min(int(payload.get("max_segments") or 120), 120))
+    if not source_asset_id or not source_url:
+        raise RuntimeError("Online 切片指令缺少原视频信息")
+
+    suffix = Path(source_filename).suffix.lower()
+    if suffix not in {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv"}:
+        suffix = ".mp4"
+    uploaded: List[Dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="lobster_h5_video_split_") as temp_name:
+        work_dir = Path(temp_name)
+        source_path = work_dir / f"source{suffix}"
+        await _post_cloud_event(
+            cloud,
+            base,
+            headers,
+            message_id,
+            "progress",
+            {"text": "Online 正在下载原视频", "stage": "download"},
+        )
+        download_task = asyncio.create_task(_download_online_split_source(source_url, source_path))
+        while not download_task.done():
+            done, _pending = await asyncio.wait({download_task}, timeout=120.0)
+            if done:
+                break
+            await _post_cloud_event(
+                cloud,
+                base,
+                headers,
+                message_id,
+                "progress",
+                {"text": "Online 仍在下载原视频", "stage": "download", "heartbeat": True},
+            )
+        source_size = await download_task
+        await _post_cloud_event(
+            cloud,
+            base,
+            headers,
+            message_id,
+            "progress",
+            {"text": "Online 正在本机切片", "stage": "split", "source_size": source_size},
+        )
+        split_task = asyncio.create_task(
+            asyncio.to_thread(
+                _split_online_video_file,
+                source_path,
+                work_dir / "segments",
+                segment_seconds=segment_seconds,
+                max_segments=max_segments,
+            )
+        )
+        while not split_task.done():
+            done, _pending = await asyncio.wait({split_task}, timeout=120.0)
+            if done:
+                break
+            await _post_cloud_event(
+                cloud,
+                base,
+                headers,
+                message_id,
+                "progress",
+                {"text": "Online 仍在本机切片", "stage": "split", "heartbeat": True},
+            )
+        segments = await split_task
+        try:
+            for index, segment_path in enumerate(segments, start=1):
+                uploaded.append(
+                    await _upload_online_split_segment(
+                        cloud,
+                        base,
+                        headers,
+                        segment_path,
+                        source_filename=source_filename,
+                        split_job_id=message_id,
+                        segment_index=index,
+                    )
+                )
+                await _post_cloud_event(
+                    cloud,
+                    base,
+                    headers,
+                    message_id,
+                    "progress",
+                    {
+                        "text": f"正在回传切片 {index}/{len(segments)}",
+                        "stage": "upload",
+                        "current": index,
+                        "total": len(segments),
+                    },
+                )
+        except Exception:
+            for item in uploaded:
+                if item.get("deduplicated"):
+                    continue
+                asset_id = str(item.get("asset_id") or "").strip()
+                if asset_id:
+                    try:
+                        await cloud.delete(
+                            f"{base}/api/assets/{asset_id}/online-split-segment",
+                            headers=headers,
+                        )
+                    except Exception:
+                        pass
+            raise
+
+    return {
+        "mode": "client_command",
+        "action": "split_uploaded_video_asset",
+        "source_asset_id": source_asset_id,
+        "segment_seconds": segment_seconds,
+        "total": len(uploaded),
+        "assets": uploaded,
+    }
+
+
+async def _cleanup_online_split_source(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    source_asset_id: str,
+) -> None:
+    try:
+        cleanup = await cloud.delete(
+            f"{base}/api/assets/{source_asset_id}/online-split-source",
+            headers=headers,
+        )
+        if cleanup.status_code >= 400:
+            logger.warning(
+                "[H5-CHAT] online split source cleanup failed asset_id=%s HTTP=%s body=%s",
+                source_asset_id,
+                cleanup.status_code,
+                (cleanup.text or "")[:300],
+            )
+    except Exception as exc:
+        logger.warning("[H5-CHAT] online split source cleanup failed asset_id=%s: %s", source_asset_id, exc)
+
+
+async def _download_online_memory_source(source_url: str, target: Path) -> bytes:
+    if not source_url.startswith(("http://", "https://")):
+        raise RuntimeError("资料解析原文件缺少可下载的公网地址")
+    max_bytes = 30 * 1024 * 1024
+    timeout = httpx.Timeout(300.0, connect=20.0, read=120.0, write=30.0, pool=20.0)
+    chunks: List[bytes] = []
+    total = 0
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+        async with client.stream("GET", source_url) as response:
+            response.raise_for_status()
+            content_length = int(response.headers.get("content-length") or 0)
+            if content_length > max_bytes:
+                raise RuntimeError("资料文件超过 30MB，请压缩或拆分后上传")
+            async for chunk in response.aiter_bytes(1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise RuntimeError("资料文件超过 30MB，请压缩或拆分后上传")
+                chunks.append(chunk)
+    data = b"".join(chunks)
+    if not data:
+        raise RuntimeError("下载到的资料文件为空")
+    target.write_bytes(data)
+    return data
+
+
+async def _cleanup_online_memory_source(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    source_asset_id: str,
+) -> None:
+    if not source_asset_id:
+        return
+    try:
+        response = await cloud.delete(
+            f"{base}/api/personal-settings/memory-documents/online-upload-source/{source_asset_id}",
+            headers=headers,
+        )
+        if response.status_code >= 400:
+            logger.warning(
+                "[H5-CHAT] online memory source cleanup failed asset_id=%s HTTP=%s body=%s",
+                source_asset_id,
+                response.status_code,
+                (response.text or "")[:300],
+            )
+    except Exception as exc:
+        logger.warning("[H5-CHAT] online memory source cleanup failed asset_id=%s: %s", source_asset_id, exc)
+
+
+async def _run_online_memory_parse_command(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    message_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    source_asset_id = str(payload.get("source_asset_id") or "").strip()
+    source_url = str(payload.get("source_url") or "").strip()
+    source_filename = Path(str(payload.get("source_filename") or "document.txt")).name
+    suffix = Path(source_filename).suffix.lower()
+    if not source_asset_id or not source_url:
+        raise RuntimeError("Online 资料解析指令缺少原文件信息")
+    if suffix not in SUPPORTED_SUFFIXES:
+        raise RuntimeError(f"Online 不支持解析 {suffix or '该'} 格式")
+    with tempfile.TemporaryDirectory(prefix="lobster_h5_memory_parse_") as temp_name:
+        source_path = Path(temp_name) / f"source{suffix}"
+        await _post_cloud_event(
+            cloud,
+            base,
+            headers,
+            message_id,
+            "progress",
+            {"text": "Online 正在下载资料", "stage": "download"},
+        )
+        data = await _download_online_memory_source(source_url, source_path)
+        await _post_cloud_event(
+            cloud,
+            base,
+            headers,
+            message_id,
+            "progress",
+            {"text": "Online 正在本机解析资料", "stage": "parse", "file_size": len(data)},
+        )
+        parse_task = asyncio.create_task(asyncio.to_thread(extract_document_text, data, source_filename))
+        while not parse_task.done():
+            done, _pending = await asyncio.wait({parse_task}, timeout=120.0)
+            if done:
+                break
+            await _post_cloud_event(
+                cloud,
+                base,
+                headers,
+                message_id,
+                "progress",
+                {"text": "Online 仍在本机解析资料", "stage": "parse", "heartbeat": True},
+            )
+        content_text = await parse_task
+    callback = await cloud.post(
+        f"{base}/api/personal-settings/memory-documents/complete-online-upload",
+        headers=headers,
+        json={
+            "message_id": message_id,
+            "source_asset_id": source_asset_id,
+            "filename": source_filename,
+            "title": str(payload.get("title") or source_filename),
+            "notes": str(payload.get("notes") or "IP人设定位上传资料"),
+            "content_text": content_text,
+            "sha256": hashlib.sha256(data).hexdigest(),
+        },
+    )
+    if callback.status_code >= 400:
+        raise RuntimeError(f"资料解析结果回写失败：HTTP {callback.status_code} {(callback.text or '')[:300]}")
+    result = callback.json() if callback.content else {}
+    return {
+        "mode": "client_command",
+        "action": "parse_uploaded_memory_document",
+        "source_asset_id": source_asset_id,
+        "filename": source_filename,
+        "document": result.get("document") if isinstance(result, dict) else None,
+    }
+
+
+async def _run_online_memory_generation_command(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    message_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    raw_sources = payload.get("sources") if isinstance(payload.get("sources"), list) else []
+    sources = [item for item in raw_sources[:12] if isinstance(item, dict)]
+    if not sources:
+        raise RuntimeError("Online 批量资料理解指令没有原文件")
+    parsed_sources: List[Dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="lobster_h5_memory_generate_") as temp_name:
+        work_dir = Path(temp_name)
+        for index, item in enumerate(sources, start=1):
+            asset_id = str(item.get("source_asset_id") or "").strip()
+            source_url = str(item.get("source_url") or "").strip()
+            filename = Path(str(item.get("source_filename") or f"document-{index}.txt")).name
+            suffix = Path(filename).suffix.lower()
+            if not asset_id or not source_url:
+                raise RuntimeError(f"第 {index} 份资料缺少原文件信息")
+            if suffix not in SUPPORTED_SUFFIXES:
+                raise RuntimeError(f"Online 不支持解析 {filename}")
+            source_path = work_dir / f"source_{index:02d}{suffix}"
+            await _post_cloud_event(
+                cloud,
+                base,
+                headers,
+                message_id,
+                "progress",
+                {
+                    "text": f"Online 正在处理资料 {index}/{len(sources)}：{filename}",
+                    "stage": "parse",
+                    "current": index,
+                    "total": len(sources),
+                },
+            )
+            data = await _download_online_memory_source(source_url, source_path)
+            content_text = await asyncio.to_thread(extract_document_text, data, filename)
+            parsed_sources.append(
+                {
+                    "source_asset_id": asset_id,
+                    "filename": filename,
+                    "content_text": content_text,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+    await _post_cloud_event(
+        cloud,
+        base,
+        headers,
+        message_id,
+        "progress",
+        {"text": "资料解析完成，正在生成可审核内容", "stage": "generate"},
+    )
+    callback = await cloud.post(
+        f"{base}/api/personal-settings/memory-documents/complete-online-generation-upload",
+        headers=headers,
+        json={"message_id": message_id, "sources": parsed_sources},
+    )
+    if callback.status_code >= 400:
+        raise RuntimeError(f"资料理解结果回写失败：HTTP {callback.status_code} {(callback.text or '')[:300]}")
+    result = callback.json() if callback.content else {}
+    return {
+        "mode": "client_command",
+        "action": "generate_memory_documents_from_upload",
+        "source_asset_ids": [item["source_asset_id"] for item in parsed_sources],
+        "documents": result.get("documents") if isinstance(result, dict) else {},
+        "doc_types": result.get("doc_types") if isinstance(result, dict) else [],
+        "source_images": result.get("source_images") if isinstance(result, dict) else [],
+        "file_results": result.get("file_results") if isinstance(result, dict) else [],
+    }
+
+
 async def _run_client_command(
     cloud: httpx.AsyncClient,
     base: str,
@@ -1333,6 +1821,8 @@ async def _run_client_command(
     if not payload:
         await _complete_cloud_message(cloud, base, headers, message_id, error="invalid client command")
         return
+    split_result_ready = False
+    memory_result_ready = False
     try:
         if action == "native_wechat_auto_reply_config":
             account_id = str(payload.get("account_id") or "pc-wechat-default").strip() or "pc-wechat-default"
@@ -1393,8 +1883,74 @@ async def _run_client_command(
                 payload={"mode": "client_command", "action": action, "config": cfg},
             )
             return
+        if action == "split_uploaded_video_asset":
+            result = await _run_online_video_split_command(cloud, base, headers, message_id, payload)
+            split_result_ready = True
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                reply_text=f"视频切片完成，共生成 {result['total']} 段",
+                payload=result,
+            )
+            await _cleanup_online_split_source(
+                cloud,
+                base,
+                headers,
+                str(result.get("source_asset_id") or ""),
+            )
+            return
+        if action == "parse_uploaded_memory_document":
+            require_document_parser_runtime(refresh=True)
+            result = await _run_online_memory_parse_command(cloud, base, headers, message_id, payload)
+            memory_result_ready = True
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                reply_text=f"资料解析完成：{result['filename']}",
+                payload=result,
+            )
+            await _cleanup_online_memory_source(
+                cloud,
+                base,
+                headers,
+                str(result.get("source_asset_id") or ""),
+            )
+            return
+        if action == "generate_memory_documents_from_upload":
+            require_document_parser_runtime(refresh=True)
+            result = await _run_online_memory_generation_command(cloud, base, headers, message_id, payload)
+            memory_result_ready = True
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                reply_text="资料理解完成，请审核生成内容",
+                payload=result,
+            )
+            for source_asset_id in result.get("source_asset_ids") or []:
+                await _cleanup_online_memory_source(cloud, base, headers, str(source_asset_id or ""))
+            return
         raise RuntimeError(f"unsupported client command: {action or '-'}")
     except Exception as exc:
+        if action == "split_uploaded_video_asset" and not split_result_ready:
+            source_asset_id = str((payload or {}).get("source_asset_id") or "").strip()
+            if source_asset_id:
+                await _cleanup_online_split_source(cloud, base, headers, source_asset_id)
+        if action in {"parse_uploaded_memory_document", "generate_memory_documents_from_upload"} and not memory_result_ready:
+            source_asset_ids = [str((payload or {}).get("source_asset_id") or "").strip()]
+            if action == "generate_memory_documents_from_upload":
+                source_asset_ids = [
+                    str(item.get("source_asset_id") or "").strip()
+                    for item in ((payload or {}).get("sources") or [])
+                    if isinstance(item, dict)
+                ]
+            for source_asset_id in source_asset_ids:
+                await _cleanup_online_memory_source(cloud, base, headers, source_asset_id)
         logger.exception("[H5-CHAT] client command failed message_id=%s action=%s", message_id, action)
         await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "client command failed")
 
@@ -7372,7 +7928,7 @@ async def h5_chat_poll_loop() -> None:
     last_h5_poll_at = 0.0
     last_task_poll_at = 0.0
     last_publish_poll_at = 0.0
-    max_h5_concurrency = _channel_concurrency("LOBSTER_H5_CHAT_CONCURRENCY", 1, 5)
+    max_h5_concurrency = _channel_concurrency("LOBSTER_H5_CHAT_CONCURRENCY", 2, 5)
     max_task_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_TASK_CONCURRENCY", 2, 10)
     max_publish_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_PUBLISH_CONCURRENCY", 1, 3)
     active_items: set[asyncio.Task] = set()
@@ -7413,6 +7969,7 @@ async def h5_chat_poll_loop() -> None:
                             "display_name": "local-online",
                             "publish_accounts": _build_publish_account_snapshot(jwt_token),
                             "wechat_contacts": _build_native_wechat_contact_snapshot(),
+                            "capabilities": _h5_client_capabilities(),
                         },
                         headers=headers,
                     )

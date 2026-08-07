@@ -3876,7 +3876,7 @@ function bindAssetLibraryUi() {
     });
   }
 
-  // Upload local files（仅火山链接算成功，上传中灰色）
+  // Upload local files; prepare a public URL only when a later action needs one.
   assetUploadFile = document.getElementById('assetUploadFile');
   assetUploadLabel = assetUploadFile ? assetUploadFile.closest('label') : null;
   if (assetUploadFile && !assetUploadFile._assetLibraryBound) {
@@ -3885,9 +3885,9 @@ function bindAssetLibraryUi() {
     var files = assetUploadFile.files;
     if (!files || !files.length) return;
     var total = files.length;
-    var done = 0, failed = 0, noTos = 0;
+    var done = 0, failed = 0;
     var uploadErrors = [];
-    setAssetUploadState(true, '正在上传到火山 ' + total + ' 个文件…');
+    setAssetUploadState(true, '正在保存到本地素材库 ' + total + ' 个文件…');
     Array.from(files).forEach(function(f, idx) {
       var fd = new FormData();
       fd.append('file', f);
@@ -3911,12 +3911,10 @@ function bindAssetLibraryUi() {
           });
         })
         .then(function(d) {
-          if (d && d.source_url && (d.source_url.indexOf('http') === 0)) {
-            done++;
-          } else if (d && d.asset_id && d.media_type === 'audio') {
+          if (d && d.asset_id) {
             done++;
           } else {
-            noTos++;
+            throw new Error('本地保存未返回素材编号');
           }
         })
         .catch(function(err) {
@@ -3928,23 +3926,22 @@ function bindAssetLibraryUi() {
           uploadErrors.push((f.name || ('文件' + (idx + 1))) + '：' + reason.slice(0, 300));
         })
         .finally(function() {
-          var finished = done + noTos + failed;
+          var finished = done + failed;
           if (finished === total) {
             assetUploadFile.value = '';
             setAssetUploadState(false, '');
-            var msg = '上传完成: ' + done + ' 已同步火山';
-            if (noTos) msg += ', ' + noTos + ' 未同步火山（失败）';
-            if (failed) msg += ', ' + failed + ' 请求失败';
+            var msg = '本地保存完成: ' + done + ' 个文件';
+            if (failed) msg += ', ' + failed + ' 个失败';
             if (uploadErrors.length) {
               msg += '；失败原因：' + uploadErrors.slice(0, 2).join('；');
               if (uploadErrors.length > 2) msg += '；另有 ' + (uploadErrors.length - 2) + ' 个文件失败';
             }
-            _assetMsgShow(msg, noTos > 0 || failed > 0);
-            if (done || noTos) _setAssetOriginTab('user_upload');
+            _assetMsgShow(msg, failed > 0);
+            if (done) _setAssetOriginTab('user_upload');
             loadCreativeCandidateGroups();
             loadAssets(_currentAssetSearchQuery(), { force: true, skipCloudSync: true });
           } else {
-            setAssetUploadState(true, '正在上传到火山 ' + finished + '/' + total + '…');
+            setAssetUploadState(true, '正在保存到本地素材库 ' + finished + '/' + total + '…');
           }
         });
     });

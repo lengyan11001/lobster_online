@@ -171,3 +171,34 @@ def test_browser_brand_interceptor_covers_chat_and_api_requests():
     assert "installBrandRequestContext" in script
     assert "(?:api|auth|chat|skills|capabilities)" in script
     assert "headers.set('X-Lobster-Brand', getLobsterBrandMark())" in script
+
+
+def test_memory_document_runtime_is_packable_and_installed_by_updater():
+    assert packer.MEMORY_DOCUMENT_RUNTIME_WHEEL_PATTERNS == (
+        "pypdf-*.whl",
+        "xlrd-*.whl",
+    )
+    group = next(
+        item for item in updater.RUNTIME_DEPENDENCY_GROUPS
+        if item.get("name") == "memory_document_runtime"
+    )
+    assert group["requirements"] == ("pypdf>=4.0.0", "xlrd>=2.0.1")
+    assert group["verify_imports"] == ("pypdf", "xlrd")
+    assert updater._should_install_runtime_group(
+        group,
+        ["backend/app/services/document_text_extractor.py"],
+    )
+
+
+def test_memory_document_runtime_packer_collects_both_wheels(tmp_path):
+    wheel_dir = tmp_path / "deps" / "wheels"
+    wheel_dir.mkdir(parents=True)
+    (wheel_dir / "pypdf-6.14.2-py3-none-any.whl").write_bytes(b"pypdf")
+    (wheel_dir / "xlrd-2.0.2-py2.py3-none-any.whl").write_bytes(b"xlrd")
+
+    copied = packer._prepare_memory_document_runtime_wheels(tmp_path)
+
+    assert copied == [
+        "scripts/memory_document_runtime_wheels/pypdf-6.14.2-py3-none-any.whl",
+        "scripts/memory_document_runtime_wheels/xlrd-2.0.2-py2.py3-none-any.whl",
+    ]

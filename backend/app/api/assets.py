@@ -2124,12 +2124,12 @@ async def upload_asset(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    """【步骤1】本地落盘 → 优先 TOS → 否则 upload-temp。两路均失败则删本地文件并 HTTP 503，不写库。"""
-    logger.info("[上传流程-步骤1] 客户端收到上传请求 filename=%s user_id=%s", file.filename, current_user.id if current_user else "N/A")
-    
+    """Save local uploads immediately; public URLs are resolved lazily on use."""
+    logger.info("[素材本地上传] 收到文件 filename=%s user_id=%s", file.filename, current_user.id if current_user else "N/A")
+    if db.in_transaction():
+        db.commit()
     data = await file.read()
     if not data:
-        logger.error("[上传流程-步骤1] 文件为空")
         raise HTTPException(400, detail="文件为空")
 
     name = file.filename or "upload"
@@ -2144,143 +2144,32 @@ async def upload_asset(
 
     ct = (file.content_type or "").strip() or "application/octet-stream"
     if mtype == "image":
-        data, ct = _resize_image_if_needed(data, ext, ct)
-    aid, fname, fsize = _save_bytes(data, ext)
-    logger.info("[上传流程-步骤1] 文件已保存到本地 asset_id=%s filename=%s size=%d media_type=%s", aid, fname, fsize, mtype)
-
-    auth_header = (request.headers.get("Authorization") or "").strip()
-    bearer_token = None
-    if auth_header.lower().startswith("bearer "):
-        bearer_token = auth_header[7:].strip()
-    had_bearer = bool(bearer_token)
-
-    tos_cfg_present = _get_tos_config() is not None
-    temp_http_status: Optional[int] = None
-    temp_body_snip = ""
-    temp_json_err = ""
-    step3_network_err = ""
-
-    # 【步骤2】优先使用 TOS 转存
-    logger.info("[上传流程-步骤2] 开始尝试 TOS 上传 asset_id=%s filename=%s size=%d tos_config_present=%s", aid, fname, fsize, tos_cfg_present)
-    tos_url = _upload_to_tos(data, f"assets/{fname}", ct)
-    if tos_url:
-        logger.info("[上传流程-步骤2] TOS 上传成功 asset_id=%s tos_url=%s", aid, tos_url[:80])
-    else:
-        logger.warning("[上传流程-步骤2] TOS 上传失败或未配置 asset_id=%s tos_config_present=%s", aid, tos_cfg_present)
-
-    # 【步骤3】如果 TOS 失败，上传到服务器临时文件接口
-    public_url = tos_url
-    if not public_url:
-        logger.info("[上传流程-步骤3] TOS 未成功，开始上传到服务器临时文件接口 asset_id=%s", aid)
-        try:
-            public_url, upload_diag = await _upload_bytes_to_auth_server(
-                data,
-                name,
-                ct,
-                request,
-                timeout=60.0,
-            )
-            temp_http_status = upload_diag.get("status_code")
-            temp_body_snip = str(upload_diag.get("body_snip") or "")[:800]
-            step3_network_err = str(upload_diag.get("error") or "")
-            if public_url:
-                logger.info(
-                    "[上传流程-步骤3] 服务器临时文件上传成功 asset_id=%s temp_id=%s storage=%s public_url=%s",
-                    aid,
-                    upload_diag.get("temp_id"),
-                    upload_diag.get("storage"),
-                    public_url[:80],
-                )
-            else:
-                logger.error(
-                    "[上传流程-步骤3] 服务器临时文件上传失败 asset_id=%s diag=%s",
-                    aid,
-                    json.dumps(upload_diag, ensure_ascii=False)[:1000],
-                )
-        except Exception as e:
-            step3_network_err = f"{type(e).__name__}: {e}"
-            logger.error(
-                "[上传流程-步骤3] 请求异常 asset_id=%s err=%s",
-                aid,
-                step3_network_err,
-                exc_info=True,
-            )
-
-    # TOS 与 upload-temp 均未得到公网 URL：不写入库、不返回 asset_id，避免进入图生视频签名链
-    if not tos_url and not public_url:
-        local_path = ASSETS_DIR / fname
-        try:
-            if local_path.exists():
-                local_path.unlink()
-        except Exception as e:
-            logger.warning("[上传流程-失败] 删除本地临时文件异常 asset_id=%s path=%s err=%s", aid, local_path, e)
-        _sb = (get_settings().auth_server_base or "").strip().rstrip("/")
-        logger.error(
-            "[上传流程-失败] 汇总 asset_id=%s reason=NO_PUBLIC_URL tos_ok=%s tos_config_present=%s "
-            "temp_http=%s had_bearer_token=%s server_base=%s temp_json_err=%s step3_network_err=%s temp_body_snip=%s",
-            aid,
-            bool(tos_url),
-            tos_cfg_present,
-            temp_http_status,
-            had_bearer,
-            _sb,
-            temp_json_err or "-",
-            step3_network_err or "-",
-            (temp_body_snip[:500] + ("…" if len(temp_body_snip) > 500 else "")) if temp_body_snip else "-",
-        )
-        failure_parts = []
-        if temp_http_status:
-            failure_parts.append(f"云端上传 HTTP {temp_http_status}")
-        if step3_network_err:
-            failure_parts.append(step3_network_err[:240])
-        if temp_body_snip:
-            failure_parts.append(temp_body_snip[:240])
-        if not failure_parts:
-            failure_parts.append("未获得公网素材地址")
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "素材上传失败：本机存储与云端兜底均未成功；"
-                + "；".join(failure_parts)
-                + "。请检查网络或重新登录后重试。"
-            ),
-        )
-
-    # 【步骤4】保存到数据库
-    logger.info("[上传流程-步骤4] 保存到数据库 asset_id=%s source_url=%s", aid, (public_url[:80] + "…") if public_url and len(public_url) > 80 else (public_url or "None"))
+        data, ct = await asyncio.to_thread(_resize_image_if_needed, data, ext, ct)
+    aid, fname, fsize = await asyncio.to_thread(_save_bytes, data, ext)
     asset = Asset(
         asset_id=aid,
         user_id=current_user.id,
         filename=fname,
         media_type=mtype,
         file_size=fsize,
-        source_url=public_url,
-        meta={"asset_origin": "user_upload"},
+        source_url=None,
+        meta={
+            "asset_origin": "user_upload",
+            "storage": "local",
+            "public_url_status": "deferred_until_use",
+        },
     )
     db.add(asset)
     db.commit()
-    remote_asset = await _register_user_upload_asset_to_auth_server(asset, request)
-    if remote_asset and remote_asset.get("asset_id"):
-        meta = dict(asset.meta or {})
-        meta["remote_asset_id"] = str(remote_asset.get("asset_id") or "")[:80]
-        meta["remote_registered_at"] = datetime.utcnow().isoformat()
-        asset.meta = meta
-        db.add(asset)
-        db.commit()
-    
-    # 【步骤5】返回结果（此时必有公网 source_url，见上方 [上传流程-失败]）
-    if tos_url:
-        logger.info("[上传流程-步骤5] 上传完成（TOS成功）asset_id=%s filename=%s size=%s source_url=%s", aid, fname, fsize, tos_url[:80])
-    else:
-        logger.info("[上传流程-步骤5] 上传完成（服务器临时文件）asset_id=%s filename=%s size=%s source_url=%s", aid, fname, fsize, (public_url or "")[:80])
-
-    effective_source = tos_url or public_url
+    logger.info("[素材本地上传] 已落盘 asset_id=%s filename=%s size=%s media_type=%s", aid, fname, fsize, mtype)
     return {
         "asset_id": aid,
         "filename": fname,
         "media_type": mtype,
         "file_size": fsize,
-        "source_url": effective_source,
+        "source_url": None,
+        "local_only": True,
+        "public_url_status": "deferred_until_use",
     }
 
 
