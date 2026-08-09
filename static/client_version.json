@@ -1,7 +1,7 @@
 {
-  "version": "1.0.150",
-  "build": 194,
-  "applied_at": "2026-08-09T21:03:38+08:00",
-  "note": "local package only after H5 online cleanup",
-  "bundle_sha256": "25656c8e4dac3f70fcd1979b14f3e59b00f4324734387b31569527ee6367103c"
+  "version": "1.0.151",
+  "build": 195,
+  "applied_at": "2026-08-10T03:35:19+08:00",
+  "note": "AI secretary, H5 capture and workflow updates",
+  "bundle_sha256": "1e4e419b464a803d0a13c3e94842e9cefdaa14ba3075dc67075f39d8ff91e52d"
 }
