@@ -29,9 +29,48 @@ def test_global_navigation_matches_workbench_layout():
     assert 'id="appSideNavMount"' in side
     assert "AI调度助手" in html
     assert "AI营销创作" in html
+    assert "AI获客" in html
+    assert "私域销管" in html
     assert "AI海外平台" in html
+    assert "抖音获客" in html
+    assert "个微" in html
+    assert "AI获客引流" not in html
+    assert "AI私域销冠" not in html
+    assert "销售引流获客" not in html
+    assert "服务运营交付" not in html
+    assert "视频号获客" not in html
+    assert "快手获客" not in html
+    assert "小红书获客" not in html
+    sidebar_nav = html[html.index('<div class="chat-sidebar-nav'): html.index('<div class="chat-sidebar-section-label">')]
+    assert "企业微信自动回复" not in sidebar_nav
+    assert "WhatsApp客服" not in sidebar_nav
     assert 'data-view="agent" data-feature-gate="agent_entry"><span class="chat-sidebar-entry-icon">销</span>' not in side
     assert 'chat-sidebar-tree-group" open' not in html
+
+    marketing_nav = sidebar_nav[sidebar_nav.index("<span>AI营销创作</span>"): sidebar_nav.index("</details>", sidebar_nav.index("<span>AI营销创作</span>"))]
+    expected_marketing_labels = [
+        "IP日更文案",
+        "AI设计图",
+        "数字人口播视频",
+        "同城爆款视频",
+        "创意分镜头视频",
+        "公众号文章",
+    ]
+    assert [marketing_nav.index(label) for label in expected_marketing_labels] == sorted(marketing_nav.index(label) for label in expected_marketing_labels)
+    for hidden_label in ("创意视频", "爆款TVC", "爆款复刻", "多段视频混剪", "PPT制作", "电商详情页"):
+        assert hidden_label not in marketing_nav
+
+
+def test_home_filter_does_not_remove_skill_store_cards():
+    chat = (ROOT / "static" / "js" / "chat.js").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "js" / "skill.js").read_text(encoding="utf-8")
+
+    assert "shortcut3.style.display = 'none';" in chat
+    assert "shortcut3.textContent = '电商详情';" not in chat
+    assert "if (comflyPkg) html += _renderComflyCard();" in script
+    assert "if (viralPkg) html += _renderViralVideoRemixCard();" in script
+    assert "if (multiClipPkg) html += _renderMultiClipMixerCard();" in script
+    assert "if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });" in script
 
 
 def test_navigation_runtime_mounts_and_preserves_permission_gates():

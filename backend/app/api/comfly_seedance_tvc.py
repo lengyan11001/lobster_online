@@ -30,7 +30,7 @@ from ..services.comfly_seedance_tvc_pipeline_runner import (
     _api_base_for_pipeline,
     build_pipeline_input,
     collect_video_urls_from_pipeline_result,
-    resolve_reference_images_for_pipeline,
+    resolve_reference_images_for_pipeline_async,
     run_storyboard_pipeline_sync,
 )
 from ..services.comfly_veo_exec import _resolve_comfly_credentials
@@ -237,7 +237,7 @@ async def _prepare_pipeline_input(
     request: Request,
     effective_output_dir: str,
 ) -> Dict[str, Any]:
-    reference_images = resolve_reference_images_for_pipeline(
+    reference_images = await resolve_reference_images_for_pipeline_async(
         user_id=current_user.id,
         db=db,
         request=request,
@@ -245,6 +245,7 @@ async def _prepare_pipeline_input(
         image_url=pl.image_url,
         reference_asset_ids=pl.reference_asset_ids,
         reference_image_urls=pl.reference_image_urls,
+        user=current_user,
     )
     if pl.reference_purposes and len(pl.reference_purposes) != len(reference_images):
         raise HTTPException(status_code=400, detail="参考图片存在重复或无效项，无法与逐图用途一一对应")

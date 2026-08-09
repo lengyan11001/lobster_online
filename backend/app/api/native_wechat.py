@@ -471,11 +471,21 @@ async def native_wechat_group_members(
 async def native_wechat_peers(
     account_id: str,
     chat_type: str = "",
+    keyword: str = "",
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    return {"ok": True, **engine.list_peers(account_id, limit=limit, offset=offset, chat_type=chat_type)}
+    return {
+        "ok": True,
+        **engine.list_peers(
+            account_id,
+            limit=limit,
+            offset=offset,
+            chat_type=chat_type,
+            keyword=keyword,
+        ),
+    }
 
 
 @router.get("/api/native-wechat/messages")

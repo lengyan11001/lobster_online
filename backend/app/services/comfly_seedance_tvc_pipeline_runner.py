@@ -11,7 +11,12 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..models import Asset
-from ..api.assets import get_asset_public_url
+from ..api.assets import (
+    _is_internal_asset_http_url,
+    _source_url_is_fetchable_for_upstream,
+    _transfer_url_via_sutui,
+    get_asset_public_url,
+)
 from .comfly_veo_exec import _comfly_upload_failure_detail
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,8 @@ def resolve_reference_image_for_pipeline(
     if u:
         if not u.startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="image_url 必须为 http(s) 公网直链")
+        if _is_internal_asset_http_url(u):
+            raise HTTPException(status_code=400, detail="image_url 不是上游可访问的公网直链，请重新上传素材或先转存")
         return u
     aid = (asset_id or "").strip()
     if not aid:
@@ -85,6 +92,111 @@ def resolve_reference_image_for_pipeline(
     if not url:
         raise HTTPException(status_code=400, detail=_comfly_upload_failure_detail(aid, user_id, db))
     return url
+
+
+async def _resolve_direct_reference_image_url_for_pipeline(
+    *,
+    url: str,
+    label: str,
+    request: Request,
+    user: Any = None,
+) -> str:
+    clean = (url or "").strip()
+    if not clean:
+        return ""
+    if not clean.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail=f"{label} 必须为 http(s) 公网直链")
+
+    needs_transfer = _is_internal_asset_http_url(clean)
+    if not needs_transfer:
+        try:
+            needs_transfer = not _source_url_is_fetchable_for_upstream(clean)
+        except Exception as exc:
+            logger.warning("[seedance-tvc] probe reference image failed label=%s url=%s err=%s", label, clean[:120], exc)
+            needs_transfer = True
+
+    if not needs_transfer:
+        return clean
+
+    transferred = await _transfer_url_via_sutui(clean, "image", user=user, request=request)
+    if transferred and transferred.startswith(("http://", "https://")) and not _is_internal_asset_http_url(transferred):
+        try:
+            if _source_url_is_fetchable_for_upstream(transferred):
+                logger.info("[seedance-tvc] reference image transferred label=%s from=%s to=%s", label, clean[:100], transferred[:100])
+                return transferred
+        except Exception as exc:
+            logger.warning("[seedance-tvc] transferred reference image probe failed label=%s url=%s err=%s", label, transferred[:120], exc)
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"{label} 不是上游可访问的公网图片链接，已尝试转存但失败。"
+            "请重新上传到素材库，或配置 TOS 后再提交。"
+        ),
+    )
+
+
+async def resolve_reference_images_for_pipeline_async(
+    *,
+    user_id: int,
+    db: Session,
+    request: Request,
+    asset_id: Optional[str],
+    image_url: Optional[str],
+    reference_asset_ids: Optional[List[str]] = None,
+    reference_image_urls: Optional[List[str]] = None,
+    user: Any = None,
+) -> List[str]:
+    resolved: List[str] = []
+
+    primary_direct = await _resolve_direct_reference_image_url_for_pipeline(
+        url=image_url or "",
+        label="image_url",
+        request=request,
+        user=user,
+    )
+    if primary_direct:
+        resolved.append(primary_direct)
+    elif (asset_id or "").strip():
+        primary_asset = get_asset_public_url((asset_id or "").strip(), user_id, request, db)
+        if not primary_asset:
+            raise HTTPException(status_code=400, detail=_comfly_upload_failure_detail(asset_id or "", user_id, db))
+        primary_asset = await _resolve_direct_reference_image_url_for_pipeline(
+            url=primary_asset,
+            label=f"asset_id「{asset_id}」",
+            request=request,
+            user=user,
+        )
+        if primary_asset:
+            resolved.append(primary_asset)
+
+    for index, url in enumerate(reference_image_urls or [], start=1):
+        u = await _resolve_direct_reference_image_url_for_pipeline(
+            url=url or "",
+            label=f"reference_image_urls[{index}]",
+            request=request,
+            user=user,
+        )
+        if u and u not in resolved:
+            resolved.append(u)
+
+    for aid in reference_asset_ids or []:
+        a = (aid or "").strip()
+        if not a:
+            continue
+        u = get_asset_public_url(a, user_id, request, db)
+        if not u:
+            raise HTTPException(status_code=400, detail=_comfly_upload_failure_detail(a, user_id, db))
+        u = await _resolve_direct_reference_image_url_for_pipeline(
+            url=u,
+            label=f"reference_asset_ids「{a}」",
+            request=request,
+            user=user,
+        )
+        if u and u not in resolved:
+            resolved.append(u)
+
+    return resolved
 
 
 def resolve_reference_images_for_pipeline(

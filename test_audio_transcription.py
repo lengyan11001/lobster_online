@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
-def test_audio_transcription_only_appears_in_header_dropdown_with_permission_gate():
+def test_ai_secretary_appears_below_ip_persona_with_permission_gate():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     top_nav = html[html.index('<nav class="app-top-nav"'):html.index("</nav>", html.index('<nav class="app-top-nav"'))]
     side_start = html.index('<div class="chat-sidebar-nav chat-sidebar-tree"')
@@ -12,9 +12,11 @@ def test_audio_transcription_only_appears_in_header_dropdown_with_permission_gat
 
     expected = 'data-view="audio-transcription" data-feature-gate="personal_settings_entry"'
     assert expected not in top_nav
-    assert expected not in side_nav
     assert html.count(expected) == 1
-    assert f'class="header-menu-view" {expected}' in html
+    assert f'class="chat-sidebar-entry app-side-primary-entry" {expected}' in side_nav
+    assert side_nav.index('data-view="personal-settings"') < side_nav.index(expected)
+    assert '<span class="chat-sidebar-entry-copy">AI秘书</span>' in side_nav
+    assert f'class="header-menu-view" {expected}' not in html
 
 
 def test_audio_transcription_registered_as_dynamic_view():
@@ -45,6 +47,10 @@ def test_online_audio_view_has_local_mobile_records_and_secondary_detail():
     assert 'source_type=device' in script
     assert "startRecorderScan" not in script
     assert "syncNewRecorderFiles" not in script
+    assert 'data-at-new' in view
+    assert 'AI秘书' in view
+    assert "function newestFirst" in script
+    assert ".slice().sort(newestFirst)" in script
 
 
 def test_local_audio_upload_returns_immediately_to_background_record_list():
@@ -78,5 +84,7 @@ def test_online_audio_detail_supports_speaker_rename_copy_and_export():
     assert 'data-at-export="transcript"' in view
     assert "/speakers" in script
     assert "renameSpeaker" in script
+    assert "data-at-speaker-id" in script
+    assert "speaker_id" in script
     assert "navigator.clipboard" in script
     assert "anchor.download" in script

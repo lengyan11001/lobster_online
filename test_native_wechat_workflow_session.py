@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+import sys
+import types
 
 import pytest
 
@@ -56,12 +59,15 @@ async def test_auto_reply_checks_friend_requests_before_scanning_messages(tmp_pa
         lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
     )
 
-    def accept_friend_requests(account_id):
+    def accept_friend_requests(account_id, *, max_accepts=20, max_scrolls=24):
         calls.append(("friends", account_id))
+        assert max_accepts == 10
+        assert max_scrolls == 6
         return {"ok": True, "checked": 2, "accepted": 1, "failed": 0, "items": []}
 
-    def sync_sessions(account_id, *, passive=False):
+    def sync_sessions(account_id, *, passive=False, recent_only=False):
         calls.append(("sessions", account_id))
+        assert recent_only is True
         return {"ok": True, "items": []}
 
     monkeypatch.setattr(engine, "accept_local_friend_requests", accept_friend_requests)
@@ -76,6 +82,260 @@ async def test_auto_reply_checks_friend_requests_before_scanning_messages(tmp_pa
     assert result["friend_requests_checked"] == 2
     assert result["friend_requests_accepted"] == 1
     assert result["friend_requests_failed"] == 0
+
+
+def test_session_preview_change_is_checked_without_an_unread_badge(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    first = engine._persist_session(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        {
+            "peer_id": "Alice",
+            "display_name": "Alice",
+            "last_content": "previous",
+            "session_time": "14:00",
+            "unread_count": 0,
+        },
+        chat_type="direct",
+    )
+    changed = engine._persist_session(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        {
+            "peer_id": "Alice",
+            "display_name": "Alice",
+            "last_content": "new message",
+            "session_time": "14:03",
+            "unread_count": 0,
+        },
+        chat_type="direct",
+    )
+
+    assert first["message_preview_changed"] is False
+    assert engine._session_needs_auto_reply_check(first) is False
+    assert changed["message_preview_changed"] is True
+    assert engine._session_needs_auto_reply_check(changed) is True
+
+
+def test_new_session_snapshot_does_not_reply_to_historical_content():
+    assert engine._session_needs_auto_reply_check(
+        {
+            "last_content": "historical message",
+            "unread_count": 0,
+            "changed": True,
+            "message_preview_changed": False,
+        }
+    ) is False
+
+
+def test_native_wechat_lists_reach_rows_after_the_first_hundred(tmp_path, monkeypatch):
+    account_id = "pagination-account"
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+
+    engine._replace_contacts_snapshot(
+        account_id,
+        [
+            {
+                "contact_key": f"contact-{index:03d}",
+                "display_name": f"联系人 {index:03d}",
+                "wx_no": f"wx-{index:03d}",
+                "source": "local",
+            }
+            for index in range(205)
+        ],
+    )
+    engine._replace_groups_snapshot(
+        account_id,
+        [
+            {
+                "group_key": f"group-{index:03d}",
+                "display_name": f"群聊 {index:03d}",
+                "source": "local",
+            }
+            for index in range(205)
+        ],
+    )
+    engine._persist_local_group_members(
+        account_id,
+        "group-000",
+        [
+            {"member_key": f"member-{index:03d}", "display_name": f"成员 {index:03d}"}
+            for index in range(205)
+        ],
+        replace=True,
+    )
+
+    contacts = engine.list_contacts(account_id, limit=100, offset=200)
+    groups = engine.list_groups(account_id, limit=100, offset=200)
+    members = engine.list_group_members(account_id, "group-000", limit=100, offset=200)
+
+    assert contacts["count"] == 205
+    assert groups["count"] == 205
+    assert members["count"] == 205
+    assert len(contacts["items"]) == len(groups["items"]) == len(members["items"]) == 5
+
+
+def test_native_wechat_peer_pagination_and_keyword_search_cover_all_sessions(tmp_path, monkeypatch):
+    account_id = "session-pagination-account"
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    for index in range(205):
+        engine._persist_session(
+            account_id,
+            {
+                "peer_id": f"peer-{index:03d}",
+                "display_name": f"客户 {index:03d}",
+                "last_content": "needle-message" if index == 204 else f"消息 {index:03d}",
+                "session_time": f"{index:03d}",
+            },
+            chat_type="direct",
+        )
+
+    last_page = engine.list_peers(account_id, limit=100, offset=200)
+    matched = engine.list_peers(account_id, limit=100, offset=0, keyword="needle-message")
+
+    assert last_page["count"] == 205
+    assert len(last_page["items"]) == 5
+    assert matched["count"] == 1
+    assert matched["items"][0]["peer_id"] == "peer-204"
+
+
+def test_native_wechat_frontend_paginates_every_local_data_list():
+    root = Path(__file__).resolve().parent
+    javascript = (root / "static/js/juhe-wechat.js").read_text(encoding="utf-8")
+    html = (root / "static/views/juhe-wechat.html").read_text(encoding="utf-8")
+
+    for key in ("peers", "contacts", "groups", "groupMembers", "contactPicker", "tasks"):
+        assert f"{key}: {{ page: 1" in javascript
+    for element_id in (
+        "nativeWechatPeerPagination",
+        "nativeWechatContactPagination",
+        "nativeWechatGroupPagination",
+        "nativeWechatGroupMemberPagination",
+        "nativeWechatContactPickerPagination",
+        "nativeWechatTaskPagination",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "limit=100&offset=0" not in javascript
+    assert "limit=200&offset=0" not in javascript
+    assert "matched.slice(0, 100)" not in javascript
+    assert "loadMessages({ append: true })" in javascript
+    assert "data-native-page-list" in javascript
+
+
+def test_wxauto_client_rebuilds_after_initial_offline(monkeypatch):
+    clients = iter([False, True])
+    created = []
+    recoveries = []
+
+    class FakeWeChat:
+        def __init__(self, online):
+            self.online = online
+
+        def IsOnline(self):
+            return self.online
+
+    def create_client(**_kwargs):
+        client = FakeWeChat(next(clients))
+        created.append(client)
+        return client
+
+    monkeypatch.setitem(sys.modules, "wxauto4", types.SimpleNamespace(WeChat=create_client))
+    monkeypatch.setattr(engine, "_prepare_local_automation_thread", lambda: {})
+    monkeypatch.setattr(engine, "_ensure_local_chat_tab", lambda _account_id="": None)
+    monkeypatch.setattr(
+        engine,
+        "_recover_local_wechat_driver",
+        lambda account_id, **kwargs: recoveries.append((account_id, kwargs)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_mark_local_driver_recovery",
+        lambda _account_id, recovery, **kwargs: {**recovery, **kwargs},
+    )
+
+    client = engine._get_wxauto4_client(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+
+    assert client.online is True
+    assert len(created) == 2
+    assert len(recoveries) == 1
+    assert "未识别到已登录" in recoveries[0][1]["error"]
+
+
+def test_local_driver_read_recovers_and_retries_once(monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "_prepare_local_automation_thread", lambda: {})
+    monkeypatch.setattr(
+        engine,
+        "_recover_local_wechat_driver",
+        lambda *_args, **_kwargs: {"ok": True, "attempted": True},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_mark_local_driver_recovery",
+        lambda _account_id, recovery, **kwargs: {**recovery, **kwargs},
+    )
+
+    def read():
+        calls.append("read")
+        if len(calls) == 1:
+            raise RuntimeError("stale UIA")
+        return {"ok": True, "items": []}
+
+    result = engine._run_local_driver_operation(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "读取微信消息",
+        read,
+    )
+
+    assert calls == ["read", "read"]
+    assert result["driver_recovered"] is True
+    assert result["driver_retry_count"] == 1
+
+
+def test_local_driver_send_failure_is_not_retried(monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "_prepare_local_automation_thread", lambda: {})
+    monkeypatch.setattr(
+        engine,
+        "_recover_local_wechat_driver",
+        lambda *_args, **_kwargs: pytest.fail("send failure must not trigger a whole-operation retry"),
+    )
+
+    def send_once(*_args, **_kwargs):
+        calls.append("send")
+        raise RuntimeError("send result unknown")
+
+    monkeypatch.setattr(engine, "_send_text_local_slow_once", send_once)
+
+    with pytest.raises(RuntimeError, match="send result unknown"):
+        engine._send_text_local_slow(engine.LOCAL_DEFAULT_ACCOUNT_ID, "Alice", "hello")
+
+    assert calls == ["send"]
+
+
+@pytest.mark.asyncio
+async def test_poll_reports_driver_failure_instead_of_false_success(monkeypatch):
+    monkeypatch.setattr(engine, "init_db", lambda: None)
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {})
+    monkeypatch.setattr(
+        engine,
+        "sync_local_sessions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stale UIA after retry")),
+    )
+    monkeypatch.setattr(engine, "local_driver_status", lambda: {"full_driver": {"usable": False}})
+    monkeypatch.setattr(
+        engine,
+        "_latest_local_driver_recovery",
+        lambda _account_id: {"attempted": True, "recovered": False},
+    )
+
+    result = await engine.poll_updates(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+
+    assert result["ok"] is False
+    assert result["driver_recovered"] is False
+    assert result["driver_retry_count"] == 1
+    assert result["error"] == "stale UIA after retry"
 
 
 def test_extract_mainland_mobile_numbers_only_reads_customer_message_fields():

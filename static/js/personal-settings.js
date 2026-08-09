@@ -16,6 +16,11 @@
     memorySourceCompetitors: {},
     memorySourceDocs: {},
     memorySourceFiles: {},
+    memorySourceRecordings: {},
+    recorderRecords: [],
+    recorderRecordsLoading: false,
+    recorderRecordsLoaded: false,
+    recorderRecordsPromise: null,
     generatedDocuments: {},
     generatedDocOrder: [],
     uploadFiles: [],
@@ -164,6 +169,12 @@
       panel.classList.toggle('is-active', panel.getAttribute('data-ps-panel') === state.tab);
     });
     if (state.tab === 'profile') renderProfileWizard();
+    if (state.tab === 'memory') {
+      renderMemorySourceSelectors();
+      loadRecorderSources().catch(function(err) {
+        setMsg(err.message || '录音转写记录加载失败', true);
+      });
+    }
   }
 
   function memoryId(doc) {
@@ -194,6 +205,29 @@
 
   function cleanIntIds(map) {
     return Object.keys(map || {}).filter(function(id) { return !!map[id]; }).map(function(id) { return parseInt(id, 10); }).filter(Boolean);
+  }
+
+  function existingIntIdSet(rows) {
+    var allowed = {};
+    (rows || []).forEach(function(row) {
+      var id = Number(row && row.id);
+      if (isFinite(id) && id > 0) allowed[String(id)] = true;
+    });
+    return allowed;
+  }
+
+  function cleanExistingIntIds(values, rows) {
+    var allowed = existingIntIdSet(rows);
+    return uniqueIds(values || []).map(function(id) { return Number(id); }).filter(function(id) {
+      return isFinite(id) && id > 0 && allowed[String(id)];
+    });
+  }
+
+  function pruneSelectedIntMap(map, rows) {
+    var allowed = existingIntIdSet(rows);
+    Object.keys(map || {}).forEach(function(id) {
+      if (!allowed[String(id)]) delete map[id];
+    });
   }
 
   function cleanStringIds(map) {
@@ -1257,6 +1291,11 @@
     state.memorySourceCompetitors = syncSelectionMap(state.memorySourceCompetitors || {}, (state.competitors || []).map(function(row) { return row.id; }));
     state.memorySourceDocs = syncSelectionMap(state.memorySourceDocs || {}, memorySourceDocRows().map(memoryId));
     state.memorySourceFiles = syncSelectionMap(state.memorySourceFiles || {}, selectedUploadFiles().map(uploadFileKey));
+    state.memorySourceRecordings = syncSelectionMap(
+      state.memorySourceRecordings || {},
+      (state.recorderRecords || []).map(function(row) { return row.id; }),
+      false
+    );
   }
 
   function selectedMemoryKeywordRows() {
@@ -1277,6 +1316,38 @@
   function selectedMemoryUploadFiles() {
     ensureMemorySourceSelections();
     return selectedUploadFiles().filter(function(file) { return state.memorySourceFiles[uploadFileKey(file)]; });
+  }
+
+  function selectedRecorderRecords() {
+    ensureMemorySourceSelections();
+    return (state.recorderRecords || []).filter(function(row) {
+      return state.memorySourceRecordings[String(row.id || '')];
+    });
+  }
+
+  function loadRecorderSources(force) {
+    if (state.recorderRecordsLoading && state.recorderRecordsPromise) return state.recorderRecordsPromise;
+    if (state.recorderRecordsLoaded && !force) {
+      renderMemorySourceSelectors();
+      return Promise.resolve(state.recorderRecords);
+    }
+    state.recorderRecordsLoading = true;
+    renderMemorySourceSelectors();
+    var request = cloudJson('/api/h5/recorder/files?page=1&page_size=50', { json: false })
+      .then(function(data) {
+        state.recorderRecords = (Array.isArray(data.items) ? data.items : []).filter(function(row) {
+          return row && row.status === 'completed';
+        });
+        state.recorderRecordsLoaded = true;
+        return state.recorderRecords;
+      })
+      .finally(function() {
+        state.recorderRecordsLoading = false;
+        state.recorderRecordsPromise = null;
+        renderMemorySourceSelectors();
+      });
+    state.recorderRecordsPromise = request;
+    return request;
   }
 
   function renderSourceOptions(elId, rows, selected, kind, titleFn, subtitleFn) {
@@ -1320,6 +1391,17 @@
         '</label>';
       }).join('');
       if (box) box.innerHTML = (box.innerHTML && box.innerHTML.indexOf('ps-empty') < 0 ? box.innerHTML : '') + fileHtml;
+    }
+    var recorderBox = $('psMemoryRecorderSourceList');
+    if (state.recorderRecordsLoading && recorderBox) {
+      recorderBox.innerHTML = '<div class="ps-empty">正在读取转写记录...</div>';
+    } else {
+      renderSourceOptions('psMemoryRecorderSourceList', state.recorderRecords || [], state.memorySourceRecordings, 'recording',
+        function(row) { return row.display_name || row.file_name || ('转写 #' + row.id); },
+        function(row) {
+          var created = String(row.recorded_at || row.created_at || '').replace('T', ' ').slice(0, 16);
+          return created + (row.source_label ? ' · ' + row.source_label : '');
+        });
     }
   }
 
@@ -1379,6 +1461,7 @@
   function loadKeywords() {
     return cloudJson('/api/ip-content/keywords').then(function(data) {
       state.keywords = Array.isArray(data.items) ? data.items : [];
+      pruneSelectedIntMap(state.selectedKeywords, state.keywords);
       renderTemplateLists();
       renderMemorySourceSelectors();
       renderKeywords();
@@ -1388,6 +1471,7 @@
   function loadCompetitors() {
     return cloudJson('/api/ip-content/competitors').then(function(data) {
       state.competitors = Array.isArray(data.items) ? data.items : [];
+      pruneSelectedIntMap(state.selectedCompetitors, state.competitors);
       renderTemplateLists();
       renderMemorySourceSelectors();
       renderCompetitors();
@@ -1423,6 +1507,8 @@
       cloudJson('/api/ip-content/personal-default').then(function(data) { state.defaultItem = data.item || {}; })
     ]).then(function() {
       applyDefaultItem(state.defaultItem || {});
+      pruneSelectedIntMap(state.selectedKeywords, state.keywords);
+      pruneSelectedIntMap(state.selectedCompetitors, state.competitors);
       renderAllLists();
       setMsg('');
     }).catch(function(err) {
@@ -1462,8 +1548,8 @@
       var language = currentPersonalTemplateLanguage();
       var body = {
         name: name,
-        keyword_ids: cleanIntIds(state.selectedKeywords),
-        competitor_ids: cleanIntIds(state.selectedCompetitors),
+        keyword_ids: cleanExistingIntIds(cleanIntIds(state.selectedKeywords), state.keywords),
+        competitor_ids: cleanExistingIntIds(cleanIntIds(state.selectedCompetitors), state.competitors),
         memory_doc_ids: cleanStringIds(state.selectedMemories),
         memory_docs: memoryDocs,
         requirements: templateRequirementsWithLanguage({}, language),
@@ -1496,8 +1582,8 @@
     var keywordSource = options.replaceSelection ? cleanIntIds(state.selectedKeywords) : [].concat(Array.isArray(existing.keyword_ids) ? existing.keyword_ids : [], cleanIntIds(state.selectedKeywords));
     var competitorSource = options.replaceSelection ? cleanIntIds(state.selectedCompetitors) : [].concat(Array.isArray(existing.competitor_ids) ? existing.competitor_ids : [], cleanIntIds(state.selectedCompetitors));
     var memorySource = options.replaceSelection ? cleanStringIds(state.selectedMemories) : [].concat(Array.isArray(existing.memory_doc_ids) ? existing.memory_doc_ids : [], cleanStringIds(state.selectedMemories));
-    var keywordIds = uniqueIds(keywordSource).map(function(id) { return Number(id); }).filter(function(id) { return isFinite(id) && id > 0; });
-    var competitorIds = uniqueIds(competitorSource).map(function(id) { return Number(id); }).filter(function(id) { return isFinite(id) && id > 0; });
+    var keywordIds = cleanExistingIntIds(keywordSource, state.keywords);
+    var competitorIds = cleanExistingIntIds(competitorSource, state.competitors);
     var memoryIds = uniqueIds(memorySource);
     return Promise.all(selectedMemoryPayload(memoryIds).map(fetchMemoryContent)).then(function(memoryDocs) {
       return cloudJson('/api/ip-content/personal-default', {
@@ -1820,6 +1906,7 @@
     var keywordRows = selectedMemoryKeywordRows();
     var competitorRows = selectedMemoryCompetitorRows();
     var sourceDocs = selectedMemorySourceDocs();
+    var recorderRows = selectedRecorderRecords();
     var docTypes = selectedGenerateDocTypes();
     var customReferenceFile = selectedCustomReferenceFile();
     var contextText = profileContextText({
@@ -1835,7 +1922,7 @@
     setBusy(btn, true, '理解中...');
     setMsg('正在理解资料并生成记忆内容...');
     competitorSourceText(competitorRows.map(function(row) { return row.id; })).then(function(competitorText) {
-      if (!files.length && !contextText && !competitorText) {
+      if (!files.length && !contextText && !competitorText && !recorderRows.length) {
         throw new Error('请选择要生成的资料来源。');
       }
       var fd = new FormData();
@@ -1848,6 +1935,8 @@
       fd.append('doc_types', JSON.stringify(docTypes));
       if (customReferenceFile) fd.append('custom_reference_file', customReferenceFile, customReferenceFile.name || 'custom-reference');
       fd.append('reference_doc_ids', '');
+      fd.append('source_doc_ids', sourceDocs.map(memoryId).filter(Boolean).join(','));
+      fd.append('recorder_record_ids', recorderRows.map(function(row) { return row.id; }).filter(Boolean).join(','));
       return fetch(cloudBase() + '/api/personal-settings/memory-documents/generate', {
         method: 'POST',
         headers: headers(false),
@@ -2120,7 +2209,9 @@
           ? state.memorySourceKeywords
           : (kind === 'competitor'
             ? state.memorySourceCompetitors
-            : (kind === 'source_doc' ? state.memorySourceDocs : state.memorySourceFiles));
+            : (kind === 'source_doc'
+              ? state.memorySourceDocs
+              : (kind === 'recording' ? state.memorySourceRecordings : state.memorySourceFiles)));
         if (input.value) map[String(input.value)] = !!input.checked;
       });
     }

@@ -101,8 +101,6 @@
         },
         "duration": {
           "type": "integer",
-          "minimum": 4,
-          "maximum": 30,
           "description": "视频时长（秒）。用户原话中明确写了 30秒/30s 等时必须原样传递；未指定时可以省略"
         },
         "aspect_ratio": {
@@ -131,7 +129,7 @@
         },
         "video_model": {
           "type": "string",
-          "description": "可选，指定视频模型；未指定时使用默认模型，系统不会因时长自动切换到价格更高的模型"
+          "description": "可选，显式指定视频模型；未指定时省略，由服务器统一选择默认模型和兜底策略，Online 不根据时长切换或限制模型"
         },
         "function_mode": {
           "type": "string",
@@ -278,7 +276,7 @@
         },
         "duration": {
           "type": "integer",
-          "default": 8
+          "default": 10
         },
         "scene_count": {
           "type": "integer",
@@ -295,7 +293,7 @@
         },
         "video_model": {
           "type": "string",
-          "default": "apiz/veo3.1/image-to-video"
+          "default": "xai/grok-imagine-video-1.5/image-to-video"
         },
         "reference_asset_ids": {
           "type": "array",

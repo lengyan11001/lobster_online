@@ -548,6 +548,17 @@ def _is_insufficient_credit_error(exc: Exception) -> bool:
     return "http 402" in text or "积分不足" in str(exc or "") or "余额不足" in str(exc or "")
 
 
+def _friendly_comfly_http_error(status_code: int, payload: Dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False)[:1200]
+    lowered = raw.lower()
+    if "timed out while downloading image" in lowered or "failed to download" in lowered and "image" in lowered:
+        return (
+            f"HTTP {status_code}: 参考图片上游下载超时。"
+            "请重新上传图片或换用已转存到素材库/CDN 的图片后再试。"
+        )
+    return f"HTTP {status_code}: {payload}"
+
+
 def _is_transient_video_poll_error(exc: Exception, channel: str) -> bool:
     text = str(exc or "").lower()
     normalized_channel = _normalize_video_channel(channel)
@@ -1061,7 +1072,7 @@ class ComflySeedanceClient:
         except Exception:
             payload = {"raw_text": response.text}
         if response.status_code != 200:
-            raise PipelineError(f"HTTP {response.status_code}: {payload}")
+            raise PipelineError(_friendly_comfly_http_error(response.status_code, payload))
         if not isinstance(payload, dict):
             raise PipelineError(f"Invalid payload: {payload}")
         return payload

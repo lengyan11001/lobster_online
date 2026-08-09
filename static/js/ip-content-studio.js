@@ -1224,7 +1224,7 @@
         };
       }
       map[gid].records.push(rec);
-      if (rec.image_url) map[gid].image_count += 1;
+      map[gid].image_count += recordImages(rec).length;
       if (rec.created_at && String(rec.created_at) > String(map[gid].created_at || '')) map[gid].created_at = rec.created_at;
     });
     return Object.keys(map).map(function(k) { return map[k]; }).sort(function(a, b) {
@@ -1233,11 +1233,61 @@
   }
 
   function recordImages(rec) {
-    if (Array.isArray(rec.images) && rec.images.length) return rec.images;
+    var rows = [];
+    var seen = {};
+    function add(value, fallbackIndex) {
+      if (typeof value === 'string') value = { image_url: value };
+      if (!value || typeof value !== 'object') return;
+      var url = String(value.image_url || value.url || value.source_url || '').trim();
+      var assetId = String(value.image_asset_id || value.asset_id || '').trim();
+      if (!url && !assetId) return;
+      var existing = rows.find(function(item) {
+        return (url && item.image_url === url) || (assetId && item.image_asset_id === assetId);
+      });
+      if (existing) {
+        if (url && !existing.image_url) existing.image_url = url;
+        if (assetId && !existing.image_asset_id) existing.image_asset_id = assetId;
+        return;
+      }
+      var key = url || ('asset:' + assetId);
+      if (seen[key]) return;
+      seen[key] = true;
+      rows.push(Object.assign({}, value, {
+        image_url: url,
+        image_asset_id: assetId,
+        index: Number(value.index || fallbackIndex || rows.length + 1)
+      }));
+    }
+    function addList(value) {
+      if (Array.isArray(value)) value.forEach(function(item, idx) { add(item, idx + 1); });
+      else if (value) add(value, rows.length + 1);
+    }
+    function addParallel(urls, assetIds) {
+      var urlList = Array.isArray(urls) ? urls : [];
+      var assetIdList = Array.isArray(assetIds) ? assetIds : [];
+      for (var index = 0; index < Math.max(urlList.length, assetIdList.length); index += 1) {
+        add({ image_url: urlList[index] || '', image_asset_id: assetIdList[index] || '' }, index + 1);
+      }
+    }
+    addList(rec && rec.images);
     var meta = rec && rec.meta ? rec.meta : {};
-    if (Array.isArray(meta.images) && meta.images.length) return meta.images;
-    if (rec && rec.image_url) return [{ image_url: rec.image_url, image_asset_id: rec.image_asset_id || '', image_prompt: rec.image_prompt || '', index: 1 }];
-    return [];
+    var imageUpdate = meta && meta.image_update ? meta.image_update : {};
+    var directImageUpdate = rec && rec.image_update ? rec.image_update : {};
+    addParallel(rec && rec.image_urls, rec && rec.image_asset_ids);
+    addList(rec && rec.image_results);
+    addList(directImageUpdate.images);
+    addParallel(directImageUpdate.image_urls, directImageUpdate.image_asset_ids);
+    addList(directImageUpdate.image_results);
+    add(directImageUpdate, rows.length + 1);
+    addList(meta.images);
+    addParallel(meta.image_urls, meta.image_asset_ids);
+    addList(meta.image_results);
+    addList(imageUpdate.images);
+    addParallel(imageUpdate.image_urls, imageUpdate.image_asset_ids);
+    addList(imageUpdate.image_results);
+    add({ image_url: rec && rec.image_url, image_asset_id: rec && rec.image_asset_id, image_prompt: rec && rec.image_prompt }, 1);
+    add({ image_url: imageUpdate.image_url || imageUpdate.url, image_asset_id: imageUpdate.image_asset_id || imageUpdate.asset_id }, rows.length + 1);
+    return rows.slice(0, 30);
   }
 
   function recordImagePrompts(rec) {
@@ -1746,6 +1796,47 @@
     return true;
   }
 
+  function openDraftMomentsPublish(rec, currentText) {
+    rec = rec || {};
+    var images = recordImages(rec).map(function(img) {
+      return {
+        image_url: String((img && (img.image_url || img.url || img.source_url)) || '').trim(),
+        image_asset_id: String((img && (img.image_asset_id || img.asset_id)) || '').trim()
+      };
+    }).filter(function(img) { return img.image_url || img.image_asset_id; });
+    if (!images.length) {
+      setMsg('请先生成图片，再发布朋友圈。', true);
+      return;
+    }
+    if (typeof window._openJuheWechatView !== 'function') {
+      setMsg('朋友圈发布功能暂时无法打开。', true);
+      return;
+    }
+    window._openJuheWechatView();
+    var attempts = 50;
+    (function waitForMoments() {
+      if (typeof window.prefillNativeWechatMoments === 'function' && $('nativeWechatMomentsContent')) {
+        window.prefillNativeWechatMoments({
+          content: String(currentText || rec.body || rec.content || '').trim(),
+          title: String(rec.title || '').trim(),
+          image_urls: images.map(function(img) { return img.image_url; }),
+          image_asset_ids: images.map(function(img) { return img.image_asset_id; }),
+          images: images,
+          source: 'ip_daily',
+          source_id: String(rec.record_id || '').trim(),
+          media_type: 'image_text'
+        });
+        return;
+      }
+      if (attempts <= 0) {
+        setMsg('朋友圈发布页面加载失败，请重试。', true);
+        return;
+      }
+      attempts -= 1;
+      setTimeout(waitForMoments, 80);
+    }());
+  }
+
   function openDraftContentAction(rec, action, currentText) {
     rec = rec || {};
     var text = String(currentText || rec.body || rec.content || '').trim();
@@ -1841,8 +1932,12 @@
         '<button type="button" data-record-action="video" data-record-id="' + id + '">生成视频</button>' +
         '<button type="button" data-record-action="digital-human" data-record-id="' + id + '">数字人口播</button>'
       : '';
+    var publishAction = rec.task === 'moments_candidate' && recordImages(rec).length
+      ? '<button type="button" data-record-action="publish-moments" data-record-id="' + id + '">发布到朋友圈</button>'
+      : '';
     return '<details class="ip-draft-action-menu"><summary>操作</summary><div class="ip-draft-action-list">' +
       creationActions +
+      publishAction +
       '<button type="button" class="is-danger" data-record-action="delete" data-record-id="' + id + '">删除</button>' +
       '</div></details>';
   }
@@ -1936,6 +2031,10 @@
           return;
         }
         var ta = box.querySelector('[data-record-copy="' + cssEscape(id) + '"]');
+        if (rec && action === 'publish-moments') {
+          openDraftMomentsPublish(rec, ta ? ta.value : '');
+          return;
+        }
         if (rec && rec.task === 'moments_candidate' && action === 'image') {
           if (ta) {
             rec.body = ta.value;
@@ -2186,6 +2285,7 @@
               '<a class="btn btn-ghost btn-sm" href="' + escAttr(url) + '" target="_blank" rel="noopener">打开图片</a></div>';
           }).join('') + '</div>' : '<div class="ip-content-empty">' + esc(failed ? '本条文案未生成图片' : (status || '等待生成图片...')) + '</div>') +
           '<div class="ip-content-item-actions"><button type="button" class="btn btn-ghost btn-sm" data-copy-moment-image-record="' + escAttr(rec.record_id) + '">复制文案</button>' +
+          (images.length ? '<button type="button" class="btn btn-primary btn-sm" data-publish-moment-image-record="' + escAttr(rec.record_id) + '">发布到朋友圈</button>' : '') +
           (failed ? '<button type="button" class="btn btn-primary btn-sm" data-retry-moment-image-record="' + escAttr(rec.record_id) + '">重新出图</button>' : '') + '</div>' +
           '</div>';
       }).join('');
@@ -2203,6 +2303,13 @@
         if (!rec) return;
         rec._selected = true;
         confirmMomentsImages([rec], btn, false);
+      });
+    });
+    box.querySelectorAll('[data-publish-moment-image-record]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-publish-moment-image-record');
+        var rec = batch.records.find(function(item) { return String(item.record_id) === String(id); });
+        if (rec) openDraftMomentsPublish(rec, rec.body || rec.content || '');
       });
     });
   }

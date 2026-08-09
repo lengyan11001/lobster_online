@@ -1345,7 +1345,7 @@ window._openIpContentStudioView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ip-content-studio', {
       html: '/static/views/ip-content-studio.html?v=20260615-ip-content-batch',
-      scripts: '/static/js/ip-content-studio.js?v=20260615-ip-content-batch',
+      scripts: '/static/js/ip-content-studio.js?v=20260615-ip-content-batch-20260807-content-publish-v1',
       cache: 'reload'
     });
   }
@@ -1368,8 +1368,8 @@ window._openIpContentStudioView = function() {
 window._openJuheWechatView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('juhe-wechat', {
-      html: '/static/views/juhe-wechat.html?v=20260715-native-wechat-moments-comment',
-      scripts: '/static/js/juhe-wechat.js?v=20260715-native-wechat-moments-comment',
+      html: '/static/views/juhe-wechat.html?v=20260808-native-wechat-pagination-v1',
+      scripts: '/static/js/juhe-wechat.js?v=20260808-native-wechat-pagination-v1',
       cache: 'reload'
     });
   }

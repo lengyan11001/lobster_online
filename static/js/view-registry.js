@@ -2,9 +2,9 @@
   if (typeof window.registerLobsterView !== 'function') return;
 
   window.registerLobsterView('audio-transcription', {
-    html: '/static/views/audio-transcription.html?v=20260806-audio-transcription-v1',
-    css: '/static/css/audio-transcription.css?v=20260806-audio-transcription-v1',
-    scripts: '/static/js/audio-transcription.js?v=20260806-audio-transcription-v1',
+    html: '/static/views/audio-transcription.html?v=20260810-ai-secretary-v2',
+    css: '/static/css/audio-transcription.css?v=20260810-ai-secretary-v2',
+    scripts: '/static/js/audio-transcription.js?v=20260810-ai-secretary-v2',
     init: 'initAudioTranscriptionView'
   });
 
@@ -72,7 +72,7 @@
 
   window.registerLobsterView('ip-content-studio', {
     html: '/static/views/ip-content-studio.html?v=20260807-moment-failure-scope',
-    scripts: '/static/js/ip-content-studio.js?v=20260807-moment-failure-scope',
+    scripts: '/static/js/ip-content-studio.js?v=20260807-moment-failure-scope-20260807-content-publish-v1',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
@@ -106,8 +106,8 @@
   });
 
   window.registerLobsterView('juhe-wechat', {
-    html: '/static/views/juhe-wechat.html?v=20260715-native-wechat-moments-comment',
-    scripts: '/static/js/juhe-wechat.js?v=20260718-native-wechat-moments-publish',
+    html: '/static/views/juhe-wechat.html?v=20260808-native-wechat-pagination-v1',
+    scripts: '/static/js/juhe-wechat.js?v=20260808-native-wechat-pagination-v1',
     init: 'initJuheWechatView',
     cache: 'reload'
   });
@@ -129,7 +129,7 @@
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20260807-digital-human-v2'
+    scripts: '/static/js/publish.js?v=20260807-digital-human-v2-20260807-content-publish-v1'
   });
 
   window.registerLobsterView('scheduled-tasks', {
@@ -157,8 +157,8 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260803-local-online-employee-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260803-local-online-employee-v1',
+    html: '/static/views/h5-employees.html?v=20260808-workflow-children-v2',
+    scripts: '/static/js/views/h5-employees.js?v=20260808-workflow-children-v2',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

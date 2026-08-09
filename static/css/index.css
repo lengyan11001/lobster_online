@@ -6563,6 +6563,7 @@ body.online-mastra-chat-compose .online-mastra-chat {
       border-color: rgba(16,185,129,0.16);
     }
     .asset-card .asset-preview-wrap {
+      position: relative;
       margin: 0.1rem 0 0.75rem !important;
       border-radius: 16px;
       overflow: hidden;
@@ -6636,6 +6637,74 @@ body.online-mastra-chat-compose .online-mastra-chat {
       line-height: 1.5;
       word-break: break-word;
     }
+    .asset-content-image-count {
+      position: absolute;
+      right: 0.55rem;
+      bottom: 0.55rem;
+      padding: 0.2rem 0.45rem;
+      border-radius: 999px;
+      color: #fff;
+      background: rgba(15, 23, 42, 0.72);
+      font-size: 0.68rem;
+      line-height: 1;
+    }
+    .asset-content-image-strip {
+      display: flex;
+      gap: 0.38rem;
+      overflow: hidden;
+      margin-top: 0.55rem;
+    }
+    .asset-content-image-strip img {
+      width: 44px;
+      height: 44px;
+      flex: 0 0 44px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #eef2fb;
+    }
+    .asset-content-action-menu {
+      position: relative;
+      display: inline-block;
+    }
+    .asset-content-action-menu summary {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 0.3rem 0.62rem;
+      border: 1px solid rgba(66, 98, 223, 0.16);
+      border-radius: 999px;
+      color: #4262df;
+      background: rgba(66, 98, 223, 0.08);
+      cursor: pointer;
+      list-style: none;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .asset-content-action-menu summary::-webkit-details-marker { display: none; }
+    .asset-content-action-list {
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + 0.4rem);
+      z-index: 30;
+      display: grid;
+      min-width: 128px;
+      gap: 0.2rem;
+      padding: 0.35rem;
+      border: 1px solid rgba(34, 49, 78, 0.12);
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 12px 28px rgba(36, 54, 88, 0.16);
+    }
+    .asset-content-action-list button {
+      padding: 0.42rem 0.55rem;
+      border: 0;
+      border-radius: 7px;
+      color: var(--text);
+      background: transparent;
+      text-align: left;
+      font-size: 0.72rem;
+    }
+    .asset-content-action-list button:hover { background: rgba(66, 98, 223, 0.08); }
     .publish-task-list {
       display: flex;
       flex-direction: column;

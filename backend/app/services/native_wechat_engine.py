@@ -15,12 +15,13 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
@@ -110,6 +111,10 @@ _TASK_WORKERS: Dict[str, asyncio.Task[Any]] = {}
 _TASK_AUTH_CONTEXT: Dict[str, Dict[str, Any]] = {}
 _AUTO_REPLY_WORKERS: Dict[str, asyncio.Task[Any]] = {}
 _AUTO_REPLY_AUTH_CONTEXT: Dict[str, Dict[str, Any]] = {}
+_LOCAL_WECHAT_UI_LOCK = threading.RLock()
+_LOCAL_WECHAT_THREAD_STATE = threading.local()
+_LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
+_LOCAL_WECHAT_DRIVER_RECOVERY: Dict[str, Dict[str, Any]] = {}
 
 
 def _now_iso() -> str:
@@ -802,7 +807,12 @@ def _known_wechat_exe_paths() -> List[str]:
     paths: List[str] = []
     for meta in _wechat_process_candidates():
         exe = str(meta.get("exe") or "").strip()
-        if exe and Path(exe).is_file() and exe not in paths:
+        if (
+            exe
+            and Path(exe).name.lower() in WECHAT_PROCESS_NAMES
+            and Path(exe).is_file()
+            and exe not in paths
+        ):
             paths.append(exe)
     for raw in (
         os.environ.get("WECHAT_EXE", ""),
@@ -1011,7 +1021,7 @@ def _module_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
-def _probe_wechat_uia(hwnd: int) -> Dict[str, Any]:
+def _probe_wechat_uia_unlocked(hwnd: int) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "available": False,
         "node_count": 0,
@@ -1051,7 +1061,13 @@ def _probe_wechat_uia(hwnd: int) -> Dict[str, Any]:
     return result
 
 
-def _probe_wxauto4(item: Dict[str, Any]) -> Dict[str, Any]:
+def _probe_wechat_uia(hwnd: int) -> Dict[str, Any]:
+    with _LOCAL_WECHAT_UI_LOCK:
+        _prepare_local_automation_thread()
+        return _probe_wechat_uia_unlocked(hwnd)
+
+
+def _probe_wxauto4_unlocked(item: Dict[str, Any]) -> Dict[str, Any]:
     version = str(item.get("version") or "")
     out: Dict[str, Any] = {
         "installed": _module_available("wxauto4"),
@@ -1079,6 +1095,12 @@ def _probe_wxauto4(item: Dict[str, Any]) -> Dict[str, Any]:
             "请使用适配版本微信或接入自研本机驱动"
         )
     return out
+
+
+def _probe_wxauto4(item: Dict[str, Any]) -> Dict[str, Any]:
+    with _LOCAL_WECHAT_UI_LOCK:
+        _prepare_local_automation_thread()
+        return _probe_wxauto4_unlocked(item)
 
 
 def _scan_local_wechat_windows(*, max_age_seconds: float = 1.5) -> List[Dict[str, Any]]:
@@ -2435,6 +2457,15 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
     return report
 
 
+def _session_needs_auto_reply_check(item: Dict[str, Any]) -> bool:
+    try:
+        if int(item.get("unread_count") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return bool(item.get("message_preview_changed")) and bool(str(item.get("last_content") or "").strip())
+
+
 async def run_auto_reply_once(
     account_id: str,
     *,
@@ -2491,6 +2522,9 @@ async def run_auto_reply_once(
         "friend_requests_accepted": 0,
         "friend_requests_failed": 0,
         "friend_requests": {},
+        "driver_recovered": False,
+        "driver_retry_count": 0,
+        "driver_recoveries": [],
         "memory": {
             "document_count": int(memory.get("document_count") or 0),
             "titles": list(memory.get("titles") or []),
@@ -2498,18 +2532,30 @@ async def run_auto_reply_once(
     }
     try:
         try:
-            friend_requests = await asyncio.to_thread(accept_local_friend_requests, account_id)
+            friend_requests = await asyncio.to_thread(
+                accept_local_friend_requests,
+                account_id,
+                max_accepts=10,
+                max_scrolls=6,
+            )
             result["friend_requests"] = friend_requests
+            _collect_local_driver_recovery(result, friend_requests)
             result["friend_requests_checked"] = int(friend_requests.get("checked") or 0)
             result["friend_requests_accepted"] = int(friend_requests.get("accepted") or 0)
             result["friend_requests_failed"] = int(friend_requests.get("failed") or 0)
         except Exception as friend_exc:
             result["friend_requests"] = {"ok": False, "error": str(friend_exc)[:500]}
             result["friend_requests_failed"] = 1
-        session_data = await asyncio.to_thread(sync_local_sessions, account_id, passive=False)
+        session_data = await asyncio.to_thread(
+            sync_local_sessions,
+            account_id,
+            passive=False,
+            recent_only=True,
+        )
+        _collect_local_driver_recovery(result, session_data)
         sessions = _enrich_sessions_with_message_counts(account_id, list(session_data.get("items") or []))
         result["session_count"] = len(sessions)
-        unread = [item for item in sessions if int(item.get("unread_count") or 0) > 0]
+        unread = [item for item in sessions if _session_needs_auto_reply_check(item)]
         max_sessions = max(1, int(DEFAULT_STRATEGY["auto_reply_max_sessions_per_run"]))
         private_unread = []
         for item in unread:
@@ -2518,7 +2564,10 @@ async def run_auto_reply_once(
                 continue
             private_unread.append(item)
         result["unread_private_count"] = len(private_unread)
-        result["unread_message_count"] = sum(max(0, int(item.get("unread_count") or 0)) for item in private_unread)
+        result["unread_message_count"] = sum(
+            max(1 if item.get("message_preview_changed") else 0, max(0, int(item.get("unread_count") or 0)))
+            for item in private_unread
+        )
         for idx, session in enumerate(private_unread[:max_sessions]):
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = str(session.get("display_name") or peer_id).strip()
@@ -2530,7 +2579,13 @@ async def run_auto_reply_once(
             current_reply = ""
             current_category = ""
             try:
-                sync_result = await asyncio.to_thread(sync_local_messages, account_id, peer_id, load_more_pages=0)
+                sync_result = await asyncio.to_thread(
+                    sync_local_messages,
+                    account_id,
+                    peer_id,
+                    load_more_pages=0,
+                )
+                _collect_local_driver_recovery(result, sync_result)
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
                 if str((chat_info or {}).get("chat_type") or "").lower() in {"group", "chatroom", "official"}:
                     result["skipped_groups"] += 1
@@ -2849,12 +2904,17 @@ async def poll_updates(account_id: str, *, timeout_ms: Optional[int] = None) -> 
     if _is_local_account_id(account_id):
         _find_local_account(account_id)
         try:
-            session_data = sync_local_sessions(account_id, passive=False)
+            session_data = await asyncio.to_thread(
+                sync_local_sessions,
+                account_id,
+                passive=False,
+                recent_only=True,
+            )
             sessions = _enrich_sessions_with_message_counts(account_id, list(session_data.get("items") or []))
             unread_sessions = [item for item in sessions if int(item.get("unread_count") or 0) > 0]
             session_by_peer = {str(item.get("peer_id") or ""): item for item in sessions}
 
-            data = sync_local_messages(account_id, "", load_more_pages=0)
+            data = await asyncio.to_thread(sync_local_messages, account_id, "", load_more_pages=0)
             peer_id = str(data.get("peer_id") or "")
             message_data = list_messages(account_id, peer_id, limit=50, offset=0) if peer_id else {"items": [], "real_message_count": 0}
             messages = message_data.get("items") or []
@@ -2874,10 +2934,20 @@ async def poll_updates(account_id: str, *, timeout_ms: Optional[int] = None) -> 
             changed = [session] if (session and has_new_message) else []
             group_sync = {"ok": False, "count": 0, "items": [], "message": ""}
             try:
-                group_sync = _sync_local_groups_from_all_sessions(account_id, limit=200, reason="poll_updates")
+                group_sync = await asyncio.to_thread(
+                    _sync_local_groups_from_all_sessions,
+                    account_id,
+                    limit=200,
+                    reason="poll_updates",
+                )
             except Exception as group_exc:
                 group_sync = {"ok": False, "count": 0, "items": [], "message": str(group_exc)}
             summary = _receive_summary(account_id, sessions, received_count=int(data.get("new_message_count") or 0))
+            recovery_events = [
+                dict(item.get("driver_recovery") or {})
+                for item in (session_data, data)
+                if isinstance(item, dict) and item.get("driver_recovered")
+            ]
             return {
                 "ok": True,
                 "items": unread_sessions,
@@ -2901,16 +2971,24 @@ async def poll_updates(account_id: str, *, timeout_ms: Optional[int] = None) -> 
                 "group_sync": group_sync,
                 "sync_result": data,
                 "unread_preserved_count": 0,
+                "driver_recovered": bool(recovery_events),
+                "driver_retry_count": len(recovery_events),
+                "driver_recoveries": recovery_events,
                 **summary,
                 "message": "收消息完成：已读取左侧会话未读数，并读取当前默认选中会话做最新消息对比",
             }
         except Exception as exc:
             status = local_driver_status()
+            recovery = _latest_local_driver_recovery(account_id)
             return {
-                "ok": True,
+                "ok": False,
                 "items": [],
                 "count": 0,
                 "message": f"本机微信已连接；消息读取驱动不可用：{exc}",
+                "error": str(exc),
+                "driver_recovered": False,
+                "driver_retry_count": 1 if recovery.get("attempted") else 0,
+                "driver_recovery": recovery,
                 "driver": status.get("full_driver") or {},
             }
     account = _load_account(account_id)
@@ -3151,6 +3229,7 @@ def _persist_session(account_id: str, session: Dict[str, Any], *, chat_type: str
     is_muted = 1 if bool(session.get("is_muted")) else 0
     raw = dict(session.get("raw") or session)
     changed = True
+    message_preview_changed = False
     unread_preserved = False
     with _connect() as conn:
         old = conn.execute(
@@ -3161,9 +3240,12 @@ def _persist_session(account_id: str, session: Dict[str, Any], *, chat_type: str
             (account_id, peer_id),
         ).fetchone()
         if old:
-            changed = (
+            message_preview_changed = (
                 str(old["last_content"] or "") != last_content
                 or str(old["session_time"] or "") != session_time
+            )
+            changed = (
+                message_preview_changed
                 or int(old["unread_count"] or 0) != unread_count
                 or int(old["is_new"] or 0) != is_new
                 or int(old["is_muted"] or 0) != is_muted
@@ -3245,6 +3327,7 @@ def _persist_session(account_id: str, session: Dict[str, Any], *, chat_type: str
         "is_new": bool(is_new),
         "is_muted": bool(is_muted),
         "changed": bool(changed),
+        "message_preview_changed": bool(message_preview_changed),
         "unread_preserved": unread_preserved,
         "updated_at": now,
     }
@@ -3731,22 +3814,253 @@ def _message_compare_key(message: Optional[Dict[str, Any]]) -> str:
     )
 
 
-def _get_wxauto4_client(account_id: str = "") -> Any:
+def _local_driver_recovery_key(account_id: str) -> str:
+    return str(account_id or "").strip() or LOCAL_DEFAULT_ACCOUNT_ID
+
+
+def _store_local_driver_recovery(account_id: str, value: Dict[str, Any]) -> Dict[str, Any]:
+    saved = dict(value)
+    _LOCAL_WECHAT_DRIVER_RECOVERY[_local_driver_recovery_key(account_id)] = saved
+    return saved
+
+
+def _latest_local_driver_recovery(account_id: str) -> Dict[str, Any]:
+    return dict(_LOCAL_WECHAT_DRIVER_RECOVERY.get(_local_driver_recovery_key(account_id)) or {})
+
+
+def _ensure_local_wechat_com_thread() -> None:
+    if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "com_initialized", False)):
+        return
+    try:
+        import pythoncom  # type: ignore
+
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
+    _LOCAL_WECHAT_THREAD_STATE.com_initialized = True
+
+
+def _reset_local_automation_clients() -> Dict[str, Any]:
+    global _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID
+
+    reset: List[str] = []
+    errors: List[str] = []
+    for module_name in ("uiautomation.uiautomation", "wxauto4.uia.uiautomation"):
+        try:
+            module = importlib.import_module(module_name)
+            client_type = getattr(module, "_AutomationClient", None)
+            if client_type is not None and getattr(client_type, "_instance", None) is not None:
+                client_type._instance = None
+                reset.append(module_name)
+        except Exception as exc:
+            errors.append(f"{module_name}: {exc}")
+    _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = threading.get_ident()
+    return {"reset": reset, "errors": errors}
+
+
+def _prepare_local_automation_thread() -> Dict[str, Any]:
+    global _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID
+
+    _ensure_local_wechat_com_thread()
+    current_thread_id = threading.get_ident()
+    if _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID in (0, current_thread_id):
+        _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = current_thread_id
+        return {"thread_changed": False, "thread_id": current_thread_id, "reset": [], "errors": []}
+    reset = _reset_local_automation_clients()
+    return {"thread_changed": True, "thread_id": current_thread_id, **reset}
+
+
+def _recover_local_wechat_driver(account_id: str, *, operation: str, error: str) -> Dict[str, Any]:
+    recovery: Dict[str, Any] = {
+        "attempted": True,
+        "ok": False,
+        "recovered": False,
+        "operation": str(operation or "native_wechat"),
+        "initial_error": str(error or "")[:1000],
+        "attempted_at": _now_iso(),
+        "thread_id": threading.get_ident(),
+        "automation_reset": {},
+        "window": {},
+        "uia": {},
+        "error": "",
+    }
+    try:
+        _clear_local_windows_cache()
+        recovery["automation_reset"] = _reset_local_automation_clients()
+        visible = _ensure_local_wechat_window_visible(wait_seconds=2.5, allow_launch=False)
+        windows = list(visible.get("windows") or [])
+        if not windows:
+            windows = _scan_local_wechat_windows(max_age_seconds=0)
+        if not windows:
+            raise RuntimeError("没有检测到已登录的微信主窗口")
+        window = dict(windows[0])
+        hwnd = int(window.get("hwnd") or 0)
+        if not hwnd:
+            raise RuntimeError("微信主窗口句柄无效")
+        recovery["window"] = {
+            "hwnd": hwnd,
+            "pid": int(window.get("pid") or 0),
+            "title": str(window.get("title") or ""),
+            "version": str(window.get("version") or ""),
+        }
+        _focus_local_wechat(hwnd)
+        _ensure_local_tab(hwnd, "\u5fae\u4fe1", strict=True)
+        time.sleep(0.8)
+        _clear_local_windows_cache()
+        recovery["uia"] = _probe_wechat_uia(hwnd)
+        recovery["ok"] = True
+    except Exception as exc:
+        recovery["error"] = str(exc)[:1000]
+    return _store_local_driver_recovery(account_id, recovery)
+
+
+def _mark_local_driver_recovery(
+    account_id: str,
+    recovery: Dict[str, Any],
+    *,
+    recovered: bool,
+    retry_error: str = "",
+) -> Dict[str, Any]:
+    updated = {
+        **dict(recovery),
+        "ok": bool(recovered),
+        "recovered": bool(recovered),
+        "retry_error": str(retry_error or "")[:1000],
+        "finished_at": _now_iso(),
+    }
+    if recovered:
+        updated["error"] = ""
+    elif retry_error:
+        updated["error"] = str(retry_error)[:1000]
+    return _store_local_driver_recovery(account_id, updated)
+
+
+def _annotate_local_driver_recovery(result: Any, recovery: Dict[str, Any]) -> Any:
+    if isinstance(result, dict):
+        result["driver_recovered"] = True
+        result["driver_retry_count"] = max(1, int(recovery.get("retry_count") or 1))
+        result["driver_recovery"] = dict(recovery)
+    return result
+
+
+def _collect_local_driver_recovery(target: Dict[str, Any], source: Any) -> None:
+    if not isinstance(source, dict) or not source.get("driver_recovered"):
+        return
+    target["driver_recovered"] = True
+    target["driver_retry_count"] = int(target.get("driver_retry_count") or 0) + int(
+        source.get("driver_retry_count") or 1
+    )
+    events = target.setdefault("driver_recoveries", [])
+    recovery = source.get("driver_recovery")
+    if isinstance(events, list) and isinstance(recovery, dict):
+        events.append(dict(recovery))
+
+
+def _run_local_driver_operation(
+    account_id: str,
+    operation: str,
+    callback: Callable[[], Any],
+    *,
+    retry_on_failure: bool = True,
+) -> Any:
+    with _LOCAL_WECHAT_UI_LOCK:
+        _prepare_local_automation_thread()
+        recovery_before = _latest_local_driver_recovery(account_id)
+
+        def invoke() -> Any:
+            previous = bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False))
+            _LOCAL_WECHAT_THREAD_STATE.operation_handles_recovery = retry_on_failure
+            try:
+                return callback()
+            finally:
+                _LOCAL_WECHAT_THREAD_STATE.operation_handles_recovery = previous
+
+        try:
+            result = invoke()
+            recovery_after = _latest_local_driver_recovery(account_id)
+            if (
+                recovery_after.get("recovered")
+                and recovery_after.get("finished_at")
+                and recovery_after.get("finished_at") != recovery_before.get("finished_at")
+            ):
+                return _annotate_local_driver_recovery(result, recovery_after)
+            return result
+        except Exception as initial_exc:
+            if not retry_on_failure:
+                raise
+            recovery = _recover_local_wechat_driver(
+                account_id,
+                operation=operation,
+                error=str(initial_exc),
+            )
+            if not recovery.get("ok"):
+                raise RuntimeError(
+                    f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u9a71\u52a8\u672a\u6210\u529f\uff1a"
+                    f"{recovery.get('error') or initial_exc}"
+                ) from initial_exc
+            try:
+                result = invoke()
+            except Exception as retry_exc:
+                recovery = _mark_local_driver_recovery(
+                    account_id,
+                    recovery,
+                    recovered=False,
+                    retry_error=str(retry_exc),
+                )
+                raise RuntimeError(
+                    f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u540e\u91cd\u8bd5\u4ecd\u5931\u8d25\uff1a{retry_exc}\uff1b"
+                    "\u8bf7\u624b\u52a8\u91cd\u542f\u5fae\u4fe1\u5e76\u91cd\u65b0\u767b\u5f55\u540e\u518d\u8bd5"
+                ) from retry_exc
+            recovery = _mark_local_driver_recovery(account_id, recovery, recovered=True)
+            return _annotate_local_driver_recovery(result, recovery)
+
+
+def _new_wxauto4_client(account_id: str = "") -> Any:
     try:
         import wxauto4  # type: ignore
     except Exception as exc:
-        raise RuntimeError("缺少 wxauto4，无法读取通讯录/群消息") from exc
-    try:
-        _ensure_local_chat_tab(account_id)
-        return wxauto4.WeChat(debug=False, resize=False, ads=False)
-    except Exception as exc:
-        windows = _scan_local_wechat_windows(max_age_seconds=0)
-        version = str((windows[0] if windows else {}).get("version") or "")
-        if version and not _version_lte(version, WXAUTO4_MAX_PLUS_VERSION):
-            raise RuntimeError(
-                f"当前微信版本 {version} 高于 wxauto4 已知适配版本，完整通讯录/群能力不可用"
-            ) from exc
-        raise RuntimeError(str(exc)) from exc
+        raise RuntimeError("\u7f3a\u5c11 wxauto4\uff0c\u65e0\u6cd5\u8bfb\u53d6\u901a\u8baf\u5f55/\u7fa4\u6d88\u606f") from exc
+    _ensure_local_chat_tab(account_id)
+    wx = wxauto4.WeChat(debug=False, resize=False, ads=False)
+    online_check = getattr(wx, "IsOnline", None)
+    if callable(online_check) and not bool(online_check()):
+        raise RuntimeError("wxauto4 \u672a\u8bc6\u522b\u5230\u5df2\u767b\u5f55\u7684\u5fae\u4fe1\u4e3b\u7a97\u53e3")
+    return wx
+
+
+def _get_wxauto4_client(account_id: str = "") -> Any:
+    with _LOCAL_WECHAT_UI_LOCK:
+        _prepare_local_automation_thread()
+        if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False)):
+            return _new_wxauto4_client(account_id)
+        try:
+            return _new_wxauto4_client(account_id)
+        except Exception as initial_exc:
+            recovery = _recover_local_wechat_driver(
+                account_id,
+                operation="wxauto4_connect",
+                error=str(initial_exc),
+            )
+            if recovery.get("ok"):
+                try:
+                    wx = _new_wxauto4_client(account_id)
+                    _mark_local_driver_recovery(account_id, recovery, recovered=True)
+                    return wx
+                except Exception as retry_exc:
+                    _mark_local_driver_recovery(
+                        account_id,
+                        recovery,
+                        recovered=False,
+                        retry_error=str(retry_exc),
+                    )
+                    initial_exc = retry_exc
+            windows = _scan_local_wechat_windows(max_age_seconds=0)
+            version = str((windows[0] if windows else {}).get("version") or "")
+            if version and not _version_lte(version, WXAUTO4_MAX_PLUS_VERSION):
+                raise RuntimeError(
+                    f"\u5f53\u524d\u5fae\u4fe1\u7248\u672c {version} \u9ad8\u4e8e wxauto4 \u5df2\u77e5\u9002\u914d\u7248\u672c\uff0c\u5b8c\u6574\u901a\u8baf\u5f55/\u7fa4\u80fd\u529b\u4e0d\u53ef\u7528"
+                ) from initial_exc
+            raise RuntimeError(str(initial_exc)) from initial_exc
 
 
 def sync_local_sessions_legacy(account_id: str) -> Dict[str, Any]:
@@ -3922,6 +4236,48 @@ def _uia_collect_visible_sessions(root: Any) -> List[Dict[str, Any]]:
     return [item for item in (_session_from_uia_cell(cell) for cell in _uia_session_cells(root)) if item.get("peer_id")]
 
 
+def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 2) -> Dict[str, Any]:
+    import uiautomation as auto  # type: ignore
+
+    root = auto.ControlFromHandle(int(hwnd))
+    cells = _uia_session_cells(root)
+    if not cells:
+        return {"items": [], "rounds": 0, "completed": False}
+    scroll_target = _uia_scroll_target_from_cells(cells, root)
+    try:
+        scroll_target.WheelUp(wheelTimes=30)
+        time.sleep(0.35)
+    except Exception:
+        pass
+
+    seen: Dict[str, Dict[str, Any]] = {}
+    rounds = 0
+    for idx in range(max(1, min(int(max_rounds or 2), 8))):
+        rounds = idx + 1
+        root = auto.ControlFromHandle(int(hwnd))
+        cells = _uia_session_cells(root)
+        visible = [_session_from_uia_cell(cell) for cell in cells]
+        visible = [item for item in visible if item.get("peer_id")]
+        before = len(seen)
+        for item in visible:
+            peer_id = str(item.get("peer_id") or "")
+            if peer_id:
+                seen[peer_id] = item
+        if len(seen) == before or idx + 1 >= max_rounds or not cells:
+            break
+        scroll_target = _uia_scroll_target_from_cells(cells, root)
+        try:
+            scroll_target.WheelDown(wheelTimes=4)
+            time.sleep(0.22)
+        except Exception:
+            break
+    try:
+        scroll_target.WheelUp(wheelTimes=30)
+    except Exception:
+        pass
+    return {"items": list(seen.values()), "rounds": rounds, "completed": False}
+
+
 def _uia_collect_all_sessions(hwnd: int) -> Dict[str, Any]:
     import uiautomation as auto  # type: ignore
 
@@ -3973,7 +4329,12 @@ def _uia_collect_all_sessions(hwnd: int) -> Dict[str, Any]:
     return {"items": list(seen.values()), "rounds": rounds, "completed": False}
 
 
-def _sync_local_sessions_from_uia(account_id: str, *, passive: bool = False) -> Dict[str, Any]:
+def _sync_local_sessions_from_uia(
+    account_id: str,
+    *,
+    passive: bool = False,
+    recent_only: bool = False,
+) -> Dict[str, Any]:
     if not _module_available("uiautomation"):
         raise RuntimeError("uiautomation is required to sync local sessions")
     import uiautomation as auto  # type: ignore
@@ -3987,6 +4348,9 @@ def _sync_local_sessions_from_uia(account_id: str, *, passive: bool = False) -> 
     scan = {"rounds": 1, "completed": True}
     if passive:
         sessions = _uia_collect_visible_sessions(root)
+    elif recent_only:
+        scan = _uia_collect_recent_sessions(hwnd)
+        sessions = list(scan.get("items") or [])
     else:
         scan = _uia_collect_all_sessions(hwnd)
         sessions = list(scan.get("items") or [])
@@ -4016,18 +4380,30 @@ def _sync_local_sessions_from_uia(account_id: str, *, passive: bool = False) -> 
         "changed": changed,
         "changed_count": len(changed),
         "mode": "replace" if replace_mode else "merge",
-        "source": "pc_wechat_uia_sessions_passive" if passive else "pc_wechat_uia_sessions",
+        "source": (
+            "pc_wechat_uia_sessions_passive"
+            if passive
+            else "pc_wechat_uia_sessions_recent"
+            if recent_only
+            else "pc_wechat_uia_sessions"
+        ),
         "passive": passive,
+        "recent_only": recent_only,
         "scroll_rounds": int(scan.get("rounds") or 0),
         "scroll_completed": bool(scan.get("completed")),
     }
 
 
-def sync_local_sessions(account_id: str, *, passive: bool = False) -> Dict[str, Any]:
+def _sync_local_sessions_once(
+    account_id: str,
+    *,
+    passive: bool = False,
+    recent_only: bool = False,
+) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     try:
-        return _sync_local_sessions_from_uia(account_id, passive=passive)
+        return _sync_local_sessions_from_uia(account_id, passive=passive, recent_only=recent_only)
     except Exception as uia_exc:
         if passive:
             raise
@@ -4039,6 +4415,20 @@ def sync_local_sessions(account_id: str, *, passive: bool = False) -> Dict[str, 
             raise RuntimeError(
                 f"未读取到微信左侧会话；UIA={uia_exc}；wxauto4 fallback={wx_exc}"
             ) from wx_exc
+
+
+def sync_local_sessions(
+    account_id: str,
+    *,
+    passive: bool = False,
+    recent_only: bool = False,
+) -> Dict[str, Any]:
+    return _run_local_driver_operation(
+        account_id,
+        "读取微信会话",
+        lambda: _sync_local_sessions_once(account_id, passive=passive, recent_only=recent_only),
+        retry_on_failure=not passive,
+    )
 
 
 def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 2000) -> Dict[str, Any]:
@@ -4680,7 +5070,7 @@ def sync_local_messages_legacy(account_id: str) -> Dict[str, Any]:
     return {"ok": True, "items": items, "count": len(items)}
 
 
-def sync_local_messages(account_id: str, peer_id: str = "", *, load_more_pages: int = 0) -> Dict[str, Any]:
+def _sync_local_messages_once(account_id: str, peer_id: str = "", *, load_more_pages: int = 0) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     wx = _get_wxauto4_client(account_id)
@@ -4739,6 +5129,19 @@ def sync_local_messages(account_id: str, peer_id: str = "", *, load_more_pages: 
         "seen_count": len(items),
         "deduped_count": len(items) - len(inserted),
     }
+
+
+def sync_local_messages(
+    account_id: str,
+    peer_id: str = "",
+    *,
+    load_more_pages: int = 0,
+) -> Dict[str, Any]:
+    return _run_local_driver_operation(
+        account_id,
+        "读取微信消息",
+        lambda: _sync_local_messages_once(account_id, peer_id, load_more_pages=load_more_pages),
+    )
 
 
 def _uia_walk(root: Any, *, max_depth: int = 16, max_nodes: int = 600) -> List[Any]:
@@ -5176,7 +5579,7 @@ def _accept_visible_friend_request(hwnd: int, item: Dict[str, Any]) -> List[str]
     return steps
 
 
-def accept_local_friend_requests(
+def _accept_local_friend_requests_once(
     account_id: str,
     *,
     max_accepts: int = 20,
@@ -5286,6 +5689,23 @@ def accept_local_friend_requests(
         "items": items,
         "source": "pc_wechat_uia_friend_requests",
     }
+
+
+def accept_local_friend_requests(
+    account_id: str,
+    *,
+    max_accepts: int = 20,
+    max_scrolls: int = 24,
+) -> Dict[str, Any]:
+    return _run_local_driver_operation(
+        account_id,
+        "检查微信好友申请",
+        lambda: _accept_local_friend_requests_once(
+            account_id,
+            max_accepts=max_accepts,
+            max_scrolls=max_scrolls,
+        ),
+    )
 
 
 def _uia_find_add_friend_plus_button(root: Any) -> Optional[Any]:
@@ -7814,7 +8234,7 @@ def _send_text_local(account_id: str, peer_id: str, text: str) -> Dict[str, Any]
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "wxauto4.SendMsg", "raw": raw}
 
 
-def _send_text_local_slow(
+def _send_text_local_slow_once(
     account_id: str,
     peer_id: str,
     text: str,
@@ -7882,6 +8302,20 @@ def _send_text_local_slow(
             (_stable_key(account_id, peer_id), account_id, peer_id, peer_id, "direct", now, _json_dumps(raw), now, now),
         )
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "pc_wechat_slow_typing"}
+
+
+def _send_text_local_slow(
+    account_id: str,
+    peer_id: str,
+    text: str,
+    raw_meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return _run_local_driver_operation(
+        account_id,
+        "发送微信自动回复",
+        lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta),
+        retry_on_failure=False,
+    )
 
 
 def _send_files_local(account_id: str, peer_id: str, attachments: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -9014,27 +9448,43 @@ async def _sleep(seconds: float) -> None:
     await __import__("asyncio").sleep(max(0.0, seconds))
 
 
-def list_peers(account_id: str, *, limit: int = 100, offset: int = 0, chat_type: str = "") -> Dict[str, Any]:
+def list_peers(
+    account_id: str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    chat_type: str = "",
+    keyword: str = "",
+) -> Dict[str, Any]:
     init_db()
     params: List[Any] = [account_id]
     where = "where account_id=?"
     if chat_type and chat_type != "unknown":
         where += " and chat_type=?"
         params.append(chat_type)
+    keyword = str(keyword or "").strip()
+    if keyword:
+        where += " and (display_name like ? or peer_id like ? or last_content like ?)"
+        like = f"%{keyword}%"
+        params.extend([like, like, like])
     with _connect() as conn:
         total = conn.execute(f"select count(*) from wechat_session_state {where}", tuple(params)).fetchone()[0]
         rows = conn.execute(
-            f"select * from wechat_session_state {where} order by updated_at desc limit ? offset ?",
+            f"select * from wechat_session_state {where} order by updated_at desc, id desc limit ? offset ?",
             tuple(params + [int(limit), int(offset)]),
         ).fetchall()
-        peer_rows = conn.execute(
-            """
-            select peer_id, last_inbound_at, last_outbound_at
-            from wechat_peers
-            where account_id=?
-            """,
-            (account_id,),
-        ).fetchall()
+        page_peer_ids = [str(row["peer_id"] or "").strip() for row in rows if str(row["peer_id"] or "").strip()]
+        peer_rows = []
+        if page_peer_ids:
+            placeholders = ",".join("?" for _ in page_peer_ids)
+            peer_rows = conn.execute(
+                f"""
+                select peer_id, last_inbound_at, last_outbound_at
+                from wechat_peers
+                where account_id=? and peer_id in ({placeholders})
+                """,
+                tuple([account_id, *page_peer_ids]),
+            ).fetchall()
     peer_meta = {str(row["peer_id"]): _row_to_dict(row) for row in peer_rows}
     items = []
     for row in rows:
@@ -9061,7 +9511,7 @@ def list_contacts(account_id: str, *, limit: int = 100, offset: int = 0, keyword
     with _connect() as conn:
         total = conn.execute(f"select count(*) from wechat_contacts {where}", tuple(params)).fetchone()[0]
         rows = conn.execute(
-            f"select * from wechat_contacts {where} order by updated_at desc limit ? offset ?",
+            f"select * from wechat_contacts {where} order by updated_at desc, id desc limit ? offset ?",
             tuple(params + [int(limit), int(offset)]),
         ).fetchall()
     return {"items": [_row_to_dict(row) for row in rows], "count": int(total), "limit": limit, "offset": offset}
@@ -9078,7 +9528,7 @@ def list_groups(account_id: str, *, limit: int = 100, offset: int = 0, keyword: 
     with _connect() as conn:
         total = conn.execute(f"select count(*) from wechat_groups {where}", tuple(params)).fetchone()[0]
         rows = conn.execute(
-            f"select * from wechat_groups {where} order by updated_at desc limit ? offset ?",
+            f"select * from wechat_groups {where} order by updated_at desc, id desc limit ? offset ?",
             tuple(params + [int(limit), int(offset)]),
         ).fetchall()
     return {"items": [_row_to_dict(row) for row in rows], "count": int(total), "limit": limit, "offset": offset}
@@ -9095,7 +9545,7 @@ def list_group_members(account_id: str, group_key: str, *, limit: int = 100, off
             """
             select * from wechat_group_members
             where account_id=? and group_key=?
-            order by updated_at desc limit ? offset ?
+            order by updated_at desc, id desc limit ? offset ?
             """,
             (account_id, group_key, int(limit), int(offset)),
         ).fetchall()
@@ -9113,7 +9563,7 @@ def list_messages(account_id: str, peer_id: str, *, limit: int = 100, offset: in
             """
             select * from wechat_messages
             where account_id=? and peer_id=?
-            order by created_at desc
+            order by created_at desc, id desc
             limit ? offset ?
             """,
             (account_id, peer_id, int(limit), int(offset)),
@@ -9177,7 +9627,7 @@ def list_tasks(account_id: str = "", *, limit: int = 50, offset: int = 0) -> Dic
     with _connect() as conn:
         total = conn.execute(f"select count(*) from wechat_tasks {where}", tuple(params)).fetchone()[0]
         rows = conn.execute(
-            f"select * from wechat_tasks {where} order by created_at desc limit ? offset ?",
+            f"select * from wechat_tasks {where} order by created_at desc, id desc limit ? offset ?",
             tuple(params + [int(limit), int(offset)]),
         ).fetchall()
     return {"items": [_row_to_dict(row) for row in rows], "count": int(total), "limit": limit, "offset": offset}

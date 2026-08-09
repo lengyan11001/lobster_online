@@ -816,6 +816,11 @@ def main() -> int:
         help="打入 nodejs/node_modules 与 .openclaw/npm（需本机已 npm install + ensure-npm-cli 跑通）",
     )
     ap.add_argument(
+        "--no-bundled-node-deps",
+        action="store_true",
+        help="Strict code-only OTA: do not pack bundled node_modules snippets; users can run install/repair if missing.",
+    )
+    ap.add_argument(
         "--with-ppt-runtime-deps",
         action="store_true",
         help="打入 scripts/ppt_runtime_wheels，并让新版 updater 离线安装 PPT Master 所需依赖",
@@ -880,6 +885,16 @@ def main() -> int:
     )
     parent = root.parent
     paths_tuple: tuple[str, ...] = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
+    if args.no_bundled_node_deps:
+        paths_tuple = tuple(
+            p
+            for p in paths_tuple
+            if p
+            not in {
+                "nodejs/node_modules/@tencent-weixin/openclaw-weixin",
+                "backend/douyin_origin/douyin_protocol/node_modules",
+            }
+        )
     if args.with_ppt_runtime_deps:
         copied = _prepare_ppt_runtime_wheels(root)
         print(f"[ppt-runtime] copied {len(copied)} wheels into scripts/ppt_runtime_wheels")
@@ -915,12 +930,15 @@ def main() -> int:
             "scripts/wechat_runtime_wheels",
             "CLIENT_CODE_VERSION.json",
         )
-    _ensure_douyin_protocol_node_deps(root)
+    if not args.no_bundled_node_deps:
+        _ensure_douyin_protocol_node_deps(root)
     if args.out is None:
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         suffix_parts = []
         if args.with_nodejs_deps:
             suffix_parts.append("with_nodejs")
+        if args.no_bundled_node_deps:
+            suffix_parts.append("no_deps")
         if args.with_ppt_runtime_deps:
             suffix_parts.append("with_ppt_runtime")
         if args.with_memory_document_runtime_deps:

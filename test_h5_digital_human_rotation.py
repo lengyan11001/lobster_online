@@ -1,9 +1,11 @@
 import asyncio
 from datetime import date
 
+from backend.app.api import h5_chat_channel
 from backend.app.api.h5_chat_channel import (
     _provided_shanjian_workflow_script,
     _resolve_workflow_virtualman,
+    _run_shanjian_digital_human_workflow,
     _select_daily_virtualman,
     _shanjian_video_create_payload,
 )
@@ -274,3 +276,69 @@ def test_long_video_prefers_requested_target_duration():
     assert payload["long_video"] is True
     assert payload["video_duration"] == 150
     assert "hard_max_duration" not in payload
+
+
+def test_audio_driven_create_payload_does_not_require_tts_fields():
+    payload = _shanjian_video_create_payload(
+        {"drive_mode": "audio", "long_video": False, "use_template": False},
+        virtualman_id="avatar-1",
+        title="音频驱动视频",
+        script="",
+        voice="",
+        audio_url="https://example.test/source.mp3",
+        language="zh-CN",
+    )
+
+    assert payload["audio_url"] == "https://example.test/source.mp3"
+    assert "speaker_id" not in payload
+    assert "text" not in payload
+
+
+def test_audio_driven_workflow_skips_voice_preview_tts(monkeypatch):
+    async def fake_resolve(*args, **kwargs):
+        return {"virtualman_id": "avatar-1", "selection_mode": "fixed"}
+
+    async def fake_event(*args, **kwargs):
+        return None
+
+    responses = iter(
+        [
+            {"task_id": "task-audio-1", "record": {"id": 7}},
+            {
+                "status": "succeed",
+                "task_id": "task-audio-1",
+                "video_url": "https://example.test/result.mp4",
+                "record": {"id": 7, "video_url": "https://example.test/result.mp4"},
+            },
+        ]
+    )
+
+    async def fake_post_cloud(*args, **kwargs):
+        return next(responses)
+
+    class NoTtsCloud:
+        async def post(self, *args, **kwargs):
+            raise AssertionError("audio drive must not call preview-tts")
+
+    monkeypatch.setattr(h5_chat_channel, "_resolve_workflow_virtualman", fake_resolve)
+    monkeypatch.setattr(h5_chat_channel, "_workflow_event", fake_event)
+    monkeypatch.setattr(h5_chat_channel, "_post_cloud_api_json", fake_post_cloud)
+
+    result = asyncio.run(
+        _run_shanjian_digital_human_workflow(
+            {
+                "drive_mode": "audio",
+                "virtualman_id": "avatar-1",
+                "audio_url": "https://example.test/source.mp3",
+                "title": "音频驱动视频",
+                "use_template": False,
+            },
+            headers={"Authorization": "Bearer token"},
+            run_id="run-audio-1",
+            cloud=NoTtsCloud(),
+            base="https://server.example.test",
+        )
+    )
+
+    assert result["video_url"] == "https://example.test/result.mp4"
+    assert result["voice"] == ""

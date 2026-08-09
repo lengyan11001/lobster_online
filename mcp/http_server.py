@@ -30,8 +30,7 @@ from .video_model_resolve import (
     APIZ_BIHUO_25_VIDEO_MODEL,
     APIZ_VEO31_IMAGE_MODEL,
     APIZ_VEO31_REFERENCE_MODEL,
-    APIZ_VEO31_TEXT_MODEL,
-    resolve_default_video_model_id,
+    SUTUI_GROK_15_IMAGE_MODEL,
     resolve_video_model_id,
 )
 
@@ -746,9 +745,6 @@ def _apply_openclaw_video_model_lock(
     if not isinstance(payload, dict):
         return payload
     locked_model, source = _openclaw_video_model_lock(request)
-    if not locked_model and _openclaw_scope_intent(request):
-        locked_model = _DEFAULT_VIDEO_MODEL
-        source = "default"
     if not locked_model:
         return payload
     out = dict(payload)
@@ -2047,7 +2043,7 @@ def _tool_definitions(
         "向抖音/头条/小红书发文请用 publish_content，asset_id 填素材 ID。"
         "生成类 prompt 只写画面/视频内容；账号、平台、标题、正文、话题等发布信息必须放 publish_content，禁止混进 image.generate/video.generate prompt。"
         "【默认模型】image.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认配置补齐；用户明确指定 jimeng-4.0/jimeng-4.5 等时正常使用。"
-        "video.generate 用户未指定模型时可省略 payload.model，由 MCP 按默认视频模型补齐。"
+        "video.generate 用户未指定模型时可省略 payload.model，由服务器统一选择默认模型和兜底策略，Online/MCP 不补默认视频模型。"
         "【素材/URL】理解图片/视频或图生视频时，可以在 payload 传 image_url/video_url/image_urls/video_urls/asset_id；不要用 read 读取 http(s) URL。"
         "【爆款TVC】用户说TVC/带货视频时不走video.generate，改用 capability_id=\"comfly.daihuo.pipeline\"。"
     )
@@ -2081,7 +2077,7 @@ def _tool_definitions(
                             "media.edit: 必须含 operation（overlay_text|trim|scale_pad|mute|mux_audio|image_to_video|extract_frame）+ asset_id；"
                             "overlay_text 时必须含 text，可选 position(top/center/bottom)、font_size、font_color。"
                             "image.generate: 含 prompt（只写画面内容；不要写发布账号、平台、标题、正文、话题）。用户未指定模型时可省略 model，由 MCP 按默认配置补齐。"
-                            "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由后端按模型默认值处理）；model 可省略并由 MCP 按默认视频模型补齐；prompt 只写视频画面/动作，不写发布账号或发布文案；图生视频可传 image_url 或 asset_id。"
+                            "video.generate: 含 prompt、duration（用户未指定时长时不要强行填 duration，由服务器按模型默认值处理）；model 可省略，由服务器统一选择默认模型和兜底策略，Online/MCP 不补默认视频模型；prompt 只写视频画面/动作，不写发布账号或发布文案；图生视频可传 image_url 或 asset_id。"
                             "goal.video.pipeline: 创意成片专用；当用户说创意成片、目标成片或根据记忆给某产品生成宣传视频时，直接传 action=start_pipeline、goal、platform，以及用户明确要求的 duration、aspect_ratio、resolution 和参考素材参数；goal 必填并尽量保留用户原话。用户说 30秒/30s 时 duration 必须是 30，禁止套用 6 秒默认值或静默缩短；没有素材也可以调用，不要先卡在素材库；若返回 status=running/openclaw_async/next_payload，说明任务仍在跑，只能继续 poll_pipeline，禁止改用普通 image.generate/video.generate。"
                             "image.understand/video.understand: 必须带 image_url/video_url、对应 *_urls 数组或 asset_id。"
                             "task.get_result: 含 task_id。"
@@ -2758,6 +2754,57 @@ def _coerce_grok_video_resolution(raw: Any) -> Optional[str]:
     return "720p"
 
 
+_SUTUI_GROK_15_ASPECT_RATIOS = frozenset(
+    {"auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
+)
+
+
+def _normalize_sutui_grok_15_image_payload(
+    payload: Dict[str, Any],
+    *,
+    model: str,
+    prompt: str,
+    image_url: str,
+) -> Dict[str, Any]:
+    if not image_url:
+        raise ValueError(f"{model} requires image_url")
+
+    duration = _parse_video_duration_seconds(_payload_get_duration_raw(payload), default=6)
+    if duration < 6 or duration > 15:
+        raise ValueError(f"{model} duration must be between 6 and 15 seconds")
+
+    resolution = str(payload.get("resolution") or "720p").strip().lower().replace(" ", "")
+    if resolution in {"auto", "automatic", "default", "original"}:
+        resolution = "720p"
+    if resolution not in {"480p", "720p"}:
+        raise ValueError(f"{model} resolution must be 480p or 720p")
+
+    raw_ratio = _payload_get_aspect_ratio(payload)
+    ratio = str(raw_ratio or "auto").strip().lower().replace(" ", "").replace("：", ":")
+    ratio = {
+        "adaptive": "auto",
+        "automatic": "auto",
+        "default": "auto",
+        "original": "auto",
+        "portrait": "9:16",
+        "vertical": "9:16",
+        "landscape": "16:9",
+        "horizontal": "16:9",
+        "square": "1:1",
+    }.get(ratio, ratio)
+    if ratio not in _SUTUI_GROK_15_ASPECT_RATIOS:
+        raise ValueError(f"{model} does not support aspect_ratio={raw_ratio}")
+
+    return {
+        "model": model,
+        "prompt": prompt,
+        "image_url": image_url,
+        "duration": duration,
+        "resolution": resolution,
+        "aspect_ratio": ratio,
+    }
+
+
 _APIZ_VEO31_DURATION_SECONDS = (4, 6, 8)
 
 
@@ -2924,9 +2971,6 @@ _IMAGE_MODEL_ALIASES: Dict[str, str] = {
 }
 
 _DEFAULT_IMAGE_MODEL = (os.getenv("LOBSTER_DEFAULT_IMAGE_GENERATE_MODEL") or "openai/gpt-image-2").strip() or "openai/gpt-image-2"
-_DEFAULT_VIDEO_MODEL = resolve_default_video_model_id(
-    os.getenv("LOBSTER_DEFAULT_VIDEO_GENERATE_MODEL") or APIZ_VEO31_TEXT_MODEL
-)
 _IMAGE_SOCIAL_PLATFORM_PATTERN = r"(?:抖音|小红书|今日头条|头条|快手|B站|b站|视频号|微博|TikTok|tiktok|YouTube|youtube|Instagram|instagram)"
 _IMAGE_PUBLISH_CONTEXT_RE = re.compile(
     rf"(?:发布|投稿|上传|发到|发至|发送到|同步到|{_IMAGE_SOCIAL_PLATFORM_PATTERN}.{{0,12}}(?:账号|帐号|账户|昵称|发布|文案|配文|话题))",
@@ -3285,16 +3329,36 @@ def _normalize_understand_payload(
     return out
 
 
-def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _server_passthrough_video_generate_payload(
+    payload: Dict[str, Any],
+    *,
+    prompt: str,
+    image_refs: List[str],
+) -> Dict[str, Any]:
+    out = dict(payload)
+    if not (str(out.get("model") or out.get("model_id") or "").strip()):
+        out.pop("model", None)
+        out.pop("model_id", None)
+    out["prompt"] = prompt
+    if image_refs:
+        out["image_url"] = image_refs[0]
+        out["image_urls"] = list(image_refs)
+    for key in ("duration", "duration_sec", "duration_seconds", "length", "video_length"):
+        if out.get(key) is None or out.get(key) == "":
+            out.pop(key, None)
+    duration_raw = _payload_get_duration_raw(payload)
+    if duration_raw is not None and duration_raw != "" and "duration" not in out:
+        out["duration"] = duration_raw
+    return out
+
+
+def _normalize_video_generate_payload(payload: Dict[str, Any], *, server_controlled: bool = False) -> Dict[str, Any]:
     """
     按视频模型把「统一 payload」转成该模型 API 需要的参数，与 lobster 对齐：支持 backend 注入的 filePaths/media_files。
     """
     if not payload or not isinstance(payload, dict):
         return payload
     model = (payload.get("model") or payload.get("model_id") or "").strip()
-    if not model:
-        model = _DEFAULT_VIDEO_MODEL
-        logger.info("[MCP video.generate] 未传 model，已使用默认视频模型 model=%s", model)
     prompt_raw = (payload.get("prompt") or "").strip()
     prompt = _sanitize_video_generate_prompt_for_publish_copy(prompt_raw)
     if prompt != prompt_raw:
@@ -3305,6 +3369,13 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         )
     image_refs = _collect_video_image_refs(payload)
     has_image = bool(image_refs)
+    if server_controlled or not model:
+        logger.info(
+            "[MCP video.generate] 跳过本地模型适配并透传给服务器 server_controlled=%s has_model=%s",
+            server_controlled,
+            bool(model),
+        )
+        return _server_passthrough_video_generate_payload(payload, prompt=prompt, image_refs=image_refs)
     model = resolve_video_model_id(model, has_image, image_count=len(image_refs))
     model_lower = model.lower()
     first_url = image_refs[0] if image_refs else ""
@@ -3334,6 +3405,14 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     # 必火2.5 supports exact 4-30 second output and has its own multimodal contract.
     if model == APIZ_BIHUO_25_VIDEO_MODEL:
         return _normalize_bihuo_25_video_payload(payload, prompt)
+
+    if model == SUTUI_GROK_15_IMAGE_MODEL:
+        return _normalize_sutui_grok_15_image_payload(
+            payload,
+            model=model,
+            prompt=prompt,
+            image_url=first_url,
+        )
 
     # st-ai/super-seed2：ratio, filePaths, functionMode（保留 backend 注入的多图 filePaths）
     if "super-seed2" in model or "st-ai/super-seed2" == model:
@@ -3523,9 +3602,12 @@ def _normalize_video_generate_payload(payload: Dict[str, Any]) -> Dict[str, Any]
         out = {"model": model, "prompt": prompt}
         if first_url:
             out["image_url"] = first_url
-        _has_ar = _payload_get_aspect_ratio(payload) is not None
+        _raw_ar = _payload_get_aspect_ratio(payload)
+        _has_ar = _raw_ar is not None
         if not first_url or _has_ar:
-            out["aspect_ratio"] = aspect_ratio if ratio_ok else "9:16"
+            out["aspect_ratio"] = (_coerce_video_aspect_ratio_for_upstream(_raw_ar) if _has_ar else "9:16")
+            if out["aspect_ratio"] not in _VIDEO_ASPECT_RATIOS:
+                out["aspect_ratio"] = "9:16"
         out["duration"] = duration_sec
         _ger = _coerce_grok_video_resolution(payload.get("resolution"))
         if _ger is not None:
@@ -5194,8 +5276,12 @@ async def _call_tool(name: str, args: Dict[str, Any], token: Optional[str], requ
                 )
                 if _oc_video_guard_error:
                     return [{"type": "text", "text": _oc_video_guard_error}], True
+                server_controls_video_payload = upstream_name == "sutui" and _sutui_upstream_is_server_gateway(upstream_url)
                 try:
-                    payload = _normalize_video_generate_payload(payload)
+                    payload = _normalize_video_generate_payload(
+                        payload,
+                        server_controlled=server_controls_video_payload,
+                    )
                 except ValueError as e:
                     return [{"type": "text", "text": f"video.generate 参数错误: {e}"}], True
                 _vm = (payload.get("model") or "").strip() if isinstance(payload, dict) else ""

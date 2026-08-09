@@ -1365,8 +1365,6 @@ function _getChatSuggestionMeta(title) {
     '每日IP日更': { tone: 'content', icon: '日', desc: '热点、同行、记忆生成文案' },
     '公众号文章': { tone: 'content', icon: '文', desc: '写文、配图、推草稿' },
     '创作图片': { tone: 'content', icon: '▣', desc: '进入图片工作台' },
-    '电商详情': { tone: 'ecommerce', icon: '▤', desc: '生成主图和详情页' },
-    '爆款TVC': { tone: 'image', icon: '▶', desc: '填入视频生成话术' },
     '创意分镜头视频': { tone: 'plan', icon: '▶', desc: '进入创意分镜头视频工作台' },
     '同城爆款': { tone: 'douyin', icon: '城', desc: '批量做30天内容' },
     '数字人口播': { tone: 'content', icon: 'H', desc: '进入数字人口播工作台' },
@@ -1400,6 +1398,19 @@ function _setChatSuggestionGate(el, featureKey) {
   var key = String(featureKey || '').trim();
   if (key) el.setAttribute('data-feature-gate', key);
   else el.removeAttribute('data-feature-gate');
+}
+
+function _hideChatSuggestionChip(el) {
+  if (!el) return;
+  _clearChatSuggestionActionAttrs(el);
+  el.style.display = 'none';
+  el.setAttribute('aria-hidden', 'true');
+}
+
+function _showChatSuggestionChip(el) {
+  if (!el) return;
+  el.style.display = '';
+  el.removeAttribute('aria-hidden');
 }
 
 function _refreshChatFeatureGates() {
@@ -1900,31 +1911,22 @@ function updateChatModeUi(mode) {
       _setChatSuggestionGate(chip2, 'h5_chat_entry');
     }
     if (chip4) {
+      _showChatSuggestionChip(chip4);
       _renderChatSuggestionChip(chip4, '创作图片');
       _setChatSuggestionAction(chip4, 'data-open-hidden-view', 'image-composer-studio');
       _setChatSuggestionGate(chip4, 'goal_video_pipeline_skill');
     }
-    if (chipEcommerceDetail) {
-      _renderChatSuggestionChip(chipEcommerceDetail, '电商详情');
-      _setChatSuggestionAction(chipEcommerceDetail, 'data-open-hidden-view', 'ecommerce-detail-studio');
-      _setChatSuggestionGate(chipEcommerceDetail, 'comfly_ecommerce_detail_skill');
-    }
-    if (chip5) {
-      _renderChatSuggestionChip(chip5, '爆款TVC');
-      _setChatSuggestionAction(chip5, 'data-jump-view', 'viral-tvc-studio');
-      _setChatSuggestionGate(chip5, 'comfly_veo_skill');
-    }
+    _hideChatSuggestionChip(chipEcommerceDetail);
+    _hideChatSuggestionChip(chip5);
     if (chip6) {
+      _showChatSuggestionChip(chip6);
       _renderChatSuggestionChip(chip6, '创意分镜头视频');
       _setChatSuggestionAction(chip6, 'data-open-hidden-view', 'seedance-tvc-studio');
       _setChatSuggestionGate(chip6, 'comfly_seedance_tvc_skill');
     }
-    if (chipPpt) {
-      _renderChatSuggestionChip(chipPpt, 'PPT制作');
-      _setChatSuggestionAction(chipPpt, 'data-jump-view', 'ppt-studio');
-      _setChatSuggestionGate(chipPpt, 'create_ppt_skill');
-    }
+    _hideChatSuggestionChip(chipPpt);
     if (chipLocalBestseller) {
+      _showChatSuggestionChip(chipLocalBestseller);
       _renderChatSuggestionChip(chipLocalBestseller, '同城爆款');
       _setChatSuggestionAction(chipLocalBestseller, 'data-open-hidden-view', 'local-bestseller');
       _setChatSuggestionGate(chipLocalBestseller, 'local_bestseller_skill');
@@ -1962,11 +1964,12 @@ function updateChatModeUi(mode) {
       shortcut2.setAttribute('data-feature-gate', 'publish_center_entry');
     }
     if (shortcut3) {
-      shortcut3.textContent = '电商详情';
-      shortcut3.setAttribute('data-open-hidden-view', 'ecommerce-detail-studio');
+      shortcut3.style.display = 'none';
+      shortcut3.removeAttribute('data-open-hidden-view');
       shortcut3.removeAttribute('data-jump-view');
       shortcut3.removeAttribute('data-chat-prompt');
-      shortcut3.setAttribute('data-feature-gate', 'comfly_ecommerce_detail_skill');
+      shortcut3.removeAttribute('data-feature-gate');
+      shortcut3.setAttribute('aria-hidden', 'true');
     }
     if (attachBtn) attachBtn.style.display = '';
     if (directChip) directChip.style.display = '';

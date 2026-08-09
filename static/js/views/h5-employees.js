@@ -11,7 +11,10 @@
     nodes: [],
     active: null,
     loading: false,
-    nodeEditIndex: -1
+    submitting: '',
+    nodeEditIndex: -1,
+    childParentIndex: -1,
+    childEditId: ''
   };
 
   var SALES_ROWS = [
@@ -74,6 +77,13 @@
     ['ip_content_daily','IP日更文案']
   ];
 
+  var CHILD_ACTION_OPTIONS = [
+    ['publish','发布内容'],
+    ['native_wechat_add_friend','自动加好友'],
+    ['native_wechat_group_invite','自动拉群'],
+    ['native_wechat_moments_engage','朋友圈点赞评论']
+  ];
+
   function el(id) { return document.getElementById(id); }
   function esc(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]; }); }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -87,7 +97,8 @@
   function showError(message) { var box = el('oeError'); if (!box) return; box.textContent = message || ''; box.hidden = !message; }
   function clearError() { showError(''); }
   function activeTemplateKey(template) { return String(template && template.meta && (template.meta.system_template_key || template.meta.systemTemplateKey) || '').trim(); }
-  function isSalesTemplate(template) { return String(state.selectedId) === 'system_sales' || activeTemplateKey(template) === 'system_sales' || (template && template.nodes || []).some(function(node) { return String(node && node.ability_key || '') === 'local_bestseller'; }); }
+  function isSalesTemplate(template) { return String(state.selectedId) === 'system_sales' || activeTemplateKey(template) === 'system_sales'; }
+  function templateNeedsPlanDay(template) { return isSalesTemplate(template) || (state.nodes.length ? state.nodes : (template && template.nodes || [])).some(function(node) { var payload=node && node.plan && node.plan.payload || {}; return String(node && node.ability_key || '') === 'local_bestseller' || String(payload.action || '') === 'local_bestseller_daily_video'; }); }
   function selectedDeviceId() { return String((el('oeDeviceSelect') && el('oeDeviceSelect').value) || '').trim(); }
   function scheduleDuration(start, end) {
     var parse = function(value) { var m = /^(\d{2}):(\d{2})$/.exec(String(value || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; };
@@ -135,8 +146,102 @@
     if (row.publish && !row.soon) node.children = row.publish.map(function(item, childIndex) { return publishChild(node, item, childIndex); });
     return node;
   }
-  function isDouyinPrivate(node) { return node && node.ability_key === 'douyin_leads' && String(node.note || '').indexOf('私信接管') >= 0; }
-  function isWechatPrivate(node) { return node && node.ability_key === 'native_wechat_poll' && String(node.note || '').indexOf('微信私信接管') >= 0 && String(node.note || '').indexOf('拉群') < 0; }
+  function workflowChildren(node) {
+    if (!node || typeof node !== 'object') return [];
+    if (Array.isArray(node.children)) return node.children;
+    if (Array.isArray(node.actions)) return node.actions;
+    return [];
+  }
+  function workflowPayload(node) {
+    return node && node.plan && typeof node.plan === 'object' && node.plan.payload && typeof node.plan.payload === 'object' ? node.plan.payload : {};
+  }
+  function childActionType(child) {
+    var explicit=String(child && (child.action_type || child.type) || '').trim().toLowerCase();
+    if (explicit && explicit !== 'client_workflow') return explicit;
+    var payload=workflowPayload(child), params=payload.params && typeof payload.params === 'object' ? payload.params : {};
+    var action=String(payload.action || child && child.ability_key || '').trim().toLowerCase();
+    if (action === 'native_wechat_poll' && params.followup_action === 'group_invite') return 'native_wechat_group_invite';
+    if (action === 'native_wechat_add_friend' || action === 'native_wechat_moments_engage') return action;
+    if (action === 'publish_content' || child && child.platform) return 'publish';
+    return explicit || 'publish';
+  }
+  function isDouyinPrivate(node) {
+    var text=[node && node.ability_label,node && node.note].map(function(value){return String(value || '');}).join(' ');
+    return !!node && String(node.ability_key || '') === 'douyin_leads' && text.indexOf('私信接管') >= 0;
+  }
+  function isWechatPrivate(node) {
+    if (!node) return false;
+    var payload=workflowPayload(node), params=payload.params && typeof payload.params === 'object' ? payload.params : {};
+    var action=String(payload.action || node.ability_key || '').trim().toLowerCase();
+    var text=[node.ability_label,node.note,node.plan && node.plan.title].map(function(value){return String(value || '');}).join(' ');
+    var takeover=action === 'native_wechat_poll' || text.indexOf('微信私信接管') >= 0 || text.indexOf('个微私信接管') >= 0 || text.indexOf('个人微信接管') >= 0;
+    return takeover && params.followup_action !== 'group_invite' && text.indexOf('自动拉群') < 0;
+  }
+  function childOptions(parent, currentType) {
+    var values=[];
+    if (isDouyinPrivate(parent)) values.push('native_wechat_add_friend');
+    if (isWechatPrivate(parent)) values.push('native_wechat_group_invite','native_wechat_moments_engage');
+    values.push('publish');
+    if (currentType && values.indexOf(currentType) < 0) values.push(currentType);
+    return values.map(function(value){return CHILD_ACTION_OPTIONS.find(function(item){return item[0] === value;});}).filter(Boolean);
+  }
+  function childPlatformLabel(platform) {
+    return ({douyin:'抖音',toutiao:'头条',wechat_channels:'视频号',wechat_moments:'朋友圈图文'})[String(platform || '').trim()] || '平台';
+  }
+  function childActionLabel(child) {
+    var type=childActionType(child);
+    if (type === 'publish') return '发布' + childPlatformLabel(child && child.platform);
+    if (type === 'native_wechat_add_friend') return '微信自动加好友';
+    if (type === 'native_wechat_group_invite') return '微信自动拉群';
+    if (type === 'native_wechat_moments_engage') return '朋友圈点赞评论';
+    return child && (child.ability_label || child.note) || '下级动作';
+  }
+  function buildWorkflowChild(parent, form, existing) {
+    var type=String(form.action_type || childActionType(existing) || 'publish').trim();
+    var time=String(form.time || existing && existing.time || parent.time || '09:00').trim();
+    var platform=String(form.platform || existing && existing.platform || 'douyin').trim();
+    var id=String(existing && existing.id || ('wf_action_' + Date.now().toString(36) + '_' + Math.random().toString(16).slice(2,8)));
+    if (type === 'publish') {
+      var publish=publishChild(parent,[time,platform,'发布' + childPlatformLabel(platform)],0);
+      publish.id=id;
+      publish.time=time;
+      return publish;
+    }
+    var keys={native_wechat_add_friend:'native_wechat_add_friend',native_wechat_group_invite:'native_wechat_poll',native_wechat_moments_engage:'native_wechat_moments_engage'};
+    var key=keys[type];
+    if (!key) throw new Error('不支持的下级动作');
+    var label=childActionLabel({action_type:type});
+    var extra={source_workflow_node_id:String(parent.id || ''),source_workflow_node_label:String(parent.ability_label || parent.note || '')};
+    if (type === 'native_wechat_add_friend') Object.assign(extra,{source_mode:'douyin_private_message_phone',trigger:'clear_mobile',skip_without_clear_mobile:true,targets:[]});
+    if (type === 'native_wechat_group_invite') Object.assign(extra,{followup_action:'group_invite',group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent',group_invite_targets_source:'qualified_intent',group_invite_members:[],group_invite_manager_contacts:[]});
+    if (type === 'native_wechat_moments_engage') Object.assign(extra,{targets:[],moment_action:'like_comment',max_scrolls:6});
+    var row={time:time,end:'',key:key,label:label,note:label,params:{}};
+    return Object.assign({},existing || {},{id:id,time:time,parent_node_id:String(parent.id || ''),action_type:type,type:type,platform:'',ability_key:key,ability_label:label,department_id:parent.department_id || '',department_name:parent.department_name || '',note:label,is_action_node:true,param_configured:true,plan:nativePlan(key,row,extra)});
+  }
+  function syncParentChildRules(parent) {
+    var next=Object.assign({},parent || {}), children=workflowChildren(next).slice();
+    var plan=next.plan && typeof next.plan === 'object' ? Object.assign({},next.plan) : {};
+    var payload=plan.payload && typeof plan.payload === 'object' ? Object.assign({},plan.payload) : {};
+    var params=payload.params && typeof payload.params === 'object' ? Object.assign({},payload.params) : {};
+    var groups=children.filter(function(child){return childActionType(child) === 'native_wechat_group_invite';});
+    var friends=children.filter(function(child){return childActionType(child) === 'native_wechat_add_friend';});
+    if (groups.length || Object.prototype.hasOwnProperty.call(params,'group_invite_rules')) {
+      params.group_invite_enabled=groups.length > 0;
+      params.group_invite_targets_source='qualified_intent';
+      params.group_invite_rules=groups.map(function(child){return {child_node_id:child.id,time:child.time,trigger:'qualified_intent',members:[],manager_contacts:[]};});
+      if (groups.length) params.group_invite_rule_status='pending_rules';
+    }
+    if (friends.length || Object.prototype.hasOwnProperty.call(params,'wechat_add_friend_rules')) {
+      params.wechat_add_friend_enabled=friends.length > 0;
+      params.wechat_add_friend_targets_source='douyin_private_message_phone';
+      params.wechat_add_friend_rules=friends.map(function(child){return {child_node_id:child.id,time:child.time,trigger:'clear_mobile',skip_without_clear_mobile:true};});
+    }
+    payload.params=params;
+    plan.payload=payload;
+    next.plan=plan;
+    next.children=children;
+    return next;
+  }
   function addChild(parent, row, index, type) {
     if (!parent) return false;
     var childKey = type === 'friend' ? 'native_wechat_add_friend' : 'native_wechat_poll';
@@ -165,6 +270,8 @@
   function ownSalesMirror() { return state.templates.find(function(item) { return activeTemplateKey(item) === 'system_sales'; }); }
   function templateForSelected() { if (state.selectedId === 'system_sales') return ownSalesMirror() || {id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()}; return state.templates.find(function(item) { return String(item.id) === String(state.selectedId); }) || null; }
   function templateIsEditable(template) { return !!(template && template.source === 'own'); }
+  function currentTemplateIsEditable() { return state.selectedId === 'system_sales' || templateIsEditable(state.selectedTemplate); }
+  function requireEditableTemplate() { if (!currentTemplateIsEditable()) throw new Error('授权模板为只读配置，不能修改'); }
   function activeForDevice() { var iid = selectedDeviceId(); return state.active && String(state.active.installation_id || '') === iid ? state.active : null; }
   function renderDevices() {
     var select = el('oeDeviceSelect'); if (!select) return;
@@ -172,25 +279,27 @@
     select.innerHTML = '<option value="">请选择 Online 设备</option>' + state.devices.map(function(device) { var id=String(device.installation_id || ''); var name=String(device.display_name || id.slice(0,12) || '未命名设备'); return '<option value="' + esc(id) + '">' + esc(name) + (device.online ? ' · 在线' : ' · 离线') + '</option>'; }).join('');
     if (current && state.devices.some(function(device) { return String(device.installation_id) === current; })) select.value = current;
     else { var online = state.devices.find(function(device) { return device.online; }); if (online) select.value = online.installation_id; }
+    select.disabled = !!state.submitting;
   }
   function renderList() {
     var host = el('oeTemplateList'); if (!host) return;
     var rows = [{id:'system_sales',name:'销售员工',meta:{system_template_key:'system_sales'},source:'system',mark:'销'}].concat(state.templates.filter(function(item) { return activeTemplateKey(item) !== 'system_sales'; }).map(function(item) { return Object.assign({mark:String(item.name || '员').charAt(0)},item); }));
     if (!rows.length) { host.innerHTML = '<div class="oe-empty-list">当前账号没有可访问的员工模板。</div>'; return; }
-    host.innerHTML = rows.map(function(item) { var selected=String(item.id)===String(state.selectedId); var meta=item.source === 'granted' ? '他人授权' : item.source === 'system' ? '系统员工' : '我的模板'; return '<button type="button" class="oe-employee-item' + (selected ? ' is-selected' : '') + '" data-oe-template="' + esc(item.id) + '"><span class="oe-employee-mark">' + esc(item.mark || String(item.name || '员').charAt(0)) + '</span><span class="oe-employee-copy"><span class="oe-employee-name">' + esc(item.name || '未命名员工') + '</span><span class="oe-employee-meta">' + meta + '</span></span></button>'; }).join('');
+    host.innerHTML = rows.map(function(item) { var selected=String(item.id)===String(state.selectedId); var meta=item.source === 'granted' ? '他人授权' : item.source === 'system' ? '系统员工' : '我的模板'; return '<button type="button" class="oe-employee-item' + (selected ? ' is-selected' : '') + '" data-oe-template="' + esc(item.id) + '"' + (state.submitting ? ' disabled aria-disabled="true"' : '') + '><span class="oe-employee-mark">' + esc(item.mark || String(item.name || '员').charAt(0)) + '</span><span class="oe-employee-copy"><span class="oe-employee-name">' + esc(item.name || '未命名员工') + '</span><span class="oe-employee-meta">' + meta + '</span></span></button>'; }).join('');
   }
   function renderStatus() {
     var status=el('oeActiveStatus'), active=activeForDevice(); if (!status) return;
     status.textContent = active ? '已启用 · ' + (active.template_name || '当前员工') : '未启用'; status.classList.toggle('is-active',!!active);
   }
-  function childHtml(child) { var soon=child.comingSoon || child.workflow_placeholder || (child.plan && child.plan.payload && child.plan.payload.skip_execution); return '<div class="oe-child"><span class="oe-child-time">' + esc(child.time || '--:--') + '</span><span class="oe-child-copy">' + esc(child.ability_label || child.note || '子动作') + (soon ? '<small>视频号功能敬请期待</small>' : '<small>' + esc(child.note || '') + '</small>') + '</span><span class="oe-tag child">下一级</span></div>'; }
-  function nodeHtml(node,index) { var soon=!!(node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution); var children=Array.isArray(node.children) ? node.children : (Array.isArray(node.actions) ? node.actions : []); return '<article class="oe-node' + (soon ? ' is-soon' : '') + '"><div class="oe-time">' + esc(node.time || '--:--') + (node.end_time ? '<br><span style="color:#a0aaba;font-size:.61rem;font-weight:400">' + esc(node.end_time) + '</span>' : '') + '</div><div class="oe-line"></div><div class="oe-node-main"><div class="oe-node-title"><span>' + esc(node.ability_label || node.note || '工作节点') + '</span>' + (soon ? '<span class="oe-tag soon">敬请期待</span>' : '') + (node.sales_preset ? '<span class="oe-tag">销售</span>' : '') + '</div><div class="oe-node-note">' + esc(node.note || '') + '</div><div class="oe-node-key">' + esc(node.ability_key || '') + '</div></div><div class="oe-node-actions">' + (!soon ? '<button type="button" class="oe-mini-btn" data-oe-edit="' + index + '">编辑</button><button type="button" class="oe-mini-btn" data-oe-delete="' + index + '">删除</button>' : '') + '</div>' + (children.length ? '<div class="oe-children">' + children.map(childHtml).join('') + '</div>' : '') + '</article>'; }
-  function renderTimeline() { var host=el('oeTimeline'); if (!host) return; var count=state.nodes.length; el('oeTimelineMeta').textContent=count + ' 个节点' + (state.nodes.reduce(function(total,node){return total+(Array.isArray(node.children)?node.children.length:0);},0) ? ' · 含下一级动作' : ''); host.innerHTML=count ? state.nodes.map(nodeHtml).join('') : '<div class="oe-empty-list">还没有节点，点击“添加节点”开始配置。</div>'; }
+  function childHtml(child,parentIndex,editable) { var soon=child.comingSoon || child.workflow_placeholder || (child.plan && child.plan.payload && child.plan.payload.skip_execution); return '<div class="oe-child"><span class="oe-child-time">' + esc(child.time || '--:--') + '</span><span class="oe-child-copy">' + esc(child.ability_label || childActionLabel(child)) + (soon ? '<small>视频号功能敬请期待</small>' : '<small>' + esc(child.note || childActionLabel(child)) + '</small>') + '</span><span class="oe-tag child">下一级</span>' + (editable && !soon ? '<span class="oe-child-actions"><button type="button" class="oe-mini-btn" data-oe-child-edit="' + esc(child.id || '') + '" data-oe-child-parent="' + parentIndex + '">编辑</button><button type="button" class="oe-mini-btn" data-oe-child-delete="' + esc(child.id || '') + '" data-oe-child-parent="' + parentIndex + '">删除</button></span>' : '') + '</div>'; }
+  function nodeHtml(node,index,editable) { var soon=!!(node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution); var children=workflowChildren(node); return '<article class="oe-node' + (soon ? ' is-soon' : '') + '"><div class="oe-time">' + esc(node.time || '--:--') + (node.end_time ? '<br><span style="color:#a0aaba;font-size:.61rem;font-weight:400">' + esc(node.end_time) + '</span>' : '') + '</div><div class="oe-line"></div><div class="oe-node-main"><div class="oe-node-title"><span>' + esc(node.ability_label || node.note || '工作节点') + '</span>' + (soon ? '<span class="oe-tag soon">敬请期待</span>' : '') + (node.sales_preset ? '<span class="oe-tag">销售</span>' : '') + '</div><div class="oe-node-note">' + esc(node.note || '') + '</div><div class="oe-node-key">' + esc(node.ability_key || '') + '</div></div><div class="oe-node-actions">' + (editable && !soon ? '<button type="button" class="oe-mini-btn" data-oe-child-add="' + index + '">添加下级</button><button type="button" class="oe-mini-btn" data-oe-edit="' + index + '">编辑</button><button type="button" class="oe-mini-btn" data-oe-delete="' + index + '">删除</button>' : '') + '</div>' + (children.length ? '<div class="oe-children">' + children.map(function(child){return childHtml(child,index,editable);}).join('') + '</div>' : '') + '</article>'; }
+  function renderTimeline() { var host=el('oeTimeline'); if (!host) return; var editable=currentTemplateIsEditable(), count=state.nodes.length, childCount=state.nodes.reduce(function(total,node){return total+workflowChildren(node).length;},0); el('oeTimelineMeta').textContent=count + ' 个节点' + (childCount ? ' · ' + childCount + ' 个下级动作' : ''); host.innerHTML=count ? state.nodes.map(function(node,index){return nodeHtml(node,index,editable);}).join('') : '<div class="oe-empty-list">还没有节点，点击“添加节点”开始配置。</div>'; }
   function renderEditor() {
     var body=el('oeEditorBody'), empty=el('oeEditorEmpty'), template=state.selectedTemplate; if (!template) { body.hidden=true; empty.hidden=false; return; }
     body.hidden=false; empty.hidden=true; el('oeEditorTitle').textContent=template.name || '未命名员工'; el('oeEditorSubtitle').textContent=isSalesTemplate(template) ? '销售 24 小时工作流 · 复用 H5 销售逻辑' : (template.source === 'granted' ? '授权模板 · 只读配置' : '自定义工作流'); el('oeTemplateName').value=template.name || ''; renderStatus(); renderTimeline();
-    var editable=state.selectedId === 'system_sales' || templateIsEditable(template); el('oeTemplateName').disabled=!editable; el('oeTemplateName').title=editable ? '' : '授权模板不能修改';
-    document.querySelectorAll('#content-h5-employees [data-oe-action="save"],#content-h5-employees [data-oe-action="add"]').forEach(function(button){button.disabled=!editable;});
+    var editable=currentTemplateIsEditable(); el('oeTemplateName').disabled=!editable; el('oeTemplateName').title=editable ? '' : '授权模板不能修改';
+    document.querySelectorAll('#content-h5-employees [data-oe-action="save"],#content-h5-employees [data-oe-action="add"]').forEach(function(button){button.disabled=!editable || !!state.submitting;});
+    document.querySelectorAll('#content-h5-employees [data-oe-action="activate"],#content-h5-employees [data-oe-action="stop"]').forEach(function(button){button.disabled=!!state.submitting;});
   }
   function render() { renderDevices(); renderList(); renderEditor(); }
   function loadTemplates() { return api('/api/h5-workflows/templates').then(function(data){ state.templates=(Array.isArray(data.templates) ? data.templates : []).map(normalizeTemplate); return state.templates; }); }
@@ -200,15 +309,52 @@
   function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; render(); }
   function findOption(key) { return NODE_OPTIONS.find(function(item){return item[0] === key;}) || NODE_OPTIONS[0]; }
   function fillNodeOptions(selected) { var select=el('oeNodeKey'); if (!select) return; select.innerHTML=NODE_OPTIONS.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=selected || NODE_OPTIONS[0][0]; }
-  function openNodeModal(index) { state.nodeEditIndex=typeof index === 'number' ? index : -1; var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null; el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点'; el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || ''; fillNodeOptions(node && node.ability_key); el('oeNodeLabel').value=node && node.ability_label || findOption(node && node.ability_key)[1]; el('oeNodeNote').value=node && node.note || ''; el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60); }
+  function openNodeModal(index) { requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1; var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null; el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点'; el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || ''; fillNodeOptions(node && node.ability_key); el('oeNodeLabel').value=node && node.ability_label || findOption(node && node.ability_key)[1]; el('oeNodeNote').value=node && node.note || ''; el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60); }
   function closeNodeModal() { el('oeNodeModal').hidden=true; state.nodeEditIndex=-1; }
-  function saveNodeFromModal() { var key=el('oeNodeKey').value, time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || findOption(key)[1], note=el('oeNodeNote').value.trim() || label; if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间'); var row={time:time,end:end,key:key,label:label,note:note}; var next=state.nodeEditIndex >= 0 ? Object.assign({},state.nodes[state.nodeEditIndex]) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)}; next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (state.nodeEditIndex >= 0) { var old=state.nodes[state.nodeEditIndex]; next.children=old.children || old.actions || []; } state.nodes=state.nodeEditIndex >= 0 ? state.nodes.map(function(item,index){return index === state.nodeEditIndex ? next : item;}) : state.nodes.concat(next); state.nodes.sort(function(a,b){return String(a.time).localeCompare(String(b.time));}); closeNodeModal(); renderEditor(); }
-  function payloadToSave() { var name=(el('oeTemplateName').value || '').trim(); if (!name) throw new Error('请填写员工名称'); if (!state.nodes.length) throw new Error('请至少添加一个节点'); var meta=Object.assign({},state.editingMeta || {}); if (isSalesTemplate(state.selectedTemplate) || state.selectedId === 'system_sales') {meta.system_template_key='system_sales';meta.source=meta.source || 'system_mirror';} return {name:name,nodes:clone(state.nodes),meta:meta}; }
-  function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;}); }); }
+  function saveNodeFromModal() { requireEditableTemplate(); var key=el('oeNodeKey').value, time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || findOption(key)[1], note=el('oeNodeNote').value.trim() || label; if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间'); var row={time:time,end:end,key:key,label:label,note:note}; var next=state.nodeEditIndex >= 0 ? Object.assign({},state.nodes[state.nodeEditIndex]) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)}; next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (state.nodeEditIndex >= 0) { var old=state.nodes[state.nodeEditIndex]; next.children=old.children || old.actions || []; } state.nodes=state.nodeEditIndex >= 0 ? state.nodes.map(function(item,index){return index === state.nodeEditIndex ? next : item;}) : state.nodes.concat(next); state.nodes.sort(function(a,b){return String(a.time).localeCompare(String(b.time));}); closeNodeModal(); renderEditor(); }
+  function fillChildOptions(parent,selected) { var select=el('oeChildType'), options=childOptions(parent,selected); if (!select) return; select.innerHTML=options.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=options.some(function(item){return item[0] === selected;}) ? selected : (options[0] && options[0][0] || 'publish'); }
+  function syncChildModalFields() { var publish=String(el('oeChildType') && el('oeChildType').value || 'publish') === 'publish', field=el('oeChildPlatformField'); if (field) field.hidden=!publish; if (el('oeChildPlatform')) el('oeChildPlatform').disabled=!publish; }
+  function openChildModal(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) throw new Error('未找到上级节点'); var existing=workflowChildren(parent).find(function(child){return String(child && child.id || '') === String(childId || '');}) || null; state.childParentIndex=index; state.childEditId=existing ? String(existing.id || '') : ''; el('oeChildModalTitle').textContent=existing ? '编辑下级动作' : '添加下级动作'; el('oeChildParent').textContent=parent.ability_label || parent.note || '上级节点'; el('oeChildTime').value=existing && existing.time || parent.end_time || parent.time || '09:00'; fillChildOptions(parent,existing ? childActionType(existing) : ''); el('oeChildPlatform').value=existing && existing.platform || 'douyin'; syncChildModalFields(); el('oeChildModal').hidden=false; setTimeout(function(){el('oeChildTime').focus();},60); }
+  function closeChildModal() { if (el('oeChildModal')) el('oeChildModal').hidden=true; state.childParentIndex=-1; state.childEditId=''; }
+  function saveChildFromModal() { requireEditableTemplate(); var parentIndex=state.childParentIndex, parent=state.nodes[parentIndex]; if (!parent) throw new Error('未找到上级节点'); var editId=String(state.childEditId || ''), time=String(el('oeChildTime').value || '').trim(), type=String(el('oeChildType').value || 'publish').trim(), platform=String(el('oeChildPlatform').value || 'douyin').trim(); if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择动作时间'); if (childOptions(parent,editId ? childActionType(workflowChildren(parent).find(function(child){return String(child.id || '') === editId;})) : '').map(function(item){return item[0];}).indexOf(type) < 0) throw new Error('这个上级节点不支持所选动作'); if (type === 'publish' && ['douyin','toutiao','wechat_channels','wechat_moments'].indexOf(platform) < 0) throw new Error('暂时只支持抖音、头条、视频号和朋友圈'); var children=workflowChildren(parent).slice(), duplicate=children.find(function(child){if (editId && String(child.id || '') === editId) return false; var childType=childActionType(child); return type === 'publish' ? childType === 'publish' && String(child.platform || '') === platform : childType === type;}); if (duplicate) throw new Error(type === 'publish' ? '这个平台已经有发布动作了' : '这个下级动作已经添加过了'); var existing=editId ? children.find(function(child){return String(child.id || '') === editId;}) : null, next=buildWorkflowChild(parent,{time:time,action_type:type,platform:platform},existing); children=children.filter(function(child){return String(child.id || '') !== String(next.id || '');}).concat(next).sort(function(a,b){return String(a.time || '').localeCompare(String(b.time || ''));}); state.nodes[parentIndex]=syncParentChildRules(Object.assign({},parent,{children:children})); closeChildModal(); renderEditor(); }
+  function removeChild(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) return; var children=workflowChildren(parent).filter(function(child){return String(child && child.id || '') !== String(childId || '');}); state.nodes[index]=syncParentChildRules(Object.assign({},parent,{children:children})); renderEditor(); }
+  function payloadToSave() { requireEditableTemplate(); var name=(el('oeTemplateName').value || '').trim(); if (!name) throw new Error('请填写员工名称'); if (!state.nodes.length) throw new Error('请至少添加一个节点'); var meta=Object.assign({},state.editingMeta || {}); if (isSalesTemplate(state.selectedTemplate)) {meta.system_template_key='system_sales';meta.source=meta.source || 'system_mirror';} return {name:name,nodes:clone(state.nodes),meta:meta}; }
+  function runSubmission(kind, task) { if (state.submitting) return Promise.reject(new Error('操作正在处理中，请勿重复提交')); state.submitting=kind; clearError(); render(); return Promise.resolve().then(task).finally(function(){state.submitting='';render();}); }
+  function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
   function askPlanDay() { var answer=window.prompt('请输入本次销售工作流从第几天开始执行（1-30）','1'); if (answer === null) return null; var day=Number(answer); if (!Number.isInteger(day) || day < 1 || day > 30) throw new Error('执行天数请输入 1 到 30 的整数'); return day; }
-  function activateTemplate() { var iid=selectedDeviceId(), template=state.selectedTemplate; if (!iid) throw new Error('请先选择 Online 设备'); var device=state.devices.find(function(item){return String(item.installation_id) === iid;}); if (!device || !device.online) throw new Error('请选择在线的 Online 设备'); var day=isSalesTemplate(template) ? askPlanDay() : undefined; if (day === null) return Promise.resolve(); var request; if (state.selectedId === 'system_sales' && !state.editingId) request=api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:'system_sales',name:'销售员工',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),plan_day:day}}); else { var id=String(state.editingId || ''); if (!id) return saveTemplate().then(activateTemplate); request=api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}}); } return request.then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('员工工作流已启用');}); }
-  function stopTemplate() { var active=activeForDevice(); if (!active || !active.id) throw new Error('当前设备没有启用员工'); return api('/api/h5-workflows/activations/' + encodeURIComponent(active.id) + '/stop',{method:'POST',json:{}}).then(function(){state.active=null;renderStatus();if(typeof toast==='function')toast('员工工作流已停用');}); }
-  function bind(root) { if (root.dataset.oeBound) return; root.dataset.oeBound='1'; root.addEventListener('click',function(event){var target=event.target.closest('[data-oe-action],[data-oe-template],[data-oe-edit],[data-oe-delete]'); if(!target) return; try { if (target.dataset.oeTemplate != null) {selectTemplate(target.dataset.oeTemplate);return;} if (target.dataset.oeEdit != null) {openNodeModal(Number(target.dataset.oeEdit));return;} if (target.dataset.oeDelete != null) {if(window.confirm('删除这个工作流节点？')) {state.nodes.splice(Number(target.dataset.oeDelete),1);renderEditor();}return;} var action=target.dataset.oeAction; if(action==='refresh') {initialize(true);return;} if(action==='new') {resetNew();return;} if(action==='add') {openNodeModal(-1);return;} if(action==='close-modal') {closeNodeModal();return;} if(action==='save-node') {saveNodeFromModal();return;} if(action==='save') {saveTemplate().catch(function(err){showError(err.message);});return;} if(action==='activate') {activateTemplate().catch(function(err){showError(err.message);});return;} if(action==='stop') {stopTemplate().catch(function(err){showError(err.message);});return;} } catch(err) {showError(err.message || String(err));} }); root.addEventListener('change',function(event){if(event.target.id==='oeDeviceSelect') loadActive().catch(function(err){showError(err.message);});}); }
+  function activateTemplate() { var iid=selectedDeviceId(), template=state.selectedTemplate; if (!iid) throw new Error('请先选择 Online 设备'); var device=state.devices.find(function(item){return String(item.installation_id) === iid;}); if (!device || !device.online) throw new Error('请选择在线的 Online 设备'); var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined; if (day === null) return Promise.resolve(); var requestFactory; if (state.selectedId === 'system_sales' && !state.editingId) requestFactory=function(){return api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:'system_sales',name:'销售员工',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),plan_day:day}});}; else { var id=String(state.editingId || template && template.id || ''); if (!id) return saveTemplate().then(activateTemplate); requestFactory=function(){return api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});}; } return runSubmission('activate',requestFactory).then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('员工工作流已启用');}); }
+  function stopTemplate() { var active=activeForDevice(); if (!active || !active.id) throw new Error('当前设备没有启用员工'); return runSubmission('stop',function(){return api('/api/h5-workflows/activations/' + encodeURIComponent(active.id) + '/stop',{method:'POST',json:{}}).then(function(){state.active=null;if(typeof toast==='function')toast('员工工作流已停用');});}); }
+  function bind(root) {
+    if (root.dataset.oeBound) return;
+    root.dataset.oeBound='1';
+    root.addEventListener('click',function(event){
+      var target=event.target.closest('[data-oe-action],[data-oe-template],[data-oe-edit],[data-oe-delete],[data-oe-child-add],[data-oe-child-edit],[data-oe-child-delete]');
+      if(!target || state.submitting) return;
+      try {
+        if (target.dataset.oeTemplate != null) {selectTemplate(target.dataset.oeTemplate);return;}
+        if (target.dataset.oeChildAdd != null) {openChildModal(Number(target.dataset.oeChildAdd),'');return;}
+        if (target.dataset.oeChildEdit != null) {openChildModal(Number(target.dataset.oeChildParent),target.dataset.oeChildEdit);return;}
+        if (target.dataset.oeChildDelete != null) {if(window.confirm('删除这个下级动作？')) removeChild(Number(target.dataset.oeChildParent),target.dataset.oeChildDelete);return;}
+        if (target.dataset.oeEdit != null) {openNodeModal(Number(target.dataset.oeEdit));return;}
+        if (target.dataset.oeDelete != null) {requireEditableTemplate();if(window.confirm('删除这个工作流节点？')) {state.nodes.splice(Number(target.dataset.oeDelete),1);renderEditor();}return;}
+        var action=target.dataset.oeAction;
+        if(action==='refresh') {initialize(true);return;}
+        if(action==='new') {resetNew();return;}
+        if(action==='add') {openNodeModal(-1);return;}
+        if(action==='close-modal') {closeNodeModal();return;}
+        if(action==='save-node') {saveNodeFromModal();return;}
+        if(action==='close-child-modal') {closeChildModal();return;}
+        if(action==='save-child') {saveChildFromModal();return;}
+        if(action==='save') {saveTemplate().catch(function(err){showError(err.message);});return;}
+        if(action==='activate') {activateTemplate().catch(function(err){showError(err.message);});return;}
+        if(action==='stop') {stopTemplate().catch(function(err){showError(err.message);});return;}
+      } catch(err) {showError(err.message || String(err));}
+    });
+    root.addEventListener('change',function(event){
+      if(event.target.id==='oeDeviceSelect') loadActive().catch(function(err){showError(err.message);});
+      if(event.target.id==='oeChildType') syncChildModalFields();
+    });
+  }
   function initialize(force) { var root=el('content-h5-employees'); if(!root) return; bind(root); clearError(); var requested=String(window.__onlineEmployeeSelectedId || '').trim(); if(requested) {state.selectedId=requested; window.__onlineEmployeeSelectedId='';} state.loading=true; Promise.all([loadTemplates(),loadDevices()]).then(function(){ if(!state.selectedId) state.selectedId='system_sales'; selectTemplate(state.selectedId); }).catch(function(err){showError(err.message || '员工数据加载失败'); if(!state.selectedId) {state.selectedId='system_sales';state.selectedTemplate={id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()};state.nodes=clone(state.selectedTemplate.nodes);render();} }).finally(function(){state.loading=false;}); }
   window.initOnlineH5EmployeesView = function() { initialize(false); };
 })();

@@ -46,7 +46,7 @@ from ..services import native_wechat_engine
 from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
 from .auth import _ServerUser, get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
-from .chat import _get_default_image_generate_model, _get_default_video_generate_model_cached
+from .chat import _get_default_image_generate_model
 from .create_ppt_pipeline import CreatePptPipelinePayload, run_create_ppt_pipeline
 from .create_video_pipeline import CreateVideoPipelinePayload, run_create_video_pipeline_with_total_billing
 from .goal_video_pipeline import (
@@ -65,6 +65,9 @@ _DOUYIN_ORIGIN_DIR = _BASE_DIR / "backend" / "douyin_origin"
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
 _H5_CLIENT_COMMAND_PREFIX = "__LOBSTER_H5_CLIENT_COMMAND__"
 _H5_CLIENT_BASE_CAPABILITIES = ("asset_video_split_v1",)
+_SEEDANCE_TVC_CAPABILITY_ID = "comfly.seedance.tvc.pipeline"
+_SEEDANCE_TVC_DEFAULT_MODEL = "grok-imagine-video-1.5-preview"
+_SEEDANCE_TVC_DEFAULT_CHANNEL = "openmind"
 _active_scheduled_run_ids: set[str] = set()
 _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
@@ -2073,8 +2076,6 @@ async def _run_openclaw_chat(
             openclaw_fallback_model(),
             jwt_token,
             installation_id=installation_id,
-            video_model_lock=_get_default_video_generate_model_cached(False),
-            video_model_lock_source="default",
             chat_turn_id=str(item.get("chat_turn_id") or f"h5:{message_id}")[:128],
             chat_turn_precharged=bool(item.get("chat_turn_charged")),
         )
@@ -2152,8 +2153,6 @@ async def _run_scheduled_chat_message(
                 openclaw_fallback_model(),
                 jwt_token,
                 installation_id=installation_id,
-                video_model_lock=_get_default_video_generate_model_cached(False),
-                video_model_lock_source="default",
                 chat_turn_id=str(item.get("chat_turn_id") or f"scheduled:{run_id}")[:128],
                 chat_turn_precharged=bool(item.get("chat_turn_charged")),
             )
@@ -3110,6 +3109,47 @@ async def _wechat_moments_attachments_from_draft(
                 headers=headers,
             )
         )
+    # Content-library drafts may carry several generated images without a legacy
+    # attachments array. Resolve those references in order and keep the first
+    # nine, matching the native WeChat image limit.
+    def list_value(value: Any) -> List[Any]:
+        if isinstance(value, list):
+            return value
+        return [value] if value else []
+
+    existing_urls = {
+        str(item.get("source_url") or "").strip()
+        for item in files
+        if isinstance(item, dict) and str(item.get("source_url") or "").strip()
+    }
+    existing_assets = {
+        str(item.get("asset_id") or "").strip()
+        for item in files
+        if isinstance(item, dict) and str(item.get("asset_id") or "").strip()
+    }
+    image_urls = [str(value or "").strip() for value in list_value(draft.get("image_urls"))]
+    image_asset_ids = [str(value or "").strip() for value in list_value(draft.get("image_asset_ids"))]
+    for index in range(max(len(image_urls), len(image_asset_ids))):
+        if len(files) >= 9:
+            break
+        asset_id = image_asset_ids[index] if index < len(image_asset_ids) else ""
+        url = image_urls[index] if index < len(image_urls) else ""
+        if asset_id and asset_id not in existing_assets:
+            local = _local_asset_to_native_wechat_attachment(asset_id)
+            if local:
+                files.append(local)
+                existing_assets.add(asset_id)
+                continue
+        if url and url not in existing_urls:
+            files.append(
+                await _download_url_to_native_wechat_attachment(
+                    url,
+                    filename=f"moments-{index + 1}.jpg",
+                    media_type="image",
+                    headers=headers,
+                )
+            )
+            existing_urls.add(url)
     return files[:9]
 
 
@@ -4872,6 +4912,15 @@ def _scheduled_complete_text(
                 lines.append(f"PPT主题样式：{theme}")
             if slide_count:
                 lines.append(f"PPT页数：{slide_count}")
+        elif source_mode == "seedance_tvc_studio":
+            video_model = str(input_refs.get("video_model") or "").strip()
+            video_channel = str(input_refs.get("video_channel") or "").strip()
+            duration = str(input_refs.get("total_duration_seconds") or "").strip()
+            segment_count = str(input_refs.get("segment_count") or "").strip()
+            if video_model:
+                lines.append(f"分镜头视频模型：{video_model}{(' / ' + video_channel) if video_channel else ''}")
+            if duration:
+                lines.append(f"分镜头时长：{duration} 秒{(' / ' + segment_count + ' 段') if segment_count else ''}")
         if group:
             lines.append(f"备选组：{group}")
         if ref_asset:
@@ -5064,18 +5113,21 @@ async def _run_goal_video_scheduled_pipeline(
     headers: Dict[str, str],
     run_id: str,
 ) -> Dict[str, Any]:
+    duration_value = cap_payload.get("duration")
+    if duration_value in (None, ""):
+        duration_value = cap_payload.get("duration_seconds")
     pl = GoalVideoPipelinePayload(
         action="run_pipeline",
         goal=generated.get("goal") or _fallback_goal(task_title),
         platform=str(cap_payload.get("platform") or "douyin").strip() or "douyin",
-        duration=int(cap_payload.get("duration") or 6),
+        duration=duration_value,
         aspect_ratio=str(cap_payload.get("aspect_ratio") or "9:16").strip() or "9:16",
         resolution=str(cap_payload.get("resolution") or "720p").strip() or "720p",
         language=str(cap_payload.get("language") or "zh").strip() or "zh",
         memory_scope="none" if generated.get("custom_prompt_used") else "default",
         planning_model=str(cap_payload.get("planning_model") or "").strip() or None,
         image_model=str(cap_payload.get("image_model") or "").strip() or None,
-        video_model=str(cap_payload.get("video_model") or "apiz/veo3.1/image-to-video").strip() or None,
+        video_model=str(cap_payload.get("video_model") or "").strip() or None,
         function_mode=str(cap_payload.get("function_mode") or cap_payload.get("functionMode") or "reference").strip() or "reference",
         first_image_url=str(cap_payload.get("first_image_url") or "").strip() or None,
         end_image_url=str(cap_payload.get("end_image_url") or cap_payload.get("last_image_url") or "").strip() or None,
@@ -5220,6 +5272,9 @@ async def _run_create_video_scheduled_pipeline(
     goal = str(generated.get("goal") or payload.get("prompt") or payload.get("topic") or "").strip()
     if not goal:
         goal = _fallback_create_video_goal(task_title)
+    duration_value = _safe_int(payload.get("duration") or payload.get("duration_seconds"))
+    if duration_value is None or duration_value <= 0:
+        duration_value = 10
     pl = CreateVideoPipelinePayload(
         action="run_pipeline",
         prompt=goal,
@@ -5228,14 +5283,14 @@ async def _run_create_video_scheduled_pipeline(
         target_audience=str(payload.get("target_audience") or "general_audience").strip() or "general_audience",
         style=str(payload.get("style") or "premium commercial, realistic, cinematic lighting").strip()
         or "premium commercial, realistic, cinematic lighting",
-        duration=int(payload.get("duration") or 8),
+        duration=duration_value,
         scene_count=int(payload.get("scene_count") or 1),
         aspect_ratio=str(payload.get("aspect_ratio") or "9:16").strip() or "9:16",
         resolution=str(payload.get("resolution") or "720p").strip() or "720p",
         language=str(payload.get("language") or "Chinese").strip() or "Chinese",
         planning_model=str(payload.get("planning_model") or "gpt-5.4").strip() or None,
         image_model=str(payload.get("image_model") or "openai/gpt-image-2").strip() or None,
-        video_model=str(payload.get("video_model") or "apiz/veo3.1/image-to-video").strip() or None,
+        video_model=str(payload.get("video_model") or "").strip() or None,
         precomputed_plan=payload.get("precomputed_plan") if isinstance(payload.get("precomputed_plan"), dict) else {},
         reference_asset_ids=[str(x).strip() for x in (payload.get("reference_asset_ids") or []) if str(x).strip()],
         reference_image_urls=[str(x).strip() for x in (payload.get("reference_image_urls") or []) if str(x).strip()],
@@ -5324,6 +5379,247 @@ async def _run_create_ppt_scheduled_pipeline(
     return result
 
 
+def _seedance_tvc_text_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                raw_items = parsed if isinstance(parsed, list) else [text]
+            except Exception:
+                raw_items = [text]
+        else:
+            raw_items = re.split(r"[\s,;，、；]+", text)
+    out: List[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _seedance_tvc_is_yunwu_veo_model(model: Any) -> bool:
+    value = str(model or "").strip().lower().replace("_", "-").replace(" ", "")
+    return value in {
+        "yunwu-veo3.1-plus",
+        "veo3.1-plus",
+        "veo3.1",
+        "veo31",
+        "veo31-fast",
+        "veo3.1-fast",
+        "yingmeng-plus",
+        "影梦plus",
+    }
+
+
+def _seedance_tvc_is_openmind_grok_model(model: Any) -> bool:
+    value = str(model or "").strip().lower().replace("_", "-").replace(" ", "")
+    return value in {
+        _SEEDANCE_TVC_DEFAULT_MODEL,
+        "yingmeng1.5plus",
+        "影梦1.5plus",
+    }
+
+
+def _seedance_tvc_video_request(payload: Dict[str, Any]) -> tuple[str, str]:
+    payload = payload if isinstance(payload, dict) else {}
+    explicit_model = str(payload.get("video_model") or payload.get("videoModel") or "").strip()
+    explicit_channel = str(payload.get("video_channel") or payload.get("videoChannel") or "").strip()
+    ui_model = str(payload.get("model") or payload.get("seedance_model") or explicit_model or _SEEDANCE_TVC_DEFAULT_MODEL).strip()
+    if explicit_model and explicit_channel:
+        return explicit_model, explicit_channel
+    if _seedance_tvc_is_openmind_grok_model(ui_model):
+        return _SEEDANCE_TVC_DEFAULT_MODEL, _SEEDANCE_TVC_DEFAULT_CHANNEL
+    if _seedance_tvc_is_yunwu_veo_model(ui_model):
+        return "veo3.1", "yunwu"
+    if explicit_model:
+        return explicit_model, explicit_channel
+    return ui_model or _SEEDANCE_TVC_DEFAULT_MODEL, explicit_channel
+
+
+def _seedance_tvc_segment_seconds(video_model: str, video_channel: str) -> int:
+    channel = str(video_channel or "").strip().lower()
+    if channel == "yunwu" and _seedance_tvc_is_yunwu_veo_model(video_model):
+        return 8
+    if _seedance_tvc_is_yunwu_veo_model(video_model):
+        return 8
+    return 10
+
+
+def _seedance_tvc_prompt(payload: Dict[str, Any]) -> str:
+    payload = payload if isinstance(payload, dict) else {}
+    for key in ("task_text", "prompt", "creative_prompt", "goal", "description"):
+        text = str(payload.get(key) or "").strip()
+        if text:
+            return text[:2000]
+    return ""
+
+
+def _normalize_seedance_tvc_scheduled_payload(
+    cap_payload: Dict[str, Any],
+    *,
+    generated: Optional[Dict[str, Any]] = None,
+    task_title: str = "",
+) -> Dict[str, Any]:
+    source = dict(cap_payload or {})
+    generated = generated if isinstance(generated, dict) else {}
+    video_model, video_channel = _seedance_tvc_video_request(source)
+    segment_seconds = _seedance_tvc_segment_seconds(video_model, video_channel)
+    total_raw = _safe_int(
+        source.get("total_duration_seconds")
+        or source.get("duration_seconds")
+        or source.get("duration")
+    )
+    count_raw = _safe_int(source.get("segment_count") or source.get("storyboard_count"))
+    if total_raw > 0:
+        segment_count = int((float(total_raw) / float(segment_seconds)) + 0.5)
+    elif count_raw > 0:
+        segment_count = count_raw
+    else:
+        segment_count = 1
+    segment_count = max(1, min(6, segment_count))
+    total_duration = segment_count * segment_seconds
+
+    asset_id = str(source.get("asset_id") or source.get("image_asset_id") or "").strip()
+    image_url = str(source.get("image_url") or source.get("first_image_url") or "").strip()
+    reference_asset_ids = _seedance_tvc_text_list(source.get("reference_asset_ids"))
+    reference_image_urls = _seedance_tvc_text_list(source.get("reference_image_urls"))
+    for aid in _seedance_tvc_text_list(source.get("asset_ids")) + _seedance_tvc_text_list(source.get("attachment_asset_ids")):
+        if aid and aid != asset_id and aid not in reference_asset_ids:
+            reference_asset_ids.append(aid)
+    for url in _seedance_tvc_text_list(source.get("image_urls")):
+        if url and url != image_url and url not in reference_image_urls:
+            reference_image_urls.append(url)
+
+    reference_count = (1 if (asset_id or image_url) else 0) + len(reference_asset_ids) + len(reference_image_urls)
+    purposes = [p for p in _seedance_tvc_text_list(source.get("reference_purposes")) if p]
+    if len(purposes) != reference_count:
+        purposes = ["storyboard"] * reference_count
+
+    task_text = _seedance_tvc_prompt(source) or str(generated.get("goal") or task_title or "").strip()[:2000]
+    workflow_mode = str(source.get("workflow_mode") or "").strip()
+    if workflow_mode not in {"storyboard", "direct_video"}:
+        workflow_mode = "storyboard"
+
+    video_fallbacks = source.get("video_fallbacks")
+    if not isinstance(video_fallbacks, list):
+        video_fallbacks = [{"channel": "comfly", "model": "veo3.1-fast"}] if _seedance_tvc_is_yunwu_veo_model(video_model) else []
+
+    return {
+        "asset_id": asset_id or None,
+        "image_url": image_url or None,
+        "reference_asset_ids": reference_asset_ids[:5],
+        "reference_image_urls": reference_image_urls[:5],
+        "reference_purposes": purposes[:11],
+        "total_duration_seconds": total_duration,
+        "segment_count": segment_count,
+        "segment_duration_seconds": segment_seconds,
+        "workflow_mode": workflow_mode,
+        "merge_clips": _workflow_flag(source.get("merge_clips"), True),
+        "auto_save": _workflow_flag(source.get("auto_save"), True),
+        "analysis_model": str(source.get("analysis_model") or "").strip(),
+        "image_model": str(source.get("image_model") or "").strip(),
+        "image_model_fallback": str(source.get("image_model_fallback") or "gpt-image-2-yunwu").strip(),
+        "video_model": video_model,
+        "video_channel": video_channel,
+        "video_fallbacks": video_fallbacks,
+        "aspect_ratio": str(source.get("aspect_ratio") or "9:16").strip() or "9:16",
+        "visual_tone": str(source.get("visual_tone") or "clean_bright").strip() or "clean_bright",
+        "rhythm": str(source.get("rhythm") or "smooth").strip() or "smooth",
+        "generate_audio": _workflow_flag(source.get("generate_audio"), True),
+        "watermark": _workflow_flag(source.get("watermark"), False),
+        "task_text": task_text,
+        "platform": str(source.get("platform") or "").strip(),
+        "country": str(source.get("country") or "").strip(),
+        "language": str(source.get("language") or "").strip(),
+        "poll_timeout_seconds": source.get("poll_timeout_seconds") or source.get("timeout_seconds"),
+        "poll_interval_seconds": source.get("poll_interval_seconds"),
+    }
+
+
+async def _run_seedance_tvc_scheduled_pipeline(
+    *,
+    cap_payload: Dict[str, Any],
+    headers: Dict[str, str],
+    cloud: httpx.AsyncClient,
+    base: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    payload = _normalize_seedance_tvc_scheduled_payload(cap_payload)
+    await _post_task_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        "thinking",
+        {
+            "text": "正在提交创意分镜头工作台",
+            "total_duration_seconds": payload.get("total_duration_seconds"),
+            "video_model": payload.get("video_model"),
+        },
+    )
+    submitted = await _post_local_api_json(
+        "/api/comfly-seedance-tvc/pipeline/start",
+        {"payload": payload},
+        headers=headers,
+        timeout_seconds=180.0,
+    )
+    job_id = str(submitted.get("job_id") or "").strip()
+    poll_path = str(submitted.get("poll_path") or "").strip()
+    if not poll_path and job_id:
+        poll_path = f"/api/comfly-seedance-tvc/pipeline/jobs/{job_id}"
+    if not job_id or not poll_path:
+        raise RuntimeError("创意分镜头工作台未返回可查询的任务编号")
+
+    timeout_seconds = _safe_int(cap_payload.get("poll_timeout_seconds") or cap_payload.get("timeout_seconds")) or 7200
+    interval = max(2, _safe_int(cap_payload.get("poll_interval_seconds")) or 5)
+    deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds))
+    last_job: Dict[str, Any] = {"ok": True, "status": "running", "job_id": job_id}
+    while True:
+        job = await _get_local_api_json(
+            poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
+            headers=headers,
+            timeout_seconds=180.0,
+        )
+        last_job = job if isinstance(job, dict) else {"result": job}
+        status = str(last_job.get("status") or "").strip().lower()
+        if status == "failed":
+            raise RuntimeError(str(last_job.get("error") or last_job.get("post_error") or "创意分镜头视频生成失败")[:500])
+        if status == "completed":
+            final_video = _local_bestseller_final_video(last_job)
+            result = {
+                "ok": True,
+                "capability_id": _SEEDANCE_TVC_CAPABILITY_ID,
+                "pipeline": "comfly_seedance_tvc_video",
+                "source_mode": "seedance_tvc_studio",
+                "status": "completed",
+                "job_id": job_id,
+                "poll_path": poll_path,
+                "payload": payload,
+                "result": last_job.get("result") if isinstance(last_job.get("result"), dict) else {},
+                "saved_assets": last_job.get("saved_assets") if isinstance(last_job.get("saved_assets"), list) else [],
+                "artifacts": last_job.get("artifacts") if isinstance(last_job.get("artifacts"), dict) else {},
+            }
+            if final_video:
+                result["final_video"] = final_video
+                result["video_asset_id"] = final_video.get("asset_id") or ""
+                result["final_asset_id"] = final_video.get("asset_id") or ""
+                result["video_url"] = final_video.get("url") or ""
+                result["source_media_urls"] = [final_video.get("url")] if final_video.get("url") else []
+            if not _goal_video_pipeline_has_video_result(result):
+                raise RuntimeError("创意分镜头视频任务已完成，但未取得最终视频素材")
+            return result
+        if asyncio.get_running_loop().time() >= deadline:
+            raise RuntimeError("创意分镜头视频生成超时，未取得最终成片")
+        await asyncio.sleep(interval)
+
+
 async def _run_scheduled_capability(
     cloud: httpx.AsyncClient,
     base: str,
@@ -5343,9 +5639,10 @@ async def _run_scheduled_capability(
         return
     try:
         task_title = str(item.get("title") or "").strip()
-        if capability_id in {"goal.video.pipeline", "goal.image.pipeline", "hifly.video.create_by_tts", "create.video.pipeline", "create.ppt.pipeline"}:
+        if capability_id in {"goal.video.pipeline", "goal.image.pipeline", "hifly.video.create_by_tts", "create.video.pipeline", "create.ppt.pipeline", _SEEDANCE_TVC_CAPABILITY_ID}:
             asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
             custom_prompt = _scheduled_custom_prompt(cap_payload)
+            provided_seedance_prompt = _seedance_tvc_prompt(cap_payload) if capability_id == _SEEDANCE_TVC_CAPABILITY_ID else ""
             resume_from_image = bool(cap_payload.get("resume_from_image"))
             uses_ip_daily_script = (
                 capability_id == "hifly.video.create_by_tts"
@@ -5356,7 +5653,10 @@ async def _run_scheduled_capability(
                 or _hifly_script_text(cap_payload.get("text"))
                 or _hifly_script_text(cap_payload.get("prompt"))
             ) if capability_id == "hifly.video.create_by_tts" else ""
-            if uses_ip_daily_script:
+            if provided_seedance_prompt:
+                generated = _generated_from_scheduled_prompt(capability_id, task_title, provided_seedance_prompt)
+                generated["custom_prompt_used"] = True
+            elif uses_ip_daily_script:
                 generated = await _generate_shanjian_workflow_script(
                     source=cap_payload,
                     cloud=cloud,
@@ -5422,6 +5722,13 @@ async def _run_scheduled_capability(
                 cap_payload = dict(original_cap_payload or {})
                 cap_payload["prompt"] = generated.get("goal") or cap_payload.get("prompt") or _fallback_ppt_goal(task_title)
                 cap_payload.setdefault("action", "run_pipeline")
+            elif capability_id == _SEEDANCE_TVC_CAPABILITY_ID:
+                publish_cfg = {}
+                cap_payload = _normalize_seedance_tvc_scheduled_payload(
+                    original_cap_payload,
+                    generated=generated,
+                    task_title=task_title,
+                )
             elif capability_id == "goal.image.pipeline":
                 publish_cfg = _scheduled_publish_config(original_cap_payload)
                 cap_payload = {
@@ -5461,6 +5768,12 @@ async def _run_scheduled_capability(
                     }
                 )
             cap_payload = _inject_scheduled_assets_into_capability_payload(cap_payload, attachment_asset_ids)
+            if capability_id == _SEEDANCE_TVC_CAPABILITY_ID:
+                cap_payload = _normalize_seedance_tvc_scheduled_payload(
+                    cap_payload,
+                    generated=generated,
+                    task_title=task_title,
+                )
             await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在调用 {capability_id}"})
             if capability_id == "hifly.video.create_by_tts":
                 result = await _run_shanjian_digital_human_workflow(
@@ -5522,6 +5835,14 @@ async def _run_scheduled_capability(
                     headers=headers,
                     run_id=run_id,
                 )
+            elif capability_id == _SEEDANCE_TVC_CAPABILITY_ID:
+                result = await _run_seedance_tvc_scheduled_pipeline(
+                    cap_payload=cap_payload,
+                    headers=headers,
+                    cloud=cloud,
+                    base=base,
+                    run_id=run_id,
+                )
             else:
                 result = await _invoke_local_capability(
                     headers=headers,
@@ -5564,6 +5885,8 @@ async def _run_scheduled_capability(
                 refs = _scheduled_create_video_result_refs(result, jwt_token)
             elif capability_id == "create.ppt.pipeline":
                 refs = _scheduled_ppt_result_refs(result, jwt_token)
+            elif capability_id == _SEEDANCE_TVC_CAPABILITY_ID:
+                refs = _scheduled_goal_video_result_refs(result, jwt_token)
             else:
                 refs = _scheduled_refs_with_asset_urls(raw_refs, jwt_token)
             skill_prompt = str(cap_payload.get("text") or cap_payload.get("goal") or result.get("skill_prompt") or "").strip()
@@ -5574,6 +5897,8 @@ async def _run_scheduled_capability(
                 skill_prompt = str((result.get("plan") or {}).get("summary") or cap_payload.get("prompt") or skill_prompt).strip()
             elif capability_id == "create.ppt.pipeline":
                 skill_prompt = str(result.get("title") or cap_payload.get("prompt") or skill_prompt).strip()
+            elif capability_id == _SEEDANCE_TVC_CAPABILITY_ID:
+                skill_prompt = str(cap_payload.get("task_text") or cap_payload.get("prompt") or skill_prompt).strip()
             elif capability_id == "goal.image.pipeline":
                 skill_prompt = str((result.get("plan") or {}).get("image_prompt") or skill_prompt).strip()
             input_refs = {}
@@ -5604,6 +5929,18 @@ async def _run_scheduled_capability(
                     "planning_model": models.get("planning"),
                     "theme": cap_payload.get("theme"),
                     "slide_count": result.get("slide_count"),
+                }
+            elif capability_id == _SEEDANCE_TVC_CAPABILITY_ID:
+                input_refs = {
+                    "source_mode": "seedance_tvc_studio",
+                    "video_model": cap_payload.get("video_model"),
+                    "video_channel": cap_payload.get("video_channel"),
+                    "segment_count": cap_payload.get("segment_count"),
+                    "segment_duration_seconds": cap_payload.get("segment_duration_seconds"),
+                    "total_duration_seconds": cap_payload.get("total_duration_seconds"),
+                    "aspect_ratio": cap_payload.get("aspect_ratio"),
+                    "reference_asset_ids": cap_payload.get("reference_asset_ids") or [],
+                    "reference_image_urls": cap_payload.get("reference_image_urls") or [],
                 }
             elif capability_id == "goal.image.pipeline" and publish_cfg:
                 asset_id = _scheduled_publish_asset_id(result, refs)
@@ -6756,19 +7093,25 @@ def _shanjian_video_create_payload(
     voice: str,
     audio_url: str,
     language: str,
+    audio_asset_id: str = "",
     tts_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     long_video = _workflow_flag(source.get("long_video"), False)
     payload: Dict[str, Any] = {
         "virtualman_id": virtualman_id,
         "title": title,
-        "text": script,
-        "speaker_id": voice,
-        "audio_url": audio_url,
         "language": language,
         "speed_ratio": source.get("speed_ratio") or 1.0,
         "long_video": long_video,
     }
+    if script:
+        payload["text"] = script
+    if voice:
+        payload["speaker_id"] = voice
+    if audio_url:
+        payload["audio_url"] = audio_url
+    if audio_asset_id:
+        payload["audio_asset_id"] = audio_asset_id
 
     if long_video:
         duration_value = source.get("video_duration") or source.get("duration_seconds")
@@ -6825,22 +7168,27 @@ async def _run_shanjian_digital_human_workflow(
         current_item=current_item,
     )
     virtualman_id = _workflow_text(selected_virtualman.get("virtualman_id"), 128)
+    drive_mode = _workflow_text(source.get("drive_mode"), 32).lower()
+    audio_url = _workflow_text(source.get("audio_url"), 2000)
+    audio_asset_id = _workflow_text(source.get("audio_asset_id"), 128)
+    audio_mode = drive_mode == "audio" or bool(audio_url or audio_asset_id)
     voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
     missing = []
     if not virtualman_id:
         missing.append("素材库：请先创建并训练完成可用的数字人形象分身（数字人2.0）")
-    if not voice:
+    if not audio_mode and not voice:
         missing.append("素材库：请先创建可用的声音分身")
+    if audio_mode and not audio_url and not audio_asset_id:
+        missing.append("请上传或选择驱动音频")
     if missing:
         raise RuntimeError("数字人2.0生成缺少：" + "；".join(missing))
     if cloud is None or not base:
-        raise RuntimeError("数字人2.0缺少云端连接，无法合成声音分身音频")
+        raise RuntimeError("数字人2.0缺少云端连接，无法提交生成任务")
 
-    provided_script = _provided_shanjian_workflow_script(source)
-    if provided_script:
+    if audio_mode:
         generated = {
             "title": _workflow_text(source.get("title") or "数字人口播", 80),
-            "script": provided_script,
+            "script": _provided_shanjian_workflow_script(source),
             "caption_hint": _workflow_text(source.get("title"), 200),
             "language": _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64),
             "ip_daily_group_id": "",
@@ -6848,50 +7196,66 @@ async def _run_shanjian_digital_human_workflow(
             "ip_daily_record": {},
         }
     else:
-        generated = await _generate_shanjian_workflow_script(
-            source=source,
-            cloud=cloud,
-            base=base,
-            headers=headers,
-            run_id=run_id,
-        )
+        provided_script = _provided_shanjian_workflow_script(source)
+        if provided_script:
+            generated = {
+                "title": _workflow_text(source.get("title") or "数字人口播", 80),
+                "script": provided_script,
+                "caption_hint": _workflow_text(source.get("title"), 200),
+                "language": _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64),
+                "ip_daily_group_id": "",
+                "ip_daily_record_id": "",
+                "ip_daily_record": {},
+            }
+        else:
+            generated = await _generate_shanjian_workflow_script(
+                source=source,
+                cloud=cloud,
+                base=base,
+                headers=headers,
+                run_id=run_id,
+            )
     script = generated["script"]
     title = generated["title"] or "数字人口播"
     language = generated["language"] or "zh-CN"
 
-    tts_payload: Dict[str, Any] = {
-        "voice": voice,
-        "text": script,
-        "rate": str(source.get("rate") or source.get("speed_ratio") or "1"),
-        "volume": str(source.get("volume") or "1"),
-        "pitch": str(source.get("pitch") if source.get("pitch") is not None else "0"),
-        "emotion": str(source.get("emotion") or "happy"),
-    }
-    instructions = _workflow_text(source.get("instructions"), 500)
-    if instructions:
-        tts_payload["instructions"] = instructions
-    provider = _workflow_text(source.get("voice_provider") or source.get("provider"), 32).lower()
-    if provider in {"minimax", "qwen"}:
-        tts_payload["voice_provider"] = provider
+    tts_data: Dict[str, Any] = {}
+    if not audio_mode:
+        tts_payload: Dict[str, Any] = {
+            "voice": voice,
+            "text": script,
+            "rate": str(source.get("rate") or source.get("speed_ratio") or "1"),
+            "volume": str(source.get("volume") or "1"),
+            "pitch": str(source.get("pitch") if source.get("pitch") is not None else "0"),
+            "emotion": str(source.get("emotion") or "happy"),
+        }
+        instructions = _workflow_text(source.get("instructions"), 500)
+        if instructions:
+            tts_payload["instructions"] = instructions
+        provider = _workflow_text(source.get("voice_provider") or source.get("provider"), 32).lower()
+        if provider in {"minimax", "qwen"}:
+            tts_payload["voice_provider"] = provider
 
-    await _workflow_event(cloud, base, headers, run_id, "正在合成声音分身音频")
-    tts_resp = await cloud.post(
-        f"{base}/api/hifly/my/voice/preview-tts",
-        json=tts_payload,
-        headers=headers,
-        timeout=httpx.Timeout(1800.0, connect=10.0, read=1800.0, write=30.0, pool=10.0),
-    )
-    try:
-        tts_data = tts_resp.json() if tts_resp.content else {}
-    except Exception:
-        tts_data = {"detail": (tts_resp.text or "")[:1000]}
-    if not isinstance(tts_data, dict):
-        tts_data = {"result": tts_data}
-    if tts_resp.status_code >= 400 or (isinstance(tts_data, dict) and tts_data.get("ok") is False):
-        raise RuntimeError(str(tts_data.get("detail") or tts_data.get("error") or tts_data.get("message") or tts_data or tts_resp.text)[:500])
-    audio_url = str(tts_data.get("audio_url") or "").strip()
-    if not audio_url:
-        raise RuntimeError("声音分身合成成功，但没有返回可用于数字人2.0的音频地址")
+        await _workflow_event(cloud, base, headers, run_id, "正在合成声音分身音频")
+        tts_resp = await cloud.post(
+            f"{base}/api/hifly/my/voice/preview-tts",
+            json=tts_payload,
+            headers=headers,
+            timeout=httpx.Timeout(1800.0, connect=10.0, read=1800.0, write=30.0, pool=10.0),
+        )
+        try:
+            tts_data = tts_resp.json() if tts_resp.content else {}
+        except Exception:
+            tts_data = {"detail": (tts_resp.text or "")[:1000]}
+        if not isinstance(tts_data, dict):
+            tts_data = {"result": tts_data}
+        if tts_resp.status_code >= 400 or tts_data.get("ok") is False:
+            raise RuntimeError(str(tts_data.get("detail") or tts_data.get("error") or tts_data.get("message") or tts_data or tts_resp.text)[:500])
+        audio_url = str(tts_data.get("audio_url") or "").strip()
+        if not audio_url:
+            raise RuntimeError("声音分身合成成功，但没有返回可用于数字人2.0的音频地址")
+    else:
+        await _workflow_event(cloud, base, headers, run_id, "正在使用所选音频驱动数字人2.0")
 
     await _workflow_event(cloud, base, headers, run_id, "正在提交数字人2.0视频任务")
     create_data = await _post_cloud_api_json(
@@ -6903,6 +7267,7 @@ async def _run_shanjian_digital_human_workflow(
             script=script,
             voice=voice,
             audio_url=audio_url,
+            audio_asset_id=audio_asset_id,
             language=language,
             tts_data=tts_data,
         ),

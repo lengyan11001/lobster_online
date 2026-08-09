@@ -18,7 +18,7 @@
       .native-wechat-panel { display: none; }
       .native-wechat-panel.active { display: block; }
       .native-wechat-grid { display: grid; grid-template-columns: minmax(300px, .9fr) minmax(460px, 1.4fr); gap: 14px; align-items: start; }
-      .native-wechat-card { border: 1px solid rgba(20, 83, 45, .13); border-radius: 22px; background: rgba(255,255,255,.82); box-shadow: 0 18px 46px rgba(25, 61, 54, .08); padding: 16px; backdrop-filter: blur(14px); }
+      .native-wechat-card { min-width: 0; border: 1px solid rgba(20, 83, 45, .13); border-radius: 22px; background: rgba(255,255,255,.82); box-shadow: 0 18px 46px rgba(25, 61, 54, .08); padding: 16px; backdrop-filter: blur(14px); }
       .native-wechat-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
       .native-wechat-card h3 { margin: 0; font-size: 16px; font-weight: 900; }
       .native-wechat-muted { color: #64766f; font-size: 12px; line-height: 1.45; }
@@ -51,6 +51,14 @@
       .native-wechat-contact-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0; padding: 10px; border: 1px solid rgba(20, 83, 45, .12); border-radius: 16px; background: rgba(255,255,255,.66); }
       .native-wechat-compact-input { width: 82px; height: 32px; padding: 0 8px; }
       .native-wechat-empty { border: 1px dashed rgba(20, 83, 45, .22); border-radius: 18px; padding: 26px 16px; text-align: center; color: #667a73; background: rgba(255,255,255,.52); }
+      .native-wechat-pagination { min-height: 34px; margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #64766f; font-size: 12px; }
+      .native-wechat-pagination-actions { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; }
+      .native-wechat-page-btn { min-width: 54px; height: 32px; padding: 0 9px; border: 1px solid rgba(20,83,45,.14); border-radius: 9px; background: rgba(255,255,255,.9); color: #285047; font: inherit; cursor: pointer; }
+      .native-wechat-page-btn:hover:not(:disabled) { border-color: rgba(15,118,110,.42); background: #f0faf6; }
+      .native-wechat-page-btn:disabled { opacity: .38; cursor: default; }
+      .native-wechat-page-current { min-width: 76px; text-align: center; white-space: nowrap; }
+      .native-wechat-history-tools { min-height: 34px; margin-bottom: 8px; display: none; align-items: center; justify-content: center; gap: 10px; color: #64766f; font-size: 12px; }
+      .native-wechat-history-tools.show { display: flex; }
       .native-wechat-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
       .native-wechat-form-block { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
       .native-wechat-form-block label { color: #30463f; font-size: 12px; font-weight: 900; }
@@ -72,7 +80,7 @@
       .native-wechat-contact-trigger { width: 100%; min-width: 0; min-height: 42px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #263f38; border: 1px solid rgba(20,83,45,.16); border-radius: 10px; background: #fff; box-shadow: none; text-align: left; }
       .native-wechat-contact-trigger span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 400; }
       .native-wechat-contact-trigger small { flex: 0 0 auto; color: #71847d; font-weight: 400; }
-      .native-wechat-contact-picker { width: min(620px, 96vw); max-height: min(720px, 88vh); display: grid; grid-template-rows: auto auto auto minmax(0,1fr) auto; overflow: hidden; }
+      .native-wechat-contact-picker { width: min(620px, 96vw); max-height: min(720px, 88vh); display: grid; grid-template-rows: auto auto auto minmax(0,1fr) auto auto; overflow: hidden; }
       .native-wechat-contact-picker-search { width: 100%; margin-bottom: 4px; }
       .native-wechat-contact-picker-count { color: #71847d; font-size: 12px; }
       .native-wechat-contact-picker-list { min-height: 220px; overflow-y: auto; display: grid; align-content: start; gap: 5px; padding: 4px 0; }
@@ -88,7 +96,8 @@
       .native-wechat-detail-list { display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 9px 12px; font-size: 13px; }
       .native-wechat-detail-list strong { color: #48635b; }
       .native-wechat-detail-list span { word-break: break-word; white-space: pre-wrap; }
-      @media (max-width: 980px) { .native-wechat-page { padding: 12px; } .native-wechat-head { align-items: flex-start; flex-direction: column; } .native-wechat-grid, .native-wechat-form-row, .native-wechat-pick-list { grid-template-columns: 1fr; } }
+      @media (max-width: 980px) { .native-wechat-page { padding: 12px; } .native-wechat-head { align-items: flex-start; flex-direction: column; } .native-wechat-grid, .native-wechat-form-row, .native-wechat-pick-list { grid-template-columns: minmax(0, 1fr); } }
+      @media (max-width: 560px) { .native-wechat-pagination { align-items: flex-start; flex-direction: column; } .native-wechat-pagination-actions { width: 100%; } .native-wechat-page-btn { flex: 1 1 0; min-width: 0; padding: 0 5px; } .native-wechat-page-current { min-width: 66px; } }
     </style>
 
     <div class="native-wechat-shell">
@@ -179,6 +188,7 @@
             </div>
             <input id="nativeWechatPeerSearch" class="native-wechat-input" placeholder="搜索会话或 Weixin ID" style="width:100%;margin-bottom:10px;">
             <div id="nativeWechatPeerList" class="native-wechat-empty">暂无会话</div>
+            <div id="nativeWechatPeerPagination" class="native-wechat-pagination"></div>
           </div>
 
           <div class="native-wechat-card">
@@ -188,6 +198,10 @@
                 <div class="native-wechat-muted" id="nativeWechatActivePeerSub">也可以手动输入 Weixin ID 发送。</div>
               </div>
               <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshMessagesBtn">刷新消息</button>
+            </div>
+            <div id="nativeWechatMessageHistoryTools" class="native-wechat-history-tools">
+              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatLoadOlderMessagesBtn">加载更早消息</button>
+              <span id="nativeWechatMessageHistoryCount">已显示 0 / 0</span>
             </div>
             <div id="nativeWechatMessageList" class="native-wechat-empty">选择会话后查看消息。</div>
             <div class="native-wechat-composer">
@@ -231,7 +245,7 @@
           </div>
           <div class="native-wechat-contact-tools">
             <span class="native-wechat-chip" id="nativeWechatContactSelectedCount">已选 0</span>
-            <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatContactSelectAllBtn">全选</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatContactSelectAllBtn">全选本页</button>
             <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatContactClearBtn">清空</button>
             <button type="button" class="btn btn-primary btn-sm" id="nativeWechatContactSendBtn">发送消息</button>
             <button type="button" class="btn btn-primary btn-sm" id="nativeWechatContactMomentsLikeBtn">朋友圈点赞</button>
@@ -246,6 +260,7 @@
           </div>
           <input id="nativeWechatContactSearch" class="native-wechat-input" placeholder="搜索昵称、备注、微信号" style="width:100%;margin-bottom:10px;">
           <div id="nativeWechatContactList" class="native-wechat-empty">暂无联系人</div>
+          <div id="nativeWechatContactPagination" class="native-wechat-pagination"></div>
         </div>
       </section>
 
@@ -262,6 +277,7 @@
             </div>
             <input id="nativeWechatGroupSearch" class="native-wechat-input" placeholder="搜索群名" style="width:100%;margin-bottom:10px;">
             <div id="nativeWechatGroupList" class="native-wechat-empty">暂无群</div>
+            <div id="nativeWechatGroupPagination" class="native-wechat-pagination"></div>
           </div>
           <div class="native-wechat-card">
             <div class="native-wechat-card-head">
@@ -272,6 +288,7 @@
               <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatSyncGroupMembersBtn">同步成员</button>
             </div>
             <div id="nativeWechatGroupMemberList" class="native-wechat-empty">请选择群</div>
+            <div id="nativeWechatGroupMemberPagination" class="native-wechat-pagination"></div>
           </div>
         </div>
       </section>
@@ -358,6 +375,7 @@
             <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshTasksBtn">刷新</button>
           </div>
           <div id="nativeWechatTaskList" class="native-wechat-empty">暂无任务</div>
+          <div id="nativeWechatTaskPagination" class="native-wechat-pagination"></div>
         </div>
       </section>
 
@@ -390,6 +408,7 @@
         <input id="nativeWechatContactPickerSearch" class="native-wechat-input native-wechat-contact-picker-search" type="search" placeholder="搜索昵称、备注或微信号" autocomplete="off">
         <div id="nativeWechatContactPickerCount" class="native-wechat-contact-picker-count">0 位联系人</div>
         <div id="nativeWechatContactPickerList" class="native-wechat-contact-picker-list"></div>
+        <div id="nativeWechatContactPickerPagination" class="native-wechat-pagination"></div>
         <div class="native-wechat-actions" style="justify-content:flex-end;">
           <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatContactPickerClear">清除选择</button>
           <button type="button" class="btn btn-ghost btn-sm" data-native-wechat-close>取消</button>

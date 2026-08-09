@@ -8,7 +8,7 @@
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="__LOBSTER_FAVICON_32__">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">
   <link rel="stylesheet" href="/static/css/common.css?v=20260608-latest-ota">
-  <link rel="stylesheet" href="/static/css/index.css?v=20260806-pc-home-layout-v1">
+    <link rel="stylesheet" href="/static/css/index.css?v=20260806-pc-home-layout-v1-20260807-content-publish-v1">
   <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20260806-home-logo-hover-v3">
   <link rel="stylesheet" href="/static/css/bihuo-25-video.css?v=20260731-workbench-v1">
 </head>
@@ -61,7 +61,6 @@
             </div>
             <button type="button" class="header-menu-action desktop-refresh-btn" id="desktopHardRefreshBtn" title="刷新桌面窗口，重新加载最新页面" style="display:none;">刷新页面</button>
             <div class="header-dropdown-divider"></div>
-            <button type="button" class="header-menu-view" data-view="audio-transcription" data-feature-gate="personal_settings_entry">音频转写</button>
             <button type="button" class="header-menu-view" data-view="personal-settings" data-feature-gate="personal_settings_entry">个人设置</button>
             <button type="button" class="header-menu-view" data-view="billing" data-feature-gate="billing_entry">消费记录</button>
             <button type="button" class="header-menu-view" data-view="sys-config" data-feature-gate="sys_config_entry">系统配置</button>
@@ -169,6 +168,11 @@
                     <span class="chat-sidebar-entry-copy">IP人设定位</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
+                  <button type="button" class="chat-sidebar-entry app-side-primary-entry" data-view="audio-transcription" data-feature-gate="personal_settings_entry">
+                    <span class="chat-sidebar-entry-icon">秘</span>
+                    <span class="chat-sidebar-entry-copy">AI秘书</span>
+                    <span class="chat-sidebar-entry-arrow">›</span>
+                  </button>
 
                   <details class="chat-sidebar-tree-group" id="onlineEmployeeNavGroup">
                     <summary><span class="chat-sidebar-tree-dot"></span><span>我的AI员工</span></summary>
@@ -182,34 +186,24 @@
                     <div class="chat-sidebar-tree-items">
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="ip-content-studio" data-feature-gate="ip_content_daily_skill"><span class="chat-sidebar-entry-icon">日</span><span class="chat-sidebar-entry-copy">IP日更文案</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="image-composer-studio" data-feature-gate="goal_video_pipeline_skill"><span class="chat-sidebar-entry-icon">图</span><span class="chat-sidebar-entry-copy">AI设计图</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="creative-film-studio" data-feature-gate="goal_video_pipeline_skill"><span class="chat-sidebar-entry-icon">创</span><span class="chat-sidebar-entry-copy">创意视频</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="shanjian-digital-human" data-feature-gate="hifly_digital_human_skill"><span class="chat-sidebar-entry-icon">人</span><span class="chat-sidebar-entry-copy">数字人口播视频</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="local-bestseller" data-feature-gate="local_bestseller_skill"><span class="chat-sidebar-entry-icon">城</span><span class="chat-sidebar-entry-copy">同城爆款视频</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="viral-tvc-studio" data-feature-gate="comfly_veo_skill"><span class="chat-sidebar-entry-icon">T</span><span class="chat-sidebar-entry-copy">爆款TVC</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="seedance-tvc-studio" data-feature-gate="comfly_seedance_tvc_skill"><span class="chat-sidebar-entry-icon">镜</span><span class="chat-sidebar-entry-copy">创意分镜头视频</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="viral-video-remix" data-feature-gate="viral_video_remix_skill"><span class="chat-sidebar-entry-icon">复</span><span class="chat-sidebar-entry-copy">爆款复刻</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="multi-clip-mixer" data-feature-gate="multi_clip_mixer_skill"><span class="chat-sidebar-entry-icon">剪</span><span class="chat-sidebar-entry-copy">多段视频混剪</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-jump-view="wechat-article" data-feature-gate="wewrite_official_account_skill"><span class="chat-sidebar-entry-icon">文</span><span class="chat-sidebar-entry-copy">公众号文章</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="ppt-studio" data-feature-gate="create_ppt_skill"><span class="chat-sidebar-entry-icon">P</span><span class="chat-sidebar-entry-copy">PPT制作</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="ecommerce-detail-studio" data-feature-gate="comfly_ecommerce_detail_skill"><span class="chat-sidebar-entry-icon">商</span><span class="chat-sidebar-entry-copy">电商详情页</span><span class="chat-sidebar-entry-arrow">›</span></button>
                     </div>
                   </details>
 
                   <details class="chat-sidebar-tree-group">
-                    <summary><span class="chat-sidebar-tree-dot"></span><span>AI获客引流</span></summary>
+                    <summary><span class="chat-sidebar-tree-dot"></span><span>AI获客</span></summary>
                     <div class="chat-sidebar-tree-items">
                       <button type="button" class="chat-sidebar-entry" data-jump-view="douyin-leads" data-feature-gate="douyin_leads_access"><span class="chat-sidebar-entry-icon">抖</span><span class="chat-sidebar-entry-copy">抖音获客</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-nav-placeholder="视频号获客"><span class="chat-sidebar-entry-icon">视</span><span class="chat-sidebar-entry-copy">视频号获客</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-nav-placeholder="快手获客"><span class="chat-sidebar-entry-icon">快</span><span class="chat-sidebar-entry-copy">快手获客</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-nav-placeholder="小红书获客"><span class="chat-sidebar-entry-icon">红</span><span class="chat-sidebar-entry-copy">小红书获客</span><span class="chat-sidebar-entry-arrow">›</span></button>
                     </div>
                   </details>
 
                   <details class="chat-sidebar-tree-group">
-                    <summary><span class="chat-sidebar-tree-dot"></span><span>AI私域销冠</span></summary>
+                    <summary><span class="chat-sidebar-tree-dot"></span><span>私域销管</span></summary>
                     <div class="chat-sidebar-tree-items">
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="juhe-wechat" data-feature-gate="juhe_wechat_skill"><span class="chat-sidebar-entry-icon">微</span><span class="chat-sidebar-entry-copy">微信协议助手</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-jump-view="wecom-config" data-feature-gate="wecom_reply"><span class="chat-sidebar-entry-icon">企</span><span class="chat-sidebar-entry-copy">企业微信自动回复</span><span class="chat-sidebar-entry-arrow">›</span></button>
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="juhe-wechat" data-feature-gate="juhe_wechat_skill"><span class="chat-sidebar-entry-icon">微</span><span class="chat-sidebar-entry-copy">个微</span><span class="chat-sidebar-entry-arrow">›</span></button>
                     </div>
                   </details>
 
@@ -221,7 +215,6 @@
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="tiktok-leads" data-feature-gate="tiktok_leads_access"><span class="chat-sidebar-entry-icon">T</span><span class="chat-sidebar-entry-copy">TikTok线索采集</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="reddit-leads" data-feature-gate="reddit_leads_access"><span class="chat-sidebar-entry-icon">R</span><span class="chat-sidebar-entry-copy">Reddit线索采集</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="x-leads" data-feature-gate="x_leads_access"><span class="chat-sidebar-entry-icon">X</span><span class="chat-sidebar-entry-copy">X线索采集</span><span class="chat-sidebar-entry-arrow">›</span></button>
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="twilio-whatsapp-config" data-feature-gate="twilio_whatsapp"><span class="chat-sidebar-entry-icon">W</span><span class="chat-sidebar-entry-copy">WhatsApp客服</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="messenger-config" data-feature-gate="messenger_reply"><span class="chat-sidebar-entry-icon">F</span><span class="chat-sidebar-entry-copy">Facebook客服</span><span class="chat-sidebar-entry-arrow">›</span></button>
                     </div>
                   </details>
@@ -326,9 +319,9 @@
                         <h2 class="chat-empty-title" id="chatEmptyTitle"><span class="chat-home-wave" aria-hidden="true">👋</span> 您好，我是 <span class="chat-empty-title-emphasis">AI 员工</span></h2>
                         <p class="chat-empty-subtitle" id="chatEmptySubtitle">我可以帮您：</p>
                         <ul class="chat-home-capabilities" aria-label="AI员工能力">
-                          <li><i aria-hidden="true"></i><strong>营销内容创作</strong><span>项目推广</span></li>
-                          <li><i aria-hidden="true"></i><strong>销售引流获客</strong><span>自动成交</span></li>
-                          <li><i aria-hidden="true"></i><strong>服务运营交付</strong><span>售后客服</span></li>
+                          <li><i aria-hidden="true"></i><strong>AI营销创作</strong><span>文案 / 图片 / 视频</span></li>
+                          <li><i aria-hidden="true"></i><strong>AI获客</strong><span>抖音线索跟进</span></li>
+                          <li><i aria-hidden="true"></i><strong>私域销管</strong><span>个微接管协同</span></li>
                         </ul>
                         <p class="chat-home-helper">选择下方功能，或直接对我说出您的需求吧~</p>
                         <div class="workspace-category-tabs" id="workspaceCategoryTabs" aria-label="云端工作台能力分类">
@@ -2680,7 +2673,7 @@
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>
   <script src="/static/js/cutcli-template-studio.js?v=20260805-shared-template-preview"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
-  <script src="/static/js/publish.js?v=20260806-content-record-actions-v2"></script>
+  <script src="/static/js/publish.js?v=20260806-content-record-actions-v2-20260807-content-publish-v1"></script>
   <script src="/static/js/scheduled-tasks.js?v=20260615-ip-daily-task-options"></script>
   <script src="/static/js/init.js?v=20260807-oem-auth-text-v1"></script>
 </body>

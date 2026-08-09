@@ -13,8 +13,17 @@
 .at-heading { min-height: 58px; }
 .at-eyebrow { display: block; margin-bottom: 4px; color: var(--at-muted); font-size: 12px; }
 .at-heading h2, .at-detail-heading h2 { margin: 0; color: var(--at-ink); font-size: 24px; letter-spacing: 0; }
+.at-secretary-heading { align-items: center; }
+.at-secretary-identity { min-width: 0; display: flex; align-items: center; gap: 13px; }
+.at-secretary-mark { width: 46px; height: 46px; flex: 0 0 46px; display: grid; place-items: center; border-radius: 8px; color: #fff; background: #1d4ed8; font-size: 19px; font-weight: 700; }
+.at-secretary-heading p { margin: 5px 0 0; color: var(--at-muted); font-size: 13px; }
+.at-heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .at-message { align-self: center; min-height: 20px; color: #0f766e; font-size: 13px; }
 .at-message.is-error { color: #b42318; }
+.at-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.at-overview > div { min-width: 0; display: grid; gap: 3px; padding: 11px 13px; border: 1px solid var(--at-line); border-radius: 8px; background: #fff; }
+.at-overview span { overflow: hidden; color: var(--at-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.at-overview strong { color: var(--at-ink); font-size: 21px; font-variant-numeric: tabular-nums; }
 
 .at-tabs, .at-result-tabs { display: grid; gap: 4px; padding: 4px; border: 1px solid var(--at-line); border-radius: 8px; background: var(--at-soft); }
 .at-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 14px 0 18px; }
@@ -77,6 +86,10 @@
 @media (max-width: 680px) {
   .at-page { padding: 14px 10px 20px; }
   .at-heading h2, .at-detail-heading h2 { font-size: 21px; }
+  .at-secretary-heading { align-items: flex-start; }
+  .at-secretary-heading p { display: none; }
+  .at-secretary-mark { width: 40px; height: 40px; flex-basis: 40px; }
+  .at-heading-actions { align-items: flex-end; flex-direction: column-reverse; gap: 5px; }
   .at-row { grid-template-columns: 1fr; gap: 9px; }
   .at-row-actions { justify-content: flex-start; }
   .at-detail-heading { grid-template-columns: 36px minmax(0, 1fr); }

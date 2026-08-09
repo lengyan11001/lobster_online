@@ -899,6 +899,55 @@ function syncContentRecordsFromLocalIfOnline() {
   });
 }
 
+var _assetLibraryReconcileTimer = null;
+
+function scheduleNextAssetLibrarySync(userId, delay) {
+  if (!token || String(window.__currentUserId || '') !== String(userId || '')) return;
+  if (_assetLibraryReconcileTimer) clearTimeout(_assetLibraryReconcileTimer);
+  _assetLibraryReconcileTimer = setTimeout(function() {
+    _assetLibraryReconcileTimer = null;
+    if (!token || String(window.__currentUserId || '') !== String(userId || '')) return;
+    if (window.__assetLibraryBackfillUserId === userId) window.__assetLibraryBackfillUserId = '';
+    syncAssetLibraryFromLocalIfOnline();
+  }, Math.max(30000, Number(delay || 120000)));
+}
+
+function syncAssetLibraryFromLocalIfOnline() {
+  if (typeof EDITION === 'undefined' || EDITION !== 'online' || !token) return;
+  var localBase = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+  var userId = String(window.__currentUserId || '');
+  if (!localBase || !userId || window.__assetLibraryBackfillUserId === userId) return;
+  window.__assetLibraryBackfillUserId = userId;
+  var rounds = 0;
+
+  function syncNextBatch() {
+    rounds += 1;
+    return fetch(localBase + '/api/assets/sync-library?origin=generated&max_batches=5&batch_size=100', {
+      method: 'POST',
+      headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + token }
+    }).then(function(response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    }).then(function(result) {
+      if (result && result.ok === false) throw new Error(result.error || '内容记录同步失败');
+      if (result && result.has_more && rounds < 10) {
+        return new Promise(function(resolve) {
+          setTimeout(function() { resolve(syncNextBatch()); }, 500);
+        });
+      }
+      return result;
+    });
+  }
+
+  syncNextBatch().then(function() {
+    scheduleNextAssetLibrarySync(userId, 120000);
+  }).catch(function(error) {
+    if (window.__assetLibraryBackfillUserId === userId) window.__assetLibraryBackfillUserId = '';
+    if (typeof console !== 'undefined') console.warn('[assets] 本地内容记录补传失败', error);
+    scheduleNextAssetLibrarySync(userId, 180000);
+  });
+}
+
 function syncOpenclawMemoryFromServerIfOnline() {
   if (typeof EDITION === 'undefined' || EDITION !== 'online' || !token) return;
   if (typeof _syncOpenclawMemoryFromCloud !== 'function') return;
@@ -1556,6 +1605,7 @@ function loadDashboard() {
       setTimeout(restoreDashboardViewAfterLogin, 0);
       syncTosFromServerIfOnline();
       syncContentRecordsFromLocalIfOnline();
+      syncAssetLibraryFromLocalIfOnline();
       syncOpenclawMemoryFromServerIfOnline();
       if (EDITION === 'online') {
         loadSutuiBalance();

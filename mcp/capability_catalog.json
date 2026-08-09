@@ -74,7 +74,7 @@
       "properties": {
         "model": {
           "type": "string",
-          "description": "可选；默认按参考图数量使用 APIZ Veo 3.1：无图 text-to-video、1 图 image-to-video、2-3 图 reference-to-video。用户明确指定其他模型时保持原模型。"
+          "description": "可选；用户明确指定模型时原样传递。未指定时省略，由服务器统一选择默认模型和兜底策略，Online 不根据时长或素材数量判断模型能力。"
         },
         "prompt": {
           "type": "string",
@@ -88,7 +88,7 @@
           "type": "array",
           "items": {"type": "string"},
           "maxItems": 3,
-          "description": "多参考图，APIZ Veo 3.1 reference-to-video 支持 1-3 张"
+          "description": "多参考图；具体数量和模型支持范围由服务器和上游能力决定"
         },
         "aspect_ratio": {
           "type": "string",
@@ -102,8 +102,7 @@
         },
         "duration": {
           "type": "integer",
-          "enum": [4, 6, 8],
-          "description": "APIZ Veo 3.1 支持 4/6/8 秒；多参考图固定 8 秒"
+          "description": "可选视频时长（秒）；用户明确指定时原样传递，未指定时省略，由服务器按当前模型策略处理"
         }
       },
       "required": [

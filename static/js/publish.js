@@ -1910,6 +1910,19 @@ function _contentRecordKindLabel(kind) {
   return ({ article: '文案', wechat_article: '公众号文章', ppt: 'PPT' })[String(kind || '')] || '文案';
 }
 
+function _contentRecordDisplayLabel(item) {
+  item = item && typeof item === 'object' ? item : {};
+  var meta = item.meta && typeof item.meta === 'object' ? item.meta : {};
+  var task = String(item.task || meta.task || '').trim().toLowerCase();
+  var taskLabels = {
+    moments_candidate: '朋友圈文案',
+    industry_hot_oral: '行业口播文案',
+    professional_ip_oral: 'IP口播文案',
+    article: '深度长文'
+  };
+  return taskLabels[task] || _contentRecordKindLabel(item.kind);
+}
+
 function _contentRecordImageUrls(item) {
   item = item && typeof item === 'object' ? item : {};
   var urls = [];
@@ -1935,7 +1948,11 @@ function _contentRecordImageUrls(item) {
     });
   }
   add(item.cover_url);
+  add(item.image_url);
+  walk(item.images, true);
   walk(item.image_urls, true);
+  walk(item.image_results, true);
+  walk(item.image_update, true);
   walk(item.meta, false);
   var content = String(item.content || item.body || '');
   var markdownPattern = /!\[[^\]]*\]\(\s*(https?:\/\/[^\s)]+)/gi;
@@ -1946,19 +1963,120 @@ function _contentRecordImageUrls(item) {
   return urls.slice(0, 30);
 }
 
+function _contentRecordImageAssetIds(item) {
+  item = item && typeof item === 'object' ? item : {};
+  var ids = [];
+  function add(value) {
+    var id = String(value || '').trim();
+    if (id && ids.indexOf(id) < 0) ids.push(id);
+  }
+  function walk(value, imageContext) {
+    if (Array.isArray(value)) {
+      value.forEach(function(entry) { walk(entry, imageContext); });
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    Object.keys(value).forEach(function(key) {
+      var normalized = String(key || '').toLowerCase();
+      var nextImageContext = imageContext || /image|cover|thumbnail|poster|preview/.test(normalized);
+      if (nextImageContext && ['asset_id', 'image_asset_id'].indexOf(normalized) >= 0) add(value[key]);
+      else walk(value[key], nextImageContext);
+    });
+  }
+  add(item.image_asset_id);
+  walk(item.image_asset_ids, true);
+  walk(item.images, true);
+  walk(item.image_results, true);
+  walk(item.image_update, true);
+  walk(item.meta, false);
+  return ids.slice(0, 30);
+}
+
+function _contentRecordImageRefs(item) {
+  item = item && typeof item === 'object' ? item : {};
+  var refs = [];
+  function add(value) {
+    if (typeof value === 'string') value = { image_url: value };
+    if (!value || typeof value !== 'object') return;
+    var url = String(value.image_url || value.url || value.source_url || value.public_url || value.preview_url || '').trim();
+    var assetId = String(value.image_asset_id || value.asset_id || '').trim();
+    if (url && !_isAbsoluteHttpUrl(url)) url = '';
+    if (!url && !assetId) return;
+    var existing = refs.find(function(ref) {
+      return (url && ref.image_url === url) || (assetId && ref.image_asset_id === assetId);
+    });
+    if (existing) {
+      if (url && !existing.image_url) existing.image_url = url;
+      if (assetId && !existing.image_asset_id) existing.image_asset_id = assetId;
+      return;
+    }
+    refs.push({ image_url: url, image_asset_id: assetId });
+  }
+  function walk(value, imageContext) {
+    if (typeof value === 'string') {
+      if (imageContext) add(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(function(entry) { walk(entry, imageContext); });
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    if (imageContext) add(value);
+    Object.keys(value).forEach(function(key) {
+      var normalized = String(key || '').toLowerCase();
+      var nextImageContext = imageContext || /image|cover|thumbnail|poster|preview/.test(normalized);
+      if (nextImageContext && ['url', 'src', 'source_url', 'public_url', 'preview_url', 'asset_id', 'image_asset_id'].indexOf(normalized) < 0) {
+        walk(value[key], nextImageContext);
+      }
+    });
+  }
+  var urls = Array.isArray(item.image_urls) ? item.image_urls : [];
+  var ids = Array.isArray(item.image_asset_ids) ? item.image_asset_ids : [];
+  walk(item.images, true);
+  walk(item.image_results, true);
+  walk(item.image_update, true);
+  walk(item.meta, false);
+  var hasStructuredRefs = refs.length > 0;
+  if (hasStructuredRefs) {
+    urls.forEach(function(url) { add({ image_url: url }); });
+    ids.forEach(function(assetId) { add({ image_asset_id: assetId }); });
+  } else {
+    for (var index = 0; index < Math.max(urls.length, ids.length); index += 1) {
+      add({ image_url: urls[index] || '', image_asset_id: ids[index] || '' });
+    }
+  }
+  add({ image_url: item.image_url || item.cover_url || '', image_asset_id: item.image_asset_id || '' });
+  _contentRecordImageUrls(item).forEach(function(url) { add({ image_url: url }); });
+  _contentRecordImageAssetIds(item).forEach(function(assetId) { add({ image_asset_id: assetId }); });
+  return refs.slice(0, 30);
+}
+
+function _isMomentsContentRecord(asset) {
+  asset = asset && typeof asset === 'object' ? asset : {};
+  var meta = asset.meta && typeof asset.meta === 'object' ? asset.meta : {};
+  var source = String(asset.source || '').trim().toLowerCase();
+  var task = String(asset.task || meta.task || '').trim().toLowerCase();
+  return source === 'ip_daily' && task === 'moments_candidate';
+}
+
 function _normalizeSharedContentRecord(item) {
   item = item && typeof item === 'object' ? item : {};
-  var imageUrls = _contentRecordImageUrls(item);
+  var imageRefs = _contentRecordImageRefs(item);
+  var imageUrls = imageRefs.map(function(ref) { return ref.image_url; }).filter(Boolean);
+  var imageAssetIds = imageRefs.map(function(ref) { return ref.image_asset_id; }).filter(Boolean);
   var coverUrl = String(imageUrls[0] || '').trim();
   var sourceUrl = String(item.file_url || item.source_url || coverUrl || '').trim();
   return Object.assign({}, item, {
     asset_id: String(item.asset_id || item.record_id || ('content:' + (item.source || '') + ':' + (item.source_id || ''))),
     asset_origin: 'generated',
     media_type: 'document',
-    filename: String(item.filename || item.title || _contentRecordKindLabel(item.kind)),
+    filename: String(item.filename || item.title || _contentRecordDisplayLabel(item)),
     source_url: sourceUrl,
     cover_url: coverUrl,
     image_urls: imageUrls,
+    image_asset_ids: imageAssetIds,
+    image_refs: imageRefs,
     preview_url: coverUrl,
     open_url: String(item.file_url || item.source_url || '').trim(),
     prompt: String(item.summary || item.prompt || '').trim(),
@@ -2045,6 +2163,8 @@ function _assetContentActionDefinitions(asset) {
   asset = asset && typeof asset === 'object' ? asset : {};
   var mediaType = String(asset.media_type || '').toLowerCase();
   var kind = String(asset.kind || '').toLowerCase();
+  var momentsRecord = _isMomentsContentRecord(asset);
+  var momentsImageCount = _contentRecordImageUrls(asset).length + _contentRecordImageAssetIds(asset).length;
   var textBased = (!!_assetContentText(asset) || !!asset._compact) && ['article', 'wechat_article'].indexOf(kind) >= 0;
   var actions = [];
   function add(action, label) {
@@ -2052,6 +2172,7 @@ function _assetContentActionDefinitions(asset) {
   }
   if (mediaType === 'image' || mediaType === 'video' || textBased || ['article', 'wechat_article', 'ppt'].indexOf(kind) >= 0) add('regenerate', '重新生成');
   if (textBased) {
+    add('copy', '复制文案');
     add('generate_image', '生成图片');
     add('generate_video', '生成视频');
     add('generate_talking_video', '数字人口播');
@@ -2061,6 +2182,7 @@ function _assetContentActionDefinitions(asset) {
     add('generate_avatar', '生成数字人');
   }
   if (mediaType === 'video') add('generate_avatar', '生成数字人');
+  if (momentsRecord && momentsImageCount > 0) add('publish_moments', '发布到朋友圈');
   if ((mediaType === 'image' || mediaType === 'video' || kind === 'ppt') && String(asset.source_url || asset.open_url || asset.file_url || asset.asset_id || '').trim()) add('publish', '发布');
   return actions;
 }
@@ -2194,10 +2316,47 @@ function _assetOpenTalkingVideo(asset) {
   });
 }
 
+function _assetOpenMomentsPublish(asset) {
+  var imageRefs = Array.isArray(asset && asset.image_refs) && asset.image_refs.length
+    ? asset.image_refs
+    : _contentRecordImageRefs(asset);
+  var imageUrls = imageRefs.map(function(ref) { return String(ref.image_url || '').trim(); });
+  var imageAssetIds = imageRefs.map(function(ref) { return String(ref.image_asset_id || '').trim(); });
+  if (!imageRefs.length) return Promise.reject(new Error('请先生成图片，再发布朋友圈'));
+  if (typeof window._openJuheWechatView !== 'function') return Promise.reject(new Error('朋友圈发布功能暂时无法打开'));
+  window._openJuheWechatView();
+  return new Promise(function(resolve, reject) {
+    var attempts = 80;
+    function check() {
+      if (document.getElementById('nativeWechatMomentsContent') && typeof window.prefillNativeWechatMoments === 'function') {
+        window.prefillNativeWechatMoments({
+          content: _assetContentText(asset),
+          title: String(asset.title || '').trim(),
+          image_urls: imageUrls,
+          image_asset_ids: imageAssetIds,
+          images: imageRefs,
+          source: String(asset.source || '').trim(),
+          source_id: String(asset.source_id || '').trim(),
+          media_type: 'image_text'
+        });
+        resolve();
+        return;
+      }
+      if (attempts <= 0) {
+        reject(new Error('朋友圈发布页面尚未加载完成'));
+        return;
+      }
+      attempts -= 1;
+      setTimeout(check, 80);
+    }
+    check();
+  });
+}
+
 function _assetOpenDocumentRegenerate(asset) {
   var kind = String(asset.kind || '').toLowerCase();
   var text = _assetContentText(asset);
-  var title = String(asset.title || _contentRecordKindLabel(kind)).trim();
+  var title = String(asset.title || _contentRecordDisplayLabel(asset)).trim();
   if (kind === 'article' && String(asset.source || '').toLowerCase() === 'ip_daily') {
     return _assetOpenWorkspace('ip-content-studio').then(function() {
       var task = String((asset.meta || {}).task || '');
@@ -2288,6 +2447,19 @@ function _assetOpenPublish(asset) {
 function _performAssetContentAction(asset, action) {
   return _resolveAssetContentActionDetail(asset).then(function(detail) {
     var mediaType = String(detail.media_type || '').toLowerCase();
+    if (action === 'copy') {
+      var copyValue = _assetContentText(detail);
+      if (!copyValue) return Promise.reject(new Error('当前文案为空'));
+      if (typeof copyToClipboard === 'function') {
+        return new Promise(function(resolve) {
+          copyToClipboard(copyValue, function() {
+            _assetMsgShow('文案已复制。', false);
+            resolve();
+          });
+        });
+      }
+      return Promise.reject(new Error('当前浏览器不支持复制'));
+    }
     if (action === 'regenerate') {
       if (mediaType === 'image') return _assetOpenImageWorkbench(detail, true);
       if (mediaType === 'video') return _assetOpenVideoWorkbench(detail, false);
@@ -2297,6 +2469,7 @@ function _performAssetContentAction(asset, action) {
     if (action === 'generate_video') return _assetOpenVideoWorkbench(detail, mediaType === 'image');
     if (action === 'generate_talking_video') return _assetOpenTalkingVideo(detail);
     if (action === 'generate_avatar') return _assetOpenAvatarClone(detail);
+    if (action === 'publish_moments') return _assetOpenMomentsPublish(detail);
     if (action === 'publish') return _assetOpenPublish(detail);
     throw new Error('当前操作暂不支持');
   });
@@ -2440,7 +2613,7 @@ function _renderAssetPreviewStage(asset) {
     var fileUrl = String(asset.file_url || '').trim();
     var body = content || summary || '当前记录暂无正文。';
     stage.innerHTML = '<article style="width:100%;max-width:780px;align-self:flex-start;padding:0.35rem;color:var(--text);">' +
-      '<div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.75rem;"><span class="asset-card-badge" style="background:#64748b;">' + escapeHtml(_contentRecordKindLabel(kind)) + '</span><strong style="font-size:1rem;">' + escapeHtml(asset.title || _contentRecordKindLabel(kind)) + '</strong></div>' +
+      '<div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.75rem;"><span class="asset-card-badge" style="background:#64748b;">' + escapeHtml(_contentRecordDisplayLabel(asset)) + '</span><strong style="font-size:1rem;">' + escapeHtml(asset.title || _contentRecordDisplayLabel(asset)) + '</strong></div>' +
       imagesHtml +
       '<div style="white-space:pre-wrap;word-break:break-word;line-height:1.75;font-size:0.9rem;">' + escapeHtml(body) + '</div>' +
       (fileUrl ? '<div style="margin-top:1rem;"><a class="btn btn-primary btn-sm" href="' + escapeAttr(fileUrl) + '" target="_blank" rel="noopener">打开文件</a></div>' : '') +
@@ -2519,7 +2692,7 @@ function _openAssetPreviewModal(asset) {
   var info = document.getElementById('assetPreviewInfo');
   var copyBtn = document.getElementById('assetPreviewCopyPromptBtn');
   if (title) title.textContent = (asset.title || asset.filename || _MEDIA_TYPE_LABELS[asset.media_type] || '素材预览');
-  if (meta) meta.textContent = (asset._content_record ? _contentRecordKindLabel(asset.kind) : (_MEDIA_TYPE_LABELS[asset.media_type] || '素材')) + ' · ' + (asset.created_at ? _formatDateTimeBeijing(asset.created_at) : '');
+  if (meta) meta.textContent = (asset._content_record ? _contentRecordDisplayLabel(asset) : (_MEDIA_TYPE_LABELS[asset.media_type] || '素材')) + ' · ' + (asset.created_at ? _formatDateTimeBeijing(asset.created_at) : '');
   if (prompt) prompt.textContent = (asset.prompt || asset.summary || '').trim() || '暂无提示词';
   if (copyBtn) copyBtn.disabled = !((asset.prompt || '').trim());
   var downloadBtn = document.getElementById('assetPreviewDownloadBtn');
@@ -3368,8 +3541,9 @@ function _bindAssetCardActions(container) {
       e.stopPropagation();
       var aid = btn.getAttribute('data-copy-asset-prompt');
       var asset = _assetLibraryState.assetMap[aid];
-      _copyAssetPrompt(asset && asset.prompt);
-      _assetMsgShow((asset && asset.prompt) ? '提示词已复制。' : '当前素材没有提示词可复制。', !(asset && asset.prompt));
+      var value = asset && asset._content_record ? _assetContentText(asset) : (asset && asset.prompt);
+      _copyAssetPrompt(value);
+      _assetMsgShow(value ? (asset && asset._content_record ? '文案已复制。' : '提示词已复制。') : (asset && asset._content_record ? '当前内容没有文案可复制。' : '当前素材没有提示词可复制。'), !value);
     });
   });
   container.querySelectorAll('button[data-download-asset]').forEach(function(btn) {
@@ -3494,6 +3668,7 @@ function _renderAssetCards(container, assets, append) {
     var isImage = a.media_type === 'image';
     var isVideo = a.media_type === 'video';
     var isDocument = a.media_type === 'document';
+    var contentImages = isContentRecord ? _contentRecordImageUrls(a) : [];
     var hasUrl = _isAbsoluteHttpUrl(a.source_url);
     var thumbUrl = _pickAssetListThumbUrl(a);
     var openUrl = _resolvePossiblyRelativeMediaUrl(a.open_url);
@@ -3539,24 +3714,25 @@ function _renderAssetCards(container, assets, append) {
       } else {
         preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
       }
-    } else if (isDocument && isContentRecord && _contentRecordImageUrls(a).length) {
-      var coverUrl = _contentRecordImageUrls(a)[0];
-      preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><img class="asset-list-thumb" data-hide-on-error="1" data-initial-src="' + escapeAttr(coverUrl) + '" alt="" style="max-width:160px;max-height:120px;border-radius:6px;object-fit:contain;pointer-events:none;"></div>';
+    } else if (isDocument && isContentRecord && contentImages.length) {
+      var coverUrl = contentImages[0];
+      var countBadge = contentImages.length > 1 ? '<span class="asset-content-image-count">' + escapeHtml(String(contentImages.length)) + ' 张</span>' : '';
+      preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><img class="asset-list-thumb" data-hide-on-error="1" data-initial-src="' + escapeAttr(coverUrl) + '" alt="" style="max-width:160px;max-height:120px;border-radius:6px;object-fit:contain;pointer-events:none;">' + countBadge + '</div>';
     } else if (isDocument) {
       var docExt = String(a.filename || '').split('.').pop().toUpperCase();
-      if (isContentRecord) docExt = _contentRecordKindLabel(a.kind);
+      if (isContentRecord) docExt = _contentRecordDisplayLabel(a);
       else if (!docExt || docExt === String(a.filename || '').toUpperCase()) docExt = 'DOC';
       if (docExt === 'PPTX') docExt = 'PPT';
       preview =
         '<div class="asset-preview-wrap asset-document-preview" ' + wrapAttrs + '><div class="asset-document-preview-inner">' +
         '<div class="asset-document-icon">' + escapeHtml(docExt.slice(0, 4)) + '</div>' +
         '<div class="asset-document-name">' + escapeHtml(a.title || a.filename || 'document') + '</div>' +
-        '<div class="asset-document-meta">' + escapeHtml(isContentRecord ? _contentRecordKindLabel(a.kind) : '文档文件') + '</div>' +
+        '<div class="asset-document-meta">' + escapeHtml(isContentRecord ? _contentRecordDisplayLabel(a) : '文档文件') + '</div>' +
         '</div></div>';
     } else {
       preview = '<div class="asset-preview-wrap asset-document-preview" ' + wrapAttrs + '><div class="asset-document-preview-inner"><div class="asset-document-icon">FILE</div><div class="asset-document-name">' + escapeHtml(a.filename || a.media_type || 'file') + '</div><div class="asset-document-meta">' + escapeHtml(a.media_type || '文件') + '</div></div></div>';
     }
-    var typeLabel = isContentRecord ? _contentRecordKindLabel(a.kind) : (_MEDIA_TYPE_LABELS[a.media_type] || a.media_type);
+    var typeLabel = isContentRecord ? _contentRecordDisplayLabel(a) : (_MEDIA_TYPE_LABELS[a.media_type] || a.media_type);
     var originLabel = a.asset_origin === 'user_upload' ? '用户上传' : '内容记录';
     var originClass = a.asset_origin === 'user_upload' ? ' is-upload' : ' is-generated';
     var currentGroup = (a.creative_candidate_group || (Array.isArray(a.creative_candidate_groups) && a.creative_candidate_groups[0]) || '').trim();
@@ -3565,10 +3741,18 @@ function _renderAssetCards(container, assets, append) {
     var selectHtml = isContentRecord ? '' : '<label class="asset-card-select" onclick="event.stopPropagation();"><input type="checkbox" data-select-asset="' + escapeAttr(a.asset_id) + '"' + (_assetIsSelected(a.asset_id) ? ' checked' : '') + '><span>选择</span></label>';
     var useAsAttachBtn = !isContentRecord && (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
     var previewBtn = '<button type="button" class="btn btn-ghost btn-sm" data-preview-asset="' + escapeAttr(a.asset_id) + '">查看结果</button>';
-    var copyPromptBtn = '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-prompt="' + escapeAttr(a.asset_id) + '"' + (((a.prompt || '').trim()) ? '' : ' disabled') + '>' + (isContentRecord ? '复制摘要' : '复制提示词') + '</button>';
+    var copyValue = isContentRecord ? _assetContentText(a) : String(a.prompt || '').trim();
+    var copyLabel = isContentRecord && ['article', 'wechat_article'].indexOf(String(a.kind || '').toLowerCase()) >= 0 ? '复制文案' : (isContentRecord ? '复制摘要' : '复制提示词');
+    var copyPromptBtn = '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-prompt="' + escapeAttr(a.asset_id) + '"' + (copyValue ? '' : ' disabled') + '>' + copyLabel + '</button>';
     var downloadBtn = (!isContentRecord || String(a.file_url || '').trim()) ? '<button type="button" class="btn btn-ghost btn-sm" data-download-asset="' + escapeAttr(a.asset_id) + '">' + (isContentRecord ? '打开文件' : '下载') + '</button>' : '';
     var candidateBtn = !isContentRecord && isImage ? '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '">设为创意备选</button>' : '';
     var actionMenu = _assetContentActionMenuHtml(a);
+    var contentPreviewText = isContentRecord ? _assetContentText(a) : '';
+    var imageStrip = isContentRecord && contentImages.length
+      ? '<div class="asset-content-image-strip">' + contentImages.slice(0, 3).map(function(url, imageIndex) {
+          return '<img src="' + escapeAttr(url) + '" alt="朋友圈图片 ' + escapeAttr(imageIndex + 1) + '" loading="lazy">';
+        }).join('') + '</div>'
+      : '';
     var deleteBtn = isContentRecord
       ? '<button type="button" class="btn btn-ghost btn-sm" data-delete-content-record="' + escapeAttr(a.asset_id) + '">删除</button>'
       : '<button type="button" class="btn btn-ghost btn-sm" data-delete-asset="' + escapeAttr(a.asset_id) + '">删除</button>';
@@ -3577,7 +3761,8 @@ function _renderAssetCards(container, assets, append) {
       selectHtml +
       '<div class="card-label"><span style="display:inline-flex;align-items:center;gap:0.35rem;flex-wrap:wrap;"><span class="asset-card-badge" style="background:' + badgeColor + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-origin-badge' + originClass + '">' + escapeHtml(originLabel) + '</span></span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
       preview +
-      '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(a.summary || a.prompt || a.title || a.filename) + '</div>' +
+      '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(contentPreviewText || a.summary || a.prompt || a.title || a.filename) + '</div>' +
+      imageStrip +
       groupHtml +
       '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
       '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';

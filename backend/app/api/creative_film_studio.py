@@ -44,7 +44,10 @@ _MAX_MEMORY_CHARS_PER_DOC = 2400
 _MAX_MEMORY_CHARS_TOTAL = 12000
 _IMAGE_PROXY_TIMEOUT_SECONDS = 900.0
 _SUTUI_GPT_IMAGE_2_MODEL = "openai/gpt-image-2"
-_SUTUI_IMAGE_SUBMIT_TIMEOUT_SECONDS = 180.0
+# The Server MCP gateway allows image.generate to run for up to 25 minutes.
+# Keep this client-side timeout aligned so a slow upstream generation is not
+# reported as a false failure before the gateway can return its result.
+_SUTUI_IMAGE_SUBMIT_TIMEOUT_SECONDS = 25 * 60.0
 _SUTUI_IMAGE_POLL_TIMEOUT_SECONDS = 90.0
 _PLATFORM_REQUIREMENTS: Dict[str, Dict[str, str]] = {
     "douyin": {
@@ -904,9 +907,18 @@ def _moment_image_writeback_payload(
     images: List[Dict[str, Any]],
     complete: bool,
     reference_image_urls: List[str] | None = None,
+    error: str = "",
+    failed_index: int = 0,
 ) -> Dict[str, Any]:
     first = images[0] if images else {}
     refs = _clean_reference_image_urls(reference_image_urls or [], limit=8)
+    error_text = re.sub(r"\s+", " ", str(error or "")).strip()[:500]
+    if complete:
+        image_status = f"{len(images)} 张图片已生成"
+    elif error_text:
+        image_status = f"生成失败：{error_text}"
+    else:
+        image_status = f"正在生成图片：{len(images)}/3"
     return {
         "image_url": first.get("image_url") or "",
         "image_asset_id": first.get("image_asset_id") or "",
@@ -917,13 +929,23 @@ def _moment_image_writeback_payload(
             "image_batch_id": batch_id,
             "image_batch_created_at": batch_created_at,
             "image_prompts": prompts,
-            "image_status": f"{len(images)} 张图片已生成" if complete else f"正在生成图片：{len(images)}/3",
+            "image_status": image_status,
             "image_progress": f"{len(images)}/3",
             "image_complete": complete,
+            "image_error": error_text,
+            "image_failed_index": max(0, int(failed_index or 0)),
             "reference_image_urls": refs,
             "images": images,
         },
     }
+
+
+def _moment_image_error_text(exc: Exception) -> str:
+    detail: Any = exc.detail if isinstance(exc, HTTPException) else str(exc)
+    if isinstance(detail, (dict, list)):
+        detail = json.dumps(detail, ensure_ascii=False)
+    text = re.sub(r"\s+", " ", str(detail or "")).strip()
+    return text[:500] or "图片生成失败，请稍后重试"
 
 
 @router.post("/api/ip-content/moments/images/generate", summary="Generate images for selected IP moments draft records")
@@ -948,80 +970,135 @@ async def generate_ip_moment_images(
             reference_urls = _reference_urls_for_memory_doc_ids(current_user.id, record.get("memory_doc_ids") or [], limit=8)
         prompts = _ip_moment_prompts(record)
         images: List[Dict[str, Any]] = []
+        record_error = ""
+        failed_index = 0
         for index, prompt in enumerate(prompts, start=1):
-            logger.info(
-                "[creative_film_studio] ip moment image start user_id=%s record_id=%s index=%s/3 batch_id=%s",
-                current_user.id,
-                record_id,
-                index,
-                batch_id,
-            )
-            direct_prompt, variant = _ip_moment_direct_prompt(record, prompt, index, body.image_extra or "")
-            memory_context = ""
-            selected_docs: List[Dict[str, Any]] = []
-            if record.get("memory_doc_ids"):
-                memory_context, selected_docs = _optional_selected_memory_context(current_user.id, record.get("memory_doc_ids") or [])
-            plan_prompt = _compose_direct_image_prompt(direct_prompt, memory_context)
-            image_url = await _generate_image(request, current_user, plan_prompt, image_model, "1:1", reference_image_urls=reference_urls)
-            asset = await _save_generated_image_asset(
-                request=request,
-                current_user=current_user,
-                image_url=image_url,
-                image_prompt=plan_prompt,
-                model=image_model,
-                title=record.get("title") or "朋友圈配图",
-            )
-            preview_url = str(asset.get("source_url") or "").strip() or image_url
-            images.append(
-                {
-                    "image_url": preview_url,
-                    "image_asset_id": str(asset.get("asset_id") or asset.get("id") or "").strip(),
-                    "image_prompt": prompt,
-                    "generated_prompt": plan_prompt,
-                    "variant": variant,
-                    "index": index,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "batch_id": batch_id,
-                    "batch_created_at": batch_created_at,
-                    "reference_image_urls": reference_urls,
-                    "selected_documents": selected_docs,
-                }
-            )
-            logger.info(
-                "[creative_film_studio] ip moment image generated user_id=%s record_id=%s index=%s/3 asset_id=%s batch_id=%s",
-                current_user.id,
-                record_id,
-                index,
-                images[-1].get("image_asset_id") or "",
-                batch_id,
-            )
-            await _post_server_ip_moment_image(
-                request,
-                current_user,
-                record_id,
-                _moment_image_writeback_payload(
-                    batch_id=batch_id,
-                    batch_created_at=batch_created_at,
-                    prompts=prompts,
-                    images=images,
-                    complete=index >= len(prompts),
-                    reference_image_urls=reference_urls,
-                ),
-            )
-            logger.info(
-                "[creative_film_studio] ip moment image writeback ok user_id=%s record_id=%s index=%s/3 batch_id=%s",
-                current_user.id,
-                record_id,
-                index,
-                batch_id,
-            )
-        processed.append({"record_id": record.get("record_id") or "", "title": record.get("title") or "", "image_count": len(images), "reference_image_urls": reference_urls, "images": images})
+            try:
+                logger.info(
+                    "[creative_film_studio] ip moment image start user_id=%s record_id=%s index=%s/3 batch_id=%s",
+                    current_user.id,
+                    record_id,
+                    index,
+                    batch_id,
+                )
+                direct_prompt, variant = _ip_moment_direct_prompt(record, prompt, index, body.image_extra or "")
+                memory_context = ""
+                selected_docs: List[Dict[str, Any]] = []
+                if record.get("memory_doc_ids"):
+                    memory_context, selected_docs = _optional_selected_memory_context(current_user.id, record.get("memory_doc_ids") or [])
+                plan_prompt = _compose_direct_image_prompt(direct_prompt, memory_context)
+                image_url = await _generate_image(request, current_user, plan_prompt, image_model, "1:1", reference_image_urls=reference_urls)
+                asset = await _save_generated_image_asset(
+                    request=request,
+                    current_user=current_user,
+                    image_url=image_url,
+                    image_prompt=plan_prompt,
+                    model=image_model,
+                    title=record.get("title") or "朋友圈配图",
+                )
+                preview_url = str(asset.get("source_url") or "").strip() or image_url
+                images.append(
+                    {
+                        "image_url": preview_url,
+                        "image_asset_id": str(asset.get("asset_id") or asset.get("id") or "").strip(),
+                        "image_prompt": prompt,
+                        "generated_prompt": plan_prompt,
+                        "variant": variant,
+                        "index": index,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "batch_id": batch_id,
+                        "batch_created_at": batch_created_at,
+                        "reference_image_urls": reference_urls,
+                        "selected_documents": selected_docs,
+                    }
+                )
+                logger.info(
+                    "[creative_film_studio] ip moment image generated user_id=%s record_id=%s index=%s/3 asset_id=%s batch_id=%s",
+                    current_user.id,
+                    record_id,
+                    index,
+                    images[-1].get("image_asset_id") or "",
+                    batch_id,
+                )
+                await _post_server_ip_moment_image(
+                    request,
+                    current_user,
+                    record_id,
+                    _moment_image_writeback_payload(
+                        batch_id=batch_id,
+                        batch_created_at=batch_created_at,
+                        prompts=prompts,
+                        images=images,
+                        complete=index >= len(prompts),
+                        reference_image_urls=reference_urls,
+                    ),
+                )
+                logger.info(
+                    "[creative_film_studio] ip moment image writeback ok user_id=%s record_id=%s index=%s/3 batch_id=%s",
+                    current_user.id,
+                    record_id,
+                    index,
+                    batch_id,
+                )
+            except Exception as exc:
+                record_error = _moment_image_error_text(exc)
+                failed_index = index
+                logger.warning(
+                    "[creative_film_studio] ip moment image failed user_id=%s record_id=%s index=%s/3 batch_id=%s error=%s",
+                    current_user.id,
+                    record_id,
+                    index,
+                    batch_id,
+                    record_error,
+                )
+                try:
+                    await _post_server_ip_moment_image(
+                        request,
+                        current_user,
+                        record_id,
+                        _moment_image_writeback_payload(
+                            batch_id=batch_id,
+                            batch_created_at=batch_created_at,
+                            prompts=prompts,
+                            images=images,
+                            complete=False,
+                            reference_image_urls=reference_urls,
+                            error=record_error,
+                            failed_index=index,
+                        ),
+                    )
+                except Exception as writeback_exc:
+                    logger.warning(
+                        "[creative_film_studio] ip moment failure writeback failed user_id=%s record_id=%s batch_id=%s error=%s",
+                        current_user.id,
+                        record_id,
+                        batch_id,
+                        _moment_image_error_text(writeback_exc),
+                    )
+                break
+        status = "failed" if record_error else "completed"
+        processed.append(
+            {
+                "record_id": record_id,
+                "title": record.get("title") or "",
+                "status": status,
+                "error": record_error,
+                "failed_index": failed_index,
+                "image_count": len(images),
+                "image_progress": f"{len(images)}/3",
+                "reference_image_urls": reference_urls,
+                "images": images,
+            }
+        )
         all_images.extend(images)
+    failed_count = sum(1 for item in processed if item.get("status") == "failed")
     return {
         "ok": True,
         "batch_id": batch_id,
         "batch_created_at": batch_created_at,
         "record_count": len(processed),
+        "completed_count": len(processed) - failed_count,
+        "failed_count": failed_count,
         "image_count": len(all_images),
         "records": processed,
         "media_urls": [img["image_url"] for img in all_images if img.get("image_url")],

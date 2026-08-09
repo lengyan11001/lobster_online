@@ -86,20 +86,26 @@ class Settings(BaseSettings):
     """服务器未返回默认生图模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
     lobster_default_image_generate_model: str = "openai/gpt-image-2"
     """服务器未返回默认视频模型时的本地兜底；正常由 AUTH_SERVER_BASE /capabilities/comfly-pricing 下发。"""
-    lobster_default_video_generate_model: str = "apiz/veo3.1/text-to-video"
+    lobster_default_video_generate_model: str = "xai/grok-imagine-video/text-to-video"
 
     @field_validator("lobster_default_video_generate_model", mode="before")
     @classmethod
     def _migrate_legacy_default_video_model(cls, value: object) -> str:
         raw = str(value or "").strip()
         if raw.lower() in {
+            "apiz/veo3.1/text-to-video",
+            "apiz/veo3.1/image-to-video",
+            "apiz/veo3.1/reference-to-video",
+            "fal-ai/veo3.1",
+            "fal-ai/veo3.1/text-to-video",
+            "fal-ai/veo3.1/image-to-video",
             "xai/grok-imagine-video/text-to-video",
             "xai/grok-imagine-video/image-to-video",
             "grok-video-3",
             "grok-imagine-video-1.5-preview",
         }:
-            return "apiz/veo3.1/text-to-video"
-        return raw or "apiz/veo3.1/text-to-video"
+            return "xai/grok-imagine-video/text-to-video"
+        return raw or "xai/grok-imagine-video/text-to-video"
     """定时编排（schedule_orchestration=True）时使用的速推子模型。不填则用默认对话模型。"""
     lobster_orchestration_sutui_chat_model: Optional[str] = None
     openclaw_gateway_url: Optional[str] = None

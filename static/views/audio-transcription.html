@@ -1,22 +1,35 @@
 <div id="content-audio-transcription" class="content-block audio-transcription-view">
   <section class="at-page" data-at-screen="main">
-    <header class="at-heading">
-      <div>
-        <span class="at-eyebrow">工作台</span>
-        <h2>音频转写</h2>
+    <header class="at-heading at-secretary-heading">
+      <div class="at-secretary-identity">
+        <span class="at-secretary-mark" aria-hidden="true">秘</span>
+        <div>
+          <span class="at-eyebrow">AI秘书</span>
+          <h2>录音整理工作台</h2>
+          <p>整理谈话、提炼重点，让每段录音都变成可跟进的信息。</p>
+        </div>
       </div>
-      <span class="at-message" id="atMessage" role="status"></span>
+      <div class="at-heading-actions">
+        <span class="at-message" id="atMessage" role="status"></span>
+        <button type="button" class="at-button" data-at-new>新建整理</button>
+      </div>
     </header>
 
-    <nav class="at-tabs" id="atTabs" role="tablist" aria-label="音频来源">
-      <button type="button" class="is-active" data-at-tab="records" role="tab">转写记录</button>
-      <button type="button" data-at-tab="local" role="tab">本地音频</button>
+    <div class="at-overview" aria-label="秘书记录概览">
+      <div><span>全部记录</span><strong id="atOverviewTotal">0</strong></div>
+      <div><span>本页已整理</span><strong id="atOverviewCompleted">0</strong></div>
+      <div><span>本页处理中</span><strong id="atOverviewPending">0</strong></div>
+    </div>
+
+    <nav class="at-tabs" id="atTabs" role="tablist" aria-label="AI秘书工作区">
+      <button type="button" class="is-active" data-at-tab="records" role="tab">秘书记录</button>
+      <button type="button" data-at-tab="local" role="tab">上传音频</button>
       <button type="button" data-at-tab="mobile" role="tab">手机同步</button>
     </nav>
 
     <section class="at-panel" data-at-panel="records">
       <div class="at-toolbar">
-        <div><strong>全部转写记录</strong><small>本地音频、个人资料与手机同步记录</small></div>
+        <div><strong>秘书记录</strong><small>最新录音优先，可查看摘要、待办和完整原文</small></div>
         <button type="button" class="at-button at-button-quiet" data-at-refresh>刷新</button>
       </div>
       <div class="at-list" id="atRecordList"></div>
@@ -46,7 +59,7 @@
     <header class="at-detail-heading">
       <button type="button" class="at-back" id="atDetailBack" aria-label="返回">‹</button>
       <div>
-        <span class="at-eyebrow">音频转写</span>
+        <span class="at-eyebrow">AI秘书 · 整理结果</span>
         <h2 id="atDetailTitle">转写详情</h2>
         <div class="at-detail-meta" id="atDetailMeta"></div>
       </div>
@@ -58,19 +71,19 @@
       <audio id="atDetailAudio" controls preload="metadata"></audio>
     </div>
     <nav class="at-result-tabs" id="atResultTabs" role="tablist">
-      <button type="button" class="is-active" data-at-result-tab="summary" role="tab">AI 摘要</button>
+      <button type="button" class="is-active" data-at-result-tab="summary" role="tab">秘书摘要</button>
       <button type="button" data-at-result-tab="transcript" role="tab">完整转写</button>
     </nav>
     <section class="at-result" data-at-result-panel="summary">
       <div class="at-result-head">
-        <h3>内容结论</h3>
+        <h3>内容摘要</h3>
         <div class="at-result-actions">
           <button type="button" class="at-button at-button-quiet" data-at-copy="summary">复制</button>
           <button type="button" class="at-button at-button-quiet" data-at-export="summary">导出</button>
         </div>
       </div>
       <div class="at-summary" id="atSummary"></div>
-      <h3>重点事项</h3>
+      <h3>秘书待办</h3>
       <div class="at-key-points" id="atKeyPoints"></div>
     </section>
     <section class="at-result" data-at-result-panel="transcript" hidden>

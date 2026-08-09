@@ -1,7 +1,7 @@
 {
-  "version": "1.0.148",
-  "build": 192,
-  "applied_at": "2026-08-07T21:50:05+08:00",
-  "note": "long audio transcription and local upload recovery",
-  "bundle_sha256": "7ce6339b0a3bbc762bef0a976e91861efc774bf63cd36f3d8d1cb0bfaf510502"
+  "version": "1.0.150",
+  "build": 194,
+  "applied_at": "2026-08-09T21:03:38+08:00",
+  "note": "local package only after H5 online cleanup",
+  "bundle_sha256": "25656c8e4dac3f70fcd1979b14f3e59b00f4324734387b31569527ee6367103c"
 }

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, text
@@ -1268,7 +1268,207 @@ def _forward_auth_headers(request: Optional[Request]) -> dict[str, str]:
     ).strip()
     if installation_id:
         headers["X-Installation-Id"] = installation_id
+    brand_mark = (
+        request.headers.get("X-Lobster-Brand")
+        or request.headers.get("x-lobster-brand")
+        or ""
+    ).strip()
+    if brand_mark:
+        headers["X-Lobster-Brand"] = brand_mark
     return headers
+
+
+def _asset_sync_payload(asset: Asset) -> Optional[dict[str, Any]]:
+    source_url = str(asset.source_url or "").strip()
+    if not source_url.startswith(("http://", "https://")) or _is_internal_asset_http_url(source_url):
+        return None
+    lowered = source_url.lower()
+    if any(value in lowered for value in ("localhost", "127.0.0.1", "0.0.0.0")):
+        return None
+    meta = dict(asset.meta or {})
+    visibility = str(meta.get("content_visibility") or meta.get("library_visibility") or "").strip().lower()
+    raw_origin = str(meta.get("asset_origin") or meta.get("origin") or "").strip().lower()
+    if visibility in {"hidden", "internal", "intermediate"} or raw_origin in {"internal", "intermediate"}:
+        return None
+    if str(asset.model or "").strip() == "shanjian-digital-human-template-media":
+        return None
+    context = meta.get("content_context") if isinstance(meta.get("content_context"), dict) else {}
+    group_name = _creative_candidate_group(meta)
+    payload: dict[str, Any] = {
+        "url": source_url,
+        "media_type": asset.media_type or "image",
+        "filename": asset.filename or "",
+        "file_size": int(asset.file_size or 0),
+        "source_asset_id": asset.asset_id,
+        "asset_origin": _asset_origin(meta),
+        "prompt": asset.prompt or "",
+        "creative_prompt": str(context.get("creative_prompt") or asset.prompt or ""),
+        "model": asset.model or "",
+        "tags": asset.tags or "",
+        "title": str(context.get("title") or meta.get("content_title") or meta.get("title") or ""),
+        "description": str(context.get("description") or meta.get("content_description") or ""),
+        "content_visibility": visibility,
+        "generation_task_id": str(meta.get("generation_task_id") or ""),
+        "source_created_at": asset.created_at.isoformat() if asset.created_at else "",
+    }
+    if group_name:
+        payload["creative_candidate_group"] = group_name
+        payload["creative_candidate_groups"] = [group_name]
+    return payload
+
+
+_asset_library_sync_locks: dict[int, asyncio.Lock] = {}
+
+
+def _asset_library_sync_lock(user_id: int) -> asyncio.Lock:
+    key = int(user_id)
+    lock = _asset_library_sync_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _asset_library_sync_locks[key] = lock
+    return lock
+
+
+def _pending_asset_sync_payloads(
+    user_id: int,
+    *,
+    origin: str,
+    media_type: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        query = db.query(Asset).filter(Asset.user_id == int(user_id))
+        clean_media_type = str(media_type or "").strip().lower()
+        if clean_media_type:
+            query = query.filter(Asset.media_type == clean_media_type)
+        meta_origin = func.lower(
+            func.coalesce(
+                Asset.meta["asset_origin"].as_string(),
+                Asset.meta["origin"].as_string(),
+                "",
+            )
+        )
+        meta_visibility = func.lower(
+            func.coalesce(
+                Asset.meta["content_visibility"].as_string(),
+                Asset.meta["library_visibility"].as_string(),
+                "",
+            )
+        )
+        clean_origin = _normalize_asset_origin_filter(origin)
+        if clean_origin == "user_upload":
+            query = query.filter(meta_origin == "user_upload")
+        elif clean_origin == "generated":
+            query = query.filter(meta_origin != "user_upload")
+        query = query.filter(
+            Asset.source_url.isnot(None),
+            Asset.source_url.like("http%"),
+            func.coalesce(Asset.meta["remote_asset_id"].as_string(), "") == "",
+            ~meta_visibility.in_(("hidden", "internal", "intermediate")),
+            ~meta_origin.in_(("internal", "intermediate")),
+            func.coalesce(Asset.model, "") != "shanjian-digital-human-template-media",
+        )
+        scan_limit = max(limit, min(limit * 4, 800))
+        rows = query.order_by(Asset.created_at.desc(), Asset.id.desc()).limit(scan_limit).all()
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            payload = _asset_sync_payload(row)
+            if payload is not None:
+                payloads.append(payload)
+            if len(payloads) >= limit:
+                break
+        return payloads
+    finally:
+        db.close()
+
+
+async def _sync_local_asset_library_to_auth_server(
+    user_id: int,
+    headers: dict[str, str],
+    *,
+    origin: str = "generated",
+    media_type: str = "",
+    max_batches: int = 1,
+    batch_size: int = 100,
+) -> dict[str, Any]:
+    base = _auth_server_base_url()
+    if not base or "Authorization" not in headers:
+        return {"ok": False, "error": "cloud authentication is unavailable", "synced": 0}
+    total_synced = 0
+    total_created = 0
+    total_updated = 0
+    has_more = False
+    async with _asset_library_sync_lock(user_id):
+        for _ in range(max(1, min(int(max_batches or 1), 10))):
+            payloads = await asyncio.to_thread(
+                _pending_asset_sync_payloads,
+                user_id,
+                origin=origin,
+                media_type=media_type,
+                limit=max(1, min(int(batch_size or 100), 200)),
+            )
+            if not payloads:
+                has_more = False
+                break
+            try:
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, trust_env=False) as client:
+                    response = await client.post(
+                        f"{base}/api/assets/register-batch",
+                        json={"assets": payloads},
+                        headers=headers,
+                    )
+                if response.status_code >= 400:
+                    return {
+                        "ok": False,
+                        "error": (response.text or f"HTTP {response.status_code}")[:500],
+                        "synced": total_synced,
+                    }
+                result = response.json() if response.content else {}
+            except Exception as exc:
+                logger.warning("[assets-sync] generated asset batch failed user_id=%s err=%s", user_id, exc)
+                return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "synced": total_synced}
+            items = result.get("items") if isinstance(result, dict) else []
+            remote_by_source = {
+                str(item.get("source_asset_id") or "").strip(): str(item.get("asset_id") or "").strip()
+                for item in items
+                if isinstance(item, dict) and str(item.get("source_asset_id") or "").strip()
+            }
+            if not remote_by_source:
+                return {"ok": False, "error": "cloud response did not map synchronized assets", "synced": total_synced}
+            db = SessionLocal()
+            try:
+                local_rows = db.query(Asset).filter(
+                    Asset.user_id == int(user_id),
+                    Asset.asset_id.in_(list(remote_by_source)),
+                ).all()
+                now_iso = datetime.utcnow().isoformat()
+                for row in local_rows:
+                    remote_asset_id = remote_by_source.get(str(row.asset_id or "").strip())
+                    if not remote_asset_id:
+                        continue
+                    meta = dict(row.meta or {})
+                    meta["remote_asset_id"] = remote_asset_id[:80]
+                    meta["remote_registered_at"] = now_iso
+                    row.meta = meta
+                    db.add(row)
+                db.commit()
+            finally:
+                db.close()
+            synced = len(remote_by_source)
+            total_synced += synced
+            total_created += int(result.get("created") or 0)
+            total_updated += int(result.get("updated") or 0)
+            has_more = len(payloads) >= max(1, min(int(batch_size or 100), 200))
+            if not has_more:
+                break
+    return {
+        "ok": True,
+        "synced": total_synced,
+        "created": total_created,
+        "updated": total_updated,
+        "has_more": has_more,
+    }
 
 
 def _remote_asset_filename(raw: Any, url: str, fallback: str) -> str:
@@ -2178,6 +2378,7 @@ async def upload_asset(
 @router.get("/api/assets", summary="列出本地素材")
 def list_assets(
     request: Request,
+    background_tasks: BackgroundTasks,
     media_type: Optional[str] = None,
     q: Optional[str] = None,
     creative_group: Optional[str] = None,
@@ -2285,7 +2486,44 @@ def list_assets(
                 "created_at": r.created_at.isoformat() if r.created_at else "",
             }
         )
+    if (
+        origin_filter == "generated"
+        and clean_offset == 0
+        and not q
+        and not creative_group_name
+    ):
+        headers = _forward_auth_headers(request)
+        if headers:
+            background_tasks.add_task(
+                _sync_local_asset_library_to_auth_server,
+                current_user.id,
+                headers,
+                origin="generated",
+                media_type=media_type or "",
+                max_batches=1,
+                batch_size=100,
+            )
     return {"total": total, "assets": out}
+
+
+@router.post("/api/assets/sync-library", summary="同步本地内容记录到云端")
+async def sync_asset_library(
+    request: Request,
+    origin: str = Query("generated"),
+    media_type: str = Query(""),
+    max_batches: int = Query(5, ge=1, le=10),
+    batch_size: int = Query(100, ge=1, le=200),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """Reconcile public local assets without holding a database session over network I/O."""
+    return await _sync_local_asset_library_to_auth_server(
+        current_user.id,
+        _forward_auth_headers(request),
+        origin=origin,
+        media_type=media_type,
+        max_batches=max_batches,
+        batch_size=batch_size,
+    )
 
 
 @router.post("/api/assets/sync-user-uploads", summary="同步用户上传素材")

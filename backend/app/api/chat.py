@@ -159,7 +159,11 @@ def _get_default_video_generate_model(_has_image: bool = False) -> str:
     bundled_fallback = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
     raw = _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
     low = raw.strip().lower()
-    if low.startswith("apiz/veo3.1/") or low.startswith("xai/grok-imagine-video/"):
+    if (
+        low.startswith("apiz/veo3.1/")
+        or low.startswith("xai/grok-imagine-video/")
+        or low.startswith("xai/grok-imagine-video-")
+    ):
         return _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
     return raw
 
@@ -171,7 +175,11 @@ def _get_default_video_generate_model_cached(_has_image: bool = False) -> str:
     bundled_fallback = _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
     raw = _remote_video_generate_default_model_cache or local_fallback or bundled_fallback
     low = raw.strip().lower()
-    if low.startswith("apiz/veo3.1/") or low.startswith("xai/grok-imagine-video/"):
+    if (
+        low.startswith("apiz/veo3.1/")
+        or low.startswith("xai/grok-imagine-video/")
+        or low.startswith("xai/grok-imagine-video-")
+    ):
         return _DEFAULT_VIDEO_GENERATE_MODEL_I2V if _has_image else _DEFAULT_VIDEO_GENERATE_MODEL_T2V
     return raw
 
@@ -2335,7 +2343,7 @@ def _infer_video_model_from_user_text(
 
 
 def _infer_video_model_lock_from_user_text(user_message: str, has_attachment: bool = False) -> Tuple[str, str]:
-    """Return (model, source) for OpenClaw video.generate. Source is user/default."""
+    """Return an explicit user-selected video model for OpenClaw video.generate."""
     text = _strip_lobster_attachment_block(user_message)
     probe = {"capability_id": "video.generate", "payload": {}}
     _infer_video_model_from_user_text(probe, text, has_attachment)
@@ -2354,11 +2362,11 @@ def _infer_video_model_lock_from_user_text(user_message: str, has_attachment: bo
     short_model = _VIDEO_SHORT_MODEL_ID_RE.search(text or "")
     if short_model:
         return short_model.group(1).strip(), "user"
-    return _get_default_video_generate_model(has_attachment), "default"
+    return "", ""
 
 
 def _infer_video_model_lock_for_openclaw(user_message: str, has_attachment: bool = False) -> Tuple[str, str]:
-    """Infer OpenClaw video model without blocking on remote pricing refresh."""
+    """Infer only explicit OpenClaw video model choices without blocking on remote pricing refresh."""
     text = _strip_lobster_attachment_block(user_message)
     probe = {"capability_id": "video.generate", "payload": {}}
     _infer_video_model_from_user_text(probe, text, has_attachment)
@@ -2377,12 +2385,12 @@ def _infer_video_model_lock_for_openclaw(user_message: str, has_attachment: bool
     short_model = _VIDEO_SHORT_MODEL_ID_RE.search(text or "")
     if short_model:
         return short_model.group(1).strip(), "user"
-    return _get_default_video_generate_model_cached(has_attachment), "default"
+    return "", ""
 
 
 _DEFAULT_IMAGE_GENERATE_MODEL = "openai/gpt-image-2"
-_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "apiz/veo3.1/text-to-video"
-_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "apiz/veo3.1/image-to-video"
+_DEFAULT_VIDEO_GENERATE_MODEL_T2V = "xai/grok-imagine-video/text-to-video"
+_DEFAULT_VIDEO_GENERATE_MODEL_I2V = "xai/grok-imagine-video-1.5/image-to-video"
 
 _IMAGE_MODEL_ALIASES: Dict[str, str] = {
     "openai/gpt-image": "openai/gpt-image-2",

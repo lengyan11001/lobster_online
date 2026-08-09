@@ -25,6 +25,14 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  function recordTimestamp(row) {
+    var value = row && (row.recorded_at || row.created_at || row.updated_at || row.queued_at);
+    var parsed = Date.parse(String(value || ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  function newestFirst(left, right) {
+    return recordTimestamp(right) - recordTimestamp(left) || Number(right && right.id || 0) - Number(left && left.id || 0);
+  }
   function cloudBase() {
     return String((typeof API_BASE !== 'undefined' && API_BASE) || window.__API_BASE || '').replace(/\/$/, '');
   }
@@ -137,7 +145,7 @@
     return String(value || '').replace('T', ' ').slice(0, 16);
   }
   function statusLabel(value) {
-    return ({ processing: '正在转写和总结', completed: '已完成', failed: '处理失败' })[value] || value || '等待处理';
+    return ({ processing: '秘书正在整理', completed: '已整理', failed: '整理失败' })[value] || value || '等待整理';
   }
   function speakerLabel(value) {
     var speaker = String(value || '').trim();
@@ -145,9 +153,9 @@
     return /^[A-Z]$/.test(speaker) ? '说话人 ' + speaker : speaker;
   }
   function progressInfo(row) {
-    if (row && row.status === 'completed') return { percent: 100, label: '转写与 AI 总结已完成' };
-    if (row && row.status === 'failed') return { percent: 100, label: '处理失败' };
-    if (row && row.process_stage === 'summarizing') return { percent: 85, label: '正在生成 AI 总结' };
+    if (row && row.status === 'completed') return { percent: 100, label: '秘书整理已完成' };
+    if (row && row.status === 'failed') return { percent: 100, label: '整理失败' };
+    if (row && row.process_stage === 'summarizing') return { percent: 85, label: '正在提炼摘要和待办' };
     var chunkMatch = /^transcribing:(\d+)\/(\d+)$/.exec(String(row && row.process_stage || ''));
     if (chunkMatch) {
       var current = Math.max(1, Number(chunkMatch[1] || 1));
@@ -189,7 +197,7 @@
     host.innerHTML = state.localFiles.length ? state.localFiles.map(function(file, index) {
       return '<div class="at-row"><div class="at-row-main"><strong>' + esc(file.name || '未命名音频') +
         '</strong><div class="at-row-meta"><span>' + esc(formatBytes(file.size)) + '</span><span>本地音频</span></div></div>' +
-        '<div class="at-row-actions"><button type="button" class="at-button" data-at-upload="' + index + '">上传并后台转写</button>' +
+        '<div class="at-row-actions"><button type="button" class="at-button" data-at-upload="' + index + '">交给秘书整理</button>' +
         '<button type="button" class="at-button at-button-danger" data-at-local-remove="' + index + '">移除</button></div></div>';
     }).join('') : '<div class="at-empty">尚未选择音频文件</div>';
   }
@@ -259,9 +267,12 @@
   function renderRecords() {
     var host = currentListHost();
     if (!host) return;
-    var pending = state.tab === 'records' ? state.uploadJobs.filter(function(job) { return job.status !== 'completed'; }) : [];
+    var pending = state.tab === 'records' ? state.uploadJobs.filter(function(job) { return job.status !== 'completed'; }).slice().sort(newestFirst) : [];
     var rows = pending.map(localUploadRow).join('') + state.records.map(recordRow).join('');
     host.innerHTML = rows || '<div class="at-empty">暂无记录</div>';
+    if (el('atOverviewTotal')) el('atOverviewTotal').textContent = String(state.total || 0);
+    if (el('atOverviewCompleted')) el('atOverviewCompleted').textContent = String(state.records.filter(function(row) { return row.status === 'completed'; }).length);
+    if (el('atOverviewPending')) el('atOverviewPending').textContent = String(state.records.filter(function(row) { return row.status === 'processing'; }).length + pending.length);
     var pager = currentPagerHost();
     if (!pager) return;
     var totalPages = Math.max(1, Math.ceil(state.total / state.pageSize));
@@ -290,7 +301,7 @@
       var cloud = results[0];
       var local = results[1];
       if (cloud.error) throw cloud.error;
-      state.records = Array.isArray(cloud.data.items) ? cloud.data.items : [];
+      state.records = (Array.isArray(cloud.data.items) ? cloud.data.items : []).slice().sort(newestFirst);
       state.total = Number(cloud.data.total || 0);
       state.page = Number(cloud.data.page || state.page);
       var cloudRecordIds = {};
@@ -303,7 +314,7 @@
       state.uploadJobs = (Array.isArray(local.items) ? local.items : []).filter(function(job) {
         var recordId = Number(job && job.record && job.record.id || 0);
         return !(recordId > 0 && cloudRecordIds[String(recordId)]);
-      });
+      }).sort(newestFirst);
       renderRecords();
       setMessage('');
     }).catch(function(error) {
@@ -370,9 +381,9 @@
     if (!row) return '';
     var points = Array.isArray(row.key_points) ? row.key_points.map(function(item) { return String(item || '').trim(); }).filter(Boolean) : [];
     return [
-      row.display_name || row.file_name || '音频转写',
-      row.summary_text ? 'AI 摘要\n' + String(row.summary_text).trim() : '',
-      points.length ? '重点事项\n' + points.map(function(item, index) { return (index + 1) + '. ' + item; }).join('\n') : ''
+      row.display_name || row.file_name || '秘书记录',
+      row.summary_text ? '秘书摘要\n' + String(row.summary_text).trim() : '',
+      points.length ? '秘书待办\n' + points.map(function(item, index) { return (index + 1) + '. ' + item; }).join('\n') : ''
     ].filter(Boolean).join('\n\n');
   }
   function transcriptText(row) {
@@ -381,7 +392,7 @@
     var body = segments.length ? segments.map(function(item) {
       return speakerLabel(item.speaker) + '：' + String(item.text || '').trim();
     }).filter(function(line) { return !/：$/.test(line); }).join('\n') : String(row.transcript_text || '').trim();
-    return [row.display_name || row.file_name || '音频转写', '完整转写', body].filter(Boolean).join('\n\n');
+    return [row.display_name || row.file_name || '秘书记录', '完整转写', body].filter(Boolean).join('\n\n');
   }
   function renderDetail(row) {
     state.detail = row;
@@ -404,7 +415,7 @@
     }).join('') : '<div class="at-empty">暂无重点事项</div>';
     var segments = Array.isArray(row.segments) ? row.segments : [];
     el('atDialogue').innerHTML = segments.length ? segments.map(function(item) {
-      return '<div class="at-line"><button type="button" class="at-speaker" data-at-speaker="' + esc(item.speaker || '未知') + '">' + esc(speakerLabel(item.speaker)) + '</button><p>' + esc(item.text || '') + '</p></div>';
+      return '<div class="at-line"><button type="button" class="at-speaker" data-at-speaker="' + esc(item.speaker || '未知') + '" data-at-speaker-id="' + esc(item.speaker_id || '') + '">' + esc(speakerLabel(item.speaker)) + '</button><p>' + esc(item.text || '') + '</p></div>';
     }).join('') : '<div class="at-empty">' + esc(row.transcript_text || (row.status === 'processing' ? '正在生成完整转写...' : '暂无转写')) + '</div>';
   }
   function setResultTab(tab) {
@@ -460,22 +471,25 @@
     var blob = new Blob(['\uFEFF' + value], { type: 'text/plain;charset=utf-8' });
     var url = URL.createObjectURL(blob);
     var anchor = document.createElement('a');
-    var fileName = String(state.detail && (state.detail.display_name || state.detail.file_name) || '音频转写').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80);
+    var fileName = String(state.detail && (state.detail.display_name || state.detail.file_name) || '秘书记录').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80);
     anchor.href = url;
-    anchor.download = fileName + '-' + (kind === 'transcript' ? '完整转写' : 'AI摘要') + '.txt';
+    anchor.download = fileName + '-' + (kind === 'transcript' ? '完整转写' : '秘书摘要') + '.txt';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
   }
-  function renameSpeaker(speaker) {
+  function renameSpeaker(speaker, speakerId) {
     if (!state.detail) return Promise.resolve();
     var current = String(speaker || '').trim();
-    var next = window.prompt('输入说话人姓名，本条记录中所有同名说话人会一起修改', speakerLabel(current));
+    var stableSpeakerId = String(speakerId || '').trim();
+    var next = window.prompt('输入说话人姓名，本条记录中该说话人的所有片段会一起修改', speakerLabel(current));
     if (next === null || !next.trim() || next.trim() === current || next.trim() === speakerLabel(current)) return Promise.resolve();
+    var body = { speaker: current, display_name: next.trim() };
+    if (stableSpeakerId) body.speaker_id = stableSpeakerId;
     return requestJson('/api/h5/recorder/files/' + encodeURIComponent(state.detail.id) + '/speakers', {
       method: 'PATCH',
-      body: { speaker: current, display_name: next.trim() }
+      body: body
     }).then(function() {
       setMessage('说话人名称已批量更新');
       return showDetail(state.detail.id, true);
@@ -510,6 +524,7 @@
     });
     root.addEventListener('click', function(event) {
       var tab = event.target.closest('[data-at-tab]');
+      var create = event.target.closest('[data-at-new]');
       var upload = event.target.closest('[data-at-upload]');
       var remove = event.target.closest('[data-at-local-remove]');
       var refresh = event.target.closest('[data-at-refresh]');
@@ -525,6 +540,7 @@
       var copy = event.target.closest('[data-at-copy]');
       var exportButton = event.target.closest('[data-at-export]');
       if (tab) return setTab(tab.dataset.atTab);
+      if (create) return setTab('local');
       if (upload) return uploadLocalFile(upload.dataset.atUpload, upload);
       if (remove) {
         state.localFiles.splice(Number(remove.dataset.atLocalRemove), 1);
@@ -539,7 +555,7 @@
       if (localDelete) return deleteLocalUpload(localDelete.dataset.atLocalDelete).catch(function(error) { setMessage(error.message || '删除失败', true); });
       if (removeRecord) return deleteRecord(removeRecord.dataset.atDelete).catch(function(error) { setMessage(error.message || '删除失败', true); });
       if (resultTab) return setResultTab(resultTab.dataset.atResultTab);
-      if (speaker) return renameSpeaker(speaker.dataset.atSpeaker).catch(function(error) { setMessage(error.message || '说话人改名失败', true); });
+      if (speaker) return renameSpeaker(speaker.dataset.atSpeaker, speaker.dataset.atSpeakerId || '').catch(function(error) { setMessage(error.message || '说话人改名失败', true); });
       if (copy) {
         var text = copy.dataset.atCopy === 'transcript' ? transcriptText(state.detail) : summaryText(state.detail);
         return copyText(text).then(function(ok) { setMessage(ok ? '已复制' : '复制失败', !ok); });
@@ -557,7 +573,7 @@
     setResultTab('summary');
     state.root.querySelector('[data-at-screen="main"]').hidden = false;
     state.root.querySelector('[data-at-screen="detail"]').hidden = true;
-    setTab(state.tab || 'records');
+    setTab('records');
     return Promise.resolve();
   };
 })();

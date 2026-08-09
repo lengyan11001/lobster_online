@@ -86,7 +86,7 @@ class GoalVideoPipelinePayload(BaseModel):
     goal: str = Field("", description="用户目标，例如：给某产品生成 6 秒宣传视频")
     platform: str = "douyin"
     language: str = "中文"
-    duration: Optional[int] = Field(6, ge=4, le=60)
+    duration: Optional[int] = None
     aspect_ratio: str = "9:16"
     resolution: str = "720p"
     memory_scope: str = "default"
@@ -127,7 +127,7 @@ class GoalVideoPipelinePayload(BaseModel):
     @classmethod
     def normalize_duration_input(cls, value: Any) -> Any:
         if value is None or value == "":
-            return 6
+            return None
         if isinstance(value, str):
             parsed = _duration_seconds_from_goal(value)
             if parsed is not None:
@@ -154,10 +154,10 @@ class GoalVideoPipelinePayload(BaseModel):
     def preserve_explicit_goal_parameters(self) -> "GoalVideoPipelinePayload":
         explicit_duration = _duration_seconds_from_goal(self.goal)
         if explicit_duration is not None:
-            configured_duration = int(self.duration or 6)
-            # Six seconds was the old injected default. A non-default value from
-            # either the user goal or task configuration must win over it.
-            if configured_duration == 6 or explicit_duration != 6:
+            configured_duration = self.duration
+            # Old tasks may still carry an injected 6s default. Keep explicit
+            # user/task duration when present, otherwise preserve the goal text.
+            if configured_duration in (None, 6) or explicit_duration != 6:
                 self.duration = explicit_duration
         explicit_ratio = _aspect_ratio_from_goal(self.goal)
         if explicit_ratio:
@@ -166,30 +166,8 @@ class GoalVideoPipelinePayload(BaseModel):
         if explicit_resolution:
             self.resolution = explicit_resolution
 
-        duration = int(self.duration or 6)
-        if duration < 4:
-            raise ValueError("创意视频当前最短支持 4 秒，不能静默延长用户要求")
-        if duration > 30:
-            raise ValueError("创意视频当前单次生成最长支持 30 秒，不能静默缩短用户要求")
-        aspect_ratio = str(self.aspect_ratio or "9:16").strip().lower()
-        if aspect_ratio not in {"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}:
-            raise ValueError(f"不支持的视频比例：{self.aspect_ratio}")
-        resolution = str(self.resolution or "720p").strip().lower()
-        if resolution not in {"480p", "720p", "1080p"}:
-            raise ValueError(f"不支持的视频分辨率：{self.resolution}")
-        selected_model = str(self.video_model or "").strip().lower()
-        if selected_model == LONG_FORM_VIDEO_MODEL:
-            if resolution not in {"480p", "720p"}:
-                raise ValueError("明确选择必火2.5时，分辨率只支持 480p 或 720p")
-            if self.function_mode in {"", "reference", "multimodal", "omni"}:
-                self.function_mode = "omini"
-        elif not selected_model or selected_model.startswith("apiz/veo3.1/"):
-            if duration not in {4, 6, 8}:
-                raise ValueError(
-                    "当前创意视频模型仅支持 4/6/8 秒；系统不会自动切换到价格更高的必火2.5，请明确选择支持该时长的模型"
-                )
-            if resolution not in {"720p", "1080p"}:
-                raise ValueError("当前创意视频模型只支持 720p 或 1080p，不会自动切换其他模型")
+        # Online only preserves explicit parameters. Model capability, duration
+        # buckets, resolution support, and provider fallback are server concerns.
         return self
 
 
@@ -505,25 +483,80 @@ async def _refund_pipeline_total(
     credits: Any,
     token: str,
     installation_id: str,
-) -> None:
+) -> Dict[str, Any]:
     try:
         amount = float(credits or 0)
     except (TypeError, ValueError):
         amount = 0.0
     if amount <= 0 or not token:
-        return
+        return {
+            "ok": amount <= 0,
+            "refunded": False,
+            "credits": amount,
+            "reason": "no_credits" if amount <= 0 else "missing_token",
+        }
     base = _billing_base()
     if not base:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
-            await client.post(
-                f"{base}/capabilities/refund",
-                json={"capability_id": capability_id, "credits": amount},
-                headers=_billing_headers(token, installation_id),
+        return {"ok": False, "refunded": False, "credits": amount, "reason": "missing_billing_base"}
+
+    idem_key = f"pipeline:refund:{capability_id}:{uuid.uuid4().hex}"
+    last_error = ""
+    last_status = 0
+    last_response: Any = None
+    for attempt in range(1, 4):
+        try:
+            headers = _billing_headers(token, installation_id)
+            headers["X-Billing-Idempotency-Key"] = idem_key
+            async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+                resp = await client.post(
+                    f"{base}/capabilities/refund",
+                    json={"capability_id": capability_id, "credits": amount},
+                    headers=headers,
+                )
+            last_status = resp.status_code
+            try:
+                last_response = resp.json() if resp.content else {}
+            except Exception:
+                last_response = (resp.text or "")[:500]
+            if resp.status_code < 400:
+                return {
+                    "ok": True,
+                    "refunded": True,
+                    "credits": amount,
+                    "attempts": attempt,
+                    "idempotency_key": idem_key,
+                    "response": last_response,
+                }
+            last_error = str(last_response or resp.text or f"HTTP {resp.status_code}")[:1000]
+            logger.warning(
+                "[pipeline.billing] refund HTTP failed capability_id=%s credits=%s attempt=%s/3 status=%s body=%s",
+                capability_id,
+                amount,
+                attempt,
+                resp.status_code,
+                last_error[:300],
             )
-    except Exception as exc:
-        logger.warning("[pipeline.billing] refund failed capability_id=%s credits=%s: %s", capability_id, amount, exc)
+        except Exception as exc:
+            last_error = str(exc)[:1000]
+            logger.warning(
+                "[pipeline.billing] refund request failed capability_id=%s credits=%s attempt=%s/3: %s",
+                capability_id,
+                amount,
+                attempt,
+                exc,
+            )
+        if attempt < 3:
+            await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
+    return {
+        "ok": False,
+        "refunded": False,
+        "credits": amount,
+        "attempts": 3,
+        "idempotency_key": idem_key,
+        "http_status": last_status,
+        "error": last_error,
+        "response": last_response,
+    }
 
 
 async def _record_pipeline_total(
@@ -890,14 +923,14 @@ def _build_video_generation_payload(
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "prompt": prompt,
-        "duration": int(pl.duration or 6),
         "aspect_ratio": pl.aspect_ratio,
         "resolution": pl.resolution,
         "functionMode": pl.function_mode or "reference",
     }
     if pl.video_model:
         payload["model"] = pl.video_model
-
+    if pl.duration is not None:
+        payload["duration"] = int(pl.duration)
     image_urls = _dedupe_strings(
         [pl.first_image_url or ""]
         + list(generated_image_urls or [])
@@ -1206,12 +1239,19 @@ async def run_goal_video_from_reference_pipeline(
 
 
 def _goal_pipeline_billing_payload(pl: GoalVideoPipelinePayload, *, source_mode: str = "ai_image") -> Dict[str, Any]:
-    payload = pl.model_dump()
+    payload = pl.model_dump(exclude_none=True)
     payload["source_mode"] = source_mode
     if source_mode != "ai_image":
         payload["reference_asset_ids"] = list(pl.reference_asset_ids or [])
         payload["reference_image_urls"] = list(pl.reference_image_urls or [])
     return payload
+
+
+def _refund_failure_suffix(refund_result: Dict[str, Any]) -> str:
+    if not isinstance(refund_result, dict) or refund_result.get("ok"):
+        return ""
+    reason = refund_result.get("error") or refund_result.get("reason") or refund_result.get("response") or "unknown"
+    return f"；预扣退款失败或待人工核对：{str(reason)[:300]}"
 
 
 def _goal_video_partial_from_image(
@@ -1316,7 +1356,7 @@ async def run_goal_video_pipeline_with_total_billing(
                 billing_context=billing_context,
             )
     except Exception as exc:
-        await _refund_pipeline_total(
+        refund_result = await _refund_pipeline_total(
             capability_id="goal.video.pipeline",
             credits=credits,
             token=token,
@@ -1325,7 +1365,7 @@ async def run_goal_video_pipeline_with_total_billing(
         await _record_pipeline_total(
             capability_id="goal.video.pipeline",
             payload=pre_payload,
-            result=None,
+            result={"pipeline_billing": {"refund": refund_result}},
             token=token,
             installation_id=installation_id,
             credits_charged=0,
@@ -1343,10 +1383,13 @@ async def run_goal_video_pipeline_with_total_billing(
             partial["pipeline_billing"] = {
                 "pre_deduct_applied": bool(credits),
                 "credits_charged": credits or 0,
-                "refunded": True,
+                "refunded": bool(refund_result.get("ok")),
+                "refund": refund_result,
             }
-            raise PipelinePartialResultError(str(exc), partial) from exc
-        raise
+            raise PipelinePartialResultError(str(exc) + _refund_failure_suffix(refund_result), partial) from exc
+        if refund_result.get("ok"):
+            raise
+        raise RuntimeError(str(exc) + _refund_failure_suffix(refund_result)) from exc
     result["pipeline_billing"] = {
         "pre_deduct_applied": bool(credits),
         "credits_charged": credits or 0,

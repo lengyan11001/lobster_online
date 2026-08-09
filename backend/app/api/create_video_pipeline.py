@@ -26,6 +26,7 @@ from .goal_video_pipeline import (
     PipelinePartialResultError,
     _pre_deduct_pipeline_total,
     _record_pipeline_total,
+    _refund_failure_suffix,
     _refund_pipeline_total,
     _installation_id_from_request,
     _raw_token_from_request,
@@ -41,7 +42,6 @@ router = APIRouter()
 
 DEFAULT_PLANNING_MODEL = "gpt-5.4"
 DEFAULT_IMAGE_MODEL = "openai/gpt-image-2"
-DEFAULT_VIDEO_MODEL = "apiz/veo3.1/image-to-video"
 
 SCRIPT_PROMPT_TEMPLATE = """你是一位专业的视频脚本编剧。请根据以下需求，创作一份结构化的视频故事脚本。
 
@@ -178,7 +178,7 @@ class CreateVideoPipelinePayload(BaseModel):
     video_type: str = "brand_promo"
     target_audience: str = "general_audience"
     style: str = "premium commercial, realistic, cinematic lighting"
-    duration: int = Field(8, ge=3, le=60)
+    duration: int = Field(10, ge=3, le=60)
     scene_count: int = Field(1, ge=1, le=6)
     aspect_ratio: str = "16:9"
     resolution: str = "720p"
@@ -517,7 +517,7 @@ async def run_create_video_pipeline(
     emit("plan_done", "plan generated", {"title": plan.get("title"), "scene_count": len(scenes)})
 
     image_model = (pl.image_model or "").strip() or DEFAULT_IMAGE_MODEL
-    video_model = (pl.video_model or "").strip() or DEFAULT_VIDEO_MODEL
+    video_model = (pl.video_model or "").strip()
     image_size = _image_size_for_ratio(aspect_ratio)
     scene_outputs: List[Dict[str, Any]] = []
     saved_assets: List[Dict[str, Any]] = []
@@ -578,11 +578,12 @@ async def run_create_video_pipeline(
 
         video_payload: Dict[str, Any] = {
             "prompt": _with_video_no_text_constraint(scene["video_prompt"], 2500),
-            "model": video_model,
             "aspect_ratio": aspect_ratio,
             "resolution": pl.resolution,
             "duration": int(scene.get("duration") or _scene_duration(pl.duration, len(scenes))),
         }
+        if video_model:
+            video_payload["model"] = video_model
         if image_ref.get("asset_id"):
             video_payload["asset_id"] = image_ref["asset_id"]
         if image_ref.get("image_url"):
@@ -638,7 +639,7 @@ async def run_create_video_pipeline(
         "models": {
             "planning": (pl.planning_model or DEFAULT_PLANNING_MODEL),
             "image": image_model,
-            "video": video_model,
+            "video": video_model or "server_default",
         },
         "plan": plan,
         "scenes": scene_outputs,
@@ -658,7 +659,10 @@ def _create_video_billing_payload(pl: CreateVideoPipelinePayload) -> Dict[str, A
     payload["source_mode"] = "reference" if (pl.reference_asset_ids or pl.reference_image_urls) else "ai_image"
     payload["scene_count"] = max(1, min(6, int(pl.scene_count or 1)))
     payload["image_model"] = (pl.image_model or DEFAULT_IMAGE_MODEL)
-    payload["video_model"] = (pl.video_model or DEFAULT_VIDEO_MODEL)
+    if pl.video_model:
+        payload["video_model"] = pl.video_model
+    else:
+        payload.pop("video_model", None)
     return payload
 
 
@@ -696,7 +700,7 @@ def _create_video_partial_from_scenes(
         "models": {
             "planning": (pl.planning_model or DEFAULT_PLANNING_MODEL),
             "image": (pl.image_model or DEFAULT_IMAGE_MODEL),
-            "video": (pl.video_model or DEFAULT_VIDEO_MODEL),
+            "video": (pl.video_model or "server_default"),
         },
         "plan": plan or {},
         "scenes": partial_scenes,
@@ -770,7 +774,7 @@ async def run_create_video_pipeline_with_total_billing(
             billing_context=billing_context,
         )
     except Exception as exc:
-        await _refund_pipeline_total(
+        refund_result = await _refund_pipeline_total(
             capability_id="create.video.pipeline",
             credits=credits,
             token=token,
@@ -779,7 +783,7 @@ async def run_create_video_pipeline_with_total_billing(
         await _record_pipeline_total(
             capability_id="create.video.pipeline",
             payload=pre_payload,
-            result=None,
+            result={"pipeline_billing": {"refund": refund_result}},
             token=token,
             installation_id=installation_id,
             credits_charged=0,
@@ -797,10 +801,13 @@ async def run_create_video_pipeline_with_total_billing(
             partial["pipeline_billing"] = {
                 "pre_deduct_applied": bool(credits),
                 "credits_charged": credits or 0,
-                "refunded": True,
+                "refunded": bool(refund_result.get("ok")),
+                "refund": refund_result,
             }
-            raise PipelinePartialResultError(str(exc), partial) from exc
-        raise
+            raise PipelinePartialResultError(str(exc) + _refund_failure_suffix(refund_result), partial) from exc
+        if refund_result.get("ok"):
+            raise
+        raise RuntimeError(str(exc) + _refund_failure_suffix(refund_result)) from exc
     result["pipeline_billing"] = {
         "pre_deduct_applied": bool(credits),
         "credits_charged": credits or 0,

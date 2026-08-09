@@ -15,6 +15,8 @@ def test_ip_daily_records_have_delete_bulk_copy_and_creation_actions():
     assert 'data-record-action="image"' in script
     assert 'data-record-action="video"' in script
     assert 'data-record-action="digital-human"' in script
+    assert 'data-record-action="publish-moments"' in script
+    assert 'function openDraftMomentsPublish' in script
     assert "/api/ip-content/draft-records/" in script
     assert "/api/ip-content/draft-record-groups/" in script
     assert "id=\"ipRecordSelectAll\"" in view
@@ -29,6 +31,7 @@ def test_ip_daily_actions_fill_the_corresponding_workbench_fields():
     assert "shanjianScriptInput" in script
     assert "shanjianTitleInput" in script
     assert "_openShanjianDigitalHumanView" in script
+    assert "prefillNativeWechatMoments" in script
 
 
 def test_ip_daily_action_handlers_are_bound_when_cards_render():
@@ -75,6 +78,7 @@ def test_moment_image_failures_are_rendered_on_the_matching_record():
     assert "if (recordImages(rec).length >= 3) return false" in script
     assert "张图片生成失败" in script
     assert 'data-retry-moment-image-record' in script
+    assert 'data-publish-moment-image-record' in script
     assert "失败原因已标在对应文案" in script
     assert "setMsg(err.message || '朋友圈出图失败', true)" not in script
     assert ".ip-moment-image-error" in view
