@@ -169,6 +169,7 @@
       panel.classList.toggle('is-active', panel.getAttribute('data-ps-panel') === state.tab);
     });
     if (state.tab === 'profile') renderProfileWizard();
+    if (state.tab === 'upload') renderUploadedDocuments();
     if (state.tab === 'memory') {
       renderMemorySourceSelectors();
       loadRecorderSources().catch(function(err) {
@@ -856,6 +857,97 @@
     ].join('|');
   }
 
+  function fileNeedsOnlineDocumentParse(file) {
+    var name = String(file && file.name || '').toLowerCase();
+    return /\.(txt|md|markdown|csv|tsv|json|jsonl|ya?ml|html?|log|pdf|docx|xlsx|xlsm|xls|pptx)$/.test(name);
+  }
+
+  function requireOnlineMemoryParser(files) {
+    if (!(files || []).some(fileNeedsOnlineDocumentParse)) return Promise.resolve();
+    return cloudJson('/api/h5-chat/devices/status', { json: false }).then(function(data) {
+      var devices = (Array.isArray(data.devices) ? data.devices : []).filter(function(item) {
+        return item && item.online;
+      });
+      if (!devices.length) throw new Error('资料解析需要先启动并登录 Online。');
+      var capable = devices.some(function(item) {
+        return Array.isArray(item.capabilities) && item.capabilities.indexOf('memory_document_parse_v1') >= 0;
+      });
+      if (!capable) throw new Error('当前 Online 版本不支持本机资料解析，请升级最新 OTA 后重试。');
+    });
+  }
+
+  function waitForOnlineMemoryGeneration(messageId) {
+    var attempts = 0;
+    function poll() {
+      if (attempts >= 600) return Promise.reject(new Error('资料仍在 Online 处理中，请稍后重试。'));
+      attempts += 1;
+      return new Promise(function(resolve) { window.setTimeout(resolve, 3000); }).then(function() {
+        return cloudJson('/api/h5-chat/messages/' + encodeURIComponent(messageId), { json: false });
+      }).then(function(data) {
+        var message = data && data.message ? data.message : {};
+        var events = Array.isArray(data && data.events) ? data.events : [];
+        var resultEvent = events.slice().reverse().find(function(event) {
+          var payload = event && event.payload && typeof event.payload === 'object' ? event.payload : {};
+          return payload.documents && typeof payload.documents === 'object';
+        });
+        if (resultEvent) return resultEvent.payload;
+        if (message.status === 'failed' || message.status === 'cancelled') {
+          throw new Error(message.error || 'Online 资料理解失败。');
+        }
+        if (message.status === 'completed') {
+          throw new Error('Online 已完成解析，但没有返回可审核内容，请重试。');
+        }
+        var progressEvent = events.slice().reverse().find(function(event) {
+          return event && event.type === 'progress';
+        });
+        var progressText = progressEvent && progressEvent.payload ? progressEvent.payload.text : '';
+        if (progressText) setMsg(progressText);
+        return poll();
+      });
+    }
+    return poll();
+  }
+
+  function monitorOnlineMemoryParse(messageId, filename) {
+    if (!messageId) return;
+    state.onlineMemoryParseMonitors = state.onlineMemoryParseMonitors || {};
+    if (state.onlineMemoryParseMonitors[messageId]) return;
+    state.onlineMemoryParseMonitors[messageId] = true;
+    var attempts = 0;
+    function finish() {
+      delete state.onlineMemoryParseMonitors[messageId];
+    }
+    function poll() {
+      if (attempts >= 600) {
+        setMsg('“' + (filename || '资料') + '”仍在 Online 解析，可稍后刷新资料列表查看。');
+        finish();
+        return;
+      }
+      attempts += 1;
+      window.setTimeout(function() {
+        cloudJson('/api/h5-chat/messages/' + encodeURIComponent(messageId), { json: false }).then(function(data) {
+          var message = data && data.message ? data.message : {};
+          if (message.status === 'completed') {
+            return loadMemories().then(saveConfigSilently).then(function() {
+              setMsg('“' + (filename || '资料') + '”已解析并存入记忆。');
+              finish();
+            });
+          }
+          if (message.status === 'failed' || message.status === 'cancelled') {
+            setMsg(message.error || ('“' + (filename || '资料') + '”解析失败。'), true);
+            finish();
+            return;
+          }
+          poll();
+        }).catch(function(err) {
+          setMsg((err && err.message) || '资料解析状态查询失败，可稍后刷新资料列表查看。', true);
+          finish();
+        });
+      }, 3000);
+    }
+    poll();
+  }
+
   function appendUploadFiles(fileList) {
     var picked = fileList ? Array.prototype.slice.call(fileList) : [];
     if (!picked.length) {
@@ -1219,6 +1311,7 @@
     var el = $('psMemoryList');
     renderMemorySelectOptions();
     renderReferenceMemoryOptions();
+    renderUploadedDocuments();
     if (!el) return;
     if (!state.memories.length) {
       el.innerHTML = '<div class="ps-empty">还没有保存的记忆文件。</div>';
@@ -1277,6 +1370,45 @@
     var notes = String((doc && doc.notes) || '');
     var meta = doc && doc.meta && typeof doc.meta === 'object' ? doc.meta : {};
     return notes.indexOf('上传资料') >= 0 || meta.save_mode === 'new' || meta.uploaded === true;
+  }
+
+  function uploadedMemoryDocRows() {
+    return (state.memories || []).filter(function(doc) {
+      return !(doc && (doc.read_only || doc.source === 'agent')) && isUploadedMemoryDoc(doc);
+    });
+  }
+
+  function renderUploadedDocuments() {
+    var el = $('psUploadDocList');
+    var count = $('psUploadHistoryCount');
+    if (!el) return;
+    var rows = uploadedMemoryDocRows();
+    if (count) count.textContent = rows.length + ' 条';
+    if (!rows.length) {
+      el.innerHTML = '<div class="ps-empty">暂无上传资料。</div>';
+      return;
+    }
+    el.innerHTML = rows.map(function(doc) {
+      var id = memoryId(doc);
+      var metaText = doc.notes || doc.filename || '已存入共享记忆';
+      if (doc.created_at) metaText += ' · ' + doc.created_at;
+      return '<article class="ps-memory-item">' +
+        '<div><strong>' + esc(memoryTitle(doc)) + '</strong><small>' + esc(metaText) + '</small></div>' +
+        '<div class="ps-actions">' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-preview-upload-memory="' + escAttr(id) + '">预览</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-delete-upload-memory="' + escAttr(id) + '">删除</button>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+    el.querySelectorAll('[data-preview-upload-memory]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        switchTab('memory');
+        previewMemory(btn.getAttribute('data-preview-upload-memory') || '');
+      });
+    });
+    el.querySelectorAll('[data-delete-upload-memory]').forEach(function(btn) {
+      btn.addEventListener('click', function() { deleteMemory(btn.getAttribute('data-delete-upload-memory') || ''); });
+    });
   }
 
   function memorySourceDocRows() {
@@ -1480,7 +1612,11 @@
 
   function loadMemories() {
     return syncOpenClawMemoryFromCloud().then(function() {
-      return cloudJson('/api/personal-settings/memory-documents/list', { json: false });
+      return cloudJson('/api/personal-settings/memory-documents/list', { json: false }).catch(function(primaryErr) {
+        return cloudJson('/api/openclaw/memory/list', { json: false }).catch(function() {
+          throw primaryErr;
+        });
+      });
     }).then(function(data) {
       state.memories = Array.isArray(data.documents) ? data.documents : [];
       renderTemplateLists();
@@ -1921,7 +2057,9 @@
     }
     setBusy(btn, true, '理解中...');
     setMsg('正在理解资料并生成记忆内容...');
-    competitorSourceText(competitorRows.map(function(row) { return row.id; })).then(function(competitorText) {
+    requireOnlineMemoryParser(files).then(function() {
+      return competitorSourceText(competitorRows.map(function(row) { return row.id; }));
+    }).then(function(competitorText) {
       if (!files.length && !contextText && !competitorText && !recorderRows.length) {
         throw new Error('请选择要生成的资料来源。');
       }
@@ -1948,6 +2086,12 @@
         return data;
       });
     }).then(function(data) {
+      if (data.processing === 'online' && data.message_id) {
+        setMsg('已下发 Online，正在本机解析资料...');
+        return waitForOnlineMemoryGeneration(data.message_id);
+      }
+      return data;
+    }).then(function(data) {
       state.generatedDocuments = data.documents || {};
       state.generatedDocOrder = Array.isArray(data.doc_types) && data.doc_types.length ? data.doc_types : docTypes;
       if ($('psMemoryTitle') && (($('psSaveMode') || {}).value || 'new') === 'new') {
@@ -1971,23 +2115,50 @@
     var btn = $('psSaveRawMemoryBtn');
     setBusy(btn, true, '保存中...');
     setMsg('正在保存上传文件...');
-    files.reduce(function(chain, file) {
-      return chain.then(function() {
-        var fd = new FormData();
-        fd.append('files', file, file.name || 'upload');
-        fd.append('title', file.name || '上传资料');
-        fd.append('notes', 'IP人设定位上传资料');
-        fd.append('raw_text', '');
-        fd.append('urls', '');
-        fd.append('mode', 'new');
-        fd.append('target_doc_id', '');
-        return saveUploadedMemory(null, fd);
-      });
-    }, Promise.resolve()).then(function() {
-      state.uploadFiles = [];
+    var savedKeys = {};
+    var queued = [];
+    var savedImmediately = 0;
+    var failed = [];
+    requireOnlineMemoryParser(files).then(function() {
+      return files.reduce(function(chain, file, index) {
+        return chain.then(function() {
+          setBusy(btn, true, '保存 ' + (index + 1) + '/' + files.length + '...');
+          setMsg('正在上传并解析 ' + (index + 1) + '/' + files.length + '：' + (file.name || '未命名文件'));
+          var fd = new FormData();
+          fd.append('files', file, file.name || 'upload');
+          fd.append('title', file.name || '上传资料');
+          fd.append('notes', 'IP人设定位上传资料');
+          fd.append('raw_text', '');
+          fd.append('urls', '');
+          fd.append('mode', 'new');
+          fd.append('target_doc_id', '');
+          return saveUploadedMemory(null, fd, { refresh: false, status: false }).then(function(result) {
+            savedKeys[uploadFileKey(file)] = true;
+            if (result && result.processing === 'online' && result.message_id) {
+              queued.push({ messageId: result.message_id, filename: file.name || '资料' });
+            } else {
+              savedImmediately += 1;
+            }
+          }).catch(function(err) {
+            failed.push((file.name || '未命名文件') + '：' + ((err && err.message) || '读取失败'));
+          });
+        });
+      }, Promise.resolve());
+    }).then(function() {
+      state.uploadFiles = files.filter(function(file) { return !savedKeys[uploadFileKey(file)]; });
       renderSelectedFiles();
       renderMemorySourceSelectors();
-      setMsg('已存入记忆。');
+      var refresh = savedImmediately ? loadMemories().then(saveConfigSilently) : Promise.resolve();
+      return refresh.then(function() {
+        queued.forEach(function(item) { monitorOnlineMemoryParse(item.messageId, item.filename); });
+        if (failed.length) {
+          setMsg('已处理 ' + Object.keys(savedKeys).length + ' 个文件；未读取 ' + failed.join('；'), true);
+        } else {
+          setMsg(queued.length
+            ? '已提交 ' + queued.length + ' 个文件到 Online 解析，完成后自动存入记忆。'
+            : '已存入 ' + Object.keys(savedKeys).length + ' 个文件。');
+        }
+      });
     }).catch(function(err) {
       setMsg(err.message || '保存记忆失败', true);
     }).finally(function() {
@@ -2087,10 +2258,11 @@
       .finally(function() { setBusy(btn, false); });
   }
 
-  function saveUploadedMemory(btn, formData) {
+  function saveUploadedMemory(btn, formData, options) {
+    options = options || {};
     setBusy(btn, true, '保存中...');
-    setMsg('正在保存上传资料到记忆...');
-    fetch(cloudBase() + '/api/personal-settings/memory-documents/save-upload', {
+    if (options.status !== false) setMsg('正在保存上传资料到记忆...');
+    return fetch(cloudBase() + '/api/personal-settings/memory-documents/save-upload', {
       method: 'POST',
       headers: headers(false),
       body: formData
@@ -2108,15 +2280,17 @@
       state.generatedDocuments = {};
       state.generatedDocOrder = [];
       renderGeneratedDocs();
-      if ($('psMemoryReviewText')) $('psMemoryReviewText').value = data.content_text || memoryInputText();
-      return loadMemories();
-    }).then(saveConfigSilently)
-      .then(function() {
-        setMsg('已存入记忆，并写入模板选择。');
+      if ($('psMemoryReviewText') && data.content_text) $('psMemoryReviewText').value = data.content_text;
+      if (options.refresh === false) return data;
+      return loadMemories().then(saveConfigSilently).then(function() { return data; });
+    }).then(function(data) {
+        if (options.status !== false) setMsg('已存入记忆，并写入模板选择。');
         renderTemplateLists();
+        return data;
       })
       .catch(function(err) {
-        setMsg(err.message || '保存记忆失败', true);
+        if (options.status !== false) setMsg(err.message || '保存记忆失败', true);
+        throw err;
       })
       .finally(function() { setBusy(btn, false); });
   }

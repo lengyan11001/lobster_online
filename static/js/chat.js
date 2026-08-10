@@ -4384,3 +4384,5 @@ function appendAssistantActionRow(parent, hasAssets) {
   parent.appendChild(wrap);
   _refreshChatFeatureGates();
 }
+
+window.initChatSessions = initChatSessions;

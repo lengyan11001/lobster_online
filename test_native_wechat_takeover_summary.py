@@ -125,6 +125,7 @@ def test_auto_reply_llm_returns_semantic_group_invite_decision(monkeypatch):
 
         async def post(self, url, *, json, headers):
             captured["prompt"] = json["messages"][1]["content"]
+            captured["system_prompt"] = json["messages"][0]["content"]
             return FakeResponse()
 
     monkeypatch.setattr(engine.httpx, "AsyncClient", FakeAsyncClient)
@@ -143,6 +144,7 @@ def test_auto_reply_llm_returns_semantic_group_invite_decision(monkeypatch):
     assert "最近聊天记录" in captured["prompt"]
     assert "体验预约需要确认日期" in captured["prompt"]
     assert "客户明确提出预约体验" in captured["prompt"]
+    assert "客户回复可以、好的、同意" in captured["system_prompt"]
     assert result["should_invite_group"] is True
     assert result["matched_group_keywords"] == ["预约体验"]
 

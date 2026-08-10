@@ -45,6 +45,7 @@ class AutoReplyConfigBody(BaseModel):
 class AutoReplyRunBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
     force: bool = True
+    check_friend_requests: bool = True
 
 
 class SyncBody(BaseModel):
@@ -63,6 +64,11 @@ class CreateGroupBody(BaseModel):
     targets: List[str] = Field(default_factory=list, max_length=100)
     names: List[str] = Field(default_factory=list, max_length=100)
     welcome_message: str = Field(default="", max_length=4000)
+    dedup_key: str = Field(default="", max_length=160)
+    source_peer_id: str = Field(default="", max_length=240)
+    source_inbound_message_id: str = Field(default="", max_length=160)
+    group_invite_reason: str = Field(default="", max_length=300)
+    matched_group_keywords: List[str] = Field(default_factory=list, max_length=20)
 
 
 class MessageSyncBody(BaseModel):
@@ -363,6 +369,7 @@ async def native_wechat_run_auto_reply_once(
             },
             force=body.force,
             trigger="manual",
+            check_friend_requests=body.check_friend_requests,
         )
         return result
     except Exception as exc:
@@ -434,6 +441,11 @@ async def native_wechat_create_group(
             body.account_id,
             _merge_targets(body.contacts, body.targets, body.names),
             welcome_message=body.welcome_message,
+            dedup_key=body.dedup_key,
+            source_peer_id=body.source_peer_id,
+            source_inbound_message_id=body.source_inbound_message_id,
+            group_invite_reason=body.group_invite_reason,
+            matched_group_keywords=body.matched_group_keywords,
         )
         return {
             "ok": True,

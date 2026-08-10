@@ -84,6 +84,39 @@ async def test_auto_reply_checks_friend_requests_before_scanning_messages(tmp_pa
     assert result["friend_requests_failed"] == 0
 
 
+@pytest.mark.asyncio
+async def test_auto_reply_can_skip_friend_requests_after_takeover_initial_scan(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(
+        engine,
+        "_load_auto_reply_memory_context",
+        lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
+    )
+    monkeypatch.setattr(
+        engine,
+        "accept_local_friend_requests",
+        lambda *_args, **_kwargs: pytest.fail("follow-up message rounds must not scan friend requests"),
+    )
+
+    def sync_sessions(account_id, *, passive=False, recent_only=False):
+        calls.append(("sessions", account_id))
+        return {"ok": True, "items": []}
+
+    monkeypatch.setattr(engine, "sync_local_sessions", sync_sessions)
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert calls == [("sessions", engine.LOCAL_DEFAULT_ACCOUNT_ID)]
+    assert result["friend_requests_checked_this_run"] is False
+    assert result["friend_requests"]["reason"] == "session_initial_check_completed"
+    assert result["friend_requests_checked"] == 0
+
+
 def test_session_preview_change_is_checked_without_an_unread_badge(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
@@ -314,6 +347,62 @@ def test_local_driver_send_failure_is_not_retried(monkeypatch):
     assert calls == ["send"]
 
 
+def test_typed_message_clicks_send_and_verifies_new_outbound(monkeypatch):
+    messages = [
+        {"id": "incoming-1", "content": "你好", "attr": "friend", "type": "text"},
+    ]
+    clicks = []
+
+    class FakeWx:
+        def GetAllMessage(self):
+            return list(messages)
+
+    def click_send(_hwnd):
+        clicks.append("send")
+        messages.append({"id": "outgoing-1", "content": "您好，有什么可以帮您？", "attr": "self", "type": "text"})
+        return "uia_send_button"
+
+    monkeypatch.setattr(engine, "_click_local_wechat_send_button", click_send)
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+
+    result = engine._submit_local_wechat_typed_message(
+        FakeWx(),
+        123,
+        "您好，有什么可以帮您？",
+        verify_timeout=0.05,
+    )
+
+    assert clicks == ["send"]
+    assert result == {"ok": True, "verified": True, "send_method": "uia_send_button", "attempts": 1}
+
+
+def test_typed_message_retries_button_when_text_remains_in_draft(monkeypatch):
+    clicks = []
+
+    class FakeWx:
+        def GetAllMessage(self):
+            return [{"id": "incoming-1", "content": "你好", "attr": "friend", "type": "text"}]
+
+    monkeypatch.setattr(
+        engine,
+        "_click_local_wechat_send_button",
+        lambda _hwnd: clicks.append("send") or "coordinate_send_button",
+    )
+    monkeypatch.setattr(engine, "_local_wechat_draft_text", lambda _hwnd: "这是一条未发出的回复")
+    monkeypatch.setattr(engine, "_focus_local_wechat", lambda _hwnd: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="仍停留在输入框"):
+        engine._submit_local_wechat_typed_message(
+            FakeWx(),
+            123,
+            "这是一条未发出的回复",
+            verify_timeout=0.01,
+        )
+
+    assert clicks == ["send", "send"]
+
+
 @pytest.mark.asyncio
 async def test_poll_reports_driver_failure_instead_of_false_success(monkeypatch):
     monkeypatch.setattr(engine, "init_db", lambda: None)
@@ -406,6 +495,58 @@ async def test_add_friend_uses_phone_from_parent_douyin_private_message(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_takeover_action_uses_server_polling_settings(monkeypatch):
+    captured = {}
+
+    async def run_takeover(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(channel, "_run_native_wechat_takeover_session", run_takeover)
+
+    result = await channel._run_client_workflow_action(
+        "native_wechat_poll",
+        {
+            "account_id": "pc-wechat-default",
+            "takeover_session_minutes": 30,
+            "message_poll_interval_seconds": 15,
+            "accept_friend_requests_once": True,
+        },
+        headers={},
+        run_id="takeover-run",
+        cloud=None,
+        base="",
+    )
+
+    assert result == {"ok": True}
+    assert captured["rounds"] == 120
+    assert captured["interval_seconds"] == 15
+
+
+@pytest.mark.asyncio
+async def test_takeover_action_keeps_polling_defaults_for_old_tasks(monkeypatch):
+    captured = {}
+
+    async def run_takeover(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(channel, "_run_native_wechat_takeover_session", run_takeover)
+
+    await channel._run_client_workflow_action(
+        "native_wechat_poll",
+        {"account_id": "pc-wechat-default"},
+        headers={},
+        run_id="legacy-takeover-run",
+        cloud=None,
+        base="",
+    )
+
+    assert captured["rounds"] == 120
+    assert captured["interval_seconds"] == 15
+
+
+@pytest.mark.asyncio
 async def test_takeover_session_polls_repeatedly_and_aggregates_new_results(monkeypatch):
     responses = iter(
         [
@@ -439,10 +580,12 @@ async def test_takeover_session_polls_repeatedly_and_aggregates_new_results(monk
         ]
     )
     sleeps = []
+    request_bodies = []
 
     async def post_local(path, body, **kwargs):
         assert path == "/api/native-wechat/auto-reply/run-once"
         assert body["force"] is True
+        request_bodies.append(dict(body))
         return next(responses)
 
     async def no_sleep(seconds):
@@ -458,18 +601,52 @@ async def test_takeover_session_polls_repeatedly_and_aggregates_new_results(monk
         base="",
         run_id="run",
         rounds=3,
-        interval_seconds=180,
+        interval_seconds=15,
     )
 
-    assert sleeps == [180, 180]
+    assert sleeps == [15, 15]
+    assert [body["check_friend_requests"] for body in request_bodies] == [True, False, False]
     assert result["completed_rounds"] == 3
     assert result["replied"] == 2
     assert result["skipped"] == 1
-    assert result["friend_requests_checked"] == 6
-    assert result["friend_requests_accepted"] == 3
-    assert result["friend_requests_failed"] == 1
+    assert result["friend_requests_checked"] == 2
+    assert result["friend_requests_accepted"] == 1
+    assert result["friend_requests_failed"] == 0
+    assert result["friend_requests_checked_once"] is True
     assert result["group_invite_candidates"] == 1
     assert [item["round"] for item in result["items"]] == [1, 3]
+
+
+@pytest.mark.asyncio
+async def test_takeover_session_defaults_to_thirty_minutes_at_fifteen_second_intervals(monkeypatch):
+    request_bodies = []
+    sleeps = []
+
+    async def post_local(path, body, **kwargs):
+        request_bodies.append(dict(body))
+        return {"ok": True, "items": []}
+
+    async def no_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel.asyncio, "sleep", no_sleep)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=None,
+        base="",
+        run_id="run",
+    )
+
+    assert result["session_minutes"] == 30
+    assert result["round_count"] == 120
+    assert result["completed_rounds"] == 120
+    assert len(sleeps) == 119
+    assert set(sleeps) == {15.0}
+    assert request_bodies[0]["check_friend_requests"] is True
+    assert all(body["check_friend_requests"] is False for body in request_bodies[1:])
 
 
 @pytest.mark.asyncio
@@ -540,6 +717,11 @@ async def test_group_invite_waits_for_parent_then_creates_group(monkeypatch):
                 "account_id": "pc-wechat-default",
                 "contacts": ["customer-a", "销售经理"],
                 "welcome_message": "您好，我把王经理拉进群了。",
+                "dedup_key": "",
+                "source_peer_id": "customer-a",
+                "source_inbound_message_id": "message-a",
+                "group_invite_reason": "客户明确要求预约体验",
+                "matched_group_keywords": ["预约体验"],
             },
         )
     ]
@@ -644,6 +826,64 @@ async def test_create_group_task_sends_welcome_after_group_is_created(monkeypatc
     )
     assert payload_updates[0][1]["welcome_sent"] is True
     assert finished[0][1] == "success"
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_match_immediately_queues_group_with_primary_contact(monkeypatch):
+    calls = []
+
+    async def create_group(account_id, contacts, **kwargs):
+        calls.append((account_id, contacts, kwargs))
+        return {"id": "group-task", "status": "pending"}
+
+    monkeypatch.setattr(engine, "create_group_task", create_group)
+    result = await engine._queue_auto_reply_group_invite(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "客户A",
+        {"auto_reply_inbound_id": "message-a", "content": "可以"},
+        {
+            "should_invite_group": True,
+            "matched_group_keywords": ["明确同意对接"],
+            "group_invite_reason": "客户同意对接负责人",
+        },
+        {
+            "group_invite_primary_contact": "张老师",
+            "group_invite_primary_contact_name": "张老师",
+            "group_invite_welcome_message": "欢迎进群",
+        },
+    )
+
+    assert calls[0][0] == engine.LOCAL_DEFAULT_ACCOUNT_ID
+    assert calls[0][1] == ["客户A", "张老师"]
+    assert calls[0][2]["source_inbound_message_id"] == "message-a"
+    assert calls[0][2]["dedup_key"].startswith("auto-invite-")
+    assert result["queued"] is True
+    assert result["task_id"] == "group-task"
+
+
+@pytest.mark.asyncio
+async def test_create_group_task_deduplicates_same_auto_invite(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 1})
+    monkeypatch.setattr(engine, "_ensure_task_worker", lambda _account_id: None)
+
+    first = await engine.create_group_task(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        ["客户A", "张老师"],
+        dedup_key="auto-invite-same-message",
+        source_peer_id="客户A",
+        source_inbound_message_id="message-a",
+    )
+    second = await engine.create_group_task(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        ["客户A", "张老师"],
+        dedup_key="auto-invite-same-message",
+        source_peer_id="客户A",
+        source_inbound_message_id="message-a",
+    )
+
+    assert second["id"] == first["id"]
+    assert second["deduped"] is True
 
 
 def test_selected_memory_context_only_loads_selected_document(monkeypatch):

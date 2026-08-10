@@ -1022,7 +1022,13 @@ async def save_uploaded_memory_document(
                 )
     content = "\n\n---\n\n".join(part for part in parts if part.strip()).strip()
     mode = (mode or "new").strip()
-    meta = {"source": "personal_settings", "document_type": "uploaded_raw_memory", "document_label": "上传原始资料", "save_mode": mode}
+    meta = {
+        "source": "personal_settings",
+        "document_type": "uploaded_raw_memory",
+        "document_label": "上传原始资料",
+        "save_mode": mode,
+        "uploaded": True,
+    }
     if mode == "overwrite":
         record = await _update_memory_document(
             request,
@@ -1048,6 +1054,14 @@ async def save_uploaded_memory_document(
     else:
         raise HTTPException(status_code=400, detail="保存方式无效")
     return {"ok": True, "document": record, "documents": [record], "content_text": content}
+
+
+@router.get("/api/personal-settings/memory-documents/list", summary="列出个人记忆文件")
+async def list_memory_documents(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    docs = _load_index(current_user.id)
+    return {"ok": True, "documents": docs}
 
 
 @router.get("/api/personal-settings/memory-documents/{doc_id}/preview", summary="预览个人记忆正文")

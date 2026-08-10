@@ -1472,6 +1472,30 @@
   background: #fbfcfe;
 }
 
+.personal-settings-view .ps-upload-history-region {
+  padding-top: 22px;
+  border-top: 1px solid #edf0f4;
+}
+
+.personal-settings-view .ps-upload-history-head {
+  margin-bottom: 2px;
+}
+
+.personal-settings-view .ps-upload-history-count {
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: #58708f;
+  background: #f1f5fa;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.personal-settings-view .ps-upload-history-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .personal-settings-view .ps-upload-label {
   color: #465267;
   font-size: 13px;

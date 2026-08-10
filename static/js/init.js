@@ -2114,6 +2114,7 @@ function showAppView(view, sourceEl) {
     if (!contentEl) contentEl = document.getElementById('content-' + view);
     if (contentEl) contentEl.classList.add('visible');
     currentView = view;
+    window.__LOBSTER_LAST_ACTIVE_VIEW = view;
     return runAppViewInit(view).then(function() {
       if (assetOrigin && typeof window.setAssetLibraryOrigin === 'function') {
         window.setAssetLibraryOrigin(assetOrigin, { load: false });

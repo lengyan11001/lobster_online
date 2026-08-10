@@ -2256,6 +2256,8 @@ async def _call_auto_reply_llm(
         "有效文字消息必须回复；如果资料里没有答案，不能编造，要自然说明需要确认，或请对方补充必要信息。"
         "如果提供了拉群判断规则文件，你还要结合最新消息、最近上下文和规则文件做语义判断；"
         "只有客户真实诉求明确符合文件规则时 should_invite_group 才能为 true，不能只因出现相近字词就判定。没有提供规则时必须为 false。"
+        "如果最近上下文中我方已经明确提出帮客户对接负责人、拉群或进入服务群，而客户回复可以、好的、同意、没问题等肯定答复，"
+        "应结合此前已表达的业务兴趣判定为明确同意对接；符合规则时 should_invite_group 必须为 true，回复中不要再重复追问已经问过的问题。"
         "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
         "\"intent_level\":\"high|medium|low|none\",\"topic\":\"简短话题\","
         "\"conversation_summary\":\"一句话总结对方诉求\",\"reply\":\"实际微信回复\","
@@ -2338,6 +2340,53 @@ async def _call_auto_reply_llm(
 def _auto_reply_report_line(value: Any, max_chars: int = 240) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:max_chars]
+
+
+async def _queue_auto_reply_group_invite(
+    account_id: str,
+    peer_id: str,
+    inbound: Dict[str, Any],
+    llm_reply: Dict[str, Any],
+    cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not llm_reply.get("should_invite_group"):
+        return {"ok": True, "skipped": True, "reason": "not_matched"}
+    primary_contact = str(
+        cfg.get("group_invite_primary_contact")
+        or next((item for item in (cfg.get("group_invite_contacts") or []) if str(item or "").strip()), "")
+    ).strip()
+    if not primary_contact:
+        return {"ok": True, "skipped": True, "reason": "missing_primary_contact"}
+    if primary_contact == str(peer_id or "").strip():
+        return {"ok": True, "skipped": True, "reason": "primary_contact_is_customer"}
+    inbound_id = str(
+        inbound.get("auto_reply_inbound_id")
+        or inbound.get("provider_message_id")
+        or inbound.get("id")
+        or _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
+    ).strip()
+    dedup_key = "auto-invite-" + _stable_key(account_id, peer_id, inbound_id)
+    task = await create_group_task(
+        account_id,
+        [peer_id, primary_contact],
+        welcome_message=str(cfg.get("group_invite_welcome_message") or "").strip(),
+        dedup_key=dedup_key,
+        source_peer_id=peer_id,
+        source_inbound_message_id=inbound_id,
+        group_invite_reason=str(llm_reply.get("group_invite_reason") or "").strip(),
+        matched_group_keywords=list(llm_reply.get("matched_group_keywords") or []),
+    )
+    status = str(task.get("status") or "").strip().lower()
+    return {
+        "ok": True,
+        "queued": status in {"pending", "running"},
+        "deduped": bool(task.get("deduped")),
+        "dedup_key": dedup_key,
+        "primary_contact": primary_contact,
+        "primary_contact_name": str(cfg.get("group_invite_primary_contact_name") or primary_contact).strip(),
+        "task_id": str(task.get("id") or ""),
+        "task_status": status,
+    }
 
 
 def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> Dict[str, Any]:
@@ -2472,6 +2521,7 @@ async def run_auto_reply_once(
     auth_context: Optional[Dict[str, Any]] = None,
     force: bool = True,
     trigger: str = "manual",
+    check_friend_requests: bool = True,
 ) -> Dict[str, Any]:
     init_db()
     account_id = str(account_id or "").strip()
@@ -2521,7 +2571,16 @@ async def run_auto_reply_once(
         "friend_requests_checked": 0,
         "friend_requests_accepted": 0,
         "friend_requests_failed": 0,
-        "friend_requests": {},
+        "friend_requests": {
+            "ok": True,
+            "skipped": not check_friend_requests,
+            "reason": "session_initial_check_completed" if not check_friend_requests else "",
+        },
+        "friend_requests_checked_this_run": bool(check_friend_requests),
+        "group_invite_queued": 0,
+        "group_invite_deduped": 0,
+        "group_invite_skipped": 0,
+        "group_invite_failed": 0,
         "driver_recovered": False,
         "driver_retry_count": 0,
         "driver_recoveries": [],
@@ -2531,21 +2590,22 @@ async def run_auto_reply_once(
         },
     }
     try:
-        try:
-            friend_requests = await asyncio.to_thread(
-                accept_local_friend_requests,
-                account_id,
-                max_accepts=10,
-                max_scrolls=6,
-            )
-            result["friend_requests"] = friend_requests
-            _collect_local_driver_recovery(result, friend_requests)
-            result["friend_requests_checked"] = int(friend_requests.get("checked") or 0)
-            result["friend_requests_accepted"] = int(friend_requests.get("accepted") or 0)
-            result["friend_requests_failed"] = int(friend_requests.get("failed") or 0)
-        except Exception as friend_exc:
-            result["friend_requests"] = {"ok": False, "error": str(friend_exc)[:500]}
-            result["friend_requests_failed"] = 1
+        if check_friend_requests:
+            try:
+                friend_requests = await asyncio.to_thread(
+                    accept_local_friend_requests,
+                    account_id,
+                    max_accepts=10,
+                    max_scrolls=6,
+                )
+                result["friend_requests"] = friend_requests
+                _collect_local_driver_recovery(result, friend_requests)
+                result["friend_requests_checked"] = int(friend_requests.get("checked") or 0)
+                result["friend_requests_accepted"] = int(friend_requests.get("accepted") or 0)
+                result["friend_requests_failed"] = int(friend_requests.get("failed") or 0)
+            except Exception as friend_exc:
+                result["friend_requests"] = {"ok": False, "error": str(friend_exc)[:500]}
+                result["friend_requests_failed"] = 1
         session_data = await asyncio.to_thread(
             sync_local_sessions,
             account_id,
@@ -2677,6 +2737,26 @@ async def run_auto_reply_once(
                     category=current_category,
                     status="sent",
                 )
+                if llm_reply.get("should_invite_group"):
+                    try:
+                        group_invite = await _queue_auto_reply_group_invite(
+                            account_id,
+                            actual_peer,
+                            inbound,
+                            llm_reply,
+                            cfg,
+                        )
+                        item_result["group_invite"] = group_invite
+                        item_result["group_invite_dedup_key"] = str(group_invite.get("dedup_key") or "")
+                        if group_invite.get("queued"):
+                            result["group_invite_queued"] += 1
+                        elif group_invite.get("deduped"):
+                            result["group_invite_deduped"] += 1
+                        elif group_invite.get("skipped"):
+                            result["group_invite_skipped"] += 1
+                    except Exception as group_exc:
+                        result["group_invite_failed"] += 1
+                        item_result["group_invite"] = {"ok": False, "error": str(group_exc)[:500]}
                 result["processed"] += 1
                 result["replied"] += 1
                 item_result.update({"status": "sent", "reply_preview": reply_text[:240]})
@@ -8234,6 +8314,145 @@ def _send_text_local(account_id: str, peer_id: str, text: str) -> Dict[str, Any]
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "wxauto4.SendMsg", "raw": raw}
 
 
+def _wxauto_visible_message_snapshot(wx: Any) -> Dict[str, Any]:
+    if not hasattr(wx, "GetAllMessage"):
+        return {"available": False, "count": 0, "items": []}
+    try:
+        messages = list(wx.GetAllMessage() or [])
+    except Exception as exc:
+        return {"available": False, "count": 0, "items": [], "error": str(exc)[:500]}
+    items: List[Dict[str, Any]] = []
+    for index, message in enumerate(messages[-80:]):
+        raw = _obj_dict(message)
+        msg_type = str(raw.get("type") or "text").strip().lower()
+        if msg_type == "time":
+            continue
+        content = str(raw.get("content") or raw.get("text") or "").strip()
+        attr = str(raw.get("attr") or "").strip().lower()
+        source_id = str(raw.get("id") or raw.get("hash") or raw.get("hash_text") or "").strip()
+        identity = source_id or "|".join(
+            (str(index), attr, msg_type, content, str(raw.get("time") or "").strip())
+        )
+        items.append({"identity": identity, "content": content, "attr": attr, "type": msg_type})
+    return {"available": True, "count": len(messages), "items": items}
+
+
+def _wxauto_snapshot_has_new_outbound(before: Dict[str, Any], after: Dict[str, Any], text: str) -> bool:
+    if not after.get("available"):
+        return False
+    expected = str(text or "").strip()
+    if not expected:
+        return False
+    before_ids = {
+        str(item.get("identity") or "")
+        for item in (before.get("items") or [])
+        if isinstance(item, dict)
+    }
+    for item in reversed(list(after.get("items") or [])):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("attr") or "").lower() not in {"self", "out", "me"}:
+            continue
+        if str(item.get("content") or "").strip() != expected:
+            continue
+        if str(item.get("identity") or "") not in before_ids:
+            return True
+    return False
+
+
+def _local_wechat_draft_text(hwnd: int) -> str:
+    try:
+        import win32gui  # type: ignore
+
+        window_left, window_top, window_right, window_bottom = win32gui.GetWindowRect(int(hwnd))
+        root = _uia_foreground_or_main_root(hwnd)
+        candidates: List[tuple[int, Any]] = []
+        for edit in _uia_visible_edit_controls(root):
+            rect = _uia_rect_tuple(edit)
+            if rect is None:
+                continue
+            left, top, right, bottom = rect
+            center_x = (left + right) // 2
+            center_y = (top + bottom) // 2
+            if center_x < window_left + (window_right - window_left) * 0.35:
+                continue
+            if center_y < window_top + (window_bottom - window_top) * 0.55:
+                continue
+            candidates.append((bottom * 1_000_000 + max(0, right - left) * max(0, bottom - top), edit))
+        if not candidates:
+            return ""
+        edit = max(candidates, key=lambda item: item[0])[1]
+        return str(_uia_value_text(edit) or "").strip()
+    except Exception:
+        return ""
+
+
+def _click_local_wechat_send_button(hwnd: int) -> str:
+    _focus_local_wechat(hwnd)
+    try:
+        root = _uia_foreground_or_main_root(hwnd)
+        candidates: List[tuple[int, Any]] = []
+        for node in _uia_walk(root, max_depth=18, max_nodes=1200):
+            name = _uia_control_text(node)
+            if name not in {"发送", "发送(S)", "Send", "Send(S)"}:
+                continue
+            rect = _uia_rect_tuple(node)
+            if rect is None:
+                continue
+            left, top, right, bottom = rect
+            candidates.append((bottom * 1_000_000 + right + max(0, right - left), node))
+        if candidates:
+            _uia_click(max(candidates, key=lambda item: item[0])[1])
+            return "uia_send_button"
+    except Exception:
+        pass
+    try:
+        import win32gui  # type: ignore
+
+        left, top, right, bottom = win32gui.GetWindowRect(int(hwnd))
+        width = max(1, right - left)
+        height = max(1, bottom - top)
+        x = right - max(55, min(80, int(width * 0.065)))
+        y = bottom - max(50, min(72, int(height * 0.075)))
+        _uia_click_screen_point(x, y)
+        return "coordinate_send_button"
+    except Exception as exc:
+        raise RuntimeError(f"未找到微信发送按钮：{exc}") from exc
+
+
+def _submit_local_wechat_typed_message(
+    wx: Any,
+    hwnd: int,
+    text: str,
+    *,
+    verify_timeout: float = 5.0,
+) -> Dict[str, Any]:
+    expected = str(text or "").strip()
+    before = _wxauto_visible_message_snapshot(wx)
+    methods: List[str] = []
+    last_snapshot: Dict[str, Any] = before
+    for attempt in range(2):
+        methods.append(_click_local_wechat_send_button(hwnd))
+        deadline = time.monotonic() + max(0.05, float(verify_timeout))
+        while time.monotonic() < deadline:
+            time.sleep(0.25)
+            last_snapshot = _wxauto_visible_message_snapshot(wx)
+            if _wxauto_snapshot_has_new_outbound(before, last_snapshot, expected):
+                return {"ok": True, "verified": True, "send_method": methods[-1], "attempts": attempt + 1}
+        draft = _local_wechat_draft_text(hwnd)
+        if expected and expected not in draft:
+            break
+        if attempt == 0:
+            _focus_local_wechat(hwnd)
+    draft = _local_wechat_draft_text(hwnd)
+    if expected and expected in draft:
+        raise RuntimeError("点击微信发送按钮后消息仍停留在输入框，未确认发送成功")
+    snapshot_error = str(last_snapshot.get("error") or "").strip()
+    if snapshot_error:
+        raise RuntimeError(f"微信消息发送后无法校验结果：{snapshot_error}")
+    raise RuntimeError("微信消息发送后未在聊天记录中出现，未确认发送成功")
+
+
 def _send_text_local_slow_once(
     account_id: str,
     peer_id: str,
@@ -8274,12 +8493,18 @@ def _send_text_local_slow_once(
         else:
             time.sleep(random.uniform(char_low, char_high))
     time.sleep(random.uniform(0.35, 0.9))
-    _send_hotkey_quick("enter")
-    time.sleep(random.uniform(0.25, 0.55))
+    submit_result = _submit_local_wechat_typed_message(wx, hwnd, text)
 
     now = _now_iso()
     client_id = f"lobster-local-wechat-auto-{uuid.uuid4().hex}"
-    raw = {"driver": "pc_wechat_slow_typing", "hwnd": hwnd, **(raw_meta or {})}
+    raw = {
+        "driver": "pc_wechat_slow_typing",
+        "hwnd": hwnd,
+        "send_method": submit_result.get("send_method"),
+        "send_verified": bool(submit_result.get("verified")),
+        "send_attempts": int(submit_result.get("attempts") or 1),
+        **(raw_meta or {}),
+    }
     with _connect() as conn:
         conn.execute(
             """
@@ -8952,7 +9177,7 @@ def _confirm_create_new_group_if_needed(hwnd: int, steps: List[Dict[str, Any]]) 
     steps.append({"step": "create_new_group_confirm", "ok": True, "skipped": "not_needed"})
 
 
-def create_local_group(account_id: str, contacts: List[str]) -> Dict[str, Any]:
+def _create_local_group_once(account_id: str, contacts: List[str]) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     targets = _normalize_task_targets(contacts, max_targets=100)
@@ -8992,6 +9217,15 @@ def create_local_group(account_id: str, contacts: List[str]) -> Dict[str, Any]:
         },
     )
     return {"ok": True, "contacts": targets, "selected": selected, "group": saved, "steps": steps}
+
+
+def create_local_group(account_id: str, contacts: List[str]) -> Dict[str, Any]:
+    return _run_local_driver_operation(
+        account_id,
+        "创建微信群",
+        lambda: _create_local_group_once(account_id, contacts),
+        retry_on_failure=False,
+    )
 
 
 async def send_message(account_id: str, peer_id: str, text: str = "", *, attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -9301,19 +9535,65 @@ async def _process_send_task(task: Dict[str, Any]) -> None:
     _finish_task(task_id, status, processed, success, failed, last_error)
 
 
-async def create_group_task(account_id: str, contacts: List[str], *, welcome_message: str = "") -> Dict[str, Any]:
+def _existing_create_group_task(account_id: str, dedup_key: str) -> Optional[Dict[str, Any]]:
+    key = str(dedup_key or "").strip()[:160]
+    if not key:
+        return None
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select * from wechat_tasks
+            where account_id=? and task_type='create_group'
+              and status in ('pending','running','success','partial_failed')
+            order by created_at desc limit 200
+            """,
+            (account_id,),
+        ).fetchall()
+    for row in rows:
+        item = _row_to_dict(row)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        if str(payload.get("dedup_key") or "").strip() == key:
+            item["deduped"] = True
+            return item
+    return None
+
+
+async def create_group_task(
+    account_id: str,
+    contacts: List[str],
+    *,
+    welcome_message: str = "",
+    dedup_key: str = "",
+    source_peer_id: str = "",
+    source_inbound_message_id: str = "",
+    group_invite_reason: str = "",
+    matched_group_keywords: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     targets = _normalize_task_targets(contacts, max_targets=100)
     if len(targets) < 2:
         raise RuntimeError("创建群至少选择2个联系人")
+    normalized_dedup_key = str(dedup_key or "").strip()[:160]
+    existing = _existing_create_group_task(account_id, normalized_dedup_key)
+    if existing:
+        return existing
     strategy = get_strategy()
     return _create_wechat_task(
         account_id=account_id,
         task_type="create_group",
         target_type="group_contacts",
         targets=targets,
-        payload={"welcome_message": str(welcome_message or "").strip()[:4000]},
+        payload={
+            "welcome_message": str(welcome_message or "").strip()[:4000],
+            "dedup_key": normalized_dedup_key,
+            "source_peer_id": str(source_peer_id or "").strip()[:240],
+            "source_inbound_message_id": str(source_inbound_message_id or "").strip()[:160],
+            "group_invite_reason": str(group_invite_reason or "").strip()[:300],
+            "matched_group_keywords": list(
+                dict.fromkeys(str(item or "").strip() for item in (matched_group_keywords or []) if str(item or "").strip())
+            )[:20],
+        },
         strategy=strategy,
         planned_total=len(targets),
     )

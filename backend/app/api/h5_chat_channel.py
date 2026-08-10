@@ -7378,10 +7378,11 @@ async def _run_native_wechat_takeover_session(
     cloud: Optional[httpx.AsyncClient],
     base: str,
     run_id: str,
-    rounds: int = 10,
-    interval_seconds: float = 180.0,
+    rounds: Optional[int] = None,
+    interval_seconds: float = 15.0,
 ) -> Dict[str, Any]:
-    round_count = max(1, min(int(rounds or 10), 10))
+    # Keep the existing 30-minute takeover window while scanning messages every 15 seconds.
+    round_count = max(1, min(int(rounds if rounds is not None else 120), 120))
     interval = max(0.0, float(interval_seconds or 0.0))
     started_at = datetime.utcnow().isoformat()
     started_monotonic = asyncio.get_running_loop().time()
@@ -7399,11 +7400,21 @@ async def _run_native_wechat_takeover_session(
         "friend_requests_checked": 0,
         "friend_requests_accepted": 0,
         "friend_requests_failed": 0,
+        "friend_requests_checked_once": True,
         "items": [],
         "rounds": [],
         "started_at": started_at,
     }
     last_config: Dict[str, Any] = {}
+    if cloud is not None and base and run_id:
+        await _post_task_event(
+            cloud,
+            base,
+            headers,
+            run_id,
+            "running",
+            {"text": "个微接管启动，正在检查新好友申请（本次仅检查一次）", "stage": "friend_requests"},
+        )
     for index in range(round_count):
         if index and interval:
             await asyncio.sleep(interval)
@@ -7420,7 +7431,11 @@ async def _run_native_wechat_takeover_session(
         try:
             result = await _post_local_api_json(
                 "/api/native-wechat/auto-reply/run-once",
-                {"account_id": account_id, "force": True},
+                {
+                    "account_id": account_id,
+                    "force": True,
+                    "check_friend_requests": index == 0,
+                },
                 headers=headers,
                 timeout_seconds=1800.0,
             )
@@ -7430,9 +7445,10 @@ async def _run_native_wechat_takeover_session(
             output["replied"] += _safe_int(result.get("replied"))
             output["skipped"] += _safe_int(result.get("skipped"))
             output["failed"] += _safe_int(result.get("failed"))
-            output["friend_requests_checked"] += _safe_int(result.get("friend_requests_checked"))
-            output["friend_requests_accepted"] += _safe_int(result.get("friend_requests_accepted"))
-            output["friend_requests_failed"] += _safe_int(result.get("friend_requests_failed"))
+            if index == 0:
+                output["friend_requests_checked"] = _safe_int(result.get("friend_requests_checked"))
+                output["friend_requests_accepted"] = _safe_int(result.get("friend_requests_accepted"))
+                output["friend_requests_failed"] = _safe_int(result.get("friend_requests_failed"))
             output["items"].extend({**item, "round": round_number} for item in items)
             output["rounds"].append(
                 {
@@ -7441,10 +7457,12 @@ async def _run_native_wechat_takeover_session(
                     "replied": _safe_int(result.get("replied")),
                     "skipped": _safe_int(result.get("skipped")),
                     "failed": _safe_int(result.get("failed")),
-                    "friend_requests_checked": _safe_int(result.get("friend_requests_checked")),
-                    "friend_requests_accepted": _safe_int(result.get("friend_requests_accepted")),
-                    "friend_requests_failed": _safe_int(result.get("friend_requests_failed")),
-                    "friend_requests": result.get("friend_requests") if isinstance(result.get("friend_requests"), dict) else {},
+                    "friend_requests_checked": _safe_int(result.get("friend_requests_checked")) if index == 0 else 0,
+                    "friend_requests_accepted": _safe_int(result.get("friend_requests_accepted")) if index == 0 else 0,
+                    "friend_requests_failed": _safe_int(result.get("friend_requests_failed")) if index == 0 else 0,
+                    "friend_requests": (
+                        result.get("friend_requests") if index == 0 and isinstance(result.get("friend_requests"), dict) else {}
+                    ),
                     "items": items,
                     "summary_text": str(result.get("summary_text") or "").strip(),
                 }
@@ -7574,7 +7592,16 @@ async def _run_native_wechat_group_invite_followup(
             continue
         result = await _post_local_api_json(
             "/api/native-wechat/groups/create",
-            {"account_id": account_id, "contacts": contacts, "welcome_message": welcome_message},
+            {
+                "account_id": account_id,
+                "contacts": contacts,
+                "welcome_message": welcome_message,
+                "dedup_key": str(candidate.get("group_invite_dedup_key") or "")[:160],
+                "source_peer_id": peer_id,
+                "source_inbound_message_id": str(candidate.get("inbound_message_id") or "")[:160],
+                "group_invite_reason": str(candidate.get("group_invite_reason") or "")[:300],
+                "matched_group_keywords": list(candidate.get("matched_group_keywords") or [])[:20],
+            },
             headers=headers,
             timeout_seconds=300.0,
         )
@@ -7765,12 +7792,17 @@ async def _run_client_workflow_action(
                 base=base,
                 current_item=current_item,
             )
+        interval_seconds = max(1, min(_safe_int(source.get("message_poll_interval_seconds")) or 15, 300))
+        session_minutes = max(1, min(_safe_int(source.get("takeover_session_minutes")) or 30, 30))
+        rounds = max(1, (session_minutes * 60 + interval_seconds - 1) // interval_seconds)
         return await _run_native_wechat_takeover_session(
             account_id=native_account_id,
             headers=headers,
             cloud=cloud,
             base=base,
             run_id=run_id,
+            rounds=rounds,
+            interval_seconds=interval_seconds,
         )
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")

@@ -762,5 +762,28 @@
     });
   }
 
+  function refresh() {
+    var status = el('onlineMastraChatStatus');
+    state.loading = false;
+    state.sending = false;
+    closeAllStreams();
+    setComposerEnabled(true);
+    if (status) status.textContent = '正在重新请求...';
+    renderSessionHeader();
+    return loadSessions().then(function () {
+      if (state.activeSessionId) return loadHistory();
+      return true;
+    }).then(function () {
+      if (status) status.textContent = '已恢复';
+      renderSessionHeader();
+      return true;
+    }).catch(function (error) {
+      if (status) status.textContent = error.message || '会话服务暂不可用';
+      renderSessionHeader();
+      return false;
+    });
+  }
+
   window.initMastraOnlineChat = init;
+  window.refreshMastraOnlineChat = refresh;
 })();

@@ -162,12 +162,108 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
         new Headers(next.headers || {}).forEach(function(value, key) { headers.set(key, value); });
         headers.set('X-Lobster-Brand', getLobsterBrandMark());
         next.headers = headers;
-        return nativeFetch(input, next);
+        return nativeFetch(input, next).catch(function(err) {
+          try {
+            var msg = String(err && err.message ? err.message : err || '');
+            var name = String(err && err.name ? err.name : '');
+            if (name !== 'AbortError' && /Failed to fetch|NetworkError|Load failed/i.test(msg) && typeof window.requestLobsterNetworkRecovery === 'function') {
+              window.requestLobsterNetworkRecovery({
+                view: currentView,
+                reason: 'fetch',
+                context: {
+                  url: String(url.pathname || ''),
+                  origin: String(url.origin || ''),
+                  message: msg
+                }
+              });
+            }
+          } catch (eRecover) {}
+          throw err;
+        });
       }
     } catch (e) {}
     return nativeFetch(input, init);
   };
   window.__LOBSTER_BRAND_FETCH_INSTALLED = true;
+})();
+
+(function installNetworkRecovery() {
+  if (window.__LOBSTER_NETWORK_RECOVERY_INSTALLED) return;
+
+  // Recovery guard only: debounce repeated retries, not a business availability flag.
+  var state = window.__LOBSTER_NETWORK_RECOVERY_STATE = window.__LOBSTER_NETWORK_RECOVERY_STATE || {
+    timer: null,
+    lastAttemptAt: 0
+  };
+
+  function clearRecoveryTimer() {
+    if (state.timer != null) {
+      try { clearTimeout(state.timer); } catch (e) {}
+      state.timer = null;
+    }
+  }
+
+  function currentRecoveryView(metaView) {
+    var view = String(metaView || '').trim();
+    if (view) return view;
+    try {
+      if (typeof currentView !== 'undefined' && currentView) return String(currentView).trim();
+    } catch (e) {}
+    try {
+      if (window.__LOBSTER_LAST_ACTIVE_VIEW) return String(window.__LOBSTER_LAST_ACTIVE_VIEW).trim();
+    } catch (e2) {}
+    return '';
+  }
+
+  function runRecovery(meta, force) {
+    meta = meta || {};
+    var view = currentRecoveryView(meta.view);
+    if (!view) return Promise.resolve(false);
+    if (!force && Date.now() - state.lastAttemptAt < 8000) return Promise.resolve(false);
+    state.lastAttemptAt = Date.now();
+
+    if (view === 'chat') {
+      if (typeof window.refreshMastraOnlineChat === 'function') {
+        return Promise.resolve(window.refreshMastraOnlineChat(meta)).then(function() { return true; }).catch(function() { return false; });
+      }
+    }
+
+    if (typeof window.showAppView === 'function') {
+      return Promise.resolve(window.showAppView(view)).then(function() { return true; }).catch(function() { return false; });
+    }
+
+    if (typeof window.location !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+      window.location.reload();
+      return Promise.resolve(true);
+    }
+
+    return Promise.resolve(false);
+  }
+
+  function scheduleRecovery(meta) {
+    meta = meta || {};
+    var view = currentRecoveryView(meta.view);
+    if (!view) return Promise.resolve(false);
+    if (state.timer != null) return Promise.resolve(false);
+    if (Date.now() - state.lastAttemptAt < 3000) return Promise.resolve(false);
+    var delay = 900;
+    state.timer = window.setTimeout(function() {
+      clearRecoveryTimer();
+      runRecovery(meta, false);
+    }, delay);
+    return Promise.resolve(true);
+  }
+
+  window.requestLobsterNetworkRecovery = scheduleRecovery;
+  window.refreshCurrentLobsterView = function(meta) {
+    clearRecoveryTimer();
+    return runRecovery(meta || { view: currentRecoveryView(), reason: 'manual' }, true);
+  };
+  window.__LOBSTER_NETWORK_RECOVERY_INSTALLED = true;
+
+  window.addEventListener('online', function() {
+    runRecovery({ view: currentRecoveryView(), reason: 'online' }, false);
+  });
 })();
 
 var token = getStoredAuthToken();
