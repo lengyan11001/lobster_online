@@ -1,7 +1,7 @@
 {
-  "version": "1.0.151",
-  "build": 195,
-  "applied_at": "2026-08-10T03:35:19+08:00",
-  "note": "AI secretary, H5 capture and workflow updates",
-  "bundle_sha256": "1e4e419b464a803d0a13c3e94842e9cefdaa14ba3075dc67075f39d8ff91e52d"
+  "version": "1.0.152",
+  "build": 196,
+  "applied_at": "2026-08-10T17:15:21+08:00",
+  "note": "Online memory, WeChat takeover and network recovery",
+  "bundle_sha256": "1cda2cedc126126cb5d6dc32a840ec1937c988f16f493f3a2d15f2ea0d86e162"
 }

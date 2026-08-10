@@ -202,3 +202,20 @@ def test_memory_document_runtime_packer_collects_both_wheels(tmp_path):
         "scripts/memory_document_runtime_wheels/pypdf-6.14.2-py3-none-any.whl",
         "scripts/memory_document_runtime_wheels/xlrd-2.0.2-py2.py3-none-any.whl",
     ]
+
+
+def test_no_dependency_ota_excludes_nested_node_modules(monkeypatch):
+    monkeypatch.setattr(
+        packer,
+        "_PACK_SKIP_REL_PREFIXES",
+        {
+            "nodejs/node_modules",
+            "backend/douyin_origin/douyin_protocol/node_modules",
+        },
+    )
+
+    assert packer._skip_file("nodejs/node_modules/openclaw/index.js")
+    assert packer._skip_file(
+        "backend/douyin_origin/douyin_protocol/node_modules/jsrsasign/lib/jsrsasign.js"
+    )
+    assert not packer._skip_file("backend/douyin_origin/douyin_protocol/index.js")

@@ -353,6 +353,15 @@ _INCLUDE_RUNTIME_WHEEL_DIRS: set[str] = set()
 _INCLUDE_PYC_FILES = False
 _PACK_OVERSEAS = False
 _PACK_BRAND = ""
+_PACK_SKIP_REL_PREFIXES: set[str] = set()
+
+
+def _is_pack_skipped_path(rel: str) -> bool:
+    normalized = _norm(rel).lower().strip("/")
+    return any(
+        normalized == prefix or normalized.startswith(prefix + "/")
+        for prefix in _PACK_SKIP_REL_PREFIXES
+    )
 
 
 def _env_text_for_pack(path: Path) -> str:
@@ -383,6 +392,8 @@ def _env_text_for_pack(path: Path) -> str:
 def _skip_file(rel: str) -> bool:
     r = _norm(rel).lower()
     nr = _norm(rel)
+    if _is_pack_skipped_path(rel):
+        return True
     if any(nr.startswith(p) for p in _OTA_INCLUDE_SKILLS_TOOL_PREFIXES):
         return False
     if r in _OTA_SECRET_REL_PATHS:
@@ -432,6 +443,7 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
             d
             for d in dirnames
             if d not in SKIP_DIR_NAMES
+            and not _is_pack_skipped_path(os.path.join(rel_here, d))
             and not any(
                 _norm(os.path.join(rel_here, d)).startswith(p)
                 for p in OTA_SKIP_REL_PREFIXES
@@ -863,6 +875,14 @@ def main() -> int:
     args = ap.parse_args()
     _PACK_OVERSEAS = bool(args.overseas)
     _PACK_BRAND = str(args.brand or "").strip().lower()
+    _PACK_SKIP_REL_PREFIXES.clear()
+    if args.no_bundled_node_deps:
+        _PACK_SKIP_REL_PREFIXES.update(
+            {
+                "nodejs/node_modules",
+                "backend/douyin_origin/douyin_protocol/node_modules",
+            }
+        )
     numeric_oem_code = _PACK_BRAND.isascii() and _PACK_BRAND.isdigit() and 4 <= len(_PACK_BRAND) <= 12
     valid_brand_mark = bool(_PACK_BRAND) and _PACK_BRAND[0].isascii() and _PACK_BRAND[0].isalpha() and all(
         ch.isascii() and (ch.isalnum() or ch in "_-") for ch in _PACK_BRAND
