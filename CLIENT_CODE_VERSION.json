@@ -1,7 +1,7 @@
 {
-  "version": "1.0.155",
-  "build": 199,
-  "applied_at": "2026-08-11T09:52:09+08:00",
-  "note": "adaptive WeChat takeover intelligence",
-  "bundle_sha256": "2763469455d039898d8737bc199ee66ad853c7f317961d45a037d0194edba7c3"
+  "version": "1.0.156",
+  "build": 200,
+  "applied_at": "2026-08-12T00:22:03+08:00",
+  "note": "safe automatic updates, installation ownership, WeChat takeover stability, and TVC model fallback",
+  "bundle_sha256": "17754e3b0bfe019631447b409dee8553b9961d298a41082cb23a76237e47f531"
 }
