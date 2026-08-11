@@ -1,7 +1,7 @@
 {
-  "version": "1.0.154",
-  "build": 198,
-  "applied_at": "2026-08-11T08:50:46+08:00",
-  "note": "native WeChat takeover deadline and safety fixes",
-  "bundle_sha256": "ec6425241970b0ea6b57e78351fbb8d567191ca97b9c0031e8695a6f3b98078b"
+  "version": "1.0.155",
+  "build": 199,
+  "applied_at": "2026-08-11T09:52:09+08:00",
+  "note": "adaptive WeChat takeover intelligence",
+  "bundle_sha256": "2763469455d039898d8737bc199ee66ad853c7f317961d45a037d0194edba7c3"
 }
