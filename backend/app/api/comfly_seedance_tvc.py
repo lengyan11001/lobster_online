@@ -79,6 +79,7 @@ class ComflySeedancePipelinePayload(BaseModel):
     output_dir: Optional[str] = None
     isolate_job_dir: bool = True
     analysis_model: Optional[str] = None
+    analysis_model_fallback: Optional[str] = None
     image_model: Optional[str] = None
     image_model_fallback: Optional[str] = None
     video_model: Optional[str] = None
@@ -309,6 +310,7 @@ async def _prepare_pipeline_input(
         language=pl.language,
         task_text=pl.task_text,
         analysis_model=pl.analysis_model,
+        analysis_model_fallback=pl.analysis_model_fallback,
         image_model=pl.image_model,
         image_model_fallback=pl.image_model_fallback,
         video_model=video_model or pl.video_model,

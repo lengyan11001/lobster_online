@@ -38,6 +38,7 @@ class Input(TypedDict, total=False):
     country: str
     language: str
     analysis_model: str
+    analysis_model_fallback: str
     image_model: str
     image_model_fallback: str
     video_model: str
@@ -81,7 +82,8 @@ class PipelineConfig:
     platform: str = "brand_tvc"
     country: str = "China"
     language: str = "zh-CN"
-    analysis_model: str = "gpt-4.1-mini"
+    analysis_model: str = "gpt-5.5"
+    analysis_model_fallback: str = "gpt-5.4"
     image_model: str = "gpt-image-2"
     image_model_fallback: str = "nano-banana-2"
     video_model: str = "doubao-seedance-2-0-fast-260128"
@@ -261,6 +263,7 @@ class RunLogger:
             "config": {
                 "base_url": config.base_url,
                 "analysis_model": config.analysis_model,
+                "analysis_model_fallback": config.analysis_model_fallback,
                 "image_model": config.image_model,
                 "image_model_fallback": config.image_model_fallback,
                 "video_model": config.video_model,
@@ -1102,24 +1105,49 @@ class ComflySeedanceClient:
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
             content.append({"type": "image_url", "image_url": {"url": url}})
-        body = {
-            "model": self.config.analysis_model,
-            "stream": False,
-            "messages": [{"role": "user", "content": content}],
-            "max_tokens": 5000,
-        }
 
-        def call() -> Dict[str, Any]:
-            chat_url = f"{self.base_url}/v1/chat/completions"
-            self._trace_request("chat_completions", chat_url, body)
-            r = self.session.post(chat_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
-            payload = self._check(r)
-            text = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
-            parsed = _parse_json(text)
-            parsed["_raw_text"] = text
-            return parsed
+        primary = (self.config.analysis_model or "").strip()
+        fallback = (self.config.analysis_model_fallback or "").strip()
+        if fallback.lower() in {"none", "null", "off", "false", "0", "disabled", "disable", "no"}:
+            fallback = ""
+        models: List[str] = [primary] if primary else []
+        if fallback and fallback != primary:
+            models.append(fallback)
+        if not models:
+            raise PipelineError("No analysis model configured")
 
-        return _retry("analyze", self.config.analysis_retries, self.config.network_retry_delay_seconds, self.logger, call)
+        last_exc: Optional[Exception] = None
+        total_attempts = 0
+        for model_idx, model_id in enumerate(models):
+            body = {
+                "model": model_id,
+                "stream": False,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": 5000,
+            }
+            tag = "analyze" if model_idx == 0 else f"analyze_fallback_{model_id}"
+
+            def call(_body=body) -> Dict[str, Any]:
+                chat_url = f"{self.base_url}/v1/chat/completions"
+                self._trace_request("chat_completions", chat_url, _body)
+                r = self.session.post(chat_url, headers={"Content-Type": "application/json"}, json=_body, timeout=180)
+                payload = self._check(r)
+                text = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+                parsed = _parse_json(text)
+                parsed["_raw_text"] = text
+                parsed["_analysis_model"] = model_id
+                return parsed
+
+            try:
+                result, attempts = _retry(tag, self.config.analysis_retries, self.config.network_retry_delay_seconds, self.logger, call)
+                return result, total_attempts + attempts
+            except Exception as exc:
+                last_exc = exc
+                total_attempts += int(self.config.analysis_retries)
+                if model_idx + 1 < len(models):
+                    self.logger.error(tag, f"analysis model {model_id} exhausted, falling back to {models[model_idx + 1]}: {exc}")
+                    continue
+        raise PipelineError(f"analyze failed on analysis model {models[-1]}: {last_exc}")
 
     def generate_board_image(self, prompt: str, refs: List[str], action: str) -> tuple[Dict[str, Any], int]:
         primary = (self.config.image_model or "").strip()
@@ -2086,6 +2114,7 @@ def _finish_segments(
         "workflow_mode": config.workflow_mode,
         "config": {
             "analysis_model": config.analysis_model,
+            "analysis_model_fallback": config.analysis_model_fallback,
             "image_model": config.image_model,
             "image_model_fallback": config.image_model_fallback,
             "video_model": config.video_model,
@@ -2182,7 +2211,8 @@ def _build_config(data: Input) -> PipelineConfig:
         platform=(data.get("platform") or "brand_tvc").strip() or "brand_tvc",
         country=(data.get("country") or "China").strip() or "China",
         language=(data.get("language") or "zh-CN").strip() or "zh-CN",
-        analysis_model=(data.get("analysis_model") or "gpt-4.1-mini").strip() or "gpt-4.1-mini",
+        analysis_model=(data.get("analysis_model") or "gpt-5.5").strip() or "gpt-5.5",
+        analysis_model_fallback=(data.get("analysis_model_fallback") or data.get("fallback_analysis_model") or "gpt-5.4").strip() or "gpt-5.4",
         image_model=_optional_model(data.get("image_model")) or "gpt-image-2",
         image_model_fallback=_optional_model(data.get("image_model_fallback")),
         video_model=effective_video_model,

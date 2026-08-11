@@ -32,7 +32,7 @@ This skill is intentionally different from `comfly_veo3_daihuo_video`:
 
 ## Default model choices
 
-- analysis model: `gpt-4.1-mini`
+- analysis model: `gpt-5.5` primary, `gpt-5.4` fallback
 - storyboard board image model: `gpt-image-2` (primary), `nano-banana-2` (fallback)
 - video model: `doubao-seedance-2-0-fast-260128`
 

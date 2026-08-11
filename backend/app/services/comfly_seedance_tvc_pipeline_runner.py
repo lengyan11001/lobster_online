@@ -261,6 +261,7 @@ def build_pipeline_input(
     language: str,
     task_text: str = "",
     analysis_model: Optional[str] = None,
+    analysis_model_fallback: Optional[str] = None,
     image_model: Optional[str] = None,
     image_model_fallback: Optional[str] = None,
     video_model: Optional[str] = None,
@@ -321,6 +322,8 @@ def build_pipeline_input(
         inp["task_text"] = task_text.strip()
     if (analysis_model or "").strip():
         inp["analysis_model"] = analysis_model.strip()
+    if (analysis_model_fallback or "").strip():
+        inp["analysis_model_fallback"] = analysis_model_fallback.strip()
     if (image_model or "").strip():
         inp["image_model"] = image_model.strip()
     if (image_model_fallback or "").strip():
