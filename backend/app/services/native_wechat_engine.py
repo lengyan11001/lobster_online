@@ -111,6 +111,7 @@ _TASK_WORKERS: Dict[str, asyncio.Task[Any]] = {}
 _TASK_AUTH_CONTEXT: Dict[str, Dict[str, Any]] = {}
 _AUTO_REPLY_WORKERS: Dict[str, asyncio.Task[Any]] = {}
 _AUTO_REPLY_AUTH_CONTEXT: Dict[str, Dict[str, Any]] = {}
+_WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = 0.0
 _LOCAL_WECHAT_UI_LOCK = threading.RLock()
 _LOCAL_WECHAT_THREAD_STATE = threading.local()
 _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
@@ -582,6 +583,18 @@ def init_db() -> None:
             );
             create index if not exists idx_wechat_auto_reply_history_account_time
             on wechat_auto_reply_history(account_id, created_at desc);
+
+            create table if not exists wechat_intelligence_outbox (
+                id text primary key,
+                dedup_key text not null unique,
+                payload text not null,
+                attempts integer not null default 0,
+                last_error text,
+                created_at text not null,
+                updated_at text not null
+            );
+            create index if not exists idx_wechat_intelligence_outbox_time
+            on wechat_intelligence_outbox(created_at asc);
 
             create table if not exists wechat_moments_comments (
                 id text primary key,
@@ -1705,6 +1718,231 @@ def _server_proxy_base() -> str:
     return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhzn.top"
 
 
+def _wechat_intelligence_headers(auth_context: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    context = auth_context or {}
+    token = str(context.get("token") or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
+    if not token:
+        return {}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    installation_id = str(
+        context.get("installation_id")
+        or getattr(settings, "openclaw_sutui_fallback_installation_id", None)
+        or ""
+    ).strip()
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    brand = str(context.get("brand") or "").strip()
+    if brand:
+        headers["X-Lobster-Brand"] = brand
+    return headers
+
+
+async def _load_wechat_intelligence_context(
+    auth_context: Optional[Dict[str, Any]],
+    *,
+    account_id: str,
+    contact_key: str,
+    contact_name: str,
+    latest_message: str,
+) -> Dict[str, Any]:
+    global _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL
+    headers = _wechat_intelligence_headers(auth_context)
+    if not headers:
+        return {"available": False, "contact": None, "rules": [], "error": "missing_token"}
+    if time.monotonic() < _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL:
+        return {"available": False, "contact": None, "rules": [], "error": "server_circuit_open"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0), trust_env=False) as client:
+            response = await client.post(
+                f"{_server_proxy_base()}/api/wechat-intelligence/context",
+                headers=headers,
+                json={
+                    "account_id": str(account_id or "")[:160],
+                    "contact_key": str(contact_key or "")[:240],
+                    "contact_name": str(contact_name or "")[:240],
+                    "latest_message": str(latest_message or "")[:4000],
+                },
+            )
+        if response.status_code >= 400:
+            _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = time.monotonic() + (300.0 if response.status_code in {401, 403} else 60.0)
+            return {
+                "available": False,
+                "contact": None,
+                "rules": [],
+                "error": f"HTTP {response.status_code}: {(response.text or '')[:300]}",
+            }
+        data = response.json() if response.content else {}
+        _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = 0.0
+        return {
+            "available": True,
+            "contact": data.get("contact") if isinstance(data.get("contact"), dict) else None,
+            "rules": data.get("rules") if isinstance(data.get("rules"), list) else [],
+            "limits": data.get("limits") if isinstance(data.get("limits"), dict) else {},
+        }
+    except Exception as exc:
+        _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = time.monotonic() + 60.0
+        return {"available": False, "contact": None, "rules": [], "error": str(exc)[:300]}
+
+
+def _wechat_intelligence_outbox_key(payload: Dict[str, Any]) -> str:
+    base = "|".join(
+        str(payload.get(key) or "").strip()
+        for key in ("account_id", "contact_key", "inbound_message_id", "event_type")
+    )
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+
+def _enqueue_wechat_intelligence_observation(payload: Dict[str, Any]) -> str:
+    init_db()
+    dedup_key = _wechat_intelligence_outbox_key(payload)
+    now = _now_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into wechat_intelligence_outbox(id,dedup_key,payload,attempts,last_error,created_at,updated_at)
+            values(?,?,?,?,?,?,?)
+            on conflict(dedup_key) do update set payload=excluded.payload,updated_at=excluded.updated_at
+            """,
+            (uuid.uuid4().hex, dedup_key, _json_dumps(payload), 0, "", now, now),
+        )
+        conn.execute(
+            """
+            delete from wechat_intelligence_outbox
+            where id in (
+              select id from wechat_intelligence_outbox order by created_at desc limit -1 offset 1000
+            )
+            """
+        )
+    return dedup_key
+
+
+def _delete_wechat_intelligence_outbox(dedup_key: str) -> None:
+    with _connect() as conn:
+        conn.execute("delete from wechat_intelligence_outbox where dedup_key=?", (dedup_key,))
+
+
+def _mark_wechat_intelligence_outbox_failed(dedup_key: str, error: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            update wechat_intelligence_outbox
+            set attempts=attempts+1,last_error=?,updated_at=? where dedup_key=?
+            """,
+            (str(error or "")[:1000], _now_iso(), dedup_key),
+        )
+        conn.execute("delete from wechat_intelligence_outbox where attempts>=8")
+
+
+async def _post_wechat_intelligence_observation(
+    auth_context: Optional[Dict[str, Any]],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    global _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL
+    headers = _wechat_intelligence_headers(auth_context)
+    if not headers:
+        return {"ok": False, "skipped": True, "reason": "missing_token"}
+    if time.monotonic() < _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL:
+        return {"ok": False, "skipped": True, "reason": "server_circuit_open"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, connect=3.0), trust_env=False) as client:
+            response = await client.post(
+                f"{_server_proxy_base()}/api/wechat-intelligence/observe",
+                headers=headers,
+                json=payload,
+            )
+        if response.status_code >= 400:
+            _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = time.monotonic() + (300.0 if response.status_code in {401, 403} else 60.0)
+            return {"ok": False, "error": f"HTTP {response.status_code}: {(response.text or '')[:300]}"}
+        data = response.json() if response.content else {}
+        _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = 0.0
+        return {"ok": bool(data.get("ok", True)), **data}
+    except Exception as exc:
+        _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = time.monotonic() + 60.0
+        return {"ok": False, "error": str(exc)[:300]}
+
+
+async def _observe_wechat_intelligence(
+    auth_context: Optional[Dict[str, Any]],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    dedup_key = _enqueue_wechat_intelligence_observation(payload)
+    result = await _post_wechat_intelligence_observation(auth_context, payload)
+    if result.get("ok"):
+        _delete_wechat_intelligence_outbox(dedup_key)
+    elif not result.get("skipped"):
+        _mark_wechat_intelligence_outbox_failed(dedup_key, str(result.get("error") or "upload_failed"))
+    return {**result, "queued": not bool(result.get("ok"))}
+
+
+async def _flush_wechat_intelligence_outbox(
+    auth_context: Optional[Dict[str, Any]],
+    *,
+    limit: int = 20,
+) -> Dict[str, int]:
+    init_db()
+    headers = _wechat_intelligence_headers(auth_context)
+    if not headers or time.monotonic() < _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL:
+        return {"processed": 0, "remaining": 0}
+    with _connect() as conn:
+        rows = conn.execute(
+            "select dedup_key,payload from wechat_intelligence_outbox order by created_at asc limit ?",
+            (max(1, min(50, int(limit or 20))),),
+        ).fetchall()
+    processed = 0
+    for row in rows:
+        payload = _safe_json_loads(row["payload"], {})
+        if not isinstance(payload, dict):
+            _delete_wechat_intelligence_outbox(str(row["dedup_key"] or ""))
+            continue
+        result = await _post_wechat_intelligence_observation(auth_context, payload)
+        if result.get("ok"):
+            _delete_wechat_intelligence_outbox(str(row["dedup_key"] or ""))
+            processed += 1
+            continue
+        if not result.get("skipped"):
+            _mark_wechat_intelligence_outbox_failed(str(row["dedup_key"] or ""), str(result.get("error") or "upload_failed"))
+        break
+    with _connect() as conn:
+        remaining = int(conn.execute("select count(1) from wechat_intelligence_outbox").fetchone()[0] or 0)
+    return {"processed": processed, "remaining": remaining}
+
+
+def _wechat_intelligence_prompt_context(context: Optional[Dict[str, Any]]) -> tuple[str, str]:
+    data = context or {}
+    contact = data.get("contact") if isinstance(data.get("contact"), dict) else {}
+    rules = data.get("rules") if isinstance(data.get("rules"), list) else []
+    contact_parts: List[str] = []
+    if contact:
+        profile = contact.get("profile") if isinstance(contact.get("profile"), dict) else {}
+        contact_parts.extend(
+            [
+                f"客户阶段：{str(contact.get('stage') or 'unknown')[:48]}",
+                f"意向等级：{str(contact.get('intent_level') or 'none')[:16]}",
+                f"历史摘要：{str(contact.get('rolling_summary') or '')[:2000]}",
+                f"客户资料：{json.dumps(profile, ensure_ascii=False)[:3000]}",
+                f"建议跟进：{str(contact.get('next_followup') or '')[:1200]}",
+            ]
+        )
+    rule_parts: List[str] = []
+    used = 0
+    for index, rule in enumerate(rules[:12], start=1):
+        if not isinstance(rule, dict):
+            continue
+        content = str(rule.get("content") or "").strip()[:1600]
+        if not content or used + len(content) > 7000:
+            continue
+        rule_parts.append(
+            f"{index}. [{str(rule.get('category') or 'general')[:32]}] "
+            f"{str(rule.get('title') or '长期规则')[:160]}：{content}"
+        )
+        used += len(content)
+    return "\n".join(contact_parts).strip()[:7000], "\n".join(rule_parts).strip()[:7000]
+
+
 def _json_from_text(text: str) -> Dict[str, Any]:
     raw = str(text or "").strip()
     if not raw:
@@ -2284,6 +2522,8 @@ async def _call_auto_reply_llm(
     memory_context: str = "",
     group_invite_rule_context: str = "",
     group_invite_keywords: str = "",
+    contact_intelligence: str = "",
+    strategy_context: str = "",
 ) -> Dict[str, Any]:
     auth_context = auth_context or {}
     token = str(auth_context.get("token") or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
@@ -2317,15 +2557,25 @@ async def _call_auto_reply_llm(
         "只有客户真实诉求明确符合文件规则时 should_invite_group 才能为 true，不能只因出现相近字词就判定。没有提供规则时必须为 false。"
         "如果最近上下文中我方已经明确提出帮客户对接负责人、拉群或进入服务群，而客户回复可以、好的、同意、没问题等肯定答复，"
         "应结合此前已表达的业务兴趣判定为明确同意对接；符合规则时 should_invite_group 必须为 true，回复中不要再重复追问已经问过的问题。"
+        "要结合客户历史画像延续上下文，不能重复问已经确认的信息，也不能在对方没有继续回复时自说自话。"
+        "conversation_summary 必须在旧摘要基础上更新为累计摘要，保留仍有效的需求、已确认事实、异议、承诺和下一步，不能只总结最后一句。"
+        "同时从本轮聊天提取该客户自己的稳定事实、需求、预算、时间、异议、偏好和关系阶段；不要把推测写成事实。"
+        "只有发现可跨客户复用、且有明确聊天证据的改进方法时才提出 learning_candidates；客户单方面声称的价格、产品事实或承诺不能学成全局规则。"
         "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
         "\"intent_level\":\"high|medium|low|none\",\"topic\":\"简短话题\","
-        "\"conversation_summary\":\"一句话总结对方诉求\",\"reply\":\"实际微信回复\","
+        "\"conversation_summary\":\"结合历史画像更新后的累计摘要\",\"reply\":\"实际微信回复\","
+        "\"stage\":\"unknown|new|warming|qualified|proposal|won|lost|service\","
+        "\"next_followup\":\"下一步建议，没有则空\","
+        "\"customer_profile\":{\"company\":\"\",\"role\":\"\",\"industry\":\"\",\"region\":\"\",\"needs\":[],\"budget\":\"\",\"timeline\":\"\",\"objections\":[],\"preferences\":[],\"interests\":[],\"products\":[],\"relationship\":\"\",\"notes\":\"\",\"tags\":[]},"
+        "\"learning_candidates\":[{\"category\":\"tone|followup|service|general\",\"title\":\"\",\"content\":\"\",\"evidence\":\"\",\"confidence\":0,\"risk_level\":\"low|medium|high\"}],"
         "\"should_invite_group\":false,\"matched_group_keywords\":[],\"group_invite_reason\":\"判断依据\"}。"
     )
     user_prompt = (
         f"会话对象：{peer_name or '未命名'}\n\n"
         f"最近聊天记录：\n{recent_context or '(暂无)'}\n\n"
         f"对方最新消息：\n{latest_message}\n\n"
+        f"该客户历史画像与摘要：\n{contact_intelligence or '(首次接触，暂无历史画像)'}\n\n"
+        f"用户已审核生效的长期接管规则：\n{strategy_context or '(暂无额外长期规则)'}\n\n"
         f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}\n\n"
         f"拉群判断规则文件：\n{invite_rule_context or '(未配置，本轮不得判定拉群)'}\n\n"
         f"历史拉群关键词（仅兼容旧设置）：\n{('、'.join(invite_keywords)) if invite_keywords else '(无)'}"
@@ -2394,6 +2644,52 @@ async def _call_auto_reply_llm(
         if "明确同意拉群" not in matched_group_keywords:
             matched_group_keywords.append("明确同意拉群")
         group_invite_reason = group_invite_reason or "客户对我方此前提出的建群或拉群邀请作出明确肯定答复"
+    profile_raw = parsed.get("customer_profile") if isinstance(parsed.get("customer_profile"), dict) else {}
+    profile_updates: Dict[str, Any] = {}
+    allowed_profile_fields = {
+        "company", "role", "industry", "region", "needs", "budget", "timeline", "objections",
+        "preferences", "interests", "products", "relationship", "notes", "tags",
+    }
+    for key, value in profile_raw.items():
+        if key not in allowed_profile_fields:
+            continue
+        if isinstance(value, list):
+            cleaned = list(dict.fromkeys(str(item or "").strip()[:160] for item in value if str(item or "").strip()))[:20]
+            if cleaned:
+                profile_updates[key] = cleaned
+        elif isinstance(value, (str, int, float, bool)) and str(value or "").strip():
+            profile_updates[key] = str(value).strip()[:1000]
+    stage = str(parsed.get("stage") or "").strip().lower()
+    if stage not in {"unknown", "new", "warming", "qualified", "proposal", "won", "lost", "service"}:
+        stage = ""
+    candidates_raw = parsed.get("learning_candidates") if isinstance(parsed.get("learning_candidates"), list) else []
+    learning_candidates: List[Dict[str, Any]] = []
+    for item in candidates_raw[:8]:
+        if not isinstance(item, dict):
+            continue
+        candidate_content = str(item.get("content") or "").strip()[:4000]
+        if not candidate_content:
+            continue
+        candidate_category = str(item.get("category") or "general").strip().lower()
+        if candidate_category not in {"general", "fact", "tone", "product", "price", "service", "commitment", "forbidden", "group_rule", "followup"}:
+            candidate_category = "general"
+        candidate_risk = str(item.get("risk_level") or "medium").strip().lower()
+        if candidate_risk not in {"low", "medium", "high"}:
+            candidate_risk = "medium"
+        try:
+            confidence = max(0, min(100, int(item.get("confidence") or 0)))
+        except (TypeError, ValueError):
+            confidence = 0
+        learning_candidates.append(
+            {
+                "category": candidate_category,
+                "title": str(item.get("title") or "聊天中发现的新规则").strip()[:200],
+                "content": candidate_content,
+                "evidence": str(item.get("evidence") or "").strip()[:4000],
+                "confidence": confidence,
+                "risk_level": candidate_risk,
+            }
+        )
     return {
         "should_reply": should_reply,
         "category": category,
@@ -2404,6 +2700,10 @@ async def _call_auto_reply_llm(
         "should_invite_group": should_invite_group,
         "matched_group_keywords": matched_group_keywords,
         "group_invite_reason": group_invite_reason,
+        "stage": stage,
+        "next_followup": str(parsed.get("next_followup") or "").strip()[:2000],
+        "profile_updates": profile_updates,
+        "learning_candidates": learning_candidates,
         "raw": content[:2000],
     }
 
@@ -2613,6 +2913,8 @@ async def run_auto_reply_once(
     started_at = _now_iso()
     memory = _load_auto_reply_memory_context(
         effective_user_id,
+        max_chars=12000,
+        max_docs=5,
         selected_doc_ids=cfg.get("memory_doc_ids") if isinstance(cfg.get("memory_doc_ids"), list) else [],
     )
     invite_rule_doc_id = str(cfg.get("group_invite_memory_doc_id") or "").strip()
@@ -2660,8 +2962,13 @@ async def run_auto_reply_once(
             "document_count": int(memory.get("document_count") or 0),
             "titles": list(memory.get("titles") or []),
         },
+        "intelligence_outbox": {"processed": 0, "remaining": 0},
     }
     try:
+        result["intelligence_outbox"] = await _flush_wechat_intelligence_outbox(
+            _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+            limit=5,
+        )
         if check_friend_requests:
             try:
                 friend_requests = await asyncio.to_thread(
@@ -2710,6 +3017,9 @@ async def run_auto_reply_once(
             current_inbound: Optional[Dict[str, Any]] = None
             current_reply = ""
             current_category = ""
+            current_peer = peer_id
+            llm_reply: Dict[str, Any] = {}
+            intelligence_context: Dict[str, Any] = {}
             try:
                 sync_result = await asyncio.to_thread(
                     sync_local_messages,
@@ -2725,6 +3035,7 @@ async def run_auto_reply_once(
                     result["items"].append(item_result)
                     continue
                 actual_peer = str(sync_result.get("peer_id") or peer_id)
+                current_peer = actual_peer
                 inbound = _latest_auto_reply_candidate(account_id, actual_peer)
                 if not inbound:
                     result["skipped"] += 1
@@ -2755,6 +3066,14 @@ async def run_auto_reply_once(
                     }
                 )
                 recent = _recent_conversation_text(account_id, actual_peer, limit=8)
+                intelligence_context = await _load_wechat_intelligence_context(
+                    _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+                    account_id=account_id,
+                    contact_key=actual_peer,
+                    contact_name=display_name,
+                    latest_message=str(inbound.get("content") or ""),
+                )
+                contact_intelligence, strategy_context = _wechat_intelligence_prompt_context(intelligence_context)
                 llm_reply = await _call_auto_reply_llm(
                     auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
                     user_id=effective_user_id,
@@ -2764,6 +3083,8 @@ async def run_auto_reply_once(
                     memory_context=str(memory.get("text") or ""),
                     group_invite_rule_context=str(invite_rule_memory.get("text") or ""),
                     group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
+                    contact_intelligence=contact_intelligence,
+                    strategy_context=strategy_context,
                 )
                 item_result.update(
                     {
@@ -2774,6 +3095,11 @@ async def run_auto_reply_once(
                         "should_invite_group": bool(llm_reply.get("should_invite_group")),
                         "matched_group_keywords": llm_reply.get("matched_group_keywords") or [],
                         "group_invite_reason": llm_reply.get("group_invite_reason") or "",
+                        "stage": llm_reply.get("stage") or "",
+                        "next_followup": llm_reply.get("next_followup") or "",
+                        "profile_update_fields": sorted((llm_reply.get("profile_updates") or {}).keys()),
+                        "learning_candidate_count": len(llm_reply.get("learning_candidates") or []),
+                        "intelligence_context_available": bool(intelligence_context.get("available")),
                     }
                 )
                 group_invite: Optional[Dict[str, Any]] = None
@@ -2893,6 +3219,72 @@ async def run_auto_reply_once(
                 result["failed"] += 1
                 item_result.update({"status": "failed", "error": str(exc)[:300]})
                 result["items"].append(item_result)
+            finally:
+                if current_inbound is not None:
+                    item_status = str(item_result.get("status") or "skipped")
+                    event_type = "reply_sent" if item_status == "sent" else "reply_skipped"
+                    outcome_status = "completed"
+                    if item_status in {"failed", "group_invite_not_executable"}:
+                        event_type = "failed"
+                        outcome_status = "failed"
+                    inbound_id = str(
+                        current_inbound.get("auto_reply_inbound_id")
+                        or current_inbound.get("provider_message_id")
+                        or current_inbound.get("id")
+                        or ""
+                    )
+                    sync_result = await _observe_wechat_intelligence(
+                        _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+                        {
+                            "account_id": account_id,
+                            "contact_key": current_peer,
+                            "contact_name": display_name,
+                            "event_type": event_type,
+                            "status": outcome_status,
+                            "inbound_message_id": inbound_id,
+                            "inbound_text": str(current_inbound.get("content") or "")[:4000],
+                            "reply_text": current_reply[:4000] if item_status == "sent" else "",
+                            "category": str(llm_reply.get("category") or current_category)[:32],
+                            "intent_level": str(llm_reply.get("intent_level") or "")[:16],
+                            "topic": str(llm_reply.get("topic") or "")[:160],
+                            "conversation_summary": str(llm_reply.get("conversation_summary") or "")[:2000],
+                            "stage": str(llm_reply.get("stage") or "")[:48],
+                            "next_followup": str(llm_reply.get("next_followup") or "")[:2000],
+                            "profile_updates": llm_reply.get("profile_updates") if isinstance(llm_reply.get("profile_updates"), dict) else {},
+                            "learning_candidates": llm_reply.get("learning_candidates") if isinstance(llm_reply.get("learning_candidates"), list) else [],
+                            "payload": {
+                                "trigger": trigger,
+                                "should_invite_group": bool(llm_reply.get("should_invite_group")),
+                                "group_invite": item_result.get("group_invite") if isinstance(item_result.get("group_invite"), dict) else {},
+                            },
+                            "error_message": str(item_result.get("error") or "")[:2000],
+                        },
+                    )
+                    item_result["intelligence_sync"] = {
+                        "ok": bool(sync_result.get("ok")),
+                        "deduplicated": bool(sync_result.get("deduplicated")),
+                        "candidate_count": len(sync_result.get("candidates") or []),
+                        "error": str(sync_result.get("error") or "")[:200],
+                    }
+                    group_invite = item_result.get("group_invite") if isinstance(item_result.get("group_invite"), dict) else {}
+                    if group_invite.get("queued"):
+                        await _observe_wechat_intelligence(
+                            _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+                            {
+                                "account_id": account_id,
+                                "contact_key": current_peer,
+                                "contact_name": display_name,
+                                "event_type": "group_queued",
+                                "status": "completed",
+                                "inbound_message_id": inbound_id,
+                                "category": str(llm_reply.get("category") or "")[:32],
+                                "intent_level": str(llm_reply.get("intent_level") or "none")[:16],
+                                "payload": {
+                                    "dedup_key": str(group_invite.get("dedup_key") or "")[:255],
+                                    "reason": str(llm_reply.get("group_invite_reason") or "")[:300],
+                                },
+                            },
+                        )
             if idx < len(private_unread[:max_sessions]) - 1:
                 low = float(DEFAULT_STRATEGY["auto_reply_session_sleep_min"])
                 high = max(low, float(DEFAULT_STRATEGY["auto_reply_session_sleep_max"]))
@@ -9789,8 +10181,40 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
             1 if welcome_error else 0,
             welcome_error,
         )
+        source_peer_id = str(payload.get("source_peer_id") or "").strip()
+        if source_peer_id:
+            await _observe_wechat_intelligence(
+                _AUTO_REPLY_AUTH_CONTEXT.get(account_id),
+                {
+                    "account_id": account_id,
+                    "contact_key": source_peer_id,
+                    "event_type": "group_created",
+                    "status": "failed" if welcome_error else "completed",
+                    "inbound_message_id": str(payload.get("source_inbound_message_id") or "")[:255],
+                    "payload": {
+                        "group_task_id": task_id,
+                        "selected": selected,
+                        "welcome_sent": bool(welcome_message and welcome_result and not welcome_error),
+                    },
+                    "error_message": welcome_error[:2000],
+                },
+            )
     except Exception as exc:
         _finish_task(task_id, "failed", 0, 0, len(targets), str(exc))
+        source_peer_id = str(payload.get("source_peer_id") or "").strip()
+        if source_peer_id:
+            await _observe_wechat_intelligence(
+                _AUTO_REPLY_AUTH_CONTEXT.get(account_id),
+                {
+                    "account_id": account_id,
+                    "contact_key": source_peer_id,
+                    "event_type": "group_created",
+                    "status": "failed",
+                    "inbound_message_id": str(payload.get("source_inbound_message_id") or "")[:255],
+                    "payload": {"group_task_id": task_id},
+                    "error_message": str(exc)[:2000],
+                },
+            )
 
 
 def _persist_task_error_message(account_id: str, peer_id: str, text: str, err: str) -> None:
