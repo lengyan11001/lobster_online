@@ -160,6 +160,52 @@ def test_new_session_snapshot_does_not_reply_to_historical_content():
     ) is False
 
 
+def test_no_badge_scan_rejects_old_inbound_after_our_newer_preview():
+    session = {
+        "last_content": "哈哈何总过奖了，我就是跟着张老师多学习。",
+        "unread_count": 0,
+        "message_preview_changed": True,
+    }
+    inbound = {"content": "你好厉害", "direction": "in"}
+
+    assert engine._session_needs_auto_reply_check(session) is True
+    assert engine._session_preview_matches_inbound(session, inbound) is False
+
+
+def test_no_badge_scan_accepts_truncated_inbound_preview():
+    session = {
+        "last_content": "我想了解一下你们的企业版价",
+        "unread_count": 0,
+        "message_preview_changed": True,
+    }
+    inbound = {"content": "我想了解一下你们的企业版价格和服务范围", "direction": "in"}
+
+    assert engine._session_preview_matches_inbound(session, inbound) is True
+
+
+def test_moments_publish_uses_shared_wechat_ui_lock(monkeypatch):
+    captured = {}
+
+    def run(account_id, operation, callback, *, retry_on_failure=True):
+        captured.update(
+            account_id=account_id,
+            operation=operation,
+            retry_on_failure=retry_on_failure,
+        )
+        return {"ok": True, "locked": True}
+
+    monkeypatch.setattr(engine, "_run_local_driver_operation", run)
+
+    result = engine.publish_moments_local("pc-wechat-default", "朋友圈正文")
+
+    assert result == {"ok": True, "locked": True}
+    assert captured == {
+        "account_id": "pc-wechat-default",
+        "operation": "发布朋友圈",
+        "retry_on_failure": False,
+    }
+
+
 def test_native_wechat_lists_reach_rows_after_the_first_hundred(tmp_path, monkeypatch):
     account_id = "pagination-account"
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
@@ -859,6 +905,101 @@ async def test_auto_reply_match_immediately_queues_group_with_primary_contact(mo
     assert calls[0][2]["dedup_key"].startswith("auto-invite-")
     assert result["queued"] is True
     assert result["task_id"] == "group-task"
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_group_invite_rejects_customer_as_primary_contact(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "create_group_task",
+        lambda *_args, **_kwargs: pytest.fail("invalid group members must not create a task"),
+    )
+
+    result = await engine._queue_auto_reply_group_invite(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "张老师",
+        {"auto_reply_inbound_id": "message-a", "content": "行"},
+        {"should_invite_group": True},
+        {
+            "group_invite_primary_contact": "张老师",
+            "group_invite_primary_contact_name": "张老师",
+        },
+    )
+
+    assert result == {"ok": True, "skipped": True, "reason": "primary_contact_is_customer"}
+
+
+@pytest.mark.asyncio
+async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(
+        engine,
+        "_load_auto_reply_memory_context",
+        lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
+    )
+    monkeypatch.setattr(
+        engine,
+        "sync_local_sessions",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "peer_id": "张老师",
+                    "display_name": "张老师",
+                    "last_content": "行",
+                    "unread_count": 1,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: {"peer_id": "张老师", "chat_info": {"chat_type": "direct"}},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_auto_reply_candidate",
+        lambda *_args, **_kwargs: {
+            "peer_id": "张老师",
+            "direction": "in",
+            "content": "行",
+            "auto_reply_inbound_id": "message-a",
+        },
+    )
+    monkeypatch.setattr(engine, "_recent_conversation_text", lambda *_args, **_kwargs: "我: 我来建个群\n对方: 行")
+
+    async def reply(**_kwargs):
+        return {
+            "should_reply": True,
+            "reply": "好的，我这就建群",
+            "category": "cooperation",
+            "should_invite_group": True,
+            "matched_group_keywords": ["明确同意拉群"],
+            "group_invite_reason": "客户已同意",
+        }
+
+    async def queue(*_args, **_kwargs):
+        return {"ok": True, "skipped": True, "reason": "primary_contact_is_customer"}
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm", reply)
+    monkeypatch.setattr(engine, "_queue_auto_reply_group_invite", queue)
+    monkeypatch.setattr(
+        engine,
+        "_send_text_local_slow",
+        lambda *_args, **_kwargs: pytest.fail("a failed group action must not send a promise to the customer"),
+    )
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["replied"] == 0
+    assert result["skipped"] == 1
+    assert result["items"][0]["status"] == "group_invite_not_executable"
+    assert result["items"][0]["reply_suppressed"] is True
+    assert "不能与当前客户相同" in result["items"][0]["error"]
 
 
 @pytest.mark.asyncio

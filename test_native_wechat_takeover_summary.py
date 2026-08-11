@@ -82,10 +82,115 @@ def test_auto_reply_llm_uses_memory_and_replies_to_valid_text(monkeypatch):
 
     prompt = captured["json"]["messages"][1]["content"]
     assert "不得虚构固定价格" in prompt
-    assert result["should_reply"] is True
+    assert result["should_reply"] is False
     assert result["category"] == "price"
     assert result["intent_level"] == "high"
-    assert result["reply"].startswith("企业版价格")
+    assert result["reply"] == ""
+
+
+def test_auto_reply_llm_never_falls_back_to_sending_control_json(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        content = b"json"
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"should_reply":false,"category":"casual","intent_level":"none",'
+                                '"topic":"拉群确认","conversation_summary":"对方已确认拉群",'
+                                '"reply":"","should_invite_group":false,"matched_group_keywords":[],'
+                                '"group_invite_reason":"无需再次回复"}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, json, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr(engine.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(
+        engine._call_auto_reply_llm(
+            auth_context={"token": "token", "installation_id": "iid"},
+            user_id=31,
+            peer_name="客户A",
+            latest_message="行",
+            recent_context="对方: 需要拉群\n我: 好的，我来建群\n对方: 行",
+            group_invite_rule_context="客户明确同意进入服务群时拉群。",
+        )
+    )
+
+    assert result["should_reply"] is False
+    assert result["reply"] == ""
+    assert engine._looks_like_auto_reply_control_payload(result["raw"]) is True
+
+
+def test_affirmative_reply_after_group_offer_forces_group_action(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        content = b"json"
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"should_reply":false,"category":"casual","intent_level":"none",'
+                                '"reply":"","should_invite_group":false,"matched_group_keywords":[],'
+                                '"group_invite_reason":"没有新的业务诉求"}'
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, json, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr(engine.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(
+        engine._call_auto_reply_llm(
+            auth_context={"token": "token", "installation_id": "iid"},
+            user_id=31,
+            peer_name="客户A",
+            latest_message="行",
+            recent_context="我: 那我建个群，把相关同事拉进来\n对方: 行",
+            group_invite_rule_context="客户明确同意进入服务群时拉群。",
+        )
+    )
+
+    assert result["should_reply"] is False
+    assert result["should_invite_group"] is True
+    assert "明确同意拉群" in result["matched_group_keywords"]
 
 
 def test_auto_reply_llm_returns_semantic_group_invite_decision(monkeypatch):

@@ -1726,6 +1726,65 @@ def _json_from_text(text: str) -> Dict[str, Any]:
     return {}
 
 
+_AUTO_REPLY_CONTROL_KEYS = frozenset(
+    {
+        "should_reply",
+        "category",
+        "intent_level",
+        "topic",
+        "conversation_summary",
+        "should_invite_group",
+        "matched_group_keywords",
+        "group_invite_reason",
+    }
+)
+
+
+def _bool_value(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _looks_like_auto_reply_control_payload(value: Any) -> bool:
+    parsed = _json_from_text(str(value or ""))
+    return bool(parsed and _AUTO_REPLY_CONTROL_KEYS.intersection(parsed))
+
+
+def _is_affirmative_group_confirmation(latest_message: str, recent_context: str) -> bool:
+    latest = re.sub(r"[\s\[\]【】()（）,.，。!！?？~～]+", "", str(latest_message or "")).lower()
+    if not latest or len(latest) > 16:
+        return False
+    if not re.fullmatch(r"(?:行|可以|可以的|好|好的|好呀|好啊|没问题|同意|拉吧|建吧|安排|ok|okay|yes)", latest):
+        return False
+    return bool(
+        re.search(
+            r"(?:^|\n)我[:：][^\n]{0,240}(?:拉.{0,6}群|建.{0,6}群|进群|群里|服务群|对接群)",
+            str(recent_context or ""),
+            flags=re.I,
+        )
+    )
+
+
+def _session_preview_matches_inbound(session: Dict[str, Any], inbound: Dict[str, Any]) -> bool:
+    """No-badge scans must prove the changed preview is the inbound being handled."""
+    try:
+        if int(session.get("unread_count") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    preview = re.sub(r"\s+", "", str(session.get("last_content") or "")).strip()
+    content = re.sub(r"\s+", "", str(inbound.get("content") or "")).strip()
+    if not preview or not content:
+        return False
+    return preview in content or content in preview
+
+
 def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
     return {
         "account_id": account_id,
@@ -2296,23 +2355,30 @@ async def _call_auto_reply_llm(
     except Exception:
         content = json.dumps(data, ensure_ascii=False)
     parsed = _json_from_text(content)
-    reply = str(parsed.get("reply") or parsed.get("content") or "").strip()
-    if not reply and content.strip():
+    is_structured = bool(parsed)
+    reply = str(parsed.get("reply") or parsed.get("content") or "").strip() if is_structured else ""
+    should_reply = _bool_value(parsed.get("should_reply"), default=bool(reply)) if is_structured else True
+    if not is_structured and content.strip():
         reply = re.sub(r"^```.*?```$", "", content.strip(), flags=re.S).strip()
     max_chars = int(DEFAULT_STRATEGY["auto_reply_max_text_chars"])
     reply = reply[:max_chars].strip()
-    if not reply:
+    if _looks_like_auto_reply_control_payload(reply):
+        raise RuntimeError("AI返回了内部判断数据，已阻止发送")
+    if should_reply and not reply:
         raise RuntimeError("AI未生成可发送的回复")
+    if not should_reply:
+        reply = ""
     category = str(parsed.get("category") or "other").strip().lower()
     if category not in {"casual", "product", "price", "service", "cooperation", "complaint", "other"}:
         category = "other"
     intent_level = str(parsed.get("intent_level") or "none").strip().lower()
     if intent_level not in {"high", "medium", "low", "none"}:
         intent_level = "none"
-    raw_should_invite = parsed.get("should_invite_group")
-    should_invite_group = raw_should_invite is True or str(raw_should_invite or "").strip().lower() in {"1", "true", "yes"}
+    should_invite_group = _bool_value(parsed.get("should_invite_group"))
     if not has_invite_rule:
         should_invite_group = False
+    elif _is_affirmative_group_confirmation(latest_message, recent_context):
+        should_invite_group = True
     matched_raw = parsed.get("matched_group_keywords")
     if isinstance(matched_raw, str):
         matched_values = re.split(r"[,，;；\n]+", matched_raw)
@@ -2323,8 +2389,13 @@ async def _call_auto_reply_llm(
     matched_group_keywords = list(
         dict.fromkeys(str(item or "").strip() for item in matched_values if str(item or "").strip())
     )[:20]
+    group_invite_reason = str(parsed.get("group_invite_reason") or "").strip()[:300]
+    if should_invite_group and _is_affirmative_group_confirmation(latest_message, recent_context):
+        if "明确同意拉群" not in matched_group_keywords:
+            matched_group_keywords.append("明确同意拉群")
+        group_invite_reason = group_invite_reason or "客户对我方此前提出的建群或拉群邀请作出明确肯定答复"
     return {
-        "should_reply": True,
+        "should_reply": should_reply,
         "category": category,
         "intent_level": intent_level,
         "topic": str(parsed.get("topic") or "").strip()[:80],
@@ -2332,7 +2403,7 @@ async def _call_auto_reply_llm(
         "reply": reply,
         "should_invite_group": should_invite_group,
         "matched_group_keywords": matched_group_keywords,
-        "group_invite_reason": str(parsed.get("group_invite_reason") or "").strip()[:300],
+        "group_invite_reason": group_invite_reason,
         "raw": content[:2000],
     }
 
@@ -2406,6 +2477,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "llm_skipped": "未回复",
         "no_unreplied_message": "无待回复消息",
         "duplicate": "已处理过",
+        "group_invite_not_executable": "拉群配置需调整",
         "failed": "回复失败",
         "skipped_group": "群聊已跳过",
         "skipped": "已跳过",
@@ -2659,6 +2731,16 @@ async def run_auto_reply_once(
                     item_result.update({"status": "no_unreplied_message"})
                     result["items"].append(item_result)
                     continue
+                if not _session_preview_matches_inbound(session, inbound):
+                    result["skipped"] += 1
+                    item_result.update(
+                        {
+                            "status": "no_unreplied_message",
+                            "reason": "latest_session_preview_is_not_inbound",
+                        }
+                    )
+                    result["items"].append(item_result)
+                    continue
                 current_inbound = inbound
                 item_result.update(
                     {
@@ -2694,6 +2776,60 @@ async def run_auto_reply_once(
                         "group_invite_reason": llm_reply.get("group_invite_reason") or "",
                     }
                 )
+                group_invite: Optional[Dict[str, Any]] = None
+                if llm_reply.get("should_invite_group"):
+                    try:
+                        group_invite = await _queue_auto_reply_group_invite(
+                            account_id,
+                            actual_peer,
+                            inbound,
+                            llm_reply,
+                            cfg,
+                        )
+                        item_result["group_invite"] = group_invite
+                        item_result["group_invite_dedup_key"] = str(group_invite.get("dedup_key") or "")
+                        if group_invite.get("queued"):
+                            result["group_invite_queued"] += 1
+                        elif group_invite.get("deduped"):
+                            result["group_invite_deduped"] += 1
+                        elif group_invite.get("skipped"):
+                            result["group_invite_skipped"] += 1
+                    except Exception as group_exc:
+                        result["group_invite_failed"] += 1
+                        group_invite = {"ok": False, "error": str(group_exc)[:500]}
+                        item_result["group_invite"] = group_invite
+
+                invite_not_executable = bool(
+                    llm_reply.get("should_invite_group")
+                    and group_invite
+                    and not (group_invite.get("queued") or group_invite.get("deduped"))
+                )
+                if invite_not_executable:
+                    invite_reason = str(group_invite.get("reason") or group_invite.get("error") or "unknown")
+                    invite_error_labels = {
+                        "missing_primary_contact": "未设置拉群主联系人",
+                        "primary_contact_is_customer": "拉群主联系人不能与当前客户相同",
+                    }
+                    invite_error = invite_error_labels.get(invite_reason, f"拉群任务未能创建：{invite_reason}")
+                    _record_auto_reply_history(
+                        account_id,
+                        actual_peer,
+                        inbound,
+                        reply="",
+                        category=str(llm_reply.get("category") or ""),
+                        status="skipped",
+                        error=invite_error,
+                    )
+                    result["skipped"] += 1
+                    item_result.update(
+                        {
+                            "status": "group_invite_not_executable",
+                            "reply_suppressed": True,
+                            "error": invite_error,
+                        }
+                    )
+                    result["items"].append(item_result)
+                    continue
                 if not llm_reply.get("should_reply"):
                     _record_auto_reply_history(
                         account_id,
@@ -2708,6 +2844,8 @@ async def run_auto_reply_once(
                     result["items"].append(item_result)
                     continue
                 reply_text = str(llm_reply.get("reply") or "").strip()
+                if _looks_like_auto_reply_control_payload(reply_text):
+                    raise RuntimeError("内部判断数据禁止作为微信回复发送")
                 current_reply = reply_text
                 current_category = str(llm_reply.get("category") or "")
                 if not _record_auto_reply_history(
@@ -2737,26 +2875,6 @@ async def run_auto_reply_once(
                     category=current_category,
                     status="sent",
                 )
-                if llm_reply.get("should_invite_group"):
-                    try:
-                        group_invite = await _queue_auto_reply_group_invite(
-                            account_id,
-                            actual_peer,
-                            inbound,
-                            llm_reply,
-                            cfg,
-                        )
-                        item_result["group_invite"] = group_invite
-                        item_result["group_invite_dedup_key"] = str(group_invite.get("dedup_key") or "")
-                        if group_invite.get("queued"):
-                            result["group_invite_queued"] += 1
-                        elif group_invite.get("deduped"):
-                            result["group_invite_deduped"] += 1
-                        elif group_invite.get("skipped"):
-                            result["group_invite_skipped"] += 1
-                    except Exception as group_exc:
-                        result["group_invite_failed"] += 1
-                        item_result["group_invite"] = {"ok": False, "error": str(group_exc)[:500]}
                 result["processed"] += 1
                 result["replied"] += 1
                 item_result.update({"status": "sent", "reply_preview": reply_text[:240]})
@@ -8466,6 +8584,8 @@ def _send_text_local_slow_once(
         raise RuntimeError("missing recipient")
     if not text:
         raise RuntimeError("missing text")
+    if _looks_like_auto_reply_control_payload(text):
+        raise RuntimeError("内部判断数据禁止作为微信回复发送")
     _enforce_local_send_rate(account_id)
     wx = _get_wxauto4_client(account_id)
     hwnd = int(item.get("hwnd") or 0)
@@ -8633,7 +8753,7 @@ def _click_moments_publish_entry(hwnd: int, steps: List[Dict[str, Any]]) -> int:
     deadline = time.time() + 8.0
     while time.time() < deadline:
         root = _uia_foreground_or_main_root(publish_hwnd)
-        if _moments_publish_dialog_ready(root) or _find_moments_publish_text_edit(root) is not None:
+        if _moments_publish_dialog_ready(root):
             steps.append({"step": "moments_publish_dialog_ready", "ok": True})
             return publish_hwnd
         time.sleep(0.25)
@@ -8671,6 +8791,8 @@ def _find_moments_publish_text_edit(root: Any) -> Optional[Any]:
 
 def _focus_moments_publish_text(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     root = _uia_foreground_or_main_root(hwnd)
+    if not _moments_publish_dialog_ready(root):
+        raise RuntimeError("朋友圈发布窗口已失去焦点，已阻止正文写入其他聊天窗口")
     edit = _find_moments_publish_text_edit(root)
     if edit is not None:
         try:
@@ -8760,6 +8882,8 @@ def _fill_moments_publish_text(hwnd: int, text: str, steps: List[Dict[str, Any]]
     last_error = ""
     for attempt in range(1, 4):
         root = _uia_foreground_or_main_root(hwnd)
+        if not _moments_publish_dialog_ready(root):
+            raise RuntimeError("朋友圈发布窗口已失去焦点，已阻止正文写入其他聊天窗口")
         edit = _find_moments_publish_text_edit(root)
         if edit is None:
             last_error = "未找到朋友圈发布输入框"
@@ -9012,7 +9136,7 @@ def _submit_moments_publish(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     raise RuntimeError(f"朋友圈发表后窗口仍未关闭，请检查是否未真正提交：{last_error or 'unknown'}")
 
 
-def publish_moments_local(
+def _publish_moments_local_once(
     account_id: str,
     content: str = "",
     *,
@@ -9061,6 +9185,28 @@ def publish_moments_local(
         "steps": steps,
         "driver": "pc_wechat_moments_uia",
     }
+
+
+def publish_moments_local(
+    account_id: str,
+    content: str = "",
+    *,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    media_type: str = "image_text",
+    visibility: str = "public",
+) -> Dict[str, Any]:
+    return _run_local_driver_operation(
+        account_id,
+        "发布朋友圈",
+        lambda: _publish_moments_local_once(
+            account_id,
+            content,
+            attachments=attachments,
+            media_type=media_type,
+            visibility=visibility,
+        ),
+        retry_on_failure=False,
+    )
 
 
 def _group_picker_root(hwnd: int) -> Any:
