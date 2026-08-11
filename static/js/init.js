@@ -276,6 +276,122 @@ var USE_INDEPENDENT_AUTH = true;
   else bind();
 })();
 
+(function initClientUpdateReminder() {
+  if (window.__LOBSTER_CLIENT_UPDATE_REMINDER__) return;
+  window.__LOBSTER_CLIENT_UPDATE_REMINDER__ = true;
+
+  var CHECK_INTERVAL_MS = 60 * 60 * 1000;
+  var RETRY_INTERVAL_MS = 5 * 60 * 1000;
+  var timer = null;
+  var checking = false;
+
+  function updateBase() {
+    var local = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+    if (local) return local;
+    try { return window.location.origin || ''; } catch (e) { return ''; }
+  }
+
+  function versionText(status) {
+    var version = String(status && status.remote_version || '').trim().replace(/^v/i, '');
+    var build = Number(status && status.remote_build);
+    if (version) return 'v' + version;
+    if (isFinite(build)) return 'build ' + build;
+    return '新版本';
+  }
+
+  function render(status) {
+    var available = !!(status && status.ok !== false && status.available);
+    var dot = document.getElementById('clientUpdateHeaderDot');
+    var action = document.getElementById('clientUpdateAction');
+    var title = document.getElementById('clientUpdateTitle');
+    var hint = document.getElementById('clientUpdateHint');
+    if (dot) dot.hidden = !available;
+    if (action) action.hidden = !available;
+    if (!available) return;
+    if (title) title.textContent = '发现新版本 ' + versionText(status);
+    if (hint) hint.textContent = status.restart_required === false ? '点击立即更新' : '点击更新并自动重启';
+    if (action) action.__clientUpdateStatus = status;
+  }
+
+  function schedule(delay) {
+    if (timer != null) window.clearTimeout(timer);
+    timer = window.setTimeout(check, Math.max(1000, Number(delay) || CHECK_INTERVAL_MS));
+  }
+
+  function requestStatus(url) {
+    return new Promise(function(resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', url, true);
+      xhr.timeout = 55 * 1000;
+      xhr.setRequestHeader('Cache-Control', 'no-cache');
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error('HTTP ' + xhr.status));
+          return;
+        }
+        try { resolve(JSON.parse(xhr.responseText || '{}')); }
+        catch (error) { reject(error); }
+      };
+      xhr.onerror = function() { reject(new Error('network error')); };
+      xhr.ontimeout = function() { reject(new Error('timeout')); };
+      xhr.send();
+    });
+  }
+
+  function check() {
+    if (checking) return;
+    if (document.hidden) {
+      schedule(60 * 1000);
+      return;
+    }
+    var base = updateBase();
+    if (!base) return;
+    checking = true;
+    requestStatus(base + '/api/client-update/status')
+      .then(function(status) {
+        render(status || {});
+        schedule(status && status.ok === false ? RETRY_INTERVAL_MS : CHECK_INTERVAL_MS);
+      })
+      .catch(function() { schedule(RETRY_INTERVAL_MS); })
+      .finally(function() { checking = false; });
+  }
+
+  function bind() {
+    var action = document.getElementById('clientUpdateAction');
+    if (action) {
+      action.addEventListener('click', function(event) {
+        event.stopPropagation();
+        if (action.disabled) return;
+        var status = action.__clientUpdateStatus || {};
+        var label = versionText(status);
+        if (!window.confirm('更新到 ' + label + '？\n\n更新时客户端会自动关闭，完成后自动重新打开。')) return;
+        if (!(window.pywebview && window.pywebview.api && window.pywebview.api.install_client_update)) {
+          window.alert('当前通过浏览器打开，无法自动重启。请关闭后重新打开桌面客户端，启动时会自动更新。');
+          return;
+        }
+        action.disabled = true;
+        var title = document.getElementById('clientUpdateTitle');
+        var hint = document.getElementById('clientUpdateHint');
+        if (title) title.textContent = '正在准备更新';
+        if (hint) hint.textContent = '客户端即将关闭并自动重启';
+        Promise.resolve(window.pywebview.api.install_client_update()).then(function(result) {
+          if (result && result.ok) return;
+          throw new Error(result && result.error ? result.error : '更新程序启动失败');
+        }).catch(function(error) {
+          action.disabled = false;
+          render(status);
+          window.alert(error && error.message ? error.message : '更新程序启动失败，请重启客户端重试。');
+        });
+      });
+    }
+    window.setTimeout(check, 1800);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
+
 /**
  * 认证中心注册接口在「在线版 + 安装槽位」下强制要求合法 X-Installation-Id。
  * 若 app.js 未加载、脚本顺序异常或 localStorage 曾异常，避免发空请求头导致「请使用最新客户端」。
@@ -604,23 +720,30 @@ function startOwnWechatLogin() {
 
 /** OAuth / 登录后同步到本机后端：写入 openclaw/.channel_fallback.json，供本机 OpenClaw（127.0.0.1:8000）读。
  * 须打 LOCAL_API_BASE，不能打 API_BASE：本机页默认 API_BASE 为公网认证域名，写文件会落在远端，本机永远 401。 */
-function persistOpenclawChannelFallback(tok) {
+function persistOpenclawChannelFallback(tok, claimSlot) {
   var t = (tok != null && tok !== '') ? String(tok) : (typeof token !== 'undefined' ? token : '');
   var localBase = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
   if (!t || !localBase) {
     if (typeof console !== 'undefined' && console.debug) {
       console.debug('[openclaw-channel-fallback] 跳过：无 token 或未配置 LOCAL_API_BASE（本机须运行 backend 且 localhost 打开页面或设 lobster_local_api_base）');
     }
-    return;
+    return Promise.resolve({ skipped: true });
   }
-  fetch(localBase + '/auth/persist-openclaw-channel-fallback', {
+  var claimQuery = claimSlot ? '?claim_slot=1' : '';
+  return fetch(localBase + '/auth/persist-openclaw-channel-fallback' + claimQuery, {
     method: 'POST',
     headers: {
       'Authorization': 'Bearer ' + t,
       'X-Installation-Id': typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '',
       'X-Lobster-Brand': typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo'
     }
-  }).catch(function() {});
+  }).then(function(r) {
+    if (!r.ok) throw new Error('slot sync HTTP ' + r.status);
+    return r.json().catch(function() { return { ok: true }; });
+  }).catch(function(e) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('[openclaw-channel-fallback]', e);
+    return { ok: false, error: String((e && e.message) || e || '') };
+  });
 }
 
 (function applyTokenFromUrl() {
@@ -633,12 +756,14 @@ function persistOpenclawChannelFallback(tok) {
   token = t;
   if (typeof setStoredAuthToken === 'function') setStoredAuthToken(t);
   else localStorage.setItem('token', t);
-  persistOpenclawChannelFallback(t);
+  var persistPromise = persistOpenclawChannelFallback(t, true);
   if (window.opener) {
-    try { window.opener.postMessage({ type: 'auth_login_ok', token: t, brand: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' }, '*'); } catch (e) {}
-    window.close();
+    Promise.resolve(persistPromise).finally(function() {
+      try { window.opener.postMessage({ type: 'auth_login_ok', token: t, brand: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' }, '*'); } catch (e) {}
+      window.close();
+    });
   } else {
-    setTimeout(function() { loadDashboard(); }, 0);
+    Promise.resolve(persistPromise).finally(function() { loadDashboard(); });
   }
 })();
 
@@ -648,8 +773,7 @@ window.addEventListener('message', function(e) {
     token = e.data.token;
     if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
     else localStorage.setItem('token', token);
-    persistOpenclawChannelFallback(token);
-    loadDashboard();
+    Promise.resolve(persistOpenclawChannelFallback(token, true)).finally(function() { loadDashboard(); });
   }
 });
 
@@ -706,7 +830,7 @@ if (loginForm) {
           token = x.data.access_token;
           if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
           else localStorage.setItem('token', token);
-          if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
+          if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token, true);
           showMsg(msgEl, '登录成功', false);
           loadDashboard();
         } else {
@@ -833,7 +957,7 @@ if (registerForm) {
             token = x.data.access_token;
             if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
             else localStorage.setItem('token', token);
-            if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
+            if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token, true);
             showMsg(msgEl, '登录成功', false);
             setRegisterSmsButtonCooldown(0);
             loadDashboard();

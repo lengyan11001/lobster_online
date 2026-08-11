@@ -695,13 +695,22 @@ async def persist_openclaw_channel_fallback_endpoint(
     raw = auth.split(" ", 1)[-1].strip()
     if not raw:
         raise HTTPException(status_code=401, detail="token 为空")
+    claim_slot = str(request.query_params.get("claim_slot") or "").strip().lower() in {"1", "true", "yes"}
+    slot_claim = None
+    if claim_slot and _auth_server_base_or_none():
+        slot_claim = await _proxy_auth_json(
+            "/auth/claim-installation-slot",
+            {},
+            request,
+            include_auth=True,
+        )
     persist_channel_fallback_for_login(
         jwt_token=raw,
         request=request,
         user_id=current_user.id,
         db=db,
     )
-    return {"ok": True}
+    return {"ok": True, "slot_claim": slot_claim}
 
 
 class WeixinOpenclawPeerBody(BaseModel):

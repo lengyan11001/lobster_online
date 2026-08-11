@@ -202,6 +202,9 @@ APP_ICON_PATH: Path | None = None
 LOADING_MARK_PATH: Path | None = None
 _ACTIVE_DESKTOP_BRANDING: dict[str, object] = {}
 _STARTUP_STATUS_LOCK = threading.Lock()
+_CLIENT_UPDATE_RESTART_LOCK = threading.Lock()
+_CLIENT_UPDATE_RESTART_SCHEDULED = False
+_ALLOW_WINDOW_CLOSE = False
 _STARTUP_STATUS: dict[str, object] = {
     "stage": "prepare",
     "message": "正在准备启动...",
@@ -1119,6 +1122,68 @@ class DesktopApi:
     def startup_status(self) -> dict:
         return get_startup_status_snapshot()
 
+    def install_client_update(self) -> dict:
+        """Exit cleanly, let a detached helper apply OTA, then relaunch."""
+        global _ALLOW_WINDOW_CLOSE, _CLIENT_UPDATE_RESTART_SCHEDULED
+
+        helper = ROOT / "scripts" / "apply_client_update_and_restart.py"
+        py = bundled_python()
+        if not helper.is_file() or not py:
+            return {"ok": False, "error": "当前客户端缺少更新组件，请关闭后重新打开客户端更新"}
+
+        with _CLIENT_UPDATE_RESTART_LOCK:
+            if _CLIENT_UPDATE_RESTART_SCHEDULED:
+                return {"ok": True, "scheduled": True}
+            launcher = next(
+                (
+                    path
+                    for path in (
+                        ROOT / "必火智能AI.exe",
+                        ROOT / "必火AI员工.exe",
+                        ROOT / "lobster.exe",
+                    )
+                    if path.is_file()
+                ),
+                ROOT / "必火智能AI.exe",
+            )
+            try:
+                subprocess.Popen(
+                    [
+                        py,
+                        str(helper),
+                        "--parent-pid",
+                        str(os.getpid()),
+                        "--launcher",
+                        str(launcher),
+                    ],
+                    cwd=str(ROOT),
+                    env=build_env(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    creationflags=creation_flags(),
+                )
+            except Exception as exc:
+                log(f"schedule client update restart failed: {exc}")
+                return {"ok": False, "error": f"无法启动更新程序：{exc}"}
+            _CLIENT_UPDATE_RESTART_SCHEDULED = True
+            _ALLOW_WINDOW_CLOSE = True
+            log("client update restart scheduled")
+
+        def close_active_window() -> None:
+            try:
+                import webview  # type: ignore
+
+                window = webview.active_window()
+                if window is not None:
+                    window.destroy()
+            except Exception as exc:
+                log(f"close window for client update failed: {exc}")
+
+        threading.Timer(0.35, close_active_window).start()
+        return {"ok": True, "scheduled": True, "restart_required": True}
+
     def save_asset_as(self, asset_id: str, suggested_name: str = "") -> dict:
         source = asset_file_for_id(asset_id)
         if not source:
@@ -1558,6 +1623,8 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         )
 
         def confirm_window_close() -> bool | None:
+            if _ALLOW_WINDOW_CLOSE:
+                return None
             return None if confirm_box(title, CONFIRM_CLOSE_BODY_TEMPLATE.format(title=title)) else False
 
         window.events.closing += confirm_window_close

@@ -735,6 +735,142 @@ async def test_takeover_session_waits_after_each_round_and_finishes_last_started
 
 
 @pytest.mark.asyncio
+async def test_takeover_session_stops_after_three_consecutive_driver_failures(monkeypatch):
+    attempts = []
+    sleeps = []
+
+    async def post_local(_path, _body, **_kwargs):
+        attempts.append(len(attempts) + 1)
+        raise RuntimeError("未识别到可用的微信窗口")
+
+    async def no_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel.asyncio, "sleep", no_sleep)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=None,
+        base="",
+        run_id="run",
+        rounds=120,
+        interval_seconds=15,
+        session_seconds=1800,
+    )
+
+    assert attempts == [1, 2, 3]
+    assert sleeps == [15.0, 15.0]
+    assert result["completed_rounds"] == 0
+    assert result["failed"] == 3
+    assert result["ok"] is False
+    assert result["stop_reason"] == "consecutive_driver_failures"
+    assert result["last_error"] == "未识别到可用的微信窗口"
+
+
+@pytest.mark.asyncio
+async def test_takeover_session_stops_before_next_scan_when_slot_owner_changes(monkeypatch):
+    event_statuses = iter([200, 409])
+    local_calls = []
+
+    async def post_event(*_args, **_kwargs):
+        return next(event_statuses)
+
+    async def post_local(*_args, **_kwargs):
+        local_calls.append(True)
+        return {"ok": True, "items": []}
+
+    monkeypatch.setattr(channel, "_post_task_event", post_event)
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=object(),
+        base="https://example.test",
+        run_id="run",
+        rounds=10,
+        interval_seconds=15,
+        session_seconds=1800,
+    )
+
+    assert local_calls == []
+    assert result["completed_rounds"] == 0
+    assert result["ok"] is False
+    assert result["stop_reason"] == "slot_ownership_changed"
+
+
+@pytest.mark.asyncio
+async def test_takeover_session_keeps_running_on_transient_event_failure(monkeypatch):
+    local_calls = []
+
+    async def post_event(*_args, **_kwargs):
+        return 500
+
+    async def post_local(*_args, **_kwargs):
+        local_calls.append(True)
+        return {"ok": True, "items": [], "summary_text": "checked"}
+
+    monkeypatch.setattr(channel, "_post_task_event", post_event)
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=object(),
+        base="https://example.test",
+        run_id="run",
+        rounds=1,
+        interval_seconds=15,
+        session_seconds=1800,
+    )
+
+    assert local_calls == [True]
+    assert result["completed_rounds"] == 1
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_client_workflow_reports_explicit_local_failure_to_cloud(monkeypatch):
+    completions = []
+
+    async def post_event(*_args, **_kwargs):
+        return None
+
+    async def run_action(*_args, **_kwargs):
+        return {
+            "ok": False,
+            "stop_reason": "consecutive_driver_failures",
+            "last_error": "未识别到可用的微信窗口",
+        }
+
+    async def complete(*_args, **kwargs):
+        completions.append(kwargs)
+
+    monkeypatch.setattr(channel, "_post_task_event", post_event)
+    monkeypatch.setattr(channel, "_run_client_workflow_action", run_action)
+    monkeypatch.setattr(channel, "_complete_task_run", complete)
+
+    await channel._run_client_workflow(
+        object(),
+        "https://example.test",
+        {},
+        {
+            "id": "run-id",
+            "payload": {
+                "action": "native_wechat_poll",
+                "params": {"account_id": "pc-wechat-default"},
+            },
+        },
+    )
+
+    assert len(completions) == 1
+    assert completions[0]["error"] == "未识别到可用的微信窗口"
+    assert completions[0]["result_payload"]["local_result"]["ok"] is False
+
+
+@pytest.mark.asyncio
 async def test_group_invite_waits_for_parent_then_creates_group(monkeypatch):
     parent_responses = iter(
         [

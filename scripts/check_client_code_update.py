@@ -1844,11 +1844,86 @@ def _sync_version_marker_locked() -> int:
     return 0
 
 
+def _check_only_locked() -> int:
+    """Check the manifest without downloading or mutating the client."""
+    env = _load_dotenv_simple(ROOT / ".env")
+    env.update(
+        {
+            k: v
+            for k, v in os.environ.items()
+            if k.startswith("CLIENT_CODE_") or k == "LOBSTER_DISABLE_CLIENT_CODE_UPDATE"
+        }
+    )
+    manifest_url = (env.get("CLIENT_CODE_MANIFEST_URL") or "").strip()
+    local_build = _local_build()
+    local_version = _local_semver()
+    local_sha = _local_bundle_sha256()
+
+    payload: dict[str, Any] = {
+        "ok": True,
+        "configured": bool(manifest_url),
+        "available": False,
+        "restart_required": False,
+        "local_build": local_build,
+        "local_version": local_version,
+        "remote_build": None,
+        "remote_version": "",
+        "reason": "",
+    }
+    if str(env.get("LOBSTER_DISABLE_CLIENT_CODE_UPDATE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        payload.update({"configured": False, "message": "本机已关闭自动更新"})
+        print("__LOBSTER_UPDATE_STATUS__=" + json.dumps(payload, ensure_ascii=False), flush=True)
+        return 0
+    if not manifest_url:
+        payload["message"] = "未配置客户端更新地址"
+        print("__LOBSTER_UPDATE_STATUS__=" + json.dumps(payload, ensure_ascii=False), flush=True)
+        return 0
+    if not manifest_url.lower().startswith(("https://", "http://")):
+        payload.update({"ok": False, "message": "客户端更新地址格式无效"})
+        print("__LOBSTER_UPDATE_STATUS__=" + json.dumps(payload, ensure_ascii=False), flush=True)
+        return 0
+
+    try:
+        manifest = _fetch_manifest_with_retry(manifest_url)
+        remote_build = int(manifest.get("build", 0))
+        remote_version = str(manifest.get("version") or "").strip()
+        remote_sha = str(manifest.get("sha256") or "").strip().lower()
+        reason = _update_reason(
+            local_build=local_build,
+            local_version=local_version,
+            local_bundle_sha256=local_sha,
+            remote_build=remote_build,
+            remote_version=remote_version,
+            remote_bundle_sha256=remote_sha,
+        )
+        payload.update(
+            {
+                "available": bool(reason),
+                "restart_required": bool(reason),
+                "remote_build": remote_build,
+                "remote_version": remote_version,
+                "reason": reason,
+            }
+        )
+    except Exception as exc:
+        payload.update({"ok": False, "message": f"检查更新失败：{exc}"})
+
+    print("__LOBSTER_UPDATE_STATUS__=" + json.dumps(payload, ensure_ascii=False), flush=True)
+    return 0
+
+
 def main() -> int:
     lock_file = _acquire_update_lock()
     if lock_file is None:
         return 0
     try:
+        if "--check-only" in sys.argv[1:]:
+            return _check_only_locked()
         if "--sync-version-marker" in sys.argv[1:]:
             return _sync_version_marker_locked()
         return _main_locked()

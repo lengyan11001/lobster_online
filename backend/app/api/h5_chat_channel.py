@@ -1035,15 +1035,17 @@ async def _post_cloud_event(
     message_id: str,
     event_type: str,
     payload: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> int:
     try:
-        await client.post(
+        response = await client.post(
             f"{base}/api/h5-chat/messages/{message_id}/event",
             json={"type": event_type, "payload": payload or {}},
             headers=headers,
         )
+        return int(response.status_code)
     except Exception as exc:
         logger.debug("[H5-CHAT] post event failed message_id=%s type=%s: %s", message_id, event_type, exc)
+        return 0
 
 
 async def _complete_cloud_message(
@@ -1071,15 +1073,24 @@ async def _post_task_event(
     run_id: str,
     event_type: str,
     payload: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> int:
     try:
-        await client.post(
+        response = await client.post(
             f"{base}/api/scheduled-tasks/runs/{run_id}/event",
             json={"type": event_type, "payload": payload or {}},
             headers=headers,
         )
+        return int(response.status_code)
     except Exception as exc:
         logger.debug("[SCHEDULED-TASK] post event failed run_id=%s type=%s: %s", run_id, event_type, exc)
+        return 0
+
+
+def _task_event_rejects_local_work(status_code: Any) -> bool:
+    try:
+        return int(status_code or 0) in {401, 403, 404, 409}
+    except (TypeError, ValueError):
+        return False
 
 
 async def _complete_task_run(
@@ -1824,6 +1835,16 @@ async def _run_client_command(
     if not payload:
         await _complete_cloud_message(cloud, base, headers, message_id, error="invalid client command")
         return
+    event_status = await _post_cloud_event(
+        cloud,
+        base,
+        headers,
+        message_id,
+        "thinking",
+        {"text": f"正在执行客户端命令：{action}"},
+    )
+    if _task_event_rejects_local_work(event_status):
+        return
     split_result_ready = False
     memory_result_ready = False
     try:
@@ -1972,7 +1993,16 @@ async def _run_direct_chat(
     if not message_id or not (clean_content or attachment_urls):
         return
 
-    await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "本地直连链路正在处理"})
+    event_status = await _post_cloud_event(
+        cloud,
+        base,
+        headers,
+        message_id,
+        "thinking",
+        {"text": "本地直连链路正在处理"},
+    )
+    if _task_event_rejects_local_work(event_status):
+        return
     payload = {
         "message": clean_content or "请根据上传图片继续处理。",
         "history": [],
@@ -2027,7 +2057,9 @@ async def _run_direct_chat(
                         final_error = str(ev.get("error") or "").strip()
                         merge_refs(_collect_scheduled_result_refs(final_reply))
                         break
-                    await _post_cloud_event(cloud, base, headers, message_id, et[:32], ev)
+                    event_status = await _post_cloud_event(cloud, base, headers, message_id, et[:32], ev)
+                    if _task_event_rejects_local_work(event_status):
+                        raise RuntimeError("message cancelled because this installation logged into another account")
         if final_error:
             await _complete_cloud_message(cloud, base, headers, message_id, error=final_error)
         else:
@@ -2132,7 +2164,16 @@ async def _run_scheduled_chat_message(
     content = _append_scheduled_asset_context(content, attachment_asset_ids)
     if not run_id or not content:
         return
-    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": "local-online claimed scheduled task"})
+    event_status = await _post_task_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        "thinking",
+        {"text": "local-online claimed scheduled task"},
+    )
+    if _task_event_rejects_local_work(event_status):
+        return
     try:
         if openclaw:
             asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
@@ -2200,7 +2241,9 @@ async def _run_scheduled_chat_message(
                         final_reply = str(ev.get("reply") or "").strip()
                         final_error = str(ev.get("error") or "").strip()
                         break
-                    await _post_task_event(cloud, base, headers, run_id, et[:32], ev)
+                    event_status = await _post_task_event(cloud, base, headers, run_id, et[:32], ev)
+                    if _task_event_rejects_local_work(event_status):
+                        raise RuntimeError("task cancelled because this installation logged into another account")
         if final_error:
             await _complete_task_run(cloud, base, headers, run_id, error=final_error)
         else:
@@ -7416,8 +7459,11 @@ async def _run_native_wechat_takeover_session(
         "started_at": started_at,
     }
     last_config: Dict[str, Any] = {}
+    consecutive_driver_failures = 0
+    max_consecutive_driver_failures = 3
+    stop_reason = ""
     if cloud is not None and base and run_id:
-        await _post_task_event(
+        event_status = await _post_task_event(
             cloud,
             base,
             headers,
@@ -7425,7 +7471,11 @@ async def _run_native_wechat_takeover_session(
             "running",
             {"text": "个微接管启动，正在检查新好友申请（本次仅检查一次）", "stage": "friend_requests"},
         )
+        if _task_event_rejects_local_work(event_status):
+            stop_reason = "slot_ownership_changed"
     for index in range(round_count):
+        if stop_reason:
+            break
         if index and interval:
             remaining = deadline_monotonic - _takeover_monotonic()
             if remaining <= 0:
@@ -7435,7 +7485,7 @@ async def _run_native_wechat_takeover_session(
             break
         round_number = index + 1
         if cloud is not None and base and run_id:
-            await _post_task_event(
+            event_status = await _post_task_event(
                 cloud,
                 base,
                 headers,
@@ -7443,6 +7493,9 @@ async def _run_native_wechat_takeover_session(
                 "running",
                 {"text": f"个微私信接管第 {round_number}/{round_count} 轮巡检", "round": round_number, "round_count": round_count},
             )
+            if _task_event_rejects_local_work(event_status):
+                stop_reason = "slot_ownership_changed"
+                break
         try:
             result = await _post_local_api_json(
                 "/api/native-wechat/auto-reply/run-once",
@@ -7454,6 +7507,7 @@ async def _run_native_wechat_takeover_session(
                 headers=headers,
                 timeout_seconds=1800.0,
             )
+            consecutive_driver_failures = 0
             last_config = result.get("config") if isinstance(result.get("config"), dict) else last_config
             items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
             output["completed_rounds"] += 1
@@ -7483,14 +7537,17 @@ async def _run_native_wechat_takeover_session(
                 }
             )
         except Exception as exc:
+            consecutive_driver_failures += 1
             output["failed"] += 1
             output["rounds"].append({"round": round_number, "failed": 1, "error": str(exc)[:500]})
+            output["last_error"] = str(exc)[:500]
+            if consecutive_driver_failures >= max_consecutive_driver_failures:
+                stop_reason = "consecutive_driver_failures"
+                break
     output["finished_at"] = datetime.utcnow().isoformat()
     output["duration_seconds"] = round(max(0.0, _takeover_monotonic() - started_monotonic), 2)
-    output["stop_reason"] = (
-        "session_deadline"
-        if _takeover_monotonic() >= deadline_monotonic
-        else "round_limit"
+    output["stop_reason"] = stop_reason or (
+        "session_deadline" if _takeover_monotonic() >= deadline_monotonic else "round_limit"
     )
     output["config"] = last_config
     output["group_invite_candidates"] = len(
@@ -7500,7 +7557,7 @@ async def _run_native_wechat_takeover_session(
             if item.get("should_invite_group") and str(item.get("peer_id") or "").strip()
         }
     )
-    output["ok"] = output["completed_rounds"] > 0
+    output["ok"] = output["completed_rounds"] > 0 and not stop_reason
     output["summary_text"] = (
         f"个微私信接管已持续巡检 {output['completed_rounds']}/{round_count} 轮，"
         f"检查新好友申请 {output['friend_requests_checked']} 条，已同意 {output['friend_requests_accepted']} 条，"
@@ -8085,6 +8142,25 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
     return _compact_result_text(result)
 
 
+def _client_workflow_failure_reason(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    status = str(result.get("status") or result.get("state") or "").strip().lower()
+    explicitly_failed = result.get("ok") is False or result.get("success") is False
+    if not explicitly_failed and status not in {"failed", "failure", "error", "timeout", "cancelled", "canceled"}:
+        return ""
+    reason = (
+        result.get("error_message")
+        or result.get("error")
+        or result.get("detail")
+        or result.get("last_error")
+        or result.get("message")
+        or result.get("summary_text")
+        or "客户端工作流执行失败"
+    )
+    return _workflow_text(reason, 500) or "客户端工作流执行失败"
+
+
 async def _run_client_workflow(
     cloud: httpx.AsyncClient,
     base: str,
@@ -8102,7 +8178,16 @@ async def _run_client_workflow(
         params["schedule_config"] = payload.get("schedule_config")
     if not run_id or not action:
         return
-    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行客户端工作流：{action}"})
+    event_status = await _post_task_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        "thinking",
+        {"text": f"正在执行客户端工作流：{action}"},
+    )
+    if _task_event_rejects_local_work(event_status):
+        return
     try:
         result = await _run_client_workflow_action(
             action,
@@ -8113,18 +8198,21 @@ async def _run_client_workflow(
             base=base,
             current_item=item,
         )
+        result_payload = {
+            "task_kind": "client_workflow",
+            "action": action,
+            "params": params,
+            "local_result": result,
+        }
+        failure_reason = _client_workflow_failure_reason(result)
         await _complete_task_run(
             cloud,
             base,
             headers,
             run_id,
             result_text=_client_workflow_result_text(action, result),
-            result_payload={
-                "task_kind": "client_workflow",
-                "action": action,
-                "params": params,
-                "local_result": result,
-            },
+            result_payload=result_payload,
+            error=failure_reason,
         )
     except Exception as exc:
         logger.exception("[SCHEDULED-TASK] client workflow failed run_id=%s action=%s", run_id, action)

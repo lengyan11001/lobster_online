@@ -7,6 +7,12 @@ from scripts import pack_client_code_ota as packer
 from scripts import pack_code_only_zip, pack_full_project_zip, pack_slim_zip
 
 
+def _read_update_status_output(output: str) -> dict:
+    prefix = "__LOBSTER_UPDATE_STATUS__="
+    line = next(row for row in output.splitlines() if row.startswith(prefix))
+    return json.loads(line[len(prefix) :])
+
+
 def test_default_ota_paths_do_not_replace_runtime_env():
     assert ".env" not in updater.DEFAULT_PATHS
     assert ".env" not in packer.OTA_PATHS
@@ -83,7 +89,6 @@ def test_packaging_records_bundle_identity_for_same_build_update_check(tmp_path)
         build=176,
         bundle_sha256=digest,
     )
-
     for rel in packer.VERSION_FILE_RELS:
         saved = json.loads((tmp_path / rel).read_text(encoding="utf-8"))
         assert saved["bundle_sha256"] == digest
@@ -98,6 +103,74 @@ def test_packaging_records_bundle_identity_for_same_build_update_check(tmp_path)
         )
         == ""
     )
+
+
+def test_check_only_reports_new_build_without_applying_update(monkeypatch, capsys):
+    monkeypatch.setattr(
+        updater,
+        "_load_dotenv_simple",
+        lambda _path: {"CLIENT_CODE_MANIFEST_URL": "https://example.test/manifest.json"},
+    )
+    monkeypatch.setattr(updater, "_local_build", lambda: 199)
+    monkeypatch.setattr(updater, "_local_semver", lambda: "1.0.155")
+    monkeypatch.setattr(updater, "_local_bundle_sha256", lambda: "a" * 64)
+    monkeypatch.setattr(
+        updater,
+        "_fetch_manifest_with_retry",
+        lambda _url: {"build": 200, "version": "1.0.156", "sha256": "b" * 64},
+    )
+
+    assert updater._check_only_locked() == 0
+
+    status = _read_update_status_output(capsys.readouterr().out)
+    assert status == {
+        "ok": True,
+        "configured": True,
+        "available": True,
+        "restart_required": True,
+        "local_build": 199,
+        "local_version": "1.0.155",
+        "remote_build": 200,
+        "remote_version": "1.0.156",
+        "reason": "build",
+    }
+
+
+def test_check_only_detects_same_version_replaced_bundle(monkeypatch, capsys):
+    monkeypatch.setattr(
+        updater,
+        "_load_dotenv_simple",
+        lambda _path: {"CLIENT_CODE_MANIFEST_URL": "https://example.test/manifest.json"},
+    )
+    monkeypatch.setattr(updater, "_local_build", lambda: 199)
+    monkeypatch.setattr(updater, "_local_semver", lambda: "1.0.155")
+    monkeypatch.setattr(updater, "_local_bundle_sha256", lambda: "a" * 64)
+    monkeypatch.setattr(
+        updater,
+        "_fetch_manifest_with_retry",
+        lambda _url: {"build": 199, "version": "1.0.155", "sha256": "b" * 64},
+    )
+
+    updater._check_only_locked()
+
+    status = _read_update_status_output(capsys.readouterr().out)
+    assert status["available"] is True
+    assert status["restart_required"] is True
+    assert status["reason"] == "bundle_sha256"
+
+
+def test_online_header_has_hourly_update_reminder_and_desktop_restart_action():
+    html = (updater.ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    script = (updater.ROOT / "static" / "js" / "init.js").read_text(encoding="utf-8")
+    launcher_source = (updater.ROOT / "desktop" / "launcher.py").read_text(encoding="utf-8")
+
+    assert 'id="clientUpdateHeaderDot"' in html
+    assert 'id="clientUpdateAction"' in html
+    assert "60 * 60 * 1000" in script
+    assert "/api/client-update/status" in script
+    assert "window.pywebview.api.install_client_update()" in script
+    assert "def install_client_update(self)" in launcher_source
+    assert "apply_client_update_and_restart.py" in launcher_source
 
 
 def test_stage_env_preserves_existing_brand(tmp_path):

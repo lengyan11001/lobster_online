@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from desktop import build_desktop_exe, launcher
 
@@ -54,6 +55,48 @@ def test_desktop_branding_uses_installed_brand(tmp_path, monkeypatch):
     assert branding["document_title"] == "Daka AI"
     assert branding["icons"]["home_visual"] == "/static/daka_source.png"
     assert launcher.desktop_brand_title(branding=branding) == "Daka AI"
+
+
+def test_desktop_update_is_scheduled_once_and_relaunches_through_helper(tmp_path, monkeypatch):
+    helper = tmp_path / "scripts" / "apply_client_update_and_restart.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("# helper", encoding="utf-8")
+    python_exe = tmp_path / "python" / "python.exe"
+    python_exe.parent.mkdir()
+    python_exe.write_bytes(b"")
+    desktop_exe = tmp_path / "必火智能AI.exe"
+    desktop_exe.write_bytes(b"")
+    popen_calls = []
+
+    class FakeTimer:
+        def __init__(self, _delay, _callback):
+            pass
+
+        def start(self):
+            return None
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+        return object()
+
+    monkeypatch.setattr(launcher, "ROOT", Path(tmp_path))
+    monkeypatch.setattr(launcher, "bundled_python", lambda: str(python_exe))
+    monkeypatch.setattr(launcher, "build_env", lambda: {})
+    monkeypatch.setattr(launcher, "creation_flags", lambda: 0)
+    monkeypatch.setattr(launcher.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(launcher.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(launcher, "_CLIENT_UPDATE_RESTART_SCHEDULED", False)
+    monkeypatch.setattr(launcher, "_ALLOW_WINDOW_CLOSE", False)
+
+    first = launcher.DesktopApi().install_client_update()
+    second = launcher.DesktopApi().install_client_update()
+
+    assert first == {"ok": True, "scheduled": True, "restart_required": True}
+    assert second == {"ok": True, "scheduled": True}
+    assert len(popen_calls) == 1
+    assert popen_calls[0][0][:2] == [str(python_exe), str(helper)]
+    assert str(desktop_exe) in popen_calls[0][0]
+    assert launcher._ALLOW_WINDOW_CLOSE is True
 
 
 def test_desktop_branding_unknown_mark_stays_blank(tmp_path, monkeypatch):

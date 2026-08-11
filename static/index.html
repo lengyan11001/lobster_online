@@ -52,6 +52,7 @@
             <span class="header-avatar-badge" id="headerUserAvatar">U</span>
             <span class="header-avatar-name" id="headerUserEmail">用户</span>
             <span class="header-avatar-caret">&#9660;</span>
+            <span class="header-update-dot" id="clientUpdateHeaderDot" aria-label="有新版本" hidden></span>
           </button>
           <div class="header-dropdown-menu">
             <div class="dropdown-email" id="userEmail">-</div>
@@ -59,6 +60,10 @@
               <span>版本</span>
               <span id="clientVersionLabel" class="header-version" title="客户端版本"></span>
             </div>
+            <button type="button" class="client-update-action" id="clientUpdateAction" hidden>
+              <span class="client-update-action-title"><span class="client-update-action-dot"></span><strong id="clientUpdateTitle">发现新版本</strong></span>
+              <span class="client-update-action-hint" id="clientUpdateHint">点击更新并自动重启</span>
+            </button>
             <button type="button" class="header-menu-action desktop-refresh-btn" id="desktopHardRefreshBtn" title="刷新桌面窗口，重新加载最新页面" style="display:none;">刷新页面</button>
             <div class="header-dropdown-divider"></div>
             <button type="button" class="header-menu-view" data-view="personal-settings" data-feature-gate="personal_settings_entry">个人设置</button>

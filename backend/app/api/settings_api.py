@@ -1,7 +1,12 @@
 """User settings: model selection, preferences."""
+import asyncio
 import json
 import logging
+import os
 import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,6 +45,12 @@ router = APIRouter()
 
 _CUSTOM_CONFIGS_FILE = Path(__file__).resolve().parent.parent.parent.parent / "custom_configs.json"
 _CLIENT_CODE_VERSION_FILE = Path(__file__).resolve().parent.parent.parent.parent / "CLIENT_CODE_VERSION.json"
+_CLIENT_ROOT = _CLIENT_CODE_VERSION_FILE.parent
+_CLIENT_UPDATE_CHECK_SCRIPT = _CLIENT_ROOT / "scripts" / "check_client_code_update.py"
+_CLIENT_UPDATE_STATUS_PREFIX = "__LOBSTER_UPDATE_STATUS__="
+_CLIENT_UPDATE_STATUS_CACHE_SECONDS = 60.0
+_client_update_status_cache: tuple[float, dict[str, Any]] | None = None
+_client_update_status_lock = asyncio.Lock()
 
 
 def _load_custom_configs() -> dict[str, Any]:
@@ -121,6 +132,73 @@ def _read_client_code_version_for_ui() -> tuple[int, Optional[str], str]:
         return 0, None, _DEFAULT_CLIENT_SEMVER
 
 
+def _run_client_update_status_check() -> dict[str, Any]:
+    build, _applied_at, version = _read_client_code_version_for_ui()
+    fallback: dict[str, Any] = {
+        "ok": False,
+        "configured": False,
+        "available": False,
+        "restart_required": False,
+        "local_build": build,
+        "local_version": version,
+        "remote_build": None,
+        "remote_version": "",
+        "reason": "",
+    }
+    if not _CLIENT_UPDATE_CHECK_SCRIPT.is_file():
+        fallback["message"] = "当前客户端缺少更新检查组件"
+        return fallback
+    flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(_CLIENT_UPDATE_CHECK_SCRIPT), "--check-only"],
+            cwd=str(_CLIENT_ROOT),
+            env=os.environ.copy(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            timeout=50,
+            creationflags=flags,
+        )
+    except subprocess.TimeoutExpired:
+        fallback["message"] = "检查更新超时，稍后会自动重试"
+        return fallback
+    except Exception as exc:
+        fallback["message"] = f"检查更新失败：{exc}"
+        return fallback
+
+    for line in reversed((completed.stdout or "").splitlines()):
+        if not line.startswith(_CLIENT_UPDATE_STATUS_PREFIX):
+            continue
+        try:
+            payload = json.loads(line[len(_CLIENT_UPDATE_STATUS_PREFIX) :])
+        except json.JSONDecodeError:
+            break
+        if isinstance(payload, dict):
+            payload["checked_at"] = int(time.time() * 1000)
+            return payload
+    fallback["message"] = "更新检查程序未返回有效结果"
+    return fallback
+
+
+async def _client_update_status() -> dict[str, Any]:
+    global _client_update_status_cache
+    now = time.monotonic()
+    cached = _client_update_status_cache
+    if cached and now - cached[0] < _CLIENT_UPDATE_STATUS_CACHE_SECONDS:
+        return dict(cached[1])
+    async with _client_update_status_lock:
+        now = time.monotonic()
+        cached = _client_update_status_cache
+        if cached and now - cached[0] < _CLIENT_UPDATE_STATUS_CACHE_SECONDS:
+            return dict(cached[1])
+        payload = await asyncio.to_thread(_run_client_update_status_check)
+        _client_update_status_cache = (time.monotonic(), dict(payload))
+        return payload
+
+
 @router.get("/api/edition", summary="在线版（固定 edition=online）")
 async def get_edition():
     use_independent = getattr(settings, "lobster_independent_auth", True)
@@ -152,6 +230,11 @@ async def get_edition():
         except Exception as e:
             logger.debug("edition merge from auth server failed: %s", e)
     return out
+
+
+@router.get("/api/client-update/status", summary="检查本机客户端是否有新版本")
+async def get_client_update_status():
+    return await _client_update_status()
 
 
 def _get_lan_ip() -> str:
