@@ -7371,6 +7371,10 @@ async def _run_shanjian_digital_human_workflow(
     return last
 
 
+def _takeover_monotonic() -> float:
+    return asyncio.get_running_loop().time()
+
+
 async def _run_native_wechat_takeover_session(
     *,
     account_id: str,
@@ -7380,17 +7384,23 @@ async def _run_native_wechat_takeover_session(
     run_id: str,
     rounds: Optional[int] = None,
     interval_seconds: float = 15.0,
+    session_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
-    # Keep the existing 30-minute takeover window while scanning messages every 15 seconds.
-    round_count = max(1, min(int(rounds if rounds is not None else 120), 120))
+    # The interval starts after a round finishes. Bound the whole session by wall-clock
+    # time so slow WeChat scans do not turn a 30-minute takeover into a multi-hour run.
     interval = max(0.0, float(interval_seconds or 0.0))
+    duration_limit = max(1.0, min(float(session_seconds if session_seconds is not None else 1800.0), 1800.0))
+    default_rounds = int((duration_limit + max(interval, 1.0) - 1) // max(interval, 1.0))
+    round_count = max(1, min(int(rounds if rounds is not None else default_rounds), 120))
     started_at = datetime.utcnow().isoformat()
-    started_monotonic = asyncio.get_running_loop().time()
+    started_monotonic = _takeover_monotonic()
+    deadline_monotonic = started_monotonic + duration_limit
     output: Dict[str, Any] = {
         "ok": True,
         "mode": "takeover_session",
         "account_id": account_id,
-        "session_minutes": 30,
+        "session_minutes": round(duration_limit / 60.0, 2),
+        "session_seconds": round(duration_limit, 2),
         "interval_seconds": int(interval),
         "round_count": round_count,
         "completed_rounds": 0,
@@ -7417,7 +7427,12 @@ async def _run_native_wechat_takeover_session(
         )
     for index in range(round_count):
         if index and interval:
-            await asyncio.sleep(interval)
+            remaining = deadline_monotonic - _takeover_monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(interval, remaining))
+        if _takeover_monotonic() >= deadline_monotonic:
+            break
         round_number = index + 1
         if cloud is not None and base and run_id:
             await _post_task_event(
@@ -7471,7 +7486,12 @@ async def _run_native_wechat_takeover_session(
             output["failed"] += 1
             output["rounds"].append({"round": round_number, "failed": 1, "error": str(exc)[:500]})
     output["finished_at"] = datetime.utcnow().isoformat()
-    output["duration_seconds"] = round(max(0.0, asyncio.get_running_loop().time() - started_monotonic), 2)
+    output["duration_seconds"] = round(max(0.0, _takeover_monotonic() - started_monotonic), 2)
+    output["stop_reason"] = (
+        "session_deadline"
+        if _takeover_monotonic() >= deadline_monotonic
+        else "round_limit"
+    )
     output["config"] = last_config
     output["group_invite_candidates"] = len(
         {
@@ -7803,6 +7823,7 @@ async def _run_client_workflow_action(
             run_id=run_id,
             rounds=rounds,
             interval_seconds=interval_seconds,
+            session_seconds=session_minutes * 60,
         )
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")

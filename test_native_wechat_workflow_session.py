@@ -567,6 +567,7 @@ async def test_takeover_action_uses_server_polling_settings(monkeypatch):
     assert result == {"ok": True}
     assert captured["rounds"] == 120
     assert captured["interval_seconds"] == 15
+    assert captured["session_seconds"] == 1800
 
 
 @pytest.mark.asyncio
@@ -590,6 +591,7 @@ async def test_takeover_action_keeps_polling_defaults_for_old_tasks(monkeypatch)
 
     assert captured["rounds"] == 120
     assert captured["interval_seconds"] == 15
+    assert captured["session_seconds"] == 1800
 
 
 @pytest.mark.asyncio
@@ -693,6 +695,43 @@ async def test_takeover_session_defaults_to_thirty_minutes_at_fifteen_second_int
     assert set(sleeps) == {15.0}
     assert request_bodies[0]["check_friend_requests"] is True
     assert all(body["check_friend_requests"] is False for body in request_bodies[1:])
+
+
+@pytest.mark.asyncio
+async def test_takeover_session_waits_after_each_round_and_finishes_last_started_round(monkeypatch):
+    clock = {"now": 0.0}
+    starts = []
+    sleeps = []
+
+    async def post_local(_path, _body, **_kwargs):
+        starts.append(clock["now"])
+        clock["now"] += 20.0
+        return {"ok": True, "items": []}
+
+    async def advance_sleep(seconds):
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(channel, "_takeover_monotonic", lambda: clock["now"])
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel.asyncio, "sleep", advance_sleep)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=None,
+        base="",
+        run_id="run",
+        rounds=120,
+        interval_seconds=15,
+        session_seconds=50,
+    )
+
+    assert starts == [0.0, 35.0]
+    assert sleeps == [15]
+    assert result["completed_rounds"] == 2
+    assert result["duration_seconds"] == 55.0
+    assert result["stop_reason"] == "session_deadline"
 
 
 @pytest.mark.asyncio
