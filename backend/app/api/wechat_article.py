@@ -16,11 +16,13 @@ import re
 import tempfile
 import time
 import asyncio
+import io
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+from PIL import Image, UnidentifiedImageError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
@@ -921,8 +923,67 @@ async def _wechat_get_access_token(appid: str, secret: str) -> str:
     return str(token)
 
 
+def _image_to_jpeg_bytes(im: Image.Image) -> bytes:
+    out = io.BytesIO()
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.getchannel("A"))
+        bg.save(out, format="JPEG", quality=92, optimize=True)
+    else:
+        im.convert("RGB").save(out, format="JPEG", quality=92, optimize=True)
+    return out.getvalue()
+
+
+def _wechat_compatible_image(data: bytes, filename: str, *, force_jpeg: bool = False) -> tuple[bytes, str, str]:
+    stem = re.sub(r"\.[^.\\/]+$", "", filename or "wechat-image") or "wechat-image"
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            fmt = (im.format or "").lower()
+            if force_jpeg:
+                out_name = f"{stem}.jpg"
+                logger.info(
+                    "[wechat-article] normalized wechat cover image filename=%s detected=%s -> %s",
+                    filename,
+                    fmt or "unknown",
+                    out_name,
+                )
+                return _image_to_jpeg_bytes(im), out_name, "image/jpeg"
+            if fmt in {"jpeg", "png", "gif", "bmp"}:
+                ext = "jpg" if fmt == "jpeg" else fmt
+                out_name = f"{stem}.{ext}"
+                return data, out_name, "image/jpeg" if ext == "jpg" else f"image/{ext}"
+
+            out_name = f"{stem}.jpg"
+            logger.info(
+                "[wechat-article] converted unsupported wechat image format filename=%s detected=%s -> %s",
+                filename,
+                fmt or "unknown",
+                out_name,
+            )
+            return _image_to_jpeg_bytes(im), out_name, "image/jpeg"
+    except UnidentifiedImageError:
+        pass
+    except Exception as exc:
+        logger.warning("[wechat-article] normalize image for wechat failed filename=%s err=%s", filename, exc)
+
+    suffix = Path(filename or "").suffix.lower().lstrip(".")
+    ctype = mimetypes.guess_type(filename or "")[0] or ""
+    allowed = {"jpg", "jpeg", "png", "gif", "bmp"}
+    if suffix in allowed and ctype.startswith("image/"):
+        return data, filename, ctype
+    return data, f"{stem}.png", "image/png"
+
+
 async def _wechat_upload_bytes(access_token: str, data: bytes, filename: str, permanent: bool) -> str:
-    content_type = mimetypes.guess_type(filename)[0] or "image/png"
+    data, filename, content_type = _wechat_compatible_image(data, filename, force_jpeg=permanent)
+    logger.info(
+        "[wechat-article] upload image to wechat permanent=%s filename=%s content_type=%s size=%s",
+        permanent,
+        filename,
+        content_type,
+        len(data),
+    )
     files = {"media": (filename, data, content_type)}
     if permanent:
         url = "https://api.weixin.qq.com/cgi-bin/material/add_material"
@@ -945,16 +1006,31 @@ async def _wechat_upload_bytes(access_token: str, data: bytes, filename: str, pe
 
 
 async def _download_url(url: str) -> tuple[bytes, str]:
+    headers = {
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 LobsterOnline/1.0 WeChatArticleImageFetcher",
+    }
     async with httpx.AsyncClient(timeout=_API_TIMEOUT, follow_redirects=True) as client:
-        r = await client.get(url)
+        r = await client.get(url, headers=headers)
     if r.status_code >= 400:
         raise HTTPException(status_code=400, detail=f"下载图片失败 HTTP {r.status_code}: {url[:120]}")
     suffix = ".png"
     ctype = r.headers.get("content-type") or ""
-    guessed = mimetypes.guess_extension(ctype.split(";")[0].strip())
-    if guessed:
-        suffix = guessed
-    return r.content, "wechat-image" + suffix
+    data = r.content or b""
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            fmt = (im.format or "").lower()
+            suffix = ".jpg" if fmt == "jpeg" else (f".{fmt}" if fmt else suffix)
+    except Exception:
+        snippet = data[:120].decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " ")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Downloaded WeChat article image is not a valid image file: "
+                f"content_type={ctype or '-'} size={len(data)} snippet={snippet[:100]} url={url[:160]}"
+            ),
+        )
+    return data, "wechat-image" + suffix
 
 
 def _asset_image_bytes(asset: Asset) -> tuple[bytes, str]:
