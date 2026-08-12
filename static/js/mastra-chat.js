@@ -70,8 +70,21 @@
   function installationId() {
     if (typeof getOrCreateInstallationId === 'function') return getOrCreateInstallationId();
     var key = 'lobster_installation_id';
+    var deprecatedInstallationIds = {
+      '2fc3f43f7a684411a442cb661898aa74': true,
+      'fa2d09cfbd9c4b2380352906225f2817': true
+    };
+    function isDeprecatedInstallationId(value) {
+      var text = String(value || '').trim();
+      var raw = text.indexOf('--') >= 0 ? text.split('--').slice(1).join('--') : text;
+      return !!deprecatedInstallationIds[raw];
+    }
     var current = '';
     try { current = localStorage.getItem(key) || ''; } catch (e) {}
+    if (isDeprecatedInstallationId(current)) {
+      try { localStorage.removeItem(key); } catch (e0) {}
+      current = '';
+    }
     if (current) return current;
     current = 'online-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
     try { localStorage.setItem(key, current); } catch (e2) {}

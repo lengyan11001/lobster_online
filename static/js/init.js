@@ -399,10 +399,23 @@ var USE_INDEPENDENT_AUTH = true;
  */
 (function ensureInstallationIdFn() {
   if (typeof window.getOrCreateInstallationId === 'function') return;
+  var deprecatedInstallationIds = {
+    '2fc3f43f7a684411a442cb661898aa74': true,
+    'fa2d09cfbd9c4b2380352906225f2817': true
+  };
+  function isDeprecatedInstallationId(value) {
+    var text = String(value || '').trim();
+    var raw = text.indexOf('--') >= 0 ? text.split('--').slice(1).join('--') : text;
+    return !!deprecatedInstallationIds[raw];
+  }
   window.getOrCreateInstallationId = function() {
     var k = 'lobster_installation_id';
     var v = '';
     try { v = localStorage.getItem(k) || ''; } catch (e) {}
+    if (isDeprecatedInstallationId(v)) {
+      try { localStorage.removeItem(k); } catch (e0) {}
+      v = '';
+    }
     if (v && v.length >= 8) return v;
     var u = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID().replace(/-/g, '')
@@ -1709,7 +1722,7 @@ function loadDashboard() {
         loadDashboard();
         return;
       }
-      if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token);
+      if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token, true);
       window.__currentUserId = d.id;
       applyLobsterFeatureGates(d.features || {});
       if (typeof window.resetChatSessionsMemory === 'function') window.resetChatSessionsMemory();

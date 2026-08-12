@@ -8485,6 +8485,12 @@ async def h5_chat_poll_loop() -> None:
                         last_heartbeat_at = 0.0
                         await asyncio.sleep(sleep_missing_auth)
                         continue
+                    if heartbeat_resp.status_code == 409:
+                        logger.warning("[H5-CHAT] heartbeat slot rejected; clearing stale channel token")
+                        clear_channel_fallback("h5_heartbeat_409")
+                        last_heartbeat_at = 0.0
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
                     heartbeat_resp.raise_for_status()
                     last_heartbeat_at = now_loop
                     try:
@@ -8508,6 +8514,12 @@ async def h5_chat_poll_loop() -> None:
                         last_heartbeat_at = 0.0
                         await asyncio.sleep(sleep_missing_auth)
                         continue
+                    if resp.status_code == 409:
+                        logger.warning("[H5-CHAT] cloud slot rejected; clearing stale channel token")
+                        clear_channel_fallback("h5_pending_409")
+                        last_heartbeat_at = 0.0
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
                     else:
                         resp.raise_for_status()
                         items = (resp.json() or {}).get("items") or []
@@ -8522,6 +8534,12 @@ async def h5_chat_poll_loop() -> None:
                     )
                     if task_resp.status_code == 401:
                         logger.warning("[SCHEDULED-TASK] cloud auth rejected; waiting for next login token")
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
+                    if task_resp.status_code == 409:
+                        logger.warning("[SCHEDULED-TASK] cloud slot rejected; clearing stale channel token")
+                        clear_channel_fallback("scheduled_task_pending_409")
+                        last_heartbeat_at = 0.0
                         await asyncio.sleep(sleep_missing_auth)
                         continue
                     if task_resp.status_code < 400:
@@ -8539,6 +8557,12 @@ async def h5_chat_poll_loop() -> None:
                     )
                     if publish_resp.status_code == 401:
                         logger.warning("[SCHEDULED-PUBLISH] cloud auth rejected; waiting for next login token")
+                        await asyncio.sleep(sleep_missing_auth)
+                        continue
+                    if publish_resp.status_code == 409:
+                        logger.warning("[SCHEDULED-PUBLISH] cloud slot rejected; clearing stale channel token")
+                        clear_channel_fallback("scheduled_publish_pending_409")
+                        last_heartbeat_at = 0.0
                         await asyncio.sleep(sleep_missing_auth)
                         continue
                     if publish_resp.status_code < 400:

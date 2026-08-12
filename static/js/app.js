@@ -314,9 +314,27 @@ function fallbackCopy(text, doneCb) {
 }
 
 /** 在线版：与认证中心「每账号最多 3 安装槽」对应的设备身份（持久化于 localStorage） */
+var DEPRECATED_INSTALLATION_IDS = {
+  '2fc3f43f7a684411a442cb661898aa74': true,
+  'fa2d09cfbd9c4b2380352906225f2817': true
+};
+
+function rawInstallationId(value) {
+  var text = String(value || '').trim();
+  return text.indexOf('--') >= 0 ? text.split('--').slice(1).join('--') : text;
+}
+
+function isDeprecatedInstallationId(value) {
+  return !!DEPRECATED_INSTALLATION_IDS[rawInstallationId(value)];
+}
+
 function getOrCreateInstallationId() {
   var k = 'lobster_installation_id';
   var v = localStorage.getItem(k);
+  if (isDeprecatedInstallationId(v)) {
+    localStorage.removeItem(k);
+    v = '';
+  }
   if (v && v.length >= 8) return v;
   var u = (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID().replace(/-/g, '')
