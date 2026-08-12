@@ -348,7 +348,16 @@
         || item.prompt
         || ''
       ).trim();
-      var imageUrl = String(item.image_url || item.imageUrl || '').trim();
+      var imageUrl = generatedSegmentImageUrl(item);
+      var referenceImageUrl = String(
+        item.reference_image_url
+        || item.referenceImageUrl
+        || item.input_reference_image_url
+        || item.inputReferenceImageUrl
+        || item.uploaded_reference_image_url
+        || item.uploadedReferenceImageUrl
+        || ''
+      ).trim();
       var videoUrl = String(item.video_url || item.videoUrl || '').trim();
       var workflowMode = String(item.workflow_mode || item.workflowMode || '').trim();
       var imageSource = String(item.image_source || item.imageSource || item.source || '').trim();
@@ -363,6 +372,7 @@
         imagePrompt: imagePrompt,
         videoPrompt: videoPrompt,
         imageUrl: imageUrl,
+        referenceImageUrl: referenceImageUrl,
         videoUrl: videoUrl,
         workflowMode: workflowMode,
         imageSource: imageSource,
@@ -545,7 +555,7 @@
     var segments = Array.isArray(artifacts.segments) ? artifacts.segments : [];
     for (var i = 0; i < segments.length; i += 1) {
       var seg = segments[i] || {};
-      var imageUrl = String(seg.imageUrl || seg.image_url || seg.first_frame_image_url || seg.segment_reference_image_url || '').trim();
+      var imageUrl = generatedSegmentImageUrl(seg);
       if (imageUrl) return imageUrl;
     }
     var cloudJob = job.cloudJob || {};
@@ -600,6 +610,35 @@
       if (url) return url;
     }
     return '';
+  }
+
+  function generatedSegmentImageUrl(seg) {
+    if (!seg || typeof seg !== 'object') return '';
+    var fields = [
+      seg.imageUrl,
+      seg.image_url,
+      seg.first_frame_image_url,
+      seg.firstFrameImageUrl,
+      seg.segment_reference_image_url,
+      seg.segmentReferenceImageUrl,
+      seg.storyboard_board_image_url,
+      seg.storyboardBoardImageUrl
+    ];
+    for (var i = 0; i < fields.length; i += 1) {
+      var url = String(fields[i] || '').trim();
+      if (url) return url;
+    }
+    return '';
+  }
+
+  function seedanceImageWithFallbackHtml(url, alt, className, fallbackText) {
+    var wrapClass = 'seedance-media-image-wrap' + (className ? ' ' + className : '');
+    var fallback = '<span class="seedance-media-fallback">' + escapeHtml(fallbackText || '图片暂不可预览') + '</span>';
+    if (!url) return '<span class="' + wrapClass + ' is-empty">' + fallback + '</span>';
+    return '<span class="' + wrapClass + '">' +
+      fallback +
+      '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(alt || '图片预览') + '" loading="lazy" decoding="async" onerror="this.style.display=\'none\';this.previousElementSibling.style.display=\'flex\';">' +
+    '</span>';
   }
 
   function normalizeExampleItem(item) {
@@ -1896,7 +1935,7 @@
     if (url) {
       mediaBody = isVideo
         ? '<video src="' + escapeHtml(url) + '" muted playsinline preload="metadata"></video><em>视频已出</em>'
-        : '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(title) + '"><em>图片已出</em>';
+        : seedanceImageWithFallbackHtml(url, title, 'is-segment', '图片暂不可预览') + '<em>图片已出</em>';
       mediaBody = [
         '<button type="button" class="seedance-segment-media-card' + (isVideo ? ' is-video' : '') + '"',
         ' data-seedance-segment-preview="' + escapeHtml(url) + '"',
@@ -1911,8 +1950,13 @@
     } else {
       var waitingTitle = isVideo ? '视频正在合成中' : '图片正在合成中';
       var waitingCopy = isVideo ? '可能需要 5-10 分钟，完成后会自动展示结果。' : '可能需要 1-2 分钟，完成后会自动展示结果。';
+      if (!isVideo && seg.referenceImageUrl) {
+        waitingTitle = '参考图已就绪，等待生成图';
+        waitingCopy = '当前展示的是输入参考图，不算生成结果。生成图返回后会显示在这里。';
+      }
       mediaBody = [
         '<div class="seedance-segment-media-card is-waiting' + (isVideo ? ' is-video' : ' is-image') + '">',
+        (!isVideo && seg.referenceImageUrl ? seedanceImageWithFallbackHtml(seg.referenceImageUrl, '参考图', 'is-reference', '参考图暂不可预览') : ''),
         '<strong>' + waitingTitle + '</strong>',
         '<small>' + waitingCopy + '</small>',
         '</div>'
@@ -1948,7 +1992,8 @@
           status: 'pending',
           imagePrompt: usesReferenceImage ? REFERENCE_IMAGE_PROMPT_TEXT : prompt,
           videoPrompt: prompt,
-          imageUrl: usesReferenceImage ? mediaItemUrl(media) : '',
+          imageUrl: '',
+          referenceImageUrl: usesReferenceImage ? mediaItemUrl(media) : '',
           videoUrl: '',
           workflowMode: usesReferenceImage ? 'direct_video' : '',
           imageSource: usesReferenceImage ? 'uploaded_reference_image' : '',
@@ -1965,7 +2010,7 @@
         if (!String(seg.imageUrl || '').trim() && isReferenceImageSegment(seg)) {
           var fallbackImageUrl = fallbackSegmentImageUrl(seg.index);
           if (fallbackImageUrl) {
-            seg.imageUrl = fallbackImageUrl;
+            seg.referenceImageUrl = seg.referenceImageUrl || fallbackImageUrl;
             seg.usesReferenceImage = true;
           }
         }
@@ -2070,7 +2115,7 @@
     if (body) {
       body.innerHTML = mt === 'video'
         ? '<video src="' + escapeHtml(url) + '" controls playsinline preload="metadata"></video>'
-        : '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(title || '图片预览') + '">';
+        : seedanceImageWithFallbackHtml(url, title || '图片预览', 'is-modal', '图片暂不可预览');
     }
     if (download) {
       download.onclick = function() {

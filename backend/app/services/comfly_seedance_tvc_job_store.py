@@ -593,6 +593,7 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_prompt": "",
             "prompt": "",
             "image_url": "",
+            "reference_image_url": "",
             "video_url": "",
             "provider": "",
             "model": "",
@@ -640,6 +641,7 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_prompt": "",
             "prompt": "",
             "image_url": "",
+            "reference_image_url": "",
             "video_url": "",
             "provider": "",
             "model": "",
@@ -668,6 +670,7 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_prompt": "",
             "prompt": "",
             "image_url": "",
+            "reference_image_url": "",
             "video_url": "",
             "provider": "",
             "model": "",
@@ -694,6 +697,7 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_prompt": "",
             "prompt": "",
             "image_url": "",
+            "reference_image_url": "",
             "video_url": "",
             "provider": "",
             "model": "",
@@ -719,8 +723,9 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
     out_segments: List[Dict[str, Any]] = []
     for idx in sorted(rows):
         row = rows[idx]
-        if reference_urls and not row.get("image_url"):
-            row["image_url"] = reference_urls[(idx - 1) % len(reference_urls)]
+        if reference_urls and not row.get("reference_image_url"):
+            row["reference_image_url"] = reference_urls[(idx - 1) % len(reference_urls)]
+            row["uses_reference_image"] = bool(row.get("uses_reference_image") or not row.get("image_url"))
         if row.get("video_url"):
             row["status"] = "video_ready"
             row["video_status"] = "ready"

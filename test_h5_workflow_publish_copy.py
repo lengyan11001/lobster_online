@@ -208,6 +208,35 @@ async def test_douyin_child_uses_oral_script_copy_without_second_rewrite(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_publish_content_preserves_douyin_origin_slot_account_id(monkeypatch):
+    calls = []
+
+    async def post_local(path, body, **kwargs):
+        calls.append((path, body))
+        return {"ok": True}
+
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+
+    await channel._run_client_workflow_action(
+        "publish_content",
+        {
+            "platform": "douyin",
+            "asset_id": "1a8bc876a535",
+            "account_id": "-1002",
+            "account_nickname": "抖音账号2",
+            "media_type": "video",
+            "ai_publish_copy": False,
+        },
+        headers={},
+        run_id="publish-origin-slot",
+    )
+
+    assert calls[0][0] == "/api/publish"
+    assert calls[0][1]["account_id"] == -1002
+    assert calls[0][1]["account_nickname"] == "抖音账号2"
+
+
+@pytest.mark.asyncio
 async def test_douyin_child_without_script_still_generates_copy_on_server(monkeypatch):
     async def resolve_parent(*args, **kwargs):
         return {

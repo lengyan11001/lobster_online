@@ -25,6 +25,7 @@
     swarmVisibleCount: SWARM_PAGE_SIZE,
     lastMessageItems: [],
     lastRunItems: [],
+    lastRecorderItems: [],
     lastSuccessSyncAt: 0
   };
 
@@ -32,6 +33,12 @@
     return (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE)
       ? String(LOCAL_API_BASE).replace(/\/$/, '')
       : ((typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '');
+  }
+
+  function cloudBase() {
+    return (typeof API_BASE !== 'undefined' && API_BASE)
+      ? String(API_BASE).replace(/\/$/, '')
+      : String(window.__API_BASE || '').replace(/\/$/, '');
   }
 
   function h(value) {
@@ -105,6 +112,12 @@
     var base = localBase();
     if (!base) return Promise.reject(new Error('本地服务地址未配置'));
     return fetch(base + path, { headers: headers() }).then(parseJsonResponse);
+  }
+
+  function fetchCloudJson(path) {
+    var base = cloudBase();
+    if (!base) return Promise.reject(new Error('服务器地址未配置'));
+    return fetch(base + path, { headers: headers(), cache: 'no-store' }).then(parseJsonResponse);
   }
 
   function buildDashboardSnapshot(messageItems, runItems) {
@@ -193,8 +206,19 @@
     var payload = run && run.payload && typeof run.payload === 'object' ? run.payload : {};
     var capabilityId = String(payload.capability_id || '').trim();
     var action = String((((run || {}).result_payload || {}).action) || (payload.action || '')).trim();
+    var liveType = String(payload.live_executor_type || '').trim();
+    if (liveType) {
+      return {
+        secretary: 'AI秘书',
+        leads: '现场获客',
+        video: '现场视频',
+        wechat: '个人微信'
+      }[liveType] || '现场执行';
+    }
     if (action) {
       return {
+        audio_transcription: 'AI秘书',
+        native_wechat_poll: '个人微信接管',
         search_collect: '采集客户',
         tasks_from_search: '同步任务池',
         comment_collect: '评论采集',
@@ -205,6 +229,7 @@
     }
     return {
       'goal.video.pipeline': '创意视频',
+      'comfly.seedance.tvc.pipeline': '创意分镜头视频',
       'goal.image.pipeline': '图片创作',
       'create.video.pipeline': '视频生成',
       'create.ppt.pipeline': 'PPT 生成',
@@ -481,6 +506,54 @@
     };
   }
 
+  function normalizeRecorderRun(row) {
+    row = row && typeof row === 'object' ? row : {};
+    var id = String(row.id || row.record_id || '');
+    var status = String(row.status || '').trim().toLowerCase();
+    var isDone = status === 'completed';
+    var isFailed = status === 'failed';
+    var title = compactText(row.display_name || row.source_name || row.file_name || row.filename, '现场秘书录音');
+    var summary = compactText(row.summary_text || row.summary || '', '');
+    var transcript = compactText(row.transcript_text || row.transcript || '', '');
+    var error = compactText(row.error_message || row.error || '', '');
+    var created = row.created_at || row.recorded_at || row.queued_at || '';
+    var updated = row.updated_at || row.completed_at || created;
+    return {
+      id: 'recorder-' + (id || String(created || updated || Math.random()).replace(/\W+/g, '')),
+      title: title,
+      content: title,
+      taskKind: 'audio_transcription',
+      status: isDone ? 'completed' : (isFailed ? 'failed' : (status || 'processing')),
+      createdAt: created,
+      updatedAt: updated,
+      startedAt: row.started_at || created,
+      finishedAt: isDone || isFailed ? updated : '',
+      progress: {
+        label: isDone ? '秘书摘要已生成' : (isFailed ? '秘书整理失败' : '秘书整理中'),
+        text: summary || error || (isDone ? '摘要已生成' : '正在转写并提炼摘要')
+      },
+      progressPercent: isDone || isFailed ? 100 : 36,
+      progressLabel: isDone ? '秘书完成' : (isFailed ? '秘书失败' : '秘书整理中'),
+      progressDetail: summary || error || '正在转写并提炼摘要',
+      resultText: summary || (transcript ? transcript.slice(0, 220) : ''),
+      error: error,
+      payload: {
+        action: 'audio_transcription',
+        live_executor: row.source_type === 'live_executor',
+        live_executor_type: 'secretary',
+        recorder_id: id
+      },
+      resultPayload: {
+        action: 'audio_transcription',
+        summary_text: summary,
+        transcript_text: transcript,
+        source_type: row.source_type || '',
+        file_url: row.file_url || row.audio_url || ''
+      },
+      installationId: String(row.installation_id || '')
+    };
+  }
+
   function newestTime(item) {
     return Date.parse(item.updatedAt || item.finishedAt || item.createdAt || item.startedAt || 0) || 0;
   }
@@ -623,6 +696,19 @@
     var status = String((run && run.status) || '').toLowerCase();
     var capability = String((((run || {}).payload || {}).capability_id) || '').toLowerCase();
     var action = String((((run || {}).payload || {}).action) || '').toLowerCase();
+    var liveType = String((((run || {}).payload || {}).live_executor_type) || '').toLowerCase();
+    if (liveType === 'secretary' || action === 'audio_transcription') {
+      return status === 'failed'
+        ? '/static/generated/agent/avatars/h5-employee-female-offline.png'
+        : (status === 'completed'
+          ? '/static/generated/agent/avatars/h5-employee-female-idle.png'
+          : '/static/generated/agent/avatars/h5-employee-female-working.png');
+    }
+    if (liveType === 'wechat' || action === 'native_wechat_poll') {
+      return status === 'completed'
+        ? '/static/generated/agent/avatars/h5-employee-male-idle.png'
+        : '/static/generated/agent/avatars/h5-employee-male-working.png';
+    }
     if (capability.indexOf('image') >= 0) {
       return status === 'failed'
         ? '/static/generated/agent/avatars/h5-employee-female-offline.png'
@@ -1415,10 +1501,12 @@
     state.lastRefreshAt = now;
     return Promise.allSettled([
       fetchJson('/api/h5-chat/messages?limit=40'),
-      fetchJson('/api/scheduled-tasks/runs?limit=80')
+      fetchJson('/api/scheduled-tasks/runs?limit=80'),
+      fetchCloudJson('/api/h5/recorder/files?page=1&page_size=12&source_type=live_executor')
     ]).then(function (results) {
       var messageResult = results[0];
       var runResult = results[1];
+      var recorderResult = results[2];
 
       if (messageResult && messageResult.status === 'fulfilled') {
         state.lastMessageItems = Array.isArray(messageResult.value && messageResult.value.messages)
@@ -1432,9 +1520,24 @@
           : [];
       }
 
+      if (recorderResult && recorderResult.status === 'fulfilled') {
+        var recorderItems = Array.isArray(recorderResult.value && recorderResult.value.items)
+          ? recorderResult.value.items
+          : (Array.isArray(recorderResult.value && recorderResult.value.records) ? recorderResult.value.records : []);
+        state.lastRecorderItems = recorderItems
+          .filter(function (row) { return String((row && row.source_type) || '').toLowerCase() === 'live_executor'; })
+          .map(normalizeRecorderRun);
+      }
+
       var messageItems = Array.isArray(state.lastMessageItems) ? state.lastMessageItems : [];
-      var runItems = Array.isArray(state.lastRunItems) ? state.lastRunItems : [];
-      var hasAnyFreshResult = (messageResult && messageResult.status === 'fulfilled') || (runResult && runResult.status === 'fulfilled');
+      var scheduledRunItems = Array.isArray(state.lastRunItems) ? state.lastRunItems : [];
+      var recorderRunItems = Array.isArray(state.lastRecorderItems) ? state.lastRecorderItems : [];
+      var runItems = scheduledRunItems.concat(recorderRunItems).sort(function (a, b) {
+        return newestTime(b) - newestTime(a);
+      });
+      var hasAnyFreshResult = (messageResult && messageResult.status === 'fulfilled')
+        || (runResult && runResult.status === 'fulfilled')
+        || (recorderResult && recorderResult.status === 'fulfilled');
       if (hasAnyFreshResult && (messageItems.length || runItems.length)) {
         state.lastSuccessSyncAt = Date.now();
       }
@@ -1454,6 +1557,9 @@
         if (runResult && runResult.status === 'rejected') {
           reasons.push(runResult.reason && runResult.reason.message ? runResult.reason.message : String(runResult.reason || ''));
         }
+        if (recorderResult && recorderResult.status === 'rejected') {
+          reasons.push(recorderResult.reason && recorderResult.reason.message ? recorderResult.reason.message : String(recorderResult.reason || ''));
+        }
         throw new Error(compactText(reasons.join('；'), '当前无法获取执行状态，请稍后重试'));
       }
 
@@ -1464,6 +1570,9 @@
         }
         if (runResult && runResult.status === 'rejected') {
           staleReasons.push(runResult.reason && runResult.reason.message ? runResult.reason.message : String(runResult.reason || ''));
+        }
+        if (recorderResult && recorderResult.status === 'rejected') {
+          staleReasons.push(recorderResult.reason && recorderResult.reason.message ? recorderResult.reason.message : String(recorderResult.reason || ''));
         }
         throw new Error(compactText(staleReasons.join('；'), '当前无法获取最新执行状态，请稍后重试'));
       }
@@ -1523,8 +1632,57 @@
     });
   }
 
+  function syncFullscreenButton() {
+    var root = el('content-agent');
+    var btn = el('agentFullscreenBtn');
+    if (!root || !btn) return;
+    var active = document.fullscreenElement === root || root.classList.contains('is-agent-fullscreen');
+    btn.textContent = active ? '退出全屏' : '全屏';
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+
+  function bindFullscreenButton() {
+    var root = el('content-agent');
+    var btn = el('agentFullscreenBtn');
+    if (!root || !btn || btn.__agentFullscreenBound) return;
+    btn.__agentFullscreenBound = true;
+    btn.addEventListener('click', function () {
+      if (document.fullscreenElement === root) {
+        document.exitFullscreen().catch(function () {
+          root.classList.remove('is-agent-fullscreen');
+          syncFullscreenButton();
+        });
+        return;
+      }
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(function () {});
+      }
+      if (root.requestFullscreen) {
+        root.requestFullscreen().catch(function () {
+          root.classList.toggle('is-agent-fullscreen');
+          syncFullscreenButton();
+        });
+      } else {
+        root.classList.toggle('is-agent-fullscreen');
+        syncFullscreenButton();
+      }
+    });
+    if (!document.__agentFullscreenListenerBound) {
+      document.__agentFullscreenListenerBound = true;
+      document.addEventListener('fullscreenchange', function () {
+        var currentRoot = el('content-agent');
+        if (currentRoot && document.fullscreenElement !== currentRoot) {
+          currentRoot.classList.remove('is-agent-fullscreen');
+        }
+        syncFullscreenButton();
+      });
+    }
+    syncFullscreenButton();
+  }
+
   window.loadAgentSubUsers = function loadAgentView() {
     bindRefreshButton();
+    bindFullscreenButton();
     bindMediaPreview();
     bindSwarmSelection();
     bindSwarmScrollPagination();

@@ -81,17 +81,17 @@ def _comfly_upload_failure_detail(aid: str, user_id: int, db: Session) -> str:
     url = (row_mine.source_url or "").strip()
     if not url:
         return (
-            f"素材「{row_mine.asset_id}」已入库，但尚无公网 source_url（可能仅本机文件、未走 TOS/转存）。"
-            "请配置 TOS 或使用生成/转存成功后带 CDN 的素材；也可在对话中对图使用 sutui.transfer_url 等转公网后再入库。"
+            f"素材「{row_mine.asset_id}」已保存到本机，但准备云端可访问图片时失败。"
+            "请稍后重试；如果连续失败，请重新上传图片或检查本机到服务器的网络连接。"
         )
     if not (url.startswith("http://") or url.startswith("https://")):
-        return f"素材「{row_mine.asset_id}」的 source_url 非 http(s)，无法给 Comfly 拉取。"
+        return f"素材「{row_mine.asset_id}」的图片地址暂不可用于云端生成，请重新上传图片后再试。"
     if _is_internal_asset_http_url(url):
         return (
-            f"素材「{row_mine.asset_id}」当前为内网或临时签名链，Comfly 云端无法访问。"
-            "请换用 CDN 公网直链（无 token=），或先转存到对象存储。"
+            f"素材「{row_mine.asset_id}」当前仍是临时预览地址，云端生成无法稳定读取。"
+            "请稍后重试；如果仍失败，请重新上传图片。"
         )
-    return f"素材「{row_mine.asset_id}」暂无法解析为可用公网图链，请稍后重试或联系管理员查看日志。"
+    return f"素材「{row_mine.asset_id}」暂时准备失败，请稍后重试或重新上传图片。"
 
 
 def _reject_if_sutui_style_model(field: str, value: str) -> None:

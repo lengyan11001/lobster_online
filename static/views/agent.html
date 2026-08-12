@@ -542,6 +542,33 @@
     gap: 1rem;
     margin-bottom: 0.1rem;
   }
+  #content-agent .agent-studio-header-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    flex: 0 0 auto;
+  }
+  #content-agent .agent-fullscreen-btn {
+    border: 1px solid rgba(125, 211, 252, 0.22);
+    background: linear-gradient(135deg, rgba(14, 165, 233, 0.9), rgba(37, 99, 235, 0.92));
+    color: #eff6ff;
+    box-shadow: 0 10px 26px rgba(37, 99, 235, 0.22);
+  }
+  #content-agent:fullscreen,
+  #content-agent.is-agent-fullscreen {
+    width: 100vw;
+    height: 100vh;
+    min-height: 100vh;
+    padding: 0.75rem;
+    border-radius: 0;
+    clip-path: none;
+  }
+  #content-agent:fullscreen .agent-studio-shell,
+  #content-agent.is-agent-fullscreen .agent-studio-shell {
+    border-radius: 28px;
+    clip-path: inset(0 round 28px);
+  }
   #content-agent .agent-studio-header-main {
     min-width: 0;
   }
@@ -1094,7 +1121,10 @@
             <div class="agent-studio-header-title">执行任务</div>
             <div class="agent-studio-header-subtitle">任务状态流</div>
           </div>
-          <button type="button" id="agentRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+          <div class="agent-studio-header-actions">
+            <button type="button" id="agentFullscreenBtn" class="btn btn-sm agent-fullscreen-btn">全屏</button>
+            <button type="button" id="agentRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+          </div>
         </div>
 
         <section class="agent-studio-card">

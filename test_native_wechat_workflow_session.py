@@ -149,6 +149,66 @@ def test_session_preview_change_is_checked_without_an_unread_badge(tmp_path, mon
     assert engine._session_needs_auto_reply_check(changed) is True
 
 
+def test_auto_reply_candidate_dedupes_same_content_when_message_id_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    inbound = {
+        "peer_id": "customer-a",
+        "direction": "in",
+        "content": "same inbound text",
+        "provider_message_id": "provider-id-a",
+        "id": "local-id-a",
+        "created_at": "2026-08-12T13:00:00",
+    }
+    assert engine._record_auto_reply_history(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {**inbound, "auto_reply_inbound_id": "provider-id-a"},
+        reply="reply once",
+        status="sent",
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_message_record",
+        lambda *_args, **_kwargs: {
+            **inbound,
+            "provider_message_id": "provider-id-b",
+            "id": "local-id-b",
+            "created_at": "2026-08-12T13:30:00",
+        },
+    )
+
+    assert engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a") is None
+
+
+def test_auto_reply_candidate_rejects_self_message_even_if_direction_was_stored_as_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    with engine._connect() as conn:
+        conn.execute(
+            """
+            insert into wechat_messages(
+                id, account_id, peer_id, direction, msg_type, content, provider_message_id, status, raw_json, created_at
+            )
+            values(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "self-message-row",
+                engine.LOCAL_DEFAULT_ACCOUNT_ID,
+                "customer-a",
+                "in",
+                "text",
+                "this is our own message",
+                "self-message-provider",
+                "sent",
+                engine._json_dumps({"attr": "self"}),
+                "2026-08-12T14:00:00",
+            ),
+        )
+
+    assert engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a") is None
+
+
 def test_new_session_snapshot_does_not_reply_to_historical_content():
     assert engine._session_needs_auto_reply_check(
         {
@@ -797,6 +857,44 @@ async def test_takeover_session_stops_before_next_scan_when_slot_owner_changes(m
 
     assert local_calls == []
     assert result["completed_rounds"] == 0
+    assert result["ok"] is False
+    assert result["stop_reason"] == "slot_ownership_changed"
+
+
+@pytest.mark.asyncio
+async def test_takeover_session_stops_after_current_round_when_cloud_run_is_cancelled(monkeypatch):
+    event_statuses = iter([200, 200, 409])
+    local_calls = []
+    sleeps = []
+
+    async def post_event(*_args, **_kwargs):
+        return next(event_statuses)
+
+    async def post_local(*_args, **_kwargs):
+        local_calls.append(True)
+        return {"ok": True, "items": []}
+
+    async def no_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(channel, "_post_task_event", post_event)
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel.asyncio, "sleep", no_sleep)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=object(),
+        base="https://example.test",
+        run_id="run",
+        rounds=10,
+        interval_seconds=15,
+        session_seconds=1800,
+    )
+
+    assert local_calls == [True]
+    assert sleeps == []
+    assert result["completed_rounds"] == 1
     assert result["ok"] is False
     assert result["stop_reason"] == "slot_ownership_changed"
 

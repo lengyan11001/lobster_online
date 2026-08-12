@@ -1,6 +1,7 @@
 import json
 import logging
 import asyncio
+import os
 from typing import Any, Dict, List
 
 import httpx
@@ -42,6 +43,39 @@ _TRANSIENT_IMAGE_ERRORS = (
     httpx.WriteError,
     httpx.PoolTimeout,
 )
+
+_DEFAULT_IMAGE_STUDIO_TIMEOUT_SECONDS = 360.0
+
+
+def _is_pending_duplicate_response(status_code: int, detail: str) -> bool:
+    if int(status_code or 0) != 409:
+        return False
+    text = str(detail or "")
+    return "仍在生成" in text or "same image task" in text.lower() or "pending" in text.lower()
+
+
+def _configured_image_studio_timeout_seconds() -> float:
+    raw = (
+        os.environ.get("LOBSTER_IMAGE_STUDIO_TIMEOUT_SECONDS")
+        or os.environ.get("COMFLY_IMAGE_TIMEOUT_SECONDS")
+        or ""
+    ).strip()
+    if not raw:
+        return _DEFAULT_IMAGE_STUDIO_TIMEOUT_SECONDS
+    try:
+        return max(60.0, min(600.0, float(raw)))
+    except (TypeError, ValueError):
+        return _DEFAULT_IMAGE_STUDIO_TIMEOUT_SECONDS
+
+
+def _reference_meta(upload_payloads: List[Dict[str, Any]] | None, reference_urls: List[str] | None) -> Dict[str, int]:
+    upload_count = len(upload_payloads or [])
+    url_count = len(reference_urls or [])
+    return {
+        "reference_count": upload_count + url_count,
+        "upload_reference_count": upload_count,
+        "reference_url_count": url_count,
+    }
 
 
 def _normalize_image_aspect_ratio(value: str) -> str:
@@ -207,13 +241,21 @@ async def _generate_image_studio_core(
     reference_image_urls: List[str] | None = None,
     size_override: str | None = None,
     auto_save: bool = True,
-    timeout_seconds: float = 180.0,
-    max_attempts: int = 1,
+    timeout_seconds: float | None = None,
+    max_attempts: int = 3,
 ) -> Dict[str, Any]:
     prompt = (prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="请输入图片提示词")
 
+    try:
+        effective_timeout = (
+            _configured_image_studio_timeout_seconds()
+            if timeout_seconds is None
+            else max(60.0, min(600.0, float(timeout_seconds)))
+        )
+    except (TypeError, ValueError):
+        effective_timeout = _configured_image_studio_timeout_seconds()
     normalized_ratio = _normalize_image_aspect_ratio(aspect_ratio)
     size = (size_override or "").strip() or _ASPECT_TO_SIZE.get(normalized_ratio, "1024x1024")
     api_base, api_key = _resolve_comfly_credentials(current_user.id, db, request)
@@ -241,6 +283,9 @@ async def _generate_image_studio_core(
             body["output_quality"] = 100
     if background and background != "auto":
         body["background"] = background
+    client_request_id = str(request.headers.get("X-Client-Request-Id") or "").strip()
+    if client_request_id:
+        body["client_request_id"] = client_request_id
     refs = [
         str(url or "").strip()
         for url in (reference_image_urls or [])
@@ -268,17 +313,36 @@ async def _generate_image_studio_core(
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     attempts = max(1, min(5, int(max_attempts or 1)))
     last_exc: Exception | None = None
+    resp = None
     for attempt in range(1, attempts + 1):
         try:
-            async with httpx.AsyncClient(timeout=max(30.0, float(timeout_seconds or 180.0))) as client:
+            async with httpx.AsyncClient(timeout=effective_timeout, trust_env=False) as client:
                 if files:
                     url = _comfly_endpoint(api_base, "/v1/images/edits")
-                    data = {k: str(v) for k, v in body.items() if k != "response_format"}
+                    data = {k: str(v) for k, v in body.items() if k != "image" and v is not None}
+                    data.setdefault("response_format", "url")
                     if refs:
                         data["image"] = json.dumps(refs, ensure_ascii=False)
+                    logger.info(
+                        "[comfly_image_studio] submit edit user_id=%s model=%s size=%s files=%s refs=%s timeout=%s",
+                        current_user.id,
+                        model_id,
+                        size,
+                        len(files),
+                        len(refs),
+                        int(effective_timeout),
+                    )
                     resp = await client.post(url, headers=headers, data=data, files=files)
                 else:
                     url = _comfly_endpoint(api_base, "/v1/images/generations")
+                    logger.info(
+                        "[comfly_image_studio] submit generation user_id=%s model=%s size=%s refs=%s timeout=%s",
+                        current_user.id,
+                        model_id,
+                        size,
+                        len(refs),
+                        int(effective_timeout),
+                    )
                     resp = await client.post(url, headers={**headers, "Content-Type": "application/json"}, json=body)
             break
         except _TRANSIENT_IMAGE_ERRORS as exc:
@@ -292,8 +356,9 @@ async def _generate_image_studio_core(
             )
             if attempt >= attempts:
                 if isinstance(exc, httpx.TimeoutException):
-                    raise HTTPException(status_code=504, detail=f"图片生成超时，已等待 {int(timeout_seconds or 180)} 秒，请稍后重试") from exc
-                raise HTTPException(status_code=502, detail=f"图片生成连接中断，已自动重试 {attempts} 次：{exc}") from exc
+                    raise HTTPException(status_code=504, detail=f"图片生成超时，已等待 {int(effective_timeout)} 秒，请稍后重试") from exc
+                retry_count = max(0, attempts - 1)
+                raise HTTPException(status_code=502, detail=f"图片生成连接中断，已自动重试 {retry_count} 次仍未成功：{exc}") from exc
             await asyncio.sleep(min(2.0 * attempt, 6.0))
         except Exception as exc:
             logger.exception("[comfly_image_studio] request failed user_id=%s", current_user.id)
@@ -301,8 +366,23 @@ async def _generate_image_studio_core(
     else:
         raise HTTPException(status_code=502, detail=f"图片生成请求失败: {last_exc}")
 
-    if resp.status_code >= 400:
+    if resp is None:
+        raise HTTPException(status_code=502, detail=f"图片生成请求失败: {last_exc}")
+
+    pending_waits = 0
+    while resp.status_code >= 400:
         detail = _pick_error_detail(resp)
+        if files and _is_pending_duplicate_response(resp.status_code, detail) and pending_waits < 3:
+            pending_waits += 1
+            await asyncio.sleep(2.0 * pending_waits)
+            async with httpx.AsyncClient(timeout=effective_timeout, trust_env=False) as client:
+                url = _comfly_endpoint(api_base, "/v1/images/edits")
+                data = {k: str(v) for k, v in body.items() if k != "image" and v is not None}
+                data.setdefault("response_format", "url")
+                if refs:
+                    data["image"] = json.dumps(refs, ensure_ascii=False)
+                resp = await client.post(url, headers=headers, data=data, files=files)
+            continue
         logger.warning(
             "[comfly_image_studio] upstream reject user_id=%s status=%s detail=%s",
             current_user.id,
@@ -374,8 +454,11 @@ async def _run_image_studio_job(
     headers = {"authorization": f"Bearer {token}"}
     if install_id:
         headers["x-installation-id"] = install_id
+    headers["x-client-request-id"] = job_id
     request = Request({**scope, "headers": Headers(headers).raw})
     current_user = _ServerUser(id=user_id)
+    reference_urls = list(payload.get("reference_image_urls") or [])
+    reference_meta = _reference_meta(upload_payloads, reference_urls)
     update_job(job_id, status="running", stage="generating")
     auth_header = f"Bearer {token}" if token else ""
     await sync_creative_job_to_cloud(
@@ -389,7 +472,7 @@ async def _run_image_studio_job(
         title="图片任务",
         prompt=str(payload.get("prompt") or ""),
         request_payload=payload,
-        meta={"reference_count": len(upload_payloads or [])},
+        meta=reference_meta,
     )
     db = SessionLocal()
     try:
@@ -403,7 +486,7 @@ async def _run_image_studio_job(
             quality=str(payload.get("quality") or "high"),
             background=str(payload.get("background") or "auto"),
             upload_payloads=upload_payloads,
-            reference_image_urls=list(payload.get("reference_image_urls") or []),
+            reference_image_urls=reference_urls,
         )
         update_job(
             job_id,
@@ -443,6 +526,7 @@ async def _run_image_studio_job(
             prompt=str(payload.get("prompt") or ""),
             request_payload=payload,
             error=error,
+            meta=reference_meta,
         )
     except Exception as exc:
         logger.exception("[comfly_image_studio] async job failed job_id=%s", job_id)
@@ -460,6 +544,7 @@ async def _run_image_studio_job(
             prompt=str(payload.get("prompt") or ""),
             request_payload=payload,
             error=error,
+            meta=reference_meta,
         )
     finally:
         db.close()
@@ -599,6 +684,7 @@ async def comfly_image_studio_generate_start(
     if not payload["prompt"]:
         raise HTTPException(status_code=400, detail="请输入图片提示词")
     upload_payloads = await _upload_files_to_payloads(images or [])
+    reference_meta = _reference_meta(upload_payloads, reference_urls)
     job_id = create_job_record(user_id=current_user.id, payload=payload)
     auth = (request.headers.get("Authorization") or "").strip()
     token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
@@ -614,7 +700,7 @@ async def comfly_image_studio_generate_start(
         title="图片任务",
         prompt=str(payload.get("prompt") or ""),
         request_payload=payload,
-        meta={"reference_count": len(upload_payloads or [])},
+        meta=reference_meta,
     ))
 
     async def _runner() -> None:

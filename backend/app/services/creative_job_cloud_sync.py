@@ -11,6 +11,19 @@ from ..core.config import get_settings
 from .oem_brand_context import with_oem_brand_header
 
 logger = logging.getLogger(__name__)
+_OMIT_CLOUD_PAYLOAD_KEYS = {
+    "b64_json",
+    "base64",
+    "base64_json",
+    "data_url",
+    "dataUrl",
+    "raw_response",
+    "rawResponse",
+    "raw_payload",
+    "rawPayload",
+    "upstream_raw",
+    "upstreamRaw",
+}
 
 
 def normalized_auth_header(auth_header: str) -> str:
@@ -49,6 +62,47 @@ def json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [json_safe(v) for v in value]
     return str(value)
+
+
+def compact_cloud_job_payload(value: Any, *, string_limit: int = 12000, max_items: int = 80, _depth: int = 0) -> Any:
+    if _depth > 8:
+        return {"omitted": True, "reason": "max_depth"}
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("data:"):
+            return {"omitted": True, "kind": "data_url", "length": len(value)}
+        if len(value) > string_limit:
+            return value[:string_limit] + f"...[truncated {len(value) - string_limit} chars]"
+        return value
+    if isinstance(value, (list, tuple)):
+        result = [compact_cloud_job_payload(item, string_limit=string_limit, max_items=max_items, _depth=_depth + 1) for item in list(value)[:max_items]]
+        if len(value) > max_items:
+            result.append({"omitted": True, "reason": "too_many_items", "count": len(value) - max_items})
+        return result
+    if isinstance(value, dict):
+        compacted: Dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in _OMIT_CLOUD_PAYLOAD_KEYS:
+                low = key_text.lower()
+                if low in {"b64_json", "base64", "base64_json"}:
+                    kind = "base64"
+                elif "data" in low:
+                    kind = "data_url"
+                else:
+                    kind = "raw_payload"
+                compacted[key_text] = {"omitted": True, "kind": kind, "length": len(str(item or ""))}
+                continue
+            compacted[key_text] = compact_cloud_job_payload(
+                item,
+                string_limit=string_limit,
+                max_items=max_items,
+                _depth=_depth + 1,
+            )
+        return compacted
+    return json_safe(value)
 
 
 async def sync_creative_job_to_cloud(
@@ -100,12 +154,12 @@ async def sync_creative_job_to_cloud(
         "progress": progress,
         "title": title or None,
         "prompt": prompt or None,
-        "request_payload": json_safe(request_payload or {}),
-        "result_payload": json_safe(result_payload or {}),
-        "saved_assets": json_safe(saved),
+        "request_payload": compact_cloud_job_payload(json_safe(request_payload or {})),
+        "result_payload": compact_cloud_job_payload(json_safe(result_payload or {})),
+        "saved_assets": compact_cloud_job_payload(json_safe(saved)),
         "asset_ids": merged_asset_ids,
         "error": (error or "")[:4000] or None,
-        "meta": json_safe(meta or {}),
+        "meta": compact_cloud_job_payload(json_safe(meta or {})),
     }
     headers = with_oem_brand_header({"Authorization": auth, "Content-Type": "application/json"})
     if installation_id:

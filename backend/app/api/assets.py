@@ -674,12 +674,39 @@ def _refresh_asset_source_url_from_local_file(
         logger.warning("[assets] cannot refresh source_url: local file missing asset_id=%s reason=%s", getattr(row, "asset_id", ""), reason)
         return None
     filename = row.filename or local_path.name
-    public_url, diag = _upload_local_asset_to_auth_server_sync(
-        local_path,
-        filename,
-        _content_type_for_asset_filename(filename),
-        request,
-    )
+    public_url: Optional[str] = None
+    diag: dict[str, Any] = {}
+    content_type = _content_type_for_asset_filename(filename)
+    for attempt in range(1, 4):
+        public_url, diag = _upload_local_asset_to_auth_server_sync(
+            local_path,
+            filename,
+            content_type,
+            request,
+        )
+        if public_url:
+            break
+        err_text = str(diag.get("error") or diag.get("body") or "")
+        transient = any(
+            token in err_text
+            for token in (
+                "RemoteProtocolError",
+                "Server disconnected",
+                "ReadTimeout",
+                "ConnectTimeout",
+                "Connection reset",
+            )
+        )
+        if attempt >= 3 or not transient:
+            break
+        logger.warning(
+            "[assets] refresh source_url transient failure asset_id=%s attempt=%s reason=%s diag=%s",
+            row.asset_id,
+            attempt,
+            reason,
+            diag,
+        )
+        time.sleep(1.0 if attempt == 1 else 2.0)
     if not public_url:
         logger.warning("[assets] refresh source_url failed asset_id=%s reason=%s diag=%s", row.asset_id, reason, diag)
         return None

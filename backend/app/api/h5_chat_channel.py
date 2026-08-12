@@ -7536,6 +7536,23 @@ async def _run_native_wechat_takeover_session(
                     "summary_text": str(result.get("summary_text") or "").strip(),
                 }
             )
+            if cloud is not None and base and run_id:
+                event_status = await _post_task_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    "running",
+                    {
+                        "text": f"\u4e2a\u5fae\u79c1\u4fe1\u63a5\u7ba1\u7b2c {round_number}/{round_count} \u8f6e\u5df2\u5b8c\u6210",
+                        "round": round_number,
+                        "round_count": round_count,
+                        "heartbeat": True,
+                    },
+                )
+                if _task_event_rejects_local_work(event_status):
+                    stop_reason = "slot_ownership_changed"
+                    break
         except Exception as exc:
             consecutive_driver_failures += 1
             output["failed"] += 1
@@ -8062,7 +8079,7 @@ async def _run_client_workflow_action(
             "options": publish_options,
         }
         account_id = str(source.get("account_id") or "").strip()
-        if account_id.isdigit():
+        if re.fullmatch(r"-?\d+", account_id):
             publish_body["account_id"] = int(account_id)
         publish_result = await _post_local_api_json(
             "/api/publish",

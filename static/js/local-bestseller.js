@@ -309,6 +309,59 @@
     return checked ? checked.value : 'upload';
   }
 
+  function mediaPreviewUrl(item) {
+    if (!item || typeof item !== 'object') return '';
+    var fields = [
+      item.object_url,
+      item.objectUrl,
+      item.preview_url,
+      item.previewUrl,
+      item.local_preview_url,
+      item.localPreviewUrl,
+      item.source_url,
+      item.sourceUrl,
+      item.url,
+      item.open_url,
+      item.openUrl
+    ];
+    for (var i = 0; i < fields.length; i += 1) {
+      var url = String(fields[i] || '').trim();
+      if (url) return url;
+    }
+    return '';
+  }
+
+  function mediaSourceUrl(item) {
+    if (!item || typeof item !== 'object') return '';
+    var fields = [
+      item.source_url,
+      item.sourceUrl,
+      item.url,
+      item.open_url,
+      item.openUrl,
+      item.preview_url,
+      item.previewUrl,
+      item.object_url,
+      item.objectUrl
+    ];
+    for (var i = 0; i < fields.length; i += 1) {
+      var url = String(fields[i] || '').trim();
+      if (url) return url;
+    }
+    return '';
+  }
+
+  function imageWithFallbackHtml(url, className, label) {
+    var text = escapeHtml(label || '图片暂不可预览');
+    var wrapClass = 'lb-image-wrap' + (className ? ' ' + className : '');
+    var fallback = '<span class="lb-image-fallback">' + text + '</span>';
+    if (!url) return '<span class="' + wrapClass + ' is-empty">' + fallback + '</span>';
+    return '<span class="' + wrapClass + '">' +
+      fallback +
+      '<img src="' + escapeHtml(url) + '" alt="" loading="lazy" decoding="async" onerror="this.style.display=\'none\';this.previousElementSibling.style.display=\'flex\';">' +
+    '</span>';
+  }
+
   function renderSelectedMedia() {
     var box = $('localBestsellerSelectedMedia');
     if (!box) return;
@@ -322,7 +375,7 @@
     if (photo) {
       parts.push(
         '<div class="lb-media-chip">' +
-          '<img src="' + escapeHtml(photo.preview_url || photo.url || '') + '" alt="">' +
+          imageWithFallbackHtml(mediaPreviewUrl(photo), 'is-chip', '图片暂不可预览') +
           '<div><strong>' + escapeHtml(photo.name || '人物照片') + '</strong><span>' + escapeHtml(photo.asset_id || '本次上传') + '</span></div>' +
           '<button type="button" data-lb-remove-photo>×</button>' +
         '</div>'
@@ -342,12 +395,16 @@
 
   function normalizeAsset(row) {
     if (!row || !row.asset_id) return null;
-    var url = row.open_url || row.source_url || row.preview_url || row.url || '';
+    var previewUrl = row.object_url || row.objectUrl || row.preview_url || row.previewUrl || row.source_url || row.sourceUrl || row.url || row.open_url || '';
+    var url = row.source_url || row.sourceUrl || row.url || row.open_url || row.openUrl || row.preview_url || row.previewUrl || previewUrl || '';
     return {
       asset_id: row.asset_id,
       name: row.filename || row.name || row.asset_id,
       url: url,
-      preview_url: row.preview_url || url,
+      preview_url: previewUrl || url,
+      source_url: row.source_url || row.sourceUrl || url,
+      open_url: row.open_url || row.openUrl || '',
+      object_url: row.object_url || row.objectUrl || '',
       media_type: row.media_type || 'image',
       file_size: row.file_size || 0
     };
@@ -357,8 +414,8 @@
     var item = findPlanItem(day);
     if (!item || !asset) return;
     item.scene_asset_id = asset.asset_id || '';
-    item.scene_url = asset.url || asset.preview_url || '';
-    item.scene_preview_url = asset.preview_url || asset.url || '';
+    item.scene_url = mediaSourceUrl(asset);
+    item.scene_preview_url = mediaPreviewUrl(asset);
     item.scene_name = asset.name || asset.asset_id || '场景底图';
     item.prefer_scene_for_video = true;
   }
@@ -369,8 +426,8 @@
     state.plan.forEach(function(item, idx) {
       var asset = list[idx] || list[idx % list.length];
       item.scene_asset_id = asset.asset_id || '';
-      item.scene_url = asset.url || asset.preview_url || '';
-      item.scene_preview_url = asset.preview_url || asset.url || '';
+      item.scene_url = mediaSourceUrl(asset);
+      item.scene_preview_url = mediaPreviewUrl(asset);
       item.scene_name = asset.name || asset.asset_id || '场景底图';
       item.prefer_scene_for_video = true;
     });
@@ -403,6 +460,8 @@
           preview_url: result.data.preview_url || result.data.source_url || '',
           media_type: kind
         };
+        item.object_url = URL.createObjectURL(file);
+        item.preview_url = item.object_url || item.preview_url || item.url || '';
         return item;
       });
   }
@@ -509,7 +568,7 @@
     grid.innerHTML = state.assets.map(function(item) {
       var selected = state.batchSceneSelectedIds.indexOf(item.asset_id) !== -1;
       return '<button type="button" class="lb-asset-item' + (selected ? ' is-selected' : '') + '" data-lb-asset-id="' + escapeHtml(item.asset_id) + '">' +
-        '<img src="' + escapeHtml(item.preview_url || item.url) + '" alt="" loading="lazy" decoding="async">' +
+        imageWithFallbackHtml(mediaPreviewUrl(item), 'is-asset', '图片暂不可预览') +
         '<span>' + escapeHtml(item.name) + '</span>' +
       '</button>';
     }).join('');
@@ -711,7 +770,7 @@
       ].join('');
     }
     var preview = previewUrl
-      ? '<img class="lb-scene-image" src="' + escapeHtml(previewUrl) + '" alt="">'
+      ? imageWithFallbackHtml(previewUrl, 'is-scene', '图片暂不可预览')
       : '<div class="lb-phone-person"></div>';
     return preview + renderSubtitlePreview(item);
   }

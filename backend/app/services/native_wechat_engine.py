@@ -2304,6 +2304,43 @@ def _looks_like_group_session(item: Dict[str, Any]) -> bool:
     return False
 
 
+def _auto_reply_content_key(content: Any) -> str:
+    return re.sub(r"\s+", "", str(content or "")).strip().lower()
+
+
+def _auto_reply_recently_handled_same_content(
+    account_id: str,
+    peer_id: str,
+    content: str,
+    *,
+    window_seconds: int = 6 * 3600,
+) -> bool:
+    key = _auto_reply_content_key(content)
+    if not key:
+        return False
+    cutoff = datetime.utcnow().timestamp() - max(60, int(window_seconds or 0))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select inbound_content, created_at from wechat_auto_reply_history
+            where account_id=? and peer_id=? and status in ('sending','sent','skipped')
+            order by created_at desc
+            limit 20
+            """,
+            (account_id, peer_id),
+        ).fetchall()
+    for row in rows:
+        if _auto_reply_content_key(row["inbound_content"]) != key:
+            continue
+        try:
+            handled_at = datetime.fromisoformat(str(row["created_at"] or "")).timestamp()
+        except Exception:
+            handled_at = datetime.utcnow().timestamp()
+        if handled_at >= cutoff:
+            return True
+    return False
+
+
 def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
     latest = _latest_message_record(account_id, peer_id)
     if not latest or latest.get("direction") != "in":
@@ -2323,6 +2360,8 @@ def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict
             (account_id, peer_id, inbound_id),
         ).fetchone()
     if existed:
+        return None
+    if _auto_reply_recently_handled_same_content(account_id, peer_id, content):
         return None
     latest["auto_reply_inbound_id"] = inbound_id
     return latest
@@ -4292,6 +4331,8 @@ def _normalize_message_public(item: Dict[str, Any]) -> Dict[str, Any]:
     if msg_type == "time" or sender == "system" or attr == "system":
         out["direction"] = "system"
         out["msg_type"] = "time" if msg_type == "time" else (out.get("msg_type") or "system")
+    elif attr in {"self", "out", "me"}:
+        out["direction"] = "out"
     attachments = raw.get("attachments") if isinstance(raw, dict) else None
     out["attachments"] = attachments if isinstance(attachments, list) else []
     if out["attachments"]:
