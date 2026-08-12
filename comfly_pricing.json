@@ -67,6 +67,14 @@
       "comfly_model": "gpt-5.4",
       "note": "For Comfly storyboard analysis; temporary price aligned with existing chat proxy estimate."
     },
+    "gpt-5.5": {
+      "price_type": "per_token",
+      "input_price_per_1k_tokens": 0.125,
+      "output_price_per_1k_tokens": 1.0,
+      "api_format": "chat",
+      "comfly_model": "gpt-5.5",
+      "note": "For Comfly Seedance storyboard analysis; upstream probe on 2026-08-12 returned usage, price temporarily aligned with gpt-5.4 until official pricing is confirmed."
+    },
     "gpt-4o-mini": {
       "price_type": "per_call",
       "price_per_unit": 1,

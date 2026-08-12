@@ -1,7 +1,7 @@
 {
-  "version": "1.0.157",
-  "build": 201,
-  "applied_at": "2026-08-12T20:07:40+08:00",
-  "note": "server workload guard and online media workflow fixes",
-  "bundle_sha256": "c54fa7df4ec3007ede3b3582400f79aaa4ab28d42d8a086caf8052424e6be016"
+  "version": "1.0.159",
+  "build": 203,
+  "applied_at": "2026-08-12T21:05:42+08:00",
+  "note": "register gpt 5.5 pricing and stabilize media proxy routing",
+  "bundle_sha256": "57e5a7aa343b1d80ba4dea32320454c1cac1819be8b47b446ad0b89b437bcbf8"
 }
