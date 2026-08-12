@@ -11,6 +11,7 @@ import sys
 import time
 import uuid
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -174,60 +175,196 @@ def _normalize_auth_server_base(server_base: str) -> str:
     return upload_base
 
 
+_AUTH_SERVER_IMAGE_UPLOAD_MAX_BYTES = max(
+    512 * 1024,
+    int(os.environ.get("AUTH_SERVER_IMAGE_UPLOAD_MAX_BYTES") or str(2 * 1024 * 1024)),
+)
+_AUTH_SERVER_IMAGE_UPLOAD_MAX_DIMENSION = max(
+    512,
+    int(os.environ.get("AUTH_SERVER_IMAGE_UPLOAD_MAX_DIMENSION") or "2048"),
+)
+_AUTH_SERVER_IMAGE_UPLOAD_JPEG_QUALITY = min(
+    95,
+    max(70, int(os.environ.get("AUTH_SERVER_IMAGE_UPLOAD_JPEG_QUALITY") or "88")),
+)
+_AUTH_SERVER_UPLOAD_TIMEOUT = httpx.Timeout(
+    connect=float(os.environ.get("AUTH_SERVER_UPLOAD_CONNECT_TIMEOUT") or "8"),
+    read=float(os.environ.get("AUTH_SERVER_UPLOAD_READ_TIMEOUT") or "45"),
+    write=float(os.environ.get("AUTH_SERVER_UPLOAD_WRITE_TIMEOUT") or "45"),
+    pool=float(os.environ.get("AUTH_SERVER_UPLOAD_POOL_TIMEOUT") or "8"),
+)
+_AUTH_SERVER_UPLOAD_MAX_ATTEMPTS = max(
+    1,
+    min(3, int(os.environ.get("AUTH_SERVER_UPLOAD_MAX_ATTEMPTS") or "2")),
+)
+
+
+def _request_header(request: Request, name: str) -> str:
+    headers = getattr(request, "headers", {}) or {}
+    for key in (name, name.lower(), name.title()):
+        try:
+            value = headers.get(key)
+        except Exception:
+            value = None
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _auth_server_upload_headers(request: Request) -> tuple[Optional[dict[str, str]], Optional[dict[str, Any]]]:
+    auth_header = _request_header(request, "Authorization")
+    if not auth_header.lower().startswith("bearer "):
+        return None, {"error": "Authorization Bearer missing"}
+    headers = {"Authorization": auth_header}
+    installation_id = _request_header(request, "X-Installation-Id")
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    brand_mark = _request_header(request, "X-Lobster-Brand")
+    if brand_mark:
+        headers["X-Lobster-Brand"] = brand_mark
+    return headers, None
+
+
+def _snapshot_auth_server_upload_headers(request: Request) -> dict[str, str]:
+    headers, _err = _auth_server_upload_headers(request)
+    return dict(headers or {})
+
+
+class _HeaderSnapshotRequest:
+    def __init__(self, headers: dict[str, str]):
+        self.headers = headers
+
+
+def _is_cloud_upload_image(filename: str, content_type: str) -> bool:
+    ext = Path(filename or "").suffix.lower()
+    ct = (content_type or "").lower()
+    if ext == ".gif" or "gif" in ct:
+        return False
+    return ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp") or ct.startswith("image/")
+
+
+def _optimize_image_for_auth_server_upload(
+    data: bytes,
+    filename: str,
+    content_type: str,
+) -> tuple[bytes, str, str, bool]:
+    """Shrink local images before mirroring them to the server/CDN for upstream models."""
+    if not data or not _is_cloud_upload_image(filename, content_type):
+        return data, filename, content_type, False
+    try:
+        from io import BytesIO
+        from PIL import Image
+
+        img = Image.open(BytesIO(data))
+        if getattr(img, "is_animated", False):
+            return data, filename, content_type, False
+        w, h = img.size
+        resized = False
+        if w > _AUTH_SERVER_IMAGE_UPLOAD_MAX_DIMENSION or h > _AUTH_SERVER_IMAGE_UPLOAD_MAX_DIMENSION:
+            scale = min(_AUTH_SERVER_IMAGE_UPLOAD_MAX_DIMENSION / w, _AUTH_SERVER_IMAGE_UPLOAD_MAX_DIMENSION / h)
+            nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+            img = img.resize((nw, nh), Image.Resampling.LANCZOS)
+            resized = True
+        if img.mode in ("RGBA", "LA") or "transparency" in img.info:
+            rgba = img.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            background.alpha_composite(rgba)
+            img = background.convert("RGB")
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        should_reencode = resized or len(data) > _AUTH_SERVER_IMAGE_UPLOAD_MAX_BYTES
+        if not should_reencode:
+            return data, filename, content_type, False
+        out = BytesIO()
+        img.save(
+            out,
+            "JPEG",
+            quality=_AUTH_SERVER_IMAGE_UPLOAD_JPEG_QUALITY,
+            optimize=True,
+            progressive=True,
+        )
+        optimized = out.getvalue()
+        if not optimized:
+            return data, filename, content_type, False
+        upload_name = f"{Path(filename or 'upload').stem or 'upload'}.jpg"
+        if len(optimized) < len(data) or resized:
+            logger.info(
+                "[assets] optimized image for cloud upload filename=%s old=%s new=%s resized=%s",
+                filename,
+                len(data),
+                len(optimized),
+                resized,
+            )
+            return optimized, upload_name, "image/jpeg", True
+        return data, filename, content_type, False
+    except Exception as exc:
+        logger.warning("[assets] image optimize for cloud upload skipped filename=%s err=%s", filename, exc)
+        return data, filename, content_type, False
+
+
 async def _upload_bytes_to_auth_server(
     data: bytes,
     filename: str,
     content_type: str,
     request: Request,
     *,
-    timeout: float = 120.0,
+    timeout: Any = _AUTH_SERVER_UPLOAD_TIMEOUT,
 ) -> tuple[Optional[str], dict[str, Any]]:
     server_base = (get_settings().auth_server_base or "").strip().rstrip("/")
     if not server_base:
         return None, {"error": "AUTH_SERVER_BASE missing"}
 
-    auth_header = (request.headers.get("Authorization") or "").strip() if request else ""
-    if not auth_header.lower().startswith("bearer "):
-        return None, {"error": "Authorization Bearer missing"}
+    headers, header_error = _auth_server_upload_headers(request)
+    if header_error:
+        return None, header_error
 
     upload_base = _normalize_auth_server_base(server_base)
     upload_url = f"{upload_base}/api/assets/upload-temp"
-    headers = {"Authorization": auth_header}
-    installation_id = (
-        request.headers.get("X-Installation-Id")
-        or request.headers.get("x-installation-id")
-        or ""
-    ).strip() if request else ""
-    if installation_id:
-        headers["X-Installation-Id"] = installation_id
-    brand_mark = (
-        request.headers.get("X-Lobster-Brand")
-        or request.headers.get("x-lobster-brand")
-        or ""
-    ).strip() if request else ""
-    if brand_mark:
-        headers["X-Lobster-Brand"] = brand_mark
+    upload_data, upload_filename, upload_content_type, optimized = _optimize_image_for_auth_server_upload(
+        data,
+        filename or "upload.bin",
+        content_type or "application/octet-stream",
+    )
 
     last_error: Optional[str] = None
-    for attempt in range(1, 4):
+    for attempt in range(1, _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS + 1):
         try:
+            started = time.monotonic()
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 resp = await client.post(
                     upload_url,
-                    files={"file": (filename or "upload.bin", data, content_type or "application/octet-stream")},
+                    files={"file": (upload_filename, upload_data, upload_content_type)},
                     headers=headers,
                     follow_redirects=True,
                 )
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             break
         except (httpx.ReadTimeout, httpx.ReadError, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
             last_error = f"{type(e).__name__}: {e}"
-            if attempt >= 3:
-                return None, {"error": last_error, "attempt": attempt, "upload_url": upload_url}
+            if attempt >= _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS:
+                return None, {
+                    "error": last_error,
+                    "attempt": attempt,
+                    "upload_url": upload_url,
+                    "upload_size": len(upload_data),
+                    "optimized_for_cloud_upload": optimized,
+                }
             await asyncio.sleep(1.0 if attempt == 1 else 3.0)
         except Exception as e:
-            return None, {"error": f"{type(e).__name__}: {e}", "attempt": attempt, "upload_url": upload_url}
+            return None, {
+                "error": f"{type(e).__name__}: {e}",
+                "attempt": attempt,
+                "upload_url": upload_url,
+                "upload_size": len(upload_data),
+                "optimized_for_cloud_upload": optimized,
+            }
     try:
-        diag: dict[str, Any] = {"status_code": resp.status_code}
+        diag: dict[str, Any] = {
+            "status_code": resp.status_code,
+            "elapsed_ms": elapsed_ms,
+            "upload_size": len(upload_data),
+            "optimized_for_cloud_upload": optimized,
+        }
         if resp.status_code >= 400:
             diag["error"] = f"server returned {resp.status_code}"
             diag["body_snip"] = (resp.text or "")[:400]
@@ -642,24 +779,70 @@ def _upload_local_asset_to_auth_server_sync(
     server_base = (get_settings().auth_server_base or "").strip().rstrip("/")
     if not server_base:
         return None, {"error": "AUTH_SERVER_BASE missing"}
-    auth_header = (request.headers.get("Authorization") or "").strip() if request else ""
-    if not auth_header.lower().startswith("bearer "):
-        return None, {"error": "Authorization Bearer missing"}
+    headers, header_error = _auth_server_upload_headers(request)
+    if header_error:
+        return None, header_error
     upload_url = f"{_normalize_auth_server_base(server_base)}/api/assets/upload-temp"
     try:
-        with path.open("rb") as fh:
-            files = {"file": (filename or path.name, fh, content_type or "application/octet-stream")}
-            with httpx.Client(timeout=180.0, follow_redirects=True, trust_env=False) as client:
-                resp = client.post(upload_url, files=files, headers={"Authorization": auth_header})
+        raw_size = path.stat().st_size
+        upload_filename = filename or path.name
+        upload_content_type = content_type or "application/octet-stream"
+        optimized = False
+        upload_size = raw_size
+        upload_source = None
+        close_upload_source = False
+        if _is_cloud_upload_image(upload_filename, upload_content_type):
+            raw_data = path.read_bytes()
+            upload_data, upload_filename, upload_content_type, optimized = _optimize_image_for_auth_server_upload(
+                raw_data,
+                upload_filename,
+                upload_content_type,
+            )
+            upload_size = len(upload_data)
+            upload_source = BytesIO(upload_data)
+            close_upload_source = True
+        else:
+            upload_source = path.open("rb")
+            close_upload_source = True
+        started = time.monotonic()
+        try:
+            files = {"file": (upload_filename or path.name, upload_source, upload_content_type or "application/octet-stream")}
+            with httpx.Client(timeout=_AUTH_SERVER_UPLOAD_TIMEOUT, follow_redirects=True, trust_env=False) as client:
+                resp = client.post(upload_url, files=files, headers=headers)
+        finally:
+            if close_upload_source and upload_source is not None:
+                try:
+                    upload_source.close()
+                except Exception:
+                    pass
+        elapsed_ms = int((time.monotonic() - started) * 1000)
         data = resp.json() if resp.content else {}
     except Exception as exc:
         return None, {"error": f"{type(exc).__name__}: {exc}"}
     if resp.status_code >= 400:
-        return None, {"http_status": resp.status_code, "body": data or (resp.text or "")[:500]}
+        return None, {
+            "http_status": resp.status_code,
+            "body": data or (resp.text or "")[:500],
+            "upload_size": locals().get("upload_size"),
+            "optimized_for_cloud_upload": bool(locals().get("optimized", False)),
+            "elapsed_ms": locals().get("elapsed_ms"),
+        }
     if not isinstance(data, dict):
-        return None, {"http_status": resp.status_code, "body": str(data)[:500]}
+        return None, {
+            "http_status": resp.status_code,
+            "body": str(data)[:500],
+            "upload_size": locals().get("upload_size"),
+            "optimized_for_cloud_upload": bool(locals().get("optimized", False)),
+            "elapsed_ms": locals().get("elapsed_ms"),
+        }
     public_url = str(data.get("public_url") or data.get("source_url") or data.get("url") or "").strip()
-    return (public_url or None), {"http_status": resp.status_code, "body": data}
+    return (public_url or None), {
+        "http_status": resp.status_code,
+        "body": data,
+        "upload_size": upload_size,
+        "optimized_for_cloud_upload": optimized,
+        "elapsed_ms": elapsed_ms,
+    }
 
 
 def _refresh_asset_source_url_from_local_file(
@@ -677,7 +860,8 @@ def _refresh_asset_source_url_from_local_file(
     public_url: Optional[str] = None
     diag: dict[str, Any] = {}
     content_type = _content_type_for_asset_filename(filename)
-    for attempt in range(1, 4):
+    for attempt in range(1, _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS + 1):
+        started = time.monotonic()
         public_url, diag = _upload_local_asset_to_auth_server_sync(
             local_path,
             filename,
@@ -687,6 +871,15 @@ def _refresh_asset_source_url_from_local_file(
         if public_url:
             break
         err_text = str(diag.get("error") or diag.get("body") or "")
+        logger.warning(
+            "[assets] refresh source_url attempt failed asset_id=%s attempt=%s/%s reason=%s elapsed_ms=%s diag=%s",
+            row.asset_id,
+            attempt,
+            _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS,
+            reason,
+            int((time.monotonic() - started) * 1000),
+            diag,
+        )
         transient = any(
             token in err_text
             for token in (
@@ -697,18 +890,21 @@ def _refresh_asset_source_url_from_local_file(
                 "Connection reset",
             )
         )
-        if attempt >= 3 or not transient:
+        if attempt >= _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS or not transient:
             break
-        logger.warning(
-            "[assets] refresh source_url transient failure asset_id=%s attempt=%s reason=%s diag=%s",
-            row.asset_id,
-            attempt,
-            reason,
-            diag,
-        )
         time.sleep(1.0 if attempt == 1 else 2.0)
     if not public_url:
         logger.warning("[assets] refresh source_url failed asset_id=%s reason=%s diag=%s", row.asset_id, reason, diag)
+        try:
+            meta = dict(row.meta or {})
+            meta["public_url_status"] = "failed"
+            meta["public_url_last_error"] = str(diag.get("error") or diag.get("body") or diag)[:500]
+            meta["public_url_last_attempt_at"] = datetime.utcnow().isoformat()
+            row.meta = meta
+            db.add(row)
+            db.commit()
+        except Exception:
+            logger.warning("[assets] failed to persist source_url failure meta asset_id=%s", row.asset_id, exc_info=True)
         return None
     old_url = (row.source_url or "").strip()
     row.source_url = public_url
@@ -716,6 +912,8 @@ def _refresh_asset_source_url_from_local_file(
         meta = dict(row.meta or {})
         meta["source_url_refreshed_at"] = datetime.utcnow().isoformat()
         meta["source_url_refresh_reason"] = reason[:80]
+        meta["public_url_status"] = "ready"
+        meta.pop("public_url_last_error", None)
         if old_url:
             meta["previous_source_url"] = old_url[:500]
         row.meta = meta
@@ -725,6 +923,32 @@ def _refresh_asset_source_url_from_local_file(
     db.commit()
     logger.info("[assets] refreshed source_url asset_id=%s old=%s new=%s", row.asset_id, old_url[:80], public_url[:80])
     return public_url
+
+
+def _warm_asset_source_url_background(asset_id: str, user_id: int, headers: dict[str, str]) -> None:
+    if not asset_id or not user_id:
+        return
+    db = SessionLocal()
+    try:
+        row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == user_id).first()
+        if not row or (row.source_url or "").strip():
+            return
+        meta = dict(row.meta or {})
+        meta["public_url_status"] = "preparing"
+        meta["public_url_prepare_started_at"] = datetime.utcnow().isoformat()
+        row.meta = meta
+        db.add(row)
+        db.commit()
+        _refresh_asset_source_url_from_local_file(
+            row,
+            _HeaderSnapshotRequest(headers),
+            db,
+            reason="post_upload_warmup",
+        )
+    except Exception:
+        logger.warning("[assets] background source_url warmup failed asset_id=%s user_id=%s", asset_id, user_id, exc_info=True)
+    finally:
+        db.close()
 
 
 def get_asset_public_url(
@@ -2181,7 +2405,6 @@ async def _save_asset_from_url_locked(
                 fname,
                 ct,
                 request,
-                timeout=180.0,
             )
             if server_upload_url:
                 effective_url = server_upload_url
@@ -2347,6 +2570,7 @@ async def save_asset_from_url(
 @router.post("/api/assets/upload", summary="上传素材文件")
 async def upload_asset(
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
@@ -2373,6 +2597,8 @@ async def upload_asset(
     if mtype == "image":
         data, ct = await asyncio.to_thread(_resize_image_if_needed, data, ext, ct)
     aid, fname, fsize = await asyncio.to_thread(_save_bytes, data, ext)
+    upload_headers = _snapshot_auth_server_upload_headers(request) if mtype == "image" else {}
+    public_url_status = "preparing" if upload_headers else "deferred_until_use"
     asset = Asset(
         asset_id=aid,
         user_id=current_user.id,
@@ -2383,11 +2609,13 @@ async def upload_asset(
         meta={
             "asset_origin": "user_upload",
             "storage": "local",
-            "public_url_status": "deferred_until_use",
+            "public_url_status": public_url_status,
         },
     )
     db.add(asset)
     db.commit()
+    if upload_headers:
+        background_tasks.add_task(_warm_asset_source_url_background, aid, current_user.id, upload_headers)
     logger.info("[素材本地上传] 已落盘 asset_id=%s filename=%s size=%s media_type=%s", aid, fname, fsize, mtype)
     return {
         "asset_id": aid,
@@ -2396,7 +2624,7 @@ async def upload_asset(
         "file_size": fsize,
         "source_url": None,
         "local_only": True,
-        "public_url_status": "deferred_until_use",
+        "public_url_status": public_url_status,
     }
 
 

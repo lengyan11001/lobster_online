@@ -454,6 +454,7 @@ class ComflyClient:
         self.logger = logger
         self.base_url = config.base_url.rstrip("/")
         self.session = requests.Session()
+        self.session.trust_env = False
         self.session.headers.update({"Authorization": f"Bearer {config.api_key}", "Accept": "application/json"})
 
     def _check(self, response: requests.Response) -> Dict[str, Any]:

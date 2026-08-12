@@ -1056,6 +1056,7 @@ class ComflySeedanceClient:
         self.config.video_base_url = self.video_base_url
         self.config.video_fallback_base_url = self.video_fallback_base_url
         self.session = requests.Session()
+        self.session.trust_env = False
         self.session.headers.update({"Authorization": f"Bearer {config.api_key.strip()}", "Accept": "application/json"})
 
     def _trace_request(self, phase: str, url: str, body: Any) -> None:

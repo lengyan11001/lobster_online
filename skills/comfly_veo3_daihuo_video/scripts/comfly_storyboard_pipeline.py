@@ -575,6 +575,7 @@ class ComflyClient:
         fallback_default_base = _default_video_base_url(self.video_fallback_channel, self.base_url)
         self.video_fallback_base_url = _normalize_api_base_url(config.video_fallback_base_url, fallback_default_base)
         self.session = requests.Session()
+        self.session.trust_env = False
         self.session.headers.update(
             {"Authorization": f"Bearer {_normalize_comfly_api_key(config.api_key)}", "Accept": "application/json"}
         )
