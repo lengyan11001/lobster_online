@@ -546,6 +546,26 @@ def _non_retryable(exc: Exception) -> bool:
     return any(key in text for key in ("http 400", "http 401", "http 403", "http 404", "missing", "not found"))
 
 
+def _is_transient_network_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return any(
+        flag in text
+        for flag in (
+            "remotedisconnected",
+            "remote end closed connection",
+            "connection aborted",
+            "connection reset",
+            "connection refused",
+            "connection broken",
+            "temporarily unavailable",
+            "readtimeout",
+            "read timed out",
+            "timed out",
+            "timeout",
+        )
+    )
+
+
 def _is_insufficient_credit_error(exc: Exception) -> bool:
     text = str(exc or "").lower()
     return "http 402" in text or "积分不足" in str(exc or "") or "余额不足" in str(exc or "")
@@ -585,16 +605,21 @@ def _is_transient_video_poll_error(exc: Exception, channel: str) -> bool:
 
 def _retry(action: str, attempts: int, delay: int, logger_obj: RunLogger, fn: Callable[[], Any]) -> tuple[Any, int]:
     last: Optional[Exception] = None
-    for i in range(1, attempts + 1):
+    max_attempts = max(1, int(attempts or 1))
+    if action.startswith("analyze"):
+        max_attempts = max(max_attempts, 4)
+    for i in range(1, max_attempts + 1):
         try:
             return fn(), i
         except Exception as exc:
             last = exc
             logger_obj.error(action, f"attempt {i} failed: {exc}")
-            if i >= attempts or _non_retryable(exc):
+            if i >= max_attempts or _non_retryable(exc):
+                break
+            if action.startswith("analyze") and not _is_transient_network_error(exc):
                 break
             time.sleep(delay * i)
-    raise PipelineError(f"{action} failed after {attempts} attempt(s): {last}")
+    raise PipelineError(f"{action} failed after {max_attempts} attempt(s): {last}")
 
 
 def _parse_json(text: str) -> Dict[str, Any]:

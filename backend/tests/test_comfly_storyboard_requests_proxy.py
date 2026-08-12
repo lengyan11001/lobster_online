@@ -41,3 +41,41 @@ def test_ecommerce_detail_client_ignores_system_proxy(tmp_path: Path) -> None:
     client = mod.ComflyClient(config, mod.RunLogger(str(tmp_path), config, {}))
 
     assert client.session.trust_env is False
+
+
+def test_seedance_storyboard_analysis_retries_remote_disconnect_beyond_default(tmp_path: Path) -> None:
+    mod = _load_module("skills/comfly_seedance_tvc_video/scripts/comfly_seedance_storyboard_pipeline.py")
+    config = mod.PipelineConfig(
+        base_url="https://bhzn.top/api/comfly-proxy",
+        api_key="token",
+        analysis_model="gpt-5.4",
+        analysis_model_fallback="off",
+        analysis_retries=2,
+        network_retry_delay_seconds=0,
+    )
+    client = mod.ComflySeedanceClient(config, mod.RunLogger(str(tmp_path), config, {}))
+
+    class _Response:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": "{\"ok\": true}"}}], "usage": {}}
+
+    calls = {"count": 0}
+
+    def _post(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            raise mod.requests.exceptions.ConnectionError(
+                "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+            )
+        return _Response()
+
+    client.session.post = _post
+
+    result, attempts = client.analyze(["https://cdn.example.test/ref.jpg"])
+
+    assert result["ok"] is True
+    assert attempts == 3
+    assert calls["count"] == 3
