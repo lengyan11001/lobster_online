@@ -1,7 +1,7 @@
 {
-  "version": "1.0.166",
-  "build": 210,
-  "applied_at": "2026-08-14T00:58:32+08:00",
-  "note": "slot identity and h5 device dispatch",
-  "bundle_sha256": "bb6930205defb770229d1febdede52a15d46c4086edd8955eb47b1650d137f3c"
+  "version": "1.0.167",
+  "build": 211,
+  "applied_at": "2026-08-14T02:02:44+08:00",
+  "note": "digital human template picker",
+  "bundle_sha256": "9901c20dc2153b8f5f03387a00919b654083f6373ddfab4dfc3123fe3ae66588"
 }
