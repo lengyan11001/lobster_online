@@ -365,6 +365,37 @@ def _article_paragraph_contexts(markdown: str, title: str = "", max_count: int =
     return [c for c in contexts if c.strip()]
 
 
+def _build_distinct_article_image_prompt(
+    *,
+    title: str,
+    global_style: str,
+    paragraph_context: str,
+    image_role: str,
+    image_index: int,
+) -> str:
+    scene_plans = [
+        "Opening image: a wide real-world scene with people, storefront/service counter or work desk, clear environment context, no robot as the main subject.",
+        "Problem image: a close-up human action scene showing the specific pain point from this paragraph, different location and camera angle from the opening image.",
+        "Method image: a workflow/process scene with hands, tools, phone or checklist, showing how the paragraph method is executed, no repeated office monitor composition.",
+        "Case image: a customer interaction or field operation scene connected to this paragraph, use a different subject, color accent and lens distance.",
+        "Ending image: a result/after-state scene with visible progress or handoff, calm and clean, not the same person/office/screen setup as previous images.",
+    ]
+    plan = scene_plans[image_index % len(scene_plans)]
+    paragraph = (paragraph_context or title or global_style or "").strip()
+    style = (global_style or "").strip()
+    return (
+        "Create one WeChat official account article illustration.\n"
+        f"Article title for context only: {title or 'untitled article'}\n"
+        f"Paragraph to illustrate, this is the main subject: {paragraph}\n"
+        f"Image role: {image_role}\n"
+        f"Required visual plan: {plan}\n"
+        f"Global style reference only, do not repeat its exact subject if it conflicts with the paragraph: {style or 'clean modern editorial commercial photography'}\n"
+        "Make this image clearly different from the other article images: different primary subject, different location, different camera distance, different props and composition.\n"
+        "Do not generate a generic robot, repeated office, repeated dashboard, repeated computer screen, title text, captions, watermark or logo.\n"
+        "No readable text in the image. Use realistic clean editorial photography suitable for a Chinese WeChat article."
+    )
+
+
 def _raw_token_from_request(request: Request) -> str:
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
@@ -754,6 +785,20 @@ async def _generate_article_images(
             f"差异化要求：这是第 {idx + 1} 张配图，必须围绕当前段落生成不同主体、不同镜头、不同场景细节；"
             "不要连续生成同一个机器人/同一个办公室/同一个电脑屏幕视角；不要出现文字、标题、水印、logo；"
             "画面真实、干净、适合微信公众号正文阅读。"
+        )
+        prompt_i = _build_distinct_article_image_prompt(
+            title=title,
+            global_style=base_prompt,
+            paragraph_context=context,
+            image_role=role,
+            image_index=idx,
+        )
+        logger.info(
+            "[wechat-article] generate paragraph image idx=%s title=%s context=%s prompt=%s",
+            idx + 1,
+            (title or "")[:80],
+            (context or "")[:180],
+            prompt_i[:500],
         )
         last_error = ""
         async with semaphore:
