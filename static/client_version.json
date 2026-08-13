@@ -1,7 +1,7 @@
 {
-  "version": "1.0.167",
-  "build": 211,
-  "applied_at": "2026-08-14T02:02:44+08:00",
-  "note": "digital human template picker",
-  "bundle_sha256": "9901c20dc2153b8f5f03387a00919b654083f6373ddfab4dfc3123fe3ae66588"
+  "version": "1.0.168",
+  "build": 212,
+  "applied_at": "2026-08-14T03:23:35+08:00",
+  "note": "image studio async proxy poll",
+  "bundle_sha256": "40d9f24647172809b9c2e36422055deef9d2bde0cee34faa4cd3cbd33cb001bb"
 }

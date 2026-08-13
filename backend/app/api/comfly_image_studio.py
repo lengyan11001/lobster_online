@@ -3,6 +3,7 @@ import logging
 import asyncio
 import os
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -203,9 +204,107 @@ def _pick_error_detail(resp: httpx.Response) -> str:
 
 def _comfly_endpoint(api_base: str, path: str) -> str:
     base = (api_base or "").strip().rstrip("/")
-    if base.lower().endswith("/v1") and path.startswith("/v1/"):
+    p = str(path or "").strip()
+    if not p.startswith("/"):
+        p = f"/{p}"
+
+    base_lower = base.lower()
+    path_lower = p.lower()
+    if path_lower.startswith("/api/comfly-proxy/") and "/api/comfly-proxy" in base_lower:
+        parsed = urlparse(base)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}{p}"
+
+    if base_lower.endswith("/v1") and p.startswith("/v1/"):
         base = base[:-3].rstrip("/")
-    return f"{base}{path}"
+    elif base_lower.endswith("/v2") and p.startswith("/v2/"):
+        base = base[:-3].rstrip("/")
+    return f"{base}{p}"
+
+
+def _is_async_proxy_unavailable(resp: httpx.Response) -> bool:
+    if resp.status_code in (404, 405):
+        return True
+    if resp.status_code >= 500:
+        text = (resp.text or "").lower()
+        return "not found" in text and "start" in text
+    return False
+
+
+async def _poll_comfly_proxy_job(
+    *,
+    client: httpx.AsyncClient,
+    api_base: str,
+    headers: Dict[str, str],
+    poll_path: str,
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    poll_url = _comfly_endpoint(api_base, poll_path)
+    deadline = asyncio.get_running_loop().time() + max(30.0, timeout_seconds)
+    interval = 1.5
+    while True:
+        if asyncio.get_running_loop().time() >= deadline:
+            raise HTTPException(status_code=504, detail="图片生成已提交，但等待服务端结果超时，请稍后刷新记录")
+        resp = await client.get(poll_url, headers=headers)
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail=_pick_error_detail(resp))
+        try:
+            payload = resp.json() if resp.content else {}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="图片生成状态返回格式异常") from exc
+        status = str(payload.get("status") or "").strip().lower()
+        if status == "completed":
+            result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+            if isinstance(result, dict):
+                return result
+            raise HTTPException(status_code=502, detail="图片生成结果格式异常")
+        if status == "failed":
+            raise HTTPException(status_code=502, detail=str(payload.get("error") or "图片生成失败"))
+        await asyncio.sleep(interval)
+        interval = min(interval + 0.5, 5.0)
+
+
+async def _submit_comfly_image_request(
+    *,
+    client: httpx.AsyncClient,
+    api_base: str,
+    headers: Dict[str, str],
+    path: str,
+    timeout_seconds: float,
+    json_body: Dict[str, Any] | None = None,
+    data: Dict[str, str] | None = None,
+    files: List[tuple[str, tuple[str, bytes, str]]] | None = None,
+) -> Dict[str, Any] | httpx.Response:
+    url = _comfly_endpoint(api_base, path)
+    start_url = _comfly_endpoint(api_base, f"{path}/start")
+    request_headers = dict(headers)
+    if json_body is not None:
+        request_headers["Content-Type"] = "application/json"
+        start_resp = await client.post(start_url, headers=request_headers, json=json_body)
+    else:
+        start_resp = await client.post(start_url, headers=request_headers, data=data or {}, files=files or [])
+    if not _is_async_proxy_unavailable(start_resp):
+        if start_resp.status_code >= 400:
+            raise HTTPException(status_code=start_resp.status_code, detail=_pick_error_detail(start_resp))
+        try:
+            start_payload = start_resp.json() if start_resp.content else {}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="图片生成提交返回格式异常") from exc
+        poll_path = str(start_payload.get("poll_path") or "").strip()
+        job_id = str(start_payload.get("job_id") or "").strip()
+        if start_payload.get("async") and poll_path and job_id:
+            logger.info("[comfly_image_studio] submitted async proxy image job_id=%s path=%s", job_id, path)
+            return await _poll_comfly_proxy_job(
+                client=client,
+                api_base=api_base,
+                headers=headers,
+                poll_path=poll_path,
+                timeout_seconds=timeout_seconds,
+            )
+        return start_payload
+    if json_body is not None:
+        return await client.post(url, headers=request_headers, json=json_body)
+    return await client.post(url, headers=headers, data=data or {}, files=files or [])
 
 
 def _status_response(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -332,7 +431,15 @@ async def _generate_image_studio_core(
                         len(refs),
                         int(effective_timeout),
                     )
-                    resp = await client.post(url, headers=headers, data=data, files=files)
+                    resp = await _submit_comfly_image_request(
+                        client=client,
+                        api_base=api_base,
+                        headers=headers,
+                        path="/v1/images/edits",
+                        timeout_seconds=effective_timeout,
+                        data=data,
+                        files=files,
+                    )
                 else:
                     url = _comfly_endpoint(api_base, "/v1/images/generations")
                     logger.info(
@@ -343,7 +450,14 @@ async def _generate_image_studio_core(
                         len(refs),
                         int(effective_timeout),
                     )
-                    resp = await client.post(url, headers={**headers, "Content-Type": "application/json"}, json=body)
+                    resp = await _submit_comfly_image_request(
+                        client=client,
+                        api_base=api_base,
+                        headers=headers,
+                        path="/v1/images/generations",
+                        timeout_seconds=effective_timeout,
+                        json_body=body,
+                    )
             break
         except _TRANSIENT_IMAGE_ERRORS as exc:
             last_exc = exc
@@ -369,33 +483,35 @@ async def _generate_image_studio_core(
     if resp is None:
         raise HTTPException(status_code=502, detail=f"图片生成请求失败: {last_exc}")
 
-    pending_waits = 0
-    while resp.status_code >= 400:
-        detail = _pick_error_detail(resp)
-        if files and _is_pending_duplicate_response(resp.status_code, detail) and pending_waits < 3:
-            pending_waits += 1
-            await asyncio.sleep(2.0 * pending_waits)
-            async with httpx.AsyncClient(timeout=effective_timeout, trust_env=False) as client:
-                url = _comfly_endpoint(api_base, "/v1/images/edits")
-                data = {k: str(v) for k, v in body.items() if k != "image" and v is not None}
-                data.setdefault("response_format", "url")
-                if refs:
-                    data["image"] = json.dumps(refs, ensure_ascii=False)
-                resp = await client.post(url, headers=headers, data=data, files=files)
-            continue
-        logger.warning(
-            "[comfly_image_studio] upstream reject user_id=%s status=%s detail=%s",
-            current_user.id,
-            resp.status_code,
-            detail,
-        )
-        raise HTTPException(status_code=resp.status_code, detail=detail)
+    if isinstance(resp, dict):
+        payload = resp
+    else:
+        pending_waits = 0
+        while resp.status_code >= 400:
+            detail = _pick_error_detail(resp)
+            if files and _is_pending_duplicate_response(resp.status_code, detail) and pending_waits < 3:
+                pending_waits += 1
+                await asyncio.sleep(2.0 * pending_waits)
+                async with httpx.AsyncClient(timeout=effective_timeout, trust_env=False) as client:
+                    data = {k: str(v) for k, v in body.items() if k != "image" and v is not None}
+                    data.setdefault("response_format", "url")
+                    if refs:
+                        data["image"] = json.dumps(refs, ensure_ascii=False)
+                    resp = await client.post(_comfly_endpoint(api_base, "/v1/images/edits"), headers=headers, data=data, files=files)
+                continue
+            logger.warning(
+                "[comfly_image_studio] upstream reject user_id=%s status=%s detail=%s",
+                current_user.id,
+                resp.status_code,
+                detail,
+            )
+            raise HTTPException(status_code=resp.status_code, detail=detail)
 
-    try:
-        payload = resp.json()
-    except Exception as exc:
-        logger.exception("[comfly_image_studio] invalid json user_id=%s", current_user.id)
-        raise HTTPException(status_code=502, detail="图片生成返回格式异常") from exc
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            logger.exception("[comfly_image_studio] invalid json user_id=%s", current_user.id)
+            raise HTTPException(status_code=502, detail="图片生成返回格式异常") from exc
 
     rows = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:
