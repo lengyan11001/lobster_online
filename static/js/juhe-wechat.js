@@ -1299,9 +1299,13 @@
     setMsg('正在同步通讯录...', false);
     return apiJson('/api/native-wechat/contacts/sync', {
       method: 'POST',
-      body: { account_id: id, limit: 2000 }
+      body: { account_id: id, limit: 10000 }
     }).then(function(data) {
-      setMsg('同步完成：' + (data.count || 0) + ' 条', false);
+      var count = Number(data.count || 0);
+      var total = Number(data.total_after || 0);
+      var note = total && total !== count ? ('，库内共 ' + total + ' 条') : '';
+      if (data.partial) note += '，本次可能未扫到底，已保留历史记录';
+      setMsg('同步完成：本次读取 ' + count + ' 条' + note, false);
       return Promise.all([loadContacts(), loadPeers()]);
     }).catch(function(err) {
       setMsg(err.message || '同步通讯录失败', true);

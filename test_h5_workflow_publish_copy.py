@@ -366,6 +366,51 @@ async def test_moments_child_drops_explicit_source_title(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_wechat_moments_publish_waits_for_local_queue_final_status(monkeypatch):
+    calls = []
+
+    async def post_local(path, body, **kwargs):
+        calls.append(("post", path, body))
+        return {
+            "ok": True,
+            "queued": True,
+            "task": {"id": "moments-task", "status": "pending"},
+            "message": "queued",
+        }
+
+    poll_responses = iter(
+        [
+            {"ok": True, "task": {"id": "moments-task", "status": "running"}},
+            {"ok": True, "task": {"id": "moments-task", "status": "success", "success": 1}},
+        ]
+    )
+
+    async def get_local(path, **kwargs):
+        calls.append(("get", path, None))
+        return next(poll_responses)
+
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel, "_get_local_api_json", get_local)
+
+    result = await channel._submit_local_publish_draft(
+        draft={
+            "platform": "wechat_moments",
+            "description": "朋友圈正文",
+            "account_id": "pc-wechat-default",
+        },
+        headers={},
+    )
+
+    assert result["status"] == "success"
+    assert result["queued"] is False
+    assert [call[1] for call in calls] == [
+        "/api/native-wechat/moments/publish",
+        "/api/native-wechat/tasks/moments-task",
+        "/api/native-wechat/tasks/moments-task",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_wechat_channels_child_strips_symbols_from_short_title(monkeypatch):
     calls = []
 

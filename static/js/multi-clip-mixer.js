@@ -7,17 +7,20 @@
     segmentContext: null,
     templates: [],
     templateCatalog: [],
+    templateCatalogProvider: '',
     selectedTemplate: null,
     overlayTexts: {},
     positionOverrides: {},
     musicOptions: [],
     selectedMusic: null,
+    templateProvider: 'local',
     busy: false,
     resultObjectUrl: '',
     previewAudio: null,
     lastBaseResult: null,
     templatePollTimer: null,
-    pendingTemplateTask: null
+    pendingTemplateTask: null,
+    batchResults: []
   };
 
   function $(id) { return document.getElementById(id); }
@@ -34,7 +37,14 @@
       : api);
   }
 
+  function shanjianApiBase(path) {
+    var cloud = cloudBaseUrl();
+    if (String(path || '').indexOf('/api/shanjian-') === 0 && cloud) return cloud;
+    return apiBase();
+  }
+
   function requestBase(path) {
+    if (String(path || '').indexOf('/api/shanjian-') === 0) return shanjianApiBase(path);
     return apiBase();
   }
 
@@ -51,8 +61,8 @@
     });
   }
 
-  function request(path, options, allowErrorPayload) {
-    return fetch(requestBase(path) + path, options || {}).then(function(response) {
+  function requestTo(base, path, options, allowErrorPayload) {
+    return fetch(base + path, options || {}).then(function(response) {
       return response.json().catch(function() { return {}; }).then(function(data) {
         if (!response.ok || (!allowErrorPayload && data.ok === false)) {
           var detail = data.detail || data.error || data.message || ('请求失败：HTTP ' + response.status);
@@ -61,6 +71,13 @@
         return data;
       });
     });
+  }
+
+  function request(path, options, allowErrorPayload) {
+    if (String(path || '').indexOf('/api/shanjian-') === 0) {
+      return requestTo(shanjianApiBase(path), path, options, allowErrorPayload);
+    }
+    return requestTo(requestBase(path), path, options, allowErrorPayload);
   }
 
   function post(path, body, allowErrorPayload) {
@@ -96,22 +113,89 @@
     if (add) add.disabled = state.busy;
   }
 
-  function defaultSegment(index, duration) {
-    var start = Math.max(0, Number(index || 0) * 3);
-    var end = start + 3;
+  function readFixedSegment(duration) {
+    var start = Number((($('mcmFixedStart') || {}).value || 0));
+    var end = Number((($('mcmFixedEnd') || {}).value || 3));
+    if (!Number.isFinite(start) || start < 0) start = 0;
+    if (!Number.isFinite(end) || end <= start) end = start + 3;
+    var span = Math.max(0.1, end - start);
     if (Number.isFinite(duration) && duration > 0) {
-      if (start >= duration) start = Math.max(0, duration - Math.min(3, duration));
-      end = Math.min(duration, start + 3);
-      if (duration >= 3 && end - start < 3) {
-        end = duration;
-        start = Math.max(0, end - 3);
-      }
+      if (start >= duration) start = Math.max(0, duration - Math.min(span, duration));
+      end = Math.min(duration, start + span);
       if (end <= start) {
         start = 0;
-        end = duration;
+        end = Math.min(duration, span);
       }
     }
     return { start: Math.round(start * 10) / 10, end: Math.round(end * 10) / 10 };
+  }
+
+  function defaultSegment(index, duration) {
+    return readFixedSegment(duration);
+  }
+
+  function currentClipMode() {
+    var checked = document.querySelector('input[name="mcmClipMode"]:checked');
+    return checked && checked.value === 'random' ? 'random' : 'fixed';
+  }
+
+  function currentTemplateProvider() {
+    var checked = document.querySelector('input[name="mcmTemplateProvider"]:checked');
+    state.templateProvider = checked && checked.value === 'shanjian' ? 'shanjian' : 'local';
+    return state.templateProvider;
+  }
+
+  function randomChoice(items) {
+    var list = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (!list.length) return null;
+    return list[Math.floor(Math.random() * list.length)];
+  }
+
+  function markedAudioClip() {
+    return state.clips.find(function(clip) { return !!clip.audioMaster; }) || null;
+  }
+
+  function randomSegmentForClip(clip, seconds) {
+    var duration = Math.max(0, Number((clip || {}).duration || 0));
+    var span = Math.max(0.1, Math.min(Number(seconds || 3), duration || Number(seconds || 3)));
+    var maxStart = Math.max(0, duration - span);
+    var start = maxStart > 0 ? Math.random() * maxStart : 0;
+    var end = Math.min(duration || (start + span), start + span);
+    if (end <= start) end = start + span;
+    return { start: Math.round(start * 10) / 10, end: Math.round(end * 10) / 10 };
+  }
+
+  function buildClipPlan(outputIndex) {
+    var mode = currentClipMode();
+    var randomSeconds = Number((($('mcmRandomSegmentSeconds') || {}).value || 3));
+    return state.clips.map(function(clip) {
+      var segment = mode === 'random'
+        ? randomSegmentForClip(clip, randomSeconds)
+        : { start: Number(clip.startSec || 0), end: Number(clip.endSec || 0) };
+      return { asset_id: clip.assetId, start_sec: segment.start, end_sec: segment.end };
+    });
+  }
+
+  function outputCount() {
+    if (currentClipMode() !== 'random') return 1;
+    var count = parseInt((($('mcmRandomOutputCount') || {}).value || 1), 10);
+    return Math.max(1, Math.min(Number.isFinite(count) ? count : 1, 20));
+  }
+
+  function applyFixedRangeToAll() {
+    if (!state.clips.length) return;
+    state.clips.forEach(function(clip) {
+      var segment = readFixedSegment(Number(clip.duration || 0));
+      clip.startSec = segment.start;
+      clip.endSec = segment.end;
+    });
+    renderClips();
+  }
+
+  function syncModePanels() {
+    var mode = currentClipMode();
+    if ($('mcmFixedModePanel')) $('mcmFixedModePanel').hidden = mode !== 'fixed';
+    if ($('mcmRandomModePanel')) $('mcmRandomModePanel').hidden = mode !== 'random';
   }
 
   function totalSelectedDuration() {
@@ -169,15 +253,16 @@
       var timelineStart = timelineCursor;
       var timelineEnd = timelineStart + clipDuration;
       timelineCursor = timelineEnd;
-      return '<article class="mcm-clip-item" data-clip-index="' + index + '">'
+      return '<article class="mcm-clip-item' + (clip.audioMaster ? ' is-audio-master' : '') + '" data-clip-index="' + index + '">'
         + '<div class="mcm-clip-thumb"><video src="' + escapeHtml(source) + '" muted preload="metadata"></video><span class="mcm-clip-number">' + (index + 1) + '</span></div>'
         + '<div class="mcm-clip-copy"><strong title="' + escapeHtml(clip.name) + '">' + escapeHtml(clip.name) + '</strong>'
         + '<span>' + escapeHtml(timelineStart.toFixed(1)) + ' - ' + escapeHtml(timelineEnd.toFixed(1)) + ' 秒</span>'
         + '<small>取原片 ' + escapeHtml(Number(clip.startSec).toFixed(1)) + ' - ' + escapeHtml(Number(clip.endSec).toFixed(1))
-        + ' 秒 · 原片 ' + escapeHtml(formatSeconds(clip.duration)) + '</small></div>'
+        + ' 秒 · 原片 ' + escapeHtml(formatSeconds(clip.duration)) + (clip.audioMaster ? ' · 主音轨' : '') + '</small></div>'
         + '<div class="mcm-clip-actions">'
         + '<button type="button" data-action="up" title="上移" aria-label="上移"' + (index === 0 ? ' disabled' : '') + '>↑</button>'
         + '<button type="button" data-action="down" title="下移" aria-label="下移"' + (index === state.clips.length - 1 ? ' disabled' : '') + '>↓</button>'
+        + '<button type="button" data-action="audio" class="mcm-audio-master-btn" title="设为整条视频主音轨">' + (clip.audioMaster ? '主音轨' : '取音') + '</button>'
         + '<button type="button" data-action="edit" title="修改片段">编辑</button>'
         + '<button type="button" data-action="remove" title="移除" aria-label="移除">×</button>'
         + '</div></article>';
@@ -528,6 +613,29 @@
     };
   }
 
+  function mergePositionOverrides(defaults, overrides) {
+    var result = {
+      caption: Object.assign({}, (defaults || {}).caption || {}),
+      overlay: Object.assign({}, (defaults || {}).overlay || {})
+    };
+    if (overrides && typeof overrides === 'object') {
+      if (overrides.caption && typeof overrides.caption === 'object') {
+        result.caption = Object.assign(result.caption, overrides.caption);
+      }
+      if (overrides.overlay && typeof overrides.overlay === 'object') {
+        Object.keys(overrides.overlay).forEach(function(key) {
+          result.overlay[key] = Object.assign({}, result.overlay[key] || {}, overrides.overlay[key] || {});
+        });
+      }
+    }
+    return result;
+  }
+
+  function templatePositionOverridesForSubmit() {
+    if (!state.selectedTemplate) return {};
+    return mergePositionOverrides(defaultPositionOverrides(state.selectedTemplate), state.positionOverrides || {});
+  }
+
   function layoutPreviewSource() {
     var clip = state.clips[0];
     return clip ? (clip.sourceUrl || clip.previewUrl || '') : templateDemo(state.selectedTemplate || {});
@@ -566,6 +674,10 @@
     var editor = $('mcmTemplateLayoutEditor');
     var media = $('mcmTemplateLayoutMedia');
     if (!panel || !editor || !media) return;
+    if (currentTemplateProvider() === 'shanjian') {
+      panel.hidden = true;
+      return;
+    }
     panel.hidden = !state.selectedTemplate;
     if (!state.selectedTemplate) return;
     var clip = state.clips[0] || {};
@@ -611,6 +723,11 @@
     var panel = $('mcmTemplateOverlayPanel');
     var fieldsRoot = $('mcmTemplateOverlayFields');
     if (!panel || !fieldsRoot) return;
+    if (currentTemplateProvider() === 'shanjian') {
+      panel.hidden = true;
+      fieldsRoot.innerHTML = '';
+      return;
+    }
     var fields = templateOverlayFields(state.selectedTemplate);
     panel.hidden = !fields.length;
     fieldsRoot.innerHTML = fields.map(function(field) {
@@ -650,13 +767,45 @@
     renderTemplates();
   }
 
+  function normalizeShanjianTemplate(item) {
+    item = item || {};
+    var id = item.id || item.styleId || item.style_id || item.templateId || item.template_id || '';
+    return Object.assign({}, item, {
+      id: String(id),
+      name: item.name || item.title || item.styleName || item.style_name || '闪剪模板',
+      coverUrl: item.coverUrl || item.cover_url || item.cover || '',
+      preview_url: item.preview_url || item.previewUrl || item.demoUrl || item.demo_url || item.videoUrl || item.video_url || '',
+      provider: 'shanjian'
+    });
+  }
+
   function loadTemplates(refresh) {
-    if (!refresh && state.templateCatalog.length) {
+    var provider = currentTemplateProvider();
+    if (!refresh && state.templateCatalog.length && state.templateCatalogProvider === provider) {
       filterTemplates();
       return Promise.resolve(state.templates);
     }
+    if (provider === 'shanjian') {
+      return post('/api/shanjian-smart-clip/templates', {
+        scene: 'newsMixCutting',
+        page_size: 36,
+        sort_by: 'desc'
+      }).then(function(data) {
+        state.templateCatalog = (Array.isArray(data.results) ? data.results : []).map(normalizeShanjianTemplate).filter(function(item) {
+          return !!item.id;
+        });
+        state.templateCatalogProvider = provider;
+        if (state.selectedTemplate) {
+          selectTemplate(state.templateCatalog.find(function(item) { return String(item.id) === String(state.selectedTemplate.id); }) || null);
+        }
+        filterTemplates();
+        if (!state.templateCatalog.length) throw new Error('闪剪暂时没有返回可用模板。');
+        return state.templates;
+      });
+    }
     return request('/api/cutcli/local/templates', { headers: headers(false) }).then(function(data) {
       state.templateCatalog = Array.isArray(data.templates) ? data.templates : [];
+      state.templateCatalogProvider = provider;
       if (state.selectedTemplate) {
         selectTemplate(state.templateCatalog.find(function(item) { return String(item.id) === String(state.selectedTemplate.id); }) || null);
       }
@@ -787,9 +936,64 @@
     return setResultVideo(saved).then(function() { return saved; });
   }
 
+  function pollShanjianTask(taskId) {
+    return new Promise(function(resolve, reject) {
+      var startedAt = Date.now();
+      function poll() {
+        if (Date.now() - startedAt > 30 * 60 * 1000) return reject(new Error('闪剪模板处理超过 30 分钟，可稍后查看任务结果'));
+        post('/api/shanjian-smart-clip/task', { task_id: taskId }, true).then(function(data) {
+          var status = String(data.status || '').toLowerCase();
+          if ((status === 'succeed' || status === 'completed' || status === 'success') && data.video_url) return resolve(data);
+          if (status === 'failed' || data.ok === false) return reject(new Error(data.message || data.error_code || '闪剪模板处理失败'));
+          progress('template', 'active', data.status_text || ('闪剪任务 ' + taskId + ' 处理中'));
+          setTimeout(poll, 5000);
+        }).catch(function(error) {
+          if (Date.now() - startedAt > 30 * 60 * 1000) return reject(error);
+          progress('template', 'active', '闪剪查询暂时中断，5 秒后继续');
+          setTimeout(poll, 5000);
+        });
+      }
+      poll();
+    });
+  }
+
+  function applyShanjianTemplate(baseResult) {
+    if (!state.selectedTemplate) return Promise.reject(new Error('请先选择闪剪模板'));
+    var videoUrl = baseResult && (baseResult.source_url || baseResult.video_url || '');
+    if (!videoUrl) return Promise.reject(new Error('基础成片没有公网链接，无法提交闪剪模板；请先保证 TOS/转存成功。'));
+    progress('template', 'active', '正在提交闪剪模板任务');
+    return post('/api/shanjian-smart-clip/submit', {
+      title: '多段视频混剪',
+      scene: 'newsMixCutting',
+      style_id: state.selectedTemplate.id,
+      materials: [{ type: 'video', fileUrl: videoUrl }],
+      material_sound_switch: true,
+      material_composition: 'sequential',
+      video_duration: Math.max(5, Math.round(Number(baseResult.duration || 30))),
+      header_switch: true,
+      material_switch: true,
+      subtitle_switch: true,
+      keyword_switch: true,
+      watermark_show: true
+    }).then(function(submitted) {
+      if (!submitted.task_id) throw new Error('闪剪没有返回任务编号');
+      return pollShanjianTask(submitted.task_id);
+    }).then(function(task) {
+      var saved = {
+        source_url: task.video_url || '',
+        preview_url: task.video_url || '',
+        duration: Number(task.duration || baseResult.duration || 0),
+        completion_message: '闪剪模板成片已完成，可打开预览。'
+      };
+      progress('template', 'done', '闪剪模板处理完成');
+      return setResultVideo(saved).then(function() { return saved; });
+    });
+  }
+
   function applyTemplate(baseResult) {
     if (!state.selectedTemplate) return Promise.reject(new Error('请先选择剪辑模板'));
     if (!baseResult || (!baseResult.asset_id && !baseResult.source_url)) return Promise.reject(new Error('基础成片没有可用的素材记录，无法提交模板定制任务'));
+    if (currentTemplateProvider() === 'shanjian') return applyShanjianTemplate(baseResult);
     progress('template', 'active', '正在提交模板定制任务');
     if ($('mcmRetryTemplateBtn')) $('mcmRetryTemplateBtn').hidden = true;
     var modes = Array.isArray(state.selectedTemplate.render_modes) ? state.selectedTemplate.render_modes : ['ffmpeg'];
@@ -800,7 +1004,7 @@
       asset_id: baseResult.asset_id || '',
       video_url: baseResult.asset_id ? '' : (baseResult.source_url || ''),
       overlay_texts: readTemplateOverlayTexts(),
-      position_overrides: state.positionOverrides || {},
+      position_overrides: templatePositionOverridesForSubmit(),
       external_task_id: 'multi_clip_mixer_' + Date.now()
     }).then(function(submitted) {
       if (!submitted.job_id) throw new Error('模板定制没有返回任务编号');
@@ -812,42 +1016,137 @@
     });
   }
 
+  function selectedTemplateForRun(useTemplate) {
+    if (!useTemplate) return null;
+    if (currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked)) {
+      return randomChoice(state.templates) || state.selectedTemplate;
+    }
+    return state.selectedTemplate;
+  }
+
+  function selectedMusicForRun(useMusic) {
+    if (!useMusic) return null;
+    if (currentClipMode() === 'random' && (($('mcmRandomMusicSwitch') || {}).checked)) {
+      return randomChoice(state.musicOptions) || state.selectedMusic;
+    }
+    return state.selectedMusic;
+  }
+
+  function renderBatchResults() {
+    var root = $('mcmBatchResults');
+    if (!root) return;
+    root.hidden = !state.batchResults.length;
+    root.innerHTML = state.batchResults.map(function(result, index) {
+      var url = resolveUrl(result.source_url || result.video_url || result.preview_url || '', apiBase());
+      var label = result.template_name ? (' · ' + result.template_name) : '';
+      return '<article class="mcm-batch-item">'
+        + '<span>' + (index + 1) + '. ' + escapeHtml(formatSeconds(result.duration || 0)) + escapeHtml(label) + '</span>'
+        + (url ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + escapeHtml(url) + '">打开</a>' : '')
+        + '</article>';
+    }).join('');
+  }
+
+  function templateStateSnapshot() {
+    return {
+      selectedTemplate: state.selectedTemplate,
+      overlayTexts: Object.assign({}, state.overlayTexts || {}),
+      positionOverrides: mergePositionOverrides({}, state.positionOverrides || {})
+    };
+  }
+
+  function restoreTemplateState(snapshot) {
+    if (!snapshot) return;
+    state.selectedTemplate = snapshot.selectedTemplate || null;
+    state.overlayTexts = Object.assign({}, snapshot.overlayTexts || {});
+    state.positionOverrides = mergePositionOverrides({}, snapshot.positionOverrides || {});
+    renderTemplates();
+  }
+
+  function runOneRender(runIndex, totalRuns, options) {
+    var music = selectedMusicForRun(options.useMusic);
+    var audioClip = markedAudioClip();
+    var templateBeforeRun = templateStateSnapshot();
+    var template = selectedTemplateForRun(options.useTemplate);
+    if (options.useTemplate && template) selectTemplate(template);
+    progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
+    return post('/api/multi-clip-mixer/render', {
+      title: totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪',
+      clips: buildClipPlan(runIndex),
+      keep_original_audio: !audioClip && !!(($('mcmKeepAudioSwitch') || {}).checked),
+      audio_asset_id: audioClip ? audioClip.assetId : '',
+      target_duration: audioClip ? Number(audioClip.duration || 0) : null,
+      audio_volume: 1,
+      clip_mode: currentClipMode(),
+      output_index: runIndex,
+      bgm_url: music ? music.bgm_url : '',
+      bgm_name: music ? music.music_name : '',
+      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24))
+    }).then(function(baseResult) {
+      state.lastBaseResult = baseResult;
+      progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));
+      progress('music', 'done', music ? ('已添加 ' + music.music_name) : (audioClip ? '已使用标记视频主音轨' : '本次未添加音乐'));
+      return setResultVideo(baseResult).then(function() {
+        if (!options.useTemplate) {
+          progress('template', 'done', '本次未套用模板');
+          return baseResult;
+        }
+        setBusy(true, '正在套用模板 ' + runIndex + '/' + totalRuns + '...');
+        return applyTemplate(baseResult);
+      });
+    }).then(function(result) {
+      result = result || {};
+      if (template) result.template_name = template.name || '';
+      state.batchResults.push(result);
+      renderBatchResults();
+      if (options.useTemplate) restoreTemplateState(templateBeforeRun);
+      return result;
+    }).catch(function(error) {
+      if (options.useTemplate) restoreTemplateState(templateBeforeRun);
+      throw error;
+    });
+  }
+
   function generate() {
     if (state.busy) return;
     if (!state.clips.length) return showMessage('请先添加至少一个视频。', true);
     var useTemplate = !!(($('mcmTemplateSwitch') || {}).checked);
     var useMusic = !!(($('mcmMusicSwitch') || {}).checked);
-    if (useTemplate && !state.selectedTemplate) return showMessage('已开启定制模板，请先选择一个模板。', true);
-    if (useMusic && !state.selectedMusic) return showMessage('已开启音乐模板，请先选择一首音乐。', true);
-
-    showMessage('', false);
-    resetProgress();
-    setBusy(true, '正在裁剪并拼接...');
-    progress('merge', 'active', '正在处理 ' + state.clips.length + ' 个视频片段');
-    post('/api/multi-clip-mixer/render', {
-      title: '多段视频混剪',
-      clips: state.clips.map(function(clip) {
-        return { asset_id: clip.assetId, start_sec: clip.startSec, end_sec: clip.endSec };
-      }),
-      keep_original_audio: !!(($('mcmKeepAudioSwitch') || {}).checked),
-      bgm_url: useMusic ? state.selectedMusic.bgm_url : '',
-      bgm_name: useMusic ? state.selectedMusic.music_name : '',
-      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24))
-    }).then(function(baseResult) {
-      state.lastBaseResult = baseResult;
-      progress('merge', 'done', '片段拼接完成，共 ' + formatSeconds(baseResult.duration));
-      progress('music', 'done', useMusic ? ('已添加 ' + state.selectedMusic.music_name) : '本次未添加音乐');
-      return setResultVideo(baseResult).then(function() {
-        if (!useTemplate) {
-          progress('template', 'done', '本次未套用模板');
-          return baseResult;
-        }
-        setBusy(true, '正在套用定制模板...');
-        return applyTemplate(baseResult);
+    setBusy(true, '正在准备素材...');
+    Promise.resolve().then(function() {
+      if (useTemplate && !state.templateCatalog.length) return loadTemplates(true);
+      return null;
+    }).then(function() {
+      if (useMusic && !state.musicOptions.length) return loadMusicOptions();
+      return null;
+    }).then(function() {
+      var canRandomTemplate = currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked) && state.templates.length;
+      if (useTemplate && !state.selectedTemplate && !canRandomTemplate) throw new Error('已开启定制模板，请先选择一个模板，或在随机模式中开启模板随机。');
+      if (useMusic && !state.selectedMusic && !(currentClipMode() === 'random' && (($('mcmRandomMusicSwitch') || {}).checked) && state.musicOptions.length)) {
+        throw new Error('已开启音乐模板，请先选择一首音乐，或在随机模式中开启音乐随机。');
+      }
+      showMessage('', false);
+      state.batchResults = [];
+      renderBatchResults();
+      resetProgress();
+      setBusy(true, '正在裁剪并拼接...');
+      var totalRuns = outputCount();
+      var chain = Promise.resolve();
+      for (var index = 1; index <= totalRuns; index += 1) {
+        (function(runIndex) {
+          chain = chain.then(function() {
+            setBusy(true, totalRuns > 1 ? ('正在生成 ' + runIndex + '/' + totalRuns + '...') : '正在裁剪并拼接...');
+            return runOneRender(runIndex, totalRuns, { useTemplate: useTemplate, useMusic: useMusic });
+          });
+        })(index);
+      }
+      return chain.then(function(result) {
+        return { result: result, totalRuns: totalRuns };
       });
-    }).then(function(result) {
-      progress('done', 'done', '成片已保存到素材库');
-      showMessage((result && result.completion_message) || '视频生成完成，结果已保存到素材库。', false);
+    }).then(function(payload) {
+      var result = payload.result;
+      var totalRuns = payload.totalRuns;
+      progress('done', 'done', result && result.asset_id ? '成片已保存到素材库' : '成片已生成，可打开预览');
+      showMessage((result && result.completion_message) || ('视频生成完成，共 ' + totalRuns + ' 条结果已保存。'), false);
     }).catch(function(error) {
       var templateActive = document.querySelector('#mcmProgressList [data-stage="template"].is-active');
       if (templateActive && state.lastBaseResult) {
@@ -938,6 +1237,9 @@
       var index = Number(item.getAttribute('data-clip-index'));
       var action = button.getAttribute('data-action');
       if (action === 'edit') openSegmentForEdit(index);
+      if (action === 'audio') {
+        state.clips.forEach(function(clip, clipIndex) { clip.audioMaster = clipIndex === index ? !clip.audioMaster : false; });
+      }
       if (action === 'remove') state.clips.splice(index, 1);
       if (action === 'up' && index > 0) {
         var previous = state.clips[index - 1]; state.clips[index - 1] = state.clips[index]; state.clips[index] = previous;
@@ -956,9 +1258,25 @@
     if ($('mcmSegmentEnd')) $('mcmSegmentEnd').addEventListener('input', syncSegmentSummary);
     if ($('mcmPreviewSegmentBtn')) $('mcmPreviewSegmentBtn').addEventListener('click', previewSelectedSegment);
     if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').addEventListener('click', confirmSegment);
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmClipMode"]'), function(input) {
+      input.addEventListener('change', syncModePanels);
+    });
+    if ($('mcmApplyFixedBtn')) $('mcmApplyFixedBtn').addEventListener('click', applyFixedRangeToAll);
     if ($('mcmTemplateSwitch')) $('mcmTemplateSwitch').addEventListener('change', function(event) {
       $('mcmTemplatePanel').hidden = !event.target.checked;
       if (event.target.checked && !state.templateCatalog.length) loadTemplates(true).catch(function(error) { showMessage(error.message, true); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmTemplateProvider"]'), function(input) {
+      input.addEventListener('change', function() {
+        state.templateCatalog = [];
+        state.templateCatalogProvider = '';
+        state.templates = [];
+        state.selectedTemplate = null;
+        state.overlayTexts = {};
+        state.positionOverrides = {};
+        renderTemplates();
+        if (($('mcmTemplateSwitch') || {}).checked) loadTemplates(true).catch(function(error) { showMessage(error.message, true); });
+      });
     });
     if ($('mcmMusicSwitch')) $('mcmMusicSwitch').addEventListener('change', function(event) {
       $('mcmMusicPanel').hidden = !event.target.checked;
@@ -1060,7 +1378,9 @@
     if (!root || root.dataset.mcmInitialized === '1') return;
     root.dataset.mcmInitialized = '1';
     bindEvents();
+    syncModePanels();
     renderClips();
+    renderBatchResults();
     resetProgress();
     resumePendingTemplateTask();
   };

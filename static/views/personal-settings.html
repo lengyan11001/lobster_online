@@ -139,6 +139,36 @@
     .ps-template-card { border: 1px solid rgba(21,35,64,0.1); border-radius: 16px; background: #fff; padding: 0.72rem; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0.65rem; align-items: start; }
     .ps-template-card strong { display: block; }
     .ps-template-meta { color: var(--ps-muted); font-size: 0.78rem; margin-top: 0.18rem; }
+    .ps-dh-summary { border: 1px solid rgba(21,35,64,0.12); border-radius: 16px; background: #fff; padding: 0.75rem; display: grid; grid-template-columns: 56px minmax(0,1fr) auto; gap: 0.7rem; align-items: center; }
+    .ps-dh-summary.is-empty { grid-template-columns: 1fr; color: var(--ps-muted); }
+    .ps-dh-summary-cover { width: 56px; height: 72px; border-radius: 12px; overflow: hidden; background: linear-gradient(135deg, rgba(67,131,236,0.15), rgba(15,143,122,0.14)); display: grid; place-items: center; color: #4383ec; font-weight: 900; }
+    .ps-dh-summary-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ps-dh-summary-copy { min-width: 0; display: grid; gap: 0.12rem; }
+    .ps-dh-summary-copy strong { font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-dh-summary-copy small { color: var(--ps-muted); font-size: 0.74rem; }
+    .ps-dh-summary-note { color: var(--ps-muted); font-size: 0.74rem; text-align: right; line-height: 1.45; }
+    .ps-dh-summary.is-empty .ps-dh-summary-note { text-align: left; }
+    .ps-dh-modal { position: fixed; inset: 0; z-index: 22000; display: none; align-items: center; justify-content: center; padding: 1rem; background: rgba(13, 20, 33, 0.52); }
+    .ps-dh-modal.is-visible { display: flex; }
+    .ps-dh-modal-dialog { width: min(980px, 96vw); max-height: min(760px, 92vh); overflow: hidden; border-radius: 20px; background: #fff; border: 1px solid rgba(21,35,64,0.12); box-shadow: 0 32px 90px rgba(16,30,54,0.28); display: grid; grid-template-rows: auto auto auto minmax(220px, 1fr); }
+    .ps-dh-modal-head { display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; padding: 0.95rem 1rem; border-bottom: 1px solid var(--ps-line); }
+    .ps-dh-modal-head strong { font-size: 1rem; }
+    .ps-dh-modal-close { width: 36px; height: 36px; border: 0; border-radius: 50%; background: #f1f4f7; color: var(--ps-ink); cursor: pointer; font-size: 1.2rem; }
+    .ps-dh-modal-tools { padding: 0.75rem 1rem 0; display: grid; gap: 0.5rem; }
+    .ps-dh-modal-tools input { width: 100%; box-sizing: border-box; border: 1px solid rgba(21,35,64,0.16); border-radius: 14px; padding: 0.72rem 0.8rem; background: #fff; color: var(--ps-ink); }
+    .ps-dh-modal-status { padding: 0 1rem 0.5rem; color: var(--ps-muted); font-size: 0.82rem; }
+    .ps-dh-modal-status.error { color: #b42318; }
+    .ps-dh-modal-grid { min-height: 0; overflow: auto; padding: 0 1rem 1rem; display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 0.7rem; align-content: start; }
+    .ps-dh-card { min-width: 0; border: 1px solid rgba(21,35,64,0.1); border-radius: 16px; background: #fff; overflow: hidden; text-align: left; cursor: pointer; color: var(--ps-ink); display: grid; gap: 0; }
+    .ps-dh-card:hover, .ps-dh-card.is-selected { border-color: rgba(67,131,236,0.46); box-shadow: 0 12px 28px rgba(67,131,236,0.12); }
+    .ps-dh-card-cover { aspect-ratio: 3 / 4; background: linear-gradient(135deg, rgba(67,131,236,0.16), rgba(15,143,122,0.14)); display: grid; place-items: center; color: #4383ec; font-size: 0.9rem; font-weight: 900; overflow: hidden; position: relative; }
+    .ps-dh-card-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ps-dh-card-cover i { position: absolute; right: 0.5rem; top: 0.5rem; padding: 0.22rem 0.42rem; border-radius: 999px; background: rgba(19,27,43,0.68); color: #fff; font-style: normal; font-size: 0.72rem; }
+    .ps-dh-card-body { padding: 0.68rem 0.72rem 0.75rem; display: grid; gap: 0.16rem; }
+    .ps-dh-card-body strong { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-dh-card-body small { color: var(--ps-muted); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ps-dh-card.skeleton { min-height: 240px; background: linear-gradient(90deg, #f2f5f9 25%, #e9eef5 37%, #f2f5f9 63%); background-size: 400% 100%; animation: psSkeleton 1.2s ease infinite; }
+    @keyframes psSkeleton { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
     @media (max-width: 960px) {
       .ps-grid,
       .ps-inline,
@@ -154,6 +184,9 @@
       .ps-photo-picker-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
       .ps-survey-heading { grid-template-columns: 36px minmax(0,1fr); }
       .ps-survey-heading > span { grid-column: 2; justify-self: start; }
+      .ps-dh-summary { grid-template-columns: 56px minmax(0,1fr); }
+      .ps-dh-summary-note { grid-column: 1 / -1; text-align: left; }
+      .ps-dh-modal-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
     }
   </style>
 
@@ -765,6 +798,12 @@
               <option value="ar">العربية</option>
             </select>
           </div>
+          <div class="ps-card-title">数字人剪辑模板</div>
+          <div id="psDigitalHumanTemplateSummary" class="ps-dh-summary is-empty"></div>
+          <div class="ps-actions">
+            <button type="button" id="psDigitalHumanTemplateChooseBtn" class="btn btn-ghost btn-sm">选择模板</button>
+            <button type="button" id="psDigitalHumanTemplateClearBtn" class="btn btn-ghost btn-sm">不使用</button>
+          </div>
           <div class="ps-actions">
             <button type="button" id="psSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button>
             <button type="button" id="psNewTemplateBtn" class="btn btn-ghost btn-sm">新建模板</button>
@@ -782,5 +821,22 @@
         </section>
       </div>
     </section>
+  </div>
+</div>
+<div id="psDigitalHumanTemplateModal" class="ps-dh-modal" aria-hidden="true">
+  <div class="ps-dh-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="psDigitalHumanTemplateTitle">
+    <div class="ps-dh-modal-head">
+      <strong id="psDigitalHumanTemplateTitle">选择数字人剪辑模板</strong>
+      <button type="button" id="psDigitalHumanTemplateClose" class="ps-dh-modal-close" aria-label="关闭">×</button>
+    </div>
+    <div class="ps-dh-modal-tools">
+      <input id="psDigitalHumanTemplateSearch" type="search" placeholder="搜索模板名称或样式 ID">
+    </div>
+    <div id="psDigitalHumanTemplateStatus" class="ps-dh-modal-status"></div>
+    <div id="psDigitalHumanTemplateGrid" class="ps-dh-modal-grid"></div>
+    <div class="ps-dh-modal-foot" style="display:flex;gap:0.5rem;justify-content:flex-end;padding:0.9rem 1rem 1rem;border-top:1px solid var(--ps-line);">
+      <button type="button" id="psDigitalHumanTemplateCancel" class="btn btn-ghost btn-sm">取消</button>
+      <button type="button" id="psDigitalHumanTemplateConfirm" class="btn btn-primary btn-sm">确定</button>
+    </div>
   </div>
 </div>

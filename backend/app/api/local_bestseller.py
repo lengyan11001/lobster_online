@@ -768,7 +768,7 @@ async def _submit_card_video_via_seedance(
         aspect_ratio="9:16",
         generate_audio=True,
         watermark=False,
-        image_model_fallback="gpt-image-2-yunwu",
+        image_model_fallback="nano-banana-2",
     )
     return await start_seedance_tvc_pipeline_job(
         pl=pl,

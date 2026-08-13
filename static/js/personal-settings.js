@@ -35,7 +35,15 @@
     profilePhotoPickerOpen: false,
     profilePhotoPickerLoading: false,
     profilePhotoPickerQuery: '',
-    profilePhotoUploadBusy: false
+    profilePhotoUploadBusy: false,
+    personalDigitalHumanTemplates: [],
+    personalDigitalHumanTemplatesLoaded: false,
+    personalDigitalHumanTemplatesLoading: false,
+    personalDigitalHumanTemplatesError: '',
+    personalDigitalHumanTemplateSearch: '',
+    personalDigitalHumanTemplateDraft: null,
+    personalSelectedDigitalHumanTemplate: null,
+    personalDigitalHumanTemplateExplicitlyCleared: false
   };
 
   var DOC_TYPES = [
@@ -1207,6 +1215,186 @@
     return String((row && row.name) || '').trim() || '未命名模板';
   }
 
+  function personalDigitalHumanMediaUrl(value) {
+    var url = String(value || '').trim();
+    return /^(https?:)?\/\//i.test(url) || url.startsWith('/') ? url : '';
+  }
+
+  function normalizePersonalDigitalHumanTemplate(item) {
+    if (!item || typeof item !== 'object') return null;
+    var styleId = String(item.style_id || item.styleId || item.id || '').trim();
+    if (!styleId) return null;
+    return {
+      scene: String(item.scene || item.template_scene || 'realMan').trim() || 'realMan',
+      style_id: styleId,
+      name: String(item.name || item.title || '未命名模板').trim() || '未命名模板',
+      cover_url: personalDigitalHumanMediaUrl(item.cover_url || item.coverUrl || item.imageUrl),
+      demo_url: personalDigitalHumanMediaUrl(item.demo_url || item.demoUrl || item.videoUrl),
+      materials: Array.isArray(item.materials) ? item.materials.map(function(row) { return Object.assign({}, row || {}); }) : [],
+      material_sound_switch: !!(item.material_sound_switch ?? item.materialSoundSwitch),
+      introduce_name: String(item.introduce_name || item.introduceName || '').trim(),
+      introduce_description: String(item.introduce_description || item.introduceDescription || '').trim(),
+      pack_rules: (item.pack_rules || item.packRules) && typeof (item.pack_rules || item.packRules) === 'object' ? Object.assign({}, item.pack_rules || item.packRules) : {},
+      process_rules: (item.process_rules || item.processRules) && typeof (item.process_rules || item.processRules) === 'object' ? Object.assign({}, item.process_rules || item.processRules) : {}
+    };
+  }
+
+  function clonePersonalDigitalHumanTemplate(item) {
+    var normalized = normalizePersonalDigitalHumanTemplate(item);
+    return normalized ? {
+      scene: normalized.scene,
+      style_id: normalized.style_id,
+      name: normalized.name,
+      cover_url: normalized.cover_url,
+      demo_url: normalized.demo_url,
+      materials: (normalized.materials || []).map(function(row) { return Object.assign({}, row || {}); }),
+      material_sound_switch: !!normalized.material_sound_switch,
+      introduce_name: normalized.introduce_name,
+      introduce_description: normalized.introduce_description,
+      pack_rules: Object.assign({}, normalized.pack_rules || {}),
+      process_rules: Object.assign({}, normalized.process_rules || {})
+    } : null;
+  }
+
+  function personalDigitalHumanTemplateLabel(item) {
+    return String((item && (item.name || item.style_id)) || '').trim() || '未选择';
+  }
+
+  function renderPersonalDigitalHumanTemplateSummary() {
+    var box = $('psDigitalHumanTemplateSummary');
+    if (!box) return;
+    var item = state.personalSelectedDigitalHumanTemplate;
+    if (!item) {
+      box.className = 'ps-dh-summary is-empty';
+      box.innerHTML = '<div class="ps-dh-summary-note">未选择数字人剪辑模板。保存后，含数字人口播的工作流会读取这里的模板信息。</div>';
+      return;
+    }
+    box.className = 'ps-dh-summary';
+    box.innerHTML = '<div class="ps-dh-summary-cover">' +
+      (item.cover_url ? '<img src="' + escAttr(item.cover_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<span>' + esc(String(personalDigitalHumanTemplateLabel(item)).slice(0, 2)) + '</span>') +
+    '</div>' +
+    '<div class="ps-dh-summary-copy">' +
+      '<strong>' + esc(personalDigitalHumanTemplateLabel(item)) + '</strong>' +
+      '<small>样式ID ' + esc(item.style_id || '') + '</small>' +
+      (item.demo_url ? '<small>有样片，可在模板列表里预览</small>' : '<small>暂无样片</small>') +
+    '</div>' +
+    '<div class="ps-dh-summary-note">已写入模板 meta.digital_human_template</div>';
+  }
+
+  function filteredPersonalDigitalHumanTemplates() {
+    var query = String(state.personalDigitalHumanTemplateSearch || '').trim().toLowerCase();
+    var rows = Array.isArray(state.personalDigitalHumanTemplates) ? state.personalDigitalHumanTemplates : [];
+    if (!query) return rows;
+    return rows.filter(function(item) {
+      return String(item.name || '').toLowerCase().indexOf(query) >= 0
+        || String(item.style_id || '').toLowerCase().indexOf(query) >= 0;
+    });
+  }
+
+  function renderPersonalDigitalHumanTemplatePicker() {
+    var modal = $('psDigitalHumanTemplateModal');
+    var grid = $('psDigitalHumanTemplateGrid');
+    if (!grid) return;
+    var rows = filteredPersonalDigitalHumanTemplates();
+    var total = (state.personalDigitalHumanTemplates || []).length;
+    var count = $('psDigitalHumanTemplateCount');
+    if (count) count.textContent = state.personalDigitalHumanTemplateSearch ? (rows.length + ' / ' + total + ' 个模板') : (total + ' 个模板');
+    var status = $('psDigitalHumanTemplateStatus');
+    if (status) {
+      status.textContent = state.personalDigitalHumanTemplatesLoading
+        ? '正在加载数字人模板...'
+        : (state.personalDigitalHumanTemplatesError || (rows.length ? '' : (state.personalDigitalHumanTemplateSearch ? '没有匹配的模板' : '暂无可用模板')));
+      status.className = 'ps-dh-modal-status' + (state.personalDigitalHumanTemplatesError ? ' error' : '');
+    }
+    if (!modal || !modal.classList.contains('is-visible')) return;
+    if (state.personalDigitalHumanTemplatesLoading && !rows.length) {
+      grid.innerHTML = Array.from({ length: 6 }, function() { return '<div class="ps-dh-card skeleton"></div>'; }).join('');
+      return;
+    }
+    var selectedId = String((state.personalDigitalHumanTemplateDraft || {}).style_id || '');
+    grid.innerHTML = rows.map(function(item) {
+      var selected = String(item.style_id || '') === selectedId;
+      return '<article class="ps-dh-card' + (selected ? ' is-selected' : '') + '" data-ps-dh-template="' + escAttr(item.style_id) + '" tabindex="0" role="radio" aria-checked="' + (selected ? 'true' : 'false') + '">' +
+        '<div class="ps-dh-card-cover">' +
+          (item.cover_url ? '<img src="' + escAttr(item.cover_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<span>' + esc(String(item.name || '模板').slice(0, 2)) + '</span>') +
+        '</div>' +
+        '<div class="ps-dh-card-body">' +
+          '<strong title="' + escAttr(item.name) + '">' + esc(item.name) + '</strong>' +
+          '<small>' + esc(item.style_id) + '</small>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+  }
+
+  function loadPersonalDigitalHumanTemplates(force) {
+    if (state.personalDigitalHumanTemplatesLoading) return Promise.resolve();
+    if (!force && state.personalDigitalHumanTemplatesLoaded) {
+      renderPersonalDigitalHumanTemplatePicker();
+      return Promise.resolve();
+    }
+    state.personalDigitalHumanTemplatesLoading = true;
+    state.personalDigitalHumanTemplatesError = '';
+    if (force) state.personalDigitalHumanTemplates = [];
+    renderPersonalDigitalHumanTemplatePicker();
+    var rows = [];
+    var seen = {};
+    var sid = '';
+    var chain = Promise.resolve();
+    var page = 0;
+    function loadNextPage() {
+      if (page >= 20) return Promise.resolve();
+      page += 1;
+      return cloudJson('/api/shanjian-smart-clip/templates', {
+        method: 'POST',
+        body: { page_size: 60, sid: sid, scene: 'realMan', sort_by: 'desc' }
+      }).then(function(data) {
+        (Array.isArray(data.results) ? data.results : []).forEach(function(raw) {
+          var item = normalizePersonalDigitalHumanTemplate(raw);
+          if (!item || seen[item.style_id]) return;
+          seen[item.style_id] = true;
+          rows.push(item);
+        });
+        var nextSid = String(data.sid || '').trim();
+        if (!nextSid || nextSid === sid) return;
+        sid = nextSid;
+        return loadNextPage();
+      });
+    }
+    return loadNextPage().then(function() {
+      state.personalDigitalHumanTemplates = rows;
+      state.personalDigitalHumanTemplatesLoaded = true;
+      var selectedId = String((state.personalDigitalHumanTemplateDraft || {}).style_id || '');
+      var selected = selectedId ? rows.find(function(item) { return item.style_id === selectedId; }) : null;
+      if (selected) state.personalDigitalHumanTemplateDraft = clonePersonalDigitalHumanTemplate(selected);
+    }).catch(function(err) {
+      state.personalDigitalHumanTemplatesError = err && err.message ? err.message : '模板加载失败，请重试';
+    }).finally(function() {
+      state.personalDigitalHumanTemplatesLoading = false;
+      renderPersonalDigitalHumanTemplatePicker();
+    });
+  }
+
+  function openPersonalDigitalHumanTemplatePicker() {
+    state.personalDigitalHumanTemplateDraft = clonePersonalDigitalHumanTemplate(state.personalSelectedDigitalHumanTemplate);
+    state.personalDigitalHumanTemplateSearch = '';
+    if ($('psDigitalHumanTemplateSearch')) $('psDigitalHumanTemplateSearch').value = '';
+    if ($('psDigitalHumanTemplateModal')) $('psDigitalHumanTemplateModal').classList.add('is-visible');
+    renderPersonalDigitalHumanTemplatePicker();
+    loadPersonalDigitalHumanTemplates(false);
+  }
+
+  function closePersonalDigitalHumanTemplatePicker() {
+    if ($('psDigitalHumanTemplateModal')) $('psDigitalHumanTemplateModal').classList.remove('is-visible');
+    state.personalDigitalHumanTemplateDraft = null;
+  }
+
+  function confirmPersonalDigitalHumanTemplate() {
+    state.personalSelectedDigitalHumanTemplate = clonePersonalDigitalHumanTemplate(state.personalDigitalHumanTemplateDraft);
+    if (state.personalSelectedDigitalHumanTemplate) state.personalDigitalHumanTemplateExplicitlyCleared = false;
+    renderPersonalDigitalHumanTemplateSummary();
+    closePersonalDigitalHumanTemplatePicker();
+  }
+
   function renderCurrentTemplate() {
     var box = $('psCurrentTemplateBox');
     if (!box) return;
@@ -1219,8 +1407,11 @@
     var sourceId = String(meta.current_template_id || '').trim();
     var sourceTemplate = sourceId ? (state.templates || []).find(function(row) { return String(row.id || '') === sourceId; }) : null;
     var title = sourceTemplate ? templateName(sourceTemplate) : (current.name && !isPersonalDefaultTemplate(current) ? templateName(current) : '未指定模板');
+    var digitalHumanLabel = meta.digital_human_template && typeof meta.digital_human_template === 'object'
+      ? String(meta.digital_human_template.name || meta.digital_human_template.style_id || '已选择数字人模板')
+      : '未选择数字人模板';
     box.innerHTML = '<article class="ps-template-card">' +
-      '<div><strong>' + esc(title) + '</strong><div class="ps-template-meta">语种 ' + esc(languageLabel) + ' · 关键词 ' + keywordCount + ' · 同行 ' + competitorCount + ' · 记忆 ' + memoryCount + '</div></div>' +
+      '<div><strong>' + esc(title) + '</strong><div class="ps-template-meta">语种 ' + esc(languageLabel) + ' · 关键词 ' + keywordCount + ' · 同行 ' + competitorCount + ' · 记忆 ' + memoryCount + ' · 数字人 ' + esc(digitalHumanLabel) + '</div></div>' +
     '</article>';
   }
 
@@ -1237,9 +1428,12 @@
       var k = Array.isArray(row.keyword_ids) ? row.keyword_ids.length : 0;
       var c = Array.isArray(row.competitor_ids) ? row.competitor_ids.length : 0;
       var m = Array.isArray(row.memory_doc_ids) ? row.memory_doc_ids.length : 0;
+      var dh = row.meta && typeof row.meta === 'object' && row.meta.digital_human_template && typeof row.meta.digital_human_template === 'object'
+        ? String(row.meta.digital_human_template.name || row.meta.digital_human_template.style_id || '已选数字人')
+        : '未选数字人';
       var languageLabel = ipTemplateLanguageLabel(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || ''));
       return '<article class="ps-template-card">' +
-        '<div><strong>' + esc(templateName(row)) + '</strong><div class="ps-template-meta">语种 ' + esc(languageLabel) + ' · 关键词 ' + k + ' · 同行 ' + c + ' · 记忆 ' + m + '</div></div>' +
+        '<div><strong>' + esc(templateName(row)) + '</strong><div class="ps-template-meta">语种 ' + esc(languageLabel) + ' · 关键词 ' + k + ' · 同行 ' + c + ' · 记忆 ' + m + ' · 数字人 ' + esc(dh) + '</div></div>' +
         '<div class="ps-item-actions">' +
           '<button type="button" class="btn btn-primary btn-sm" data-use-template="' + escAttr(id) + '">设为当前</button>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-edit-template="' + escAttr(id) + '">编辑</button>' +
@@ -1569,6 +1763,7 @@
     renderTemplateLists();
     renderCurrentTemplate();
     renderSavedTemplates();
+    renderPersonalDigitalHumanTemplateSummary();
     renderKeywords();
     renderCompetitors();
     renderMemories();
@@ -1579,6 +1774,8 @@
   function applyDefaultItem(item) {
     state.defaultItem = item || {};
     setPersonalTemplateLanguage(templateLanguageFromParts(state.defaultItem.requirements, state.defaultItem.meta, state.personalTemplateLanguage));
+    state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((state.defaultItem.meta || {}).digital_human_template);
+    state.personalDigitalHumanTemplateExplicitlyCleared = false;
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
     state.selectedMemories = {};
@@ -1588,6 +1785,7 @@
     fillProfileFields(state.defaultItem);
     renderTemplateLists();
     renderCurrentTemplate();
+    renderPersonalDigitalHumanTemplateSummary();
   }
 
   function loadKeywords() {
@@ -1682,6 +1880,9 @@
     setMsg('正在保存模板...');
     Promise.all(selectedMemoryPayload().map(fetchMemoryContent)).then(function(memoryDocs) {
       var language = currentPersonalTemplateLanguage();
+      var digitalHumanTemplate = state.personalDigitalHumanTemplateExplicitlyCleared
+        ? null
+        : clonePersonalDigitalHumanTemplate(state.personalSelectedDigitalHumanTemplate);
       var body = {
         name: name,
         keyword_ids: cleanExistingIntIds(cleanIntIds(state.selectedKeywords), state.keywords),
@@ -1689,7 +1890,7 @@
         memory_doc_ids: cleanStringIds(state.selectedMemories),
         memory_docs: memoryDocs,
         requirements: templateRequirementsWithLanguage({}, language),
-        meta: { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language) }
+        meta: { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate }
       };
       return cloudJson(state.editingTemplateId ? '/api/ip-content/schedule-templates/' + encodeURIComponent(state.editingTemplateId) : '/api/ip-content/schedule-templates', {
         method: state.editingTemplateId ? 'PATCH' : 'POST',
@@ -1721,6 +1922,11 @@
     var keywordIds = cleanExistingIntIds(keywordSource, state.keywords);
     var competitorIds = cleanExistingIntIds(competitorSource, state.competitors);
     var memoryIds = uniqueIds(memorySource);
+    var digitalHumanTemplate = options.digital_human_template !== undefined
+      ? clonePersonalDigitalHumanTemplate(options.digital_human_template)
+      : (state.personalDigitalHumanTemplateExplicitlyCleared
+        ? null
+        : clonePersonalDigitalHumanTemplate(state.personalSelectedDigitalHumanTemplate || (existing.meta || {}).digital_human_template));
     return Promise.all(selectedMemoryPayload(memoryIds).map(fetchMemoryContent)).then(function(memoryDocs) {
       return cloudJson('/api/ip-content/personal-default', {
         method: 'PUT',
@@ -1731,7 +1937,7 @@
           memory_doc_ids: memoryIds,
           memory_docs: memoryDocs,
           requirements: incomingRequirements,
-          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: source, language: language, target_language: ipTemplateLanguageLabel(language) })
+          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: source, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate })
         }
       });
     }).then(function(data) {
@@ -1758,6 +1964,8 @@
   function applyTemplate(row, editing) {
     row = row || {};
     state.editingTemplateId = editing && row.id ? String(row.id) : '';
+    state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
+    state.personalDigitalHumanTemplateExplicitlyCleared = false;
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
     state.selectedMemories = {};
@@ -1766,6 +1974,7 @@
     (row.memory_doc_ids || []).forEach(function(id) { if (id) state.selectedMemories[String(id)] = true; });
     if ($('psTemplateName')) $('psTemplateName').value = row.name || '';
     setPersonalTemplateLanguage(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage));
+    renderPersonalDigitalHumanTemplateSummary();
     renderAllLists();
     switchTab('template');
   }
@@ -1775,10 +1984,14 @@
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
     state.selectedMemories = {};
+    state.personalSelectedDigitalHumanTemplate = clonePersonalDigitalHumanTemplate((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_template);
+    state.personalDigitalHumanTemplateDraft = null;
+    state.personalDigitalHumanTemplateExplicitlyCleared = false;
     if ($('psTemplateName')) $('psTemplateName').value = '';
     setPersonalTemplateLanguage(templateLanguageFromParts((state.defaultItem || {}).requirements, (state.defaultItem || {}).meta, state.personalTemplateLanguage));
     renderTemplateLists();
     renderSavedTemplates();
+    renderPersonalDigitalHumanTemplateSummary();
   }
 
   function useTemplate(id, btn) {
@@ -1791,6 +2004,8 @@
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
     state.selectedMemories = {};
+    state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
+    state.personalDigitalHumanTemplateExplicitlyCleared = false;
     (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
     (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
     (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
@@ -1803,7 +2018,7 @@
     saveCurrentDefault({
       name: templateName(row),
       requirements: requirements,
-      meta: Object.assign({}, row.meta || {}, { current_template_id: row.id, language: language, target_language: ipTemplateLanguageLabel(language) }),
+      meta: Object.assign({}, row.meta || {}, { current_template_id: row.id, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: state.personalSelectedDigitalHumanTemplate }),
       source: 'personal_settings_current_template',
       language: language,
       replaceSelection: true
@@ -2354,6 +2569,48 @@
       setPersonalTemplateLanguage(ev.target.value || 'zh-CN');
       renderCurrentTemplate();
       renderSavedTemplates();
+    });
+    if ($('psDigitalHumanTemplateChooseBtn')) $('psDigitalHumanTemplateChooseBtn').addEventListener('click', function() {
+      openPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplateClearBtn')) $('psDigitalHumanTemplateClearBtn').addEventListener('click', function() {
+      state.personalSelectedDigitalHumanTemplate = null;
+      state.personalDigitalHumanTemplateExplicitlyCleared = true;
+      renderPersonalDigitalHumanTemplateSummary();
+    });
+    if ($('psDigitalHumanTemplateClose')) $('psDigitalHumanTemplateClose').addEventListener('click', closePersonalDigitalHumanTemplatePicker);
+    if ($('psDigitalHumanTemplateModal')) $('psDigitalHumanTemplateModal').addEventListener('click', function(ev) {
+      if (ev.target === $('psDigitalHumanTemplateModal')) closePersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplateSearch')) $('psDigitalHumanTemplateSearch').addEventListener('input', function(ev) {
+      state.personalDigitalHumanTemplateSearch = String(ev.target.value || '');
+      renderPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplateGrid')) $('psDigitalHumanTemplateGrid').addEventListener('click', function(ev) {
+      var card = ev.target && ev.target.closest ? ev.target.closest('[data-ps-dh-template]') : null;
+      if (!card) return;
+      var item = (state.personalDigitalHumanTemplates || []).find(function(row) { return String(row.style_id || '') === String(card.getAttribute('data-ps-dh-template') || ''); });
+      if (!item) return;
+      state.personalDigitalHumanTemplateDraft = clonePersonalDigitalHumanTemplate(item);
+      renderPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplateGrid')) $('psDigitalHumanTemplateGrid').addEventListener('keydown', function(ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      var card = ev.target && ev.target.closest ? ev.target.closest('[data-ps-dh-template]') : null;
+      if (!card) return;
+      ev.preventDefault();
+      var item = (state.personalDigitalHumanTemplates || []).find(function(row) { return String(row.style_id || '') === String(card.getAttribute('data-ps-dh-template') || ''); });
+      if (!item) return;
+      state.personalDigitalHumanTemplateDraft = clonePersonalDigitalHumanTemplate(item);
+      renderPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplateChooseBtn')) $('psDigitalHumanTemplateChooseBtn').addEventListener('click', function() {
+      openPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplateCancel')) $('psDigitalHumanTemplateCancel').addEventListener('click', closePersonalDigitalHumanTemplatePicker);
+    if ($('psDigitalHumanTemplateConfirm')) $('psDigitalHumanTemplateConfirm').addEventListener('click', confirmPersonalDigitalHumanTemplate);
+    if ($('psDigitalHumanTemplateModal')) $('psDigitalHumanTemplateModal').addEventListener('click', function(ev) {
+      if (ev.target === $('psDigitalHumanTemplateModal')) closePersonalDigitalHumanTemplatePicker();
     });
     if ($('psAddKeywordBtn')) $('psAddKeywordBtn').addEventListener('click', addKeyword);
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);

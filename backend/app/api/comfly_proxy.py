@@ -317,7 +317,7 @@ def _image_generation_model_attempts(model: str, body: Optional[Dict[str, Any]] 
     normalized = _normalized_model_id(model)
     if normalized in {"gpt-image-2", "gpt-image2", "gpt-image", "gpt-image-2-vip", "gpt-image-2-official"}:
         attempts: List[str] = ["gpt-image-2", "doubao-seedream-5-0-260128"]
-        attempts.extend(["gpt-image-2", "gpt-image-2-openmindapi", "gpt-image-2-yunwu"])
+        attempts.extend(["gpt-image-2", "gpt-image-2-openmindapi", "nano-banana-2"])
         ordered: List[str] = []
         for item in attempts:
             if item and item not in ordered:

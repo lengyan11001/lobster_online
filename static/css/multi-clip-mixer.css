@@ -25,6 +25,7 @@
 .mcm-empty-mark { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #d9dee7; border-radius: 50%; color: #d9363e; font-size: 27px; font-weight: 300; }
 .mcm-clip-list { display: flex; flex-direction: column; gap: 9px; margin-top: 16px; }
 .mcm-clip-item { display: grid; grid-template-columns: 68px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 82px; padding: 8px 10px 8px 8px; border: 1px solid #e5e8ee; border-radius: 8px; background: #fbfcfd; }
+.mcm-clip-item.is-audio-master { border-color: #58b888; background: #f3fbf7; box-shadow: 0 0 0 1px rgba(46,155,99,.08); }
 .mcm-clip-thumb { position: relative; width: 68px; height: 64px; overflow: hidden; border-radius: 6px; background: #111827; }
 .mcm-clip-thumb video { width: 100%; height: 100%; object-fit: cover; }
 .mcm-clip-number { position: absolute; left: 5px; top: 5px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 4px; background: rgba(17, 24, 39, .78); color: #fff; font-size: 11px; line-height: 20px; text-align: center; }
@@ -32,11 +33,22 @@
 .mcm-clip-copy strong { display: block; overflow: hidden; color: #263044; font-size: 13px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
 .mcm-clip-copy span { display: block; margin-top: 7px; color: #d9363e; font-size: 12px; }
 .mcm-clip-copy small { display: block; margin-top: 3px; color: #8a93a2; font-size: 11px; }
-.mcm-clip-actions { display: flex; align-items: center; gap: 4px; }
+.mcm-clip-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; }
 .mcm-clip-actions button, .mcm-icon-btn { display: inline-grid; place-items: center; width: 31px; height: 31px; border: 1px solid #dfe3ea; border-radius: 6px; background: #fff; color: #5d6675; cursor: pointer; font: inherit; }
 .mcm-clip-actions button[data-action="edit"] { width: 44px; white-space: nowrap; word-break: keep-all; }
+.mcm-clip-actions .mcm-audio-master-btn { width: 54px; color: #237a4b; }
+.mcm-clip-item.is-audio-master .mcm-audio-master-btn { border-color: #58b888; background: #e9f8f0; color: #167247; }
 .mcm-clip-actions button:hover, .mcm-icon-btn:hover { border-color: #bdc4cf; color: #172033; }
 .mcm-clip-actions button[data-action="remove"]:hover { border-color: #ffc7c9; color: #d9363e; }
+.mcm-mode-panel { margin-top: 12px; padding: 12px; border: 1px solid #e4e8ef; border-radius: 8px; background: #fbfcff; }
+.mcm-mode-tabs, .mcm-provider-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.mcm-mode-tabs label, .mcm-provider-row label, .mcm-inline-check { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid #dfe4ec; border-radius: 999px; background: #fff; color: #546174; cursor: pointer; font-size: 12px; }
+.mcm-mode-tabs input, .mcm-provider-row input, .mcm-inline-check input { width: auto; height: auto; accent-color: #e5484d; }
+.mcm-mode-tabs input:checked + span, .mcm-provider-row input:checked + span, .mcm-inline-check input:checked + span { color: #d9363e; font-weight: 600; }
+.mcm-mode-body { display: grid; grid-template-columns: repeat(2, minmax(0, 160px)) auto repeat(2, auto); gap: 10px; align-items: end; }
+.mcm-mode-body label:not(.mcm-inline-check) { color: #5f6978; font-size: 12px; }
+.mcm-mode-body input[type="number"] { width: 100%; height: 34px; margin-top: 5px; border: 1px solid #dfe3e9; border-radius: 6px; padding: 0 9px; color: #172033; font: inherit; }
+.mcm-provider-row { margin-bottom: 12px; }
 .mcm-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 14px 2px; border-bottom: 1px solid #edf0f4; cursor: pointer; }
 .mcm-setting-row span { min-width: 0; }
 .mcm-setting-row strong { display: block; font-size: 14px; font-weight: 580; }
@@ -105,6 +117,9 @@
 .mcm-result-empty strong { color: #eef1f5; font-size: 14px; font-weight: 550; }
 .mcm-result-empty span { font-size: 12px; }
 .mcm-result-actions { display: flex; gap: 8px; margin-top: 12px; }
+.mcm-batch-results { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.mcm-batch-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid #e4e8ef; border-radius: 7px; background: #fbfcfd; color: #4d5869; font-size: 12px; }
+.mcm-batch-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcm-progress-section h3 { display: block; margin-bottom: 13px; }
 .mcm-progress-list { display: flex; flex-direction: column; gap: 0; margin: 0; padding: 0; list-style: none; }
 .mcm-progress-list li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 10px; min-height: 52px; color: #8b94a2; }
@@ -154,6 +169,8 @@
   .mcm-clip-item { grid-template-columns: 58px minmax(0, 1fr); }
   .mcm-clip-thumb { width: 58px; height: 58px; }
   .mcm-clip-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .mcm-mode-body { grid-template-columns: 1fr 1fr; }
+  .mcm-mode-body .btn, .mcm-mode-body .mcm-inline-check { grid-column: span 1; justify-content: center; }
   .mcm-choice-toolbar input[type="search"] { width: 100%; }
   .mcm-music-grid { grid-template-columns: 1fr; }
   .mcm-overlay-head { align-items: flex-start; flex-direction: column; gap: 3px; }

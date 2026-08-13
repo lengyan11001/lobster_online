@@ -1672,6 +1672,32 @@ async def _query_all_any_frame(page: Any, selector: str) -> List[Any]:
     return out
 
 
+async def _douyin_is_creator_login_page(page: Any) -> bool:
+    try:
+        data = await page.evaluate(
+            """
+            () => ({
+              url: location.href || '',
+              bodyText: ((document.body && document.body.innerText) || '').slice(0, 5000),
+            })
+            """
+        )
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    url = str(data.get("url") or getattr(page, "url", "") or "").lower()
+    body = str(data.get("bodyText") or "")
+    if "passport" in url or "/login" in url:
+        return True
+    login_hits = sum(1 for text in ("扫码登录", "验证码登录", "手机号登录", "密码登录", "创作者登录") if text in body)
+    if login_hits >= 2:
+        return True
+    if "我是创作者" in body and ("扫码登录" in body or "登录" in body):
+        return True
+    return False
+
+
 # ===========================================================================
 # DouyinDriver
 # ===========================================================================
@@ -1684,6 +1710,8 @@ class DouyinDriver(BaseDriver):
         try:
             url = getattr(page, "url", "") or ""
             if "login" in url or "passport" in url:
+                return False
+            if await _douyin_is_creator_login_page(page):
                 return False
             markers = [
                 'text="退出登录"', 'text="作品管理"', 'text="内容管理"',
@@ -1710,7 +1738,7 @@ class DouyinDriver(BaseDriver):
             try:
                 await page.goto(UPLOAD_URL, wait_until="domcontentloaded", timeout=_nav_ms(15000))
                 await asyncio.sleep(1)
-                if await _query_any_frame(page, 'input[type="file"]'):
+                if not await _douyin_is_creator_login_page(page) and await _query_any_frame(page, 'input[type="file"]'):
                     return True
             except Exception:
                 pass

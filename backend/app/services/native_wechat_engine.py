@@ -4141,6 +4141,37 @@ def _replace_contacts_snapshot(account_id: str, contacts: List[Dict[str, Any]], 
     return [_contact_record_public(record) for record in records]
 
 
+def _merge_contacts_snapshot(account_id: str, contacts: List[Dict[str, Any]], *, chat_type: str = "direct") -> List[Dict[str, Any]]:
+    now = _now_iso()
+    records = [x for x in (_build_contact_record(account_id, item, now=now) for item in contacts) if x]
+    with _connect() as conn:
+        for record in records:
+            _write_contact_record(conn, record, chat_type=chat_type)
+    return [_contact_record_public(record) for record in records]
+
+
+def _contact_count(account_id: str) -> int:
+    with _connect() as conn:
+        row = conn.execute("select count(*) from wechat_contacts where account_id=?", (account_id,)).fetchone()
+    return int(row[0] if row else 0)
+
+
+def _contact_sync_max_rounds(limit: int) -> int:
+    clean_limit = max(1, min(int(limit or 10000), 10000))
+    return max(120, min(900, int(clean_limit / 4) + 120))
+
+
+def _wechat_contact_skip_names() -> set[str]:
+    return {
+        "新的朋友",
+        "群聊",
+        "标签",
+        "公众号",
+        "企业微信联系人",
+        "仅聊天的朋友",
+    }
+
+
 def _persist_group(account_id: str, group: Dict[str, Any]) -> Dict[str, Any]:
     now = _now_iso()
     group_key = str(group.get("group_key") or group.get("wxNo") or group.get("username") or group.get("id") or group.get("name") or "").strip()
@@ -5062,11 +5093,12 @@ def sync_local_sessions(
     )
 
 
-def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 2000) -> Dict[str, Any]:
+def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dict[str, Any]:
     if not _module_available("uiautomation"):
         raise RuntimeError("uiautomation is required to sync local contacts")
     import uiautomation as auto  # type: ignore
 
+    clean_limit = max(1, min(int(limit or 10000), 10000))
     hwnd = _ensure_local_contacts_tab(account_id)
     if not hwnd:
         raise RuntimeError("local WeChat window not found")
@@ -5089,53 +5121,81 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 2000) -> Dict
         raise RuntimeError("local WeChat contact list not found")
 
     try:
-        contact_list.WheelUp(wheelTimes=20)
+        contact_list.WheelUp(wheelTimes=40)
         time.sleep(0.35)
     except Exception:
         pass
 
     seen: Dict[str, Dict[str, Any]] = {}
     stable_rounds = 0
-    max_rounds = max(8, min(80, int(limit / 8) + 8))
+    last_signature = ""
+    completed = False
+    hit_limit = False
+    max_rounds = _contact_sync_max_rounds(clean_limit)
+    skip_names = _wechat_contact_skip_names()
+    rounds = 0
     for _idx in range(max_rounds):
-        before = len(seen)
+        rounds = _idx + 1
         try:
-            children = contact_list.GetChildren()
+            root = auto.ControlFromHandle(int(hwnd))
+            refreshed = _uia_primary_contact_list(root)
+            if refreshed is not None:
+                contact_list = refreshed
         except Exception:
-            children = []
-        for child in children:
-            name = _uia_control_text(child)
-            class_name = _uia_control_class(child)
-            if not name or class_name != "mmui::ContactsCellItemView":
+            pass
+        before = len(seen)
+        names = _uia_visible_contact_cell_names(contact_list)
+        for name in names:
+            clean = str(name or "").strip()
+            if not clean or clean in skip_names:
                 continue
-            seen[name] = {
-                "contact_key": name,
-                "display_name": name,
-                "name": name,
+            seen[clean] = {
+                "contact_key": clean,
+                "display_name": clean,
+                "name": clean,
                 "source": "pc_wechat_uia_contacts",
-                "raw": {"class_name": class_name},
+                "raw": {"source": "pc_wechat_uia_contacts"},
             }
-            if len(seen) >= limit:
+            if len(seen) >= clean_limit:
+                hit_limit = True
                 break
-        if len(seen) >= limit:
+        if hit_limit:
             break
-        stable_rounds = stable_rounds + 1 if len(seen) == before else 0
-        if stable_rounds >= 3:
+        signature = "|".join(names[-16:])
+        stable_rounds = stable_rounds + 1 if len(seen) == before and signature == last_signature else 0
+        last_signature = signature
+        if stable_rounds >= 6:
+            completed = True
             break
         try:
-            contact_list.WheelDown(wheelTimes=4)
-            time.sleep(0.25)
+            contact_list.WheelDown(wheelTimes=5)
+            time.sleep(0.2)
         except Exception:
             break
 
     if not seen:
         raise RuntimeError("未读取到通讯录联系人，请确认微信已切到通讯录页后重试")
-    items = _replace_contacts_snapshot(account_id, list(seen.values()), chat_type="direct")
+    existing_before = _contact_count(account_id)
+    items = _merge_contacts_snapshot(account_id, list(seen.values()), chat_type="direct")
+    total_after = _contact_count(account_id)
     _ensure_local_chat_tab(account_id)
-    return {"ok": True, "items": items, "count": len(items), "source": "pc_wechat_uia_contacts", "mode": "replace"}
+    return {
+        "ok": True,
+        "items": items[:200],
+        "count": len(items),
+        "total_after": total_after,
+        "existing_before": existing_before,
+        "source": "pc_wechat_uia_contacts",
+        "mode": "merge",
+        "scroll_completed": completed,
+        "limit_reached": hit_limit,
+        "rounds": rounds,
+        "max_rounds": max_rounds,
+        "partial": (not completed and not hit_limit),
+    }
 
 
-def sync_local_contacts_legacy(account_id: str, *, limit: int = 2000) -> Dict[str, Any]:
+def sync_local_contacts_legacy(account_id: str, *, limit: int = 10000) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     try:
@@ -5144,16 +5204,24 @@ def sync_local_contacts_legacy(account_id: str, *, limit: int = 2000) -> Dict[st
         raise RuntimeError(f"完整通讯录驱动不可用：{exc}") from exc
     if hasattr(wx, "GetFriendDetails"):
         contacts = wx.GetFriendDetails(n=limit, timeout=max(30, min(int(limit), 600)))
-        items = _replace_contacts_snapshot(
+        existing_before = _contact_count(account_id)
+        items = _merge_contacts_snapshot(
             account_id,
             [{**_obj_dict(x), "source": "wx_driver_contacts"} for x in contacts or []],
             chat_type="direct",
         )
-        return {"ok": True, "items": items, "count": len(items), "mode": "replace"}
+        return {
+            "ok": True,
+            "items": items[:200],
+            "count": len(items),
+            "total_after": _contact_count(account_id),
+            "existing_before": existing_before,
+            "mode": "merge",
+        }
     raise RuntimeError("当前驱动不支持完整通讯录同步")
 
 
-def sync_local_contacts(account_id: str, *, limit: int = 2000) -> Dict[str, Any]:
+def sync_local_contacts(account_id: str, *, limit: int = 10000) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     try:

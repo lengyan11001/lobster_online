@@ -1,4 +1,4 @@
-(function() {
+﻿(function() {
   var state = {
     jobId: '',
     pollTimer: null,
@@ -12,7 +12,8 @@
     createFiles: [],
     runtimeReady: false,
     runtimeLoaded: false,
-    runtimePollTimer: null
+    runtimePollTimer: null,
+    componentSelectedRole: ''
   };
   var LAST_JOB_KEY = 'lobster.ai3d.lastJobId';
 
@@ -407,7 +408,11 @@
   }
 
   function isComponentSplitMode(mode) {
-    return ['component_split', 'component_split_v2', 'component_split_v3'].indexOf(String(mode || '')) >= 0;
+    return ['component_split', 'component_split_v2', 'component_split_v3', 'component_split_v4'].indexOf(String(mode || '')) >= 0;
+  }
+
+  function isComponentSplitV4Mode(mode) {
+    return String(mode || '') === 'component_split_v4';
   }
 
   function realObjectSlotFiles() {
@@ -485,7 +490,9 @@
       if (strategy) strategy.value = 'part_batch';
       if (preprocess) preprocess.checked = true;
       if (autoDecompose) autoDecompose.checked = false;
-      if (hint) hint.textContent = mode === 'component_split_v3'
+      if (hint) hint.textContent = mode === 'component_split_v4'
+        ? '拆件 4.0：上传 1 张图后 AI 先出部件提案，人工逐件接管部件图、三视图和 3D。'
+        : mode === 'component_split_v3'
         ? '拆件 3.0：上传 1 张主图，GPT 规划部件区域，SAM 分割，再用遮罩补全生成部件图。'
         : mode === 'component_split_v2'
         ? '拆件 2.0：上传 1 张主图，先直接生成部件图；不满意时再反推提示词重生。'
@@ -741,7 +748,9 @@
     if (trigger && trigger.currentTarget) btn = trigger.currentTarget;
     else if (trigger && trigger.nodeType === 1) btn = trigger;
     else btn = el(fallbackId);
-    var jobId = explicitJobId || (btn && btn.dataset ? btn.dataset.jobId : '') || state.jobId;
+    var jobId = explicitJobId
+      || (btn && btn.dataset ? (btn.dataset.jobId || btn.dataset.ai3dJobId || btn.getAttribute('data-ai3d-job-id') || btn.getAttribute('data-job-id') || '') : '')
+      || state.jobId;
     if (jobId) rememberJob(jobId);
     return { btn: btn, jobId: jobId };
   }
@@ -841,6 +850,11 @@
             startComponentsJob(null, x.data.job.job_id, '');
             return;
           }
+          if (createdWorkflowMode === 'component_split_v4') {
+            setMsg('拆件 4.0 任务已创建：在工作台点击“生成部件提案/部件图”开始。', false);
+            renderComponentWorkbench(x.data.job || {});
+            return;
+          }
           if (isComponentSplitMode(x.data.job.workflow_mode) || (x.data.job.preprocessing && isComponentSplitMode(x.data.job.preprocessing.workflow_mode))) {
             setMsg('拆件任务已创建：先点“生成拆件部件图”；后续会为每个部件生成三视图再生成 3D。', false);
           } else if (x.data.job.workflow_mode === 'game_prop' || (x.data.job.preprocessing && x.data.job.preprocessing.workflow_mode === 'game_prop')) {
@@ -934,6 +948,10 @@
   function renderJob(job) {
     job = job || {};
     state.currentJob = job;
+    var root = el('content-ai-3d-model');
+    if (root) {
+      root.classList.toggle('is-component-v4', isComponentSplitV4Mode(job.workflow_mode || (job.preprocessing && job.preprocessing.workflow_mode) || ''));
+    }
     var badge = el('ai3dJobBadge');
     var meta = el('ai3dJobMeta');
     var bar = el('ai3dProgressBar');
@@ -951,7 +969,11 @@
     if (bar) bar.style.width = Math.max(0, Math.min(100, Number(job.progress || 0))) + '%';
     renderActions(job);
     renderPreview(job);
-    renderSteps(job);
+    if (isComponentSplitV4Mode(job.workflow_mode || (job.preprocessing && job.preprocessing.workflow_mode) || '')) {
+      renderComponentWorkbench(job);
+    } else {
+      renderSteps(job);
+    }
     renderMetrics(job);
     renderOutputs(job);
     updateCurrentDownload(job);
@@ -1894,10 +1916,228 @@
     return glbs[0];
   }
 
+  function workflowOfJob(job) {
+    return String((job && job.workflow_mode) || (job && job.preprocessing && job.preprocessing.workflow_mode) || '');
+  }
+
+  function componentRecords(job, key) {
+    var prep = job && job.preprocessing ? job.preprocessing : {};
+    var rows = prep && Array.isArray(prep[key]) ? prep[key] : [];
+    return rows.filter(function(item) { return item && typeof item === 'object'; });
+  }
+
+  function firstComponentRecord(job, key, role) {
+    role = String(role || '');
+    return componentRecords(job, key).filter(function(item) {
+      return String(item.role || item.part_role || '').replace(/_triview_sheet$/, '') === role;
+    })[0] || null;
+  }
+
+  function componentPlanParts(job) {
+    var prep = job && job.preprocessing ? job.preprocessing : {};
+    var plan = prep.component_ai_plan && typeof prep.component_ai_plan === 'object' ? prep.component_ai_plan : {};
+    var parts = Array.isArray(plan.parts) ? plan.parts : [];
+    var byRole = {};
+    parts.forEach(function(part, index) {
+      if (!part || typeof part !== 'object') return;
+      var role = String(part.role || ('part_' + (index + 1))).trim();
+      if (!role) return;
+      byRole[role] = Object.assign({ role: role, index: index + 1 }, part);
+    });
+    componentRecords(job, 'component_inputs').concat(componentRecords(job, 'component_inputs_partial')).forEach(function(item, index) {
+      var role = String(item.role || ('part_' + (index + 1))).trim();
+      if (!role || role === 'component_sheet') return;
+      byRole[role] = Object.assign({ role: role, index: index + 1 }, byRole[role] || {}, {
+        label: (byRole[role] && byRole[role].label) || item.label || role
+      });
+    });
+    return Object.keys(byRole).map(function(role) { return byRole[role]; });
+  }
+
+  function componentImageForRole(job, role) {
+    return firstComponentRecord(job, 'component_inputs', role) || firstComponentRecord(job, 'component_inputs_partial', role);
+  }
+
+  function componentTriviewForRole(job, role) {
+    return firstComponentRecord(job, 'component_triview_parts', role);
+  }
+
+  function component3dForRole(job, role) {
+    var outputs = job && job.outputs ? job.outputs : {};
+    var parts = Array.isArray(outputs.parts) ? outputs.parts : [];
+    return parts.filter(function(part) {
+      return String(part.role || part.part_role || '') === String(role || '');
+    })[0] || null;
+  }
+
+  function componentPromptForRole(job, role) {
+    var planPart = componentPlanParts(job).filter(function(part) {
+      return String(part.role || '') === String(role || '');
+    })[0] || {};
+    return String(planPart.image_prompt || planPart.prompt || '');
+  }
+
+  function componentTriviewPromptForRole(job, role) {
+    var row = firstComponentRecord(job, 'component_triview_prompt_parts', role) || {};
+    return String(row.triview_prompt || row.prompt || '');
+  }
+
+  function componentV4AnnotatedSource(job) {
+    var prep = job && job.preprocessing ? job.preprocessing : {};
+    return prep.component_v4_annotated_source && typeof prep.component_v4_annotated_source === 'object' ? prep.component_v4_annotated_source : null;
+  }
+
+  function componentV4PartsSheet(job) {
+    var prep = job && job.preprocessing ? job.preprocessing : {};
+    return prep.component_v4_parts_sheet && typeof prep.component_v4_parts_sheet === 'object' ? prep.component_v4_parts_sheet : null;
+  }
+
+  function renderComponentSource(job) {
+    var prep = job && job.preprocessing ? job.preprocessing : {};
+    var inputs = Array.isArray(prep.source_inputs) && prep.source_inputs.length ? prep.source_inputs : (Array.isArray(job.inputs) ? job.inputs : []);
+    var src = inputs[0] || {};
+    var url = src.url || src.preview_url || '';
+    if (!url) return '<div class="ai3d-v4-source-empty">等待参考图</div>';
+    return previewImg(url, src.label || src.filename || '参考图', 'ai3d-previewable ai3d-v4-source-img');
+  }
+
+  function renderComponentV4AnnotatedSource(job) {
+    var item = componentV4AnnotatedSource(job);
+    var url = item && (item.url || item.preview_url || '');
+    if (!url) return renderComponentSource(job);
+    return previewImg(url, item.label || '标注原图', 'ai3d-previewable ai3d-v4-source-img');
+  }
+
+  function renderComponentV4PartsSheet(job) {
+    var item = componentV4PartsSheet(job);
+    var url = item && (item.url || item.preview_url || '');
+    if (!url) return '';
+    return previewImg(url, item.label || '部件预览板', 'ai3d-previewable ai3d-v4-result-img');
+  }
+
+  function renderComponentCard(job, part) {
+    var role = String(part.role || '');
+    var label = part.label || part.name || role || '部件';
+    var image = componentImageForRole(job, role);
+    var triview = componentTriviewForRole(job, role);
+    var model = component3dForRole(job, role);
+    var imageUrl = image && (image.url || image.preview_url || '');
+    var triviewUrl = triview && (triview.url || triview.preview_url || '');
+    var modelReady = !!(model && Array.isArray(model.files) && model.files.some(isGlbFile));
+    return '<article class="ai3d-v4-part-card" data-ai3d-v4-role="' + escAttr(role) + '">' +
+      '<button type="button" class="ai3d-v4-card-main" data-ai3d-v4-open="' + escAttr(role) + '">' +
+        '<span class="ai3d-v4-part-thumb">' + (imageUrl ? '<img src="' + escAttr(assetUrl(imageUrl, job, image)) + '" alt="">' : '<i>未生成</i>') + '</span>' +
+        '<strong>' + esc(label) + '</strong>' +
+        '<small>' + esc(role || 'part') + '</small>' +
+      '</button>' +
+      '<div class="ai3d-v4-status-row">' +
+        '<span class="' + (imageUrl ? 'ok' : '') + '">部件图</span>' +
+        '<span class="' + (triviewUrl ? 'ok' : '') + '">三视图</span>' +
+        '<span class="' + (modelReady ? 'ok' : '') + '">3D</span>' +
+      '</div>' +
+      '<div class="ai3d-v4-card-actions">' +
+        '<button type="button" data-ai3d-action="component_images" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">生成图片</button>' +
+        '<button type="button" data-ai3d-action="component_triviews" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">生成三视图</button>' +
+        '<button type="button" data-ai3d-action="parts" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">生成 3D</button>' +
+      '</div>' +
+    '</article>';
+  }
+
+  function renderComponentDetail(job, part) {
+    if (!part) return '<aside class="ai3d-v4-detail"><div class="ai3d-empty slim">选择一个部件后查看结果和操作。</div></aside>';
+    var role = String(part.role || '');
+    var label = part.label || part.name || role || '部件';
+    var image = componentImageForRole(job, role);
+    var triview = componentTriviewForRole(job, role);
+    var model = component3dForRole(job, role);
+    var imageUrl = image && (image.url || image.preview_url || '');
+    var triviewUrl = triview && (triview.url || triview.preview_url || '');
+    var files = model && Array.isArray(model.files) ? model.files : [];
+    var glb = files.filter(isGlbFile)[0];
+    return '<aside class="ai3d-v4-detail" data-ai3d-part-role="' + escAttr(role) + '">' +
+      '<div class="ai3d-v4-detail-head"><div><strong>' + esc(label) + '</strong><span>' + esc(role) + '</span></div>' +
+      '<button type="button" class="ai3d-mini-action" data-ai3d-action="save_component_prompt" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">保存</button></div>' +
+      '<div class="ai3d-v4-switches">' +
+        '<label><input type="checkbox" checked> 需要</label>' +
+        '<label><input type="checkbox"> 补全</label>' +
+        '<label><input type="checkbox" checked> 转三视图</label>' +
+        '<label><input type="checkbox"> 高清</label>' +
+      '</div>' +
+      '<div class="ai3d-v4-detail-actions">' +
+        '<button type="button" data-ai3d-action="component_images" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">生成部件图</button>' +
+        '<button type="button" data-ai3d-action="component_triviews" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">生成三视图</button>' +
+        '<button type="button" data-ai3d-action="parts" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">生成 3D</button>' +
+        '<button type="button" class="danger" data-ai3d-action="delete_component_record" data-ai3d-scope="component_image" data-ai3d-job-id="' + escAttr(job.job_id || '') + '" data-ai3d-role="' + escAttr(role) + '">删除图片</button>' +
+      '</div>' +
+      '<div class="ai3d-v4-results">' +
+        '<div><strong>部件图</strong>' + (imageUrl ? previewImg(imageUrl, label + ' 部件图', 'ai3d-previewable ai3d-v4-result-img') : '<span>暂无</span>') + '</div>' +
+        '<div><strong>三视图</strong>' + (triviewUrl ? previewImg(triviewUrl, label + ' 三视图', 'ai3d-previewable ai3d-v4-result-img') : '<span>暂无</span>') + '</div>' +
+        '<div><strong>3D</strong>' + (glb ? modelOutputCard(glb, files, job) : '<span>暂无</span>') + '</div>' +
+      '</div>' +
+    '</aside>';
+  }
+
+  function renderComponentWorkbench(job) {
+    var host = el('ai3dPreview');
+    var steps = el('ai3dStepTimeline');
+    if (steps) steps.innerHTML = '';
+    if (!host) return;
+    var parts = componentPlanParts(job);
+    if (!parts.length) {
+      host.hidden = false;
+      host.innerHTML = '<div class="ai3d-v4-workbench">' +
+        '<section class="ai3d-v4-source"><div class="ai3d-output-compact-head"><strong>标注原图</strong><span>左边是编号标注</span></div>' + renderComponentV4AnnotatedSource(job) + '</section>' +
+        '<section class="ai3d-v4-main"><div class="ai3d-empty slim">部件结果会显示在这里。</div>' + renderComponentV4PartsSheet(job) + '</section>' +
+      '</div>';
+      return;
+    }
+    var selected = state.componentSelectedRole && parts.filter(function(part) { return String(part.role || '') === state.componentSelectedRole; })[0];
+    selected = selected || parts[0];
+    state.componentSelectedRole = String(selected.role || state.componentSelectedRole || '');
+    host.hidden = false;
+    host.innerHTML = '<div class="ai3d-v4-workbench">' +
+      '<section class="ai3d-v4-source"><div class="ai3d-output-compact-head"><strong>标注原图</strong><span>' + esc(parts.length + ' 个部件') + '</span></div>' + renderComponentV4AnnotatedSource(job) + '</section>' +
+      '<section class="ai3d-v4-main">' +
+        '<div class="ai3d-v4-toolbar"><strong>部件工作台</strong><div>' +
+          '<button type="button" data-ai3d-action="component_images" data-ai3d-job-id="' + escAttr(job.job_id || '') + '">生成图片</button>' +
+          '<button type="button" data-ai3d-action="component_triviews" data-ai3d-job-id="' + escAttr(job.job_id || '') + '">生成三视图</button>' +
+          '<button type="button" data-ai3d-action="parts" data-ai3d-job-id="' + escAttr(job.job_id || '') + '">生成 3D</button>' +
+        '</div></div>' +
+        '<div class="ai3d-v4-grid">' + parts.map(function(part) { return renderComponentCard(job, part); }).join('') + '</div>' +
+        renderComponentV4PartsSheet(job) +
+      '</section>' + renderComponentDetail(job, selected) +
+    '</div>';
+  }  function dispatchAi3dAction(actionBtn) {
+    if (!actionBtn || actionBtn.disabled) return;
+    var action = actionBtn.getAttribute('data-ai3d-action') || '';
+    var jobId = actionBtn.getAttribute('data-ai3d-job-id') || '';
+    setMsg('正在执行：' + (actionBtn.textContent || action || '操作') + '...', false);
+    if (action === 'triview') startTriviewJob(actionBtn, jobId);
+    else if (action === 'triview_prompt') editTriviewPrompt(jobId);
+    else if (action === 'regen_view') regenerateTriviewView(jobId, actionBtn.getAttribute('data-ai3d-role') || '');
+    else if (action === 'base') startBaseModelJob(actionBtn, jobId);
+    else if (action === 'components') startComponentsJob(actionBtn, jobId);
+    else if (action === 'save_component_prompt') saveComponentPromptsAction(actionBtn, jobId);
+    else if (action === 'delete_component_record') deleteComponentRecord(actionBtn, jobId);
+    else if (action === 'component_images') startComponentImagesJob(actionBtn, jobId);
+    else if (action === 'component_image_prompts') startComponentImagePromptsJob(actionBtn, jobId);
+    else if (action === 'component_triview_prompts') startComponentTriviewPromptsJob(actionBtn, jobId);
+    else if (action === 'component_triviews') startComponentTriviewsJob(actionBtn, jobId);
+    else if (action === 'parts') startPartModelsJob(actionBtn, jobId);
+    else if (action === 'assemble') startGeneratedJob(actionBtn, jobId);
+    else if (action === '3mf_base') start3mfExport(actionBtn, jobId, 'base');
+    else if (action === '3mf_parts') start3mfExport(actionBtn, jobId, 'parts');
+    else if (action === '3mf_final') start3mfExport(actionBtn, jobId, 'final');
+  }
+
   function renderPreview(job) {
     var host = el('ai3dPreview');
     if (!host) return;
     host.hidden = true;
+    if (isComponentSplitV4Mode(workflowOfJob(job))) {
+      renderComponentWorkbench(job);
+      return;
+    }
     var effectiveOutputs = job.outputs && Object.keys(job.outputs || {}).length ? job.outputs : { parts: job.subtasks || [] };
     var files = flattenFiles(effectiveOutputs);
     var glbs = files.filter(isGlbFile);
@@ -2222,6 +2462,11 @@
     });
   }
 
+  function refreshComponentV4Selection(role) {
+    state.componentSelectedRole = String(role || state.componentSelectedRole || '');
+    if (state.currentJob && isComponentSplitV4Mode(workflowOfJob(state.currentJob))) renderComponentWorkbench(state.currentJob);
+  }
+
   function startComponentImagePromptsJob(trigger, explicitJobId, userInstruction) {
     var ctx = actionContext(trigger, 'ai3dComponentsBtn', explicitJobId);
     var btn = ctx.btn;
@@ -2476,6 +2721,10 @@
   function renderOutputs(job) {
     var host = el('ai3dOutputs');
     if (!host) return;
+    if (isComponentSplitV4Mode(workflowOfJob(job))) {
+      host.innerHTML = '';
+      return;
+    }
     host.innerHTML = '';
   }
 
@@ -2644,25 +2893,7 @@
         var actionBtn = evt.target.closest('[data-ai3d-action]');
         if (!actionBtn) return;
         evt.preventDefault();
-        if (actionBtn.disabled) return;
-        var action = actionBtn.getAttribute('data-ai3d-action') || '';
-        var jobId = actionBtn.getAttribute('data-ai3d-job-id') || '';
-        if (action === 'triview') startTriviewJob(actionBtn, jobId);
-        else if (action === 'triview_prompt') editTriviewPrompt(jobId);
-        else if (action === 'regen_view') regenerateTriviewView(jobId, actionBtn.getAttribute('data-ai3d-role') || '');
-        else if (action === 'base') startBaseModelJob(actionBtn, jobId);
-        else if (action === 'components') startComponentsJob(actionBtn, jobId);
-        else if (action === 'save_component_prompt') saveComponentPromptsAction(actionBtn, jobId);
-        else if (action === 'delete_component_record') deleteComponentRecord(actionBtn, jobId);
-        else if (action === 'component_images') startComponentImagesJob(actionBtn, jobId);
-        else if (action === 'component_image_prompts') startComponentImagePromptsJob(actionBtn, jobId);
-        else if (action === 'component_triview_prompts') startComponentTriviewPromptsJob(actionBtn, jobId);
-        else if (action === 'component_triviews') startComponentTriviewsJob(actionBtn, jobId);
-        else if (action === 'parts') startPartModelsJob(actionBtn, jobId);
-        else if (action === 'assemble') startGeneratedJob(actionBtn, jobId);
-        else if (action === '3mf_base') start3mfExport(actionBtn, jobId, 'base');
-        else if (action === '3mf_parts') start3mfExport(actionBtn, jobId, 'parts');
-        else if (action === '3mf_final') start3mfExport(actionBtn, jobId, 'final');
+        dispatchAi3dAction(actionBtn);
       });
       stepTimeline.addEventListener('mouseover', function(evt) {
         var infoBtn = evt.target.closest('[data-ai3d-info]');
@@ -2708,6 +2939,12 @@
         if (!(target && target.closest && (target.closest('[data-ai3d-info]') || target.closest('.ai3d-info-bubble')))) {
           closeInfoBubble();
         }
+        var actionBtn = target && target.closest ? target.closest('[data-ai3d-action]') : null;
+        if (actionBtn) {
+          evt.preventDefault();
+          dispatchAi3dAction(actionBtn);
+          return;
+        }
         var modelBtn = target && target.closest ? target.closest('[data-ai3d-model-url]') : null;
         if (modelBtn) {
           evt.preventDefault();
@@ -2720,6 +2957,12 @@
             btn.classList.toggle('active', (btn.getAttribute('data-ai3d-model-url') || '') === src);
           });
           openModelLightbox(src, label, poster, modelBtn.getAttribute('data-ai3d-model-download') || src);
+          return;
+        }
+        var v4Open = target && target.closest ? target.closest('[data-ai3d-v4-open]') : null;
+        if (v4Open) {
+          evt.preventDefault();
+          refreshComponentV4Selection(v4Open.getAttribute('data-ai3d-v4-open') || '');
           return;
         }
         var preview = target && target.closest ? target.closest('[data-ai3d-preview-src]') : null;

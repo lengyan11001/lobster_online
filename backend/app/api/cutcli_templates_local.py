@@ -2740,6 +2740,8 @@ def _multi_clip_audio_segments(db: Session, user_id: int, source_asset_id: str) 
             meta = {}
     if not bool(meta.get("keep_original_audio")):
         return []
+    if str(meta.get("audio_source") or "").strip() == "marked_video" or str(meta.get("audio_source_asset_id") or "").strip():
+        return []
     raw_segments = meta.get("segments") if isinstance(meta.get("segments"), list) else []
     timeline_sec = 0.0
     segments: List[Dict[str, Any]] = []

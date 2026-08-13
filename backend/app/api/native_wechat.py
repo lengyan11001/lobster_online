@@ -50,7 +50,7 @@ class AutoReplyRunBody(BaseModel):
 
 class SyncBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
-    limit: int = Field(default=2000, ge=1, le=10000)
+    limit: int = Field(default=10000, ge=1, le=10000)
 
 
 class GroupBody(BaseModel):

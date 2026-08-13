@@ -5,7 +5,7 @@
       <div>
         <span class="mcm-eyebrow">视频创作</span>
         <h2>多段视频混剪</h2>
-        <p>按顺序截取每个视频的指定片段，拼成一条完整视频。</p>
+        <p>固定取同一段，或随机抽段批量生成；可指定一个视频作为整条成片主音轨。</p>
       </div>
       <button id="mcmBackBtn" type="button" class="btn btn-ghost btn-sm">返回技能商店</button>
     </header>
@@ -17,7 +17,7 @@
             <div>
               <span class="mcm-step">01</span>
               <h3>选择视频片段</h3>
-              <p>添加后逐个选择片段，生成时按列表顺序拼接。</p>
+              <p>添加后可逐个微调片段，也可以用下方模式一键统一。</p>
             </div>
             <button id="mcmAddVideoBtn" type="button" class="btn btn-primary">添加视频</button>
             <input id="mcmVideoInput" type="file" accept="video/*" multiple hidden>
@@ -27,7 +27,7 @@
           <div id="mcmClipEmpty" class="mcm-empty-clips">
             <div class="mcm-empty-mark">+</div>
             <strong>添加 3 个视频即可快速开始</strong>
-            <span>默认依次截取 0-3 秒、3-6 秒、6-9 秒，也可以逐条修改。</span>
+            <span>默认所有视频截取同一段 0-3 秒，也可以切换随机抽段批量生成。</span>
           </div>
         </section>
 
@@ -36,6 +36,24 @@
             <div>
               <span class="mcm-step">02</span>
               <h3>成片设置</h3>
+            </div>
+          </div>
+
+          <div class="mcm-mode-panel">
+            <div class="mcm-mode-tabs" role="radiogroup" aria-label="剪辑模式">
+              <label><input type="radio" name="mcmClipMode" value="fixed" checked><span>固定时长</span></label>
+              <label><input type="radio" name="mcmClipMode" value="random"><span>随机抽段</span></label>
+            </div>
+            <div id="mcmFixedModePanel" class="mcm-mode-body">
+              <label>统一开始（秒）<input id="mcmFixedStart" type="number" min="0" step="0.1" value="0"></label>
+              <label>统一结束（秒）<input id="mcmFixedEnd" type="number" min="0.1" step="0.1" value="3"></label>
+              <button id="mcmApplyFixedBtn" type="button" class="btn btn-ghost btn-sm">应用到所有视频</button>
+            </div>
+            <div id="mcmRandomModePanel" class="mcm-mode-body" hidden>
+              <label>每段随机时长（秒）<input id="mcmRandomSegmentSeconds" type="number" min="0.5" step="0.5" value="3"></label>
+              <label>生成数量<input id="mcmRandomOutputCount" type="number" min="1" max="20" step="1" value="1"></label>
+              <label class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>模板随机</span></label>
+              <label class="mcm-inline-check"><input id="mcmRandomMusicSwitch" type="checkbox" checked><span>音乐随机</span></label>
             </div>
           </div>
 
@@ -49,6 +67,10 @@
             <input id="mcmTemplateSwitch" type="checkbox">
           </label>
           <div id="mcmTemplatePanel" class="mcm-choice-panel" hidden>
+            <div class="mcm-provider-row">
+              <label><input type="radio" name="mcmTemplateProvider" value="local" checked><span>我们的模板</span></label>
+              <label><input type="radio" name="mcmTemplateProvider" value="shanjian"><span>闪剪模板</span></label>
+            </div>
             <div class="mcm-choice-toolbar">
               <div>
                 <strong>选择剪辑模板</strong>
@@ -110,6 +132,7 @@
             <a id="mcmOpenResultBtn" class="btn btn-primary" target="_blank" rel="noopener">打开成片</a>
             <button id="mcmRetryTemplateBtn" type="button" class="btn btn-ghost" hidden>重试模板处理</button>
           </div>
+          <div id="mcmBatchResults" class="mcm-batch-results" hidden></div>
         </section>
 
         <section class="mcm-progress-section">

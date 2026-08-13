@@ -3213,9 +3213,14 @@ async def _submit_local_publish_draft(
             "media_type": str(draft.get("media_type") or ("video" if any(item.get("kind") == "video" for item in attachments) else "image_text")).strip() or "image_text",
             "visibility": str(draft.get("visibility") or "public").strip() or "public",
         }
-        return await _post_local_api_json(
+        submitted = await _post_local_api_json(
             "/api/native-wechat/moments/publish",
             body,
+            headers=headers,
+            timeout_seconds=1200.0,
+        )
+        return await _wait_for_local_native_wechat_task_result(
+            submitted,
             headers=headers,
             timeout_seconds=1200.0,
         )
@@ -3250,6 +3255,74 @@ async def _submit_local_publish_draft(
     if isinstance(data, dict) and data.get("code") not in (None, 0, 200):
         raise RuntimeError(str(data.get("msg") or data.get("message") or data)[:500])
     return data if isinstance(data, dict) else {"result": data}
+
+
+def _local_native_wechat_publish_status(result: Dict[str, Any]) -> str:
+    task = result.get("task") if isinstance(result.get("task"), dict) else {}
+    return str(result.get("status") or result.get("state") or task.get("status") or "").strip().lower()
+
+
+async def _wait_for_local_native_wechat_task_result(
+    result: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    timeout_seconds: float = 1200.0,
+    poll_interval_seconds: float = 2.0,
+) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return {"ok": False, "status": "failed", "error": "本机发布任务返回格式异常"}
+    task = result.get("task") if isinstance(result.get("task"), dict) else {}
+    task_id = str(task.get("id") or result.get("task_id") or "").strip()
+    status = _local_native_wechat_publish_status(result)
+    running_statuses = {"pending", "running", "processing", "queued", "waiting"}
+    final_statuses = {"success", "failed", "partial_failed", "cancelled", "canceled", "timeout", "need_login", "login_required"}
+    if not task_id or (status and status not in running_statuses):
+        return result
+    deadline = asyncio.get_running_loop().time() + max(timeout_seconds, poll_interval_seconds)
+    latest = dict(result)
+    while True:
+        if status in final_statuses:
+            latest["queued"] = False
+            latest["status"] = status
+            latest.setdefault("task_id", task_id)
+            latest.setdefault("ok", status == "success")
+            if latest.get("ok") is False and not str(latest.get("error") or "").strip():
+                latest["error"] = str(task.get("error_message") or latest.get("message") or "本机发布任务执行失败").strip()
+            return latest
+        if asyncio.get_running_loop().time() >= deadline:
+            latest["ok"] = False
+            latest["queued"] = True
+            latest["status"] = status or "timeout"
+            latest["task_id"] = task_id
+            latest["error"] = "发布仍在本机执行队列中，尚未返回最终成功结果"
+            return latest
+        await asyncio.sleep(max(0.5, poll_interval_seconds))
+        try:
+            detail = await _get_local_api_json(
+                f"/api/native-wechat/tasks/{task_id}",
+                headers=headers,
+                timeout_seconds=max(10.0, min(30.0, poll_interval_seconds + 8.0)),
+            )
+        except Exception as exc:
+            latest["ok"] = False
+            latest["queued"] = True
+            latest["status"] = status or "pending"
+            latest["task_id"] = task_id
+            latest["error"] = f"查询本机发布任务结果失败：{exc}"
+            return latest
+        task = detail.get("task") if isinstance(detail.get("task"), dict) else {}
+        if task:
+            latest = dict(task)
+            payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+            publish_result = payload.get("publish_result") if isinstance(payload.get("publish_result"), dict) else {}
+            if publish_result:
+                latest.update(publish_result)
+            latest["task"] = task
+            latest.setdefault("task_id", task_id)
+        else:
+            latest = dict(detail)
+            latest.setdefault("task_id", task_id)
+        status = _local_native_wechat_publish_status(latest)
 
 
 def _scheduled_refs_asset_urls_only(
@@ -4379,12 +4452,15 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         from douyin_api import douyin_start_video_comment, get_commentable_douyin_tasks  # type: ignore
 
         comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
-        selected_task_ids = [
-            _safe_int(row.get("id"))
-            for row in get_commentable_douyin_tasks()
-            if isinstance(row, dict) and _safe_int(row.get("id")) > 0
-        ]
+        selected_task_ids = _scheduled_douyin_selected_task_ids(source)
+        if not selected_task_ids:
+            selected_task_ids = [
+                _safe_int(row.get("id"))
+                for row in get_commentable_douyin_tasks()
+                if isinstance(row, dict) and _safe_int(row.get("id")) > 0
+            ][:max_users]
         result = await douyin_start_video_comment(request={
+            "selected_task_ids": selected_task_ids,
             "comment_mode": comment_mode,
             "comment_text": _scheduled_douyin_fixed_text(source, "comment") if comment_mode == "fixed" else "",
             "comment_prompt": str(source.get("comment_prompt") or "").strip(),
@@ -5568,7 +5644,7 @@ def _normalize_seedance_tvc_scheduled_payload(
         "auto_save": _workflow_flag(source.get("auto_save"), True),
         "analysis_model": str(source.get("analysis_model") or "").strip(),
         "image_model": str(source.get("image_model") or "").strip(),
-        "image_model_fallback": str(source.get("image_model_fallback") or "gpt-image-2-yunwu").strip(),
+        "image_model_fallback": str(source.get("image_model_fallback") or "nano-banana-2").strip(),
         "video_model": video_model,
         "video_channel": video_channel,
         "video_fallbacks": video_fallbacks,

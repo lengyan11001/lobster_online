@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 
 from ..core.config import settings
 from ..db import SessionLocal
@@ -168,8 +168,8 @@ _VIEW_ROLE_LABELS = {
     "back": "背视图",
 }
 _VIEW_ROLE_ORDER = {role: idx for idx, role in enumerate(_DIRECT_MULTI_VIEW_ROLES)}
-_AI3D_WORKFLOW_MODES = {"custom", "real_object", "game_prop", "direct_multiview", "component_split", "component_split_v2", "component_split_v3"}
-_AI3D_COMPONENT_SPLIT_MODES = {"component_split", "component_split_v2", "component_split_v3"}
+_AI3D_WORKFLOW_MODES = {"custom", "real_object", "game_prop", "direct_multiview", "component_split", "component_split_v2", "component_split_v3", "component_split_v4"}
+_AI3D_COMPONENT_SPLIT_MODES = {"component_split", "component_split_v2", "component_split_v3", "component_split_v4"}
 
 _CHARACTER_PART_PRESETS = [
     {"role": "full_body", "label": "全身主体", "box": (0.05, 0.00, 0.95, 1.00)},
@@ -1886,6 +1886,168 @@ def _make_generated_component_sheet(parts: List[Dict[str, Any]], dest: Path) -> 
     dest.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(dest, "JPEG", quality=94, optimize=True)
     return {"width": canvas.width, "height": canvas.height, "layout": f"{cols}x{rows}", "part_count": min(len(parts), cols * rows)}
+
+
+def _make_component_v4_annotated_source(
+    source_path: Path,
+    parts: List[Dict[str, Any]],
+    dest: Path,
+) -> Dict[str, Any]:
+    with Image.open(source_path) as im:
+        source = ImageOps.exif_transpose(im).convert("RGB")
+        board = source.copy()
+        max_side = 1580
+        if max(board.width, board.height) > max_side:
+            board.thumbnail((max_side, max_side), _LANCZOS)
+        canvas_w = max(1280, board.width + 64)
+        canvas_h = max(960, board.height + 64)
+        canvas = Image.new("RGB", (canvas_w, canvas_h), (245, 247, 250))
+        x0 = (canvas_w - board.width) // 2
+        y0 = (canvas_h - board.height) // 2
+        canvas.paste(board, (x0, y0))
+        draw = ImageDraw.Draw(canvas)
+        try:
+            font = ImageFont.truetype("arial.ttf", 30)
+            small_font = ImageFont.truetype("arial.ttf", 20)
+        except Exception:
+            font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+        scale_x = board.width / max(1, source.width)
+        scale_y = board.height / max(1, source.height)
+        used: List[Tuple[int, int, int, int]] = []
+        for idx, part in enumerate(parts[:24], start=1):
+            box = part.get("box")
+            if not isinstance(box, (list, tuple)) or len(box) != 4:
+                continue
+            abs_box = _relative_box_to_abs(source.width, source.height, tuple(float(v) for v in list(box)[:4]))  # type: ignore[arg-type]
+            cx = x0 + int(round(((abs_box[0] + abs_box[2]) / 2.0) * scale_x))
+            cy = y0 + int(round(((abs_box[1] + abs_box[3]) / 2.0) * scale_y))
+            radius = 18
+            marker = (cx - radius, cy - radius, cx + radius, cy + radius)
+            if any(not (marker[2] < u[0] or marker[0] > u[2] or marker[3] < u[1] or marker[1] > u[3]) for u in used):
+                cy = min(canvas_h - 32, cy + 34 + ((idx - 1) % 4) * 10)
+                marker = (cx - radius, cy - radius, cx + radius, cy + radius)
+            used.append(marker)
+            draw.ellipse(marker, fill=(220, 38, 38), outline=(255, 255, 255), width=3)
+            text = str(idx)
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            draw.text((cx - tw / 2, cy - th / 2 - 2), text, fill=(255, 255, 255), font=font)
+        header = f"拆件 4.0 标注预览 · {len(parts)} 个部件"
+        draw.rounded_rectangle((20, 18, min(canvas_w - 20, 520), 72), radius=14, fill=(255, 255, 255), outline=(219, 234, 254), width=2)
+        draw.text((38, 31), header, fill=(15, 23, 42), font=font)
+        draw.text((38, 56), "左侧为标注号，右侧在工作台查看部件与名称", fill=(100, 116, 139), font=small_font)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(dest, "JPEG", quality=94, optimize=True)
+        return {"width": canvas.width, "height": canvas.height, "part_count": len(parts), "annotated": True}
+
+
+def _make_component_v4_part_preview(
+    source_path: Path,
+    part: Dict[str, Any],
+    dest: Path,
+) -> Dict[str, Any]:
+    box = part.get("box")
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        raise RuntimeError(f"部件缺少有效 box：{part.get('role') or part.get('label') or 'unknown'}")
+    rel_box = tuple(float(v) for v in list(box)[:4])
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_path) as im:
+        source = ImageOps.exif_transpose(im).convert("RGB")
+        abs_box = _relative_box_to_abs(source.width, source.height, rel_box)  # type: ignore[arg-type]
+        meta = _save_square_crop(source, abs_box, dest, size=1024)
+    meta["component_source_mode"] = "component_split_v4_preview"
+    meta["source_width"] = source.width
+    meta["source_height"] = source.height
+    meta["relative_source_box"] = [
+        abs_box[0] / max(1, source.width),
+        abs_box[1] / max(1, source.height),
+        abs_box[2] / max(1, source.width),
+        abs_box[3] / max(1, source.height),
+    ]
+    return meta
+
+
+def _make_component_v4_part_preview(
+    source_path: Path,
+    part: Dict[str, Any],
+    dest: Path,
+) -> Dict[str, Any]:
+    box = part.get("box")
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        raise RuntimeError(f"部件缺少有效 box：{part.get('role') or part.get('label') or 'unknown'}")
+    rel_box = tuple(float(v) for v in list(box)[:4])
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_path) as im:
+        source = ImageOps.exif_transpose(im).convert("RGB")
+        abs_box = _relative_box_to_abs(source.width, source.height, rel_box)  # type: ignore[arg-type]
+        meta = _save_square_crop(source, abs_box, dest, size=1024)
+    meta["component_source_mode"] = "component_split_v4_preview"
+    meta["source_width"] = source.width
+    meta["source_height"] = source.height
+    meta["relative_source_box"] = [
+        abs_box[0] / max(1, source.width),
+        abs_box[1] / max(1, source.height),
+        abs_box[2] / max(1, source.width),
+        abs_box[3] / max(1, source.height),
+    ]
+    return meta
+
+
+def _make_component_v4_annotated_source(
+    source_path: Path,
+    parts: List[Dict[str, Any]],
+    dest: Path,
+) -> Dict[str, Any]:
+    with Image.open(source_path) as im:
+        source = ImageOps.exif_transpose(im).convert("RGB")
+        board = source.copy()
+        max_side = 1580
+        if max(board.width, board.height) > max_side:
+            board.thumbnail((max_side, max_side), _LANCZOS)
+        canvas_w = max(1280, board.width + 64)
+        canvas_h = max(960, board.height + 64)
+        canvas = Image.new("RGB", (canvas_w, canvas_h), (245, 247, 250))
+        x0 = (canvas_w - board.width) // 2
+        y0 = (canvas_h - board.height) // 2
+        canvas.paste(board, (x0, y0))
+        draw = ImageDraw.Draw(canvas)
+        try:
+            font = ImageFont.truetype("arial.ttf", 30)
+            small_font = ImageFont.truetype("arial.ttf", 20)
+        except Exception:
+            font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+        scale_x = board.width / max(1, source.width)
+        scale_y = board.height / max(1, source.height)
+        used: List[Tuple[int, int, int, int]] = []
+        for idx, part in enumerate(parts[:24], start=1):
+            box = part.get("box")
+            if not isinstance(box, (list, tuple)) or len(box) != 4:
+                continue
+            abs_box = _relative_box_to_abs(source.width, source.height, tuple(float(v) for v in list(box)[:4]))  # type: ignore[arg-type]
+            cx = x0 + int(round(((abs_box[0] + abs_box[2]) / 2.0) * scale_x))
+            cy = y0 + int(round(((abs_box[1] + abs_box[3]) / 2.0) * scale_y))
+            radius = 18
+            marker = (cx - radius, cy - radius, cx + radius, cy + radius)
+            if any(not (marker[2] < u[0] or marker[0] > u[2] or marker[3] < u[1] or marker[1] > u[3]) for u in used):
+                cy = min(canvas_h - 32, cy + 34 + ((idx - 1) % 4) * 10)
+                marker = (cx - radius, cy - radius, cx + radius, cy + radius)
+            used.append(marker)
+            draw.ellipse(marker, fill=(220, 38, 38), outline=(255, 255, 255), width=3)
+            text = str(idx)
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            draw.text((cx - tw / 2, cy - th / 2 - 2), text, fill=(255, 255, 255), font=font)
+        header = f"拆件 4.0 标注预览 · {len(parts)} 个部件"
+        draw.rounded_rectangle((20, 18, min(canvas_w - 20, 460), 70), radius=14, fill=(255, 255, 255), outline=(219, 234, 254), width=2)
+        draw.text((38, 31), header, fill=(15, 23, 42), font=font)
+        draw.text((38, 54), "左侧为标注号，右侧在工作台查看部件与名称", fill=(100, 116, 139), font=small_font)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(dest, "JPEG", quality=94, optimize=True)
+        return {"width": canvas.width, "height": canvas.height, "part_count": len(parts), "annotated": True}
 
 
 def _make_fidelity_component_inputs_from_plan(
@@ -9389,16 +9551,72 @@ async def _run_component_split_background(
         if component_split_mode and plan_only:
             part_slots = _component_slots_from_plan(preprocessing, max_parts=int(preprocessing.get("max_parts") or _AI3D_DEFAULT_MAX_PARTS))
             preprocessing["component_slots"] = [{"role": role, "label": label} for role, label in part_slots]
+            preview_dir = root / "components" / "v4_preview"
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            annotated_path = preview_dir / "component_v4_annotated_source.jpg"
+            preview_sheet_path = preview_dir / "component_v4_parts_sheet.jpg"
+            source_part_items: List[Dict[str, Any]] = []
+            source_ref = Path(str(reference_path))
+            for idx, (role, label) in enumerate(part_slots, start=1):
+                part_plan = dict((ai_plan.get("parts") or [{}])[idx - 1] if idx - 1 < len(ai_plan.get("parts") or []) else {})
+                part_plan.setdefault("role", role)
+                part_plan.setdefault("label", label)
+                if not isinstance(part_plan.get("box"), (list, tuple)) or len(part_plan.get("box") or []) != 4:
+                    continue
+                preview_path = preview_dir / f"{idx:02d}_{role}.jpg"
+                try:
+                    meta = _make_component_v4_part_preview(source_ref, part_plan, preview_path)
+                except Exception:
+                    continue
+                source_part_items.append(_public_input(
+                    job_id=job_id,
+                    index=idx,
+                    filename=preview_path.name,
+                    normalized_path=preview_path,
+                    meta=meta,
+                    role=role,
+                    label=label,
+                    source_filename=str(source_for_plan.get("filename") or ""),
+                    generated=True,
+                ))
+            if source_part_items:
+                preview_sheet_meta = _make_generated_component_sheet(source_part_items, preview_sheet_path)
+                preview_sheet_input = _public_input(
+                    job_id=job_id,
+                    index=0,
+                    filename=preview_sheet_path.name,
+                    normalized_path=preview_sheet_path,
+                    meta=preview_sheet_meta,
+                    role="component_sheet",
+                    label="拆件 4.0 部件预览板",
+                    source_filename=str(source_for_plan.get("filename") or ""),
+                    generated=True,
+                )
+                annotated_meta = _make_component_v4_annotated_source(reference_path, ai_plan.get("parts") or [], annotated_path)
+                annotated_input = _public_input(
+                    job_id=job_id,
+                    index=0,
+                    filename=annotated_path.name,
+                    normalized_path=annotated_path,
+                    meta=annotated_meta,
+                    role="component_annotated_source",
+                    label="标注原图",
+                    source_filename=str(source_for_plan.get("filename") or ""),
+                    generated=True,
+                )
+                preprocessing["component_v4_annotated_source"] = annotated_input
+                preprocessing["component_v4_parts_sheet"] = preview_sheet_input
+                preprocessing["component_v4_part_previews"] = source_part_items
             notes = list(job.get("quality_notes") or [])
             if user_instruction:
                 notes.append(f"拆件提示词本次补充方向：{user_instruction[:500]}")
-            note = "GPT 已完成拆件规划和每个部件的图片提示词；请先检查/修改提示词，再生成部件图。"
+            note = "GPT 已完成拆件规划；请先查看左侧标注原图和右侧部件预览板，再决定是否继续生成图片。"
             if note not in notes:
                 notes.append(note)
             store.update_job(
                 job_id,
                 status="preprocessed",
-                stage="component_prompts_ready",
+                stage="component_v4_preview_ready",
                 progress=100,
                 error=None,
                 preprocessing=preprocessing,
@@ -9897,15 +10115,16 @@ async def ai_3d_model_config(request: Request, _: _ServerUser = Depends(_ai3d_lo
         "see_through": see_through.health(),
     }
     try:
-        balance = await _query_server_meshy_balance(request)
-        if bool(balance.get("configured", True)):
-            data["configured"] = True
-        data["balance"] = balance.get("balance")
-        data["balance_unit"] = balance.get("balance_unit") or "credits"
-        data["balance_source"] = "server"
+        balance = await meshy.get_balance()
+        if isinstance(balance, dict):
+          if bool(balance.get("configured", True)):
+              data["configured"] = True
+          data["balance"] = balance.get("balance")
+          data["balance_unit"] = balance.get("balance_unit") or balance.get("unit") or "credits"
+          data["balance_source"] = "local"
     except Exception as exc:
         data["balance_error"] = str(exc)
-        data["balance_source"] = "server"
+        data["balance_source"] = "local"
     return data
 
 

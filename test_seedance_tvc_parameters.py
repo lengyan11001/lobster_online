@@ -170,7 +170,7 @@ def test_h5_seedance_payload_matches_online_workbench_defaults():
     assert payload["merge_clips"] is True
     assert payload["auto_save"] is True
     assert payload["generate_audio"] is True
-    assert payload["image_model_fallback"] == "gpt-image-2-yunwu"
+    assert payload["image_model_fallback"] == "nano-banana-2"
     assert payload["reference_purposes"] == ["storyboard", "storyboard"]
 
 

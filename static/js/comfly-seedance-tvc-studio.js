@@ -2634,7 +2634,7 @@
       auto_save: true,
       analysis_model: typeof ANALYSIS_MODEL !== 'undefined' ? ANALYSIS_MODEL : '',
       image_model: typeof IMAGE_MODEL !== 'undefined' ? IMAGE_MODEL : '',
-      image_model_fallback: 'gpt-image-2-yunwu',
+      image_model_fallback: 'nano-banana-2',
       video_model: videoRequest.model,
       video_channel: videoRequest.channel,
       video_fallbacks: isYunwuVeoModel(values.model) ? [

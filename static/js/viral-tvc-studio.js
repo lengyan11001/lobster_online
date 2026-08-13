@@ -278,7 +278,7 @@
         auto_save: true,
         task_text: prompt,
         image_model: 'gpt-image-2',
-        image_model_fallback: 'gpt-image-2-yunwu',
+        image_model_fallback: 'nano-banana-2',
         video_model: videoRequest.model,
         video_channel: videoRequest.channel,
         video_fallbacks: isYunwuVeoModel(model) ? [{ channel: 'comfly', model: 'veo3.1-fast' }] : [],

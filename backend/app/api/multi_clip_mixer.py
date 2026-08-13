@@ -35,9 +35,14 @@ class MultiClipRenderBody(BaseModel):
     clips: List[ClipSegment] = Field(..., min_length=1, max_length=20)
     title: str = Field("多段视频混剪", max_length=80)
     keep_original_audio: bool = True
+    audio_asset_id: Optional[str] = Field(default=None, max_length=64)
+    target_duration: Optional[float] = Field(default=None, ge=0.1, le=3600)
+    audio_volume: float = Field(1.0, ge=0, le=2)
     bgm_url: Optional[str] = None
     bgm_name: Optional[str] = None
     bgm_volume: float = Field(0.24, ge=0, le=1)
+    clip_mode: str = Field("fixed", max_length=32)
+    output_index: int = Field(1, ge=1, le=50)
 
 
 def _find_ffprobe(ffmpeg: str) -> str:
@@ -128,6 +133,28 @@ def _download_bgm(url: str, work_dir: Path) -> Path:
     return target
 
 
+def _extend_visual_segments_to_target(segments: List[Dict[str, Any]], target_duration: float) -> float:
+    if not segments:
+        return 0.0
+    clean_target = max(0.0, float(target_duration or 0))
+    total = sum(max(0.0, float(item.get("duration") or 0)) for item in segments)
+    if clean_target <= 0 or clean_target <= total + 0.01:
+        return round(total, 3)
+
+    remaining = clean_target - total
+    last = segments[-1]
+    last_end = max(0.0, float(last.get("end_sec") or 0))
+    source_duration = max(last_end, float(last.get("source_duration") or last_end))
+    extend = min(remaining, max(0.0, source_duration - last_end))
+    if extend > 0.001:
+        last["end_sec"] = round(last_end + extend, 3)
+        last["duration"] = round(float(last.get("duration") or 0) + extend, 3)
+        remaining -= extend
+    if remaining > 0.001:
+        last["pad_after"] = round(remaining, 3)
+    return round(clean_target, 3)
+
+
 def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipRenderBody) -> Dict[str, Any]:
     ffmpeg = find_ffmpeg()
     ffprobe = _find_ffprobe(ffmpeg)
@@ -162,6 +189,25 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
                 }
             )
 
+        audio_source_asset_id = str(body.audio_asset_id or "").strip()
+        audio_source_path: Optional[Path] = None
+        target_duration = float(body.target_duration or 0)
+        if audio_source_asset_id:
+            audio_source_path, _, audio_media_type = resolve_asset_path(db, user_id, audio_source_asset_id)
+            if audio_media_type != "video":
+                raise ValueError("主音轨素材必须是视频")
+            if audio_source_path.parent.name.startswith("media_edit_dl_"):
+                download_dirs.add(audio_source_path.parent)
+            audio_info = _probe_video(audio_source_path, ffprobe)
+            if not bool(audio_info["has_audio"]):
+                raise ValueError("标记为主音轨的视频没有可用音频")
+            audio_duration = float(audio_info["duration"] or 0)
+            if target_duration <= 0 or target_duration > audio_duration:
+                target_duration = audio_duration
+
+        if target_duration > 0:
+            _extend_visual_segments_to_target(normalized, target_duration)
+
         target_width, target_height = _output_size(normalized[0]["width"], normalized[0]["height"])
         command: List[str] = [ffmpeg, "-y"]
         for path in resolved_paths:
@@ -169,60 +215,138 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
 
         filters: List[str] = []
         concat_inputs: List[str] = []
+        use_main_audio = audio_source_path is not None
         for index, item in enumerate(normalized):
             start = item["start_sec"]
             end = item["end_sec"]
             duration = item["duration"]
-            filters.append(
+            pad_after = max(0.0, float(item.get("pad_after") or 0))
+            video_filter = (
                 f"[{index}:v:0]trim=start={start}:end={end},setpts=PTS-STARTPTS,"
                 f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
                 f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black,"
-                "setsar=1,fps=30,format=yuv420p[v%d]" % index
             )
-            if body.keep_original_audio and item["has_audio"]:
-                filters.append(
+            if pad_after > 0.001:
+                video_filter += f"tpad=stop_mode=clone:stop_duration={pad_after},"
+            video_filter += "setsar=1,fps=30,format=yuv420p[v%d]" % index
+            filters.append(video_filter)
+            if use_main_audio:
+                concat_inputs.append(f"[v{index}]")
+                continue
+            filters.append(
+                (
                     f"[{index}:a:0]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,"
                     "aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a%d]"
                     % index
                 )
-            else:
-                filters.append(
+                if body.keep_original_audio and item["has_audio"]
+                else (
                     f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={duration},"
                     "asetpts=PTS-STARTPTS[a%d]" % index
                 )
+            )
             concat_inputs.extend([f"[v{index}]", f"[a{index}]"])
 
-        filters.append("".join(concat_inputs) + f"concat=n={len(normalized)}:v=1:a=1[vout][aout]")
-        merged_path = work_dir / "merged.mp4"
-        command.extend(
-            [
-                "-filter_complex",
-                ";".join(filters),
-                "-map",
-                "[vout]",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "22",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "160k",
-                "-movflags",
-                "+faststart",
-                str(merged_path),
-            ]
-        )
+        if use_main_audio:
+            filters.append("".join(concat_inputs) + f"concat=n={len(normalized)}:v=1:a=0[vout]")
+            merged_path = work_dir / "merged.mp4"
+            command.extend(
+                [
+                    "-filter_complex",
+                    ";".join(filters),
+                    "-map",
+                    "[vout]",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    "22",
+                    "-movflags",
+                    "+faststart",
+                    str(merged_path),
+                ]
+            )
+        else:
+            filters.append("".join(concat_inputs) + f"concat=n={len(normalized)}:v=1:a=1[vout][aout]")
+            merged_path = work_dir / "merged.mp4"
+            command.extend(
+                [
+                    "-filter_complex",
+                    ";".join(filters),
+                    "-map",
+                    "[vout]",
+                    "-map",
+                    "[aout]",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "fast",
+                    "-crf",
+                    "22",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "160k",
+                    "-movflags",
+                    "+faststart",
+                    str(merged_path),
+                ]
+            )
         _run_process(command)
 
         final_path = merged_path
         bgm_url = str(body.bgm_url or "").strip()
-        if bgm_url:
-            bgm_path = _download_bgm(bgm_url, work_dir)
+        bgm_path = _download_bgm(bgm_url, work_dir) if bgm_url else None
+        if use_main_audio and audio_source_path is not None:
+            mixed_path = work_dir / "merged_with_marked_audio.mp4"
+            final_duration = max(0.1, float(target_duration or 0))
+            mix_command = [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(merged_path),
+                "-i",
+                str(audio_source_path),
+            ]
+            if bgm_path:
+                mix_command.extend(["-stream_loop", "-1", "-i", str(bgm_path)])
+                audio_filter = (
+                    f"[1:a:0]atrim=start=0:duration={final_duration},asetpts=PTS-STARTPTS,volume={body.audio_volume},"
+                    "aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[maina];"
+                    f"[2:a:0]atrim=duration={final_duration},asetpts=PTS-STARTPTS,volume={body.bgm_volume},"
+                    "aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[bgm];"
+                    "[maina][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                )
+            else:
+                audio_filter = (
+                    f"[1:a:0]atrim=start=0:duration={final_duration},asetpts=PTS-STARTPTS,volume={body.audio_volume},"
+                    "aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[aout]"
+                )
+            mix_command.extend(
+                [
+                    "-filter_complex",
+                    audio_filter,
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "[aout]",
+                    "-t",
+                    str(round(final_duration, 3)),
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "160k",
+                    "-movflags",
+                    "+faststart",
+                    str(mixed_path),
+                ]
+            )
+            _run_process(mix_command)
+            final_path = mixed_path
+        elif bgm_path:
             mixed_path = work_dir / "merged_with_bgm.mp4"
             if body.keep_original_audio:
                 audio_filter = (
@@ -268,6 +392,9 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
             "duration": round(float(output_info["duration"]), 3),
             "width": target_width,
             "height": target_height,
+            "audio_source_asset_id": audio_source_asset_id,
+            "audio_source": "marked_video" if audio_source_asset_id else "segments",
+            "target_duration": round(float(target_duration), 3) if target_duration > 0 else None,
         }
     finally:
         db.close()
@@ -323,6 +450,11 @@ async def render_multi_clip_video(
             "title": (body.title or "多段视频混剪").strip()[:80],
             "segments": rendered["segments"],
             "keep_original_audio": body.keep_original_audio,
+            "audio_source_asset_id": rendered.get("audio_source_asset_id") or "",
+            "audio_source": rendered.get("audio_source") or "segments",
+            "target_duration": rendered.get("target_duration"),
+            "clip_mode": (body.clip_mode or "fixed").strip()[:32],
+            "output_index": body.output_index,
             "bgm_name": (body.bgm_name or "").strip()[:120],
             "bgm_url": (body.bgm_url or "").strip()[:1000],
             "bgm_volume": body.bgm_volume,
