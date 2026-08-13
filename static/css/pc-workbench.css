@@ -2181,10 +2181,10 @@ html.ps-dh-modal-open body {
   min-height: 0;
   padding: 0 18px 18px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
   gap: 12px;
   align-content: start;
-  overflow: auto;
+  overflow: hidden auto;
 }
 
 .ps-dh-card {
@@ -2214,7 +2214,8 @@ html.ps-dh-modal-open body {
 
 .ps-dh-card-cover {
   position: relative;
-  aspect-ratio: 3 / 4;
+  min-height: 0;
+  aspect-ratio: 9 / 16;
   overflow: hidden;
   display: grid;
   place-items: center;
@@ -2228,7 +2229,8 @@ html.ps-dh-modal-open body {
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: cover;
+  object-fit: contain;
+  background: #edf4ff;
 }
 
 .ps-dh-card-body {
@@ -2257,7 +2259,7 @@ html.ps-dh-modal-open body {
 }
 
 .ps-dh-card.skeleton {
-  min-height: 250px;
+  min-height: 222px;
   border: 0;
   background: linear-gradient(90deg, #f2f5f9 25%, #e9eef5 37%, #f2f5f9 63%);
   background-size: 400% 100%;
@@ -2265,9 +2267,34 @@ html.ps-dh-modal-open body {
 }
 
 .ps-dh-modal-foot {
+  min-width: 0;
   padding: 14px 18px !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between !important;
+  gap: 12px !important;
   border-top: 1px solid #edf0f4 !important;
   background: #fbfcfe;
+}
+
+.ps-dh-pagination,
+.ps-dh-modal-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ps-dh-pagination span {
+  min-width: 58px;
+  color: #64748b;
+  font-size: 12px;
+  text-align: center;
+}
+
+.ps-dh-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 @keyframes ps-dh-skeleton {
@@ -2288,8 +2315,18 @@ html.ps-dh-modal-open body {
   }
 
   .ps-dh-modal-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 9px;
+  }
+
+  .ps-dh-modal-foot {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ps-dh-pagination,
+  .ps-dh-modal-actions {
+    justify-content: space-between;
   }
 }
 

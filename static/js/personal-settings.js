@@ -41,6 +41,7 @@
     personalDigitalHumanTemplatesLoading: false,
     personalDigitalHumanTemplatesError: '',
     personalDigitalHumanTemplateSearch: '',
+    personalDigitalHumanTemplatePage: 1,
     personalDigitalHumanTemplateDraft: null,
     personalSelectedDigitalHumanTemplate: null,
     personalDigitalHumanTemplateExplicitlyCleared: false
@@ -1291,14 +1292,31 @@
     });
   }
 
+  var PERSONAL_DH_TEMPLATE_PAGE_SIZE = 12;
+
+  function clampPersonalDigitalHumanTemplatePage(totalRows) {
+    var totalPages = Math.max(1, Math.ceil(Math.max(0, Number(totalRows) || 0) / PERSONAL_DH_TEMPLATE_PAGE_SIZE));
+    var page = parseInt(state.personalDigitalHumanTemplatePage, 10);
+    if (!Number.isFinite(page) || page < 1) page = 1;
+    if (page > totalPages) page = totalPages;
+    state.personalDigitalHumanTemplatePage = page;
+    return { page: page, totalPages: totalPages };
+  }
+
   function renderPersonalDigitalHumanTemplatePicker() {
     var modal = $('psDigitalHumanTemplateModal');
     var grid = $('psDigitalHumanTemplateGrid');
     if (!grid) return;
     var rows = filteredPersonalDigitalHumanTemplates();
     var total = (state.personalDigitalHumanTemplates || []).length;
+    var pageInfo = clampPersonalDigitalHumanTemplatePage(rows.length);
+    var start = (pageInfo.page - 1) * PERSONAL_DH_TEMPLATE_PAGE_SIZE;
+    var pageRows = rows.slice(start, start + PERSONAL_DH_TEMPLATE_PAGE_SIZE);
     var count = $('psDigitalHumanTemplateCount');
-    if (count) count.textContent = state.personalDigitalHumanTemplateSearch ? (rows.length + ' / ' + total + ' 个模板') : (total + ' 个模板');
+    if (count) {
+      var visibleRange = rows.length ? ((start + 1) + '-' + Math.min(start + PERSONAL_DH_TEMPLATE_PAGE_SIZE, rows.length)) : '0';
+      count.textContent = (state.personalDigitalHumanTemplateSearch ? (rows.length + ' / ' + total) : String(total)) + ' 个模板 · 当前 ' + visibleRange;
+    }
     var status = $('psDigitalHumanTemplateStatus');
     if (status) {
       status.textContent = state.personalDigitalHumanTemplatesLoading
@@ -1306,13 +1324,19 @@
         : (state.personalDigitalHumanTemplatesError || (rows.length ? '' : (state.personalDigitalHumanTemplateSearch ? '没有匹配的模板' : '暂无可用模板')));
       status.className = 'ps-dh-modal-status' + (state.personalDigitalHumanTemplatesError ? ' error' : '');
     }
+    var pageText = $('psDigitalHumanTemplatePageText');
+    var prevBtn = $('psDigitalHumanTemplatePrev');
+    var nextBtn = $('psDigitalHumanTemplateNext');
+    if (pageText) pageText.textContent = pageInfo.page + ' / ' + pageInfo.totalPages;
+    if (prevBtn) prevBtn.disabled = pageInfo.page <= 1 || state.personalDigitalHumanTemplatesLoading;
+    if (nextBtn) nextBtn.disabled = pageInfo.page >= pageInfo.totalPages || state.personalDigitalHumanTemplatesLoading;
     if (!modal || !modal.classList.contains('is-visible')) return;
     if (state.personalDigitalHumanTemplatesLoading && !rows.length) {
       grid.innerHTML = Array.from({ length: 6 }, function() { return '<div class="ps-dh-card skeleton"></div>'; }).join('');
       return;
     }
     var selectedId = String((state.personalDigitalHumanTemplateDraft || {}).style_id || '');
-    grid.innerHTML = rows.map(function(item) {
+    grid.innerHTML = pageRows.map(function(item) {
       var selected = String(item.style_id || '') === selectedId;
       return '<article class="ps-dh-card' + (selected ? ' is-selected' : '') + '" data-ps-dh-template="' + escAttr(item.style_id) + '" tabindex="0" role="radio" aria-checked="' + (selected ? 'true' : 'false') + '">' +
         '<div class="ps-dh-card-cover">' +
@@ -1377,6 +1401,7 @@
   function openPersonalDigitalHumanTemplatePicker() {
     state.personalDigitalHumanTemplateDraft = clonePersonalDigitalHumanTemplate(state.personalSelectedDigitalHumanTemplate);
     state.personalDigitalHumanTemplateSearch = '';
+    state.personalDigitalHumanTemplatePage = 1;
     if ($('psDigitalHumanTemplateSearch')) $('psDigitalHumanTemplateSearch').value = '';
     var modal = $('psDigitalHumanTemplateModal');
     if (modal) {
@@ -2599,6 +2624,15 @@
     });
     if ($('psDigitalHumanTemplateSearch')) $('psDigitalHumanTemplateSearch').addEventListener('input', function(ev) {
       state.personalDigitalHumanTemplateSearch = String(ev.target.value || '');
+      state.personalDigitalHumanTemplatePage = 1;
+      renderPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplatePrev')) $('psDigitalHumanTemplatePrev').addEventListener('click', function() {
+      state.personalDigitalHumanTemplatePage = Math.max(1, Number(state.personalDigitalHumanTemplatePage || 1) - 1);
+      renderPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanTemplateNext')) $('psDigitalHumanTemplateNext').addEventListener('click', function() {
+      state.personalDigitalHumanTemplatePage = Number(state.personalDigitalHumanTemplatePage || 1) + 1;
       renderPersonalDigitalHumanTemplatePicker();
     });
     if ($('psDigitalHumanTemplateGrid')) $('psDigitalHumanTemplateGrid').addEventListener('click', function(ev) {

@@ -831,12 +831,20 @@
     </div>
     <div class="ps-dh-modal-tools">
       <input id="psDigitalHumanTemplateSearch" type="search" placeholder="搜索模板名称或样式 ID">
+      <div id="psDigitalHumanTemplateCount" class="ps-dh-modal-count">0 个模板</div>
     </div>
     <div id="psDigitalHumanTemplateStatus" class="ps-dh-modal-status"></div>
     <div id="psDigitalHumanTemplateGrid" class="ps-dh-modal-grid"></div>
-    <div class="ps-dh-modal-foot" style="display:flex;gap:0.5rem;justify-content:flex-end;padding:0.9rem 1rem 1rem;border-top:1px solid var(--ps-line);">
-      <button type="button" id="psDigitalHumanTemplateCancel" class="btn btn-ghost btn-sm">取消</button>
-      <button type="button" id="psDigitalHumanTemplateConfirm" class="btn btn-primary btn-sm">确定</button>
+    <div class="ps-dh-modal-foot">
+      <div class="ps-dh-pagination" aria-label="数字人模板分页">
+        <button type="button" id="psDigitalHumanTemplatePrev" class="btn btn-ghost btn-sm">上一页</button>
+        <span id="psDigitalHumanTemplatePageText">1 / 1</span>
+        <button type="button" id="psDigitalHumanTemplateNext" class="btn btn-ghost btn-sm">下一页</button>
+      </div>
+      <div class="ps-dh-modal-actions">
+        <button type="button" id="psDigitalHumanTemplateCancel" class="btn btn-ghost btn-sm">取消</button>
+        <button type="button" id="psDigitalHumanTemplateConfirm" class="btn btn-primary btn-sm">确定</button>
+      </div>
     </div>
   </div>
 </div>
