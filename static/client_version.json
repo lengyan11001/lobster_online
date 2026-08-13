@@ -1,7 +1,7 @@
 {
-  "version": "1.0.163",
-  "build": 207,
-  "applied_at": "2026-08-13T21:25:23+08:00",
-  "note": "wechat takeover group invite switch",
-  "bundle_sha256": "ea5619fd8cc090d6b81b60884088fc93b5a46a5c0456d5fa50c4252236768ff5"
+  "version": "1.0.164",
+  "build": 208,
+  "applied_at": "2026-08-13T21:34:47+08:00",
+  "note": "remove legacy group invite rows",
+  "bundle_sha256": "4326d13158e781aaecd56c0a6455ddb7014409e40e69a405d934290128b0e45e"
 }
