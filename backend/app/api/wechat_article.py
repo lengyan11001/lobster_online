@@ -268,6 +268,103 @@ def _digest(markdown: str, explicit: str = "") -> str:
     return text[:120]
 
 
+def _plain_heading_text(text: str) -> str:
+    value = re.sub(r"[*_`#\s]+", "", str(text or ""))
+    value = re.sub(r"[，。！？、：；,.!?:;《》「」『』“”\"'（）()\[\]【】\-—_]+", "", value)
+    return value.strip().lower()
+
+
+def _strip_duplicate_title_heading(markdown: str, title: str = "") -> str:
+    raw = (markdown or "").replace("\r\n", "\n").replace("\r", "\n")
+    explicit_title = (title or "").strip()
+    derived_title = explicit_title or _extract_title(raw, "")
+    title_key = _plain_heading_text(derived_title)
+    if not raw.strip() or not title_key:
+        return raw.strip()
+    lines = raw.split("\n")
+    idx = 0
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx >= len(lines):
+        return raw.strip()
+    first = lines[idx].strip()
+    heading = re.match(r"^\s*#\s+(.+?)\s*$", first)
+    first_text = heading.group(1).strip() if heading else first
+    first_key = _plain_heading_text(first_text)
+    if first_key and (first_key == title_key or first_key in title_key or title_key in first_key):
+        del lines[idx]
+        while idx < len(lines) and not lines[idx].strip():
+            del lines[idx]
+        return "\n".join(lines).strip()
+    return raw.strip()
+
+
+def _article_paragraph_contexts(markdown: str, title: str = "", max_count: int = 3) -> List[str]:
+    clean = _strip_duplicate_title_heading(markdown, title)
+    blocks: List[Dict[str, str]] = []
+    current_heading = ""
+    current_parts: List[str] = []
+
+    def flush() -> None:
+        nonlocal current_parts
+        text = " ".join(p.strip() for p in current_parts if p.strip())
+        text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) >= 24:
+            heading = current_heading.strip()
+            blocks.append({"heading": heading, "text": text})
+        current_parts = []
+
+    for raw in clean.splitlines():
+        line = raw.strip()
+        if not line:
+            flush()
+            continue
+        if re.match(r"^\s*#{1,6}\s+", line):
+            flush()
+            current_heading = re.sub(r"^\s*#{1,6}\s+", "", line).strip()
+            continue
+        if line.startswith("!["):
+            continue
+        if re.match(r"^\s*[-*+]\s+", line):
+            current_parts.append(re.sub(r"^\s*[-*+]\s+", "", line))
+        elif re.match(r"^\s*\d+[.)]\s+", line):
+            current_parts.append(re.sub(r"^\s*\d+[.)]\s+", "", line))
+        elif line.startswith(">"):
+            current_parts.append(line.lstrip("> ").strip())
+        else:
+            current_parts.append(line)
+    flush()
+
+    if not blocks:
+        text = re.sub(r"\s+", " ", re.sub(r"[#>*_`\[\]()]|https?://\S+", " ", clean)).strip()
+        if text:
+            blocks.append({"heading": "", "text": text})
+
+    max_count = max(1, _clamp_image_count(max_count))
+    if len(blocks) <= max_count:
+        selected = blocks
+    else:
+        step = (len(blocks) - 1) / max(1, max_count - 1)
+        picked: List[int] = []
+        for i in range(max_count):
+            idx = int(round(i * step))
+            if idx not in picked:
+                picked.append(idx)
+        while len(picked) < max_count:
+            for idx in range(len(blocks)):
+                if idx not in picked:
+                    picked.append(idx)
+                    break
+        selected = [blocks[i] for i in picked[:max_count]]
+
+    contexts: List[str] = []
+    for block in selected:
+        prefix = f"{block['heading']}：" if block.get("heading") else ""
+        contexts.append((prefix + block.get("text", ""))[:360])
+    return [c for c in contexts if c.strip()]
+
+
 def _raw_token_from_request(request: Request) -> str:
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
@@ -387,7 +484,7 @@ async def _call_article_writer(body: WechatArticleGenerateIn, token: str, instal
     system_prompt = (
         "你是资深微信公众号主编和排版策划。请根据用户输入的主题/想法，直接生成可发布的公众号文章。"
         "必须返回严格 JSON，不要 Markdown 代码块。字段：title、digest、markdown、image_prompt。"
-        "markdown 需包含一级标题、自然段、二级标题、列表或引用，语言中文，适合微信阅读。"
+        "markdown 不要重复写文章标题或一级标题，正文从导语或二级标题开始，可包含自然段、二级标题、列表或引用，语言中文，适合微信阅读。"
         "如果用户要求自动配图，image_prompt 写一条适合 gpt-image-2 的配图提示词；否则 image_prompt 可为空。"
     )
     user_prompt = (
@@ -629,23 +726,35 @@ async def _generate_article_images(
     model: str,
     aspect_ratio: str,
     count: int,
+    paragraph_contexts: Optional[List[str]] = None,
+    title: str = "",
 ) -> tuple[List[str], List[str]]:
     count = _clamp_image_count(count)
     base_prompt = (prompt or "").strip()
-    if not base_prompt:
+    contexts = [str(x or "").strip() for x in (paragraph_contexts or []) if str(x or "").strip()]
+    if not base_prompt and not contexts and not title:
         return [], []
     roles = [
-        "文章头图：概括全文主题，适合放在标题下方。",
-        "正文章节配图：承接文章中段观点，画面更偏场景和细节。",
-        "正文案例配图：表现读者痛点、工作场景或方法落地。",
-        "数据洞察配图：抽象表现趋势、增长、运营分析，不要出现文字。",
-        "结尾配图：收束文章情绪，干净、有行动感、适合结尾前。",
+        "首图：承接开篇观点，画面要有明确主体和场景入口。",
+        "正文配图：根据当前段落内容表现一个具体业务场景。",
+        "案例配图：根据当前段落内容表现痛点、方法或落地过程。",
+        "数据/方法配图：根据当前段落内容表现分析、流程或决策，不要重复前图构图。",
+        "结尾配图：根据当前段落内容收束主题，画面更有行动感。",
     ]
     semaphore = asyncio.Semaphore(min(_IMAGE_GENERATION_CONCURRENCY, count))
 
     async def generate_one(idx: int) -> tuple[int, str, str, int]:
         role = roles[idx] if idx < len(roles) else f"文章配图 {idx + 1}"
-        prompt_i = f"{base_prompt}\n\n用途：{role}"
+        context = contexts[idx] if idx < len(contexts) else (contexts[-1] if contexts else "")
+        prompt_i = (
+            f"公众号文章配图，主题：{title or '公众号文章'}。\n"
+            f"全文视觉方向：{base_prompt or title or '现代中文公众号商业配图'}\n"
+            f"当前段落内容：{context or title or base_prompt}\n"
+            f"图片用途：{role}\n"
+            f"差异化要求：这是第 {idx + 1} 张配图，必须围绕当前段落生成不同主体、不同镜头、不同场景细节；"
+            "不要连续生成同一个机器人/同一个办公室/同一个电脑屏幕视角；不要出现文字、标题、水印、logo；"
+            "画面真实、干净、适合微信公众号正文阅读。"
+        )
         last_error = ""
         async with semaphore:
             for attempt in range(1, _IMAGE_GENERATION_RETRIES + 1):
@@ -674,7 +783,6 @@ async def _generate_article_images(
         elif err:
             errors.append(f"第 {idx + 1} 张（已重试 {attempts} 次）：{err}")
     return urls, errors
-
 
 def _insert_article_images(markdown: str, image_urls: List[str]) -> str:
     urls = [u for u in image_urls if isinstance(u, str) and u.strip()]
@@ -1233,11 +1341,12 @@ def preview_wechat_article(
     body: WechatArticlePreviewIn,
 ):
     title = _extract_title(body.markdown, body.title)
-    article_html = _render_markdown_to_wechat_html(body.markdown, body.theme)
+    markdown = _strip_duplicate_title_heading(body.markdown, title)
+    article_html = _render_markdown_to_wechat_html(markdown, body.theme)
     return {
         "ok": True,
         "title": title,
-        "digest": _digest(body.markdown),
+        "digest": _digest(markdown),
         "html": article_html,
         "theme": body.theme if body.theme in _THEMES else "professional-clean",
     }
@@ -1264,6 +1373,10 @@ async def generate_wechat_article(
         warnings.append("AI 成稿服务暂不可用，已使用本地结构化草稿兜底。")
         article = _normalize_generated_article({}, idea, body.include_images)
 
+    article_title = _extract_title(article.get("markdown") or "", article.get("title") or "")
+    article_markdown = _strip_duplicate_title_heading(article["markdown"], article_title)
+    paragraph_contexts = _article_paragraph_contexts(article_markdown, article_title, body.image_count)
+
     image_url = ""
     image_urls: List[str] = []
     image_error = ""
@@ -1288,6 +1401,8 @@ async def generate_wechat_article(
             model=body.image_model,
             aspect_ratio=body.image_aspect_ratio,
             count=body.image_count,
+            paragraph_contexts=paragraph_contexts,
+            title=article_title,
         )
         image_url = image_urls[0] if image_urls else ""
         image_error = "；".join(image_errors[:3])
@@ -1306,8 +1421,8 @@ async def generate_wechat_article(
 
     all_image_urls = _dedupe_urls(selected_urls + image_urls)
     image_url = all_image_urls[0] if all_image_urls else image_url
-    markdown = _insert_article_images(article["markdown"], all_image_urls)
-    title = _extract_title(markdown, article["title"])
+    markdown = _insert_article_images(article_markdown, all_image_urls)
+    title = article_title or _extract_title(markdown, article["title"])
     digest = _digest(markdown, article["digest"])
     article_html = _render_markdown_to_wechat_html(markdown, theme_name)
     return {
@@ -1348,6 +1463,7 @@ async def create_wechat_article_draft(
     secret = (cfg.get("secret") or "").strip()
 
     title = _extract_title(markdown, body.title)
+    markdown = _strip_duplicate_title_heading(markdown, title)
     digest = _digest(markdown, body.digest)
     theme_name = body.theme if body.theme in _THEMES else (cfg.get("theme") or "professional-clean")
     author = (body.author or cfg.get("author") or "").strip()
