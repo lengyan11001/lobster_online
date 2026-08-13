@@ -285,6 +285,10 @@
                                                 <textarea id="douyin-video-comment-text" rows="3" placeholder="例如：这条讲得挺实在，很多细节一下就听明白了"></textarea>
                                             </div>
                                         </div>
+                                        <div class="dm-preset-head" style="margin-top:14px">
+                                            <label>视频评论话术预设</label>
+                                            <div class="dm-preset-tabs" id="douyin-video-comment-preset-tabs" aria-label="视频评论话术预设"></div>
+                                        </div>
                                         <div id="douyin-video-comment-ai-wrap" class="video-comment-panel">
                                             <div class="video-comment-field">
                                                 <label for="douyin-video-comment-prompt">AI 生成方向 / 核心观点</label>
@@ -315,6 +319,10 @@
                                                 <textarea id="douyin-video-comment-seed-text" rows="3" placeholder="例如：看完更有方向了，尤其是执行顺序这块讲得很清楚"></textarea>
                                                 <div class="video-comment-hint">AI 会围绕这条文案做同方向改编，每次换个表达，但不会把原本方向改掉。</div>
                                             </div>
+                                        </div>
+                                        <div class="dm-preset-hint">
+                                            <span>会保存当前评论方式、文案、AI方向、基准文案和评论间隔到本机。</span>
+                                            <button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinVideoCommentPreset(true)">保存当前话术</button>
                                         </div>
                                     </div>
                                     <div class="interaction-runtime" style="margin-bottom:14px"><strong>视频评论执行状态</strong><p id="douyin-video-comment-status" class="subtle">尚未开始视频评论任务。</p></div>

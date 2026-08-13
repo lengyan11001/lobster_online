@@ -266,6 +266,10 @@
                                             <label>执行说明</label>
                                             <div id="stranger-message-reply-mode-hint" class="video-comment-hint is-alert">这里要填写你准备发送给用户的统一引流话术。每换一行，系统就会按顺序单独发送一条消息。</div>
                                         </div>
+                                        <div class="dm-preset-head" style="margin-bottom:12px">
+                                            <label>私信引流话术预设</label>
+                                            <div class="dm-preset-tabs" id="stranger-message-preset-tabs" aria-label="私信引流话术预设"></div>
+                                        </div>
                                         <div id="stranger-message-fixed-wrap" class="video-comment-panel active">
                                             <label for="stranger-message-reply-text">统一引流话术</label>
                                             <textarea id="stranger-message-reply-text" rows="4" placeholder="例如：你好，看到你刚刚的私信啦。我这边把相关方案整理过一版，如果你方便的话我可以直接把最适合你的那种发你看看。" oninput="syncStrangerMonitorField('stranger-message-reply-text',['interaction-stranger-reply-text']);refreshActionState()">你好，看到你刚刚的私信啦。我这边把相关方案整理过一版，如果你方便的话我可以直接把最适合你的那种发你看看。</textarea>
@@ -278,6 +282,10 @@
                                             <label for="stranger-message-contact" style="margin-top:12px">绿泡泡联系方式</label>
                                             <input type="text" id="stranger-message-contact" class="input" placeholder="例如：nbzql-1993" oninput="syncStrangerMonitorField('stranger-message-contact',['interaction-stranger-contact']);refreshActionState()">
                                             <div class="video-comment-hint">系统会强制把“麻烦您绿泡泡”和这个联系方式拆成两条独立消息发出，不会合并在一起。</div>
+                                        </div>
+                                        <div class="dm-preset-hint">
+                                            <span>会保存当前回复方式、引流话术、AI方向、联系方式、采集数和自动回复开关到本机。</span>
+                                            <button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinStrangerMessagePreset(true)">保存当前话术</button>
                                         </div>
                                     </div>
                                     <div class="stranger-message-side-stack">

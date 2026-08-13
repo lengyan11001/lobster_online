@@ -283,6 +283,10 @@
                                                 <textarea id="douyin-follow-comment-text" rows="3" placeholder="例如：你这条讲得很落地，几个细节一下就听明白了"></textarea>
                                             </div>
                                         </div>
+                                        <div class="dm-preset-head" style="margin-top:14px">
+                                            <label>关注评论话术预设</label>
+                                            <div class="dm-preset-tabs" id="douyin-follow-comment-preset-tabs" aria-label="关注评论话术预设"></div>
+                                        </div>
                                         <div id="douyin-follow-comment-ai-wrap" class="video-comment-panel">
                                             <div class="video-comment-field">
                                                 <label for="douyin-follow-comment-prompt">AI 生成方向 / 核心观点</label>
@@ -313,6 +317,10 @@
                                                 </div>
                                                 <div class="video-comment-hint">选择图片后，关注评论会在找到客户首个作品后，使用 modal_id 页面入口发送图文评论。留空则保持原来的纯文字关注评论。</div>
                                             </div>
+                                        </div>
+                                        <div class="dm-preset-hint">
+                                            <span>会保存当前评论方式、文案、AI方向、基准文案和评论间隔到本机。</span>
+                                            <button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinFollowCommentPreset(true)">保存当前话术</button>
                                         </div>
                                     </div>
                                     <div class="interaction-runtime" style="margin-bottom:14px"><strong>执行状态</strong><p id="douyin-follow-comment-status" class="subtle">尚未开始关注评论任务。</p></div>
