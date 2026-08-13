@@ -333,7 +333,8 @@
   padding: 0 0.65rem 0.65rem;
 }
 
-.ai3d-job-download {
+.ai3d-job-download,
+.ai3d-job-delete {
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -353,6 +354,12 @@
   border-color: rgba(15, 118, 110, 0.36);
   background: #ecfdf5;
   color: #0f766e;
+}
+
+.ai3d-job-delete {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: #fff7f7;
+  color: #b91c1c;
 }
 
 .ai3d-step-actions {
@@ -820,7 +827,8 @@
   justify-content: flex-end;
 }
 
-.ai3d-job-list-modal .ai3d-job-download {
+.ai3d-job-list-modal .ai3d-job-download,
+.ai3d-job-list-modal .ai3d-job-delete {
   white-space: nowrap;
 }
 

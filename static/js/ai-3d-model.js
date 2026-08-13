@@ -260,9 +260,9 @@
           badge.className = 'ai3d-badge ' + (state.configured ? 'ok' : 'bad');
         }
         if (balance) {
-          if (!state.configured) balance.textContent = '最终 3D 需在本机 .env 配置 MESHY_API_KEY；拆件可单独选择，不走底模拼接。';
-          else if (x.data.balance_error) balance.textContent = '余额读取失败：' + x.data.balance_error;
-          else balance.textContent = 'Meshy 3D 余额：' + (x.data.balance == null ? '未知' : x.data.balance + ' credits') + '；拆件流程会逐部件生成三视图再送 3D';
+          if (!state.configured) balance.textContent = 'Meshy 3D 服务未连接；拆件图/三视图流程可继续使用。';
+          else if (x.data.balance_error) balance.textContent = '服务器余额读取失败：' + x.data.balance_error;
+          else balance.textContent = 'Meshy 3D 余额（服务器）：' + (x.data.balance == null ? '未知' : x.data.balance + ' ' + (x.data.balance_unit || 'credits')) + '；拆件流程会逐部件生成三视图再送 3D';
         }
       })
       .catch(function(err) {
@@ -1078,6 +1078,38 @@
     downloadHref(href, String(current.job_id || 'ai3d') + '-ai3d-outputs.zip');
   }
 
+  function deleteJob(jobId, trigger) {
+    if (!jobId) return;
+    if (!window.confirm('确定删除这个 3D 任务记录和本地生成文件吗？执行中的任务不能删除。')) return;
+    setBusy(trigger, true, '删除中...');
+    fetch(api('/api/ai-3d-model/jobs/' + encodeURIComponent(jobId)), {
+      method: 'DELETE',
+      headers: headers()
+    })
+      .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
+      .then(function(x) {
+        if (!x.ok || !x.data || x.data.ok === false) throw new Error(parseError(x.data, '删除任务失败'));
+        state.jobs = (state.jobs || []).filter(function(job) { return job && job.job_id !== jobId; });
+        if (state.jobId === jobId) {
+          state.jobId = '';
+          state.currentJob = null;
+          rememberJob('');
+          renderSteps({});
+          renderMetrics({});
+        }
+        clampJobPage();
+        renderJobList();
+        if (!state.jobId) restoreJobFromList();
+        setMsg('任务记录已删除。', false);
+      })
+      .catch(function(err) {
+        setMsg(err && err.message ? err.message : '删除任务失败', true);
+      })
+      .finally(function() {
+        setBusy(trigger, false);
+      });
+  }
+
   function totalJobPages() {
     return Math.max(1, Math.ceil((state.jobs || []).length / state.jobPageSize));
   }
@@ -1164,6 +1196,7 @@
         '<strong>' + esc(title) + '</strong><span>' + esc(meta) + '</span></button>' +
         '<div class="ai3d-job-actions">' +
         (download ? '<a class="ai3d-job-download" href="' + escAttr(download) + '" target="_blank" rel="noopener">批量下载</a>' : '') +
+        '<button type="button" class="ai3d-job-delete" data-ai3d-delete-job="' + escAttr(job.job_id || '') + '">删除</button>' +
         '</div></article>';
     }).join('');
     renderJobPager();
@@ -2325,7 +2358,7 @@
     var prep = current.preprocessing || {};
     var currentWorkflowMode = String(current.workflow_mode || prep.workflow_mode || '');
     var componentSplitMode = isComponentSplitMode(currentWorkflowMode);
-    if (componentSplitMode && currentWorkflowMode !== 'component_split_v2' && userInstruction === undefined) {
+    if (componentSplitMode && userInstruction === undefined) {
       requestGenerationInstruction({
         title: '补充 GPT 拆件规划方向',
         subtitle: '会让 GPT 按你的方向重新规划部件和部件图片提示词。'
@@ -2574,6 +2607,12 @@
     if (jobList && !jobList._ai3dBound) {
       jobList._ai3dBound = true;
       jobList.addEventListener('click', function(evt) {
+        var del = evt.target.closest('[data-ai3d-delete-job]');
+        if (del) {
+          evt.preventDefault();
+          deleteJob(del.getAttribute('data-ai3d-delete-job') || '', del);
+          return;
+        }
         var btn = evt.target.closest('.ai3d-job-item[data-ai3d-job-id]');
         if (btn) selectJob(btn.getAttribute('data-ai3d-job-id') || '');
       });

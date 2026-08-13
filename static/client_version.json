@@ -1,7 +1,7 @@
 {
-  "version": "1.0.160",
-  "build": 204,
-  "applied_at": "2026-08-12T21:13:57+08:00",
-  "note": "retry seedance analysis disconnects",
-  "bundle_sha256": "22b636ffccb44b0563ce2d0efb79bd687d4192cf447b110979b754e26c5027d9"
+  "version": "1.0.161",
+  "build": 205,
+  "applied_at": "2026-08-13T12:27:17+08:00",
+  "note": "ai3d delete and server meshy balance",
+  "bundle_sha256": "d49e16af5bca9277e96703598815f9303d821e0109a4dc5cd3dc8818884c445c"
 }

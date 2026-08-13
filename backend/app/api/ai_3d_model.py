@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import subprocess
 import re
 import sys
@@ -22,6 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from fastapi.responses import FileResponse
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageStat
 
+from ..core.config import settings
 from ..db import SessionLocal
 from .auth import _ServerUser
 from .assets import _upload_bytes_to_auth_server
@@ -78,6 +80,39 @@ def _request_from_captured_headers(headers: Dict[str, str]) -> Any:
 
 def _ai3d_local_user() -> _ServerUser:
     return _ServerUser(id=1)
+
+
+def _delete_ai3d_job(job_id: str) -> Dict[str, Any]:
+    job = store.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if str(job.get("status") or "") in {"preprocessing", "queued", "running", "generating_views", "splitting_parts"}:
+        raise HTTPException(status_code=409, detail="任务仍在执行中，不能删除")
+    job_dir = store.job_dir(job_id)
+    if job_dir.exists():
+        shutil.rmtree(job_dir)
+    return {"ok": True, "job_id": str(job_id)}
+
+
+def _auth_server_base() -> str:
+    return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+
+
+async def _query_server_meshy_balance(request: Request) -> Dict[str, Any]:
+    base = _auth_server_base()
+    if not base:
+        raise RuntimeError("AUTH_SERVER_BASE 未配置，无法读取服务器 Meshy 余额")
+    url = f"{base}/api/meshy-proxy/user-balance"
+    headers = _mcp_headers_from_request(request)
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, trust_env=False) as client:
+        resp = await client.get(url, headers=headers)
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"detail": (resp.text or "").strip()}
+    if resp.status_code >= 400:
+        raise RuntimeError(str(payload.get("detail") or payload.get("message") or payload.get("error") or f"HTTP {resp.status_code}"))
+    return payload if isinstance(payload, dict) else {"data": payload}
 
 
 _MAX_UPLOAD_BYTES = 120 * 1024 * 1024
@@ -1683,6 +1718,62 @@ def _part_plan_lookup(preprocessing: Dict[str, Any]) -> Dict[str, Dict[str, Any]
         if role:
             out[role] = item
     return out
+
+
+def _should_refresh_component_plan(
+    *,
+    component_split_mode: bool,
+    plan_only: bool,
+    role_filter: str = "",
+    user_instruction: str = "",
+) -> bool:
+    return bool(component_split_mode and (user_instruction or role_filter) and (plan_only or user_instruction))
+
+
+def _merge_component_ai_plan(existing_plan: Dict[str, Any], incoming_plan: Dict[str, Any], *, role_filter: str = "") -> Dict[str, Any]:
+    existing_parts = [dict(part) for part in existing_plan.get("parts", []) if isinstance(part, dict)]
+    incoming_parts = [dict(part) for part in incoming_plan.get("parts", []) if isinstance(part, dict)]
+    if not existing_parts:
+        return dict(incoming_plan)
+    if not incoming_parts:
+        return dict(existing_plan)
+
+    clean_role_filter = str(role_filter or "").strip()
+    incoming_by_role = {
+        str(part.get("role") or "").strip(): part
+        for part in incoming_parts
+        if str(part.get("role") or "").strip()
+    }
+    merged_parts: List[Dict[str, Any]] = []
+    seen_roles: set[str] = set()
+    for part in existing_parts:
+        role = str(part.get("role") or "").strip()
+        replacement = incoming_by_role.get(role)
+        if clean_role_filter and role != clean_role_filter:
+            replacement = None
+        if replacement:
+            merged = dict(part)
+            merged.update({key: value for key, value in replacement.items() if value not in (None, "")})
+            merged["role"] = role
+            merged_parts.append(merged)
+        else:
+            merged_parts.append(part)
+        if role:
+            seen_roles.add(role)
+
+    for part in incoming_parts:
+        role = str(part.get("role") or "").strip()
+        if not role or role in seen_roles:
+            continue
+        if clean_role_filter and role != clean_role_filter:
+            continue
+        merged_parts.append(part)
+        seen_roles.add(role)
+
+    merged_plan = dict(existing_plan)
+    merged_plan.update({key: value for key, value in incoming_plan.items() if key != "parts" and value not in (None, "")})
+    merged_plan["parts"] = merged_parts
+    return merged_plan
 
 
 def _make_component_part_reference(
@@ -9236,7 +9327,12 @@ async def _run_component_split_background(
             )
             return
         existing_plan = preprocessing.get("component_ai_plan") if isinstance(preprocessing.get("component_ai_plan"), dict) else {}
-        force_prompt_plan = bool(component_split_mode and plan_only and (user_instruction or role_filter))
+        force_prompt_plan = _should_refresh_component_plan(
+            component_split_mode=component_split_mode,
+            plan_only=plan_only,
+            role_filter=role_filter,
+            user_instruction=user_instruction,
+        )
         if isinstance(existing_plan.get("parts"), list) and existing_plan.get("parts") and not force_prompt_plan:
             ai_plan = existing_plan
         else:
@@ -9262,30 +9358,16 @@ async def _run_component_split_background(
                 user_instruction=user_instruction,
                 component_image_paths=existing_component_images,
             )
-            if role_filter and isinstance(existing_plan.get("parts"), list):
+            if isinstance(existing_plan.get("parts"), list):
                 generated_parts = [part for part in ai_plan.get("parts", []) if isinstance(part, dict)]
-                replacement = next((part for part in generated_parts if str(part.get("role") or "").strip() == role_filter), None)
-                if replacement is None and generated_parts:
-                    replacement = dict(generated_parts[0])
-                    replacement["role"] = role_filter
-                if replacement is not None:
-                    merged_parts = []
-                    replaced = False
-                    for part in existing_plan.get("parts", []):
-                        if not isinstance(part, dict):
-                            continue
-                        if str(part.get("role") or "").strip() == role_filter:
-                            merged = dict(part)
-                            merged.update({k: v for k, v in replacement.items() if v not in (None, "")})
-                            merged["role"] = role_filter
-                            merged_parts.append(merged)
-                            replaced = True
-                        else:
-                            merged_parts.append(dict(part))
-                    if not replaced:
-                        merged_parts.append(replacement)
-                    ai_plan = dict(existing_plan)
-                    ai_plan["parts"] = merged_parts
+                if role_filter:
+                    replacement = next((part for part in generated_parts if str(part.get("role") or "").strip() == role_filter), None)
+                    if replacement is None and generated_parts:
+                        replacement = dict(generated_parts[0])
+                        replacement["role"] = role_filter
+                    ai_plan = _merge_component_ai_plan(existing_plan, {"parts": [replacement] if replacement else []}, role_filter=role_filter)
+                elif user_instruction:
+                    ai_plan = _merge_component_ai_plan(existing_plan, ai_plan)
         preprocessing["component_ai_plan"] = ai_plan
         preprocessing["component_plan_source"] = "image.understand"
         if component_split_mode and plan_only:
@@ -9796,9 +9878,10 @@ async def _run_component_split_background(
 
 
 @router.get("/api/ai-3d-model/config")
-async def ai_3d_model_config(_: _ServerUser = Depends(_ai3d_local_user)):
+async def ai_3d_model_config(request: Request, _: _ServerUser = Depends(_ai3d_local_user)):
+    local_configured = meshy.is_configured()
     data: Dict[str, Any] = {
-        "configured": meshy.is_configured(),
+        "configured": local_configured,
         "provider": "meshy",
         "provider_label": "Meshy 3D",
         "final_3d_provider": "meshy",
@@ -9813,11 +9896,16 @@ async def ai_3d_model_config(_: _ServerUser = Depends(_ai3d_local_user)):
         },
         "see_through": see_through.health(),
     }
-    if data["configured"]:
-        try:
-            data["balance"] = (await meshy.get_balance()).get("balance")
-        except Exception as exc:
-            data["balance_error"] = str(exc)
+    try:
+        balance = await _query_server_meshy_balance(request)
+        if bool(balance.get("configured", True)):
+            data["configured"] = True
+        data["balance"] = balance.get("balance")
+        data["balance_unit"] = balance.get("balance_unit") or "credits"
+        data["balance_source"] = "server"
+    except Exception as exc:
+        data["balance_error"] = str(exc)
+        data["balance_source"] = "server"
     return data
 
 
@@ -10449,6 +10537,11 @@ async def ai_3d_model_create_job(
 async def ai_3d_model_list_jobs(limit: int = 20, _: _ServerUser = Depends(_ai3d_local_user)):
     jobs = [_public_job(job) for job in store.list_jobs(limit=limit)]
     return {"ok": True, "jobs": jobs}
+
+
+@router.delete("/api/ai-3d-model/jobs/{job_id}")
+async def ai_3d_model_delete_job(job_id: str, _: _ServerUser = Depends(_ai3d_local_user)):
+    return _delete_ai3d_job(job_id)
 
 
 @router.get("/api/ai-3d-model/jobs/{job_id}")
