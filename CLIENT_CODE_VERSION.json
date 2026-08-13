@@ -1,7 +1,7 @@
 {
-  "version": "1.0.164",
-  "build": 208,
-  "applied_at": "2026-08-13T21:34:47+08:00",
-  "note": "remove legacy group invite rows",
-  "bundle_sha256": "4326d13158e781aaecd56c0a6455ddb7014409e40e69a405d934290128b0e45e"
+  "version": "1.0.166",
+  "build": 210,
+  "applied_at": "2026-08-14T00:58:32+08:00",
+  "note": "slot identity and h5 device dispatch",
+  "bundle_sha256": "bb6930205defb770229d1febdede52a15d46c4086edd8955eb47b1650d137f3c"
 }

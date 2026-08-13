@@ -2063,6 +2063,236 @@
   color: #8994a6;
 }
 
+html.ps-dh-modal-open,
+html.ps-dh-modal-open body {
+  overflow: hidden;
+}
+
+.ps-dh-modal[hidden] {
+  display: none !important;
+}
+
+.ps-dh-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 26000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+  background: rgba(14, 24, 42, 0.58);
+  backdrop-filter: blur(8px);
+}
+
+.ps-dh-modal.is-visible {
+  display: flex;
+}
+
+.ps-dh-modal-dialog {
+  width: min(980px, calc(100vw - 40px));
+  max-height: min(760px, calc(100dvh - 40px));
+  min-width: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(180px, 1fr) auto;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 22px;
+  background: #fff;
+  color: #273347;
+  box-shadow: 0 34px 100px rgba(15, 23, 42, 0.3);
+}
+
+.ps-dh-modal-head {
+  min-width: 0;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.ps-dh-modal-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #273347;
+  font-size: 16px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ps-dh-modal-close {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f4f7;
+  color: #536174;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.ps-dh-modal-close:hover {
+  background: #e8edf3;
+  color: #273347;
+}
+
+.ps-dh-modal-tools {
+  min-width: 0;
+  padding: 14px 18px 0;
+}
+
+.ps-dh-modal-tools input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 11px 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  outline: none;
+  background: #f9fbfd;
+  color: #273347;
+}
+
+.ps-dh-modal-tools input:focus {
+  border-color: #4383ec;
+  box-shadow: 0 0 0 3px rgba(67, 131, 236, 0.12);
+}
+
+.ps-dh-modal-status {
+  min-height: 18px;
+  padding: 9px 18px;
+  color: #8994a6;
+  font-size: 12px;
+}
+
+.ps-dh-modal-status.error {
+  color: #b42318;
+}
+
+.ps-dh-modal-grid {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 18px 18px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-content: start;
+  overflow: auto;
+}
+
+.ps-dh-card {
+  min-width: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto;
+  border: 1px solid #e7ebf1;
+  border-radius: 16px;
+  background: #fff;
+  color: #273347;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.ps-dh-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(67, 131, 236, 0.45);
+  box-shadow: 0 12px 26px rgba(51, 80, 130, 0.12);
+}
+
+.ps-dh-card.is-selected {
+  border-color: #4383ec;
+  box-shadow: 0 0 0 2px rgba(67, 131, 236, 0.14), 0 12px 28px rgba(67, 131, 236, 0.14);
+}
+
+.ps-dh-card-cover {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, #edf4ff, #eef9f7);
+  color: #4383ec;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.ps-dh-card-cover img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.ps-dh-card-body {
+  min-width: 0;
+  padding: 10px 11px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.ps-dh-card-body strong,
+.ps-dh-card-body small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ps-dh-card-body strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ps-dh-card-body small {
+  color: #8994a6;
+  font-size: 11px;
+}
+
+.ps-dh-card.skeleton {
+  min-height: 250px;
+  border: 0;
+  background: linear-gradient(90deg, #f2f5f9 25%, #e9eef5 37%, #f2f5f9 63%);
+  background-size: 400% 100%;
+  animation: ps-dh-skeleton 1.2s ease infinite;
+}
+
+.ps-dh-modal-foot {
+  padding: 14px 18px !important;
+  border-top: 1px solid #edf0f4 !important;
+  background: #fbfcfe;
+}
+
+@keyframes ps-dh-skeleton {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+
+@media (max-width: 760px) {
+  .ps-dh-modal {
+    padding: 10px;
+    align-items: flex-end;
+  }
+
+  .ps-dh-modal-dialog {
+    width: 100%;
+    max-height: min(88dvh, 760px);
+    border-radius: 20px 20px 12px 12px;
+  }
+
+  .ps-dh-modal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+}
+
 @media (max-width: 1180px) {
   .page:has(#dashboard.visible) .header-left {
     flex-basis: 190px;

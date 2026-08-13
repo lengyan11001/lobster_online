@@ -1378,13 +1378,25 @@
     state.personalDigitalHumanTemplateDraft = clonePersonalDigitalHumanTemplate(state.personalSelectedDigitalHumanTemplate);
     state.personalDigitalHumanTemplateSearch = '';
     if ($('psDigitalHumanTemplateSearch')) $('psDigitalHumanTemplateSearch').value = '';
-    if ($('psDigitalHumanTemplateModal')) $('psDigitalHumanTemplateModal').classList.add('is-visible');
+    var modal = $('psDigitalHumanTemplateModal');
+    if (modal) {
+      modal.hidden = false;
+      modal.setAttribute('aria-hidden', 'false');
+      modal.classList.add('is-visible');
+      document.documentElement.classList.add('ps-dh-modal-open');
+    }
     renderPersonalDigitalHumanTemplatePicker();
     loadPersonalDigitalHumanTemplates(false);
   }
 
   function closePersonalDigitalHumanTemplatePicker() {
-    if ($('psDigitalHumanTemplateModal')) $('psDigitalHumanTemplateModal').classList.remove('is-visible');
+    var modal = $('psDigitalHumanTemplateModal');
+    if (modal) {
+      modal.classList.remove('is-visible');
+      modal.setAttribute('aria-hidden', 'true');
+      modal.hidden = true;
+    }
+    document.documentElement.classList.remove('ps-dh-modal-open');
     state.personalDigitalHumanTemplateDraft = null;
   }
 
@@ -2562,6 +2574,9 @@
     });
     document.addEventListener('keydown', function(ev) {
       if (ev.key === 'Escape' && state.profilePhotoPickerOpen) closeProfilePhotoPicker();
+      if (ev.key === 'Escape' && $('psDigitalHumanTemplateModal') && !$('psDigitalHumanTemplateModal').hidden) {
+        closePersonalDigitalHumanTemplatePicker();
+      }
     });
     if ($('psSaveTemplateBtn')) $('psSaveTemplateBtn').addEventListener('click', saveTemplate);
     if ($('psNewTemplateBtn')) $('psNewTemplateBtn').addEventListener('click', resetTemplateForm);
@@ -2604,14 +2619,8 @@
       state.personalDigitalHumanTemplateDraft = clonePersonalDigitalHumanTemplate(item);
       renderPersonalDigitalHumanTemplatePicker();
     });
-    if ($('psDigitalHumanTemplateChooseBtn')) $('psDigitalHumanTemplateChooseBtn').addEventListener('click', function() {
-      openPersonalDigitalHumanTemplatePicker();
-    });
     if ($('psDigitalHumanTemplateCancel')) $('psDigitalHumanTemplateCancel').addEventListener('click', closePersonalDigitalHumanTemplatePicker);
     if ($('psDigitalHumanTemplateConfirm')) $('psDigitalHumanTemplateConfirm').addEventListener('click', confirmPersonalDigitalHumanTemplate);
-    if ($('psDigitalHumanTemplateModal')) $('psDigitalHumanTemplateModal').addEventListener('click', function(ev) {
-      if (ev.target === $('psDigitalHumanTemplateModal')) closePersonalDigitalHumanTemplatePicker();
-    });
     if ($('psAddKeywordBtn')) $('psAddKeywordBtn').addEventListener('click', addKeyword);
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);
     if ($('psSearchCompetitorBtn')) $('psSearchCompetitorBtn').addEventListener('click', searchCompetitors);
@@ -2669,5 +2678,9 @@
     renderCustomReferenceFile();
     renderGeneratedDocs();
     loadAll();
+  };
+  window.closePersonalSettingsOverlays = function() {
+    closeProfilePhotoPicker();
+    closePersonalDigitalHumanTemplatePicker();
   };
 })();

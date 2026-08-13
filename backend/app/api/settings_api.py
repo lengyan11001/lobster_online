@@ -3,10 +3,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,6 +27,7 @@ from .auth import (
 )
 from .openclaw_config import clear_openclaw_local_provider_keys
 from ..models import ConsumptionAccount, User
+from ..services.openclaw_channel_auth_store import persist_channel_fallback_for_login
 from ..services.asset_storage_paths import get_asset_path_settings, set_asset_export_dir
 from ..services.chat_route_mode import (
     CHAT_ROUTE_MODE_DIRECT,
@@ -51,6 +54,8 @@ _CLIENT_UPDATE_STATUS_PREFIX = "__LOBSTER_UPDATE_STATUS__="
 _CLIENT_UPDATE_STATUS_CACHE_SECONDS = 60.0
 _client_update_status_cache: tuple[float, dict[str, Any]] | None = None
 _client_update_status_lock = asyncio.Lock()
+_MACHINE_ID_FILE_NAME = "machine_identity.json"
+_MACHINE_INSTANCE_ID_CACHE = ""
 
 
 def _load_custom_configs() -> dict[str, Any]:
@@ -260,10 +265,108 @@ class AssetPathSettingsRequest(BaseModel):
     export_dir: Optional[str] = None
 
 
+class InstallationIdSyncRequest(BaseModel):
+    installation_id: str
+
+
+class MachineIdentityResponse(BaseModel):
+    ok: bool = True
+    machine_instance_id: str
+
+
+_INSTALLATION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,128}$")
+
+
+def _normalize_installation_id(raw: str) -> str:
+    value = (raw or "").strip()
+    return value if _INSTALLATION_ID_RE.fullmatch(value) else ""
+
+
+def _machine_identity_candidates() -> list[Path]:
+    """Return machine-local identity paths, preferring locations outside OTA."""
+    paths: list[Path] = []
+    if os.name == "nt":
+        for env_name in ("PROGRAMDATA", "LOCALAPPDATA", "APPDATA"):
+            root = str(os.environ.get(env_name) or "").strip()
+            if root:
+                paths.append(Path(root) / "LobsterOnline" / _MACHINE_ID_FILE_NAME)
+    paths.append(_CLIENT_ROOT / "openclaw" / "identity" / _MACHINE_ID_FILE_NAME)
+    out: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _machine_identity_file() -> Path:
+    candidates = _machine_identity_candidates()
+    return candidates[0] if candidates else _CLIENT_ROOT / "openclaw" / "identity" / _MACHINE_ID_FILE_NAME
+
+
+def _get_or_create_machine_instance_id() -> str:
+    global _MACHINE_INSTANCE_ID_CACHE
+    cached = _normalize_installation_id(_MACHINE_INSTANCE_ID_CACHE)
+    if cached:
+        return cached
+    candidates = _machine_identity_candidates()
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            value = _normalize_installation_id(str(data.get("machine_instance_id") or ""))
+            if value:
+                _MACHINE_INSTANCE_ID_CACHE = value
+                return value
+        except Exception:
+            pass
+
+    created_at_ms = int(time.time() * 1000)
+    value = f"m{created_at_ms:x}{uuid.uuid4().hex}"
+    payload = {
+        "version": 1,
+        "machine_instance_id": value,
+        "created_at_ms": created_at_ms,
+    }
+    errors: list[str] = []
+    for path in candidates:
+        tmp = path.with_suffix(".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            os.replace(str(tmp), str(path))
+            _MACHINE_INSTANCE_ID_CACHE = value
+            return value
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+    _MACHINE_INSTANCE_ID_CACHE = value
+    if errors:
+        logger.warning("machine identity persistence failed at all paths: %s", "; ".join(errors[:3]))
+    return value
+
+
+def _bearer_token_from_request(request: Request) -> str:
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return auth
+
+
 @router.get("/api/settings", summary="获取用户设置")
 def get_settings(current_user: User = Depends(get_current_user)):
     preferred = "sutui"
     return {"preferred_model": preferred}
+
+
+@router.get("/api/settings/machine-identity", response_model=MachineIdentityResponse)
+def get_machine_identity():
+    return MachineIdentityResponse(machine_instance_id=_get_or_create_machine_instance_id())
 
 
 @router.post("/api/settings", summary="更新用户设置")
@@ -372,6 +475,38 @@ def update_chat_route_settings(
     if not mode:
         raise HTTPException(status_code=400, detail="无效的智能对话路由模式")
     return {"ok": True, "mode": set_chat_route_mode(mode)}
+
+
+@router.post("/api/settings/installation-id/sync", summary="Sync current local installation id cache")
+async def sync_local_installation_id(
+    body: InstallationIdSyncRequest,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    installation_id = _normalize_installation_id(body.installation_id)
+    if not installation_id:
+        raise HTTPException(status_code=400, detail="invalid installation id")
+    jwt_token = _bearer_token_from_request(request)
+    if jwt_token:
+        persist_channel_fallback_for_login(
+            jwt_token=jwt_token,
+            installation_id=installation_id,
+            user_id=current_user.id,
+            db=db,
+        )
+    else:
+        row = db.query(User).filter(User.id == current_user.id).first()
+        if row is not None:
+            row.client_installation_id = installation_id
+            db.add(row)
+            db.commit()
+    logger.info(
+        "[settings] local installation id synced user_id=%s installation_id=%s",
+        current_user.id,
+        installation_id[:16],
+    )
+    return {"ok": True, "installation_id": installation_id}
 
 
 @router.post(

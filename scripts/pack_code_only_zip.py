@@ -29,7 +29,11 @@ def _is_excluded(rel_posix: str) -> bool:
         return True
     if rel_posix == "sutui_config.json":
         return True
+    if rel_posix == "machine_identity.json" or rel_posix.endswith("/machine_identity.json"):
+        return True
     if rel_posix == "openclaw/.env":
+        return True
+    if rel_posix == "openclaw/identity" or rel_posix.startswith("openclaw/identity/"):
         return True
     if rel_posix.startswith("openclaw/workspace/"):
         return True

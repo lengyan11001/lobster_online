@@ -318,6 +318,9 @@ var DEPRECATED_INSTALLATION_IDS = {
   '2fc3f43f7a684411a442cb661898aa74': true,
   'fa2d09cfbd9c4b2380352906225f2817': true
 };
+var LOBSTER_INSTALLATION_STORAGE_KEY = 'lobster_installation_id';
+var LOBSTER_DEVICE_SEED_STORAGE_KEY = 'lobster_device_seed';
+var LOBSTER_MACHINE_INSTANCE_STORAGE_KEY = 'lobster_machine_instance_id';
 
 function rawInstallationId(value) {
   var text = String(value || '').trim();
@@ -328,20 +331,230 @@ function isDeprecatedInstallationId(value) {
   return !!DEPRECATED_INSTALLATION_IDS[rawInstallationId(value)];
 }
 
-function getOrCreateInstallationId() {
-  var k = 'lobster_installation_id';
-  var v = localStorage.getItem(k);
-  if (isDeprecatedInstallationId(v)) {
-    localStorage.removeItem(k);
-    v = '';
-  }
-  if (v && v.length >= 8) return v;
-  var u = (typeof crypto !== 'undefined' && crypto.randomUUID)
+function isValidLobsterInstallationId(value) {
+  return /^[a-zA-Z0-9_-]{8,128}$/.test(String(value || '').trim());
+}
+
+function generateLobsterInstallationId() {
+  return (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID().replace(/-/g, '')
     : (Date.now().toString(36) + Math.random().toString(36).slice(2, 18));
-  localStorage.setItem(k, u);
+}
+
+function currentStoredInstallationId() {
+  try { return localStorage.getItem(LOBSTER_INSTALLATION_STORAGE_KEY) || ''; } catch (e) { return ''; }
+}
+
+function currentStoredLobsterDeviceSeed() {
+  try { return localStorage.getItem(LOBSTER_DEVICE_SEED_STORAGE_KEY) || ''; } catch (e) { return ''; }
+}
+
+function currentStoredLobsterMachineInstanceId() {
+  try { return localStorage.getItem(LOBSTER_MACHINE_INSTANCE_STORAGE_KEY) || ''; } catch (e) { return ''; }
+}
+
+function setLobsterMachineInstanceId(value, meta) {
+  var next = String(value || '').trim();
+  if (!isValidLobsterInstallationId(next)) throw new Error('invalid machine instance id');
+  var prev = currentStoredLobsterMachineInstanceId();
+  try { localStorage.setItem(LOBSTER_MACHINE_INSTANCE_STORAGE_KEY, next); } catch (e) {}
+  if (prev !== next && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    try {
+      window.dispatchEvent(new CustomEvent('lobster:machine-instance-id-changed', {
+        detail: Object.assign({ previous: prev, current: next }, meta || {})
+      }));
+    } catch (e2) {}
+  }
+  return next;
+}
+
+function getCachedLobsterMachineInstanceId() {
+  var value = currentStoredLobsterMachineInstanceId();
+  if (isValidLobsterInstallationId(value)) return value;
+  return '';
+}
+
+function loadLobsterMachineInstanceId() {
+  var cached = getCachedLobsterMachineInstanceId();
+  var base = String((typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '').replace(/\/$/, '');
+  if (!base || typeof fetch !== 'function') return Promise.resolve(cached || '');
+  return fetch(base + '/api/settings/machine-identity', {
+    method: 'GET',
+    headers: uniqueInstallationRequestHeaders(false)
+  }).then(function(resp) {
+    return resp.json().catch(function() { return {}; }).then(function(data) {
+      var next = String(data && data.machine_instance_id || '').trim();
+      if (resp.ok && isValidLobsterInstallationId(next)) {
+        return setLobsterMachineInstanceId(next, { reason: 'local_machine_identity' });
+      }
+      return cached || '';
+    });
+  }).catch(function() {
+    return cached || '';
+  });
+}
+
+function setLobsterDeviceSeed(value, meta) {
+  var next = String(value || '').trim();
+  if (!isValidLobsterInstallationId(next)) throw new Error('invalid device id');
+  var prev = currentStoredLobsterDeviceSeed();
+  try { localStorage.setItem(LOBSTER_DEVICE_SEED_STORAGE_KEY, next); } catch (e) {}
+  if (prev !== next && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    try {
+      window.dispatchEvent(new CustomEvent('lobster:device-seed-changed', {
+        detail: Object.assign({ previous: prev, current: next }, meta || {})
+      }));
+    } catch (e2) {}
+  }
+  return next;
+}
+
+function getOrCreateLobsterDeviceSeed() {
+  var seed = currentStoredLobsterDeviceSeed();
+  if (isDeprecatedInstallationId(seed)) {
+    try { localStorage.removeItem(LOBSTER_DEVICE_SEED_STORAGE_KEY); } catch (e0) {}
+    seed = '';
+  }
+  if (isValidLobsterInstallationId(seed)) return seed;
+  var existing = currentStoredInstallationId();
+  if (isValidLobsterInstallationId(existing) && !/^u\d+-[a-f0-9]{32}$/i.test(existing)) {
+    return setLobsterDeviceSeed(rawInstallationId(existing), { reason: 'migrate_from_installation_id' });
+  }
+  return setLobsterDeviceSeed(generateLobsterInstallationId(), { reason: 'local_seed_initial' });
+}
+
+function randomizeLobsterDeviceSeed(meta) {
+  return setLobsterDeviceSeed(generateLobsterInstallationId(), meta || { reason: 'manual_randomize' });
+}
+
+function setLobsterInstallationId(value, meta) {
+  var next = String(value || '').trim();
+  if (!isValidLobsterInstallationId(next)) throw new Error('invalid installation id');
+  var prev = currentStoredInstallationId();
+  try { localStorage.setItem(LOBSTER_INSTALLATION_STORAGE_KEY, next); } catch (e) {}
+  if (prev !== next && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    try {
+      window.dispatchEvent(new CustomEvent('lobster:installation-id-changed', {
+        detail: Object.assign({ previous: prev, current: next }, meta || {})
+      }));
+    } catch (e2) {}
+  }
+  return next;
+}
+
+function uniqueInstallationRequestHeaders(json) {
+  var headers = {};
+  if (json !== false) headers['Content-Type'] = 'application/json';
+  try { headers['X-Lobster-Brand'] = getLobsterBrandMark(); } catch (e) {}
+  return headers;
+}
+
+function requestUniqueLobsterInstallationId(options) {
+  options = options || {};
+  var base = String((typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : '').replace(/\/$/, '');
+  var candidate = String(options.candidate || '').trim();
+  if (!base || typeof fetch !== 'function') {
+    return Promise.resolve({
+      ok: false,
+      offline: true,
+      installation_id: candidate && isValidLobsterInstallationId(candidate) ? candidate : generateLobsterInstallationId()
+    });
+  }
+  return fetch(base + '/api/installation-id/ensure', {
+    method: 'POST',
+    headers: uniqueInstallationRequestHeaders(true),
+    body: JSON.stringify({
+      candidate: candidate || null,
+      force_new: !!options.forceNew,
+      brand_mark: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : undefined
+    })
+  }).then(function(resp) {
+    return resp.json().catch(function() { return {}; }).then(function(data) {
+      if (!resp.ok || !data.installation_id) throw new Error(data.detail || data.message || 'installation id check failed');
+      return data;
+    });
+  });
+}
+
+function bindLobsterInstallationId(options) {
+  options = options || {};
+  var base = String((typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : '').replace(/\/$/, '');
+  if (!base || typeof fetch !== 'function') return Promise.reject(new Error('API_BASE unavailable'));
+  var deviceId = String(options.deviceId || '').trim();
+  if (!deviceId && options.forceNew) deviceId = randomizeLobsterDeviceSeed({ reason: 'bind_force_new' });
+  if (!deviceId) deviceId = getOrCreateLobsterDeviceSeed();
+  var machineInstanceId = String(options.machineInstanceId || options.machine_instance_id || getCachedLobsterMachineInstanceId() || '').trim();
+  return fetch(base + '/api/installation-id/bind', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      installation_id: options.installationId || getOrCreateInstallationId(),
+      device_id: deviceId,
+      machine_instance_id: machineInstanceId || null,
+      force_new: !!options.forceNew
+    })
+  }).then(function(resp) {
+    return resp.json().catch(function() { return {}; }).then(function(data) {
+      if (!resp.ok || !data.installation_id) throw new Error(data.detail || data.message || 'installation id bind failed');
+      return data;
+    });
+  });
+}
+
+function loadLobsterInstallationIdStatus() {
+  var base = String((typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : '').replace(/\/$/, '');
+  if (!base || typeof fetch !== 'function') return Promise.reject(new Error('API_BASE unavailable'));
+  return fetch(base + '/api/installation-id/status', {
+    method: 'GET',
+    headers: authHeaders()
+  }).then(function(resp) {
+    return resp.json().catch(function() { return {}; }).then(function(data) {
+      if (!resp.ok) throw new Error(data.detail || data.message || 'installation id status failed');
+      return data;
+    });
+  });
+}
+
+function scheduleInitialInstallationIdCheck(candidate) {
+  // Kept only for old pages that may still call it. New Online clients bind
+  // the effective slot after auth; unauthenticated startup must not rewrite the
+  // formal installation id asynchronously.
+  if (!candidate || window.__LOBSTER_INSTALLATION_INIT_CHECK__) return;
+  window.__LOBSTER_INSTALLATION_INIT_CHECK__ = true;
+  requestUniqueLobsterInstallationId({ candidate: candidate }).then(function(data) {
+    var next = String(data && data.installation_id || '').trim();
+    if (next && next !== candidate && typeof console !== 'undefined' && console.info) {
+      console.info('[installation-id] initial uniqueness result ignored until auth bind', { candidate: candidate, suggested: next });
+    }
+  }).catch(function(err) {
+    console.warn('[installation-id] initial uniqueness check skipped', err);
+  });
+}
+
+function getOrCreateInstallationId() {
+  var v = currentStoredInstallationId();
+  if (isDeprecatedInstallationId(v)) {
+    try { localStorage.removeItem(LOBSTER_INSTALLATION_STORAGE_KEY); } catch (e0) {}
+    v = '';
+  }
+  if (isValidLobsterInstallationId(v)) return v;
+  var u = setLobsterInstallationId(getOrCreateLobsterDeviceSeed(), { reason: 'local_initial' });
+  scheduleInitialInstallationIdCheck(u);
   return u;
 }
+
+window.generateLobsterInstallationId = generateLobsterInstallationId;
+window.getOrCreateInstallationId = getOrCreateInstallationId;
+window.setLobsterInstallationId = setLobsterInstallationId;
+window.getOrCreateLobsterDeviceSeed = getOrCreateLobsterDeviceSeed;
+window.setLobsterDeviceSeed = setLobsterDeviceSeed;
+window.randomizeLobsterDeviceSeed = randomizeLobsterDeviceSeed;
+window.getCachedLobsterMachineInstanceId = getCachedLobsterMachineInstanceId;
+window.setLobsterMachineInstanceId = setLobsterMachineInstanceId;
+window.loadLobsterMachineInstanceId = loadLobsterMachineInstanceId;
+window.requestUniqueLobsterInstallationId = requestUniqueLobsterInstallationId;
+window.bindLobsterInstallationId = bindLobsterInstallationId;
+window.loadLobsterInstallationIdStatus = loadLobsterInstallationIdStatus;
 
 function authHeaders() {
   var h = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (token || '') };

@@ -408,6 +408,73 @@ var USE_INDEPENDENT_AUTH = true;
     var raw = text.indexOf('--') >= 0 ? text.split('--').slice(1).join('--') : text;
     return !!deprecatedInstallationIds[raw];
   }
+  function isValidInstallationId(value) {
+    return /^[a-zA-Z0-9_-]{8,128}$/.test(String(value || '').trim());
+  }
+  window.generateLobsterInstallationId = window.generateLobsterInstallationId || function() {
+    return (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID().replace(/-/g, '')
+      : (Date.now().toString(36) + Math.random().toString(36).slice(2, 18));
+  };
+  window.setLobsterInstallationId = window.setLobsterInstallationId || function(value) {
+    var next = String(value || '').trim();
+    if (!isValidInstallationId(next)) throw new Error('invalid installation id');
+    try { localStorage.setItem('lobster_installation_id', next); } catch (e) {}
+    return next;
+  };
+  window.setLobsterDeviceSeed = window.setLobsterDeviceSeed || function(value) {
+    var next = String(value || '').trim();
+    if (!isValidInstallationId(next)) throw new Error('invalid device id');
+    try { localStorage.setItem('lobster_device_seed', next); } catch (e) {}
+    return next;
+  };
+  window.getCachedLobsterMachineInstanceId = window.getCachedLobsterMachineInstanceId || function() {
+    try {
+      var value = localStorage.getItem('lobster_machine_instance_id') || '';
+      return isValidInstallationId(value) ? value : '';
+    } catch (e) {
+      return '';
+    }
+  };
+  window.setLobsterMachineInstanceId = window.setLobsterMachineInstanceId || function(value) {
+    var next = String(value || '').trim();
+    if (!isValidInstallationId(next)) throw new Error('invalid machine instance id');
+    try { localStorage.setItem('lobster_machine_instance_id', next); } catch (e) {}
+    return next;
+  };
+  window.loadLobsterMachineInstanceId = window.loadLobsterMachineInstanceId || function() {
+    var cached = window.getCachedLobsterMachineInstanceId();
+    var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+    if (!base || typeof fetch !== 'function') return Promise.resolve(cached || '');
+    return fetch(base + '/api/settings/machine-identity', {
+      headers: { 'X-Lobster-Brand': typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' }
+    }).then(function(r) {
+      return r.json().catch(function() { return {}; }).then(function(d) {
+        var next = String(d && d.machine_instance_id || '').trim();
+        return isValidInstallationId(next) ? window.setLobsterMachineInstanceId(next) : (cached || '');
+      });
+    }).catch(function() {
+      return cached || '';
+    });
+  };
+  window.getOrCreateLobsterDeviceSeed = window.getOrCreateLobsterDeviceSeed || function() {
+    var seed = '';
+    try { seed = localStorage.getItem('lobster_device_seed') || ''; } catch (e) {}
+    if (isDeprecatedInstallationId(seed)) {
+      try { localStorage.removeItem('lobster_device_seed'); } catch (e0) {}
+      seed = '';
+    }
+    if (isValidInstallationId(seed)) return seed;
+    var existing = '';
+    try { existing = localStorage.getItem('lobster_installation_id') || ''; } catch (e1) {}
+    if (isValidInstallationId(existing) && !/^u\d+-[a-f0-9]{32}$/i.test(existing)) {
+      return window.setLobsterDeviceSeed(existing.indexOf('--') >= 0 ? existing.split('--').slice(1).join('--') : existing);
+    }
+    return window.setLobsterDeviceSeed(window.generateLobsterInstallationId());
+  };
+  window.randomizeLobsterDeviceSeed = window.randomizeLobsterDeviceSeed || function() {
+    return window.setLobsterDeviceSeed(window.generateLobsterInstallationId());
+  };
   window.getOrCreateInstallationId = function() {
     var k = 'lobster_installation_id';
     var v = '';
@@ -416,12 +483,8 @@ var USE_INDEPENDENT_AUTH = true;
       try { localStorage.removeItem(k); } catch (e0) {}
       v = '';
     }
-    if (v && v.length >= 8) return v;
-    var u = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID().replace(/-/g, '')
-      : (Date.now().toString(36) + Math.random().toString(36).slice(2, 18));
-    try { localStorage.setItem(k, u); } catch (e2) {}
-    return u;
+    if (isValidInstallationId(v)) return v;
+    return window.setLobsterInstallationId(window.getOrCreateLobsterDeviceSeed());
   };
 })();
 
@@ -759,6 +822,77 @@ function persistOpenclawChannelFallback(tok, claimSlot) {
   });
 }
 
+var __lobsterInstallationRepairPromise = null;
+var __lobsterInstallationRepairKey = '';
+
+function syncLocalInstallationSlotCache(iid, tok) {
+  var t = (tok != null && tok !== '') ? String(tok) : (typeof token !== 'undefined' ? token : '');
+  var localBase = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+  var installationId = String(iid || '').trim();
+  if (!t || !localBase || !installationId) return Promise.resolve({ skipped: true });
+  return fetch(localBase + '/api/settings/installation-id/sync', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + t,
+      'X-Installation-Id': installationId,
+      'X-Lobster-Brand': typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo'
+    },
+    body: JSON.stringify({ installation_id: installationId })
+  }).then(function(r) {
+    if (!r.ok) throw new Error('local slot sync HTTP ' + r.status);
+    return r.json().catch(function() { return { ok: true }; });
+  }).catch(function(e) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('[installation-id] local sync failed', e);
+    return { ok: false, error: String((e && e.message) || e || '') };
+  });
+}
+
+function repairAuthenticatedInstallationSlot(tok, options) {
+  options = options || {};
+  var t = (tok != null && tok !== '') ? String(tok) : (typeof token !== 'undefined' ? token : '');
+  if (!t || typeof bindLobsterInstallationId !== 'function') {
+    return persistOpenclawChannelFallback(t, true);
+  }
+  var current = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var deviceId = typeof getOrCreateLobsterDeviceSeed === 'function' ? getOrCreateLobsterDeviceSeed() : current;
+  var cachedMachineId = typeof getCachedLobsterMachineInstanceId === 'function' ? getCachedLobsterMachineInstanceId() : '';
+  var key = [t.slice(-16), current, deviceId, cachedMachineId, options.forceNew ? '1' : '0'].join('|');
+  if (__lobsterInstallationRepairPromise && __lobsterInstallationRepairKey === key) {
+    return __lobsterInstallationRepairPromise;
+  }
+  __lobsterInstallationRepairKey = key;
+  var machinePromise = typeof loadLobsterMachineInstanceId === 'function'
+    ? loadLobsterMachineInstanceId()
+    : Promise.resolve(cachedMachineId || '');
+  __lobsterInstallationRepairPromise = machinePromise.then(function(machineInstanceId) {
+    return bindLobsterInstallationId({
+      installationId: current,
+      deviceId: deviceId,
+      machineInstanceId: machineInstanceId || '',
+      forceNew: !!options.forceNew
+    });
+  }).then(function(data) {
+    var next = String(data && data.installation_id || '').trim();
+    if (next && next !== current && typeof setLobsterInstallationId === 'function') {
+      setLobsterInstallationId(next, { reason: 'server_signed_bind', device_id: data && data.device_id });
+    }
+    var effective = next || current;
+    return syncLocalInstallationSlotCache(effective, t).then(function() {
+      return persistOpenclawChannelFallback(t, true);
+    }).then(function(result) {
+      return Object.assign({}, data || {}, { local_sync: result });
+    });
+  }).catch(function(e) {
+    if (typeof console !== 'undefined' && console.warn) console.warn('[installation-id] authenticated bind failed', e);
+    return persistOpenclawChannelFallback(t, true);
+  }).finally(function() {
+    __lobsterInstallationRepairPromise = null;
+  });
+  return __lobsterInstallationRepairPromise;
+}
+window.repairAuthenticatedInstallationSlot = repairAuthenticatedInstallationSlot;
+
 (function applyTokenFromUrl() {
   var params = new URLSearchParams(window.location.search || '');
   var callbackBrand = params.get('brand') || params.get('brand_mark');
@@ -769,7 +903,7 @@ function persistOpenclawChannelFallback(tok, claimSlot) {
   token = t;
   if (typeof setStoredAuthToken === 'function') setStoredAuthToken(t);
   else localStorage.setItem('token', t);
-  var persistPromise = persistOpenclawChannelFallback(t, true);
+  var persistPromise = repairAuthenticatedInstallationSlot(t);
   if (window.opener) {
     Promise.resolve(persistPromise).finally(function() {
       try { window.opener.postMessage({ type: 'auth_login_ok', token: t, brand: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' }, '*'); } catch (e) {}
@@ -786,7 +920,7 @@ window.addEventListener('message', function(e) {
     token = e.data.token;
     if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
     else localStorage.setItem('token', token);
-    Promise.resolve(persistOpenclawChannelFallback(token, true)).finally(function() { loadDashboard(); });
+    Promise.resolve(repairAuthenticatedInstallationSlot(token)).finally(function() { loadDashboard(); });
   }
 });
 
@@ -843,9 +977,8 @@ if (loginForm) {
           token = x.data.access_token;
           if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
           else localStorage.setItem('token', token);
-          if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token, true);
           showMsg(msgEl, '登录成功', false);
-          loadDashboard();
+          Promise.resolve(repairAuthenticatedInstallationSlot(token)).finally(function() { loadDashboard(); });
         } else {
           showMsg(msgEl, normalizeAuthErrorDetail(x.data.detail) || '登录失败', true);
         }
@@ -970,10 +1103,9 @@ if (registerForm) {
             token = x.data.access_token;
             if (typeof setStoredAuthToken === 'function') setStoredAuthToken(token);
             else localStorage.setItem('token', token);
-            if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token, true);
             showMsg(msgEl, '登录成功', false);
             setRegisterSmsButtonCooldown(0);
-            loadDashboard();
+            Promise.resolve(repairAuthenticatedInstallationSlot(token)).finally(function() { loadDashboard(); });
           } else {
             var detail = normalizeAuthErrorDetail(x.data.detail);
             showMsg(msgEl, detail || '登录失败', true);
@@ -1722,7 +1854,7 @@ function loadDashboard() {
         loadDashboard();
         return;
       }
-      if (typeof persistOpenclawChannelFallback === 'function') persistOpenclawChannelFallback(token, true);
+      if (typeof repairAuthenticatedInstallationSlot === 'function') repairAuthenticatedInstallationSlot(token);
       window.__currentUserId = d.id;
       applyLobsterFeatureGates(d.features || {});
       if (typeof window.resetChatSessionsMemory === 'function') window.resetChatSessionsMemory();
@@ -2209,6 +2341,9 @@ function runAppViewInit(view) {
 
 function showAppView(view, sourceEl) {
   if (typeof window.closeAllPublishModals === 'function') window.closeAllPublishModals();
+  if (view !== 'personal-settings' && typeof window.closePersonalSettingsOverlays === 'function') {
+    window.closePersonalSettingsOverlays();
+  }
   var chatTips = document.getElementById('chatTipsModal');
   if (chatTips) chatTips.classList.remove('visible');
   if (!view) return Promise.resolve(null);
@@ -2590,5 +2725,11 @@ function openCreditLimitModal() {
 
 mountAppSideNav();
 applyBrandingFromApi().then(function() {
-  if (token) loadDashboard();
+  if (token) {
+    Promise.resolve(
+      typeof repairAuthenticatedInstallationSlot === 'function'
+        ? repairAuthenticatedInstallationSlot(token)
+        : null
+    ).finally(function() { loadDashboard(); });
+  }
 });

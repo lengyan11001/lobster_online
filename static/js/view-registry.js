@@ -28,8 +28,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260806-pc-layout-v1',
-    scripts: '/static/js/personal-settings.js?v=20260806-pc-layout-v1',
+    html: '/static/views/personal-settings.html?v=20260813-dh-modal-v1',
+    scripts: '/static/js/personal-settings.js?v=20260813-dh-modal-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -143,8 +143,8 @@
   });
 
   window.registerLobsterView('sys-config', {
-    html: '/static/views/sys-config.html',
-    scripts: '/static/js/views/sysconfig.js?v=20260528-view-split'
+    html: '/static/views/sys-config.html?v=20260813-signed-slot-v1',
+    scripts: '/static/js/views/sysconfig.js?v=20260813-signed-slot-v1'
   });
 
   window.registerLobsterView('agent', {

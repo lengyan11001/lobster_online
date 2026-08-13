@@ -31,6 +31,9 @@ def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> b
     root_name = parts[0] if len(parts) == 1 else None
     lower_rel = rel_posix.lower()
 
+    if parts[-1].lower() == "machine_identity.json":
+        return True
+
     if factory_oem:
         if rel_posix == ".env":
             return True
@@ -81,6 +84,8 @@ def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> b
     if lower_rel.endswith(".bak") or ".bak." in lower_rel or ".db.bak" in lower_rel:
         return True
     if rel_posix == "openclaw/.env":
+        return True
+    if rel_posix == "openclaw/identity" or rel_posix.startswith("openclaw/identity/"):
         return True
     if rel_posix.startswith("openclaw/workspace/"):
         return True

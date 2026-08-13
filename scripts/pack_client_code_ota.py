@@ -394,6 +394,10 @@ def _skip_file(rel: str) -> bool:
     nr = _norm(rel)
     if _is_pack_skipped_path(rel):
         return True
+    if r == "machine_identity.json" or r.endswith("/machine_identity.json"):
+        return True
+    if r == "openclaw/identity" or r.startswith("openclaw/identity/"):
+        return True
     if any(nr.startswith(p) for p in _OTA_INCLUDE_SKILLS_TOOL_PREFIXES):
         return False
     if r in _OTA_SECRET_REL_PATHS:
@@ -881,6 +885,8 @@ def main() -> int:
             {
                 "nodejs/node_modules",
                 "backend/douyin_origin/douyin_protocol/node_modules",
+                "desktop/wheels",
+                "skills/comfly_veo3_daihuo_video/tools/ffmpeg",
             }
         )
     numeric_oem_code = _PACK_BRAND.isascii() and _PACK_BRAND.isdigit() and 4 <= len(_PACK_BRAND) <= 12

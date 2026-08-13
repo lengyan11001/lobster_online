@@ -64,6 +64,11 @@ def is_excluded(rel: Path) -> bool:
     parts = parts_under_proj(rel)
     name = parts[-1] if parts else ""
 
+    if name == "machine_identity.json":
+        return True
+    if len(parts) >= 3 and parts[1] == "openclaw" and parts[2] == "identity":
+        return True
+
     if name in SKIP_NAME_EXACT:
         return True
     if name.endswith(".pyc") or name.endswith(".db"):

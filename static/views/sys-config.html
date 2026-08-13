@@ -45,6 +45,17 @@
           <span id="chatRouteModeMsg" class="msg" style="display:none;"></span>
         </div>
       </div>
+      <div class="form-group" id="installationSlotBlock">
+        <label>本地槽位 ID</label>
+        <div class="form-hint">这是本机 Online 和 H5 绑定、在线设备识别、任务下发使用的本地槽位。若多台设备显示同一个 ID，可点击“随机更换”生成新的唯一槽位并重新绑定当前账号。</div>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:0.55rem;align-items:center;margin-top:0.55rem;max-width:58rem;">
+          <code id="installationSlotIdText" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.5rem 0.6rem;background:rgba(15,23,42,0.04);font-size:0.78rem;">加载中...</code>
+          <button type="button" id="copyInstallationSlotIdBtn" class="btn btn-ghost btn-sm">复制</button>
+          <button type="button" id="randomizeInstallationSlotIdBtn" class="btn btn-ghost btn-sm">随机更换</button>
+        </div>
+        <div class="form-hint" id="installationSlotHint" style="margin-top:0.4rem;">首次生成和随机更换都会向服务器确认唯一性。</div>
+        <span id="installationSlotMsg" class="msg" style="display:none;margin-top:0.5rem;"></span>
+      </div>
       <div id="sutuiTokenBlock" class="form-group" style="display:none;">
         <label>AI 能力 Token</label>
         <input type="password" id="sutuiTokenInput" placeholder="" style="max-width:24rem;">

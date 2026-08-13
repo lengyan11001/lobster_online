@@ -65,6 +65,138 @@ function showAssetPathMsg(text, isErr) {
   }
 }
 
+function showInstallationSlotMsg(text, isErr) {
+  var msgEl = document.getElementById('installationSlotMsg');
+  if (typeof showMsg === 'function') {
+    showMsg(msgEl, text, !!isErr);
+  } else if (msgEl) {
+    msgEl.textContent = text || '';
+    msgEl.className = 'msg ' + (isErr ? 'err' : 'ok');
+    msgEl.style.display = text ? 'inline-block' : 'none';
+  }
+  if (msgEl && text) msgEl.style.display = 'inline-block';
+}
+
+function renderInstallationSlotId(status) {
+  var idEl = document.getElementById('installationSlotIdText');
+  var hintEl = document.getElementById('installationSlotHint');
+  var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var machineId = typeof getCachedLobsterMachineInstanceId === 'function' ? getCachedLobsterMachineInstanceId() : '';
+  if (idEl) {
+    idEl.textContent = iid || '-';
+    idEl.title = machineId ? (iid + '\nMachine: ' + machineId) : (iid || '');
+  }
+  if (hintEl) {
+    if (status && status.duplicate) {
+      hintEl.textContent = '服务器检测到这个槽位还被其他账号/设备记录使用，建议点击“随机更换”。';
+      hintEl.style.color = 'var(--danger, #dc2626)';
+    } else if (status && status.ok) {
+      hintEl.textContent = '服务器已确认当前槽位可用于当前账号。';
+      hintEl.style.color = 'var(--success, #16a34a)';
+    } else {
+      hintEl.textContent = '首次生成和随机更换都会向服务器确认唯一性。';
+      hintEl.style.color = '';
+    }
+  }
+}
+
+function syncLocalInstallationSlotId(iid) {
+  if (!iid || !LOCAL_API_BASE) return Promise.resolve({ ok: false, skipped: true });
+  return fetch((LOCAL_API_BASE || '') + '/api/settings/installation-id/sync', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ installation_id: iid })
+  }).then(function(r) {
+    return r.json().catch(function() { return {}; }).then(function(d) {
+      if (!r.ok) throw new Error((d && d.detail) || '本机槽位同步失败');
+      return d;
+    });
+  });
+}
+
+function loadInstallationSlotStatus() {
+  if (!document.getElementById('installationSlotBlock')) return;
+  renderInstallationSlotId();
+  var machinePromise = typeof loadLobsterMachineInstanceId === 'function'
+    ? loadLobsterMachineInstanceId()
+    : Promise.resolve('');
+  machinePromise.then(function() {
+    if (typeof loadLobsterInstallationIdStatus !== 'function') return null;
+    return loadLobsterInstallationIdStatus();
+  })
+    .then(function(status) {
+      renderInstallationSlotId(status || {});
+      showInstallationSlotMsg('', false);
+    })
+    .catch(function(err) {
+      renderInstallationSlotId();
+      showInstallationSlotMsg((err && err.message) || '槽位状态检查失败', true);
+    });
+}
+
+function randomizeInstallationSlotId() {
+  var btn = document.getElementById('randomizeInstallationSlotIdBtn');
+  var copyBtn = document.getElementById('copyInstallationSlotIdBtn');
+  var oldText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '生成中...';
+  }
+  if (copyBtn) copyBtn.disabled = true;
+  showInstallationSlotMsg('正在向服务器申请唯一槽位...', false);
+  var previous = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var nextDeviceSeed = typeof randomizeLobsterDeviceSeed === 'function'
+    ? randomizeLobsterDeviceSeed({ reason: 'manual_randomize' })
+    : (typeof generateLobsterInstallationId === 'function' ? generateLobsterInstallationId() : String(Date.now()));
+  if (typeof setLobsterDeviceSeed === 'function') {
+    try { setLobsterDeviceSeed(nextDeviceSeed, { reason: 'manual_randomize' }); } catch (e) {}
+  } else {
+    try { localStorage.setItem('lobster_device_seed', nextDeviceSeed); } catch (e2) {}
+  }
+  var bindPromise;
+  var machinePromise = typeof loadLobsterMachineInstanceId === 'function'
+    ? loadLobsterMachineInstanceId()
+    : Promise.resolve(typeof getCachedLobsterMachineInstanceId === 'function' ? getCachedLobsterMachineInstanceId() : '');
+  if (typeof bindLobsterInstallationId === 'function') {
+    bindPromise = machinePromise.then(function(machineInstanceId) {
+      return bindLobsterInstallationId({
+        installationId: previous,
+        deviceId: nextDeviceSeed,
+        machineInstanceId: machineInstanceId || '',
+        forceNew: true
+      });
+    });
+  } else if (typeof requestUniqueLobsterInstallationId === 'function') {
+    bindPromise = requestUniqueLobsterInstallationId({ forceNew: true, candidate: previous });
+  } else {
+    bindPromise = Promise.resolve({ installation_id: (typeof generateLobsterInstallationId === 'function' ? generateLobsterInstallationId() : String(Date.now())) });
+  }
+  bindPromise
+    .then(function(data) {
+      var next = String(data && data.installation_id || '').trim();
+      if (!next) throw new Error('服务器未返回新槽位');
+      if (typeof setLobsterInstallationId === 'function') setLobsterInstallationId(next, { reason: 'manual_randomize' });
+      else localStorage.setItem('lobster_installation_id', next);
+      renderInstallationSlotId({ ok: true, duplicate: !!(data && data.duplicate) });
+      return syncLocalInstallationSlotId(next).catch(function(err) {
+        showInstallationSlotMsg('新槽位已保存，但本机缓存同步失败：' + ((err && err.message) || err), true);
+        return null;
+      }).then(function() {
+        if (!(data && data.duplicate)) showInstallationSlotMsg('新槽位已生成并绑定当前账号，后续任务会使用这个 ID。', false);
+      });
+    })
+    .catch(function(err) {
+      showInstallationSlotMsg((err && err.message) || '随机更换失败', true);
+    })
+    .finally(function() {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = oldText || '随机更换';
+      }
+      if (copyBtn) copyBtn.disabled = false;
+    });
+}
+
 function renderAssetPathSettings(data) {
   var internalEl = document.getElementById('assetInternalPathText');
   var input = document.getElementById('assetExportPathInput');
@@ -293,6 +425,7 @@ function loadOpenClawConfig() {
   if (EDITION !== 'online') loadSutuiConfig();
   checkOcStatus();
   loadLanInfo();
+  loadInstallationSlotStatus();
   loadAssetPathSettings();
   loadChatRouteMode();
   if (_currentSysTab === 'custom') loadCustomConfigs();
@@ -503,9 +636,30 @@ var saveAssetPathBtn = document.getElementById('saveAssetPathBtn');
 if (saveAssetPathBtn) saveAssetPathBtn.addEventListener('click', function() {
   saveAssetPathSettings(false);
 });
+var copyInstallationSlotIdBtn = document.getElementById('copyInstallationSlotIdBtn');
+if (copyInstallationSlotIdBtn) copyInstallationSlotIdBtn.addEventListener('click', function() {
+  var id = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  if (!id) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(id).then(function() {
+      showInstallationSlotMsg('已复制当前槽位 ID', false);
+    }).catch(function() {
+      showInstallationSlotMsg('复制失败，请手动复制', true);
+    });
+  } else {
+    showInstallationSlotMsg('当前浏览器不支持自动复制', true);
+  }
+});
+var randomizeInstallationSlotIdBtn = document.getElementById('randomizeInstallationSlotIdBtn');
+if (randomizeInstallationSlotIdBtn) randomizeInstallationSlotIdBtn.addEventListener('click', function() {
+  randomizeInstallationSlotId();
+});
 var resetAssetPathBtn = document.getElementById('resetAssetPathBtn');
 if (resetAssetPathBtn) resetAssetPathBtn.addEventListener('click', function() {
   saveAssetPathSettings(true);
+});
+window.addEventListener('lobster:installation-id-changed', function() {
+  loadInstallationSlotStatus();
 });
 
 function renderRuntimeRepairResult(data) {
