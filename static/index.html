@@ -8,7 +8,7 @@
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="__LOBSTER_FAVICON_32__">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">
   <link rel="stylesheet" href="/static/css/common.css?v=20260608-latest-ota">
-    <link rel="stylesheet" href="/static/css/index.css?v=20260806-pc-home-layout-v1-20260807-content-publish-v1">
+    <link rel="stylesheet" href="/static/css/index.css?v=20260813-local-bestseller-ip-role">
   <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20260806-home-logo-hover-v3">
   <link rel="stylesheet" href="/static/css/bihuo-25-video.css?v=20260731-workbench-v1">
 </head>
@@ -1215,19 +1215,23 @@
                       <label>家乡<input id="localBestsellerHometown" type="text" value="广东潮汕"></label>
                       <label>年龄标签<input id="localBestsellerAge" type="text" value="80后"></label>
                       <label>目标人群<input id="localBestsellerTargetAge" type="text" value="607080后"></label>
-                      <label>画面风格
-                        <select id="localBestsellerStyle">
-                          <option value="真实同城生活感" selected>真实同城生活感</option>
-                          <option value="轻创业励志">轻创业励志</option>
-                          <option value="门店老板日常">门店老板日常</option>
-                          <option value="大健康专业可信">大健康专业可信</option>
-                        </select>
+                      <label>种草IP行业和角色
+                        <input id="localBestsellerIpRole" type="text" value="AI公司老板" placeholder="例如：AI公司老板、服务门店老板">
+                        <div class="lb-role-suggestions" aria-label="常用种草IP角色">
+                          <button type="button" data-lb-role-preset="AI公司老板">AI公司老板</button>
+                          <button type="button" data-lb-role-preset="服务门店老板">服务门店老板</button>
+                          <button type="button" data-lb-role-preset="AI智能体创业者">AI智能体创业者</button>
+                          <button type="button" data-lb-role-preset="美业门店老板">美业门店老板</button>
+                          <button type="button" data-lb-role-preset="大健康营养专家">大健康营养专家</button>
+                        </div>
                       </label>
-                      <label>规划天数
+                      <label>起始 Day<input id="localBestsellerStartDay" type="number" min="1" max="30" step="1" value="1"></label>
+                      <label>结束 Day<input id="localBestsellerEndDay" type="number" min="1" max="30" step="1" value="10"></label>
+                      <label style="display:none;">兼容规划天数
                         <select id="localBestsellerDays">
-                          <option value="10">10天</option>
+                          <option value="10" selected>10天</option>
                           <option value="20">20天</option>
-                          <option value="30" selected>30天</option>
+                          <option value="30">30天</option>
                         </select>
                       </label>
                     </div>
@@ -2672,7 +2676,7 @@
   <script src="/static/js/comfly-ecommerce-detail.js?v=20260604-asset-picker"></script>
   <script src="/static/js/comfly-image-studio.js?v=20260806-content-prefill"></script>
   <script src="/static/js/comfly-seedance-tvc-studio.js?v=20260806-content-prefill"></script>
-  <script src="/static/js/local-bestseller.js?v=20260704-local-bgm-picker"></script>
+  <script src="/static/js/local-bestseller.js?v=20260813-ip-role-range"></script>
   <script src="/static/js/viral-video-remix.js?v=20260612-auto-ref-upload-flow"></script>
   <script src="/static/js/bihuo-25-video.js?v=20260731-workbench-v1"></script>
   <script src="/static/js/shanjian-smart-clip.js?v=20260518-upload-materials"></script>

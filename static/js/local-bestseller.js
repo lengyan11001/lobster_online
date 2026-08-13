@@ -14,6 +14,8 @@
     batchSceneSelectedIds: [],
     assets: [],
     plan: [],
+    planStartDay: 1,
+    planEndDay: 10,
     loadingAssets: false,
     submitting: false,
     sceneGenerating: {},
@@ -204,13 +206,58 @@
   }
 
   function planDays() {
-    var n = Number(val('localBestsellerDays') || 30);
-    if (n !== 10 && n !== 20 && n !== 30) n = 30;
+    var range = planRange();
+    return Math.max(1, range.end - range.start + 1);
+  }
+
+  function clampDay(value, fallback) {
+    var n = Number(value);
+    if (!Number.isFinite(n)) n = Number(fallback) || 1;
+    n = Math.round(n);
+    if (n < 1) n = 1;
+    if (n > 30) n = 30;
     return n;
   }
 
+  function planRange() {
+    var legacyDays = clampDay(val('localBestsellerDays') || 10, 10);
+    var startEl = $('localBestsellerStartDay');
+    var endEl = $('localBestsellerEndDay');
+    var start = startEl ? clampDay(startEl.value || 1, 1) : 1;
+    var end = endEl ? clampDay(endEl.value || legacyDays, legacyDays) : legacyDays;
+    if (end < start) end = start;
+    return { start: start, end: end };
+  }
+
+  function syncPlanRangeInputs() {
+    var range = planRange();
+    setVal('localBestsellerStartDay', String(range.start));
+    setVal('localBestsellerEndDay', String(range.end));
+    state.planStartDay = range.start;
+    state.planEndDay = range.end;
+    return range;
+  }
+
+  function planTemplateDays() {
+    if (state.planEndDay) return clampDay(state.planEndDay, 10);
+    return planRange().end;
+  }
+
+  function currentPlanLabel() {
+    if (state.plan.length) {
+      var days = state.plan.map(function(item) { return Number(item.day) || 0; }).filter(Boolean);
+      if (days.length) {
+        var minDay = Math.min.apply(Math, days);
+        var maxDay = Math.max.apply(Math, days);
+        return minDay === maxDay ? ('Day ' + minDay) : ('Day ' + minDay + '-' + maxDay);
+      }
+    }
+    return planLabel();
+  }
+
   function planLabel() {
-    return planDays() + '天';
+    var range = planRange();
+    return range.start === range.end ? ('Day ' + range.start) : ('Day ' + range.start + '-' + range.end);
   }
 
   function setVal(id, value) {
@@ -285,18 +332,22 @@
   }
 
   function getProfile() {
+    var industry = val('localBestsellerIndustry') || '大健康';
+    var ipRole = val('localBestsellerIpRole') || val('localBestsellerStyle') || industry;
     return {
       name: val('localBestsellerName'),
       nickname: val('localBestsellerNickname') || val('localBestsellerName') || '我',
       gender: val('localBestsellerGender') || 'female',
-      identity: val('localBestsellerIdentity') || '女老板',
-      industry: val('localBestsellerIndustry') || '大健康',
+      identity: ipRole || val('localBestsellerIdentity') || '女老板',
+      industry: ipRole || industry,
+      raw_industry: industry,
+      industry_role: ipRole,
       city: val('localBestsellerCity') || '深圳',
       province: val('localBestsellerProvince') || '广东',
       hometown: val('localBestsellerHometown') || '广东潮汕',
       age_label: val('localBestsellerAge') || '80后',
       target_age: val('localBestsellerTargetAge') || '607080后',
-      style: val('localBestsellerStyle') || '真实同城生活感',
+      style: ipRole || '真实同城生活感',
       source_mode: selectedSourceMode(),
       photo_asset_id: state.selectedPhoto && state.selectedPhoto.asset_id ? state.selectedPhoto.asset_id : '',
       photo_url: state.selectedPhoto && state.selectedPhoto.url ? state.selectedPhoto.url : '',
@@ -941,12 +992,12 @@
     }
     state.submitting = true;
     updateButtons();
-    var days = planDays();
-    showMessage('正在生成' + days + '天方案...', false);
+    var range = syncPlanRangeInputs();
+    showMessage('正在生成' + planLabel() + '方案...', false);
     fetch(base + '/api/local-bestseller/plan', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: days, profile: getProfile() })
+      body: JSON.stringify({ days: range.end, profile: getProfile() })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -958,10 +1009,13 @@
         state.bgmOptions = Array.isArray(result.data.bgm_options) ? result.data.bgm_options.map(function(option, idx) {
           return normalizeBgmOption(option, 'bgm-' + idx);
         }) : [];
-        state.plan = normalizePlan(Array.isArray(result.data.items) ? result.data.items : []);
+        state.plan = normalizePlan(Array.isArray(result.data.items) ? result.data.items : []).filter(function(item) {
+          var day = Number(item.day) || 0;
+          return day >= range.start && day <= range.end;
+        });
         ensureBgmOptions();
         renderPlan();
-        showMessage(state.plan.length + '天同城爆款方案已生成。下一步可以单张或批量合成场景图片。', false);
+        showMessage(currentPlanLabel() + ' 同城爆款方案已生成，共 ' + state.plan.length + ' 天。下一步可以单张或批量合成场景图片。', false);
       })
       .catch(function(err) {
         showMessage((err && err.message) || '生成失败', true);
@@ -1161,7 +1215,7 @@
     fetch(base + '/api/local-bestseller/scene/generate', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: state.plan.length || planDays(), day: Number(day), profile: getProfile(), item: cardPayload(item) })
+      body: JSON.stringify({ days: planTemplateDays(), day: Number(day), profile: getProfile(), item: cardPayload(item) })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -1206,7 +1260,7 @@
       return fetch(base + '/api/local-bestseller/scene/generate', {
         method: 'POST',
         headers: headersJson(),
-        body: JSON.stringify({ days: state.plan.length || planDays(), day: Number(item.day), profile: getProfile(), item: cardPayload(item) })
+        body: JSON.stringify({ days: planTemplateDays(), day: Number(item.day), profile: getProfile(), item: cardPayload(item) })
       })
         .then(function(resp) {
           return resp.json().then(function(data) {
@@ -1269,7 +1323,7 @@
     fetch(base + '/api/local-bestseller/video/generate', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: state.plan.length || planDays(), day: Number(day), profile: getProfile(), item: cardPayload(item), video_model: 'grok-imagine-video-1.5-preview' })
+      body: JSON.stringify({ days: planTemplateDays(), day: Number(day), profile: getProfile(), item: cardPayload(item), video_model: 'grok-imagine-video-1.5-preview' })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -1315,7 +1369,7 @@
     fetch(base + '/api/local-bestseller/video/batch', {
       method: 'POST',
       headers: headersJson(),
-      body: JSON.stringify({ days: state.plan.length || planDays(), profile: getProfile(), items: planPayload(), video_model: 'grok-imagine-video-1.5-preview' })
+      body: JSON.stringify({ days: planTemplateDays(), profile: getProfile(), items: planPayload(), video_model: 'grok-imagine-video-1.5-preview' })
     })
       .then(function(resp) {
         return resp.json().then(function(data) {
@@ -1355,10 +1409,10 @@
     }
     if (renderBtn) {
       renderBtn.disabled = state.submitting || !hasPlan;
-      renderBtn.textContent = state.submitting ? '合成中...' : '批量合成' + (state.plan.length || planDays()) + '天场景图';
+      renderBtn.textContent = state.submitting ? '合成中...' : '批量合成' + (hasPlan ? (state.plan.length + '天') : planLabel()) + '场景图';
     }
     var title = $('localBestsellerResultTitle');
-    if (title) title.textContent = (state.plan.length || planDays()) + '天结果卡';
+    if (title) title.textContent = hasPlan ? (currentPlanLabel() + '结果卡') : (planLabel() + '结果卡');
     var emptyHint = $('localBestsellerEmptyHint');
     if (emptyHint) emptyHint.textContent = '先选择照片并填写个人信息，再生成' + planLabel() + '同城爆款方案。';
     if (batchSceneUploadBtn) batchSceneUploadBtn.disabled = state.submitting || !hasPlan;
@@ -1477,6 +1531,16 @@
     });
     var daysSelect = $('localBestsellerDays');
     if (daysSelect) daysSelect.addEventListener('change', updateButtons);
+    var startDayInput = $('localBestsellerStartDay');
+    var endDayInput = $('localBestsellerEndDay');
+    [startDayInput, endDayInput].forEach(function(input) {
+      if (!input) return;
+      input.addEventListener('change', function() {
+        syncPlanRangeInputs();
+        updateButtons();
+      });
+      input.addEventListener('input', updateButtons);
+    });
     document.addEventListener('input', function(event) {
       var edit = event.target.closest('[data-lb-edit-day][data-lb-edit-path]');
       if (!edit) return;
@@ -1497,6 +1561,12 @@
         return;
       }
       if (!event.target.closest('[data-lb-bgm-picker]')) closeBgmMenu();
+      var rolePreset = event.target.closest('[data-lb-role-preset]');
+      if (rolePreset) {
+        setVal('localBestsellerIpRole', rolePreset.getAttribute('data-lb-role-preset') || '');
+        updateButtons();
+        return;
+      }
       var asset = event.target.closest('[data-lb-asset-id]');
       if (asset) {
         pickAsset(asset.getAttribute('data-lb-asset-id'));
