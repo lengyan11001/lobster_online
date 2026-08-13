@@ -304,6 +304,48 @@ def test_auto_reply_llm_never_invites_without_configured_keywords(monkeypatch):
     assert result["should_invite_group"] is False
 
 
+def test_auto_reply_llm_never_invites_when_parent_switch_is_off(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        content = b"json"
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "choices": [{"message": {"content": (
+                    '{"should_reply":true,"reply":"好的","should_invite_group":true,'
+                    '"matched_group_keywords":["预约体验"],"group_invite_reason":"命中规则"}'
+                )}}]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, json, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr(engine.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(engine._call_auto_reply_llm(
+        auth_context={"token": "token", "installation_id": "iid"},
+        user_id=31,
+        peer_name="客户A",
+        latest_message="我想预约体验",
+        recent_context="",
+        group_invite_rule_context="预约体验时允许拉群",
+        group_invite_enabled=False,
+    ))
+
+    assert result["should_invite_group"] is False
+
+
 def test_auto_reply_report_contains_received_and_reply_details():
     result = {
         "started_at": "2026-07-29T09:00:00",

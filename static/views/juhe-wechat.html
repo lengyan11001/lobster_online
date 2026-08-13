@@ -161,6 +161,18 @@
               </div>
               <div class="native-wechat-takeover-config-grid">
                 <div class="native-wechat-form-block full">
+                  <label class="native-wechat-auto-reply-main">
+                    <span class="native-wechat-switch" title="命中拉群规则后立即拉群">
+                      <input id="nativeWechatGroupInviteEnabled" type="checkbox">
+                      <span></span>
+                    </span>
+                    <span>
+                      <strong>自动拉群</strong>
+                      <small class="native-wechat-muted">接管当轮命中拉群规则后立即执行</small>
+                    </span>
+                  </label>
+                </div>
+                <div class="native-wechat-form-block full">
                   <label>回复与判断记忆文件</label>
                   <select id="nativeWechatAutoReplyMemoryDoc" class="native-wechat-select">
                     <option value="">不指定，使用系统优先记忆</option>
@@ -169,7 +181,7 @@
                 <div class="native-wechat-form-block">
                   <label>拉群判断记忆文件</label>
                   <select id="nativeWechatGroupInviteMemoryDoc" class="native-wechat-select">
-                    <option value="">不启用自动拉群</option>
+                    <option value="">不指定拉群规则文件</option>
                   </select>
                 </div>
                 <div class="native-wechat-form-block">

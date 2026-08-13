@@ -487,6 +487,8 @@
 
   function renderAutoReplyConfig() {
     var cfg = state.autoReply || {};
+    var inviteEnabled = $('nativeWechatGroupInviteEnabled');
+    if (inviteEnabled) inviteEnabled.checked = !!cfg.group_invite_enabled;
     var select = $('nativeWechatAutoReplyMemoryDoc');
     if (select) {
       var selected = Array.isArray(cfg.memory_doc_ids) && cfg.memory_doc_ids.length ? String(cfg.memory_doc_ids[0] || '') : '';
@@ -501,7 +503,7 @@
     }
     var inviteMemorySelect = $('nativeWechatGroupInviteMemoryDoc');
     if (inviteMemorySelect) {
-      var inviteMemoryOptions = ['<option value="">不启用自动拉群</option>'];
+      var inviteMemoryOptions = ['<option value="">不指定拉群规则文件</option>'];
       (state.autoReplyMemoryDocs || []).forEach(function(doc) {
         var inviteDocId = String(doc.id || doc.doc_id || '');
         if (!inviteDocId) return;
@@ -590,6 +592,7 @@
       enabled: !!enabled,
       interval_seconds: 1800,
       memory_doc_ids: memoryId ? [memoryId] : [],
+      group_invite_enabled: !!(($('nativeWechatGroupInviteEnabled') || {}).checked),
       group_invite_memory_doc_id: (($('nativeWechatGroupInviteMemoryDoc') || {}).value || '').trim(),
       group_invite_keywords: '',
       group_invite_contacts: primaryContact ? [primaryContact] : [],

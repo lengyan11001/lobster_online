@@ -550,6 +550,7 @@ def init_db() -> None:
                 account_id text primary key,
                 enabled integer not null default 0,
                 interval_seconds integer not null default 1800,
+                group_invite_enabled integer not null default 0,
                 user_id integer,
                 memory_doc_ids text not null default '[]',
                 group_invite_memory_doc_id text not null default '',
@@ -616,7 +617,9 @@ def init_db() -> None:
             """
         )
         config_columns = {str(row[1]) for row in conn.execute("pragma table_info(wechat_auto_reply_config)").fetchall()}
+        added_config_columns = []
         for column_name, column_sql in (
+            ("group_invite_enabled", "integer not null default 0"),
             ("memory_doc_ids", "text not null default '[]'"),
             ("group_invite_memory_doc_id", "text not null default ''"),
             ("group_invite_keywords", "text not null default ''"),
@@ -627,6 +630,18 @@ def init_db() -> None:
         ):
             if column_name not in config_columns:
                 conn.execute(f"alter table wechat_auto_reply_config add column {column_name} {column_sql}")
+                added_config_columns.append(column_name)
+        if "group_invite_enabled" in added_config_columns:
+            conn.execute(
+                """
+                update wechat_auto_reply_config
+                   set group_invite_enabled=1
+                 where coalesce(group_invite_memory_doc_id, '') <> ''
+                    or coalesce(group_invite_keywords, '') <> ''
+                    or coalesce(group_invite_contacts, '[]') <> '[]'
+                    or coalesce(group_invite_primary_contact, '') <> ''
+                """
+            )
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -2028,6 +2043,7 @@ def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
         "account_id": account_id,
         "enabled": False,
         "interval_seconds": int(DEFAULT_STRATEGY["auto_reply_interval_seconds"]),
+        "group_invite_enabled": False,
         "user_id": None,
         "memory_doc_ids": [],
         "group_invite_memory_doc_id": "",
@@ -2051,6 +2067,7 @@ def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) ->
     if row:
         cfg.update(_row_to_dict(row))
     cfg["enabled"] = bool(int(cfg.get("enabled") or 0))
+    cfg["group_invite_enabled"] = bool(int(cfg.get("group_invite_enabled") or 0))
     cfg["running"] = bool(int(cfg.get("running") or 0))
     try:
         cfg["interval_seconds"] = max(300, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
@@ -2089,6 +2106,7 @@ def save_auto_reply_config(
     *,
     enabled: bool,
     interval_seconds: int = 1800,
+    group_invite_enabled: Optional[bool] = None,
     user_id: Optional[int] = None,
     memory_doc_ids: Optional[List[str]] = None,
     group_invite_memory_doc_id: Optional[str] = None,
@@ -2108,6 +2126,7 @@ def save_auto_reply_config(
     _find_local_account(account_id)
     interval_seconds = max(300, int(interval_seconds or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
     current = get_auto_reply_config(account_id)
+    invite_enabled = current.get("group_invite_enabled") if group_invite_enabled is None else bool(group_invite_enabled)
     selected_memory_ids = current.get("memory_doc_ids") if memory_doc_ids is None else memory_doc_ids
     selected_memory_ids = list(
         dict.fromkeys(str(item or "").strip()[:64] for item in (selected_memory_ids or []) if str(item or "").strip())
@@ -2149,15 +2168,16 @@ def save_auto_reply_config(
         conn.execute(
             """
             insert into wechat_auto_reply_config(
-                account_id, enabled, interval_seconds, user_id, memory_doc_ids,
+                account_id, enabled, interval_seconds, group_invite_enabled, user_id, memory_doc_ids,
                 group_invite_memory_doc_id, group_invite_keywords, group_invite_contacts,
                 group_invite_primary_contact, group_invite_primary_contact_name,
                 group_invite_welcome_message, running, updated_at
             )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(account_id) do update set
               enabled=excluded.enabled,
               interval_seconds=excluded.interval_seconds,
+              group_invite_enabled=excluded.group_invite_enabled,
               user_id=coalesce(excluded.user_id, wechat_auto_reply_config.user_id),
               memory_doc_ids=excluded.memory_doc_ids,
               group_invite_memory_doc_id=excluded.group_invite_memory_doc_id,
@@ -2172,6 +2192,7 @@ def save_auto_reply_config(
                 account_id,
                 1 if enabled else 0,
                 interval_seconds,
+                1 if invite_enabled else 0,
                 user_id,
                 _json_dumps(selected_memory_ids),
                 invite_memory_doc_id,
@@ -2561,6 +2582,7 @@ async def _call_auto_reply_llm(
     memory_context: str = "",
     group_invite_rule_context: str = "",
     group_invite_keywords: str = "",
+    group_invite_enabled: bool = True,
     contact_intelligence: str = "",
     strategy_context: str = "",
 ) -> Dict[str, Any]:
@@ -2586,7 +2608,7 @@ async def _call_auto_reply_llm(
         )
     )[:50]
     invite_rule_context = str(group_invite_rule_context or "").strip()[:8000]
-    has_invite_rule = bool(invite_rule_context or invite_keywords)
+    has_invite_rule = bool(group_invite_enabled and (invite_rule_context or invite_keywords))
     system_prompt = (
         "你是个人微信私聊代回复助手，只处理一对一私聊，不回复群聊。"
         "回复要像真人微信聊天：短、自然、有边界，不营销、不硬广、不夸大。"
@@ -2616,6 +2638,7 @@ async def _call_auto_reply_llm(
         f"该客户历史画像与摘要：\n{contact_intelligence or '(首次接触，暂无历史画像)'}\n\n"
         f"用户已审核生效的长期接管规则：\n{strategy_context or '(暂无额外长期规则)'}\n\n"
         f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}\n\n"
+        f"自动拉群开关：{'已开启' if group_invite_enabled else '已关闭'}\n\n"
         f"拉群判断规则文件：\n{invite_rule_context or '(未配置，本轮不得判定拉群)'}\n\n"
         f"历史拉群关键词（仅兼容旧设置）：\n{('、'.join(invite_keywords)) if invite_keywords else '(无)'}"
     )
@@ -2664,7 +2687,7 @@ async def _call_auto_reply_llm(
     if intent_level not in {"high", "medium", "low", "none"}:
         intent_level = "none"
     should_invite_group = _bool_value(parsed.get("should_invite_group"))
-    if not has_invite_rule:
+    if not group_invite_enabled or not has_invite_rule:
         should_invite_group = False
     elif _is_affirmative_group_confirmation(latest_message, recent_context):
         should_invite_group = True
@@ -2933,6 +2956,7 @@ async def run_auto_reply_once(
     force: bool = True,
     trigger: str = "manual",
     check_friend_requests: bool = True,
+    config_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     init_db()
     account_id = str(account_id or "").strip()
@@ -2941,6 +2965,14 @@ async def run_auto_reply_once(
     if auth_context:
         _AUTO_REPLY_AUTH_CONTEXT[account_id] = dict(auth_context)
     cfg = get_auto_reply_config(account_id)
+    if isinstance(config_override, dict) and config_override:
+        cfg = {**cfg, **config_override}
+        cfg["group_invite_enabled"] = bool(cfg.get("group_invite_enabled"))
+        cfg["group_invite_contacts"] = [
+            str(item or "").strip() for item in (cfg.get("group_invite_contacts") or []) if str(item or "").strip()
+        ][:20]
+        if "group_invite_enabled" in config_override:
+            cfg["group_invite_enabled"] = bool(config_override.get("group_invite_enabled"))
     effective_user_id = int(cfg.get("user_id") or (auth_context or {}).get("user_id") or 0) or None
     if not force and not cfg.get("enabled"):
         return {"ok": True, "skipped": True, "reason": "disabled", "config": cfg}
@@ -3122,6 +3154,7 @@ async def run_auto_reply_once(
                     memory_context=str(memory.get("text") or ""),
                     group_invite_rule_context=str(invite_rule_memory.get("text") or ""),
                     group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
+                    group_invite_enabled=bool(cfg.get("group_invite_enabled")),
                     contact_intelligence=contact_intelligence,
                     strategy_context=strategy_context,
                 )

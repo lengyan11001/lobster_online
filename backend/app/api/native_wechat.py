@@ -33,6 +33,7 @@ class AutoReplyConfigBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
     enabled: bool = False
     interval_seconds: int = Field(default=1800, ge=300, le=86400)
+    group_invite_enabled: Optional[bool] = None
     memory_doc_ids: Optional[List[str]] = Field(default=None, max_length=20)
     group_invite_memory_doc_id: Optional[str] = Field(default=None, max_length=64)
     group_invite_keywords: Optional[str] = Field(default=None, max_length=2000)
@@ -46,6 +47,7 @@ class AutoReplyRunBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
     force: bool = True
     check_friend_requests: bool = True
+    config_override: Optional[Dict[str, Any]] = None
 
 
 class SyncBody(BaseModel):
@@ -334,6 +336,7 @@ async def native_wechat_save_auto_reply_config(
             body.account_id,
             enabled=body.enabled,
             interval_seconds=body.interval_seconds,
+            group_invite_enabled=body.group_invite_enabled,
             user_id=current_user.id,
             memory_doc_ids=body.memory_doc_ids,
             group_invite_memory_doc_id=body.group_invite_memory_doc_id,
@@ -370,6 +373,7 @@ async def native_wechat_run_auto_reply_once(
             force=body.force,
             trigger="manual",
             check_friend_requests=body.check_friend_requests,
+            config_override=body.config_override,
         )
         return result
     except Exception as exc:

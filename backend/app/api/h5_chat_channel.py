@@ -1862,6 +1862,11 @@ async def _run_client_command(
                     if isinstance(payload.get("memory_doc_ids"), list)
                     else None
                 ),
+                group_invite_enabled=(
+                    bool(payload.get("group_invite_enabled"))
+                    if "group_invite_enabled" in payload
+                    else None
+                ),
                 group_invite_memory_doc_id=(
                     str(payload.get("group_invite_memory_doc_id") or "").strip()
                     if "group_invite_memory_doc_id" in payload
@@ -7504,6 +7509,7 @@ async def _run_native_wechat_takeover_session(
     rounds: Optional[int] = None,
     interval_seconds: float = 15.0,
     session_seconds: Optional[float] = None,
+    config_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     # The interval starts after a round finishes. Bound the whole session by wall-clock
     # time so slow WeChat scans do not turn a 30-minute takeover into a multi-hour run.
@@ -7579,6 +7585,7 @@ async def _run_native_wechat_takeover_session(
                     "account_id": account_id,
                     "force": True,
                     "check_friend_requests": index == 0,
+                    "config_override": config_override or {},
                 },
                 headers=headers,
                 timeout_seconds=1800.0,
@@ -7953,15 +7960,6 @@ async def _run_client_workflow_action(
     if action == "wecom_poll_reply":
         return await _post_local_api_json("/api/wecom/poll-and-reply", {}, headers=headers, timeout_seconds=300.0)
     if action == "native_wechat_poll":
-        if str(source.get("followup_action") or "").strip().lower() == "group_invite":
-            return await _run_native_wechat_group_invite_followup(
-                source,
-                account_id=native_account_id,
-                headers=headers,
-                cloud=cloud,
-                base=base,
-                current_item=current_item,
-            )
         interval_seconds = max(1, min(_safe_int(source.get("message_poll_interval_seconds")) or 15, 300))
         session_minutes = max(1, min(_safe_int(source.get("takeover_session_minutes")) or 30, 30))
         rounds = max(1, (session_minutes * 60 + interval_seconds - 1) // interval_seconds)
@@ -7974,6 +7972,19 @@ async def _run_client_workflow_action(
             rounds=rounds,
             interval_seconds=interval_seconds,
             session_seconds=session_minutes * 60,
+            config_override={
+                key: source[key]
+                for key in (
+                    "group_invite_enabled",
+                    "group_invite_memory_doc_id",
+                    "group_invite_keywords",
+                    "group_invite_contacts",
+                    "group_invite_primary_contact",
+                    "group_invite_primary_contact_name",
+                    "group_invite_welcome_message",
+                )
+                if key in source
+            },
         )
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")

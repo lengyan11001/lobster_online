@@ -1,7 +1,7 @@
 {
-  "version": "1.0.161",
-  "build": 205,
-  "applied_at": "2026-08-13T12:27:17+08:00",
-  "note": "ai3d delete and server meshy balance",
-  "bundle_sha256": "d49e16af5bca9277e96703598815f9303d821e0109a4dc5cd3dc8818884c445c"
+  "version": "1.0.163",
+  "build": 207,
+  "applied_at": "2026-08-13T21:25:23+08:00",
+  "note": "wechat takeover group invite switch",
+  "bundle_sha256": "ea5619fd8cc090d6b81b60884088fc93b5a46a5c0456d5fa50c4252236768ff5"
 }
