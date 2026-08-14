@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20260805-v2">
+<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20260814-v2">
 <div id="content-multi-clip-mixer" class="content-block">
   <div class="mcm-page">
     <header class="mcm-header">
@@ -57,11 +57,6 @@
             </div>
           </div>
 
-          <label class="mcm-setting-row" for="mcmKeepAudioSwitch">
-            <span><strong>保留视频原声</strong><small>关闭后只保留所选音乐；未选音乐时生成静音视频。</small></span>
-            <input id="mcmKeepAudioSwitch" type="checkbox" checked>
-          </label>
-
           <label class="mcm-setting-row" for="mcmTemplateSwitch">
             <span><strong>套用定制模板</strong><small>先完成片段拼接，再使用模板定制能力生成成片。</small></span>
             <input id="mcmTemplateSwitch" type="checkbox">
@@ -86,6 +81,16 @@
                 <span>填写项由当前模板决定，将直接用于成片标题和角标。</span>
               </div>
               <div id="mcmTemplateOverlayFields" class="mcm-overlay-fields"></div>
+            </div>
+            <div id="mcmShanjianCopyPanel" class="mcm-overlay-panel" hidden>
+              <div class="mcm-overlay-head">
+                <strong>闪剪文案</strong>
+                <span>闪剪接口支持标题和介绍卡片文案，会随模板任务一起提交。</span>
+              </div>
+              <div class="mcm-overlay-fields">
+                <label class="mcm-overlay-field"><span><strong>标题</strong><em>用于任务标题</em></span><input id="mcmShanjianTitle" type="text" maxlength="40" placeholder="多段视频混剪"></label>
+                <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>传给闪剪 introduceCard</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写想展示在模板中的文案，留空则只使用视频素材。"></textarea></label>
+              </div>
             </div>
             <div id="mcmTemplateLayoutPanel" class="mcm-layout-panel" hidden>
               <div class="mcm-layout-head">

@@ -1643,7 +1643,7 @@
   }
 
   function memorySourceDocRows() {
-    var rows = (state.memories || []).filter(function(doc) { return !(doc && (doc.read_only || doc.source === 'agent')); });
+    var rows = (state.memories || []).slice();
     var uploaded = rows.filter(isUploadedMemoryDoc);
     return uploaded.length ? uploaded : rows;
   }

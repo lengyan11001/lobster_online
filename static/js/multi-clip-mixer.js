@@ -20,7 +20,8 @@
     lastBaseResult: null,
     templatePollTimer: null,
     pendingTemplateTask: null,
-    batchResults: []
+    batchResults: [],
+    importingFiles: false
   };
 
   function $(id) { return document.getElementById(id); }
@@ -155,6 +156,74 @@
     return state.clips.find(function(clip) { return !!clip.audioMaster; }) || null;
   }
 
+  function openVideoPicker() {
+    var input = $('mcmVideoInput');
+    if (!input || state.busy) return;
+    input.click();
+  }
+
+  function clipPosterUrl(clip) {
+    var assetId = String((clip || {}).assetId || '').trim();
+    if (!assetId) return '';
+    return assetPosterUrl(assetId);
+  }
+
+  function fetchObjectUrl(url) {
+    var target = resolveUrl(url || '', apiBase());
+    if (!target) return Promise.reject(new Error('预览地址为空'));
+    return fetch(target, { headers: headers(false) }).then(function(response) {
+      if (!response.ok) throw new Error('预览读取失败');
+      return response.blob();
+    }).then(function(blob) {
+      return URL.createObjectURL(blob);
+    });
+  }
+
+  function revokeClipObjectUrls(clip) {
+    ['posterObjectUrl', 'playObjectUrl'].forEach(function(key) {
+      var value = clip && clip[key];
+      if (value && /^blob:/i.test(value)) {
+        try { URL.revokeObjectURL(value); } catch (error) {}
+      }
+      if (clip) clip[key] = '';
+    });
+  }
+
+  function hydrateClipPoster(clip) {
+    if (!clip || clip.localPosterUrl || clip.posterObjectUrl || clip.posterLoading || clip.posterFailed) return;
+    var posterUrl = clip.posterUrl || clipPosterUrl(clip);
+    if (!posterUrl) return;
+    clip.posterLoading = true;
+    fetchObjectUrl(posterUrl).then(function(objectUrl) {
+      clip.posterObjectUrl = objectUrl;
+      renderClips();
+    }).catch(function() {
+      clip.posterFailed = true;
+    }).finally(function() {
+      clip.posterLoading = false;
+    });
+  }
+
+  function hydrateClipPosters() {
+    state.clips.forEach(hydrateClipPoster);
+  }
+
+  function playableClipUrl(clip) {
+    if (!clip) return Promise.resolve('');
+    if (clip.sourceUrl) return Promise.resolve(resolveUrl(clip.sourceUrl, apiBase()));
+    if (clip.playObjectUrl) return Promise.resolve(clip.playObjectUrl);
+    var previewUrl = clip.previewUrl || (clip.assetId ? ('/api/assets/' + encodeURIComponent(clip.assetId) + '/content') : '');
+    if (!previewUrl) return Promise.resolve('');
+    if (clip.playLoading) return Promise.resolve('');
+    clip.playLoading = true;
+    return fetchObjectUrl(previewUrl).then(function(objectUrl) {
+      clip.playObjectUrl = objectUrl;
+      return objectUrl;
+    }).finally(function() {
+      clip.playLoading = false;
+    });
+  }
+
   function randomSegmentForClip(clip, seconds) {
     var duration = Math.max(0, Number((clip || {}).duration || 0));
     var span = Math.max(0.1, Math.min(Number(seconds || 3), duration || Number(seconds || 3)));
@@ -183,19 +252,22 @@
   }
 
   function applyFixedRangeToAll() {
-    if (!state.clips.length) return;
+    if (!state.clips.length) return showMessage('请先添加视频，再应用统一片段。', true);
     state.clips.forEach(function(clip) {
       var segment = readFixedSegment(Number(clip.duration || 0));
       clip.startSec = segment.start;
       clip.endSec = segment.end;
     });
     renderClips();
+    showMessage('已应用到所有视频：统一取 ' + Number((($('mcmFixedStart') || {}).value || 0)).toFixed(1)
+      + ' - ' + Number((($('mcmFixedEnd') || {}).value || 3)).toFixed(1) + ' 秒。', false);
   }
 
   function syncModePanels() {
     var mode = currentClipMode();
     if ($('mcmFixedModePanel')) $('mcmFixedModePanel').hidden = mode !== 'fixed';
     if ($('mcmRandomModePanel')) $('mcmRandomModePanel').hidden = mode !== 'random';
+    renderClips();
   }
 
   function totalSelectedDuration() {
@@ -246,23 +318,25 @@
     var list = $('mcmClipList');
     var empty = $('mcmClipEmpty');
     if (!list) return;
-    var timelineCursor = 0;
     list.innerHTML = state.clips.map(function(clip, index) {
       var source = clip.sourceUrl || clip.previewUrl || '';
       var clipDuration = Math.max(0, Number(clip.endSec || 0) - Number(clip.startSec || 0));
-      var timelineStart = timelineCursor;
-      var timelineEnd = timelineStart + clipDuration;
-      timelineCursor = timelineEnd;
+      var poster = clip.localPosterUrl || clip.posterObjectUrl || '';
+      var modeLabel = currentClipMode() === 'random'
+        ? '随机抽段时会重新计算'
+        : ('统一取段 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒');
       return '<article class="mcm-clip-item' + (clip.audioMaster ? ' is-audio-master' : '') + '" data-clip-index="' + index + '">'
-        + '<div class="mcm-clip-thumb"><video src="' + escapeHtml(source) + '" muted preload="metadata"></video><span class="mcm-clip-number">' + (index + 1) + '</span></div>'
+        + '<div class="mcm-clip-thumb">'
+        + (poster ? '<img src="' + escapeHtml(poster) + '" alt="" loading="lazy">' : '<span class="mcm-clip-thumb-placeholder">VIDEO</span>')
+        + '<span class="mcm-clip-number">' + (index + 1) + '</span></div>'
         + '<div class="mcm-clip-copy"><strong title="' + escapeHtml(clip.name) + '">' + escapeHtml(clip.name) + '</strong>'
-        + '<span>' + escapeHtml(timelineStart.toFixed(1)) + ' - ' + escapeHtml(timelineEnd.toFixed(1)) + ' 秒</span>'
-        + '<small>取原片 ' + escapeHtml(Number(clip.startSec).toFixed(1)) + ' - ' + escapeHtml(Number(clip.endSec).toFixed(1))
-        + ' 秒 · 原片 ' + escapeHtml(formatSeconds(clip.duration)) + (clip.audioMaster ? ' · 主音轨' : '') + '</small></div>'
+        + '<span>' + escapeHtml(modeLabel) + '</span>'
+        + '<small>本段时长 ' + escapeHtml(formatSeconds(clipDuration)) + ' · 原片 ' + escapeHtml(formatSeconds(clip.duration))
+        + (clip.audioMaster ? ' · 已标记为整片原声音轨' : '') + '</small></div>'
         + '<div class="mcm-clip-actions">'
         + '<button type="button" data-action="up" title="上移" aria-label="上移"' + (index === 0 ? ' disabled' : '') + '>↑</button>'
         + '<button type="button" data-action="down" title="下移" aria-label="下移"' + (index === state.clips.length - 1 ? ' disabled' : '') + '>↓</button>'
-        + '<button type="button" data-action="audio" class="mcm-audio-master-btn" title="设为整条视频主音轨">' + (clip.audioMaster ? '主音轨' : '取音') + '</button>'
+        + '<button type="button" data-action="audio" class="mcm-audio-master-btn" title="标记为整条成片原声音轨">' + (clip.audioMaster ? '原声源' : '用原声') + '</button>'
         + '<button type="button" data-action="edit" title="修改片段">编辑</button>'
         + '<button type="button" data-action="remove" title="移除" aria-label="移除">×</button>'
         + '</div></article>';
@@ -270,12 +344,67 @@
     if (empty) empty.hidden = state.clips.length > 0;
     if ($('mcmTotalDuration')) $('mcmTotalDuration').textContent = formatSeconds(totalSelectedDuration());
     renderTemplateLayout();
+    hydrateClipPosters();
   }
 
   function uploadVideo(file) {
     var data = new FormData();
     data.append('file', file);
     return request('/api/assets/upload', { method: 'POST', headers: headers(false), body: data });
+  }
+
+  function assetContentUrl(assetId) {
+    return apiBase() + '/api/assets/' + encodeURIComponent(assetId) + '/content';
+  }
+
+  function assetPosterUrl(assetId) {
+    return apiBase() + '/api/multi-clip-mixer/assets/' + encodeURIComponent(assetId) + '/poster.jpg';
+  }
+
+  function addVideoClip(clip) {
+    clip = clip || {};
+    var duration = Number(clip.duration || 0);
+    var segment = defaultSegment(state.clips.length, duration);
+    clip.startSec = Number(clip.startSec != null ? clip.startSec : segment.start);
+    clip.endSec = Number(clip.endSec != null ? clip.endSec : segment.end);
+    state.clips.push(clip);
+    renderClips();
+    return clip;
+  }
+
+  function addUploadedVideoClip(file, data, info) {
+    data = data || {};
+    info = info || {};
+    var assetId = String(data.asset_id || '').trim();
+    if (!assetId) throw new Error('视频上传后没有返回素材 ID');
+    return addVideoClip({
+      assetId: assetId,
+      name: (file && file.name) || ('视频 ' + (state.clips.length + 1)),
+      sourceUrl: data.source_url || '',
+      previewUrl: assetContentUrl(assetId),
+      posterUrl: assetPosterUrl(assetId),
+      duration: Number(info.duration || data.duration || 0),
+      width: Number(info.width || data.width || 0),
+      height: Number(info.height || data.height || 0),
+      localPosterUrl: info.localPosterUrl || ''
+    });
+  }
+
+  function addAssetVideoClip(item) {
+    item = item || {};
+    var assetId = String(item.asset_id || item.assetId || item.id || '').trim();
+    if (!assetId) throw new Error('素材缺少 asset_id，无法加入混剪');
+    return addVideoClip({
+      assetId: assetId,
+      name: item.name || item.title || item.filename || ('素材视频 ' + (state.clips.length + 1)),
+      sourceUrl: item.source_url || item.sourceUrl || item.open_url || item.openUrl || '',
+      previewUrl: item.preview_url || item.previewUrl || assetContentUrl(assetId),
+      posterUrl: item.poster_url || item.posterUrl || item.cover_url || item.coverUrl || assetPosterUrl(assetId),
+      duration: Number(item.duration || item.video_duration || item.duration_sec || (item.meta && (item.meta.duration || item.meta.duration_sec)) || 0),
+      width: Number(item.width || (item.meta && item.meta.width) || 0),
+      height: Number(item.height || (item.meta && item.meta.height) || 0),
+      localPosterUrl: item.localPosterUrl || ''
+    });
   }
 
   function closeSegmentModal(cancelled) {
@@ -290,7 +419,118 @@
     }
     if (context && context.objectUrl && context.mode === 'new') URL.revokeObjectURL(context.objectUrl);
     state.segmentContext = null;
-    if (cancelled && context && context.mode === 'new') processNextPendingFile();
+  }
+
+  function configureSegmentVideo(video, src, poster, handlers) {
+    if (!video) return;
+    video.pause();
+    video.removeAttribute('src');
+    video.removeAttribute('poster');
+    handlers = handlers || {};
+    video.onerror = handlers.error || null;
+    video.onloadedmetadata = handlers.loadedmetadata || null;
+    if (poster) video.poster = poster;
+    if (src) video.src = src;
+    video.load();
+  }
+
+  function captureLocalVideoPoster(src, done) {
+    if (!src || typeof document === 'undefined') return;
+    var probe = document.createElement('video');
+    probe.muted = true;
+    probe.playsInline = true;
+    probe.preload = 'auto';
+    probe.crossOrigin = 'anonymous';
+    var settled = false;
+    function cleanup() {
+      probe.onloadedmetadata = null;
+      probe.onseeked = null;
+      probe.onerror = null;
+      probe.removeAttribute('src');
+      try { probe.load(); } catch (error) {}
+    }
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (typeof done === 'function') done(value || '');
+    }
+    probe.onerror = function() { finish(''); };
+    probe.onloadedmetadata = function() {
+      try {
+        var duration = Number(probe.duration || 0);
+        probe.currentTime = Math.min(Math.max(duration * 0.08, 0.2), Math.max(duration - 0.05, 0));
+      } catch (error) {
+        finish('');
+      }
+    };
+    probe.onseeked = function() {
+      try {
+        var canvas = document.createElement('canvas');
+        var width = Number(probe.videoWidth || 0);
+        var height = Number(probe.videoHeight || 0);
+        if (!width || !height) return finish('');
+        var scale = Math.min(1, 640 / Math.max(width, height));
+        canvas.width = Math.max(2, Math.round(width * scale));
+        canvas.height = Math.max(2, Math.round(height * scale));
+        canvas.getContext('2d').drawImage(probe, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL('image/jpeg', 0.82));
+      } catch (error) {
+        finish('');
+      }
+    };
+    probe.src = src;
+    try { probe.load(); } catch (error) { finish(''); }
+  }
+
+  function readLocalVideoInfo(file) {
+    return new Promise(function(resolve) {
+      var objectUrl = URL.createObjectURL(file);
+      var info = { objectUrl: objectUrl, duration: 0, width: 0, height: 0, localPosterUrl: '' };
+      var video = document.createElement('video');
+      var settled = false;
+      var timer = setTimeout(function() { finish(); }, 2500);
+
+      function cleanup() {
+        clearTimeout(timer);
+        video.onloadedmetadata = null;
+        video.onerror = null;
+        video.removeAttribute('src');
+        try { video.load(); } catch (error) {}
+      }
+
+      function finish() {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        var posterDone = false;
+        var posterTimer = setTimeout(function() {
+          if (posterDone) return;
+          posterDone = true;
+          resolve(info);
+        }, 1800);
+        captureLocalVideoPoster(objectUrl, function(poster) {
+          if (posterDone) return;
+          posterDone = true;
+          clearTimeout(posterTimer);
+          info.localPosterUrl = poster || '';
+          resolve(info);
+        });
+      }
+
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      video.onloadedmetadata = function() {
+        info.duration = Number(video.duration || 0);
+        info.width = Number(video.videoWidth || 0);
+        info.height = Number(video.videoHeight || 0);
+        finish();
+      };
+      video.onerror = function() { finish(); };
+      video.src = objectUrl;
+      try { video.load(); } catch (error) { finish(); }
+    });
   }
 
   function syncSegmentSummary() {
@@ -321,37 +561,6 @@
     syncSegmentSummary();
   }
 
-  function openSegmentForFile(file) {
-    var index = state.clips.length;
-    var objectUrl = URL.createObjectURL(file);
-    state.segmentContext = {
-      mode: 'new',
-      file: file,
-      objectUrl: objectUrl,
-      index: index,
-      duration: 0,
-      uploading: false
-    };
-    var modal = $('mcmSegmentModal');
-    var video = $('mcmSegmentVideo');
-    if ($('mcmSegmentIndex')) $('mcmSegmentIndex').textContent = '视频 ' + (index + 1);
-    if ($('mcmSourceDuration')) $('mcmSourceDuration').textContent = '读取中';
-    if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').textContent = '使用这段';
-    setSegmentValues(defaultSegment(index));
-    if (video) {
-      video.src = objectUrl;
-      video.onloadedmetadata = function() {
-        if (!state.segmentContext || state.segmentContext.objectUrl !== objectUrl) return;
-        state.segmentContext.duration = Number(video.duration || 0);
-        state.segmentContext.width = Number(video.videoWidth || 0);
-        state.segmentContext.height = Number(video.videoHeight || 0);
-        if ($('mcmSourceDuration')) $('mcmSourceDuration').textContent = formatSeconds(video.duration);
-        setSegmentValues(defaultSegment(index, video.duration));
-      };
-    }
-    if (modal) modal.hidden = false;
-  }
-
   function openSegmentForEdit(index) {
     var clip = state.clips[index];
     if (!clip || state.busy) return;
@@ -360,14 +569,59 @@
     if ($('mcmSourceDuration')) $('mcmSourceDuration').textContent = formatSeconds(clip.duration);
     if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').textContent = '保存片段';
     var video = $('mcmSegmentVideo');
-    if (video) video.src = clip.sourceUrl || clip.previewUrl;
+    var poster = clip.localPosterUrl || clip.posterObjectUrl || '';
+    configureSegmentVideo(video, '', poster);
+    playableClipUrl(clip).then(function(url) {
+      if (!state.segmentContext || state.segmentContext.mode !== 'edit' || state.segmentContext.index !== index) return;
+      configureSegmentVideo(video, url, clip.localPosterUrl || clip.posterObjectUrl || '');
+    }).catch(function(error) {
+      var errorEl = $('mcmSegmentError');
+      if (errorEl) {
+        errorEl.hidden = false;
+        errorEl.textContent = error.message || '视频预览加载失败';
+      }
+    });
     setSegmentValues({ start: clip.startSec, end: clip.endSec });
     if ($('mcmSegmentModal')) $('mcmSegmentModal').hidden = false;
   }
 
   function processNextPendingFile() {
-    if (state.segmentContext || !state.pendingFiles.length) return;
-    openSegmentForFile(state.pendingFiles.shift());
+    if (state.importingFiles || !state.pendingFiles.length || state.busy) return;
+    state.importingFiles = true;
+    var total = state.pendingFiles.length;
+    var added = 0;
+    var failed = 0;
+
+    function finishBatch() {
+      state.importingFiles = false;
+      setBusy(false);
+      if (failed) showMessage('已添加 ' + added + ' 个视频，' + failed + ' 个上传失败。失败的视频请重新选择。', true);
+      else showMessage('已添加 ' + added + ' 个视频，可直接生成或点“编辑”微调片段。', false);
+    }
+
+    function next() {
+      if (!state.pendingFiles.length) return finishBatch();
+      var file = state.pendingFiles.shift();
+      setBusy(true, '正在添加视频 ' + (added + failed + 1) + '/' + total + '...');
+      var infoForCleanup = null;
+      readLocalVideoInfo(file).then(function(info) {
+        infoForCleanup = info;
+        return uploadVideo(file).then(function(data) {
+          addUploadedVideoClip(file, data, info);
+          added += 1;
+        });
+      }).catch(function(error) {
+        failed += 1;
+        showMessage(((file && file.name) || '视频') + ' 添加失败：' + (error.message || error), true);
+      }).finally(function() {
+        if (infoForCleanup && infoForCleanup.objectUrl) {
+          try { URL.revokeObjectURL(infoForCleanup.objectUrl); } catch (error) {}
+        }
+        next();
+      });
+    }
+
+    next();
   }
 
   function confirmSegment() {
@@ -380,34 +634,9 @@
       state.clips[context.index].endSec = end;
       closeSegmentModal(false);
       renderClips();
-      return;
-    }
-
-    context.uploading = true;
-    var confirm = $('mcmConfirmSegmentBtn');
-    if (confirm) { confirm.disabled = true; confirm.textContent = '正在上传...'; }
-    uploadVideo(context.file).then(function(data) {
-      state.clips.push({
-        assetId: data.asset_id,
-        name: context.file.name || ('视频 ' + (state.clips.length + 1)),
-        sourceUrl: data.source_url || '',
-        previewUrl: apiBase() + '/api/assets/' + encodeURIComponent(data.asset_id) + '/content',
-        duration: context.duration || end,
-        width: context.width || 0,
-        height: context.height || 0,
-        startSec: start,
-        endSec: end
-      });
+    } else {
       closeSegmentModal(false);
-      renderClips();
-      showMessage('视频已添加，可继续添加或修改片段。', false);
-      processNextPendingFile();
-    }).catch(function(error) {
-      context.uploading = false;
-      if (confirm) { confirm.disabled = false; confirm.textContent = '重试上传'; }
-      var errorEl = $('mcmSegmentError');
-      if (errorEl) { errorEl.hidden = false; errorEl.textContent = error.message || '视频上传失败'; }
-    });
+    }
   }
 
   function previewSelectedSegment() {
@@ -722,12 +951,15 @@
   function renderTemplateOverlayFields() {
     var panel = $('mcmTemplateOverlayPanel');
     var fieldsRoot = $('mcmTemplateOverlayFields');
+    var shanjianPanel = $('mcmShanjianCopyPanel');
     if (!panel || !fieldsRoot) return;
     if (currentTemplateProvider() === 'shanjian') {
       panel.hidden = true;
       fieldsRoot.innerHTML = '';
+      if (shanjianPanel) shanjianPanel.hidden = !state.selectedTemplate;
       return;
     }
+    if (shanjianPanel) shanjianPanel.hidden = true;
     var fields = templateOverlayFields(state.selectedTemplate);
     panel.hidden = !fields.length;
     fieldsRoot.innerHTML = fields.map(function(field) {
@@ -957,19 +1189,29 @@
     });
   }
 
+  function normalizeShanjianTitle(value) {
+    var title = String(value || '').trim();
+    if (Array.from(title).length < 3) title = '智能剪辑';
+    return Array.from(title).slice(0, 120).join('');
+  }
+
   function applyShanjianTemplate(baseResult) {
     if (!state.selectedTemplate) return Promise.reject(new Error('请先选择闪剪模板'));
     var videoUrl = baseResult && (baseResult.source_url || baseResult.video_url || '');
     if (!videoUrl) return Promise.reject(new Error('基础成片没有公网链接，无法提交闪剪模板；请先保证 TOS/转存成功。'));
+    var title = normalizeShanjianTitle((($('mcmShanjianTitle') || {}).value || ''));
+    var description = String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240);
     progress('template', 'active', '正在提交闪剪模板任务');
     return post('/api/shanjian-smart-clip/submit', {
-      title: '多段视频混剪',
+      title: title,
       scene: 'newsMixCutting',
       style_id: state.selectedTemplate.id,
       materials: [{ type: 'video', fileUrl: videoUrl }],
       material_sound_switch: true,
-      material_composition: 'sequential',
+      material_composition: 'order',
       video_duration: Math.max(5, Math.round(Number(baseResult.duration || 30))),
+      introduce_name: title,
+      introduce_description: description,
       header_switch: true,
       material_switch: true,
       subtitle_switch: true,
@@ -1040,6 +1282,7 @@
       var url = resolveUrl(result.source_url || result.video_url || result.preview_url || '', apiBase());
       var label = result.template_name ? (' · ' + result.template_name) : '';
       return '<article class="mcm-batch-item">'
+        + (url ? '<button type="button" class="mcm-batch-preview" data-batch-index="' + index + '"><video src="' + escapeHtml(url) + '" muted playsinline preload="metadata"></video></button>' : '<span class="mcm-batch-preview is-empty">无预览</span>')
         + '<span>' + (index + 1) + '. ' + escapeHtml(formatSeconds(result.duration || 0)) + escapeHtml(label) + '</span>'
         + (url ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + escapeHtml(url) + '">打开</a>' : '')
         + '</article>';
@@ -1072,7 +1315,7 @@
     return post('/api/multi-clip-mixer/render', {
       title: totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪',
       clips: buildClipPlan(runIndex),
-      keep_original_audio: !audioClip && !!(($('mcmKeepAudioSwitch') || {}).checked),
+      keep_original_audio: false,
       audio_asset_id: audioClip ? audioClip.assetId : '',
       target_duration: audioClip ? Number(audioClip.duration || 0) : null,
       audio_volume: 1,
@@ -1221,7 +1464,8 @@
     if ($('mcmBackBtn')) $('mcmBackBtn').addEventListener('click', function() {
       if (typeof window.showLobsterView === 'function') window.showLobsterView('skill-store');
     });
-    if ($('mcmAddVideoBtn')) $('mcmAddVideoBtn').addEventListener('click', function() { $('mcmVideoInput').click(); });
+    if ($('mcmAddVideoBtn')) $('mcmAddVideoBtn').addEventListener('click', openVideoPicker);
+    if ($('mcmClipEmpty')) $('mcmClipEmpty').addEventListener('click', openVideoPicker);
     if ($('mcmVideoInput')) $('mcmVideoInput').addEventListener('change', function(event) {
       var files = Array.prototype.slice.call(event.target.files || []).filter(function(file) {
         return /^video\//i.test(file.type || '') || /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name || '');
@@ -1239,6 +1483,9 @@
       if (action === 'edit') openSegmentForEdit(index);
       if (action === 'audio') {
         state.clips.forEach(function(clip, clipIndex) { clip.audioMaster = clipIndex === index ? !clip.audioMaster : false; });
+        showMessage(state.clips[index] && state.clips[index].audioMaster
+          ? '已把这个视频标记为整条成片的原声音轨。之后无论怎么切片，都使用它的整段音频。'
+          : '已取消原声音轨标记。', false);
       }
       if (action === 'remove') state.clips.splice(index, 1);
       if (action === 'up' && index > 0) {
@@ -1371,6 +1618,13 @@
     });
     if ($('mcmGenerateBtn')) $('mcmGenerateBtn').addEventListener('click', generate);
     if ($('mcmRetryTemplateBtn')) $('mcmRetryTemplateBtn').addEventListener('click', retryTemplate);
+    if ($('mcmBatchResults')) $('mcmBatchResults').addEventListener('click', function(event) {
+      var button = event.target.closest('[data-batch-index]');
+      if (!button) return;
+      var index = Number(button.getAttribute('data-batch-index'));
+      var result = state.batchResults[index];
+      if (result) setResultVideo(result).catch(function(error) { showMessage(error.message || '预览失败', true); });
+    });
   }
 
   window.initMultiClipMixerView = function() {
@@ -1383,5 +1637,25 @@
     renderBatchResults();
     resetProgress();
     resumePendingTemplateTask();
+  };
+
+  window.addMultiClipMixerAsset = function(item) {
+    if (state.busy) return false;
+    addAssetVideoClip(item || {});
+    showMessage('已加入视频列表，可直接生成或点“编辑”微调片段。', false);
+    return true;
+  };
+
+  window.addMultiClipMixerAssets = function(items) {
+    if (state.busy) return 0;
+    var added = 0;
+    (Array.isArray(items) ? items : [items]).forEach(function(item) {
+      try {
+        addAssetVideoClip(item || {});
+        added += 1;
+      } catch (error) {}
+    });
+    if (added) showMessage('已加入 ' + added + ' 个素材视频，可直接生成或点“编辑”微调片段。', false);
+    return added;
   };
 })();

@@ -166,6 +166,20 @@ def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_submit_title(value: Any) -> str:
+    title = _clean_text(value)
+    if len(title) < 3:
+        title = "智能剪辑"
+    return title[:1800]
+
+
+def _normalize_material_composition(value: Any) -> str:
+    composition = _clean_text(value)
+    if composition == "sequential":
+        composition = "order"
+    return composition if composition in {"random", "order"} else "random"
+
+
 def _normalize_virtualman_row(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": _clean_text(item.get("id") or item.get("virtualmanId") or item.get("virtualManId")),
@@ -338,7 +352,7 @@ async def submit_clip(
 
     payload: Dict[str, Any] = {
         "styleId": body.style_id.strip(),
-        "title": str(body.title or "智能剪辑").strip()[:80],
+        "title": _normalize_submit_title(body.title),
         "materialSoundSwitch": bool(body.material_sound_switch),
         "packRules": {
             "headerSwitch": bool(body.header_switch),
@@ -367,9 +381,7 @@ async def submit_clip(
         endpoint = "/v1/clip/video/broadcast_mixcut"
     elif scene == "newsMixCutting":
         endpoint = "/v1/clip/video/news_mixcut"
-        payload["processRules"]["materialComposition"] = (
-            body.material_composition if body.material_composition in {"random", "sequential"} else "random"
-        )
+        payload["processRules"]["materialComposition"] = _normalize_material_composition(body.material_composition)
         payload["processRules"]["videoDuration"] = max(5, min(int(body.video_duration or 30), 300))
 
     if scene in {"virtualman", "oralMixCutting"}:

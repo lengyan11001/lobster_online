@@ -28,8 +28,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260813-dh-modal-v1',
-    scripts: '/static/js/personal-settings.js?v=20260813-dh-modal-v1',
+    html: '/static/views/personal-settings.html?v=20260814-agent-memory-v1',
+    scripts: '/static/js/personal-settings.js?v=20260814-agent-memory-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -164,9 +164,9 @@
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20260805-v2',
-    css: '/static/css/multi-clip-mixer.css?v=20260805-v2',
-    scripts: '/static/js/multi-clip-mixer.js?v=20260805-v2',
+    html: '/static/views/multi-clip-mixer.html?v=20260814-v2',
+    css: '/static/css/multi-clip-mixer.css?v=20260814-v2',
+    scripts: '/static/js/multi-clip-mixer.js?v=20260814-v2',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });

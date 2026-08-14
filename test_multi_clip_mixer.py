@@ -5,6 +5,7 @@ import pytest
 
 from backend.app.api import multi_clip_mixer as mixer
 from backend.app.api import cutcli_templates_local as cutcli_templates
+from backend.app.api import shanjian_smart_clip as shanjian
 
 
 class _FakeSession:
@@ -31,11 +32,22 @@ def test_template_customization_uses_the_existing_local_cutcli_pipeline():
     assert "'/api/cutcli/local/templates'" in script
     assert "'/api/cutcli/local/tasks/start'" in script
     assert "'/api/cutcli/local/templates/jobs/'" in script
-    assert "'/api/shanjian-smart-clip/submit'" not in script
-    assert "'/api/shanjian-smart-clip/task'" not in script
+    assert "'/api/shanjian-smart-clip/submit'" in script
+    assert "'/api/shanjian-smart-clip/task'" in script
+    assert "function normalizeShanjianTitle" in script
+    assert "material_composition: 'order'" in script
+    assert "material_composition: 'sequential'" not in script
     assert "overlay_texts: readTemplateOverlayTexts()" in script
     assert "templateOverlayFields(state.selectedTemplate)" in script
     assert "overlayFieldMaxLength(field)" in script
+
+
+def test_shanjian_submit_params_match_provider_contract():
+    assert shanjian._normalize_submit_title("Hi") == "智能剪辑"
+    assert shanjian._normalize_submit_title("闪剪模板") == "闪剪模板"
+    assert shanjian._normalize_material_composition("sequential") == "order"
+    assert shanjian._normalize_material_composition("order") == "order"
+    assert shanjian._normalize_material_composition("bad-value") == "random"
 
 
 def test_ui_keeps_timeline_and_template_task_resumable():
@@ -43,15 +55,23 @@ def test_ui_keeps_timeline_and_template_task_resumable():
     script = (root / "static" / "js" / "multi-clip-mixer.js").read_text(encoding="utf-8")
     styles = (root / "static" / "css" / "multi-clip-mixer.css").read_text(encoding="utf-8")
 
-    assert "var timelineCursor = 0" in script
-    assert "timelineCursor = timelineEnd" in script
+    assert "var timelineCursor = 0" not in script
+    assert "随机抽段时会重新计算" in script
+    assert "已标记为整片原声音轨" in script
     assert "renderMode = modes.indexOf('ffmpeg') >= 0" in script
     assert "asset_id: baseResult.asset_id || ''" in script
+    assert "window.addMultiClipMixerAsset" in script
+    assert "addUploadedVideoClip(file, data, info)" in script
+    assert "function openSegmentForFile" not in script
+    assert "openSegmentForFile(state.pendingFiles.shift())" not in script
+    assert "mcmKeepAudioSwitch" not in script
+    assert "keep_original_audio: false" in script
     assert "PENDING_TEMPLATE_STORAGE_KEY" in script
     assert "resumePendingTemplateTask()" in script
     assert "网络暂时中断，5 秒后继续查询任务" in script
     assert "encodeURIComponent(taskId)" in script
-    assert "duration >= 3 && end - start < 3" in script
+    assert "openVideoPicker" in script
+    assert "mcmClipEmpty" in script
     assert 'button[data-action="edit"]' in styles
     assert "white-space: nowrap" in styles
 
@@ -79,6 +99,8 @@ def test_template_overlay_inputs_are_driven_by_template_metadata():
 
     assert 'id="mcmTemplateOverlayPanel"' in view
     assert 'id="mcmTemplateOverlayFields"' in view
+    assert 'id="mcmShanjianCopyPanel"' in view
+    assert "introduce_description: description" in script
     assert "field.label || key" in script
     assert "field.multiline" in script
     assert "truncateChars" in script
@@ -87,7 +109,7 @@ def test_template_overlay_inputs_are_driven_by_template_metadata():
     assert 'id="mcmTemplateLayoutLayer"' in view
     assert "defaultPositionOverrides" in script
     assert "setTargetPosition" in script
-    assert "position_overrides: state.positionOverrides || {}" in script
+    assert "position_overrides: templatePositionOverridesForSubmit()" in script
 
 
 def test_multi_clip_preview_reuses_template_studio_renderer():

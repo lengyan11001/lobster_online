@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,7 @@ from .auth import _ServerUser, get_current_user_for_local
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_POSTER_CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "multi_clip_mixer_posters"
 
 
 class ClipSegment(BaseModel):
@@ -69,6 +71,100 @@ def _run_process(args: List[str], *, timeout: int = 3600) -> None:
     if process.returncode != 0:
         error = (process.stderr or process.stdout or "ffmpeg 执行失败").strip()
         raise RuntimeError(error[-4000:])
+
+
+def _safe_cache_key(value: str) -> str:
+    raw = str(value or "").strip()
+    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in raw)[:96] or "asset"
+
+
+def _video_poster_path(asset_id: str, path: Path) -> Path:
+    stat = path.stat()
+    _POSTER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    safe_id = _safe_cache_key(asset_id)
+    current = _POSTER_CACHE_DIR / f"{safe_id}_{stat.st_size}_{int(stat.st_mtime)}.jpg"
+    for old in _POSTER_CACHE_DIR.glob(f"{safe_id}_*.jpg"):
+        if old != current:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    return current
+
+
+def _ensure_video_poster(asset_id: str, path: Path) -> Path:
+    target = _video_poster_path(asset_id, path)
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+    ffmpeg = find_ffmpeg()
+    base_args = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    try:
+        _run_process(
+            base_args
+            + [
+                "-ss",
+                "0.2",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=640:-2:force_original_aspect_ratio=decrease",
+                "-q:v",
+                "3",
+                str(target),
+            ],
+            timeout=120,
+        )
+    except Exception:
+        _run_process(
+            base_args
+            + [
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=640:-2:force_original_aspect_ratio=decrease",
+                "-q:v",
+                "3",
+                str(target),
+            ],
+            timeout=120,
+        )
+    if not target.is_file() or target.stat().st_size <= 0:
+        raise RuntimeError("视频封面生成失败")
+    return target
+
+
+@router.get("/api/multi-clip-mixer/assets/{asset_id}/poster.jpg")
+def multi_clip_asset_poster(
+    asset_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    db = SessionLocal()
+    download_dir: Optional[Path] = None
+    try:
+        path, _, media_type = resolve_asset_path(db, current_user.id, asset_id)
+        if media_type != "video":
+            raise HTTPException(status_code=400, detail="该素材不是视频，无法生成封面")
+        if path.parent.name.startswith("media_edit_dl_"):
+            download_dir = path.parent
+        poster = _ensure_video_poster(asset_id, path)
+        return FileResponse(
+            str(poster),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("[multi-clip-mixer] poster failed asset_id=%s user_id=%s err=%s", asset_id, current_user.id, exc)
+        raise HTTPException(status_code=500, detail=f"视频封面生成失败：{exc}") from exc
+    finally:
+        db.close()
+        if download_dir:
+            shutil.rmtree(download_dir, ignore_errors=True)
 
 
 def _probe_video(path: Path, ffprobe: str) -> Dict[str, Any]:
