@@ -94,8 +94,8 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "backoff_seconds": 30,
     "one_active_task_per_account": True,
     "auto_reply_interval_seconds": 1800,
-    "auto_reply_session_sleep_min": 20.0,
-    "auto_reply_session_sleep_max": 60.0,
+    "auto_reply_session_sleep_min": 0.0,
+    "auto_reply_session_sleep_max": 0.0,
     "auto_reply_char_sleep_min": 0.08,
     "auto_reply_char_sleep_max": 0.22,
     "auto_reply_punctuation_sleep_min": 0.35,
@@ -2038,6 +2038,24 @@ def _session_preview_matches_inbound(session: Dict[str, Any], inbound: Dict[str,
     return preview in content or content in preview
 
 
+def _looks_like_non_replyable_wechat_event(content: Any) -> bool:
+    text = re.sub(r"\s+", "", str(content or "")).strip()
+    if not text:
+        return True
+    call_markers = (
+        "已在其它设备接听",
+        "已在其他设备接听",
+        "通话中断",
+        "视频通话",
+        "语音通话",
+        "已取消",
+        "已拒绝",
+        "未接通",
+        "对方忙线",
+    )
+    return any(marker in text for marker in call_markers)
+
+
 def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
     return {
         "account_id": account_id,
@@ -2070,7 +2088,7 @@ def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) ->
     cfg["group_invite_enabled"] = bool(int(cfg.get("group_invite_enabled") or 0))
     cfg["running"] = bool(int(cfg.get("running") or 0))
     try:
-        cfg["interval_seconds"] = max(300, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
+        cfg["interval_seconds"] = max(1, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
     except Exception:
         cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
     if not isinstance(cfg.get("last_result"), dict):
@@ -2124,7 +2142,7 @@ def save_auto_reply_config(
     if not _is_local_account_id(account_id):
         raise RuntimeError("auto reply only supports local PC WeChat accounts")
     _find_local_account(account_id)
-    interval_seconds = max(300, int(interval_seconds or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
+    interval_seconds = max(1, int(interval_seconds or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
     current = get_auto_reply_config(account_id)
     invite_enabled = current.get("group_invite_enabled") if group_invite_enabled is None else bool(group_invite_enabled)
     selected_memory_ids = current.get("memory_doc_ids") if memory_doc_ids is None else memory_doc_ids
@@ -2222,7 +2240,7 @@ def _auto_reply_due(cfg: Dict[str, Any], *, force: bool = False) -> bool:
     last = _parse_iso_datetime(cfg.get("last_checked_at") or cfg.get("last_finished_at"))
     if not last:
         return True
-    interval = max(300, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
+    interval = max(1, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
     return (datetime.utcnow() - last).total_seconds() >= interval
 
 
@@ -2305,7 +2323,7 @@ async def _run_auto_reply_worker(account_id: str) -> None:
                     )
                 except Exception:
                     pass
-            interval = max(300, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
+            interval = max(1, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
             await asyncio.sleep(min(60, max(10, interval / 10)))
     finally:
         current = _AUTO_REPLY_WORKERS.get(account_id)
@@ -2320,46 +2338,21 @@ def _looks_like_group_session(item: Dict[str, Any]) -> bool:
         return True
     if chat_type in {"official", "subscription"}:
         return True
+    if peer_id in {"公众号", "服务号", "订阅号", "文件传输助手"}:
+        return True
     if "@chatroom" in peer_id.lower():
+        return True
+    if "群" in peer_id:
+        return True
+    preview = str(item.get("last_content") or "").strip()
+    first_line = next((line.strip() for line in preview.splitlines() if line.strip()), "")
+    if re.match(r"^[^:：]{1,40}[:：]", first_line):
         return True
     return False
 
 
 def _auto_reply_content_key(content: Any) -> str:
     return re.sub(r"\s+", "", str(content or "")).strip().lower()
-
-
-def _auto_reply_recently_handled_same_content(
-    account_id: str,
-    peer_id: str,
-    content: str,
-    *,
-    window_seconds: int = 6 * 3600,
-) -> bool:
-    key = _auto_reply_content_key(content)
-    if not key:
-        return False
-    cutoff = datetime.utcnow().timestamp() - max(60, int(window_seconds or 0))
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            select inbound_content, created_at from wechat_auto_reply_history
-            where account_id=? and peer_id=? and status in ('sending','sent','skipped')
-            order by created_at desc
-            limit 20
-            """,
-            (account_id, peer_id),
-        ).fetchall()
-    for row in rows:
-        if _auto_reply_content_key(row["inbound_content"]) != key:
-            continue
-        try:
-            handled_at = datetime.fromisoformat(str(row["created_at"] or "")).timestamp()
-        except Exception:
-            handled_at = datetime.utcnow().timestamp()
-        if handled_at >= cutoff:
-            return True
-    return False
 
 
 def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
@@ -2372,18 +2365,6 @@ def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict
     if not content:
         return None
     inbound_id = str(latest.get("provider_message_id") or latest.get("id") or _stable_key(peer_id, content, latest.get("created_at")))
-    with _connect() as conn:
-        existed = conn.execute(
-            """
-            select id from wechat_auto_reply_history
-            where account_id=? and peer_id=? and inbound_message_id=? limit 1
-            """,
-            (account_id, peer_id, inbound_id),
-        ).fetchone()
-    if existed:
-        return None
-    if _auto_reply_recently_handled_same_content(account_id, peer_id, content):
-        return None
     latest["auto_reply_inbound_id"] = inbound_id
     return latest
 
@@ -2403,32 +2384,36 @@ def _record_auto_reply_history(
         inbound_id = _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
     now = _now_iso()
     with _connect() as conn:
-        try:
-            conn.execute(
-                """
-                insert into wechat_auto_reply_history(
-                    id, account_id, peer_id, inbound_message_id, inbound_content, reply_content,
-                    category, status, error_message, created_at, updated_at
-                )
-                values(?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    uuid.uuid4().hex,
-                    account_id,
-                    peer_id,
-                    inbound_id,
-                    str(inbound.get("content") or "")[:4000],
-                    str(reply or "")[:4000],
-                    str(category or "")[:80],
-                    status,
-                    str(error or "")[:2000],
-                    now,
-                    now,
-                ),
+        conn.execute(
+            """
+            insert into wechat_auto_reply_history(
+                id, account_id, peer_id, inbound_message_id, inbound_content, reply_content,
+                category, status, error_message, created_at, updated_at
             )
-            return True
-        except sqlite3.IntegrityError:
-            return False
+            values(?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(account_id, peer_id, inbound_message_id) do update set
+                inbound_content=excluded.inbound_content,
+                reply_content=excluded.reply_content,
+                category=excluded.category,
+                status=excluded.status,
+                error_message=excluded.error_message,
+                updated_at=excluded.updated_at
+            """,
+            (
+                uuid.uuid4().hex,
+                account_id,
+                peer_id,
+                inbound_id,
+                str(inbound.get("content") or "")[:4000],
+                str(reply or "")[:4000],
+                str(category or "")[:80],
+                status,
+                str(error or "")[:2000],
+                now,
+                now,
+            ),
+        )
+        return True
 
 
 def _update_auto_reply_history(
@@ -2839,6 +2824,8 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "llm_skipped": "未回复",
         "no_unreplied_message": "无待回复消息",
         "duplicate": "已处理过",
+        "group_invite_queued": "拉群已排队",
+        "group_invite_deduped": "拉群已去重",
         "group_invite_not_executable": "拉群配置需调整",
         "failed": "回复失败",
         "skipped_group": "群聊已跳过",
@@ -2936,17 +2923,20 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
                 matched = "、".join(str(value) for value in (item.get("matched_group_keywords") or []) if str(value).strip())
                 reason = _auto_reply_report_line(item.get("group_invite_reason"), 200)
                 lines.append(f"   拉群判断：符合{f'（{matched}）' if matched else ''}{f'；{reason}' if reason else ''}")
+                welcome = _auto_reply_report_line(item.get("group_invite_welcome_message"), 200)
+                if welcome:
+                    lines.append(f"   建群欢迎话术：{welcome}")
     report["summary_text"] = "\n".join(lines)
     return report
 
 
 def _session_needs_auto_reply_check(item: Dict[str, Any]) -> bool:
     try:
-        if int(item.get("unread_count") or 0) > 0:
-            return True
+        if int(item.get("unread_count") or 0) <= 0:
+            return False
     except (TypeError, ValueError):
-        pass
-    return bool(item.get("message_preview_changed")) and bool(str(item.get("last_content") or "").strip())
+        return False
+    return not _looks_like_non_replyable_wechat_event(item.get("last_content"))
 
 
 async def run_auto_reply_once(
@@ -2999,6 +2989,7 @@ async def run_auto_reply_once(
         if invite_rule_doc_id
         else {"text": "", "document_count": 0, "titles": []}
     )
+    group_invite_welcome_message = str(cfg.get("group_invite_welcome_message") or "").strip()
     result: Dict[str, Any] = {
         "ok": True,
         "trigger": trigger,
@@ -3075,7 +3066,7 @@ async def run_auto_reply_once(
             private_unread.append(item)
         result["unread_private_count"] = len(private_unread)
         result["unread_message_count"] = sum(
-            max(1 if item.get("message_preview_changed") else 0, max(0, int(item.get("unread_count") or 0)))
+            max(0, int(item.get("unread_count") or 0))
             for item in private_unread
         )
         for idx, session in enumerate(private_unread[:max_sessions]):
@@ -3197,18 +3188,34 @@ async def run_auto_reply_once(
                         group_invite = {"ok": False, "error": str(group_exc)[:500]}
                         item_result["group_invite"] = group_invite
 
-                invite_not_executable = bool(
-                    llm_reply.get("should_invite_group")
-                    and group_invite
-                    and not (group_invite.get("queued") or group_invite.get("deduped"))
-                )
-                if invite_not_executable:
-                    invite_reason = str(group_invite.get("reason") or group_invite.get("error") or "unknown")
-                    invite_error_labels = {
-                        "missing_primary_contact": "未设置拉群主联系人",
-                        "primary_contact_is_customer": "拉群主联系人不能与当前客户相同",
-                    }
-                    invite_error = invite_error_labels.get(invite_reason, f"拉群任务未能创建：{invite_reason}")
+                if llm_reply.get("should_invite_group"):
+                    invite_ok = bool(group_invite and (group_invite.get("queued") or group_invite.get("deduped")))
+                    if not invite_ok:
+                        invite_reason = str((group_invite or {}).get("reason") or (group_invite or {}).get("error") or "unknown")
+                        invite_error_labels = {
+                            "missing_primary_contact": "未设置拉群主联系人",
+                            "primary_contact_is_customer": "拉群主联系人不能与当前客户相同",
+                        }
+                        invite_error = invite_error_labels.get(invite_reason, f"拉群任务未能创建：{invite_reason}")
+                        _record_auto_reply_history(
+                            account_id,
+                            actual_peer,
+                            inbound,
+                            reply="",
+                            category=str(llm_reply.get("category") or ""),
+                            status="skipped",
+                            error=invite_error,
+                        )
+                        result["skipped"] += 1
+                        item_result.update(
+                            {
+                                "status": "group_invite_not_executable",
+                                "reply_suppressed": True,
+                                "error": invite_error,
+                            }
+                        )
+                        result["items"].append(item_result)
+                        continue
                     _record_auto_reply_history(
                         account_id,
                         actual_peer,
@@ -3216,14 +3223,14 @@ async def run_auto_reply_once(
                         reply="",
                         category=str(llm_reply.get("category") or ""),
                         status="skipped",
-                        error=invite_error,
+                        error="已进入拉群流程，抑制普通回复",
                     )
-                    result["skipped"] += 1
                     item_result.update(
                         {
-                            "status": "group_invite_not_executable",
+                            "status": "group_invite_queued" if group_invite and group_invite.get("queued") else "group_invite_deduped",
                             "reply_suppressed": True,
-                            "error": invite_error,
+                            "group_invite_initiated": True,
+                            "group_invite_welcome_message": group_invite_welcome_message,
                         }
                     )
                     result["items"].append(item_result)
@@ -3575,35 +3582,39 @@ async def poll_updates(account_id: str, *, timeout_ms: Optional[int] = None) -> 
             sessions = _enrich_sessions_with_message_counts(account_id, list(session_data.get("items") or []))
             unread_sessions = [item for item in sessions if int(item.get("unread_count") or 0) > 0]
             session_by_peer = {str(item.get("peer_id") or ""): item for item in sessions}
-
-            data = await asyncio.to_thread(sync_local_messages, account_id, "", load_more_pages=0)
-            peer_id = str(data.get("peer_id") or "")
-            message_data = list_messages(account_id, peer_id, limit=50, offset=0) if peer_id else {"items": [], "real_message_count": 0}
-            messages = message_data.get("items") or []
-            current_left_session = session_by_peer.get(peer_id) if peer_id else None
-            current_left_unread_count = int((current_left_session or {}).get("unread_count") or 0)
+            target_session = unread_sessions[0] if unread_sessions else None
+            peer_id = str((target_session or {}).get("peer_id") or "")
+            data = {"new_message_count": 0, "has_new_message": False, "previous_latest_message": None, "latest_message": None}
+            message_data: Dict[str, Any] = {"items": [], "real_message_count": 0}
+            messages: List[Dict[str, Any]] = []
+            current_left_session = target_session
+            current_left_unread_count = int((target_session or {}).get("unread_count") or 0)
             session = None
             if peer_id:
-                with _connect() as conn:
-                    row = conn.execute(
-                        "select * from wechat_session_state where account_id=? and peer_id=? limit 1",
-                        (account_id, peer_id),
-                    ).fetchone()
-                session = _row_to_dict(row) if row else {"account_id": account_id, "peer_id": peer_id, "display_name": peer_id}
-                sessions = _enrich_sessions_with_message_counts(account_id, [session])
-                session = sessions[0] if sessions else session
+                data = await asyncio.to_thread(sync_local_messages, account_id, peer_id, load_more_pages=0)
+                peer_id = str(data.get("peer_id") or peer_id)
+                message_data = list_messages(account_id, peer_id, limit=50, offset=0) if peer_id else {"items": [], "real_message_count": 0}
+                messages = message_data.get("items") or []
+                current_left_session = session_by_peer.get(peer_id) or target_session
+                current_left_unread_count = int((current_left_session or {}).get("unread_count") or 0)
+                if peer_id:
+                    with _connect() as conn:
+                        row = conn.execute(
+                            "select * from wechat_session_state where account_id=? and peer_id=? limit 1",
+                            (account_id, peer_id),
+                        ).fetchone()
+                    session = _row_to_dict(row) if row else {"account_id": account_id, "peer_id": peer_id, "display_name": peer_id}
+                    sessions = _enrich_sessions_with_message_counts(account_id, [session])
+                    session = sessions[0] if sessions else session
             has_new_message = bool(data.get("has_new_message"))
             changed = [session] if (session and has_new_message) else []
-            group_sync = {"ok": False, "count": 0, "items": [], "message": ""}
-            try:
-                group_sync = await asyncio.to_thread(
-                    _sync_local_groups_from_all_sessions,
-                    account_id,
-                    limit=200,
-                    reason="poll_updates",
-                )
-            except Exception as group_exc:
-                group_sync = {"ok": False, "count": 0, "items": [], "message": str(group_exc)}
+            group_sync = {
+                "ok": True,
+                "skipped": True,
+                "count": 0,
+                "items": [],
+                "message": "接管轮询只处理未读消息，群列表同步已跳过",
+            }
             summary = _receive_summary(account_id, sessions, received_count=int(data.get("new_message_count") or 0))
             recovery_events = [
                 dict(item.get("driver_recovery") or {})
@@ -4833,15 +4844,21 @@ def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
     raw_text = _uia_control_text(cell)
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     peer_id = lines[0] if lines else ""
-    session_time = lines[-1] if len(lines) >= 2 else ""
-    content_lines = lines[1:-1] if len(lines) >= 3 else []
+    is_muted = bool(lines and lines[-1] == "消息免打扰")
+    time_index = len(lines) - (2 if is_muted and len(lines) >= 2 else 1)
+    session_time = lines[time_index] if len(lines) >= 2 and time_index >= 1 else ""
+    content_lines = lines[1:time_index] if len(lines) >= 3 and time_index >= 1 else []
+    pinned = bool(content_lines and content_lines[0] == "已置顶")
+    if pinned:
+        content_lines = content_lines[1:]
     last_content = "\n".join(content_lines).strip()
     unread_count = 0
     if content_lines:
-        m = re.match(r"^\[(\d+)条\]\s*$", content_lines[0])
+        m = re.match(r"^\[(\d+)条\]\s*(.*)$", content_lines[0])
         if m:
             unread_count = int(m.group(1))
-            last_content = "\n".join(content_lines[1:]).strip()
+            first_content = str(m.group(2) or "").strip()
+            last_content = "\n".join([x for x in [first_content, *content_lines[1:]] if x]).strip()
     return {
         "peer_id": peer_id,
         "display_name": peer_id,
@@ -4849,8 +4866,8 @@ def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
         "session_time": session_time,
         "unread_count": unread_count,
         "is_new": unread_count > 0,
-        "is_muted": False,
-        "raw": {"name": raw_text, "source": "pc_wechat_uia_sessions"},
+        "is_muted": is_muted,
+        "raw": {"name": raw_text, "source": "pc_wechat_uia_sessions", "pinned": pinned},
     }
 
 
@@ -4931,7 +4948,7 @@ def _uia_collect_visible_sessions(root: Any) -> List[Dict[str, Any]]:
     return [item for item in (_session_from_uia_cell(cell) for cell in _uia_session_cells(root)) if item.get("peer_id")]
 
 
-def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 2) -> Dict[str, Any]:
+def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 5) -> Dict[str, Any]:
     import uiautomation as auto  # type: ignore
 
     root = auto.ControlFromHandle(int(hwnd))
@@ -4947,7 +4964,7 @@ def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 2) -> Dict[str,
 
     seen: Dict[str, Dict[str, Any]] = {}
     rounds = 0
-    for idx in range(max(1, min(int(max_rounds or 2), 8))):
+    for idx in range(max(1, min(int(max_rounds or 5), 5))):
         rounds = idx + 1
         root = auto.ControlFromHandle(int(hwnd))
         cells = _uia_session_cells(root)
@@ -5044,7 +5061,7 @@ def _sync_local_sessions_from_uia(
     if passive:
         sessions = _uia_collect_visible_sessions(root)
     elif recent_only:
-        scan = _uia_collect_recent_sessions(hwnd)
+        scan = _uia_collect_recent_sessions(hwnd, max_rounds=5)
         sessions = list(scan.get("items") or [])
     else:
         scan = _uia_collect_all_sessions(hwnd)

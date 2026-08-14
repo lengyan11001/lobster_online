@@ -32,7 +32,7 @@ class PollBody(BaseModel):
 class AutoReplyConfigBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
     enabled: bool = False
-    interval_seconds: int = Field(default=1800, ge=300, le=86400)
+    interval_seconds: int = Field(default=1800, ge=1, le=86400)
     group_invite_enabled: Optional[bool] = None
     memory_doc_ids: Optional[List[str]] = Field(default=None, max_length=20)
     group_invite_memory_doc_id: Optional[str] = Field(default=None, max_length=64)

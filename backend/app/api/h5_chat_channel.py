@@ -1123,6 +1123,11 @@ def _local_api_url(path: str) -> str:
     return f"http://127.0.0.1:{port}{suffix}"
 
 
+def _local_api_unavailable_message(path: str, exc: Exception) -> str:
+    port = int(getattr(settings, "port", 8000) or 8000)
+    return f"本机微信接管服务不可达（127.0.0.1:{port}），无法访问 {path}：{exc}"
+
+
 def _extract_mobile_upload_attachments(content: str) -> tuple[str, List[str], List[str]]:
     raw = str(content or "")
     match = _MOBILE_UPLOAD_BLOCK_RE.search(raw)
@@ -1850,7 +1855,7 @@ async def _run_client_command(
     try:
         if action == "native_wechat_auto_reply_config":
             account_id = str(payload.get("account_id") or "pc-wechat-default").strip() or "pc-wechat-default"
-            interval_seconds = max(300, min(int(payload.get("interval_seconds") or 1800), 86400))
+            interval_seconds = max(1, min(int(payload.get("interval_seconds") or 1800), 86400))
             user_id = int(_decode_jwt_sub(jwt_token) or "0") or None
             cfg = native_wechat_engine.save_auto_reply_config(
                 account_id,
@@ -6237,7 +6242,10 @@ async def _post_local_api_json(
 ) -> Dict[str, Any]:
     timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
-        resp = await local.post(_local_api_url(path), json=body or {}, headers=_local_chat_headers(headers))
+        try:
+            resp = await local.post(_local_api_url(path), json=body or {}, headers=_local_chat_headers(headers))
+        except httpx.ConnectError as exc:
+            raise RuntimeError(_local_api_unavailable_message(path, exc)) from exc
     try:
         data = resp.json() if resp.content else {}
     except Exception:
@@ -6262,7 +6270,10 @@ async def _post_local_api_form(
         for key, value in (fields or {}).items()
     ]
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
-        resp = await local.post(_local_api_url(path), files=multipart, headers=_local_chat_headers(headers))
+        try:
+            resp = await local.post(_local_api_url(path), files=multipart, headers=_local_chat_headers(headers))
+        except httpx.ConnectError as exc:
+            raise RuntimeError(_local_api_unavailable_message(path, exc)) from exc
     try:
         data = resp.json() if resp.content else {}
     except Exception:
@@ -6282,7 +6293,10 @@ async def _get_local_api_json(
 ) -> Dict[str, Any]:
     timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
-        resp = await local.get(_local_api_url(path), headers=_local_chat_headers(headers))
+        try:
+            resp = await local.get(_local_api_url(path), headers=_local_chat_headers(headers))
+        except httpx.ConnectError as exc:
+            raise RuntimeError(_local_api_unavailable_message(path, exc)) from exc
     try:
         data = resp.json() if resp.content else {}
     except Exception:
@@ -7734,22 +7748,22 @@ async def _run_native_wechat_group_invite_followup(
         return {"ok": True, "skipped": True, "reason": "no_match", "message": "本轮没有会话命中拉群条件"}
     cfg = native_wechat_engine.get_auto_reply_config(account_id)
     primary_contact = str(
-        source.get("group_invite_primary_contact")
-        or cfg.get("group_invite_primary_contact")
+        cfg.get("group_invite_primary_contact")
+        or source.get("group_invite_primary_contact")
         or ""
     ).strip()
     if not primary_contact:
-        legacy_contacts = _workflow_target_list(source, "group_invite_manager_contacts", "group_invite_members")
-        legacy_contacts.extend(_workflow_target_list(cfg, "group_invite_contacts"))
+        legacy_contacts = _workflow_target_list(cfg, "group_invite_contacts")
+        legacy_contacts.extend(_workflow_target_list(source, "group_invite_manager_contacts", "group_invite_members"))
         primary_contact = next((item for item in legacy_contacts if str(item or "").strip()), "")
     primary_contact_name = str(
-        source.get("group_invite_primary_contact_name")
-        or cfg.get("group_invite_primary_contact_name")
+        cfg.get("group_invite_primary_contact_name")
+        or source.get("group_invite_primary_contact_name")
         or primary_contact
     ).strip()
     welcome_message = str(
-        source.get("group_invite_welcome_message")
-        or cfg.get("group_invite_welcome_message")
+        cfg.get("group_invite_welcome_message")
+        or source.get("group_invite_welcome_message")
         or ""
     ).strip()[:4000]
     if not primary_contact:

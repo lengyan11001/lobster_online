@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import types
@@ -117,7 +118,7 @@ async def test_auto_reply_can_skip_friend_requests_after_takeover_initial_scan(t
     assert result["friend_requests_checked"] == 0
 
 
-def test_session_preview_change_is_checked_without_an_unread_badge(tmp_path, monkeypatch):
+def test_session_preview_change_without_unread_badge_is_not_replied(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
     first = engine._persist_session(
@@ -146,10 +147,10 @@ def test_session_preview_change_is_checked_without_an_unread_badge(tmp_path, mon
     assert first["message_preview_changed"] is False
     assert engine._session_needs_auto_reply_check(first) is False
     assert changed["message_preview_changed"] is True
-    assert engine._session_needs_auto_reply_check(changed) is True
+    assert engine._session_needs_auto_reply_check(changed) is False
 
 
-def test_auto_reply_candidate_dedupes_same_content_when_message_id_changes(tmp_path, monkeypatch):
+def test_auto_reply_candidate_allows_same_content_when_message_id_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
     inbound = {
@@ -178,7 +179,80 @@ def test_auto_reply_candidate_dedupes_same_content_when_message_id_changes(tmp_p
         },
     )
 
-    assert engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a") is None
+    candidate = engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a")
+    assert candidate is not None
+    assert candidate["auto_reply_inbound_id"] == "provider-id-b"
+
+
+def test_auto_reply_candidate_allows_same_message_id_after_unread_trigger(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    inbound = {
+        "peer_id": "customer-a",
+        "direction": "in",
+        "content": "same inbound text",
+        "provider_message_id": "provider-id-a",
+        "id": "local-id-a",
+        "created_at": "2026-08-12T13:00:00",
+    }
+    assert engine._record_auto_reply_history(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {**inbound, "auto_reply_inbound_id": "provider-id-a"},
+        reply="reply once",
+        status="sent",
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_message_record",
+        lambda *_args, **_kwargs: {
+            **inbound,
+            "provider_message_id": "provider-id-a",
+            "id": "local-id-b",
+            "created_at": "2026-08-12T13:30:00",
+        },
+    )
+
+    candidate = engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a")
+    assert candidate is not None
+    assert candidate["auto_reply_inbound_id"] == "provider-id-a"
+
+
+def test_auto_reply_history_is_a_record_not_a_filter(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    inbound = {
+        "peer_id": "customer-a",
+        "direction": "in",
+        "content": "same inbound text",
+        "provider_message_id": "provider-id-a",
+        "id": "local-id-a",
+        "created_at": "2026-08-12T13:00:00",
+    }
+    assert engine._record_auto_reply_history(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {**inbound, "auto_reply_inbound_id": "provider-id-a"},
+        reply="first reply",
+        status="sent",
+    ) is True
+    assert engine._record_auto_reply_history(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {**inbound, "auto_reply_inbound_id": "provider-id-a"},
+        reply="second reply",
+        status="sent",
+    ) is True
+    with engine._connect() as conn:
+        row = conn.execute(
+            """
+            select reply_content from wechat_auto_reply_history
+            where account_id=? and peer_id=? and inbound_message_id=?
+            """,
+            (engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a", "provider-id-a"),
+        ).fetchone()
+
+    assert row["reply_content"] == "second reply"
 
 
 def test_auto_reply_candidate_rejects_self_message_even_if_direction_was_stored_as_in(tmp_path, monkeypatch):
@@ -228,7 +302,7 @@ def test_no_badge_scan_rejects_old_inbound_after_our_newer_preview():
     }
     inbound = {"content": "你好厉害", "direction": "in"}
 
-    assert engine._session_needs_auto_reply_check(session) is True
+    assert engine._session_needs_auto_reply_check(session) is False
     assert engine._session_preview_matches_inbound(session, inbound) is False
 
 
@@ -241,6 +315,15 @@ def test_no_badge_scan_accepts_truncated_inbound_preview():
     inbound = {"content": "我想了解一下你们的企业版价格和服务范围", "direction": "in"}
 
     assert engine._session_preview_matches_inbound(session, inbound) is True
+
+
+def test_auto_reply_only_processes_unread_non_call_sessions():
+    assert engine._session_needs_auto_reply_check(
+        {"last_content": "客户刚发来的新消息", "unread_count": 1}
+    ) is True
+    assert engine._session_needs_auto_reply_check(
+        {"last_content": "已在其它设备接听", "unread_count": 1}
+    ) is False
 
 
 def test_moments_publish_uses_shared_wechat_ui_lock(monkeypatch):
@@ -531,6 +614,137 @@ async def test_poll_reports_driver_failure_instead_of_false_success(monkeypatch)
     assert result["driver_recovered"] is False
     assert result["driver_retry_count"] == 1
     assert result["error"] == "stale UIA after retry"
+
+
+def test_recent_session_sync_uses_five_page_limit(monkeypatch):
+    captured = {}
+
+    fake_uia = types.SimpleNamespace(ControlFromHandle=lambda _hwnd: object())
+
+    def fake_collect_recent_sessions(hwnd, *, max_rounds=5):
+        captured["hwnd"] = hwnd
+        captured["max_rounds"] = max_rounds
+        return {
+            "items": [
+                {
+                    "peer_id": "today-session",
+                    "display_name": "today-session",
+                    "last_content": "你好",
+                    "session_time": "2026-08-14 09:00",
+                    "unread_count": 1,
+                    "is_new": True,
+                }
+            ],
+            "rounds": 2,
+            "completed": False,
+        }
+
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_uia)
+    monkeypatch.setattr(engine, "_module_available", lambda _name: True)
+    monkeypatch.setattr(engine, "_local_wechat_hwnd", lambda _account_id="": 123)
+    monkeypatch.setattr(engine, "_ensure_local_tab", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "_uia_collect_recent_sessions", fake_collect_recent_sessions)
+    monkeypatch.setattr(engine, "_persist_session", lambda _account_id, session, **_kwargs: {"changed": True, **session})
+
+    result = engine._sync_local_sessions_from_uia(engine.LOCAL_DEFAULT_ACCOUNT_ID, recent_only=True)
+
+    assert captured["hwnd"] == 123
+    assert captured["max_rounds"] == 5
+    assert result["recent_only"] is True
+    assert result["source"] == "pc_wechat_uia_sessions_recent"
+    assert result["count"] == 1
+
+
+def test_recent_session_collect_does_not_stop_on_yesterday_label(monkeypatch):
+    class FakeCell:
+        def __init__(self, text: str):
+            self.Name = text
+            self.ClassName = "mmui::ChatSessionCell"
+            self.BoundingRectangle = None
+
+    pages = [
+        [FakeCell("A\n今天 10:00")],
+        [FakeCell("B\n昨天 12:45")],
+        [FakeCell("C\n08/07")],
+        [FakeCell("D\n星期六")],
+        [FakeCell("E\n08/04")],
+    ]
+    state = {"page": 0}
+
+    class FakeScrollTarget:
+        def WheelUp(self, wheelTimes=1):
+            return None
+
+        def WheelDown(self, wheelTimes=1):
+            state["page"] = min(state["page"] + 1, len(pages) - 1)
+            return None
+
+    fake_uia = types.SimpleNamespace(ControlFromHandle=lambda _hwnd: object())
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_uia)
+    monkeypatch.setattr(engine, "_uia_session_cells", lambda _root: pages[state["page"]])
+    monkeypatch.setattr(engine, "_uia_scroll_target_from_cells", lambda _cells, _root: FakeScrollTarget())
+
+    result = engine._uia_collect_recent_sessions(123, max_rounds=5)
+
+    assert result["rounds"] == 5
+    assert [item["peer_id"] for item in result["items"]] == ["A", "B", "C", "D", "E"]
+
+
+def test_uia_session_cell_parses_inline_unread_badge_and_mute_label():
+    class FakeCell:
+        Name = "雅涛花园纯业主\n[6条] 李华健: [文件] 8.14号 外贸实单采购.pdf\n14:56\n消息免打扰"
+        ClassName = "mmui::ChatSessionCell"
+
+    item = engine._session_from_uia_cell(FakeCell())
+
+    assert item["peer_id"] == "雅涛花园纯业主"
+    assert item["unread_count"] == 6
+    assert item["is_new"] is True
+    assert item["is_muted"] is True
+    assert item["session_time"] == "14:56"
+    assert item["last_content"] == "李华健: [文件] 8.14号 外贸实单采购.pdf"
+
+
+def test_auto_reply_skips_non_private_sessions_before_opening_chat():
+    assert engine._looks_like_group_session({"peer_id": "服务号", "last_content": "通知", "unread_count": 2}) is True
+    assert engine._looks_like_group_session({"peer_id": "客户交流群", "last_content": "你好", "unread_count": 1}) is True
+    assert engine._looks_like_group_session({"peer_id": "客户A", "last_content": "你好", "unread_count": 1}) is False
+
+
+@pytest.mark.asyncio
+async def test_poll_scans_recent_pages_but_only_reads_unread(monkeypatch):
+    called = {"sessions_kwargs": None, "messages": 0}
+
+    def sync_sessions(*_args, **kwargs):
+        called["sessions_kwargs"] = dict(kwargs)
+        return {
+            "items": [
+                {
+                    "peer_id": "later-page-session",
+                    "display_name": "later-page-session",
+                    "last_content": "历史记录",
+                    "session_time": "2026-08-14 10:00:00",
+                    "unread_count": 0,
+                    "is_new": False,
+                }
+            ]
+        }
+
+    def sync_messages(*_args, **_kwargs):
+        called["messages"] += 1
+        raise AssertionError("sync_local_messages should not run without unread sessions")
+
+    monkeypatch.setattr(engine, "init_db", lambda: None)
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {})
+    monkeypatch.setattr(engine, "sync_local_sessions", sync_sessions)
+    monkeypatch.setattr(engine, "sync_local_messages", sync_messages)
+
+    result = await engine.poll_updates(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+
+    assert called["sessions_kwargs"]["recent_only"] is True
+    assert called["messages"] == 0
+    assert result["unread_session_count"] == 0
+    assert result["group_sync"]["skipped"] is True
 
 
 def test_extract_mainland_mobile_numbers_only_reads_customer_message_fields():
@@ -1049,6 +1263,81 @@ async def test_group_invite_waits_for_parent_then_creates_group(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_group_invite_prefers_platform_account_config_over_source(monkeypatch):
+    async def resolve_parent(*args, **kwargs):
+        return [
+            {
+                "result_payload": {
+                    "local_result": {
+                        "items": [
+                            {
+                                "peer_id": "customer-a",
+                                "display_name": "客户A",
+                                "inbound_message_id": "message-a",
+                                "should_invite_group": True,
+                                "matched_group_keywords": ["预约体验"],
+                                "group_invite_reason": "客户明确要求预约体验",
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+
+    calls = []
+
+    async def post_local(path, body, **kwargs):
+        calls.append((path, body))
+        return {"ok": True, "task": {"id": "group-task"}}
+
+    monkeypatch.setattr(channel, "_resolve_parent_workflow_results", resolve_parent)
+    monkeypatch.setattr(channel.asyncio, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(
+        channel.native_wechat_engine,
+        "get_auto_reply_config",
+        lambda _account_id: {
+            "group_invite_primary_contact": "九变",
+            "group_invite_primary_contact_name": "九变",
+            "group_invite_welcome_message": "这是平台账号配置的欢迎语。",
+        },
+    )
+
+    result = await channel._run_native_wechat_group_invite_followup(
+        {
+            "source_workflow_node_id": "wechat-private",
+            "parent_wait_seconds": 0,
+            "parent_poll_seconds": 15,
+            "group_invite_primary_contact": "军争",
+            "group_invite_primary_contact_name": "军争",
+            "group_invite_welcome_message": "旧的节点值。",
+        },
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=object(),
+        base="https://example.com",
+        current_item={},
+    )
+
+    assert calls == [
+        (
+            "/api/native-wechat/groups/create",
+            {
+                "account_id": "pc-wechat-default",
+                "contacts": ["customer-a", "九变"],
+                "welcome_message": "这是平台账号配置的欢迎语。",
+                "dedup_key": "",
+                "source_peer_id": "customer-a",
+                "source_inbound_message_id": "message-a",
+                "group_invite_reason": "客户明确要求预约体验",
+                "matched_group_keywords": ["预约体验"],
+            },
+        )
+    ]
+    assert result["queued"] == 1
+
+
+@pytest.mark.asyncio
 async def test_group_invite_reports_missing_companion_contact(monkeypatch):
     async def resolve_parent(*args, **kwargs):
         return [
@@ -1104,6 +1393,32 @@ def test_auto_reply_config_preserves_memory_when_only_toggle_changes(tmp_path, m
     assert second["group_invite_primary_contact"] == "销售经理"
     assert second["group_invite_primary_contact_name"] == "王经理"
     assert second["group_invite_welcome_message"].startswith("您好")
+
+
+def test_auto_reply_config_allows_short_intervals(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"account_id": _account_id})
+    monkeypatch.setattr(engine, "ensure_auto_reply_worker", lambda *args, **kwargs: None)
+
+    cfg = engine.save_auto_reply_config(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        enabled=False,
+        interval_seconds=15,
+    )
+
+    assert cfg["interval_seconds"] == 15
+    assert engine._auto_reply_due(
+        {
+            "interval_seconds": 15,
+            "last_checked_at": (datetime.utcnow() - timedelta(seconds=16)).isoformat(),
+        }
+    ) is True
+    assert engine._auto_reply_due(
+        {
+            "interval_seconds": 15,
+            "last_checked_at": (datetime.utcnow() - timedelta(seconds=14)).isoformat(),
+        }
+    ) is False
 
 
 @pytest.mark.asyncio
@@ -1273,6 +1588,93 @@ async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, mon
     assert result["items"][0]["status"] == "group_invite_not_executable"
     assert result["items"][0]["reply_suppressed"] is True
     assert "不能与当前客户相同" in result["items"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_group_invite_success_keeps_default_welcome_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(
+        engine,
+        "_load_auto_reply_memory_context",
+        lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
+    )
+    monkeypatch.setattr(
+        engine,
+        "get_auto_reply_config",
+        lambda _account_id: {
+            "enabled": True,
+            "group_invite_enabled": True,
+            "group_invite_primary_contact": "销售经理",
+            "group_invite_primary_contact_name": "王经理",
+            "group_invite_welcome_message": "您好，我把王经理拉进群了。",
+            "memory_doc_ids": [],
+            "group_invite_memory_doc_id": "",
+            "group_invite_keywords": "预约体验",
+            "group_invite_contacts": ["销售经理"],
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "sync_local_sessions",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "peer_id": "张老师",
+                    "display_name": "张老师",
+                    "last_content": "行",
+                    "unread_count": 1,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: {"peer_id": "张老师", "chat_info": {"chat_type": "direct"}},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_auto_reply_candidate",
+        lambda *_args, **_kwargs: {
+            "peer_id": "张老师",
+            "direction": "in",
+            "content": "行",
+            "auto_reply_inbound_id": "message-a",
+        },
+    )
+    monkeypatch.setattr(engine, "_recent_conversation_text", lambda *_args, **_kwargs: "我: 我来建个群\n对方: 行")
+
+    async def reply(**_kwargs):
+        return {
+            "should_reply": True,
+            "reply": "好的，我这就建群",
+            "category": "cooperation",
+            "should_invite_group": True,
+            "matched_group_keywords": ["明确同意拉群"],
+            "group_invite_reason": "客户已同意",
+        }
+
+    async def queue(*_args, **_kwargs):
+        return {"ok": True, "queued": True, "deduped": False, "task_id": "group-task"}
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm", reply)
+    monkeypatch.setattr(engine, "_queue_auto_reply_group_invite", queue)
+    monkeypatch.setattr(
+        engine,
+        "_send_text_local_slow",
+        lambda *_args, **_kwargs: pytest.fail("group invite success should not send a separate customer reply"),
+    )
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["replied"] == 0
+    assert result["group_invite_queued"] == 1
+    assert result["items"][0]["status"] == "group_invite_queued"
+    assert result["items"][0]["group_invite_welcome_message"] == "您好，我把王经理拉进群了。"
 
 
 @pytest.mark.asyncio
