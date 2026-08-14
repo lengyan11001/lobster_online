@@ -490,6 +490,7 @@
         theme: currentTheme(),
         include_images: wantsImages,
         image_model: 'gpt-image-2',
+        image_style: field('wechatArticleImageStyle') ? field('wechatArticleImageStyle').value.trim() : '',
         image_aspect_ratio: field('wechatArticleImageRatio') ? field('wechatArticleImageRatio').value : '3:2',
         image_count: imageCount
       }, selectedImagePayload()))

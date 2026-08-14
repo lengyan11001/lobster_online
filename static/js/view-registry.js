@@ -45,7 +45,7 @@
 
   window.registerLobsterView('wechat-article', {
     html: '/static/views/wechat-article.html',
-    scripts: '/static/js/wechat-article.js?v=20260724-wechat-init-fix',
+    scripts: '/static/js/wechat-article.js?v=20260814-wechat-image-style',
     init: 'loadWechatArticlePage',
     cache: 'reload'
   });

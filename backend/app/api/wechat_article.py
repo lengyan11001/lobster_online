@@ -96,6 +96,7 @@ class WechatArticleGenerateIn(BaseModel):
     theme: str = "professional-clean"
     include_images: bool = False
     image_model: str = "gpt-image-2"
+    image_style: str = ""
     image_aspect_ratio: str = "3:2"
     image_count: int = 3
     selected_image_urls: List[str] = Field(default_factory=list)
@@ -121,6 +122,7 @@ class WechatArticlePipelineIn(BaseModel):
     theme: str = "professional-clean"
     include_images: bool = True
     image_model: str = "gpt-image-2"
+    image_style: str = ""
     image_aspect_ratio: str = "16:9"
     image_count: int = 3
     selected_image_urls: List[str] = Field(default_factory=list)
@@ -368,6 +370,7 @@ def _article_paragraph_contexts(markdown: str, title: str = "", max_count: int =
 def _build_distinct_article_image_prompt(
     *,
     title: str,
+    user_style: str,
     global_style: str,
     paragraph_context: str,
     image_role: str,
@@ -382,9 +385,11 @@ def _build_distinct_article_image_prompt(
     ]
     plan = scene_plans[image_index % len(scene_plans)]
     paragraph = (paragraph_context or title or global_style or "").strip()
+    user_style = (user_style or "").strip()
     style = (global_style or "").strip()
     return (
         "Create one WeChat official account article illustration.\n"
+        f"User visual style requirement, highest priority: {user_style or 'not specified'}\n"
         f"Article title for context only: {title or 'untitled article'}\n"
         f"Paragraph to illustrate, this is the main subject: {paragraph}\n"
         f"Image role: {image_role}\n"
@@ -759,6 +764,7 @@ async def _generate_article_images(
     count: int,
     paragraph_contexts: Optional[List[str]] = None,
     title: str = "",
+    user_style: str = "",
 ) -> tuple[List[str], List[str]]:
     count = _clamp_image_count(count)
     base_prompt = (prompt or "").strip()
@@ -788,15 +794,17 @@ async def _generate_article_images(
         )
         prompt_i = _build_distinct_article_image_prompt(
             title=title,
+            user_style=user_style,
             global_style=base_prompt,
             paragraph_context=context,
             image_role=role,
             image_index=idx,
         )
         logger.info(
-            "[wechat-article] generate paragraph image idx=%s title=%s context=%s prompt=%s",
+            "[wechat-article] generate paragraph image idx=%s title=%s user_style=%s context=%s prompt=%s",
             idx + 1,
             (title or "")[:80],
+            (user_style or "")[:120],
             (context or "")[:180],
             prompt_i[:500],
         )
@@ -1448,6 +1456,7 @@ async def generate_wechat_article(
             count=body.image_count,
             paragraph_contexts=paragraph_contexts,
             title=article_title,
+            user_style=body.image_style,
         )
         image_url = image_urls[0] if image_urls else ""
         image_error = "；".join(image_errors[:3])
@@ -1649,6 +1658,7 @@ async def run_wechat_article_pipeline(
             theme=theme_name,
             include_images=body.include_images,
             image_model=body.image_model or "gpt-image-2",
+            image_style=body.image_style,
             image_aspect_ratio=body.image_aspect_ratio or "16:9",
             image_count=body.image_count or 3,
             selected_image_urls=body.selected_image_urls,
