@@ -1,7 +1,7 @@
 {
-  "version": "1.0.169",
-  "build": 213,
-  "applied_at": "2026-08-14T13:26:20+08:00",
-  "note": "multi clip mixer and template sync",
-  "bundle_sha256": "7eb1f42f3252b91cc4e83a7dcbefa4980fff33bb8ceed4927bd6e634f6c642ab"
+  "version": "1.0.170",
+  "build": 214,
+  "applied_at": "2026-08-14T18:23:01+08:00",
+  "note": "h5 group invite config precedence",
+  "bundle_sha256": "7fb6d15e12d4c8eefcb45c227979f749737de440837b4f6b0621c84452df73d1"
 }
