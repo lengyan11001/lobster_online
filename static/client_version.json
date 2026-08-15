@@ -1,7 +1,7 @@
 {
-  "version": "1.0.176",
-  "build": 220,
-  "applied_at": "2026-08-16T00:10:01+08:00",
-  "note": "fix: recover interrupted local requests and WeChat sends",
-  "bundle_sha256": "e834677a78590d2bf7abbb0d5114d0ccd7e03d8d7cd5c241372ac4b52ef69b78"
+  "version": "1.0.177",
+  "build": 221,
+  "applied_at": "2026-08-16T01:06:54+08:00",
+  "note": "fix: stabilize native wechat takeover",
+  "bundle_sha256": "d30f697e1119abfa1d93a560f2018bc2824e72109cdc5d0286652f4d10064324"
 }
