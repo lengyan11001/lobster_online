@@ -1,7 +1,7 @@
 {
-  "version": "1.0.175",
-  "build": 219,
-  "applied_at": "2026-08-15T21:59:55+08:00",
-  "note": "fix: prevent duplicate group invite after verified creation",
-  "bundle_sha256": "90d486abb700a0a1124095155d28bed80170cd310551b919e86f8f47b77da754"
+  "version": "1.0.176",
+  "build": 220,
+  "applied_at": "2026-08-16T00:10:01+08:00",
+  "note": "fix: recover interrupted local requests and WeChat sends",
+  "bundle_sha256": "e834677a78590d2bf7abbb0d5114d0ccd7e03d8d7cd5c241372ac4b52ef69b78"
 }
