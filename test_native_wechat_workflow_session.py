@@ -12,6 +12,47 @@ from backend.app.api import h5_chat_channel as channel
 from backend.app.services import native_wechat_engine as engine
 
 
+@pytest.mark.asyncio
+async def test_takeover_does_not_mark_skipped_running_as_completed(monkeypatch):
+    async def post_local(path, payload, *, headers, timeout_seconds):
+        assert path == "/api/native-wechat/auto-reply/run-once"
+        return {"ok": True, "skipped": True, "reason": "running", "config": {"running": True}}
+
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id=engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        headers={},
+        cloud=None,
+        base="",
+        run_id="run-id",
+        session_seconds=30,
+        interval_seconds=15,
+    )
+
+    assert result["ok"] is False
+    assert result["completed_rounds"] == 0
+    assert result["stop_reason"] == "local_wechat_busy"
+    assert result["failed"] == 1
+
+
+def test_group_picker_rejects_normal_chat_root(monkeypatch):
+    monkeypatch.setattr(engine, "_uia_foreground_or_main_root", lambda _hwnd: "chat-root")
+    monkeypatch.setattr(engine, "_uia_control_class", lambda _root: "mmui::ChatWindow")
+    monkeypatch.setattr(engine, "_uia_find_by_names", lambda *args, **kwargs: None)
+
+    assert engine._group_picker_root(123) is None
+    assert engine._find_group_picker_search_edit(None) is None
+
+
+def test_group_picker_accepts_session_picker_root(monkeypatch):
+    picker_root = object()
+    monkeypatch.setattr(engine, "_uia_foreground_or_main_root", lambda _hwnd: picker_root)
+    monkeypatch.setattr(engine, "_uia_control_class", lambda _root: "mmui::SessionPickerWindow")
+
+    assert engine._group_picker_root(123) is picker_root
+
+
 def test_friend_request_action_only_matches_pending_status_suffix():
     assert engine._friend_request_action_label("Alice\u6211\u662f Alice\u63a5\u53d7") == "\u63a5\u53d7"
     assert engine._friend_request_action_label("Bob requested to connect Accept") == "Accept"
@@ -570,25 +611,32 @@ def test_local_driver_read_recovers_and_retries_once(monkeypatch):
     assert result["driver_retry_count"] == 1
 
 
-def test_local_driver_send_failure_is_not_retried(monkeypatch):
+def test_local_driver_send_failure_is_retried_after_driver_recovery(monkeypatch):
     calls = []
     monkeypatch.setattr(engine, "_prepare_local_automation_thread", lambda: {})
     monkeypatch.setattr(
         engine,
         "_recover_local_wechat_driver",
-        lambda *_args, **_kwargs: pytest.fail("send failure must not trigger a whole-operation retry"),
+        lambda *_args, **_kwargs: {"ok": True, "attempted": True},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_mark_local_driver_recovery",
+        lambda _account_id, recovery, **kwargs: {**recovery, **kwargs},
     )
 
     def send_once(*_args, **_kwargs):
         calls.append("send")
-        raise RuntimeError("send result unknown")
+        if len(calls) == 1:
+            raise RuntimeError("send result unknown")
+        return {"ok": True, "verified": True}
 
     monkeypatch.setattr(engine, "_send_text_local_slow_once", send_once)
 
-    with pytest.raises(RuntimeError, match="send result unknown"):
-        engine._send_text_local_slow(engine.LOCAL_DEFAULT_ACCOUNT_ID, "Alice", "hello")
+    result = engine._send_text_local_slow(engine.LOCAL_DEFAULT_ACCOUNT_ID, "Alice", "hello")
 
-    assert calls == ["send"]
+    assert calls == ["send", "send"]
+    assert result["driver_recovered"] is True
 
 
 def test_typed_message_clicks_send_and_verifies_new_outbound(monkeypatch):
@@ -1225,7 +1273,7 @@ async def test_takeover_session_stops_before_next_scan_when_slot_owner_changes(m
         return next(event_statuses)
 
     async def post_local(*_args, **_kwargs):
-        local_calls.append(True)
+        local_calls.append(_args[0] if _args else "")
         return {"ok": True, "items": []}
 
     monkeypatch.setattr(channel, "_post_task_event", post_event)
@@ -1242,7 +1290,7 @@ async def test_takeover_session_stops_before_next_scan_when_slot_owner_changes(m
         session_seconds=1800,
     )
 
-    assert local_calls == []
+    assert local_calls == ["/api/native-wechat/auto-reply/stop"]
     assert result["completed_rounds"] == 0
     assert result["ok"] is False
     assert result["stop_reason"] == "slot_ownership_changed"
@@ -1258,7 +1306,7 @@ async def test_takeover_session_stops_after_current_round_when_cloud_run_is_canc
         return next(event_statuses)
 
     async def post_local(*_args, **_kwargs):
-        local_calls.append(True)
+        local_calls.append(_args[0] if _args else "")
         return {"ok": True, "items": []}
 
     async def no_sleep(seconds):
@@ -1279,7 +1327,10 @@ async def test_takeover_session_stops_after_current_round_when_cloud_run_is_canc
         session_seconds=1800,
     )
 
-    assert local_calls == [True]
+    assert local_calls == [
+        "/api/native-wechat/auto-reply/run-once",
+        "/api/native-wechat/auto-reply/stop",
+    ]
     assert sleeps == []
     assert result["completed_rounds"] == 1
     assert result["ok"] is False
@@ -1680,6 +1731,7 @@ async def test_auto_reply_match_immediately_queues_group_with_primary_contact(tm
     assert calls[0][2]["source_inbound_message_id"] == "message-a"
     assert calls[0][2]["dedup_key"].startswith("auto-invite-")
     assert calls[0][2]["use_current_chat"] is True
+    assert calls[0][2]["customer_wx_no"] == ""
     assert calls[0][2]["execute_now"] is True
     assert result["queued"] is True
     assert result["task_id"] == "group-task"

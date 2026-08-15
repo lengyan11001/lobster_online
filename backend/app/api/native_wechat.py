@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, Dict, List, Optional
 
@@ -160,6 +161,10 @@ def _merge_targets(*items: Any) -> List[str]:
     return out
 
 
+def _client_request_id(request: Request) -> str:
+    return str(request.headers.get("x-lobster-request-id") or "").strip()[:180]
+
+
 def _diagnostic_detail(operation: str, exc: Exception, *, account_id: str = "", extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     diag = engine.create_native_wechat_diagnostic(
         operation,
@@ -213,8 +218,11 @@ async def native_wechat_strategy(current_user: _ServerUser = Depends(get_current
 @router.get("/api/native-wechat/accounts")
 async def native_wechat_accounts(current_user: _ServerUser = Depends(get_current_user_for_local)):
     try:
-        items = engine.list_accounts()
-        result = {"ok": True, "items": items, "count": len(items), "driver": engine.local_driver_status(passive=True)}
+        items, driver = await asyncio.gather(
+            asyncio.to_thread(engine.list_accounts),
+            asyncio.to_thread(engine.local_driver_status, passive=True),
+        )
+        result = {"ok": True, "items": items, "count": len(items), "driver": driver}
         has_local_window = any(
             item.get("source") == "pc_wechat" and int(item.get("hwnd") or 0) > 0 and not item.get("offline")
             for item in items
@@ -229,7 +237,7 @@ async def native_wechat_accounts(current_user: _ServerUser = Depends(get_current
 @router.get("/api/native-wechat/local/status")
 async def native_wechat_local_status(current_user: _ServerUser = Depends(get_current_user_for_local)):
     try:
-        result = {"ok": True, **engine.local_driver_status()}
+        result = {"ok": True, **await asyncio.to_thread(engine.local_driver_status)}
         if not result.get("ok") or int(result.get("count") or 0) <= 0:
             return _attach_diagnostic_if_needed(result, "local_status", reason="local pc wechat window not detected")
         return result
@@ -256,7 +264,7 @@ async def native_wechat_local_diagnose(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        result = engine.diagnose_local_wechat_ui(account_id)
+        result = await asyncio.to_thread(engine.diagnose_local_wechat_ui, account_id)
         diag = engine.create_native_wechat_diagnostic(
             "local_diagnose",
             account_id=account_id,
@@ -380,13 +388,25 @@ async def native_wechat_run_auto_reply_once(
         _raise_native_wechat_error("auto_reply_run_once", exc, account_id=body.account_id)
 
 
+@router.post("/api/native-wechat/auto-reply/stop")
+async def native_wechat_stop_auto_reply(
+    body: AutoReplyRunBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    try:
+        return engine.request_auto_reply_stop(body.account_id)
+    except Exception as exc:
+        _raise_native_wechat_error("auto_reply_stop", exc, account_id=body.account_id)
+
+
 @router.post("/api/native-wechat/contacts/sync")
 async def native_wechat_sync_contacts(
     body: SyncBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        return engine.sync_local_contacts(body.account_id, limit=body.limit)
+        return await asyncio.to_thread(engine.sync_local_contacts, body.account_id, limit=body.limit)
     except Exception as exc:
         _raise_native_wechat_error("contacts_sync", exc, account_id=body.account_id)
 
@@ -397,7 +417,7 @@ async def native_wechat_sync_sessions(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        return engine.sync_local_sessions(body.account_id)
+        return await asyncio.to_thread(engine.sync_local_sessions, body.account_id)
     except Exception as exc:
         _raise_native_wechat_error("sessions_sync", exc, account_id=body.account_id)
 
@@ -419,7 +439,7 @@ async def native_wechat_sync_groups(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        return engine.sync_local_groups(body.account_id, limit=body.limit)
+        return await asyncio.to_thread(engine.sync_local_groups, body.account_id, limit=body.limit)
     except Exception as exc:
         _raise_native_wechat_error("groups_sync", exc, account_id=body.account_id)
 
@@ -437,6 +457,7 @@ async def native_wechat_groups(
 
 @router.post("/api/native-wechat/groups/create")
 async def native_wechat_create_group(
+    request: Request,
     body: CreateGroupBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
@@ -450,6 +471,7 @@ async def native_wechat_create_group(
             source_inbound_message_id=body.source_inbound_message_id,
             group_invite_reason=body.group_invite_reason,
             matched_group_keywords=body.matched_group_keywords,
+            client_request_id=_client_request_id(request),
         )
         return {
             "ok": True,
@@ -467,7 +489,11 @@ async def native_wechat_sync_group_members(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        return engine.sync_local_group_members(body.account_id, body.group_key)
+        return await asyncio.to_thread(
+            engine.sync_local_group_members,
+            body.account_id,
+            body.group_key,
+        )
     except Exception as exc:
         _raise_native_wechat_error("group_members_sync", exc, account_id=body.account_id)
 
@@ -521,7 +547,8 @@ async def native_wechat_fetch_messages(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        return engine.fetch_conversation_messages(
+        return await asyncio.to_thread(
+            engine.fetch_conversation_messages,
             body.account_id,
             body.peer_id,
             limit=body.limit,
@@ -539,7 +566,12 @@ async def native_wechat_sync_messages(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
-        return engine.sync_local_messages(body.account_id, body.peer_id, load_more_pages=body.load_more_pages)
+        return await asyncio.to_thread(
+            engine.sync_local_messages,
+            body.account_id,
+            body.peer_id,
+            load_more_pages=body.load_more_pages,
+        )
     except Exception as exc:
         _raise_native_wechat_error("messages_sync", exc, account_id=body.account_id)
 
@@ -587,6 +619,7 @@ async def native_wechat_upload_file(
 
 @router.post("/api/native-wechat/messages/send")
 async def native_wechat_send_text(
+    request: Request,
     body: SendTextBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
@@ -597,6 +630,7 @@ async def native_wechat_send_text(
             body.content,
             target_type=body.target_type,
             attachments=body.attachments,
+            client_request_id=_client_request_id(request),
         )
         return {
             "ok": True,
@@ -611,6 +645,7 @@ async def native_wechat_send_text(
 
 @router.post("/api/native-wechat/friends/add")
 async def native_wechat_add_friend(
+    request: Request,
     body: AddFriendBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
@@ -623,6 +658,7 @@ async def native_wechat_add_friend(
             tags=body.tags,
             permission=body.permission,
             prepare_only=body.prepare_only,
+            client_request_id=_client_request_id(request),
         )
         return {
             "ok": True,
@@ -636,6 +672,7 @@ async def native_wechat_add_friend(
 
 @router.post("/api/native-wechat/moments/like")
 async def native_wechat_moments_like(
+    request: Request,
     body: MomentsLikeBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
@@ -645,6 +682,7 @@ async def native_wechat_moments_like(
             _merge_targets(body.targets, body.contacts, body.names),
             dry_run=body.dry_run,
             max_scrolls=body.max_scrolls,
+            client_request_id=_client_request_id(request),
         )
         return {
             "ok": True,
@@ -677,6 +715,7 @@ async def native_wechat_moments_comment(
                 "user_id": current_user.id,
                 "installation_id": _installation_id_from_request(request, current_user.id),
             },
+            client_request_id=_client_request_id(request),
         )
         return {
             "ok": True,
@@ -692,6 +731,7 @@ async def native_wechat_moments_comment(
 
 @router.post("/api/native-wechat/moments/publish")
 async def native_wechat_moments_publish(
+    request: Request,
     body: MomentsPublishBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
@@ -703,6 +743,7 @@ async def native_wechat_moments_publish(
             attachments=body.attachments,
             media_type=body.media_type,
             visibility=body.visibility,
+            client_request_id=_client_request_id(request),
         )
         return {
             "ok": True,

@@ -163,6 +163,7 @@ douyin_stranger_message_state: Dict[str, object] = {
 }
 douyin_stranger_message_monitor_states: Dict[str, Dict[str, object]] = {}
 douyin_stranger_message_monitor_tasks_by_account: Dict[int, asyncio.Task] = {}
+douyin_h5_stranger_message_task_lock = asyncio.Lock()
 douyin_inbox_running = False
 douyin_inbox_stop_requested = False
 douyin_inbox_background_task: Optional[asyncio.Task] = None
@@ -3402,6 +3403,15 @@ def normalize_douyin_stranger_message_row(row: Dict) -> Dict:
         "reply_started_at": normalize_douyin_text(row.get("reply_started_at", "")),
         "reply_finished_at": normalize_douyin_text(row.get("reply_finished_at", "")),
         "reply_updated_at": normalize_douyin_text(row.get("reply_updated_at", "")),
+        "last_message_text": normalize_douyin_text(row.get("last_message_text", "")),
+        "last_message_is_user": (
+            bool(row.get("last_message_is_user"))
+            if row.get("last_message_is_user") is not None
+            else None
+        ),
+        "has_user_message": bool(row.get("has_user_message")) if row.get("has_user_message") is not None else None,
+        "h5_reply_fingerprint": normalize_douyin_text(row.get("h5_reply_fingerprint", "")),
+        "h5_reply_sent_at": normalize_douyin_text(row.get("h5_reply_sent_at", "")),
     }
     normalized["profile_url"] = ensure_douyin_profile_url(normalized)
     if not normalized["conversation_key"]:
@@ -3471,6 +3481,12 @@ def _build_douyin_stranger_message_reply_fields(row: Dict) -> Dict[str, object]:
         "reply_started_at": normalized.get("reply_started_at", ""),
         "reply_finished_at": normalized.get("reply_finished_at", ""),
         "reply_updated_at": normalized.get("reply_updated_at", ""),
+        "last_message_text": normalized.get("last_message_text", ""),
+        "last_message_is_user": normalized.get("last_message_is_user"),
+        "has_user_message": normalized.get("has_user_message"),
+        "h5_reply_fingerprint": normalized.get("h5_reply_fingerprint", ""),
+        "h5_reply_sent_at": normalized.get("h5_reply_sent_at", ""),
+        "phone_numbers": list(normalized.get("phone_numbers") or []),
     }
 
 
@@ -10853,7 +10869,7 @@ _DOUYIN_MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)1[\s-]*[3-9](?:[\s-]*\d){9}(?!\
 
 
 def extract_douyin_mainland_mobile_numbers(rows: List[Dict]) -> List[str]:
-    """Extract mainland mobile numbers from newly unread private messages."""
+    """Extract mainland mobile numbers from private-message rows and details."""
     numbers: List[str] = []
     seen: Set[str] = set()
     for row in rows or []:
@@ -10863,6 +10879,14 @@ def extract_douyin_mainland_mobile_numbers(rows: List[Dict]) -> List[str]:
             str(row.get(key) or "")
             for key in ("incoming_message", "preview_text", "content", "username")
         )
+        messages = row.get("messages") if isinstance(row.get("messages"), list) else []
+        for message in messages:
+            if isinstance(message, dict):
+                source += "\n" + str(message.get("text") or message.get("content") or "")
+            else:
+                source += "\n" + str(message or "")
+        stored_numbers = row.get("phone_numbers") if isinstance(row.get("phone_numbers"), list) else []
+        source += "\n" + "\n".join(str(item or "") for item in stored_numbers)
         for match in _DOUYIN_MAINLAND_MOBILE_RE.findall(source):
             number = re.sub(r"\D", "", match)
             if len(number) != 11 or number in seen:
@@ -10898,6 +10922,233 @@ async def _queue_douyin_wechat_friend_add(phone_numbers: List[str]) -> Dict[str,
             "targets": phone_numbers,
             "reason": str(exc),
         }
+
+
+def _h5_douyin_last_message_is_user(row: Dict) -> bool:
+    value = row.get("last_message_is_user") if isinstance(row, dict) else None
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "user", "incoming"}
+
+
+def _h5_douyin_reply_fingerprint(row: Dict) -> str:
+    normalized = normalize_douyin_stranger_message_row(row if isinstance(row, dict) else {})
+    key = stranger_message_row_key(normalized)
+    last_text = normalize_douyin_text(
+        normalized.get("last_message_text")
+        or normalized.get("incoming_message")
+        or normalized.get("preview_text")
+    )
+    if not key or not last_text:
+        return ""
+    return f"{key}|last:{last_text}"[:800]
+
+
+async def run_douyin_h5_stranger_message_task_once(
+    account_id: int = 0,
+    *,
+    max_conversations: int = 100,
+    fixed_message: str = "",
+    auto_reply_enabled: bool = True,
+    wechat_add_friend_enabled: bool = False,
+) -> Dict[str, object]:
+    """Run the H5 Douyin private-message node once without enabling its monitor."""
+    async with douyin_h5_stranger_message_task_lock:
+        requested_account_id = int(account_id or 0)
+        fixed_text = normalize_douyin_text(fixed_message)
+        if auto_reply_enabled and not fixed_text:
+            return {"status": "failed", "code": 400, "message": "H5 抖音私信接管缺少固定文案。"}
+
+        config = load_global_config()
+        account = (
+            get_douyin_account_by_id(requested_account_id, config)
+            if requested_account_id > 0
+            else get_active_douyin_account(config)
+        )
+        if not account:
+            return {
+                "status": "skipped",
+                "code": 400,
+                "message": "当前没有可用的抖音在线账号，请先登录。",
+                "reason": "no_online_account",
+            }
+        if str(account.get("status", "") or "").strip().lower() != "online":
+            return {
+                "status": "skipped",
+                "code": 400,
+                "message": f"账号 {account.get('id')} 还没有完成登录，请先检查或登录。",
+                "reason": "account_waiting_login",
+                "account_id": int(account.get("id", 0) or 0),
+            }
+
+        target_account_id = int(account.get("id", 0) or 0)
+        busy, busy_reason = is_douyin_stranger_message_monitor_busy(target_account_id)
+        if busy:
+            return {
+                "status": "skipped",
+                "code": 400,
+                "message": f"当前账号已有任务执行中：{busy_reason}。",
+                "reason": "account_busy",
+                "account_id": target_account_id,
+            }
+
+        limit = max(1, min(int(max_conversations or 100), 100))
+        scraper = create_douyin_message_scraper(account, config)
+        prepared_rows: List[Dict] = []
+        reply_rows: List[Dict] = []
+        phone_numbers: List[str] = []
+        seen_phones: Set[str] = set()
+        existing_rows = {
+            stranger_message_row_key(row): row
+            for row in collect_douyin_stranger_message_results(target_account_id)
+            if stranger_message_row_key(row)
+        }
+        qualifying_users = 0
+        skipped_without_user_last = 0
+        skipped_duplicate_reply = 0
+        started_at = _now_text()
+        try:
+            douyin_log(
+                f"[H5抖音私信接管] 开始一次性读取账号 {target_account_id}，最多 {limit} 条会话，不启用常驻监控",
+                "info",
+            )
+            rows = await scraper.collect_stranger_private_messages(
+                max_conversations=limit,
+                should_stop=lambda: False,
+                logger=douyin_log,
+                include_details=True,
+            )
+            for raw_row in rows if isinstance(rows, list) else []:
+                if not isinstance(raw_row, dict):
+                    continue
+                row = {**raw_row, "account_id": target_account_id}
+                key = stranger_message_row_key(row)
+                if not key:
+                    continue
+                existing = existing_rows.get(key) or {}
+                current_numbers = extract_douyin_mainland_mobile_numbers([row])
+                old_numbers = [
+                    str(item).strip()
+                    for item in (existing.get("phone_numbers") or [])
+                    if str(item).strip()
+                ]
+                merged_numbers = list(dict.fromkeys([*old_numbers, *current_numbers]))
+                row["phone_numbers"] = merged_numbers
+                prepared_rows.append(row)
+
+                if not _h5_douyin_last_message_is_user(row):
+                    skipped_without_user_last += 1
+                    continue
+                qualifying_users += 1
+                for phone in merged_numbers:
+                    if phone not in seen_phones:
+                        seen_phones.add(phone)
+                        phone_numbers.append(phone)
+
+                if merged_numbers or not auto_reply_enabled:
+                    continue
+                fingerprint = _h5_douyin_reply_fingerprint(row)
+                if not fingerprint:
+                    continue
+                if str(existing.get("h5_reply_fingerprint") or "").strip() == fingerprint:
+                    skipped_duplicate_reply += 1
+                    continue
+                reply_rows.append(row)
+
+            merge_douyin_stranger_message_results(target_account_id, prepared_rows)
+
+            reply_result: Dict[str, object] = {
+                "total": len(reply_rows),
+                "processed": 0,
+                "success": 0,
+                "failed": 0,
+                "stopped": False,
+            }
+            if reply_rows:
+                reply_result = await send_douyin_stranger_messages_for_monitor(
+                    account,
+                    reply_rows,
+                    fixed_text,
+                    reply_mode="fixed",
+                )
+
+                latest_rows = {
+                    stranger_message_row_key(row): row
+                    for row in collect_douyin_stranger_message_results(target_account_id)
+                    if stranger_message_row_key(row)
+                }
+                marker_rows: List[Dict] = []
+                for sent_row in reply_rows:
+                    latest = latest_rows.get(stranger_message_row_key(sent_row))
+                    if not latest or str(latest.get("reply_status") or "").strip().lower() != "sent":
+                        continue
+                    fingerprint = _h5_douyin_reply_fingerprint(sent_row)
+                    if not fingerprint:
+                        continue
+                    latest["h5_reply_fingerprint"] = fingerprint
+                    latest["h5_reply_sent_at"] = _now_text()
+                    marker_rows.append(latest)
+                if marker_rows:
+                    merge_douyin_stranger_message_results(target_account_id, marker_rows)
+
+            wechat_add_friend_result = (
+                await _queue_douyin_wechat_friend_add(phone_numbers)
+                if wechat_add_friend_enabled
+                else {"enabled": False, "queued": False, "targets": [], "reason": "disabled"}
+            )
+            reply_success = int(reply_result.get("success", 0) or 0)
+            reply_failed = int(reply_result.get("failed", 0) or 0)
+            message = (
+                f"H5 抖音私信接管完成：读取 {len(prepared_rows)}/{limit} 条会话，"
+                f"最后消息为用户 {qualifying_users} 条，发送固定文案成功 {reply_success} 条，失败 {reply_failed} 条，"
+                f"收集手机号 {len(phone_numbers)} 个。"
+            )
+            douyin_log(f"[H5抖音私信接管] {message}", "success")
+            return {
+                "status": "completed",
+                "code": 200,
+                "message": message,
+                "msg": message,
+                "summary": message,
+                "account_id": target_account_id,
+                "started_at": started_at,
+                "finished_at": _now_text(),
+                "mode": "h5_one_shot",
+                "total_conversations": len(prepared_rows),
+                "max_conversations": limit,
+                "processed_user_last": qualifying_users,
+                "skipped_last_message_not_user": skipped_without_user_last,
+                "skipped_duplicate_reply": skipped_duplicate_reply,
+                "reply": dict(reply_result),
+                "extracted_phone_numbers": phone_numbers,
+                "wechat_add_friend": wechat_add_friend_result,
+                "stats": {
+                    "total": len(prepared_rows),
+                    "processed": qualifying_users,
+                    "reply_total": int(reply_result.get("total", 0) or 0),
+                    "reply_success": reply_success,
+                    "reply_failed": reply_failed,
+                    "phone_numbers": len(phone_numbers),
+                },
+                "final_state": {
+                    "status": "completed",
+                    "total_conversations": len(prepared_rows),
+                    "processed_user_last": qualifying_users,
+                    "extracted_phone_numbers": phone_numbers,
+                    "wechat_add_friend": wechat_add_friend_result,
+                },
+            }
+        except Exception as exc:
+            douyin_log(f"[H5抖音私信接管] 一次性任务失败：{exc}", "error")
+            return {
+                "status": "failed",
+                "code": 500,
+                "message": str(exc),
+                "account_id": target_account_id,
+                "mode": "h5_one_shot",
+            }
+        finally:
+            await scraper.close()
 
 
 async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_type: str = "scheduled") -> Dict[str, object]:

@@ -2339,7 +2339,8 @@ function runAppViewInit(view) {
   return Promise.resolve();
 }
 
-function showAppView(view, sourceEl) {
+function showAppView(view, sourceEl, recoveryOptions) {
+  recoveryOptions = recoveryOptions || {};
   if (typeof window.closeAllPublishModals === 'function') window.closeAllPublishModals();
   if (view !== 'personal-settings' && typeof window.closePersonalSettingsOverlays === 'function') {
     window.closePersonalSettingsOverlays();
@@ -2396,8 +2397,15 @@ function showAppView(view, sourceEl) {
     });
   }).catch(function(err) {
     console.error('Failed to show view:', view, err);
+    var rawMessage = err && err.message ? err.message : String(err);
+    var isNetworkFailure = !!(err && err.lobsterNetworkError) || /Failed to fetch|NetworkError|Load failed|timed out|timeout|网络连接暂时中断/i.test(String(rawMessage || ''));
+    if (isNetworkFailure && !recoveryOptions.networkRetry) {
+      return new Promise(function(resolve) { window.setTimeout(resolve, 1200); }).then(function() {
+        return showAppView(requestedRoute, sourceEl, { networkRetry: true });
+      });
+    }
     var fallback = (typeof window.createLobsterViewError === 'function')
-      ? window.createLobsterViewError(view, err && err.message ? err.message : String(err))
+      ? window.createLobsterViewError(view, isNetworkFailure ? 'network recovery' : rawMessage)
       : null;
     document.querySelectorAll('.content-block').forEach(function(p) { p.classList.remove('visible'); });
     if (fallback) fallback.classList.add('visible');

@@ -289,17 +289,32 @@ async def upload_logs_diagnostics(
         headers["X-Installation-Id"] = installation_id
 
     url = f"{server_base}/api/diagnostics/upload"
+    resp = None
+    last_error = None
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                url,
-                headers=headers,
-                data={"client_info": json.dumps(summary, ensure_ascii=False)},
-                files={"file": (bundle_name, bundle_bytes, "application/zip")},
-            )
+            for attempt in range(3):
+                try:
+                    resp = await client.post(
+                        url,
+                        headers=headers,
+                        data={"client_info": json.dumps(summary, ensure_ascii=False)},
+                        files={"file": (bundle_name, bundle_bytes, "application/zip")},
+                    )
+                    if resp.status_code not in {408, 425, 429, 500, 502, 503, 504} or attempt >= 2:
+                        break
+                    last_error = f"upstream returned HTTP {resp.status_code}"
+                except httpx.HTTPError as exc:
+                    last_error = str(exc)
+                    if attempt >= 2:
+                        raise
+                await asyncio.sleep(1.0 if attempt == 0 else 2.0)
     except httpx.HTTPError as e:
-        logger.warning("[diagnostics] upload failed url=%s err=%s", url, e)
+        logger.warning("[diagnostics] upload failed after retries url=%s err=%s", url, last_error or e)
         raise HTTPException(status_code=502, detail=f"diagnostic upload failed: {e}") from e
+
+    if resp is None:
+        raise HTTPException(status_code=502, detail=f"diagnostic upload failed: {last_error or 'no response'}")
 
     try:
         payload = resp.json()

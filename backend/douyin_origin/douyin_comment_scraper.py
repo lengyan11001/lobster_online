@@ -3618,6 +3618,7 @@ class DouyinCommentScraper:
         should_stop: Optional[Callable[[], bool]] = None,
         logger: Optional[Callable[[str, str], None]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        include_details: bool = False,
     ) -> List[Dict]:
         limit = max(1, min(int(max_conversations or 100), 100))
         page = await self._new_page(logger=logger)
@@ -4192,12 +4193,17 @@ class DouyinCommentScraper:
                             });
                         }
                         const incoming = items.filter((item) => item.is_incoming);
-                        const latestIncoming = incoming.length ? incoming[incoming.length - 1].text : (items.length ? items[items.length - 1].text : '');
+                        const latestItem = items.length ? items[items.length - 1] : null;
+                        const latestIncoming = incoming.length ? incoming[incoming.length - 1].text : (latestItem?.text || '');
                         return {
                             username: headerName,
                             avatar_url: headerAvatar,
                             profile_url: readProfileUrl(),
                             incoming_message: latestIncoming,
+                            messages: items,
+                            last_message_text: latestItem?.text || '',
+                            last_message_is_user: latestItem ? Boolean(latestItem.is_incoming) : null,
+                            has_user_message: incoming.length > 0,
                         };
                     }
                     """
@@ -4320,6 +4326,39 @@ class DouyinCommentScraper:
                 }
                 if not str(merged.get("username", "") or "").strip():
                     merged["username"] = username
+
+                if include_details:
+                    try:
+                        opened, detail_reason = await open_direct_conversation(page, merged)
+                        if opened:
+                            await page.wait_for_timeout(700)
+                            detail = await extract_opened_conversation(page)
+                            if isinstance(detail, dict):
+                                merged.update(
+                                    {
+                                        "username": str(detail.get("username", "") or merged.get("username", "") or "").strip(),
+                                        "avatar_url": str(detail.get("avatar_url", "") or merged.get("avatar_url", "") or "").strip(),
+                                        "profile_url": str(detail.get("profile_url", "") or merged.get("profile_url", "") or "").strip(),
+                                        "incoming_message": str(detail.get("incoming_message", "") or merged.get("incoming_message", "") or "").strip(),
+                                        "messages": detail.get("messages") if isinstance(detail.get("messages"), list) else [],
+                                        "last_message_text": str(detail.get("last_message_text", "") or "").strip(),
+                                        "last_message_is_user": detail.get("last_message_is_user"),
+                                        "has_user_message": bool(detail.get("has_user_message")),
+                                    }
+                                )
+                        else:
+                            self._emit(
+                                logger,
+                                f"[抖音私信引流] 读取会话详情失败：{username or '-'}，原因：{detail_reason or '未找到目标会话'}",
+                                "warning",
+                            )
+                    except Exception as exc:
+                        self._emit(
+                            logger,
+                            f"[抖音私信引流] 读取会话详情失败：{username or '-'}，原因：{exc}",
+                            "warning",
+                        )
+
                 results.append(merged)
                 if progress_callback:
                     try:

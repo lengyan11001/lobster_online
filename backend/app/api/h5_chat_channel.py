@@ -65,6 +65,7 @@ _DOUYIN_ORIGIN_DIR = _BASE_DIR / "backend" / "douyin_origin"
 _RESULT_URL_RE = re.compile(r'https?://[^\s"\'<>\)\]]+', re.IGNORECASE)
 _H5_CLIENT_COMMAND_PREFIX = "__LOBSTER_H5_CLIENT_COMMAND__"
 _H5_CLIENT_BASE_CAPABILITIES = ("asset_video_split_v1",)
+_CLIENT_PROCESS_ID = f"{os.getpid()}-{uuid.uuid4().hex}"
 _SEEDANCE_TVC_CAPABILITY_ID = "comfly.seedance.tvc.pipeline"
 _SEEDANCE_TVC_DEFAULT_MODEL = "grok-imagine-video-1.5-preview"
 _SEEDANCE_TVC_DEFAULT_CHANNEL = "openmind"
@@ -366,6 +367,7 @@ def _headers(jwt_token: str, installation_id: str) -> Dict[str, str]:
     h = with_oem_brand_header({"Authorization": f"Bearer {jwt_token}"})
     if installation_id:
         h["X-Installation-Id"] = installation_id
+    h["X-Client-Process-Id"] = _CLIENT_PROCESS_ID
     h["X-Lobster-Chat-Turn-Billing"] = "pre_deduct_v1"
     return h
 
@@ -3805,6 +3807,14 @@ def _scheduled_douyin_result_payload(
             "users",
             "conversations",
             "conversation_scope",
+            "mode",
+            "total_conversations",
+            "processed_user_last",
+            "skipped_last_message_not_user",
+            "skipped_duplicate_reply",
+            "reply",
+            "extracted_phone_numbers",
+            "wechat_add_friend",
         ):
             value = result.get(key)
             if value not in (None, "", []):
@@ -4604,85 +4614,16 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         )
 
     if action == "stranger_message":
-        from douyin_api import (  # type: ignore
-            collect_douyin_stranger_message_results,
-            douyin_start_stranger_message_monitor,
-            run_douyin_stranger_message_monitor_cycle,
-        )
+        from douyin_api import run_douyin_h5_stranger_message_task_once  # type: ignore
 
-        before_rows = collect_douyin_stranger_message_results(account_id)
-        result = await douyin_start_stranger_message_monitor(
-            request={
-                "account_id": account_id,
-                "interval_minutes": _safe_int(source.get("interval_minutes") or 30) or 30,
-                "max_conversations": max_users,
-                "auto_reply_enabled": bool(source.get("auto_reply_enabled", True)),
-                "reply_mode": str(source.get("reply_mode") or "fixed").strip() or "fixed",
-                "message": str(source.get("message") or "").strip(),
-                "reply_prompt": str(source.get("reply_prompt") or "").strip(),
-                "contact_value": str(source.get("contact_value") or "").strip(),
-                "wechat_add_friend_enabled": bool(source.get("wechat_add_friend_enabled", False)),
-            }
+        result = await run_douyin_h5_stranger_message_task_once(
+            account_id=account_id,
+            max_conversations=100,
+            fixed_message=str(source.get("message") or "").strip(),
+            auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
+            wechat_add_friend_enabled=bool(source.get("wechat_add_friend_enabled", False)),
         )
-        if not isinstance(result, dict):
-            return {"code": 500, "msg": "抖音陌生人消息接管启动失败"}
-        if _safe_int(result.get("code")) != 200:
-            return dict(result)
-        monitor = result.get("monitor") if isinstance(result.get("monitor"), dict) else {}
-        target_account_id = _safe_int(monitor.get("account_id") or account_id)
-        if account_id <= 0:
-            before_rows = [
-                row
-                for row in before_rows
-                if isinstance(row, dict) and _safe_int(row.get("account_id")) == target_account_id
-            ]
-        cycle = await run_douyin_stranger_message_monitor_cycle(
-            target_account_id,
-            trigger_type="workflow",
-        )
-        after_rows = collect_douyin_stranger_message_results(target_account_id)
-        changed_rows = _scheduled_douyin_changed_conversations(before_rows, after_rows, limit=20)
-        recent_rows = [
-            _scheduled_douyin_slim_conversation(row)
-            for row in list(reversed(after_rows))[:10]
-            if isinstance(row, dict)
-        ]
-        conversations = changed_rows or recent_rows
-        cycle_status = str(cycle.get("status") or "").strip().lower() if isinstance(cycle, dict) else "failed"
-        cycle_message = str(cycle.get("message") or "").strip() if isinstance(cycle, dict) else "私信接管执行失败"
-        if cycle_status == "failed":
-            return {
-                "code": 500,
-                "msg": cycle_message or "私信接管执行失败",
-                "account_id": target_account_id,
-                "conversations": conversations,
-            }
-        stats = {
-            "total": _safe_int(cycle.get("total_count") if isinstance(cycle, dict) else len(after_rows)),
-            "processed": _safe_int(cycle.get("total_count") if isinstance(cycle, dict) else 0),
-            "new": _safe_int(cycle.get("new_count") if isinstance(cycle, dict) else 0),
-            "unread": _safe_int(cycle.get("unread_count") if isinstance(cycle, dict) else 0),
-            "updated": _safe_int(cycle.get("updated_count") if isinstance(cycle, dict) else 0),
-            "reply_total": _safe_int(cycle.get("auto_reply_total") if isinstance(cycle, dict) else 0),
-            "reply_success": _safe_int(cycle.get("auto_reply_success") if isinstance(cycle, dict) else 0),
-            "reply_failed": _safe_int(cycle.get("auto_reply_failed") if isinstance(cycle, dict) else 0),
-            "extracted_phone_numbers": list(cycle.get("extracted_phone_numbers") or []) if isinstance(cycle, dict) else [],
-            "wechat_add_friend": cycle.get("wechat_add_friend") if isinstance(cycle, dict) else {},
-        }
-        summary = cycle_message or (
-            f"私信接管本轮读取 {stats['total']} 条会话，新增 {stats['new']} 条，自动回复成功 {stats['reply_success']} 条。"
-        )
-        return {
-            **dict(result),
-            "msg": summary,
-            "summary": summary,
-            "status": cycle_status or "completed",
-            "account_id": target_account_id,
-            "stats": stats,
-            "final_state": dict(cycle) if isinstance(cycle, dict) else {},
-            "conversations": conversations,
-            "conversation_scope": "changed" if changed_rows else "recent",
-        }
+        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音私信一次性任务执行失败"}
 
     return {"code": 400, "msg": f"暂不支持的销售抖音动作：{action}"}
 
@@ -6264,6 +6205,18 @@ async def _post_local_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+async def _request_local_auto_reply_stop(account_id: str, headers: Dict[str, str]) -> None:
+    try:
+        await _post_local_api_json(
+            "/api/native-wechat/auto-reply/stop",
+            {"account_id": account_id},
+            headers=headers,
+            timeout_seconds=8.0,
+        )
+    except Exception as exc:
+        logger.debug("[SCHEDULED-TASK] local WeChat stop request failed account_id=%s: %s", account_id, exc)
+
+
 async def _post_local_api_form(
     path: str,
     fields: Dict[str, Any],
@@ -7574,6 +7527,7 @@ async def _run_native_wechat_takeover_session(
             {"text": "个微接管启动，正在检查新好友申请（本次仅检查一次）", "stage": "friend_requests"},
         )
         if _task_event_rejects_local_work(event_status):
+            await _request_local_auto_reply_stop(account_id, headers)
             stop_reason = "slot_ownership_changed"
     while not stop_reason and _takeover_monotonic() < deadline_monotonic and (
         round_limit is None or round_number < round_limit
@@ -7596,6 +7550,7 @@ async def _run_native_wechat_takeover_session(
                 {"text": f"个微私信接管第 {round_number} 轮巡检", "round": round_number, "session_seconds": duration_limit},
             )
             if _task_event_rejects_local_work(event_status):
+                await _request_local_auto_reply_stop(account_id, headers)
                 stop_reason = "slot_ownership_changed"
                 break
         try:
@@ -7610,6 +7565,29 @@ async def _run_native_wechat_takeover_session(
                 headers=headers,
                 timeout_seconds=1800.0,
             )
+            if str(result.get("stop_reason") or "").strip().lower() == "cancelled":
+                stop_reason = "cancelled"
+                break
+            # A normal scan reports an integer skipped count. Only the local
+            # endpoint's boolean skipped response means that no round ran.
+            if isinstance(result.get("skipped"), bool) and result.get("skipped"):
+                reason = str(result.get("reason") or "").strip().lower()
+                message = "本机微信接管未执行"
+                if reason == "running":
+                    message = "本机微信仍有上一轮接管占用，本轮没有扫描会话"
+                elif reason:
+                    message = f"本机微信接管未执行：{reason}"
+                output["failed"] += 1
+                output["last_error"] = message
+                output["rounds"].append(
+                    {
+                        "round": round_number,
+                        "status": "failed",
+                        "error": message,
+                    }
+                )
+                stop_reason = "local_wechat_busy" if reason == "running" else "local_wechat_not_executed"
+                break
             consecutive_driver_failures = 0
             last_config = result.get("config") if isinstance(result.get("config"), dict) else last_config
             items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
@@ -7654,6 +7632,7 @@ async def _run_native_wechat_takeover_session(
                     },
                 )
                 if _task_event_rejects_local_work(event_status):
+                    await _request_local_auto_reply_stop(account_id, headers)
                     stop_reason = "slot_ownership_changed"
                     break
         except Exception as exc:

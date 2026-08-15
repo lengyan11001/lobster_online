@@ -1,7 +1,7 @@
 {
-  "version": "1.0.171",
-  "build": 215,
-  "applied_at": "2026-08-15T12:40:27+08:00",
-  "note": "native WeChat takeover scans 20 UIA rounds and replies only to latest inbound messages",
-  "bundle_sha256": "6e3fcba60f803eeccb01c5222c37dfcd39104c0c38a8cc9086c069e525021151"
+  "version": "1.0.175",
+  "build": 219,
+  "applied_at": "2026-08-15T21:59:55+08:00",
+  "note": "fix: prevent duplicate group invite after verified creation",
+  "bundle_sha256": "90d486abb700a0a1124095155d28bed80170cd310551b919e86f8f47b77da754"
 }

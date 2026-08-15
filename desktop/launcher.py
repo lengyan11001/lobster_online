@@ -1589,8 +1589,61 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         except Exception as exc:
             log(f"set bundled fixed WebView2 runtime failed: {exc}")
 
-    runtime: dict[str, object] = {"backend_proc": None, "mcp_proc": None}
+    runtime: dict[str, object] = {
+        "backend_proc": None,
+        "mcp_proc": None,
+        "watchdog_stop": threading.Event(),
+    }
     try:
+        def watch_backend(window) -> None:
+            """Restart only an unexpectedly exited local backend while the window is open."""
+            stop_event = runtime["watchdog_stop"]
+            failures = 0
+            health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
+            while not stop_event.wait(2.0):
+                if http_ready(health_url, timeout=1.0):
+                    failures = 0
+                    continue
+                failures += 1
+                if failures < 3:
+                    continue
+
+                proc = runtime.get("backend_proc")
+                if isinstance(proc, subprocess.Popen) and proc.poll() is None:
+                    # A healthy event loop answers the fast health endpoint even
+                    # while a task is running. Only restart an owned process after
+                    # a sustained health failure; this covers a wedged event loop
+                    # without treating one slow request as a crash.
+                    if failures < 10:
+                        continue
+                    log("Backend watchdog: owned backend is alive but unhealthy; restarting it")
+                    stop_process(proc, "BackendWatchdog")
+                    runtime["backend_proc"] = None
+                    time.sleep(0.5)
+                if port_open("127.0.0.1", port, timeout=0.3):
+                    failures = 0
+                    continue
+
+                log("Backend watchdog: local backend exited; restarting it")
+                recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
+                runtime["backend_proc"] = recovered_proc
+                failures = 0
+                if recovered_proc is None:
+                    continue
+
+                deadline = time.time() + 45
+                while time.time() < deadline and not stop_event.wait(1.0):
+                    if http_ready(health_url, timeout=1.0):
+                        log("Backend watchdog: local backend recovered")
+                        try:
+                            window.evaluate_js(
+                                "if (window.requestLobsterNetworkRecovery) "
+                                "window.requestLobsterNetworkRecovery({reason:'backend_watchdog'});"
+                            )
+                        except Exception:
+                            pass
+                        break
+
         def start_services_then_load(window) -> None:
             try:
                 ok, actual_url, backend_proc, mcp_proc, error = start_services_blocking(port, mcp_port, env, wait_seconds, ensure_runtime=False)
@@ -1599,6 +1652,12 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 if ok:
                     window.load_url(actual_url)
                     log("webview client page loaded")
+                    threading.Thread(
+                        target=watch_backend,
+                        args=(window,),
+                        name="lobster-backend-watchdog",
+                        daemon=True,
+                    ).start()
                 else:
                     log(f"webview service startup failed: {error}")
                     window.load_html(
@@ -1624,8 +1683,12 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
         def confirm_window_close() -> bool | None:
             if _ALLOW_WINDOW_CLOSE:
+                runtime["watchdog_stop"].set()
                 return None
-            return None if confirm_box(title, CONFIRM_CLOSE_BODY_TEMPLATE.format(title=title)) else False
+            allowed = confirm_box(title, CONFIRM_CLOSE_BODY_TEMPLATE.format(title=title))
+            if allowed:
+                runtime["watchdog_stop"].set()
+            return None if allowed else False
 
         window.events.closing += confirm_window_close
         webview.start(
@@ -1637,8 +1700,10 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             storage_path=str(ROOT / "browser_data" / "desktop_webview"),
             icon=str(APP_ICON_PATH) if APP_ICON_PATH and APP_ICON_PATH.is_file() else None,
         )
+        runtime["watchdog_stop"].set()
         return True, runtime.get("backend_proc") if isinstance(runtime.get("backend_proc"), subprocess.Popen) else None, runtime.get("mcp_proc") if isinstance(runtime.get("mcp_proc"), subprocess.Popen) else None
     except Exception as exc:
+        runtime["watchdog_stop"].set()
         log(f"webview start failed: {exc}")
         return False, None, None
 

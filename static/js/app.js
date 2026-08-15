@@ -4,11 +4,15 @@ var LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
 (function setApiBaseFromUrl() {
   // 定死：本机回环端口与当前页端口一致（默认 8000）
   var lp = (window.location && window.location.port) ? window.location.port : '8000';
-  var LOBSTER_LOCAL_LOOPBACK = 'http://127.0.0.1:' + lp;
+  var startupParams = new URLSearchParams(window.location.search || '');
+  // 8765 is only a static preview port. It can serve HTML, but it has no
+  // FastAPI endpoints; keep API requests on the real local backend instead.
+  var staticPreviewPort = lp === '8765' && startupParams.get('desktop') !== '1';
+  var LOBSTER_LOCAL_LOOPBACK = 'http://127.0.0.1:' + (staticPreviewPort ? '8000' : lp);
 
   // 正式环境：登录/验证码/auth/me 固定走公网认证服务。
   // 调试覆盖：?api=http://127.0.0.1:8002 或 localStorage.lobster_server_api_base
-  var p = new URLSearchParams(window.location.search);
+  var p = startupParams;
   var serverApiOverride = (p.get('api') || '').trim();
   if (serverApiOverride) {
     try { localStorage.setItem('lobster_server_api_base', serverApiOverride.replace(/\/$/, '')); } catch (eApi) {}
@@ -136,6 +140,100 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
   if (window.__LOBSTER_BRAND_FETCH_INSTALLED || typeof window.fetch !== 'function') return;
   var nativeFetch = window.fetch.bind(window);
   var apiPathPattern = /^\/(?:api|auth|chat|skills|capabilities)(?:\/|$)/;
+  var NETWORK_RETRY_DELAYS = [0, 350, 1000, 2500];
+  var nativeTaskPathPattern = /^\/api\/native-wechat\/(?:messages\/send|friends\/add|groups\/create|moments\/(?:like|comment|publish))(?:\/|$)/;
+  var backendRecoveryPromise = null;
+
+  function isTransientNetworkError(error) {
+    var name = String(error && error.name || '');
+    var message = String(error && error.message || error || '');
+    return !!(error && error.lobsterNetworkError) || (
+      name !== 'AbortError' && /Failed to fetch|NetworkError|Load failed|timed out|timeout/i.test(message)
+    );
+  }
+
+  function normalizeNetworkError(error) {
+    if (!isTransientNetworkError(error)) return error;
+    var normalized = new Error('网络连接暂时中断，请稍后重试');
+    normalized.name = 'LobsterNetworkError';
+    normalized.code = 'NETWORK_UNAVAILABLE';
+    normalized.lobsterNetworkError = true;
+    normalized.cause = error;
+    return normalized;
+  }
+
+  function requestMethod(input, init) {
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    return String(method || 'GET').toUpperCase();
+  }
+
+  function retryableRequest(input, init) {
+    return requestMethod(input, init) === 'GET' || requestMethod(input, init) === 'HEAD';
+  }
+
+  function requestId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    } catch (e) {}
+    return 'lobster-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+  }
+
+  function backendRecoveryOrigins(preferredOrigin) {
+    var values = [];
+    // A failed request must recover the same backend that owns that request.
+    // A healthy cloud API cannot make a dead local WeChat backend reachable.
+    var candidates = String(preferredOrigin || '').trim() ? [preferredOrigin] : apiOrigins();
+    candidates.forEach(function(value) {
+      try {
+        var origin = new URL(String(value || ''), window.location.href).origin;
+        if (origin && values.indexOf(origin) < 0) values.push(origin);
+      } catch (e) {}
+    });
+    return values;
+  }
+
+  function probeBackend(origin) {
+    var url = String(origin || '').replace(/\/$/, '') + '/api/health?fast=1&recovery_probe=1';
+    return nativeFetch(url, { method: 'GET', cache: 'no-store' }).then(function(resp) {
+      if (!resp.ok) throw new Error('backend health ' + resp.status);
+      return true;
+    });
+  }
+
+  function recoverBackend(preferredOrigin) {
+    if (backendRecoveryPromise) return backendRecoveryPromise;
+    var origins = backendRecoveryOrigins(preferredOrigin);
+    var delays = [0, 500, 1200, 2500, 5000, 8000];
+    backendRecoveryPromise = new Promise(function(resolve) {
+      var index = 0;
+      function attempt() {
+        var originIndex = 0;
+        function nextOrigin() {
+          if (originIndex >= origins.length) {
+            if (index >= delays.length - 1) return resolve(false);
+            index += 1;
+            return window.setTimeout(attempt, delays[index]);
+          }
+          var origin = origins[originIndex++];
+          probeBackend(origin).then(function() {
+            window.__LOBSTER_BACKEND_LAST_RECOVERY_AT = Date.now();
+            resolve(true);
+          }).catch(nextOrigin);
+        }
+        nextOrigin();
+      }
+      attempt();
+    }).finally(function() {
+      backendRecoveryPromise = null;
+    });
+    return backendRecoveryPromise;
+  }
+
+  window.__lobsterProbeBackend = recoverBackend;
+
+  function waitForNetworkRetry(ms) {
+    return new Promise(function(resolve) { window.setTimeout(resolve, ms); });
+  }
 
   function apiOrigins() {
     var values = [];
@@ -156,30 +254,35 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     try {
       var rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
       var url = new URL(rawUrl, window.location.href);
-      if (apiPathPattern.test(url.pathname) && apiOrigins().indexOf(url.origin) >= 0) {
-        var next = Object.assign({}, init || {});
-        var headers = new Headers(input instanceof Request ? input.headers : undefined);
-        new Headers(next.headers || {}).forEach(function(value, key) { headers.set(key, value); });
-        headers.set('X-Lobster-Brand', getLobsterBrandMark());
+      var shouldAddBrand = apiPathPattern.test(url.pathname) && apiOrigins().indexOf(url.origin) >= 0;
+      var method = requestMethod(input, init);
+      var next = Object.assign({}, init || {});
+      var headers = new Headers(input instanceof Request ? input.headers : undefined);
+      new Headers(next.headers || {}).forEach(function(value, key) { headers.set(key, value); });
+      var isNativeTask = method === 'POST' && nativeTaskPathPattern.test(url.pathname);
+      if (isNativeTask && !headers.get('X-Lobster-Request-Id')) headers.set('X-Lobster-Request-Id', requestId());
+      var hasIdempotencyKey = !!headers.get('X-Lobster-Request-Id');
+      var canRetryAfterRecovery = retryableRequest(input, init) || (isNativeTask && hasIdempotencyKey);
+      if (shouldAddBrand || canRetryAfterRecovery) {
+        if (shouldAddBrand) headers.set('X-Lobster-Brand', getLobsterBrandMark());
         next.headers = headers;
-        return nativeFetch(input, next).catch(function(err) {
-          try {
-            var msg = String(err && err.message ? err.message : err || '');
-            var name = String(err && err.name ? err.name : '');
-            if (name !== 'AbortError' && /Failed to fetch|NetworkError|Load failed/i.test(msg) && typeof window.requestLobsterNetworkRecovery === 'function') {
-              window.requestLobsterNetworkRecovery({
-                view: currentView,
-                reason: 'fetch',
-                context: {
-                  url: String(url.pathname || ''),
-                  origin: String(url.origin || ''),
-                  message: msg
-                }
+        var attempt = 0;
+        function run() {
+          var requestInput = input;
+          if (attempt > 0 && input instanceof Request) {
+            try { requestInput = input.clone(); } catch (eClone) {}
+          }
+          return nativeFetch(requestInput, next).catch(function(err) {
+            if (canRetryAfterRecovery && isTransientNetworkError(err) && attempt < NETWORK_RETRY_DELAYS.length - 1) {
+              attempt += 1;
+              return waitForNetworkRetry(NETWORK_RETRY_DELAYS[attempt]).then(function() {
+                return recoverBackend(url.origin).then(function() { return run(); });
               });
             }
-          } catch (eRecover) {}
-          throw err;
-        });
+            throw normalizeNetworkError(err);
+          });
+        }
+        return run();
       }
     } catch (e) {}
     return nativeFetch(input, init);
@@ -189,19 +292,6 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
 
 (function installNetworkRecovery() {
   if (window.__LOBSTER_NETWORK_RECOVERY_INSTALLED) return;
-
-  // Recovery guard only: debounce repeated retries, not a business availability flag.
-  var state = window.__LOBSTER_NETWORK_RECOVERY_STATE = window.__LOBSTER_NETWORK_RECOVERY_STATE || {
-    timer: null,
-    lastAttemptAt: 0
-  };
-
-  function clearRecoveryTimer() {
-    if (state.timer != null) {
-      try { clearTimeout(state.timer); } catch (e) {}
-      state.timer = null;
-    }
-  }
 
   function currentRecoveryView(metaView) {
     var view = String(metaView || '').trim();
@@ -215,12 +305,10 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     return '';
   }
 
-  function runRecovery(meta, force) {
+  function runRecovery(meta) {
     meta = meta || {};
     var view = currentRecoveryView(meta.view);
     if (!view) return Promise.resolve(false);
-    if (!force && Date.now() - state.lastAttemptAt < 8000) return Promise.resolve(false);
-    state.lastAttemptAt = Date.now();
 
     if (view === 'chat') {
       if (typeof window.refreshMastraOnlineChat === 'function') {
@@ -240,30 +328,20 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     return Promise.resolve(false);
   }
 
-  function scheduleRecovery(meta) {
-    meta = meta || {};
-    var view = currentRecoveryView(meta.view);
-    if (!view) return Promise.resolve(false);
-    if (state.timer != null) return Promise.resolve(false);
-    if (Date.now() - state.lastAttemptAt < 3000) return Promise.resolve(false);
-    var delay = 900;
-    state.timer = window.setTimeout(function() {
-      clearRecoveryTimer();
-      runRecovery(meta, false);
-    }, delay);
-    return Promise.resolve(true);
-  }
-
-  window.requestLobsterNetworkRecovery = scheduleRecovery;
+  // Network recovery is request-scoped. Do not use a shared availability state
+  // to block or skip requests for the current view.
+  window.requestLobsterNetworkRecovery = function(meta) {
+    meta = meta || { view: currentRecoveryView(), reason: 'network' };
+    var probe = typeof window.__lobsterProbeBackend === 'function'
+      ? window.__lobsterProbeBackend(meta.origin || '')
+      : Promise.resolve(true);
+    return Promise.resolve(probe).then(function() { return runRecovery(meta); });
+  };
   window.refreshCurrentLobsterView = function(meta) {
-    clearRecoveryTimer();
-    return runRecovery(meta || { view: currentRecoveryView(), reason: 'manual' }, true);
+    meta = meta || { view: currentRecoveryView(), reason: 'manual' };
+    return runRecovery(meta);
   };
   window.__LOBSTER_NETWORK_RECOVERY_INSTALLED = true;
-
-  window.addEventListener('online', function() {
-    runRecovery({ view: currentRecoveryView(), reason: 'online' }, false);
-  });
 })();
 
 var token = getStoredAuthToken();

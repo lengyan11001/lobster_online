@@ -60,7 +60,21 @@ function uploadDiagnosticLogs() {
     credentials: 'same-origin',
     headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + (typeof token !== 'undefined' ? token : '') }
   };
-  fetch(url, opts)
+  function uploadAttempt(attempt) {
+    return fetch(url, opts).catch(function(error) {
+      var message = String(error && error.message || error || '');
+      if (!(error && error.lobsterNetworkError) && !/Failed to fetch|NetworkError|Load failed|timed out|timeout/i.test(message) || attempt >= 2) {
+        throw error;
+      }
+      return new Promise(function(resolve) {
+        window.setTimeout(resolve, attempt === 0 ? 900 : 1800);
+      }).then(function() {
+        return uploadAttempt(attempt + 1);
+      });
+    });
+  }
+
+  uploadAttempt(0)
     .then(function(r) {
       return r.json().catch(function() { return {}; }).then(function(d) {
         return { ok: r.ok, status: r.status, data: d };
@@ -86,7 +100,9 @@ function uploadDiagnosticLogs() {
       var msg = (e && e.message) ? e.message : String(e);
       if (msgEl) {
         msgEl.style.color = '#d14343';
-        msgEl.textContent = '上传诊断失败：' + msg;
+        msgEl.textContent = (e && e.lobsterNetworkError) || /Failed to fetch|NetworkError|Load failed|timeout/i.test(msg)
+          ? '本地服务正在恢复，诊断上传暂未完成，请稍后再点上传诊断。'
+          : '上传诊断失败：' + msg;
       }
     })
     .finally(function() {

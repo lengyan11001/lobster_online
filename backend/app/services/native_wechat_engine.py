@@ -110,6 +110,11 @@ _TASK_WORKERS: Dict[str, asyncio.Task[Any]] = {}
 _TASK_AUTH_CONTEXT: Dict[str, Dict[str, Any]] = {}
 _AUTO_REPLY_WORKERS: Dict[str, asyncio.Task[Any]] = {}
 _AUTO_REPLY_AUTH_CONTEXT: Dict[str, Dict[str, Any]] = {}
+_AUTO_REPLY_ACTIVE_RUNS: set[str] = set()
+_AUTO_REPLY_ACTIVE_RUNS_LOCK = threading.Lock()
+_AUTO_REPLY_STOP_REQUESTS: set[str] = set()
+_AUTO_REPLY_STARTUP_RECONCILED = False
+_AUTO_REPLY_STARTUP_RECONCILE_LOCK = threading.Lock()
 _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = 0.0
 _LOCAL_WECHAT_UI_LOCK = threading.RLock()
 _LOCAL_WECHAT_THREAD_STATE = threading.local()
@@ -404,6 +409,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    global _AUTO_REPLY_STARTUP_RECONCILED
     with _connect() as conn:
         conn.executescript(
             """
@@ -640,7 +646,34 @@ def init_db() -> None:
                     or coalesce(group_invite_contacts, '[]') <> '[]'
                     or coalesce(group_invite_primary_contact, '') <> ''
                 """
-            )
+                )
+        task_columns = {str(row[1]) for row in conn.execute("pragma table_info(wechat_tasks)").fetchall()}
+        if "client_request_id" not in task_columns:
+            conn.execute("alter table wechat_tasks add column client_request_id text")
+        conn.execute(
+            "create unique index if not exists idx_wechat_tasks_client_request "
+            "on wechat_tasks(account_id, client_request_id) where client_request_id is not null and client_request_id <> ''"
+        )
+        # A local backend restart cannot resume a half-completed UI round.
+        # Clear only the persisted running marker once per process so a stale
+        # client state never blocks the next explicit run.
+        with _AUTO_REPLY_STARTUP_RECONCILE_LOCK:
+            if not _AUTO_REPLY_STARTUP_RECONCILED:
+                conn.execute(
+                    """
+                    update wechat_auto_reply_config
+                       set running=0,
+                           last_error=case
+                               when coalesce(last_error, '') = ''
+                               then '本机服务已重启，上一次接管未完成'
+                               else last_error
+                           end,
+                           updated_at=?
+                     where running=1
+                    """,
+                    (_now_iso(),),
+                )
+                _AUTO_REPLY_STARTUP_RECONCILED = True
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -2298,50 +2331,88 @@ def _auto_reply_due(cfg: Dict[str, Any], *, force: bool = False) -> bool:
 
 
 def _claim_auto_reply_run(account_id: str) -> bool:
-    now = _now_iso()
-    with _connect() as conn:
-        row = conn.execute(
-            "select running,last_started_at from wechat_auto_reply_config where account_id=? limit 1",
-            (account_id,),
-        ).fetchone()
-        if not row:
-            conn.execute(
-                """
-                insert into wechat_auto_reply_config(account_id, enabled, interval_seconds, running, last_started_at, updated_at)
-                values(?,?,?,?,?,?)
-                """,
-                (account_id, 0, int(DEFAULT_STRATEGY["auto_reply_interval_seconds"]), 1, now, now),
-            )
-            return True
-        started = _parse_iso_datetime(row["last_started_at"])
-        if (
-            int(row["running"] or 0)
-            and started
-            and (datetime.utcnow() - started).total_seconds() < 20 * 60
-        ):
+    account_id = str(account_id or "").strip()
+    with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+        if account_id in _AUTO_REPLY_ACTIVE_RUNS:
             return False
-        conn.execute(
-            """
-            update wechat_auto_reply_config
-            set running=1, last_started_at=?, last_error='', updated_at=?
-            where account_id=?
-            """,
-            (now, now, account_id),
-        )
-    return True
+        _AUTO_REPLY_ACTIVE_RUNS.add(account_id)
+        _AUTO_REPLY_STOP_REQUESTS.discard(account_id)
+    now = _now_iso()
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "select account_id from wechat_auto_reply_config where account_id=? limit 1",
+                (account_id,),
+            ).fetchone()
+            if not row:
+                conn.execute(
+                    """
+                    insert into wechat_auto_reply_config(account_id, enabled, interval_seconds, running, last_started_at, updated_at)
+                    values(?,?,?,?,?,?)
+                    """,
+                    (account_id, 0, int(DEFAULT_STRATEGY["auto_reply_interval_seconds"]), 1, now, now),
+                )
+            else:
+                # The database flag survives a client restart. The in-process set
+                # is the authoritative lock; an old persisted flag must not block
+                # the first real takeover after restart.
+                conn.execute(
+                    """
+                    update wechat_auto_reply_config
+                    set running=1, last_started_at=?, last_error='', updated_at=?
+                    where account_id=?
+                    """,
+                    (now, now, account_id),
+                )
+        return True
+    except Exception:
+        with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+            _AUTO_REPLY_ACTIVE_RUNS.discard(account_id)
+        raise
+
+
+def _release_auto_reply_run(account_id: str) -> None:
+    with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+        _AUTO_REPLY_ACTIVE_RUNS.discard(str(account_id or "").strip())
+
+
+def request_auto_reply_stop(account_id: str) -> Dict[str, Any]:
+    """Ask the current local round to stop after its active UI call returns."""
+    normalized = str(account_id or "").strip()
+    if not normalized:
+        raise RuntimeError("missing account_id")
+    with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+        active = normalized in _AUTO_REPLY_ACTIVE_RUNS
+        if active:
+            _AUTO_REPLY_STOP_REQUESTS.add(normalized)
+    return {"ok": True, "account_id": normalized, "requested": active}
+
+
+def _auto_reply_stop_requested(account_id: str) -> bool:
+    with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+        return str(account_id or "").strip() in _AUTO_REPLY_STOP_REQUESTS
+
+
+def _clear_auto_reply_stop(account_id: str) -> None:
+    with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+        _AUTO_REPLY_STOP_REQUESTS.discard(str(account_id or "").strip())
 
 
 def _finish_auto_reply_run(account_id: str, result: Dict[str, Any], error: str = "") -> None:
     now = _now_iso()
-    with _connect() as conn:
-        conn.execute(
-            """
-            update wechat_auto_reply_config
-            set running=0, last_checked_at=?, last_finished_at=?, last_error=?, last_result=?, updated_at=?
-            where account_id=?
-            """,
-            (now, now, str(error or "")[:2000], _json_dumps(result or {}), now, account_id),
-        )
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                update wechat_auto_reply_config
+                set running=0, last_checked_at=?, last_finished_at=?, last_error=?, last_result=?, updated_at=?
+                where account_id=?
+                """,
+                (now, now, str(error or "")[:2000], _json_dumps(result or {}), now, account_id),
+            )
+    finally:
+        _clear_auto_reply_stop(account_id)
+        _release_auto_reply_run(account_id)
 
 
 def ensure_auto_reply_worker(account_id: str, *, auth_context: Optional[Dict[str, Any]] = None) -> None:
@@ -2935,7 +3006,6 @@ async def _queue_auto_reply_group_invite(
     if configured_primary_contact == str(peer_id or "").strip():
         return {"ok": True, "skipped": True, "reason": "primary_contact_is_customer"}
     primary_contact = _resolve_local_contact_wx_no(account_id, configured_primary_contact)
-    customer_wx_no = _resolve_local_contact_wx_no(account_id, peer_id)
     if not primary_contact:
         return {
             "ok": True,
@@ -2943,36 +3013,35 @@ async def _queue_auto_reply_group_invite(
             "reason": "primary_contact_wx_no_missing",
             "configured_primary_contact": configured_primary_contact,
         }
-    if not customer_wx_no:
-        customer_wx_no = _read_current_session_wx_no_by_avatar(account_id, peer_id)
-    if primary_contact == customer_wx_no:
-        return {"ok": True, "skipped": True, "reason": "primary_contact_is_customer"}
     inbound_id = str(
         inbound.get("auto_reply_inbound_id")
         or inbound.get("provider_message_id")
         or inbound.get("id")
         or _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
     ).strip()
-    dedup_key = "auto-invite-v3-" + _stable_key(account_id, customer_wx_no or peer_id, primary_contact)
+    # The open private chat already identifies the customer. Only the configured
+    # companion's WeChat ID is searched in the add-member picker.
+    dedup_key = "auto-invite-v4-" + _stable_key(account_id, peer_id, primary_contact)
     task = await create_group_task(
         account_id,
-        [customer_wx_no or peer_id, primary_contact],
+        [peer_id, primary_contact],
         welcome_message=str(cfg.get("group_invite_welcome_message") or "").strip(),
         dedup_key=dedup_key,
         source_peer_id=peer_id,
         source_inbound_message_id=inbound_id,
         group_invite_reason=str(llm_reply.get("group_invite_reason") or "").strip(),
         matched_group_keywords=list(llm_reply.get("matched_group_keywords") or []),
-        customer_wx_no=customer_wx_no,
+        customer_wx_no="",
         use_current_chat=True,
         execute_now=True,
     )
     status = str(task.get("status") or "").strip().lower()
+    task_error = str(task.get("error_message") or "").strip()
     completed = status in {"success", "partial_failed"} and bool(
         (task.get("payload") or {}).get("group_verified") if isinstance(task.get("payload"), dict) else False
     )
     return {
-        "ok": True,
+        "ok": status != "failed",
         "queued": status in {"pending", "running"},
         "completed": completed,
         "deduped": bool(task.get("deduped")),
@@ -2981,8 +3050,9 @@ async def _queue_auto_reply_group_invite(
         "primary_contact_name": str(cfg.get("group_invite_primary_contact_name") or configured_primary_contact).strip(),
         "task_id": str(task.get("id") or ""),
         "task_status": status,
+        "error": task_error,
         "already_grouped": bool(task.get("deduped") and status in {"success", "partial_failed"}),
-        "customer_wx_no": customer_wx_no,
+        "customer_wx_no": "",
     }
 
 
@@ -3210,6 +3280,7 @@ async def run_auto_reply_once(
         "driver_recovered": False,
         "driver_retry_count": 0,
         "driver_recoveries": [],
+        "stop_reason": "",
         "memory": {
             "document_count": int(memory.get("document_count") or 0),
             "titles": list(memory.get("titles") or []),
@@ -3237,6 +3308,16 @@ async def run_auto_reply_once(
             except Exception as friend_exc:
                 result["friend_requests"] = {"ok": False, "error": str(friend_exc)[:500]}
                 result["friend_requests_failed"] = 1
+        if _auto_reply_stop_requested(account_id):
+            result["stop_reason"] = "cancelled"
+        if result.get("stop_reason"):
+            result["finished_at"] = _now_iso()
+            result["duration_seconds"] = round(max(0.0, time.monotonic() - started_monotonic), 2)
+            report = _build_auto_reply_report(result, memory)
+            result["report"] = report
+            result["summary_text"] = report.get("summary_text") or ""
+            _finish_auto_reply_run(account_id, result)
+            return {**result, "config": get_auto_reply_config(account_id)}
         session_data = await asyncio.to_thread(
             sync_local_sessions,
             account_id,
@@ -3264,6 +3345,9 @@ async def run_auto_reply_once(
         # unrelated session-count cap. Process every eligible private session
         # collected by those rounds so later pages cannot be silently skipped.
         for idx, session in enumerate(private_unread):
+            if _auto_reply_stop_requested(account_id):
+                result["stop_reason"] = "cancelled"
+                break
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = str(session.get("display_name") or peer_id).strip()
             if not peer_id:
@@ -3620,6 +3704,16 @@ async def run_auto_reply_once(
         result["summary_text"] = report.get("summary_text") or ""
         _finish_auto_reply_run(account_id, result)
         return {**result, "config": get_auto_reply_config(account_id)}
+    except asyncio.CancelledError:
+        result["ok"] = False
+        result["stop_reason"] = "cancelled"
+        result["error"] = "本轮接管已取消"
+        result["finished_at"] = _now_iso()
+        result["duration_seconds"] = round(max(0.0, time.monotonic() - started_monotonic), 2)
+        try:
+            _finish_auto_reply_run(account_id, result, error=result["error"])
+        finally:
+            raise
     except Exception as exc:
         result["ok"] = False
         result["error"] = str(exc)
@@ -4939,7 +5033,12 @@ def _run_local_driver_operation(
     *,
     retry_on_failure: bool = True,
 ) -> Any:
-    with _LOCAL_WECHAT_UI_LOCK:
+    # Do not let stale UI requests queue behind a stuck WeChat control. A
+    # queued request could execute against a different chat after the first
+    # operation finishes and click the wrong control.
+    if not _LOCAL_WECHAT_UI_LOCK.acquire(timeout=0.75):
+        raise RuntimeError("\u5fae\u4fe1\u6b63\u5728\u5904\u7406\u4e0a\u4e00\u9879\u64cd\u4f5c\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5")
+    try:
         _prepare_local_automation_thread()
         recovery_before = _latest_local_driver_recovery(account_id)
 
@@ -4989,6 +5088,8 @@ def _run_local_driver_operation(
                 ) from retry_exc
             recovery = _mark_local_driver_recovery(account_id, recovery, recovered=True)
             return _annotate_local_driver_recovery(result, recovery)
+    finally:
+        _LOCAL_WECHAT_UI_LOCK.release()
 
 
 def _new_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
@@ -5320,46 +5421,6 @@ def _open_local_session_by_uia(
         except Exception:
             break
     raise RuntimeError(f"未在微信会话列表找到联系人：{target}")
-
-
-def _read_current_session_wx_no_by_avatar(account_id: str, peer_id: str) -> str:
-    """Read the selected customer's wx id from the visible session avatar card."""
-    if not _module_available("uiautomation"):
-        return ""
-    import uiautomation as auto  # type: ignore
-
-    hwnd = _local_wechat_hwnd(account_id)
-    if not hwnd:
-        return ""
-    root = auto.ControlFromHandle(int(hwnd))
-    cell = _find_uia_session_cell(root, peer_id)
-    if cell is None:
-        return ""
-    avatar = next(
-        (
-            node
-            for node in _uia_walk(cell, max_depth=8, max_nodes=160)
-            if _uia_control_class(node).endswith("ContactHeadView")
-        ),
-        None,
-    )
-    if avatar is None:
-        return ""
-    try:
-        _uia_click(avatar)
-        time.sleep(0.55)
-        profile_root = _uia_foreground_or_main_root(hwnd)
-        wx_no = _extract_contact_profile_wx_no(profile_root)
-        if wx_no:
-            _persist_contact_wx_no(account_id, peer_id, wx_no)
-        return wx_no
-    finally:
-        # The profile card is a transient overlay. Close only that overlay so
-        # the currently selected chat and the session-list cursor stay intact.
-        try:
-            _send_hotkey("esc", pause=0.15)
-        except Exception:
-            pass
 
 
 def _uia_collect_all_sessions(hwnd: int) -> Dict[str, Any]:
@@ -6582,11 +6643,24 @@ def _uia_foreground_or_main_root(hwnd: int) -> Any:
 
     try:
         import win32gui  # type: ignore
+        import win32process  # type: ignore
 
         fg = int(win32gui.GetForegroundWindow() or 0)
+        target = int(hwnd or 0)
+        if fg and target:
+            target_pid = int(win32process.GetWindowThreadProcessId(target)[1] or 0)
+            foreground_pid = int(win32process.GetWindowThreadProcessId(fg)[1] or 0)
+            if target_pid and foreground_pid and target_pid != foreground_pid:
+                fg = 0
     except Exception:
         fg = 0
     return auto.ControlFromHandle(fg or int(hwnd))
+
+
+def _uia_main_root(hwnd: int) -> Any:
+    import uiautomation as auto  # type: ignore
+
+    return auto.ControlFromHandle(int(hwnd or 0))
 
 
 def _uia_wait_for_names(hwnd: int, names: List[str], *, timeout: float = 8.0, contains: bool = False) -> Optional[Any]:
@@ -8866,8 +8940,12 @@ async def create_add_friend_task(
     tags: Optional[List[str]] = None,
     permission: str = "朋友圈",
     prepare_only: bool = False,
+    client_request_id: str = "",
 ) -> Dict[str, Any]:
     init_db()
+    existing = _existing_task_by_client_request_id(account_id, client_request_id)
+    if existing:
+        return existing
     _find_local_account(account_id)
     strategy = get_strategy()
     max_targets = int(strategy.get("max_targets_per_task") or 0)
@@ -8891,7 +8969,9 @@ async def create_add_friend_task(
             "prepare_only": bool(prepare_only),
         },
         strategy=strategy,
+        client_request_id=client_request_id,
     )
+    return task
 
 
 async def _process_add_friend_task(task: Dict[str, Any]) -> None:
@@ -8945,8 +9025,12 @@ async def create_moments_publish_task(
     attachments: Optional[List[Dict[str, Any]]] = None,
     media_type: str = "image_text",
     visibility: str = "public",
+    client_request_id: str = "",
 ) -> Dict[str, Any]:
     init_db()
+    existing = _existing_task_by_client_request_id(account_id, client_request_id)
+    if existing:
+        return existing
     if not _local_moments_or_main_hwnd(account_id):
         raise RuntimeError("没有检测到本机微信窗口")
     text = str(content or "").strip()
@@ -8971,6 +9055,7 @@ async def create_moments_publish_task(
         },
         strategy=strategy,
         planned_total=1,
+        client_request_id=client_request_id,
     )
 
 
@@ -9002,8 +9087,12 @@ async def create_moments_like_task(
     *,
     dry_run: bool = False,
     max_scrolls: int = 20,
+    client_request_id: str = "",
 ) -> Dict[str, Any]:
     init_db()
+    existing = _existing_task_by_client_request_id(account_id, client_request_id)
+    if existing:
+        return existing
     if not _local_moments_or_main_hwnd(account_id):
         raise RuntimeError("没有检测到本机微信窗口")
     target_list = _normalize_task_targets(targets, max_targets=100)
@@ -9019,6 +9108,7 @@ async def create_moments_like_task(
         payload={"dry_run": bool(dry_run), "max_scrolls": max_scrolls},
         strategy=strategy,
         planned_total=max_scrolls,
+        client_request_id=client_request_id,
     )
 
 
@@ -9131,8 +9221,12 @@ async def create_moments_comment_task(
     max_scrolls: int = 6,
     user_id: int = 0,
     auth_context: Optional[Dict[str, Any]] = None,
+    client_request_id: str = "",
 ) -> Dict[str, Any]:
     init_db()
+    existing = _existing_task_by_client_request_id(account_id, client_request_id)
+    if existing:
+        return existing
     if not _local_moments_or_main_hwnd(account_id):
         raise RuntimeError("没有检测到本机微信窗口")
     target_list = _normalize_task_targets(targets, max_targets=100)
@@ -9149,6 +9243,7 @@ async def create_moments_comment_task(
         strategy=strategy,
         planned_total=len(target_list),
         auth_context=auth_context or {},
+        client_request_id=client_request_id,
     )
     return task
 
@@ -9755,6 +9850,16 @@ def _click_local_wechat_send_button(hwnd: int) -> str:
         raise RuntimeError(f"未找到微信发送按钮：{exc}") from exc
 
 
+def _clear_local_wechat_draft(hwnd: int) -> None:
+    """Remove only the draft owned by the failed automatic send attempt."""
+    try:
+        _focus_local_wechat(hwnd)
+        _send_hotkey("a", ctrl=True, pause=0.05)
+        _send_hotkey_quick("backspace")
+    except Exception:
+        pass
+
+
 def _submit_local_wechat_typed_message(
     wx: Any,
     hwnd: int,
@@ -9781,10 +9886,13 @@ def _submit_local_wechat_typed_message(
             _focus_local_wechat(hwnd)
     draft = _local_wechat_draft_text(hwnd)
     if expected and expected in draft:
+        _clear_local_wechat_draft(hwnd)
         raise RuntimeError("点击微信发送按钮后消息仍停留在输入框，未确认发送成功")
     snapshot_error = str(last_snapshot.get("error") or "").strip()
     if snapshot_error:
+        _clear_local_wechat_draft(hwnd)
         raise RuntimeError(f"微信消息发送后无法校验结果：{snapshot_error}")
+    _clear_local_wechat_draft(hwnd)
     raise RuntimeError("微信消息发送后未在聊天记录中出现，未确认发送成功")
 
 
@@ -9880,7 +9988,11 @@ def _send_text_local_slow(
         account_id,
         "发送微信自动回复",
         lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
-        retry_on_failure=False,
+        # Sending is verified from the visible chat record. If the UI driver
+        # loses its COM/UIA handle mid-send, rebuild the driver and retry the
+        # same operation instead of leaving the task stuck until the user
+        # restarts WeChat.
+        retry_on_failure=True,
     )
 
 
@@ -10432,9 +10544,22 @@ def publish_moments_local(
 
 def _group_picker_root(hwnd: int) -> Any:
     root = _uia_foreground_or_main_root(hwnd)
-    if _uia_control_class(root) == "mmui::SessionPickerWindow":
+    class_name = _uia_control_class(root)
+    if class_name == "mmui::SessionPickerWindow" or class_name.endswith("SessionPickerWindow"):
         return root
-    return root
+    # The picker can be exposed as a child of the registered main window when
+    # its transient top-level handle is not foreground. Never treat a normal
+    # chat window as a picker merely because it contains a text named "完成";
+    # that allowed a WeChat ID to be typed into the conversation composer.
+    try:
+        main_root = _uia_main_root(hwnd)
+    except Exception:
+        return None
+    for node in _uia_walk(main_root, max_depth=12, max_nodes=2600):
+        node_class = _uia_control_class(node)
+        if node_class == "mmui::SessionPickerWindow" or node_class.endswith("SessionPickerWindow"):
+            return node
+    return None
 
 
 def _open_local_create_group_picker(account_id: str, steps: List[Dict[str, Any]]) -> int:
@@ -10496,6 +10621,29 @@ def _find_current_chat_more_button(root: Any) -> Optional[Any]:
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
+def _current_chat_header_rect(root: Any) -> Optional[Tuple[int, int, int, int]]:
+    for node in _uia_walk(root, max_depth=12, max_nodes=1200):
+        if _uia_control_class(node) == "mmui::ChatTitleBarChatSingleView":
+            rect = _uia_rect_tuple(node)
+            if rect is not None:
+                return rect
+    return _uia_rect_tuple(root)
+
+
+def _current_chat_icon_point(root: Any, *, kind: str) -> Optional[Tuple[int, int]]:
+    rect = _current_chat_header_rect(root)
+    if rect is None:
+        return None
+    _left, top, right, _bottom = rect
+    # Weixin 4.1 renders these controls as icon-only views with no UIA name.
+    # Their positions are stable relative to the single-chat title bar.
+    if kind == "more":
+        return right - 32, top + 49
+    if kind == "add":
+        return right - 158, top + 102
+    return None
+
+
 def _find_current_chat_add_button(root: Any) -> Optional[Any]:
     root_rect = _uia_rect_tuple(root)
     if root_rect is None:
@@ -10514,11 +10662,32 @@ def _find_current_chat_add_button(root: Any) -> Optional[Any]:
         center_y = (n_top + n_bottom) / 2
         if center_x < left + width * 0.55 or center_y < top + 35:
             continue
-        score = int(center_x * 10 + center_y)
+        target = node
         class_name = _uia_control_class(node).lower()
-        if "button" in class_name or "head" in class_name or "view" in class_name:
+        # Weixin exposes the visible label as XTextView, but the clickable
+        # action is its ChatMemberActionView parent. Clicking the text child
+        # leaves the member panel open and makes the run appear to stall.
+        for _idx in range(5):
+            if "chatmemberactionview" in class_name:
+                break
+            try:
+                parent = target.GetParentControl()
+            except Exception:
+                parent = None
+            if parent is None:
+                break
+            target = parent
+            class_name = _uia_control_class(target).lower()
+        target_rect = _uia_rect_tuple(target) or rect
+        target_left, target_top, target_right, target_bottom = target_rect
+        target_center_x = (target_left + target_right) / 2
+        target_center_y = (target_top + target_bottom) / 2
+        score = int(target_center_x * 10 + target_center_y)
+        if "chatmemberactionview" in class_name:
+            score += 2000
+        elif "button" in class_name or "view" in class_name:
             score += 100
-        candidates.append((score, node))
+        candidates.append((score, target))
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
@@ -10527,24 +10696,52 @@ def _open_current_chat_add_contact_picker(account_id: str, steps: List[Dict[str,
     hwnd = _local_wechat_hwnd(account_id)
     if not hwnd:
         raise RuntimeError("没有检测到本机微信窗口")
-    root = _uia_foreground_or_main_root(hwnd)
-    more = _find_current_chat_more_button(root)
-    if more is None:
-        raise RuntimeError("当前会话未找到右上角更多按钮")
-    _uia_click(more)
-    steps.append({"step": "open_current_chat_more", "ok": True, "method": "uia"})
+    _focus_local_wechat(hwnd)
+    time.sleep(0.3)
+    # The group action must start from the registered WeChat main window. A
+    # small auxiliary WebView can temporarily become foreground after a click,
+    # but it does not contain the current chat toolbar or picker controls.
+    main_root = _uia_main_root(hwnd)
+    root = main_root
+    # Do not toggle an already-open member panel closed. This is common after
+    # a previous picker timeout and was the reason the next run lost "添加".
+    add = _find_current_chat_add_button(root)
+    if add is None:
+        more = _find_current_chat_more_button(root)
+        if more is None:
+            root = _uia_foreground_or_main_root(hwnd)
+            more = _find_current_chat_more_button(root)
+        if more is not None:
+            _uia_click(more)
+            steps.append({"step": "open_current_chat_more", "ok": True, "method": "uia"})
+        else:
+            point = _current_chat_icon_point(main_root, kind="more")
+            if point is None:
+                raise RuntimeError("当前会话未找到右上角更多按钮")
+            _uia_click_screen_point(*point)
+            steps.append({"step": "open_current_chat_more", "ok": True, "method": "icon_coordinate", "point": point})
     deadline = time.monotonic() + 5.0
     add = None
     while time.monotonic() < deadline:
-        root = _uia_foreground_or_main_root(hwnd)
+        root = main_root
         add = _find_current_chat_add_button(root)
+        if add is None:
+            foreground_root = _uia_foreground_or_main_root(hwnd)
+            add = _find_current_chat_add_button(foreground_root)
+            if add is not None:
+                root = foreground_root
         if add is not None:
             break
         time.sleep(0.2)
-    if add is None:
-        raise RuntimeError("当前会话更多面板未找到添加联系人入口")
-    _uia_click(add)
-    steps.append({"step": "open_current_chat_add_contact_picker", "ok": True, "method": "uia"})
+    if add is not None:
+        _uia_click(add)
+        steps.append({"step": "open_current_chat_add_contact_picker", "ok": True, "method": "uia"})
+    else:
+        point = _current_chat_icon_point(main_root, kind="add")
+        if point is None:
+            raise RuntimeError("当前会话更多面板未找到添加联系人入口")
+        _uia_click_screen_point(*point)
+        steps.append({"step": "open_current_chat_add_contact_picker", "ok": True, "method": "icon_coordinate", "point": point})
     deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline:
         root = _group_picker_root(hwnd)
@@ -10555,6 +10752,8 @@ def _open_current_chat_add_contact_picker(account_id: str, steps: List[Dict[str,
 
 
 def _find_group_picker_search_edit(root: Any) -> Optional[Any]:
+    if root is None:
+        return None
     edits = _uia_visible_edit_controls(root)
     if not edits:
         return None
@@ -10606,6 +10805,8 @@ def _uia_group_picker_selection_state(node: Any) -> Optional[bool]:
 
 
 def _group_picker_selected_count(root: Any) -> Optional[int]:
+    if root is None:
+        return None
     for node in _uia_walk(root, max_depth=14, max_nodes=1200):
         text = _uia_control_text(node)
         if not text:
@@ -10649,6 +10850,8 @@ def _group_picker_selection_target(cell: Any) -> Any:
 
 
 def _find_group_picker_contact_node(root: Any, target: str) -> Optional[Any]:
+    if root is None:
+        return None
     wanted = str(target or "").strip()
     if not wanted:
         return None
@@ -10678,6 +10881,8 @@ def _find_group_picker_contact_node(root: Any, target: str) -> Optional[Any]:
 
 def _find_first_group_picker_search_result(root: Any) -> Optional[Any]:
     """Return the unique result produced by an exact WeChat-ID search."""
+    if root is None:
+        return None
     candidates: List[Any] = []
     for node in _uia_walk(root, max_depth=20, max_nodes=2200):
         class_name = _uia_control_class(node)
@@ -10723,6 +10928,9 @@ def _select_group_picker_contact(hwnd: int, account_id: str, target: str, steps:
     search_term = ""
     for search_term in search_terms:
         _uia_set_text(edit, search_term)
+        # ValuePattern updates the field but some Weixin builds do not refresh
+        # the result list until the edit receives an Enter event.
+        _send_hotkey("enter", pause=0.08)
         deadline = time.monotonic() + 2.5
         while time.monotonic() < deadline:
             time.sleep(0.25)
@@ -11012,6 +11220,22 @@ def _normalize_task_targets(targets: List[str], *, max_targets: int = 0) -> List
     return out
 
 
+def _existing_task_by_client_request_id(account_id: str, client_request_id: str) -> Optional[Dict[str, Any]]:
+    key = str(client_request_id or "").strip()[:180]
+    if not key:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from wechat_tasks where account_id=? and client_request_id=? limit 1",
+            (account_id, key),
+        ).fetchone()
+    if not row:
+        return None
+    item = _row_to_dict(row)
+    item["deduped"] = True
+    return item
+
+
 def _create_wechat_task(
     *,
     account_id: str,
@@ -11022,31 +11246,46 @@ def _create_wechat_task(
     strategy: Dict[str, Any],
     planned_total: Optional[int] = None,
     auth_context: Optional[Dict[str, Any]] = None,
+    client_request_id: str = "",
     start_worker: bool = True,
 ) -> Dict[str, Any]:
+    client_request_id = str(client_request_id or "").strip()[:180]
+    if client_request_id:
+        existing = _existing_task_by_client_request_id(account_id, client_request_id)
+        if existing:
+            return existing
     task_id = uuid.uuid4().hex
     now = _now_iso()
     total = int(planned_total if planned_total is not None else len(targets))
-    with _connect() as conn:
-        conn.execute(
-            """
-            insert into wechat_tasks(id, account_id, task_type, target_type, targets, payload, strategy, status, planned_total, created_at, updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                task_id,
-                account_id,
-                task_type,
-                target_type,
-                _json_dumps(targets),
-                _json_dumps(payload),
-                _json_dumps(strategy),
-                "pending",
-                total,
-                now,
-                now,
-            ),
-        )
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                insert into wechat_tasks(id, account_id, task_type, target_type, targets, payload, strategy, status, planned_total, created_at, updated_at, client_request_id)
+                values(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    task_id,
+                    account_id,
+                    task_type,
+                    target_type,
+                    _json_dumps(targets),
+                    _json_dumps(payload),
+                    _json_dumps(strategy),
+                    "pending",
+                    total,
+                    now,
+                    now,
+                    client_request_id or None,
+                ),
+            )
+    except sqlite3.IntegrityError:
+        if not client_request_id:
+            raise
+        existing = _existing_task_by_client_request_id(account_id, client_request_id)
+        if not existing:
+            raise
+        return existing
     if auth_context:
         _TASK_AUTH_CONTEXT[task_id] = dict(auth_context)
     if start_worker:
@@ -11222,8 +11461,12 @@ async def create_send_task(
     *,
     target_type: str = "direct",
     attachments: Optional[List[Dict[str, Any]]] = None,
+    client_request_id: str = "",
 ) -> Dict[str, Any]:
     init_db()
+    existing = _existing_task_by_client_request_id(account_id, client_request_id)
+    if existing:
+        return existing
     strategy = get_strategy()
     max_targets = int(strategy.get("max_targets_per_task") or 0)
     targets = _normalize_task_targets(targets, max_targets=max_targets)
@@ -11245,6 +11488,7 @@ async def create_send_task(
         targets=targets,
         payload={"text": text, "attachments": files},
         strategy=strategy,
+        client_request_id=client_request_id,
     )
 
 
@@ -11356,8 +11600,12 @@ async def create_group_task(
     customer_wx_no: str = "",
     use_current_chat: bool = False,
     execute_now: bool = False,
+    client_request_id: str = "",
 ) -> Dict[str, Any]:
     init_db()
+    existing_by_request = _existing_task_by_client_request_id(account_id, client_request_id)
+    if existing_by_request:
+        return existing_by_request
     _find_local_account(account_id)
     targets = _normalize_task_targets(contacts, max_targets=100)
     if len(targets) < 2:
@@ -11367,7 +11615,7 @@ async def create_group_task(
     if existing:
         return existing
     strategy = get_strategy()
-    return _create_wechat_task(
+    task = _create_wechat_task(
         account_id=account_id,
         task_type="create_group",
         target_type="group_contacts",
@@ -11386,6 +11634,7 @@ async def create_group_task(
         },
         strategy=strategy,
         planned_total=len(targets),
+        client_request_id=client_request_id,
         start_worker=not execute_now,
     )
     if execute_now:

@@ -522,12 +522,8 @@
     var primaryInput = $('nativeWechatGroupInvitePrimaryContact');
     if (primaryInput) {
       var selected = String(cfg.group_invite_primary_contact || ((cfg.group_invite_contacts || [])[0]) || '').trim();
-      var match = state.contacts.concat(state.contactPickerContacts || []).find(function(item) { return groupInviteContactMatches(item, selected); });
-      var selectedName = String((match && contactTitle(match)) || cfg.group_invite_primary_contact_name || selected).trim();
       primaryInput.value = selected;
-      primaryInput.setAttribute('data-contact-name', selectedName);
-      var primaryText = $('nativeWechatGroupInvitePrimaryContactText');
-      if (primaryText) primaryText.textContent = selectedName || (state.pagination.contacts.total ? '请选择主联系人' : '暂无通讯录，请先同步');
+      primaryInput.setAttribute('data-contact-name', selected);
     }
     var welcome = $('nativeWechatGroupInviteWelcomeMessage');
     if (welcome && document.activeElement !== welcome) {
@@ -593,14 +589,8 @@
     var memoryId = (($('nativeWechatAutoReplyMemoryDoc') || {}).value || '').trim();
     var primaryInput = $('nativeWechatGroupInvitePrimaryContact');
     var primaryContact = ((primaryInput || {}).value || '').trim();
-    var matched = state.contacts.concat(state.contactPickerContacts || []).find(function(item) {
-      return groupInviteContactMatches(item, primaryContact);
-    });
-    if (matched) {
-      var normalized = String(groupInviteContactValue(matched) || '').trim();
-      if (normalized) primaryContact = normalized;
-    }
-    var primaryLabel = primaryContact ? String((primaryInput && primaryInput.getAttribute('data-contact-name')) || (matched && contactTitle(matched)) || primaryContact).trim() : '';
+    var primaryLabel = primaryContact;
+    var current = state.autoReply || {};
     return {
       account_id: activeAccountId(),
       enabled: !!enabled,
@@ -608,12 +598,75 @@
       memory_doc_ids: memoryId ? [memoryId] : [],
       group_invite_enabled: !!(($('nativeWechatGroupInviteEnabled') || {}).checked),
       group_invite_memory_doc_id: (($('nativeWechatGroupInviteMemoryDoc') || {}).value || '').trim(),
-      group_invite_keywords: '',
+      group_invite_keywords: String(current.group_invite_keywords || '').trim(),
       group_invite_contacts: primaryContact ? [primaryContact] : [],
       group_invite_primary_contact: primaryContact,
       group_invite_primary_contact_name: primaryLabel,
       group_invite_welcome_message: (($('nativeWechatGroupInviteWelcomeMessage') || {}).value || '').trim()
     };
+  }
+
+  function cloudAutoReplyConfigBody(body) {
+    var payload = Object.assign({}, body || {});
+    payload.installation_id = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+    payload.account_key = 'wechat:pc-default';
+    return payload;
+  }
+
+  function syncAutoReplyConfigToCloud(body) {
+    return cloudJson('/api/h5-chat/mounted-accounts/wechat-auto-reply', {
+      method: 'POST',
+      body: cloudAutoReplyConfigBody(body)
+    });
+  }
+
+  function cloudAutoReplyConfig() {
+    return cloudJson('/api/h5-chat/mounted-accounts', { json: false }).then(function(data) {
+      var installationId = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+      var accounts = Array.isArray(data && data.accounts) ? data.accounts : [];
+      var row = accounts.find(function(item) {
+        return item && item.scope === 'wechat' && String(item.installation_id || '') === String(installationId || '');
+      });
+      var defaultRow = data && data.defaults && data.defaults.wechat_auto_reply;
+      if (!row || !defaultRow || !defaultRow.updated_at) return null;
+      return {
+        account_id: String(row.account_id || activeAccountId() || 'pc-wechat-default'),
+        updated_at: String(defaultRow.updated_at || ''),
+        enabled: !!row.auto_reply_enabled,
+        interval_seconds: Number(row.auto_reply_interval_seconds || 1800),
+        memory_doc_ids: Array.isArray(row.auto_reply_memory_doc_ids) ? row.auto_reply_memory_doc_ids : [],
+        group_invite_enabled: !!row.group_invite_enabled,
+        group_invite_memory_doc_id: String(row.group_invite_memory_doc_id || ''),
+        group_invite_keywords: String(row.group_invite_keywords || ''),
+        group_invite_contacts: Array.isArray(row.group_invite_contacts) ? row.group_invite_contacts : [],
+        group_invite_primary_contact: String(row.group_invite_primary_contact || ''),
+        group_invite_primary_contact_name: String(row.group_invite_primary_contact_name || row.group_invite_primary_contact || ''),
+        group_invite_welcome_message: String(row.group_invite_welcome_message || '')
+      };
+    });
+  }
+
+  function applyCloudAutoReplyConfig() {
+    return cloudAutoReplyConfig().then(function(body) {
+      if (!body) return null;
+      var local = state.autoReply || {};
+      var localTime = Date.parse(String(local.updated_at || '')) || 0;
+      var cloudTime = Date.parse(String(body.updated_at || '')) || 0;
+      if (localTime > cloudTime) {
+        return syncAutoReplyConfigToCloud(autoReplyConfigBody(!!local.enabled)).then(function() {
+          return state.autoReply;
+        });
+      }
+      return apiJson('/api/native-wechat/auto-reply/config', {
+        method: 'POST',
+        body: body
+      }).then(function(data) {
+        state.autoReply = data.config || body;
+        renderAutoReply();
+        renderAutoReplyConfig();
+        return state.autoReply;
+      });
+    });
   }
 
   function renderPeers() {
@@ -894,6 +947,7 @@
       state.autoReply = data.config || {};
       renderAutoReply();
       renderAutoReplyConfig();
+      return applyCloudAutoReplyConfig().catch(function() { return state.autoReply; });
     }).catch(function(err) {
       state.autoReply = null;
       renderAutoReply();
@@ -916,15 +970,18 @@
     if (!id) return setMsg('请先选择本机微信账号', true);
     state.autoReplyBusy = true;
     renderAutoReply();
+    var body = autoReplyConfigBody(enabled);
     return apiJson('/api/native-wechat/auto-reply/config', {
       method: 'POST',
-      body: autoReplyConfigBody(enabled)
+      body: body
     }).then(function(data) {
       state.autoReply = data.config || {};
       renderAutoReplyConfig();
-      setMsg(enabled ? '个人微信自动回复已开启：每30分钟检查一次，只回复私聊。' : '个人微信自动回复已关闭。', false);
+      return syncAutoReplyConfigToCloud(body).then(function() {
+        setMsg(enabled ? '个人微信自动回复已开启，设置已同步服务器。' : '个人微信自动回复已关闭，设置已同步服务器。', false);
+      });
     }).catch(function(err) {
-      setMsg(err.message || '自动回复配置保存失败', true);
+      setMsg(err.message || '自动回复配置保存失败，服务器可能未同步', true);
       return loadAutoReplyConfig();
     }).finally(function() {
       state.autoReplyBusy = false;
@@ -937,15 +994,18 @@
     if (!id) return setMsg('请先选择本机微信账号', true);
     state.autoReplyBusy = true;
     renderAutoReply();
+    var body = autoReplyConfigBody(!!(state.autoReply || {}).enabled);
     return apiJson('/api/native-wechat/auto-reply/config', {
       method: 'POST',
-      body: autoReplyConfigBody(!!(state.autoReply || {}).enabled)
+      body: body
     }).then(function(data) {
       state.autoReply = data.config || {};
       renderAutoReplyConfig();
-      setMsg('接管设置已保存，AI 会结合消息上下文、关键词和所选记忆判断拉群条件。', false);
+      return syncAutoReplyConfigToCloud(body).then(function() {
+        setMsg('接管设置已保存，H5 与 Online 已同步服务器。', false);
+      });
     }).catch(function(err) {
-      setMsg(err.message || '接管设置保存失败', true);
+      setMsg(err.message || '接管设置保存失败，服务器可能未同步', true);
     }).finally(function() {
       state.autoReplyBusy = false;
       renderAutoReply();
@@ -1999,8 +2059,6 @@
     if (contactMomentsCommentBtn) contactMomentsCommentBtn.addEventListener('click', submitMomentsComment);
     var contactCreateGroupBtn = $('nativeWechatContactCreateGroupBtn');
     if (contactCreateGroupBtn) contactCreateGroupBtn.addEventListener('click', createGroupFromSelectedContacts);
-    var choosePrimaryContactBtn = $('nativeWechatGroupInvitePrimaryContactChooseBtn');
-    if (choosePrimaryContactBtn) choosePrimaryContactBtn.addEventListener('click', openGroupInviteContactPicker);
     var groupContactSearch = $('nativeWechatContactPickerSearch');
     if (groupContactSearch) groupContactSearch.addEventListener('input', debounce(function() {
       state.groupInviteContactSearch = groupContactSearch.value || '';

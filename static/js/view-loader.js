@@ -10,6 +10,49 @@
   state.scripts = state.scripts || {};
   state.inited = state.inited || {};
 
+  var RESOURCE_RETRY_DELAYS = [0, 280, 900, 1800];
+
+  function isTransientResourceError(error) {
+    var name = String(error && error.name || '');
+    var message = String(error && error.message || error || '');
+    return !!(error && error.lobsterNetworkError) || (
+      name !== 'AbortError' && /Failed to fetch|NetworkError|Load failed|timed out|timeout/i.test(message)
+    );
+  }
+
+  function delay(ms) {
+    return new Promise(function(resolve) { window.setTimeout(resolve, ms); });
+  }
+
+  function retryUrl(url, attempt) {
+    if (!attempt || !url) return url;
+    var sep = String(url).indexOf('?') >= 0 ? '&' : '?';
+    return String(url) + sep + '_lobster_retry=' + Date.now().toString(36) + '-' + attempt;
+  }
+
+  function fetchViewHtml(url, options) {
+    options = options || {};
+    var attempt = 0;
+
+    function run() {
+      var requestOptions = Object.assign({}, options);
+      requestOptions.cache = attempt ? 'no-store' : (options.cache || 'default');
+      return fetch(retryUrl(url, attempt), requestOptions).then(function(response) {
+        if (response.ok || ![408, 425, 429, 500, 502, 503, 504].includes(response.status) || attempt >= RESOURCE_RETRY_DELAYS.length - 1) {
+          return response;
+        }
+        attempt += 1;
+        return delay(RESOURCE_RETRY_DELAYS[attempt]).then(run);
+      }).catch(function(error) {
+        if (!isTransientResourceError(error) || attempt >= RESOURCE_RETRY_DELAYS.length - 1) throw error;
+        attempt += 1;
+        return delay(RESOURCE_RETRY_DELAYS[attempt]).then(run);
+      });
+    }
+
+    return run();
+  }
+
   function normalizeViewName(view) {
     return String(view || '').trim();
   }
@@ -65,12 +108,25 @@
       }
     }
     state.styles[href] = new Promise(function(resolve, reject) {
-      var link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = href;
-      link.onload = resolve;
-      link.onerror = function() { reject(new Error('Failed to load stylesheet: ' + href)); };
-      document.head.appendChild(link);
+      var attempt = 0;
+      function append() {
+        var link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = retryUrl(href, attempt);
+        link.onload = resolve;
+        link.onerror = function() {
+          link.remove();
+          if (attempt >= RESOURCE_RETRY_DELAYS.length - 1) {
+            delete state.styles[href];
+            reject(new Error('Failed to load stylesheet: ' + href));
+            return;
+          }
+          attempt += 1;
+          delay(RESOURCE_RETRY_DELAYS[attempt]).then(append);
+        };
+        document.head.appendChild(link);
+      }
+      append();
     });
     return state.styles[href];
   }
@@ -88,12 +144,25 @@
       }
     }
     state.scripts[src] = new Promise(function(resolve, reject) {
-      var script = document.createElement('script');
-      script.src = src;
-      script.async = false;
-      script.onload = resolve;
-      script.onerror = function() { reject(new Error('Failed to load script: ' + src)); };
-      document.body.appendChild(script);
+      var attempt = 0;
+      function append() {
+        var script = document.createElement('script');
+        script.src = retryUrl(src, attempt);
+        script.async = false;
+        script.onload = resolve;
+        script.onerror = function() {
+          script.remove();
+          if (attempt >= RESOURCE_RETRY_DELAYS.length - 1) {
+            delete state.scripts[src];
+            reject(new Error('Failed to load script: ' + src));
+            return;
+          }
+          attempt += 1;
+          delay(RESOURCE_RETRY_DELAYS[attempt]).then(append);
+        };
+        document.body.appendChild(script);
+      }
+      append();
     });
     return state.scripts[src];
   }
@@ -144,10 +213,21 @@
       host.className = 'content-block';
       getViewMount({}).appendChild(host);
     }
-    host.innerHTML = '<div class="card"><p class="msg err" style="display:block;margin:0;">视图加载失败：' +
-      String(message || 'unknown error').replace(/[&<>"']/g, function(ch) {
-        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
-      }) + '</p></div>';
+    var isNetworkFailure = /Failed to fetch|NetworkError|Load failed|timeout|网络连接暂时中断/i.test(String(message || ''));
+    host.innerHTML = '<div class="card view-recovery-state">' +
+      '<p class="msg ' + (isNetworkFailure ? 'ok' : 'err') + '" style="display:block;margin:0;">' +
+      (isNetworkFailure ? '连接正在恢复，请稍候…' : '页面暂时无法打开，请稍后重试') +
+      '</p><button type="button" class="btn btn-ghost view-recovery-retry">重新连接</button></div>';
+    var retryButton = host.querySelector('.view-recovery-retry');
+    if (retryButton) {
+      retryButton.addEventListener('click', function() {
+        retryButton.disabled = true;
+        retryButton.textContent = '正在连接…';
+        if (typeof window.refreshCurrentLobsterView === 'function') {
+          window.refreshCurrentLobsterView({ view: view, reason: 'view_error_retry' });
+        }
+      });
+    }
     return host;
   }
 
@@ -169,7 +249,7 @@
 
     state.loading[view] = Promise.all(asArray(config.css).map(loadStyleOnce))
       .then(function() {
-        return fetch(htmlUrl, {
+        return fetchViewHtml(htmlUrl, {
           credentials: 'same-origin',
           cache: config.cache || 'default'
         });
