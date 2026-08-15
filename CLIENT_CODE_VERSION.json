@@ -1,7 +1,7 @@
 {
-  "version": "1.0.177",
-  "build": 221,
-  "applied_at": "2026-08-16T01:06:54+08:00",
-  "note": "fix: stabilize native wechat takeover",
-  "bundle_sha256": "d30f697e1119abfa1d93a560f2018bc2824e72109cdc5d0286652f4d10064324"
+  "version": "1.0.178",
+  "build": 222,
+  "applied_at": "2026-08-16T01:44:40+08:00",
+  "note": "fix: align online workflow node catalog",
+  "bundle_sha256": "9c72aa15e20affc5c3260b6d825a61436fac48b4d589e8c003d41be555f91204"
 }
