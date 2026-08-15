@@ -561,7 +561,7 @@ def _build_native_wechat_contact_snapshot() -> List[Dict[str, str]]:
         if not isinstance(item, dict):
             continue
         display_name = str(item.get("display_name") or item.get("remark") or item.get("wx_no") or "").strip()
-        target = str(item.get("remark") or item.get("display_name") or item.get("wx_no") or item.get("contact_key") or "").strip()
+        target = str(item.get("wx_no") or item.get("remark") or item.get("display_name") or item.get("contact_key") or "").strip()
         contact_key = str(item.get("contact_key") or item.get("wx_no") or target).strip()
         if not target or target.lower() in seen:
             continue

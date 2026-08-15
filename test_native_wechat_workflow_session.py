@@ -700,7 +700,7 @@ def test_group_picker_selects_exact_contact_checkbox_and_verifies(monkeypatch):
     assert engine._find_group_picker_contact_node(root, "张深根-AI三域营销运营") is other_contact
 
     steps = []
-    engine._select_group_picker_contact(123, "张深根（私人号）", steps)
+    engine._select_group_picker_contact(123, engine.LOCAL_DEFAULT_ACCOUNT_ID, "张深根（私人号）", steps)
 
     assert clicks == [checkbox]
     assert steps[-1]["target"] == "张深根（私人号）"
@@ -1640,7 +1640,18 @@ async def test_create_group_task_sends_welcome_after_group_is_created(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_auto_reply_match_immediately_queues_group_with_primary_contact(monkeypatch):
+async def test_auto_reply_match_immediately_queues_group_with_primary_contact(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    engine._persist_contact(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        {
+            "contact_key": "张老师",
+            "display_name": "张老师",
+            "wx_no": "wxid_primary_contact",
+            "source": "test",
+        },
+    )
     calls = []
 
     async def create_group(account_id, contacts, **kwargs):
@@ -1665,9 +1676,11 @@ async def test_auto_reply_match_immediately_queues_group_with_primary_contact(mo
     )
 
     assert calls[0][0] == engine.LOCAL_DEFAULT_ACCOUNT_ID
-    assert calls[0][1] == ["客户A", "张老师"]
+    assert calls[0][1] == ["客户A", "wxid_primary_contact"]
     assert calls[0][2]["source_inbound_message_id"] == "message-a"
     assert calls[0][2]["dedup_key"].startswith("auto-invite-")
+    assert calls[0][2]["use_current_chat"] is True
+    assert calls[0][2]["execute_now"] is True
     assert result["queued"] is True
     assert result["task_id"] == "group-task"
 
@@ -1880,6 +1893,119 @@ async def test_create_group_task_deduplicates_same_auto_invite(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_failed_group_invite_can_retry_after_primary_contact_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 1})
+    monkeypatch.setattr(engine, "_ensure_task_worker", lambda _account_id: None)
+    engine.init_db()
+
+    inbound = {
+        "peer_id": "customer-a",
+        "direction": "in",
+        "content": "how much is it",
+        "provider_message_id": "message-a",
+        "created_at": "2026-08-14T09:44:00",
+        "auto_reply_inbound_id": "message-a",
+    }
+    engine._record_auto_reply_history(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        inbound,
+        reply="",
+        category="price",
+        status="skipped",
+        error="group invite queued",
+    )
+    failed = await engine.create_group_task(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        ["customer-a", "old-sales"],
+        dedup_key="auto-invite-old-sales",
+        source_peer_id="customer-a",
+        source_inbound_message_id="message-a",
+    )
+    engine._finish_task(failed["id"], "failed", 0, 0, 2, "not found old-sales")
+    engine._mark_auto_reply_group_invite_failed(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        "message-a",
+        "not found old-sales",
+    )
+
+    candidate = engine._latest_failed_group_invite_candidate(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        "new-sales",
+    )
+
+    assert candidate is not None
+    assert candidate["content"] == "how much is it"
+    assert candidate["auto_reply_inbound_id"] == "message-a"
+    assert candidate["previous_group_invite_primary_contact"] == "old-sales"
+    with engine._connect() as conn:
+        row = conn.execute(
+            """
+            select status,error_message from wechat_auto_reply_history
+            where account_id=? and peer_id=? and inbound_message_id=?
+            """,
+            (engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a", "message-a"),
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert "not found old-sales" in row["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_failed_group_invite_retry_is_throttled_for_same_primary_contact(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 1})
+    monkeypatch.setattr(engine, "_ensure_task_worker", lambda _account_id: None)
+    engine.init_db()
+    inbound = {
+        "peer_id": "customer-a",
+        "direction": "in",
+        "content": "please invite me",
+        "provider_message_id": "message-a",
+        "created_at": "2026-08-14T09:44:00",
+        "auto_reply_inbound_id": "message-a",
+    }
+    engine._record_auto_reply_history(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        inbound,
+        reply="",
+        category="price",
+        status="skipped",
+        error="group invite queued",
+    )
+    failed = await engine.create_group_task(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        ["customer-a", "same-sales"],
+        dedup_key="auto-invite-same-sales",
+        source_peer_id="customer-a",
+        source_inbound_message_id="message-a",
+    )
+    engine._finish_task(failed["id"], "failed", 0, 0, 2, "not found same-sales")
+
+    assert (
+        engine._latest_failed_group_invite_candidate(
+            engine.LOCAL_DEFAULT_ACCOUNT_ID,
+            "customer-a",
+            "same-sales",
+            retry_cooldown_seconds=300,
+        )
+        is None
+    )
+    assert (
+        engine._latest_failed_group_invite_candidate(
+            engine.LOCAL_DEFAULT_ACCOUNT_ID,
+            "customer-a",
+            "same-sales",
+            retry_cooldown_seconds=0,
+        )
+        is not None
+    )
+
+
+@pytest.mark.asyncio
 async def test_unverified_group_success_does_not_block_retry(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 1})
@@ -1924,6 +2050,53 @@ def test_unverified_group_claim_is_detected_and_sanitized():
     sanitized = engine._strip_unverified_group_claims("已将张老师拉入群聊，群内对接")
     assert "群状态未核验" in sanitized
 
+
+def test_local_contact_wx_no_index_prefers_wxno(monkeypatch):
+    class FakeWx:
+        def GetFriendDetails(self, n=0, timeout=0):
+            return [
+                {
+                    "display_name": "张深根-AI三域营销运营",
+                    "remark": "张老师",
+                    "wxNo": "AIZhang7891",
+                    "username": "AIZhang7891",
+                    "contact_key": "AIZhang7891",
+                }
+            ]
+
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: FakeWx())
+    index = engine._build_local_contact_wx_no_index(100)
+
+    assert index[engine._normalize_contact_lookup_key("张深根-AI三域营销运营")] == "AIZhang7891"
+    assert index[engine._normalize_contact_lookup_key("张老师")] == "AIZhang7891"
+    assert index[engine._normalize_contact_lookup_key("AIZhang7891")] == "AIZhang7891"
+
+
+
+
+def test_visible_contact_cell_names_walks_nested_children(monkeypatch):
+    class Node:
+        def __init__(self, name="", class_name="", children=None):
+            self.Name = name
+            self.ClassName = class_name
+            self._children = list(children or [])
+
+        def GetChildren(self):
+            return list(self._children)
+
+    nested = Node("???-AI??????", "mmui::ContactsCellItemView")
+    wrapper = Node(children=[Node(children=[nested])])
+    assert engine._uia_visible_contact_cell_names(wrapper) == ["???-AI??????"]
+
+
+def test_find_local_contact_list_falls_back_to_guess(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(engine, "_uia_walk", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(engine, "_uia_control_class", lambda _node: "Other")
+    monkeypatch.setattr(engine, "_uia_control_text", lambda _node: "")
+    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda _root: sentinel)
+
+    assert engine._find_local_contact_list(object()) is sentinel
 
 def test_selected_memory_context_only_loads_selected_document(monkeypatch):
     from backend.app.api import openclaw_memory

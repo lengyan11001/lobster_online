@@ -2511,6 +2511,91 @@ def _update_auto_reply_history(
         )
 
 
+def _mark_auto_reply_group_invite_failed(account_id: str, peer_id: str, inbound_id: str, error: str) -> None:
+    inbound_id = str(inbound_id or "").strip()
+    peer_id = str(peer_id or "").strip()
+    if not inbound_id or not peer_id:
+        return
+    with _connect() as conn:
+        conn.execute(
+            """
+            update wechat_auto_reply_history
+            set status='failed', error_message=?, updated_at=?
+            where account_id=? and peer_id=? and inbound_message_id=?
+            """,
+            (f"拉群失败：{str(error or '')[:1800]}", _now_iso(), account_id, peer_id, inbound_id),
+        )
+
+
+def _latest_failed_group_invite_candidate(
+    account_id: str,
+    peer_id: str,
+    primary_contact: str,
+    *,
+    retry_cooldown_seconds: int = 300,
+) -> Optional[Dict[str, Any]]:
+    primary_contact = str(primary_contact or "").strip()
+    peer_id = str(peer_id or "").strip()
+    if not primary_contact or not peer_id or _has_verified_group_invite(account_id, peer_id, primary_contact):
+        return None
+    peer_key = _compact_for_contains(peer_id).lower()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select id, targets, payload, error_message, updated_at
+            from wechat_tasks
+            where account_id=? and task_type='create_group' and status='failed'
+            order by updated_at desc
+            limit 20
+            """,
+            (account_id,),
+        ).fetchall()
+        for row in rows:
+            payload = _safe_json_loads(str(row["payload"] or ""), {})
+            source_peer_id = str((payload or {}).get("source_peer_id") or "").strip()
+            if not isinstance(payload, dict) or _compact_for_contains(source_peer_id).lower() != peer_key:
+                continue
+            inbound_id = str(payload.get("source_inbound_message_id") or "").strip()
+            if not inbound_id:
+                continue
+            targets = [
+                str(item or "").strip()
+                for item in _safe_json_loads(str(row["targets"] or ""), [])
+                if str(item or "").strip()
+            ]
+            task_primary = next((item for item in targets if item != peer_id), "")
+            updated_at = _parse_iso_datetime(row["updated_at"])
+            if task_primary == primary_contact and updated_at:
+                if (datetime.utcnow() - updated_at).total_seconds() < retry_cooldown_seconds:
+                    return None
+            hist = conn.execute(
+                """
+                select inbound_content, created_at
+                from wechat_auto_reply_history
+                where account_id=? and peer_id=? and inbound_message_id=?
+                limit 1
+                """,
+                (account_id, source_peer_id or peer_id, inbound_id),
+            ).fetchone()
+            content = str(hist["inbound_content"] if hist else "").strip()
+            if not content:
+                continue
+            return {
+                "peer_id": source_peer_id or peer_id,
+                "direction": "in",
+                "msg_type": "text",
+                "content": content,
+                "provider_message_id": inbound_id,
+                "auto_reply_inbound_id": inbound_id,
+                "created_at": str(hist["created_at"] if hist else row["updated_at"]),
+                "group_invite_retry": True,
+                "previous_group_invite_error": str(row["error_message"] or "")[:500],
+                "previous_group_invite_task_id": str(row["id"] or ""),
+                "previous_group_invite_primary_contact": task_primary,
+            }
+    return None
+
+
 def _recent_conversation_text(account_id: str, peer_id: str, *, limit: int = 8) -> str:
     rows = list_messages(account_id, peer_id, limit=limit, offset=0).get("items") or []
     lines: List[str] = []
@@ -2841,13 +2926,26 @@ async def _queue_auto_reply_group_invite(
 ) -> Dict[str, Any]:
     if not llm_reply.get("should_invite_group"):
         return {"ok": True, "skipped": True, "reason": "not_matched"}
-    primary_contact = str(
+    configured_primary_contact = str(
         cfg.get("group_invite_primary_contact")
         or next((item for item in (cfg.get("group_invite_contacts") or []) if str(item or "").strip()), "")
     ).strip()
-    if not primary_contact:
+    if not configured_primary_contact:
         return {"ok": True, "skipped": True, "reason": "missing_primary_contact"}
-    if primary_contact == str(peer_id or "").strip():
+    if configured_primary_contact == str(peer_id or "").strip():
+        return {"ok": True, "skipped": True, "reason": "primary_contact_is_customer"}
+    primary_contact = _resolve_local_contact_wx_no(account_id, configured_primary_contact)
+    customer_wx_no = _resolve_local_contact_wx_no(account_id, peer_id)
+    if not primary_contact:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "primary_contact_wx_no_missing",
+            "configured_primary_contact": configured_primary_contact,
+        }
+    if not customer_wx_no:
+        customer_wx_no = _read_current_session_wx_no_by_avatar(account_id, peer_id)
+    if primary_contact == customer_wx_no:
         return {"ok": True, "skipped": True, "reason": "primary_contact_is_customer"}
     inbound_id = str(
         inbound.get("auto_reply_inbound_id")
@@ -2855,28 +2953,36 @@ async def _queue_auto_reply_group_invite(
         or inbound.get("id")
         or _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
     ).strip()
-    dedup_key = "auto-invite-v2-" + _stable_key(account_id, peer_id, primary_contact)
+    dedup_key = "auto-invite-v3-" + _stable_key(account_id, customer_wx_no or peer_id, primary_contact)
     task = await create_group_task(
         account_id,
-        [peer_id, primary_contact],
+        [customer_wx_no or peer_id, primary_contact],
         welcome_message=str(cfg.get("group_invite_welcome_message") or "").strip(),
         dedup_key=dedup_key,
         source_peer_id=peer_id,
         source_inbound_message_id=inbound_id,
         group_invite_reason=str(llm_reply.get("group_invite_reason") or "").strip(),
         matched_group_keywords=list(llm_reply.get("matched_group_keywords") or []),
+        customer_wx_no=customer_wx_no,
+        use_current_chat=True,
+        execute_now=True,
     )
     status = str(task.get("status") or "").strip().lower()
+    completed = status in {"success", "partial_failed"} and bool(
+        (task.get("payload") or {}).get("group_verified") if isinstance(task.get("payload"), dict) else False
+    )
     return {
         "ok": True,
         "queued": status in {"pending", "running"},
+        "completed": completed,
         "deduped": bool(task.get("deduped")),
         "dedup_key": dedup_key,
         "primary_contact": primary_contact,
-        "primary_contact_name": str(cfg.get("group_invite_primary_contact_name") or primary_contact).strip(),
+        "primary_contact_name": str(cfg.get("group_invite_primary_contact_name") or configured_primary_contact).strip(),
         "task_id": str(task.get("id") or ""),
         "task_status": status,
         "already_grouped": bool(task.get("deduped") and status in {"success", "partial_failed"}),
+        "customer_wx_no": customer_wx_no,
     }
 
 
@@ -2898,6 +3004,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "no_unreplied_message": "无待回复消息",
         "duplicate": "已处理过",
         "group_invite_queued": "拉群已排队",
+        "group_invite_completed": "拉群已完成",
         "group_invite_deduped": "拉群已去重",
         "group_invite_not_executable": "拉群配置需调整",
         "failed": "回复失败",
@@ -3096,6 +3203,7 @@ async def run_auto_reply_once(
         },
         "friend_requests_checked_this_run": bool(check_friend_requests),
         "group_invite_queued": 0,
+        "group_invite_completed": 0,
         "group_invite_deduped": 0,
         "group_invite_skipped": 0,
         "group_invite_failed": 0,
@@ -3174,6 +3282,7 @@ async def run_auto_reply_once(
                     account_id,
                     peer_id,
                     load_more_pages=0,
+                    select_via_uia=True,
                 )
                 _collect_local_driver_recovery(result, sync_result)
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
@@ -3184,7 +3293,28 @@ async def run_auto_reply_once(
                     continue
                 actual_peer = str(sync_result.get("peer_id") or peer_id)
                 current_peer = actual_peer
+                configured_primary_contact = str(
+                    cfg.get("group_invite_primary_contact")
+                    or next(
+                        (value for value in (cfg.get("group_invite_contacts") or []) if str(value or "").strip()),
+                        "",
+                    )
+                ).strip()
+                primary_contact = _resolve_local_contact_wx_no(account_id, configured_primary_contact) or configured_primary_contact
                 inbound = _latest_auto_reply_candidate(account_id, actual_peer)
+                if not inbound and cfg.get("group_invite_enabled"):
+                    inbound = _latest_failed_group_invite_candidate(account_id, actual_peer, primary_contact)
+                    if inbound:
+                        item_result.update(
+                            {
+                                "group_invite_retry": True,
+                                "previous_group_invite_error": str(inbound.get("previous_group_invite_error") or "")[:240],
+                                "previous_group_invite_task_id": str(inbound.get("previous_group_invite_task_id") or ""),
+                                "previous_group_invite_primary_contact": str(
+                                    inbound.get("previous_group_invite_primary_contact") or ""
+                                ),
+                            }
+                        )
                 if not inbound:
                     result["skipped"] += 1
                     item_result.update({"status": "no_unreplied_message"})
@@ -3212,13 +3342,6 @@ async def run_auto_reply_once(
                     latest_message=str(inbound.get("content") or ""),
                 )
                 contact_intelligence, strategy_context = _wechat_intelligence_prompt_context(intelligence_context)
-                primary_contact = str(
-                    cfg.get("group_invite_primary_contact")
-                    or next(
-                        (value for value in (cfg.get("group_invite_contacts") or []) if str(value or "").strip()),
-                        "",
-                    )
-                ).strip()
                 local_group_invite_verified = _has_verified_group_invite(
                     account_id,
                     actual_peer,
@@ -3280,8 +3403,11 @@ async def run_auto_reply_once(
                         )
                         item_result["group_invite"] = group_invite
                         item_result["group_invite_dedup_key"] = str(group_invite.get("dedup_key") or "")
+                        item_result["customer_wx_no"] = str(group_invite.get("customer_wx_no") or "")
                         if group_invite.get("queued"):
                             result["group_invite_queued"] += 1
+                        elif group_invite.get("completed"):
+                            result["group_invite_completed"] += 1
                         elif group_invite.get("deduped"):
                             result["group_invite_deduped"] += 1
                         elif group_invite.get("skipped"):
@@ -3297,11 +3423,15 @@ async def run_auto_reply_once(
                     item_result["group_invite_already_verified"] = True
 
                 if llm_reply.get("should_invite_group"):
-                    invite_ok = bool(group_invite and (group_invite.get("queued") or group_invite.get("deduped")))
+                    invite_ok = bool(
+                        group_invite
+                        and (group_invite.get("queued") or group_invite.get("completed") or group_invite.get("deduped"))
+                    )
                     if not invite_ok:
                         invite_reason = str((group_invite or {}).get("reason") or (group_invite or {}).get("error") or "unknown")
                         invite_error_labels = {
                             "missing_primary_contact": "未设置拉群主联系人",
+                            "primary_contact_wx_no_missing": "预设拉群联系人没有微信号，请先同步通讯录",
                             "primary_contact_is_customer": "拉群主联系人不能与当前客户相同",
                         }
                         invite_error = invite_error_labels.get(invite_reason, f"拉群任务未能创建：{invite_reason}")
@@ -3335,7 +3465,13 @@ async def run_auto_reply_once(
                     )
                     item_result.update(
                         {
-                            "status": "group_invite_queued" if group_invite and group_invite.get("queued") else "group_invite_deduped",
+                            "status": (
+                                "group_invite_completed"
+                                if group_invite and group_invite.get("completed")
+                                else "group_invite_queued"
+                                if group_invite and group_invite.get("queued")
+                                else "group_invite_deduped"
+                            ),
                             "reply_suppressed": True,
                             "group_invite_initiated": True,
                             "group_invite_welcome_message": group_invite_welcome_message,
@@ -3379,6 +3515,7 @@ async def run_auto_reply_once(
                     actual_peer,
                     reply_text,
                     {"driver": "native_wechat_auto_reply", "trigger": trigger, "category": llm_reply.get("category")},
+                    True,
                 )
                 _update_auto_reply_history(
                     account_id,
@@ -3952,6 +4089,17 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
             clicked = True
             time.sleep(1.2)
         if not clicked:
+            # Newer WeChat builds expose the left navigation item as an
+            # XTabBarItem rather than a ButtonControl.
+            nav = _uia_find_by_names(root, [tab_name], contains=False, max_depth=10)
+            if nav is not None:
+                try:
+                    nav.Click(simulateMove=True)
+                except Exception:
+                    nav.Click(simulateMove=False)
+                clicked = True
+                time.sleep(1.2)
+        if not clicked:
             shortcut = {"\u5fae\u4fe1": "1", "\u901a\u8baf\u5f55": "2"}.get(tab_name)
             if shortcut:
                 _send_hotkey(shortcut, ctrl=True, pause=0.8)
@@ -4156,6 +4304,7 @@ def _obj_dict(obj: Any) -> Dict[str, Any]:
     data: Dict[str, Any] = {}
     for name in (
         "name",
+        "display_name",
         "nickname",
         "nickName",
         "remark",
@@ -4218,7 +4367,7 @@ def _build_contact_record(account_id: str, contact: Dict[str, Any], *, now: Opti
     if not contact_key:
         return {}
     source = str(contact.get("source") or "local").strip() or "local"
-    wx_no = str(contact.get("wxNo") or contact.get("wx_no") or contact.get("username") or contact_key).strip()
+    wx_no = str(contact.get("wxNo") or contact.get("wx_no") or contact.get("username") or "").strip()
     remark = str(contact.get("remark") or "").strip()
     raw = dict(contact)
     return {
@@ -4242,7 +4391,7 @@ def _write_contact_record(conn: sqlite3.Connection, record: Dict[str, Any], *, c
         on conflict(account_id, contact_key) do update set
           display_name=excluded.display_name,
           remark=excluded.remark,
-          wx_no=excluded.wx_no,
+          wx_no=coalesce(nullif(excluded.wx_no, ''), wechat_contacts.wx_no),
           source=excluded.source,
           raw_json=excluded.raw_json,
           updated_at=excluded.updated_at
@@ -4321,7 +4470,7 @@ def _wechat_contact_skip_names() -> set[str]:
         "公众号",
         "企业微信联系人",
         "仅聊天的朋友",
-    }
+    } | set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 def _persist_group(account_id: str, group: Dict[str, Any]) -> Dict[str, Any]:
@@ -4690,7 +4839,13 @@ def _prepare_local_automation_thread() -> Dict[str, Any]:
     return {"thread_changed": True, "thread_id": current_thread_id, **reset}
 
 
-def _recover_local_wechat_driver(account_id: str, *, operation: str, error: str) -> Dict[str, Any]:
+def _recover_local_wechat_driver(
+    account_id: str,
+    *,
+    operation: str,
+    error: str,
+    ensure_chat_tab: bool = True,
+) -> Dict[str, Any]:
     recovery: Dict[str, Any] = {
         "attempted": True,
         "ok": False,
@@ -4724,7 +4879,8 @@ def _recover_local_wechat_driver(account_id: str, *, operation: str, error: str)
             "version": str(window.get("version") or ""),
         }
         _focus_local_wechat(hwnd)
-        _ensure_local_tab(hwnd, "\u5fae\u4fe1", strict=True)
+        if ensure_chat_tab:
+            _ensure_local_tab(hwnd, "\u5fae\u4fe1", strict=True)
         time.sleep(0.8)
         _clear_local_windows_cache()
         recovery["uia"] = _probe_wechat_uia(hwnd)
@@ -4835,12 +4991,13 @@ def _run_local_driver_operation(
             return _annotate_local_driver_recovery(result, recovery)
 
 
-def _new_wxauto4_client(account_id: str = "") -> Any:
+def _new_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
     try:
         import wxauto4  # type: ignore
     except Exception as exc:
         raise RuntimeError("\u7f3a\u5c11 wxauto4\uff0c\u65e0\u6cd5\u8bfb\u53d6\u901a\u8baf\u5f55/\u7fa4\u6d88\u606f") from exc
-    _ensure_local_chat_tab(account_id)
+    if ensure_chat_tab:
+        _ensure_local_chat_tab(account_id)
     wx = wxauto4.WeChat(debug=False, resize=False, ads=False)
     online_check = getattr(wx, "IsOnline", None)
     if callable(online_check) and not bool(online_check()):
@@ -4848,22 +5005,23 @@ def _new_wxauto4_client(account_id: str = "") -> Any:
     return wx
 
 
-def _get_wxauto4_client(account_id: str = "") -> Any:
+def _get_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
     with _LOCAL_WECHAT_UI_LOCK:
         _prepare_local_automation_thread()
         if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False)):
-            return _new_wxauto4_client(account_id)
+            return _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
         try:
-            return _new_wxauto4_client(account_id)
+            return _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
         except Exception as initial_exc:
             recovery = _recover_local_wechat_driver(
                 account_id,
                 operation="wxauto4_connect",
                 error=str(initial_exc),
+                ensure_chat_tab=ensure_chat_tab,
             )
             if recovery.get("ok"):
                 try:
-                    wx = _new_wxauto4_client(account_id)
+                    wx = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
                     _mark_local_driver_recovery(account_id, recovery, recovered=True)
                     return wx
                 except Exception as retry_exc:
@@ -5104,6 +5262,106 @@ def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 20) -> Dict[str
     return {"items": list(seen.values()), "rounds": rounds, "completed": False}
 
 
+def _find_uia_session_cell(root: Any, peer_id: str) -> Optional[Any]:
+    """Find a session row by its first-line peer name, never by child controls."""
+    wanted = str(peer_id or "").strip()
+    if not wanted:
+        return None
+    for cell in _uia_session_cells(root):
+        item = _session_from_uia_cell(cell)
+        if str(item.get("peer_id") or "").strip() == wanted:
+            return cell
+    return None
+
+
+def _open_local_session_by_uia(
+    account_id: str,
+    peer_id: str,
+    *,
+    max_rounds: int = 20,
+) -> Dict[str, Any]:
+    """Open one conversation by clicking its session row, without ChatWith search."""
+    if not _module_available("uiautomation"):
+        raise RuntimeError("uiautomation is required to open a local WeChat session")
+    import uiautomation as auto  # type: ignore
+
+    hwnd = _local_wechat_hwnd(account_id)
+    if not hwnd:
+        raise RuntimeError("local WeChat window not found")
+    root = auto.ControlFromHandle(int(hwnd))
+    cells = _uia_session_cells(root)
+    if not cells:
+        raise RuntimeError("未读取到微信会话列表")
+    scroll_target = _uia_scroll_target_from_cells(cells, root)
+    target = str(peer_id or "").strip()
+    rounds = 0
+    # run_auto_reply processes sessions in the same order as this scan, so the
+    # cursor can keep moving down instead of resetting and reopening the list.
+    for index in range(max(1, min(int(max_rounds or 20), 20))):
+        rounds = index + 1
+        root = auto.ControlFromHandle(int(hwnd))
+        cell = _find_uia_session_cell(root, target)
+        if cell is not None:
+            _uia_click(cell)
+            time.sleep(random.uniform(0.35, 0.65))
+            return {
+                "ok": True,
+                "peer_id": target,
+                "rounds": rounds,
+                "selection_method": "pc_wechat_uia_session_cell",
+            }
+        cells = _uia_session_cells(root)
+        if not cells:
+            break
+        scroll_target = _uia_scroll_target_from_cells(cells, root)
+        try:
+            scroll_target.WheelDown(wheelTimes=4)
+            time.sleep(0.22)
+        except Exception:
+            break
+    raise RuntimeError(f"未在微信会话列表找到联系人：{target}")
+
+
+def _read_current_session_wx_no_by_avatar(account_id: str, peer_id: str) -> str:
+    """Read the selected customer's wx id from the visible session avatar card."""
+    if not _module_available("uiautomation"):
+        return ""
+    import uiautomation as auto  # type: ignore
+
+    hwnd = _local_wechat_hwnd(account_id)
+    if not hwnd:
+        return ""
+    root = auto.ControlFromHandle(int(hwnd))
+    cell = _find_uia_session_cell(root, peer_id)
+    if cell is None:
+        return ""
+    avatar = next(
+        (
+            node
+            for node in _uia_walk(cell, max_depth=8, max_nodes=160)
+            if _uia_control_class(node).endswith("ContactHeadView")
+        ),
+        None,
+    )
+    if avatar is None:
+        return ""
+    try:
+        _uia_click(avatar)
+        time.sleep(0.55)
+        profile_root = _uia_foreground_or_main_root(hwnd)
+        wx_no = _extract_contact_profile_wx_no(profile_root)
+        if wx_no:
+            _persist_contact_wx_no(account_id, peer_id, wx_no)
+        return wx_no
+    finally:
+        # The profile card is a transient overlay. Close only that overlay so
+        # the currently selected chat and the session-list cursor stay intact.
+        try:
+            _send_hotkey("esc", pause=0.15)
+        except Exception:
+            pass
+
+
 def _uia_collect_all_sessions(hwnd: int) -> Dict[str, Any]:
     import uiautomation as auto  # type: ignore
 
@@ -5280,6 +5538,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             except Exception:
                 pass
     if contact_list is None:
+        contact_list = _uia_guess_contact_list(root)
+    if contact_list is None:
         contact_list = _uia_primary_contact_list(root)
     if contact_list is None:
         raise RuntimeError("local WeChat contact list not found")
@@ -5291,18 +5551,27 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         pass
 
     seen: Dict[str, Dict[str, Any]] = {}
+    # Do not initialize wxauto4 from this path. On unsupported WeChat builds
+    # its constructor switches the window back to the chat tab before raising,
+    # invalidating the Contacts UIA tree. The UIA profile card is the reliable
+    # source for wx ids when the full driver API is unavailable.
+    wx_no_index: Dict[str, str] = {}
     stable_rounds = 0
     last_signature = ""
     completed = False
     hit_limit = False
     max_rounds = _contact_sync_max_rounds(clean_limit)
     skip_names = _wechat_contact_skip_names()
+    profile_fallback_attempts = 0
+    profile_fallback_successes = 0
+    profile_fallback_failures = 0
+    profile_attempted: set[str] = set()
     rounds = 0
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:
             root = auto.ControlFromHandle(int(hwnd))
-            refreshed = _uia_primary_contact_list(root)
+            refreshed = _uia_guess_contact_list(root) or _uia_primary_contact_list(root)
             if refreshed is not None:
                 contact_list = refreshed
         except Exception:
@@ -5313,12 +5582,30 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             clean = str(name or "").strip()
             if not clean or clean in skip_names:
                 continue
+            wx_no = wx_no_index.get(_normalize_contact_lookup_key(clean), "")
+            normalized_name = _normalize_contact_lookup_key(clean)
+            if not wx_no and normalized_name and normalized_name not in profile_attempted:
+                profile_attempted.add(normalized_name)
+                profile_fallback_attempts += 1
+                try:
+                    wx_no = _read_visible_contact_profile_wx_no(hwnd, account_id, clean)
+                    if wx_no:
+                        profile_fallback_successes += 1
+                        wx_no_index[normalized_name] = wx_no
+                    else:
+                        profile_fallback_failures += 1
+                except Exception:
+                    profile_fallback_failures += 1
             seen[clean] = {
                 "contact_key": clean,
                 "display_name": clean,
                 "name": clean,
+                "wxNo": wx_no,
                 "source": "pc_wechat_uia_contacts",
-                "raw": {"source": "pc_wechat_uia_contacts"},
+                "raw": {
+                    "source": "pc_wechat_uia_contacts",
+                    "wxNo": wx_no,
+                },
             }
             if len(seen) >= clean_limit:
                 hit_limit = True
@@ -5342,7 +5629,6 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     existing_before = _contact_count(account_id)
     items = _merge_contacts_snapshot(account_id, list(seen.values()), chat_type="direct")
     total_after = _contact_count(account_id)
-    _ensure_local_chat_tab(account_id)
     return {
         "ok": True,
         "items": items[:200],
@@ -5356,6 +5642,10 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         "rounds": rounds,
         "max_rounds": max_rounds,
         "partial": (not completed and not hit_limit),
+        "wx_no_source": "uia_contact_profile",
+        "profile_fallback_attempts": profile_fallback_attempts,
+        "profile_fallback_successes": profile_fallback_successes,
+        "profile_fallback_failures": profile_fallback_failures,
     }
 
 
@@ -5363,7 +5653,7 @@ def sync_local_contacts_legacy(account_id: str, *, limit: int = 10000) -> Dict[s
     init_db()
     _find_local_account(account_id)
     try:
-        wx = _get_wxauto4_client()
+        wx = _get_wxauto4_client(account_id, ensure_chat_tab=False)
     except Exception as exc:
         raise RuntimeError(f"完整通讯录驱动不可用：{exc}") from exc
     if hasattr(wx, "GetFriendDetails"):
@@ -5388,16 +5678,176 @@ def sync_local_contacts_legacy(account_id: str, *, limit: int = 10000) -> Dict[s
 def sync_local_contacts(account_id: str, *, limit: int = 10000) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
+    # Contact sync is intentionally UIA-only. wxauto4's constructor can move
+    # unsupported WeChat builds to the chat tab before reporting that its full
+    # contacts API is unavailable, which corrupts this workflow's UI state.
+    return _run_local_driver_operation(
+        account_id,
+        "同步通讯录",
+        lambda: _sync_local_contacts_from_uia(account_id, limit=limit),
+        retry_on_failure=False,
+    )
+
+
+def _normalize_contact_lookup_key(value: Any) -> str:
+    return _compact_for_contains(str(value or "")).lower()
+
+
+def _build_local_contact_wx_no_index(limit: int, *, account_id: str = "") -> Dict[str, str]:
     try:
-        return _sync_local_contacts_from_uia(account_id, limit=limit)
-    except Exception as uia_exc:
-        try:
-            data = sync_local_contacts_legacy(account_id, limit=limit)
-            data["uia_error"] = str(uia_exc)
-            data["fallback"] = True
-            return data
-        except Exception as wx_exc:
-            raise RuntimeError(f"通讯录同步失败：UIA={uia_exc}；wxauto4 fallback={wx_exc}") from wx_exc
+        wx = _get_wxauto4_client(account_id, ensure_chat_tab=False)
+    except Exception:
+        return {}
+    if not hasattr(wx, "GetFriendDetails"):
+        return {}
+    try:
+        contacts = wx.GetFriendDetails(n=limit, timeout=max(30, min(int(limit), 600)))
+    except Exception:
+        return {}
+    index: Dict[str, str] = {}
+    for raw in contacts or []:
+        item = _obj_dict(raw)
+        wx_no = str(item.get("wxNo") or item.get("wx_no") or item.get("username") or item.get("contact_key") or "").strip()
+        if not wx_no:
+            continue
+        for alias in (
+            item.get("display_name"),
+            item.get("nickname"),
+            item.get("nickName"),
+            item.get("remark"),
+            item.get("name"),
+            item.get("contact_key"),
+            item.get("wxNo"),
+            item.get("wx_no"),
+            item.get("username"),
+            item.get("id"),
+        ):
+            key = _normalize_contact_lookup_key(alias)
+            if key and key not in index:
+                index[key] = wx_no
+    return index
+
+
+def _extract_contact_profile_wx_no(root: Any) -> str:
+    entries: List[tuple[str, str]] = []
+    for node in _uia_walk(root, max_depth=20, max_nodes=5000):
+        text = _uia_control_text(node)
+        if text:
+            entries.append((text, _uia_control_class(node)))
+    texts = [text for text, _class_name in entries]
+    label_seen = False
+    profile_started = False
+    for idx, text in enumerate(texts):
+        class_name = entries[idx][1]
+        if class_name.endswith("ContactHeadView"):
+            profile_started = True
+            continue
+        compact = _compact_for_contains(text)
+        match = re.search(r"微信号[:：]\s*([^\s]+)", compact)
+        if match:
+            return str(match.group(1) or "").strip()
+        if compact in {"微信号", "微信號"} or compact.startswith("微信号") or compact.startswith("微信號"):
+            label_seen = True
+            continue
+        if label_seen:
+            candidate = str(text or "").strip()
+            if any(marker in candidate for marker in ("地区", "地區", "备注", "朋友圈", "视频号", "共同群聊")):
+                label_seen = False
+                continue
+            if candidate and class_name.endswith("ContactProfileTextView"):
+                return candidate
+        if profile_started and class_name.endswith("ContactProfileTextView"):
+            candidate = str(text or "").strip()
+            if candidate and not any("\u4e00" <= char <= "\u9fff" for char in candidate):
+                return candidate
+    return ""
+
+
+def _persist_contact_wx_no(account_id: str, target: str, wx_no: str, *, source: str = "pc_wechat_uia_contact_profile") -> Dict[str, Any]:
+    account_id = str(account_id or "").strip()
+    target = str(target or "").strip()
+    wx_no = str(wx_no or "").strip()
+    if not account_id or not target or not wx_no:
+        return {}
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            select * from wechat_contacts
+            where account_id=? and (contact_key=? or display_name=? or remark=? or wx_no=?)
+            order by updated_at desc, id desc
+            limit 1
+            """,
+            (account_id, target, target, target, target),
+        ).fetchone()
+    base = _row_to_dict(row) if row else {}
+    contact = dict(base)
+    contact["contact_key"] = str(contact.get("contact_key") or target).strip()
+    contact["display_name"] = str(contact.get("display_name") or target).strip()
+    contact["remark"] = str(contact.get("remark") or "").strip()
+    contact["wxNo"] = wx_no
+    contact["wx_no"] = wx_no
+    contact["source"] = source or str(contact.get("source") or "local")
+    return _persist_contact(account_id, contact)
+
+
+def _resolve_local_contact_aliases(account_id: str, target: str) -> List[str]:
+    target = str(target or "").strip()
+    if not target:
+        return []
+    aliases: List[str] = [target]
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                select contact_key, display_name, remark, wx_no
+                from wechat_contacts
+                where account_id=? and (contact_key=? or display_name=? or remark=? or wx_no=?)
+                order by updated_at desc, id desc
+                limit 1
+                """,
+                (account_id, target, target, target, target),
+            ).fetchone()
+    except Exception:
+        row = None
+    if row:
+        for value in (row["wx_no"], row["contact_key"], row["display_name"], row["remark"]):
+            text = str(value or "").strip()
+            if text and text not in aliases:
+                aliases.append(text)
+    return aliases
+
+
+def _looks_like_wechat_id(value: str) -> bool:
+    text = str(value or "").strip()
+    return bool(text and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{5,}", text))
+
+
+def _resolve_local_contact_wx_no(account_id: str, target: str) -> str:
+    """Resolve a contact's stable WeChat ID; never turn a nickname into an ID."""
+    account_id = str(account_id or "").strip()
+    target = str(target or "").strip()
+    if not account_id or not target:
+        return ""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                select wx_no
+                from wechat_contacts
+                where account_id=? and (contact_key=? or display_name=? or remark=? or wx_no=?)
+                order by case when wx_no=? then 0 else 1 end, updated_at desc, id desc
+                limit 1
+                """,
+                (account_id, target, target, target, target, target),
+            ).fetchone()
+    except Exception:
+        row = None
+    wx_no = str(row["wx_no"] if row else "").strip()
+    if wx_no:
+        return wx_no
+    # A value already shaped like a WeChat ID is safe to pass through even if
+    # this contact has not been synced into the local contact table yet.
+    return target if _looks_like_wechat_id(target) else ""
 
 
 def _uia_contact_recycler_lists(root: Any) -> List[Any]:
@@ -5406,6 +5856,62 @@ def _uia_contact_recycler_lists(root: Any) -> List[Any]:
         for node in _uia_walk(root, max_depth=16, max_nodes=1800)
         if _uia_control_class(node) == "mmui::StickyHeaderRecyclerListView"
     ]
+
+
+def _uia_contact_list_score(node: Any) -> int:
+    if _uia_rect(node) is None:
+        return -1000
+    score = 0
+    text = _uia_control_text(node)
+    if "通讯录" in text:
+        score += 200
+    if "联系人" in text:
+        score += 120
+    try:
+        children = node.GetChildren()
+    except Exception:
+        children = []
+    contact_cells = 0
+    queue = list(children[:80])
+    seen_ids: set[int] = set()
+    while queue and contact_cells < 24:
+        child = queue.pop(0)
+        child_id = id(child)
+        if child_id in seen_ids:
+            continue
+        seen_ids.add(child_id)
+        class_name = _uia_control_class(child)
+        if class_name == "mmui::ContactsCellItemView" or class_name.endswith("ContactsCellItemView"):
+            contact_cells += 1
+        try:
+            grand_children = child.GetChildren()
+        except Exception:
+            grand_children = []
+        if grand_children:
+            queue.extend(grand_children[:20])
+    score += min(contact_cells, 20) * 10
+    return score
+
+
+def _uia_guess_contact_list(root: Any) -> Optional[Any]:
+    candidates: List[tuple[int, Any]] = []
+    for node in _uia_contact_recycler_lists(root):
+        score = _uia_contact_list_score(node)
+        if score > 0:
+            candidates.append((score, node))
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+    for node in _uia_walk(root, max_depth=16, max_nodes=1800):
+        class_name = _uia_control_class(node)
+        if class_name.endswith("RecyclerView") or class_name.endswith("ListView"):
+            score = _uia_contact_list_score(node)
+            if score > 0:
+                candidates.append((score, node))
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+    return None
 
 
 def _uia_parent_contact_cell(node: Any) -> Optional[Any]:
@@ -5489,12 +5995,24 @@ def _uia_visible_contact_cell_names(list_node: Any) -> List[str]:
         children = list_node.GetChildren()
     except Exception:
         children = []
-    for child in children:
-        if _uia_control_class(child) != "mmui::ContactsCellItemView":
+    queue = list(children)
+    seen_ids: set[int] = set()
+    while queue and len(names) < 120:
+        child = queue.pop(0)
+        child_id = id(child)
+        if child_id in seen_ids:
             continue
-        name = _uia_control_text(child)
-        if name:
-            names.append(name)
+        seen_ids.add(child_id)
+        if _uia_control_class(child) == "mmui::ContactsCellItemView":
+            name = _uia_control_text(child)
+            if name:
+                names.append(name)
+        try:
+            grand_children = child.GetChildren()
+        except Exception:
+            grand_children = []
+        if grand_children:
+            queue.extend(grand_children[:20])
     return names
 
 
@@ -5933,14 +6451,23 @@ def sync_local_messages_legacy(account_id: str) -> Dict[str, Any]:
     return {"ok": True, "items": items, "count": len(items)}
 
 
-def _sync_local_messages_once(account_id: str, peer_id: str = "", *, load_more_pages: int = 0) -> Dict[str, Any]:
+def _sync_local_messages_once(
+    account_id: str,
+    peer_id: str = "",
+    *,
+    load_more_pages: int = 0,
+    select_via_uia: bool = False,
+) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     wx = _get_wxauto4_client(account_id)
     target = str(peer_id or "").strip()
     if target:
-        wx.ChatWith(target, exact=True, force=False)
-        time.sleep(random.uniform(0.45, 0.9))
+        if select_via_uia:
+            _open_local_session_by_uia(account_id, target)
+        else:
+            wx.ChatWith(target, exact=True, force=False)
+            time.sleep(random.uniform(0.45, 0.9))
     info = wx.ChatInfo() if hasattr(wx, "ChatInfo") else {}
     actual_peer = str((info or {}).get("chat_name") or target or "").strip() or "current"
     _persist_peer_chat_info(account_id, actual_peer, info or {"chat_name": actual_peer, "chat_type": "unknown"})
@@ -5999,11 +6526,17 @@ def sync_local_messages(
     peer_id: str = "",
     *,
     load_more_pages: int = 0,
+    select_via_uia: bool = False,
 ) -> Dict[str, Any]:
     return _run_local_driver_operation(
         account_id,
         "读取微信消息",
-        lambda: _sync_local_messages_once(account_id, peer_id, load_more_pages=load_more_pages),
+        lambda: _sync_local_messages_once(
+            account_id,
+            peer_id,
+            load_more_pages=load_more_pages,
+            select_via_uia=select_via_uia,
+        ),
     )
 
 
@@ -7053,9 +7586,9 @@ def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
 
 def _find_local_contact_list(root: Any) -> Optional[Any]:
     for node in _uia_walk(root, max_depth=14, max_nodes=1200):
-        if _uia_control_class(node) == "mmui::StickyHeaderRecyclerListView" and _uia_control_text(node) == "通讯录":
+        if _uia_control_class(node) == "mmui::StickyHeaderRecyclerListView" and _uia_control_text(node) == "???":
             return node
-    return None
+    return _uia_guess_contact_list(root)
 
 
 def _find_visible_contact_cell(root: Any, target: str) -> Optional[Any]:
@@ -7074,12 +7607,57 @@ def _find_visible_contact_cell(root: Any, target: str) -> Optional[Any]:
     return fallback
 
 
+def _read_visible_contact_profile_wx_no(
+    hwnd: int,
+    account_id: str,
+    target: str,
+    steps: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Read one contact's wx id without leaving the Contacts page workflow."""
+    import uiautomation as auto  # type: ignore
+
+    root = auto.ControlFromHandle(int(hwnd))
+    cell = _find_visible_contact_cell(root, target)
+    if cell is None:
+        return ""
+    if steps is None:
+        steps = []
+    _uia_click(cell)
+    steps.append({"step": "sync_contact_open_profile", "ok": True, "target": target})
+    wx_no = ""
+    try:
+        time.sleep(0.8)
+        profile_root = auto.ControlFromHandle(int(hwnd))
+        wx_no = _extract_contact_profile_wx_no(profile_root)
+        if wx_no:
+            persisted = _persist_contact_wx_no(account_id, target, wx_no)
+            steps.append(
+                {
+                    "step": "sync_contact_capture_wx_no",
+                    "ok": True,
+                    "target": target,
+                    "wx_no": wx_no,
+                    "persisted": bool(persisted),
+                }
+            )
+        else:
+            steps.append({"step": "sync_contact_capture_wx_no", "ok": False, "target": target, "error": "资料页未显示微信号"})
+    finally:
+        # PC WeChat keeps the Contacts list on the left while the profile is
+        # rendered on the right. Leave that list in place for the next item;
+        # switching to the chat tab would break the sync workflow.
+        pass
+    return wx_no
+
+
 def _open_local_contact_profile(hwnd: int, account_id: str, target: str, steps: List[Dict[str, Any]]) -> None:
     _ensure_local_contacts_tab(account_id)
     root = _uia_foreground_or_main_root(hwnd)
     contact_list = _find_local_contact_list(root)
     if contact_list is None:
         raise RuntimeError("local WeChat contact list not found")
+    aliases = _resolve_local_contact_aliases(account_id, target)
+    search_terms = aliases or [str(target or "").strip()]
     try:
         contact_list.WheelUp(wheelTimes=24)
         time.sleep(0.35)
@@ -7091,7 +7669,11 @@ def _open_local_contact_profile(hwnd: int, account_id: str, target: str, steps: 
     found_node: Optional[Any] = None
     for _idx in range(80):
         root = _uia_foreground_or_main_root(hwnd)
-        found_node = _find_visible_contact_cell(root, target)
+        for candidate in search_terms:
+            found_node = _find_visible_contact_cell(root, candidate)
+            if found_node is not None:
+                target = candidate
+                break
         if found_node is not None:
             break
         visible_names: List[str] = []
@@ -7115,8 +7697,16 @@ def _open_local_contact_profile(hwnd: int, account_id: str, target: str, steps: 
     if found_node is None:
         raise RuntimeError(f"联系人未找到：{target}")
     _uia_click(found_node)
-    steps.append({"step": "open_contact_profile", "ok": True, "target": target})
+    steps.append({"step": "open_contact_profile", "ok": True, "target": target, "aliases": aliases[:5]})
     time.sleep(0.8)
+    try:
+        root = _uia_foreground_or_main_root(hwnd)
+        wx_no = _extract_contact_profile_wx_no(root)
+        if wx_no:
+            persisted = _persist_contact_wx_no(account_id, target, wx_no)
+            steps.append({"step": "capture_contact_wx_no", "ok": True, "target": target, "wx_no": wx_no, "persisted": bool(persisted)})
+    except Exception as exc:
+        steps.append({"step": "capture_contact_wx_no", "ok": False, "target": target, "error": str(exc)})
 
 
 def _open_local_contact_moments(account_id: str, target: str, steps: List[Dict[str, Any]]) -> int:
@@ -8288,7 +8878,7 @@ async def create_add_friend_task(
     added_today = _local_friend_request_count_today(account_id)
     if daily_limit > 0 and added_today + len(targets) > daily_limit:
         raise RuntimeError(f"daily friend add limit would be exceeded: {added_today}/{daily_limit}")
-    return _create_wechat_task(
+    task = _create_wechat_task(
         account_id=account_id,
         task_type="add_friend",
         target_type="friend_keyword",
@@ -9203,6 +9793,7 @@ def _send_text_local_slow_once(
     peer_id: str,
     text: str,
     raw_meta: Optional[Dict[str, Any]] = None,
+    use_current_chat: bool = False,
 ) -> Dict[str, Any]:
     item = _find_local_account(account_id)
     peer_id = str(peer_id or "").strip()
@@ -9217,11 +9808,12 @@ def _send_text_local_slow_once(
     wx = _get_wxauto4_client(account_id)
     hwnd = int(item.get("hwnd") or 0)
     _focus_local_wechat(hwnd)
-    try:
-        wx.ChatWith(peer_id, exact=True, force=False)
-    except Exception as exc:
-        raise RuntimeError(f"open local WeChat chat failed: {exc}") from exc
-    time.sleep(random.uniform(0.55, 1.1))
+    if not use_current_chat:
+        try:
+            wx.ChatWith(peer_id, exact=True, force=False)
+        except Exception as exc:
+            raise RuntimeError(f"open local WeChat chat failed: {exc}") from exc
+        time.sleep(random.uniform(0.55, 1.1))
     _focus_local_wechat(hwnd)
 
     # ChatWith usually focuses the input box. Clear only the input area, then
@@ -9247,6 +9839,7 @@ def _send_text_local_slow_once(
     raw = {
         "driver": "pc_wechat_slow_typing",
         "hwnd": hwnd,
+        "chat_selection_method": "current_session" if use_current_chat else "wxauto4_chat_with",
         "send_method": submit_result.get("send_method"),
         "send_verified": bool(submit_result.get("verified")),
         "send_attempts": int(submit_result.get("attempts") or 1),
@@ -9281,11 +9874,12 @@ def _send_text_local_slow(
     peer_id: str,
     text: str,
     raw_meta: Optional[Dict[str, Any]] = None,
+    use_current_chat: bool = False,
 ) -> Dict[str, Any]:
     return _run_local_driver_operation(
         account_id,
         "发送微信自动回复",
-        lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta),
+        lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
         retry_on_failure=False,
     )
 
@@ -9875,6 +10469,91 @@ def _open_local_create_group_picker(account_id: str, steps: List[Dict[str, Any]]
     raise RuntimeError("发起群聊选择窗口未打开")
 
 
+def _find_current_chat_more_button(root: Any) -> Optional[Any]:
+    root_rect = _uia_rect_tuple(root)
+    if root_rect is None:
+        return None
+    left, top, right, bottom = root_rect
+    width = max(1, right - left)
+    candidates: List[tuple[int, Any]] = []
+    for node in _uia_walk(root, max_depth=18, max_nodes=2400):
+        name = _uia_control_text(node)
+        if name not in {"更多", "...", "…"}:
+            continue
+        rect = _uia_rect_tuple(node)
+        if rect is None:
+            continue
+        n_left, n_top, n_right, n_bottom = rect
+        center_x = (n_left + n_right) / 2
+        center_y = (n_top + n_bottom) / 2
+        if center_x < left + width * 0.62 or center_y < top or center_y > top + 120:
+            continue
+        score = int(center_x * 10)
+        class_name = _uia_control_class(node).lower()
+        if "button" in class_name:
+            score += 1000
+        candidates.append((score, node))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def _find_current_chat_add_button(root: Any) -> Optional[Any]:
+    root_rect = _uia_rect_tuple(root)
+    if root_rect is None:
+        return None
+    left, top, right, _bottom = root_rect
+    width = max(1, right - left)
+    candidates: List[tuple[int, Any]] = []
+    for node in _uia_walk(root, max_depth=20, max_nodes=2600):
+        if _uia_control_text(node) != "添加":
+            continue
+        rect = _uia_rect_tuple(node)
+        if rect is None:
+            continue
+        n_left, n_top, n_right, n_bottom = rect
+        center_x = (n_left + n_right) / 2
+        center_y = (n_top + n_bottom) / 2
+        if center_x < left + width * 0.55 or center_y < top + 35:
+            continue
+        score = int(center_x * 10 + center_y)
+        class_name = _uia_control_class(node).lower()
+        if "button" in class_name or "head" in class_name or "view" in class_name:
+            score += 100
+        candidates.append((score, node))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def _open_current_chat_add_contact_picker(account_id: str, steps: List[Dict[str, Any]]) -> int:
+    """Open the add-member picker from the already selected private chat."""
+    hwnd = _local_wechat_hwnd(account_id)
+    if not hwnd:
+        raise RuntimeError("没有检测到本机微信窗口")
+    root = _uia_foreground_or_main_root(hwnd)
+    more = _find_current_chat_more_button(root)
+    if more is None:
+        raise RuntimeError("当前会话未找到右上角更多按钮")
+    _uia_click(more)
+    steps.append({"step": "open_current_chat_more", "ok": True, "method": "uia"})
+    deadline = time.monotonic() + 5.0
+    add = None
+    while time.monotonic() < deadline:
+        root = _uia_foreground_or_main_root(hwnd)
+        add = _find_current_chat_add_button(root)
+        if add is not None:
+            break
+        time.sleep(0.2)
+    if add is None:
+        raise RuntimeError("当前会话更多面板未找到添加联系人入口")
+    _uia_click(add)
+    steps.append({"step": "open_current_chat_add_contact_picker", "ok": True, "method": "uia"})
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        root = _group_picker_root(hwnd)
+        if _find_group_picker_search_edit(root) is not None:
+            return hwnd
+        time.sleep(0.25)
+    raise RuntimeError("当前会话添加联系人选择窗口未打开")
+
+
 def _find_group_picker_search_edit(root: Any) -> Optional[Any]:
     edits = _uia_visible_edit_controls(root)
     if not edits:
@@ -9997,10 +10676,30 @@ def _find_group_picker_contact_node(root: Any, target: str) -> Optional[Any]:
     return (exact or fallback or [None])[0]
 
 
+def _find_first_group_picker_search_result(root: Any) -> Optional[Any]:
+    """Return the unique result produced by an exact WeChat-ID search."""
+    candidates: List[Any] = []
+    for node in _uia_walk(root, max_depth=20, max_nodes=2200):
+        class_name = _uia_control_class(node)
+        if class_name != "mmui::SearchContactCellView" and not class_name.endswith("SearchContactCellView"):
+            continue
+        if not _uia_control_text(node):
+            continue
+        try:
+            if bool(getattr(node, "IsOffscreen", False)):
+                continue
+        except Exception:
+            pass
+        candidates.append(node)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _group_picker_search_terms(target: str) -> List[str]:
     value = str(target or "").strip()
     if not value:
         return []
+    if _looks_like_wechat_id(value):
+        return [value]
     terms = [value]
     prefix = re.split(r"[-_－—]", value, maxsplit=1)[0].strip()
     if prefix and prefix != value:
@@ -10008,20 +10707,35 @@ def _group_picker_search_terms(target: str) -> List[str]:
     return list(dict.fromkeys(terms))
 
 
-def _select_group_picker_contact(hwnd: int, target: str, steps: List[Dict[str, Any]]) -> None:
+def _select_group_picker_contact(hwnd: int, account_id: str, target: str, steps: List[Dict[str, Any]]) -> None:
     root = _group_picker_root(hwnd)
     edit = _find_group_picker_search_edit(root)
     if edit is None:
         raise RuntimeError("未找到发起群聊搜索框")
+    resolved_wx_no = _resolve_local_contact_wx_no(account_id, target)
+    aliases = _resolve_local_contact_aliases(account_id, target) if not resolved_wx_no else [resolved_wx_no]
+    search_terms: List[str] = []
+    for value in aliases or [str(target or "").strip()]:
+        for term in _group_picker_search_terms(value):
+            if term and term not in search_terms:
+                search_terms.append(term)
     node: Optional[Any] = None
     search_term = ""
-    for search_term in _group_picker_search_terms(target):
+    for search_term in search_terms:
         _uia_set_text(edit, search_term)
         deadline = time.monotonic() + 2.5
         while time.monotonic() < deadline:
             time.sleep(0.25)
             root = _group_picker_root(hwnd)
-            node = _find_group_picker_contact_node(root, target)
+            for candidate in (target, *aliases, search_term):
+                candidate = str(candidate or "").strip()
+                if not candidate:
+                    continue
+                node = _find_group_picker_contact_node(root, candidate)
+                if node is not None:
+                    break
+            if node is None and resolved_wx_no:
+                node = _find_first_group_picker_search_result(root)
             if node is not None:
                 break
         if node is not None:
@@ -10042,6 +10756,8 @@ def _select_group_picker_contact(hwnd: int, target: str, steps: List[Dict[str, A
         time.sleep(0.2)
         latest_root = _group_picker_root(hwnd)
         latest_node = _find_group_picker_contact_node(latest_root, target)
+        if latest_node is None and resolved_wx_no:
+            latest_node = _find_first_group_picker_search_result(latest_root)
         latest_target = _group_picker_selection_target(latest_node) if latest_node is not None else selection_target
         after_state = _uia_group_picker_selection_state(latest_target)
         after_count = _group_picker_selected_count(latest_root)
@@ -10057,6 +10773,7 @@ def _select_group_picker_contact(hwnd: int, target: str, steps: List[Dict[str, A
             "step": "select_group_contact",
             "ok": True,
             "target": target,
+            "resolved_wx_no": resolved_wx_no,
             "search_term": search_term,
             "selection_method": _uia_control_class(selection_target) or "contact_cell",
             "verified": True,
@@ -10151,7 +10868,7 @@ def _create_local_group_once(account_id: str, contacts: List[str]) -> Dict[str, 
     selected = 0
     try:
         for target in targets:
-            _select_group_picker_contact(hwnd, target, steps)
+            _select_group_picker_contact(hwnd, account_id, target, steps)
             selected += 1
         _finish_local_create_group(hwnd, steps)
     except Exception:
@@ -10185,11 +10902,77 @@ def _create_local_group_once(account_id: str, contacts: List[str]) -> Dict[str, 
     }
 
 
+def _create_local_group_from_current_once(
+    account_id: str,
+    contacts: List[str],
+    added_contacts: List[str],
+) -> Dict[str, Any]:
+    """Add configured contacts to the already-open customer conversation."""
+    init_db()
+    _find_local_account(account_id)
+    targets = _normalize_task_targets(contacts, max_targets=100)
+    additions = _normalize_task_targets(added_contacts, max_targets=99)
+    if len(targets) < 2 or not additions:
+        raise RuntimeError("当前会话拉群至少需要1个预设联系人")
+    steps: List[Dict[str, Any]] = []
+    hwnd = _open_current_chat_add_contact_picker(account_id, steps)
+    selected = 0
+    try:
+        for target in additions:
+            _select_group_picker_contact(hwnd, account_id, target, steps)
+            selected += 1
+        _finish_local_create_group(hwnd, steps)
+    except Exception:
+        try:
+            _send_hotkey("esc", pause=0.25)
+        except Exception:
+            pass
+        raise
+    verification = _verify_created_local_group(account_id, targets)
+    info = verification.get("chat_info") if isinstance(verification.get("chat_info"), dict) else {}
+    group_key = str(verification.get("group_key") or "").strip()
+    saved = _persist_group(
+        account_id,
+        {
+            "group_key": group_key,
+            "display_name": group_key,
+            "member_count": int(verification.get("member_count") or 0),
+            "source": "pc_wechat_uia_current_chat_created_group",
+            "raw": {"contacts": targets, "added_contacts": additions, "steps": steps, "chat_info": info},
+        },
+    )
+    return {
+        "ok": True,
+        "contacts": targets,
+        "added_contacts": additions,
+        "selected": selected,
+        "group": saved,
+        "steps": steps,
+        "group_verified": True,
+        "verified_member_count": int(verification.get("member_count") or 0),
+        "verification": verification,
+        "selection_method": "current_chat_more_add",
+    }
+
+
 def create_local_group(account_id: str, contacts: List[str]) -> Dict[str, Any]:
     return _run_local_driver_operation(
         account_id,
         "创建微信群",
         lambda: _create_local_group_once(account_id, contacts),
+        retry_on_failure=False,
+    )
+
+
+def create_local_group_from_current(
+    account_id: str,
+    contacts: List[str],
+    added_contacts: List[str],
+) -> Dict[str, Any]:
+    return _run_local_driver_operation(
+        account_id,
+        "当前会话拉群",
+        lambda: _create_local_group_from_current_once(account_id, contacts, added_contacts),
         retry_on_failure=False,
     )
 
@@ -10239,6 +11022,7 @@ def _create_wechat_task(
     strategy: Dict[str, Any],
     planned_total: Optional[int] = None,
     auth_context: Optional[Dict[str, Any]] = None,
+    start_worker: bool = True,
 ) -> Dict[str, Any]:
     task_id = uuid.uuid4().hex
     now = _now_iso()
@@ -10265,7 +11049,8 @@ def _create_wechat_task(
         )
     if auth_context:
         _TASK_AUTH_CONTEXT[task_id] = dict(auth_context)
-    _ensure_task_worker(account_id)
+    if start_worker:
+        _ensure_task_worker(account_id)
     return get_task(task_id) or {"id": task_id, "status": "pending", "planned_total": total}
 
 
@@ -10568,6 +11353,9 @@ async def create_group_task(
     source_inbound_message_id: str = "",
     group_invite_reason: str = "",
     matched_group_keywords: Optional[List[str]] = None,
+    customer_wx_no: str = "",
+    use_current_chat: bool = False,
+    execute_now: bool = False,
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
@@ -10589,6 +11377,8 @@ async def create_group_task(
             "dedup_key": normalized_dedup_key,
             "source_peer_id": str(source_peer_id or "").strip()[:240],
             "source_inbound_message_id": str(source_inbound_message_id or "").strip()[:160],
+            "customer_wx_no": str(customer_wx_no or "").strip()[:240],
+            "use_current_chat": bool(use_current_chat),
             "group_invite_reason": str(group_invite_reason or "").strip()[:300],
             "matched_group_keywords": list(
                 dict.fromkeys(str(item or "").strip() for item in (matched_group_keywords or []) if str(item or "").strip())
@@ -10596,7 +11386,12 @@ async def create_group_task(
         },
         strategy=strategy,
         planned_total=len(targets),
+        start_worker=not execute_now,
     )
+    if execute_now:
+        await _process_create_group_task(task)
+        return get_task(str(task.get("id") or "")) or task
+    return task
 
 
 async def _process_create_group_task(task: Dict[str, Any]) -> None:
@@ -10606,7 +11401,17 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     welcome_message = str(payload.get("welcome_message") or "").strip()[:4000]
     try:
-        result = await asyncio.to_thread(create_local_group, account_id, targets)
+        if bool(payload.get("use_current_chat")):
+            customer_target = str(payload.get("customer_wx_no") or (targets[0] if targets else "")).strip()
+            added_targets = [target for target in targets if target != customer_target]
+            result = await asyncio.to_thread(
+                create_local_group_from_current,
+                account_id,
+                targets,
+                added_targets,
+            )
+        else:
+            result = await asyncio.to_thread(create_local_group, account_id, targets)
         if not bool(result.get("group_verified")):
             raise RuntimeError("微信建群结果未通过群聊和成员校验")
         selected = int(result.get("selected") or len(targets))
@@ -10619,13 +11424,15 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
                 welcome_error = "群已创建，但未识别到群名称，默认欢迎话术未发送"
             else:
                 try:
-                    welcome_result = await asyncio.to_thread(
-                        _send_text_local_slow,
+                    welcome_args = (
                         account_id,
                         group_key,
                         welcome_message,
                         {"driver": "native_wechat_group_welcome", "group_task_id": task_id},
                     )
+                    if bool(payload.get("use_current_chat")):
+                        welcome_args = (*welcome_args, True)
+                    welcome_result = await asyncio.to_thread(_send_text_local_slow, *welcome_args)
                 except Exception as exc:
                     welcome_error = f"群已创建，但默认欢迎话术发送失败：{exc}"
         _update_task_payload(
@@ -10671,6 +11478,9 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
     except Exception as exc:
         _finish_task(task_id, "failed", 0, 0, len(targets), str(exc))
         source_peer_id = str(payload.get("source_peer_id") or "").strip()
+        source_inbound_id = str(payload.get("source_inbound_message_id") or "").strip()
+        if source_peer_id and source_inbound_id:
+            _mark_auto_reply_group_invite_failed(account_id, source_peer_id, source_inbound_id, str(exc))
         if source_peer_id:
             await _observe_wechat_intelligence(
                 _AUTO_REPLY_AUTH_CONTEXT.get(account_id),
@@ -10679,7 +11489,7 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
                     "contact_key": source_peer_id,
                     "event_type": "group_created",
                     "status": "failed",
-                    "inbound_message_id": str(payload.get("source_inbound_message_id") or "")[:255],
+                    "inbound_message_id": source_inbound_id[:255],
                     "payload": {"group_task_id": task_id},
                     "error_message": str(exc)[:2000],
                 },
@@ -10822,7 +11632,7 @@ def list_peers(
 def list_contacts(account_id: str, *, limit: int = 100, offset: int = 0, keyword: str = "") -> Dict[str, Any]:
     init_db()
     params: List[Any] = [account_id]
-    where = "where account_id=? and source in ('pc_wechat_uia_contacts','wx_driver_contacts','local','manual')"
+    where = "where account_id=? and source in ('pc_wechat_uia_contacts','pc_wechat_uia_contact_profile','wx_driver_contacts','local','manual')"
     if keyword:
         where += " and (display_name like ? or remark like ? or wx_no like ? or contact_key like ?)"
         like = f"%{keyword}%"

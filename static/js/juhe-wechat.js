@@ -346,7 +346,14 @@
   }
 
   function groupInviteContactValue(item) {
-    return item.remark || item.display_name || item.wx_no || item.contact_key || item.id || contactTitle(item);
+    return item.wx_no || item.contact_key || item.remark || item.display_name || item.id || contactTitle(item);
+  }
+
+  function groupInviteContactMatches(item, selected) {
+    var wanted = String(selected || '').trim();
+    if (!wanted) return false;
+    return [groupInviteContactValue(item), item.wx_no, item.contact_key, item.remark, item.display_name, item.id, contactTitle(item)]
+      .some(function(value) { return String(value || '').trim() === wanted; });
   }
 
   function selectedContactValues() {
@@ -515,7 +522,7 @@
     var primaryInput = $('nativeWechatGroupInvitePrimaryContact');
     if (primaryInput) {
       var selected = String(cfg.group_invite_primary_contact || ((cfg.group_invite_contacts || [])[0]) || '').trim();
-      var match = state.contacts.concat(state.contactPickerContacts || []).find(function(item) { return groupInviteContactValue(item) === selected; });
+      var match = state.contacts.concat(state.contactPickerContacts || []).find(function(item) { return groupInviteContactMatches(item, selected); });
       var selectedName = String((match && contactTitle(match)) || cfg.group_invite_primary_contact_name || selected).trim();
       primaryInput.value = selected;
       primaryInput.setAttribute('data-contact-name', selectedName);
@@ -544,7 +551,7 @@
       var value = groupInviteContactValue(item);
       var name = contactTitle(item) || value;
       var sub = contactSub(item) || value;
-      var isSelected = value === selected;
+      var isSelected = groupInviteContactMatches(item, selected);
       return '<button type="button" class="native-wechat-contact-picker-row' + (isSelected ? ' selected' : '') + '" data-native-group-contact="' + esc(value) + '" data-native-group-contact-name="' + esc(name) + '">' +
         '<span class="native-wechat-contact-picker-avatar">' + esc(String(name || '联系').slice(0, 2)) + '</span>' +
         '<span class="native-wechat-contact-picker-copy"><strong>' + esc(name) + '</strong><small>' + esc(sub) + '</small></span>' +
@@ -586,7 +593,14 @@
     var memoryId = (($('nativeWechatAutoReplyMemoryDoc') || {}).value || '').trim();
     var primaryInput = $('nativeWechatGroupInvitePrimaryContact');
     var primaryContact = ((primaryInput || {}).value || '').trim();
-    var primaryLabel = primaryContact ? String((primaryInput && primaryInput.getAttribute('data-contact-name')) || primaryContact).trim() : '';
+    var matched = state.contacts.concat(state.contactPickerContacts || []).find(function(item) {
+      return groupInviteContactMatches(item, primaryContact);
+    });
+    if (matched) {
+      var normalized = String(groupInviteContactValue(matched) || '').trim();
+      if (normalized) primaryContact = normalized;
+    }
+    var primaryLabel = primaryContact ? String((primaryInput && primaryInput.getAttribute('data-contact-name')) || (matched && contactTitle(matched)) || primaryContact).trim() : '';
     return {
       account_id: activeAccountId(),
       enabled: !!enabled,
