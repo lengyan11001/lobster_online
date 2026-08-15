@@ -2997,6 +2997,8 @@ async def _queue_auto_reply_group_invite(
 ) -> Dict[str, Any]:
     if not llm_reply.get("should_invite_group"):
         return {"ok": True, "skipped": True, "reason": "not_matched"}
+    if not bool(cfg.get("group_invite_enabled")):
+        return {"ok": True, "skipped": True, "reason": "disabled"}
     configured_primary_contact = str(
         cfg.get("group_invite_primary_contact")
         or next((item for item in (cfg.get("group_invite_contacts") or []) if str(item or "").strip()), "")
@@ -3367,6 +3369,8 @@ async def run_auto_reply_once(
                     peer_id,
                     load_more_pages=0,
                     select_via_uia=True,
+                    read_chat_info=False,
+                    download_attachments=False,
                 )
                 _collect_local_driver_recovery(result, sync_result)
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
@@ -4767,7 +4771,44 @@ def _normalize_message_public(item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _persist_message_obj(account_id: str, peer_id: str, msg: Any) -> Dict[str, Any]:
+def _matches_recent_local_outbound(
+    account_id: str,
+    peer_id: str,
+    content: str,
+    *,
+    max_age_seconds: int = 600,
+) -> bool:
+    content = str(content or "").strip()
+    if not content:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            select created_at
+            from wechat_messages
+            where account_id=? and peer_id=? and direction='out' and status='sent' and content=?
+            order by created_at desc
+            limit 1
+            """,
+            (account_id, peer_id, content),
+        ).fetchone()
+    if not row:
+        return False
+    try:
+        sent_at = datetime.fromisoformat(str(row["created_at"] or "").replace("Z", "+00:00"))
+        now = datetime.now(sent_at.tzinfo) if sent_at.tzinfo else datetime.utcnow()
+        return 0 <= (now - sent_at).total_seconds() <= max(1, int(max_age_seconds))
+    except (TypeError, ValueError):
+        return False
+
+
+def _persist_message_obj(
+    account_id: str,
+    peer_id: str,
+    msg: Any,
+    *,
+    download_attachments: bool = True,
+) -> Dict[str, Any]:
     raw = _obj_dict(msg)
     content = str(raw.get("content") or raw.get("text") or "")
     msg_type = str(raw.get("type") or "text").lower()
@@ -4777,11 +4818,20 @@ def _persist_message_obj(account_id: str, peer_id: str, msg: Any) -> Dict[str, A
         direction = "system"
     elif attr in {"self", "out", "me"}:
         direction = "out"
+    elif _matches_recent_local_outbound(account_id, peer_id, content):
+        # Some wxauto4 builds omit attr=self for messages sent by this client.
+        # Keep a just-sent reply outbound so the next takeover round cannot
+        # treat it as a fresh customer message and answer it again.
+        direction = "out"
     else:
         direction = "in"
     created_at = _now_iso()
     message_id = str(raw.get("id") or raw.get("hash") or _stable_key(peer_id, msg_type, content, str(raw.get("time") or "")))
-    attachment = _download_message_attachment(account_id, peer_id, msg, raw, msg_type)
+    attachment = (
+        _download_message_attachment(account_id, peer_id, msg, raw, msg_type)
+        if download_attachments
+        else None
+    )
     if attachment:
         raw["attachments"] = [attachment]
     with _connect() as conn:
@@ -6518,6 +6568,8 @@ def _sync_local_messages_once(
     *,
     load_more_pages: int = 0,
     select_via_uia: bool = False,
+    read_chat_info: bool = True,
+    download_attachments: bool = True,
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
@@ -6529,7 +6581,11 @@ def _sync_local_messages_once(
         else:
             wx.ChatWith(target, exact=True, force=False)
             time.sleep(random.uniform(0.45, 0.9))
-    info = wx.ChatInfo() if hasattr(wx, "ChatInfo") else {}
+    info = (
+        wx.ChatInfo()
+        if read_chat_info and hasattr(wx, "ChatInfo")
+        else {"chat_name": target or "current", "chat_type": "unknown"}
+    )
     actual_peer = str((info or {}).get("chat_name") or target or "").strip() or "current"
     _persist_peer_chat_info(account_id, actual_peer, info or {"chat_name": actual_peer, "chat_type": "unknown"})
     previous_latest = _latest_message_record(account_id, actual_peer)
@@ -6542,7 +6598,15 @@ def _sync_local_messages_once(
             except Exception:
                 break
     messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
-    items = [_persist_message_obj(account_id, actual_peer, msg) for msg in (messages or [])]
+    items = [
+        _persist_message_obj(
+            account_id,
+            actual_peer,
+            msg,
+            download_attachments=download_attachments,
+        )
+        for msg in (messages or [])
+    ]
     inserted = [
         x for x in items
         if not x.get("deduped") and x.get("direction") != "system" and x.get("msg_type") != "time"
@@ -6588,6 +6652,8 @@ def sync_local_messages(
     *,
     load_more_pages: int = 0,
     select_via_uia: bool = False,
+    read_chat_info: bool = True,
+    download_attachments: bool = True,
 ) -> Dict[str, Any]:
     return _run_local_driver_operation(
         account_id,
@@ -6597,6 +6663,8 @@ def sync_local_messages(
             peer_id,
             load_more_pages=load_more_pages,
             select_via_uia=select_via_uia,
+            read_chat_info=read_chat_info,
+            download_attachments=download_attachments,
         ),
     )
 

@@ -259,6 +259,72 @@ def test_auto_reply_candidate_allows_same_message_id_after_unread_trigger(tmp_pa
     assert candidate["auto_reply_inbound_id"] == "provider-id-a"
 
 
+def test_takeover_message_sync_does_not_download_media(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+
+    class ImageMessage:
+        content = "[图片]"
+        type = "image"
+        attr = "friend"
+        sender = "customer-a"
+        id = "image-message-a"
+
+        def download(self):
+            raise AssertionError("takeover message sync must not download media")
+
+    item = engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        ImageMessage(),
+        download_attachments=False,
+    )
+
+    assert item["msg_type"] == "image"
+    assert item["attachments"] == []
+
+
+def test_recent_local_reply_with_missing_self_attr_stays_outbound(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    now = engine._now_iso()
+    with engine._connect() as conn:
+        conn.execute(
+            """
+            insert into wechat_messages(
+                id, account_id, peer_id, direction, msg_type, content, client_id, status, raw_json, created_at
+            ) values(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "local-outbound-a",
+                engine.LOCAL_DEFAULT_ACCOUNT_ID,
+                "customer-a",
+                "out",
+                "text",
+                "same reply",
+                "client-a",
+                "sent",
+                "{}",
+                now,
+            ),
+        )
+
+    item = engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {
+            "content": "same reply",
+            "type": "text",
+            "attr": "",
+            "sender": "",
+            "id": "visible-message-a",
+        },
+        download_attachments=False,
+    )
+
+    assert item["direction"] == "out"
+
+
 def test_auto_reply_history_is_a_record_not_a_filter(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
@@ -1720,6 +1786,7 @@ async def test_auto_reply_match_immediately_queues_group_with_primary_contact(tm
             "group_invite_reason": "客户同意对接负责人",
         },
         {
+            "group_invite_enabled": True,
             "group_invite_primary_contact": "张老师",
             "group_invite_primary_contact_name": "张老师",
             "group_invite_welcome_message": "欢迎进群",
@@ -1751,6 +1818,7 @@ async def test_auto_reply_group_invite_rejects_customer_as_primary_contact(monke
         {"auto_reply_inbound_id": "message-a", "content": "行"},
         {"should_invite_group": True},
         {
+            "group_invite_enabled": True,
             "group_invite_primary_contact": "张老师",
             "group_invite_primary_contact_name": "张老师",
         },
