@@ -3723,6 +3723,7 @@ def _scheduled_douyin_online_config_params(
                     "message": str(monitor.get("reply_message") or "").strip(),
                     "reply_prompt": str(monitor.get("reply_prompt") or "").strip(),
                     "contact_value": str(monitor.get("contact_value") or "").strip(),
+                    "wechat_add_friend_enabled": bool(monitor.get("wechat_add_friend_enabled", False)),
                 }
             )
         return params
@@ -4620,6 +4621,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "message": str(source.get("message") or "").strip(),
                 "reply_prompt": str(source.get("reply_prompt") or "").strip(),
                 "contact_value": str(source.get("contact_value") or "").strip(),
+                "wechat_add_friend_enabled": bool(source.get("wechat_add_friend_enabled", False)),
             }
         )
         if not isinstance(result, dict):
@@ -4664,6 +4666,8 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             "reply_total": _safe_int(cycle.get("auto_reply_total") if isinstance(cycle, dict) else 0),
             "reply_success": _safe_int(cycle.get("auto_reply_success") if isinstance(cycle, dict) else 0),
             "reply_failed": _safe_int(cycle.get("auto_reply_failed") if isinstance(cycle, dict) else 0),
+            "extracted_phone_numbers": list(cycle.get("extracted_phone_numbers") or []) if isinstance(cycle, dict) else [],
+            "wechat_add_friend": cycle.get("wechat_add_friend") if isinstance(cycle, dict) else {},
         }
         summary = cycle_message or (
             f"私信接管本轮读取 {stats['total']} 条会话，新增 {stats['new']} 条，自动回复成功 {stats['reply_success']} 条。"
@@ -4707,7 +4711,10 @@ async def _run_scheduled_douyin_leads(
         action = sales_action
     if is_sales_workflow:
         action = _scheduled_douyin_sales_action_from_context(h5_context) or action
+        workflow_params = dict(params)
         params = _load_scheduled_douyin_online_config_params(action)
+        if action == "stranger_message" and "wechat_add_friend_enabled" in workflow_params:
+            params["wechat_add_friend_enabled"] = bool(workflow_params.get("wechat_add_friend_enabled"))
     elif not params:
         params = _load_scheduled_douyin_online_config_params(action)
     if not run_id or not action:
@@ -7529,8 +7536,7 @@ async def _run_native_wechat_takeover_session(
     # time so slow WeChat scans do not turn a 30-minute takeover into a multi-hour run.
     interval = max(0.0, float(interval_seconds or 0.0))
     duration_limit = max(1.0, min(float(session_seconds if session_seconds is not None else 1800.0), 1800.0))
-    default_rounds = int((duration_limit + max(interval, 1.0) - 1) // max(interval, 1.0))
-    round_count = max(1, min(int(rounds if rounds is not None else default_rounds), 120))
+    round_limit = max(1, int(rounds)) if rounds is not None else None
     started_at = datetime.utcnow().isoformat()
     started_monotonic = _takeover_monotonic()
     deadline_monotonic = started_monotonic + duration_limit
@@ -7541,7 +7547,6 @@ async def _run_native_wechat_takeover_session(
         "session_minutes": round(duration_limit / 60.0, 2),
         "session_seconds": round(duration_limit, 2),
         "interval_seconds": int(interval),
-        "round_count": round_count,
         "completed_rounds": 0,
         "replied": 0,
         "skipped": 0,
@@ -7558,6 +7563,7 @@ async def _run_native_wechat_takeover_session(
     consecutive_driver_failures = 0
     max_consecutive_driver_failures = 3
     stop_reason = ""
+    round_number = 0
     if cloud is not None and base and run_id:
         event_status = await _post_task_event(
             cloud,
@@ -7569,17 +7575,17 @@ async def _run_native_wechat_takeover_session(
         )
         if _task_event_rejects_local_work(event_status):
             stop_reason = "slot_ownership_changed"
-    for index in range(round_count):
-        if stop_reason:
-            break
-        if index and interval:
+    while not stop_reason and _takeover_monotonic() < deadline_monotonic and (
+        round_limit is None or round_number < round_limit
+    ):
+        if round_number and interval:
             remaining = deadline_monotonic - _takeover_monotonic()
             if remaining <= 0:
                 break
             await asyncio.sleep(min(interval, remaining))
         if _takeover_monotonic() >= deadline_monotonic:
             break
-        round_number = index + 1
+        round_number += 1
         if cloud is not None and base and run_id:
             event_status = await _post_task_event(
                 cloud,
@@ -7587,7 +7593,7 @@ async def _run_native_wechat_takeover_session(
                 headers,
                 run_id,
                 "running",
-                {"text": f"个微私信接管第 {round_number}/{round_count} 轮巡检", "round": round_number, "round_count": round_count},
+                {"text": f"个微私信接管第 {round_number} 轮巡检", "round": round_number, "session_seconds": duration_limit},
             )
             if _task_event_rejects_local_work(event_status):
                 stop_reason = "slot_ownership_changed"
@@ -7598,7 +7604,7 @@ async def _run_native_wechat_takeover_session(
                 {
                     "account_id": account_id,
                     "force": True,
-                    "check_friend_requests": index == 0,
+                    "check_friend_requests": round_number == 1,
                     "config_override": config_override or {},
                 },
                 headers=headers,
@@ -7611,7 +7617,7 @@ async def _run_native_wechat_takeover_session(
             output["replied"] += _safe_int(result.get("replied"))
             output["skipped"] += _safe_int(result.get("skipped"))
             output["failed"] += _safe_int(result.get("failed"))
-            if index == 0:
+            if round_number == 1:
                 output["friend_requests_checked"] = _safe_int(result.get("friend_requests_checked"))
                 output["friend_requests_accepted"] = _safe_int(result.get("friend_requests_accepted"))
                 output["friend_requests_failed"] = _safe_int(result.get("friend_requests_failed"))
@@ -7623,11 +7629,11 @@ async def _run_native_wechat_takeover_session(
                     "replied": _safe_int(result.get("replied")),
                     "skipped": _safe_int(result.get("skipped")),
                     "failed": _safe_int(result.get("failed")),
-                    "friend_requests_checked": _safe_int(result.get("friend_requests_checked")) if index == 0 else 0,
-                    "friend_requests_accepted": _safe_int(result.get("friend_requests_accepted")) if index == 0 else 0,
-                    "friend_requests_failed": _safe_int(result.get("friend_requests_failed")) if index == 0 else 0,
+                    "friend_requests_checked": _safe_int(result.get("friend_requests_checked")) if round_number == 1 else 0,
+                    "friend_requests_accepted": _safe_int(result.get("friend_requests_accepted")) if round_number == 1 else 0,
+                    "friend_requests_failed": _safe_int(result.get("friend_requests_failed")) if round_number == 1 else 0,
                     "friend_requests": (
-                        result.get("friend_requests") if index == 0 and isinstance(result.get("friend_requests"), dict) else {}
+                        result.get("friend_requests") if round_number == 1 and isinstance(result.get("friend_requests"), dict) else {}
                     ),
                     "items": items,
                     "summary_text": str(result.get("summary_text") or "").strip(),
@@ -7641,9 +7647,9 @@ async def _run_native_wechat_takeover_session(
                     run_id,
                     "running",
                     {
-                        "text": f"\u4e2a\u5fae\u79c1\u4fe1\u63a5\u7ba1\u7b2c {round_number}/{round_count} \u8f6e\u5df2\u5b8c\u6210",
+                        "text": f"个微私信接管第 {round_number} 轮已完成",
                         "round": round_number,
-                        "round_count": round_count,
+                        "session_seconds": duration_limit,
                         "heartbeat": True,
                     },
                 )
@@ -7658,11 +7664,11 @@ async def _run_native_wechat_takeover_session(
             if consecutive_driver_failures >= max_consecutive_driver_failures:
                 stop_reason = "consecutive_driver_failures"
                 break
+    if not stop_reason and round_limit is not None and round_number >= round_limit and _takeover_monotonic() < deadline_monotonic:
+        stop_reason = "round_limit"
     output["finished_at"] = datetime.utcnow().isoformat()
     output["duration_seconds"] = round(max(0.0, _takeover_monotonic() - started_monotonic), 2)
-    output["stop_reason"] = stop_reason or (
-        "session_deadline" if _takeover_monotonic() >= deadline_monotonic else "round_limit"
-    )
+    output["stop_reason"] = stop_reason or ("session_deadline" if _takeover_monotonic() >= deadline_monotonic else "session_end")
     output["config"] = last_config
     output["group_invite_candidates"] = len(
         {
@@ -7673,7 +7679,7 @@ async def _run_native_wechat_takeover_session(
     )
     output["ok"] = output["completed_rounds"] > 0 and not stop_reason
     output["summary_text"] = (
-        f"个微私信接管已持续巡检 {output['completed_rounds']}/{round_count} 轮，"
+        f"个微私信接管已持续巡检 {output['completed_rounds']} 轮，"
         f"检查新好友申请 {output['friend_requests_checked']} 条，已同意 {output['friend_requests_accepted']} 条，"
         f"自动回复 {output['replied']} 条，跳过 {output['skipped']} 条，失败 {output['failed']} 条；"
         f"命中拉群条件 {output['group_invite_candidates']} 个会话。"
@@ -7973,17 +7979,28 @@ async def _run_client_workflow_action(
         return await _post_local_api_json("/api/viral-video-remix/seedance/start", body, headers=headers)
     if action == "wecom_poll_reply":
         return await _post_local_api_json("/api/wecom/poll-and-reply", {}, headers=headers, timeout_seconds=300.0)
+    if action == "native_wechat_group_invite" or (
+        action == "native_wechat_poll"
+        and str(source.get("followup_action") or "").strip().lower() == "group_invite"
+    ):
+        message = "自动拉群已并入个人微信接管：接管每轮发现新消息后即时判断并拉群，不再单独创建拉群任务。"
+        return {
+            "ok": True,
+            "skipped": True,
+            "action": action,
+            "reason": "group_invite_folded_into_takeover",
+            "message": message,
+            "summary_text": message,
+        }
     if action == "native_wechat_poll":
         interval_seconds = max(1, min(_safe_int(source.get("message_poll_interval_seconds")) or 15, 300))
         session_minutes = max(1, min(_safe_int(source.get("takeover_session_minutes")) or 30, 30))
-        rounds = max(1, (session_minutes * 60 + interval_seconds - 1) // interval_seconds)
         return await _run_native_wechat_takeover_session(
             account_id=native_account_id,
             headers=headers,
             cloud=cloud,
             base=base,
             run_id=run_id,
-            rounds=rounds,
             interval_seconds=interval_seconds,
             session_seconds=session_minutes * 60,
             config_override={

@@ -326,6 +326,61 @@ def test_auto_reply_only_processes_unread_non_call_sessions():
     ) is False
 
 
+def test_takeover_scan_candidate_does_not_require_unread_badge():
+    assert engine._session_is_scan_candidate(
+        {"peer_id": "customer-a", "last_content": "customer message", "unread_count": 0}
+    ) is True
+    assert engine._session_is_scan_candidate(
+        {"peer_id": "customer-a", "last_content": "\u5df2\u5728\u5176\u4ed6\u8bbe\u5907\u63a5\u542c", "unread_count": 0}
+    ) is False
+
+
+def test_latest_auto_reply_candidate_rejects_system_message_after_customer_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    with engine._connect() as conn:
+        conn.execute(
+            """
+            insert into wechat_messages(
+                id, account_id, peer_id, direction, msg_type, content, provider_message_id, status, raw_json, created_at
+            ) values(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "customer-message",
+                engine.LOCAL_DEFAULT_ACCOUNT_ID,
+                "customer-a",
+                "in",
+                "text",
+                "customer message",
+                "customer-message",
+                "received",
+                engine._json_dumps({"attr": "friend", "sender": "customer"}),
+                "2026-08-15T10:00:00.000000",
+            ),
+        )
+        conn.execute(
+            """
+            insert into wechat_messages(
+                id, account_id, peer_id, direction, msg_type, content, provider_message_id, status, raw_json, created_at
+            ) values(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "system-message",
+                engine.LOCAL_DEFAULT_ACCOUNT_ID,
+                "customer-a",
+                "system",
+                "system",
+                "\u5df2\u5728\u5176\u4ed6\u8bbe\u5907\u63a5\u542c",
+                "system-message",
+                "received",
+                engine._json_dumps({"attr": "system", "sender": "system", "type": "system"}),
+                "2026-08-15T10:00:01.000000",
+            ),
+        )
+
+    assert engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a") is None
+
+
 def test_moments_publish_uses_shared_wechat_ui_lock(monkeypatch):
     captured = {}
 
@@ -565,6 +620,94 @@ def test_typed_message_clicks_send_and_verifies_new_outbound(monkeypatch):
     assert result == {"ok": True, "verified": True, "send_method": "uia_send_button", "attempts": 1}
 
 
+def test_local_send_uses_verified_ui_path(monkeypatch):
+    calls = []
+
+    def verified_send(account_id, peer_id, text, raw_meta=None):
+        calls.append((account_id, peer_id, text, raw_meta))
+        return {"ok": True, "verified": True, "driver": "pc_wechat_slow_typing"}
+
+    monkeypatch.setattr(engine, "_send_text_local_slow", verified_send)
+
+    result = engine._send_text_local("local-account", "张深根（私人号）", "明天上午聊")
+
+    assert result["verified"] is True
+    assert calls == [
+        (
+            "local-account",
+            "张深根（私人号）",
+            "明天上午聊",
+            {"driver": "native_wechat_verified_send", "source": "send_text"},
+        )
+    ]
+
+
+def test_group_picker_selects_exact_contact_checkbox_and_verifies(monkeypatch):
+    class Rect:
+        def __init__(self, left, top, right, bottom):
+            self.left = left
+            self.top = top
+            self.right = right
+            self.bottom = bottom
+
+    class Node:
+        def __init__(self, name="", class_name="", control_type="", rect=None, children=None):
+            self.Name = name
+            self.ClassName = class_name
+            self.ControlTypeName = control_type
+            self.BoundingRectangle = rect or Rect(0, 0, 100, 30)
+            self._children = list(children or [])
+            self.IsOffscreen = False
+            self.IsEnabled = True
+            self.IsSelected = False
+
+        def GetChildren(self):
+            return list(self._children)
+
+    count = Node("已选择1个联系人")
+    checkbox = Node("", "mmui::XCheckBox", "CheckBoxControl", Rect(10, 10, 34, 34))
+    own_contact = Node(
+        "张深根\n（私人号）",
+        "mmui::ContactsCellItemView",
+        "ListItemControl",
+        Rect(0, 0, 360, 48),
+        [checkbox, Node("张深根（私人号）", "mmui::XTextView", "TextControl")],
+    )
+    other_contact = Node(
+        "张深根-AI三域营销运营",
+        "mmui::ContactsCellItemView",
+        "ListItemControl",
+        Rect(0, 55, 360, 103),
+        [Node("张深根-AI三域营销运营", "mmui::XTextView", "TextControl")],
+    )
+    root = Node("", "mmui::SessionPickerWindow", children=[count, own_contact, other_contact])
+    clock = [0.0]
+    clicks = []
+
+    monkeypatch.setattr(engine, "_group_picker_root", lambda _hwnd: root)
+    monkeypatch.setattr(engine, "_find_group_picker_search_edit", lambda _root: Node("search", "Edit"))
+    monkeypatch.setattr(engine, "_uia_set_text", lambda _node, _text: None)
+    monkeypatch.setattr(engine.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def click(node):
+        clicks.append(node)
+        node.IsSelected = True
+        count.Name = "已选择2个联系人"
+
+    monkeypatch.setattr(engine, "_uia_click", click)
+
+    assert engine._find_group_picker_contact_node(root, "张深根-AI三域营销运营") is other_contact
+
+    steps = []
+    engine._select_group_picker_contact(123, "张深根（私人号）", steps)
+
+    assert clicks == [checkbox]
+    assert steps[-1]["target"] == "张深根（私人号）"
+    assert steps[-1]["selection_method"] == "mmui::XCheckBox"
+    assert steps[-1]["verified"] is True
+
+
 def test_typed_message_retries_button_when_text_remains_in_draft(monkeypatch):
     clicks = []
 
@@ -616,7 +759,7 @@ async def test_poll_reports_driver_failure_instead_of_false_success(monkeypatch)
     assert result["error"] == "stale UIA after retry"
 
 
-def test_recent_session_sync_uses_five_page_limit(monkeypatch):
+def test_recent_session_sync_uses_twenty_page_limit(monkeypatch):
     captured = {}
 
     fake_uia = types.SimpleNamespace(ControlFromHandle=lambda _hwnd: object())
@@ -649,7 +792,7 @@ def test_recent_session_sync_uses_five_page_limit(monkeypatch):
     result = engine._sync_local_sessions_from_uia(engine.LOCAL_DEFAULT_ACCOUNT_ID, recent_only=True)
 
     assert captured["hwnd"] == 123
-    assert captured["max_rounds"] == 5
+    assert captured["max_rounds"] == 20
     assert result["recent_only"] is True
     assert result["source"] == "pc_wechat_uia_sessions_recent"
     assert result["count"] == 1
@@ -839,7 +982,7 @@ async def test_takeover_action_uses_server_polling_settings(monkeypatch):
     )
 
     assert result == {"ok": True}
-    assert captured["rounds"] == 120
+    assert "rounds" not in captured
     assert captured["interval_seconds"] == 15
     assert captured["session_seconds"] == 1800
 
@@ -863,9 +1006,37 @@ async def test_takeover_action_keeps_polling_defaults_for_old_tasks(monkeypatch)
         base="",
     )
 
-    assert captured["rounds"] == 120
+    assert "rounds" not in captured
     assert captured["interval_seconds"] == 15
     assert captured["session_seconds"] == 1800
+
+
+@pytest.mark.asyncio
+async def test_legacy_group_invite_action_finishes_without_waiting(monkeypatch):
+    calls = []
+
+    async def run_takeover(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(channel, "_run_native_wechat_takeover_session", run_takeover)
+
+    result = await channel._run_client_workflow_action(
+        "native_wechat_poll",
+        {
+            "account_id": "pc-wechat-default",
+            "followup_action": "group_invite",
+            "takeover_session_minutes": 30,
+        },
+        headers={},
+        run_id="legacy-group-invite-run",
+        cloud=None,
+        base="",
+    )
+
+    assert result["skipped"] is True
+    assert result["reason"] == "group_invite_folded_into_takeover"
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -941,6 +1112,7 @@ async def test_takeover_session_polls_repeatedly_and_aggregates_new_results(monk
 
 @pytest.mark.asyncio
 async def test_takeover_session_defaults_to_thirty_minutes_at_fifteen_second_intervals(monkeypatch):
+    clock = {"now": 0.0}
     request_bodies = []
     sleeps = []
 
@@ -950,7 +1122,9 @@ async def test_takeover_session_defaults_to_thirty_minutes_at_fifteen_second_int
 
     async def no_sleep(seconds):
         sleeps.append(seconds)
+        clock["now"] += seconds
 
+    monkeypatch.setattr(channel, "_takeover_monotonic", lambda: clock["now"])
     monkeypatch.setattr(channel, "_post_local_api_json", post_local)
     monkeypatch.setattr(channel.asyncio, "sleep", no_sleep)
 
@@ -963,9 +1137,8 @@ async def test_takeover_session_defaults_to_thirty_minutes_at_fifteen_second_int
     )
 
     assert result["session_minutes"] == 30
-    assert result["round_count"] == 120
     assert result["completed_rounds"] == 120
-    assert len(sleeps) == 119
+    assert len(sleeps) == 120
     assert set(sleeps) == {15.0}
     assert request_bodies[0]["check_friend_requests"] is True
     assert all(body["check_friend_requests"] is False for body in request_bodies[1:])
@@ -1115,6 +1288,7 @@ async def test_takeover_session_stops_after_current_round_when_cloud_run_is_canc
 
 @pytest.mark.asyncio
 async def test_takeover_session_keeps_running_on_transient_event_failure(monkeypatch):
+    clock = {"now": 0.0}
     local_calls = []
 
     async def post_event(*_args, **_kwargs):
@@ -1122,8 +1296,10 @@ async def test_takeover_session_keeps_running_on_transient_event_failure(monkeyp
 
     async def post_local(*_args, **_kwargs):
         local_calls.append(True)
+        clock["now"] += 25.0
         return {"ok": True, "items": [], "summary_text": "checked"}
 
+    monkeypatch.setattr(channel, "_takeover_monotonic", lambda: clock["now"])
     monkeypatch.setattr(channel, "_post_task_event", post_event)
     monkeypatch.setattr(channel, "_post_local_api_json", post_local)
 
@@ -1133,9 +1309,8 @@ async def test_takeover_session_keeps_running_on_transient_event_failure(monkeyp
         cloud=object(),
         base="https://example.test",
         run_id="run",
-        rounds=1,
         interval_seconds=15,
-        session_seconds=1800,
+        session_seconds=20,
     )
 
     assert local_calls == [True]
@@ -1433,6 +1608,8 @@ async def test_create_group_task_sends_welcome_after_group_is_created(monkeypatc
         lambda _account_id, _targets: {
             "ok": True,
             "selected": 2,
+            "group_verified": True,
+            "verified_member_count": 3,
             "group": {"group_key": "客户A、王经理"},
         },
     )
@@ -1700,6 +1877,52 @@ async def test_create_group_task_deduplicates_same_auto_invite(tmp_path, monkeyp
 
     assert second["id"] == first["id"]
     assert second["deduped"] is True
+
+
+@pytest.mark.asyncio
+async def test_unverified_group_success_does_not_block_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 1})
+    monkeypatch.setattr(engine, "_ensure_task_worker", lambda _account_id: None)
+
+    first = await engine.create_group_task(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        ["客户A", "张老师"],
+        dedup_key="auto-invite-v2-same-contact",
+        source_peer_id="客户A",
+        source_inbound_message_id="message-a",
+    )
+    engine._finish_task(first["id"], "success", 2, 2, 0)
+    engine._update_task_payload(first["id"], {"group_verified": False})
+
+    retry = await engine.create_group_task(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        ["客户A", "张老师"],
+        dedup_key="auto-invite-v2-same-contact",
+        source_peer_id="客户A",
+        source_inbound_message_id="message-b",
+    )
+    assert retry["id"] != first["id"]
+    assert retry.get("deduped") is not True
+
+    engine._finish_task(retry["id"], "success", 2, 2, 0)
+    engine._update_task_payload(retry["id"], {"group_verified": True})
+    deduped = await engine.create_group_task(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        ["客户A", "张老师"],
+        dedup_key="auto-invite-v2-same-contact",
+        source_peer_id="客户A",
+        source_inbound_message_id="message-c",
+    )
+    assert deduped["id"] == retry["id"]
+    assert deduped["deduped"] is True
+
+
+def test_unverified_group_claim_is_detected_and_sanitized():
+    assert engine._reply_claims_existing_group("张老师，您已经在群里了哈") is True
+    assert engine._reply_claims_existing_group("我先确认一下，再帮您安排") is False
+    sanitized = engine._strip_unverified_group_claims("已将张老师拉入群聊，群内对接")
+    assert "群状态未核验" in sanitized
 
 
 def test_selected_memory_context_only_loads_selected_document(monkeypatch):

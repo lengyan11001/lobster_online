@@ -258,7 +258,8 @@
                                         <div class="video-comment-field" style="margin-bottom:12px">
                                             <label for="stranger-message-reply-mode">回复方式</label>
                                             <select id="stranger-message-reply-mode" onchange="syncStrangerMonitorField('stranger-message-reply-mode',['interaction-stranger-reply-mode']);toggleDouyinStrangerReplyOptions();refreshActionState()">
-                                                <option value="fixed" selected>固定文案</option>
+                                                <option value="ai_auto" selected>AI 自动回复</option>
+                                                <option value="fixed">固定文案</option>
                                                 <option value="ai_lead">AI 引导加绿泡泡</option>
                                             </select>
                                         </div>
@@ -313,10 +314,20 @@
                                                     <span class="monitor-toggle-note">关闭后只监控新的未读私信，不会自动发出回复。</span>
                                                 </span>
                                                 <span class="monitor-toggle-switch">
-                                                    <input type="checkbox" id="stranger-message-monitor-auto-reply" checked onchange="syncStrangerMonitorCheckbox('stranger-message-monitor-auto-reply',['interaction-stranger-monitor-auto-reply']);refreshActionState()">
-                                                    <span class="monitor-toggle-slider" aria-hidden="true"></span>
-                                                </span>
-                                            </label>
+                                                     <input type="checkbox" id="stranger-message-monitor-auto-reply" checked onchange="syncStrangerMonitorCheckbox('stranger-message-monitor-auto-reply',['interaction-stranger-monitor-auto-reply']);refreshActionState()">
+                                                     <span class="monitor-toggle-slider" aria-hidden="true"></span>
+                                                 </span>
+                                             </label>
+                                             <label class="monitor-toggle-card" for="stranger-message-monitor-wechat-add-friend">
+                                                 <span class="monitor-toggle-copy">
+                                                     <span class="monitor-toggle-title">识别手机号后自动加微信好友</span>
+                                                     <span class="monitor-toggle-note">只从本轮新私信提取 11 位手机号，提交到个微加好友队列。</span>
+                                                 </span>
+                                                 <span class="monitor-toggle-switch">
+                                                     <input type="checkbox" id="stranger-message-monitor-wechat-add-friend" onchange="syncStrangerMonitorCheckbox('stranger-message-monitor-wechat-add-friend',['interaction-stranger-wechat-add-friend']);refreshActionState()">
+                                                     <span class="monitor-toggle-slider" aria-hidden="true"></span>
+                                                 </span>
+                                             </label>
                                             <div id="stranger-message-monitor-status" class="subtle">陌生人消息监控未开启。</div>
                                             <div class="table-action-row stranger-message-monitor-actions">
                                                 <button type="button" class="btn btn-primary" id="stranger-message-monitor-start-btn" onclick="startDouyinStrangerMessageMonitor()">开启监控</button>
@@ -453,7 +464,7 @@
 
     <script src="/static/douyin-origin/libs/echarts-5.3.3.min.js"></script>
     <script src="/static/douyin-origin/geojson/china.js"></script>
-    <script src="/static/douyin-origin/douyin-workbench-shared.js?v=20260608-direct-routes"></script>
+    <script src="/static/douyin-origin/douyin-workbench-shared.js?v=20260814-douyin-takeover-v1"></script>
 
 </body>
 </html>

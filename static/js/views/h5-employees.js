@@ -20,7 +20,6 @@
   var SALES_ROWS = [
     {time:'06:00',end:'06:30',key:'local_bestseller',label:'创作同城爆款视频',note:'创作一条同城爆款视频（用于发公域平台）',publish:[['08:45','douyin','同城爆款视频发布抖音'],['09:00','wechat_channels','同城爆款视频发布视频号']]},
     {time:'06:30',end:'07:00',key:'hifly.video.create_by_tts',label:'创作数字人口播视频',note:'创作一条数字人口播视频（用于发朋友圈）',publish:[['09:30','wechat_moments','微信朋友圈发布']]},
-    {time:'07:00',end:'07:15',key:'native_wechat_add_friend',label:'微信自动加好友',note:'从抖音私信接管结果中提取明确微信号后加好友，没有明确微信号则跳过',params:{source_mode:'douyin_private_message_wechat_id',trigger:'clear_wechat_id',skip_without_clear_wechat_id:true}},
     {time:'07:15',end:'07:30',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'07:45',end:'08:15',key:'douyin_leads',label:'抖音自动养号',note:'抖音自动养号'},
     {time:'08:15',end:'08:45',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true},
@@ -33,7 +32,6 @@
     {time:'12:00',end:'12:15',key:'douyin_leads',label:'抖音回复精准客户评论10个',note:'抖音回复精准客户评论10个'},
     {time:'12:15',end:'12:30',key:'douyin_leads',label:'抖音自己评论区接管',note:'抖音自己评论区接管，评论并@10个精准客户'},
     {time:'12:30',end:'12:45',key:'douyin_leads',label:'抖音关注精准客户并评论首条作品',note:'抖音关注10个精准客户，并找到他的首条作品去评论'},
-    {time:'12:45',end:'13:00',key:'native_wechat_add_friend',label:'微信自动加好友',note:'从抖音私信接管结果中提取明确微信号后加好友，没有明确微信号则跳过',params:{source_mode:'douyin_private_message_wechat_id',trigger:'clear_wechat_id',skip_without_clear_wechat_id:true}},
     {time:'13:00',end:'13:15',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'13:30',end:'13:45',key:'native_wechat_moments_engage',label:'微信朋友圈自己评论区接管',note:'微信朋友圈自己评论区接管',params:{moment_action:'comment'}},
     {time:'13:45',end:'14:15',key:'hifly.video.create_by_tts',label:'创作数字人口播视频',note:'创作一条数字人口播视频（用于发朋友圈）',publish:[['14:15','wechat_moments','微信朋友圈发布']]},
@@ -49,14 +47,12 @@
     {time:'17:30',end:'17:45',key:'douyin_leads',label:'抖音回复精准客户评论10个',note:'抖音回复精准客户评论10个'},
     {time:'17:45',end:'18:00',key:'douyin_leads',label:'抖音自己评论区接管',note:'抖音自己评论区接管，评论并@10个精准客户'},
     {time:'18:00',end:'18:15',key:'douyin_leads',label:'抖音关注精准客户并评论首条作品',note:'抖音关注10个精准客户，并找到他的首条作品去评论'},
-    {time:'18:15',end:'18:30',key:'native_wechat_add_friend',label:'微信自动加好友',note:'从抖音私信接管结果中提取明确微信号后加好友，没有明确微信号则跳过',params:{source_mode:'douyin_private_message_wechat_id',trigger:'clear_wechat_id',skip_without_clear_wechat_id:true}},
     {time:'18:30',end:'18:45',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'19:00',end:'19:15',key:'douyin_leads',label:'抖音主动私信精准客户',note:'抖音主动私信10个精准客户'},
     {time:'19:15',end:'19:30',key:'douyin_leads',label:'抖音私信接管',note:'抖音私信接管'},
     {time:'19:30',end:'20:00',key:'hifly.video.create_by_tts',label:'创作数字人口播视频',note:'创作一条数字人口播视频（用于发朋友圈）',publish:[['20:00','wechat_moments','微信朋友圈发布']]},
     {time:'20:15',end:'20:30',key:'wechat_channels_comment',label:'视频号评论区接管（敬请期待）',note:'视频号评论区接管',soon:true},
     {time:'20:30',end:'20:45',key:'wechat_channels_message',label:'视频号私信接管（敬请期待）',note:'视频号私信接管',soon:true},
-    {time:'20:45',end:'21:00',key:'native_wechat_add_friend',label:'微信自动加好友',note:'从抖音私信接管结果中提取明确微信号后加好友，没有明确微信号则跳过',params:{source_mode:'douyin_private_message_wechat_id',trigger:'clear_wechat_id',skip_without_clear_wechat_id:true}},
     {time:'21:00',end:'22:00',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'22:15',end:'22:30',key:'native_wechat_moments_engage',label:'朋友圈点赞评论（微信）',note:'朋友圈点赞评论（微信）'},
     {time:'22:30',end:'23:00',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管'},
@@ -67,13 +63,12 @@
   var NODE_OPTIONS = [
     ['local_bestseller','同城爆款视频'], ['hifly.video.create_by_tts','数字人口播视频'],
     ['douyin_leads','抖音获客'], ['native_wechat_poll','微信私信接管'],
-    ['native_wechat_add_friend','微信自动加好友'], ['native_wechat_moments_engage','朋友圈点赞评论'],
+    ['native_wechat_moments_engage','朋友圈点赞评论'],
     ['ip_content_daily','IP日更文案']
   ];
 
   var CHILD_ACTION_OPTIONS = [
     ['publish','发布内容'],
-    ['native_wechat_add_friend','自动加好友'],
     ['native_wechat_moments_engage','朋友圈点赞评论']
   ];
 
@@ -96,6 +91,19 @@
   function scheduleDuration(start, end) {
     var parse = function(value) { var m = /^(\d{2}):(\d{2})$/.exec(String(value || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; };
     var a = parse(start), b = parse(end); if (end === '24:00') b = 1440; if (b && b < a) b += 1440; return Math.max(0, b - a);
+  }
+  function normalizeWorkflowTimeline(nodes) {
+    var items = clone(Array.isArray(nodes) ? nodes : []);
+    items.sort(function(a, b) { return String(a && a.time || '').localeCompare(String(b && b.time || '')); });
+    items.forEach(function(node, index) {
+      if (!node || typeof node !== 'object') return;
+      var next = items[index + 1];
+      var end = String(node.end_time || '').trim();
+      if (!end && next && /^\d{2}:\d{2}$/.test(String(next.time || ''))) end = String(next.time || '').trim();
+      node.end_time = end;
+      node.time_range = end ? String(node.time || '') + '-' + end : String(node.time || '');
+    });
+    return items;
   }
   function salesAction(note) {
     var text = String(note || '');
@@ -175,7 +183,6 @@
   }
   function childOptions(parent, currentType) {
     var values=[];
-    if (isDouyinPrivate(parent)) values.push('native_wechat_add_friend');
     if (isWechatPrivate(parent)) values.push('native_wechat_moments_engage');
     values.push('publish');
     if (currentType && currentType !== 'native_wechat_group_invite' && values.indexOf(currentType) < 0) values.push(currentType);
@@ -306,7 +313,39 @@
     });
     return result;
   }
-  function normalizeTemplate(template) { var out = Object.assign({}, template || {}); out.nodes = migrateGroupInviteNodes(Array.isArray(out.nodes) ? clone(out.nodes) : []); out.meta = out.meta && typeof out.meta === 'object' ? Object.assign({},out.meta) : {}; return out; }
+  function migrateDouyinAddFriendChildren(nodes) {
+    var list = Array.isArray(nodes) ? listClone(nodes) : [];
+    var parents = list.filter(isDouyinPrivate), legacyRows = list.filter(function(node) { return childActionType(node) === 'native_wechat_add_friend'; });
+    if (!parents.length) return list;
+    var prepared = list.filter(function(node) { return childActionType(node) !== 'native_wechat_add_friend'; });
+    parents.forEach(function(parent) {
+      var payload = workflowPayload(parent), params = payload.params && typeof payload.params === 'object' ? Object.assign({}, payload.params) : {}, children = workflowChildren(parent), hadChild = children.some(function(child) { return childActionType(child) === 'native_wechat_add_friend'; });
+      params.wechat_add_friend_enabled = Object.prototype.hasOwnProperty.call(params, 'wechat_add_friend_enabled') ? !!params.wechat_add_friend_enabled : !!(hadChild || legacyRows.length);
+      params.wechat_add_friend_targets_source = 'douyin_private_message_phone';
+      delete params.wechat_add_friend_rules;
+      parent.plan = parent.plan && typeof parent.plan === 'object' ? parent.plan : {};
+      parent.plan.payload = Object.assign({}, payload, {params:params});
+      var remaining = children.filter(function(child) { return childActionType(child) !== 'native_wechat_add_friend'; });
+      if (remaining.length) parent.children = remaining; else delete parent.children;
+    });
+    return prepared;
+  }
+  function listClone(value) { return clone(value); }
+  function salesNodes() {
+    var nodes = [];
+    SALES_ROWS.forEach(function(row, index) {
+      if (row.key === 'native_wechat_add_friend') return;
+      if (row.key === 'native_wechat_poll' && row.label === '微信自动拉群') { addChild(nodes.slice().reverse().find(isWechatPrivate), row, index, 'group'); return; }
+      var node = makeNode(row, index);
+      if (isDouyinPrivate(node)) {
+        node.plan.payload = node.plan.payload || {};
+        node.plan.payload.params = Object.assign({}, node.plan.payload.params || {}, {wechat_add_friend_enabled:true, wechat_add_friend_targets_source:'douyin_private_message_phone'});
+      }
+      nodes.push(node);
+    });
+    return nodes;
+  }
+  function normalizeTemplate(template) { var out = Object.assign({}, template || {}); out.nodes = normalizeWorkflowTimeline(migrateDouyinAddFriendChildren(migrateGroupInviteNodes(Array.isArray(out.nodes) ? clone(out.nodes) : []))); out.meta = out.meta && typeof out.meta === 'object' ? Object.assign({},out.meta) : {}; return out; }
   function ownSalesMirror() { return state.templates.find(function(item) { return activeTemplateKey(item) === 'system_sales'; }); }
   function templateForSelected() { if (state.selectedId === 'system_sales') return ownSalesMirror() || {id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()}; return state.templates.find(function(item) { return String(item.id) === String(state.selectedId); }) || null; }
   function templateIsEditable(template) { return !!(template && template.source === 'own'); }
@@ -345,21 +384,21 @@
   function loadTemplates() { return api('/api/h5-workflows/templates').then(function(data){ state.templates=(Array.isArray(data.templates) ? data.templates : []).map(normalizeTemplate); return state.templates; }); }
   function loadDevices() { return api('/api/h5-chat/devices/status').then(function(data){state.devices=Array.isArray(data.devices) ? data.devices : []; return state.devices;}); }
   function loadActive() { var iid=selectedDeviceId(); if (!iid) { state.active=null; renderStatus(); return Promise.resolve(null); } return api('/api/h5-workflows/active?installation_id=' + encodeURIComponent(iid)).then(function(data){state.active=data.activation || null; renderStatus(); return state.active;}); }
-  function selectTemplate(id) { state.selectedId=String(id || 'system_sales'); state.selectedTemplate=normalizeTemplate(templateForSelected()); state.editingId=state.selectedTemplate.source === 'own' ? String(state.selectedTemplate.id || '') : ''; state.editingMeta=Object.assign({},state.selectedTemplate.meta || {}); state.nodes=clone(state.selectedTemplate.nodes || []); if (state.selectedId === 'system_sales' && !ownSalesMirror()) state.nodes=salesNodes(); render(); loadActive().catch(function(){}); }
+  function selectTemplate(id) { state.selectedId=String(id || 'system_sales'); state.selectedTemplate=normalizeTemplate(templateForSelected()); state.editingId=state.selectedTemplate.source === 'own' ? String(state.selectedTemplate.id || '') : ''; state.editingMeta=Object.assign({},state.selectedTemplate.meta || {}); state.nodes=normalizeWorkflowTimeline(state.selectedTemplate.nodes || []); if (state.selectedId === 'system_sales' && !ownSalesMirror()) state.nodes=normalizeWorkflowTimeline(salesNodes()); render(); loadActive().catch(function(){}); }
   function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; render(); }
   function findOption(key) { return NODE_OPTIONS.find(function(item){return item[0] === key;}) || NODE_OPTIONS[0]; }
   function fillNodeOptions(selected) { var select=el('oeNodeKey'); if (!select) return; select.innerHTML=NODE_OPTIONS.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=selected || NODE_OPTIONS[0][0]; }
   function syncNodeModalFields() { var takeover=String((el('oeNodeKey') || {}).value || '') === 'native_wechat_poll', field=el('oeNodeGroupInviteField'); if (field) field.hidden=!takeover; }
   function openNodeModal(index) { requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1; var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowPayload(node).params || {}; el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点'; el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || ''; fillNodeOptions(node && node.ability_key); el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; syncNodeModalFields(); el('oeNodeLabel').value=node && node.ability_label || findOption(node && node.ability_key)[1]; el('oeNodeNote').value=node && node.note || ''; el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60); }
   function closeNodeModal() { el('oeNodeModal').hidden=true; state.nodeEditIndex=-1; }
-  function saveNodeFromModal() { requireEditableTemplate(); var key=el('oeNodeKey').value, time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || findOption(key)[1], note=el('oeNodeNote').value.trim() || label; if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间'); var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowPayload(existing).params || {}, row={time:time,end:end,key:key,label:label,note:note,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})}; delete row.params.followup_action; delete row.params.group_invite_rules; var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)}; next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || []; state.nodes=state.nodeEditIndex >= 0 ? state.nodes.map(function(item,index){return index === state.nodeEditIndex ? next : item;}) : state.nodes.concat(next); state.nodes.sort(function(a,b){return String(a.time).localeCompare(String(b.time));}); closeNodeModal(); renderEditor(); }
+  function saveNodeFromModal() { requireEditableTemplate(); var key=el('oeNodeKey').value, time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || findOption(key)[1], note=el('oeNodeNote').value.trim() || label; if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间'); var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowPayload(existing).params || {}, row={time:time,end:end,key:key,label:label,note:note,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})}; delete row.params.followup_action; delete row.params.group_invite_rules; var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)}; next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || []; state.nodes=state.nodeEditIndex >= 0 ? state.nodes.map(function(item,index){return index === state.nodeEditIndex ? next : item;}) : state.nodes.concat(next); state.nodes=normalizeWorkflowTimeline(state.nodes); closeNodeModal(); renderEditor(); }
   function fillChildOptions(parent,selected) { var select=el('oeChildType'), options=childOptions(parent,selected); if (!select) return; select.innerHTML=options.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=options.some(function(item){return item[0] === selected;}) ? selected : (options[0] && options[0][0] || 'publish'); }
   function syncChildModalFields() { var publish=String(el('oeChildType') && el('oeChildType').value || 'publish') === 'publish', field=el('oeChildPlatformField'); if (field) field.hidden=!publish; if (el('oeChildPlatform')) el('oeChildPlatform').disabled=!publish; }
   function openChildModal(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) throw new Error('未找到上级节点'); var existing=workflowChildren(parent).find(function(child){return String(child && child.id || '') === String(childId || '');}) || null; state.childParentIndex=index; state.childEditId=existing ? String(existing.id || '') : ''; el('oeChildModalTitle').textContent=existing ? '编辑下级动作' : '添加下级动作'; el('oeChildParent').textContent=parent.ability_label || parent.note || '上级节点'; el('oeChildTime').value=existing && existing.time || parent.end_time || parent.time || '09:00'; fillChildOptions(parent,existing ? childActionType(existing) : ''); el('oeChildPlatform').value=existing && existing.platform || 'douyin'; syncChildModalFields(); el('oeChildModal').hidden=false; setTimeout(function(){el('oeChildTime').focus();},60); }
   function closeChildModal() { if (el('oeChildModal')) el('oeChildModal').hidden=true; state.childParentIndex=-1; state.childEditId=''; }
   function saveChildFromModal() { requireEditableTemplate(); var parentIndex=state.childParentIndex, parent=state.nodes[parentIndex]; if (!parent) throw new Error('未找到上级节点'); var editId=String(state.childEditId || ''), time=String(el('oeChildTime').value || '').trim(), type=String(el('oeChildType').value || 'publish').trim(), platform=String(el('oeChildPlatform').value || 'douyin').trim(); if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择动作时间'); if (childOptions(parent,editId ? childActionType(workflowChildren(parent).find(function(child){return String(child.id || '') === editId;})) : '').map(function(item){return item[0];}).indexOf(type) < 0) throw new Error('这个上级节点不支持所选动作'); if (type === 'publish' && ['douyin','toutiao','wechat_channels','wechat_moments'].indexOf(platform) < 0) throw new Error('暂时只支持抖音、头条、视频号和朋友圈'); var children=workflowChildren(parent).slice(), duplicate=children.find(function(child){if (editId && String(child.id || '') === editId) return false; var childType=childActionType(child); return type === 'publish' ? childType === 'publish' && String(child.platform || '') === platform : childType === type;}); if (duplicate) throw new Error(type === 'publish' ? '这个平台已经有发布动作了' : '这个下级动作已经添加过了'); var existing=editId ? children.find(function(child){return String(child.id || '') === editId;}) : null, next=buildWorkflowChild(parent,{time:time,action_type:type,platform:platform},existing); children=children.filter(function(child){return String(child.id || '') !== String(next.id || '');}).concat(next).sort(function(a,b){return String(a.time || '').localeCompare(String(b.time || ''));}); state.nodes[parentIndex]=syncParentChildRules(Object.assign({},parent,{children:children})); closeChildModal(); renderEditor(); }
   function removeChild(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) return; var children=workflowChildren(parent).filter(function(child){return String(child && child.id || '') !== String(childId || '');}); state.nodes[index]=syncParentChildRules(Object.assign({},parent,{children:children})); renderEditor(); }
-  function payloadToSave() { requireEditableTemplate(); state.nodes=migrateGroupInviteNodes(state.nodes); var name=(el('oeTemplateName').value || '').trim(); if (!name) throw new Error('请填写员工名称'); if (!state.nodes.length) throw new Error('请至少添加一个节点'); var meta=Object.assign({},state.editingMeta || {}); if (isSalesTemplate(state.selectedTemplate)) {meta.system_template_key='system_sales';meta.source=meta.source || 'system_mirror';} return {name:name,nodes:clone(state.nodes),meta:meta}; }
+  function payloadToSave() { requireEditableTemplate(); state.nodes=normalizeWorkflowTimeline(migrateGroupInviteNodes(state.nodes)); var name=(el('oeTemplateName').value || '').trim(); if (!name) throw new Error('请填写员工名称'); if (!state.nodes.length) throw new Error('请至少添加一个节点'); var meta=Object.assign({},state.editingMeta || {}); if (isSalesTemplate(state.selectedTemplate)) {meta.system_template_key='system_sales';meta.source=meta.source || 'system_mirror';} return {name:name,nodes:clone(state.nodes),meta:meta}; }
   function runSubmission(kind, task) { if (state.submitting) return Promise.reject(new Error('操作正在处理中，请勿重复提交')); state.submitting=kind; clearError(); render(); return Promise.resolve().then(task).finally(function(){state.submitting='';render();}); }
   function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
   function askPlanDay() { var answer=window.prompt('请输入本次销售工作流从第几天开始执行（1-30）','1'); if (answer === null) return null; var day=Number(answer); if (!Number.isInteger(day) || day < 1 || day > 30) throw new Error('执行天数请输入 1 到 30 的整数'); return day; }
@@ -377,7 +416,7 @@
         if (target.dataset.oeChildEdit != null) {openChildModal(Number(target.dataset.oeChildParent),target.dataset.oeChildEdit);return;}
         if (target.dataset.oeChildDelete != null) {if(window.confirm('删除这个下级动作？')) removeChild(Number(target.dataset.oeChildParent),target.dataset.oeChildDelete);return;}
         if (target.dataset.oeEdit != null) {openNodeModal(Number(target.dataset.oeEdit));return;}
-        if (target.dataset.oeDelete != null) {requireEditableTemplate();if(window.confirm('删除这个工作流节点？')) {state.nodes.splice(Number(target.dataset.oeDelete),1);renderEditor();}return;}
+        if (target.dataset.oeDelete != null) {requireEditableTemplate();if(window.confirm('删除这个工作流节点？')) {state.nodes.splice(Number(target.dataset.oeDelete),1);state.nodes=normalizeWorkflowTimeline(state.nodes);renderEditor();}return;}
         var action=target.dataset.oeAction;
         if(action==='refresh') {initialize(true);return;}
         if(action==='new') {resetNew();return;}
@@ -398,5 +437,29 @@
     });
   }
   function initialize(force) { var root=el('content-h5-employees'); if(!root) return; bind(root); clearError(); var requested=String(window.__onlineEmployeeSelectedId || '').trim(); if(requested) {state.selectedId=requested; window.__onlineEmployeeSelectedId='';} state.loading=true; Promise.all([loadTemplates(),loadDevices()]).then(function(){ if(!state.selectedId) state.selectedId='system_sales'; selectTemplate(state.selectedId); }).catch(function(err){showError(err.message || '员工数据加载失败'); if(!state.selectedId) {state.selectedId='system_sales';state.selectedTemplate={id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()};state.nodes=clone(state.selectedTemplate.nodes);render();} }).finally(function(){state.loading=false;}); }
+  function syncNodeModalFields() {
+    var key=String((el('oeNodeKey') || {}).value || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note});
+    if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
+    if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
+  }
+  function openNodeModal(index) {
+    requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1;
+    var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowPayload(node).params || {};
+    el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点';
+    el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || '';
+    fillNodeOptions(node && node.ability_key); el('oeNodeLabel').value=node && node.ability_label || findOption(node && node.ability_key)[1]; el('oeNodeNote').value=node && node.note || '';
+    el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=params.wechat_add_friend_enabled !== false;
+    syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
+  }
+  function saveNodeFromModal() {
+    requireEditableTemplate(); var key=el('oeNodeKey').value, time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || findOption(key)[1], note=el('oeNodeNote').value.trim() || label;
+    if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间');
+    var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowPayload(existing).params || {}, row={time:time,end:end,key:key,label:label,note:note,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
+    if (isDouyinPrivate({ability_key:key,ability_label:label,note:note})) { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; }
+    delete row.params.followup_action; delete row.params.group_invite_rules;
+    var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
+    next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || [];
+    state.nodes=state.nodeEditIndex >= 0 ? state.nodes.map(function(item,index){return index === state.nodeEditIndex ? next : item;}) : state.nodes.concat(next); state.nodes=normalizeWorkflowTimeline(state.nodes); closeNodeModal(); renderEditor();
+  }
   window.initOnlineH5EmployeesView = function() { initialize(false); };
 })();

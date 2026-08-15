@@ -78,6 +78,7 @@ def test_stranger_takeover_reuses_online_monitor_configuration():
                 "reply_mode": "ai_lead",
                 "reply_prompt": "基于本机资料回复",
                 "contact_value": "wx-local",
+                "wechat_add_friend_enabled": True,
             }
         ],
     )
@@ -88,6 +89,7 @@ def test_stranger_takeover_reuses_online_monitor_configuration():
     assert params["auto_reply_enabled"] is True
     assert params["reply_mode"] == "ai_lead"
     assert params["contact_value"] == "wx-local"
+    assert params["wechat_add_friend_enabled"] is True
 
 
 def test_sales_result_payload_exposes_readable_fields_at_top_level():

@@ -100,7 +100,6 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "auto_reply_char_sleep_max": 0.22,
     "auto_reply_punctuation_sleep_min": 0.35,
     "auto_reply_punctuation_sleep_max": 0.9,
-    "auto_reply_max_sessions_per_run": 12,
     "auto_reply_max_text_chars": 600,
 }
 
@@ -2009,6 +2008,49 @@ def _looks_like_auto_reply_control_payload(value: Any) -> bool:
     return bool(parsed and _AUTO_REPLY_CONTROL_KEYS.intersection(parsed))
 
 
+def _reply_claims_existing_group(value: Any) -> bool:
+    text = re.sub(r"\s+", "", str(value or "")).strip()
+    if not text:
+        return False
+    return bool(
+        re.search(
+            r"(?:您|你|客户)?(?:已经|已)(?:被)?拉(?:进|到)?群|"
+            r"(?:您|你|客户)?(?:已经|已)(?:在|进)(?:群|群里)|"
+            r"群里(?:同事|老师|负责人)(?:已经|会|马上)",
+            text,
+        )
+    )
+
+
+def _strip_unverified_group_claims(value: Any) -> Any:
+    replacements = (
+        "已经在群里",
+        "已在群里",
+        "已经进群",
+        "已进群",
+        "已经拉群",
+        "已拉群",
+        "已进入群聊",
+        "确认已进入群聊",
+        "已拉群对接",
+        "拉入群聊",
+        "拉进群聊",
+        "进入群聊",
+        "在群内",
+        "群内对接",
+    )
+    if isinstance(value, str):
+        text = value
+        for phrase in replacements:
+            text = text.replace(phrase, "群状态未核验")
+        return text
+    if isinstance(value, list):
+        return [_strip_unverified_group_claims(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_unverified_group_claims(item) for key, item in value.items()}
+    return value
+
+
 def _is_affirmative_group_confirmation(latest_message: str, recent_context: str) -> bool:
     latest = re.sub(r"[\s\[\]【】()（）,.，。!！?？~～]+", "", str(latest_message or "")).lower()
     if not latest or len(latest) > 16:
@@ -2052,6 +2094,17 @@ def _looks_like_non_replyable_wechat_event(content: Any) -> bool:
         "已拒绝",
         "未接通",
         "对方忙线",
+        "发起了语音通话",
+        "发起了视频通话",
+        "通话邀请",
+        "对方已取消",
+        "对方已拒绝",
+        "对方无应答",
+        "[语音通话]",
+        "[视频通话]",
+        "[通话]",
+        "[语音]",
+        "[视频]",
     )
     return any(marker in text for marker in call_markers)
 
@@ -2356,10 +2409,19 @@ def _auto_reply_content_key(content: Any) -> str:
 
 
 def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
-    latest = _latest_message_record(account_id, peer_id)
+    latest = _latest_message_record(account_id, peer_id, include_system=True)
     if not latest or latest.get("direction") != "in":
         return None
-    if latest.get("is_system") or latest.get("msg_type") == "time":
+    raw = latest.get("raw_json") if isinstance(latest.get("raw_json"), dict) else {}
+    raw_type = str(raw.get("type") or "").strip().lower()
+    raw_sender = str(raw.get("sender") or raw.get("sender_remark") or "").strip().lower()
+    if (
+        latest.get("is_system")
+        or latest.get("msg_type") == "time"
+        or raw_sender == "system"
+        or raw_type in {"system", "sys", "status", "notification", "notify", "time", "voip", "call"}
+        or _looks_like_non_replyable_wechat_event(latest.get("content"))
+    ):
         return None
     content = str(latest.get("content") or "").strip()
     if not content:
@@ -2568,6 +2630,7 @@ async def _call_auto_reply_llm(
     group_invite_rule_context: str = "",
     group_invite_keywords: str = "",
     group_invite_enabled: bool = True,
+    group_invite_already_verified: bool = False,
     contact_intelligence: str = "",
     strategy_context: str = "",
 ) -> Dict[str, Any]:
@@ -2601,6 +2664,8 @@ async def _call_auto_reply_llm(
         "有效文字消息必须回复；如果资料里没有答案，不能编造，要自然说明需要确认，或请对方补充必要信息。"
         "如果提供了拉群判断规则文件，你还要结合最新消息、最近上下文和规则文件做语义判断；"
         "只有客户真实诉求明确符合文件规则时 should_invite_group 才能为 true，不能只因出现相近字词就判定。没有提供规则时必须为 false。"
+        "群聊状态只能以系统提供的核验结果为准；历史摘要、历史回复或客户画像中的‘已拉群/已在群里’都不能作为事实。"
+        "如果系统标记为未核验，回复中禁止声称客户已经在群里；符合拉群规则时必须把 should_invite_group 设为 true。"
         "如果最近上下文中我方已经明确提出帮客户对接负责人、拉群或进入服务群，而客户回复可以、好的、同意、没问题等肯定答复，"
         "应结合此前已表达的业务兴趣判定为明确同意对接；符合规则时 should_invite_group 必须为 true，回复中不要再重复追问已经问过的问题。"
         "要结合客户历史画像延续上下文，不能重复问已经确认的信息，也不能在对方没有继续回复时自说自话。"
@@ -2624,6 +2689,7 @@ async def _call_auto_reply_llm(
         f"用户已审核生效的长期接管规则：\n{strategy_context or '(暂无额外长期规则)'}\n\n"
         f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}\n\n"
         f"自动拉群开关：{'已开启' if group_invite_enabled else '已关闭'}\n\n"
+        f"系统核验群状态：{'已核验客户在本系统创建的群聊中' if group_invite_already_verified else '未核验，禁止声称客户已在群里'}\n\n"
         f"拉群判断规则文件：\n{invite_rule_context or '(未配置，本轮不得判定拉群)'}\n\n"
         f"历史拉群关键词（仅兼容旧设置）：\n{('、'.join(invite_keywords)) if invite_keywords else '(无)'}"
     )
@@ -2674,7 +2740,11 @@ async def _call_auto_reply_llm(
     should_invite_group = _bool_value(parsed.get("should_invite_group"))
     if not group_invite_enabled or not has_invite_rule:
         should_invite_group = False
+    elif group_invite_already_verified:
+        should_invite_group = False
     elif _is_affirmative_group_confirmation(latest_message, recent_context):
+        should_invite_group = True
+    elif _reply_claims_existing_group(reply):
         should_invite_group = True
     matched_raw = parsed.get("matched_group_keywords")
     if isinstance(matched_raw, str):
@@ -2687,6 +2757,8 @@ async def _call_auto_reply_llm(
         dict.fromkeys(str(item or "").strip() for item in matched_values if str(item or "").strip())
     )[:20]
     group_invite_reason = str(parsed.get("group_invite_reason") or "").strip()[:300]
+    if should_invite_group and _reply_claims_existing_group(reply) and not group_invite_already_verified:
+        group_invite_reason = group_invite_reason or "AI 回复涉及已入群状态，但系统尚未核验，必须先实际执行拉群"
     if should_invite_group and _is_affirmative_group_confirmation(latest_message, recent_context):
         if "明确同意拉群" not in matched_group_keywords:
             matched_group_keywords.append("明确同意拉群")
@@ -2783,7 +2855,7 @@ async def _queue_auto_reply_group_invite(
         or inbound.get("id")
         or _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
     ).strip()
-    dedup_key = "auto-invite-" + _stable_key(account_id, peer_id, inbound_id)
+    dedup_key = "auto-invite-v2-" + _stable_key(account_id, peer_id, primary_contact)
     task = await create_group_task(
         account_id,
         [peer_id, primary_contact],
@@ -2804,6 +2876,7 @@ async def _queue_auto_reply_group_invite(
         "primary_contact_name": str(cfg.get("group_invite_primary_contact_name") or primary_contact).strip(),
         "task_id": str(task.get("id") or ""),
         "task_status": status,
+        "already_grouped": bool(task.get("deduped") and status in {"success", "partial_failed"}),
     }
 
 
@@ -2939,6 +3012,15 @@ def _session_needs_auto_reply_check(item: Dict[str, Any]) -> bool:
     return not _looks_like_non_replyable_wechat_event(item.get("last_content"))
 
 
+def _session_is_scan_candidate(item: Dict[str, Any]) -> bool:
+    """A takeover scan opens the chat and checks its actual last message."""
+    if not str(item.get("peer_id") or "").strip():
+        return False
+    if item.get("is_system") or str(item.get("msg_type") or "").lower() == "time":
+        return False
+    return not _looks_like_non_replyable_wechat_event(item.get("last_content"))
+
+
 async def run_auto_reply_once(
     account_id: str,
     *,
@@ -3056,8 +3138,9 @@ async def run_auto_reply_once(
         _collect_local_driver_recovery(result, session_data)
         sessions = _enrich_sessions_with_message_counts(account_id, list(session_data.get("items") or []))
         result["session_count"] = len(sessions)
-        unread = [item for item in sessions if _session_needs_auto_reply_check(item)]
-        max_sessions = max(1, int(DEFAULT_STRATEGY["auto_reply_max_sessions_per_run"]))
+        result["session_scan_rounds"] = int(session_data.get("scroll_rounds") or 0)
+        result["session_scan_limit"] = 20
+        unread = [item for item in sessions if _session_is_scan_candidate(item)]
         private_unread = []
         for item in unread:
             if _looks_like_group_session(item):
@@ -3069,7 +3152,10 @@ async def run_auto_reply_once(
             max(0, int(item.get("unread_count") or 0))
             for item in private_unread
         )
-        for idx, session in enumerate(private_unread[:max_sessions]):
+        # The scan is intentionally bounded by 20 UIA scroll rounds, not by an
+        # unrelated session-count cap. Process every eligible private session
+        # collected by those rounds so later pages cannot be silently skipped.
+        for idx, session in enumerate(private_unread):
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = str(session.get("display_name") or peer_id).strip()
             if not peer_id:
@@ -3104,16 +3190,6 @@ async def run_auto_reply_once(
                     item_result.update({"status": "no_unreplied_message"})
                     result["items"].append(item_result)
                     continue
-                if not _session_preview_matches_inbound(session, inbound):
-                    result["skipped"] += 1
-                    item_result.update(
-                        {
-                            "status": "no_unreplied_message",
-                            "reason": "latest_session_preview_is_not_inbound",
-                        }
-                    )
-                    result["items"].append(item_result)
-                    continue
                 current_inbound = inbound
                 item_result.update(
                     {
@@ -3136,6 +3212,25 @@ async def run_auto_reply_once(
                     latest_message=str(inbound.get("content") or ""),
                 )
                 contact_intelligence, strategy_context = _wechat_intelligence_prompt_context(intelligence_context)
+                primary_contact = str(
+                    cfg.get("group_invite_primary_contact")
+                    or next(
+                        (value for value in (cfg.get("group_invite_contacts") or []) if str(value or "").strip()),
+                        "",
+                    )
+                ).strip()
+                local_group_invite_verified = _has_verified_group_invite(
+                    account_id,
+                    actual_peer,
+                    primary_contact,
+                )
+                server_contact = intelligence_context.get("contact") if isinstance(intelligence_context, dict) else {}
+                group_invite_already_verified = bool(
+                    local_group_invite_verified
+                    or (isinstance(server_contact, dict) and server_contact.get("group_invite_verified"))
+                )
+                if not group_invite_already_verified:
+                    contact_intelligence = str(_strip_unverified_group_claims(contact_intelligence) or "")
                 llm_reply = await _call_auto_reply_llm(
                     auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
                     user_id=effective_user_id,
@@ -3146,9 +3241,17 @@ async def run_auto_reply_once(
                     group_invite_rule_context=str(invite_rule_memory.get("text") or ""),
                     group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
                     group_invite_enabled=bool(cfg.get("group_invite_enabled")),
+                    group_invite_already_verified=group_invite_already_verified,
                     contact_intelligence=contact_intelligence,
                     strategy_context=strategy_context,
                 )
+                if not group_invite_already_verified:
+                    llm_reply["conversation_summary"] = _strip_unverified_group_claims(
+                        llm_reply.get("conversation_summary") or ""
+                    )
+                    llm_reply["profile_updates"] = _strip_unverified_group_claims(
+                        llm_reply.get("profile_updates") or {}
+                    )
                 item_result.update(
                     {
                         "category": llm_reply.get("category"),
@@ -3187,6 +3290,11 @@ async def run_auto_reply_once(
                         result["group_invite_failed"] += 1
                         group_invite = {"ok": False, "error": str(group_exc)[:500]}
                         item_result["group_invite"] = group_invite
+
+                if llm_reply.get("should_invite_group") and group_invite and group_invite.get("already_grouped"):
+                    llm_reply["should_invite_group"] = False
+                    item_result["should_invite_group"] = False
+                    item_result["group_invite_already_verified"] = True
 
                 if llm_reply.get("should_invite_group"):
                     invite_ok = bool(group_invite and (group_invite.get("queued") or group_invite.get("deduped")))
@@ -3364,7 +3472,7 @@ async def run_auto_reply_once(
                                 },
                             },
                         )
-            if idx < len(private_unread[:max_sessions]) - 1:
+            if idx < len(private_unread) - 1:
                 low = float(DEFAULT_STRATEGY["auto_reply_session_sleep_min"])
                 high = max(low, float(DEFAULT_STRATEGY["auto_reply_session_sleep_max"]))
                 await asyncio.sleep(random.uniform(low, high))
@@ -4495,14 +4603,20 @@ def _persist_message_obj(account_id: str, peer_id: str, msg: Any) -> Dict[str, A
     }
 
 
-def _latest_message_record(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
+def _latest_message_record(
+    account_id: str,
+    peer_id: str,
+    *,
+    include_system: bool = False,
+) -> Optional[Dict[str, Any]]:
+    filters = ["account_id=?", "peer_id=?"]
+    if not include_system:
+        filters.extend(["direction != 'system'", "msg_type != 'time'"])
     with _connect() as conn:
         row = conn.execute(
-            """
+            f"""
             select * from wechat_messages
-            where account_id=? and peer_id=?
-              and direction != 'system'
-              and msg_type != 'time'
+            where {' and '.join(filters)}
             order by created_at desc
             limit 1
             """,
@@ -4948,7 +5062,7 @@ def _uia_collect_visible_sessions(root: Any) -> List[Dict[str, Any]]:
     return [item for item in (_session_from_uia_cell(cell) for cell in _uia_session_cells(root)) if item.get("peer_id")]
 
 
-def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 5) -> Dict[str, Any]:
+def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 20) -> Dict[str, Any]:
     import uiautomation as auto  # type: ignore
 
     root = auto.ControlFromHandle(int(hwnd))
@@ -4964,7 +5078,7 @@ def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 5) -> Dict[str,
 
     seen: Dict[str, Dict[str, Any]] = {}
     rounds = 0
-    for idx in range(max(1, min(int(max_rounds or 5), 5))):
+    for idx in range(max(1, min(int(max_rounds or 20), 20))):
         rounds = idx + 1
         root = auto.ControlFromHandle(int(hwnd))
         cells = _uia_session_cells(root)
@@ -5061,7 +5175,7 @@ def _sync_local_sessions_from_uia(
     if passive:
         sessions = _uia_collect_visible_sessions(root)
     elif recent_only:
-        scan = _uia_collect_recent_sessions(hwnd, max_rounds=5)
+        scan = _uia_collect_recent_sessions(hwnd, max_rounds=20)
         sessions = list(scan.get("items") or [])
     else:
         scan = _uia_collect_all_sessions(hwnd)
@@ -8934,53 +9048,15 @@ def _send_text_local_legacy(account_id: str, peer_id: str, text: str) -> Dict[st
 
 
 def _send_text_local(account_id: str, peer_id: str, text: str) -> Dict[str, Any]:
-    _find_local_account(account_id)
-    peer_id = str(peer_id or "").strip()
-    text = str(text or "").strip()
-    if not peer_id:
-        raise RuntimeError("缺少接收人")
-    if not text:
-        raise RuntimeError("缺少发送内容")
-    _enforce_local_send_rate(account_id)
-    wx = _get_wxauto4_client(account_id)
-    client_id = f"lobster-local-wechat-{uuid.uuid4().hex}"
-    try:
-        resp = wx.SendMsg(text, who=peer_id, clear=True, exact=True)
-    except Exception as exc:
-        raise RuntimeError(f"local WeChat SendMsg failed: {exc}") from exc
-    raw = _obj_dict(resp)
-    if not bool(resp):
-        raise RuntimeError(f"local WeChat SendMsg failed: {resp}")
-    now = _now_iso()
-    chat_type = "direct"
-    try:
-        info = wx.ChatInfo() if hasattr(wx, "ChatInfo") else {}
-        chat_type = "group" if str((info or {}).get("chat_type") or "") == "group" else "direct"
-        _persist_peer_chat_info(account_id, peer_id, info or {"chat_name": peer_id, "chat_type": chat_type})
-    except Exception:
-        _persist_session(account_id, {"peer_id": peer_id, "display_name": peer_id, "raw": raw}, chat_type=chat_type)
-    with _connect() as conn:
-        conn.execute(
-            """
-            insert into wechat_messages(id, account_id, peer_id, direction, msg_type, content, client_id, status, raw_json, created_at)
-            values(?,?,?,?,?,?,?,?,?,?)
-            """,
-            (uuid.uuid4().hex, account_id, peer_id, "out", "text", text, client_id, "sent", _json_dumps(raw), now),
-        )
-        conn.execute(
-            """
-            insert into wechat_peers(id, account_id, peer_id, display_name, chat_type, last_outbound_at, raw_json, created_at, updated_at)
-            values(?,?,?,?,?,?,?,?,?)
-            on conflict(account_id, peer_id) do update set
-              display_name=excluded.display_name,
-              chat_type=excluded.chat_type,
-              last_outbound_at=excluded.last_outbound_at,
-              raw_json=excluded.raw_json,
-              updated_at=excluded.updated_at
-            """,
-            (_stable_key(account_id, peer_id), account_id, peer_id, peer_id, chat_type, now, _json_dumps(raw), now, now),
-        )
-    return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "wxauto4.SendMsg", "raw": raw}
+    # A successful wxauto4 call only means the API accepted the request. The
+    # visible chat record is the source of truth, so every local send now uses
+    # the same click-and-verify path as automatic replies.
+    return _send_text_local_slow(
+        account_id,
+        peer_id,
+        text,
+        {"driver": "native_wechat_verified_send", "source": "send_text"},
+    )
 
 
 def _wxauto_visible_message_snapshot(wx: Any) -> Dict[str, Any]:
@@ -9806,24 +9882,130 @@ def _find_group_picker_search_edit(root: Any) -> Optional[Any]:
     return sorted(edits, key=_uia_control_rect_score, reverse=True)[0]
 
 
+def _uia_optional_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "on", "selected", "checked"}:
+        return True
+    if text in {"false", "0", "off", "unselected", "unchecked"}:
+        return False
+    return None
+
+
+def _uia_group_picker_selection_state(node: Any) -> Optional[bool]:
+    """Read the selection state without relying on a screenshot or OCR."""
+    if node is None:
+        return None
+    sources: List[Any] = [node]
+    for getter in ("GetSelectionItemPattern", "GetTogglePattern", "SelectionItemPattern", "TogglePattern"):
+        try:
+            pattern = getattr(node, getter, None)
+            pattern = pattern() if callable(pattern) else pattern
+        except Exception:
+            pattern = None
+        if pattern is not None:
+            sources.append(pattern)
+    for source in sources:
+        for attr in ("IsSelected", "CurrentIsSelected", "Selected", "CurrentToggleState", "ToggleState"):
+            try:
+                state = _uia_optional_bool(getattr(source, attr, None))
+            except Exception:
+                state = None
+            if state is not None:
+                return state
+    return None
+
+
+def _group_picker_selected_count(root: Any) -> Optional[int]:
+    for node in _uia_walk(root, max_depth=14, max_nodes=1200):
+        text = _uia_control_text(node)
+        if not text:
+            continue
+        match = re.search(r"已选择\s*(\d+)\s*个联系人", text)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _group_picker_selection_target(cell: Any) -> Any:
+    """Prefer the row checkbox; clicking the text child is not sufficient in WeChat."""
+    cell_rect = _uia_rect_tuple(cell)
+    candidates: List[tuple[int, Any]] = []
+    for node in _uia_walk(cell, max_depth=6, max_nodes=120):
+        if node is cell:
+            continue
+        class_name = _uia_control_class(node).lower()
+        control_type = str(getattr(node, "ControlTypeName", "") or "").lower()
+        if not any(token in class_name or token in control_type for token in ("checkbox", "radiobutton", "check", "toggle")):
+            continue
+        try:
+            if bool(getattr(node, "IsOffscreen", False)):
+                continue
+            if hasattr(node, "IsEnabled") and not bool(getattr(node, "IsEnabled")):
+                continue
+        except Exception:
+            pass
+        score = 100
+        if "checkbox" in class_name or "checkbox" in control_type:
+            score += 40
+        if cell_rect and _uia_rect_tuple(node):
+            left, top, right, bottom = _uia_rect_tuple(node) or (0, 0, 0, 0)
+            c_left, c_top, c_right, c_bottom = cell_rect
+            if c_left <= left <= right <= c_right and c_top <= top <= bottom <= c_bottom:
+                score += 20
+        candidates.append((score, node))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1]
+    return cell
+
+
 def _find_group_picker_contact_node(root: Any, target: str) -> Optional[Any]:
     wanted = str(target or "").strip()
     if not wanted:
         return None
-    fallback: Optional[Any] = None
+    wanted_compact = _compact_for_contains(wanted).lower()
+    exact: List[Any] = []
+    fallback: List[Any] = []
     for node in _uia_walk(root, max_depth=20, max_nodes=2200):
         name = _uia_control_text(node)
         if not name:
             continue
         class_name = _uia_control_class(node)
-        is_contact_like = "Cell" in class_name or "Item" in class_name or class_name in {"mmui::XTextView", "mmui::XCheckBox"}
+        is_contact_like = (
+            class_name == "mmui::ContactsCellItemView"
+            or class_name.endswith("ContactsCellItemView")
+            or class_name == "mmui::SearchContactCellView"
+            or class_name.endswith("SearchContactCellView")
+        )
         if not is_contact_like:
             continue
-        if name == wanted:
-            return node
-        if fallback is None and wanted in name:
-            fallback = node
-    return fallback
+        compact_name = _compact_for_contains(name).lower()
+        if compact_name == wanted_compact:
+            exact.append(node)
+        elif wanted_compact and wanted_compact in compact_name:
+            fallback.append(node)
+    return (exact or fallback or [None])[0]
+
+
+def _group_picker_search_terms(target: str) -> List[str]:
+    value = str(target or "").strip()
+    if not value:
+        return []
+    terms = [value]
+    prefix = re.split(r"[-_－—]", value, maxsplit=1)[0].strip()
+    if prefix and prefix != value:
+        terms.append(prefix)
+    return list(dict.fromkeys(terms))
 
 
 def _select_group_picker_contact(hwnd: int, target: str, steps: List[Dict[str, Any]]) -> None:
@@ -9831,15 +10013,57 @@ def _select_group_picker_contact(hwnd: int, target: str, steps: List[Dict[str, A
     edit = _find_group_picker_search_edit(root)
     if edit is None:
         raise RuntimeError("未找到发起群聊搜索框")
-    _uia_set_text(edit, target)
-    time.sleep(0.9)
-    root = _group_picker_root(hwnd)
-    node = _find_group_picker_contact_node(root, target)
+    node: Optional[Any] = None
+    search_term = ""
+    for search_term in _group_picker_search_terms(target):
+        _uia_set_text(edit, search_term)
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            time.sleep(0.25)
+            root = _group_picker_root(hwnd)
+            node = _find_group_picker_contact_node(root, target)
+            if node is not None:
+                break
+        if node is not None:
+            break
     if node is None:
         raise RuntimeError(f"未找到联系人：{target}")
-    _uia_click(node)
-    steps.append({"step": "select_group_contact", "ok": True, "target": target})
-    time.sleep(random.uniform(0.6, 1.2))
+    before_count = _group_picker_selected_count(root)
+    selection_target = _group_picker_selection_target(node)
+    before_state = _uia_group_picker_selection_state(selection_target)
+    if before_state is not True:
+        _uia_click(selection_target)
+
+    deadline = time.monotonic() + 3.0
+    verified = False
+    after_count: Optional[int] = before_count
+    after_state: Optional[bool] = before_state
+    while time.monotonic() < deadline:
+        time.sleep(0.2)
+        latest_root = _group_picker_root(hwnd)
+        latest_node = _find_group_picker_contact_node(latest_root, target)
+        latest_target = _group_picker_selection_target(latest_node) if latest_node is not None else selection_target
+        after_state = _uia_group_picker_selection_state(latest_target)
+        after_count = _group_picker_selected_count(latest_root)
+        if after_state is True or (
+            before_count is not None and after_count is not None and after_count > before_count
+        ):
+            verified = True
+            break
+    if not verified and before_state is not True:
+        raise RuntimeError(f"联系人已显示但未确认勾选成功：{target}")
+    steps.append(
+        {
+            "step": "select_group_contact",
+            "ok": True,
+            "target": target,
+            "search_term": search_term,
+            "selection_method": _uia_control_class(selection_target) or "contact_cell",
+            "verified": True,
+            "selected_count_before": before_count,
+            "selected_count_after": after_count,
+        }
+    )
 
 
 def _finish_local_create_group(hwnd: int, steps: List[Dict[str, Any]]) -> None:
@@ -9874,6 +10098,48 @@ def _confirm_create_new_group_if_needed(hwnd: int, steps: List[Dict[str, Any]]) 
     steps.append({"step": "create_new_group_confirm", "ok": True, "skipped": "not_needed"})
 
 
+def _verify_created_local_group(
+    account_id: str,
+    targets: List[str],
+    *,
+    timeout_seconds: float = 8.0,
+) -> Dict[str, Any]:
+    expected_count = len(targets) + 1
+    wx = _get_wxauto4_client(account_id)
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    last_info: Dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        info = wx.ChatInfo() if hasattr(wx, "ChatInfo") else {}
+        if not isinstance(info, dict):
+            info = _obj_dict(info)
+        last_info = dict(info or {})
+        chat_type = str(info.get("chat_type") or "").strip().lower()
+        group_key = str(info.get("chat_name") or "").strip()
+        try:
+            member_count = int(info.get("group_member_count") or 0)
+        except (TypeError, ValueError):
+            member_count = 0
+        if chat_type in {"group", "chatroom"} and group_key:
+            if member_count <= 0 and hasattr(wx, "GetGroupMembers"):
+                try:
+                    member_count = len(list(wx.GetGroupMembers() or []))
+                except Exception:
+                    member_count = 0
+            if member_count >= expected_count:
+                return {
+                    "group_key": group_key,
+                    "chat_info": info,
+                    "member_count": member_count,
+                    "expected_member_count": expected_count,
+                }
+        time.sleep(0.35)
+    raise RuntimeError(
+        f"微信建群未通过结果核验：chat_type={last_info.get('chat_type') or 'unknown'}, "
+        f"chat_name={last_info.get('chat_name') or ''}, "
+        f"member_count={last_info.get('group_member_count') or 0}, expected={expected_count}"
+    )
+
+
 def _create_local_group_once(account_id: str, contacts: List[str]) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
@@ -9894,26 +10160,29 @@ def _create_local_group_once(account_id: str, contacts: List[str]) -> Dict[str, 
         except Exception:
             pass
         raise
-    group_key = "、".join(targets[:4]) + ("等" if len(targets) > 4 else "")
-    try:
-        wx = _get_wxauto4_client(account_id)
-        info = wx.ChatInfo() if hasattr(wx, "ChatInfo") else {}
-        detected_group_name = str((info or {}).get("chat_name") or "").strip()
-        if detected_group_name:
-            group_key = detected_group_name
-    except Exception:
-        info = {}
+    verification = _verify_created_local_group(account_id, targets)
+    info = verification.get("chat_info") if isinstance(verification.get("chat_info"), dict) else {}
+    group_key = str(verification.get("group_key") or "").strip()
     saved = _persist_group(
         account_id,
         {
             "group_key": group_key,
             "display_name": group_key,
-            "member_count": len(targets) + 1,
+            "member_count": int(verification.get("member_count") or 0),
             "source": "pc_wechat_uia_created_group",
             "raw": {"contacts": targets, "steps": steps, "chat_info": info},
         },
     )
-    return {"ok": True, "contacts": targets, "selected": selected, "group": saved, "steps": steps}
+    return {
+        "ok": True,
+        "contacts": targets,
+        "selected": selected,
+        "group": saved,
+        "steps": steps,
+        "group_verified": True,
+        "verified_member_count": int(verification.get("member_count") or 0),
+        "verification": verification,
+    }
 
 
 def create_local_group(account_id: str, contacts: List[str]) -> Dict[str, Any]:
@@ -10249,10 +10518,44 @@ def _existing_create_group_task(account_id: str, dedup_key: str) -> Optional[Dic
     for row in rows:
         item = _row_to_dict(row)
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        if str(payload.get("dedup_key") or "").strip() == key:
+        if str(payload.get("dedup_key") or "").strip() != key:
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status in {"pending", "running"} or (
+            status in {"success", "partial_failed"} and bool(payload.get("group_verified"))
+        ):
             item["deduped"] = True
             return item
     return None
+
+
+def _has_verified_group_invite(account_id: str, peer_id: str, primary_contact: str) -> bool:
+    peer_id = str(peer_id or "").strip()
+    primary_contact = str(primary_contact or "").strip()
+    if not peer_id or not primary_contact:
+        return False
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select * from wechat_tasks
+            where account_id=? and task_type='create_group'
+              and status in ('success','partial_failed')
+            order by created_at desc limit 200
+            """,
+            (account_id,),
+        ).fetchall()
+    for row in rows:
+        item = _row_to_dict(row)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        targets = [str(value or "").strip() for value in (item.get("targets") or [])]
+        if not bool(payload.get("group_verified")):
+            continue
+        if str(payload.get("source_peer_id") or "").strip() != peer_id:
+            continue
+        if primary_contact not in targets:
+            continue
+        return True
+    return False
 
 
 async def create_group_task(
@@ -10304,6 +10607,8 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
     welcome_message = str(payload.get("welcome_message") or "").strip()[:4000]
     try:
         result = await asyncio.to_thread(create_local_group, account_id, targets)
+        if not bool(result.get("group_verified")):
+            raise RuntimeError("微信建群结果未通过群聊和成员校验")
         selected = int(result.get("selected") or len(targets))
         group = result.get("group") if isinstance(result.get("group"), dict) else {}
         group_key = str(group.get("group_key") or group.get("display_name") or "").strip()
@@ -10330,6 +10635,8 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
                 "welcome_message": welcome_message,
                 "welcome_sent": bool(welcome_message and welcome_result and not welcome_error),
                 "welcome_result": welcome_result,
+                "group_verified": True,
+                "verified_member_count": int(result.get("verified_member_count") or 0),
             },
         )
         _finish_task(
@@ -10348,12 +10655,15 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
                     "account_id": account_id,
                     "contact_key": source_peer_id,
                     "event_type": "group_created",
-                    "status": "failed" if welcome_error else "completed",
+                    "status": "completed",
                     "inbound_message_id": str(payload.get("source_inbound_message_id") or "")[:255],
                     "payload": {
                         "group_task_id": task_id,
                         "selected": selected,
                         "welcome_sent": bool(welcome_message and welcome_result and not welcome_error),
+                        "group_verified": True,
+                        "group_key": group_key,
+                        "welcome_error": welcome_error[:2000],
                     },
                     "error_message": welcome_error[:2000],
                 },

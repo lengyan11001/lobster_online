@@ -1,7 +1,7 @@
 {
-  "version": "1.0.170",
-  "build": 214,
-  "applied_at": "2026-08-14T18:23:01+08:00",
-  "note": "h5 group invite config precedence",
-  "bundle_sha256": "7fb6d15e12d4c8eefcb45c227979f749737de440837b4f6b0621c84452df73d1"
+  "version": "1.0.171",
+  "build": 215,
+  "applied_at": "2026-08-15T12:40:27+08:00",
+  "note": "native WeChat takeover scans 20 UIA rounds and replies only to latest inbound messages",
+  "bundle_sha256": "6e3fcba60f803eeccb01c5222c37dfcd39104c0c38a8cc9086c069e525021151"
 }

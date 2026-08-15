@@ -448,10 +448,11 @@ def build_default_douyin_stranger_message_monitor_state(account_id: int = 0) -> 
         "account_id": int(account_id or 0) or None,
         "max_conversations": 100,
         "auto_reply_enabled": True,
-        "reply_mode": "fixed",
+        "reply_mode": "ai_auto",
         "reply_message": "",
         "reply_prompt": "",
         "contact_value": "",
+        "wechat_add_friend_enabled": False,
         "message": "陌生人消息监控未开启。",
         "last_run_at": "",
         "next_run_at": "",
@@ -486,6 +487,7 @@ def normalize_douyin_stranger_message_monitor_state(
             "reply_message": str(payload.get("reply_message", base["reply_message"]) or "").strip(),
             "reply_prompt": str(payload.get("reply_prompt", base["reply_prompt"]) or "").strip(),
             "contact_value": str(payload.get("contact_value", base["contact_value"]) or "").strip(),
+            "wechat_add_friend_enabled": bool(payload.get("wechat_add_friend_enabled", base["wechat_add_friend_enabled"])),
             "message": normalize_douyin_text(payload.get("message", base["message"])),
             "last_run_at": normalize_douyin_text(payload.get("last_run_at", base["last_run_at"])),
             "next_run_at": normalize_douyin_text(payload.get("next_run_at", base["next_run_at"])),
@@ -500,6 +502,11 @@ def normalize_douyin_stranger_message_monitor_state(
             "seen_message_count": max(0, int(payload.get("seen_message_count", base["seen_message_count"]) or 0)),
         }
     )
+    # Old monitor records used fixed mode with an empty message. Treat that
+    # persisted state as AI auto-reply so workflow execution is not rejected
+    # before the first unread-message scan.
+    if base["reply_mode"] == "fixed" and not str(base.get("reply_message") or "").strip():
+        base["reply_mode"] = "ai_auto"
     return base
 
 
@@ -595,6 +602,7 @@ def save_douyin_stranger_message_monitor_config():
                     "reply_message": str(state.get("reply_message", "") or "").strip(),
                     "reply_prompt": str(state.get("reply_prompt", "") or "").strip(),
                     "contact_value": str(state.get("contact_value", "") or "").strip(),
+                    "wechat_add_friend_enabled": bool(state.get("wechat_add_friend_enabled", False)),
                 }
             )
         douyin_state_store.save_blob_json(
@@ -3376,6 +3384,11 @@ def normalize_douyin_stranger_message_row(row: Dict) -> Dict:
         "account_id": int(row.get("account_id", 0) or 0),
         "unread_count": max(0, int(row.get("unread_count", 0) or 0)),
         "is_unread": bool(row.get("is_unread", False)),
+        "phone_numbers": list(dict.fromkeys(
+            str(item).strip()
+            for item in (row.get("phone_numbers") or [])
+            if str(item).strip()
+        )),
         "time_text": normalize_douyin_text(row.get("time_text", "")),
         "stranger_index": max(0, int(row.get("stranger_index", 0) or 0)),
         "conversation_source": normalize_douyin_text(
@@ -5246,17 +5259,18 @@ def douyin_video_comment_mode_label(mode: Optional[str]) -> str:
 
 def normalize_douyin_stranger_reply_mode(value: Optional[str]) -> str:
     mode = str(value or "fixed").strip().lower()
-    if mode in {"fixed", "ai_lead"}:
+    if mode in {"fixed", "ai_lead", "ai_auto"}:
         return mode
-    return "fixed"
+    return "ai_auto"
 
 
 def douyin_stranger_reply_mode_label(mode: Optional[str]) -> str:
     normalized = normalize_douyin_stranger_reply_mode(mode)
     return {
         "fixed": "固定文案",
-        "ai_lead": "AI 引导加绿泡泡",
-    }.get(normalized, "固定文案")
+        "ai_lead": "AI 引导加微信",
+        "ai_auto": "AI 自动回复",
+    }.get(normalized, "AI 自动回复")
 
 
 def normalize_douyin_inbox_reply_mode(value: Optional[str]) -> str:
@@ -5662,6 +5676,40 @@ def generate_douyin_stranger_reply_message(
         if not final_text:
             raise RuntimeError("固定引流文案为空，无法执行。")
         return final_text
+
+    if normalized == "ai_auto":
+        incoming_message = clean_douyin_video_comment_text(
+            row.get("incoming_message", "") or row.get("preview_text", ""),
+            limit=120,
+        )
+        direction = clean_douyin_video_comment_text(prompt_text, limit=120)
+        system_prompt = (
+            "你正在回复抖音私信。只输出1到2句自然、简短的中文回复，"
+            "先回应对方当前消息，不要提及AI、系统、引流或固定模板。"
+        )
+        user_prompt = (
+            f"对方昵称：{row.get('username') or '未知'}\n"
+            f"对方消息：{incoming_message or '未知'}\n"
+            f"补充方向：{direction or '自然承接对话'}"
+        )
+        try:
+            ai_text = request_douyin_ai_comment(system_prompt, user_prompt, max_tokens=100)
+        except Exception as exc:
+            douyin_log(f"[抖音私信接管] AI 自动回复不可用，使用短回复兜底：{exc}", "warning")
+            return "你好，看到你的消息了，我来回复你。"
+        lines: List[str] = []
+        seen_lines: Set[str] = set()
+        for raw_line in str(ai_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = clean_douyin_message_line(raw_line, limit=24)
+            if not line or line in seen_lines:
+                continue
+            if any(flag in line for flag in ("AI", "系统", "引流", "微信", "绿泡泡")):
+                continue
+            seen_lines.add(line)
+            lines.append(line)
+            if len(lines) >= 2:
+                break
+        return "\n".join(lines) or "你好，看到你的消息了，我来回复你。"
 
     cleaned_contact = normalize_douyin_text(contact_value)
     if not cleaned_contact:
@@ -10801,6 +10849,57 @@ async def send_douyin_stranger_messages_for_monitor(
     }
 
 
+_DOUYIN_MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)1[\s-]*[3-9](?:[\s-]*\d){9}(?!\d)")
+
+
+def extract_douyin_mainland_mobile_numbers(rows: List[Dict]) -> List[str]:
+    """Extract mainland mobile numbers from newly unread private messages."""
+    numbers: List[str] = []
+    seen: Set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        source = "\n".join(
+            str(row.get(key) or "")
+            for key in ("incoming_message", "preview_text", "content", "username")
+        )
+        for match in _DOUYIN_MAINLAND_MOBILE_RE.findall(source):
+            number = re.sub(r"\D", "", match)
+            if len(number) != 11 or number in seen:
+                continue
+            seen.add(number)
+            numbers.append(number)
+    return numbers
+
+
+async def _queue_douyin_wechat_friend_add(phone_numbers: List[str]) -> Dict[str, object]:
+    if not phone_numbers:
+        return {"enabled": True, "queued": False, "targets": [], "reason": "no_phone_number"}
+    try:
+        try:
+            from app.services import native_wechat_engine  # type: ignore
+        except ImportError:
+            from backend.app.services import native_wechat_engine  # type: ignore
+        task = await native_wechat_engine.create_add_friend_task(
+            native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID,
+            phone_numbers,
+        )
+        return {
+            "enabled": True,
+            "queued": True,
+            "targets": phone_numbers,
+            "task_id": str(task.get("id") or "") if isinstance(task, dict) else "",
+        }
+    except Exception as exc:
+        douyin_log(f"[抖音私信接管] 手机号识别后提交加好友任务失败：{exc}", "error")
+        return {
+            "enabled": True,
+            "queued": False,
+            "targets": phone_numbers,
+            "reason": str(exc),
+        }
+
+
 async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_type: str = "scheduled") -> Dict[str, object]:
     state = get_douyin_stranger_message_monitor_state(account_id, create=True)
     started_at = datetime.now()
@@ -10824,6 +10923,7 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
     reply_message = str(state.get("reply_message", "") or "").strip()
     reply_prompt = str(state.get("reply_prompt", "") or "").strip()
     contact_value = str(state.get("contact_value", "") or "").strip()
+    wechat_add_friend_enabled = bool(state.get("wechat_add_friend_enabled", False))
     config = load_global_config()
     account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
     if not account:
@@ -10906,8 +11006,10 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             if isinstance(row, dict) and is_douyin_stranger_message_unread_row({**row, "account_id": account["id"]})
         ]
         unseen_rows, seen_rows = split_unseen_douyin_stranger_message_rows(account["id"], unread_rows)
+        extracted_phone_numbers = extract_douyin_mainland_mobile_numbers(unseen_rows)
+        for row in unseen_rows:
+            row["phone_numbers"] = extract_douyin_mainland_mobile_numbers([row])
         new_count = len(unseen_rows)
-        mark_douyin_stranger_message_rows_seen(account["id"], unread_rows)
         total_count = len([row for row in rows if isinstance(row, dict)])
         unread_total = len(unread_rows)
         seen_total = get_douyin_stranger_message_seen_count(account["id"])
@@ -10955,6 +11057,14 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
                 reply_prompt=reply_prompt,
                 contact_value=contact_value,
             )
+        wechat_add_friend_result = (
+            await _queue_douyin_wechat_friend_add(extracted_phone_numbers)
+            if wechat_add_friend_enabled
+            else {"enabled": False, "queued": False, "targets": [], "reason": "disabled"}
+        )
+        # Mark the unread snapshot only after this cycle has completed its
+        # reply and optional friend-add submission.
+        mark_douyin_stranger_message_rows_seen(account["id"], unread_rows)
         schedule_next_douyin_stranger_message_monitor_run(account_id, started_at)
         auto_reply_suffix = ""
         if auto_reply_enabled:
@@ -11004,6 +11114,8 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             "auto_reply_total": int(auto_reply_result.get("processed", 0)),
             "auto_reply_success": int(auto_reply_result.get("success", 0)),
             "auto_reply_failed": int(auto_reply_result.get("failed", 0)),
+            "extracted_phone_numbers": extracted_phone_numbers,
+            "wechat_add_friend": wechat_add_friend_result,
         }
     except Exception as exc:
         schedule_next_douyin_stranger_message_monitor_run(account_id, started_at)
@@ -14699,9 +14811,10 @@ async def douyin_start_stranger_message_monitor(http_request: Request = None, re
     reply_message = str(payload.get("message", "") or "").strip()
     reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
     contact_value = str(payload.get("contact_value", "") or "").strip()
+    wechat_add_friend_enabled = bool(payload.get("wechat_add_friend_enabled", False))
     if auto_reply_enabled:
         if reply_mode == "fixed" and not reply_message:
-            return {"code": 400, "msg": "开启监控自动回复前，请先填写固定引流文案。"}
+            reply_mode = "ai_auto"
         if reply_mode == "ai_lead":
             if not contact_value:
                 return {"code": 400, "msg": "开启监控自动回复前，请先填写绿泡泡联系方式。"}
@@ -14721,6 +14834,7 @@ async def douyin_start_stranger_message_monitor(http_request: Request = None, re
             "reply_message": reply_message,
             "reply_prompt": reply_prompt,
             "contact_value": contact_value,
+            "wechat_add_friend_enabled": wechat_add_friend_enabled,
             "last_error": "",
             "last_skip_reason": "",
         },
