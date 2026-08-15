@@ -61,10 +61,22 @@
   ];
 
   var NODE_OPTIONS = [
-    ['local_bestseller','同城爆款视频'], ['hifly.video.create_by_tts','数字人口播视频'],
-    ['douyin_leads','抖音获客'], ['native_wechat_poll','微信私信接管'],
-    ['native_wechat_moments_engage','朋友圈点赞评论'],
-    ['ip_content_daily','IP日更文案']
+    ['hifly.video.create_by_tts','\u8425\u9500\u521b\u4f5c - \u6570\u5b57\u4eba\u53e3\u64ad\u89c6\u9891'],
+    ['comfly.seedance.tvc.pipeline','\u8425\u9500\u521b\u4f5c - \u521b\u610f\u5206\u955c\u5934\u89c6\u9891'],
+    ['local_bestseller','\u8425\u9500\u521b\u4f5c - \u540c\u57ce\u7206\u6b3e\u89c6\u9891'],
+    ['comfly.daihuo.pipeline','\u8425\u9500\u521b\u4f5c - \u7206\u6b3e TVC'],
+    ['viral_video_remix','\u8425\u9500\u521b\u4f5c - \u7206\u6b3e\u590d\u5236'],
+    ['image_composer_studio','\u8425\u9500\u521b\u4f5c - AI\u8bbe\u8ba1\u56fe'],
+    ['ip_content_daily','\u8425\u9500\u521b\u4f5c - IP\u65e5\u66f4\u6587\u6848'],
+    ['wewrite.article.pipeline','\u8425\u9500\u521b\u4f5c - \u516c\u4f17\u53f7\u6587\u7ae0'],
+    ['douyin_leads','AI\u83b7\u5ba2 - \u6296\u97f3\u83b7\u5ba2'],
+    ['native_wechat_poll','\u79c1\u57df\u9500\u7ba1 - \u5fae\u4fe1\u79c1\u4fe1\u63a5\u7ba1'],
+    ['native_wechat_add_friend','\u79c1\u57df\u9500\u7ba1 - \u5fae\u4fe1\u81ea\u52a8\u52a0\u597d\u53cb'],
+    ['native_wechat_moments_engage','\u79c1\u57df\u9500\u7ba1 - \u670b\u53cb\u5708\u70b9\u8d5e\u8bc4\u8bba'],
+    ['linkedin_leads','AI\u6d77\u5916\u5e73\u53f0 - LinkedIn\u7ebf\u7d22\u6316\u6398'],
+    ['reddit_leads','AI\u6d77\u5916\u5e73\u53f0 - Reddit\u7ebf\u7d22\u91c7\u96c6'],
+    ['x_leads','AI\u6d77\u5916\u5e73\u53f0 - X\u7ebf\u7d22\u91c7\u96c6'],
+    ['tiktok_leads','AI\u6d77\u5916\u5e73\u53f0 - TikTok\u7ebf\u7d22\u91c7\u96c6']
   ];
 
   var CHILD_ACTION_OPTIONS = [
@@ -121,8 +133,24 @@
   }
   function nativePlan(key, row, extra) {
     var params = Object.assign({account_id:'pc-wechat-default', note:row.note || row.label || '', prompt:row.note || row.label || ''}, row.params || {}, extra || {});
-    if (key === 'native_wechat_add_friend') Object.assign(params, {source_mode:'douyin_private_message_wechat_id',trigger:'clear_wechat_id',skip_without_clear_wechat_id:true,targets:[]});
     if (key === 'native_wechat_moments_engage') params.moment_action = params.moment_action || 'like_comment';
+    if (key === 'native_wechat_add_friend') {
+      params.targets = Array.isArray(params.targets) ? params.targets.filter(Boolean) : [];
+      if (!String(params.source_mode || '').trim()) {
+        delete params.source_mode;
+        delete params.trigger;
+        delete params.skip_without_clear_wechat_id;
+      }
+    }
+    if (key === 'native_wechat_moments_engage') {
+      params.targets = Array.isArray(params.targets) ? params.targets.filter(Boolean) : [];
+      params.max_scrolls = Number(params.max_scrolls || 6);
+    }
+    if (key === 'native_wechat_poll' && !params.group_invite_enabled) {
+      params.takeover_session_minutes = Number(params.takeover_session_minutes || 30);
+      params.message_poll_interval_seconds = Number(params.message_poll_interval_seconds || 15);
+      params.accept_friend_requests_once = params.accept_friend_requests_once !== false;
+    }
     if (params.followup_action === 'group_invite' || String(row.label || '').indexOf('拉群') >= 0) {
       delete params.followup_action;
       Object.assign(params, {group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'});
@@ -141,9 +169,24 @@
     if (row.key.indexOf('native_wechat_') === 0) return nativePlan(row.key, row);
     if (row.key === 'local_bestseller') return {title:'同城爆款视频',task_kind:'client_workflow',content:'H5 工作流：同城爆款视频',payload:{action:'local_bestseller_daily_video',params:baseScheduleParams(row,{note:prompt,prompt:prompt,days:30,day_mode:'workflow_elapsed'})}};
     if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:{script:prompt,prompt:prompt}}};
+    if (row.key === 'comfly.seedance.tvc.pipeline') return {title:'创意分镜头视频',task_kind:'capability',content:'H5 工作流：创意分镜头视频',payload:{capability_id:'comfly.seedance.tvc.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
+    if (row.key === 'comfly.daihuo.pipeline') return {title:'爆款TVC',task_kind:'capability',content:'H5 工作流：爆款TVC',payload:{capability_id:'comfly.daihuo.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
+    if (row.key === 'viral_video_remix') return {title:'爆款复制',task_kind:'client_workflow',content:'H5 工作流：爆款复制',payload:{action:'viral_video_remix_start',params:baseScheduleParams(row,{prompt:prompt,billing_confirmed:true,ratio:'9:16'})}};
+    if (row.key === 'image_composer_studio') return {title:'AI设计图',task_kind:'client_workflow',content:'H5 工作流：AI设计图',payload:{action:'image_studio_generate',params:baseScheduleParams(row,{prompt:prompt,note:prompt})}};
     if (row.key === 'ip_content_daily') return {title:'IP日更文案',task_kind:'ip_content_daily',content:'H5 工作流：IP日更文案',payload:{template_id:0,use_personal_default:true,tasks:['industry_hot_oral','professional_ip_oral','moments_candidate'],sync_before:true,industry_count:5,ip_count:5,moments_count:20,requirements:{}}};
-    var action = salesAction(prompt), max = action === 'search_collect' || action === 'account_nurture' ? 50 : 10;
-    return {title:'抖音获客 - ' + prompt.slice(0,24),task_kind:'douyin_leads',content:'H5 工作流：抖音获客',payload:{action:'search_collect',params:baseScheduleParams(row,{keyword:prompt,query:prompt,search_keyword:prompt,sales_action:action,max_results:max,max_users:max,regions:['全国'],mode:'script'})}};
+    if (row.key === 'wewrite.article.pipeline') return {title:'公众号文章',task_kind:'capability',content:'H5 工作流：公众号文章',payload:{capability_id:'wewrite.article.pipeline',payload:{idea:prompt,style:'',include_images:true,image_count:3,image_aspect_ratio:'16:9'}}};
+    if (row.key === 'linkedin_leads') return {title:'LinkedIn线索挖掘',task_kind:'linkedin_mining',content:'H5 工作流：LinkedIn线索挖掘',payload:{title:'LinkedIn线索挖掘',keywords:[prompt],max_people:30,auto_run:true}};
+    if (row.key === 'reddit_leads' || row.key === 'x_leads' || row.key === 'tiktok_leads') {
+      var platform = row.key === 'reddit_leads' ? 'reddit' : row.key === 'x_leads' ? 'x' : 'tiktok';
+      var socialPayload = {platform:platform,title:platform.toUpperCase() + '线索采集',keywords:[prompt],max_items:100,include_comments:true,include_account_posts:true,auto_run:true};
+      if (platform === 'reddit') socialPayload.communities = [prompt]; else socialPayload.source_keywords = [prompt];
+      return {title:socialPayload.title,task_kind:'social_leads',content:'H5 工作流：' + socialPayload.title,payload:socialPayload};
+    }
+    if (row.key === 'douyin_leads') {
+      var action = salesAction(prompt), max = action === 'search_collect' || action === 'account_nurture' ? 50 : 10;
+      return {title:'抖音获客 - ' + prompt.slice(0,24),task_kind:'douyin_leads',content:'H5 工作流：抖音获客',payload:{action:action,params:baseScheduleParams(row,{keyword:prompt,query:prompt,search_keyword:prompt,sales_action:action,max_results:max,max_users:max,regions:['全国'],mode:'script'})}};
+    }
+    throw new Error('该节点暂不支持加入工作流：' + row.key);
   }
   function makeNode(row, index) {
     var node = {id:'sales_' + row.time.replace(':','') + '_' + index,time:row.time,end_time:row.end,time_range:row.time + '-' + row.end,ability_key:row.key,ability_label:row.label,note:row.note,department_id:'sales',department_name:'销售部',sales_preset:true,comingSoon:!!row.soon,workflow_placeholder:!!row.soon,param_configured:false,plan:planForRow(row)};
@@ -386,7 +429,7 @@
   function loadActive() { var iid=selectedDeviceId(); if (!iid) { state.active=null; renderStatus(); return Promise.resolve(null); } return api('/api/h5-workflows/active?installation_id=' + encodeURIComponent(iid)).then(function(data){state.active=data.activation || null; renderStatus(); return state.active;}); }
   function selectTemplate(id) { state.selectedId=String(id || 'system_sales'); state.selectedTemplate=normalizeTemplate(templateForSelected()); state.editingId=state.selectedTemplate.source === 'own' ? String(state.selectedTemplate.id || '') : ''; state.editingMeta=Object.assign({},state.selectedTemplate.meta || {}); state.nodes=normalizeWorkflowTimeline(state.selectedTemplate.nodes || []); if (state.selectedId === 'system_sales' && !ownSalesMirror()) state.nodes=normalizeWorkflowTimeline(salesNodes()); render(); loadActive().catch(function(){}); }
   function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; render(); }
-  function findOption(key) { return NODE_OPTIONS.find(function(item){return item[0] === key;}) || NODE_OPTIONS[0]; }
+  function findOption(key) { return NODE_OPTIONS.find(function(item){return item[0] === key;}) || [String(key || ''), String(key || '')]; }
   function fillNodeOptions(selected) { var select=el('oeNodeKey'); if (!select) return; select.innerHTML=NODE_OPTIONS.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=selected || NODE_OPTIONS[0][0]; }
   function syncNodeModalFields() { var takeover=String((el('oeNodeKey') || {}).value || '') === 'native_wechat_poll', field=el('oeNodeGroupInviteField'); if (field) field.hidden=!takeover; }
   function openNodeModal(index) { requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1; var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowPayload(node).params || {}; el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点'; el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || ''; fillNodeOptions(node && node.ability_key); el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; syncNodeModalFields(); el('oeNodeLabel').value=node && node.ability_label || findOption(node && node.ability_key)[1]; el('oeNodeNote').value=node && node.note || ''; el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60); }

@@ -673,6 +673,20 @@ def init_db() -> None:
                     """,
                     (_now_iso(),),
                 )
+                conn.execute(
+                    """
+                    update wechat_tasks
+                       set status='failed',
+                           error_message=case
+                               when coalesce(error_message, '') = ''
+                               then 'local backend restarted before the previous WeChat UI task completed'
+                               else error_message
+                           end,
+                           updated_at=?
+                     where status in ('pending', 'running')
+                    """,
+                    (_now_iso(),),
+                )
                 _AUTO_REPLY_STARTUP_RECONCILED = True
 
 
@@ -7899,8 +7913,28 @@ def _close_foreground_sns_window(main_hwnd: int, steps: List[Dict[str, Any]], *,
         steps.append({"step": "close_contact_moments", "ok": False, "error": str(exc), "reason": reason})
 
 
-def _scroll_local_moments(hwnd: int, amount: int = -5) -> None:
+def _scroll_local_moments(
+    hwnd: int,
+    amount: int = -5,
+    *,
+    steps: Optional[List[Dict[str, Any]]] = None,
+    target: str = "",
+) -> None:
     root = _uia_foreground_or_main_root(hwnd)
+    classes = {
+        _uia_control_class(node)
+        for node in _uia_walk(root, max_depth=12, max_nodes=700)
+        if _uia_control_class(node)
+    }
+    view_kind = (
+        "contact_album" if "mmui::AlbumContentCell" in classes else
+        "timeline" if "mmui::TimelineContentCell" in classes or "mmui::TimeLineListView" in classes else
+        "unknown"
+    )
+    if steps is not None:
+        steps.append({"step": "moments_scroll", "ok": view_kind != "unknown", "view": view_kind, "target": target})
+    if view_kind == "unknown":
+        raise RuntimeError("朋友圈页面未就绪，已停止继续滑动")
     rect = _uia_rect_tuple(root)
     if rect is None:
         return
@@ -8083,6 +8117,7 @@ def _scan_and_like_contact_album_page(
     liked = 0
     already_liked = 0
     skipped = 0
+    target_handled = False
     stop_after_24h = False
     cells = _visible_contact_album_cells(root)
     if not cells:
@@ -8114,9 +8149,10 @@ def _scan_and_like_contact_album_page(
         liked += int(detail.get("liked") or 0)
         already_liked += int(detail.get("already_liked") or 0)
         skipped += int(detail.get("skipped") or 0)
+        target_handled = target_handled or bool(detail.get("target_handled"))
         stop_after_24h = stop_after_24h or bool(detail.get("stop_after_24h"))
         _return_contact_album_list(hwnd, steps, target)
-        if stop_after_24h:
+        if stop_after_24h or detail.get("target_handled"):
             break
     return {
         "found": found,
@@ -8124,6 +8160,7 @@ def _scan_and_like_contact_album_page(
         "already_liked": already_liked,
         "skipped": skipped,
         "stop_after_24h": stop_after_24h,
+        "target_handled": target_handled,
     }
 
 
@@ -8143,6 +8180,7 @@ def _process_contact_moments_like_target(
     skipped_total = 0
     processed_steps = 0
     stopped_after_24h = False
+    target_handled = False
     try:
         for idx in range(max_scrolls):
             result = _scan_and_like_contact_album_page(account_id, target, dry_run=dry_run, seen=seen, steps=steps)
@@ -8152,9 +8190,10 @@ def _process_contact_moments_like_target(
             skipped_total += int(result.get("skipped") or 0)
             processed_steps = idx + 1
             stopped_after_24h = bool(result.get("stop_after_24h"))
-            if stopped_after_24h:
+            target_handled = bool(result.get("target_handled"))
+            if stopped_after_24h or result.get("target_handled"):
                 break
-            _scroll_local_moments(hwnd, -4)
+            _scroll_local_moments(hwnd, -4, steps=steps, target=target)
         return {
             "found": found_total,
             "liked": liked_total,
@@ -8162,6 +8201,7 @@ def _process_contact_moments_like_target(
             "skipped": skipped_total,
             "processed_steps": processed_steps,
             "stop_after_24h": stopped_after_24h,
+            "target_handled": target_handled,
         }
     finally:
         _close_foreground_sns_window(hwnd, steps, reason="contact_target_done")
@@ -8320,6 +8360,7 @@ def _scan_and_like_visible_moments(
     liked = 0
     already_liked = 0
     skipped = 0
+    target_handled = False
     for post in _find_visible_target_moments_posts(root, targets):
         target = str(post.get("target") or "")
         rect = post.get("rect")
@@ -8356,6 +8397,7 @@ def _scan_and_like_visible_moments(
         menu = _open_moments_action_menu_at_point(hwnd, point[0], point[1])
         if menu.get("cancel") is not None:
             already_liked += 1
+            target_handled = True
             _send_hotkey("esc", pause=0.2)
             steps.append(
                 {
@@ -8381,6 +8423,7 @@ def _scan_and_like_visible_moments(
             continue
         if dry_run:
             _send_hotkey("esc", pause=0.2)
+            target_handled = True
             steps.append(
                 {
                     "step": "moments_post_like_ready",
@@ -8394,13 +8437,15 @@ def _scan_and_like_visible_moments(
             daily_limit = int(get_strategy().get("daily_moments_like_limit") or 0)
             if daily_limit > 0 and _local_moments_like_count_today(account_id) + liked >= daily_limit:
                 skipped += 1
+                target_handled = True
                 _send_hotkey("esc", pause=0.2)
                 steps.append({"step": "moments_post_skip", "target": target, "reason": "daily_limit", "time": time_label})
                 continue
             _uia_click(like_node)
             liked += 1
+            target_handled = True
             steps.append({"step": "moments_post_liked", "target": target, "time": time_label})
-            _human_pause("moments_like_sleep_min", "moments_like_sleep_max", floor=5.0)
+            _human_pause("ui_action_sleep_min", "ui_action_sleep_max", floor=0.7)
     stop_post = _first_visible_moments_post_outside_24h(root)
     if stop_post is not None:
         text = str(stop_post.get("text") or "")
@@ -8417,6 +8462,7 @@ def _scan_and_like_visible_moments(
         "already_liked": already_liked,
         "skipped": skipped,
         "stop_after_24h": bool(stop_post),
+        "target_handled": target_handled,
     }
 
 
@@ -8988,7 +9034,7 @@ async def _process_contact_moments_comment_target(
             stopped_after_24h = bool(result.get("stop_after_24h"))
             if result.get("found") or result.get("commented") or result.get("already_commented") or result.get("skipped") or stopped_after_24h:
                 break
-            _scroll_local_moments(hwnd, -4)
+            _scroll_local_moments(hwnd, -4, steps=steps, target=target)
         return {
             **total,
             "processed_steps": processed_steps,
@@ -9154,7 +9200,7 @@ async def create_moments_like_task(
     targets: List[str],
     *,
     dry_run: bool = False,
-    max_scrolls: int = 20,
+    max_scrolls: int = 6,
     client_request_id: str = "",
 ) -> Dict[str, Any]:
     init_db()
@@ -9166,7 +9212,10 @@ async def create_moments_like_task(
     target_list = _normalize_task_targets(targets, max_targets=100)
     if not target_list:
         raise RuntimeError("缺少朋友圈目标联系人")
-    max_scrolls = max(1, min(int(max_scrolls or 20), 120))
+    max_scrolls = max(1, min(int(max_scrolls or 6), 30))
+    active = _existing_active_moments_task(account_id, "moments_like", target_list)
+    if active:
+        return active
     strategy = get_strategy()
     return _create_wechat_task(
         account_id=account_id,
@@ -9187,7 +9236,7 @@ async def _process_moments_like_task(task: Dict[str, Any]) -> None:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     strategy = task.get("strategy") if isinstance(task.get("strategy"), dict) else get_strategy()
     dry_run = bool(payload.get("dry_run", True))
-    max_scrolls = max(1, min(int(payload.get("max_scrolls") or 20), 120))
+    max_scrolls = max(1, min(int(payload.get("max_scrolls") or 6), 30))
     steps: List[Dict[str, Any]] = []
     found_total = 0
     liked_total = 0
@@ -9231,6 +9280,7 @@ async def _process_moments_like_task(task: Dict[str, Any]) -> None:
                 0,
                 f"found={found_total}, liked={liked_total}, already={already_total}, skipped={skipped_total}",
             )
+            _merge_task_payload(task_id, {"steps": steps[-120:]})
             await _sleep_between_moments_targets(strategy, target_idx, len(targets))
         if fallback_targets:
             await asyncio.to_thread(_open_local_moments, hwnd, steps)
@@ -9257,9 +9307,10 @@ async def _process_moments_like_task(task: Dict[str, Any]) -> None:
                     0,
                     f"found={found_total}, liked={liked_total}, already={already_total}, skipped={skipped_total}",
                 )
-                if stopped_after_24h:
+                _merge_task_payload(task_id, {"steps": steps[-120:]})
+                if stopped_after_24h or result.get("target_handled"):
                     break
-                await asyncio.to_thread(_scroll_local_moments, hwnd, -4)
+                await asyncio.to_thread(_scroll_local_moments, hwnd, -4, steps=steps, target=",".join(fallback_targets))
         status = "success"
         stop_note = ", stop_after_24h=true" if stopped_after_24h else ""
         _finish_task(
@@ -9300,6 +9351,9 @@ async def create_moments_comment_task(
     target_list = _normalize_task_targets(targets, max_targets=100)
     if not target_list:
         raise RuntimeError("缺少朋友圈评论目标联系人")
+    active = _existing_active_moments_task(account_id, "moments_comment", target_list)
+    if active:
+        return active
     max_scrolls = max(1, min(int(max_scrolls or 6), 30))
     strategy = get_strategy()
     task = _create_wechat_task(
@@ -11302,6 +11356,35 @@ def _existing_task_by_client_request_id(account_id: str, client_request_id: str)
     item = _row_to_dict(row)
     item["deduped"] = True
     return item
+
+
+def _existing_active_moments_task(
+    account_id: str,
+    task_type: str,
+    targets: List[str],
+) -> Optional[Dict[str, Any]]:
+    """Avoid queuing the same local WeChat moments action twice."""
+    wanted = _normalize_task_targets(targets, max_targets=100)
+    if not wanted:
+        return None
+    wanted_key = {value.casefold() for value in wanted}
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select * from wechat_tasks
+             where account_id=? and task_type=? and status in ('pending', 'running')
+             order by created_at asc
+            """,
+            (account_id, task_type),
+        ).fetchall()
+    for row in rows:
+        item = _row_to_dict(row)
+        current = _normalize_task_targets(list(item.get("targets") or []), max_targets=100)
+        if {value.casefold() for value in current} == wanted_key:
+            item["deduped"] = True
+            item["dedupe_reason"] = "same_moments_task_active"
+            return item
+    return None
 
 
 def _create_wechat_task(
