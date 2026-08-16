@@ -1,7 +1,7 @@
 {
-  "version": "1.0.180",
-  "build": 224,
-  "applied_at": "2026-08-16T16:14:22+08:00",
-  "note": "workflow end time and client stability",
-  "bundle_sha256": "c541be268d15ce5be4f04e03fb38afdee6de153b84eb58d874bec9b49afd6591"
+  "version": "1.0.181",
+  "build": 225,
+  "applied_at": "2026-08-16T17:34:46+08:00",
+  "note": "fix: stabilize WeChat reply and verified group skip",
+  "bundle_sha256": "e53d0d3cbd4a4a3d58bddbd940bb539f01126c43d82617acd442f4200b263be1"
 }
