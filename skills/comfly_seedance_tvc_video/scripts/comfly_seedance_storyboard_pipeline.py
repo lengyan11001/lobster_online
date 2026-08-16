@@ -684,7 +684,7 @@ def _resolve_tool_binary(tool_name: str, configured_path: str = "") -> str:
     if explicit and Path(explicit).exists():
         return explicit
     found = shutil.which(explicit or tool_name)
-    return found or explicit or tool_name
+    return found or explicit or ""
 
 
 def _ffprobe_binary_for(ffmpeg_path: str) -> str:
@@ -700,13 +700,18 @@ def _ffprobe_binary_for(ffmpeg_path: str) -> str:
 
 def _probe_video_dimensions(media_path: str, ffmpeg_path: str) -> Optional[Dict[str, int]]:
     ffprobe_binary = _ffprobe_binary_for(ffmpeg_path)
-    proc = subprocess.run(
-        [ffprobe_binary, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", media_path],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    if not ffprobe_binary:
+        return None
+    try:
+        proc = subprocess.run(
+            [ffprobe_binary, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", media_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (FileNotFoundError, OSError):
+        return None
     if proc.returncode != 0:
         return None
     try:
@@ -729,13 +734,18 @@ def _probe_video_dimensions(media_path: str, ffmpeg_path: str) -> Optional[Dict[
 
 def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
     ffprobe_binary = _ffprobe_binary_for(ffmpeg_path)
-    proc = subprocess.run(
-        [ffprobe_binary, "-v", "error", "-show_entries", "stream=codec_type", "-of", "json", media_path],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    if not ffprobe_binary:
+        return []
+    try:
+        proc = subprocess.run(
+            [ffprobe_binary, "-v", "error", "-show_entries", "stream=codec_type", "-of", "json", media_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (FileNotFoundError, OSError):
+        return []
     if proc.returncode != 0:
         return []
     try:
@@ -747,6 +757,8 @@ def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
 
 def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, segments: List[Dict[str, Any]]) -> Dict[str, Any]:
     ffmpeg_binary = _resolve_tool_binary("ffmpeg", config.ffmpeg_path)
+    if not ffmpeg_binary:
+        raise PipelineError(f"ffmpeg executable not found: {config.ffmpeg_path or 'ffmpeg'}")
     clips_dir = logger_obj.run_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
     downloaded: List[Dict[str, Any]] = []

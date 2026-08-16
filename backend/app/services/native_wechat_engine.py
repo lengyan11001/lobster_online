@@ -93,7 +93,7 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "consecutive_failure_limit": 3,
     "backoff_seconds": 30,
     "one_active_task_per_account": True,
-    "auto_reply_interval_seconds": 1800,
+    "auto_reply_interval_seconds": 15,
     "auto_reply_session_sleep_min": 0.0,
     "auto_reply_session_sleep_max": 0.0,
     "auto_reply_char_sleep_min": 0.08,
@@ -554,7 +554,7 @@ def init_db() -> None:
             create table if not exists wechat_auto_reply_config (
                 account_id text primary key,
                 enabled integer not null default 0,
-                interval_seconds integer not null default 1800,
+                interval_seconds integer not null default 15,
                 group_invite_enabled integer not null default 0,
                 user_id integer,
                 memory_doc_ids text not null default '[]',
@@ -2191,6 +2191,8 @@ def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) ->
         cfg["interval_seconds"] = max(1, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
     except Exception:
         cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
+    if cfg["interval_seconds"] == 1800:
+        cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
     if not isinstance(cfg.get("last_result"), dict):
         cfg["last_result"] = _safe_json_loads(str(cfg.get("last_result") or ""), {})
     for key in ("memory_doc_ids", "group_invite_contacts"):
@@ -2223,7 +2225,7 @@ def save_auto_reply_config(
     account_id: str,
     *,
     enabled: bool,
-    interval_seconds: int = 1800,
+    interval_seconds: int = 15,
     group_invite_enabled: Optional[bool] = None,
     user_id: Optional[int] = None,
     memory_doc_ids: Optional[List[str]] = None,
@@ -2328,6 +2330,9 @@ def save_auto_reply_config(
     if enabled:
         ensure_auto_reply_worker(account_id, auth_context=auth_context)
     else:
+        with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+            if account_id in _AUTO_REPLY_ACTIVE_RUNS:
+                _AUTO_REPLY_STOP_REQUESTS.add(account_id)
         worker = _AUTO_REPLY_WORKERS.get(account_id)
         if worker and not worker.done():
             worker.cancel()

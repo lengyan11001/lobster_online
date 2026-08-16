@@ -58,6 +58,9 @@ from .goal_video_pipeline import (
 )
 from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
+
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _BASE_DIR = Path(__file__).resolve().parents[3]
@@ -441,6 +444,20 @@ def _parse_utc_datetime(value: Any) -> Optional[datetime]:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _workflow_minutes_between(start: Any, end: Any, *, default: int = 30) -> int:
+    start_text = str(start or "").strip()
+    end_text = str(end or "").strip()
+    start_match = _TIME_RE.match(start_text)
+    end_match = _TIME_RE.match(end_text)
+    if not start_match or not end_match:
+        return max(1, int(default))
+    start_total = int(start_match.group(1)) * 60 + int(start_match.group(2))
+    end_total = int(end_match.group(1)) * 60 + int(end_match.group(2))
+    if end_total < start_total:
+        end_total += 24 * 60
+    return max(1, end_total - start_total)
 
 
 def _local_bestseller_workflow_day(source: Dict[str, Any], days: int) -> int:
@@ -1857,7 +1874,7 @@ async def _run_client_command(
     try:
         if action == "native_wechat_auto_reply_config":
             account_id = str(payload.get("account_id") or "pc-wechat-default").strip() or "pc-wechat-default"
-            interval_seconds = max(1, min(int(payload.get("interval_seconds") or 1800), 86400))
+            interval_seconds = 15
             user_id = int(_decode_jwt_sub(jwt_token) or "0") or None
             cfg = native_wechat_engine.save_auto_reply_config(
                 account_id,
@@ -3601,9 +3618,8 @@ def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
     return ""
 
 
-def _scheduled_douyin_sales_action_from_context(context: Any) -> str:
-    source = context if isinstance(context, dict) else {}
-    text = str(source.get("ability_label") or source.get("workflow_node_label") or "").strip()
+def _scheduled_douyin_sales_action_from_text(value: Any) -> str:
+    text = str(value or "").strip()
     if "养号" in text:
         return "account_nurture"
     if "发布后采集" in text or "关键词抓取" in text:
@@ -3618,6 +3634,45 @@ def _scheduled_douyin_sales_action_from_context(context: Any) -> str:
         return "direct_message"
     if "私信接管" in text or "私信引流" in text:
         return "stranger_message"
+    return ""
+
+
+def _scheduled_douyin_sales_action_from_context(context: Any) -> str:
+    source = context if isinstance(context, dict) else {}
+    for key in ("ability_label", "workflow_node_label", "sales_node_label", "title", "note"):
+        action = _scheduled_douyin_sales_action_from_text(source.get(key))
+        if action:
+            return action
+    return ""
+
+
+def _scheduled_douyin_sales_action_from_payload(payload: Dict[str, Any], item: Dict[str, Any]) -> str:
+    """Recover the sales action from saved task labels when an old node polluted keyword fields."""
+    source = payload if isinstance(payload, dict) else {}
+    params = source.get("params") if isinstance(source.get("params"), dict) else {}
+    h5_context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+    candidates: List[Any] = [
+        h5_context.get("ability_label"),
+        h5_context.get("workflow_node_label"),
+        h5_context.get("sales_node_label"),
+        source.get("title"),
+        source.get("content"),
+        item.get("title"),
+        item.get("content"),
+        item.get("name"),
+        params.get("sales_node_label"),
+        params.get("node_label"),
+        params.get("note"),
+        params.get("prompt"),
+    ]
+    for key in ("keyword", "search_keyword", "query", "keywords"):
+        for keyword in _scheduled_douyin_keyword_values(params.get(key)):
+            if _scheduled_douyin_keyword_looks_like_workflow_title(keyword):
+                candidates.append(keyword)
+    for candidate in candidates:
+        action = _scheduled_douyin_sales_action_from_text(candidate)
+        if action:
+            return action
     return ""
 
 
@@ -4647,16 +4702,20 @@ async def _run_scheduled_douyin_leads(
         str(h5_context.get("department_id") or "").strip().lower() == "sales"
         or str(h5_context.get("workflow_template_key") or "").strip().lower() == "system_sales"
     )
+    inferred_sales_action = _scheduled_douyin_sales_action_from_payload(payload, item)
     sales_action = str((params if isinstance(params, dict) else {}).get("sales_action") or "").strip().lower()
     if action == "search_collect" and sales_action and sales_action != "search_collect":
         action = sales_action
-    if is_sales_workflow:
-        action = _scheduled_douyin_sales_action_from_context(h5_context) or action
+    if action == "search_collect" and inferred_sales_action and inferred_sales_action != "search_collect":
+        action = inferred_sales_action
+    use_online_sales_config = is_sales_workflow or bool(inferred_sales_action and inferred_sales_action != "search_collect")
+    if use_online_sales_config:
+        action = _scheduled_douyin_sales_action_from_context(h5_context) or inferred_sales_action or action
         workflow_params = dict(params)
         params = _load_scheduled_douyin_online_config_params(action)
         if action == "stranger_message" and "wechat_add_friend_enabled" in workflow_params:
             params["wechat_add_friend_enabled"] = bool(workflow_params.get("wechat_add_friend_enabled"))
-    elif not params:
+    elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
         params = _load_scheduled_douyin_online_config_params(action)
     if not run_id or not action:
         return
@@ -7486,9 +7545,9 @@ async def _run_native_wechat_takeover_session(
     config_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     # The interval starts after a round finishes. Bound the whole session by wall-clock
-    # time so slow WeChat scans do not turn a 30-minute takeover into a multi-hour run.
+    # time so slow WeChat scans do not outlive the configured end time.
     interval = max(0.0, float(interval_seconds or 0.0))
-    duration_limit = max(1.0, min(float(session_seconds if session_seconds is not None else 1800.0), 1800.0))
+    duration_limit = max(1.0, min(float(session_seconds if session_seconds is not None else 1800.0), 86400.0))
     round_limit = max(1, int(rounds)) if rounds is not None else None
     started_at = datetime.utcnow().isoformat()
     started_monotonic = _takeover_monotonic()
@@ -7973,7 +8032,16 @@ async def _run_client_workflow_action(
         }
     if action == "native_wechat_poll":
         interval_seconds = max(1, min(_safe_int(source.get("message_poll_interval_seconds")) or 15, 300))
-        session_minutes = max(1, min(_safe_int(source.get("takeover_session_minutes")) or 30, 30))
+        h5_context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+        window_start = h5_context.get("workflow_node_time") or source.get("sales_schedule_start")
+        window_end = h5_context.get("workflow_node_end_time") or source.get("sales_schedule_end")
+        configured_minutes = _safe_int(source.get("takeover_session_minutes"))
+        derived_minutes = _workflow_minutes_between(window_start, window_end)
+        has_workflow_window = bool(str(window_start or "").strip())
+        session_minutes = configured_minutes or derived_minutes
+        if session_minutes <= 0:
+            session_minutes = 1 if has_workflow_window else 30
+        session_minutes = max(1, min(session_minutes, 1440))
         return await _run_native_wechat_takeover_session(
             account_id=native_account_id,
             headers=headers,

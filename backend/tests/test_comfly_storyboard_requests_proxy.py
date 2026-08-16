@@ -79,3 +79,19 @@ def test_seedance_storyboard_analysis_retries_remote_disconnect_beyond_default(t
     assert result["ok"] is True
     assert attempts == 3
     assert calls["count"] == 3
+
+
+def test_seedance_storyboard_ffprobe_missing_degrades_cleanly(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module("skills/comfly_seedance_tvc_video/scripts/comfly_seedance_storyboard_pipeline.py")
+    config = mod.PipelineConfig(base_url="https://bhzn.top/api/comfly-proxy", api_key="token", ffmpeg_path="ffmpeg")
+    client = mod.ComflySeedanceClient(config, mod.RunLogger(str(tmp_path), config, {}))
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "")
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("subprocess.run should not be called when ffprobe is unavailable")
+
+    monkeypatch.setattr(mod.subprocess, "run", _boom)
+
+    assert mod._probe_video_dimensions("C:/missing.mp4", client.config.ffmpeg_path) is None
+    assert mod._probe_stream_types("C:/missing.mp4", client.config.ffmpeg_path) == []

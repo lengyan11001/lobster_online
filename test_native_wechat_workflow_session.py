@@ -1085,7 +1085,7 @@ async def test_takeover_action_uses_server_polling_settings(monkeypatch):
         "native_wechat_poll",
         {
             "account_id": "pc-wechat-default",
-            "takeover_session_minutes": 30,
+            "takeover_session_minutes": 60,
             "message_poll_interval_seconds": 15,
             "accept_friend_requests_once": True,
         },
@@ -1098,7 +1098,7 @@ async def test_takeover_action_uses_server_polling_settings(monkeypatch):
     assert result == {"ok": True}
     assert "rounds" not in captured
     assert captured["interval_seconds"] == 15
-    assert captured["session_seconds"] == 1800
+    assert captured["session_seconds"] == 3600
 
 
 @pytest.mark.asyncio

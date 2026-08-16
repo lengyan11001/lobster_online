@@ -477,7 +477,7 @@
     }
     var parts = [];
     parts.push(cfg.enabled ? '已开启' : '未开启');
-    parts.push('每' + Math.round((cfg.interval_seconds || 1800) / 60) + '分钟检查一次');
+    parts.push('每' + Math.max(1, Number(cfg.interval_seconds || 15)) + '秒检查一次');
     parts.push('只回复私聊');
     if (cfg.running) parts.push('运行中');
     if (cfg.last_checked_at) parts.push('上次 ' + formatTime(cfg.last_checked_at));
@@ -594,7 +594,7 @@
     return {
       account_id: activeAccountId(),
       enabled: !!enabled,
-      interval_seconds: 1800,
+      interval_seconds: 15,
       memory_doc_ids: memoryId ? [memoryId] : [],
       group_invite_enabled: !!(($('nativeWechatGroupInviteEnabled') || {}).checked),
       group_invite_memory_doc_id: (($('nativeWechatGroupInviteMemoryDoc') || {}).value || '').trim(),
@@ -633,7 +633,7 @@
         account_id: String(row.account_id || activeAccountId() || 'pc-wechat-default'),
         updated_at: String(defaultRow.updated_at || ''),
         enabled: !!row.auto_reply_enabled,
-        interval_seconds: Number(row.auto_reply_interval_seconds || 1800),
+        interval_seconds: Number(row.auto_reply_interval_seconds || 15),
         memory_doc_ids: Array.isArray(row.auto_reply_memory_doc_ids) ? row.auto_reply_memory_doc_ids : [],
         group_invite_enabled: !!row.group_invite_enabled,
         group_invite_memory_doc_id: String(row.group_invite_memory_doc_id || ''),
