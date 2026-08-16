@@ -14,6 +14,7 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -3381,6 +3382,7 @@ async def run_auto_reply_once(
             current_peer = peer_id
             llm_reply: Dict[str, Any] = {}
             intelligence_context: Dict[str, Any] = {}
+            skip_intelligence_observation = False
             try:
                 sync_result = await asyncio.to_thread(
                     sync_local_messages,
@@ -3409,19 +3411,6 @@ async def run_auto_reply_once(
                 ).strip()
                 primary_contact = _resolve_local_contact_wx_no(account_id, configured_primary_contact) or configured_primary_contact
                 inbound = _latest_auto_reply_candidate(account_id, actual_peer)
-                if not inbound and cfg.get("group_invite_enabled"):
-                    inbound = _latest_failed_group_invite_candidate(account_id, actual_peer, primary_contact)
-                    if inbound:
-                        item_result.update(
-                            {
-                                "group_invite_retry": True,
-                                "previous_group_invite_error": str(inbound.get("previous_group_invite_error") or "")[:240],
-                                "previous_group_invite_task_id": str(inbound.get("previous_group_invite_task_id") or ""),
-                                "previous_group_invite_primary_contact": str(
-                                    inbound.get("previous_group_invite_primary_contact") or ""
-                                ),
-                            }
-                        )
                 if not inbound:
                     result["skipped"] += 1
                     item_result.update({"status": "no_unreplied_message"})
@@ -3440,7 +3429,32 @@ async def run_auto_reply_once(
                         "message_time": str(inbound.get("created_at") or ""),
                     }
                 )
-                recent = _recent_conversation_text(account_id, actual_peer, limit=8)
+                local_group_invite_verified = _has_verified_group_invite(
+                    account_id,
+                    actual_peer,
+                    primary_contact,
+                )
+                if local_group_invite_verified:
+                    skip_intelligence_observation = True
+                    _record_auto_reply_history(
+                        account_id,
+                        actual_peer,
+                        inbound,
+                        reply="",
+                        status="skipped",
+                        error="group already verified locally",
+                    )
+                    result["skipped"] += 1
+                    item_result.update(
+                        {
+                            "status": "group_already_verified",
+                            "group_invite_already_verified": True,
+                            "reply_suppressed": True,
+                            "verification_source": "local_task",
+                        }
+                    )
+                    result["items"].append(item_result)
+                    continue
                 intelligence_context = await _load_wechat_intelligence_context(
                     _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
                     account_id=account_id,
@@ -3449,16 +3463,33 @@ async def run_auto_reply_once(
                     latest_message=str(inbound.get("content") or ""),
                 )
                 contact_intelligence, strategy_context = _wechat_intelligence_prompt_context(intelligence_context)
-                local_group_invite_verified = _has_verified_group_invite(
-                    account_id,
-                    actual_peer,
-                    primary_contact,
-                )
                 server_contact = intelligence_context.get("contact") if isinstance(intelligence_context, dict) else {}
                 group_invite_already_verified = bool(
                     local_group_invite_verified
                     or (isinstance(server_contact, dict) and server_contact.get("group_invite_verified"))
                 )
+                if group_invite_already_verified:
+                    skip_intelligence_observation = True
+                    _record_auto_reply_history(
+                        account_id,
+                        actual_peer,
+                        inbound,
+                        reply="",
+                        status="skipped",
+                        error="group already verified",
+                    )
+                    result["skipped"] += 1
+                    item_result.update(
+                        {
+                            "status": "group_already_verified",
+                            "group_invite_already_verified": True,
+                            "reply_suppressed": True,
+                            "verification_source": "server_intelligence",
+                        }
+                    )
+                    result["items"].append(item_result)
+                    continue
+                recent = _recent_conversation_text(account_id, actual_peer, limit=8)
                 if not group_invite_already_verified:
                     contact_intelligence = str(_strip_unverified_group_claims(contact_intelligence) or "")
                 llm_reply = await _call_auto_reply_llm(
@@ -3651,7 +3682,7 @@ async def run_auto_reply_once(
                 item_result.update({"status": "failed", "error": str(exc)[:300]})
                 result["items"].append(item_result)
             finally:
-                if current_inbound is not None:
+                if current_inbound is not None and not skip_intelligence_observation:
                     item_status = str(item_result.get("status") or "skipped")
                     event_type = "reply_sent" if item_status == "sent" else "reply_skipped"
                     outcome_status = "completed"
@@ -9600,54 +9631,44 @@ def _focus_local_wechat(hwnd: int) -> None:
 
 
 def _paste_text(text: str) -> None:
-    value = str(text or "")
-    last_error = ""
-    for _idx in range(5):
-        try:
-            import win32clipboard  # type: ignore
-            import win32con  # type: ignore
-
-            win32clipboard.OpenClipboard()
-            try:
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, value)
-            finally:
-                win32clipboard.CloseClipboard()
-            last_error = ""
-            break
-        except Exception as exc:
-            last_error = str(exc)
-            try:
-                win32clipboard.CloseClipboard()  # type: ignore[name-defined]
-            except Exception:
-                pass
-            time.sleep(0.18)
-    if last_error:
-        raise RuntimeError(f"本机微信控制组件不可用：剪贴板写入失败：{last_error}")
+    _clipboard_text(str(text or ""))
     time.sleep(0.08)
     _send_hotkey("v", ctrl=True, pause=0.12)
 
 
 def _clipboard_text(value: str) -> None:
+    """Write the clipboard in a child process so native clipboard crashes cannot kill Backend."""
     last_error = ""
     for _idx in range(5):
         try:
-            import win32clipboard  # type: ignore
-            import win32con  # type: ignore
-
-            win32clipboard.OpenClipboard()
-            try:
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, str(value or ""))
-            finally:
-                win32clipboard.CloseClipboard()
+            child_code = (
+                "import sys\n"
+                "import win32clipboard\n"
+                "import win32con\n"
+                "value = sys.stdin.buffer.read().decode('utf-8')\n"
+                "win32clipboard.OpenClipboard()\n"
+                "try:\n"
+                "    win32clipboard.EmptyClipboard()\n"
+                "    win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, value)\n"
+                "finally:\n"
+                "    win32clipboard.CloseClipboard()\n"
+            )
+            creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
+            completed = subprocess.run(
+                [sys.executable, "-c", child_code],
+                input=str(value or "").encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5.0,
+                creationflags=creation_flags,
+                check=False,
+            )
+            if completed.returncode:
+                error = completed.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(error or f"clipboard helper exited {completed.returncode}")
             return
         except Exception as exc:
             last_error = str(exc)
-            try:
-                win32clipboard.CloseClipboard()  # type: ignore[name-defined]
-            except Exception:
-                pass
             time.sleep(0.12)
     raise RuntimeError(f"clipboard write failed: {last_error}")
 
@@ -10051,21 +10072,12 @@ def _send_text_local_slow_once(
         time.sleep(random.uniform(0.55, 1.1))
     _focus_local_wechat(hwnd)
 
-    # ChatWith usually focuses the input box. Clear only the input area, then
-    # paste one character at a time so the visible operation is paced like a person.
+    # ChatWith usually focuses the input box. Clear the draft and paste once;
+    # repeated in-process clipboard writes can corrupt the Windows heap.
     _send_hotkey("a", ctrl=True, pause=0.08)
     _send_hotkey_quick("backspace")
     time.sleep(random.uniform(0.18, 0.42))
-    char_low = float(DEFAULT_STRATEGY["auto_reply_char_sleep_min"])
-    char_high = max(char_low, float(DEFAULT_STRATEGY["auto_reply_char_sleep_max"]))
-    punc_low = float(DEFAULT_STRATEGY["auto_reply_punctuation_sleep_min"])
-    punc_high = max(punc_low, float(DEFAULT_STRATEGY["auto_reply_punctuation_sleep_max"]))
-    for ch in text:
-        _paste_text_quick(ch)
-        if ch in "。！？!?，,；;：:\n":
-            time.sleep(random.uniform(punc_low, punc_high))
-        else:
-            time.sleep(random.uniform(char_low, char_high))
+    _paste_text_quick(text)
     time.sleep(random.uniform(0.35, 0.9))
     submit_result = _submit_local_wechat_typed_message(wx, hwnd, text)
 

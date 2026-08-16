@@ -53,6 +53,26 @@ def test_group_picker_accepts_session_picker_root(monkeypatch):
     assert engine._group_picker_root(123) is picker_root
 
 
+def test_clipboard_write_isolated_in_child_process(monkeypatch):
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stderr = b""
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(engine.subprocess, "run", run)
+    engine._clipboard_text("你好")
+
+    assert calls
+    assert calls[0][0][0] == sys.executable
+    assert calls[0][1]["input"] == "你好".encode("utf-8")
+    assert calls[0][1]["timeout"] == 5.0
+
+
 def test_friend_request_action_only_matches_pending_status_suffix():
     assert engine._friend_request_action_label("Alice\u6211\u662f Alice\u63a5\u53d7") == "\u63a5\u53d7"
     assert engine._friend_request_action_label("Bob requested to connect Accept") == "Accept"
@@ -1898,6 +1918,88 @@ async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, mon
     assert result["items"][0]["status"] == "group_invite_not_executable"
     assert result["items"][0]["reply_suppressed"] is True
     assert "不能与当前客户相同" in result["items"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_verified_group_skips_before_llm_or_conversation_context(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    monkeypatch.setattr(
+        engine,
+        "get_auto_reply_config",
+        lambda _account_id: {
+            "enabled": True,
+            "group_invite_enabled": True,
+            "group_invite_primary_contact": "sales-contact",
+            "group_invite_contacts": ["sales-contact"],
+            "memory_doc_ids": [],
+            "group_invite_memory_doc_id": "",
+            "group_invite_keywords": "",
+            "group_invite_welcome_message": "welcome",
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_load_auto_reply_memory_context",
+        lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
+    )
+    async def flush_outbox(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(engine, "_flush_wechat_intelligence_outbox", flush_outbox)
+    monkeypatch.setattr(engine, "sync_local_sessions", lambda *_args, **_kwargs: {
+        "items": [{"peer_id": "customer-a", "display_name": "Customer A", "last_content": "please invite me"}],
+        "scroll_rounds": 1,
+    })
+    monkeypatch.setattr(engine, "_enrich_sessions_with_message_counts", lambda _account_id, items: items)
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: {"peer_id": "customer-a", "chat_info": {"chat_type": "direct"}},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_auto_reply_candidate",
+        lambda *_args, **_kwargs: {
+            "peer_id": "customer-a",
+            "direction": "in",
+            "content": "please invite me",
+            "auto_reply_inbound_id": "message-a",
+        },
+    )
+    monkeypatch.setattr(engine, "_resolve_local_contact_wx_no", lambda *_args, **_kwargs: "wx-sales")
+    monkeypatch.setattr(engine, "_has_verified_group_invite", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        engine,
+        "_recent_conversation_text",
+        lambda *_args, **_kwargs: pytest.fail("verified group must not load conversation context"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_load_wechat_intelligence_context",
+        lambda *_args, **_kwargs: pytest.fail("verified group must not query intelligence context"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_auto_reply_llm",
+        lambda **_kwargs: pytest.fail("verified group must not call the LLM"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_send_text_local_slow",
+        lambda *_args, **_kwargs: pytest.fail("verified group must not send a reply"),
+    )
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["replied"] == 0
+    assert result["skipped"] == 1
+    assert result["items"][0]["status"] == "group_already_verified"
+    assert result["items"][0]["verification_source"] == "local_task"
 
 
 @pytest.mark.asyncio

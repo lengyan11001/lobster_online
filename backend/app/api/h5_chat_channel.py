@@ -4683,6 +4683,18 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     return {"code": 400, "msg": f"暂不支持的销售抖音动作：{action}"}
 
 
+def _is_h5_douyin_one_shot(payload: Any, h5_context: Any = None) -> bool:
+    payload_obj = payload if isinstance(payload, dict) else {}
+    context_obj = h5_context if isinstance(h5_context, dict) else {}
+    if bool(payload_obj.get("h5_one_shot")) or bool(context_obj.get("h5_one_shot")):
+        return True
+    return str(
+        payload_obj.get("douyin_execution_mode")
+        or context_obj.get("douyin_execution_mode")
+        or ""
+    ).strip().lower() == "one_shot"
+
+
 async def _run_scheduled_douyin_leads(
     cloud: httpx.AsyncClient,
     base: str,
@@ -4698,6 +4710,7 @@ async def _run_scheduled_douyin_leads(
     action = str(payload.get("action") or "").strip().lower()
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     h5_context = payload.get("h5_context") if isinstance(payload.get("h5_context"), dict) else {}
+    h5_one_shot = _is_h5_douyin_one_shot(payload, h5_context)
     is_sales_workflow = (
         str(h5_context.get("department_id") or "").strip().lower() == "sales"
         or str(h5_context.get("workflow_template_key") or "").strip().lower() == "system_sales"
@@ -4717,6 +4730,11 @@ async def _run_scheduled_douyin_leads(
             params["wechat_add_friend_enabled"] = bool(workflow_params.get("wechat_add_friend_enabled"))
     elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
         params = _load_scheduled_douyin_online_config_params(action)
+    if h5_one_shot:
+        # Shared Online settings may provide the text and account, but they
+        # must not change the H5 task into a persistent monitor.
+        params = dict(params)
+        params["h5_one_shot"] = True
     if not run_id or not action:
         return
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行抖音获客任务：{action}"})

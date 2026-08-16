@@ -454,6 +454,7 @@ def build_default_douyin_stranger_message_monitor_state(account_id: int = 0) -> 
         "reply_prompt": "",
         "contact_value": "",
         "wechat_add_friend_enabled": False,
+        "source": "online_monitor",
         "message": "陌生人消息监控未开启。",
         "last_run_at": "",
         "next_run_at": "",
@@ -489,6 +490,7 @@ def normalize_douyin_stranger_message_monitor_state(
             "reply_prompt": str(payload.get("reply_prompt", base["reply_prompt"]) or "").strip(),
             "contact_value": str(payload.get("contact_value", base["contact_value"]) or "").strip(),
             "wechat_add_friend_enabled": bool(payload.get("wechat_add_friend_enabled", base["wechat_add_friend_enabled"])),
+            "source": str(payload.get("source", base["source"]) or "online_monitor").strip() or "online_monitor",
             "message": normalize_douyin_text(payload.get("message", base["message"])),
             "last_run_at": normalize_douyin_text(payload.get("last_run_at", base["last_run_at"])),
             "next_run_at": normalize_douyin_text(payload.get("next_run_at", base["next_run_at"])),
@@ -604,6 +606,7 @@ def save_douyin_stranger_message_monitor_config():
                     "reply_prompt": str(state.get("reply_prompt", "") or "").strip(),
                     "contact_value": str(state.get("contact_value", "") or "").strip(),
                     "wechat_add_friend_enabled": bool(state.get("wechat_add_friend_enabled", False)),
+                    "source": str(state.get("source") or "online_monitor").strip() or "online_monitor",
                 }
             )
         douyin_state_store.save_blob_json(
@@ -15046,6 +15049,8 @@ async def douyin_stranger_message_status():
 async def douyin_start_stranger_message_monitor(http_request: Request = None, request: Optional[dict] = None):
     set_douyin_ai_auth_token_from_request(http_request)
     payload = request if isinstance(request, dict) else {}
+    if bool(payload.get("h5_one_shot")) or str(payload.get("douyin_execution_mode") or "").strip().lower() == "one_shot":
+        return {"code": 400, "msg": "H5 抖音获客任务是一次性执行，不能启动常驻监控。"}
     config = load_global_config()
     accounts = _normalize_accounts(config.get("douyin_accounts"))
     account_id = int(payload.get("account_id", 0) or 0)
@@ -15086,6 +15091,7 @@ async def douyin_start_stranger_message_monitor(http_request: Request = None, re
             "reply_prompt": reply_prompt,
             "contact_value": contact_value,
             "wechat_add_friend_enabled": wechat_add_friend_enabled,
+            "source": "online_monitor",
             "last_error": "",
             "last_skip_reason": "",
         },
