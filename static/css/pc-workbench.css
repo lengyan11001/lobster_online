@@ -1455,6 +1455,38 @@
   line-height: 1.5;
 }
 
+.personal-settings-view .ps-multi-select {
+  position: relative;
+  min-width: 0;
+}
+.personal-settings-view .ps-multi-select > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid #dfe6ef;
+  border-radius: 12px;
+  color: #667085;
+  background: #fff;
+  cursor: pointer;
+  list-style: none;
+}
+.personal-settings-view .ps-multi-select > summary::-webkit-details-marker { display: none; }
+.personal-settings-view .ps-multi-select > summary strong { min-width: 0; overflow: hidden; color: #344054; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.personal-settings-view .ps-multi-select > summary i { color: #4383ec; font-style: normal; }
+.personal-settings-view .ps-multi-select[open] > summary { border-color: #9bbcf5; box-shadow: 0 0 0 3px rgba(67,131,236,.1); }
+.personal-settings-view .ps-multi-select-menu { display: grid; gap: 8px; margin-top: 6px; padding: 8px; border: 1px solid #dfe6ef; border-radius: 12px; background: #fff; box-shadow: 0 14px 28px rgba(16,24,40,.12); }
+.personal-settings-view .ps-multi-select-options { display: grid; gap: 5px; max-height: 250px; overflow: auto; }
+.personal-settings-view .ps-multi-select-option { padding: 8px 9px; border-radius: 9px; background: #f8fafc; }
+.personal-settings-view .ps-multi-select-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.personal-settings-view .ps-multi-select-footer,
+.personal-settings-view .ps-list-pager { display: flex; align-items: center; justify-content: center; gap: 8px; color: #98a2b2; font-size: 11px; }
+.personal-settings-view .ps-multi-select-footer .ps-list-pager { margin: 0; }
+.personal-settings-view .ps-multi-select-footer button,
+.personal-settings-view .ps-list-pager button { min-height: 28px; padding: 4px 9px; }
+
 .personal-settings-view .ps-upload-card {
   min-height: min(610px, calc(100vh - 210px));
   align-content: start;

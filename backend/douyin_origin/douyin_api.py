@@ -444,6 +444,7 @@ def get_douyin_comment_filter_strategy(config: Dict) -> str:
 def build_default_douyin_stranger_message_monitor_state(account_id: int = 0) -> Dict[str, object]:
     return {
         "enabled": False,
+        "explicitly_started": False,
         "running": False,
         "interval_minutes": 30,
         "account_id": int(account_id or 0) or None,
@@ -480,6 +481,7 @@ def normalize_douyin_stranger_message_monitor_state(
     base.update(
         {
             "enabled": bool(payload.get("enabled", base["enabled"])),
+            "explicitly_started": bool(payload.get("explicitly_started", base["explicitly_started"])),
             "running": bool(payload.get("running", base["running"])),
             "interval_minutes": max(1, min(int(payload.get("interval_minutes", base["interval_minutes"]) or 30), 1440)),
             "account_id": int(payload.get("account_id", account_id) or account_id or 0) or None,
@@ -597,6 +599,7 @@ def save_douyin_stranger_message_monitor_config():
             payload.append(
                 {
                     "enabled": bool(state.get("enabled")),
+                    "explicitly_started": bool(state.get("explicitly_started")),
                     "interval_minutes": max(1, min(int(state.get("interval_minutes", 30) or 30), 1440)),
                     "account_id": int(state.get("account_id", 0) or 0),
                     "max_conversations": max(1, min(int(state.get("max_conversations", 100) or 100), 100)),
@@ -1248,6 +1251,7 @@ def restore_douyin_stranger_message_monitor_config():
             default=[],
         )
         next_states: Dict[str, Dict[str, object]] = {}
+        migrated_legacy_state = False
         items = loaded if isinstance(loaded, list) else [loaded] if isinstance(loaded, dict) else []
         for raw_state in items:
             if not isinstance(raw_state, dict):
@@ -1255,11 +1259,27 @@ def restore_douyin_stranger_message_monitor_config():
             account_id = int(raw_state.get("account_id", 0) or 0)
             if account_id <= 0:
                 continue
-            next_states[str(account_id)] = normalize_douyin_stranger_message_monitor_state(
+            state = normalize_douyin_stranger_message_monitor_state(
                 raw_state,
                 account_id=account_id,
             )
+            # Before explicitly_started existed, saving a fixed reply could
+            # leave enabled=true in the persisted monitor state. Do not let
+            # that legacy flag start a background monitor after restart.
+            if bool(state.get("enabled")) and not bool(state.get("explicitly_started")):
+                state.update(
+                    {
+                        "enabled": False,
+                        "running": False,
+                        "next_run_at": "",
+                        "last_skip_reason": "legacy_monitor_state_not_explicitly_started",
+                    }
+                )
+                migrated_legacy_state = True
+            next_states[str(account_id)] = state
         douyin_stranger_message_monitor_states = next_states
+        if migrated_legacy_state:
+            save_douyin_stranger_message_monitor_config()
     except Exception:
         douyin_stranger_message_monitor_states = {}
 
@@ -3394,6 +3414,7 @@ def normalize_douyin_stranger_message_row(row: Dict) -> Dict:
             if str(item).strip()
         )),
         "time_text": normalize_douyin_text(row.get("time_text", "")),
+        "conversation_position": max(0, int(row.get("conversation_position", 0) or 0)),
         "stranger_index": max(0, int(row.get("stranger_index", 0) or 0)),
         "conversation_source": normalize_douyin_text(
             row.get("conversation_source", "") or "stranger_messages"
@@ -3413,6 +3434,8 @@ def normalize_douyin_stranger_message_row(row: Dict) -> Dict:
             else None
         ),
         "has_user_message": bool(row.get("has_user_message")) if row.get("has_user_message") is not None else None,
+        "detail_read_status": normalize_douyin_text(row.get("detail_read_status", "")) or "not_requested",
+        "detail_read_error": normalize_douyin_text(row.get("detail_read_error", "")),
         "h5_reply_fingerprint": normalize_douyin_text(row.get("h5_reply_fingerprint", "")),
         "h5_reply_sent_at": normalize_douyin_text(row.get("h5_reply_sent_at", "")),
     }
@@ -10783,6 +10806,8 @@ async def send_douyin_stranger_messages_for_monitor(
     try:
         shared_page = await scraper._new_page(logger=douyin_log)
         for row in rows:
+            if douyin_stranger_message_stop_requested:
+                break
             current_user = str(row.get("username", "") or row.get("profile_url", ""))
             item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
@@ -10850,7 +10875,7 @@ async def send_douyin_stranger_messages_for_monitor(
                     finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
                 douyin_log(f"[抖音陌生人消息监控] 自动回复失败：{current_user}，原因：{exc}", "error")
-            if processed < total:
+            if processed < total and not douyin_stranger_message_stop_requested:
                 await asyncio.sleep(2)
     finally:
         if shared_page is not None:
@@ -10864,7 +10889,7 @@ async def send_douyin_stranger_messages_for_monitor(
         "processed": processed,
         "success": success,
         "failed": failed,
-        "stopped": False,
+        "stopped": bool(douyin_stranger_message_stop_requested and processed < total),
     }
 
 
@@ -10956,7 +10981,11 @@ async def run_douyin_h5_stranger_message_task_once(
     wechat_add_friend_enabled: bool = False,
 ) -> Dict[str, object]:
     """Run the H5 Douyin private-message node once without enabling its monitor."""
+    global douyin_stranger_message_running, douyin_stranger_message_stop_requested
+    global douyin_stranger_message_background_task
+
     async with douyin_h5_stranger_message_task_lock:
+        current_task = asyncio.current_task()
         requested_account_id = int(account_id or 0)
         fixed_text = normalize_douyin_text(fixed_message)
         if auto_reply_enabled and not fixed_text:
@@ -10995,7 +11024,20 @@ async def run_douyin_h5_stranger_message_task_once(
                 "account_id": target_account_id,
             }
 
+        monitor_task = douyin_stranger_message_monitor_tasks_by_account.get(target_account_id)
+        if monitor_task and not monitor_task.done():
+            return {
+                "status": "skipped",
+                "code": 409,
+                "message": f"当前账号已有陌生人私信监控正在执行：账号 {target_account_id}",
+                "reason": "stranger_message_monitor_running",
+                "account_id": target_account_id,
+            }
+
         limit = max(1, min(int(max_conversations or 100), 100))
+        douyin_stranger_message_running = True
+        douyin_stranger_message_stop_requested = False
+        douyin_stranger_message_background_task = current_task
         scraper = create_douyin_message_scraper(account, config)
         prepared_rows: List[Dict] = []
         reply_rows: List[Dict] = []
@@ -11009,7 +11051,25 @@ async def run_douyin_h5_stranger_message_task_once(
         qualifying_users = 0
         skipped_without_user_last = 0
         skipped_duplicate_reply = 0
+        detail_failures: List[Dict[str, str]] = []
         started_at = _now_text()
+        douyin_stranger_message_state.update(
+            {
+                "running": True,
+                "phase": "h5_one_shot",
+                "message": f"H5 抖音私信接管执行中，账号 {target_account_id}",
+                "total": limit,
+                "processed": 0,
+                "success": 0,
+                "failed": 0,
+                "account_id": target_account_id,
+                "current_user": "",
+                "current_message_text": "",
+                "started_at": started_at,
+                "finished_at": "",
+                "last_error": "",
+            }
+        )
         try:
             douyin_log(
                 f"[H5抖音私信接管] 开始一次性读取账号 {target_account_id}，最多 {limit} 条会话，不启用常驻监控",
@@ -11017,11 +11077,22 @@ async def run_douyin_h5_stranger_message_task_once(
             )
             rows = await scraper.collect_stranger_private_messages(
                 max_conversations=limit,
-                should_stop=lambda: False,
+                should_stop=lambda: bool(douyin_stranger_message_stop_requested),
                 logger=douyin_log,
                 include_details=True,
+                progress_callback=lambda processed, total, username: douyin_stranger_message_state.update(
+                    {
+                        "running": True,
+                        "total": total,
+                        "processed": processed,
+                        "current_user": normalize_douyin_text(username),
+                        "message": f"H5 抖音私信接管读取中，已读取 {processed}/{total} 条",
+                    }
+                ),
             )
             for raw_row in rows if isinstance(rows, list) else []:
+                if douyin_stranger_message_stop_requested:
+                    break
                 if not isinstance(raw_row, dict):
                     continue
                 row = {**raw_row, "account_id": target_account_id}
@@ -11038,6 +11109,16 @@ async def run_douyin_h5_stranger_message_task_once(
                 merged_numbers = list(dict.fromkeys([*old_numbers, *current_numbers]))
                 row["phone_numbers"] = merged_numbers
                 prepared_rows.append(row)
+
+                if str(row.get("detail_read_status") or "").strip().lower() == "failed":
+                    detail_failures.append(
+                        {
+                            "username": str(row.get("username") or "").strip() or "未知会话",
+                            "conversation_key": str(row.get("conversation_key") or "").strip(),
+                            "error": str(row.get("detail_read_error") or "详情读取失败").strip(),
+                        }
+                    )
+                    continue
 
                 if not _h5_douyin_last_message_is_user(row):
                     skipped_without_user_last += 1
@@ -11059,6 +11140,18 @@ async def run_douyin_h5_stranger_message_task_once(
                 reply_rows.append(row)
 
             merge_douyin_stranger_message_results(target_account_id, prepared_rows)
+
+            if douyin_stranger_message_stop_requested:
+                return {
+                    "status": "stopped",
+                    "code": 200,
+                    "message": "H5 抖音私信接管已停止，已保留已读取结果。",
+                    "account_id": target_account_id,
+                    "mode": "h5_one_shot",
+                    "total_conversations": len(prepared_rows),
+                    "max_conversations": limit,
+                    "stopped": True,
+                }
 
             reply_result: Dict[str, object] = {
                 "total": len(reply_rows),
@@ -11094,6 +11187,19 @@ async def run_douyin_h5_stranger_message_task_once(
                 if marker_rows:
                     merge_douyin_stranger_message_results(target_account_id, marker_rows)
 
+            if douyin_stranger_message_stop_requested:
+                return {
+                    "status": "stopped",
+                    "code": 200,
+                    "message": "H5 抖音私信接管已停止，未继续执行后续加好友动作。",
+                    "account_id": target_account_id,
+                    "mode": "h5_one_shot",
+                    "total_conversations": len(prepared_rows),
+                    "max_conversations": limit,
+                    "reply": dict(reply_result),
+                    "stopped": True,
+                }
+
             wechat_add_friend_result = (
                 await _queue_douyin_wechat_friend_add(phone_numbers)
                 if wechat_add_friend_enabled
@@ -11101,6 +11207,52 @@ async def run_douyin_h5_stranger_message_task_once(
             )
             reply_success = int(reply_result.get("success", 0) or 0)
             reply_failed = int(reply_result.get("failed", 0) or 0)
+            if detail_failures:
+                detail_summary = "；".join(
+                    f"{item['username']}：{item['error']}" for item in detail_failures[:5]
+                )
+                failure_message = (
+                    f"H5 抖音私信接管失败：{len(detail_failures)} 个会话详情读取失败，未将其当作无新消息跳过。"
+                    f" {detail_summary}"
+                )
+                douyin_log(f"[H5抖音私信接管] {failure_message}", "error")
+                return {
+                    "status": "failed",
+                    "code": 502,
+                    "message": failure_message,
+                    "msg": failure_message,
+                    "summary": failure_message,
+                    "account_id": target_account_id,
+                    "started_at": started_at,
+                    "finished_at": _now_text(),
+                    "mode": "h5_one_shot",
+                    "total_conversations": len(prepared_rows),
+                    "max_conversations": limit,
+                    "processed_user_last": qualifying_users,
+                    "skipped_last_message_not_user": skipped_without_user_last,
+                    "skipped_duplicate_reply": skipped_duplicate_reply,
+                    "detail_read_failed": True,
+                    "detail_read_failed_count": len(detail_failures),
+                    "detail_failures": detail_failures,
+                    "reply": dict(reply_result),
+                    "extracted_phone_numbers": phone_numbers,
+                    "wechat_add_friend": wechat_add_friend_result,
+                    "stats": {
+                        "total": len(prepared_rows),
+                        "processed": qualifying_users,
+                        "detail_read_failed": len(detail_failures),
+                        "reply_total": int(reply_result.get("total", 0) or 0),
+                        "reply_success": reply_success,
+                        "reply_failed": reply_failed,
+                        "phone_numbers": len(phone_numbers),
+                    },
+                    "final_state": {
+                        "status": "failed",
+                        "total_conversations": len(prepared_rows),
+                        "detail_read_failed": len(detail_failures),
+                        "detail_failures": detail_failures,
+                    },
+                }
             message = (
                 f"H5 抖音私信接管完成：读取 {len(prepared_rows)}/{limit} 条会话，"
                 f"最后消息为用户 {qualifying_users} 条，发送固定文案成功 {reply_success} 条，失败 {reply_failed} 条，"
@@ -11152,6 +11304,18 @@ async def run_douyin_h5_stranger_message_task_once(
             }
         finally:
             await scraper.close()
+            if douyin_stranger_message_background_task is current_task:
+                douyin_stranger_message_background_task = None
+            douyin_stranger_message_running = False
+            douyin_stranger_message_stop_requested = False
+            douyin_stranger_message_state.update(
+                {
+                    "running": False,
+                    "current_user": "",
+                    "current_message_text": "",
+                    "finished_at": _now_text(),
+                }
+            )
 
 
 async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_type: str = "scheduled") -> Dict[str, object]:
@@ -15045,6 +15209,71 @@ async def douyin_stranger_message_status():
     }
 
 
+@router.post("/stranger-messages/monitor/config")
+async def douyin_save_stranger_message_monitor_config(request: Optional[dict] = None):
+    """Persist the current stranger-message form without starting the monitor.
+
+    The preset button is also used by finite H5 one-shot tasks. Those tasks
+    read the Python-side monitor config, so browser-only preset storage is not
+    enough and must not be confused with enabling the background scheduler.
+    """
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
+    if account_id > 0 and not account:
+        return {"code": 400, "msg": f"未找到抖音账号 {account_id}。"}
+    if not account:
+        return {"code": 400, "msg": "当前没有可用的抖音账号配置。"}
+
+    target_account_id = int(
+        (account or {}).get("id", 0)
+        or account_id
+        or config.get("douyin_default_account_id", 1)
+        or 1
+    )
+    existing = get_douyin_stranger_message_monitor_state(target_account_id)
+    reply_mode = normalize_douyin_stranger_reply_mode(
+        payload.get("reply_mode", existing.get("reply_mode"))
+    )
+    reply_message = str(
+        payload.get("message", payload.get("reply_message", existing.get("reply_message", ""))) or ""
+    ).strip()
+    state = normalize_douyin_stranger_message_monitor_state(
+        {
+            **existing,
+            # This endpoint only saves the form. It must not resurrect an old
+            # background monitor when H5 saves a fixed reply for a one-shot run.
+            "enabled": False,
+            "explicitly_started": False,
+            "running": False,
+            "account_id": target_account_id,
+            "interval_minutes": payload.get("interval_minutes", existing.get("interval_minutes", 30)),
+            "max_conversations": payload.get("max_conversations", existing.get("max_conversations", 100)),
+            "auto_reply_enabled": payload.get("auto_reply_enabled", existing.get("auto_reply_enabled", True)),
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": payload.get("reply_prompt", existing.get("reply_prompt", "")),
+            "contact_value": payload.get("contact_value", existing.get("contact_value", "")),
+            "wechat_add_friend_enabled": payload.get(
+                "wechat_add_friend_enabled",
+                existing.get("wechat_add_friend_enabled", False),
+            ),
+            "source": "online_monitor",
+            "next_run_at": "",
+        },
+        account_id=target_account_id,
+    )
+    douyin_stranger_message_monitor_states[str(target_account_id)] = state
+    save_douyin_stranger_message_monitor_config()
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的私信接管配置已保存。",
+        "monitor": state,
+        "monitors": list_douyin_stranger_message_monitor_states(),
+    }
+
+
 @router.post("/stranger-messages/monitor/start")
 async def douyin_start_stranger_message_monitor(http_request: Request = None, request: Optional[dict] = None):
     set_douyin_ai_auth_token_from_request(http_request)
@@ -15081,6 +15310,7 @@ async def douyin_start_stranger_message_monitor(http_request: Request = None, re
     state = normalize_douyin_stranger_message_monitor_state(
         {
             "enabled": True,
+            "explicitly_started": True,
             "running": False,
             "interval_minutes": interval_minutes,
             "account_id": target_account_id or None,
@@ -15131,12 +15361,16 @@ async def douyin_stop_stranger_message_monitor(request: Optional[dict] = None):
     state.update(
         {
             "enabled": False,
+            "explicitly_started": False,
             "running": False,
             "message": "陌生人消息监控已关闭。",
             "next_run_at": "",
             "last_cycle_status": "idle",
         }
     )
+    monitor_task = douyin_stranger_message_monitor_tasks_by_account.pop(account_id, None)
+    if monitor_task and not monitor_task.done():
+        monitor_task.cancel()
     save_douyin_stranger_message_monitor_config()
     douyin_log(f"[抖音陌生人消息监控] 已关闭，账号 {account_id}", "warning")
     return {

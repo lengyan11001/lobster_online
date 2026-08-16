@@ -32,10 +32,7 @@
       .native-wechat-item-title { font-weight: 900; line-height: 1.35; word-break: break-all; }
       .native-wechat-meta { margin-top: 4px; color: #667a73; font-size: 12px; line-height: 1.45; word-break: break-all; }
       .native-wechat-chip { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 4px 9px; background: rgba(20,184,166,.12); color: #0f766e; font-size: 12px; font-weight: 900; }
-      .native-wechat-auto-reply { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; padding: 10px 11px; border: 1px solid rgba(15,118,110,.16); border-radius: 16px; background: rgba(240,253,250,.72); }
       .native-wechat-auto-reply-main { display: flex; align-items: center; gap: 9px; min-width: 0; }
-      .native-wechat-auto-reply-title { font-size: 13px; font-weight: 900; color: #123c34; white-space: nowrap; }
-      .native-wechat-auto-reply-status { color: #587069; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .native-wechat-takeover-config { display: grid; gap: 9px; margin: -2px 0 12px; padding: 12px; border: 1px solid rgba(15,118,110,.14); border-radius: 14px; background: rgba(255,255,255,.82); }
       .native-wechat-takeover-config-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
       .native-wechat-takeover-config-head strong { color: #173f37; font-size: 13px; }
@@ -140,19 +137,6 @@
                 <button type="button" class="btn btn-primary btn-sm" id="nativeWechatPollBtn">收消息</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatRefreshPeersBtn">刷新</button>
               </div>
-            </div>
-            <div class="native-wechat-auto-reply">
-              <div class="native-wechat-auto-reply-main">
-                <label class="native-wechat-switch" title="个人微信自动回复">
-                  <input id="nativeWechatAutoReplyEnabled" type="checkbox">
-                  <span></span>
-                </label>
-                <div style="min-width:0;">
-                  <div class="native-wechat-auto-reply-title">个人微信自动回复</div>
-                  <div class="native-wechat-auto-reply-status" id="nativeWechatAutoReplyStatus">每30分钟检查一次，只回复私聊。</div>
-                </div>
-              </div>
-              <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatAutoReplyRunBtn">立即检查</button>
             </div>
             <div class="native-wechat-takeover-config">
               <div class="native-wechat-takeover-config-head">

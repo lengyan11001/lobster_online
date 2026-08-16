@@ -157,8 +157,8 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260808-workflow-children-v2',
-    scripts: '/static/js/views/h5-employees.js?v=20260808-workflow-children-v2',
+    html: '/static/views/h5-employees.html?v=20260816-workflow-parity-demo-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260816-workflow-parity-demo-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

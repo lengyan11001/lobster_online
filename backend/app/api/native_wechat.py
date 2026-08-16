@@ -32,7 +32,8 @@ class PollBody(BaseModel):
 
 class AutoReplyConfigBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
-    enabled: bool = False
+    # Omitted by configuration-only clients; keep the existing runtime state.
+    enabled: Optional[bool] = None
     interval_seconds: int = Field(default=15, ge=1, le=86400)
     group_invite_enabled: Optional[bool] = None
     memory_doc_ids: Optional[List[str]] = Field(default=None, max_length=20)
@@ -315,11 +316,12 @@ async def native_wechat_poll_updates(
 async def native_wechat_auto_reply_config(
     request: Request,
     account_id: str,
+    start_worker: bool = True,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
         cfg = engine.get_auto_reply_config(account_id)
-        if cfg.get("enabled"):
+        if start_worker and cfg.get("enabled"):
             engine.ensure_auto_reply_worker(
                 account_id,
                 auth_context={

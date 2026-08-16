@@ -1162,10 +1162,120 @@
     });
   }
 
+  var PS_MULTI_SELECT_PAGE_SIZE = 8;
+  var PS_LIST_PAGE_SIZE = 8;
+  var psMultiSelectPages = {};
+  var psListPages = {};
+  var psListPagingBound = false;
+
+  function psPageInfo(elId, rows, size, store) {
+    var totalPages = Math.max(1, Math.ceil(rows.length / size));
+    var page = parseInt(store[elId] || 1, 10);
+    if (!Number.isFinite(page) || page < 1) page = 1;
+    if (page > totalPages) page = totalPages;
+    store[elId] = page;
+    return { page: page, totalPages: totalPages, start: (page - 1) * size };
+  }
+
+  function psPagerMarkup(attr, id, page, totalPages) {
+    if (totalPages <= 1) return '';
+    return '<div class="ps-list-pager">' +
+      '<button type="button" class="btn btn-ghost btn-sm" ' + attr + '="' + escAttr(id) + '" data-page-delta="-1"' + (page <= 1 ? ' disabled' : '') + '>上一页</button>' +
+      '<span>' + page + ' / ' + totalPages + '</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" ' + attr + '="' + escAttr(id) + '" data-page-delta="1"' + (page >= totalPages ? ' disabled' : '') + '>下一页</button>' +
+    '</div>';
+  }
+
+  function updatePsMultiSelectSummary(el) {
+    if (!el) return;
+    var summary = el.querySelector('[data-ps-multi-summary]');
+    if (!summary) return;
+    var checked = Array.prototype.slice.call(el.querySelectorAll('input[type="checkbox"]:checked'));
+    var names = checked.slice(0, 2).map(function(input) {
+      var strong = input.closest('label') && input.closest('label').querySelector('strong');
+      return strong ? strong.textContent : input.value;
+    });
+    summary.textContent = checked.length ? ('已选 ' + checked.length + ' 项' + (names.length ? ' · ' + names.join('、') : '')) : '未选择';
+  }
+
+  function renderPsMultiSelect(elId, rows, opts) {
+    var el = $(elId);
+    if (!el) return;
+    opts = opts || {};
+    rows = Array.isArray(rows) ? rows : [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="ps-empty">' + esc(opts.empty || '暂无') + '</div>';
+      return;
+    }
+    var info = psPageInfo(elId, rows, PS_MULTI_SELECT_PAGE_SIZE, psMultiSelectPages);
+    var pageRows = rows.slice(info.start, info.start + PS_MULTI_SELECT_PAGE_SIZE);
+    var selected = opts.selected || {};
+    var idFn = opts.id || function(row) { return row.id; };
+    var titleFn = opts.title || function(row) { return row.name || row.title || row.id; };
+    var subtitleFn = opts.subtitle || function() { return ''; };
+    var kindFn = opts.kindFn || function() { return opts.kind || ''; };
+    var attrName = opts.attributeName || 'data-ps-option';
+    var selectedRows = rows.filter(function(row) { return !!selected[String(idFn(row))]; });
+    var selectedNames = selectedRows.slice(0, 2).map(function(row) { return titleFn(row); });
+    var label = selectedRows.length ? ('已选 ' + selectedRows.length + ' 项' + (selectedNames.length ? ' · ' + selectedNames.join('、') : '')) : '未选择';
+    el.innerHTML = '<details class="ps-multi-select">' +
+      '<summary><span>' + esc(opts.label || '选择') + '</span><strong data-ps-multi-summary>' + esc(label) + '</strong><i>⌄</i></summary>' +
+      '<div class="ps-multi-select-menu"><div class="ps-multi-select-options">' + pageRows.map(function(row) {
+        var id = String(idFn(row) || '');
+        var kind = String(kindFn(row) || '');
+        var subtitle = String(subtitleFn(row) || '');
+        return '<label class="ps-option ps-multi-select-option">' +
+          '<input type="checkbox" ' + attrName + '="' + escAttr(kind) + '" value="' + escAttr(id) + '"' + (selected[id] ? ' checked' : '') + '>' +
+          '<span><strong>' + esc(titleFn(row)) + '</strong>' + (subtitle ? '<small>' + esc(subtitle) + '</small>' : '') + '</span>' +
+        '</label>';
+      }).join('') + '</div><div class="ps-multi-select-footer">' + psPagerMarkup('data-ps-multi-page', elId, info.page, info.totalPages) + '</div></div></details>';
+    bindOptionChecks(el, opts.kind, selected);
+    el.querySelectorAll('input[' + attrName + ']').forEach(function(input) {
+      input.addEventListener('change', function() { updatePsMultiSelectSummary(el); });
+    });
+    el.querySelectorAll('[data-ps-multi-page]').forEach(function(btn) {
+      btn.addEventListener('click', function(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var next = (psMultiSelectPages[elId] || 1) + Number(btn.getAttribute('data-page-delta') || 0);
+        psMultiSelectPages[elId] = Math.max(1, Math.min(info.totalPages, next));
+        renderPsMultiSelect(elId, rows, opts);
+        var details = $(elId).querySelector('details');
+        if (details) details.open = true;
+      });
+    });
+  }
+
+  function ensurePsListPagingHandlers() {
+    if (psListPagingBound) return;
+    psListPagingBound = true;
+    document.addEventListener('click', function(ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest('[data-ps-list-page]') : null;
+      if (!btn) return;
+      ev.preventDefault();
+      var id = btn.getAttribute('data-ps-list-page') || '';
+      psListPages[id] = Math.max(1, (psListPages[id] || 1) + Number(btn.getAttribute('data-page-delta') || 0));
+      renderAllLists();
+    });
+  }
+
+  function psListPageRows(elId, rows) {
+    var info = psPageInfo(elId, rows, PS_LIST_PAGE_SIZE, psListPages);
+    return {
+      rows: rows.slice(info.start, info.start + PS_LIST_PAGE_SIZE),
+      pager: psPagerMarkup('data-ps-list-page', elId, info.page, info.totalPages)
+    };
+  }
+
   function renderTemplateOptions(elId, rows, opts) {
     var el = $(elId);
     if (!el) return;
     opts = opts || {};
+    renderPsMultiSelect(elId, rows, Object.assign({}, opts, {
+      label: opts.label || '选择资源',
+      attributeName: 'data-ps-option'
+    }));
+    return;
     if (!rows.length) {
       el.innerHTML = '<div class="ps-empty">' + esc(opts.empty || '暂无可选项') + '</div>';
       return;
@@ -1460,7 +1570,8 @@
       list.innerHTML = '<div class="ps-empty">暂无模板</div>';
       return;
     }
-    list.innerHTML = rows.map(function(row) {
+    var page = psListPageRows('psSavedTemplateList', rows);
+    list.innerHTML = page.rows.map(function(row) {
       var id = String(row.id || '');
       var k = Array.isArray(row.keyword_ids) ? row.keyword_ids.length : 0;
       var c = Array.isArray(row.competitor_ids) ? row.competitor_ids.length : 0;
@@ -1476,7 +1587,7 @@
           '<button type="button" class="btn btn-ghost btn-sm" data-edit-template="' + escAttr(id) + '">编辑</button>' +
         '</div>' +
       '</article>';
-    }).join('');
+    }).join('') + page.pager;
     list.querySelectorAll('[data-use-template]').forEach(function(btn) {
       btn.addEventListener('click', function() { useTemplate(btn.getAttribute('data-use-template') || '', btn); });
     });
@@ -1496,7 +1607,8 @@
       el.innerHTML = '<div class="ps-empty">还没有关键词。</div>';
       return;
     }
-    el.innerHTML = state.keywords.map(function(row) {
+    var page = psListPageRows('psKeywordList', state.keywords);
+    el.innerHTML = page.rows.map(function(row) {
       var id = String(row.id || '');
       return '<article class="ps-option is-action">' +
         '<div><strong>' + esc(row.display_name || row.keyword || ('关键词 #' + id)) + '</strong>' +
@@ -1505,7 +1617,7 @@
           '<button type="button" class="btn btn-ghost btn-sm" data-delete-keyword="' + escAttr(id) + '">删除</button>' +
         '</div>' +
       '</article>';
-    }).join('');
+    }).join('') + page.pager;
     el.querySelectorAll('[data-delete-keyword]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteKeyword(btn.getAttribute('data-delete-keyword') || ''); });
     });
@@ -1518,7 +1630,8 @@
       el.innerHTML = '<div class="ps-empty">还没有同行账号。</div>';
       return;
     }
-    el.innerHTML = state.competitors.map(function(row) {
+    var page = psListPageRows('psCompetitorList', state.competitors);
+    el.innerHTML = page.rows.map(function(row) {
       var id = String(row.id || '');
       return '<article class="ps-option is-action">' +
         '<div><strong>' + esc(row.display_name || row.account_key || ('同行 #' + id)) + '</strong>' +
@@ -1529,7 +1642,7 @@
           '<button type="button" class="btn btn-ghost btn-sm" data-delete-competitor="' + escAttr(id) + '">删除</button>' +
         '</div>' +
       '</article>';
-    }).join('');
+    }).join('') + page.pager;
     el.querySelectorAll('[data-sync-competitor]').forEach(function(btn) {
       btn.addEventListener('click', function() { syncCompetitor(btn.getAttribute('data-sync-competitor') || '', btn); });
     });
@@ -1548,7 +1661,8 @@
       el.innerHTML = '<div class="ps-empty">还没有保存的记忆文件。</div>';
       return;
     }
-    el.innerHTML = state.memories.map(function(doc) {
+    var page = psListPageRows('psMemoryList', state.memories);
+    el.innerHTML = page.rows.map(function(doc) {
       var id = memoryId(doc);
       var readOnly = !!(doc && (doc.read_only || doc.source === 'agent'));
       var tag = readOnly ? '代理商' : '个人';
@@ -1560,7 +1674,7 @@
           (readOnly ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-delete-memory="' + escAttr(id) + '">删除</button>') +
         '</div>' +
       '</article>';
-    }).join('');
+    }).join('') + page.pager;
     el.querySelectorAll('[data-preview-memory]').forEach(function(btn) {
       btn.addEventListener('click', function() { previewMemory(btn.getAttribute('data-preview-memory') || ''); });
     });
@@ -1619,7 +1733,8 @@
       el.innerHTML = '<div class="ps-empty">暂无上传资料。</div>';
       return;
     }
-    el.innerHTML = rows.map(function(doc) {
+    var page = psListPageRows('psUploadDocList', rows);
+    el.innerHTML = page.rows.map(function(doc) {
       var id = memoryId(doc);
       var metaText = doc.notes || doc.filename || '已存入共享记忆';
       if (doc.created_at) metaText += ' · ' + doc.created_at;
@@ -1630,7 +1745,7 @@
           '<button type="button" class="btn btn-ghost btn-sm" data-delete-upload-memory="' + escAttr(id) + '">删除</button>' +
         '</div>' +
       '</article>';
-    }).join('');
+    }).join('') + page.pager;
     el.querySelectorAll('[data-preview-upload-memory]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         switchTab('memory');
@@ -1716,6 +1831,33 @@
   function renderSourceOptions(elId, rows, selected, kind, titleFn, subtitleFn) {
     var el = $(elId);
     if (!el) return;
+    var entries = (Array.isArray(rows) ? rows : []).map(function(row) {
+      return { row: row, sourceKind: kind };
+    });
+    if (elId === 'psMemoryUploadSourceList') {
+      selectedUploadFiles().forEach(function(file) {
+        entries.push({ row: file, sourceKind: 'source_file' });
+      });
+    }
+    renderPsMultiSelect(elId, entries, {
+      label: '选择资料',
+      selected: selected,
+      empty: '暂无',
+      attributeName: 'data-ps-memory-source',
+      kind: kind,
+      kindFn: function(entry) { return entry.sourceKind; },
+      id: function(entry) {
+        return entry.sourceKind === 'source_file' ? uploadFileKey(entry.row) : (entry.sourceKind === 'source_doc' ? memoryId(entry.row) : String(entry.row.id || ''));
+      },
+      title: function(entry) {
+        return entry.sourceKind === 'source_file' ? (entry.row.name || '未命名文件') : titleFn(entry.row);
+      },
+      subtitle: function(entry) {
+        if (entry.sourceKind === 'source_file') return entry.row.size ? (Math.ceil(entry.row.size / 1024) + 'KB') : '当前选择';
+        return subtitleFn ? String(subtitleFn(entry.row) || '') : '';
+      }
+    });
+    return;
     if (!rows.length) {
       el.innerHTML = '<div class="ps-empty">暂无</div>';
       return;
@@ -1742,7 +1884,7 @@
     renderSourceOptions('psMemoryUploadSourceList', memorySourceDocRows(), state.memorySourceDocs, 'source_doc',
       memoryTitle,
       function(row) { return row.notes || row.filename || ''; });
-    var currentFiles = selectedUploadFiles();
+    var currentFiles = [];
     if (currentFiles.length) {
       var box = $('psMemoryUploadSourceList');
       var fileHtml = currentFiles.map(function(file) {
@@ -1797,6 +1939,7 @@
   }
 
   function renderAllLists() {
+    ensurePsListPagingHandlers();
     renderTemplateLists();
     renderCurrentTemplate();
     renderSavedTemplates();

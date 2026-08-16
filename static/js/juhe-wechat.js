@@ -14,7 +14,6 @@
     strategy: null,
     autoReply: null,
     autoReplyMemoryDocs: [],
-    autoReplyBusy: false,
     driver: null,
     lastDiagnostic: null,
     sendFiles: [],
@@ -456,42 +455,6 @@
     }).join('');
   }
 
-  function renderAutoReply() {
-    var enabled = $('nativeWechatAutoReplyEnabled');
-    var status = $('nativeWechatAutoReplyStatus');
-    var runBtn = $('nativeWechatAutoReplyRunBtn');
-    var cfg = state.autoReply || {};
-    if (enabled) {
-      enabled.checked = !!cfg.enabled;
-      enabled.disabled = state.autoReplyBusy || !activeAccountId();
-    }
-    if (runBtn) runBtn.disabled = state.autoReplyBusy || !activeAccountId();
-    if (!status) return;
-    if (!activeAccountId()) {
-      status.textContent = '请先选择本机微信账号。';
-      return;
-    }
-    if (state.autoReplyBusy) {
-      status.textContent = '正在检查私聊消息，处理时会按会话顺序慢速回复。';
-      return;
-    }
-    var parts = [];
-    parts.push(cfg.enabled ? '已开启' : '未开启');
-    parts.push('每' + Math.max(1, Number(cfg.interval_seconds || 15)) + '秒检查一次');
-    parts.push('只回复私聊');
-    if (cfg.running) parts.push('运行中');
-    if (cfg.last_checked_at) parts.push('上次 ' + formatTime(cfg.last_checked_at));
-    var result = cfg.last_result || {};
-    if (result && (result.replied || result.skipped || result.failed)) {
-      parts.push('回复 ' + (result.replied || 0) + '，跳过 ' + (result.skipped || 0) + '，失败 ' + (result.failed || 0));
-    }
-    if (result && (result.friend_requests_checked || result.friend_requests_accepted || result.friend_requests_failed)) {
-      parts.push('好友申请检查 ' + (result.friend_requests_checked || 0) + '，已同意 ' + (result.friend_requests_accepted || 0));
-    }
-    if (cfg.last_error) parts.push('错误：' + cfg.last_error);
-    status.textContent = parts.join(' · ');
-  }
-
   function renderAutoReplyConfig() {
     var cfg = state.autoReply || {};
     var inviteEnabled = $('nativeWechatGroupInviteEnabled');
@@ -585,7 +548,7 @@
     return String(value || '').split(/[,，;；\n]+/).map(function(item) { return item.trim(); }).filter(Boolean);
   }
 
-  function autoReplyConfigBody(enabled) {
+  function autoReplyConfigBody() {
     var memoryId = (($('nativeWechatAutoReplyMemoryDoc') || {}).value || '').trim();
     var primaryInput = $('nativeWechatGroupInvitePrimaryContact');
     var primaryContact = ((primaryInput || {}).value || '').trim();
@@ -593,7 +556,6 @@
     var current = state.autoReply || {};
     return {
       account_id: activeAccountId(),
-      enabled: !!enabled,
       interval_seconds: 15,
       memory_doc_ids: memoryId ? [memoryId] : [],
       group_invite_enabled: !!(($('nativeWechatGroupInviteEnabled') || {}).checked),
@@ -617,55 +579,6 @@
     return cloudJson('/api/h5-chat/mounted-accounts/wechat-auto-reply', {
       method: 'POST',
       body: cloudAutoReplyConfigBody(body)
-    });
-  }
-
-  function cloudAutoReplyConfig() {
-    return cloudJson('/api/h5-chat/mounted-accounts', { json: false }).then(function(data) {
-      var installationId = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
-      var accounts = Array.isArray(data && data.accounts) ? data.accounts : [];
-      var row = accounts.find(function(item) {
-        return item && item.scope === 'wechat' && String(item.installation_id || '') === String(installationId || '');
-      });
-      var defaultRow = data && data.defaults && data.defaults.wechat_auto_reply;
-      if (!row || !defaultRow || !defaultRow.updated_at) return null;
-      return {
-        account_id: String(row.account_id || activeAccountId() || 'pc-wechat-default'),
-        updated_at: String(defaultRow.updated_at || ''),
-        enabled: !!row.auto_reply_enabled,
-        interval_seconds: Number(row.auto_reply_interval_seconds || 15),
-        memory_doc_ids: Array.isArray(row.auto_reply_memory_doc_ids) ? row.auto_reply_memory_doc_ids : [],
-        group_invite_enabled: !!row.group_invite_enabled,
-        group_invite_memory_doc_id: String(row.group_invite_memory_doc_id || ''),
-        group_invite_keywords: String(row.group_invite_keywords || ''),
-        group_invite_contacts: Array.isArray(row.group_invite_contacts) ? row.group_invite_contacts : [],
-        group_invite_primary_contact: String(row.group_invite_primary_contact || ''),
-        group_invite_primary_contact_name: String(row.group_invite_primary_contact_name || row.group_invite_primary_contact || ''),
-        group_invite_welcome_message: String(row.group_invite_welcome_message || '')
-      };
-    });
-  }
-
-  function applyCloudAutoReplyConfig() {
-    return cloudAutoReplyConfig().then(function(body) {
-      if (!body) return null;
-      var local = state.autoReply || {};
-      var localTime = Date.parse(String(local.updated_at || '')) || 0;
-      var cloudTime = Date.parse(String(body.updated_at || '')) || 0;
-      if (localTime > cloudTime) {
-        return syncAutoReplyConfigToCloud(autoReplyConfigBody(!!local.enabled)).then(function() {
-          return state.autoReply;
-        });
-      }
-      return apiJson('/api/native-wechat/auto-reply/config', {
-        method: 'POST',
-        body: body
-      }).then(function(data) {
-        state.autoReply = data.config || body;
-        renderAutoReply();
-        renderAutoReplyConfig();
-        return state.autoReply;
-      });
     });
   }
 
@@ -940,17 +853,13 @@
     var id = activeAccountId();
     if (!id) {
       state.autoReply = null;
-      renderAutoReply();
       return Promise.resolve();
     }
-    return apiJson('/api/native-wechat/auto-reply/config?account_id=' + encodeURIComponent(id)).then(function(data) {
+    return apiJson('/api/native-wechat/auto-reply/config?account_id=' + encodeURIComponent(id) + '&start_worker=false').then(function(data) {
       state.autoReply = data.config || {};
-      renderAutoReply();
       renderAutoReplyConfig();
-      return applyCloudAutoReplyConfig().catch(function() { return state.autoReply; });
     }).catch(function(err) {
       state.autoReply = null;
-      renderAutoReply();
       setMsg(err.message || '自动回复配置加载失败', true);
     });
   }
@@ -965,36 +874,12 @@
     });
   }
 
-  function saveAutoReplyConfig(enabled) {
-    var id = activeAccountId();
-    if (!id) return setMsg('请先选择本机微信账号', true);
-    state.autoReplyBusy = true;
-    renderAutoReply();
-    var body = autoReplyConfigBody(enabled);
-    return apiJson('/api/native-wechat/auto-reply/config', {
-      method: 'POST',
-      body: body
-    }).then(function(data) {
-      state.autoReply = data.config || {};
-      renderAutoReplyConfig();
-      return syncAutoReplyConfigToCloud(body).then(function() {
-        setMsg(enabled ? '个人微信自动回复已开启，设置已同步服务器。' : '个人微信自动回复已关闭，设置已同步服务器。', false);
-      });
-    }).catch(function(err) {
-      setMsg(err.message || '自动回复配置保存失败，服务器可能未同步', true);
-      return loadAutoReplyConfig();
-    }).finally(function() {
-      state.autoReplyBusy = false;
-      renderAutoReply();
-    });
-  }
-
   function saveAutoReplyDetails() {
     var id = activeAccountId();
     if (!id) return setMsg('请先选择本机微信账号', true);
-    state.autoReplyBusy = true;
-    renderAutoReply();
-    var body = autoReplyConfigBody(!!(state.autoReply || {}).enabled);
+    var saveBtn = $('nativeWechatAutoReplyConfigSaveBtn');
+    if (saveBtn) saveBtn.disabled = true;
+    var body = autoReplyConfigBody();
     return apiJson('/api/native-wechat/auto-reply/config', {
       method: 'POST',
       body: body
@@ -1007,35 +892,7 @@
     }).catch(function(err) {
       setMsg(err.message || '接管设置保存失败，服务器可能未同步', true);
     }).finally(function() {
-      state.autoReplyBusy = false;
-      renderAutoReply();
-    });
-  }
-
-  function runAutoReplyOnce() {
-    var id = activeAccountId();
-    if (!id) return setMsg('请先选择本机微信账号', true);
-    state.autoReplyBusy = true;
-    renderAutoReply();
-    setMsg('正在检查私聊消息，会按会话顺序慢速回复...', false);
-    return apiJson('/api/native-wechat/auto-reply/run-once', {
-      method: 'POST',
-      body: { account_id: id, force: true }
-    }).then(function(data) {
-      state.autoReply = data.config || state.autoReply || {};
-      var replied = Number(data.replied || 0);
-      var skipped = Number(data.skipped || 0);
-      var failed = Number(data.failed || 0);
-      var friendAccepted = Number(data.friend_requests_accepted || 0);
-      var friendFailed = Number(data.friend_requests_failed || 0);
-      setMsg('检查完成：同意好友申请 ' + friendAccepted + '，回复 ' + replied + '，跳过 ' + skipped + '，失败 ' + (failed + friendFailed) + '。', !!(failed + friendFailed));
-      return Promise.all([loadPeers(), loadTasks(), loadAutoReplyConfig()]);
-    }).catch(function(err) {
-      setMsg(err.message || '自动回复检查失败', true);
-      return loadAutoReplyConfig();
-    }).finally(function() {
-      state.autoReplyBusy = false;
-      renderAutoReply();
+      if (saveBtn) saveBtn.disabled = false;
     });
   }
 
@@ -1915,7 +1772,6 @@
     renderGroups();
     renderGroupMembers();
     renderMessages();
-    renderAutoReply();
     renderAutoReplyConfig();
   }
 
@@ -1964,14 +1820,6 @@
     if (diagnoseBtn) diagnoseBtn.addEventListener('click', diagnoseWechatControls);
     var poll = $('nativeWechatPollBtn');
     if (poll) poll.addEventListener('click', pollUpdates);
-    var autoReplyToggle = $('nativeWechatAutoReplyEnabled');
-    if (autoReplyToggle) {
-      autoReplyToggle.addEventListener('change', function() {
-        saveAutoReplyConfig(autoReplyToggle.checked);
-      });
-    }
-    var autoReplyRunBtn = $('nativeWechatAutoReplyRunBtn');
-    if (autoReplyRunBtn) autoReplyRunBtn.addEventListener('click', runAutoReplyOnce);
     var autoReplyConfigSaveBtn = $('nativeWechatAutoReplyConfigSaveBtn');
     if (autoReplyConfigSaveBtn) autoReplyConfigSaveBtn.addEventListener('click', saveAutoReplyDetails);
     var send = $('nativeWechatSendBtn');
@@ -2184,7 +2032,6 @@
     renderTasks();
     renderSendFiles();
     renderMomentsFiles();
-    renderAutoReply();
     renderAutoReplyConfig();
     loadAccounts().then(function() {
       return Promise.all([loadPeers(), loadContacts(), loadTasks(), loadStrategy(), loadAutoReplyConfig(), loadAutoReplyMemoryDocs()]);

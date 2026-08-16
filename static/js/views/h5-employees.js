@@ -14,7 +14,11 @@
     submitting: '',
     nodeEditIndex: -1,
     childParentIndex: -1,
-    childEditId: ''
+    childEditId: '',
+    momentContactPage: 1,
+    momentContactSearch: '',
+    momentContactSelected: {},
+    childMomentContactSelected: {}
   };
 
   var SALES_ROWS = [
@@ -60,24 +64,37 @@
     {time:'23:30',end:'24:00',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true}
   ];
 
-  var NODE_OPTIONS = [
-    ['hifly.video.create_by_tts','\u8425\u9500\u521b\u4f5c - \u6570\u5b57\u4eba\u53e3\u64ad\u89c6\u9891'],
-    ['comfly.seedance.tvc.pipeline','\u8425\u9500\u521b\u4f5c - \u521b\u610f\u5206\u955c\u5934\u89c6\u9891'],
-    ['local_bestseller','\u8425\u9500\u521b\u4f5c - \u540c\u57ce\u7206\u6b3e\u89c6\u9891'],
-    ['comfly.daihuo.pipeline','\u8425\u9500\u521b\u4f5c - \u7206\u6b3e TVC'],
-    ['viral_video_remix','\u8425\u9500\u521b\u4f5c - \u7206\u6b3e\u590d\u5236'],
-    ['image_composer_studio','\u8425\u9500\u521b\u4f5c - AI\u8bbe\u8ba1\u56fe'],
-    ['ip_content_daily','\u8425\u9500\u521b\u4f5c - IP\u65e5\u66f4\u6587\u6848'],
-    ['wewrite.article.pipeline','\u8425\u9500\u521b\u4f5c - \u516c\u4f17\u53f7\u6587\u7ae0'],
-    ['douyin_leads','AI\u83b7\u5ba2 - \u6296\u97f3\u83b7\u5ba2'],
-    ['native_wechat_poll','\u79c1\u57df\u9500\u7ba1 - \u5fae\u4fe1\u79c1\u4fe1\u63a5\u7ba1'],
-    ['native_wechat_add_friend','\u79c1\u57df\u9500\u7ba1 - \u5fae\u4fe1\u81ea\u52a8\u52a0\u597d\u53cb'],
-    ['native_wechat_moments_engage','\u79c1\u57df\u9500\u7ba1 - \u670b\u53cb\u5708\u70b9\u8d5e\u8bc4\u8bba'],
-    ['linkedin_leads','AI\u6d77\u5916\u5e73\u53f0 - LinkedIn\u7ebf\u7d22\u6316\u6398'],
-    ['reddit_leads','AI\u6d77\u5916\u5e73\u53f0 - Reddit\u7ebf\u7d22\u91c7\u96c6'],
-    ['x_leads','AI\u6d77\u5916\u5e73\u53f0 - X\u7ebf\u7d22\u91c7\u96c6'],
-    ['tiktok_leads','AI\u6d77\u5916\u5e73\u53f0 - TikTok\u7ebf\u7d22\u91c7\u96c6']
-  ];
+  // Keep the editor options aligned with H5: sales presets are distinct
+  // actions even when they share the same ability key.
+  var NODE_OPTIONS = [];
+  var nodeOptionKeys = {};
+  function addNodeOption(key, label, note, group) {
+    var identity = String(key || '') + '@@' + String(label || '');
+    if (!key || !label || nodeOptionKeys[identity]) return;
+    nodeOptionKeys[identity] = true;
+    NODE_OPTIONS.push([String(key), String(label), String(note || label), String(group || '销售员工'), identity]);
+  }
+  SALES_ROWS.forEach(function(row) {
+    if (!row.soon) addNodeOption(row.key, row.label, row.note, '销售员工');
+  });
+  [
+    ['hifly.video.create_by_tts','数字人口播视频','选择数字人和声音，生成口播视频。','AI营销创作'],
+    ['comfly.seedance.tvc.pipeline','创意分镜头视频','按连续分镜规划视频，并生成完整成片。','AI营销创作'],
+    ['local_bestseller','同城爆款视频','围绕同城热点和门店场景生成爆款视频方案。','AI营销创作'],
+    ['comfly.daihuo.pipeline','爆款TVC','使用素材或产品图生成广告短片。','AI营销创作'],
+    ['viral_video_remix','爆款复刻','基于爆款结构复刻视频脚本和执行方案。','AI营销创作'],
+    ['image_composer_studio','AI设计图','根据文案或产品资料生成海报、详情页和朋友圈配图。','AI营销创作'],
+    ['ip_content_daily','IP日更文案','生成短视频口播、朋友圈文案和配图提示词。','AI营销创作'],
+    ['wewrite.article.pipeline','公众号文章','根据主题生成公众号文章、配图和发布草稿。','AI营销创作'],
+    ['douyin_leads','抖音获客','采集客户线索、评论互动、私信触达和同行监控。','AI获客'],
+    ['native_wechat_poll','个微私信接管','读取个人微信新消息，并按个人记忆自动生成回复。','私域销管'],
+    ['native_wechat_add_friend','个微自动加好友','把目标手机号或微信号加入本机个人微信加好友队列。','私域销管'],
+    ['native_wechat_moments_engage','朋友圈点赞评论','对指定联系人24小时内朋友圈进行点赞或评论。','私域销管'],
+    ['linkedin_leads','LinkedIn线索挖掘','采集LinkedIn相关线索和账号资料。','AI海外平台'],
+    ['reddit_leads','Reddit线索采集','采集社区帖子、评论并分析精准用户。','AI海外平台'],
+    ['x_leads','X线索采集','采集账号内容、评论和潜在线索。','AI海外平台'],
+    ['tiktok_leads','TikTok线索采集','采集账号作品、视频评论和潜在线索。','AI海外平台']
+  ].forEach(function(item) { addNodeOption(item[0], item[1], item[2], item[3]); });
 
   var CHILD_ACTION_OPTIONS = [
     ['publish','发布内容'],
@@ -88,10 +105,11 @@
   function esc(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]; }); }
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
   function baseUrl() { return String((typeof API_BASE !== 'undefined' && API_BASE) || window.__API_BASE || '').replace(/\/$/, ''); }
+  function localBaseUrl() { return String((typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) || window.__LOCAL_API_BASE || '').replace(/\/$/, ''); }
   function headers() { return Object.assign({}, typeof authHeaders === 'function' ? authHeaders() : {}, {'Content-Type':'application/json'}); }
   function api(path, options) {
     options = options || {};
-    return fetch(baseUrl() + path, {method:options.method || 'GET', headers:headers(), body:options.json === undefined ? undefined : JSON.stringify(options.json)})
+    return fetch(baseUrl() + path, {method:options.method || 'GET', headers:Object.assign({}, headers(), options.headers || {}), body:options.json === undefined ? undefined : JSON.stringify(options.json)})
       .then(function(response) { return response.json().catch(function() { return {}; }).then(function(data) { if (!response.ok) throw new Error(data.detail || data.message || ('请求失败（' + response.status + '）')); return data; }); });
   }
   function showError(message) { var box = el('oeError'); if (!box) return; box.textContent = message || ''; box.hidden = !message; }
@@ -100,6 +118,46 @@
   function isSalesTemplate(template) { return String(state.selectedId) === 'system_sales' || activeTemplateKey(template) === 'system_sales'; }
   function templateNeedsPlanDay(template) { return isSalesTemplate(template) || (state.nodes.length ? state.nodes : (template && template.nodes || [])).some(function(node) { var payload=node && node.plan && node.plan.payload || {}; return String(node && node.ability_key || '') === 'local_bestseller' || String(payload.action || '') === 'local_bestseller_daily_video'; }); }
   function selectedDeviceId() { return String((el('oeDeviceSelect') && el('oeDeviceSelect').value) || '').trim(); }
+  function normalizedMomentContact(item) {
+    if (!item || typeof item !== 'object') return null;
+    var wxNo=String(item.wx_no || item.wxNo || item.wechat_id || item.wechatId || item.contact_key || '').trim();
+    if (!wxNo) return null;
+    var name=String(item.display_name || item.name || item.remark || item.nickname || wxNo).trim() || wxNo;
+    var remark=String(item.remark || '').trim();
+    return {wx_no:wxNo,name:name,remark:remark};
+  }
+  function momentContacts() {
+    var device=state.devices.find(function(item){return String(item.installation_id || '') === selectedDeviceId();});
+    var rows=device && Array.isArray(device.wechat_contacts) ? device.wechat_contacts : [];
+    var seen={};
+    return rows.map(normalizedMomentContact).filter(function(item){if(!item || seen[item.wx_no]) return false; seen[item.wx_no]=true; return true;});
+  }
+  function momentSelection(scope) { return scope === 'child' ? state.childMomentContactSelected : state.momentContactSelected; }
+  function momentSelectionValues(scope) { return Object.keys(momentSelection(scope) || {}).filter(Boolean); }
+  function setMomentSelection(scope, values) {
+    var next={}; (Array.isArray(values) ? values : []).map(function(value){return String(value || '').trim();}).filter(Boolean).forEach(function(value){next[value]=true;});
+    if (scope === 'child') state.childMomentContactSelected=next; else state.momentContactSelected=next;
+  }
+  function momentPickerIds(scope) {
+    return scope === 'child'
+      ? {field:'oeChildMomentField',trigger:'oeChildMomentTrigger',search:'oeChildMomentSearch',list:'oeChildMomentContacts',prev:'oeChildMomentPrev',next:'oeChildMomentNext',page:'oeChildMomentPage',summary:'oeChildMomentSummary',action:'oeChildMomentAction'}
+      : {field:'oeNodeMomentField',trigger:'oeNodeMomentTrigger',search:'oeNodeMomentSearch',list:'oeNodeMomentContacts',prev:'oeNodeMomentPrev',next:'oeNodeMomentNext',page:'oeNodeMomentPage',summary:'oeNodeMomentSummary',action:'oeNodeMomentAction'};
+  }
+  function renderMomentPicker(scope) {
+    var ids=momentPickerIds(scope), list=el(ids.list); if (!list) return;
+    var query=String(state.momentContactSearch || '').trim().toLowerCase(), rows=momentContacts().filter(function(item){return !query || [item.name,item.remark,item.wx_no].join(' ').toLowerCase().indexOf(query) >= 0;});
+    var pageSize=20, totalPages=Math.max(1,Math.ceil(rows.length / pageSize)); state.momentContactPage=Math.min(Math.max(1,state.momentContactPage || 1),totalPages);
+    var start=(state.momentContactPage - 1) * pageSize, selected=momentSelection(scope), pageRows=rows.slice(start,start + pageSize);
+    list.innerHTML=pageRows.length ? pageRows.map(function(item){return '<label class="oe-moment-contact"><input type="checkbox" data-oe-moment-contact="' + esc(item.wx_no) + '" data-oe-moment-scope="' + scope + '"' + (selected[item.wx_no] ? ' checked' : '') + '><span><strong>' + esc(item.name) + '</strong><small>' + esc(item.wx_no) + (item.remark && item.remark !== item.name ? ' · ' + esc(item.remark) : '') + '</small></span></label>';}).join('') : '<div class="oe-moment-empty">当前设备没有可用微信号通讯录，或没有匹配联系人</div>';
+    if (el(ids.page)) el(ids.page).textContent=state.momentContactPage + ' / ' + totalPages;
+    if (el(ids.prev)) el(ids.prev).disabled=state.momentContactPage <= 1;
+    if (el(ids.next)) el(ids.next).disabled=state.momentContactPage >= totalPages;
+    var selectedCount=momentSelectionValues(scope).length;
+    if (el(ids.trigger)) el(ids.trigger).textContent=selectedCount ? '已选择 ' + selectedCount + ' 位联系人' : '选择通讯录联系人';
+    if (el(ids.summary)) el(ids.summary).textContent='已选择 ' + selectedCount + ' 人，任务将按微信号定位';
+  }
+  function initMomentPicker(scope, values) { state.momentContactPage=1; state.momentContactSearch=''; setMomentSelection(scope, values); var ids=momentPickerIds(scope); if (el(ids.search)) el(ids.search).value=''; renderMomentPicker(scope); }
+  function syncMomentPicker(scope, visible) { var ids=momentPickerIds(scope); if (el(ids.field)) el(ids.field).hidden=!visible; if (el(ids.action)) { var actionField=el(ids.action).closest('.oe-form-label'); if (actionField) actionField.hidden=!visible; } if (visible) renderMomentPicker(scope); }
   function scheduleDuration(start, end) {
     var parse = function(value) { var m = /^(\d{2}):(\d{2})$/.exec(String(value || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; };
     var a = parse(start), b = parse(end); if (end === '24:00') b = 1440; if (b && b < a) b += 1440; return Math.max(0, b - a);
@@ -151,8 +209,11 @@
       }
     }
     if (key === 'native_wechat_moments_engage') {
-      params.targets = Array.isArray(params.targets) ? params.targets.filter(Boolean) : [];
+      var momentTargets=Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets;
+      params.contact_wx_nos = Array.isArray(momentTargets) ? momentTargets.map(function(value){return String(value || '').trim();}).filter(Boolean) : [];
+      params.targets = params.contact_wx_nos.slice();
       params.max_scrolls = Number(params.max_scrolls || 6);
+      ['group_invite_enabled','group_invite_memory_doc_id','group_invite_keywords','group_invite_contacts','group_invite_primary_contact','group_invite_primary_contact_name','group_invite_welcome_message','group_invite_rule_status','group_invite_targets_source','group_invite_members','group_invite_manager_contacts','followup_action','group_invite_rules','trigger'].forEach(function(name){ delete params[name]; });
     }
     if (key === 'native_wechat_poll') {
       var duration=scheduleDuration(row.time, row.end);
@@ -272,7 +333,7 @@
     var label=childActionLabel({action_type:type});
     var extra={source_workflow_node_id:String(parent.id || ''),source_workflow_node_label:String(parent.ability_label || parent.note || '')};
     if (type === 'native_wechat_add_friend') Object.assign(extra,{source_mode:'douyin_private_message_phone',trigger:'clear_mobile',skip_without_clear_mobile:true,targets:[]});
-    if (type === 'native_wechat_moments_engage') Object.assign(extra,{targets:[],moment_action:'like_comment',max_scrolls:6});
+    if (type === 'native_wechat_moments_engage') { var wxNos=Array.isArray(form.contact_wx_nos) ? form.contact_wx_nos.slice() : []; Object.assign(extra,{contact_wx_nos:wxNos,targets:wxNos.slice(),moment_action:String(form.moment_action || 'like_comment'),max_scrolls:6}); }
     var row={time:time,end:end,key:key,label:label,note:label,params:{}};
     return Object.assign({},existing || {},{id:id,time:time,end_time:end,time_range:end ? time + '-' + end : time,parent_node_id:String(parent.id || ''),action_type:type,type:type,platform:'',ability_key:key,ability_label:label,department_id:parent.department_id || '',department_name:parent.department_name || '',note:label,is_action_node:true,param_configured:true,plan:nativePlan(key,row,extra)});
   }
@@ -427,7 +488,13 @@
     status.textContent = active ? '已启用 · ' + (active.template_name || '当前员工') : '未启用'; status.classList.toggle('is-active',!!active);
   }
   function childHtml(child,parentIndex,editable) { var soon=child.comingSoon || child.workflow_placeholder || (child.plan && child.plan.payload && child.plan.payload.skip_execution); return '<div class="oe-child"><span class="oe-child-time">' + esc(child.time || '--:--') + (child.end_time ? '<small>' + esc(child.end_time) + '</small>' : '') + '</span><span class="oe-child-copy">' + esc(child.ability_label || childActionLabel(child)) + (soon ? '<small>视频号功能敬请期待</small>' : '<small>' + esc(child.note || childActionLabel(child)) + '</small>') + '</span><span class="oe-tag child">下一级</span>' + (editable && !soon ? '<span class="oe-child-actions"><button type="button" class="oe-mini-btn" data-oe-child-edit="' + esc(child.id || '') + '" data-oe-child-parent="' + parentIndex + '">编辑</button><button type="button" class="oe-mini-btn" data-oe-child-delete="' + esc(child.id || '') + '" data-oe-child-parent="' + parentIndex + '">删除</button></span>' : '') + '</div>'; }
-  function nodeHtml(node,index,editable) { var soon=!!(node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution); var children=workflowChildren(node); return '<article class="oe-node' + (soon ? ' is-soon' : '') + '"><div class="oe-time">' + esc(node.time || '--:--') + (node.end_time ? '<br><span style="color:#a0aaba;font-size:.61rem;font-weight:400">' + esc(node.end_time) + '</span>' : '') + '</div><div class="oe-line"></div><div class="oe-node-main"><div class="oe-node-title"><span>' + esc(node.ability_label || node.note || '工作节点') + '</span>' + (soon ? '<span class="oe-tag soon">敬请期待</span>' : '') + (node.sales_preset ? '<span class="oe-tag">销售</span>' : '') + '</div><div class="oe-node-note">' + esc(node.note || '') + '</div><div class="oe-node-key">' + esc(node.ability_key || '') + '</div></div><div class="oe-node-actions">' + (editable && !soon ? '<button type="button" class="oe-mini-btn" data-oe-child-add="' + index + '">添加下级</button><button type="button" class="oe-mini-btn" data-oe-edit="' + index + '">编辑</button><button type="button" class="oe-mini-btn" data-oe-delete="' + index + '">删除</button>' : '') + '</div>' + (children.length ? '<div class="oe-children">' + children.map(function(child){return childHtml(child,index,editable);}).join('') + '</div>' : '') + '</article>'; }
+  function nodeActionsHtml(node,index,editable,soon) {
+    if (soon) return '';
+    var html='<button type="button" class="oe-mini-btn" data-oe-demo="' + index + '">演示</button>';
+    if (editable) html+='<button type="button" class="oe-mini-btn" data-oe-child-add="' + index + '">添加下级</button><button type="button" class="oe-mini-btn" data-oe-edit="' + index + '">编辑</button><button type="button" class="oe-mini-btn" data-oe-delete="' + index + '">删除</button>';
+    return html;
+  }
+  function nodeHtml(node,index,editable) { var soon=!!(node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution); var children=workflowChildren(node); return '<article class="oe-node' + (soon ? ' is-soon' : '') + '"><div class="oe-time">' + esc(node.time || '--:--') + (node.end_time ? '<br><span style="color:#a0aaba;font-size:.61rem;font-weight:400">' + esc(node.end_time) + '</span>' : '') + '</div><div class="oe-line"></div><div class="oe-node-main"><div class="oe-node-title"><span>' + esc(node.ability_label || node.note || '工作节点') + '</span>' + (soon ? '<span class="oe-tag soon">敬请期待</span>' : '') + (node.sales_preset ? '<span class="oe-tag">销售</span>' : '') + '</div><div class="oe-node-note">' + esc(node.note || '') + '</div><div class="oe-node-key">' + esc(node.ability_key || '') + '</div></div><div class="oe-node-actions">' + nodeActionsHtml(node,index,editable,soon) + '</div>' + (children.length ? '<div class="oe-children">' + children.map(function(child){return childHtml(child,index,editable);}).join('') + '</div>' : '') + '</article>'; }
   function renderTimeline() { var host=el('oeTimeline'); if (!host) return; var editable=currentTemplateIsEditable(), count=state.nodes.length, childCount=state.nodes.reduce(function(total,node){return total+workflowChildren(node).length;},0); el('oeTimelineMeta').textContent=count + ' 个节点' + (childCount ? ' · ' + childCount + ' 个下级动作' : ''); host.innerHTML=count ? state.nodes.map(function(node,index){return nodeHtml(node,index,editable);}).join('') : '<div class="oe-empty-list">还没有节点，点击“添加节点”开始配置。</div>'; }
   function renderEditor() {
     var body=el('oeEditorBody'), empty=el('oeEditorEmpty'), template=state.selectedTemplate; if (!template) { body.hidden=true; empty.hidden=false; return; }
@@ -438,23 +505,78 @@
   }
   function render() { renderDevices(); renderList(); renderEditor(); }
   function loadTemplates() { return api('/api/h5-workflows/templates').then(function(data){ state.templates=(Array.isArray(data.templates) ? data.templates : []).map(normalizeTemplate); return state.templates; }); }
-  function loadDevices() { return api('/api/h5-chat/devices/status').then(function(data){state.devices=Array.isArray(data.devices) ? data.devices : []; return state.devices;}); }
+  function loadLocalWechatContacts() {
+    var base=localBaseUrl();
+    if (!base) return Promise.resolve([]);
+    return fetch(base + '/api/native-wechat/contacts?account_id=pc-wechat-default&limit=500&offset=0', {headers:headers()})
+      .then(function(response){return response.json().catch(function(){return {};}).then(function(data){if (!response.ok) return []; return Array.isArray(data.items) ? data.items : [];});})
+      .catch(function(){return [];});
+  }
+  function loadDevices() {
+    return Promise.all([api('/api/h5-chat/devices/status'), loadLocalWechatContacts()]).then(function(results){
+      var data=results[0] || {}, localContacts=Array.isArray(results[1]) ? results[1] : [];
+      state.devices=Array.isArray(data.devices) ? data.devices : [];
+      if (localContacts.length) {
+        var target=state.devices.find(function(item){return item && item.online;}) || state.devices[0];
+        if (target) target.wechat_contacts=localContacts;
+      }
+      return state.devices;
+    });
+  }
   function loadActive() { var iid=selectedDeviceId(); if (!iid) { state.active=null; renderStatus(); return Promise.resolve(null); } return api('/api/h5-workflows/active?installation_id=' + encodeURIComponent(iid)).then(function(data){state.active=data.activation || null; renderStatus(); return state.active;}); }
   function selectTemplate(id) { state.selectedId=String(id || 'system_sales'); state.selectedTemplate=normalizeTemplate(templateForSelected()); state.editingId=state.selectedTemplate.source === 'own' ? String(state.selectedTemplate.id || '') : ''; state.editingMeta=Object.assign({},state.selectedTemplate.meta || {}); state.nodes=normalizeWorkflowTimeline(state.selectedTemplate.nodes || []); if (state.selectedId === 'system_sales' && !ownSalesMirror()) state.nodes=normalizeWorkflowTimeline(salesNodes()); render(); loadActive().catch(function(){}); }
   function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; render(); }
-  function findOption(key) { return NODE_OPTIONS.find(function(item){return item[0] === key;}) || [String(key || ''), String(key || '')]; }
-  function fillNodeOptions(selected) { var select=el('oeNodeKey'); if (!select) return; select.innerHTML=NODE_OPTIONS.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=selected || NODE_OPTIONS[0][0]; }
-  function syncNodeModalFields() { var takeover=String((el('oeNodeKey') || {}).value || '') === 'native_wechat_poll', field=el('oeNodeGroupInviteField'); if (field) field.hidden=!takeover; }
-  function openNodeModal(index) { requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1; var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowPayload(node).params || {}; el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点'; el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || ''; fillNodeOptions(node && node.ability_key); el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; syncNodeModalFields(); el('oeNodeLabel').value=node && node.ability_label || findOption(node && node.ability_key)[1]; el('oeNodeNote').value=node && node.note || ''; el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60); }
+  function findOption(key, label) { return NODE_OPTIONS.find(function(item){return item[0] === key && (!label || item[1] === label);}) || NODE_OPTIONS.find(function(item){return item[0] === key;}) || [String(key || ''), String(key || ''), String(key || ''), '销售员工', String(key || '')]; }
+  function nodeOptionFromValue(value) { return NODE_OPTIONS.find(function(item){return item[4] === String(value || '');}) || findOption(value); }
+  function fillNodeOptions(selected, selectedLabel) {
+    var select=el('oeNodeKey'); if (!select) return;
+    var groups={}, order=[];
+    NODE_OPTIONS.forEach(function(item){var group=item[3] || '销售员工';if(!groups[group]){groups[group]=[];order.push(group);}groups[group].push(item);});
+    select.innerHTML=order.map(function(group){return '<optgroup label="' + esc(group) + '">' + groups[group].map(function(item){return '<option value="' + esc(item[4]) + '">' + esc(item[1]) + '</option>';}).join('') + '</optgroup>';}).join('');
+    var option=findOption(selected,selectedLabel);
+    select.value=option[4] || NODE_OPTIONS[0][4];
+  }
+  function syncNodeModalFields() { var key=String((el('oeNodeKey') || {}).value || ''), takeover=key === 'native_wechat_poll', field=el('oeNodeGroupInviteField'); if (field) field.hidden=!takeover; syncMomentPicker('node',key === 'native_wechat_moments_engage'); }
+  function openNodeModal(index) { requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1; var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowPayload(node).params || {}, option=findOption(node && node.ability_key); el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点'; el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || ''; fillNodeOptions(node && node.ability_key); el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; syncNodeModalFields(); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1]; el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60); }
   function closeNodeModal() { el('oeNodeModal').hidden=true; state.nodeEditIndex=-1; }
   function saveNodeFromModal() { requireEditableTemplate(); var key=el('oeNodeKey').value, time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || findOption(key)[1], note=el('oeNodeNote').value.trim() || label; if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间'); var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowPayload(existing).params || {}, row={time:time,end:end,key:key,label:label,note:note,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})}; delete row.params.followup_action; delete row.params.group_invite_rules; var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)}; next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || []; state.nodes=state.nodeEditIndex >= 0 ? state.nodes.map(function(item,index){return index === state.nodeEditIndex ? next : item;}) : state.nodes.concat(next); state.nodes=normalizeWorkflowTimeline(state.nodes); closeNodeModal(); renderEditor(); }
   function fillChildOptions(parent,selected) { var select=el('oeChildType'), options=childOptions(parent,selected); if (!select) return; select.innerHTML=options.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=options.some(function(item){return item[0] === selected;}) ? selected : (options[0] && options[0][0] || 'publish'); }
-  function syncChildModalFields() { var publish=String(el('oeChildType') && el('oeChildType').value || 'publish') === 'publish', field=el('oeChildPlatformField'); if (field) field.hidden=!publish; if (el('oeChildPlatform')) el('oeChildPlatform').disabled=!publish; }
-  function openChildModal(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) throw new Error('未找到上级节点'); var existing=workflowChildren(parent).find(function(child){return String(child && child.id || '') === String(childId || '');}) || null; state.childParentIndex=index; state.childEditId=existing ? String(existing.id || '') : ''; el('oeChildModalTitle').textContent=existing ? '编辑下级动作' : '添加下级动作'; el('oeChildParent').textContent=parent.ability_label || parent.note || '上级节点'; el('oeChildTime').value=existing && existing.time || parent.end_time || parent.time || '09:00'; el('oeChildEndTime').value=existing && existing.end_time || ''; fillChildOptions(parent,existing ? childActionType(existing) : ''); el('oeChildPlatform').value=existing && existing.platform || 'douyin'; syncChildModalFields(); el('oeChildModal').hidden=false; setTimeout(function(){el('oeChildTime').focus();},60); }
+  function syncChildModalFields() { var type=String(el('oeChildType') && el('oeChildType').value || 'publish'), publish=type === 'publish', field=el('oeChildPlatformField'); if (field) field.hidden=!publish; if (el('oeChildPlatform')) el('oeChildPlatform').disabled=!publish; syncMomentPicker('child',type === 'native_wechat_moments_engage'); }
+  function openChildModal(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) throw new Error('未找到上级节点'); var existing=workflowChildren(parent).find(function(child){return String(child && child.id || '') === String(childId || '');}) || null; state.childParentIndex=index; state.childEditId=existing ? String(existing.id || '') : ''; el('oeChildModalTitle').textContent=existing ? '编辑下级动作' : '添加下级动作'; el('oeChildParent').textContent=parent.ability_label || parent.note || '上级节点'; el('oeChildTime').value=existing && existing.time || parent.end_time || parent.time || '09:00'; el('oeChildEndTime').value=existing && existing.end_time || ''; fillChildOptions(parent,existing ? childActionType(existing) : ''); el('oeChildPlatform').value=existing && existing.platform || 'douyin'; var childParams=workflowPayload(existing).params || {}; el('oeChildMomentAction').value=String(childParams.moment_action || 'like_comment'); initMomentPicker('child',Array.isArray(childParams.contact_wx_nos) ? childParams.contact_wx_nos : childParams.targets); syncChildModalFields(); el('oeChildModal').hidden=false; setTimeout(function(){el('oeChildTime').focus();},60); }
   function closeChildModal() { if (el('oeChildModal')) el('oeChildModal').hidden=true; state.childParentIndex=-1; state.childEditId=''; }
-  function saveChildFromModal() { requireEditableTemplate(); var parentIndex=state.childParentIndex, parent=state.nodes[parentIndex]; if (!parent) throw new Error('未找到上级节点'); var editId=String(state.childEditId || ''), time=String(el('oeChildTime').value || '').trim(), type=String(el('oeChildType').value || 'publish').trim(), platform=String(el('oeChildPlatform').value || 'douyin').trim(); if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择动作时间'); if (childOptions(parent,editId ? childActionType(workflowChildren(parent).find(function(child){return String(child.id || '') === editId;})) : '').map(function(item){return item[0];}).indexOf(type) < 0) throw new Error('这个上级节点不支持所选动作'); if (type === 'publish' && ['douyin','toutiao','wechat_channels','wechat_moments'].indexOf(platform) < 0) throw new Error('暂时只支持抖音、头条、视频号和朋友圈'); var children=workflowChildren(parent).slice(), duplicate=children.find(function(child){if (editId && String(child.id || '') === editId) return false; var childType=childActionType(child); return type === 'publish' ? childType === 'publish' && String(child.platform || '') === platform : childType === type;}); if (duplicate) throw new Error(type === 'publish' ? '这个平台已经有发布动作了' : '这个下级动作已经添加过了'); var existing=editId ? children.find(function(child){return String(child.id || '') === editId;}) : null, next=buildWorkflowChild(parent,{time:time,action_type:type,platform:platform},existing); children=children.filter(function(child){return String(child.id || '') !== String(next.id || '');}).concat(next).sort(function(a,b){return String(a.time || '').localeCompare(String(b.time || ''));}); state.nodes[parentIndex]=syncParentChildRules(Object.assign({},parent,{children:children})); closeChildModal(); renderEditor(); }
+  function saveChildFromModal() { requireEditableTemplate(); var parentIndex=state.childParentIndex, parent=state.nodes[parentIndex]; if (!parent) throw new Error('未找到上级节点'); var editId=String(state.childEditId || ''), time=String(el('oeChildTime').value || '').trim(), type=String(el('oeChildType').value || 'publish').trim(), platform=String(el('oeChildPlatform').value || 'douyin').trim(); if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择动作时间'); if (childOptions(parent,editId ? childActionType(workflowChildren(parent).find(function(child){return String(child.id || '') === editId;})) : '').map(function(item){return item[0];}).indexOf(type) < 0) throw new Error('这个上级节点不支持所选动作'); if (type === 'publish' && ['douyin','toutiao','wechat_channels','wechat_moments'].indexOf(platform) < 0) throw new Error('暂时只支持抖音、头条、视频号和朋友圈'); if (type === 'native_wechat_moments_engage' && !momentSelectionValues('child').length) throw new Error('请选择至少一个朋友圈联系人'); var children=workflowChildren(parent).slice(), duplicate=children.find(function(child){if (editId && String(child.id || '') === editId) return false; var childType=childActionType(child); return type === 'publish' ? childType === 'publish' && String(child.platform || '') === platform : childType === type;}); if (duplicate) throw new Error(type === 'publish' ? '这个平台已经有发布动作了' : '这个下级动作已经添加过了'); var existing=editId ? children.find(function(child){return String(child.id || '') === editId;}) : null, next=buildWorkflowChild(parent,{time:time,action_type:type,platform:platform,contact_wx_nos:momentSelectionValues('child'),moment_action:String(el('oeChildMomentAction').value || 'like_comment')},existing); children=children.filter(function(child){return String(child.id || '') !== String(next.id || '');}).concat(next).sort(function(a,b){return String(a.time || '').localeCompare(String(b.time || ''));}); state.nodes[parentIndex]=syncParentChildRules(Object.assign({},parent,{children:children})); closeChildModal(); renderEditor(); }
   function removeChild(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) return; var children=workflowChildren(parent).filter(function(child){return String(child && child.id || '') !== String(childId || '');}); state.nodes[index]=syncParentChildRules(Object.assign({},parent,{children:children})); renderEditor(); }
   function payloadToSave() { requireEditableTemplate(); state.nodes=normalizeWorkflowTimeline(migrateGroupInviteNodes(state.nodes)); var name=(el('oeTemplateName').value || '').trim(); if (!name) throw new Error('请填写员工名称'); if (!state.nodes.length) throw new Error('请至少添加一个节点'); var meta=Object.assign({},state.editingMeta || {}); if (isSalesTemplate(state.selectedTemplate)) {meta.system_template_key='system_sales';meta.source=meta.source || 'system_mirror';} return {name:name,nodes:clone(state.nodes),meta:meta}; }
+  function workflowDemoPlan(node) {
+    if (!node || node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution) throw new Error('敬请期待');
+    var raw=node.plan && typeof node.plan === 'object' ? clone(node.plan) : planForRow({key:node.ability_key,label:node.ability_label,note:node.note,time:node.time,end:node.end_time});
+    return {
+      title:'演示-' + (raw.title || node.ability_label || '员工节点'),
+      task_kind:raw.task_kind || raw.taskKind || 'client_workflow',
+      content:raw.content || 'Online 员工节点演示：' + (node.ability_label || '任务节点'),
+      payload:raw.payload || {}
+    };
+  }
+  function demoNode(index) {
+    var iid=selectedDeviceId(), device=state.devices.find(function(item){return String(item.installation_id || '') === iid;});
+    if (!iid) throw new Error('请先选择 Online 设备');
+    if (!device || !device.online) throw new Error('请选择在线的 Online 设备');
+    var plan=workflowDemoPlan(state.nodes[Number(index)]);
+    return runSubmission('demo',function(){
+      return api('/api/scheduled-tasks/tasks',{method:'POST',headers:{'X-Installation-Id':iid},json:{
+        title:plan.title,
+        task_kind:plan.task_kind,
+        content:plan.content,
+        payload:plan.payload,
+        schedule_type:'once',
+        interval_seconds:60,
+        start_at:'',
+        daily_times:[],
+        timezone_offset_minutes:-new Date().getTimezoneOffset(),
+        installation_ids:[iid]
+      }}).then(function(){if(typeof toast === 'function') toast('演示任务已下发，可在工作历史查看结果');});
+    });
+  }
   function runSubmission(kind, task) { if (state.submitting) return Promise.reject(new Error('操作正在处理中，请勿重复提交')); state.submitting=kind; clearError(); render(); return Promise.resolve().then(task).finally(function(){state.submitting='';render();}); }
   function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
   function askPlanDay() { var answer=window.prompt('请输入本次销售工作流从第几天开始执行（1-30）','1'); if (answer === null) return null; var day=Number(answer); if (!Number.isInteger(day) || day < 1 || day > 30) throw new Error('执行天数请输入 1 到 30 的整数'); return day; }
@@ -464,10 +586,12 @@
     if (root.dataset.oeBound) return;
     root.dataset.oeBound='1';
     root.addEventListener('click',function(event){
-      var target=event.target.closest('[data-oe-action],[data-oe-template],[data-oe-edit],[data-oe-delete],[data-oe-child-add],[data-oe-child-edit],[data-oe-child-delete]');
+      var target=event.target.closest('[data-oe-action],[data-oe-template],[data-oe-demo],[data-oe-edit],[data-oe-delete],[data-oe-child-add],[data-oe-child-edit],[data-oe-child-delete],[data-oe-moment-contact]');
       if(!target || state.submitting) return;
       try {
+        if (target.dataset.oeMomentContact != null) { var scope=String(target.dataset.oeMomentScope || 'node'), selected=momentSelection(scope), wxNo=String(target.dataset.oeMomentContact || ''); if (target.checked) selected[wxNo]=true; else delete selected[wxNo]; renderMomentPicker(scope); return; }
         if (target.dataset.oeTemplate != null) {selectTemplate(target.dataset.oeTemplate);return;}
+        if (target.dataset.oeDemo != null) {demoNode(Number(target.dataset.oeDemo)).catch(function(err){showError(err.message || '演示失败');});return;}
         if (target.dataset.oeChildAdd != null) {openChildModal(Number(target.dataset.oeChildAdd),'');return;}
         if (target.dataset.oeChildEdit != null) {openChildModal(Number(target.dataset.oeChildParent),target.dataset.oeChildEdit);return;}
         if (target.dataset.oeChildDelete != null) {if(window.confirm('删除这个下级动作？')) removeChild(Number(target.dataset.oeChildParent),target.dataset.oeChildDelete);return;}
@@ -481,36 +605,46 @@
         if(action==='save-node') {saveNodeFromModal();return;}
         if(action==='close-child-modal') {closeChildModal();return;}
         if(action==='save-child') {saveChildFromModal();return;}
+        if(action==='moment-node-prev' || action==='moment-child-prev') {state.momentContactPage=Math.max(1,state.momentContactPage-1);renderMomentPicker(action.indexOf('child')>=0?'child':'node');return;}
+        if(action==='moment-node-next' || action==='moment-child-next') {state.momentContactPage+=1;renderMomentPicker(action.indexOf('child')>=0?'child':'node');return;}
         if(action==='save') {saveTemplate().catch(function(err){showError(err.message);});return;}
         if(action==='activate') {activateTemplate().catch(function(err){showError(err.message);});return;}
         if(action==='stop') {stopTemplate().catch(function(err){showError(err.message);});return;}
       } catch(err) {showError(err.message || String(err));}
     });
     root.addEventListener('change',function(event){
-      if(event.target.id==='oeDeviceSelect') loadActive().catch(function(err){showError(err.message);});
-      if(event.target.id==='oeNodeKey') syncNodeModalFields();
+      if(event.target.id==='oeDeviceSelect') { loadActive().catch(function(err){showError(err.message);}); renderMomentPicker('node'); renderMomentPicker('child'); }
+      if(event.target.id==='oeNodeKey') { var option=nodeOptionFromValue(event.target.value); if (option) { el('oeNodeLabel').value=option[1]; el('oeNodeNote').value=option[2] || option[1]; } syncNodeModalFields(); }
       if(event.target.id==='oeChildType') syncChildModalFields();
+    });
+    root.addEventListener('input',function(event){
+      if(event.target.id==='oeNodeMomentSearch' || event.target.id==='oeChildMomentSearch') {state.momentContactSearch=String(event.target.value || '');state.momentContactPage=1;renderMomentPicker(event.target.id.indexOf('Child')>=0?'child':'node');}
     });
   }
   function initialize(force) { var root=el('content-h5-employees'); if(!root) return; bind(root); clearError(); var requested=String(window.__onlineEmployeeSelectedId || '').trim(); if(requested) {state.selectedId=requested; window.__onlineEmployeeSelectedId='';} state.loading=true; Promise.all([loadTemplates(),loadDevices()]).then(function(){ if(!state.selectedId) state.selectedId='system_sales'; selectTemplate(state.selectedId); }).catch(function(err){showError(err.message || '员工数据加载失败'); if(!state.selectedId) {state.selectedId='system_sales';state.selectedTemplate={id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()};state.nodes=clone(state.selectedTemplate.nodes);render();} }).finally(function(){state.loading=false;}); }
   function syncNodeModalFields() {
-    var key=String((el('oeNodeKey') || {}).value || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note});
+    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note});
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
+    syncMomentPicker('node',key === 'native_wechat_moments_engage');
   }
   function openNodeModal(index) {
     requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1;
     var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowPayload(node).params || {};
     el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点';
     el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || '';
-    fillNodeOptions(node && node.ability_key); el('oeNodeLabel').value=node && node.ability_label || findOption(node && node.ability_key)[1]; el('oeNodeNote').value=node && node.note || '';
+    var option=findOption(node && node.ability_key,node && node.ability_label);
+    fillNodeOptions(node && node.ability_key,node && node.ability_label); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=params.wechat_add_friend_enabled !== false;
+    el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
   }
   function saveNodeFromModal() {
-    requireEditableTemplate(); var key=el('oeNodeKey').value, time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || findOption(key)[1], note=el('oeNodeNote').value.trim() || label;
+    requireEditableTemplate(); var option=nodeOptionFromValue(el('oeNodeKey').value), key=String(option[0] || ''), time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || option[1], note=el('oeNodeNote').value.trim() || option[2] || label;
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间');
     var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowPayload(existing).params || {}, row={time:time,end:end,key:key,label:label,note:note,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
+    if (key === 'native_wechat_moments_engage') { row.params.contact_wx_nos=momentSelectionValues('node'); row.params.targets=row.params.contact_wx_nos.slice(); row.params.moment_action=String(el('oeNodeMomentAction').value || 'like_comment'); row.params.max_scrolls=Number(row.params.max_scrolls || 6); if (!row.params.contact_wx_nos.length) throw new Error('请选择至少一个朋友圈联系人'); }
+    else { delete row.params.contact_wx_nos; delete row.params.targets; delete row.params.moment_action; }
     if (isDouyinPrivate({ability_key:key,ability_label:label,note:note})) { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; }
     delete row.params.followup_action; delete row.params.group_invite_rules;
     var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
@@ -528,13 +662,14 @@
     var existing=editId ? workflowChildren(parent).find(function(child){return String(child.id || '') === editId;}) : null;
     if (childOptions(parent,existing ? childActionType(existing) : '').map(function(item){return item[0];}).indexOf(type) < 0) throw new Error('这个上级节点不支持所选动作');
     if (type === 'publish' && ['douyin','toutiao','wechat_channels','wechat_moments'].indexOf(platform) < 0) throw new Error('暂时只支持抖音、头条、视频号和朋友圈');
+    if (type === 'native_wechat_moments_engage' && !momentSelectionValues('child').length) throw new Error('请选择至少一个朋友圈联系人');
     var children=workflowChildren(parent).slice(), duplicate=children.find(function(child){
       if (editId && String(child.id || '') === editId) return false;
       var childType=childActionType(child);
       return type === 'publish' ? childType === 'publish' && String(child.platform || '') === platform : childType === type;
     });
     if (duplicate) throw new Error(type === 'publish' ? '这个平台已经有发布动作了' : '这个下级动作已经添加过了');
-    var next=buildWorkflowChild(parent,{time:time,end_time:end,action_type:type,platform:platform},existing);
+    var next=buildWorkflowChild(parent,{time:time,end_time:end,action_type:type,platform:platform,contact_wx_nos:momentSelectionValues('child'),moment_action:String(el('oeChildMomentAction').value || 'like_comment')},existing);
     children=children.filter(function(child){return String(child.id || '') !== String(next.id || '');}).concat(next).sort(function(a,b){return String(a.time || '').localeCompare(String(b.time || ''));});
     state.nodes[parentIndex]=syncParentChildRules(Object.assign({},parent,{children:children}));
     closeChildModal(); renderEditor();

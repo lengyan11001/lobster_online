@@ -44,6 +44,12 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "data-oe-child-add" in script
     assert "data-oe-child-edit" in script
     assert "data-oe-child-delete" in script
+    assert "data-oe-demo" in script
+    assert "function demoNode(index)" in script
+    assert "演示任务已下发" in script
+    assert "salesAction(note)" in script
+    assert "AI营销创作" in script
+    assert "AI海外平台" in script
     assert "native_wechat_group_invite" in script
     assert "native_wechat_moments_engage" in script
     assert 'id="oeChildModal"' in html
@@ -55,4 +61,25 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "state.editingId || template && template.id" in script
     assert ".oe-form-label[hidden] { display:none; }" in html
     assert "100dvh" in html
-    assert "20260808-workflow-children-v2" in registry
+    assert "20260816-workflow-parity-demo-v1" in registry
+
+
+def test_moments_nodes_save_paginated_contact_selection_as_wechat_ids():
+    script = _script()
+    html = (ROOT / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+    channel = (ROOT / "backend" / "app" / "api" / "h5_chat_channel.py").read_text(encoding="utf-8")
+
+    assert 'id="oeNodeMomentField"' in html
+    assert 'id="oeChildMomentField"' in html
+    assert 'id="oeNodeMomentPrev"' in html
+    assert 'id="oeNodeMomentNext"' in html
+    assert "var pageSize=20" in script
+    assert "params.contact_wx_nos" in script
+    assert "row.params.targets=row.params.contact_wx_nos.slice()" in script
+    assert "contact_wx_nos:momentSelectionValues('child')" in script
+    assert '_workflow_target_list(source, "contact_wx_nos", "targets", "contacts", "names")' in channel
+    assert "function loadLocalWechatContacts()" in script
+    assert "/api/native-wechat/contacts?account_id=pc-wechat-default" in script
+    assert "loadDevices()" in script and "loadLocalWechatContacts()" in script
+    assert '"/api/h5-chat/devices/status"' in channel
+    assert "proxy_h5_chat_devices_status" in channel

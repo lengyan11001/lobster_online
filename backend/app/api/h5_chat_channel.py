@@ -25,7 +25,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -865,6 +865,18 @@ async def proxy_h5_chat_messages(
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="Cloud H5 chat returned invalid payload")
     return data
+
+
+@router.get("/api/h5-chat/devices/status", summary="Proxy cloud Online device status for local UI")
+async def proxy_h5_chat_devices_status(
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    return await _proxy_cloud_json(
+        request,
+        "GET",
+        "/api/h5-chat/devices/status",
+    )
 
 
 @router.get("/api/scheduled-tasks/runs", summary="Proxy cloud scheduled task runs for local online UI")
@@ -1878,7 +1890,7 @@ async def _run_client_command(
             user_id = int(_decode_jwt_sub(jwt_token) or "0") or None
             cfg = native_wechat_engine.save_auto_reply_config(
                 account_id,
-                enabled=bool(payload.get("enabled")),
+                enabled=(bool(payload.get("enabled")) if "enabled" in payload else None),
                 interval_seconds=interval_seconds,
                 user_id=user_id,
                 memory_doc_ids=(
@@ -3867,6 +3879,9 @@ def _scheduled_douyin_result_payload(
             "processed_user_last",
             "skipped_last_message_not_user",
             "skipped_duplicate_reply",
+            "detail_read_failed",
+            "detail_read_failed_count",
+            "detail_failures",
             "reply",
             "extracted_phone_numbers",
             "wechat_add_friend",
@@ -4760,7 +4775,7 @@ async def _run_scheduled_douyin_leads(
         code = _safe_int(result.get("code") if isinstance(result, dict) else 0)
         error_text = ""
         if isinstance(result, dict):
-            error_text = str(result.get("msg") or result.get("detail") or "").strip()
+            error_text = str(result.get("msg") or result.get("message") or result.get("detail") or "").strip()
         if code and code != 200:
             if _scheduled_is_douyin_skip_error_text(error_text):
                 await _complete_task_run(
@@ -4772,7 +4787,19 @@ async def _run_scheduled_douyin_leads(
                     result_payload=_scheduled_douyin_skip_payload("douyin_leads", result, {"action": action, **params}),
                 )
                 return
-            raise RuntimeError(error_text or f"douyin_leads {action} failed")
+            # Keep the structured provider result on the run. Without this,
+            # the exception handler only stored a plain error string and H5
+            # could not show which conversation failed to open.
+            await _complete_task_run(
+                cloud,
+                base,
+                headers,
+                run_id,
+                result_text=error_text or f"douyin_leads {action} failed",
+                result_payload=_scheduled_douyin_result_payload(action, result, params),
+                error=(error_text or f"douyin_leads {action} failed")[:500],
+            )
+            return
 
         if action == "search_collect" and isinstance(result, dict):
             selected_task_ids = _scheduled_douyin_selected_task_ids(result)
@@ -6264,11 +6291,16 @@ async def _post_local_api_json(
     *,
     headers: Dict[str, str],
     timeout_seconds: float = 7200.0,
+    request_id: str = "",
 ) -> Dict[str, Any]:
     timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
+    local_headers = _local_chat_headers(headers)
+    clean_request_id = str(request_id or "").strip()[:180]
+    if clean_request_id:
+        local_headers["X-Lobster-Request-Id"] = clean_request_id
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as local:
         try:
-            resp = await local.post(_local_api_url(path), json=body or {}, headers=_local_chat_headers(headers))
+            resp = await local.post(_local_api_url(path), json=body or {}, headers=local_headers)
         except httpx.ConnectError as exc:
             raise RuntimeError(_local_api_unavailable_message(path, exc)) from exc
     try:
@@ -6280,6 +6312,37 @@ async def _post_local_api_json(
     if isinstance(data, dict) and data.get("ok") is False:
         raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
     return data if isinstance(data, dict) else {"result": data}
+
+
+async def _wait_for_local_native_wechat_task(
+    submitted: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    timeout_seconds: float = 1800.0,
+) -> Dict[str, Any]:
+    task = submitted.get("task") if isinstance(submitted.get("task"), dict) else {}
+    task_id = str(task.get("id") or "").strip()
+    if not task_id:
+        return submitted
+    deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds or 1800.0))
+    terminal = {"success", "completed", "failed", "partial_failed", "cancelled", "canceled"}
+    while True:
+        detail = await _get_local_api_json(
+            f"/api/native-wechat/tasks/{quote(task_id, safe='')}",
+            headers=headers,
+            timeout_seconds=30.0,
+        )
+        current = detail.get("task") if isinstance(detail.get("task"), dict) else task
+        status = str(current.get("status") or "").strip().lower()
+        if status in terminal:
+            result = {**submitted, "task": current, "queued": False}
+            if status not in {"success", "completed"}:
+                reason = str(current.get("error_message") or current.get("message") or status).strip()
+                raise RuntimeError(reason[:500] or "本机微信任务执行失败")
+            return result
+        if asyncio.get_running_loop().time() >= deadline:
+            raise RuntimeError(f"本机微信任务等待超时：{task_id}")
+        await asyncio.sleep(1.0)
 
 
 async def _request_local_auto_reply_stop(account_id: str, headers: Dict[str, str]) -> None:
@@ -8129,25 +8192,37 @@ async def _run_client_workflow_action(
         result["extracted_phones"] = extracted_phones
         return result
     if action == "native_wechat_moments_engage":
-        targets = _workflow_target_list(source, "targets", "contacts", "names")
+        targets = _workflow_target_list(source, "contact_wx_nos", "targets", "contacts", "names")
         if not targets:
             return {"ok": True, "skipped": True, "reason": "missing_targets", "message": "未配置朋友圈互动目标，已跳过"}
         moment_action = str(source.get("moment_action") or source.get("mode") or "like_comment").strip().lower() or "like_comment"
         max_scrolls = max(1, min(_safe_int(source.get("max_scrolls") or 6), 30))
         result: Dict[str, Any] = {"ok": True, "targets": targets, "moment_action": moment_action}
         if moment_action in {"like", "like_comment", "both"}:
-            result["like_result"] = await _post_local_api_json(
+            like_submitted = await _post_local_api_json(
                 "/api/native-wechat/moments/like",
                 {"account_id": native_account_id, "targets": targets, "dry_run": False, "max_scrolls": max(1, min(max_scrolls * 4, 120))},
                 headers=headers,
-                timeout_seconds=300.0,
+                timeout_seconds=30.0,
+                request_id=f"h5:{run_id}:native-wechat-moments:like" if run_id else "",
+            )
+            result["like_result"] = await _wait_for_local_native_wechat_task(
+                like_submitted,
+                headers=headers,
+                timeout_seconds=1800.0,
             )
         if moment_action in {"comment", "like_comment", "both"}:
-            result["comment_result"] = await _post_local_api_json(
+            comment_submitted = await _post_local_api_json(
                 "/api/native-wechat/moments/comment",
                 {"account_id": native_account_id, "targets": targets, "dry_run": False, "max_scrolls": max_scrolls},
                 headers=headers,
-                timeout_seconds=300.0,
+                timeout_seconds=30.0,
+                request_id=f"h5:{run_id}:native-wechat-moments:comment" if run_id else "",
+            )
+            result["comment_result"] = await _wait_for_local_native_wechat_task(
+                comment_submitted,
+                headers=headers,
+                timeout_seconds=1800.0,
             )
         return result
     if action == "ip_moments_generate_images":

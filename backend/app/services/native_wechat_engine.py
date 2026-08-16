@@ -2225,7 +2225,7 @@ def get_auto_reply_config(account_id: str) -> Dict[str, Any]:
 def save_auto_reply_config(
     account_id: str,
     *,
-    enabled: bool,
+    enabled: Optional[bool] = None,
     interval_seconds: int = 15,
     group_invite_enabled: Optional[bool] = None,
     user_id: Optional[int] = None,
@@ -2247,6 +2247,7 @@ def save_auto_reply_config(
     _find_local_account(account_id)
     interval_seconds = max(1, int(interval_seconds or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
     current = get_auto_reply_config(account_id)
+    effective_enabled = bool(current.get("enabled")) if enabled is None else bool(enabled)
     invite_enabled = current.get("group_invite_enabled") if group_invite_enabled is None else bool(group_invite_enabled)
     selected_memory_ids = current.get("memory_doc_ids") if memory_doc_ids is None else memory_doc_ids
     selected_memory_ids = list(
@@ -2311,7 +2312,7 @@ def save_auto_reply_config(
             """,
             (
                 account_id,
-                1 if enabled else 0,
+                1 if effective_enabled else 0,
                 interval_seconds,
                 1 if invite_enabled else 0,
                 user_id,
@@ -2328,9 +2329,9 @@ def save_auto_reply_config(
         )
     if auth_context:
         _AUTO_REPLY_AUTH_CONTEXT[account_id] = dict(auth_context)
-    if enabled:
+    if enabled is True:
         ensure_auto_reply_worker(account_id, auth_context=auth_context)
-    else:
+    elif enabled is False:
         with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
             if account_id in _AUTO_REPLY_ACTIVE_RUNS:
                 _AUTO_REPLY_STOP_REQUESTS.add(account_id)
@@ -4610,6 +4611,29 @@ def _contact_sync_max_rounds(limit: int) -> int:
     return max(120, min(900, int(clean_limit / 4) + 120))
 
 
+def _existing_contact_wx_no_index(account_id: str) -> Dict[str, str]:
+    """Reuse wx ids already collected before opening a profile card."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select contact_key, display_name, remark, wx_no
+            from wechat_contacts
+            where account_id=? and nullif(trim(wx_no), '') is not null
+            """,
+            (account_id,),
+        ).fetchall()
+    index: Dict[str, str] = {}
+    for row in rows:
+        wx_no = str(row["wx_no"] or "").strip()
+        if not wx_no:
+            continue
+        for alias in (row["contact_key"], row["display_name"], row["remark"], wx_no):
+            key = _normalize_contact_lookup_key(alias)
+            if key and key not in index:
+                index[key] = wx_no
+    return index
+
+
 def _wechat_contact_skip_names() -> set[str]:
     return {
         "新的朋友",
@@ -5435,6 +5459,7 @@ def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 20) -> Dict[str
     except Exception:
         pass
 
+    existing_before = _contact_count(account_id)
     seen: Dict[str, Dict[str, Any]] = {}
     rounds = 0
     for idx in range(max(1, min(int(max_rounds or 20), 20))):
@@ -5716,7 +5741,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     # its constructor switches the window back to the chat tab before raising,
     # invalidating the Contacts UIA tree. The UIA profile card is the reliable
     # source for wx ids when the full driver API is unavailable.
-    wx_no_index: Dict[str, str] = {}
+    wx_no_index: Dict[str, str] = _existing_contact_wx_no_index(account_id)
+    persisted_names: set[str] = set()
     stable_rounds = 0
     last_signature = ""
     completed = False
@@ -5768,6 +5794,9 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                     "wxNo": wx_no,
                 },
             }
+            if clean not in persisted_names:
+                _merge_contacts_snapshot(account_id, [seen[clean]], chat_type="direct")
+                persisted_names.add(clean)
             if len(seen) >= clean_limit:
                 hit_limit = True
                 break
@@ -5783,11 +5812,16 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             contact_list.WheelDown(wheelTimes=5)
             time.sleep(0.2)
         except Exception:
-            break
+            try:
+                root = auto.ControlFromHandle(int(hwnd))
+                contact_list = _uia_guess_contact_list(root) or _uia_primary_contact_list(root) or contact_list
+                contact_list.WheelDown(wheelTimes=3)
+                time.sleep(0.35)
+            except Exception:
+                break
 
     if not seen:
         raise RuntimeError("未读取到通讯录联系人，请确认微信已切到通讯录页后重试")
-    existing_before = _contact_count(account_id)
     items = _merge_contacts_snapshot(account_id, list(seen.values()), chat_type="direct")
     total_after = _contact_count(account_id)
     return {
@@ -5807,6 +5841,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         "profile_fallback_attempts": profile_fallback_attempts,
         "profile_fallback_successes": profile_fallback_successes,
         "profile_fallback_failures": profile_fallback_failures,
+        "progress_saved": len(persisted_names),
     }
 
 

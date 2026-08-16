@@ -42,3 +42,21 @@ def test_partial_contact_sync_merges_without_dropping_existing(monkeypatch, tmp_
 def test_contact_sync_round_budget_covers_large_address_books():
     assert engine._contact_sync_max_rounds(3000) >= 600
     assert engine._contact_sync_max_rounds(10000) >= 900
+
+
+def test_existing_contact_wx_no_index_reuses_saved_profile_id(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+
+    account_id = "wechat-account-wx-no"
+    engine._merge_contacts_snapshot(account_id, [{
+        "contact_key": "张深根-AI三域营销运营",
+        "display_name": "张深根-AI三域营销运营",
+        "remark": "张老师",
+        "wxNo": "AIZhang7891",
+    }])
+
+    index = engine._existing_contact_wx_no_index(account_id)
+
+    assert index["张深根-ai三域营销运营"] == "AIZhang7891"
+    assert index["张老师"] == "AIZhang7891"
+    assert index["aizhang7891"] == "AIZhang7891"

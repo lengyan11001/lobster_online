@@ -673,6 +673,34 @@ def netstat_listening_pids(port: int) -> set[int]:
     return pids
 
 
+def netstat_listening_endpoints() -> dict[int, set[int]]:
+    """Return listening TCP ports and owning PIDs for local duplicate cleanup."""
+    if os.name != "nt":
+        return {}
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano"],
+            text=True,
+            errors="ignore",
+            creationflags=creation_flags(),
+        )
+    except Exception as exc:
+        log(f"netstat endpoint scan failed: {exc}")
+        return {}
+    endpoints: dict[int, set[int]] = {}
+    for raw in out.splitlines():
+        parts = raw.strip().split()
+        if len(parts) < 5 or parts[0].upper() != "TCP" or parts[3].upper() != "LISTENING":
+            continue
+        try:
+            port = int(parts[1].rsplit(":", 1)[-1])
+            pid = int(parts[-1])
+        except (TypeError, ValueError):
+            continue
+        endpoints.setdefault(port, set()).add(pid)
+    return endpoints
+
+
 def process_command_line(pid: int) -> str:
     if os.name != "nt":
         return ""
@@ -721,6 +749,7 @@ def process_looks_lobster(pid: int) -> bool:
         "lobster_server",
         "backend\\run.py",
         "backend/run.py",
+        "backend.app.main",
         "run_mcp.bat",
         "run_backend.bat",
         "run_module('mcp'",
@@ -1035,6 +1064,25 @@ def choose_backend_port(preferred: int) -> int:
     return preferred
 
 
+def stop_other_root_backends(preferred_port: int) -> None:
+    """Stop stale same-root backends listening on an alternate local port.
+
+    A manually started backend on 8011 can keep polling cloud tasks after the
+    desktop launcher starts the current backend on 8000. Only stop processes
+    that both look like a Lobster backend and identify this exact client root
+    through the health endpoint; unrelated local services are left alone.
+    """
+    for port, pids in netstat_listening_endpoints().items():
+        if port == int(preferred_port):
+            continue
+        if not any(process_looks_lobster(pid) for pid in pids):
+            continue
+        if not port_owned_by_this_root(port):
+            continue
+        log(f"Backend: stopping stale same-root backend on port {port}")
+        stop_port_processes(port, "BackendDuplicate")
+
+
 def choose_mcp_port(preferred: int, backend_port: int) -> int:
     if not port_open("127.0.0.1", preferred):
         return preferred
@@ -1071,6 +1119,7 @@ def start_services_blocking(
     ensure_runtime: bool = True,
 ) -> tuple[bool, str, subprocess.Popen | None, subprocess.Popen | None, str]:
     set_startup_status("ports", "检查本地端口", detail=f"Backend {port} / MCP {mcp_port}", percent=4)
+    stop_other_root_backends(port)
     port = choose_backend_port(port)
     mcp_port = choose_mcp_port(mcp_port, port)
     env["PORT"] = str(port)

@@ -1,7 +1,7 @@
 {
-  "version": "1.0.181",
-  "build": 225,
-  "applied_at": "2026-08-16T17:34:46+08:00",
-  "note": "fix: stabilize WeChat reply and verified group skip",
-  "bundle_sha256": "e53d0d3cbd4a4a3d58bddbd940bb539f01126c43d82617acd442f4200b263be1"
+  "version": "1.0.182",
+  "build": 226,
+  "applied_at": "2026-08-17T00:06:04+08:00",
+  "note": "pack client OTA",
+  "bundle_sha256": "c4779537292406513b1c67a9698c99eef819d14cac915fb15c87eb92c6af0731"
 }

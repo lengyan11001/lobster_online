@@ -479,18 +479,22 @@ def _ordered_video_providers(client: "ComflySeedanceClient") -> List[Dict[str, s
         seen.add(label)
         providers.append({"role": "fallback", **item})
 
-    fallback_channel = _normalize_video_channel(client.config.video_fallback_channel)
-    fallback_model = (client.config.video_fallback_model or "").strip() or _default_video_model(fallback_channel)
-    label = _video_provider_label(fallback_channel, fallback_model)
-    if label not in seen:
-        providers.append(
-            {
-                "role": "fallback",
-                "channel": fallback_channel,
-                "base_url": client.video_fallback_base_url,
-                "model": fallback_model,
-            }
-        )
+    # A server policy is authoritative for managed pipelines. The scalar
+    # fallback is only a compatibility path for locally configured runs that
+    # do not provide an explicit provider list.
+    if not client.config.video_fallbacks:
+        fallback_channel = _normalize_video_channel(client.config.video_fallback_channel)
+        fallback_model = (client.config.video_fallback_model or "").strip() or _default_video_model(fallback_channel)
+        label = _video_provider_label(fallback_channel, fallback_model)
+        if label not in seen:
+            providers.append(
+                {
+                    "role": "fallback",
+                    "channel": fallback_channel,
+                    "base_url": client.video_fallback_base_url,
+                    "model": fallback_model,
+                }
+            )
     return providers
 
 

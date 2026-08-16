@@ -3989,7 +3989,7 @@ class DouyinCommentScraper:
                         const root = findRoot();
                         if (!root) return [];
                         const rows = [];
-                        for (const node of root.querySelectorAll('[data-e2e="conversation-item"], [class*="conversationConversationItemwrapper"]')) {
+                        for (const [position, node] of Array.from(root.querySelectorAll('[data-e2e="conversation-item"], [class*="conversationConversationItemwrapper"]')).entries()) {
                             const text = normalize(node.innerText || node.textContent || '');
                             if (!text) continue;
                             const name = normalize(node.querySelector('.conversationConversationItemtitle')?.textContent || '');
@@ -4026,6 +4026,7 @@ class DouyinCommentScraper:
                             rows.push({
                                 conversation_key: conversationId,
                                 conversation_id: allHints[0] || '',
+                                conversation_position: position + 1,
                                 stranger_index: indexText,
                                 username: name,
                                 preview_text: preview || text,
@@ -4056,8 +4057,11 @@ class DouyinCommentScraper:
                     return False, reason or "陌生人消息面板不可用"
                 conversation_key = str(row.get("conversation_key", "") or "").strip()
                 stranger_index = str(row.get("stranger_index", "") or "").strip()
+                conversation_position = str(row.get("conversation_position", "") or "").strip()
                 username = str(row.get("username", "") or "").strip()
                 preview_text = str(row.get("preview_text", "") or "").strip()
+                profile_url = str(row.get("profile_url", "") or "").strip()
+                avatar_url = str(row.get("avatar_url", "") or "").strip()
 
                 clicked = await target_page.evaluate(
                     r"""
@@ -4095,12 +4099,27 @@ class DouyinCommentScraper:
                         const indexText = normalize(payload?.stranger_index || '');
                         const name = normalize(payload?.username || '');
                         const preview = normalize(payload?.preview_text || '');
+                        const positionText = normalize(payload?.conversation_position || '');
+                        const profileUrl = normalize(payload?.profile_url || '');
+                        const avatarUrl = normalize(payload?.avatar_url || '').split('?')[0];
                         const rows = Array.from(root.querySelectorAll('[data-e2e="conversation-item"], [class*="conversationConversationItemwrapper"]'));
-                        const scoreNode = (node) => {
+                        const scoreNode = (node, position) => {
                             let score = 0;
                             const text = normalize(node.innerText || node.textContent || '');
                             const title = normalize(node.querySelector('.conversationConversationItemtitle')?.textContent || '');
                             const hint = normalize(node.querySelector('.ConversationItemHinttextBox')?.textContent || '');
+                            const candidateAvatar = normalize(node.querySelector('img')?.src || '').split('?')[0];
+                            const toAbsoluteUserUrl = (value) => {
+                                const raw = normalize(value);
+                                if (!raw) return '';
+                                if (raw.startsWith('http://') || raw.startsWith('https://')) return raw.split('?')[0];
+                                if (raw.startsWith('//')) return `https:${raw}`.split('?')[0];
+                                if (raw.startsWith('/')) return `https://www.douyin.com${raw}`.split('?')[0];
+                                return '';
+                            };
+                            const candidateProfileUrl = Array.from(node.querySelectorAll('a[href*="/user/"]'))
+                                .map((anchor) => toAbsoluteUserUrl(anchor.getAttribute('href') || ''))
+                                .find((href) => href.includes('/user/')) || '';
                             const nodeIndex = normalize(node.closest('[data-index]')?.getAttribute('data-index') || '');
                             const dataset = node.dataset || {};
                             const hints = [
@@ -4113,15 +4132,19 @@ class DouyinCommentScraper:
                             for (const datasetKey of Object.keys(dataset)) {
                                 if (/id|conversation|session|chat/i.test(datasetKey)) hints.push(dataset[datasetKey]);
                             }
-                            if (key && hints.some((value) => normalize(value) === key)) score += 10;
+                            const fallbackKey = `${title}|${hint}|${candidateAvatar}`;
+                            if (key && (hints.some((value) => normalize(value) === key) || fallbackKey === key)) score += 20;
+                            if (profileUrl && candidateProfileUrl === profileUrl) score += 18;
+                            if (positionText && String(position + 1) === positionText) score += 12;
                             if (indexText && nodeIndex === indexText) score += 8;
                             if (name && title === name) score += 6;
                             if (preview && hint === preview) score += 3;
+                            if (avatarUrl && candidateAvatar === avatarUrl) score += 2;
                             if (preview && text.includes(preview)) score += 1;
                             return score;
                         };
                         const target = rows
-                            .map((node) => ({ node, score: scoreNode(node) }))
+                            .map((node, position) => ({ node, score: scoreNode(node, position) }))
                             .sort((a, b) => b.score - a.score)[0];
                         if (!target || target.score <= 0) return false;
                         const node = target.node;
@@ -4136,8 +4159,11 @@ class DouyinCommentScraper:
                     {
                         "conversation_key": conversation_key,
                         "stranger_index": stranger_index,
+                        "conversation_position": conversation_position,
                         "username": username,
                         "preview_text": preview_text,
+                        "profile_url": profile_url,
+                        "avatar_url": avatar_url,
                     },
                 )
                 if not clicked:
@@ -4323,6 +4349,8 @@ class DouyinCommentScraper:
                         or ""
                     ).strip(),
                     "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "detail_read_status": "not_requested" if not include_details else "pending",
+                    "detail_read_error": "",
                 }
                 if not str(merged.get("username", "") or "").strip():
                     merged["username"] = username
@@ -4346,13 +4374,22 @@ class DouyinCommentScraper:
                                         "has_user_message": bool(detail.get("has_user_message")),
                                     }
                                 )
+                                merged["detail_read_status"] = "ok"
+                                merged["detail_read_error"] = ""
+                            else:
+                                merged["detail_read_status"] = "failed"
+                                merged["detail_read_error"] = "详情返回为空"
                         else:
+                            merged["detail_read_status"] = "failed"
+                            merged["detail_read_error"] = detail_reason or "未找到目标会话"
                             self._emit(
                                 logger,
                                 f"[抖音私信引流] 读取会话详情失败：{username or '-'}，原因：{detail_reason or '未找到目标会话'}",
                                 "warning",
                             )
                     except Exception as exc:
+                        merged["detail_read_status"] = "failed"
+                        merged["detail_read_error"] = str(exc)
                         self._emit(
                             logger,
                             f"[抖音私信引流] 读取会话详情失败：{username or '-'}，原因：{exc}",
