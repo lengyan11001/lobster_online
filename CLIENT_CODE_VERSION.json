@@ -1,7 +1,7 @@
 {
-  "version": "1.0.183",
-  "build": 227,
-  "applied_at": "2026-08-17T14:19:05+08:00",
-  "note": "fix direct WeChat replies and stabilize one-shot Douyin takeover",
-  "bundle_sha256": "aecae819442aab3a2cf296e31aa3eb19e813590530c0e88b81c1f5de6e7308fa"
+  "version": "1.0.184",
+  "build": 228,
+  "applied_at": "2026-08-17T20:01:00+08:00",
+  "note": "fix local WeChat Moments video publishing flow",
+  "bundle_sha256": "8b0b0fdc866c8e369c150c78376a93ff37199f38d2f58c122c635b60ce730a45"
 }
