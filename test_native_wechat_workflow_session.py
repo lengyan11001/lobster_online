@@ -1797,6 +1797,7 @@ def test_auto_reply_config_preserves_memory_when_only_toggle_changes(tmp_path, m
     first = engine.save_auto_reply_config(
         engine.LOCAL_DEFAULT_ACCOUNT_ID,
         enabled=False,
+        language="en-US",
         memory_doc_ids=["faq-doc"],
         group_invite_memory_doc_id="group-rule-doc",
         group_invite_keywords="咨询报价，预约体验",
@@ -1808,7 +1809,9 @@ def test_auto_reply_config_preserves_memory_when_only_toggle_changes(tmp_path, m
     second = engine.save_auto_reply_config(engine.LOCAL_DEFAULT_ACCOUNT_ID, enabled=True)
 
     assert first["memory_doc_ids"] == ["faq-doc"]
+    assert first["language"] == "en"
     assert second["memory_doc_ids"] == ["faq-doc"]
+    assert second["language"] == "en"
     assert second["group_invite_memory_doc_id"] == "group-rule-doc"
     assert second["group_invite_keywords"] == "咨询报价，预约体验"
     assert second["group_invite_contacts"] == ["销售经理"]

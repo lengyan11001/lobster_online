@@ -1893,6 +1893,11 @@ async def _run_client_command(
                 enabled=(bool(payload.get("enabled")) if "enabled" in payload else None),
                 interval_seconds=interval_seconds,
                 user_id=user_id,
+                language=(
+                    str(payload.get("language") or payload.get("target_language") or "").strip()
+                    if ("language" in payload or "target_language" in payload)
+                    else None
+                ),
                 memory_doc_ids=(
                     [str(item or "").strip() for item in payload.get("memory_doc_ids") if str(item or "").strip()]
                     if isinstance(payload.get("memory_doc_ids"), list)
@@ -8185,6 +8190,8 @@ async def _run_client_workflow_action(
             config_override={
                 key: source[key]
                 for key in (
+                    "language",
+                    "target_language",
                     "group_invite_enabled",
                     "group_invite_memory_doc_id",
                     "group_invite_keywords",

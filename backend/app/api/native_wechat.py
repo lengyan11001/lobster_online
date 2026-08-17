@@ -36,6 +36,8 @@ class AutoReplyConfigBody(BaseModel):
     enabled: Optional[bool] = None
     interval_seconds: int = Field(default=15, ge=1, le=86400)
     group_invite_enabled: Optional[bool] = None
+    language: Optional[str] = Field(default=None, max_length=64)
+    target_language: Optional[str] = Field(default=None, max_length=64)
     memory_doc_ids: Optional[List[str]] = Field(default=None, max_length=20)
     group_invite_memory_doc_id: Optional[str] = Field(default=None, max_length=64)
     group_invite_keywords: Optional[str] = Field(default=None, max_length=2000)
@@ -357,6 +359,7 @@ async def native_wechat_save_auto_reply_config(
             enabled=body.enabled,
             interval_seconds=15,
             group_invite_enabled=body.group_invite_enabled,
+            language=body.language or body.target_language,
             user_id=current_user.id,
             memory_doc_ids=body.memory_doc_ids,
             group_invite_memory_doc_id=body.group_invite_memory_doc_id,

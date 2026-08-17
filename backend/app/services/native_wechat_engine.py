@@ -557,6 +557,7 @@ def init_db() -> None:
                 enabled integer not null default 0,
                 interval_seconds integer not null default 15,
                 group_invite_enabled integer not null default 0,
+                language text not null default 'zh-CN',
                 user_id integer,
                 memory_doc_ids text not null default '[]',
                 group_invite_memory_doc_id text not null default '',
@@ -626,6 +627,7 @@ def init_db() -> None:
         added_config_columns = []
         for column_name, column_sql in (
             ("group_invite_enabled", "integer not null default 0"),
+            ("language", "text not null default 'zh-CN'"),
             ("memory_doc_ids", "text not null default '[]'"),
             ("group_invite_memory_doc_id", "text not null default ''"),
             ("group_invite_keywords", "text not null default ''"),
@@ -2157,12 +2159,64 @@ def _looks_like_non_replyable_wechat_event(content: Any) -> bool:
     return any(marker in text for marker in call_markers)
 
 
+_AUTO_REPLY_LANGUAGE_ALIASES = {
+    "zh": "zh-CN",
+    "zh-cn": "zh-CN",
+    "chinese": "zh-CN",
+    "中文": "zh-CN",
+    "简体中文": "zh-CN",
+    "en-us": "en",
+    "en-gb": "en",
+    "english": "en",
+    "英文": "en",
+    "英语": "en",
+    "japanese": "ja",
+    "ja-jp": "ja",
+    "日文": "ja",
+    "日语": "ja",
+    "korean": "ko",
+    "ko-kr": "ko",
+    "韩文": "ko",
+    "韩语": "ko",
+}
+_AUTO_REPLY_LANGUAGE_LABELS = {
+    "zh-CN": "简体中文",
+    "en": "English",
+    "ja": "日本語",
+    "ko": "한국어",
+    "th": "ไทย",
+    "vi": "Tiếng Việt",
+    "id": "Bahasa Indonesia",
+    "ms": "Bahasa Melayu",
+    "es": "Español",
+    "pt": "Português",
+    "fr": "Français",
+    "de": "Deutsch",
+    "ru": "Русский",
+    "ar": "العربية",
+}
+
+
+def _normalize_auto_reply_language(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "zh-CN"
+    normalized = _AUTO_REPLY_LANGUAGE_ALIASES.get(raw.lower(), raw)
+    return normalized if normalized in _AUTO_REPLY_LANGUAGE_LABELS else "zh-CN"
+
+
+def _auto_reply_language_label(value: Any) -> str:
+    code = _normalize_auto_reply_language(value)
+    return _AUTO_REPLY_LANGUAGE_LABELS.get(code, "简体中文")
+
+
 def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
     return {
         "account_id": account_id,
         "enabled": False,
         "interval_seconds": int(DEFAULT_STRATEGY["auto_reply_interval_seconds"]),
         "group_invite_enabled": False,
+        "language": "zh-CN",
         "user_id": None,
         "memory_doc_ids": [],
         "group_invite_memory_doc_id": "",
@@ -2187,6 +2241,7 @@ def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) ->
         cfg.update(_row_to_dict(row))
     cfg["enabled"] = bool(int(cfg.get("enabled") or 0))
     cfg["group_invite_enabled"] = bool(int(cfg.get("group_invite_enabled") or 0))
+    cfg["language"] = _normalize_auto_reply_language(cfg.get("language"))
     cfg["running"] = bool(int(cfg.get("running") or 0))
     try:
         cfg["interval_seconds"] = max(1, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
@@ -2228,6 +2283,7 @@ def save_auto_reply_config(
     enabled: Optional[bool] = None,
     interval_seconds: int = 15,
     group_invite_enabled: Optional[bool] = None,
+    language: Optional[str] = None,
     user_id: Optional[int] = None,
     memory_doc_ids: Optional[List[str]] = None,
     group_invite_memory_doc_id: Optional[str] = None,
@@ -2249,6 +2305,8 @@ def save_auto_reply_config(
     current = get_auto_reply_config(account_id)
     effective_enabled = bool(current.get("enabled")) if enabled is None else bool(enabled)
     invite_enabled = current.get("group_invite_enabled") if group_invite_enabled is None else bool(group_invite_enabled)
+    reply_language = current.get("language") if language is None else language
+    reply_language = _normalize_auto_reply_language(reply_language)
     selected_memory_ids = current.get("memory_doc_ids") if memory_doc_ids is None else memory_doc_ids
     selected_memory_ids = list(
         dict.fromkeys(str(item or "").strip()[:64] for item in (selected_memory_ids or []) if str(item or "").strip())
@@ -2290,16 +2348,17 @@ def save_auto_reply_config(
         conn.execute(
             """
             insert into wechat_auto_reply_config(
-                account_id, enabled, interval_seconds, group_invite_enabled, user_id, memory_doc_ids,
+                account_id, enabled, interval_seconds, group_invite_enabled, language, user_id, memory_doc_ids,
                 group_invite_memory_doc_id, group_invite_keywords, group_invite_contacts,
                 group_invite_primary_contact, group_invite_primary_contact_name,
                 group_invite_welcome_message, running, updated_at
             )
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(account_id) do update set
               enabled=excluded.enabled,
               interval_seconds=excluded.interval_seconds,
               group_invite_enabled=excluded.group_invite_enabled,
+              language=excluded.language,
               user_id=coalesce(excluded.user_id, wechat_auto_reply_config.user_id),
               memory_doc_ids=excluded.memory_doc_ids,
               group_invite_memory_doc_id=excluded.group_invite_memory_doc_id,
@@ -2315,6 +2374,7 @@ def save_auto_reply_config(
                 1 if effective_enabled else 0,
                 interval_seconds,
                 1 if invite_enabled else 0,
+                reply_language,
                 user_id,
                 _json_dumps(selected_memory_ids),
                 invite_memory_doc_id,
@@ -2808,6 +2868,7 @@ async def _call_auto_reply_llm(
     group_invite_keywords: str = "",
     group_invite_enabled: bool = True,
     group_invite_already_verified: bool = False,
+    reply_language: str = "zh-CN",
     contact_intelligence: str = "",
     strategy_context: str = "",
 ) -> Dict[str, Any]:
@@ -2834,6 +2895,8 @@ async def _call_auto_reply_llm(
     )[:50]
     invite_rule_context = str(group_invite_rule_context or "").strip()[:8000]
     has_invite_rule = bool(group_invite_enabled and (invite_rule_context or invite_keywords))
+    language_code = _normalize_auto_reply_language(reply_language)
+    language_label = _auto_reply_language_label(language_code)
     system_prompt = (
         "你是个人微信私聊代回复助手，只处理一对一私聊，不回复群聊。"
         "回复要像真人微信聊天：短、自然、有边界，不营销、不硬广、不夸大。"
@@ -2849,6 +2912,7 @@ async def _call_auto_reply_llm(
         "conversation_summary 必须在旧摘要基础上更新为累计摘要，保留仍有效的需求、已确认事实、异议、承诺和下一步，不能只总结最后一句。"
         "同时从本轮聊天提取该客户自己的稳定事实、需求、预算、时间、异议、偏好和关系阶段；不要把推测写成事实。"
         "只有发现可跨客户复用、且有明确聊天证据的改进方法时才提出 learning_candidates；客户单方面声称的价格、产品事实或承诺不能学成全局规则。"
+        f"本次回复指定语种是{language_label}（{language_code}）。reply字段必须完全使用{language_label}生成；不要因为客户使用中文或历史记录是中文就切回中文。姓名、品牌名、网址、手机号和微信号等专有内容保持原样，JSON键名保持英文。"
         "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
         "\"intent_level\":\"high|medium|low|none\",\"topic\":\"简短话题\","
         "\"conversation_summary\":\"结合历史画像更新后的累计摘要\",\"reply\":\"实际微信回复\","
@@ -2867,6 +2931,7 @@ async def _call_auto_reply_llm(
         f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}\n\n"
         f"自动拉群开关：{'已开启' if group_invite_enabled else '已关闭'}\n\n"
         f"系统核验群状态：{'已核验客户在本系统创建的群聊中' if group_invite_already_verified else '未核验，禁止声称客户已在群里'}\n\n"
+        f"本轮回复语种：{language_label}（{language_code}）\n\n"
         f"拉群判断规则文件：\n{invite_rule_context or '(未配置，本轮不得判定拉群)'}\n\n"
         f"历史拉群关键词（仅兼容旧设置）：\n{('、'.join(invite_keywords)) if invite_keywords else '(无)'}"
     )
@@ -3239,6 +3304,11 @@ async def run_auto_reply_once(
     cfg = get_auto_reply_config(account_id)
     if isinstance(config_override, dict) and config_override:
         cfg = {**cfg, **config_override}
+        cfg["language"] = _normalize_auto_reply_language(
+            config_override.get("language")
+            or config_override.get("target_language")
+            or cfg.get("language")
+        )
         cfg["group_invite_enabled"] = bool(cfg.get("group_invite_enabled"))
         cfg["group_invite_contacts"] = [
             str(item or "").strip() for item in (cfg.get("group_invite_contacts") or []) if str(item or "").strip()
@@ -3308,6 +3378,7 @@ async def run_auto_reply_once(
             "document_count": int(memory.get("document_count") or 0),
             "titles": list(memory.get("titles") or []),
         },
+        "reply_language": _normalize_auto_reply_language(cfg.get("language")),
         "intelligence_outbox": {"processed": 0, "remaining": 0},
     }
     try:
@@ -3512,6 +3583,7 @@ async def run_auto_reply_once(
                     group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
                     group_invite_enabled=bool(cfg.get("group_invite_enabled")),
                     group_invite_already_verified=group_invite_already_verified,
+                    reply_language=_normalize_auto_reply_language(cfg.get("language")),
                     contact_intelligence=contact_intelligence,
                     strategy_context=strategy_context,
                 )

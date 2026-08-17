@@ -13,6 +13,7 @@
     tasks: [],
     strategy: null,
     autoReply: null,
+    autoReplyTemplateLanguage: 'zh-CN',
     autoReplyMemoryDocs: [],
     driver: null,
     lastDiagnostic: null,
@@ -37,6 +38,40 @@
   };
 
   function $(id) { return document.getElementById(id); }
+
+  var AUTO_REPLY_LANGUAGE_CODES = {
+    'zh-CN': true, en: true, ja: true, ko: true, th: true, vi: true, id: true,
+    ms: true, es: true, pt: true, fr: true, de: true, ru: true, ar: true
+  };
+  var AUTO_REPLY_LANGUAGE_ALIASES = {
+    zh: 'zh-CN', 'zh-cn': 'zh-CN', chinese: 'zh-CN', '中文': 'zh-CN', '简体中文': 'zh-CN',
+    'en-us': 'en', english: 'en', '英文': 'en', '英语': 'en',
+    japanese: 'ja', '日文': 'ja', '日语': 'ja', korean: 'ko', '韩文': 'ko', '韩语': 'ko'
+  };
+
+  function normalizeAutoReplyLanguage(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return 'zh-CN';
+    var normalized = AUTO_REPLY_LANGUAGE_ALIASES[raw.toLowerCase()] || raw;
+    return AUTO_REPLY_LANGUAGE_CODES[normalized] ? normalized : 'zh-CN';
+  }
+
+  function loadAutoReplyTemplateLanguage() {
+    return cloudJson('/api/ip-content/personal-default').then(function(data) {
+      var item = data && data.item && typeof data.item === 'object' ? data.item : {};
+      var requirements = item.requirements && typeof item.requirements === 'object' ? item.requirements : {};
+      var meta = item.meta && typeof item.meta === 'object' ? item.meta : {};
+      state.autoReplyTemplateLanguage = normalizeAutoReplyLanguage(
+        requirements.language || requirements.target_language || meta.language || meta.target_language || ''
+      );
+      return state.autoReplyTemplateLanguage;
+    }).catch(function() {
+      state.autoReplyTemplateLanguage = normalizeAutoReplyLanguage(
+        state.autoReply && state.autoReply.language
+      );
+      return state.autoReplyTemplateLanguage;
+    });
+  }
 
   function debounce(fn, wait) {
     var timer = null;
@@ -557,6 +592,8 @@
     return {
       account_id: activeAccountId(),
       interval_seconds: 15,
+      language: normalizeAutoReplyLanguage(state.autoReplyTemplateLanguage),
+      target_language: normalizeAutoReplyLanguage(state.autoReplyTemplateLanguage),
       memory_doc_ids: memoryId ? [memoryId] : [],
       group_invite_enabled: !!(($('nativeWechatGroupInviteEnabled') || {}).checked),
       group_invite_memory_doc_id: (($('nativeWechatGroupInviteMemoryDoc') || {}).value || '').trim(),
@@ -879,15 +916,17 @@
     if (!id) return setMsg('请先选择本机微信账号', true);
     var saveBtn = $('nativeWechatAutoReplyConfigSaveBtn');
     if (saveBtn) saveBtn.disabled = true;
-    var body = autoReplyConfigBody();
-    return apiJson('/api/native-wechat/auto-reply/config', {
-      method: 'POST',
-      body: body
-    }).then(function(data) {
-      state.autoReply = data.config || {};
-      renderAutoReplyConfig();
-      return syncAutoReplyConfigToCloud(body).then(function() {
-        setMsg('接管设置已保存，H5 与 Online 已同步服务器。', false);
+    return loadAutoReplyTemplateLanguage().then(function() {
+      var body = autoReplyConfigBody();
+      return apiJson('/api/native-wechat/auto-reply/config', {
+        method: 'POST',
+        body: body
+      }).then(function(data) {
+        state.autoReply = data.config || {};
+        renderAutoReplyConfig();
+        return syncAutoReplyConfigToCloud(body).then(function() {
+          setMsg('接管设置已保存，H5 与 Online 已同步服务器。', false);
+        });
       });
     }).catch(function(err) {
       setMsg(err.message || '接管设置保存失败，服务器可能未同步', true);
@@ -2034,7 +2073,10 @@
     renderMomentsFiles();
     renderAutoReplyConfig();
     loadAccounts().then(function() {
-      return Promise.all([loadPeers(), loadContacts(), loadTasks(), loadStrategy(), loadAutoReplyConfig(), loadAutoReplyMemoryDocs()]);
+      return Promise.all([
+        loadPeers(), loadContacts(), loadTasks(), loadStrategy(), loadAutoReplyConfig(),
+        loadAutoReplyMemoryDocs(), loadAutoReplyTemplateLanguage()
+      ]);
     });
   };
 })();
