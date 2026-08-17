@@ -135,6 +135,16 @@ class MomentsCommentBody(BaseModel):
     max_scrolls: int = Field(default=6, ge=1, le=30)
 
 
+class MomentsEngageBody(BaseModel):
+    account_id: str = Field(min_length=1, max_length=160)
+    targets: List[str] = Field(default_factory=list, max_length=100)
+    contacts: List[str] = Field(default_factory=list, max_length=100)
+    names: List[str] = Field(default_factory=list, max_length=100)
+    moment_action: str = Field(default="like_comment", max_length=32)
+    dry_run: bool = False
+    max_scrolls: int = Field(default=6, ge=1, le=30)
+
+
 class MomentsPublishBody(BaseModel):
     account_id: str = Field(default="pc-wechat-default", min_length=1, max_length=160)
     content: str = Field(default="", max_length=4000)
@@ -729,6 +739,45 @@ async def native_wechat_moments_comment(
         raise
     except Exception as exc:
         _raise_native_wechat_error("moments_comment", exc, account_id=body.account_id)
+
+
+@router.post("/api/native-wechat/moments/engage")
+async def native_wechat_moments_engage(
+    request: Request,
+    body: MomentsEngageBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    try:
+        action = str(body.moment_action or "like_comment").strip().lower() or "like_comment"
+        if action not in {"like", "comment", "like_comment", "both"}:
+            raise HTTPException(status_code=422, detail="朋友圈互动动作只支持点赞、评论或点赞并评论")
+        raw_token = _raw_token_from_request(request)
+        if action in {"comment", "like_comment", "both"} and not raw_token:
+            raise HTTPException(status_code=401, detail="需要登录后才能生成朋友圈评论")
+        task = await engine.create_moments_engage_task(
+            body.account_id,
+            _merge_targets(body.targets, body.contacts, body.names),
+            moment_action=action,
+            dry_run=body.dry_run,
+            max_scrolls=body.max_scrolls,
+            user_id=current_user.id,
+            auth_context={
+                "token": raw_token,
+                "user_id": current_user.id,
+                "installation_id": _installation_id_from_request(request, current_user.id),
+            },
+            client_request_id=_client_request_id(request),
+        )
+        return {
+            "ok": True,
+            "task": task,
+            "queued": task.get("status") in {"pending", "running"},
+            "message": "朋友圈互动任务已加入队列",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_native_wechat_error("moments_engage", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/moments/publish")

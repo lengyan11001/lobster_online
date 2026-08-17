@@ -1072,7 +1072,13 @@ def stop_other_root_backends(preferred_port: int) -> None:
     that both look like a Lobster backend and identify this exact client root
     through the health endpoint; unrelated local services are left alone.
     """
+    # Limit duplicate cleanup to the local service port range.  Scanning every
+    # listening process invokes the WMIC/PowerShell command-line fallback for
+    # unrelated services (which is slow on Windows hosts without WMIC).
+    service_ports = range(8000, 8100)
     for port, pids in netstat_listening_endpoints().items():
+        if port not in service_ports:
+            continue
         if port == int(preferred_port):
             continue
         if not any(process_looks_lobster(pid) for pid in pids):

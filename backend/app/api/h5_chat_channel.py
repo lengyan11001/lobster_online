@@ -3813,7 +3813,14 @@ def _load_scheduled_douyin_online_config_params(action: str) -> Dict[str, Any]:
             list_douyin_stranger_message_monitor_states,
             load_douyin_search_sessions_state,
             load_global_config,
+            restore_douyin_stranger_message_monitor_config,
         )
+
+        if str(action or "").strip().lower() == "stranger_message":
+            # The Online process can import this module after the startup
+            # restore hook has already run. Reload the persisted config before
+            # a one-shot H5 task so the fixed reply is never lost from memory.
+            restore_douyin_stranger_message_monitor_config()
 
         return _scheduled_douyin_online_config_params(
             action,
@@ -3825,6 +3832,38 @@ def _load_scheduled_douyin_online_config_params(action: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("[SCHEDULED-TASK] load Online Douyin config failed action=%s error=%s", action, exc)
         return {}
+
+
+def _merge_scheduled_douyin_stranger_params(
+    online_params: Any,
+    task_params: Any,
+) -> Dict[str, Any]:
+    """Use Online's saved stranger-message config for every one-shot task.
+
+    H5 sends a small task payload and may include only the add-friend switch.
+    Do not mistake that partial payload for a complete reply configuration.
+    """
+    online = dict(online_params) if isinstance(online_params, dict) else {}
+    task = dict(task_params) if isinstance(task_params, dict) else {}
+    merged = dict(online)
+    for key in (
+        "account_id",
+        "max_conversations",
+        "auto_reply_enabled",
+        "reply_mode",
+        "message",
+        "reply_prompt",
+        "contact_value",
+        "wechat_add_friend_enabled",
+    ):
+        if key not in task:
+            continue
+        value = task.get(key)
+        if isinstance(value, bool):
+            merged[key] = value
+        elif value not in (None, "", []):
+            merged[key] = value
+    return merged
 
 
 def _scheduled_douyin_skip_payload(
@@ -4737,12 +4776,17 @@ async def _run_scheduled_douyin_leads(
     if action == "search_collect" and inferred_sales_action and inferred_sales_action != "search_collect":
         action = inferred_sales_action
     use_online_sales_config = is_sales_workflow or bool(inferred_sales_action and inferred_sales_action != "search_collect")
-    if use_online_sales_config:
+    workflow_params = dict(params)
+    if action == "stranger_message":
+        # H5 sends a partial one-shot payload. The saved reply lives in the
+        # Online runtime config and must be loaded even without sales metadata.
+        params = _merge_scheduled_douyin_stranger_params(
+            _load_scheduled_douyin_online_config_params(action),
+            workflow_params,
+        )
+    elif use_online_sales_config:
         action = _scheduled_douyin_sales_action_from_context(h5_context) or inferred_sales_action or action
-        workflow_params = dict(params)
         params = _load_scheduled_douyin_online_config_params(action)
-        if action == "stranger_message" and "wechat_add_friend_enabled" in workflow_params:
-            params["wechat_add_friend_enabled"] = bool(workflow_params.get("wechat_add_friend_enabled"))
     elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
         params = _load_scheduled_douyin_online_config_params(action)
     if h5_one_shot:
@@ -6336,6 +6380,9 @@ async def _wait_for_local_native_wechat_task(
         status = str(current.get("status") or "").strip().lower()
         if status in terminal:
             result = {**submitted, "task": current, "queued": False}
+            if status == "partial_failed":
+                result["task"] = {**current, "original_status": status, "status": "partial_success"}
+                return result
             if status not in {"success", "completed"}:
                 reason = str(current.get("error_message") or current.get("message") or status).strip()
                 raise RuntimeError(reason[:500] or "本机微信任务执行失败")
@@ -8197,33 +8244,26 @@ async def _run_client_workflow_action(
             return {"ok": True, "skipped": True, "reason": "missing_targets", "message": "未配置朋友圈互动目标，已跳过"}
         moment_action = str(source.get("moment_action") or source.get("mode") or "like_comment").strip().lower() or "like_comment"
         max_scrolls = max(1, min(_safe_int(source.get("max_scrolls") or 6), 30))
-        result: Dict[str, Any] = {"ok": True, "targets": targets, "moment_action": moment_action}
-        if moment_action in {"like", "like_comment", "both"}:
-            like_submitted = await _post_local_api_json(
-                "/api/native-wechat/moments/like",
-                {"account_id": native_account_id, "targets": targets, "dry_run": False, "max_scrolls": max(1, min(max_scrolls * 4, 120))},
-                headers=headers,
-                timeout_seconds=30.0,
-                request_id=f"h5:{run_id}:native-wechat-moments:like" if run_id else "",
-            )
-            result["like_result"] = await _wait_for_local_native_wechat_task(
-                like_submitted,
-                headers=headers,
-                timeout_seconds=1800.0,
-            )
-        if moment_action in {"comment", "like_comment", "both"}:
-            comment_submitted = await _post_local_api_json(
-                "/api/native-wechat/moments/comment",
-                {"account_id": native_account_id, "targets": targets, "dry_run": False, "max_scrolls": max_scrolls},
-                headers=headers,
-                timeout_seconds=30.0,
-                request_id=f"h5:{run_id}:native-wechat-moments:comment" if run_id else "",
-            )
-            result["comment_result"] = await _wait_for_local_native_wechat_task(
-                comment_submitted,
-                headers=headers,
-                timeout_seconds=1800.0,
-            )
+        submitted = await _post_local_api_json(
+            "/api/native-wechat/moments/engage",
+            {
+                "account_id": native_account_id,
+                "targets": targets,
+                "moment_action": moment_action,
+                "dry_run": False,
+                "max_scrolls": max_scrolls,
+            },
+            headers=headers,
+            timeout_seconds=30.0,
+            request_id=f"h5:{run_id}:native-wechat-moments:engage" if run_id else "",
+        )
+        result = await _wait_for_local_native_wechat_task(
+            submitted,
+            headers=headers,
+            timeout_seconds=1800.0,
+        )
+        result["targets"] = targets
+        result["moment_action"] = moment_action
         return result
     if action == "ip_moments_generate_images":
         return await _post_local_api_json("/api/ip-content/moments/images/generate", source, headers=headers, timeout_seconds=7200.0)
@@ -8399,14 +8439,17 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
     if action == "native_wechat_moments_engage":
         if result.get("skipped"):
             return str(result.get("message") or "朋友圈互动已跳过。")
-        like_task = result.get("like_result") if isinstance(result.get("like_result"), dict) else {}
-        comment_task = result.get("comment_result") if isinstance(result.get("comment_result"), dict) else {}
-        labels = []
-        if like_task:
-            labels.append("点赞")
-        if comment_task:
-            labels.append("评论")
-        return f"朋友圈{'/'.join(labels) if labels else '互动'}任务已加入队列。"
+        task = result.get("task") if isinstance(result.get("task"), dict) else {}
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        items = payload.get("engage_results") if isinstance(payload.get("engage_results"), list) else []
+        completed = sum(1 for item in items if isinstance(item, dict) and str(item.get("status") or "").lower() in {"success", "skipped"})
+        failed = sum(1 for item in items if isinstance(item, dict) and str(item.get("status") or "").lower() in {"failed", "partial_failed"})
+        liked = sum(int(item.get("liked") or 0) for item in items if isinstance(item, dict))
+        commented = sum(int(item.get("commented") or 0) for item in items if isinstance(item, dict))
+        already_commented = sum(int(item.get("already_commented") or 0) for item in items if isinstance(item, dict))
+        if str(task.get("original_status") or "").lower() == "partial_failed" or failed:
+            return f"朋友圈互动部分完成：处理 {completed} 个，失败 {failed} 个；点赞 {liked} 条，评论 {commented + already_commented} 条。"
+        return f"朋友圈互动完成：处理 {completed} 个；点赞 {liked} 条，评论 {commented + already_commented} 条。"
     if action == "ip_moments_generate_images":
         return f"朋友圈图片生成完成：{int(result.get('record_count') or 0)} 条文案，{int(result.get('image_count') or 0)} 张图片。"
     if action == "publish_content":

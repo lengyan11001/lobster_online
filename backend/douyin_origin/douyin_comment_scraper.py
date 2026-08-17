@@ -3994,6 +3994,7 @@ class DouyinCommentScraper:
                             if (!text) continue;
                             const name = normalize(node.querySelector('.conversationConversationItemtitle')?.textContent || '');
                             if (!name) continue;
+                            if (name === '陌生人消息') continue;
                             const preview = normalize(node.querySelector('.ConversationItemHinttextBox')?.textContent || '');
                             if (isGroupLikeConversation(name, preview, text, node)) continue;
                             const timeText = normalize(node.querySelector('.ConversationItemTagNextToTitletimeStr')?.textContent || '');
@@ -4075,10 +4076,12 @@ class DouyinCommentScraper:
                         };
                         const findRoot = () => {
                             const entrySelector = '.conversationStrangerBoxwrapper, .conversationStrangerBoxrowArea2, [class*="conversationStrangerBox"], [data-e2e="conversation-item"]';
-                            const titleNode = Array.from(document.querySelectorAll('div, span, p, pre, a, button'))
-                                .find((node) => normalize(node.textContent || node.innerText || '') === '陌生人消息');
-                            if (!titleNode) return null;
-                            if (titleNode.closest(entrySelector)) return null;
+                        const titleNodes = Array.from(document.querySelectorAll('div, span, p, pre, a, button'))
+                            .filter((node) => normalize(node.textContent || node.innerText || '') === '陌生人消息');
+                        for (const titleNode of titleNodes) {
+                            // The left sidebar keeps an entry with the same title after
+                            // the panel opens. It is not the panel root and must be skipped.
+                            if (titleNode.closest(entrySelector)) continue;
                             let current = titleNode.parentElement;
                             for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
                                 if (!isVisible(current)) continue;
@@ -4091,7 +4094,8 @@ class DouyinCommentScraper:
                                 );
                                 if (hasBackButton || depth <= 2) return current;
                             }
-                            return null;
+                        }
+                        return null;
                         };
                         const root = findRoot();
                         if (!root) return false;
@@ -4609,6 +4613,8 @@ class DouyinCommentScraper:
                         or ""
                     ).strip(),
                     "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "detail_read_status": "pending",
+                    "detail_read_error": "",
                 }
                 if not str(merged.get("username", "") or "").strip():
                     merged["username"] = username
@@ -4637,6 +4643,8 @@ class DouyinCommentScraper:
                 try:
                     opened, reason = await self.open_chat_page_conversation(page, row)
                     if not opened:
+                        row["detail_read_status"] = "failed"
+                        row["detail_read_error"] = reason or "未找到目标会话"
                         self._emit(
                             logger,
                             f"[抖音私信聚合] 同步会话详情失败：{username}，原因：{reason or '未找到目标会话'}",
@@ -4647,6 +4655,8 @@ class DouyinCommentScraper:
                     detail = await self.extract_chat_page_conversation_detail(page)
                     detail_messages = detail.get("messages", []) if isinstance(detail, dict) else []
                     if not isinstance(detail_messages, list) or not detail_messages:
+                        row["detail_read_status"] = "failed"
+                        row["detail_read_error"] = "已打开会话，但没有读取到右侧消息气泡"
                         self._emit(
                             logger,
                             f"[抖音私信聚合] 会话 {username} 未读取到右侧消息气泡，保留列表预览",
@@ -4673,7 +4683,26 @@ class DouyinCommentScraper:
                                 detail.get("reply_message", "") or row.get("reply_message", "") or ""
                             ).strip(),
                             "messages": detail_messages,
+                            "last_message_text": str(
+                                (
+                                    detail_messages[-1].get("text")
+                                    if isinstance(detail_messages[-1], dict)
+                                    else detail_messages[-1]
+                                )
+                                or ""
+                            ).strip(),
+                            "last_message_is_user": bool(
+                                isinstance(detail_messages[-1], dict)
+                                and str(detail_messages[-1].get("direction") or "").strip().lower() == "incoming"
+                            ),
+                            "has_user_message": any(
+                                isinstance(message, dict)
+                                and str(message.get("direction") or "").strip().lower() == "incoming"
+                                for message in detail_messages
+                            ),
                             "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "detail_read_status": "ok",
+                            "detail_read_error": "",
                             "is_partial": False,
                         }
                     )
@@ -4683,6 +4712,8 @@ class DouyinCommentScraper:
                         "success",
                     )
                 except Exception as exc:
+                    row["detail_read_status"] = "failed"
+                    row["detail_read_error"] = str(exc)
                     self._emit(
                         logger,
                         f"[抖音私信聚合] 同步会话详情失败：{username}，原因：{exc}",

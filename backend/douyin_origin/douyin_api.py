@@ -3413,6 +3413,7 @@ def normalize_douyin_stranger_message_row(row: Dict) -> Dict:
             for item in (row.get("phone_numbers") or [])
             if str(item).strip()
         )),
+        "wechat_add_status": normalize_douyin_text(row.get("wechat_add_status", "")).lower(),
         "time_text": normalize_douyin_text(row.get("time_text", "")),
         "conversation_position": max(0, int(row.get("conversation_position", 0) or 0)),
         "stranger_index": max(0, int(row.get("stranger_index", 0) or 0)),
@@ -3439,6 +3440,8 @@ def normalize_douyin_stranger_message_row(row: Dict) -> Dict:
         "h5_reply_fingerprint": normalize_douyin_text(row.get("h5_reply_fingerprint", "")),
         "h5_reply_sent_at": normalize_douyin_text(row.get("h5_reply_sent_at", "")),
     }
+    if normalized["phone_numbers"] and not normalized["wechat_add_status"]:
+        normalized["wechat_add_status"] = "phone_detected"
     normalized["profile_url"] = ensure_douyin_profile_url(normalized)
     if not normalized["conversation_key"]:
         normalized["conversation_key"] = normalize_douyin_text(
@@ -3513,6 +3516,7 @@ def _build_douyin_stranger_message_reply_fields(row: Dict) -> Dict[str, object]:
         "h5_reply_fingerprint": normalized.get("h5_reply_fingerprint", ""),
         "h5_reply_sent_at": normalized.get("h5_reply_sent_at", ""),
         "phone_numbers": list(normalized.get("phone_numbers") or []),
+        "wechat_add_status": normalized.get("wechat_add_status", ""),
     }
 
 
@@ -3587,7 +3591,16 @@ def merge_douyin_stranger_message_results(account_id: int, rows: List[Dict]) -> 
             continue
         existing = account_map.get(key)
         if existing:
+            incoming_phone_numbers = list(normalized.get("phone_numbers") or [])
+            incoming_wechat_add_status = str(normalized.get("wechat_add_status") or "").strip().lower()
             normalized.update(_build_douyin_stranger_message_reply_fields(existing))
+            # Reply markers are read from the stored row, but phone capture and
+            # WeChat add status come from the current pass. Keep the newer
+            # status so a queued number is not downgraded to phone_detected.
+            if incoming_phone_numbers:
+                normalized["phone_numbers"] = incoming_phone_numbers
+            if incoming_wechat_add_status:
+                normalized["wechat_add_status"] = incoming_wechat_add_status
             if existing != normalized:
                 changed += 1
         else:
@@ -11075,7 +11088,7 @@ async def run_douyin_h5_stranger_message_task_once(
                 f"[H5抖音私信接管] 开始一次性读取账号 {target_account_id}，最多 {limit} 条会话，不启用常驻监控",
                 "info",
             )
-            rows = await scraper.collect_stranger_private_messages(
+            stranger_rows = await scraper.collect_stranger_private_messages(
                 max_conversations=limit,
                 should_stop=lambda: bool(douyin_stranger_message_stop_requested),
                 logger=douyin_log,
@@ -11089,6 +11102,48 @@ async def run_douyin_h5_stranger_message_task_once(
                         "message": f"H5 抖音私信接管读取中，已读取 {processed}/{total} 条",
                     }
                 ),
+            )
+            normal_rows: List[Dict] = []
+            try:
+                normal_rows = await scraper.collect_chat_page_private_messages(
+                    max_conversations=limit,
+                    should_stop=lambda: bool(douyin_stranger_message_stop_requested),
+                    logger=douyin_log,
+                )
+            except Exception as exc:
+                # A normal inbox read must not discard stranger messages that
+                # were already collected in this one-shot takeover.
+                douyin_log(f"[H5抖音私信接管] 普通好友会话读取失败，保留陌生人会话结果：{exc}", "warning")
+
+            rows_by_key: Dict[str, Dict] = {}
+            row_order: List[str] = []
+            for raw_row in [*(normal_rows or []), *(stranger_rows or [])]:
+                if not isinstance(raw_row, dict):
+                    continue
+                source = str(raw_row.get("conversation_source") or "").strip()
+                identity = str(
+                    raw_row.get("conversation_key")
+                    or raw_row.get("profile_url")
+                    or f"{source}:{raw_row.get('username') or ''}"
+                ).strip()
+                if not identity:
+                    continue
+                existing_row = rows_by_key.get(identity)
+                if existing_row is None:
+                    row_order.append(identity)
+                    rows_by_key[identity] = raw_row
+                    continue
+                # Prefer the row that reached a detail page successfully.
+                if (
+                    str(existing_row.get("detail_read_status") or "").lower() == "failed"
+                    and str(raw_row.get("detail_read_status") or "").lower() != "failed"
+                ):
+                    rows_by_key[identity] = raw_row
+            rows = [rows_by_key[key] for key in row_order[:limit] if key in rows_by_key]
+            douyin_log(
+                f"[H5抖音私信接管] 本轮合并普通好友 {len(normal_rows)} 条、陌生人 {len(stranger_rows or [])} 条，"
+                f"按顺序处理 {len(rows)}/{limit} 条会话",
+                "info",
             )
             for raw_row in rows if isinstance(rows, list) else []:
                 if douyin_stranger_message_stop_requested:
@@ -11205,6 +11260,21 @@ async def run_douyin_h5_stranger_message_task_once(
                 if wechat_add_friend_enabled
                 else {"enabled": False, "queued": False, "targets": [], "reason": "disabled"}
             )
+            phone_status = (
+                "queued"
+                if bool(wechat_add_friend_result.get("queued"))
+                else "phone_detected"
+            )
+            phone_marker_rows = [
+                {
+                    **row,
+                    "wechat_add_status": phone_status,
+                }
+                for row in prepared_rows
+                if row.get("phone_numbers")
+            ]
+            if phone_marker_rows:
+                merge_douyin_stranger_message_results(target_account_id, phone_marker_rows)
             reply_success = int(reply_result.get("success", 0) or 0)
             reply_failed = int(reply_result.get("failed", 0) or 0)
             if detail_failures:

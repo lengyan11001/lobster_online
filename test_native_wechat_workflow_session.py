@@ -2003,6 +2003,82 @@ async def test_verified_group_skips_before_llm_or_conversation_context(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_group_session_is_skipped_before_reply_or_group_decision(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    monkeypatch.setattr(
+        engine,
+        "get_auto_reply_config",
+        lambda _account_id: {
+            "enabled": True,
+            "group_invite_enabled": True,
+            "group_invite_primary_contact": "sales-contact",
+            "group_invite_contacts": ["sales-contact"],
+            "memory_doc_ids": [],
+            "group_invite_memory_doc_id": "",
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_load_auto_reply_memory_context",
+        lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
+    )
+    async def flush_outbox(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(engine, "_flush_wechat_intelligence_outbox", flush_outbox)
+    monkeypatch.setattr(
+        engine,
+        "sync_local_sessions",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "peer_id": "peer-unknown-chat-type",
+                    "display_name": "客户会话",
+                    "last_content": "请介绍一下",
+                    "unread_count": 1,
+                }
+            ]
+        },
+    )
+    read_info_calls = []
+
+    def sync_messages(*_args, **kwargs):
+        read_info_calls.append(kwargs.get("read_chat_info"))
+        return {
+            "peer_id": "peer-unknown-chat-type",
+            "chat_info": {"chat_type": "group"},
+        }
+
+    monkeypatch.setattr(engine, "sync_local_messages", sync_messages)
+    monkeypatch.setattr(
+        engine,
+        "_call_auto_reply_llm",
+        lambda **_kwargs: pytest.fail("群聊不能进入模型判断"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_send_text_local_slow",
+        lambda *_args, **_kwargs: pytest.fail("群聊不能发送回复"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_queue_auto_reply_group_invite",
+        lambda *_args, **_kwargs: pytest.fail("群聊不能触发拉群"),
+    )
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert read_info_calls == [True]
+    assert result["replied"] == 0
+    assert result["skipped_groups"] == 1
+    assert result["items"][0]["status"] == "skipped_group"
+
+
+@pytest.mark.asyncio
 async def test_group_invite_success_keeps_default_welcome_message(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     monkeypatch.setattr(

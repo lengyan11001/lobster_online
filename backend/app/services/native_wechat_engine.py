@@ -3391,17 +3391,25 @@ async def run_auto_reply_once(
                     peer_id,
                     load_more_pages=0,
                     select_via_uia=True,
-                    read_chat_info=False,
+                    read_chat_info=True,
                     download_attachments=False,
                 )
                 _collect_local_driver_recovery(result, sync_result)
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
-                if str((chat_info or {}).get("chat_type") or "").lower() in {"group", "chatroom", "official"}:
+                actual_peer = str(sync_result.get("peer_id") or peer_id)
+                chat_type = str((chat_info or {}).get("chat_type") or "").strip().lower()
+                if chat_type in {"group", "chatroom", "official", "subscription"} or _looks_like_group_session(
+                    {
+                        "peer_id": actual_peer,
+                        "display_name": display_name,
+                        "last_content": str(session.get("last_content") or ""),
+                        "chat_type": chat_type,
+                    }
+                ):
                     result["skipped_groups"] += 1
-                    item_result.update({"status": "skipped_group", "chat_type": (chat_info or {}).get("chat_type")})
+                    item_result.update({"status": "skipped_group", "chat_type": chat_type or "group_like"})
                     result["items"].append(item_result)
                     continue
-                actual_peer = str(sync_result.get("peer_id") or peer_id)
                 current_peer = actual_peer
                 configured_primary_contact = str(
                     cfg.get("group_invite_primary_contact")
@@ -5459,7 +5467,6 @@ def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 20) -> Dict[str
     except Exception:
         pass
 
-    existing_before = _contact_count(account_id)
     seen: Dict[str, Dict[str, Any]] = {}
     rounds = 0
     for idx in range(max(1, min(int(max_rounds or 20), 20))):
@@ -7660,7 +7667,20 @@ def _local_moments_like_count_today(account_id: str) -> int:
             """,
             (account_id, today),
         ).fetchone()
-    return int((row[0] if row else 0) or 0)
+        engage_rows = conn.execute(
+            """
+            select payload from wechat_tasks
+            where account_id=? and task_type='moments_engage' and created_at >= ?
+            """,
+            (account_id, today),
+        ).fetchall()
+    total = int((row[0] if row else 0) or 0)
+    for engage_row in engage_rows:
+        payload = _safe_json_loads(engage_row["payload"], {})
+        results = payload.get("engage_results") if isinstance(payload, dict) else []
+        if isinstance(results, list):
+            total += sum(int(item.get("liked") or 0) for item in results if isinstance(item, dict))
+    return total
 
 
 def _local_moments_comment_count_today(account_id: str) -> int:
@@ -7877,7 +7897,14 @@ def _read_visible_contact_profile_wx_no(
     return wx_no
 
 
-def _open_local_contact_profile(hwnd: int, account_id: str, target: str, steps: List[Dict[str, Any]]) -> None:
+def _open_local_contact_profile(
+    hwnd: int,
+    account_id: str,
+    target: str,
+    steps: List[Dict[str, Any]],
+    *,
+    capture_wx_no: bool = True,
+) -> None:
     _ensure_local_contacts_tab(account_id)
     root = _uia_foreground_or_main_root(hwnd)
     contact_list = _find_local_contact_list(root)
@@ -7926,6 +7953,8 @@ def _open_local_contact_profile(hwnd: int, account_id: str, target: str, steps: 
     _uia_click(found_node)
     steps.append({"step": "open_contact_profile", "ok": True, "target": target, "aliases": aliases[:5]})
     time.sleep(0.8)
+    if not capture_wx_no:
+        return
     try:
         root = _uia_foreground_or_main_root(hwnd)
         wx_no = _extract_contact_profile_wx_no(root)
@@ -7940,7 +7969,7 @@ def _open_local_contact_moments(account_id: str, target: str, steps: List[Dict[s
     hwnd = _local_wechat_hwnd(account_id)
     if not hwnd:
         raise RuntimeError("没有检测到本机微信窗口")
-    _open_local_contact_profile(hwnd, account_id, target, steps)
+    _open_local_contact_profile(hwnd, account_id, target, steps, capture_wx_no=False)
     root = _uia_foreground_or_main_root(hwnd)
     candidates: List[tuple[int, Any]] = []
     for node in _uia_walk(root, max_depth=18, max_nodes=1400):
@@ -8875,7 +8904,40 @@ def _click_moments_comment_send(hwnd: int, rect: tuple[int, int, int, int]) -> N
     time.sleep(0.8)
 
 
-def _submit_moments_comment_at_point(hwnd: int, point: tuple[int, int], reply: str) -> None:
+def _wait_for_moments_comment_confirmation(
+    hwnd: int,
+    target: str,
+    reply: str,
+    *,
+    timeout: float = 6.0,
+) -> bool:
+    needle = re.sub(r"\s+", " ", str(reply or "")).strip()
+    if not needle:
+        return False
+    deadline = time.monotonic() + max(1.0, float(timeout or 1.0))
+    while time.monotonic() < deadline:
+        root = _uia_foreground_or_main_root(hwnd)
+        post = _find_first_visible_timeline_post(root, target)
+        if post is not None:
+            comments = _moments_comment_text(root, post.get("node"))
+            normalized = re.sub(r"\s+", " ", comments).strip()
+            if needle in normalized:
+                return True
+        detail = _find_detail_comment_cell(root)
+        detail_text = re.sub(r"\s+", " ", _uia_control_text(detail)).strip() if detail is not None else ""
+        if needle in detail_text:
+            return True
+        time.sleep(0.35)
+    return False
+
+
+def _submit_moments_comment_at_point(
+    hwnd: int,
+    point: tuple[int, int],
+    reply: str,
+    *,
+    target: str,
+) -> None:
     menu = _open_moments_action_menu_at_point(hwnd, point[0], point[1])
     # 朋友圈菜单是自绘弹层，UIA Invoke 偶尔不触发；取“评论”按钮矩形后用真实鼠标点中心。
     comment_rect = _uia_rect_tuple(menu.get("comment")) if menu.get("comment") is not None else None
@@ -8895,11 +8957,15 @@ def _submit_moments_comment_at_point(hwnd: int, point: tuple[int, int], reply: s
         else:
             _send_hotkey("enter", pause=0.3)
         time.sleep(0.8)
+        if not _wait_for_moments_comment_confirmation(hwnd, target, reply):
+            raise RuntimeError("评论已点击发送，但未在朋友圈中确认到评论内容")
         return
     rect = _focus_moments_detail_comment_box(hwnd)
     _paste_text(reply)
     time.sleep(random.uniform(0.4, 1.0))
     _click_moments_comment_send(hwnd, rect)
+    if not _wait_for_moments_comment_confirmation(hwnd, target, reply):
+        raise RuntimeError("评论已点击发送，但未在朋友圈中确认到评论内容")
 
 
 async def _comment_first_visible_moments_post(
@@ -8927,8 +8993,10 @@ async def _comment_first_visible_moments_post(
     post_key = _moments_post_key(target, post_text, time_label, fallback=album_text)
     steps.append({"step": "moments_comment_post_found", "target": target, "time": time_label, "post_text": post_text[:500]})
     if _moments_comment_record_exists(account_id, target, post_key):
-        steps.append({"step": "moments_comment_skip", "target": target, "reason": "already_recorded", "time": time_label})
-        return {"found": 1, "commented": 0, "already_commented": 1, "skipped": 0, "result": {"target": target, "status": "already_commented", "reason": "already_recorded"}}
+        if post_node is not None and _moments_already_commented_by_self(root, post_node, self_names):
+            steps.append({"step": "moments_comment_skip", "target": target, "reason": "already_recorded_and_confirmed", "time": time_label})
+            return {"found": 1, "commented": 0, "already_commented": 1, "skipped": 0, "result": {"target": target, "status": "already_commented", "reason": "already_recorded_and_confirmed"}}
+        steps.append({"step": "moments_comment_record_unconfirmed", "target": target, "time": time_label})
     if post_node is not None and _moments_already_commented_by_self(root, post_node, self_names):
         steps.append({"step": "moments_comment_skip", "target": target, "reason": "already_commented_in_ui", "time": time_label})
         return {"found": 1, "commented": 0, "already_commented": 1, "skipped": 0, "result": {"target": target, "status": "already_commented", "reason": "ui_detected"}}
@@ -8973,7 +9041,7 @@ async def _comment_first_visible_moments_post(
         steps.append({"step": "moments_comment_skip", "target": target, "reason": "daily_limit", "time": time_label})
         return {"found": 1, "commented": 0, "already_commented": 0, "skipped": 1, "result": {"target": target, "status": "skipped", "reason": "daily_limit"}}
     try:
-        _submit_moments_comment_at_point(hwnd, point, reply)
+        _submit_moments_comment_at_point(hwnd, point, reply, target=target)
     except Exception as exc:
         err = str(exc)
         _record_moments_comment(
@@ -9114,6 +9182,197 @@ async def _process_contact_moments_comment_target(
         }
     finally:
         _close_foreground_sns_window(hwnd, steps, reason="contact_comment_done")
+
+
+def _wait_for_contact_moments_content(
+    hwnd: int,
+    target: str,
+    *,
+    timeout: float = 10.0,
+    require_post: bool = False,
+) -> Dict[str, Any]:
+    deadline = time.monotonic() + max(0.5, float(timeout or 0.5))
+    while True:
+        root = _uia_foreground_or_main_root(hwnd)
+        post = _find_first_visible_timeline_post(root, target)
+        if post is not None:
+            return {"root": root, "post": post}
+        cells = _visible_contact_album_cells(root)
+        if cells and not require_post:
+            return {"root": root, "cell": cells[0]}
+        if time.monotonic() >= deadline:
+            return {}
+        time.sleep(0.35)
+
+
+def _contact_moments_view_debug(root: Any) -> Dict[str, Any]:
+    interesting = {
+        "mmui::SNSWindow",
+        "mmui::AlbumContentCell",
+        "mmui::TimelineContentCell",
+        "mmui::TimeLineListView",
+    }
+    counts: Dict[str, int] = {}
+    for node in _uia_walk(root, max_depth=12, max_nodes=900):
+        class_name = _uia_control_class(node)
+        if class_name in interesting:
+            counts[class_name] = counts.get(class_name, 0) + 1
+    return {
+        "root_class": _uia_control_class(root),
+        "root_name": _uia_control_text(root)[:120],
+        "classes": counts,
+    }
+
+
+def _like_first_visible_moments_post(
+    account_id: str,
+    target: str,
+    *,
+    dry_run: bool,
+    fallback_time_label: str,
+    steps: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    hwnd = _local_wechat_hwnd(account_id)
+    if not hwnd:
+        raise RuntimeError("没有检测到本机微信窗口")
+    root = _uia_foreground_or_main_root(hwnd)
+    post = _find_first_visible_timeline_post(root, target)
+    if post is None:
+        steps.append({"step": "moments_engage_like_skip", "target": target, "reason": "post_not_found"})
+        return {"status": "failed", "reason": "post_not_found", "liked": 0, "already_liked": 0}
+    time_label = str(post.get("time_label") or fallback_time_label or "")
+    point = _moments_action_point_for_post(root, post.get("node"))
+    if point is None:
+        steps.append({"step": "moments_engage_like_skip", "target": target, "reason": "action_not_visible", "time": time_label})
+        return {"status": "failed", "reason": "action_not_visible", "liked": 0, "already_liked": 0}
+    menu = _open_moments_action_menu_at_point(hwnd, point[0], point[1])
+    if menu.get("cancel") is not None:
+        _send_hotkey("esc", pause=0.2)
+        steps.append({"step": "moments_engage_already_liked", "target": target, "time": time_label})
+        return {"status": "already_liked", "liked": 0, "already_liked": 1}
+    like_node = menu.get("like")
+    if like_node is None:
+        _send_hotkey("esc", pause=0.2)
+        steps.append({"step": "moments_engage_like_skip", "target": target, "reason": "like_button_not_found", "time": time_label})
+        return {"status": "failed", "reason": "like_button_not_found", "liked": 0, "already_liked": 0}
+    if dry_run:
+        _send_hotkey("esc", pause=0.2)
+        steps.append({"step": "moments_engage_like_ready", "target": target, "time": time_label})
+        return {"status": "ready", "liked": 0, "already_liked": 0}
+    daily_limit = int(get_strategy().get("daily_moments_like_limit") or 0)
+    if daily_limit > 0 and _local_moments_like_count_today(account_id) >= daily_limit:
+        _send_hotkey("esc", pause=0.2)
+        steps.append({"step": "moments_engage_like_skip", "target": target, "reason": "daily_limit", "time": time_label})
+        return {"status": "failed", "reason": "daily_limit", "liked": 0, "already_liked": 0}
+    _uia_click(like_node)
+    steps.append({"step": "moments_engage_liked", "target": target, "time": time_label})
+    _human_pause("ui_action_sleep_min", "ui_action_sleep_max", floor=0.7)
+    return {"status": "liked", "liked": 1, "already_liked": 0}
+
+
+async def _process_contact_moments_engage_target(
+    account_id: str,
+    target: str,
+    *,
+    moment_action: str,
+    dry_run: bool,
+    auth_context: Dict[str, Any],
+    user_id: int,
+    steps: List[Dict[str, Any]],
+    self_names: List[str],
+) -> Dict[str, Any]:
+    hwnd = _open_local_contact_moments(account_id, target, steps)
+    opened_detail = False
+    try:
+        visible = _wait_for_contact_moments_content(hwnd, target)
+        if not visible:
+            steps.append(
+                {
+                    "step": "moments_engage_skip",
+                    "target": target,
+                    "reason": "page_not_ready",
+                    "view": _contact_moments_view_debug(_uia_foreground_or_main_root(hwnd)),
+                }
+            )
+            return {"target": target, "status": "failed", "reason": "page_not_ready"}
+        cell = visible.get("cell") if isinstance(visible.get("cell"), dict) else None
+        fallback_time_label = ""
+        if cell is not None:
+            fallback_time_label = str(cell.get("time_label") or "")
+            if cell.get("outside_24h"):
+                steps.append({"step": "moments_engage_skip", "target": target, "reason": "outside_24h", "time": fallback_time_label or "unknown"})
+                return {"target": target, "status": "skipped", "reason": "outside_24h"}
+            if not cell.get("within_24h"):
+                steps.append({"step": "moments_engage_skip", "target": target, "reason": "time_unknown", "time": fallback_time_label or "unknown"})
+                return {"target": target, "status": "failed", "reason": "time_unknown"}
+            _uia_click(cell.get("node"))
+            opened_detail = True
+            steps.append({"step": "moments_engage_open_post", "target": target, "time": fallback_time_label})
+            time.sleep(1.0)
+            visible = _wait_for_contact_moments_content(hwnd, target, timeout=6.0, require_post=True)
+        post = visible.get("post") if isinstance(visible.get("post"), dict) else None
+        if post is None:
+            root = _uia_foreground_or_main_root(hwnd)
+            post = _find_first_visible_timeline_post(root, target)
+        if post is None:
+            steps.append({"step": "moments_engage_skip", "target": target, "reason": "post_not_found"})
+            return {"target": target, "status": "failed", "reason": "post_not_found"}
+        time_label = str(post.get("time_label") or fallback_time_label or "")
+        if _moments_time_outside_24h(time_label):
+            steps.append({"step": "moments_engage_skip", "target": target, "reason": "outside_24h", "time": time_label})
+            return {"target": target, "status": "skipped", "reason": "outside_24h"}
+        if not _moments_time_within_24h(time_label):
+            steps.append({"step": "moments_engage_skip", "target": target, "reason": "time_unknown", "time": time_label or "unknown"})
+            return {"target": target, "status": "failed", "reason": "time_unknown"}
+
+        wants_like = moment_action in {"like", "like_comment", "both"}
+        wants_comment = moment_action in {"comment", "like_comment", "both"}
+        like_result: Dict[str, Any] = {"status": "not_requested", "liked": 0, "already_liked": 0}
+        if wants_like:
+            like_result = _like_first_visible_moments_post(
+                account_id,
+                target,
+                dry_run=dry_run,
+                fallback_time_label=time_label,
+                steps=steps,
+            )
+        comment_result: Dict[str, Any] = {
+            "found": 0,
+            "commented": 0,
+            "already_commented": 0,
+            "skipped": 0,
+            "result": {"target": target, "status": "not_requested"},
+        }
+        if wants_comment:
+            comment_result = await _comment_first_visible_moments_post(
+                account_id,
+                target,
+                dry_run=dry_run,
+                auth_context=auth_context,
+                user_id=user_id,
+                album_text=str(cell.get("text") or "") if cell else "",
+                steps=steps,
+                self_names=self_names,
+            )
+        comment_item = comment_result.get("result") if isinstance(comment_result.get("result"), dict) else {}
+        like_ok = not wants_like or str(like_result.get("status") or "") in {"liked", "already_liked", "ready"}
+        comment_ok = not wants_comment or str(comment_item.get("status") or "") in {"submitted", "already_commented", "ready"}
+        status = "success" if like_ok and comment_ok else ("partial_failed" if like_ok or comment_ok else "failed")
+        return {
+            "target": target,
+            "status": status,
+            "time": time_label,
+            "like": like_result,
+            "comment": comment_item,
+            "liked": int(like_result.get("liked") or 0),
+            "already_liked": int(like_result.get("already_liked") or 0),
+            "commented": int(comment_result.get("commented") or 0),
+            "already_commented": int(comment_result.get("already_commented") or 0),
+        }
+    finally:
+        if opened_detail:
+            _return_contact_album_list(hwnd, steps, target)
+        _close_foreground_sns_window(hwnd, steps, reason="contact_engage_done")
 
 
 async def create_add_friend_task(
@@ -9519,6 +9778,132 @@ async def _process_moments_comment_task(task: Dict[str, Any]) -> None:
             skipped_total or int(task.get("planned_total") or 0),
             str(exc),
         )
+    finally:
+        _TASK_AUTH_CONTEXT.pop(task_id, None)
+
+
+async def create_moments_engage_task(
+    account_id: str,
+    targets: List[str],
+    *,
+    moment_action: str = "like_comment",
+    dry_run: bool = False,
+    max_scrolls: int = 6,
+    user_id: int = 0,
+    auth_context: Optional[Dict[str, Any]] = None,
+    client_request_id: str = "",
+) -> Dict[str, Any]:
+    init_db()
+    existing = _existing_task_by_client_request_id(account_id, client_request_id)
+    if existing:
+        return existing
+    if not _local_moments_or_main_hwnd(account_id):
+        raise RuntimeError("没有检测到本机微信窗口")
+    target_list = _normalize_task_targets(targets, max_targets=100)
+    if not target_list:
+        raise RuntimeError("缺少朋友圈互动目标联系人")
+    action = str(moment_action or "like_comment").strip().lower() or "like_comment"
+    if action not in {"like", "comment", "like_comment", "both"}:
+        raise RuntimeError("朋友圈互动动作只支持点赞、评论或点赞并评论")
+    strategy = get_strategy()
+    return _create_wechat_task(
+        account_id=account_id,
+        task_type="moments_engage",
+        target_type="moments_author",
+        targets=target_list,
+        payload={
+            "moment_action": action,
+            "dry_run": bool(dry_run),
+            "max_scrolls": max(1, min(int(max_scrolls or 6), 30)),
+            "user_id": int(user_id or 0),
+            "engage_results": [],
+        },
+        strategy=strategy,
+        planned_total=len(target_list),
+        auth_context=auth_context or {},
+        client_request_id=client_request_id,
+    )
+
+
+async def _process_moments_engage_task(task: Dict[str, Any]) -> None:
+    task_id = str(task.get("id") or "")
+    account_id = str(task.get("account_id") or "")
+    targets = _normalize_task_targets(list(task.get("targets") or []))
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    action = str(payload.get("moment_action") or "like_comment").strip().lower() or "like_comment"
+    dry_run = bool(payload.get("dry_run", False))
+    user_id = int(payload.get("user_id") or 0)
+    auth_context = dict(_TASK_AUTH_CONTEXT.get(task_id) or {})
+    if user_id and not auth_context.get("user_id"):
+        auth_context["user_id"] = user_id
+    wants_comment = action in {"comment", "like_comment", "both"}
+    steps: List[Dict[str, Any]] = []
+    results: List[Dict[str, Any]] = []
+    processed = 0
+    completed = 0
+    failed = 0
+    liked = 0
+    already_liked = 0
+    commented = 0
+    already_commented = 0
+    last_error = ""
+    try:
+        if not _local_moments_or_main_hwnd(account_id):
+            raise RuntimeError("没有检测到本机微信窗口")
+        if wants_comment and not str(auth_context.get("token") or "").strip():
+            raise RuntimeError("缺少登录 Token，不能生成朋友圈评论")
+        self_names = _local_my_names(account_id)
+        for idx, target in enumerate(targets):
+            processed += 1
+            try:
+                result = await _process_contact_moments_engage_target(
+                    account_id,
+                    target,
+                    moment_action=action,
+                    dry_run=dry_run,
+                    auth_context=auth_context,
+                    user_id=user_id,
+                    steps=steps,
+                    self_names=self_names,
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                result = {"target": target, "status": "failed", "reason": last_error}
+            results.append(result)
+            status = str(result.get("status") or "failed")
+            if status in {"success", "skipped"}:
+                completed += 1
+            else:
+                failed += 1
+            liked += int(result.get("liked") or 0)
+            already_liked += int(result.get("already_liked") or 0)
+            commented += int(result.get("commented") or 0)
+            already_commented += int(result.get("already_commented") or 0)
+            summary = (
+                f"processed={processed}, completed={completed}, failed={failed}, "
+                f"liked={liked}, already_liked={already_liked}, "
+                f"commented={commented}, already_commented={already_commented}"
+            )
+            _merge_task_payload(task_id, {"engage_results": results[-100:], "steps": steps[-160:]})
+            _update_task_progress(task_id, processed, completed, failed, summary)
+            if idx < len(targets) - 1:
+                await _sleep(0.8)
+        status = "success" if failed == 0 else ("partial_failed" if completed else "failed")
+        _finish_task(
+            task_id,
+            status,
+            processed,
+            completed,
+            failed,
+            (
+                f"action={action}, processed={processed}, completed={completed}, failed={failed}, "
+                f"liked={liked}, already_liked={already_liked}, "
+                f"commented={commented}, already_commented={already_commented}"
+                + (f", last_error={last_error}" if last_error else "")
+            ),
+        )
+    except Exception as exc:
+        _finish_task(task_id, "failed", processed, completed, failed or len(targets), str(exc))
     finally:
         _TASK_AUTH_CONTEXT.pop(task_id, None)
 
@@ -11555,6 +11940,14 @@ async def _run_account_task_queue(account_id: str) -> None:
                     await _process_moments_like_task(task)
                 elif task.get("task_type") == "moments_comment":
                     await _process_moments_comment_task(task)
+                elif task.get("task_type") == "moments_engage":
+                    # UIA traversals and mouse actions are synchronous. Keep the
+                    # whole combined task off the API event loop so health checks
+                    # and task polling remain responsive while WeChat is busy.
+                    await asyncio.to_thread(
+                        asyncio.run,
+                        _process_moments_engage_task(task),
+                    )
                 elif task.get("task_type") == "moments_publish":
                     await _process_moments_publish_task(task)
                 elif task.get("task_type") == "create_group":
