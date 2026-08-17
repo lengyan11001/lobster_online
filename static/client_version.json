@@ -1,7 +1,7 @@
 {
-  "version": "1.0.182",
-  "build": 226,
-  "applied_at": "2026-08-17T00:06:04+08:00",
-  "note": "pack client OTA",
-  "bundle_sha256": "c4779537292406513b1c67a9698c99eef819d14cac915fb15c87eb92c6af0731"
+  "version": "1.0.183",
+  "build": 227,
+  "applied_at": "2026-08-17T14:19:05+08:00",
+  "note": "fix direct WeChat replies and stabilize one-shot Douyin takeover",
+  "bundle_sha256": "aecae819442aab3a2cf296e31aa3eb19e813590530c0e88b81c1f5de6e7308fa"
 }
