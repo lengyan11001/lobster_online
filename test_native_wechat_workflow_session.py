@@ -531,6 +531,116 @@ def test_moments_publish_uses_shared_wechat_ui_lock(monkeypatch):
     }
 
 
+def test_moments_file_dialog_uses_targeted_controls(monkeypatch):
+    class FakeNode:
+        pass
+
+    filename = FakeNode()
+    open_button = FakeNode()
+    calls = []
+
+    class FakeRoot:
+        def EditControl(self, **kwargs):
+            calls.append(("edit", kwargs))
+            return filename if kwargs.get("AutomationId") == "1148" else None
+
+        def ButtonControl(self, **kwargs):
+            calls.append(("button", kwargs))
+            return open_button if kwargs.get("AutomationId") == "1" else None
+
+    root = FakeRoot()
+
+    assert engine._file_dialog_filename_edit(root) is filename
+    assert engine._file_dialog_open_button(root) is open_button
+    assert calls == [
+        ("edit", {"searchDepth": 8, "AutomationId": "1148"}),
+        ("button", {"searchDepth": 8, "AutomationId": "1"}),
+    ]
+
+
+def test_moments_publish_entry_accepts_initial_file_picker(monkeypatch):
+    page_root = object()
+    picker_root = object()
+    publish_entry = object()
+    roots = iter([page_root, picker_root])
+    clicked = []
+    steps = []
+
+    monkeypatch.setattr(engine, "_moments_publish_hwnd", lambda _hwnd: 321)
+    monkeypatch.setattr(engine, "_focus_local_wechat", lambda _hwnd: None)
+    monkeypatch.setattr(engine, "_uia_foreground_or_main_root", lambda _hwnd: next(roots))
+    monkeypatch.setattr(engine, "_moments_publish_dialog_ready", lambda _root: False)
+    monkeypatch.setattr(engine, "_uia_find_by_names", lambda *_args, **_kwargs: publish_entry)
+    monkeypatch.setattr(engine, "_uia_click", lambda node: clicked.append(node))
+    monkeypatch.setattr(engine, "_uia_control_text", lambda _node: "发表")
+    monkeypatch.setattr(
+        engine,
+        "_file_dialog_filename_edit",
+        lambda root: object() if root is picker_root else None,
+    )
+
+    hwnd = engine._click_moments_publish_entry(123, steps, expect_file_picker=True)
+
+    assert hwnd == 321
+    assert clicked == [publish_entry]
+    assert steps[-1] == {"step": "moments_file_picker_ready", "ok": True, "attempt": 1}
+
+
+def test_moments_publish_selects_initial_picker_before_compose(monkeypatch):
+    files = [{"local_path": "C:/temp/post.jpg", "filename": "post.jpg", "kind": "image", "size": 10}]
+    picker_root = object()
+    calls = []
+
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 123})
+    monkeypatch.setattr(engine, "_normalize_attachments", lambda _attachments: files)
+    monkeypatch.setattr(engine, "_enforce_local_moments_publish_rate", lambda _account_id: None)
+    monkeypatch.setattr(engine, "_open_local_moments", lambda _hwnd, _steps: calls.append("open_moments"))
+    monkeypatch.setattr(
+        engine,
+        "_click_moments_publish_entry",
+        lambda _hwnd, _steps, *, expect_file_picker=False: calls.append(("open_entry", expect_file_picker)) or 456,
+    )
+    monkeypatch.setattr(engine, "_uia_foreground_or_main_root", lambda _hwnd: picker_root)
+    monkeypatch.setattr(engine, "_file_dialog_filename_edit", lambda root: object() if root is picker_root else None)
+    monkeypatch.setattr(engine, "_select_files_in_open_dialog", lambda _hwnd, _files, _steps: calls.append("select_files"))
+    monkeypatch.setattr(engine, "_wait_for_moments_publish_dialog", lambda _hwnd, _steps: calls.append("wait_compose"))
+    monkeypatch.setattr(engine, "_focus_moments_publish_text", lambda _hwnd, _steps: calls.append("focus_text"))
+    monkeypatch.setattr(engine, "_fill_moments_publish_text", lambda _hwnd, _text, _steps: calls.append("fill_text"))
+    monkeypatch.setattr(engine, "_submit_moments_publish", lambda _hwnd, _steps: calls.append("submit"))
+
+    result = engine._publish_moments_local_once(
+        "pc-wechat-default",
+        "正文",
+        attachments=files,
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        "open_moments",
+        ("open_entry", True),
+        "select_files",
+        "wait_compose",
+        "focus_text",
+        "fill_text",
+        "submit",
+    ]
+
+
+def test_moments_publish_rejects_video_longer_than_wechat_limit(monkeypatch):
+    files = [{"local_path": "C:/temp/long.mp4", "filename": "long.mp4", "kind": "video", "size": 10}]
+
+    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 123})
+    monkeypatch.setattr(engine, "_normalize_attachments", lambda _attachments: files)
+    monkeypatch.setattr(engine, "_probe_moments_video_duration", lambda _path: 50.916667)
+
+    with pytest.raises(engine._MomentsPublishError, match="最长支持30秒") as error:
+        engine._publish_moments_local_once("pc-wechat-default", attachments=files)
+
+    assert error.value.steps == [
+        {"step": "validate_moments_video", "ok": False, "duration_seconds": 50.917}
+    ]
+
+
 def test_native_wechat_lists_reach_rows_after_the_first_hundred(tmp_path, monkeypatch):
     account_id = "pagination-account"
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")

@@ -166,6 +166,65 @@ class DouyinCommentScraper:
         except Exception:
             pass
 
+    async def send_open_chat_message(
+        self,
+        page: Page,
+        message: str,
+        logger: Optional[Callable[[str, str], None]] = None,
+        username: str = "",
+    ) -> Dict:
+        message_parts = [
+            part.strip()
+            for part in str(message or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            if str(part or "").strip()
+        ]
+        if not message_parts:
+            raise ValueError("私信内容不能为空")
+
+        input_box = page.locator(
+            'div[data-e2e="msg-input"] [contenteditable="true"], .public-DraftEditor-content[contenteditable="true"]'
+        ).first
+        send_button = page.locator(".e2e-send-msg-btn, [class*='send-msg-btn'], span.e2e-send-msg-btn").first
+        await input_box.wait_for(state="visible", timeout=15000)
+        await send_button.wait_for(state="visible", timeout=15000)
+
+        sent_messages: List[str] = []
+        for index, message_part in enumerate(message_parts, start=1):
+            await input_box.click()
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await page.keyboard.type(message_part, delay=35)
+            await send_button.click(timeout=10000)
+            await page.wait_for_timeout(1200)
+            delivered = await page.evaluate(
+                """
+                (sentText) => {
+                    const needle = String(sentText || '').trim();
+                    if (!needle) return false;
+                    const texts = Array.from(document.querySelectorAll('[data-e2e="msg-item-content"]'))
+                        .map((node) => (node.textContent || '').trim())
+                        .filter(Boolean);
+                    if (texts.some((text) => text.includes(needle))) return true;
+                    const editor = document.querySelector(
+                        'div[data-e2e="msg-input"] [contenteditable="true"][role="textbox"]'
+                    );
+                    return ((editor?.textContent || '').trim().length === 0);
+                }
+                """,
+                message_part,
+            )
+            if not delivered:
+                raise RuntimeError(f"第 {index} 条消息发送按钮已点击，但未确认消息已发出")
+            sent_messages.append(message_part)
+            self._emit(
+                logger,
+                f"[抖音私信接管] 已发送第 {index}/{len(message_parts)} 条：{username or '-'}",
+                "success",
+            )
+            if index < len(message_parts):
+                await page.wait_for_timeout(700)
+        return {"success": True, "messages": sent_messages, "message_count": len(sent_messages)}
+
     def _raise_if_should_stop(
         self,
         should_stop: Optional[Callable[[], bool]] = None,
@@ -2447,12 +2506,20 @@ class DouyinCommentScraper:
                 const centerX = panelRect.left + panelRect.width / 2;
                 const messages = [];
                 const bubbles = Array.from(document.querySelectorAll('[data-e2e="msg-item-content"]'));
-                for (const bubble of bubbles) {
+                for (const [domIndex, bubble] of bubbles.entries()) {
                     const text = normalize(bubble.textContent || '');
                     if (!text) continue;
                     const rect = bubble.getBoundingClientRect();
-                    const bubbleCenterX = rect.left + rect.width / 2;
-                    const direction = bubbleCenterX < centerX ? 'incoming' : 'outgoing';
+                    if (
+                        bubble.closest('[class*="Unsupport"], [class*="Unsuport"], [class*="System"], [data-e2e*="system"]')
+                        || bubble.querySelector('[class*="Unsupport"], [class*="Unsuport"], [class*="System"], [data-e2e*="system"]')
+                    ) {
+                        continue;
+                    }
+                    const outgoingMarker = bubble.closest('[class*="isFromMe"]');
+                    const direction = outgoingMarker || rect.left >= centerX
+                        ? 'outgoing'
+                        : 'incoming';
                     let timeText = '';
                     const container = bubble.closest('[class*="message"], [class*="msg"], li, div');
                     if (container) {
@@ -2466,7 +2533,21 @@ class DouyinCommentScraper:
                         text,
                         time_text: timeText,
                         label: direction === 'incoming' ? (headerName || '对方') : '我',
+                        // Douyin renders the newest message first in the DOM.
+                        // Keep the visual position so callers can select the real last message.
+                        _visual_top: rect.top,
+                        _dom_index: domIndex,
                     });
+                }
+                messages.sort((left, right) => {
+                    const topDelta = Number(left?._visual_top || 0) - Number(right?._visual_top || 0);
+                    return Math.abs(topDelta) > 1
+                        ? topDelta
+                        : Number(left?._dom_index || 0) - Number(right?._dom_index || 0);
+                });
+                for (const message of messages) {
+                    delete message._visual_top;
+                    delete message._dom_index;
                 }
                 const incoming = messages.filter((item) => item.direction === 'incoming');
                 const outgoing = messages.filter((item) => item.direction === 'outgoing');
@@ -3619,6 +3700,7 @@ class DouyinCommentScraper:
         logger: Optional[Callable[[str, str], None]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         include_details: bool = False,
+        item_callback: Optional[Callable[[Dict, Page], Awaitable[Optional[Dict]]]] = None,
     ) -> List[Dict]:
         limit = max(1, min(int(max_conversations or 100), 100))
         page = await self._new_page(logger=logger)
@@ -4400,6 +4482,11 @@ class DouyinCommentScraper:
                             "warning",
                         )
 
+                if item_callback:
+                    callback_result = await item_callback(merged, page)
+                    if isinstance(callback_result, dict):
+                        merged.update(callback_result)
+
                 results.append(merged)
                 if progress_callback:
                     try:
@@ -4423,6 +4510,7 @@ class DouyinCommentScraper:
         should_stop: Optional[Callable[[], bool]] = None,
         logger: Optional[Callable[[str, str], None]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        item_callback: Optional[Callable[[Dict, Page], Awaitable[Optional[Dict]]]] = None,
     ) -> List[Dict]:
         limit = max(1, min(int(max_conversations or 100), 100))
         page = await self._new_page(logger=logger)
@@ -4650,10 +4738,21 @@ class DouyinCommentScraper:
                             f"[抖音私信聚合] 同步会话详情失败：{username}，原因：{reason or '未找到目标会话'}",
                             "warning",
                         )
+                        if item_callback:
+                            callback_result = await item_callback(row, page)
+                            if isinstance(callback_result, dict):
+                                row.update(callback_result)
                         continue
                     await page.wait_for_timeout(900)
-                    detail = await self.extract_chat_page_conversation_detail(page)
-                    detail_messages = detail.get("messages", []) if isinstance(detail, dict) else []
+                    detail: Dict = {}
+                    detail_messages: List[Dict] = []
+                    for detail_attempt in range(4):
+                        detail = await self.extract_chat_page_conversation_detail(page)
+                        detail_messages = detail.get("messages", []) if isinstance(detail, dict) else []
+                        if isinstance(detail_messages, list) and detail_messages:
+                            break
+                        if detail_attempt < 3:
+                            await page.wait_for_timeout(700)
                     if not isinstance(detail_messages, list) or not detail_messages:
                         row["detail_read_status"] = "failed"
                         row["detail_read_error"] = "已打开会话，但没有读取到右侧消息气泡"
@@ -4662,6 +4761,10 @@ class DouyinCommentScraper:
                             f"[抖音私信聚合] 会话 {username} 未读取到右侧消息气泡，保留列表预览",
                             "warning",
                         )
+                        if item_callback:
+                            callback_result = await item_callback(row, page)
+                            if isinstance(callback_result, dict):
+                                row.update(callback_result)
                         continue
                     row.update(
                         {
@@ -4711,6 +4814,10 @@ class DouyinCommentScraper:
                         f"[抖音私信聚合] 已同步 {index}/{len(results)}：{username}",
                         "success",
                     )
+                    if item_callback:
+                        callback_result = await item_callback(row, page)
+                        if isinstance(callback_result, dict):
+                            row.update(callback_result)
                 except Exception as exc:
                     row["detail_read_status"] = "failed"
                     row["detail_read_error"] = str(exc)
@@ -4719,6 +4826,10 @@ class DouyinCommentScraper:
                         f"[抖音私信聚合] 同步会话详情失败：{username}，原因：{exc}",
                         "warning",
                     )
+                    if item_callback:
+                        callback_result = await item_callback(row, page)
+                        if isinstance(callback_result, dict):
+                            row.update(callback_result)
 
             self._emit(logger, f"[抖音私信聚合] 共提取 {len(results)} 条当前消息会话", "success")
             return results

@@ -3918,11 +3918,15 @@ def _scheduled_douyin_result_payload(
             "processed_user_last",
             "skipped_last_message_not_user",
             "skipped_duplicate_reply",
+            "normal_conversations",
+            "stranger_conversations",
             "detail_read_failed",
             "detail_read_failed_count",
             "detail_failures",
             "reply",
             "extracted_phone_numbers",
+            "wechat_add_targets",
+            "phone_contacts_skipped",
             "wechat_add_friend",
         ):
             value = result.get(key)

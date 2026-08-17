@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -53,6 +54,10 @@ _ASSET_FILE_EXPIRY_SEC = 600  # 10 分钟
 _ASSET_LIST_PREVIEW_EXPIRY_SEC = 3600  # 1 小时
 # 无公网 source_url 时，点击「预览」回退用本机签名链（尽量长）
 _ASSET_LIST_OPEN_FALLBACK_EXPIRY_SEC = 86400  # 24 小时
+
+# Keep large synchronous SDK uploads off the event loop and cap concurrent
+# transfers so several users cannot exhaust local worker threads at once.
+_TOS_UPLOAD_GATE = threading.BoundedSemaphore(2)
 
 
 def _asset_file_token(asset_id: str, expiry_ts: int) -> str:
@@ -162,6 +167,11 @@ def _upload_to_tos(data: bytes, object_key: str, content_type: str) -> Optional[
     except Exception as e:
         logger.error("[TOS-步骤2.4] TOS 上传失败 object_key=%s error=%s", object_key, str(e), exc_info=True)
         return None
+
+
+def _upload_to_tos_guarded(data: bytes, object_key: str, content_type: str) -> Optional[str]:
+    with _TOS_UPLOAD_GATE:
+        return _upload_to_tos(data, object_key, content_type)
 
 
 def _normalize_auth_server_base(server_base: str) -> str:
@@ -906,6 +916,8 @@ def _refresh_asset_source_url_from_local_file(
         except Exception:
             logger.warning("[assets] failed to persist source_url failure meta asset_id=%s", row.asset_id, exc_info=True)
         return None
+
+
     old_url = (row.source_url or "").strip()
     row.source_url = public_url
     try:
@@ -2398,7 +2410,10 @@ async def _save_asset_from_url_locked(
     server_upload_url: Optional[str] = None
     server_upload_diag: dict[str, Any] = {}
     if not skip_tos_mirror:
-        tos_url = _upload_to_tos(data, f"assets/{fname}", ct)
+        # The TOS SDK is synchronous. Running it inline blocks the local
+        # asyncio event loop during large video uploads, so the launcher
+        # watchdog cannot receive /api/health and may kill a healthy task.
+        tos_url = await asyncio.to_thread(_upload_to_tos_guarded, data, f"assets/{fname}", ct)
         if not tos_url:
             server_upload_url, server_upload_diag = await _upload_bytes_to_auth_server(
                 data,

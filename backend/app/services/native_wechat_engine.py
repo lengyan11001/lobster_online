@@ -7495,6 +7495,77 @@ def _submit_local_add_friend_request(hwnd: int, steps: List[Dict[str, Any]]) -> 
             steps.append({"step": "submit_final_confirm", "ok": True, "button": confirm_name})
 
 
+def _is_local_add_friend_dialog_window(title: str, class_name: str, root_name: str = "") -> bool:
+    labels = " ".join(
+        str(value or "").strip().lower()
+        for value in (title, class_name, root_name)
+    )
+    return any(
+        marker.lower() in labels
+        for marker in ("\u6dfb\u52a0\u670b\u53cb", "searchnewfriend", "addfriend")
+    )
+
+
+def _close_local_add_friend_dialog(hwnd: int, steps: List[Dict[str, Any]], *, reason: str = "") -> bool:
+    """Close only the submitted add-friend dialog, never the WeChat main window."""
+    try:
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+
+        main_hwnd = int(hwnd or 0)
+        if not main_hwnd or not win32gui.IsWindow(main_hwnd):
+            return False
+        main_pid = int(win32process.GetWindowThreadProcessId(main_hwnd)[1] or 0)
+        foreground = int(win32gui.GetForegroundWindow() or 0)
+        candidates: List[int] = []
+
+        def collect(candidate: int, _extra: Any) -> None:
+            try:
+                if candidate == main_hwnd or not win32gui.IsWindowVisible(candidate):
+                    return
+                candidate_pid = int(win32process.GetWindowThreadProcessId(candidate)[1] or 0)
+                if not main_pid or candidate_pid != main_pid:
+                    return
+                title = str(win32gui.GetWindowText(candidate) or "")
+                class_name = str(win32gui.GetClassName(candidate) or "")
+                root_name = ""
+                if candidate == foreground:
+                    try:
+                        root_name = _uia_control_text(_uia_foreground_or_main_root(main_hwnd))
+                    except Exception:
+                        pass
+                if _is_local_add_friend_dialog_window(title, class_name, root_name):
+                    candidates.append(int(candidate))
+            except Exception:
+                return
+
+        win32gui.EnumWindows(collect, None)
+        closed_any = False
+        for candidate in dict.fromkeys(candidates):
+            title = str(win32gui.GetWindowText(candidate) or "")
+            class_name = str(win32gui.GetClassName(candidate) or "")
+            win32gui.PostMessage(candidate, win32con.WM_CLOSE, 0, 0)
+            deadline = time.time() + 1.5
+            while time.time() < deadline and win32gui.IsWindow(candidate):
+                time.sleep(0.1)
+            closed = not win32gui.IsWindow(candidate)
+            closed_any = closed_any or closed
+            steps.append(
+                {
+                    "step": "close_add_friend_dialog",
+                    "ok": closed,
+                    "reason": reason,
+                    "title": title,
+                    "class_name": class_name,
+                }
+            )
+        return closed_any
+    except Exception as exc:
+        steps.append({"step": "close_add_friend_dialog", "ok": False, "reason": reason, "error": str(exc)})
+        return False
+
+
 def _prepare_local_add_friend_form(
     account_id: str,
     keyword: str,
@@ -7566,6 +7637,7 @@ def _prepare_local_add_friend_form(
     if submit_final:
         _submit_local_add_friend_request(hwnd, steps)
         submitted = True
+        _close_local_add_friend_dialog(hwnd, steps, reason="friend_request_submitted")
 
     return {
         "ok": True,
@@ -9521,7 +9593,11 @@ async def _process_moments_publish_task(task: Dict[str, Any]) -> None:
         _merge_task_payload(task_id, {"publish_result": result})
         _finish_task(task_id, "success", 1, 1, 0, "")
     except Exception as exc:
-        _merge_task_payload(task_id, {"publish_result": {"ok": False, "error": str(exc)}})
+        failure: Dict[str, Any] = {"ok": False, "error": str(exc)}
+        failure_steps = getattr(exc, "steps", None)
+        if isinstance(failure_steps, list):
+            failure["steps"] = failure_steps
+        _merge_task_payload(task_id, {"publish_result": failure})
         _finish_task(task_id, "failed", 1, 0, 1, str(exc))
 
 
@@ -10609,47 +10685,145 @@ def _send_files_local(account_id: str, peer_id: str, attachments: List[Dict[str,
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "wxauto4.SendFiles", "files": files, "raw": raw}
 
 
+class _MomentsPublishError(RuntimeError):
+    def __init__(self, message: str, steps: List[Dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.steps = [dict(step) for step in steps]
+
+
 def _moments_publish_hwnd(main_hwnd: int) -> int:
     return _find_visible_local_moments_hwnd() or int(main_hwnd or 0)
 
 
-def _moments_publish_dialog_ready(root: Any) -> bool:
+def _moments_publish_dialog_text(root: Any) -> str:
     if root is None:
-        return False
-    text = "\n".join(_uia_control_text(node) for node in _uia_walk(root, max_depth=12, max_nodes=900) if _uia_control_text(node))
+        return ""
+    return "\n".join(
+        text
+        for node in _uia_walk(root, max_depth=12, max_nodes=900)
+        if (text := _uia_control_text(node))
+    )
+
+
+def _moments_publish_dialog_ready(root: Any) -> bool:
+    text = _moments_publish_dialog_text(root)
     return ("这一刻的想法" in text or "谁可以看" in text) and ("发表" in text or "取消" in text)
 
 
-def _click_moments_publish_entry(hwnd: int, steps: List[Dict[str, Any]]) -> int:
-    publish_hwnd = _moments_publish_hwnd(hwnd)
-    if not publish_hwnd:
-        raise RuntimeError("未找到朋友圈窗口")
-    _focus_local_wechat(publish_hwnd)
-    root = _uia_foreground_or_main_root(publish_hwnd)
-    if _moments_publish_dialog_ready(root):
-        steps.append({"step": "open_moments_publish", "ok": True, "entry": "already_open"})
-        return publish_hwnd
+def _moments_publish_rejection(root: Any) -> str:
+    text = _moments_publish_dialog_text(root)
+    for marker in (
+        "不能分享长于30秒的视频",
+        "视频时长超过30秒",
+        "视频过长",
+        "不能分享此视频",
+        "无法分享此视频",
+    ):
+        if marker in text:
+            return marker
+    return ""
 
-    entry = _uia_find_by_names(root, ["发布朋友圈", "发朋友圈", "相机", "拍照分享"], contains=True, max_depth=12)
-    if entry is not None:
-        _uia_click(entry)
-        steps.append({"step": "open_moments_publish", "ok": True, "method": "uia", "entry": _uia_control_text(entry)})
-    else:
-        rect = _uia_rect_tuple(root)
-        if rect is None:
-            raise RuntimeError("未找到朋友圈窗口位置，无法打开发布入口")
-        left, top, _right, _bottom = rect
-        _uia_click_screen_point(left + 75, top + 23)
-        steps.append({"step": "open_moments_publish", "ok": True, "method": "coordinate"})
 
-    deadline = time.time() + 8.0
+def _click_moments_publish_entry(
+    hwnd: int,
+    steps: List[Dict[str, Any]],
+    *,
+    expect_file_picker: bool = False,
+) -> int:
+    # WeChat can leave the Moments page visible while its compose dialog is
+    # still opening. Keep the first UIA attempt, then retry with a controlled
+    # recovery and the alternate header position instead of failing once on a
+    # transient window-state mismatch.
+    expected_error = "朋友圈素材选择窗口未打开" if expect_file_picker else "朋友圈发布窗口未打开"
+    last_error = expected_error
+    for attempt in range(1, 3):
+        publish_hwnd = _moments_publish_hwnd(hwnd)
+        if not publish_hwnd:
+            last_error = "未找到朋友圈窗口"
+        else:
+            _focus_local_wechat(publish_hwnd)
+            root = _uia_foreground_or_main_root(publish_hwnd)
+            if _moments_publish_dialog_ready(root):
+                steps.append({"step": "open_moments_publish", "ok": True, "entry": "already_open", "attempt": attempt})
+                return publish_hwnd
+
+            entry = None
+            if attempt == 1:
+                entry = _uia_find_by_names(
+                    root,
+                    ["发表", "发布朋友圈", "发朋友圈", "相机", "拍照分享"],
+                    contains=True,
+                    max_depth=12,
+                )
+            if entry is not None:
+                _uia_click(entry)
+                steps.append({"step": "open_moments_publish", "ok": True, "method": "uia", "entry": _uia_control_text(entry), "attempt": attempt})
+            else:
+                rect = _uia_rect_tuple(root)
+                if rect is None:
+                    last_error = "未找到朋友圈窗口位置，无法打开发布入口"
+                else:
+                    left, top, right, _bottom = rect
+                    # Older WeChat builds expose no accessible name for the
+                    # camera entry. Try the historical left header position
+                    # first, then the right header position on recovery.
+                    x = left + 75 if attempt == 1 else max(left + 20, right - 75)
+                    _uia_click_screen_point(x, top + 23)
+                    steps.append({
+                        "step": "open_moments_publish",
+                        "ok": True,
+                        "method": "coordinate",
+                        "point": [x, top + 23],
+                        "attempt": attempt,
+                    })
+                    last_error = expected_error
+
+            if last_error == expected_error:
+                deadline = time.time() + (10.0 if attempt == 1 else 12.0)
+                while time.time() < deadline:
+                    root = _uia_foreground_or_main_root(publish_hwnd)
+                    if expect_file_picker and _file_dialog_filename_edit(root) is not None:
+                        steps.append({"step": "moments_file_picker_ready", "ok": True, "attempt": attempt})
+                        return publish_hwnd
+                    if _moments_publish_dialog_ready(root):
+                        steps.append({"step": "moments_publish_dialog_ready", "ok": True, "attempt": attempt})
+                        return publish_hwnd
+                    time.sleep(0.25)
+
+        steps.append({"step": "moments_publish_entry_retry", "ok": False, "attempt": attempt, "error": last_error})
+        if attempt == 1:
+            try:
+                _send_hotkey("esc", pause=0.1)
+            except Exception:
+                pass
+            try:
+                _focus_local_wechat(hwnd)
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+    raise RuntimeError(last_error)
+
+
+def _wait_for_moments_publish_dialog(
+    hwnd: int,
+    steps: List[Dict[str, Any]],
+    *,
+    timeout: float = 30.0,
+) -> int:
+    deadline = time.time() + max(2.0, float(timeout or 30.0))
     while time.time() < deadline:
-        root = _uia_foreground_or_main_root(publish_hwnd)
+        root = _uia_foreground_or_main_root(hwnd)
+        rejection = _moments_publish_rejection(root)
+        if rejection:
+            steps.append({"step": "moments_media_rejected", "ok": False, "error": rejection})
+            raise RuntimeError(f"微信朋友圈拒绝该素材：{rejection}")
         if _moments_publish_dialog_ready(root):
-            steps.append({"step": "moments_publish_dialog_ready", "ok": True})
-            return publish_hwnd
+            steps.append({"step": "moments_publish_dialog_ready", "ok": True, "after_file_selection": True})
+            return hwnd
         time.sleep(0.25)
-    raise RuntimeError("朋友圈发布窗口未打开")
+    steps.append({"step": "moments_publish_dialog_ready", "ok": False, "after_file_selection": True})
+    raise RuntimeError("选择素材后朋友圈发布编辑页未打开")
 
 
 def _find_moments_publish_text_edit(root: Any) -> Optional[Any]:
@@ -10918,26 +11092,46 @@ def _click_moments_publish_submit_node(node: Any, steps: List[Dict[str, Any]], a
         return False
 
 
-def _file_dialog_filename_edit(root: Any) -> Optional[Any]:
-    edits = _uia_visible_edit_controls(root)
-    if not edits:
+def _uia_targeted_child(root: Any, control_type: str, automation_ids: List[str]) -> Optional[Any]:
+    """Find a known dialog control without walking the file thumbnail tree."""
+    finder = getattr(root, f"{control_type}Control", None)
+    if not callable(finder):
         return None
-    scored: List[tuple[int, Any]] = []
-    for edit in edits:
-        rect = _uia_rect_tuple(edit)
-        if rect is None:
-            continue
-        left, top, right, bottom = rect
-        width = right - left
-        name = _uia_control_text(edit)
-        score = bottom + min(width, 500)
-        if "文件名" in name or "File name" in name:
-            score += 1000
-        scored.append((score, edit))
-    if not scored:
-        return sorted(edits, key=_uia_control_rect_score, reverse=True)[0]
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return scored[0][1]
+    for automation_id in automation_ids:
+        try:
+            node = finder(searchDepth=8, AutomationId=str(automation_id))
+        except Exception:
+            node = None
+        if node is not None:
+            return node
+    return None
+
+
+def _file_dialog_filename_edit(root: Any) -> Optional[Any]:
+    # The Windows common file dialog exposes the filename box as Edit/1148.
+    # Do not use _uia_walk here: a directory with many video thumbnails makes
+    # UIA enumerate every item and can hold the per-account WeChat lock.
+    node = _uia_targeted_child(root, "Edit", ["1148"])
+    if node is not None:
+        return node
+    for name in ("文件名:", "文件名(N):", "File name:"):
+        finder = getattr(root, "EditControl", None)
+        if not callable(finder):
+            break
+        try:
+            node = finder(searchDepth=8, Name=name)
+        except Exception:
+            node = None
+        if node is not None:
+            return node
+    return None
+
+
+def _file_dialog_open_button(root: Any) -> Optional[Any]:
+    # Common dialog Open button is Button/1. If this control is unavailable,
+    # the caller uses Enter; do not fall back to another full UIA traversal.
+    node = _uia_targeted_child(root, "Button", ["1"])
+    return node
 
 
 def _select_files_in_open_dialog(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
@@ -10948,22 +11142,47 @@ def _select_files_in_open_dialog(hwnd: int, files: List[Dict[str, Any]], steps: 
     deadline = time.time() + 10.0
     edit = None
     root = None
+    dialog_hwnd = 0
     while time.time() < deadline:
         root = _uia_foreground_or_main_root(hwnd)
+        try:
+            import win32gui  # type: ignore
+
+            dialog_hwnd = int(win32gui.GetForegroundWindow() or 0)
+        except Exception:
+            dialog_hwnd = 0
         edit = _file_dialog_filename_edit(root)
         if edit is not None:
             break
         time.sleep(0.25)
     if edit is None or root is None:
-        raise RuntimeError("未找到系统文件选择框")
+        raise RuntimeError("未找到系统文件选择框的文件名输入框")
     _uia_set_text(edit, file_spec)
     steps.append({"step": "select_moments_files", "ok": True, "count": len(paths)})
-    open_btn = _uia_find_by_names(root, ["打开(&O)", "打开", "Open"], contains=True, max_depth=16)
+    open_btn = _file_dialog_open_button(root)
     if open_btn is not None:
         _uia_click(open_btn)
     else:
         _send_hotkey("enter", pause=0.25)
-    time.sleep(1.5)
+    close_deadline = time.time() + 8.0
+    while time.time() < close_deadline:
+        try:
+            import win32gui  # type: ignore
+
+            if not dialog_hwnd or not win32gui.IsWindow(dialog_hwnd) or not win32gui.IsWindowVisible(dialog_hwnd):
+                steps.append({"step": "close_moments_file_picker", "ok": True})
+                return
+        except Exception:
+            # If the platform does not expose a window handle, the compose
+            # dialog check below will still catch a failed selection.
+            pass
+        time.sleep(0.25)
+    try:
+        _send_hotkey("esc", pause=0.1)
+    except Exception:
+        pass
+    steps.append({"step": "close_moments_file_picker", "ok": False, "error": "系统文件选择框未在8秒内关闭"})
+    raise RuntimeError("系统文件选择框选择素材后未关闭，请重试")
 
 
 def _add_moments_publish_files(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
@@ -10983,6 +11202,48 @@ def _add_moments_publish_files(hwnd: int, files: List[Dict[str, Any]], steps: Li
         steps.append({"step": "open_moments_file_picker", "ok": True, "method": "coordinate"})
     _select_files_in_open_dialog(hwnd, files, steps)
     time.sleep(random.uniform(1.0, 2.0))
+
+
+def _moments_ffprobe_path() -> str:
+    executable = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    candidates = [
+        ROOT_DIR / "deps" / "ffmpeg" / executable,
+        ROOT_DIR / "deps" / "ffmpeg" / "bin" / executable,
+        ROOT_DIR / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / executable,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which(executable) or ""
+
+
+def _probe_moments_video_duration(path: str) -> float:
+    source = str(path or "").strip()
+    ffprobe = _moments_ffprobe_path()
+    if not source or not ffprobe:
+        return 0.0
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                source,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode != 0:
+            return 0.0
+        return max(0.0, float((result.stdout or "").strip() or 0.0))
+    except Exception:
+        return 0.0
 
 
 def _submit_moments_publish(hwnd: int, steps: List[Dict[str, Any]]) -> None:
@@ -11039,44 +11300,63 @@ def _publish_moments_local_once(
     item = _find_local_account(account_id)
     files = _normalize_attachments(attachments)
     text = str(content or "").strip()
-    if not text and not files:
-        raise RuntimeError("朋友圈发布缺少正文或素材")
-    image_count = sum(1 for file in files if file.get("kind") == "image")
-    video_count = sum(1 for file in files if file.get("kind") == "video")
-    if image_count and video_count:
-        raise RuntimeError("朋友圈一次发布暂不混合图片和视频")
-    if image_count > 9:
-        raise RuntimeError("朋友圈图文一次最多选择9张图片")
-    if video_count > 1:
-        raise RuntimeError("朋友圈视频一次只支持1个视频")
-    _enforce_local_moments_publish_rate(account_id)
     steps: List[Dict[str, Any]] = []
-    hwnd = int(item.get("hwnd") or 0)
-    _open_local_moments(hwnd, steps)
-    publish_hwnd = _click_moments_publish_entry(hwnd, steps)
-    if files:
-        _add_moments_publish_files(publish_hwnd, files, steps)
-    if text:
-        _focus_moments_publish_text(publish_hwnd, steps)
-        _fill_moments_publish_text(publish_hwnd, text, steps)
-    _submit_moments_publish(publish_hwnd, steps)
-    return {
-        "ok": True,
-        "account_id": account_id,
-        "content_length": len(text),
-        "media_type": media_type or ("video" if video_count else "image_text"),
-        "visibility": visibility or "public",
-        "attachments": [
-            {
-                "filename": item.get("filename"),
-                "kind": item.get("kind"),
-                "size": item.get("size"),
-            }
-            for item in files
-        ],
-        "steps": steps,
-        "driver": "pc_wechat_moments_uia",
-    }
+    try:
+        if not text and not files:
+            raise RuntimeError("朋友圈发布缺少正文或素材")
+        image_count = sum(1 for file in files if file.get("kind") == "image")
+        video_count = sum(1 for file in files if file.get("kind") == "video")
+        if image_count and video_count:
+            raise RuntimeError("朋友圈一次发布暂不混合图片和视频")
+        if image_count > 9:
+            raise RuntimeError("朋友圈图文一次最多选择9张图片")
+        if video_count > 1:
+            raise RuntimeError("朋友圈视频一次只支持1个视频")
+        if video_count == 1:
+            video = next(file for file in files if file.get("kind") == "video")
+            duration = _probe_moments_video_duration(str(video.get("local_path") or ""))
+            if duration > 30.05:
+                steps.append({"step": "validate_moments_video", "ok": False, "duration_seconds": round(duration, 3)})
+                raise RuntimeError(f"微信朋友圈视频最长支持30秒，当前视频{duration:.1f}秒，请剪短后重试")
+            if duration > 0:
+                steps.append({"step": "validate_moments_video", "ok": True, "duration_seconds": round(duration, 3)})
+
+        _enforce_local_moments_publish_rate(account_id)
+        hwnd = int(item.get("hwnd") or 0)
+        _open_local_moments(hwnd, steps)
+        publish_hwnd = _click_moments_publish_entry(hwnd, steps, expect_file_picker=bool(files))
+        if files:
+            root = _uia_foreground_or_main_root(publish_hwnd)
+            if _file_dialog_filename_edit(root) is not None:
+                _select_files_in_open_dialog(publish_hwnd, files, steps)
+            else:
+                _add_moments_publish_files(publish_hwnd, files, steps)
+            _wait_for_moments_publish_dialog(publish_hwnd, steps)
+        if text:
+            _focus_moments_publish_text(publish_hwnd, steps)
+            _fill_moments_publish_text(publish_hwnd, text, steps)
+        _submit_moments_publish(publish_hwnd, steps)
+        return {
+            "ok": True,
+            "account_id": account_id,
+            "content_length": len(text),
+            "media_type": media_type or ("video" if video_count else "image_text"),
+            "visibility": visibility or "public",
+            "attachments": [
+                {
+                    "filename": file.get("filename"),
+                    "kind": file.get("kind"),
+                    "size": file.get("size"),
+                }
+                for file in files
+            ],
+            "steps": steps,
+            "driver": "pc_wechat_moments_uia",
+        }
+    except Exception as exc:
+        if isinstance(exc, _MomentsPublishError):
+            raise
+        raise _MomentsPublishError(str(exc), steps) from exc
 
 
 def publish_moments_local(

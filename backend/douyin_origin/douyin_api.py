@@ -3510,9 +3510,6 @@ def _build_douyin_stranger_message_reply_fields(row: Dict) -> Dict[str, object]:
         "reply_started_at": normalized.get("reply_started_at", ""),
         "reply_finished_at": normalized.get("reply_finished_at", ""),
         "reply_updated_at": normalized.get("reply_updated_at", ""),
-        "last_message_text": normalized.get("last_message_text", ""),
-        "last_message_is_user": normalized.get("last_message_is_user"),
-        "has_user_message": normalized.get("has_user_message"),
         "h5_reply_fingerprint": normalized.get("h5_reply_fingerprint", ""),
         "h5_reply_sent_at": normalized.get("h5_reply_sent_at", ""),
         "phone_numbers": list(normalized.get("phone_numbers") or []),
@@ -3593,14 +3590,20 @@ def merge_douyin_stranger_message_results(account_id: int, rows: List[Dict]) -> 
         if existing:
             incoming_phone_numbers = list(normalized.get("phone_numbers") or [])
             incoming_wechat_add_status = str(normalized.get("wechat_add_status") or "").strip().lower()
+            existing_phone_numbers = list(existing.get("phone_numbers") or [])
+            existing_wechat_add_status = str(existing.get("wechat_add_status") or "").strip().lower()
             normalized.update(_build_douyin_stranger_message_reply_fields(existing))
-            # Reply markers are read from the stored row, but phone capture and
-            # WeChat add status come from the current pass. Keep the newer
-            # status so a queued number is not downgraded to phone_detected.
-            if incoming_phone_numbers:
-                normalized["phone_numbers"] = incoming_phone_numbers
-            if incoming_wechat_add_status:
-                normalized["wechat_add_status"] = incoming_wechat_add_status
+            # Current detail data owns the latest message direction. Only
+            # persisted reply/contact markers are merged from the old row.
+            # A fresh detail snapshot is authoritative.  Unioning it with
+            # persisted numbers can keep a phone number that came from our
+            # own outgoing message and send that stale number to WeChat.
+            normalized["phone_numbers"] = list(dict.fromkeys(
+                [str(item).strip() for item in (
+                    incoming_phone_numbers or existing_phone_numbers
+                ) if str(item).strip()]
+            ))
+            normalized["wechat_add_status"] = incoming_wechat_add_status or existing_wechat_add_status
             if existing != normalized:
                 changed += 1
         else:
@@ -10909,25 +10912,74 @@ async def send_douyin_stranger_messages_for_monitor(
 _DOUYIN_MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)1[\s-]*[3-9](?:[\s-]*\d){9}(?!\d)")
 
 
+def _douyin_incoming_message_text(message: object) -> str:
+    if not isinstance(message, dict):
+        return ""
+
+    direction = normalize_douyin_text(message.get("direction") or "").lower()
+    if direction and direction not in {"incoming", "user", "customer", "received", "other"}:
+        return ""
+    is_incoming = message.get("is_incoming")
+    if isinstance(is_incoming, bool) and not is_incoming:
+        return ""
+    if str(is_incoming or "").strip().lower() in {"0", "false", "no", "outgoing", "self"}:
+        return ""
+    if message.get("is_self") is True or message.get("from_me") is True:
+        return ""
+    return normalize_douyin_text(message.get("text") or message.get("content") or "")
+
+
 def extract_douyin_mainland_mobile_numbers(rows: List[Dict]) -> List[str]:
-    """Extract mainland mobile numbers from private-message rows and details."""
+    """Extract mainland mobile numbers from the other party's messages only."""
     numbers: List[str] = []
     seen: Set[str] = set()
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        source = "\n".join(
-            str(row.get(key) or "")
-            for key in ("incoming_message", "preview_text", "content", "username")
-        )
         messages = row.get("messages") if isinstance(row.get("messages"), list) else []
-        for message in messages:
-            if isinstance(message, dict):
-                source += "\n" + str(message.get("text") or message.get("content") or "")
-            else:
-                source += "\n" + str(message or "")
-        stored_numbers = row.get("phone_numbers") if isinstance(row.get("phone_numbers"), list) else []
-        source += "\n" + "\n".join(str(item or "") for item in stored_numbers)
+        raw_last_message_is_user = row.get("last_message_is_user")
+        last_message_is_user = raw_last_message_is_user
+        last_message_is_user = (
+            last_message_is_user is True
+            or str(last_message_is_user or "").strip().lower()
+            in {"1", "true", "yes", "user", "incoming"}
+        )
+        last_message_is_self = (
+            raw_last_message_is_user is False
+            or str(raw_last_message_is_user or "").strip().lower()
+            in {"0", "false", "no", "self", "outgoing"}
+        )
+        explicit_incoming = normalize_douyin_text(row.get("incoming_message") or "")
+        source_parts: List[str] = []
+
+        if messages:
+            source_parts.extend(
+                text
+                for text in (_douyin_incoming_message_text(message) for message in messages)
+                if text
+            )
+            if explicit_incoming:
+                source_parts.append(explicit_incoming)
+        else:
+            # Legacy rows did not have directional message objects.  Their
+            # explicit incoming field is safe; content/preview are accepted
+            # only when the row is not known to end with our own message.
+            if explicit_incoming:
+                source_parts.append(explicit_incoming)
+            elif not last_message_is_self:
+                source_parts.extend(
+                    text
+                    for text in (
+                        normalize_douyin_text(row.get("preview_text") or ""),
+                        normalize_douyin_text(row.get("content") or ""),
+                    )
+                    if text
+                )
+
+        if last_message_is_user:
+            source_parts.append(normalize_douyin_text(row.get("username") or ""))
+
+        source = "\n".join(part for part in source_parts if part)
         for match in _DOUYIN_MAINLAND_MOBILE_RE.findall(source):
             number = re.sub(r"\D", "", match)
             if len(number) != 11 or number in seen:
@@ -10983,6 +11035,29 @@ def _h5_douyin_reply_fingerprint(row: Dict) -> str:
     if not key or not last_text:
         return ""
     return f"{key}|last:{last_text}"[:800]
+
+
+_H5_DOUYIN_WECHAT_ADD_TERMINAL_STATUSES = {
+    "added",
+    "already_added",
+    "friend_added",
+    "success",
+    "completed",
+}
+_H5_DOUYIN_WECHAT_ADD_PENDING_STATUSES = {
+    "pending",
+    "queued",
+    "processing",
+    "in_progress",
+}
+
+
+def _h5_douyin_should_queue_wechat_add(existing_status: object) -> bool:
+    status = normalize_douyin_text(existing_status).lower()
+    return status not in (
+        _H5_DOUYIN_WECHAT_ADD_TERMINAL_STATUSES
+        | _H5_DOUYIN_WECHAT_ADD_PENDING_STATUSES
+    )
 
 
 async def run_douyin_h5_stranger_message_task_once(
@@ -11052,10 +11127,13 @@ async def run_douyin_h5_stranger_message_task_once(
         douyin_stranger_message_stop_requested = False
         douyin_stranger_message_background_task = current_task
         scraper = create_douyin_message_scraper(account, config)
+        scraper_closed = False
         prepared_rows: List[Dict] = []
-        reply_rows: List[Dict] = []
         phone_numbers: List[str] = []
+        phone_numbers_to_queue: List[str] = []
         seen_phones: Set[str] = set()
+        seen_queue_phones: Set[str] = set()
+        phone_contacts_skipped = 0
         existing_rows = {
             stranger_message_row_key(row): row
             for row in collect_douyin_stranger_message_results(target_account_id)
@@ -11065,6 +11143,16 @@ async def run_douyin_h5_stranger_message_task_once(
         skipped_without_user_last = 0
         skipped_duplicate_reply = 0
         detail_failures: List[Dict[str, str]] = []
+        normal_rows: List[Dict] = []
+        stranger_rows: List[Dict] = []
+        reply_result: Dict[str, object] = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "stopped": False,
+        }
+        wechat_add_friend_results: List[Dict[str, object]] = []
         started_at = _now_text()
         douyin_stranger_message_state.update(
             {
@@ -11083,6 +11171,146 @@ async def run_douyin_h5_stranger_message_task_once(
                 "last_error": "",
             }
         )
+
+        async def process_one_row(raw_row: Dict, page) -> Dict:
+            nonlocal qualifying_users, skipped_without_user_last, skipped_duplicate_reply
+            nonlocal phone_contacts_skipped
+
+            row = {**raw_row, "account_id": target_account_id}
+            key = stranger_message_row_key(row)
+            if not key:
+                return row
+            existing = existing_rows.get(key) or {}
+            current_numbers = extract_douyin_mainland_mobile_numbers([row])
+            old_numbers = [
+                str(item).strip()
+                for item in (existing.get("phone_numbers") or [])
+                if str(item).strip()
+            ]
+            # When this scan found an inbound number, it replaces the old
+            # snapshot.  This removes numbers previously extracted from our
+            # own outgoing messages instead of carrying them forward forever.
+            merged_numbers = list(dict.fromkeys(current_numbers or old_numbers))
+            row["phone_numbers"] = merged_numbers
+            existing_status = normalize_douyin_text(existing.get("wechat_add_status") or "").lower()
+            row["wechat_add_status"] = existing_status or ("phone_detected" if merged_numbers else "")
+            prepared_rows.append(row)
+
+            def persist_row() -> None:
+                existing_rows[key] = dict(row)
+                merge_douyin_stranger_message_results(target_account_id, [row])
+                if normalize_douyin_text(row.get("conversation_source", "")) == "chat_inbox":
+                    merge_douyin_inbox_results(target_account_id, [row])
+
+            async def handle_phone_numbers() -> None:
+                nonlocal phone_contacts_skipped
+
+                if wechat_add_friend_enabled and _h5_douyin_should_queue_wechat_add(existing_status):
+                    pending_targets = [phone for phone in merged_numbers if phone not in seen_queue_phones]
+                    if pending_targets:
+                        seen_queue_phones.update(pending_targets)
+                        phone_numbers_to_queue.extend(pending_targets)
+                        # Do not start native WeChat UI work from the
+                        # Playwright item callback.  The callback runs while
+                        # Douyin is still opening conversations.
+                        row["wechat_add_status"] = "queued_pending"
+                    else:
+                        phone_contacts_skipped += 1
+                elif existing_status in (_H5_DOUYIN_WECHAT_ADD_TERMINAL_STATUSES | _H5_DOUYIN_WECHAT_ADD_PENDING_STATUSES):
+                    phone_contacts_skipped += 1
+                else:
+                    row["wechat_add_status"] = "phone_detected"
+
+            if str(row.get("detail_read_status") or "").strip().lower() == "failed":
+                detail_failures.append(
+                    {
+                        "username": str(row.get("username") or "").strip() or "未知会话",
+                        "conversation_key": str(row.get("conversation_key") or "").strip(),
+                        "error": str(row.get("detail_read_error") or "详情读取失败").strip(),
+                    }
+                )
+                # A list preview can already contain a phone number even when
+                # the right-hand conversation bubbles fail to load. Keep the
+                # contact useful; the detail failure is still reported
+                # separately in the task result.
+                if merged_numbers and row.get("last_message_is_user") is not False:
+                    qualifying_users += 1
+                    for phone in merged_numbers:
+                        if phone not in seen_phones:
+                            seen_phones.add(phone)
+                            phone_numbers.append(phone)
+                    await handle_phone_numbers()
+                persist_row()
+                return row
+
+            if not _h5_douyin_last_message_is_user(row):
+                skipped_without_user_last += 1
+                persist_row()
+                return row
+
+            qualifying_users += 1
+            for phone in merged_numbers:
+                if phone not in seen_phones:
+                    seen_phones.add(phone)
+                    phone_numbers.append(phone)
+
+            if merged_numbers:
+                await handle_phone_numbers()
+                persist_row()
+                return row
+
+            if not auto_reply_enabled:
+                persist_row()
+                return row
+
+            fingerprint = _h5_douyin_reply_fingerprint(row)
+            if not fingerprint:
+                persist_row()
+                return row
+            if str(existing.get("h5_reply_fingerprint") or "").strip() == fingerprint:
+                skipped_duplicate_reply += 1
+                persist_row()
+                return row
+
+            reply_result["total"] = int(reply_result.get("total", 0) or 0) + 1
+            row["reply_status"] = "processing"
+            row["reply_message"] = fixed_text
+            douyin_stranger_message_state.update(
+                {
+                    "phase": "send",
+                    "current_user": normalize_douyin_text(row.get("username", "")),
+                    "current_message_text": fixed_text,
+                    "message": f"正在回复 {normalize_douyin_text(row.get('username', '')) or '当前会话'}",
+                }
+            )
+            try:
+                await scraper.send_open_chat_message(
+                    page,
+                    fixed_text,
+                    logger=douyin_log,
+                    username=normalize_douyin_text(row.get("username", "")),
+                )
+                reply_result["processed"] = int(reply_result.get("processed", 0) or 0) + 1
+                reply_result["success"] = int(reply_result.get("success", 0) or 0) + 1
+                row.update(
+                    {
+                        "reply_status": "sent",
+                        "reply_error": "",
+                        "h5_reply_fingerprint": fingerprint,
+                        "h5_reply_sent_at": _now_text(),
+                    }
+                )
+            except Exception as exc:
+                reply_result["processed"] = int(reply_result.get("processed", 0) or 0) + 1
+                reply_result["failed"] = int(reply_result.get("failed", 0) or 0) + 1
+                row.update({"reply_status": "failed", "reply_error": str(exc)})
+                douyin_log(
+                    f"[H5抖音私信接管] 回复失败：{row.get('username') or '-'}，原因：{exc}",
+                    "error",
+                )
+            persist_row()
+            return row
+
         try:
             douyin_log(
                 f"[H5抖音私信接管] 开始一次性读取账号 {target_account_id}，最多 {limit} 条会话，不启用常驻监控",
@@ -11093,6 +11321,7 @@ async def run_douyin_h5_stranger_message_task_once(
                 should_stop=lambda: bool(douyin_stranger_message_stop_requested),
                 logger=douyin_log,
                 include_details=True,
+                item_callback=process_one_row,
                 progress_callback=lambda processed, total, username: douyin_stranger_message_state.update(
                     {
                         "running": True,
@@ -11103,12 +11332,12 @@ async def run_douyin_h5_stranger_message_task_once(
                     }
                 ),
             )
-            normal_rows: List[Dict] = []
             try:
                 normal_rows = await scraper.collect_chat_page_private_messages(
                     max_conversations=limit,
                     should_stop=lambda: bool(douyin_stranger_message_stop_requested),
                     logger=douyin_log,
+                    item_callback=process_one_row,
                 )
             except Exception as exc:
                 # A normal inbox read must not discard stranger messages that
@@ -11145,55 +11374,6 @@ async def run_douyin_h5_stranger_message_task_once(
                 f"按顺序处理 {len(rows)}/{limit} 条会话",
                 "info",
             )
-            for raw_row in rows if isinstance(rows, list) else []:
-                if douyin_stranger_message_stop_requested:
-                    break
-                if not isinstance(raw_row, dict):
-                    continue
-                row = {**raw_row, "account_id": target_account_id}
-                key = stranger_message_row_key(row)
-                if not key:
-                    continue
-                existing = existing_rows.get(key) or {}
-                current_numbers = extract_douyin_mainland_mobile_numbers([row])
-                old_numbers = [
-                    str(item).strip()
-                    for item in (existing.get("phone_numbers") or [])
-                    if str(item).strip()
-                ]
-                merged_numbers = list(dict.fromkeys([*old_numbers, *current_numbers]))
-                row["phone_numbers"] = merged_numbers
-                prepared_rows.append(row)
-
-                if str(row.get("detail_read_status") or "").strip().lower() == "failed":
-                    detail_failures.append(
-                        {
-                            "username": str(row.get("username") or "").strip() or "未知会话",
-                            "conversation_key": str(row.get("conversation_key") or "").strip(),
-                            "error": str(row.get("detail_read_error") or "详情读取失败").strip(),
-                        }
-                    )
-                    continue
-
-                if not _h5_douyin_last_message_is_user(row):
-                    skipped_without_user_last += 1
-                    continue
-                qualifying_users += 1
-                for phone in merged_numbers:
-                    if phone not in seen_phones:
-                        seen_phones.add(phone)
-                        phone_numbers.append(phone)
-
-                if merged_numbers or not auto_reply_enabled:
-                    continue
-                fingerprint = _h5_douyin_reply_fingerprint(row)
-                if not fingerprint:
-                    continue
-                if str(existing.get("h5_reply_fingerprint") or "").strip() == fingerprint:
-                    skipped_duplicate_reply += 1
-                    continue
-                reply_rows.append(row)
-
             merge_douyin_stranger_message_results(target_account_id, prepared_rows)
 
             if douyin_stranger_message_stop_requested:
@@ -11208,73 +11388,35 @@ async def run_douyin_h5_stranger_message_task_once(
                     "stopped": True,
                 }
 
-            reply_result: Dict[str, object] = {
-                "total": len(reply_rows),
-                "processed": 0,
-                "success": 0,
-                "failed": 0,
-                "stopped": False,
+            # Close the Douyin browser before starting native WeChat work so
+            # the add-friend worker cannot steal the foreground window or
+            # mouse while the private-message scan is still running.
+            if wechat_add_friend_enabled and phone_numbers_to_queue:
+                await scraper.close()
+                scraper_closed = True
+                friend_result = await _queue_douyin_wechat_friend_add(phone_numbers_to_queue)
+                wechat_add_friend_results.append(friend_result)
+                final_add_status = "queued" if bool(friend_result.get("queued")) else "add_failed"
+                for prepared_row in prepared_rows:
+                    row_numbers = set(prepared_row.get("phone_numbers") or [])
+                    if row_numbers.intersection(phone_numbers_to_queue):
+                        prepared_row["wechat_add_status"] = final_add_status
+                merge_douyin_stranger_message_results(target_account_id, prepared_rows)
+                for prepared_row in prepared_rows:
+                    if normalize_douyin_text(prepared_row.get("conversation_source", "")) == "chat_inbox":
+                        merge_douyin_inbox_results(target_account_id, [prepared_row])
+
+            wechat_add_friend_result = {
+                "enabled": bool(wechat_add_friend_enabled),
+                "queued": any(bool(item.get("queued")) for item in wechat_add_friend_results),
+                "targets": phone_numbers_to_queue,
+                "results": wechat_add_friend_results,
+                "reason": (
+                    "no_pending_phone_number"
+                    if wechat_add_friend_enabled and not phone_numbers_to_queue
+                    else "disabled" if not wechat_add_friend_enabled else ""
+                ),
             }
-            if reply_rows:
-                reply_result = await send_douyin_stranger_messages_for_monitor(
-                    account,
-                    reply_rows,
-                    fixed_text,
-                    reply_mode="fixed",
-                )
-
-                latest_rows = {
-                    stranger_message_row_key(row): row
-                    for row in collect_douyin_stranger_message_results(target_account_id)
-                    if stranger_message_row_key(row)
-                }
-                marker_rows: List[Dict] = []
-                for sent_row in reply_rows:
-                    latest = latest_rows.get(stranger_message_row_key(sent_row))
-                    if not latest or str(latest.get("reply_status") or "").strip().lower() != "sent":
-                        continue
-                    fingerprint = _h5_douyin_reply_fingerprint(sent_row)
-                    if not fingerprint:
-                        continue
-                    latest["h5_reply_fingerprint"] = fingerprint
-                    latest["h5_reply_sent_at"] = _now_text()
-                    marker_rows.append(latest)
-                if marker_rows:
-                    merge_douyin_stranger_message_results(target_account_id, marker_rows)
-
-            if douyin_stranger_message_stop_requested:
-                return {
-                    "status": "stopped",
-                    "code": 200,
-                    "message": "H5 抖音私信接管已停止，未继续执行后续加好友动作。",
-                    "account_id": target_account_id,
-                    "mode": "h5_one_shot",
-                    "total_conversations": len(prepared_rows),
-                    "max_conversations": limit,
-                    "reply": dict(reply_result),
-                    "stopped": True,
-                }
-
-            wechat_add_friend_result = (
-                await _queue_douyin_wechat_friend_add(phone_numbers)
-                if wechat_add_friend_enabled
-                else {"enabled": False, "queued": False, "targets": [], "reason": "disabled"}
-            )
-            phone_status = (
-                "queued"
-                if bool(wechat_add_friend_result.get("queued"))
-                else "phone_detected"
-            )
-            phone_marker_rows = [
-                {
-                    **row,
-                    "wechat_add_status": phone_status,
-                }
-                for row in prepared_rows
-                if row.get("phone_numbers")
-            ]
-            if phone_marker_rows:
-                merge_douyin_stranger_message_results(target_account_id, phone_marker_rows)
             reply_success = int(reply_result.get("success", 0) or 0)
             reply_failed = int(reply_result.get("failed", 0) or 0)
             if detail_failures:
@@ -11301,11 +11443,15 @@ async def run_douyin_h5_stranger_message_task_once(
                     "processed_user_last": qualifying_users,
                     "skipped_last_message_not_user": skipped_without_user_last,
                     "skipped_duplicate_reply": skipped_duplicate_reply,
+                    "normal_conversations": len(normal_rows),
+                    "stranger_conversations": len(stranger_rows),
                     "detail_read_failed": True,
                     "detail_read_failed_count": len(detail_failures),
                     "detail_failures": detail_failures,
                     "reply": dict(reply_result),
                     "extracted_phone_numbers": phone_numbers,
+                    "wechat_add_targets": phone_numbers_to_queue,
+                    "phone_contacts_skipped": phone_contacts_skipped,
                     "wechat_add_friend": wechat_add_friend_result,
                     "stats": {
                         "total": len(prepared_rows),
@@ -11315,6 +11461,8 @@ async def run_douyin_h5_stranger_message_task_once(
                         "reply_success": reply_success,
                         "reply_failed": reply_failed,
                         "phone_numbers": len(phone_numbers),
+                        "phone_numbers_queued": len(phone_numbers_to_queue),
+                        "phone_contacts_skipped": phone_contacts_skipped,
                     },
                     "final_state": {
                         "status": "failed",
@@ -11326,7 +11474,7 @@ async def run_douyin_h5_stranger_message_task_once(
             message = (
                 f"H5 抖音私信接管完成：读取 {len(prepared_rows)}/{limit} 条会话，"
                 f"最后消息为用户 {qualifying_users} 条，发送固定文案成功 {reply_success} 条，失败 {reply_failed} 条，"
-                f"收集手机号 {len(phone_numbers)} 个。"
+                f"收集手机号 {len(phone_numbers)} 个，新增加好友 {len(phone_numbers_to_queue)} 个。"
             )
             douyin_log(f"[H5抖音私信接管] {message}", "success")
             return {
@@ -11344,8 +11492,12 @@ async def run_douyin_h5_stranger_message_task_once(
                 "processed_user_last": qualifying_users,
                 "skipped_last_message_not_user": skipped_without_user_last,
                 "skipped_duplicate_reply": skipped_duplicate_reply,
+                "normal_conversations": len(normal_rows),
+                "stranger_conversations": len(stranger_rows),
                 "reply": dict(reply_result),
                 "extracted_phone_numbers": phone_numbers,
+                "wechat_add_targets": phone_numbers_to_queue,
+                "phone_contacts_skipped": phone_contacts_skipped,
                 "wechat_add_friend": wechat_add_friend_result,
                 "stats": {
                     "total": len(prepared_rows),
@@ -11354,6 +11506,8 @@ async def run_douyin_h5_stranger_message_task_once(
                     "reply_success": reply_success,
                     "reply_failed": reply_failed,
                     "phone_numbers": len(phone_numbers),
+                    "phone_numbers_queued": len(phone_numbers_to_queue),
+                    "phone_contacts_skipped": phone_contacts_skipped,
                 },
                 "final_state": {
                     "status": "completed",
@@ -11373,7 +11527,8 @@ async def run_douyin_h5_stranger_message_task_once(
                 "mode": "h5_one_shot",
             }
         finally:
-            await scraper.close()
+            if not scraper_closed:
+                await scraper.close()
             if douyin_stranger_message_background_task is current_task:
                 douyin_stranger_message_background_task = None
             douyin_stranger_message_running = False
