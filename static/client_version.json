@@ -1,7 +1,7 @@
 {
-  "version": "1.0.183",
-  "build": 227,
-  "applied_at": "2026-08-17T14:19:05+08:00",
-  "note": "fix direct WeChat replies and stabilize one-shot Douyin takeover",
-  "bundle_sha256": "aecae819442aab3a2cf296e31aa3eb19e813590530c0e88b81c1f5de6e7308fa"
+  "version": "1.0.185",
+  "build": 229,
+  "applied_at": "2026-08-17T22:02:47+08:00",
+  "note": "support template language for WeChat replies",
+  "bundle_sha256": "abb7d5b272c9d53baf5ccd977a34e7b8e3f3cf40244bbf4370d5f478a1d42952"
 }
