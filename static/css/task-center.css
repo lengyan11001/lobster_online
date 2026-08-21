@@ -1,0 +1,199 @@
+.lobster-task-fab{
+  position:fixed;
+  right:24px;
+  bottom:28px;
+  z-index:1250;
+  width:58px;
+  height:58px;
+  border:1px solid rgba(14,165,233,.5);
+  border-radius:16px;
+  color:#075985;
+  background:linear-gradient(145deg,rgba(224,247,255,.98),rgba(213,238,255,.97));
+  box-shadow:0 12px 32px rgba(14,116,144,.2),inset 0 0 0 1px rgba(255,255,255,.62);
+  cursor:pointer;
+  overflow:hidden;
+}
+
+.lobster-task-fab::before,
+.lobster-task-panel::before{
+  content:"";
+  position:absolute;
+  pointer-events:none;
+  background:linear-gradient(112deg,transparent 42%,rgba(103,232,249,.62) 50%,transparent 58%);
+  animation:lobsterTaskSweep 3s linear infinite;
+}
+
+.lobster-task-fab::before{inset:-80% -35%}
+
+.lobster-task-fab svg{
+  position:relative;
+  width:26px;
+  height:26px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.9;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+
+.lobster-task-fab i{
+  position:absolute;
+  top:7px;
+  right:7px;
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  background:#4ade80;
+  box-shadow:0 0 0 3px #d9efff,0 0 14px #4ade80;
+}
+
+.lobster-task-fab:not(.is-active) i{
+  background:#94a3b8;
+  box-shadow:0 0 0 3px #d9efff;
+}
+
+.lobster-task-panel{
+  position:fixed;
+  right:24px;
+  bottom:96px;
+  z-index:1251;
+  width:min(390px,calc(100vw - 32px));
+  border:1px solid rgba(14,165,233,.5);
+  border-radius:12px;
+  color:#0f2942;
+  background:linear-gradient(145deg,rgba(224,247,255,.98),rgba(213,238,255,.97));
+  box-shadow:0 22px 54px rgba(14,116,144,.26);
+  overflow:hidden;
+}
+
+.lobster-task-panel::before{inset:-65% -30%}
+.lobster-task-panel[hidden]{display:none}
+
+.lobster-task-close{
+  position:absolute;
+  top:8px;
+  right:8px;
+  z-index:2;
+  width:28px;
+  height:28px;
+  border:0;
+  border-radius:7px;
+  color:#075985;
+  background:rgba(255,255,255,.42);
+  font-size:22px;
+  line-height:1;
+  cursor:pointer;
+}
+
+.lobster-task-list{
+  position:relative;
+  max-height:min(50vh,410px);
+  overflow:auto;
+  padding:10px;
+}
+
+.lobster-task-empty{
+  min-height:82px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:18px 40px 18px 10px;
+  color:#52718d;
+  text-align:center;
+  font-size:13px;
+}
+
+.lobster-task-card{
+  position:relative;
+  padding:12px;
+  margin-bottom:8px;
+  border:1px solid rgba(56,189,248,.28);
+  border-radius:9px;
+  background:rgba(255,255,255,.76);
+  box-shadow:0 5px 16px rgba(14,116,144,.08);
+  overflow:hidden;
+}
+
+.lobster-task-card:last-child{margin-bottom:0}
+
+.lobster-task-card::before{
+  content:"";
+  position:absolute;
+  left:0;
+  right:0;
+  top:0;
+  height:2px;
+  background:linear-gradient(90deg,transparent,#22d3ee,#60a5fa,#22d3ee,transparent);
+  background-size:200% 100%;
+  animation:lobsterTaskLine 1.8s linear infinite;
+}
+
+.lobster-task-row{display:flex;align-items:start;gap:10px}
+.lobster-task-copy{min-width:0;flex:1}
+
+.lobster-task-title{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-weight:650;
+  font-size:13px;
+  color:#0c4a6e;
+}
+
+.lobster-task-message{
+  margin-top:5px;
+  min-height:17px;
+  color:#45657f;
+  font-size:12px;
+  line-height:1.45;
+}
+
+.lobster-task-meta{margin-top:7px;color:#0284c7;font-size:11px}
+.lobster-task-panel .lobster-task-meta,
+.lobster-task-panel .lobster-task-track{display:none}
+
+.lobster-task-stop{
+  flex:0 0 auto;
+  border:1px solid rgba(251,113,133,.45);
+  border-radius:6px;
+  color:#be123c;
+  background:#fff1f2;
+  padding:5px 9px;
+  font-size:12px;
+  cursor:pointer;
+}
+
+.lobster-task-stop:disabled{opacity:.55;cursor:wait}
+
+.lobster-task-track{
+  height:5px;
+  margin-top:9px;
+  border-radius:999px;
+  background:#cbe8f5;
+  overflow:hidden;
+}
+
+.lobster-task-track>i{
+  display:block;
+  height:100%;
+  width:var(--task-progress,18%);
+  border-radius:inherit;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa);
+  box-shadow:0 0 16px rgba(34,211,238,.65);
+  transition:width .35s ease;
+}
+
+@keyframes lobsterTaskSweep{
+  from{transform:translateX(-45%)}
+  to{transform:translateX(45%)}
+}
+
+@keyframes lobsterTaskLine{
+  from{background-position:200% 0}
+  to{background-position:-20% 0}
+}
+
+@media(max-width:620px){
+  .lobster-task-fab{right:16px;bottom:82px}
+  .lobster-task-panel{right:16px;bottom:150px}
+}
