@@ -1,7 +1,7 @@
 {
-  "version": "1.0.198",
-  "build": 242,
-  "applied_at": "2026-08-21T14:57:14+08:00",
-  "note": "precision lead follow-up actions",
-  "bundle_sha256": "45507895b4dd2cc5300a245b207c724951c19e6768d1cc69953d9405a6f0b800"
+  "version": "1.0.199",
+  "build": 243,
+  "applied_at": "2026-08-21T15:46:41+08:00",
+  "note": "precision lead node parameter sync",
+  "bundle_sha256": "b5ded19808deac2359daeb8b3ee6b2ef5e1c04c23ef6511f01d37466a8c87813"
 }
