@@ -73,6 +73,10 @@ _SEEDANCE_TVC_CAPABILITY_ID = "comfly.seedance.tvc.pipeline"
 _SEEDANCE_TVC_DEFAULT_MODEL = "grok-imagine-video-1.5-preview"
 _SEEDANCE_TVC_DEFAULT_CHANNEL = "openmind"
 _active_scheduled_run_ids: set[str] = set()
+_active_scheduled_douyin_actions: Dict[str, str] = {}
+_active_client_workflow_actions: Dict[str, str] = {}
+_WORKFLOW_NODE_STOP_TIMEOUT_SECONDS = 8.0
+_WORKFLOW_NODE_CANCEL_GRACE_SECONDS = 8.0
 _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
@@ -460,20 +464,145 @@ def _workflow_minutes_between(start: Any, end: Any, *, default: int = 30) -> int
     return max(1, end_total - start_total)
 
 
-def _local_bestseller_workflow_day(source: Dict[str, Any], days: int) -> int:
+_WORKFLOW_NODE_DEADLINE_KEYS = (
+    "workflow_node_deadline_at",
+    "workflow_node_deadline_utc",
+    "node_deadline_at",
+    "deadline_at",
+)
+
+
+def _workflow_node_deadline_utc(item: Any, *, now: Optional[datetime] = None) -> Optional[datetime]:
+    """Return a workflow node's absolute UTC end time from a claimed run.
+
+    New servers may provide an absolute deadline. Older queued runs only carry
+    a local start/end pair, so derive the same absolute deadline from the run's
+    creation date and workflow timezone. Using ``created_at`` is important:
+    a run claimed late must keep the original node window rather than receiving
+    a new full window from its late claim time.
+    """
+    source = item if isinstance(item, dict) else {}
+    payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    h5_context = payload.get("h5_context") if isinstance(payload.get("h5_context"), dict) else {}
+    param_context = params.get("h5_context") if isinstance(params.get("h5_context"), dict) else {}
+    schedule_config = payload.get("schedule_config") if isinstance(payload.get("schedule_config"), dict) else {}
+    param_schedule_config = params.get("schedule_config") if isinstance(params.get("schedule_config"), dict) else {}
+
+    if not str(
+        h5_context.get("workflow_node_id")
+        or param_context.get("workflow_node_id")
+        or source.get("workflow_node_id")
+        or ""
+    ).strip():
+        return None
+
+    # Prefer a server-calculated absolute cutoff when it is available. It
+    # avoids timezone ambiguity for runs created by a different client build.
+    for candidate in (source, payload, h5_context, params, param_context, schedule_config, param_schedule_config):
+        for key in _WORKFLOW_NODE_DEADLINE_KEYS:
+            deadline = _parse_utc_datetime(candidate.get(key))
+            if deadline is not None:
+                return deadline
+
+    def _first_value(*keys: str) -> str:
+        for candidate in (h5_context, param_context, params, payload):
+            for key in keys:
+                value = str(candidate.get(key) or "").strip()
+                if value:
+                    return value
+        return ""
+
+    start_text = _first_value("workflow_node_time", "sales_schedule_start", "start_time", "time")
+    end_text = _first_value("workflow_node_end_time", "sales_schedule_end", "end_time")
+    start_match = _TIME_RE.match(start_text)
+    end_match = _TIME_RE.match(end_text)
+    if not start_match or not end_match:
+        return None
+
+    timezone_offset_minutes = 480
+    for candidate in (schedule_config, param_schedule_config, h5_context, param_context, params, payload):
+        if candidate.get("timezone_offset_minutes") is None:
+            continue
+        try:
+            timezone_offset_minutes = int(candidate.get("timezone_offset_minutes"))
+        except (TypeError, ValueError):
+            pass
+        break
+    timezone_offset_minutes = max(-720, min(840, timezone_offset_minutes))
+
+    reference: Optional[datetime] = None
+    for value in (
+        source.get("created_at"),
+        payload.get("created_at"),
+        source.get("claimed_at"),
+        source.get("started_at"),
+    ):
+        reference = _parse_utc_datetime(value)
+        if reference is not None:
+            break
+    if reference is None:
+        reference = now or datetime.now(timezone.utc)
+    else:
+        reference = reference.astimezone(timezone.utc)
+
+    local_reference = reference + timedelta(minutes=timezone_offset_minutes)
+    start_hour, start_minute = int(start_match.group(1)), int(start_match.group(2))
+    end_hour, end_minute = int(end_match.group(1)), int(end_match.group(2))
+    local_end = datetime(
+        local_reference.year,
+        local_reference.month,
+        local_reference.day,
+        end_hour,
+        end_minute,
+    )
+    if (end_hour, end_minute) < (start_hour, start_minute):
+        local_end += timedelta(days=1)
+    return (local_end - timedelta(minutes=timezone_offset_minutes)).replace(tzinfo=timezone.utc)
+
+
+def _workflow_node_remaining_seconds(item: Any, *, now: Optional[datetime] = None) -> Optional[float]:
+    deadline = _workflow_node_deadline_utc(item, now=now)
+    if deadline is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return (deadline - current.astimezone(timezone.utc)).total_seconds()
+
+
+def _local_bestseller_workflow_day(
+    source: Dict[str, Any],
+    days: int,
+    *,
+    now: Optional[datetime] = None,
+) -> int:
+    days = max(1, days)
+    mode = str(source.get("day_mode") or "").strip().lower()
     explicit = _safe_int(source.get("day"))
-    if explicit > 0:
+    legacy_elapsed = mode == "activation_selected" and explicit > 0
+    if mode != "workflow_elapsed" and not legacy_elapsed and explicit > 0:
         return max(1, min(explicit, days))
+    start_day = _safe_int(source.get("start_day"))
+    if start_day <= 0 and legacy_elapsed:
+        # Older employee activations stored the selected starting day in
+        # ``day``. Treat it as the start only for that legacy workflow mode;
+        # one-off demo tasks with an explicit day remain fixed above.
+        start_day = explicit
+    start_day = max(1, min(start_day or 1, days))
     ctx = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
     schedule = source.get("schedule_config") if isinstance(source.get("schedule_config"), dict) else {}
     tz_offset = _safe_int(schedule.get("timezone_offset_minutes") or ctx.get("timezone_offset_minutes") or 480)
     start = _parse_utc_datetime(ctx.get("workflow_day_start") or ctx.get("workflow_started_at") or source.get("workflow_started_at"))
     if not start:
-        return 1
-    today_local = (datetime.now(timezone.utc) + timedelta(minutes=tz_offset)).date()
+        return start_day
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    today_local = (current.astimezone(timezone.utc) + timedelta(minutes=tz_offset)).date()
     start_local = (start + timedelta(minutes=tz_offset)).date()
     elapsed = max(0, (today_local - start_local).days)
-    return (elapsed % max(1, days)) + 1
+    return ((start_day - 1 + elapsed) % days) + 1
 
 
 def _local_bestseller_missing_fields(source: Dict[str, Any], profile: Dict[str, Any]) -> List[str]:
@@ -2251,7 +2380,7 @@ async def _run_scheduled_chat_message(
                 headers,
                 run_id,
                 result_text=reply.strip(),
-                result_payload={"mode": "openclaw_message"},
+                result_payload={"mode": "chat_message"},
             )
             return
 
@@ -3793,7 +3922,14 @@ def _scheduled_douyin_online_config_params(
                     "interval_minutes": _safe_int(monitor.get("interval_minutes") or 30) or 30,
                     "max_users": _safe_int(monitor.get("max_conversations") or 100) or 100,
                     "auto_reply_enabled": bool(monitor.get("auto_reply_enabled", True)),
-                    "reply_mode": str(monitor.get("reply_mode") or "fixed").strip() or "fixed",
+                    # H5 supports only its explicit fixed/AI-lead switch.
+                    # Online's legacy ``ai_auto`` mode must not leak into a
+                    # one-shot workflow and change its fixed-script behavior.
+                    "reply_mode": (
+                        "ai_lead"
+                        if str(monitor.get("reply_mode") or "").strip().lower() == "ai_lead"
+                        else "fixed"
+                    ),
                     "message": str(monitor.get("reply_message") or "").strip(),
                     "reply_prompt": str(monitor.get("reply_prompt") or "").strip(),
                     "contact_value": str(monitor.get("contact_value") or "").strip(),
@@ -3864,6 +4000,8 @@ def _merge_scheduled_douyin_stranger_params(
         if key not in task:
             continue
         value = task.get(key)
+        if key == "reply_mode":
+            value = "ai_lead" if str(value or "").strip().lower() == "ai_lead" else "fixed"
         if isinstance(value, bool):
             merged[key] = value
         elif value not in (None, "", []):
@@ -4249,15 +4387,23 @@ def _scheduled_douyin_fixed_text(params: Optional[Dict[str, Any]], kind: str) ->
     return str(source.get("comment_text") or source.get("comment") or "内容很有参考价值，学习了。").strip()
 
 
-def _scheduled_douyin_interaction_users(limit: int = 10) -> List[Dict[str, Any]]:
+def _scheduled_douyin_interaction_users(
+    limit: int = 10,
+    selected_task_ids: Optional[List[int]] = None,
+) -> List[Dict[str, Any]]:
     _install_douyin_origin_import_path()
     from douyin_api import collect_douyin_interaction_users  # type: ignore
 
-    rows = collect_douyin_interaction_users()
+    wanted_task_ids = {
+        _safe_int(task_id) for task_id in (selected_task_ids or []) if _safe_int(task_id) > 0
+    }
+    rows = collect_douyin_interaction_users(wanted_task_ids or None)
     out: List[Dict[str, Any]] = []
     seen: set[str] = set()
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
+            continue
+        if wanted_task_ids and _safe_int(row.get("task_id")) not in wanted_task_ids:
             continue
         key = str(row.get("profile_url") or row.get("sec_uid") or row.get("user_id") or row.get("username") or "").strip()
         if not key or key in seen:
@@ -4279,6 +4425,20 @@ _SCHEDULED_DOUYIN_ACTION_LABELS = {
     "stranger_message": "私信接管",
 }
 
+_SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS = (
+    "reply_comments",
+    "mention_comment",
+    "follow_comment",
+    "direct_message",
+)
+
+
+def _scheduled_douyin_followup_actions(value: Any, *, default_all: bool = False) -> List[str]:
+    if not isinstance(value, list):
+        return list(_SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS) if default_all else []
+    selected = {str(item or "").strip().lower() for item in value}
+    return [action for action in _SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS if action in selected]
+
 
 def _scheduled_douyin_action_timeout(start_result: Dict[str, Any]) -> float:
     total = max(1, _safe_int(start_result.get("total") or 1))
@@ -4293,6 +4453,7 @@ async def _wait_for_douyin_sales_action_completion(
     action: str,
     *,
     timeout_seconds: float,
+    account_id: int = 0,
     poll_interval_seconds: float = 2.0,
 ) -> Dict[str, Any]:
     _install_douyin_origin_import_path()
@@ -4323,7 +4484,8 @@ async def _wait_for_douyin_sales_action_completion(
         if not running:
             return {"status": "done", "state": last_snapshot}
         if asyncio.get_running_loop().time() >= deadline:
-            return {"status": "timeout", "state": last_snapshot}
+            stop_result = await _stop_douyin_action(action, account_id=account_id)
+            return {"status": "timeout_stopped", "state": last_snapshot, "stop_result": stop_result}
         await asyncio.sleep(max(0.5, poll_interval_seconds))
 
 
@@ -4370,7 +4532,12 @@ def _scheduled_douyin_action_users(
     _install_douyin_origin_import_path()
     from douyin_api import collect_douyin_interaction_users, user_choice_key  # type: ignore
 
-    current_rows = collect_douyin_interaction_users()
+    selected_task_ids = {
+        _safe_int(row.get("task_id"))
+        for row in selected_users
+        if isinstance(row, dict) and _safe_int(row.get("task_id")) > 0
+    }
+    current_rows = collect_douyin_interaction_users(selected_task_ids or None)
     current_map = {
         user_choice_key(row): row
         for row in (current_rows if isinstance(current_rows, list) else [])
@@ -4382,6 +4549,54 @@ def _scheduled_douyin_action_users(
         row = current_map.get(key, selected)
         output.append(_scheduled_douyin_slim_user(row, action))
     return output
+
+
+async def _run_scheduled_douyin_batch_followups(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    followup_actions: List[str],
+    selected_task_ids: List[int],
+) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for followup_action in followup_actions:
+        await _post_task_event(
+            cloud,
+            base,
+            headers,
+            run_id,
+            "progress",
+            {
+                "text": f"正在对本次采集的精准客户执行：{_SCHEDULED_DOUYIN_ACTION_LABELS.get(followup_action, followup_action)}",
+                "action": followup_action,
+            },
+        )
+        _active_scheduled_douyin_actions[run_id] = followup_action
+        followup_params = _load_scheduled_douyin_online_config_params(followup_action)
+        followup_params.update(
+            {
+                "selected_task_ids": list(selected_task_ids),
+                "customer_scope": "current_collection_batch",
+            }
+        )
+        try:
+            followup_result = await _run_scheduled_douyin_sales_action(followup_action, followup_params)
+        except Exception as exc:
+            logger.exception(
+                "[SCHEDULED-TASK] Douyin batch followup failed run_id=%s action=%s",
+                run_id,
+                followup_action,
+            )
+            followup_result = {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
+        results.append(
+            {
+                "action": followup_action,
+                "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(followup_action, followup_action),
+                "result": followup_result,
+            }
+        )
+    return results
 
 
 def _scheduled_douyin_video_comment_tasks(selected_task_ids: List[int]) -> List[Dict[str, Any]]:
@@ -4514,10 +4729,10 @@ def _scheduled_douyin_completed_result(
     }
     stats = {key: value for key, value in stats.items() if value or key in {"total", "processed", "success", "failed"}}
     label = _SCHEDULED_DOUYIN_ACTION_LABELS.get(action, action)
-    if completion_status == "timeout":
+    if completion_status in {"timeout", "timeout_stopped"}:
         summary = (
-            f"{label}仍在执行，当前已处理 {stats.get('processed', 0)}/{stats.get('total', 0)}，"
-            f"成功 {stats.get('success', 0)}，失败 {stats.get('failed', 0)}；后续结果会继续保存在 Online。"
+            f"{label}超过安全等待时间，已请求停止；当前已处理 {stats.get('processed', 0)}/{stats.get('total', 0)}，"
+            f"成功 {stats.get('success', 0)}，失败 {stats.get('failed', 0)}。"
         )
     else:
         summary = (
@@ -4537,6 +4752,8 @@ def _scheduled_douyin_completed_result(
         result["users"] = users
     if tasks is not None:
         result["tasks"] = tasks
+    if isinstance(completion.get("stop_result"), dict):
+        result["stop_result"] = completion.get("stop_result")
     return result
 
 
@@ -4614,6 +4831,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         completion = await _wait_for_douyin_sales_action_completion(
             action,
             timeout_seconds=_scheduled_douyin_action_timeout(result),
+            account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
             action,
@@ -4625,7 +4843,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "follow_comment":
         from douyin_api import douyin_start_follow_comment  # type: ignore
 
-        users = _scheduled_douyin_interaction_users(max_users)
+        users = _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
         if not users:
             return {"code": 400, "msg": "当前没有可执行的精准客户，请先完成关键词采集。"}
         comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
@@ -4645,6 +4863,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         completion = await _wait_for_douyin_sales_action_completion(
             action,
             timeout_seconds=_scheduled_douyin_action_timeout(result),
+            account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
             action,
@@ -4656,7 +4875,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "direct_message":
         from douyin_api import douyin_start_interaction  # type: ignore
 
-        users = _scheduled_douyin_interaction_users(max_users)
+        users = _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
         if not users:
             return {"code": 400, "msg": "当前没有可私信的精准客户，请先完成关键词采集。"}
         message_mode = str(source.get("message_mode") or "fixed").strip() or "fixed"
@@ -4684,6 +4903,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         completion = await _wait_for_douyin_sales_action_completion(
             action,
             timeout_seconds=_scheduled_douyin_action_timeout(result),
+            account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
             action,
@@ -4696,7 +4916,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         from douyin_api import douyin_get_self_videos  # type: ignore
         from douyin_api import douyin_start_mention_comment  # type: ignore
 
-        users = _scheduled_douyin_interaction_users(max_users)
+        users = _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
         if not users:
             return {"code": 400, "msg": "当前没有可@的精准客户，请先完成关键词采集。"}
         videos_result = await douyin_get_self_videos(account_id=account_id, max_videos=6)
@@ -4723,6 +4943,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         completion = await _wait_for_douyin_sales_action_completion(
             action,
             timeout_seconds=_scheduled_douyin_action_timeout(result),
+            account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
             action,
@@ -4740,6 +4961,13 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             fixed_message=str(source.get("message") or "").strip(),
             auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
             wechat_add_friend_enabled=bool(source.get("wechat_add_friend_enabled", False)),
+            reply_mode=(
+                "ai_lead"
+                if str(source.get("reply_mode") or "").strip().lower() == "ai_lead"
+                else "fixed"
+            ),
+            reply_prompt=str(source.get("reply_prompt") or "").strip(),
+            contact_value=str(source.get("contact_value") or "").strip(),
         )
         return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音私信一次性任务执行失败"}
 
@@ -4796,6 +5024,13 @@ async def _run_scheduled_douyin_leads(
     elif use_online_sales_config:
         action = _scheduled_douyin_sales_action_from_context(h5_context) or inferred_sales_action or action
         params = _load_scheduled_douyin_online_config_params(action)
+        if action == "search_collect":
+            params = dict(params)
+            params["followup_actions"] = _scheduled_douyin_followup_actions(
+                workflow_params.get("followup_actions"),
+                default_all="followup_actions" not in workflow_params,
+            )
+            params["customer_scope"] = "current_collection_batch"
     elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
         params = _load_scheduled_douyin_online_config_params(action)
     if h5_one_shot:
@@ -4805,7 +5040,17 @@ async def _run_scheduled_douyin_leads(
         params["h5_one_shot"] = True
     if not run_id or not action:
         return
-    await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": f"正在执行抖音获客任务：{action}"})
+    event_status = await _post_task_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        "thinking",
+        {"text": f"正在执行抖音获客任务：{action}"},
+    )
+    if _task_event_rejects_local_work(event_status):
+        return
+    _active_scheduled_douyin_actions[run_id] = action
     try:
         if action == "search_collect":
             result = await _run_scheduled_douyin_search_collect_action(params)
@@ -4887,11 +5132,31 @@ async def _run_scheduled_douyin_leads(
                 )
                 search_total = _safe_int(result.get("search_total") or result_payload.get("search_total"))
                 final_status = str((final_state or {}).get("status") or "").strip().lower()
+                followup_results: List[Dict[str, Any]] = []
+                followup_actions = _scheduled_douyin_followup_actions(params.get("followup_actions"))
+                if final_status == "done" and followup_actions:
+                    followup_results = await _run_scheduled_douyin_batch_followups(
+                        cloud,
+                        base,
+                        headers,
+                        run_id,
+                        followup_actions,
+                        selected_task_ids,
+                    )
+                    _active_scheduled_douyin_actions[run_id] = action
+                    result_payload["followup_actions"] = followup_actions
+                    result_payload["followup_results"] = followup_results
                 if final_status == "done":
                     result_text = (
                         f"搜索完成，找到 {search_total} 个视频；"
                         f"已采集第 1 个视频的客户 {comments_collected} 人，精准客户 {precise_total} 人。"
                     )
+                    if followup_results:
+                        success_count = len([
+                            row for row in followup_results
+                            if _safe_int((row.get("result") or {}).get("code")) in {0, 200}
+                        ])
+                        result_text += f" 已按本次客户批次执行 {len(followup_results)} 个后续动作，成功 {success_count} 个。"
                 elif final_status == "timeout":
                     result_text = (
                         f"搜索完成，找到 {search_total} 个视频；"
@@ -4939,6 +5204,155 @@ async def _run_scheduled_douyin_leads(
             )
             return
         await _complete_task_run(cloud, base, headers, run_id, error=error_text[:500] or "douyin leads failed")
+    finally:
+        _active_scheduled_douyin_actions.pop(run_id, None)
+
+
+def _scheduled_douyin_action_for_item(item: Dict[str, Any]) -> str:
+    """Resolve the actual sales action so a deadline stops the matching worker."""
+    payload = _scheduled_payload(item)
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    h5_context = payload.get("h5_context") if isinstance(payload.get("h5_context"), dict) else {}
+    action = str(payload.get("action") or "").strip().lower()
+    sales_action = str(params.get("sales_action") or "").strip().lower()
+    inferred_action = _scheduled_douyin_sales_action_from_payload(payload, item)
+    context_action = _scheduled_douyin_sales_action_from_context(h5_context)
+    if action == "search_collect" and sales_action and sales_action != "search_collect":
+        action = sales_action
+    if action == "search_collect" and inferred_action and inferred_action != "search_collect":
+        action = inferred_action
+    return context_action or inferred_action or action
+
+
+async def _stop_douyin_action(
+    action: str,
+    *,
+    account_id: int = 0,
+) -> Dict[str, Any]:
+    """Call the action-specific Douyin stop API in the local process."""
+    action = str(action or "").strip().lower()
+    try:
+        _install_douyin_origin_import_path()
+        if action == "account_nurture":
+            from douyin_api import douyin_stop_account_nurture  # type: ignore
+
+            request = {"account_ids": [account_id]} if account_id > 0 else None
+            result = await douyin_stop_account_nurture(request)
+        elif action == "reply_comments":
+            from douyin_api import douyin_stop_video_comment  # type: ignore
+
+            result = await douyin_stop_video_comment()
+        elif action == "follow_comment":
+            from douyin_api import douyin_stop_follow_comment  # type: ignore
+
+            result = await douyin_stop_follow_comment()
+        elif action == "direct_message":
+            from douyin_api import douyin_stop_interaction  # type: ignore
+
+            result = await douyin_stop_interaction()
+        elif action == "mention_comment":
+            from douyin_api import douyin_stop_mention_comment  # type: ignore
+
+            result = await douyin_stop_mention_comment()
+        elif action == "stranger_message":
+            from douyin_api import douyin_stop_stranger_messages  # type: ignore
+
+            result = await douyin_stop_stranger_messages()
+        elif action == "search_collect":
+            from douyin_api import douyin_stop_tasks  # type: ignore
+
+            result = await douyin_stop_tasks()
+        else:
+            return {"action": action, "stop_requested": False, "reason": "unsupported_action"}
+    except Exception as exc:
+        logger.warning("[SCHEDULED-TASK] deadline stop failed action=%s: %s", action, exc)
+        return {"action": action, "stop_requested": False, "error": str(exc)[:500]}
+    return {
+        "action": action,
+        "stop_requested": True,
+        "result": result if isinstance(result, dict) else {"result": str(result)},
+    }
+
+
+async def _stop_scheduled_douyin_action_for_deadline(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Stop a scheduled Douyin action before freeing its next workflow node."""
+    run_id = str(item.get("id") or "").strip()
+    action = _active_scheduled_douyin_actions.get(run_id) or _scheduled_douyin_action_for_item(item)
+    if run_id and run_id not in _active_scheduled_douyin_actions:
+        # An already-expired pending run never started this local action. Do
+        # not accidentally stop a separately launched manual Douyin task.
+        return {"action": action, "stop_requested": False, "reason": "action_not_started"}
+    payload = _scheduled_payload(item)
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    return await _stop_douyin_action(action, account_id=_scheduled_douyin_account_id(params))
+
+
+async def _stop_workflow_node_local_execution(
+    item: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+) -> Dict[str, Any]:
+    """Request a cooperative stop for actions that own local background work."""
+    kind = str(item.get("task_kind") or "").strip().lower()
+    if kind == "douyin_leads":
+        return await _stop_scheduled_douyin_action_for_deadline(item)
+
+    if kind == "client_workflow":
+        payload = _scheduled_payload(item)
+        run_id = str(item.get("id") or "").strip()
+        action = _active_client_workflow_actions.get(run_id) or str(payload.get("action") or "").strip().lower()
+        if run_id and run_id not in _active_client_workflow_actions:
+            return {"action": action, "stop_requested": False, "reason": "action_not_started"}
+        if action == "native_wechat_poll":
+            params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+            account_id = str(
+                params.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
+            ).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
+            await _request_local_auto_reply_stop(account_id, headers)
+            return {"action": action, "stop_requested": True, "account_id": account_id}
+
+    return {"stop_requested": False, "reason": "no_cooperative_stop"}
+
+
+async def _stop_workflow_node_with_timeout(
+    item: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+) -> Dict[str, Any]:
+    """Bound the local stop request so a broken stop endpoint cannot hold the queue."""
+    try:
+        return await asyncio.wait_for(
+            _stop_workflow_node_local_execution(item, headers=headers),
+            timeout=_WORKFLOW_NODE_STOP_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[SCHEDULED-TASK] workflow deadline stop timed out run_id=%s",
+            str(item.get("id") or "").strip(),
+        )
+        return {
+            "stop_requested": False,
+            "reason": "stop_timeout",
+            "timeout_seconds": _WORKFLOW_NODE_STOP_TIMEOUT_SECONDS,
+        }
+
+
+async def _cancel_workflow_execution_task(execution_task: asyncio.Task[Any]) -> None:
+    """Cancel the task without allowing cancellation cleanup to block the next node."""
+    if execution_task.done():
+        return
+    execution_task.cancel()
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(execution_task),
+            timeout=_WORKFLOW_NODE_CANCEL_GRACE_SECONDS,
+        )
+    except asyncio.CancelledError:
+        pass
+    except asyncio.TimeoutError:
+        logger.warning("[SCHEDULED-TASK] deadline-cancelled worker did not exit within %.1fs", _WORKFLOW_NODE_CANCEL_GRACE_SECONDS)
+    except Exception as exc:
+        logger.debug("[SCHEDULED-TASK] deadline-cancelled worker exited with error: %s", exc)
 
 
 def _goal_video_pipeline_has_video_result(result: Any) -> bool:
@@ -6632,6 +7046,28 @@ async def _post_cloud_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+async def _get_cloud_api_json(
+    path: str,
+    *,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    timeout_seconds: float = 30.0,
+) -> Dict[str, Any]:
+    """Read current cloud-side configuration for long-running local workflows."""
+    if cloud is None or not base:
+        raise RuntimeError("cloud api connection missing")
+    timeout = httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)
+    resp = await cloud.get(f"{base}{path}", headers=headers, timeout=timeout)
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {"detail": (resp.text or "")[:1000]}
+    if resp.status_code >= 400:
+        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+    return data if isinstance(data, dict) else {"result": data}
+
+
 def _parse_run_time(value: Any) -> Optional[datetime]:
     text = str(value or "").strip()
     if not text:
@@ -8179,30 +8615,80 @@ async def _run_client_workflow_action(
         if session_minutes <= 0:
             session_minutes = 1 if has_workflow_window else 30
         session_minutes = max(1, min(session_minutes, 1440))
-        return await _run_native_wechat_takeover_session(
-            account_id=native_account_id,
-            headers=headers,
-            cloud=cloud,
-            base=base,
-            run_id=run_id,
-            interval_seconds=interval_seconds,
-            session_seconds=session_minutes * 60,
-            config_override={
-                key: source[key]
-                for key in (
-                    "language",
-                    "target_language",
-                    "group_invite_enabled",
-                    "group_invite_memory_doc_id",
-                    "group_invite_keywords",
-                    "group_invite_contacts",
-                    "group_invite_primary_contact",
-                    "group_invite_primary_contact_name",
-                    "group_invite_welcome_message",
+        session_seconds = float(session_minutes * 60)
+        workflow_deadline = _parse_utc_datetime(source.get("_workflow_node_deadline_at"))
+        if workflow_deadline is not None:
+            remaining_seconds = (workflow_deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining_seconds <= 0:
+                return {
+                    "ok": False,
+                    "status": "cancelled",
+                    "reason": "workflow_node_deadline_expired",
+                    "message": "节点时间已结束，个微接管未启动。",
+                    "deadline_at": workflow_deadline.isoformat(),
+                }
+            session_seconds = min(session_seconds, max(1.0, remaining_seconds))
+        config_override = {
+            key: source[key]
+            for key in (
+                "language",
+                "target_language",
+                "group_invite_enabled",
+                "group_invite_memory_doc_id",
+                "group_invite_keywords",
+                "group_invite_contacts",
+                "group_invite_primary_contact",
+                "group_invite_primary_contact_name",
+                "group_invite_welcome_message",
+                "private_sessions_per_round",
+                "max_private_sessions_per_round",
+            )
+            if key in source
+        }
+        # Existing scheduled tasks may predate language persistence. Resolve the
+        # current personal template on every takeover session so a template
+        # change from Chinese to English takes effect without recreating a task.
+        if not config_override.get("language") and not config_override.get("target_language"):
+            try:
+                mounted = await _get_cloud_api_json(
+                    "/api/h5-chat/mounted-accounts",
+                    cloud=cloud,
+                    base=base,
+                    headers=headers,
                 )
-                if key in source
-            },
-        )
+                accounts = mounted.get("accounts") if isinstance(mounted.get("accounts"), list) else []
+                language = next(
+                    (
+                        str(row.get("auto_reply_language") or "").strip()
+                        for row in accounts
+                        if isinstance(row, dict)
+                        and str(row.get("scope") or "").strip().lower() == "wechat"
+                        and str(row.get("auto_reply_language") or "").strip()
+                    ),
+                    "",
+                )
+                if language:
+                    config_override["language"] = language
+            except Exception:
+                # Cloud config lookup is supplemental; the local persisted config
+                # remains the fallback when the cloud is temporarily unavailable.
+                pass
+        if run_id:
+            _active_client_workflow_actions[run_id] = action
+        try:
+            return await _run_native_wechat_takeover_session(
+                account_id=native_account_id,
+                headers=headers,
+                cloud=cloud,
+                base=base,
+                run_id=run_id,
+                interval_seconds=interval_seconds,
+                session_seconds=session_seconds,
+                config_override=config_override,
+            )
+        finally:
+            if run_id:
+                _active_client_workflow_actions.pop(run_id, None)
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")
         extracted_phones: List[str] = []
@@ -8507,6 +8993,12 @@ async def _run_client_workflow(
         params["schedule_config"] = payload.get("schedule_config")
     if not run_id or not action:
         return
+    workflow_deadline = _workflow_node_deadline_utc(item)
+    if workflow_deadline is not None:
+        # Keep action-specific code aware of the immutable node cutoff. This
+        # particularly prevents a late-started personal-WeChat session from
+        # treating the whole scheduled window as newly available time.
+        params["_workflow_node_deadline_at"] = workflow_deadline.isoformat()
     event_status = await _post_task_event(
         cloud,
         base,
@@ -8557,7 +9049,11 @@ async def _process_scheduled_task(
 ) -> None:
     headers = _headers(jwt_token, installation_id)
     await _sync_openclaw_memory_for_context(jwt_token, installation_id, "scheduled-task")
-    kind = str(item.get("task_kind") or "openclaw_message").strip().lower()
+    # ``openclaw_message`` is a legacy name kept in old cloud rows. All such
+    # runs now use the normal direct chat executor and never start Gateway.
+    kind = str(item.get("task_kind") or "chat_message").strip().lower()
+    if kind == "openclaw_message":
+        kind = "chat_message"
     if kind == "capability":
         await _run_scheduled_capability(
             client,
@@ -8589,12 +9085,14 @@ async def _process_scheduled_task(
             installation_id=installation_id,
         )
     else:
+        # Unknown/legacy chat task kinds are handled as ordinary chat rather
+        # than falling back to the retired OpenClaw executor.
         await _run_scheduled_chat_message(
             client,
             base,
             headers,
             item,
-            openclaw=True,
+            openclaw=False,
             jwt_token=jwt_token,
             installation_id=installation_id,
         )
@@ -8668,6 +9166,146 @@ async def _scheduled_task_keepalive(
             logger.debug("[SCHEDULED-TASK] heartbeat failed run_id=%s: %s", run_id, exc)
 
 
+def _workflow_node_deadline_message(deadline: datetime) -> str:
+    _ = deadline
+    return "节点时间已结束，本次任务已自动停止，后续节点继续执行。"
+
+
+async def _report_workflow_node_deadline_expired(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+    *,
+    deadline: datetime,
+    phase: str,
+    stop_result: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Make node expiry visible to both new and older cloud server builds."""
+    run_id = str(item.get("id") or "").strip()
+    if not run_id:
+        return
+    message = _workflow_node_deadline_message(deadline)
+    payload = {
+        "reason": "workflow_node_deadline_expired",
+        "deadline_at": deadline.astimezone(timezone.utc).isoformat(),
+        "phase": phase,
+        "text": message,
+    }
+    if stop_result:
+        payload["local_stop"] = stop_result
+    event_status = await _post_task_event(client, base, headers, run_id, "cancelled", payload)
+    if event_status and event_status not in {200, 201, 202, 204, 409}:
+        logger.debug(
+            "[SCHEDULED-TASK] deadline event not accepted run_id=%s status=%s",
+            run_id,
+            event_status,
+        )
+    if _task_event_rejects_local_work(event_status):
+        # The current cloud implementation has already persisted a canonical
+        # cancelled result at the deadline. Do not send a fallback error
+        # completion that could overwrite it on a different code path.
+        return
+    try:
+        await _complete_task_run(
+            client,
+            base,
+            headers,
+            run_id,
+            result_text=message,
+            result_payload=payload,
+            # Older cloud versions have no cancelled completion state. An
+            # error still releases the serial queue; newer versions convert
+            # this callback to their canonical cancelled node-expiry result.
+            error=message,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("[SCHEDULED-TASK] deadline completion callback failed run_id=%s: %s", run_id, exc)
+
+
+async def _run_scheduled_task_with_workflow_deadline(
+    client: httpx.AsyncClient,
+    base: str,
+    jwt_token: str,
+    installation_id: str,
+    headers: Dict[str, str],
+    item: Dict[str, Any],
+) -> None:
+    """Run a claimed node only until its absolute workflow boundary.
+
+    The outer deadline covers every workflow action. Known local workers also
+    receive an explicit stop request, because cancelling this coroutine alone
+    cannot stop a Douyin worker that was launched in a separate background
+    task.
+    """
+    deadline = _workflow_node_deadline_utc(item)
+    if deadline is None:
+        await _process_scheduled_task(client, base, jwt_token, installation_id, item)
+        return
+
+    remaining_seconds = _workflow_node_remaining_seconds(item)
+    if remaining_seconds is None or remaining_seconds <= 0:
+        await _report_workflow_node_deadline_expired(
+            client,
+            base,
+            headers,
+            item,
+            deadline=deadline,
+            phase="before_start",
+        )
+        return
+
+    execution_task = asyncio.create_task(
+        _process_scheduled_task(client, base, jwt_token, installation_id, item)
+    )
+    try:
+        done, _pending = await asyncio.wait({execution_task}, timeout=remaining_seconds)
+        if execution_task in done:
+            await execution_task
+            return
+
+        logger.info(
+            "[SCHEDULED-TASK] workflow node deadline reached run_id=%s deadline=%s",
+            str(item.get("id") or "").strip(),
+            deadline.isoformat(),
+        )
+        stop_result = await _stop_workflow_node_with_timeout(item, headers=headers)
+        await _report_workflow_node_deadline_expired(
+            client,
+            base,
+            headers,
+            item,
+            deadline=deadline,
+            phase="while_running",
+            stop_result=stop_result,
+        )
+
+        # Give cooperative workers a brief chance to flush their own cleanup.
+        # This is especially useful for the stranger-message loop, which exits
+        # after observing its explicit stop flag.
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(execution_task),
+                timeout=_WORKFLOW_NODE_CANCEL_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await _cancel_workflow_execution_task(execution_task)
+        except Exception as exc:
+            logger.debug("[SCHEDULED-TASK] stopped worker exited with error: %s", exc)
+    except asyncio.CancelledError:
+        if not execution_task.done():
+            try:
+                await _stop_workflow_node_with_timeout(item, headers=headers)
+            finally:
+                await _cancel_workflow_execution_task(execution_task)
+        raise
+    finally:
+        if not execution_task.done():
+            await _cancel_workflow_execution_task(execution_task)
+
+
 async def _process_item_detached(
     base: str,
     jwt_token: str,
@@ -8696,7 +9334,14 @@ async def _process_scheduled_task_detached(
         if run_id:
             keepalive = asyncio.create_task(_scheduled_task_keepalive(client, base, headers, run_id))
         try:
-            await _process_scheduled_task(client, base, jwt_token, installation_id, item)
+            await _run_scheduled_task_with_workflow_deadline(
+                client,
+                base,
+                jwt_token,
+                installation_id,
+                headers,
+                item,
+            )
         finally:
             if keepalive:
                 keepalive.cancel()

@@ -156,14 +156,12 @@
             <span id="oeActiveStatus" class="oe-status">未启用</span>
           </div>
           <div class="oe-toolbar">
-            <label class="oe-device-wrap" for="oeDeviceSelect">执行设备
-              <select id="oeDeviceSelect"><option value="">正在读取设备...</option></select>
-            </label>
             <div class="oe-actions">
               <button type="button" class="oe-btn" data-oe-action="add">添加节点</button>
               <button type="button" class="oe-btn" data-oe-action="save">保存员工</button>
               <button type="button" class="oe-btn primary" data-oe-action="activate">启用员工</button>
               <button type="button" class="oe-btn danger" data-oe-action="stop">停用</button>
+              <button type="button" class="oe-btn danger" data-oe-action="delete-template">删除员工</button>
             </div>
           </div>
           <div class="oe-name-row"><label for="oeTemplateName">员工名称</label><input id="oeTemplateName" maxlength="160" placeholder="例如：销售员工"></div>
@@ -186,10 +184,25 @@
           <span>自动拉群</span>
           <span><input id="oeNodeGroupInviteEnabled" type="checkbox"> 命中拉群规则后立即执行</span>
         </label>
+        <label class="oe-form-label" id="oeNodeWechatPrivateSessionLimitField" hidden>
+          <span>本轮个人会话数量</span>
+          <span><input id="oeNodeWechatPrivateSessionLimit" type="number" min="1" max="100" step="1" value="10"> 达到数量后进入下一轮</span>
+        </label>
+        <label class="oe-form-label" id="oeNodeDouyinReplyModeField" hidden>
+          <span>鎶栭煶绉佷俊鍥炲绛栫暐</span>
+          <select id="oeNodeDouyinReplyMode"><option value="fixed">鍥哄畾璇濇湇</option><option value="ai_lead">AI 寮曞鍔犵豫娉℃场</option></select>
+        </label>
         <label class="oe-form-label" id="oeNodeWechatAddFriendField" hidden>
           <span>抖音私信识别手机号后加微信好友</span>
           <span><input id="oeNodeWechatAddFriendEnabled" type="checkbox"> 自动提交好友申请</span>
         </label>
+        <div class="oe-form-label" id="oeNodeDouyinFollowupField" hidden>
+          <span>采集后继续执行（可多选）</span>
+          <label><input id="oeNodeDouyinFollowupReplyComments" type="checkbox"> 回复客户评论</label>
+          <label><input id="oeNodeDouyinFollowupMentionComment" type="checkbox"> 评论并@客户</label>
+          <label><input id="oeNodeDouyinFollowupFollowComment" type="checkbox"> 关注并评论</label>
+          <label><input id="oeNodeDouyinFollowupDirectMessage" type="checkbox"> 主动私信</label>
+        </div>
         <div class="oe-form-label" id="oeNodeMomentField" hidden>
           <span>朋友圈联系人（按微信号保存，可多选）</span>
           <details class="oe-moment-dropdown">

@@ -3943,9 +3943,10 @@ def remove_group_members_from_results(rows: List[Dict]) -> int:
     return removed
 
 
-def collect_douyin_interaction_users() -> List[Dict]:
+def collect_douyin_interaction_users(selected_task_ids: Optional[Set[int]] = None) -> List[Dict]:
     rows: List[Dict] = []
     seen = set()
+    wanted_task_ids = {int(task_id) for task_id in (selected_task_ids or set()) if int(task_id) > 0}
 
     def append_user(raw_user: Dict, extra: Optional[Dict] = None):
         if not isinstance(raw_user, dict):
@@ -3960,12 +3961,15 @@ def collect_douyin_interaction_users() -> List[Dict]:
         rows.append(row)
 
     for task in douyin_tasks:
+        task_id = int(task.get("id", 0) or 0)
+        if wanted_task_ids and task_id not in wanted_task_ids:
+            continue
         for user in task.get("high_intent_users", []) or []:
             normalized = normalize_high_intent_user(user)
             append_user(
                 normalized,
                 {
-                    "task_id": int(task.get("id", 0) or 0),
+                    "task_id": task_id,
                     "task_title": task.get("title", ""),
                     "task_url": task.get("url", ""),
                     "task_author": task.get("author", ""),
@@ -3977,28 +3981,29 @@ def collect_douyin_interaction_users() -> List[Dict]:
                     ).strip(),
                 },
             )
-    _monitor_all_rows, monitor_precise_rows = build_monitor_customer_pools(None)
-    for user in monitor_precise_rows:
-        append_user(
-            user,
-            {
-                "source": "douyin_monitor",
-                "task_id": 0,
-                "task_title": str(user.get("latest_video_title", "") or user.get("task_title", "") or "同行监控"),
-                "task_url": str(user.get("latest_video_url", "") or user.get("task_url", "") or ""),
-                "task_author": str(user.get("monitor_target_username", "") or user.get("target_username", "") or ""),
-            },
-        )
-    for user in douyin_manual_interaction_users:
-        normalized = normalize_high_intent_user(user)
-        append_user(
-            normalized,
-            {
-                "task_id": 0,
-                "task_title": normalized.get("task_title", "") or normalized.get("group_name", "群成员导入"),
-                "task_url": normalized.get("task_url", ""),
-                "task_author": normalized.get("task_author", ""),
-            },
+    if not wanted_task_ids:
+        _monitor_all_rows, monitor_precise_rows = build_monitor_customer_pools(None)
+        for user in monitor_precise_rows:
+            append_user(
+                user,
+                {
+                    "source": "douyin_monitor",
+                    "task_id": 0,
+                    "task_title": str(user.get("latest_video_title", "") or user.get("task_title", "") or "同行监控"),
+                    "task_url": str(user.get("latest_video_url", "") or user.get("task_url", "") or ""),
+                    "task_author": str(user.get("monitor_target_username", "") or user.get("target_username", "") or ""),
+                },
+            )
+        for user in douyin_manual_interaction_users:
+            normalized = normalize_high_intent_user(user)
+            append_user(
+                normalized,
+                {
+                    "task_id": 0,
+                    "task_title": normalized.get("task_title", "") or normalized.get("group_name", "群成员导入"),
+                    "task_url": normalized.get("task_url", ""),
+                    "task_author": normalized.get("task_author", ""),
+                },
             )
 
     def sort_key(row: Dict) -> tuple[int, float, str]:
@@ -11063,10 +11068,13 @@ def _h5_douyin_should_queue_wechat_add(existing_status: object) -> bool:
 async def run_douyin_h5_stranger_message_task_once(
     account_id: int = 0,
     *,
-    max_conversations: int = 100,
+    max_conversations: int = 10000,
     fixed_message: str = "",
     auto_reply_enabled: bool = True,
     wechat_add_friend_enabled: bool = False,
+    reply_mode: str = "fixed",
+    reply_prompt: str = "",
+    contact_value: str = "",
 ) -> Dict[str, object]:
     """Run the H5 Douyin private-message node once without enabling its monitor."""
     global douyin_stranger_message_running, douyin_stranger_message_stop_requested
@@ -11076,8 +11084,14 @@ async def run_douyin_h5_stranger_message_task_once(
         current_task = asyncio.current_task()
         requested_account_id = int(account_id or 0)
         fixed_text = normalize_douyin_text(fixed_message)
-        if auto_reply_enabled and not fixed_text:
+        normalized_reply_mode = normalize_douyin_stranger_reply_mode(reply_mode)
+        prompt_text = normalize_douyin_text(reply_prompt)
+        normalized_contact = normalize_douyin_text(contact_value)
+        if auto_reply_enabled and normalized_reply_mode == "fixed" and not fixed_text:
             return {"status": "failed", "code": 400, "message": "H5 抖音私信接管缺少固定文案。"}
+
+        if auto_reply_enabled and normalized_reply_mode == "ai_lead" and not normalized_contact:
+            return {"status": "failed", "code": 400, "message": "H5 AI lead mode requires a contact value."}
 
         config = load_global_config()
         account = (
@@ -11122,12 +11136,15 @@ async def run_douyin_h5_stranger_message_task_once(
                 "account_id": target_account_id,
             }
 
-        limit = max(1, min(int(max_conversations or 100), 100))
+        # Each list traversal stops at its first prior-day item; retain only
+        # a high safety bound instead of the former 100-item cap.
+        limit = max(1, int(max_conversations or 10000))
         douyin_stranger_message_running = True
         douyin_stranger_message_stop_requested = False
         douyin_stranger_message_background_task = current_task
         scraper = create_douyin_message_scraper(account, config)
         scraper_closed = False
+        shared_page = None
         prepared_rows: List[Dict] = []
         phone_numbers: List[str] = []
         phone_numbers_to_queue: List[str] = []
@@ -11233,13 +11250,30 @@ async def run_douyin_h5_stranger_message_task_once(
                 # the right-hand conversation bubbles fail to load. Keep the
                 # contact useful; the detail failure is still reported
                 # separately in the task result.
-                if merged_numbers and row.get("last_message_is_user") is not False:
-                    qualifying_users += 1
+                if merged_numbers:
+                    if row.get("last_message_is_user") is not False:
+                        qualifying_users += 1
                     for phone in merged_numbers:
                         if phone not in seen_phones:
                             seen_phones.add(phone)
                             phone_numbers.append(phone)
                     await handle_phone_numbers()
+                persist_row()
+                return row
+
+            for phone in merged_numbers:
+                if phone not in seen_phones:
+                    seen_phones.add(phone)
+                    phone_numbers.append(phone)
+
+            if merged_numbers:
+                if _h5_douyin_last_message_is_user(row):
+                    qualifying_users += 1
+                await handle_phone_numbers()
+                # A phone number is a lead signal independent of who sent the
+                # latest message. The reply gate below still requires the
+                # latest message to be from the customer, but a prior inbound
+                # phone must not be lost just because the bot replied after it.
                 persist_row()
                 return row
 
@@ -11249,15 +11283,6 @@ async def run_douyin_h5_stranger_message_task_once(
                 return row
 
             qualifying_users += 1
-            for phone in merged_numbers:
-                if phone not in seen_phones:
-                    seen_phones.add(phone)
-                    phone_numbers.append(phone)
-
-            if merged_numbers:
-                await handle_phone_numbers()
-                persist_row()
-                return row
 
             if not auto_reply_enabled:
                 persist_row()
@@ -11274,6 +11299,7 @@ async def run_douyin_h5_stranger_message_task_once(
 
             reply_result["total"] = int(reply_result.get("total", 0) or 0) + 1
             row["reply_status"] = "processing"
+            row["reply_mode"] = normalized_reply_mode
             row["reply_message"] = fixed_text
             douyin_stranger_message_state.update(
                 {
@@ -11284,9 +11310,18 @@ async def run_douyin_h5_stranger_message_task_once(
                 }
             )
             try:
+                final_message = generate_douyin_stranger_reply_message(
+                    row,
+                    mode=normalized_reply_mode,
+                    fixed_text=fixed_text,
+                    prompt_text=prompt_text,
+                    contact_value=normalized_contact,
+                )
+                row["reply_message"] = final_message
+                douyin_stranger_message_state["current_message_text"] = final_message
                 await scraper.send_open_chat_message(
                     page,
-                    fixed_text,
+                    final_message,
                     logger=douyin_log,
                     username=normalize_douyin_text(row.get("username", "")),
                 )
@@ -11312,25 +11347,18 @@ async def run_douyin_h5_stranger_message_task_once(
             return row
 
         try:
+            # Both inbox and stranger-list collectors operate on the same
+            # Douyin chat workspace. Reuse one page for the round so the
+            # second collector does not launch a fresh page and redo the
+            # initial navigation before it can inspect anything.
+            if hasattr(scraper, "_new_page"):
+                try:
+                    shared_page = await scraper._new_page(logger=douyin_log)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    douyin_log(f"[H5抖音私信接管] 复用聊天页面失败，按独立页面继续：{exc}", "warning")
             douyin_log(
                 f"[H5抖音私信接管] 开始一次性读取账号 {target_account_id}，最多 {limit} 条会话，不启用常驻监控",
                 "info",
-            )
-            stranger_rows = await scraper.collect_stranger_private_messages(
-                max_conversations=limit,
-                should_stop=lambda: bool(douyin_stranger_message_stop_requested),
-                logger=douyin_log,
-                include_details=True,
-                item_callback=process_one_row,
-                progress_callback=lambda processed, total, username: douyin_stranger_message_state.update(
-                    {
-                        "running": True,
-                        "total": total,
-                        "processed": processed,
-                        "current_user": normalize_douyin_text(username),
-                        "message": f"H5 抖音私信接管读取中，已读取 {processed}/{total} 条",
-                    }
-                ),
             )
             try:
                 normal_rows = await scraper.collect_chat_page_private_messages(
@@ -11338,11 +11366,35 @@ async def run_douyin_h5_stranger_message_task_once(
                     should_stop=lambda: bool(douyin_stranger_message_stop_requested),
                     logger=douyin_log,
                     item_callback=process_one_row,
+                    page=shared_page,
                 )
             except Exception as exc:
-                # A normal inbox read must not discard stranger messages that
-                # were already collected in this one-shot takeover.
-                douyin_log(f"[H5抖音私信接管] 普通好友会话读取失败，保留陌生人会话结果：{exc}", "warning")
+                # A normal inbox cutoff or failure only ends that list. The
+                # stranger list still needs an independent scan this round.
+                douyin_log(f"[H5抖音私信接管] 普通好友会话读取失败，继续读取陌生人会话：{exc}", "warning")
+            if not douyin_stranger_message_stop_requested:
+                try:
+                    stranger_rows = await scraper.collect_stranger_private_messages(
+                        max_conversations=limit,
+                        should_stop=lambda: bool(douyin_stranger_message_stop_requested),
+                        logger=douyin_log,
+                        include_details=True,
+                        item_callback=process_one_row,
+                        page=shared_page,
+                        progress_callback=lambda processed, total, username: douyin_stranger_message_state.update(
+                            {
+                                "running": True,
+                                "total": total,
+                                "processed": processed,
+                                "current_user": normalize_douyin_text(username),
+                                "message": f"H5 抖音私信接管读取中，已读取 {processed}/{total} 条",
+                            }
+                        ),
+                    )
+                except Exception as exc:
+                    # The normal-list result remains useful even when the
+                    # stranger panel itself cannot be opened.
+                    douyin_log(f"[H5抖音私信接管] 陌生人会话读取失败，保留普通好友会话结果：{exc}", "warning")
 
             rows_by_key: Dict[str, Dict] = {}
             row_order: List[str] = []
@@ -11474,7 +11526,7 @@ async def run_douyin_h5_stranger_message_task_once(
             message = (
                 f"H5 抖音私信接管完成：读取 {len(prepared_rows)}/{limit} 条会话，"
                 f"最后消息为用户 {qualifying_users} 条，发送固定文案成功 {reply_success} 条，失败 {reply_failed} 条，"
-                f"收集手机号 {len(phone_numbers)} 个，新增加好友 {len(phone_numbers_to_queue)} 个。"
+                f"收集手机号 {len(phone_numbers)} 个，已加入微信加好友队列 {len(phone_numbers_to_queue)} 个。"
             )
             douyin_log(f"[H5抖音私信接管] {message}", "success")
             return {
@@ -11527,6 +11579,11 @@ async def run_douyin_h5_stranger_message_task_once(
                 "mode": "h5_one_shot",
             }
         finally:
+            if shared_page is not None:
+                try:
+                    await shared_page.close()
+                except Exception:
+                    pass
             if not scraper_closed:
                 await scraper.close()
             if douyin_stranger_message_background_task is current_task:

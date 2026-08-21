@@ -1,9 +1,43 @@
 from backend.app.api.h5_chat_channel import (
+    _merge_scheduled_douyin_stranger_params,
     _scheduled_douyin_changed_conversations,
+    _scheduled_douyin_followup_actions,
     _scheduled_douyin_online_config_params,
     _scheduled_douyin_result_payload,
     _scheduled_douyin_sales_action_from_context,
 )
+
+
+def test_h5_employee_editor_exposes_collection_followup_actions():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    script = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+    html = (root / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+
+    assert "oeNodeDouyinFollowupField" in html
+    assert "customer_scope:'current_collection_batch'" in script
+    assert "migrateDouyinFollowupNodes" in script
+
+
+def test_collection_followups_default_all_but_keep_explicit_empty():
+    assert _scheduled_douyin_followup_actions(None, default_all=True) == [
+        "reply_comments",
+        "mention_comment",
+        "follow_comment",
+        "direct_message",
+    ]
+    assert _scheduled_douyin_followup_actions([], default_all=True) == []
+
+
+def test_stranger_workflow_explicit_false_overrides_online_config():
+    params = _merge_scheduled_douyin_stranger_params(
+        {"wechat_add_friend_enabled": True, "message": "saved reply"},
+        {"wechat_add_friend_enabled": False},
+    )
+
+    assert params["wechat_add_friend_enabled"] is False
+    assert params["message"] == "saved reply"
 
 
 def test_old_sales_workflow_context_recovers_the_real_action():
