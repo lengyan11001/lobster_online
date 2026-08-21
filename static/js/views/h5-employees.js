@@ -278,7 +278,12 @@
       // Keep explicitly edited private-message options when rebuilding the
       // plan.  The editor stores the checkbox in row.params, but the old
       // branch rebuilt params from scratch and silently dropped it.
-      var douyinParams = Object.assign({}, row.params || {}, {sales_action:action,max_results:max,max_users:max,regions:['全国'],mode:'script'});
+      var douyinParams = Object.assign({}, row.params || {});
+      douyinParams.sales_action=action;
+      if (douyinParams.max_results == null) douyinParams.max_results=max;
+      if (douyinParams.max_users == null) douyinParams.max_users=max;
+      if (!Array.isArray(douyinParams.regions) || !douyinParams.regions.length) douyinParams.regions=['全国'];
+      if (!douyinParams.mode) douyinParams.mode='script';
       if (action === 'search_collect') {
         douyinParams.followup_actions=normalizeDouyinFollowupActions(douyinParams.followup_actions || []);
         douyinParams.customer_scope='current_collection_batch';
@@ -719,6 +724,7 @@
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
+    if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinCollection;
     syncMomentPicker('node',key === 'native_wechat_moments_engage');
   }
@@ -731,6 +737,10 @@
     fillNodeOptions(node && node.ability_key,node && node.ability_label); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
     if (el('oeNodeDouyinReplyMode')) el('oeNodeDouyinReplyMode').value=String(params.reply_mode || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed';
+    if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
+    if (el('oeNodeDouyinRegions')) el('oeNodeDouyinRegions').value=(Array.isArray(params.regions) ? params.regions.join('，') : String(params.regions || '全国'));
+    if (el('oeNodeDouyinMaxResults')) el('oeNodeDouyinMaxResults').value=Math.max(10,Math.min(100,Number(params.max_results || 50)));
+    if (el('oeNodeDouyinMode')) el('oeNodeDouyinMode').value=['script','api'].indexOf(String(params.mode || '').toLowerCase()) >= 0 ? String(params.mode).toLowerCase() : 'script';
     var followups=Object.prototype.hasOwnProperty.call(params,'followup_actions') ? normalizeDouyinFollowupActions(params.followup_actions) : DOUYIN_FOLLOWUP_ACTIONS.slice();
     [['oeNodeDouyinFollowupReplyComments','reply_comments'],['oeNodeDouyinFollowupMentionComment','mention_comment'],['oeNodeDouyinFollowupFollowComment','follow_comment'],['oeNodeDouyinFollowupDirectMessage','direct_message']].forEach(function(item){if(el(item[0]))el(item[0]).checked=followups.indexOf(item[1])>=0;});
     el('oeNodeWechatPrivateSessionLimit').value=Math.max(1,Math.min(100,Number(params.private_sessions_per_round || 10)));
@@ -748,6 +758,13 @@
     if (isDouyinPrivate({ability_key:key,ability_label:label,note:note})) { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
     if (key === 'douyin_leads' && salesAction(note || label) === 'search_collect') {
+      var keyword=String((el('oeNodeDouyinKeyword') || {}).value || '').trim();
+      if (!keyword) throw new Error('请填写采集关键词');
+      var regions=String((el('oeNodeDouyinRegions') || {}).value || '全国').split(/[，,\n]+/).map(function(value){return value.trim();}).filter(Boolean);
+      row.params.keyword=keyword;
+      row.params.regions=regions.length ? regions : ['全国'];
+      row.params.max_results=Math.max(10,Math.min(100,Number((el('oeNodeDouyinMaxResults') || {}).value || 50)));
+      row.params.mode=['script','api'].indexOf(String((el('oeNodeDouyinMode') || {}).value || '').toLowerCase()) >= 0 ? String(el('oeNodeDouyinMode').value).toLowerCase() : 'script';
       row.params.followup_actions=normalizeDouyinFollowupActions([
         el('oeNodeDouyinFollowupReplyComments') && el('oeNodeDouyinFollowupReplyComments').checked ? 'reply_comments' : '',
         el('oeNodeDouyinFollowupMentionComment') && el('oeNodeDouyinFollowupMentionComment').checked ? 'mention_comment' : '',
@@ -755,7 +772,7 @@
         el('oeNodeDouyinFollowupDirectMessage') && el('oeNodeDouyinFollowupDirectMessage').checked ? 'direct_message' : ''
       ]);
       row.params.customer_scope='current_collection_batch';
-    } else { delete row.params.followup_actions; delete row.params.customer_scope; }
+    } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.mode; delete row.params.followup_actions; delete row.params.customer_scope; }
     delete row.params.followup_action; delete row.params.group_invite_rules;
     var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
     next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || [];

@@ -196,6 +196,13 @@
           <span>抖音私信识别手机号后加微信好友</span>
           <span><input id="oeNodeWechatAddFriendEnabled" type="checkbox"> 自动提交好友申请</span>
         </label>
+        <div class="oe-form-label" id="oeNodeDouyinCollectionField" hidden>
+          <span>精准获客参数</span>
+          <label>采集关键词<textarea id="oeNodeDouyinKeyword" rows="3" placeholder="例如：深圳装修、口腔种植、母婴门店"></textarea></label>
+          <label>地区<input id="oeNodeDouyinRegions" type="text" value="全国" placeholder="全国，或用逗号分隔多个城市"></label>
+          <label>搜索数量<input id="oeNodeDouyinMaxResults" type="number" min="10" max="100" step="1" value="50"></label>
+          <label>搜索方式<select id="oeNodeDouyinMode"><option value="script">浏览器脚本</option><option value="api">接口模式</option></select></label>
+        </div>
         <div class="oe-form-label" id="oeNodeDouyinFollowupField" hidden>
           <span>采集后继续执行（可多选）</span>
           <label><input id="oeNodeDouyinFollowupReplyComments" type="checkbox"> 回复客户评论</label>

@@ -4440,6 +4440,23 @@ def _scheduled_douyin_followup_actions(value: Any, *, default_all: bool = False)
     return [action for action in _SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS if action in selected]
 
 
+def _merge_scheduled_douyin_collection_params(
+    online_params: Any,
+    workflow_params: Any,
+) -> Dict[str, Any]:
+    merged = dict(online_params) if isinstance(online_params, dict) else {}
+    workflow = dict(workflow_params) if isinstance(workflow_params, dict) else {}
+    for key in ("keyword", "regions", "max_results", "max_videos_per_run", "mode"):
+        if key in workflow and workflow.get(key) not in (None, "", []):
+            merged[key] = workflow.get(key)
+    merged["followup_actions"] = _scheduled_douyin_followup_actions(
+        workflow.get("followup_actions"),
+        default_all="followup_actions" not in workflow,
+    )
+    merged["customer_scope"] = "current_collection_batch"
+    return merged
+
+
 def _scheduled_douyin_action_timeout(start_result: Dict[str, Any]) -> float:
     total = max(1, _safe_int(start_result.get("total") or 1))
     interval_seconds = max(
@@ -5025,12 +5042,7 @@ async def _run_scheduled_douyin_leads(
         action = _scheduled_douyin_sales_action_from_context(h5_context) or inferred_sales_action or action
         params = _load_scheduled_douyin_online_config_params(action)
         if action == "search_collect":
-            params = dict(params)
-            params["followup_actions"] = _scheduled_douyin_followup_actions(
-                workflow_params.get("followup_actions"),
-                default_all="followup_actions" not in workflow_params,
-            )
-            params["customer_scope"] = "current_collection_batch"
+            params = _merge_scheduled_douyin_collection_params(params, workflow_params)
     elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
         params = _load_scheduled_douyin_online_config_params(action)
     if h5_one_shot:

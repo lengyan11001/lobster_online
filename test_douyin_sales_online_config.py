@@ -1,4 +1,5 @@
 from backend.app.api.h5_chat_channel import (
+    _merge_scheduled_douyin_collection_params,
     _merge_scheduled_douyin_stranger_params,
     _scheduled_douyin_changed_conversations,
     _scheduled_douyin_followup_actions,
@@ -18,6 +19,20 @@ def test_h5_employee_editor_exposes_collection_followup_actions():
     assert "oeNodeDouyinFollowupField" in html
     assert "customer_scope:'current_collection_batch'" in script
     assert "migrateDouyinFollowupNodes" in script
+    for field_id in (
+        "oeNodeDouyinKeyword",
+        "oeNodeDouyinRegions",
+        "oeNodeDouyinMaxResults",
+        "oeNodeDouyinMode",
+        "oeNodeDouyinFollowupReplyComments",
+        "oeNodeDouyinFollowupMentionComment",
+        "oeNodeDouyinFollowupFollowComment",
+        "oeNodeDouyinFollowupDirectMessage",
+    ):
+        assert f'id="{field_id}"' in html
+    assert "row.params.keyword=keyword" in script
+    assert "el('oeNodeDouyinKeyword').value" in script
+    assert "return saveTemplate().then" in script
 
 
 def test_collection_followups_default_all_but_keep_explicit_empty():
@@ -28,6 +43,36 @@ def test_collection_followups_default_all_but_keep_explicit_empty():
         "direct_message",
     ]
     assert _scheduled_douyin_followup_actions([], default_all=True) == []
+
+
+def test_collection_node_params_override_online_defaults():
+    params = _merge_scheduled_douyin_collection_params(
+        {
+            "keyword": "Online 全局关键词",
+            "regions": ["全国"],
+            "max_results": 50,
+            "mode": "script",
+        },
+        {
+            "keyword": "服务器节点关键词",
+            "regions": ["深圳", "东莞"],
+            "max_results": 80,
+            "mode": "api",
+            "followup_actions": ["direct_message", "reply_comments"],
+        },
+    )
+
+    assert params["keyword"] == "服务器节点关键词"
+    assert params["regions"] == ["深圳", "东莞"]
+    assert params["max_results"] == 80
+    assert params["mode"] == "api"
+    assert params["followup_actions"] == ["reply_comments", "direct_message"]
+    assert params["customer_scope"] == "current_collection_batch"
+
+
+def test_collection_node_explicit_empty_actions_remains_empty():
+    params = _merge_scheduled_douyin_collection_params({}, {"followup_actions": []})
+    assert params["followup_actions"] == []
 
 
 def test_stranger_workflow_explicit_false_overrides_online_config():
