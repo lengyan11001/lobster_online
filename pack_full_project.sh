@@ -4,6 +4,11 @@
 # LOBSTER_BRAND_MARK（默认 bihuo）写入产物名，且仅删除同品牌旧 zip，避免不同品牌互相覆盖。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ "${LOBSTER_ALLOW_PLAIN_PACK:-}" != "1" ]; then
+  echo "[ERR] 禁止生成明文完整版；请使用 _pack_exe_test/build_encrypted_dist.py（默认加密）" >&2
+  echo "      仅本机调试可临时设置 LOBSTER_ALLOW_PLAIN_PACK=1" >&2
+  exit 2
+fi
 PARENT="$(dirname "$SCRIPT_DIR")"
 PROJ=$(basename "$SCRIPT_DIR")
 LOBSTER_BRAND_MARK="${LOBSTER_BRAND_MARK:-bihuo}"

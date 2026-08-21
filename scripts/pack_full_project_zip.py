@@ -214,6 +214,14 @@ def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> b
 
 
 def main() -> int:
+    if os.environ.get("LOBSTER_ALLOW_PLAIN_PACK") != "1":
+        print(
+            "[ERR] 拒绝生成明文完整版：正式包必须使用 "
+            "_pack_exe_test/build_encrypted_dist.py；仅本机调试时设置 "
+            "LOBSTER_ALLOW_PLAIN_PACK=1",
+            file=sys.stderr,
+        )
+        return 2
     parser = argparse.ArgumentParser(
         description="Create a complete project ZIP without requiring an external zip executable."
     )

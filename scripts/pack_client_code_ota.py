@@ -67,6 +67,16 @@ OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
     "nodejs/node_modules",
 )
 
+# Production OTA is intentionally limited to the web application.  Desktop,
+# MCP, OpenClaw and skills are distributed by their dedicated installers or
+# separate updates; including them here makes every web update unnecessarily
+# slow to extract.
+WEBSITE_OTA_PATHS: tuple[str, ...] = (
+    "backend",
+    "static",
+    "CLIENT_CODE_VERSION.json",
+)
+
 ENCRYPTED_OTA_DIRS: tuple[str, ...] = (
     "backend",
     "desktop",
@@ -856,10 +866,33 @@ def main() -> int:
         action="store_true",
         help="Pack scripts/wechat_runtime_wheels and let updater install native WeChat control dependencies offline",
     )
-    ap.add_argument(
+    encryption = ap.add_mutually_exclusive_group()
+    encryption.add_argument(
         "--encrypted",
+        dest="encrypted",
         action="store_true",
-        help="Pack encrypted OTA: ship .py loader stubs plus sibling .pyc files compiled by bundled Python",
+        default=True,
+        help="Pack encrypted OTA (default): ship .py loader stubs plus sibling .pyc files",
+    )
+    encryption.add_argument(
+        "--plain",
+        dest="encrypted",
+        action="store_false",
+        help="仅供本地调试，生成明文源码包；禁止用于正式发布",
+    )
+    scope = ap.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--website-only",
+        dest="website_only",
+        action="store_true",
+        default=True,
+        help="仅打包 backend、static 和版本清单（默认）",
+    )
+    scope.add_argument(
+        "--full-code",
+        dest="website_only",
+        action="store_false",
+        help="打包完整代码路径；仍默认加密，适用于明确的完整代码发布",
     )
     ap.add_argument(
         "--overseas",
@@ -877,6 +910,9 @@ def main() -> int:
         help="Note stored in both local client version files before packing",
     )
     args = ap.parse_args()
+    if args.website_only and (args.with_nodejs_deps or args.with_ppt_runtime_deps or args.with_memory_document_runtime_deps or args.with_douyin_runtime_deps or args.with_wechat_runtime_deps):
+        print("[ERR] --website-only 不能与运行时依赖包选项同时使用")
+        return 1
     _PACK_OVERSEAS = bool(args.overseas)
     _PACK_BRAND = str(args.brand or "").strip().lower()
     _PACK_SKIP_REL_PREFIXES.clear()
@@ -910,7 +946,11 @@ def main() -> int:
         f"version={bumped_version['version']} build={bumped_version['build']}"
     )
     parent = root.parent
-    paths_tuple: tuple[str, ...] = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
+    paths_tuple: tuple[str, ...]
+    if args.website_only:
+        paths_tuple = WEBSITE_OTA_PATHS
+    else:
+        paths_tuple = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
     if args.no_bundled_node_deps:
         paths_tuple = tuple(
             p
@@ -956,7 +996,7 @@ def main() -> int:
             "scripts/wechat_runtime_wheels",
             "CLIENT_CODE_VERSION.json",
         )
-    if not args.no_bundled_node_deps:
+    if not args.no_bundled_node_deps and not args.website_only:
         _ensure_douyin_protocol_node_deps(root)
     if args.out is None:
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
