@@ -1,7 +1,7 @@
 {
-  "version": "1.0.200",
-  "build": 244,
-  "applied_at": "2026-08-21T16:56:13+08:00",
-  "note": "all local online changes including running task center",
-  "bundle_sha256": "e83e1d55154153c128b72eb86e2ea2f7b7cf230492ae3bc366e29907c45a8855"
+  "version": "1.0.202",
+  "build": 246,
+  "applied_at": "2026-08-21T17:38:03+08:00",
+  "note": "encrypted website code update",
+  "bundle_sha256": "eb75a1e76feeac99ed1d099b4e38e37600269069e485311d30bc0d6648664f2b"
 }

@@ -73,7 +73,17 @@ OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
 # slow to extract.
 WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "backend",
-    "static",
+    "static/css",
+    "static/js",
+    "static/views",
+    "static/douyin-origin",
+    "static/vendor",
+    "static/data",
+    "static/branding/brands.json",
+    "static/index.html",
+    "static/ai3d-model-preview.html",
+    "static/lobster-bridge.js",
+    "static/client_version.json",
     "CLIENT_CODE_VERSION.json",
 )
 
